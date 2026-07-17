@@ -2276,11 +2276,24 @@ defmodule Platform.Meetings do
   end
 
   defp do_verify_livekit_jwt(token, raw_body, secret) do
+    # Compare signatures TEXTUALLY against our canonical `Base.url_encode64`
+    # output rather than decoding `sig_b64` to bytes and byte-comparing.
+    #
+    # Why: HMAC-SHA256 emits 32 bytes → 43 base64url chars, and the last char
+    # holds 4 data bits + 2 unused padding bits. `Base.url_decode64/2` (non-
+    # strict) accepts any of the four textual encodings that only differ in
+    # those unused bits (e.g. "…A", "…B", "…C", "…D" all decode identically
+    # when the trailing data nibble is 0000). Decoding-then-byte-comparing
+    # would therefore accept ~4 textually-distinct JWT strings per valid
+    # signature and let an attacker replay any intercepted webhook N times
+    # under textually-different tokens. Comparing the canonical encoding
+    # keeps the JWT one-canonical-string-per-signature invariant intact.
     with [header_b64, payload_b64, sig_b64] <- String.split(token, ".", parts: 3),
          signing_input = "#{header_b64}.#{payload_b64}",
-         {:ok, sig} <- Base.url_decode64(sig_b64, padding: false),
-         expected = :crypto.mac(:hmac, :sha256, secret, signing_input),
-         true <- Plug.Crypto.secure_compare(expected, sig) || :bad_signature,
+         expected_b64 =
+           :crypto.mac(:hmac, :sha256, secret, signing_input)
+           |> Base.url_encode64(padding: false),
+         true <- Plug.Crypto.secure_compare(expected_b64, sig_b64) || :bad_signature,
          {:ok, payload_json} <- Base.url_decode64(payload_b64, padding: false),
          {:ok, claims} <- Jason.decode(payload_json) do
       check_claims(claims, raw_body)

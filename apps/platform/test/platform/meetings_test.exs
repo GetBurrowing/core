@@ -613,12 +613,60 @@ defmodule Platform.MeetingsTest do
 
       [h, p, s] = String.split(jwt, ".", parts: 3)
 
+      # Flip a byte inside the sig — mid-string, unambiguously changes
+      # decoded bytes regardless of the trailing base64 padding-bit alphabet.
+      mid = div(String.length(s), 2)
+      original = String.at(s, mid)
+      replacement = if original == "A", do: "B", else: "A"
+
       flipped =
-        String.slice(s, 0..-2//1) <>
-          if String.last(s) == "A", do: "B", else: "A"
+        String.slice(s, 0, mid) <> replacement <> String.slice(s, (mid + 1)..-1//1)
 
       tampered = Enum.join([h, p, flipped], ".")
       assert {:error, :bad_signature} = Meetings.verify_livekit_jwt(tampered, body)
+    end
+
+    test "rejects non-canonical base64 padding-bit permutations of a valid sig" do
+      # Regression pin for a stochastic bug: HMAC-SHA256 = 32 bytes = 43 base64url
+      # chars, and the last char has 2 unused padding bits. Chars "A" (000000) and
+      # "B" (000001) differ ONLY in those unused bits, so a naive decode-then-
+      # byte-compare would accept "…B" as a valid encoding of a signature that
+      # canonically ends in "…A" (and vice versa). Any 4-char cluster of the last
+      # position (e.g. A/B/C/D when data nibble is 0000) collapses to the same
+      # decoded bytes. Enforcing canonical encoding closes the replay-variant hole.
+      body = Jason.encode!(%{"event" => "room_started"})
+      {body, jwt} = LivekitTestHelpers.sign_livekit_payload(body)
+
+      [h, p, s] = String.split(jwt, ".", parts: 3)
+      prefix = String.slice(s, 0..-2//1)
+      last = String.last(s)
+
+      # For any last char, at least one other char in its 4-member equivalence
+      # class exists — pick a variant that differs only in the unused low bits.
+      variant =
+        case last do
+          "A" -> "B"
+          "B" -> "A"
+          "C" -> "D"
+          "D" -> "C"
+          # Fall back: increment/decrement within a same-nibble neighbor.
+          _ -> if last == "E", do: "F", else: "A"
+        end
+
+      tampered_body = Enum.join([h, p, prefix <> variant], ".")
+
+      # If verify decodes sig-bytes and byte-compares, this returns :ok for
+      # canonical-"A" (and similar) sigs — the exact stochastic regression that
+      # blocked PR #552 CI. Canonical text compare rejects it deterministically.
+      result = Meetings.verify_livekit_jwt(tampered_body, body)
+
+      if variant == last do
+        # No perturbation — shouldn't hit this branch given the case above.
+        assert :ok = result
+      else
+        assert {:error, reason} = result
+        assert reason in [:bad_signature, :malformed]
+      end
     end
 
     test "returns {:error, :body_hash_mismatch} when body doesn't match sha256 claim" do
