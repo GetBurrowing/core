@@ -1358,6 +1358,154 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert reloaded.assignee_type == "agent"
     end
 
+    # ── Auto-planning dispatch on task_create (post-PR #550 hotfix) ─────
+    #
+    # `TaskRouterWatcher.should_run?/1` only spawns a router for tasks
+    # whose status is in ["planning", "in_progress", "in_review",
+    # "deploying"]. `task_create` inserts at "backlog" by default, so
+    # without an auto-transition a task with a planning-phase agent
+    # assignee would silently stall in backlog — the planner never
+    # dispatches. See `Tasks.maybe_start_planning_on_create/1`.
+
+    test "task_create with planning-phase agent assignee auto-transitions to planning" do
+      project = create_project()
+      planner = create_agent()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Auto-plan on create",
+            "phase_assignees" => %{
+              "planning" => %{
+                "assignee_id" => planner.id,
+                "assignee_type" => "agent"
+              }
+            }
+          },
+          %{}
+        )
+
+      # Response envelope reflects the post-transition status so callers
+      # observing `result.status` see the planning state immediately (no
+      # follow-up task_get needed).
+      assert result.status == "planning"
+
+      reloaded = Tasks.get_task_record(result.id)
+      assert reloaded.status == "planning"
+
+      # phase_assignees still intact — the transition doesn't re-derive
+      # or clobber the assignee map.
+      assert reloaded.phase_assignees["planning"]["assignee_id"] == planner.id
+      assert reloaded.phase_assignees["planning"]["assignee_type"] == "agent"
+    end
+
+    test "task_create with flat agent assignee (auto-routed to planning) auto-transitions to planning" do
+      # Flat `assignee_id + assignee_type` lifts into
+      # `phase_assignees["planning"]` via `TaskAttrs.build_task_attrs/3`
+      # (ADR 0044), so the same auto-plan hop must fire for the flat
+      # shape too — otherwise MCP callers that use the compact form
+      # would still stall in backlog.
+      project = create_project()
+      planner = create_agent()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Flat assignee auto-plans",
+            "assignee_id" => planner.id,
+            "assignee_type" => "agent"
+          },
+          %{}
+        )
+
+      assert result.status == "planning"
+
+      reloaded = Tasks.get_task_record(result.id)
+      assert reloaded.status == "planning"
+      assert reloaded.phase_assignees["planning"]["assignee_id"] == planner.id
+    end
+
+    test "task_create without any assignee stays at backlog" do
+      # Boundary: no auto-transition when there's no planning-phase
+      # assignee. The task sits at backlog waiting for a later
+      # `task_update` to attach an assignee (or the operator to move it
+      # via drag-and-drop). Locks the guardrail that the hotfix does
+      # NOT change behaviour for assignee-less tasks.
+      project = create_project()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Unassigned"
+          },
+          %{}
+        )
+
+      assert result.status == "backlog"
+      assert Tasks.get_task_record(result.id).status == "backlog"
+    end
+
+    test "task_create with only execution-phase assignee (no planning slot) stays at backlog" do
+      # Boundary: `phase_assignees["execution"]` alone is not enough —
+      # planning-phase assignee is the signal the hotfix keys on. This
+      # is the shape a caller uses when they want to pre-assign the
+      # execution phase but keep planning human-driven.
+      project = create_project()
+      executor = create_agent()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Execution assignee only",
+            "phase_assignees" => %{
+              "execution" => %{
+                "assignee_id" => executor.id,
+                "assignee_type" => "agent"
+              }
+            }
+          },
+          %{}
+        )
+
+      assert result.status == "backlog"
+      assert Tasks.get_task_record(result.id).status == "backlog"
+    end
+
+    test "task_create with planning-phase USER assignee stays at backlog" do
+      # Only agent-typed planning assignees warrant an auto-transition
+      # — a human planner doesn't need a router-driven dispatch, so we
+      # leave the task in backlog for the human to move via the board.
+      project = create_project()
+      user = insert_user_for_sponsor()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Human planning",
+            "phase_assignees" => %{
+              "planning" => %{
+                "assignee_id" => user.id,
+                "assignee_type" => "user"
+              }
+            }
+          },
+          %{}
+        )
+
+      assert result.status == "backlog"
+      assert Tasks.get_task_record(result.id).status == "backlog"
+    end
+
     test "task_update with phase_assignees writes only the supplied slot" do
       # Merge (not replace) semantics — set_phase_assignees does a
       # Map.merge onto the existing map so callers can target one slot

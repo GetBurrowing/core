@@ -3174,6 +3174,18 @@ defmodule Platform.Federation.ToolSurface do
 
       case Map.get(args, "stack_id") do
         nil ->
+          # Hotfix (post-PR #550): auto-transition `backlog → planning`
+          # when the caller supplied an agent-typed planning-phase
+          # assignee. Without this, `TaskRouterWatcher.should_run?/1`
+          # never spawns a router for a fresh `backlog` task and the
+          # planner never dispatches — so `phase_assignees["planning"]`
+          # would be a silent no-op. See
+          # `Tasks.maybe_start_planning_on_create/1` for the invariant
+          # and the log-and-swallow failure model. Stack members
+          # (`stack_id != nil` in `args`) skip this branch entirely —
+          # `Stacks.start_planning/1` owns wave-gated dispatch for them.
+          {:ok, task} = Tasks.maybe_start_planning_on_create(task)
+
           {:ok,
            %{
              id: task.id,

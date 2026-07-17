@@ -307,6 +307,73 @@ defmodule Platform.Tasks do
     end
   end
 
+  @doc """
+  Auto-transition a freshly-created task from `backlog → planning` when it
+  carries an agent-typed planning-phase assignee. No-op otherwise.
+
+  Called by `Platform.Federation.ToolSurface :task_create` after
+  `create_task/1` + `set_phase_assignees/2` land. Without this hop, a task
+  created with `phase_assignees["planning"] = %{"assignee_type" => "agent",
+  "assignee_id" => id}` would sit at `backlog` forever —
+  `Platform.Orchestration.TaskRouterWatcher.should_run?/1` only spawns a
+  router when the task's status is in
+  `[\"planning\", \"in_progress\", \"in_review\", \"deploying\"]`, so no
+  planner ever dispatches for a `backlog` task.
+
+  Stack members (`stack_id != nil`) are intentionally excluded — the
+  stack's own `Stacks.start_planning/1` wave cascade owns backlog →
+  planning for its members, and firing this hop would race the wave
+  gating.
+
+  Failure model: `transition_task/2` refusals (invalid transition, stack
+  gates, deploy gates) are logged at `:warning` and swallowed — the
+  caller keeps the un-transitioned task. Auto-planning is advisory to
+  the create write; a task created without its planner dispatch is
+  recoverable via a subsequent manual transition or an operator
+  `task_update`. A hard-fail here would surface a confusing "task
+  created but rejected" envelope to MCP callers.
+
+  ## Returns
+
+    * `{:ok, transitioned_task}` when the transition fired and succeeded.
+    * `{:ok, task}` when no transition was warranted (wrong status,
+      missing/non-agent planning assignee, stack member, blank id).
+    * `{:ok, task}` when the transition writer refused; a warning is
+      logged with the reason.
+  """
+  @spec maybe_start_planning_on_create(Task.t()) :: {:ok, Task.t()}
+  def maybe_start_planning_on_create(
+        %Task{
+          status: "backlog",
+          stack_id: nil,
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => id, "assignee_type" => "agent"}
+          }
+        } = task
+      )
+      when is_binary(id) and id != "" do
+    case transition_task(task, "planning") do
+      {:ok, transitioned} ->
+        {:ok, transitioned}
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Tasks] maybe_start_planning_on_create: transition_task refused task_id=#{task.id} reason=#{inspect(reason)} — task stays at backlog"
+        )
+
+        {:ok, task}
+
+      {:error, reason, details} ->
+        Logger.warning(
+          "[Tasks] maybe_start_planning_on_create: transition_task refused task_id=#{task.id} reason=#{inspect(reason)} details=#{inspect(details)} — task stays at backlog"
+        )
+
+        {:ok, task}
+    end
+  end
+
+  def maybe_start_planning_on_create(%Task{} = task), do: {:ok, task}
+
   def update_task(%Task{} = task, attrs) do
     task
     |> Task.changeset(attrs)
