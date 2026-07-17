@@ -2,9 +2,11 @@ defmodule Platform.Org.ContextTest do
   @moduledoc "Tests for org context file and memory entry schemas + seeds."
   use Platform.DataCase, async: true
 
-  alias Platform.Org.WikiPage
-  alias Platform.Org.WikiJournalEntry
+  alias Platform.MemoryFeedback.Entry, as: FeedbackEntry
+  alias Platform.Org.Context
   alias Platform.Org.Seeds
+  alias Platform.Org.WikiJournalEntry
+  alias Platform.Org.WikiPage
   alias Platform.Repo
 
   defp errors_on(changeset) do
@@ -241,5 +243,161 @@ defmodule Platform.Org.ContextTest do
                "Expected #{file.file_key} to have content"
       end
     end
+  end
+
+  # ── Memory-feedback capture (stage 2) ────────────────────────────────
+  #
+  # These assertions cover the invariant that every write-path mutation
+  # against `Platform.Org.Context` produces exactly one append-only row
+  # in `org_memory_feedback`, and that a rolled-back mutation (stale
+  # optimistic lock) leaves the ledger untouched.
+
+  describe "upsert_context_file/3 feedback capture" do
+    setup do
+      clear_seeded_files()
+      # Feedback rows accumulate across the test DB; snapshot a baseline
+      # so assertions are relative to work this test performed.
+      {:ok, baseline: Repo.aggregate(FeedbackEntry, :count, :id)}
+    end
+
+    test "first-create writes ZERO feedback rows", %{baseline: baseline} do
+      assert {:ok, %WikiPage{}} =
+               Context.upsert_context_file("org/page/identity.md", %{
+                 content: "brand-new",
+                 updated_by: Ecto.UUID.generate()
+               })
+
+      assert Repo.aggregate(FeedbackEntry, :count, :id) == baseline
+    end
+
+    test "edit round-trip writes ONE feedback row with edit shape", %{baseline: baseline} do
+      author_a = Ecto.UUID.generate()
+      author_b = Ecto.UUID.generate()
+
+      {:ok, _v1} =
+        Context.upsert_context_file("org/page/memory.md", %{
+          content: "roster v1",
+          updated_by: author_a
+        })
+
+      # First-create didn't emit anything.
+      assert Repo.aggregate(FeedbackEntry, :count, :id) == baseline
+
+      {:ok, _v2} =
+        Context.upsert_context_file("org/page/memory.md", %{
+          content: "roster v2",
+          updated_by: author_b
+        })
+
+      assert Repo.aggregate(FeedbackEntry, :count, :id) == baseline + 1
+
+      row =
+        FeedbackEntry
+        |> last_inserted()
+
+      assert row.feedback_kind == "edit"
+      assert row.original_content == "roster v1"
+      assert row.edited_content == "roster v2"
+      assert row.path == "org/page/memory.md"
+      assert row.namespace == "org_context"
+      assert row.original_author_id == author_a
+      assert row.editor_id == author_b
+    end
+
+    test "stale optimistic-lock rollback leaves no orphan feedback row",
+         %{baseline: baseline} do
+      author = Ecto.UUID.generate()
+
+      {:ok, v1} =
+        Context.upsert_context_file("org/page/agents.md", %{
+          content: "v1",
+          updated_by: author
+        })
+
+      # Race: caller believes we're still on v1's predecessor (version 0).
+      # `expected_version: 0` mismatches the actual v1, so the txn rolls
+      # back with `:stale` and the feedback row must NOT be inserted.
+      assert {:error, :stale} =
+               Context.upsert_context_file(
+                 "org/page/agents.md",
+                 %{content: "v2-lost", updated_by: author},
+                 expected_version: 0
+               )
+
+      # Baseline unchanged — the rolled-back branch never wrote either
+      # the WikiPage update or a feedback row.
+      assert Repo.aggregate(FeedbackEntry, :count, :id) == baseline
+
+      # Version still v1's version (no successful update happened).
+      assert %WikiPage{version: unchanged_version} =
+               Context.get_file("org/page/agents.md")
+
+      assert unchanged_version == v1.version
+    end
+  end
+
+  describe "delete_file/2 feedback capture" do
+    setup do
+      clear_seeded_files()
+      {:ok, baseline: Repo.aggregate(FeedbackEntry, :count, :id)}
+    end
+
+    test "delete writes ONE feedback row with delete shape", %{baseline: baseline} do
+      author = Ecto.UUID.generate()
+      deleter = Ecto.UUID.generate()
+
+      {:ok, _} =
+        Context.upsert_context_file("org/page/agents.md", %{
+          content: "content-to-delete",
+          updated_by: author
+        })
+
+      assert {:ok, %WikiPage{}} =
+               Context.delete_file("org/page/agents.md",
+                 editor_id: deleter,
+                 reason: "outdated"
+               )
+
+      assert Repo.aggregate(FeedbackEntry, :count, :id) == baseline + 1
+      assert is_nil(Context.get_file("org/page/agents.md"))
+
+      row = last_inserted(FeedbackEntry)
+      assert row.feedback_kind == "delete"
+      assert row.original_content == "content-to-delete"
+      assert is_nil(row.edited_content)
+      assert row.path == "org/page/agents.md"
+      assert row.namespace == "org_context"
+      assert row.original_author_id == author
+      assert row.editor_id == deleter
+      assert row.reason_text == "outdated"
+    end
+
+    test "delete of a missing file returns {:error, :not_found} and writes no row",
+         %{baseline: baseline} do
+      assert {:error, :not_found} = Context.delete_file("org/page/does-not-exist.md")
+      assert Repo.aggregate(FeedbackEntry, :count, :id) == baseline
+    end
+
+    test "delete_file/1 (no opts) still works — editor_id defaults to nil",
+         %{baseline: baseline} do
+      {:ok, _} =
+        Context.upsert_context_file("org/page/identity.md", %{
+          content: "will-be-nuked",
+          updated_by: Ecto.UUID.generate()
+        })
+
+      assert {:ok, %WikiPage{}} = Context.delete_file("org/page/identity.md")
+
+      assert Repo.aggregate(FeedbackEntry, :count, :id) == baseline + 1
+      row = last_inserted(FeedbackEntry)
+      assert row.feedback_kind == "delete"
+      assert is_nil(row.editor_id)
+      assert is_nil(row.reason_text)
+    end
+  end
+
+  defp last_inserted(schema) do
+    import Ecto.Query
+    Repo.one(from(r in schema, order_by: [desc: r.inserted_at, desc: r.id], limit: 1))
   end
 end

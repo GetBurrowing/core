@@ -396,7 +396,8 @@ defmodule Platform.Orchestration.PromptTemplates do
           "workspace_id",
           "pending_tokens",
           "activity_digest",
-          "date"
+          "date",
+          "deleted_paths_notice"
         ],
         content: """
         You are the Historian. Curate pages under `org/page/`, `project/<id>/page/`, and `space/<id>/page/`.
@@ -408,6 +409,12 @@ defmodule Platform.Orchestration.PromptTemplates do
         ## Activity digest (last 24h)
 
         {{activity_digest}}
+
+        ## Intentionally deleted paths
+
+        Do NOT re-create these; treat broken links to them as a signal to clean up the referring page, not to restore the target:
+
+        {{deleted_paths_notice}}
 
         ## Wiki-first writing contract
 

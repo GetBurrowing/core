@@ -606,7 +606,12 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # bumped by TaskRouter alarm_silence (task 019f6791-c01b stage 3) — the
     # operator escape hatch that retires the report_blocker(needs_human:
     # false) anti-pattern (+alarm_silence → 84)
-    @t6_baseline_tool_count 84
+    # bumped by memory-feedback stage 4 (task 019f6381) — three read-only
+    # tools exposing the org_memory_feedback corpus for few-shot exemplar
+    # retrieval and backlink-deletion reasoning
+    # (+org_memory_recently_edited, +org_memory_recently_deleted,
+    # +org_memory_feedback_at_path → 87)
+    @t6_baseline_tool_count 87
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

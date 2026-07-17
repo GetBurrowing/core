@@ -448,7 +448,12 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   @impl true
   def handle_event("delete_file", %{"key" => file_key}, socket) do
-    case Wiki.delete_page(file_key) do
+    # Route through `Platform.Org.Context.delete_file/2` (not
+    # `Wiki.delete_page/2`) so the memory-feedback ledger captures the
+    # delete — Context.delete_file wraps the Repo.delete + capture in a
+    # single transaction. `editor_id` threads through so the row is
+    # attributed to the human clicking the delete button.
+    case Context.delete_file(file_key, editor_id: socket.assigns.current_user_id) do
       {:ok, _} ->
         {:noreply,
          socket

@@ -281,6 +281,100 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       end
     end
 
+    describe "deleted-paths notice injection (task 019f6381 stage 5)" do
+      # Bridge test: `Platform.MemoryFeedback` delete rows are surfaced
+      # into every historian dispatch under the "Intentionally deleted
+      # paths" section so the Historian doesn't restore backlink
+      # targets that were purposefully cleaned up.
+      #
+      # Legacy `"dreaming"` event name still resolves through the
+      # scheduler's `normalize_event/1` funnel to the modern
+      # `historian.scheduled` template — the plan spec pins this via the
+      # e2e_behavior case. Firing `"dreaming"` here mirrors that
+      # contract at the unit level.
+
+      test "dreaming fire renders recent delete rows under 'Intentionally deleted paths'" do
+        # Seed two delete rows via the stage-1 capture API so the
+        # rendered notice pulls from the real corpus, not a stub.
+        {:ok, _} =
+          Platform.MemoryFeedback.record_delete(%{
+            original_content: "old agent roster",
+            path: "ORG_AGENTS.md",
+            namespace: "org_context",
+            reason_text: "outdated"
+          })
+
+        {:ok, _} =
+          Platform.MemoryFeedback.record_delete(%{
+            original_content: "old memory sketch",
+            path: "ORG_MEMORY.md",
+            namespace: "org_context"
+          })
+
+        agent = create_agent(%{}, assign_historian?: true)
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        # Fire the legacy event name so we also cover the
+        # `normalize_event("dreaming")` → historian.scheduled routing.
+        SystemEventScheduler.fire_now("dreaming")
+
+        [message | _] = read_system_space_messages(agent)
+
+        assert message.content =~ "Intentionally deleted paths"
+        assert message.content =~ "- ORG_AGENTS.md — outdated"
+        assert message.content =~ "- ORG_MEMORY.md"
+
+        # Regression guard: the placeholder must NEVER survive the
+        # render — an interpolation miss here would ship broken prompt
+        # scaffold to the Historian.
+        refute String.contains?(message.content, "{deleted_paths_notice}")
+        refute String.contains?(message.content, "{{deleted_paths_notice}}")
+      end
+
+      test "empty delete corpus renders '(none in the recent window)' rather than crashing" do
+        agent = create_agent(%{}, assign_historian?: true)
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        SystemEventScheduler.fire_now("dreaming")
+
+        [message | _] = read_system_space_messages(agent)
+
+        assert message.content =~ "Intentionally deleted paths"
+        assert message.content =~ "(none in the recent window)"
+        refute String.contains?(message.content, "{deleted_paths_notice}")
+        refute String.contains?(message.content, "{{deleted_paths_notice}}")
+      end
+
+      test "namespace filter isolates other namespaces from the notice" do
+        # A delete row in a non-org_context namespace must not leak
+        # into the org_context-scoped notice. The MemoryFeedback API's
+        # namespace filter is strict-eq (verified in the stage 3
+        # tests); this asserts the injection uses the same scope.
+        {:ok, _} =
+          Platform.MemoryFeedback.record_delete(%{
+            original_content: "space-scoped content",
+            path: "SPACE_NOTES.md",
+            namespace: "space_context"
+          })
+
+        agent = create_agent(%{}, assign_historian?: true)
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        SystemEventScheduler.fire_now("dreaming")
+
+        [message | _] = read_system_space_messages(agent)
+
+        assert message.content =~ "(none in the recent window)"
+        refute message.content =~ "SPACE_NOTES.md"
+      end
+    end
+
     describe "external runtime handling" do
       setup do
         user =

@@ -29,10 +29,12 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
   use PlatformWeb.ConnCase, async: false
 
+  import Ecto.Query
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.MemoryFeedback.Entry, as: FeedbackEntry
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.Journal
   alias Platform.Org.WikiPage
@@ -929,6 +931,75 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
       refute_receive {:memory_search, _args, _context}
       refute has_element?(view, ~s([data-search-result]))
+    end
+  end
+
+  describe "delete via LiveView captures memory feedback (019f6381 validation 2 gap)" do
+    # Regression coverage for the stage-2 gap: the `delete_file` event
+    # was going through `Wiki.delete_page/2` (plain Repo.delete, no
+    # capture). It now routes through `Context.delete_file/2` so the
+    # `org_memory_feedback` ledger records the delete with editor_id
+    # attribution. See task 019f6381 stage 6 hotfix commit for context.
+    setup %{conn: conn} do
+      Repo.delete_all(WikiPage)
+      Repo.delete_all(FeedbackEntry)
+
+      author = create_user!()
+      deleter = create_user!()
+
+      {:ok, page} =
+        Wiki.upsert_page("org/page/identity.md", %{
+          content: "# Identity\n\nContent that will be deleted.",
+          updated_by: author.id
+        })
+
+      {:ok, conn: authenticated_conn(conn, deleter), page: page, deleter: deleter, author: author}
+    end
+
+    test "confirm+delete removes the page and writes a delete-shaped feedback row",
+         %{conn: conn, page: page, deleter: deleter, author: author} do
+      baseline = Repo.aggregate(FeedbackEntry, :count, :id)
+      {:ok, view, _html} = live(conn, ~p"/org_memory/org/page/identity.md")
+
+      # Trigger the confirm dialog then the delete itself. The UI's
+      # confirm button fires phx-click="delete_file" carrying the key.
+      render_click(view, "confirm_delete", %{"key" => "org/page/identity.md"})
+      render_click(view, "delete_file", %{"key" => "org/page/identity.md"})
+
+      # Underlying WikiPage row is gone.
+      assert Wiki.get_page("org/page/identity.md") == nil
+
+      # Exactly one delete-shaped feedback row landed with the current
+      # user attributed as the editor and the pre-delete content
+      # captured verbatim.
+      assert Repo.aggregate(FeedbackEntry, :count, :id) == baseline + 1
+
+      row =
+        Repo.one(
+          from(r in FeedbackEntry,
+            order_by: [desc: r.inserted_at, desc: r.id],
+            limit: 1
+          )
+        )
+
+      assert row.feedback_kind == "delete"
+      assert row.path == "org/page/identity.md"
+      assert row.namespace == "org_context"
+      assert row.original_content == page.content
+      assert is_nil(row.edited_content)
+      assert row.editor_id == deleter.id
+      assert row.original_author_id == author.id
+    end
+
+    test "delete of a missing key surfaces an error flash and writes no feedback row",
+         %{conn: conn} do
+      baseline = Repo.aggregate(FeedbackEntry, :count, :id)
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      html = render_click(view, "delete_file", %{"key" => "org/page/does-not-exist.md"})
+
+      assert html =~ "Failed to delete org/page/does-not-exist.md"
+      assert Repo.aggregate(FeedbackEntry, :count, :id) == baseline
     end
   end
 end

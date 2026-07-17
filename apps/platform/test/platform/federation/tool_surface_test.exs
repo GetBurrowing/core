@@ -49,9 +49,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   describe "tool_definitions/0" do
-    test "returns all 84 tools with required components" do
+    test "returns all 87 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 84
+      assert length(tools) == 87
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -133,6 +133,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "file_search" in tool_names
       assert "file_add" in tool_names
       assert "file_delete" in tool_names
+      # Memory-feedback read tools (task 019f6381 stage 4) — thin read-only
+      # wrappers over Platform.MemoryFeedback.list_recent/1. Live in the
+      # `memory` bundle alongside memory_view / memory_search.
+      assert "org_memory_recently_edited" in tool_names
+      assert "org_memory_recently_deleted" in tool_names
+      assert "org_memory_feedback_at_path" in tool_names
 
       for tool <- tools do
         assert Map.has_key?(tool, :name)

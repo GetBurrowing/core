@@ -626,6 +626,13 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # explicitly forbidding it in the copy. Content-only sync; no schema
       # changes. Mirrors the force-update pattern at 20260715000000.
       "20260715220000_refresh_dispatch_templates_alarm_silence_fallback.exs",
+      # Task 019f6381 stage 1 (memory-feedback training corpus) — layer-1
+      # storage: append-only `org_memory_feedback` table capturing every
+      # edit/delete/retention signal against org memory. Backs
+      # `Platform.MemoryFeedback` (the capture surface + query API that
+      # later stages 2-5 wire into `Platform.Org.Context` write paths,
+      # expose via MCP, and feed into the historian dreaming instruction).
+      "20260716174039_create_org_memory_feedback.exs",
       # Task 019f6c73 stage 4 — Router: task_ack requires subagent_id.
       # Force-updates the four dispatch prompt templates so every runtime
       # dispatch in prod carries the new @task_ack_preamble body with
@@ -634,7 +641,15 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # subagent_id, causing every ack in prod to fail hard until the next
       # redeploy. Content-only sync; no schema changes. Mirrors the
       # force-update pattern at 20260715220000.
-      "20260716211312_refresh_dispatch_templates_subagent_id_ack.exs"
+      "20260716211312_refresh_dispatch_templates_subagent_id_ack.exs",
+      # Task 019f6381 stage 5 (memory-feedback training corpus) — bridge
+      # the deleted-paths corpus into the historian dreaming instruction.
+      # Force-updates the `historian.scheduled` prompt template row to
+      # include the "Intentionally deleted paths" section so the
+      # Historian sees which paths were intentionally removed on every
+      # dispatch. Content-only sync; no schema changes. Mirrors the
+      # `force_update_*` pattern at 20260714000050.
+      "20260716220000_force_update_historian_scheduled_deleted_paths.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

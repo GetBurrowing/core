@@ -85,6 +85,13 @@ defmodule Platform.Agents.HistorianDispatcher do
 
   {activity_digest}
 
+  ## Intentionally deleted paths
+
+  Do NOT re-create these; treat broken links to them as a signal to \
+  clean up the referring page, not to restore the target:
+
+  {deleted_paths_notice}
+
   Review recent journal entries and short-term memory. Curate durable \
   knowledge into pages under `org/page/`, `project/<id>/page/`, and \
   `space/<id>/page/`. Write transient notes to today's journal at \
@@ -889,10 +896,15 @@ defmodule Platform.Agents.HistorianDispatcher do
        ) do
     date = Date.to_iso8601(Date.utc_today())
     digest = Keyword.get(opts, :activity_digest) || activity_digest()
+    deleted_paths_notice = render_deleted_paths_notice()
 
     template_vars =
       Map.merge(
-        %{date: date, activity_digest: digest},
+        %{
+          date: date,
+          activity_digest: digest,
+          deleted_paths_notice: deleted_paths_notice
+        },
         extra_metadata
       )
 
@@ -905,6 +917,7 @@ defmodule Platform.Agents.HistorianDispatcher do
           @default_historian_instruction
           |> String.replace("{date}", date)
           |> String.replace("{activity_digest}", digest)
+          |> String.replace("{deleted_paths_notice}", deleted_paths_notice)
       end
 
     case guard_body_size(content, event_type, template_slug) do
@@ -975,6 +988,52 @@ defmodule Platform.Agents.HistorianDispatcher do
     window_end = DateTime.utc_now()
     window_start = DateTime.add(window_end, -@daily_window_hours * 3_600, :second)
     ActivityDigest.build(window_start, window_end)
+  end
+
+  # Render the "Intentionally deleted paths" body from the recent
+  # `feedback_kind: "delete"` rows in the memory-feedback corpus
+  # (task 019f6381 stage 5). Signals to the Historian which paths were
+  # intentionally removed so it doesn't restore backlink targets that
+  # were purposefully cleaned up.
+  #
+  # Interpolated into every dispatched instruction — the corresponding
+  # `{{deleted_paths_notice}}` placeholder is currently only referenced
+  # by the `historian.scheduled` template body; other templates that
+  # don't reference the placeholder silently drop the extra var (this
+  # is by design — `interpolate/2` treats unreferenced keys as no-ops).
+  # Empty window renders `(none in the recent window)` so the section
+  # header never leaves a dangling placeholder in the rendered content.
+  @spec render_deleted_paths_notice() :: String.t()
+  defp render_deleted_paths_notice do
+    deleted =
+      Platform.MemoryFeedback.list_recent(
+        namespace: "org_context",
+        feedback_kind: "delete",
+        limit: 20
+      )
+
+    case deleted do
+      [] ->
+        "(none in the recent window)"
+
+      rows ->
+        rows
+        |> Enum.map(fn r ->
+          reason =
+            if r.reason_text in [nil, ""], do: "", else: " — #{r.reason_text}"
+
+          "- #{r.path}#{reason}"
+        end)
+        |> Enum.join("\n")
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[HistorianDispatcher] MemoryFeedback.list_recent/1 raised: " <>
+          Exception.message(error)
+      )
+
+      "(none in the recent window)"
   end
 
   # ── Telemetry helper (task 019f5bc4 stage 1) ──────────────────────────────

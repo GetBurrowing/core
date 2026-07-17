@@ -31,6 +31,7 @@ defmodule Platform.Org.Context do
   require Logger
 
   alias Platform.Memory
+  alias Platform.MemoryFeedback
   alias Platform.Org.WikiJournalEntry
   alias Platform.Org.WikiPage
   alias Platform.Repo
@@ -236,14 +237,38 @@ defmodule Platform.Org.Context do
           if not is_nil(expected_version) and file.version != expected_version do
             Repo.rollback(:stale)
           else
-            file
-            |> WikiPage.changeset(%{
-              content: Map.get(attrs, :content, Map.get(attrs, "content")),
-              updated_by: Map.get(attrs, :updated_by, Map.get(attrs, "updated_by")),
-              version: file.version + 1
-            })
-            |> Repo.update()
-            |> unwrap_or_rollback()
+            new_content = Map.get(attrs, :content, Map.get(attrs, "content"))
+            editor_id = Map.get(attrs, :updated_by, Map.get(attrs, "updated_by"))
+
+            updated =
+              file
+              |> WikiPage.changeset(%{
+                content: new_content,
+                updated_by: editor_id,
+                version: file.version + 1
+              })
+              |> Repo.update()
+              |> unwrap_or_rollback()
+
+            # Capture the edit signal *inside* the same transaction: if
+            # the feedback insert fails we roll the file update back too.
+            # That way a mutation and its training-corpus row land (or
+            # don't) atomically — no silent mutations, no orphan rows.
+            feedback_attrs = %{
+              original_content: file.content,
+              edited_content: new_content,
+              original_author_id: file.updated_by,
+              editor_id: editor_id,
+              path: file_key,
+              namespace: "org_context",
+              workspace_id: workspace_id,
+              reason_text: Keyword.get(opts, :reason)
+            }
+
+            case MemoryFeedback.record_edit(feedback_attrs) do
+              {:ok, _entry} -> updated
+              {:error, changeset} -> Repo.rollback(changeset)
+            end
           end
       end
     end)
@@ -269,12 +294,69 @@ defmodule Platform.Org.Context do
     upsert_context_file(file_key, %{content: content, updated_by: updated_by})
   end
 
-  @doc "Deletes a context file. Returns {:ok, file} or {:error, :not_found}."
-  def delete_file(file_key) do
-    case get_file(file_key) do
-      nil -> {:error, :not_found}
-      file -> Repo.delete(file)
-    end
+  @doc """
+  Deletes a context file and captures a `feedback_kind: "delete"` row.
+
+  ## Options
+
+    * `:editor_id` - UUID of the user or agent performing the delete
+      (surfaces in the feedback row's `editor_id` column). Defaults to
+      `nil` if omitted.
+    * `:reason` - optional human-supplied justification, stored on the
+      feedback row's `reason_text` column.
+
+  The delete + capture run in a single `Repo.transaction`: a failure on
+  the feedback insert rolls the file delete back too. Returns
+  `{:ok, file}` on success, `{:error, :not_found}` if the file didn't
+  exist, or `{:error, changeset}` if the feedback insert failed.
+  """
+  def delete_file(file_key, opts \\ []) do
+    editor_id = Keyword.get(opts, :editor_id)
+    reason = Keyword.get(opts, :reason)
+
+    Repo.transaction(fn ->
+      case get_file(file_key) do
+        nil ->
+          Repo.rollback(:not_found)
+
+        file ->
+          feedback_attrs = %{
+            original_content: file.content,
+            path: file_key,
+            namespace: "org_context",
+            workspace_id: file.workspace_id,
+            original_author_id: file.updated_by,
+            editor_id: editor_id,
+            reason_text: reason
+          }
+
+          # Capture BEFORE the delete so the pre-mutation row is still
+          # queryable if the delete itself fails and we roll back. The
+          # transaction guarantees no orphan feedback rows either way.
+          with {:ok, _entry} <- MemoryFeedback.record_delete(feedback_attrs),
+               {:ok, deleted} <- Repo.delete(file) do
+            deleted
+          else
+            {:error, changeset_or_reason} -> Repo.rollback(changeset_or_reason)
+          end
+      end
+    end)
+    |> tap_ok(fn deleted ->
+      # Mirror `Wiki.delete_page/2`'s index event so the T3 indexer
+      # cleans up the vector-store entry for user-initiated deletes
+      # routed through this path (e.g. the org-memory LiveView).
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        "org_wiki:index",
+        {:wiki_page_deleted,
+         %{
+           page_id: deleted.id,
+           file_key: deleted.file_key,
+           workspace_id: deleted.workspace_id
+         }}
+      )
+    end)
+    |> normalize_transaction_result()
   end
 
   @doc """

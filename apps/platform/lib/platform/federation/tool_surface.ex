@@ -672,6 +672,93 @@ defmodule Platform.Federation.ToolSurface do
           "Message hits are filtered to spaces the calling agent participates in (anonymous callers get no message hits). Deleted or orphaned rows are silently dropped. `truncated: true` indicates a channel hit its `2*limit` cap and a higher `limit` may surface more hits.",
         when_to_use:
           "When you need to recall information beyond the org preamble — past decisions, journal entries, relevant chat threads, prior tasks (shipped or in-flight), or any cross-corpus lookup."
+      },
+      %{
+        name: "org_memory_recently_edited",
+        description:
+          "List the K most recent org-memory edit events. Useful for understanding what shape of content Rowan / a human editor prefers to keep. Read-only wrapper over `Platform.MemoryFeedback.list_recent/1` scoped to `feedback_kind: \"edit\"` rows.",
+        parameters: %{
+          path_prefix: %{
+            type: "string",
+            required: false,
+            description:
+              "Restrict to rows whose `path` starts with this literal prefix (case-insensitive, `_`/`%`/`\\` escaped). Omit to return edits across all paths."
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description:
+              "UUID scoping the read to a single workspace. Omit to span every workspace (org-level view)."
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description:
+              "Max rows to return (default 20, capped at 100). Values above 100 are clamped."
+          }
+        },
+        returns:
+          "Array of %{path, original_content, edited_content, editor_id, original_author_id, inserted_at}, newest first.",
+        limitations:
+          "Read-only — no way to edit or delete a feedback row through MCP. Filters compose via strict-eq (workspace) and prefix-ilike (path). Empty corpus returns `[]`, never an error.",
+        when_to_use:
+          "Before proposing a curated-page edit, to inspect the last-K human-preferred content shapes for that path/prefix. Also useful as a few-shot exemplar source when the historian is deciding phrasing."
+      },
+      %{
+        name: "org_memory_recently_deleted",
+        description:
+          "List the K most recent org-memory delete events. Useful for avoiding recreating content that was intentionally removed. Read-only wrapper over `Platform.MemoryFeedback.list_recent/1` scoped to `feedback_kind: \"delete\"` rows.",
+        parameters: %{
+          path_prefix: %{
+            type: "string",
+            required: false,
+            description:
+              "Restrict to rows whose `path` starts with this literal prefix (case-insensitive, `_`/`%`/`\\` escaped). Omit to return deletes across all paths."
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description:
+              "UUID scoping the read to a single workspace. Omit to span every workspace (org-level view)."
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description:
+              "Max rows to return (default 20, capped at 100). Values above 100 are clamped."
+          }
+        },
+        returns:
+          "Array of %{path, original_content, editor_id, original_author_id, reason_text, inserted_at}, newest first.",
+        limitations:
+          "Read-only. Rows are append-only — a path being present here does NOT mean it is currently deleted (a later `memory_create` may have restored it). Cross-reference with `org_memory_feedback_at_path` when you need a full history for one path.",
+        when_to_use:
+          "Before creating or restoring a page/journal entry, to check whether a similarly-named path was intentionally retired. Historian consults this when resolving broken backlinks — a deleted target means clean up the referrer, not re-create the target."
+      },
+      %{
+        name: "org_memory_feedback_at_path",
+        description:
+          "Full feedback history for one path. Used by the historian to answer 'was this backlink-target intentionally deleted?' when resolving broken references. Returns both edit and delete rows in one call, split into two arrays.",
+        parameters: %{
+          path: %{
+            type: "string",
+            required: true,
+            description:
+              "Exact `path` (file_key) to look up. Prefix / fuzzy matching is not supported — pass the same string that appears in an `org_memory_*` row's `path` field."
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description:
+              "UUID scoping the read to a single workspace. Omit to span every workspace (org-level view)."
+          }
+        },
+        returns:
+          "%{path, edits: [...edit rows...], deletes: [...delete rows...]} — arrays are newest-first, both empty (never nil) when the path has no feedback history.",
+        limitations:
+          "Read-only. Exact-path match — no prefix/fuzzy lookup (use `org_memory_recently_edited` / `org_memory_recently_deleted` with `path_prefix` for that). Capped at the same 100-row ceiling per side.",
+        when_to_use:
+          "When you have a specific broken backlink or a suspicious re-create candidate and you need the full audit trail for that one path — both what got edited and what got deleted, in one round-trip."
       }
     ]
   end
@@ -6076,6 +6163,77 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # ── Memory-feedback read tools (task 019f6381 stage 4) ───────────────────
+  #
+  # These three tools thinly wrap `Platform.MemoryFeedback.list_recent/1`.
+  # They are READ-ONLY by construction — no `record_*` write path is
+  # exposed here. Humans (and the in-tree capture hooks at
+  # `Platform.Org.Context.upsert_context_file/3` + `delete_file/2`) own
+  # the write side of the corpus; agents may only inspect it.
+  #
+  # The default namespace lives on `Platform.MemoryFeedback` itself
+  # (`@default_namespace`), so we deliberately do NOT pass it here —
+  # keeps the tool_surface source clean of any bundle-name-adjacent
+  # string literals that the T5 scope-creep guard forbids.
+
+  def execute("org_memory_recently_edited", args, _context) do
+    opts = feedback_read_opts(args, "edit")
+    {:ok, Enum.map(Platform.MemoryFeedback.list_recent(opts), &serialize_feedback_entry/1)}
+  end
+
+  def execute("org_memory_recently_deleted", args, _context) do
+    opts = feedback_read_opts(args, "delete")
+    {:ok, Enum.map(Platform.MemoryFeedback.list_recent(opts), &serialize_feedback_entry/1)}
+  end
+
+  def execute("org_memory_feedback_at_path", args, _context) do
+    with {:ok, path} <- require_string(args, "path", "org_memory_feedback_at_path") do
+      workspace_id = Map.get(args, "workspace_id")
+
+      # Two `list_recent/1` calls (one per feedback_kind) rather than a
+      # single unfiltered call + Elixir-side partition — keeps the query
+      # narrow enough that the ceiling of 100 per side is enforced by
+      # the DB, not by an in-BEAM filter that would need a much larger
+      # buffer to guarantee the same result for pathological corpora.
+      edits =
+        [feedback_kind: "edit", path_prefix: path, workspace_id: workspace_id, limit: 100]
+        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+        |> Platform.MemoryFeedback.list_recent()
+        |> Enum.filter(&(&1.path == path))
+        |> Enum.map(&serialize_feedback_entry/1)
+
+      deletes =
+        [feedback_kind: "delete", path_prefix: path, workspace_id: workspace_id, limit: 100]
+        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+        |> Platform.MemoryFeedback.list_recent()
+        |> Enum.filter(&(&1.path == path))
+        |> Enum.map(&serialize_feedback_entry/1)
+
+      {:ok, %{path: path, edits: edits, deletes: deletes}}
+    end
+  end
+
+  # Shared opt-builder for the two `recently_*` heads. `feedback_kind`
+  # is caller-controlled ("edit" | "delete"); everything else comes off
+  # the MCP args map.
+  defp feedback_read_opts(args, feedback_kind) do
+    limit_arg = Map.get(args, "limit", 20)
+
+    limit =
+      case limit_arg do
+        n when is_integer(n) and n > 0 -> min(n, 100)
+        _ -> 20
+      end
+
+    [
+      feedback_kind: feedback_kind,
+      path_prefix: Map.get(args, "path_prefix"),
+      workspace_id: Map.get(args, "workspace_id"),
+      limit: limit
+    ]
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+  end
+
   # ── Files MCP dispatch (ADR-0042 Stage 4) ──────────────────────────────
 
   def execute("file_list", args, context) do
@@ -7658,6 +7816,23 @@ defmodule Platform.Federation.ToolSurface do
       feedback: item.feedback,
       reviewed_by: item.reviewed_by,
       reviewed_at: format_datetime(item.reviewed_at)
+    }
+  end
+
+  # MCP serializer for a `Platform.MemoryFeedback.Entry` row. The
+  # `edited_content` field is nil for delete rows and populated for
+  # edit rows — callers can rely on the presence to disambiguate the
+  # kind without reading `feedback_kind` explicitly. `reason_text` is
+  # nullable on both kinds.
+  defp serialize_feedback_entry(%Platform.MemoryFeedback.Entry{} = entry) do
+    %{
+      path: entry.path,
+      original_content: entry.original_content,
+      edited_content: entry.edited_content,
+      editor_id: entry.editor_id,
+      original_author_id: entry.original_author_id,
+      reason_text: entry.reason_text,
+      inserted_at: format_datetime(entry.inserted_at)
     }
   end
 

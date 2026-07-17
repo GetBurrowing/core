@@ -148,10 +148,27 @@ config :platform, :canvas_persist_sync, true
 # memory_search's read-gate hydration. Only the template keys (and the
 # comment introducing them) changed; the module body is otherwise
 # untouched.
+#
+# Memory-feedback stage 2 re-pin (task 019f6381, 2026-07-16): wired
+# `Platform.MemoryFeedback.record_edit/1` and `record_delete/1` calls
+# into `upsert_context_file/3` and `delete_file/2` write paths so
+# every mutation lands a training-corpus row atomically with the
+# mutation itself. `delete_file/1` gained an `opts` arg for
+# `:editor_id`/`:reason` (kept back-compat via default `[]`). Legit
+# scope for this task; T7 still retires the module.
+#
+# Memory-feedback stage 6 hotfix (task 019f6381, 2026-07-16): the
+# org-memory LiveView delete path was still calling `Wiki.delete_page/2`
+# (no capture), so its deletes bypassed the feedback ledger. Fix
+# rerouted the LiveView through `Context.delete_file/2` (the tested
+# capture path) and added a `Phoenix.PubSub.broadcast/3` on the
+# `"org_wiki:index"` topic to preserve the T3 indexer semantics
+# `Wiki.delete_page/2` provided. Legit scope; T7 still retires the
+# module.
 config :platform,
        :t2_context_sha256_t1_head,
-       # bumped by ADR 0042
-       "278db635b7de680685ea8254b4ae51f0edb365a55b9f50e1c604ca6d3c246428"
+       # bumped by memory-feedback stage 6 hotfix
+       "e9943bbcb46f7a8b9c41dd893b28c5f328763c34c208209b63fad2591742645e"
 
 # Stack v2 (task 019f487d, ADR 0045) — Platform.Tasks.Stacks.DepInference
 # resolves its LLM adapter from application env at call time. Tests
