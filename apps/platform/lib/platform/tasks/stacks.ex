@@ -313,10 +313,39 @@ defmodule Platform.Tasks.Stacks do
     end
   end
 
-  # Only members at `backlog` are dragged forward by the cascade — anything
-  # already past backlog is treated as committed work that the operator
-  # explicitly advanced, and we don't overwrite it.
+  # ADR 0041 Status cascade — entering a stack.
+  #
+  # Members at `backlog` are dragged forward to whatever target the
+  # caller passes — `in_progress` (roots via `start_stack/1`),
+  # `stack_pending` (non-roots via `start_stack/1`), or `planning`
+  # (wave-gated dispatch via `start_planning/1`).
+  #
+  # Additionally, roots targeted at `in_progress` accept `stack_pending`
+  # as a valid source status: `stack_pending` roots arrive there when
+  # `task_create` side effects or an operator `task_update` already
+  # flipped the member out of `backlog` before `start_stack/1` ran, and
+  # the state machine allows `stack_pending → in_progress` (see
+  # `Tasks.@allowed_transitions`). Without this second clause the
+  # cascade would leave those roots stranded — silently swallowing the
+  # router dispatch downstream (incident 019f5e29). The transitioned
+  # roots are folded into `started:` alongside the `backlog → in_progress`
+  # promotions so operators see what actually happened.
+  #
+  # Anything else — a member already past the target (`planning`,
+  # `in_progress`, `in_review`, …) or a non-root already at
+  # `stack_pending` — is left alone: no cascade write, no reported
+  # transition. The wildcard clause is idempotent by design.
   defp cascade_member(%Task{status: "backlog"} = member, target, ok, errors) do
+    do_cascade_member(member, target, ok, errors)
+  end
+
+  defp cascade_member(%Task{status: "stack_pending"} = member, "in_progress" = target, ok, errors) do
+    do_cascade_member(member, target, ok, errors)
+  end
+
+  defp cascade_member(_member, _target, ok, errors), do: {ok, errors}
+
+  defp do_cascade_member(member, target, ok, errors) do
     case Tasks.transition_task(member, target) do
       {:ok, updated} ->
         {[updated | ok], errors}
@@ -325,8 +354,6 @@ defmodule Platform.Tasks.Stacks do
         {ok, [%{task_id: member.id, target_status: target, reason: reason} | errors]}
     end
   end
-
-  defp cascade_member(_member, _target, ok, errors), do: {ok, errors}
 
   @doc """
   Stack-level "Start Planning": drive members into the `planning`

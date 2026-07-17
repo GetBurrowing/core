@@ -83,40 +83,38 @@ defmodule Platform.Tasks.Stacks.CommencementGateIntegrationTest do
       assert sid == stack.id
 
       # ── (iv) Explicit `Stacks.start_stack/1` succeeds now that
-      #         plans_ready? is true. Stack flips to in_progress. The
-      #         cascade only picks up members currently at `backlog`; in
-      #         our test the members are already at `stack_pending`
-      #         (parked by apply_dispatch_gate during each approval), so
-      #         the started/parked lists come back empty — the operator
-      #         (or MCP task_start) is responsible for the per-member
-      #         transitions in this state.
-      assert {:ok, %{stack: started, started: [], parked: []}} =
+      #         plans_ready? is true. Stack flips to in_progress. Per
+      #         the ADR 0041 cascade (hotfix: stack_start cascades
+      #         stack_pending roots to in_progress), members currently
+      #         at `stack_pending` that are also level-0 roots of the
+      #         in-stack DAG are promoted to `in_progress` — the cascade
+      #         completes the transition that `apply_dispatch_gate/1`
+      #         parked during each approval. Flat stack → all three
+      #         members are roots → all three land in `started:`.
+      assert {:ok, %{stack: started, started: cascaded, parked: []}} =
                Stacks.start_stack(Repo.reload!(stack))
 
       assert started.status == "in_progress"
 
-      # ── (v) Explicit `Tasks.transition_task/2` on a stack_pending
-      #         member NOW succeeds — the gate is truly open
-      #         (stack.status == "in_progress" AND plans_ready?). This is
-      #         the "MCP task_start" path a caller would take once the
-      #         gate broadcast fires: pick a root, flip it in_progress.
+      cascaded_ids = cascaded |> Enum.map(& &1.id) |> Enum.sort()
+      assert cascaded_ids == Enum.sort([m1.id, m2.id, m3.id])
+      assert Enum.all?(cascaded, &(&1.status == "in_progress"))
+
+      # ── (v) The cascade already flipped every stack_pending root to
+      #         in_progress, so the "MCP task_start" per-member
+      #         transition path is now a no-op idempotency check: the
+      #         members are already in_progress, and any redundant
+      #         `Tasks.transition_task/2` back into in_progress hits
+      #         `:invalid_transition` — NOT the gate. Proves the
+      #         :stack_plans_pending error is definitively gone.
       m1_now = Tasks.get_task_record(m1.id)
-      assert m1_now.status == "stack_pending"
+      assert m1_now.status == "in_progress"
 
-      assert {:ok, m1_started} = Tasks.transition_task(m1_now, "in_progress")
-      assert m1_started.status == "in_progress"
-
-      # Same for the other roots — flat stack, so every member is a
-      # root and no in-stack deps block them.
-      m2_now = Tasks.get_task_record(m2.id)
-      assert {:ok, m2_started} = Tasks.transition_task(m2_now, "in_progress")
-      assert m2_started.status == "in_progress"
-
-      # And the :stack_plans_pending error is definitively GONE — a
-      # freshly-transitioned in_progress member trying to re-enter
-      # in_progress hits `:invalid_transition`, NOT the gate.
       assert {:error, :invalid_transition} =
-               Tasks.transition_task(m1_started, "in_progress")
+               Tasks.transition_task(m1_now, "in_progress")
+
+      m2_now = Tasks.get_task_record(m2.id)
+      assert m2_now.status == "in_progress"
 
       _ = project
     end

@@ -2126,6 +2126,52 @@ defmodule Platform.Tasks.StacksTest do
       assert hd(parked).status == "stack_pending"
     end
 
+    test "promotes stack_pending roots to in_progress (regression: incident 019f5e29)" do
+      # Regression coverage for the cascade bug where members that arrived
+      # at `stack_pending` before `start_stack/1` ran (via `task_create`
+      # side effects or an operator `task_update`) were stranded — the
+      # cascade only pulled from `backlog`, so the router never picked
+      # them up. See ADR 0041 "Status cascade — entering a stack".
+      {:ok, project} = Tasks.create_project(%{name: "Stack-pending cascade"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "M1 root"})
+
+      {:ok, m2} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "M2 depends on M1",
+          dependencies: [%{"task_id" => m1.id, "kind" => "blocks"}]
+        })
+
+      {:ok, _} = Stacks.add_task(stack, m1)
+      {:ok, _} = Stacks.add_task(stack, m2)
+
+      {:ok, _} = Tasks.create_plan(%{task_id: m1.id, status: "approved"})
+      {:ok, _} = Tasks.create_plan(%{task_id: m2.id, status: "approved"})
+
+      # Park both members at `stack_pending` directly, mimicking the
+      # operator/side-effect promotion out of `backlog` that happened
+      # before `start_stack/1` was invoked.
+      m1 |> Task.changeset(%{status: "stack_pending"}) |> Repo.update!()
+      m2 |> Task.changeset(%{status: "stack_pending"}) |> Repo.update!()
+
+      assert {:ok, %{stack: updated, started: started, parked: parked}} =
+               Stacks.start_stack(stack)
+
+      assert updated.status == "in_progress"
+
+      # The root (M1) was promoted from `stack_pending` → `in_progress`
+      # and is reported in `started:`. M2 (non-root) stays parked at
+      # `stack_pending` — no cascade write because it was already there.
+      assert [%Task{id: started_id, status: "in_progress"}] = started
+      assert started_id == m1.id
+      assert parked == []
+
+      assert Tasks.get_task_record(m1.id).status == "in_progress"
+      assert Tasks.get_task_record(m2.id).status == "stack_pending"
+    end
+
     test "skips members already past backlog (idempotent / additive)" do
       {:ok, project} = Tasks.create_project(%{name: "Cascade additive"})
       stack = stack_fixture(project_id: project.id)
