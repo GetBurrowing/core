@@ -626,6 +626,15 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # explicitly forbidding it in the copy. Content-only sync; no schema
       # changes. Mirrors the force-update pattern at 20260715000000.
       "20260715220000_refresh_dispatch_templates_alarm_silence_fallback.exs",
+      # Task 019f671f stage 1 — User archival. Adds nullable
+      # `users.archived_at`, `users.archived_by_user_id` (FK → users(id)
+      # on_delete: :nilify_all so historical actor stays resolvable) and
+      # `users.archived_reason` (text). Powers the soft-archive flow
+      # wired into `Platform.Accounts.archive_user/2` +
+      # `unarchive_user/1`; downstream reads (`list_users`,
+      # `get_users_map`) filter via `include_archived: false` default.
+      # Mirrors the `spaces.archived_at` precedent.
+      "20260716000000_add_archived_to_users.exs",
       # Task 019f6381 stage 1 (memory-feedback training corpus) — layer-1
       # storage: append-only `org_memory_feedback` table capturing every
       # edit/delete/retention signal against org memory. Backs

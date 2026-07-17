@@ -11,6 +11,8 @@ defmodule Platform.Push do
 
   require Logger
 
+  alias Platform.Accounts.User
+  alias Platform.Chat.Participant
   alias Platform.Push.Subscription
   alias Platform.Repo
 
@@ -46,22 +48,59 @@ defmodule Platform.Push do
   @doc "Send a web push notification to all subscriptions for a participant."
   @spec send_notification(binary(), map()) :: :ok
   def send_notification(participant_id, %{title: _, body: _} = payload) do
-    subscriptions =
-      from(s in Subscription, where: s.participant_id == ^participant_id)
-      |> Repo.all()
+    if archived_user_participant?(participant_id) do
+      # Defense-in-depth (task 019f671f Stage 4). `AttentionRouter.route/1`
+      # (Stage 3) is the primary chokepoint that keeps `maybe_send_push/3`
+      # from firing for archived users, but any future caller — direct push,
+      # meeting notifier, batch digest — inherits this guard automatically.
+      :telemetry.execute(
+        [:platform, :push, :suppressed_archived_user],
+        %{count: 1},
+        %{participant_id: participant_id}
+      )
 
-    json = Jason.encode!(payload)
+      :ok
+    else
+      subscriptions =
+        from(s in Subscription, where: s.participant_id == ^participant_id)
+        |> Repo.all()
 
-    Enum.each(subscriptions, fn sub ->
-      case do_send_push(sub, json) do
-        {:ok, _} ->
-          :ok
+      json = Jason.encode!(payload)
 
-        {:error, reason} ->
-          Logger.warning("[Push] failed to send to #{sub.endpoint}: #{inspect(reason)}")
-      end
-    end)
+      Enum.each(subscriptions, fn sub ->
+        case do_send_push(sub, json) do
+          {:ok, _} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("[Push] failed to send to #{sub.endpoint}: #{inspect(reason)}")
+        end
+      end)
+    end
   end
+
+  # Return true when `participant_id` resolves to a `chat_participants` row
+  # whose `participant_type == "user"` AND the referenced `users` row exists
+  # with a non-nil `archived_at`. Unknown participant rows and agent
+  # participants pass through — the guard only suppresses the case the
+  # archival contract cares about.
+  @spec archived_user_participant?(binary()) :: boolean()
+  defp archived_user_participant?(participant_id) when is_binary(participant_id) do
+    case Repo.get(Participant, participant_id) do
+      %Participant{participant_type: "user", participant_id: user_id}
+      when is_binary(user_id) ->
+        case Repo.get(User, user_id) do
+          %User{archived_at: nil} -> false
+          %User{archived_at: _} -> true
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp archived_user_participant?(_), do: false
 
   @doc "List all push subscriptions for a participant."
   @spec list_subscriptions(binary()) :: [Subscription.t()]

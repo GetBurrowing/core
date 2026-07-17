@@ -84,8 +84,12 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
   Pure suggestion builder used by `mention_query`. Exposed for tests so we
   can exercise the `@here` sentinel ordering without spinning up a full
   LiveView. The pipeline is: filter participants by case-insensitive
-  prefix → prepend the `here` broadcast sentinel when the query is a
-  prefix of "here" (empty query included) → truncate to `@max_suggestions`.
+  prefix → drop archived-user participants (task 019f671f validation 1(c);
+  the `participants_map` still contains them so historical author
+  attribution renders correctly, but they must NOT be selectable in the
+  autocomplete) → prepend the `here` broadcast sentinel when the query is
+  a prefix of "here" (empty query included) → truncate to
+  `@max_suggestions`.
   """
   @spec build_suggestions(String.t() | nil, map()) :: [map()]
   def build_suggestions(query, participants_map) when is_map(participants_map) do
@@ -100,6 +104,14 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
     |> prepend_here_sentinel(participants)
     |> Enum.take(@max_suggestions)
   end
+
+  # Archived-user participants live in `participants_map` for historical
+  # rendering (see `PresenceHooks.enter_space/4` — `include_archived: true`
+  # is deliberate). Reject them here so `@Rowan Kl` doesn't autocomplete to
+  # an archived user. Agents carry `archived: false` (see
+  # `PresenceHooks.participant_identity/2`), so this is safe as a single
+  # boolean lookup regardless of `participant_type`.
+  defp matches?(%{archived: true}, _query), do: false
 
   defp matches?(%{display_name: name}, query) when is_binary(name) do
     name |> String.downcase() |> String.starts_with?(query)

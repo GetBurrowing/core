@@ -30,6 +30,14 @@ defmodule PlatformWeb.Plugs.RequireAuthAPI do
             |> configure_session(drop: true)
             |> unauthorized("Session is stale; sign in again.")
 
+          %{archived_at: %DateTime{}} ->
+            # Stage 5: JSON-API counterpart to `RequireAuth`'s
+            # archived-user guard. Drop the session so the next
+            # navigation to a browser route also bounces cleanly.
+            conn
+            |> configure_session(drop: true)
+            |> unauthorized("Account is archived.")
+
           user ->
             assign(conn, :current_user, user)
         end

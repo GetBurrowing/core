@@ -53,11 +53,20 @@ defmodule PlatformWeb.Plugs.AttachmentAuth do
 
   defp authenticate_session(conn) do
     with user_id when is_binary(user_id) <- get_session(conn, :current_user_id),
-         user when not is_nil(user) <- Accounts.get_user(user_id) do
+         %_{archived_at: nil} = user <- Accounts.get_user(user_id) do
       conn
       |> assign(:current_user, user)
       |> assign(:principal, {:user, user.id})
     else
+      %_{archived_at: %DateTime{}} ->
+        # Stage 5: an in-flight attachment fetch from a session whose
+        # user was archived mid-flight must not keep pulling bytes.
+        # Drop the session and redirect same as any missing user.
+        conn
+        |> configure_session(drop: true)
+        |> redirect(to: "/auth/login")
+        |> halt()
+
       _ ->
         conn
         |> redirect(to: "/auth/login")

@@ -11,6 +11,7 @@ defmodule PlatformWeb.Plugs.RequireAuthTest do
 
   use PlatformWeb.ConnCase, async: false
 
+  alias Platform.Accounts
   alias Platform.Accounts.User
   alias Platform.Repo
   alias Platform.Tenancy
@@ -103,6 +104,26 @@ defmodule PlatformWeb.Plugs.RequireAuthTest do
 
       assert conn.halted
       assert Phoenix.ConnTest.redirected_to(conn) == "/auth/login"
+    end
+  end
+
+  describe "archived user (Stage 5)" do
+    test "session for an archived user → drop session + redirect to login", %{conn: conn} do
+      user = create_user!()
+      {:ok, _archived} = Accounts.archive_user(user)
+
+      conn = call(conn, user.id)
+
+      assert conn.halted
+      assert Phoenix.ConnTest.redirected_to(conn) == "/auth/login"
+      # `configure_session(drop: true)` marks the session for teardown on
+      # response — `plug_session_info: :drop` in `conn.private` is the
+      # signal the underlying `Plug.Session` looks at when it emits the
+      # Set-Cookie. In-memory `get_session` still returns the old value
+      # inside this request; verify the drop marker instead.
+      assert conn.private.plug_session_info == :drop
+      # never assigned the current_user (the guard fires before assign)
+      refute Map.has_key?(conn.assigns, :current_user)
     end
   end
 

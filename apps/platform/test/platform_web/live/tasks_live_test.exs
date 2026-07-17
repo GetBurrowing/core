@@ -4,6 +4,7 @@ defmodule PlatformWeb.TasksLiveTest do
   import Ecto.Query
   import Phoenix.LiveViewTest
 
+  alias Platform.Accounts
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat
@@ -2584,6 +2585,43 @@ defmodule PlatformWeb.TasksLiveTest do
 
       assert created
       assert is_nil(created.sponsor_user_id)
+    end
+
+    # ── User archival (task 019f671f stage 2) ─────────────────────────
+    #
+    # Stage 1 flipped `Accounts.list_users/1` to default `include_archived:
+    # false`. The mount at tasks_live.ex:139 calls `Accounts.list_users()`
+    # with no opts, so archived users must not appear in the socket-assigned
+    # `:users` list that backs the New-Task sheet Sponsor picker.
+    test "New-Task Sponsor picker excludes archived users", %{conn: conn} do
+      _project = create_project()
+
+      active_user =
+        Repo.insert!(%User{
+          email: "active_sponsor_#{System.unique_integer([:positive])}@example.com",
+          name: "Active Sponsor Candidate",
+          oidc_sub: "oidc-active-#{System.unique_integer([:positive])}"
+        })
+
+      archived_user =
+        Repo.insert!(%User{
+          email: "archived_sponsor_#{System.unique_integer([:positive])}@example.com",
+          name: "Archived Sponsor Candidate",
+          oidc_sub: "oidc-archived-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, _archived} = Accounts.archive_user(archived_user)
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Open the New-Task bottom sheet so `@users` renders inside the
+      # Sponsor <select>.
+      render_click(view, "toggle_task_sheet", %{})
+      rendered = render(view)
+
+      assert rendered =~ "Active Sponsor Candidate"
+      refute rendered =~ "Archived Sponsor Candidate"
     end
   end
 

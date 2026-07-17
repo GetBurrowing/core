@@ -38,7 +38,7 @@ defmodule PlatformWeb.AuthController do
     with true <- is_map(session_params) and session_params[:state] == state,
          {:ok, auth} <- OIDC.callback(params, session_params),
          {:ok, oidc_user} <- extract_oidc_user(auth),
-         {:ok, user} <- Accounts.find_or_create_from_oidc(oidc_user) do
+         {:ok, user} <- find_or_create_capturing_email(oidc_user) do
       :telemetry.execute(
         [:platform, :auth, :callback],
         %{system_time: System.system_time()},
@@ -64,12 +64,29 @@ defmodule PlatformWeb.AuthController do
         emit_callback_failure(conn, :invalid_state)
         invalid_state(conn)
 
+      {:error, {:user_archived, email}} ->
+        emit_access_blocked(conn, :user_archived, email)
+        user_archived(conn)
+
       {:error, reason} ->
         emit_callback_failure(conn, reason)
 
         conn
         |> put_status(:unauthorized)
         |> text("OIDC callback failed: #{inspect(reason)}")
+    end
+  end
+
+  # Wrap `Accounts.find_or_create_from_oidc/1` so the archived-user
+  # rejection carries the OIDC-claim email through the `with` chain into
+  # the telemetry emitter. The email isn't on the (nonexistent) session
+  # yet, and the OIDC callback params don't include it — the OIDC
+  # exchange did — so we bind it here.
+  defp find_or_create_capturing_email(%{email: email} = oidc_user) do
+    case Accounts.find_or_create_from_oidc(oidc_user) do
+      {:ok, user} -> {:ok, user}
+      {:error, :user_archived} -> {:error, {:user_archived, email}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -92,24 +109,32 @@ defmodule PlatformWeb.AuthController do
           {"dev-#{slug}", "#{slug}@localhost", "Dev #{String.capitalize(slug)}"}
       end
 
-    {:ok, user} =
-      Accounts.find_or_create_from_oidc(%{sub: sub, email: email, name: name})
+    case Accounts.find_or_create_from_oidc(%{sub: sub, email: email, name: name}) do
+      {:ok, user} ->
+        space = Platform.Chat.get_space_by_slug("general")
 
-    space = Platform.Chat.get_space_by_slug("general")
+        if space do
+          Platform.Chat.add_participant(space.id, %{
+            participant_type: "user",
+            participant_id: user.id,
+            display_name: user.name || name,
+            joined_at: DateTime.utc_now()
+          })
+        end
 
-    if space do
-      Platform.Chat.add_participant(space.id, %{
-        participant_type: "user",
-        participant_id: user.id,
-        display_name: user.name || name,
-        joined_at: DateTime.utc_now()
-      })
+        conn
+        |> put_session(:current_user_id, user.id)
+        |> put_session(:oidc_id_token, "dev-id-token")
+        |> redirect(to: ~p"/chat")
+
+      {:error, :user_archived} ->
+        # Same interstitial the OIDC callback renders — dev_login
+        # exercises the identical `find_or_create_from_oidc/1` code
+        # path, so it must refuse identically to keep the e2e archived
+        # user check honest.
+        emit_access_blocked(conn, :user_archived, email)
+        user_archived(conn)
     end
-
-    conn
-    |> put_session(:current_user_id, user.id)
-    |> put_session(:oidc_id_token, "dev-id-token")
-    |> redirect(to: ~p"/chat")
   end
 
   def logout(conn, _params) do
@@ -157,6 +182,30 @@ defmodule PlatformWeb.AuthController do
     |> configure_session(drop: true)
     |> put_status(:unauthorized)
     |> text("Invalid OIDC state")
+  end
+
+  # Stage 5: archived-user interstitial. Drops any session bleed-through
+  # (defensive — the OIDC + dev_login paths shouldn't have set
+  # `current_user_id` yet, but a stale session cookie can be lingering),
+  # then renders 403 with the message the plan pins.
+  defp user_archived(conn) do
+    conn
+    |> configure_session(drop: true)
+    |> put_status(:forbidden)
+    |> text("This account has been archived. Contact your Suite administrator.")
+  end
+
+  defp emit_access_blocked(conn, reason, email) do
+    :telemetry.execute(
+      [:platform, :auth, :access_blocked],
+      %{system_time: System.system_time()},
+      %{
+        action: "blocked",
+        ip_address: format_ip(conn.remote_ip),
+        reason: to_string(reason),
+        email: email
+      }
+    )
   end
 
   defp maybe_put_id_token(conn, auth) do

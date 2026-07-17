@@ -577,9 +577,13 @@ defmodule Platform.Org.Context do
 
       remaining = Enum.reject(ids, &Map.has_key?(agents, &1))
 
+      # Historical attribution: memory entries authored by an archived user
+      # must still resolve to that user's display name. Overrides the
+      # `include_archived: false` default flipped in Stage 1 of the archival
+      # rollout (`Accounts.get_users_map/1`).
       users =
         remaining
-        |> Platform.Accounts.get_users_map()
+        |> Platform.Accounts.get_users_map(include_archived: true)
         |> Map.new(fn {id, user} ->
           {id, %{kind: :user, name: user_name(user), color: nil}}
         end)

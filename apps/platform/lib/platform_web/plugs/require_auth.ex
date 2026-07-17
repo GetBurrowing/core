@@ -19,6 +19,18 @@ defmodule PlatformWeb.Plugs.RequireAuth do
             |> redirect(to: "/auth/login")
             |> halt()
 
+          %{archived_at: %DateTime{}} ->
+            # Stage 5: archived user with a lingering session — drop it
+            # and bounce to login. Same shape as the stale-session branch
+            # above so audit-log consumers get one class of "session
+            # invalidated" event, differentiated by `reason`.
+            emit_access_blocked(conn, :user_archived, user_id)
+
+            conn
+            |> configure_session(drop: true)
+            |> redirect(to: "/auth/login")
+            |> halt()
+
           user ->
             conn
             |> assign(:current_user, user)

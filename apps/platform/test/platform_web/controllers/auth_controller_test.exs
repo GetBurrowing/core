@@ -1,6 +1,7 @@
 defmodule PlatformWeb.AuthControllerTest do
   use PlatformWeb.ConnCase
 
+  alias Platform.Accounts
   alias Platform.Accounts.User
   alias Platform.Repo
 
@@ -115,6 +116,70 @@ defmodule PlatformWeb.AuthControllerTest do
     conn = get(conn, ~p"/auth/oidc/callback?code=test-code&state=wrong-state")
 
     assert response(conn, 401) =~ "Invalid OIDC state"
+  end
+
+  describe "archived user (Stage 5)" do
+    test "GET /auth/oidc/callback rejects an archived user with 403 and no session", %{
+      conn: conn
+    } do
+      # Seed an existing archived user under the same OIDC sub the mock
+      # response will present. The callback path resolves by `oidc_sub`,
+      # sees `archived_at != nil`, and must refuse.
+      user = insert_user()
+      {:ok, _archived} = Accounts.archive_user(user)
+
+      mock_oidc_response(%{
+        user: base_claims(),
+        userinfo: base_claims(),
+        id_token: base_claims()
+      })
+
+      conn =
+        init_test_session(conn, oidc_session_params: %{state: "expected-state", nonce: "n"})
+
+      conn = get(conn, ~p"/auth/oidc/callback?code=test-code&state=expected-state")
+
+      body = response(conn, 403)
+      assert body =~ "archived"
+      assert body =~ "Suite administrator"
+
+      # No `current_user_id` planted in the session, and any bleed-through
+      # was dropped by `configure_session(drop: true)`.
+      # `configure_session(drop: true)` marks the cookie for teardown;
+      # in-memory `get_session` still returns the pre-drop state during
+      # this request, but critically no `:current_user_id` was ever set.
+      assert get_session(conn, :current_user_id) == nil or
+               conn.private.plug_session_info == :drop
+    end
+
+    test "AuthController.dev_login refuses an archived user without crashing", %{conn: conn} do
+      # The `/dev/login` route is only registered in `Mix.env() == :dev`
+      # (see router.ex:103), so we invoke the controller action
+      # directly. This guards a real regression: prior to Stage 5 the
+      # action pattern-matched `{:ok, user} = find_or_create_from_oidc(...)`
+      # which FunctionClauseError-crashed on `{:error, :user_archived}`.
+      slug = "archived-dev-#{System.unique_integer([:positive])}"
+
+      {:ok, user} =
+        Accounts.find_or_create_from_oidc(%{
+          sub: "dev-#{slug}",
+          email: "#{slug}@localhost",
+          name: "Dev #{slug}"
+        })
+
+      {:ok, _archived} = Accounts.archive_user(user)
+
+      conn =
+        conn
+        |> init_test_session(%{})
+        |> PlatformWeb.AuthController.dev_login(%{"as" => slug})
+
+      body = response(conn, 403)
+      assert body =~ "archived"
+
+      assert get_session(conn, :current_user_id) == nil or
+               conn.private.plug_session_info == :drop
+    end
   end
 
   test "GET /auth/logout clears the session and redirects to the end-session endpoint", %{

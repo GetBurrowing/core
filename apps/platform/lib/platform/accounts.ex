@@ -41,15 +41,31 @@ defmodule Platform.Accounts do
 
   @doc """
   Return a map of user id => user for the given ids.
+
+  Defaults to `include_archived: false` — archived users (`archived_at`
+  IS NOT NULL, task 019f671f Stage 1) are silently dropped from the map.
+  Historical-attribution call sites (memory-entry author resolution,
+  past-message participant labels) opt in with `include_archived: true`;
+  those overrides are enumerated in Stage 2 of the archival plan.
   """
-  @spec get_users_map([binary()]) :: %{binary() => User.t()}
-  def get_users_map(ids) when is_list(ids) do
+  @spec get_users_map([binary()], keyword()) :: %{binary() => User.t()}
+  def get_users_map(ids, opts \\ []) when is_list(ids) do
+    include_archived = Keyword.get(opts, :include_archived, false)
     ids = ids |> Enum.reject(&is_nil/1) |> Enum.uniq()
 
     if ids == [] do
       %{}
     else
-      from(u in User, where: u.id in ^ids)
+      base = from(u in User, where: u.id in ^ids)
+
+      base =
+        if include_archived do
+          base
+        else
+          where(base, [u], is_nil(u.archived_at))
+        end
+
+      base
       |> Repo.all()
       |> Map.new(&{&1.id, &1})
     end
@@ -57,12 +73,26 @@ defmodule Platform.Accounts do
 
   @doc """
   List all users, optionally filtered by a search query (name or email).
+
+  Defaults to `include_archived: false` — archived users are excluded so
+  active-user pickers (task assignee, DM/group new-conversation, add-participant
+  sheet) drop them with no explicit filter. The admin surface
+  (`UserAccessLive`, task 019f671f Stage 6) opts in with
+  `include_archived: true`.
   """
   @spec list_users(keyword()) :: [User.t()]
   def list_users(opts \\ []) do
     query = Keyword.get(opts, :query)
+    include_archived = Keyword.get(opts, :include_archived, false)
 
     base = from(u in User, order_by: [asc: u.name])
+
+    base =
+      if include_archived do
+        base
+      else
+        where(base, [u], is_nil(u.archived_at))
+      end
 
     base =
       if query && String.trim(query) != "" do
@@ -73,6 +103,64 @@ defmodule Platform.Accounts do
       end
 
     Repo.all(base)
+  end
+
+  # ── Soft-archive (task 019f671f Stage 1) ───────────────────────────────
+  #
+  # Users are never hard-deleted. Archive flips `archived_at` (+ optional
+  # actor + reason), which flows through every read path that defaults to
+  # `include_archived: false`. Historical attribution (past-authored
+  # messages, task `reported_by`, memory-entry authorship) still resolves
+  # because the row stays resident and callers can opt in.
+  #
+  # Auth boundaries close in Stage 5; participant + mention filtering
+  # closes in Stage 3. This stage only wires the columns and the API.
+  #
+  # `get_user/1` is deliberately UNCHANGED — the auth plugs need to look
+  # up an archived user to detect and bounce them (Stage 5).
+
+  @doc """
+  Soft-archive a user. Idempotent-ish: repeated calls re-stamp
+  `archived_at` and (if provided) `archived_by_user_id` / `archived_reason`.
+
+  ## Options
+
+    * `:actor`  — `%User{}` performing the archive; stamped as
+      `archived_by_user_id`. Nil (or absent) leaves the FK nil.
+    * `:reason` — free-text note surfaced in the admin UI. Optional.
+
+  Returns `{:ok, %User{}}` or `{:error, changeset}`.
+  """
+  @spec archive_user(User.t(), keyword()) ::
+          {:ok, User.t()} | {:error, Ecto.Changeset.t()}
+  def archive_user(%User{} = user, opts \\ []) do
+    actor = Keyword.get(opts, :actor)
+    reason = Keyword.get(opts, :reason)
+
+    attrs = %{
+      archived_at: DateTime.utc_now(),
+      archived_by_user_id: actor && actor.id,
+      archived_reason: reason
+    }
+
+    user
+    |> User.changeset(attrs)
+    |> Repo.update()
+  end
+
+  @doc """
+  Reverse an archive by clearing all three archive columns. Mirrors
+  `Platform.Chat.unarchive_space/2`.
+  """
+  @spec unarchive_user(User.t()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
+  def unarchive_user(%User{} = user) do
+    user
+    |> User.changeset(%{
+      archived_at: nil,
+      archived_by_user_id: nil,
+      archived_reason: nil
+    })
+    |> Repo.update()
   end
 
   @doc """
@@ -109,6 +197,13 @@ defmodule Platform.Accounts do
     attrs = build_oidc_user_attrs(oidc_user)
 
     case Repo.get_by(User, oidc_sub: sub) do
+      %User{archived_at: %DateTime{}} ->
+        # Stage 5: archived users are refused at the OIDC seam. No attrs
+        # refresh, no membership sync — the auth boundary decides here
+        # so downstream telemetry (`[:platform, :auth, :access_blocked]`)
+        # fires from the controller without a stale-but-refreshed row.
+        {:error, :user_archived}
+
       %User{} = existing ->
         update_user_with_membership_sync(existing, attrs)
 

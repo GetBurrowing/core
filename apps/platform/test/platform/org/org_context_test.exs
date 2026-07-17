@@ -2,8 +2,11 @@ defmodule Platform.Org.ContextTest do
   @moduledoc "Tests for org context file and memory entry schemas + seeds."
   use Platform.DataCase, async: true
 
+  alias Platform.Accounts
+  alias Platform.Accounts.User
   alias Platform.MemoryFeedback.Entry, as: FeedbackEntry
   alias Platform.Org.Context
+  alias Platform.Org.Context, as: OrgContext
   alias Platform.Org.Seeds
   alias Platform.Org.WikiJournalEntry
   alias Platform.Org.WikiPage
@@ -399,5 +402,60 @@ defmodule Platform.Org.ContextTest do
   defp last_inserted(schema) do
     import Ecto.Query
     Repo.one(from(r in schema, order_by: [desc: r.inserted_at, desc: r.id], limit: 1))
+  end
+
+  # ── resolve_authors/1 (task 019f671f stage 2) ─────────────────────────
+  #
+  # Memory-entry authors must still resolve to their display name after
+  # the user is archived. `resolve_authors/1` overrides the Stage-1
+  # `include_archived: false` default via `Accounts.get_users_map(ids,
+  # include_archived: true)` — this test is the regression guard for
+  # that explicit override.
+  describe "resolve_authors/1 with archived user" do
+    test "still returns display name for a memory entry authored by an archived user" do
+      author =
+        Repo.insert!(%User{
+          email: "author_#{System.unique_integer([:positive])}@example.com",
+          name: "Archived Author",
+          oidc_sub: "oidc-author-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, entry} =
+        %WikiJournalEntry{}
+        |> WikiJournalEntry.changeset(%{
+          content: "Historical decision by a since-archived user.",
+          date: ~D[2026-04-08],
+          authored_by: author.id
+        })
+        |> Repo.insert()
+
+      {:ok, _archived} = Accounts.archive_user(author)
+
+      resolved = OrgContext.resolve_authors([entry])
+
+      assert %{kind: :user, name: "Archived Author"} = Map.fetch!(resolved, author.id)
+    end
+
+    test "returns display name for an active user (baseline)" do
+      author =
+        Repo.insert!(%User{
+          email: "author_active_#{System.unique_integer([:positive])}@example.com",
+          name: "Active Author",
+          oidc_sub: "oidc-author-active-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, entry} =
+        %WikiJournalEntry{}
+        |> WikiJournalEntry.changeset(%{
+          content: "Recent decision.",
+          date: ~D[2026-06-01],
+          authored_by: author.id
+        })
+        |> Repo.insert()
+
+      resolved = OrgContext.resolve_authors([entry])
+
+      assert %{kind: :user, name: "Active Author"} = Map.fetch!(resolved, author.id)
+    end
   end
 end

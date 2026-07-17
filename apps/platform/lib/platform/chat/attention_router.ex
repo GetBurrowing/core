@@ -226,7 +226,26 @@ defmodule Platform.Chat.AttentionRouter do
     recipients = Enum.reject(participants, &(&1.id == author_id))
 
     agent_recipients = Enum.filter(recipients, &(&1.participant_type == "agent"))
-    human_recipients = Enum.reject(recipients, &(&1.participant_type == "agent"))
+
+    # Task 019f671f Stage 3: filter archived-user participants out of the
+    # human recipient list so attention routing (mentions, @[here] fan-out,
+    # `decide_human/2`, PubSub broadcast, push) is transparently silenced
+    # for them. The `chat_participants` row survives — that's intentional
+    # so past-message author snapshots still resolve in the transcript via
+    # `presence_hooks`' `include_archived: true` participant-map build.
+    # Agent recipients are UNaffected: archival is a user-only lifecycle.
+    # `mentioned?/2` is deliberately NOT touched; mention detection stays
+    # symmetric so parsing invariants remain stable — the archived user is
+    # dropped here, one level up.
+    active_user_participant_ids =
+      space_id
+      |> Chat.list_active_user_participant_ids()
+      |> MapSet.new()
+
+    human_recipients =
+      recipients
+      |> Enum.reject(&(&1.participant_type == "agent"))
+      |> Enum.filter(&MapSet.member?(active_user_participant_ids, &1.id))
 
     # ── Agent routing (mutex-based) ──────────────────────────────────────────
 

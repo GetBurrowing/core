@@ -195,4 +195,209 @@ defmodule Platform.AccountsTest do
       assert fabrikam_role(refreshed) == "member"
     end
   end
+
+  # ── Soft-archive (task 019f671f Stage 1) ──────────────────────────────
+
+  describe "archive_user/2 + unarchive_user/1" do
+    setup do
+      {:ok, target} =
+        Accounts.find_or_create_from_oidc(oidc_attrs(%{email: "target@example.com"}))
+
+      {:ok, actor} =
+        Accounts.find_or_create_from_oidc(oidc_attrs(%{email: "actor@example.com"}))
+
+      %{target: target, actor: actor}
+    end
+
+    test "archive_user/2 stamps archived_at (no actor, no reason)", %{target: target} do
+      assert is_nil(target.archived_at)
+      assert {:ok, archived} = Accounts.archive_user(target)
+      refute is_nil(archived.archived_at)
+      assert is_nil(archived.archived_by_user_id)
+      assert is_nil(archived.archived_reason)
+    end
+
+    test "archive_user/2 with :actor stamps archived_by_user_id", %{target: target, actor: actor} do
+      assert {:ok, archived} = Accounts.archive_user(target, actor: actor)
+      assert archived.archived_by_user_id == actor.id
+    end
+
+    test "archive_user/2 with :reason stamps archived_reason", %{target: target} do
+      assert {:ok, archived} = Accounts.archive_user(target, reason: "left the company")
+      assert archived.archived_reason == "left the company"
+    end
+
+    test "archive_user/2 with actor + reason stamps both", %{target: target, actor: actor} do
+      assert {:ok, archived} = Accounts.archive_user(target, actor: actor, reason: "offboard")
+      refute is_nil(archived.archived_at)
+      assert archived.archived_by_user_id == actor.id
+      assert archived.archived_reason == "offboard"
+    end
+
+    test "unarchive_user/1 clears all three columns", %{target: target, actor: actor} do
+      {:ok, archived} = Accounts.archive_user(target, actor: actor, reason: "test")
+
+      assert {:ok, restored} = Accounts.unarchive_user(archived)
+
+      assert is_nil(restored.archived_at)
+      assert is_nil(restored.archived_by_user_id)
+      assert is_nil(restored.archived_reason)
+    end
+
+    test "archive/unarchive round-trip preserves other fields", %{target: target, actor: actor} do
+      original_email = target.email
+
+      {:ok, archived} = Accounts.archive_user(target, actor: actor)
+      {:ok, restored} = Accounts.unarchive_user(archived)
+
+      assert restored.id == target.id
+      assert restored.email == original_email
+      assert restored.name == target.name
+    end
+  end
+
+  describe "list_users/1 include_archived option" do
+    setup do
+      {:ok, active} =
+        Accounts.find_or_create_from_oidc(oidc_attrs(%{email: "active@example.com"}))
+
+      {:ok, archived_user} =
+        Accounts.find_or_create_from_oidc(oidc_attrs(%{email: "archived@example.com"}))
+
+      {:ok, archived_user} = Accounts.archive_user(archived_user)
+
+      %{active: active, archived_user: archived_user}
+    end
+
+    test "defaults to excluding archived users", %{
+      active: active,
+      archived_user: archived_user
+    } do
+      ids = Accounts.list_users() |> Enum.map(& &1.id)
+      assert active.id in ids
+      refute archived_user.id in ids
+    end
+
+    test "include_archived: true includes archived users", %{
+      active: active,
+      archived_user: archived_user
+    } do
+      ids = Accounts.list_users(include_archived: true) |> Enum.map(& &1.id)
+      assert active.id in ids
+      assert archived_user.id in ids
+    end
+
+    test "query filter composes with archived filter by default", %{
+      archived_user: archived_user
+    } do
+      # Even if the query would match, archived rows are dropped by default.
+      ids = Accounts.list_users(query: "archived@example.com") |> Enum.map(& &1.id)
+      refute archived_user.id in ids
+    end
+
+    test "query filter + include_archived: true returns matching archived rows", %{
+      archived_user: archived_user
+    } do
+      ids =
+        Accounts.list_users(query: "archived@example.com", include_archived: true)
+        |> Enum.map(& &1.id)
+
+      assert archived_user.id in ids
+    end
+  end
+
+  describe "get_users_map/2 include_archived option" do
+    setup do
+      {:ok, active} =
+        Accounts.find_or_create_from_oidc(oidc_attrs(%{email: "map-active@example.com"}))
+
+      {:ok, archived_user} =
+        Accounts.find_or_create_from_oidc(oidc_attrs(%{email: "map-archived@example.com"}))
+
+      {:ok, archived_user} = Accounts.archive_user(archived_user)
+
+      %{active: active, archived_user: archived_user}
+    end
+
+    test "get_users_map/1 defaults to dropping archived rows", %{
+      active: active,
+      archived_user: archived_user
+    } do
+      result = Accounts.get_users_map([active.id, archived_user.id])
+      assert Map.has_key?(result, active.id)
+      refute Map.has_key?(result, archived_user.id)
+    end
+
+    test "get_users_map/2 with include_archived: true returns archived rows", %{
+      active: active,
+      archived_user: archived_user
+    } do
+      result =
+        Accounts.get_users_map([active.id, archived_user.id], include_archived: true)
+
+      assert Map.has_key?(result, active.id)
+      assert Map.has_key?(result, archived_user.id)
+    end
+
+    test "get_users_map/1 handles archived-only id list by returning empty map", %{
+      archived_user: archived_user
+    } do
+      assert Accounts.get_users_map([archived_user.id]) == %{}
+    end
+
+    test "get_users_map/1 for empty list is empty map (regression guard)" do
+      assert Accounts.get_users_map([]) == %{}
+    end
+  end
+
+  describe "find_or_create_from_oidc/1 — archived user (Stage 5)" do
+    test "returns {:error, :user_archived} for a sub whose user is archived, no mutation" do
+      attrs = oidc_attrs(%{email: "archived-oidc@example.com"})
+
+      {:ok, user} = Accounts.find_or_create_from_oidc(attrs)
+      {:ok, archived} = Accounts.archive_user(user)
+
+      snapshot = %{
+        email: archived.email,
+        name: archived.name,
+        avatar_url: archived.avatar_url,
+        archived_at: archived.archived_at
+      }
+
+      # Simulate a re-login attempt with a fresh (would-be-refreshed)
+      # name + avatar payload from the OIDC provider.
+      relogin_attrs = %{
+        sub: user.oidc_sub,
+        email: archived.email,
+        name: "Renamed Post-Archive",
+        avatar_url: "https://issuer.example.com/new-avatar-post-archive.png"
+      }
+
+      assert {:error, :user_archived} =
+               Accounts.find_or_create_from_oidc(relogin_attrs)
+
+      # Row is untouched — nothing on the archived user got refreshed.
+      reloaded = Repo.get!(Platform.Accounts.User, user.id)
+      assert reloaded.email == snapshot.email
+      assert reloaded.name == snapshot.name
+      assert reloaded.avatar_url == snapshot.avatar_url
+      assert reloaded.archived_at == snapshot.archived_at
+    end
+  end
+
+  describe "get_user/1 (unchanged by archival)" do
+    # get_user/1 is deliberately NOT filtered by archived_at — Stage 5's
+    # auth plugs need to look up the archived user in order to bounce it.
+    # This test locks that behavior in.
+    test "returns archived user unchanged" do
+      {:ok, user} =
+        Accounts.find_or_create_from_oidc(oidc_attrs(%{email: "auth-lookup@example.com"}))
+
+      {:ok, archived} = Accounts.archive_user(user)
+
+      fetched = Accounts.get_user(archived.id)
+      assert fetched.id == archived.id
+      refute is_nil(fetched.archived_at)
+    end
+  end
 end

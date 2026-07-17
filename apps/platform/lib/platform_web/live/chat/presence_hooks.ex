@@ -119,11 +119,21 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       })
     end
 
+    # Explicit archived-user override (task 019f671f Stage 3): the
+    # `enter_space` participant map is the identity source for EVERY
+    # currently-rendered chat message, including historical messages whose
+    # author has since been archived. Without `include_archived: true` the
+    # default `Accounts.get_users_map/1` (Stage 1) would drop the archived
+    # user, leaving `sender_name/2` to fall back to the ADR 0038 author
+    # snapshot ("User" for pre-snapshot rows). Mirror `Platform.Org.Context`
+    # / `resolve_authors/1` semantics from Stage 2 — historical attribution
+    # MUST resolve. Attention routing suppression for archived users is
+    # handled one layer up in `AttentionRouter.route/1`.
     users_by_id =
       participants
       |> Enum.filter(&(&1.participant_type == "user"))
       |> Enum.map(& &1.participant_id)
-      |> Accounts.get_users_map()
+      |> Accounts.get_users_map(include_archived: true)
 
     participants_map = build_participant_identity_map(participants, users_by_id)
 
@@ -421,7 +431,14 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       name: name,
       display_name: name,
       avatar_url: participant.avatar_url,
-      avatar_seed: participant.participant_id || participant.id
+      avatar_seed: participant.participant_id || participant.id,
+      # Agents are never "archived" in the user-lifecycle sense — the flag
+      # exists so the Mentions autocomplete filter can be a single map-lookup
+      # across user AND agent entries without needing to check
+      # `participant_type` first. See task 019f671f validation 1(c) —
+      # archived users must NOT appear in @-mention autocomplete, but agents
+      # (and the here sentinel) must remain reachable.
+      archived: false
     }
   end
 
@@ -433,9 +450,19 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       name: name,
       display_name: name,
       avatar_url: participant.avatar_url || (user && user.avatar_url),
-      avatar_seed: participant_avatar_seed(participant, user)
+      avatar_seed: participant_avatar_seed(participant, user),
+      # `participants_map` intentionally still contains archived users so
+      # historical messages authored by them render with their real display
+      # name (task 019f671f Stage 3 explanatory comment in `enter_space/4`).
+      # This flag lets downstream consumers that must NOT surface archived
+      # users (mention autocomplete — task 019f671f validation 1(c))
+      # reject them without losing the identity for render.
+      archived: user_archived?(user)
     }
   end
+
+  defp user_archived?(%{archived_at: %DateTime{}}), do: true
+  defp user_archived?(_), do: false
 
   defp participant_name(%{name: name}, _user) when is_binary(name) and name != "", do: name
 

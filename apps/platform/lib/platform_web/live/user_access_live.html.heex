@@ -5,20 +5,140 @@
       <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
         Admin · User Access
       </h1>
+      <span class="badge badge-ghost badge-sm">{length(@users)}</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button
+        type="button"
+        phx-click="toggle_show_archived"
+        class={[
+          "btn btn-sm gap-2",
+          if(@show_archived, do: "btn-primary", else: "btn-ghost")
+        ]}
+        data-role="toggle-show-archived"
+      >
+        <span class="hero-archive-box size-4"></span>
+        <%= if @show_archived do %>
+          Hide archived ({@archived_count})
+        <% else %>
+          Show archived ({@archived_count})
+        <% end %>
+      </button>
     </div>
   </div>
 
-  <%!-- Coming Soon stub --%>
+  <%!-- User list --%>
   <div class="flex-1 min-h-0 overflow-y-auto p-4">
-    <div class="mx-auto max-w-2xl mt-12">
-      <div class="rounded-lg border border-base-300 bg-base-200 p-8 text-center">
-        <span class="hero-user-group size-12 mx-auto mb-4 block text-base-content/40"></span>
-        <h2 class="text-lg font-semibold text-base-content mb-2">User Access — Coming Soon</h2>
-        <p class="text-sm text-base-content/60 leading-relaxed">
-          Manage user permissions, roles, and org membership for Suite. This surface is
-          placeholder pending UX scoping in a follow-up task.
-        </p>
-      </div>
+    <div :if={@users == []} class="flex items-center justify-center h-full text-base-content/40">
+      No users to show.
+    </div>
+
+    <div :if={@users != []} class="overflow-x-auto">
+      <table class="table table-sm w-full">
+        <thead>
+          <tr>
+            <th class="text-xs uppercase tracking-wider text-base-content/50">Name</th>
+            <th class="text-xs uppercase tracking-wider text-base-content/50 hidden md:table-cell">
+              Email
+            </th>
+            <th class="text-xs uppercase tracking-wider text-base-content/50">Status</th>
+            <th class="text-xs uppercase tracking-wider text-base-content/50 hidden lg:table-cell">
+              Archived by
+            </th>
+            <th class="text-xs uppercase tracking-wider text-base-content/50 text-right">
+              Actions
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            :for={u <- @users}
+            data-user-id={u.id}
+            data-archived={if u.archived_at, do: "true", else: "false"}
+            class={[
+              "align-middle",
+              u.archived_at && "bg-base-200/60"
+            ]}
+          >
+            <td class="min-w-0">
+              <div class="flex items-center gap-3">
+                <%!-- Plain circular avatar — no ring decoration
+                     (project memory: sponsor/user avatars are plain
+                     circular images everywhere). --%>
+                <img
+                  :if={u.avatar_url}
+                  src={u.avatar_url}
+                  alt={u.name}
+                  class="w-8 h-8 rounded-full object-cover"
+                  loading="lazy"
+                />
+                <div
+                  :if={!u.avatar_url}
+                  class="w-8 h-8 rounded-full bg-base-300 flex items-center justify-center text-xs font-semibold uppercase text-base-content/60"
+                  aria-hidden="true"
+                >
+                  {String.first(u.name || "?") |> String.upcase()}
+                </div>
+                <div class="min-w-0">
+                  <div class="text-sm font-medium text-base-content truncate">{u.name}</div>
+                  <div class="text-xs text-base-content/50 md:hidden truncate">{u.email}</div>
+                </div>
+              </div>
+            </td>
+            <td class="text-sm text-base-content/70 hidden md:table-cell">{u.email}</td>
+            <td class="whitespace-nowrap">
+              <%= if u.archived_at do %>
+                <span
+                  class="badge badge-ghost badge-sm gap-1"
+                  title={"Archived #{u.archived_at}"}
+                >
+                  Archived {relative_time(u.archived_at)}
+                </span>
+              <% else %>
+                <span class="badge badge-success badge-sm">Active</span>
+              <% end %>
+            </td>
+            <td class="text-xs text-base-content/60 hidden lg:table-cell">
+              {archived_by_name(@users_by_id, u.archived_by_user_id)}
+            </td>
+            <td class="text-right whitespace-nowrap">
+              <%= cond do %>
+                <% u.archived_at -> %>
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-primary"
+                    phx-click="unarchive"
+                    phx-value-id={u.id}
+                    data-role="unarchive"
+                  >
+                    Unarchive
+                  </button>
+                <% @current_user_record && u.id == @current_user_record.id -> %>
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-error"
+                    disabled
+                    title="You can't archive yourself"
+                    data-role="archive"
+                    data-disabled-reason="self"
+                  >
+                    Archive
+                  </button>
+                <% true -> %>
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-error"
+                    phx-click="archive"
+                    phx-value-id={u.id}
+                    data-role="archive"
+                  >
+                    Archive
+                  </button>
+              <% end %>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>
 </div>

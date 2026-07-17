@@ -167,8 +167,11 @@ config :platform, :canvas_persist_sync, true
 # module.
 config :platform,
        :t2_context_sha256_t1_head,
-       # bumped by memory-feedback stage 6 hotfix
-       "e9943bbcb46f7a8b9c41dd893b28c5f328763c34c208209b63fad2591742645e"
+       # bumped by memory-feedback stage 6 hotfix (main) + user-archival stage 2
+       # (task 019f671f): `resolve_authors/1` now passes `include_archived: true`
+       # to `Accounts.get_users_map/2` so historical memory-entry authors still
+       # resolve after the author is archived. Rehash absorbs both edits.
+       "2f900b380c4a08bd482357bb9f9a02b29d85ddee905a02af9e4debfc4d157b6d"
 
 # Stack v2 (task 019f487d, ADR 0045) — Platform.Tasks.Stacks.DepInference
 # resolves its LLM adapter from application env at call time. Tests

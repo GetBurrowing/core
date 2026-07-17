@@ -106,6 +106,22 @@ defmodule Platform.Chat.AttentionRouterTest do
     "test-#{System.unique_integer([:positive])}"
   end
 
+  # Insert a real Platform.Accounts.User for tests that exercise archived-user
+  # filtering (Stage 3). Most other tests in this file use bogus participant_ids
+  # because chat_participants has no FK to users; the archival helper's LEFT
+  # JOIN keeps those bogus rows visible while still dropping known-archived
+  # users. Tests here need REAL user rows so `Accounts.archive_user/1` has
+  # something to flip.
+  defp insert_test_user(opts \\ []) do
+    n = System.unique_integer([:positive])
+
+    Repo.insert!(%Platform.Accounts.User{
+      name: Keyword.get(opts, :name, "User #{n}"),
+      email: Keyword.get(opts, :email, "user-#{n}@example.com"),
+      oidc_sub: "sub-#{n}"
+    })
+  end
+
   defp drain do
     :ok = GenServer.call(AttentionRouter, :__drain__)
   end
@@ -1167,6 +1183,135 @@ defmodule Platform.Chat.AttentionRouterTest do
         assert AttentionRouter.notification_title("Rowan", reason) == "Rowan in Suite",
                "expected default title for reason #{inspect(reason)}"
       end
+    end
+  end
+
+  # ── Archived-user filtering (task 019f671f Stage 3) ──────────────────────
+  #
+  # Archiving a user flips `users.archived_at` but does NOT hard-delete the
+  # `chat_participants` row — that stays behind so past-message author
+  # snapshots remain attributable via presence_hooks. To silence attention
+  # routing for archived users, `AttentionRouter.route/1` filters human
+  # recipients through `Chat.list_active_user_participant_ids/1`. Agent
+  # participants are NOT affected (archival is a user-only lifecycle).
+
+  describe "archived-user participants (Stage 3)" do
+    test "route/1 emits no decision for an archived-user participant; agent + active-user decisions unchanged" do
+      space = create_space(%{kind: "group"})
+
+      # Sender (an active user with a real user row).
+      sender_user = insert_test_user(name: "Rowan Sender")
+
+      sender =
+        create_participant(space.id, %{
+          participant_id: sender_user.id,
+          display_name: "Rowan Sender",
+          attention_mode: "all"
+        })
+
+      # Active recipient — real, unarchived user row.
+      active_user = insert_test_user(name: "Alice Active")
+
+      active_recipient =
+        create_participant(space.id, %{
+          participant_id: active_user.id,
+          display_name: "Alice Active",
+          attention_mode: "all"
+        })
+
+      # Archived recipient — real user, then archived.
+      archived_user = insert_test_user(name: "Bob Archived")
+
+      archived_recipient =
+        create_participant(space.id, %{
+          participant_id: archived_user.id,
+          display_name: "Bob Archived",
+          attention_mode: "all"
+        })
+
+      {:ok, _archived_user} = Platform.Accounts.archive_user(archived_user)
+
+      # Agent participant — should stay in routing (archival is user-only).
+      agent = create_agent(%{name: "Zip"})
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
+
+      Chat.add_space_agent(space.id, agent.id, role: "principal")
+
+      # Message @-mentions the archived user by display name; agent gets
+      # `:mention` via bracketed form. Under Stage 3 the archived recipient
+      # is dropped BEFORE decide_human/2 runs.
+      message =
+        create_message(space.id, sender.id, %{
+          content: "hey @[Bob Archived] and @[Zip] and @[Alice Active]"
+        })
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      participant_ids = Enum.map(decisions, & &1.participant_id)
+
+      refute archived_recipient.id in participant_ids,
+             "archived-user participant must not receive any routing decision, got: #{inspect(decisions)}"
+
+      assert active_recipient.id in participant_ids,
+             "active user must still receive a routing decision, got: #{inspect(decisions)}"
+
+      assert agent_participant.id in participant_ids,
+             "agent participant must still be routed (archival is user-only), got: #{inspect(decisions)}"
+
+      # Sender is never in decisions.
+      refute sender.id in participant_ids
+
+      drain()
+    end
+
+    test "route/1 with @[here] fan-out skips archived-user participants" do
+      # Defense: @[here] bypasses per-participant attention_mode and fans
+      # out to every human recipient. Archived users must still be excluded.
+      space = create_space(%{kind: "channel"})
+
+      sender_user = insert_test_user(name: "Sender")
+
+      sender =
+        create_participant(space.id, %{participant_id: sender_user.id, display_name: "Sender"})
+
+      active_user = insert_test_user(name: "Alice")
+
+      active_recipient =
+        create_participant(space.id, %{
+          participant_id: active_user.id,
+          display_name: "Alice",
+          attention_mode: "all"
+        })
+
+      archived_user = insert_test_user(name: "Bob")
+
+      archived_recipient =
+        create_participant(space.id, %{
+          participant_id: archived_user.id,
+          display_name: "Bob",
+          attention_mode: "all"
+        })
+
+      {:ok, _archived_user} = Platform.Accounts.archive_user(archived_user)
+
+      message = create_message(space.id, sender.id, %{content: "@[here] all hands"})
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      here_pids =
+        decisions
+        |> Enum.filter(&(&1.reason == :here))
+        |> Enum.map(& &1.participant_id)
+
+      refute archived_recipient.id in here_pids,
+             "archived user must be excluded from @[here] fan-out, got: #{inspect(decisions)}"
+
+      assert active_recipient.id in here_pids,
+             "active user must still receive :here, got: #{inspect(decisions)}"
+
+      drain()
     end
   end
 

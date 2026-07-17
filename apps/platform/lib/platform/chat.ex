@@ -800,6 +800,36 @@ defmodule Platform.Chat do
     Repo.all(base)
   end
 
+  @doc """
+  Return the ids of `chat_participants` rows in `space_id` whose participant is
+  a NOT-known-to-be-archived user (`participant_type == "user"` and the joined
+  `users` row either does not exist or has `is_nil(archived_at)`).
+
+  Agent participants are OUT of scope for this helper — pair it with the caller's
+  agent-side split (see `Platform.Chat.AttentionRouter.route/1`). The LEFT JOIN
+  semantics — "unknown user row treated as active" — are deliberate: `chat_participants`
+  has no FK back to `users` (see `20260314080000_create_chat_tables.exs`), so bogus
+  participant_ids can exist (test fixtures use random UUIDs). Silencing those would
+  be a semantic change unrelated to archival; we only suppress the ONE case the
+  archival contract cares about: participant.user is present and archived.
+
+  Used by `AttentionRouter.route/1` (task 019f671f Stage 3) to silence attention
+  routing for archived users while keeping their historical author snapshots
+  attributable via `presence_hooks`' `include_archived: true` participant map
+  build.
+  """
+  @spec list_active_user_participant_ids(binary()) :: [binary()]
+  def list_active_user_participant_ids(space_id) when is_binary(space_id) do
+    from(p in Participant,
+      left_join: u in Platform.Accounts.User,
+      on: u.id == p.participant_id,
+      where: p.space_id == ^space_id and p.participant_type == "user",
+      where: is_nil(u.id) or is_nil(u.archived_at),
+      select: p.id
+    )
+    |> Repo.all()
+  end
+
   @doc "Update a participant's attributes (role, display_name, attention settings, etc.)."
   @spec update_participant(Participant.t(), map()) ::
           {:ok, Participant.t()} | {:error, Ecto.Changeset.t()}

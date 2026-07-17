@@ -92,8 +92,8 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
     end
   end
 
-  describe "/admin/users (User Access stub)" do
-    test "admin user reaches the page and sees the Coming Soon stub", %{conn: conn} do
+  describe "/admin/users (User Access)" do
+    test "admin user reaches the page and sees the user-list surface", %{conn: conn} do
       user = create_user!()
       fabrikam = Tenancy.get_org_by_slug!("fabrikam")
       create_membership!(user, fabrikam, "admin")
@@ -101,7 +101,15 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
       {:ok, _view, html} = conn |> authenticated_conn(user) |> live(~p"/admin/users")
 
       assert html =~ "Admin · User Access"
-      assert html =~ "Coming Soon"
+      # Toggle button rendered — this is the primary affordance of the
+      # (no-longer-stubbed) surface. Task 019f671f Stage 6.
+      assert html =~ ~s(data-role="toggle-show-archived")
+      # Own admin row present with the self-archive guard rendered
+      # (`disabled` on the current-user row, self-explanatory title).
+      # `'` is HTML-escaped to `&#39;` inside the title attribute.
+      assert html =~ "You can&#39;t archive yourself"
+      # The old "Coming Soon" copy is gone.
+      refute html =~ "Coming Soon"
     end
 
     test "member user is redirected to /", %{conn: conn} do
