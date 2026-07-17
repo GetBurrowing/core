@@ -588,6 +588,52 @@ defmodule Platform.Tasks.StackDeployerTest do
       assert {:error, {:invalid_args, _}} =
                Platform.Tasks.StackDeployer.GitShellRunner.merge_member_into_rollup(%{})
     end
+
+    # Regression for the moon container /app permission-denied crash on
+    # 2026-07-17: the previous default `@default_repo_root "tmp/stack_deployer"`
+    # `Path.expand`ed to `<CWD>/tmp/stack_deployer` — inside the release image
+    # that resolved to `/app/tmp/stack_deployer`, which the beam (running as
+    # UID 1000) could not `File.mkdir_p!/1` because `/app` was owned by root.
+    # This test exercises the `ensure_clone/2` mkdir_p call with NO config
+    # override in place, so the default runtime path is the only thing under
+    # test. We deliberately use a bogus repo_url so the subsequent `git clone`
+    # fails fast — we only care that the parent directory got created under a
+    # writable location (System.tmp_dir!/0).
+    test "default repo_root falls back to System.tmp_dir!/0 (writable in containers)" do
+      # Force no override — the OTP config may have one set for the test env,
+      # so remove it for the duration of the test. Restore on exit even if
+      # the test crashes so we don't leak into sibling tests.
+      original_config = Application.get_env(:platform, :stack_deployer)
+      on_exit(fn -> Application.put_env(:platform, :stack_deployer, original_config) end)
+      Application.delete_env(:platform, :stack_deployer)
+
+      project_id = "test-#{System.unique_integer([:positive])}"
+      expected_parent = Path.join(System.tmp_dir!(), "stack_deployer")
+      expected_clone_path = Path.join(expected_parent, project_id)
+
+      # Clean any stale scratch dir from prior runs of this project_id.
+      on_exit(fn -> File.rm_rf(expected_clone_path) end)
+
+      # A bogus repo_url guarantees `git clone` fails, but ensure_clone's
+      # `File.mkdir_p!(Path.dirname(clone_path))` runs first — which is
+      # exactly the call that crashed prod under the old hardcoded path.
+      result =
+        Platform.Tasks.StackDeployer.GitShellRunner.ensure_rollup_branch(%{
+          repo_url: "file:///nonexistent/repo-for-mkdir-smoke-test.git",
+          base_branch: "main",
+          rollup_branch: "stack/mkdir-smoke",
+          project_id: project_id
+        })
+
+      # We expect the clone to fail (bogus URL), NOT a mkdir_p crash.
+      assert match?({:error, {:git_clone_failed, _, _}}, result),
+             "expected git_clone_failed after mkdir_p succeeded, got #{inspect(result)}"
+
+      # The parent directory must exist under System.tmp_dir!/0 — proving
+      # the default runtime path resolved to a writable location.
+      assert File.dir?(expected_parent),
+             "expected parent directory #{expected_parent} to exist after ensure_clone/2"
+    end
   end
 
   # ── merge_member_into_rollup/1 (stage 2) ─────────────────────────────────

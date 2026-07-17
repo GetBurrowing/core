@@ -46,7 +46,16 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
 
   require Logger
 
-  @default_repo_root "tmp/stack_deployer"
+  # Default repo-root subdirectory name. The full path is composed at
+  # runtime by `default_repo_root/0` off `System.tmp_dir!/0` — this
+  # avoids the historical hardcoded `"tmp/stack_deployer"` that
+  # `Path.expand/1` resolved to `<CWD>/tmp/stack_deployer` (i.e. under
+  # the release's `/app` in the moon container, which is owned by
+  # `root:root` while the beam runs as UID 1000 — a `File.mkdir_p!/1`
+  # crash there stalled the meeting-to-tasks pipeline rollup on
+  # 2026-07-17). Override via `config :platform, :stack_deployer,
+  # repo_root: <path>` when you want a persistent location.
+  @default_repo_root_subdir "stack_deployer"
 
   @impl true
   def ensure_rollup_branch(%{
@@ -545,7 +554,14 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
 
   defp repo_root do
     Application.get_env(:platform, :stack_deployer, [])
-    |> Keyword.get(:repo_root, @default_repo_root)
+    |> Keyword.get(:repo_root, default_repo_root())
     |> Path.expand()
   end
+
+  # Runtime-resolved default so we land in a writable dir regardless of
+  # CWD. `System.tmp_dir!/0` picks `TMPDIR` / `TEMP` / `TMP` / `/tmp` in
+  # that order — every container image we ship has one of those writable
+  # by the release user. See the module attribute doc above for the
+  # historical /app permission-denied failure this replaces.
+  defp default_repo_root, do: Path.join(System.tmp_dir!(), @default_repo_root_subdir)
 end
