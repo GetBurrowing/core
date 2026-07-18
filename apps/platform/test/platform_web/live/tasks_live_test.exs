@@ -3947,6 +3947,38 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Manual review screenshot"
     assert html =~ "View output"
     assert html =~ "Please verify the submitted screenshot."
+
+    # DOM-order contract (task 019f70f0 stage 2): the Pending Review pane
+    # was hoisted from below Outputs to sit directly under the description
+    # block. In the rendered detail panel it MUST appear after the
+    # description-block anchor and BEFORE the Outputs / Execution Log
+    # sections so reviewers land on approval actions without scrolling.
+    desc_idx = :binary.match(html, "data-role=\"description-block\"") |> elem(0)
+    pending_idx = :binary.match(html, "Pending Review") |> elem(0)
+    outputs_idx = :binary.match(html, "Outputs") |> elem(0)
+
+    assert desc_idx < pending_idx,
+           "Pending Review pane must render after description-block " <>
+             "(desc_idx=#{desc_idx}, pending_idx=#{pending_idx})"
+
+    assert pending_idx < outputs_idx,
+           "Pending Review pane must render before Outputs section " <>
+             "(pending_idx=#{pending_idx}, outputs_idx=#{outputs_idx})"
+  end
+
+  test "task detail hides Pending Review pane when there are no review_requests",
+       %{conn: conn} do
+    # Companion to `task detail renders review canvas evidence`: the
+    # `:if={@pending_reviews != []}` conditional must fully elide the
+    # section — no h3, no warning border, no orphan whitespace container.
+    project = create_project()
+    task = create_task(project, %{title: "No Reviews Task", status: "in_progress"})
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+    refute html =~ "Pending Review"
+    refute html =~ "border-warning bg-warning/5"
   end
 
   # ── Soft delete tests ─────────────────────────────────────────────────
