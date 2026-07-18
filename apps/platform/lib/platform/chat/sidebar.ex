@@ -26,10 +26,43 @@ defmodule Platform.Chat.Sidebar do
   @channel_order_key "chat_channel_order"
   @hidden_sections_key "chat_hidden_sections"
 
-  @doc "The org-default sections, ordered by admin position then name."
+  @doc """
+  The org-default sections, ordered by admin position then name.
+
+  ALL rows, including sections whose org is archived — the curation writes
+  and the admin editor need the full set. The RENDER path must use
+  `list_active_default_sections/0` instead.
+  """
   @spec list_default_sections() :: [Section.t()]
   def list_default_sections do
     Repo.all(from(s in Section, order_by: [asc: s.position, asc: s.name]))
+  end
+
+  @doc """
+  The org-default sections a user should actually SEE — `list_default_sections/0`
+  minus any section whose org is archived (task 019f4eaa).
+
+  Archiving an org cascade-hides its projects and channels, but a section is a
+  row of its own in `channel_sections` and the cascade never touched it. So the
+  channels correctly vanished while the org's section header kept rendering
+  above an empty "No channels yet" placeholder — the org looked half-deleted.
+  Marlowe hit this walking the review.
+
+  Mirrors `Tenancy.list_tenants/0` vs `list_active_tenants/0`: the data API
+  keeps returning every row; only the render path filters. Restoring the org
+  brings the section back with no extra work, because nothing about the
+  section row ever changed.
+  """
+  @spec list_active_default_sections() :: [Section.t()]
+  def list_active_default_sections do
+    Repo.all(
+      from(s in Section,
+        join: o in Platform.Tenancy.Org,
+        on: o.id == s.org_id,
+        where: is_nil(o.archived_at),
+        order_by: [asc: s.position, asc: s.name]
+      )
+    )
   end
 
   @doc "Rename an org-default section (Fabrikam admin only)."
@@ -123,10 +156,13 @@ defmodule Platform.Chat.Sidebar do
   Resolve the sidebar for a user: org default sections + their personal
   overrides. Loads sections and the user's prefs, then delegates to the pure
   `resolve/3`. Anonymous / unknown user ids resolve to the plain default.
+
+  Reads `list_active_default_sections/0`, NOT `list_default_sections/0` — an
+  archived org must not keep a section header in anyone's sidebar.
   """
   @spec resolve_for_user(binary() | nil, [Chat.Space.t()]) :: [resolved()]
   def resolve_for_user(user_id, channels) do
-    resolve(list_default_sections(), channels, Accounts.get_user_preferences(user_id))
+    resolve(list_active_default_sections(), channels, Accounts.get_user_preferences(user_id))
   end
 
   @doc """

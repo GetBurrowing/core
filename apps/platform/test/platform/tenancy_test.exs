@@ -154,6 +154,76 @@ defmodule Platform.TenancyTest do
     end
   end
 
+  # ── list_active_tenants/0 (scope-rail source) ────────────────────────
+
+  describe "list_active_tenants/0" do
+    # Stamp `archived_at` directly — the column is the only thing
+    # `list_active_tenants/0` reads. The full authz/cascade path is
+    # covered in Platform.Tenancy.LifecycleTest.
+    defp archive_org!(slug) do
+      org = Tenancy.get_org_by_slug!(slug)
+
+      org
+      |> Org.changeset(%{archived_at: DateTime.utc_now()})
+      |> Repo.update!()
+    end
+
+    test "includes the root Fabrikam plus every active tenant" do
+      slugs = Tenancy.list_active_tenants() |> Enum.map(& &1.slug)
+      assert "fabrikam" in slugs
+      assert Enum.sort(slugs) == ~w(paragon soylent fabrikam wayne_tech sxi)
+    end
+
+    test "returns rows in canonical tenant-priority order (Fabrikam first)" do
+      slugs = Tenancy.list_active_tenants() |> Enum.map(& &1.slug)
+      assert slugs == ["fabrikam", "soylent", "wayne_tech", "sxi", "paragon"]
+    end
+
+    test "excludes an archived tenant" do
+      archive_org!("sxi")
+
+      slugs = Tenancy.list_active_tenants() |> Enum.map(& &1.slug)
+      refute "sxi" in slugs
+      # the other four scopes (root + 3 active tenants) survive
+      assert Enum.sort(slugs) == ~w(paragon soylent fabrikam wayne_tech)
+    end
+
+    test "excludes a deletion-scheduled tenant (scheduling stamps archived_at)" do
+      org = Tenancy.get_org_by_slug!("paragon")
+
+      org
+      |> Org.changeset(%{
+        archived_at: DateTime.utc_now(),
+        deletion_scheduled_at: DateTime.utc_now()
+      })
+      |> Repo.update!()
+
+      slugs = Tenancy.list_active_tenants() |> Enum.map(& &1.slug)
+      refute "paragon" in slugs
+    end
+
+    test "still lists Fabrikam even though the root can never be archived" do
+      # Archive every tenant; only the un-archivable root remains.
+      Enum.each(~w(soylent wayne_tech sxi paragon), &archive_org!/1)
+
+      slugs = Tenancy.list_active_tenants() |> Enum.map(& &1.slug)
+      assert slugs == ["fabrikam"]
+    end
+
+    test "regression: list_tenants/0 STILL returns an archived tenant (all-rows callers)" do
+      archive_org!("sxi")
+
+      # list_active_tenants hides it...
+      refute "sxi" in (Tenancy.list_active_tenants() |> Enum.map(& &1.slug))
+
+      # ...but list_tenants/0 (org-summary walkers, preamble builder,
+      # federation tool surface) still sees every tenant regardless of
+      # archive state.
+      all = Tenancy.list_tenants() |> Enum.map(& &1.slug) |> Enum.sort()
+      assert all == ~w(paragon soylent wayne_tech sxi)
+    end
+  end
+
   # ── ADR-0042 canonical tenant-priority ordering ──────────────────────
 
   describe "tenant_priority/0 + helpers" do

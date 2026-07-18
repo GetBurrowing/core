@@ -21,7 +21,7 @@
 
     <div class="flex-1 overflow-y-auto" data-role="files-project-picker">
       <details
-        :for={{org_slug, _org_name, org_projects} <- @projects_by_org}
+        :for={{org_slug, _org_name, org_projects} <- @project_sections}
         open
         class="group"
         data-role="files-project-group"
@@ -46,8 +46,10 @@
         </button>
       </details>
 
+      <%!-- Every active org now renders a header, so the picker is never truly
+           empty — show the hint only when no org has a project to select. --%>
       <div
-        :if={@projects_by_org == []}
+        :if={Enum.all?(@project_sections, fn {_slug, _name, projects} -> projects == [] end)}
         class="px-3 py-6 text-center text-sm text-base-content/50"
       >
         No projects yet. Create one from the Tasks surface to start uploading files here.

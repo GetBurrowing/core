@@ -68,6 +68,7 @@ defmodule Platform.Chat do
     result =
       %Space{}
       |> Space.changeset(attrs)
+      |> Platform.Tenancy.Lifecycle.guard_org_active()
       |> Repo.insert()
 
     case result do

@@ -177,6 +177,7 @@ defmodule PlatformWeb.Router do
       ],
       layout: {PlatformWeb.Layouts, :shell} do
       live("/admin", AdminLive, :index)
+      live("/admin/recovery", RecoveryLive, :index)
       live("/admin/users", UserAccessLive, :index)
       live("/admin/prompts", AdminPromptsLive, :index)
       live("/admin/prompts/:slug", AdminPromptsLive, :edit)

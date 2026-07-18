@@ -68,6 +68,10 @@ config :platform, :task_router_watcher_reconcile, false
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_space_purger, false
 
+# ContainerPurger (task 019f4eaa stage 4): tests call `sweep/0` directly
+# inside the DataCase sandbox instead of racing a global daily ticker.
+config :platform, :start_container_purger, false
+
 # M1 stage 4 (ADR-0041): Platform.Responsibilities.Registry runs
 # `register_all/1` on init, which writes to the DB. Tests use the
 # DataCase sandbox and start their own per-case Registry instance with

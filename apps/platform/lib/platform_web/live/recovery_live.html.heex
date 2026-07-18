@@ -1,0 +1,124 @@
+<div class="flex h-full min-h-0 flex-col">
+  <%!-- Header (mirrors the Admin surface chrome) --%>
+  <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+    <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+      Recovery · Archived &amp; scheduled
+    </h1>
+  </div>
+
+  <div class="flex-1 min-h-0 overflow-y-auto p-4">
+    <div class="mx-auto max-w-5xl">
+      <%= if @entries == [] do %>
+        <.empty_state variant={:standard} icon_name="hero-archive-box">
+          <:title>Nothing archived</:title>
+          <:body>
+            Retired orgs and projects show up here so you can bring them back.
+          </:body>
+        </.empty_state>
+      <% else %>
+        <%!-- Structured table (task 019f4eaa review): one row per retired
+             container, status + dates in columns, a simple Restore action.
+             Scheduled rows sort to the top (soonest permanent-delete first). --%>
+        <div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
+          <table class="w-full border-collapse text-sm">
+            <thead>
+              <tr class="border-b border-base-300 text-left text-xs font-medium uppercase tracking-wide text-base-content/50">
+                <th class="px-4 py-2.5">Name</th>
+                <th class="px-4 py-2.5">Type</th>
+                <th class="px-4 py-2.5">Status</th>
+                <th class="px-4 py-2.5">Archived on</th>
+                <th class="px-4 py-2.5">Auto-deletes</th>
+                <th class="px-4 py-2.5 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                :for={entry <- @entries}
+                data-role="recovery-row"
+                data-type={entry.type}
+                data-id={entry.id}
+                data-status={if entry.scheduled?, do: "scheduled", else: "archived"}
+                class="border-b border-base-300/50 last:border-0 hover:bg-base-200/40 transition-colors"
+              >
+                <td class="px-4 py-3">
+                  <div class="flex min-w-0 items-center gap-2.5">
+                    <.icon
+                      name={kind_icon(entry.type)}
+                      class="size-4 shrink-0 text-base-content/40"
+                    />
+                    <span class="truncate font-medium text-base-content">{entry.name}</span>
+                  </div>
+                  <%!-- What Restore brings back WITH this row (task 019f4eaa,
+                       Marlowe's ask). Cascade children aren't rows of their own —
+                       they return with their org — but the row must say what's
+                       inside rather than make you restore blind. Same instinct
+                       as the confirm dialog's "ALSO HIDDEN" list, and the same
+                       source of truth: this is exactly the restore query.
+                       Absent for projects (no cascade) and for an org whose
+                       children were archived independently — Restore won't
+                       bring those back, so it must not imply it will. --%>
+                  <p
+                    :if={hidden_labels(entry) != []}
+                    data-role="recovery-row-hidden"
+                    class="mt-1 truncate pl-[26px] text-xs text-base-content/50"
+                    title={Enum.join(hidden_labels(entry), ", ")}
+                  >
+                    Restores {length(hidden_labels(entry))} inside: {Enum.join(
+                      hidden_labels(entry),
+                      ", "
+                    )}
+                  </p>
+                </td>
+                <td class="px-4 py-3 text-base-content/70">{entry.kind_label}</td>
+                <%!-- Status reads as plain text (task 019f4eaa review): the
+                     leading dot was decoration — the word already says it, and
+                     the tone carries the urgency. --%>
+                <td class="px-4 py-3">
+                  <span :if={entry.scheduled?} class="whitespace-nowrap text-warning">
+                    Scheduled for deletion
+                  </span>
+                  <span :if={not entry.scheduled?} class="whitespace-nowrap text-base-content/60">
+                    Archived
+                  </span>
+                </td>
+                <td class="whitespace-nowrap px-4 py-3 tabular-nums text-base-content/70">
+                  {format_date(entry.archived_at)}
+                </td>
+                <td class="whitespace-nowrap px-4 py-3">
+                  <%= if entry.scheduled? do %>
+                    <% {tone, label} = runway(entry.deletion_scheduled_at, @retention_days) %>
+                    <div class="flex flex-col leading-tight">
+                      <span class={["tabular-nums", deadline_class(tone)]}>
+                        {format_date(
+                          permanent_delete_at(entry.deletion_scheduled_at, @retention_days)
+                        )}
+                      </span>
+                      <span class="text-[11px] text-base-content/50">{label}</span>
+                    </div>
+                  <% else %>
+                    <span class="text-base-content/30">—</span>
+                  <% end %>
+                </td>
+                <td class="px-4 py-3">
+                  <div class="flex items-center justify-end gap-1.5">
+                    <.button
+                      variant="primary"
+                      phx-click="restore"
+                      phx-value-type={entry.type}
+                      phx-value-id={entry.id}
+                      phx-value-action={if entry.scheduled?, do: "cancel", else: "unarchive"}
+                      data-role="restore"
+                      class="btn btn-primary btn-xs focus-visible-ring"
+                    >
+                      <.icon name="hero-arrow-uturn-left" class="size-3.5" /> Restore
+                    </.button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      <% end %>
+    </div>
+  </div>
+</div>

@@ -14,6 +14,9 @@ defmodule Platform.Tasks.Project do
     field(:tech_stack, :map, default: %{})
     field(:deploy_config, :map, default: %{})
     field(:config, :map, default: %{})
+    field(:archived_at, :utc_datetime_usec)
+    field(:deletion_scheduled_at, :utc_datetime_usec)
+    field(:archived_cascade_org_id, :binary_id)
 
     belongs_to(:org, Platform.Tenancy.Org)
 
@@ -23,7 +26,7 @@ defmodule Platform.Tasks.Project do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @cast_fields ~w(workspace_id name slug repo_url default_branch tech_stack deploy_config config org_id)a
+  @cast_fields ~w(workspace_id name slug repo_url default_branch tech_stack deploy_config config org_id archived_at deletion_scheduled_at archived_cascade_org_id)a
 
   def changeset(project, attrs) do
     project

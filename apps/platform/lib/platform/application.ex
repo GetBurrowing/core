@@ -101,6 +101,7 @@ defmodule Platform.Application do
       |> maybe_add_summarizer_sweeper()
       |> maybe_add_security_sweeper()
       |> maybe_add_space_purger()
+      |> maybe_add_container_purger()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -163,6 +164,20 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_space_purger, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Chat.SpacePurger)
+    else
+      children
+    end
+  end
+
+  # ContainerPurger (task 019f4eaa stage 4): daily hard-delete of projects
+  # and cascade-hidden chat_spaces whose container's scheduled deletion
+  # passed the retention window. NEVER deletes org rows. Needs Repo.
+  # Disabled in config/test.exs — tests call `sweep/0` directly inside the
+  # DataCase sandbox.
+  defp maybe_add_container_purger(children) do
+    if Application.get_env(:platform, :start_container_purger, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Tenancy.ContainerPurger)
     else
       children
     end

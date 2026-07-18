@@ -45,6 +45,7 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.SearchHooks
   alias PlatformWeb.ChatLive.SettingsComponent
   alias PlatformWeb.ChatLive.UploadHooks
+  alias PlatformWeb.LifecycleActions
 
   @quick_emojis ["👍", "❤️", "😂", "🎉"]
   @max_upload_entries 5
@@ -242,6 +243,18 @@ defmodule PlatformWeb.ChatLive do
       # the server-side gate agree. Desktop only — the whole rail is
       # `hidden lg:flex`; the admin toggle lives inside that aside.
       |> assign(:fabrikam_admin?, Platform.Tenancy.fabrikam_admin?(%{id: user_id}))
+      # Container-lifecycle affordances on the org section headers (task
+      # 019f4eaa stage 6). `:tenant_org_ids` is the set of NON-root org ids —
+      # the root (Fabrikam) section never gets archive controls (the lifecycle
+      # refuses it). `:lifecycle_menu_key` is the single open kebab menu;
+      # `:delete_modal` is `nil` or the `%{type:, id:, name:}` the confirm
+      # dialog targets.
+      |> assign(:tenant_org_ids, MapSet.new(Platform.Tenancy.list_tenants(), & &1.id))
+      |> assign(:lifecycle_menu_key, nil)
+      |> assign(:delete_modal, nil)
+      # `:undo_archive` is nil (no toast) or the %{type:, id:, name:, hidden:}
+      # the archive undo toast targets.
+      |> assign(:undo_archive, nil)
       |> assign(:sidebar_admin_edit, false)
       # Sidebar layout overflow menu (chat sidebar header). The "CHANNELS"
       # header is a ~260px rail that can't fit two text toggles (personal
@@ -916,6 +929,111 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
+  # ── Container lifecycle (task 019f4eaa stage 6) ───────────────────────
+  # Fabrikam-admin-only archive / schedule-deletion on the org section headers.
+  # The controls only render behind `@fabrikam_admin?` and only for tenant orgs
+  # (never the root), and every call re-authorizes underneath in
+  # `Platform.Tenancy.Lifecycle`, so a forged event still gets refused.
+
+  def handle_event("toggle_lifecycle_menu", %{"key" => key}, socket) do
+    next = if socket.assigns.lifecycle_menu_key == key, do: nil, else: key
+    {:noreply, assign(socket, :lifecycle_menu_key, next)}
+  end
+
+  def handle_event("archive_container", %{"type" => type, "id" => id} = params, socket) do
+    case LifecycleActions.archive(%{id: socket.assigns.user_id}, type, id) do
+      {:ok, resource} ->
+        # Undo toast rather than a flash (Marlowe, 2026-07-16) — archive stays
+        # instant + dialog-free, but says what it took. See
+        # PlatformWeb.LifecycleControls.archive_undo_toast/1.
+        {:noreply,
+         socket
+         |> assign(:lifecycle_menu_key, nil)
+         |> refresh_chat_containers()
+         |> assign(:undo_archive, %{
+           type: type,
+           id: id,
+           name: params["name"] || Map.get(resource, :name, "it"),
+           hidden: LifecycleActions.cascade_hidden_labels(type, id)
+         })}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:lifecycle_menu_key, nil)
+         |> put_flash(:error, LifecycleActions.error_message(reason))}
+    end
+  end
+
+  def handle_event("undo_archive", _params, socket) do
+    case socket.assigns[:undo_archive] do
+      nil ->
+        {:noreply, socket}
+
+      %{type: type, id: id} ->
+        case LifecycleActions.unarchive(%{id: socket.assigns.user_id}, type, id) do
+          {:ok, _resource} ->
+            {:noreply,
+             socket
+             |> assign(:undo_archive, nil)
+             |> refresh_chat_containers()
+             |> put_flash(:info, "Restored.")}
+
+          {:error, reason} ->
+            {:noreply,
+             socket
+             |> assign(:undo_archive, nil)
+             |> put_flash(:error, LifecycleActions.error_message(reason))}
+        end
+    end
+  end
+
+  def handle_event("dismiss_undo_archive", _params, socket) do
+    {:noreply, assign(socket, :undo_archive, nil)}
+  end
+
+  def handle_event("open_delete_modal", %{"type" => type, "id" => id, "name" => name}, socket) do
+    # `preview` is what the cascade would ACTUALLY hide, read at open time, so
+    # the dialog names it rather than saying "and everything under it"
+    # (Marlowe's call, 2026-07-16 — keep bulk cascade, but say what it takes).
+    {:noreply,
+     socket
+     |> assign(:lifecycle_menu_key, nil)
+     |> assign(:delete_modal, %{
+       type: type,
+       id: id,
+       name: name,
+       preview: PlatformWeb.LifecycleActions.cascade_preview(type, id)
+     })}
+  end
+
+  def handle_event("close_delete_modal", _params, socket) do
+    {:noreply, assign(socket, :delete_modal, nil)}
+  end
+
+  def handle_event("confirm_schedule_deletion", _params, socket) do
+    case socket.assigns.delete_modal do
+      %{type: type, id: id} ->
+        case LifecycleActions.schedule_deletion(%{id: socket.assigns.user_id}, type, id) do
+          {:ok, _resource} ->
+            {:noreply,
+             socket
+             |> assign(:delete_modal, nil)
+             |> refresh_chat_containers()
+             |> put_flash(:info, "Scheduled for deletion. You can still restore it before then.")}
+
+          {:error, reason} ->
+            {:noreply,
+             socket
+             |> assign(:delete_modal, nil)
+             |> put_flash(:error, LifecycleActions.error_message(reason))}
+        end
+
+      _ ->
+        {:noreply, assign(socket, :delete_modal, nil)}
+    end
+  end
+
   # Channel drag-drop OR keyboard move. The hook emits the TARGET section's
   # resulting channel-id order; `Sidebar.put_channel_order/3` records that
   # order for the section AND removes those channels from every other section
@@ -1039,6 +1157,16 @@ defmodule PlatformWeb.ChatLive do
         socket.assigns.hidden_channel_ids
       )
     )
+  end
+
+  # Refresh after an org archive / schedule-deletion (task 019f4eaa stage 6):
+  # the cascade hides that org's channels, so re-fetch the active channel
+  # list before recomputing the sidebar or the just-hidden channels would
+  # linger in the rail until the next navigation.
+  defp refresh_chat_containers(socket) do
+    socket
+    |> assign(:channels, Chat.list_spaces(kind: "channel"))
+    |> recompute_sidebar()
   end
 
   # Current ordered channel ids for a section, read from the already-resolved

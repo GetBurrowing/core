@@ -29,6 +29,7 @@ defmodule Platform.Tasks do
   }
 
   alias Platform.Repo
+  alias Platform.Tenancy.Lifecycle
 
   alias Platform.Tasks.{
     Epic,
@@ -152,6 +153,7 @@ defmodule Platform.Tasks do
   def create_project(attrs) do
     case %Project{}
          |> Project.changeset(default_org_id(attrs))
+         |> Platform.Tenancy.Lifecycle.guard_org_active()
          |> Repo.insert() do
       {:ok, project} = ok ->
         Phoenix.PubSub.broadcast(
@@ -183,11 +185,40 @@ defmodule Platform.Tasks do
     end
   end
 
+  @doc """
+  Update a project's own attributes (name, repo_url, default_branch,
+  deploy_config). Frozen while the project is archived.
+
+  Safe to guard: this is NOT the archive path. `Lifecycle` stamps
+  `archived_at` through its own private writer, so archiving stays reversible
+  even with this locked.
+  """
   def update_project(%Project{} = project, attrs) do
-    project
-    |> Project.changeset(attrs)
-    |> Repo.update()
+    with :ok <- Lifecycle.ensure_project_writable(project.id) do
+      project
+      |> Project.changeset(attrs)
+      |> Repo.update()
+    end
   end
+
+  # ── Project lifecycle (archive / schedule-deletion / restore) ─────────
+  #
+  # Task 019f4eaa stage 3. Implemented in `Platform.Tenancy.Lifecycle`
+  # (single-row — projects have no cascade of their own); delegated here
+  # so callers use the natural context API. All four require a Fabrikam admin
+  # actor.
+
+  @doc "See `Platform.Tenancy.Lifecycle.archive_project/2`."
+  defdelegate archive_project(actor, project), to: Platform.Tenancy.Lifecycle
+
+  @doc "See `Platform.Tenancy.Lifecycle.unarchive_project/2`."
+  defdelegate unarchive_project(actor, project), to: Platform.Tenancy.Lifecycle
+
+  @doc "See `Platform.Tenancy.Lifecycle.schedule_project_deletion/2`."
+  defdelegate schedule_project_deletion(actor, project), to: Platform.Tenancy.Lifecycle
+
+  @doc "See `Platform.Tenancy.Lifecycle.cancel_project_deletion/2`."
+  defdelegate cancel_project_deletion(actor, project), to: Platform.Tenancy.Lifecycle
 
   def get_project(id), do: Repo.get(Project, id)
 
@@ -223,33 +254,64 @@ defmodule Platform.Tasks do
     where(query, [p], p.org_id == ^org_id)
   end
 
+  @doc """
+  List the **independently** archived projects for the recovery surface —
+  projects with `archived_at` set whose `archived_cascade_org_id` is NULL
+  (i.e. archived on their own, not swept up by an org archive/deletion
+  cascade). Cascade-hidden children are intentionally excluded: they come
+  back automatically when their org is restored, so listing them as
+  separately-restorable rows would be misleading.
+
+  Returns both the purely-archived and the deletion-scheduled states
+  (scheduling also stamps `archived_at`), with `:org` preloaded and
+  ordered deletion-scheduled-first (soonest deadline first) so the
+  recovery LiveView's split into "scheduled" / "archived" buckets keeps
+  each bucket in the right order. Read-only companion to
+  `list_projects/1`; the lifecycle mutators live in
+  `Platform.Tenancy.Lifecycle`.
+  """
+  @spec list_archived_projects() :: [Project.t()]
+  def list_archived_projects do
+    Project
+    |> where([p], not is_nil(p.archived_at) and is_nil(p.archived_cascade_org_id))
+    |> Repo.all()
+    |> Repo.preload(:org)
+    |> Enum.sort_by(fn p ->
+      {p.deletion_scheduled_at || ~U[9999-01-01 00:00:00.000000Z], p.name}
+    end)
+  end
+
   # ── Epics ────────────────────────────────────────────────────────────────
 
   def create_epic(attrs) do
-    %Epic{}
-    |> Epic.changeset(attrs)
-    |> Repo.insert()
-    |> case do
-      {:ok, epic} ->
-        broadcast_board({:epic_created, epic})
-        {:ok, epic}
+    with :ok <- Lifecycle.ensure_project_writable(project_id_from(attrs)) do
+      %Epic{}
+      |> Epic.changeset(attrs)
+      |> Repo.insert()
+      |> case do
+        {:ok, epic} ->
+          broadcast_board({:epic_created, epic})
+          {:ok, epic}
 
-      error ->
-        error
+        error ->
+          error
+      end
     end
   end
 
   def update_epic(%Epic{} = epic, attrs) do
-    epic
-    |> Epic.changeset(attrs)
-    |> Repo.update()
-    |> case do
-      {:ok, updated} ->
-        broadcast_board({:epic_updated, updated})
-        {:ok, updated}
+    with :ok <- Lifecycle.ensure_project_writable(epic.project_id) do
+      epic
+      |> Epic.changeset(attrs)
+      |> Repo.update()
+      |> case do
+        {:ok, updated} ->
+          broadcast_board({:epic_updated, updated})
+          {:ok, updated}
 
-      error ->
-        error
+        error ->
+          error
+      end
     end
   end
 
@@ -288,6 +350,12 @@ defmodule Platform.Tasks do
   # ── Tasks (persistent) ──────────────────────────────────────────────────
 
   def create_task(attrs) do
+    with :ok <- Lifecycle.ensure_project_writable(project_id_from(attrs)) do
+      do_create_task(attrs)
+    end
+  end
+
+  defp do_create_task(attrs) do
     %Task{}
     |> Task.changeset(attrs)
     |> Repo.insert()
@@ -463,6 +531,12 @@ defmodule Platform.Tasks do
   Returns `{:ok, task}` or `{:error, :restricted_status}`.
   """
   def soft_delete_task(%Task{} = task) do
+    with :ok <- Lifecycle.ensure_project_writable(task.project_id) do
+      do_soft_delete_task(task)
+    end
+  end
+
+  defp do_soft_delete_task(%Task{} = task) do
     if task.status in @restricted_delete_statuses do
       {:error, :restricted_status}
     else
@@ -1102,18 +1176,33 @@ defmodule Platform.Tasks do
 
   # ── Plans ────────────────────────────────────────────────────────────────
 
+  @doc """
+  Create a plan for a task.
+
+  The project write-freeze keystone: a plan is how new work *starts*, and it
+  is reachable without ever calling `create_task/1` (an agent can plan a
+  pre-existing backlog task). Guarding only task creation would leave that
+  door open, so an archived project is rejected here too — one hop, on a
+  lookup this function already pays for.
+
+  Stages and validations underneath are deliberately NOT guarded: blocking
+  the chain at its head means the tail only ever contains plans created
+  before the archive, which is exactly the in-flight work that should drain.
+  """
   def create_plan(attrs) do
     case task_id_from(attrs) do
       nil ->
         do_create_plan(attrs)
 
       task_id ->
-        case latest_plan(task_id) do
-          %Plan{status: status} when status in ["draft", "pending_review"] ->
-            {:error, :plan_pending_review}
+        with :ok <- Lifecycle.ensure_task_project_writable(task_id) do
+          case latest_plan(task_id) do
+            %Plan{status: status} when status in ["draft", "pending_review"] ->
+              {:error, :plan_pending_review}
 
-          _ ->
-            do_create_plan(attrs)
+            _ ->
+              do_create_plan(attrs)
+          end
         end
     end
   end
@@ -1129,6 +1218,13 @@ defmodule Platform.Tasks do
   defp task_id_from(%{task_id: id}) when is_binary(id), do: id
   defp task_id_from(%{"task_id" => id}) when is_binary(id), do: id
   defp task_id_from(_), do: nil
+
+  # Attrs reach the context with either atom or string keys depending on the
+  # caller (LiveView forms vs MCP tools). A missing project_id falls through
+  # to nil, which the guard treats as :ok so `validate_required` reports it.
+  defp project_id_from(%{project_id: id}) when is_binary(id), do: id
+  defp project_id_from(%{"project_id" => id}) when is_binary(id), do: id
+  defp project_id_from(_), do: nil
 
   def get_plan(id) do
     Plan

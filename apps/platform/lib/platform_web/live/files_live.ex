@@ -6,9 +6,11 @@ defmodule PlatformWeb.FilesLive do
   ## Layout
 
     * LEFT — org-grouped project picker (sidebar; hidden on mobile).
-      Reuses `Platform.Projects.group_by_org/1` so the Files and Tasks
-      sidebars stay in lock-step. Header order, scope colours, and
-      "Unassigned" bucket all share the Tasks-sidebar treatment.
+      Reuses `Platform.Projects.group_by_active_org/2` so the Files and
+      Tasks sidebars stay in lock-step: every active org keeps its header
+      even at zero projects (archiving an org's last project can't erase
+      it). Header order, scope colours, and "Unassigned" bucket all share
+      the Tasks-sidebar treatment.
     * CENTER — file list for the selected project. Sortable columns
       (date / name / size / type), client-side substring filter, and a
       semantic-search box that hits `Platform.Memory.search/2` with
@@ -73,7 +75,14 @@ defmodule PlatformWeb.FilesLive do
      |> assign(:current_path, "/files")
      |> assign(:current_user_id, current_user_id)
      |> assign(:projects, projects)
-     |> assign(:projects_by_org, Projects.group_by_org(projects))
+     # Navigation source: every active org keeps a section (and count) even at
+     # zero projects, so archiving an org's last project can't erase its header
+     # — matches the Tasks sidebar and Chat. Files has no <select> consuming
+     # this grouping, so there's no project-derived variant to keep alongside.
+     |> assign(
+       :project_sections,
+       Projects.group_by_active_org(projects, Tenancy.list_active_tenants())
+     )
      |> assign(:selected_project_id, nil)
      |> assign(:selected_project, nil)
      |> assign(:files, [])
@@ -494,29 +503,32 @@ defmodule PlatformWeb.FilesLive do
   # ── Internals ───────────────────────────────────────────────────────────
 
   defp load_project(socket, project_id) do
-    case Tasks.get_project(project_id) do
-      nil ->
-        socket
-        |> put_flash(:error, "Project not found.")
-        |> push_patch(to: ~p"/files")
+    # An archived project is treated exactly like a missing one (task
+    # 019f4eaa): it's gone from the sidebar, so it must not stay reachable as
+    # a live file list via a restored selection or a deep link.
+    project = Tasks.get_project(project_id)
 
-      project ->
-        # Preload :org so the breadcrumb can render the scope label/color.
-        # `Tasks.get_project/1` doesn't preload by default — the sidebar
-        # already calls `list_projects(preload: :org)` for the same reason.
-        project = Platform.Repo.preload(project, :org)
+    if is_nil(project) or Platform.Projects.archived?(project) do
+      socket
+      |> put_flash(:error, "Project not found.")
+      |> push_patch(to: ~p"/files")
+    else
+      # Preload :org so the breadcrumb can render the scope label/color.
+      # `Tasks.get_project/1` doesn't preload by default — the sidebar
+      # already calls `list_projects(preload: :org)` for the same reason.
+      project = Platform.Repo.preload(project, :org)
 
-        socket
-        |> maybe_unsubscribe()
-        |> subscribe(project_id)
-        |> assign(:selected_project_id, project_id)
-        |> assign(:selected_project, project)
-        |> assign(:files, list_files(project_id))
-        |> assign(:selected_file, nil)
-        |> assign(:selected_file_text, nil)
-        |> assign(:semantic_results, [])
-        |> assign(:semantic_search_state, :idle)
-        |> assign(:filter, "")
+      socket
+      |> maybe_unsubscribe()
+      |> subscribe(project_id)
+      |> assign(:selected_project_id, project_id)
+      |> assign(:selected_project, project)
+      |> assign(:files, list_files(project_id))
+      |> assign(:selected_file, nil)
+      |> assign(:selected_file_text, nil)
+      |> assign(:semantic_results, [])
+      |> assign(:semantic_search_state, :idle)
+      |> assign(:filter, "")
     end
   end
 

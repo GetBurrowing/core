@@ -35,6 +35,32 @@ defmodule Platform.Audit.TelemetryHandler do
     # Stage 3 of task 019e41a9 — emitted by
     # `Platform.Tenancy.promote_to_admin/2` and `revoke_admin/2`.
     [:platform, :tenancy, :role_change],
+    # Task 019f4eaa stage 3 — org lifecycle. Emitted by
+    # `Platform.Tenancy.Lifecycle` (archive/schedule/restore). Metadata
+    # carries actor_id, actor_type: "user", resource_type: "org",
+    # resource_id + org slug/name; the scheduled event adds
+    # retention_deadline. Archive/schedule also cascade-hide child
+    # projects + chat_spaces in the same transaction (see that module).
+    [:platform, :tenancy, :org_archived],
+    [:platform, :tenancy, :org_unarchived],
+    [:platform, :tenancy, :org_deletion_scheduled],
+    [:platform, :tenancy, :org_deletion_cancelled],
+    # Task 019f4eaa stage 3 — project lifecycle (single-row). Emitted by
+    # `Platform.Tenancy.Lifecycle` (archive/schedule/restore). Metadata
+    # carries actor_id, resource_type: "project", resource_id + project
+    # slug/name + org_id; the scheduled event adds retention_deadline.
+    [:platform, :tasks, :project_archived],
+    [:platform, :tasks, :project_unarchived],
+    [:platform, :tasks, :project_deletion_scheduled],
+    [:platform, :tasks, :project_deletion_cancelled],
+    # Task 019f4eaa stage 4 — retention purge. Emitted by
+    # `Platform.Tenancy.ContainerPurger` (actor_type: "system") when a
+    # directly-scheduled project OR a project cascade-hidden by a scheduled
+    # org is hard-deleted past the retention window. Cascade-hidden chat_spaces
+    # reuse `[:platform, :chat, :space_purged]` below. Metadata carries
+    # resource_type "project", resource_id, project slug/name, org_id, and
+    # archived_cascade_org_id (present only for cascade-hidden children).
+    [:platform, :tasks, :project_purged],
     # Task 019f25f2 — auto-approve plan bridging (stage 2 emitters,
     # this bridge added in a corrective patch on top of stage 4).
     # `Platform.Tasks.maybe_auto_approve/1` emits these; metadata carries

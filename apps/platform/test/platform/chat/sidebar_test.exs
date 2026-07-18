@@ -92,6 +92,62 @@ defmodule Platform.Chat.SidebarTest do
     end
   end
 
+  # ── Archived orgs drop out of the rendered sidebar (task 019f4eaa) ───────
+
+  describe "archived orgs vs the sidebar" do
+    # Marlowe, walking the review: scheduling Paragon for deletion hid its
+    # channels but LEFT its section header in the sidebar, sitting above an
+    # empty "No channels yet" placeholder — the org read as half-deleted.
+    # The org cascade hides projects and chat_spaces; a section is its own row
+    # in channel_sections and the cascade never touches it, so the RENDER path
+    # has to filter.
+
+    test "an archived org's section is dropped from the rendered sidebar" do
+      admin = admin_user!()
+      paragon = Tenancy.get_org_by_slug!("paragon")
+      {:ok, _} = Tenancy.archive_org(admin, paragon)
+
+      refute Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == paragon.id))
+      # resolve_for_user/2 returns %{section:, channels:} wrappers, not sections.
+      refute Enum.any?(Sidebar.resolve_for_user(nil, []), &(&1.section.org_id == paragon.id))
+
+      # Active orgs are untouched.
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      assert Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == fabrikam.id))
+      assert Enum.any?(Sidebar.resolve_for_user(nil, []), &(&1.section.org_id == fabrikam.id))
+    end
+
+    test "a deletion-scheduled org's section is dropped too (schedule stamps archived_at)" do
+      admin = admin_user!()
+      soylent = Tenancy.get_org_by_slug!("soylent")
+      {:ok, _} = Tenancy.schedule_org_deletion(admin, soylent)
+
+      refute Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == soylent.id))
+    end
+
+    test "list_default_sections/0 STILL returns all rows — the data API stays unfiltered" do
+      # Curation writes and the admin editor need the full set; only the render
+      # path filters. Mirrors Tenancy.list_tenants/0 vs list_active_tenants/0.
+      admin = admin_user!()
+      paragon = Tenancy.get_org_by_slug!("paragon")
+      {:ok, _} = Tenancy.archive_org(admin, paragon)
+
+      assert Enum.any?(Sidebar.list_default_sections(), &(&1.org_id == paragon.id))
+    end
+
+    test "restoring the org brings its section back" do
+      admin = admin_user!()
+      paragon = Tenancy.get_org_by_slug!("paragon")
+
+      {:ok, archived} = Tenancy.archive_org(admin, paragon)
+      refute Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == paragon.id))
+
+      # Nothing about the section row ever changed, so restore is free.
+      {:ok, _} = Tenancy.unarchive_org(admin, archived)
+      assert Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == paragon.id))
+    end
+  end
+
   # ── Admin-gated writes ───────────────────────────────────────────────────
 
   describe "rename_section/3" do

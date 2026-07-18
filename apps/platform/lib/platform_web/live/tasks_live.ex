@@ -19,6 +19,7 @@ defmodule PlatformWeb.TasksLive do
   alias Platform.Tasks.ChatPins
   alias Platform.Tasks.{Epic, Plan, Project, ReviewRequest, ReviewRequests, Stack, Stacks, Task}
   alias Platform.Tenancy
+  alias PlatformWeb.LifecycleActions
 
   # Desktop kanban columns (Stage 2 of Tasks v2 plan, 2026-05-19). Seven
   # explicit buckets — planning + blocked are split out from Backlog so
@@ -158,6 +159,10 @@ defmodule PlatformWeb.TasksLive do
      # the board PubSub doesn't fan that out yet — we recompute inline in
      # the create handler).
      |> assign(:projects_by_org, group_projects_by_org(projects))
+     # Navigation sidebar (desktop + mobile sheet): every active org, even at
+     # zero projects, so an org's header + kebab survive archiving its last
+     # project. The <select>s above stay on the project-derived list.
+     |> assign(:project_sections, project_sections(projects))
      # Org dropdown options for the New-Project form. Stable for the
      # lifetime of the mount (no live org-edit surface exists yet).
      # ADR-0042: surfaced in canonical tenant-priority order so the FAB's
@@ -250,6 +255,18 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:task_search_query, "")
      |> assign(:create_menu_open, false)
      |> assign(:fab_menu_open, false)
+     # Container-lifecycle UI state (task 019f4eaa stage 6). `:active_scope_keys`
+     # is the data-driven scope-rail source — the seeded slugs of every
+     # non-archived tenant (Fabrikam always included), as atoms, so an archived
+     # org drops off the rail. `:lifecycle_menu_key` is the single open
+     # kebab menu (org/project); `:delete_modal` is `nil` or the
+     # `%{type:, id:, name:}` the Schedule-deletion confirm dialog targets.
+     |> assign(:active_scope_keys, active_scope_keys())
+     |> assign(:lifecycle_menu_key, nil)
+     |> assign(:delete_modal, nil)
+     # `:undo_archive` is nil (no toast) or the %{type:, id:, name:, hidden:}
+     # the archive undo toast targets.
+     |> assign(:undo_archive, nil)
      |> assign(:pending_plan_count, count_pending_plans(all_tasks))
      |> assign(:review_counts, pending_review_counts(all_tasks))
      |> assign(:review_request_subscriptions, initial_task_ids)
@@ -603,6 +620,114 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, assign(socket, :create_menu_open, !socket.assigns.create_menu_open)}
   end
 
+  # ── Container lifecycle (task 019f4eaa stage 6) ───────────────────────
+  # Fabrikam-admin-only archive / schedule-deletion for the orgs + projects in
+  # the sidebar. The controls only render behind `@fabrikam_admin?`, and every
+  # call re-authorizes underneath in `Platform.Tenancy.Lifecycle`, so a
+  # forged event from a non-admin still gets `{:error, :unauthorized}`.
+
+  def handle_event("toggle_lifecycle_menu", %{"key" => key}, socket) do
+    next = if socket.assigns.lifecycle_menu_key == key, do: nil, else: key
+    {:noreply, assign(socket, :lifecycle_menu_key, next)}
+  end
+
+  def handle_event("archive_container", %{"type" => type, "id" => id} = params, socket) do
+    case LifecycleActions.archive(socket.assigns.current_user_record, type, id) do
+      {:ok, resource} ->
+        # An undo toast rather than a flash (Marlowe, 2026-07-16). Archive stays
+        # instant + dialog-free — recoverable by default, undo not consent —
+        # but it now SAYS what it took and keeps the reversal one click away.
+        # Labels are read AFTER the archive on purpose: cascade_hidden reads
+        # the provenance marker, which only exists once the cascade has run.
+        {:noreply,
+         socket
+         |> assign(:lifecycle_menu_key, nil)
+         |> refresh_containers()
+         |> assign(:undo_archive, %{
+           type: type,
+           id: id,
+           name: params["name"] || Map.get(resource, :name, "it"),
+           hidden: LifecycleActions.cascade_hidden_labels(type, id)
+         })}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:lifecycle_menu_key, nil)
+         |> put_flash(:error, LifecycleActions.error_message(reason))}
+    end
+  end
+
+  def handle_event("undo_archive", _params, socket) do
+    case socket.assigns[:undo_archive] do
+      nil ->
+        {:noreply, socket}
+
+      %{type: type, id: id} ->
+        case LifecycleActions.unarchive(socket.assigns.current_user_record, type, id) do
+          {:ok, _resource} ->
+            {:noreply,
+             socket
+             |> assign(:undo_archive, nil)
+             |> refresh_containers()
+             |> put_flash(:info, "Restored.")}
+
+          {:error, reason} ->
+            {:noreply,
+             socket
+             |> assign(:undo_archive, nil)
+             |> put_flash(:error, LifecycleActions.error_message(reason))}
+        end
+    end
+  end
+
+  def handle_event("dismiss_undo_archive", _params, socket) do
+    {:noreply, assign(socket, :undo_archive, nil)}
+  end
+
+  def handle_event("open_delete_modal", %{"type" => type, "id" => id, "name" => name}, socket) do
+    # `preview` is what the cascade would ACTUALLY hide, read at open time, so
+    # the dialog can name it instead of saying "and everything under it"
+    # (Marlowe's call, 2026-07-16 — keep bulk cascade, but say what it takes).
+    # NB: `id` is an org SLUG on this surface; LifecycleActions resolves it.
+    {:noreply,
+     socket
+     |> assign(:lifecycle_menu_key, nil)
+     |> assign(:delete_modal, %{
+       type: type,
+       id: id,
+       name: name,
+       preview: LifecycleActions.cascade_preview(type, id)
+     })}
+  end
+
+  def handle_event("close_delete_modal", _params, socket) do
+    {:noreply, assign(socket, :delete_modal, nil)}
+  end
+
+  def handle_event("confirm_schedule_deletion", _params, socket) do
+    case socket.assigns.delete_modal do
+      %{type: type, id: id} ->
+        case LifecycleActions.schedule_deletion(socket.assigns.current_user_record, type, id) do
+          {:ok, _resource} ->
+            {:noreply,
+             socket
+             |> assign(:delete_modal, nil)
+             |> refresh_containers()
+             |> put_flash(:info, "Scheduled for deletion. You can still restore it before then.")}
+
+          {:error, reason} ->
+            {:noreply,
+             socket
+             |> assign(:delete_modal, nil)
+             |> put_flash(:error, LifecycleActions.error_message(reason))}
+        end
+
+      _ ->
+        {:noreply, assign(socket, :delete_modal, nil)}
+    end
+  end
+
   def handle_event("toggle_fab_menu", _params, socket) do
     {:noreply, assign(socket, :fab_menu_open, !socket.assigns.fab_menu_open)}
   end
@@ -667,6 +792,7 @@ defmodule PlatformWeb.TasksLive do
          socket
          |> assign(:projects, projects)
          |> assign(:projects_by_org, group_projects_by_org(projects))
+         |> assign(:project_sections, project_sections(projects))
          |> assign(:show_project_create_sheet, false)
          |> assign(
            :project_form,
@@ -700,31 +826,39 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_event("select_project", %{"id" => project_id}, socket) do
     # Stale-id fallback: a restored localStorage value may reference a project
-    # that has since been deleted (or that the current user can no longer see).
-    # `Tasks.get_project/1` returns nil in that case — we drop back to the
-    # All Projects view rather than render a blank board.
-    case Tasks.get_project(project_id) do
-      nil ->
-        {:noreply,
-         socket
-         |> assign(:selected_project_id, nil)
-         |> assign(:selected_epic_id, nil)
-         |> assign(:epics, enrich_epics(Tasks.list_epics_for_project(nil)))
-         |> assign(:show_project_sheet, false)
-         |> refresh_board()
-         |> push_selected_project_changed()}
+    # that has since been deleted, been ARCHIVED, or that the current user can
+    # no longer see. We drop back to the All Projects view rather than render a
+    # board the sidebar no longer offers.
+    #
+    # Archived counts as stale (task 019f4eaa): `last_project.js` replays the
+    # stored id via this event on EVERY mount, so filtering archived projects
+    # out of the sidebar isn't enough on its own — whoever had the project
+    # selected when it was archived would keep getting a live, interactive
+    # board for it on every visit. Falling through here also self-heals the
+    # stored value, because `push_selected_project_changed/1` writes the
+    # corrected id back to localStorage.
+    project = Tasks.get_project(project_id)
 
-      _project ->
-        epics = enrich_epics(Tasks.list_epics_for_project(project_id))
+    if is_nil(project) or Platform.Projects.archived?(project) do
+      {:noreply,
+       socket
+       |> assign(:selected_project_id, nil)
+       |> assign(:selected_epic_id, nil)
+       |> assign(:epics, enrich_epics(Tasks.list_epics_for_project(nil)))
+       |> assign(:show_project_sheet, false)
+       |> refresh_board()
+       |> push_selected_project_changed()}
+    else
+      epics = enrich_epics(Tasks.list_epics_for_project(project_id))
 
-        {:noreply,
-         socket
-         |> assign(:selected_project_id, project_id)
-         |> assign(:selected_epic_id, nil)
-         |> assign(:epics, epics)
-         |> assign(:show_project_sheet, false)
-         |> refresh_board()
-         |> push_selected_project_changed()}
+      {:noreply,
+       socket
+       |> assign(:selected_project_id, project_id)
+       |> assign(:selected_epic_id, nil)
+       |> assign(:epics, epics)
+       |> assign(:show_project_sheet, false)
+       |> refresh_board()
+       |> push_selected_project_changed()}
     end
   end
 
@@ -5118,6 +5252,38 @@ defmodule PlatformWeb.TasksLive do
   # as a delegating wrapper here so call sites already reading
   # `group_projects_by_org/1` don't churn.
   defp group_projects_by_org(projects), do: Platform.Projects.group_by_org(projects)
+
+  # Navigation-sidebar source (task 019f4eaa follow-up): every ACTIVE org gets
+  # a section, even at zero projects, so archiving an org's last project can't
+  # erase its header — and with it the lifecycle kebab that archives the org
+  # itself. `group_projects_by_org/1` stays the SELECTION source for the
+  # New-Task / New-Epic <select>s, which must not render empty <optgroup>s.
+  defp project_sections(projects) do
+    Platform.Projects.group_by_active_org(projects, Tenancy.list_active_tenants())
+  end
+
+  # Reload projects + recompute every container-derived assign after an
+  # archive / schedule-deletion so the archived row leaves the sidebar and
+  # an archived org drops off the scope rail without a page reload.
+  defp refresh_containers(socket) do
+    projects = Tasks.list_projects(preload: :org)
+
+    socket
+    |> assign(:projects, projects)
+    |> assign(:projects_by_org, group_projects_by_org(projects))
+    |> assign(:project_sections, project_sections(projects))
+    |> assign(:active_scope_keys, active_scope_keys())
+  end
+
+  # Scope-rail source (task 019f4eaa stage 6): the seeded slugs of every
+  # non-archived tenant (Fabrikam always present — the root can't be archived),
+  # as atoms, in canonical tenant-priority order. `list_active_tenants/0`
+  # only ever yields the seeded five, so `String.to_existing_atom/1` is safe
+  # and every atom is a valid `<.scope_pill>` value.
+  defp active_scope_keys do
+    Tenancy.list_active_tenants()
+    |> Enum.map(&String.to_existing_atom(&1.slug))
+  end
 
   defp normalize_task_assignee(params, default_agent_id, requested_plan?) do
     selected_assignee_id =

@@ -609,6 +609,14 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # (`Chat.get_space_by_slug/2`) can resolve them. Data-only;
       # `down/0` is a no-op.
       "20260715165309_backfill_exec_space_org_id.exs",
+      # Task 019f4eaa stage 2 — container archive/delete lifecycle columns.
+      # `orgs` + `projects` gain `archived_at` + `deletion_scheduled_at`;
+      # `projects` + `chat_spaces` gain `archived_cascade_org_id` (the
+      # provenance marker letting a restore un-hide ONLY the children a given
+      # org's cascade hid, never an independently-archived one). Partial
+      # indexes on each non-NULL predicate keep the lifecycle sweeps and the
+      # active-only listing filters cheap. Fully reversible.
+      "20260714010000_add_lifecycle_columns_to_orgs_projects_chat_spaces.exs",
       # Task 019f6791 stage 1 — Router arch fix: stage-scoped leases.
       # Adds `stage_id` column to `execution_leases` and repartitions
       # the unique index so each `(task_id, stage_id)` pair carries

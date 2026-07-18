@@ -31,6 +31,9 @@ defmodule Platform.Tenancy.Org do
 
     belongs_to(:parent_org, __MODULE__, foreign_key: :parent_org_id)
 
+    field(:archived_at, :utc_datetime_usec)
+    field(:deletion_scheduled_at, :utc_datetime_usec)
+
     timestamps()
   end
 
@@ -43,7 +46,7 @@ defmodule Platform.Tenancy.Org do
   """
   def changeset(org, attrs) do
     org
-    |> cast(attrs, [:name, :slug, :parent_org_id])
+    |> cast(attrs, [:name, :slug, :parent_org_id, :archived_at, :deletion_scheduled_at])
     |> validate_required([:name, :slug])
     |> validate_format(:slug, @slug_format,
       message: "must start with a lowercase letter and contain only [a-z0-9_-]"

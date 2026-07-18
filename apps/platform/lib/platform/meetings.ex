@@ -170,7 +170,8 @@ defmodule Platform.Meetings do
     name = attrs[:name]
 
     with :ok <- require_present(project_id, :project_id),
-         :ok <- require_present(name, :name) do
+         :ok <- require_present(name, :name),
+         :ok <- Platform.Tenancy.Lifecycle.ensure_project_writable(project_id) do
       slug = resolve_slug(project_id, attrs[:slug], name)
 
       result =

@@ -43,27 +43,56 @@
          DB-free) so users see at a glance which org a section belongs to. --%>
     <div :if={!@projects_collapsed} class="flex-1 overflow-y-auto">
       <details
-        :for={{org_slug, _org_name, org_projects} <- @projects_by_org}
+        :for={{org_slug, _org_name, org_projects} <- @project_sections}
         open
-        class="group"
+        class="group relative"
         data-role="project-group"
         data-org-slug={org_slug}
       >
-        <summary class="flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 hover:bg-base-200 cursor-pointer select-none">
+        <summary class={[
+          "flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 hover:bg-base-200 cursor-pointer select-none",
+          (@fabrikam_admin? and org_slug not in ["fabrikam", "_unassigned"]) && "pr-9"
+        ]}>
           <span class={"size-2 rounded-full bg-current #{Tenancy.scope_color(org_slug)}"}></span>
           <span>{Tenancy.scope_label(org_slug)}</span>
           <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
             {length(org_projects)}
           </span>
         </summary>
-        <button
+        <%!-- Org kebab: a sibling of <summary> (NOT a descendant) positioned
+             over the row's right edge, so clicking it opens the lifecycle
+             menu without toggling the native <details>. Root org (Fabrikam) is
+             never offered — the lifecycle refuses it. --%>
+        <.lifecycle_menu
+          :if={@fabrikam_admin? and org_slug not in ["fabrikam", "_unassigned"]}
+          key={"org:#{org_slug}"}
+          open={@lifecycle_menu_key == "org:#{org_slug}"}
+          type="org"
+          id={org_slug}
+          name={Tenancy.scope_label(org_slug)}
+          class="absolute right-1 top-1.5"
+        />
+        <div
           :for={project <- org_projects}
-          phx-click="select_project"
-          phx-value-id={project.id}
-          class={"w-full text-left px-5 py-2 text-sm hover:bg-base-200 #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
+          class="group/proj relative flex items-center hover:bg-base-200"
         >
-          {project.name}
-        </button>
+          <button
+            phx-click="select_project"
+            phx-value-id={project.id}
+            class={"min-w-0 flex-1 text-left px-5 py-2 text-sm truncate #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
+          >
+            {project.name}
+          </button>
+          <.lifecycle_menu
+            :if={@fabrikam_admin?}
+            key={"project:#{project.id}"}
+            open={@lifecycle_menu_key == "project:#{project.id}"}
+            type="project"
+            id={project.id}
+            name={project.name}
+            class="relative pr-2 opacity-0 focus-within:opacity-100 group-hover/proj:opacity-100"
+          />
+        </div>
       </details>
     </div>
 
@@ -273,7 +302,7 @@
             </span>
           </button>
           <span
-            :for={scope <- Platform.Tasks.scope_keys()}
+            :for={scope <- @active_scope_keys}
             data-scope-chip={Atom.to_string(scope)}
             data-active={to_string(@scope_filter == scope)}
             class="inline-flex items-center gap-1"
@@ -3542,26 +3571,58 @@
          as the desktop sidebar so the mobile sheet stays visually consistent. --%>
     <div class="flex flex-col">
       <details
-        :for={{org_slug, _org_name, org_projects} <- @projects_by_org}
+        :for={{org_slug, _org_name, org_projects} <- @project_sections}
         open
+        class="relative"
         data-role="project-group"
         data-org-slug={org_slug}
       >
-        <summary class="flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 cursor-pointer select-none">
+        <summary class={[
+          "flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 cursor-pointer select-none",
+          (@fabrikam_admin? and org_slug not in ["fabrikam", "_unassigned"]) && "pr-9"
+        ]}>
           <span class={"size-2 rounded-full bg-current #{Tenancy.scope_color(org_slug)}"}></span>
           <span>{Tenancy.scope_label(org_slug)}</span>
           <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
             {length(org_projects)}
           </span>
         </summary>
-        <button
+        <%!-- Mobile org kebab: same lifecycle_menu + events as the desktop
+             sidebar, keyed with a `mobile-` prefix so its open-state never
+             collides with the desktop menu's data-menu-key in the DOM.
+             Positioned sibling of <summary> so a tap opens the menu without
+             toggling the native <details>. Root org (Fabrikam) is never offered. --%>
+        <.lifecycle_menu
+          :if={@fabrikam_admin? and org_slug not in ["fabrikam", "_unassigned"]}
+          key={"mobile-org:#{org_slug}"}
+          open={@lifecycle_menu_key == "mobile-org:#{org_slug}"}
+          type="org"
+          id={org_slug}
+          name={Tenancy.scope_label(org_slug)}
+          class="absolute right-1 top-1.5"
+        />
+        <div
           :for={project <- org_projects}
-          phx-click="select_project"
-          phx-value-id={project.id}
-          class={"w-full text-left px-5 py-2 text-sm hover:bg-base-200 #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
+          class="relative flex items-center hover:bg-base-200"
         >
-          {project.name}
-        </button>
+          <button
+            phx-click="select_project"
+            phx-value-id={project.id}
+            class={"min-w-0 flex-1 text-left px-5 py-2 text-sm truncate #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
+          >
+            {project.name}
+          </button>
+          <%!-- Kebab stays visible on touch (no hover reveal like desktop). --%>
+          <.lifecycle_menu
+            :if={@fabrikam_admin?}
+            key={"mobile-project:#{project.id}"}
+            open={@lifecycle_menu_key == "mobile-project:#{project.id}"}
+            type="project"
+            id={project.id}
+            name={project.name}
+            class="relative pr-2"
+          />
+        </div>
       </details>
     </div>
     <:actions>
@@ -4465,4 +4526,16 @@
       </button>
     </div>
   </.sheet>
+
+  <%!-- Schedule-deletion confirm dialog (task 019f4eaa stage 6). Archive is
+       instant + reversible with no modal; only this destructive step confirms. --%>
+  <.schedule_delete_modal
+    resource={@delete_modal}
+    retention_days={Tenancy.Lifecycle.retention_days()}
+  />
+
+  <%!-- Archive undo toast (task 019f4eaa). Archive stays instant + dialog-free
+       by design; this says what it took and keeps the reversal one click away.
+       Top-level sibling — pinned chrome must never nest in an :if region. --%>
+  <.archive_undo_toast undo={@undo_archive} />
 </div>

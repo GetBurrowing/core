@@ -3244,6 +3244,9 @@ defmodule Platform.Federation.ToolSurface do
       {:error, {:auto_approve_precondition_missing, %{missing_phases: phases}}} ->
         {:error, auto_approve_precondition_envelope(phases)}
 
+      {:error, :project_archived} ->
+        {:error, project_archived_envelope("create a task in")}
+
       {:error, %Ecto.Changeset{} = changeset} ->
         {:error,
          %{
@@ -5620,6 +5623,9 @@ defmodule Platform.Federation.ToolSurface do
         {:ok, plan} ->
           {:ok, serialize_plan(plan)}
 
+        {:error, :project_archived} ->
+          {:error, project_archived_envelope("start a plan in")}
+
         {:error, :plan_pending_review} ->
           existing = Tasks.latest_plan(task_id)
 
@@ -7641,6 +7647,29 @@ defmodule Platform.Federation.ToolSurface do
        suggestion:
          "Re-read the page with memory_view, re-apply your change against the latest content, and retry."
      }}
+  end
+
+  # `{:error, :project_archived}` from the project write freeze
+  # (`Platform.Tenancy.Lifecycle.ensure_project_writable/1`, task 019f4eaa).
+  #
+  # Agents, unlike humans, have no UI affordance to hide — the LiveViews stop
+  # a person from ever reaching an archived project's board, but an agent
+  # holding a project_id can call straight into the tool. So this atom needs a
+  # real message, not the catch-all's "check the request shape".
+  #
+  # `recoverable: false` on purpose: retrying cannot succeed. The only way
+  # forward is a human restoring the project from /admin/recovery.
+  defp project_archived_envelope(verb_phrase) do
+    %{
+      error:
+        "Cannot #{verb_phrase} an archived project. Archiving freezes a project: " <>
+          "its existing work stays readable, but nothing new can be created or edited in it.",
+      code: :project_archived,
+      recoverable: false,
+      suggestion:
+        "Do not retry. If this project should be active again, a Fabrikam admin can restore it " <>
+          "from the Recovery view (/admin/recovery); otherwise pick a different project."
+    }
   end
 
   defp changeset_error(tool, %Ecto.Changeset{} = changeset) do

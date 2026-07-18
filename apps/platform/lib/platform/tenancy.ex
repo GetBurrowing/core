@@ -86,6 +86,11 @@ defmodule Platform.Tenancy do
   @spec get_org!(binary()) :: Org.t() | no_return()
   def get_org!(id), do: Repo.get!(Org, id)
 
+  @doc "Fetch an org by id. Returns `nil` if not found."
+  @spec get_org(binary()) :: Org.t() | nil
+  def get_org(id) when is_binary(id), do: Repo.get(Org, id)
+  def get_org(_), do: nil
+
   @doc "Fetch an org by slug. Returns `nil` if not found."
   @spec get_org_by_slug(String.t()) :: Org.t() | nil
   def get_org_by_slug(slug) when is_binary(slug), do: Repo.get_by(Org, slug: slug)
@@ -107,6 +112,64 @@ defmodule Platform.Tenancy do
     |> where([o], not is_nil(o.parent_org_id))
     |> order_by([o], asc: o.slug)
     |> Repo.all()
+  end
+
+  @doc """
+  List the **active scopes** for the scope rail: the root org (Fabrikam) plus
+  every tenant whose `archived_at` is `nil`, in canonical tenant-priority
+  order (Fabrikam first — see `tenant_priority/0`).
+
+  Deletion-scheduled tenants are excluded too: scheduling also stamps
+  `archived_at` (see `Platform.Tenancy.Lifecycle.schedule_org_deletion/2`),
+  so the single `is_nil(archived_at)` filter hides both the archived and
+  the pending-deletion states.
+
+  The root org can never be archived — `Lifecycle` refuses it with
+  `{:error, :not_deletable}` — so Fabrikam is always present. Because archived
+  tenants are always a subset of the seeded five, every slug returned here
+  has a static label/color entry in `@scope_labels`/`@scope_classes`, so the
+  scope rail's unknown-slug guard never fires.
+
+  Contrast with `list_tenants/0`, which returns tenants only (no root) and
+  every row regardless of archive state — background callers that must see
+  archived tenants (org-summary walkers, preamble builder, federation tool
+  surface) keep using that one. `list_active_tenants/0` is the data-driven
+  source for the scope-rail chips; the `.heex` render swap lands in a later
+  stage.
+  """
+  @spec list_active_tenants() :: [Org.t()]
+  def list_active_tenants do
+    Org
+    |> where([o], is_nil(o.archived_at))
+    |> Repo.all()
+    |> sort_by_tenant_priority(& &1.slug)
+  end
+
+  @doc """
+  List the **inactive** tenant orgs for the recovery surface — every
+  non-root org with `archived_at` set (both the purely-archived and the
+  deletion-scheduled states; scheduling also stamps `archived_at`).
+
+  The root org can never be archived, so this only ever yields tenants.
+  Ordered deletion-scheduled first (soonest deadline first — the rows the
+  admin most needs to act on), then the purely-archived tenants in
+  canonical tenant-priority order. The recovery LiveView buckets the two
+  states apart for display; the ordering here means each bucket is already
+  in the right order once split.
+
+  Read-only companion to `list_active_tenants/0` — the lifecycle mutators
+  (`archive_org/2`, `schedule_org_deletion/2`, …) live in
+  `Platform.Tenancy.Lifecycle`.
+  """
+  @spec list_archived_tenants() :: [Org.t()]
+  def list_archived_tenants do
+    Org
+    |> where([o], not is_nil(o.archived_at))
+    |> Repo.all()
+    |> Enum.sort_by(fn org ->
+      {org.deletion_scheduled_at || ~U[9999-01-01 00:00:00.000000Z],
+       tenant_priority_index(org.slug), org.slug}
+    end)
   end
 
   @doc """
@@ -304,6 +367,25 @@ defmodule Platform.Tenancy do
   @spec tier(Org.t()) :: :root | :tenant
   def tier(%Org{parent_org_id: nil}), do: :root
   def tier(%Org{}), do: :tenant
+
+  # ── Org lifecycle (archive / schedule-deletion / restore) ─────────────
+  #
+  # Task 019f4eaa stage 3. Implemented in `Platform.Tenancy.Lifecycle`
+  # (which also owns the provenance-aware cascade over child projects and
+  # chat_spaces); delegated here so callers use the natural context API.
+  # All four require a Fabrikam admin actor and refuse the root org.
+
+  @doc "See `Platform.Tenancy.Lifecycle.archive_org/2`."
+  defdelegate archive_org(actor, org), to: Platform.Tenancy.Lifecycle
+
+  @doc "See `Platform.Tenancy.Lifecycle.unarchive_org/2`."
+  defdelegate unarchive_org(actor, org), to: Platform.Tenancy.Lifecycle
+
+  @doc "See `Platform.Tenancy.Lifecycle.schedule_org_deletion/2`."
+  defdelegate schedule_org_deletion(actor, org), to: Platform.Tenancy.Lifecycle
+
+  @doc "See `Platform.Tenancy.Lifecycle.cancel_org_deletion/2`."
+  defdelegate cancel_org_deletion(actor, org), to: Platform.Tenancy.Lifecycle
 
   @doc """
   Fetch the parent org for a tenant. Returns `nil` for the root.

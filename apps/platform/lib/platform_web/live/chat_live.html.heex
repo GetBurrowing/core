@@ -442,6 +442,18 @@
             >
               ☰
             </button>
+            <%!-- Org archive / schedule-deletion (task 019f4eaa stage 6).
+                 Fabrikam-admin only, and only for tenant orgs — the root org's
+                 section is never offered (the lifecycle refuses it). --%>
+            <.lifecycle_menu
+              :if={@fabrikam_admin? and MapSet.member?(@tenant_org_ids, section.org_id)}
+              key={"org:#{section.org_id}"}
+              open={@lifecycle_menu_key == "org:#{section.org_id}"}
+              type="org"
+              id={section.org_id}
+              name={section.name}
+              class="relative ml-auto opacity-0 focus-within:opacity-100 group-hover:opacity-100"
+            />
           </div>
           <%!-- Admin-edit (Stage 6): compact recolor palette — the 5 scope
                tokens ARE the palette (no free-form color picker). Each swatch
@@ -606,9 +618,20 @@
            channels AND no DMs at all. The sub-org headers above still
            render (with their own empty-state hints), but a separate
            top-level invite chip keeps the "Welcome to Suite" message
-           from Stage 1 visible. --%>
+           from Stage 1 visible.
+
+           `@archived_channels == []` is part of the test (task 019f4eaa):
+           having archived channels is proof you are NOT a brand-new user, so
+           "Welcome to Suite. To get started, create a space" is simply wrong
+           — it rendered directly above the ARCHIVED section, telling an admin
+           who had just archived her orgs that she had never used the product.
+           Org-archive made this trivial to hit: it empties every channel in
+           an org at once. Hidden channels deliberately do NOT count here —
+           `@channels` still carries them (hiding is applied downstream in
+           `channel_sections/4`), so hiding everything is not mistaken for
+           being new either. --%>
       <.empty_state
-        :if={@channels == [] and @dm_conversations == []}
+        :if={@channels == [] and @dm_conversations == [] and @archived_channels == []}
         variant={:conversational}
       >
         <:system_message>— no spaces yet —</:system_message>
@@ -2646,3 +2669,15 @@
     </button>
   </div>
 </.sheet>
+
+<%!-- Schedule-deletion confirm dialog (task 019f4eaa stage 6). Archive is
+     instant + reversible with no modal; only this destructive step confirms. --%>
+<.schedule_delete_modal
+  resource={@delete_modal}
+  retention_days={Platform.Tenancy.Lifecycle.retention_days()}
+/>
+
+<%!-- Archive undo toast (task 019f4eaa). Archive is instant + dialog-free by
+     design; this says what it took and keeps the reversal one click away.
+     Top-level sibling — pinned chrome must never nest in an :if region. --%>
+<.archive_undo_toast undo={@undo_archive} />

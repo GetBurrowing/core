@@ -127,7 +127,12 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     :start_summarizer_sweeper,
     :start_stall_registry,
     :start_security_sweeper,
-    :start_space_purger
+    :start_space_purger,
+    # Task 019f4eaa — container retention purger. Sibling of
+    # :start_space_purger (which is channel-specific by contract); this one
+    # hard-deletes deletion-scheduled projects and the cascade-hidden
+    # children of deletion-scheduled orgs once the retention window elapses.
+    :start_container_purger
   ]
 
   # ── Assertion 1: Task-Supervisor rescue audit ─────────────────────

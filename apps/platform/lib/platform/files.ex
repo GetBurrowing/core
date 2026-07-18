@@ -27,6 +27,7 @@ defmodule Platform.Files do
   alias Platform.Files.File
   alias Platform.Files.Text
   alias Platform.Repo
+  alias Platform.Tenancy.Lifecycle
 
   @doc """
   Inserts a new file row.
@@ -35,11 +36,16 @@ defmodule Platform.Files do
   Stage 6 backfill) hit the same validation surface. Returns
   `{:ok, file}` or `{:error, changeset}`.
   """
-  @spec create_file(map()) :: {:ok, File.t()} | {:error, Ecto.Changeset.t()}
+  @spec create_file(map()) ::
+          {:ok, File.t()} | {:error, Ecto.Changeset.t() | :project_archived}
   def create_file(attrs) when is_map(attrs) do
-    %File{}
-    |> File.changeset(attrs)
-    |> Repo.insert()
+    project_id = attrs[:project_id] || attrs["project_id"]
+
+    with :ok <- Lifecycle.ensure_project_writable(project_id) do
+      %File{}
+      |> File.changeset(attrs)
+      |> Repo.insert()
+    end
   end
 
   @doc """
@@ -88,8 +94,13 @@ defmodule Platform.Files do
   at the same object key — neither table owns deletion of the other's
   bytes.
   """
-  @spec delete_file(File.t()) :: {:ok, File.t()} | {:error, Ecto.Changeset.t()}
-  def delete_file(%File{} = file), do: Repo.delete(file)
+  @spec delete_file(File.t()) ::
+          {:ok, File.t()} | {:error, Ecto.Changeset.t() | :project_archived}
+  def delete_file(%File{} = file) do
+    with :ok <- Lifecycle.ensure_project_writable(file.project_id) do
+      Repo.delete(file)
+    end
+  end
 
   @doc """
   Updates the `:ingest_status` field on a `Platform.Files.File`.

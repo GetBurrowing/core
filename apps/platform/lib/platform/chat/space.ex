@@ -22,6 +22,7 @@ defmodule Platform.Chat.Space do
     field(:created_by, :binary_id)
     field(:archived_at, :utc_datetime_usec)
     field(:deletion_scheduled_at, :utc_datetime_usec)
+    field(:archived_cascade_org_id, :binary_id)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -42,7 +43,8 @@ defmodule Platform.Chat.Space do
       :is_direct,
       :created_by,
       :archived_at,
-      :deletion_scheduled_at
+      :deletion_scheduled_at,
+      :archived_cascade_org_id
     ])
     |> validate_required([:kind])
     |> validate_inclusion(:kind, @kinds)

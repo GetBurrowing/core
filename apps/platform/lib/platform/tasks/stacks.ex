@@ -18,6 +18,7 @@ defmodule Platform.Tasks.Stacks do
 
   alias Platform.Repo
   alias Platform.Tasks
+  alias Platform.Tenancy.Lifecycle
   alias Platform.Tasks.{Plan, PlanEngine, ReviewRequests, Stack, StackDeployer, Task}
   alias Platform.Tasks.{Stage, Validation}
   alias Platform.Tasks.Stacks.{CommencementGate, DepInference}
@@ -34,11 +35,16 @@ defmodule Platform.Tasks.Stacks do
   `rollup_branch` consistent with `rollup_branch_name/1` (typically the
   stack's slug); future stages may auto-derive it.
   """
-  @spec create_stack(map()) :: {:ok, Stack.t()} | {:error, Ecto.Changeset.t()}
+  @spec create_stack(map()) ::
+          {:ok, Stack.t()} | {:error, Ecto.Changeset.t() | :project_archived}
   def create_stack(attrs) when is_map(attrs) do
-    %Stack{}
-    |> Stack.changeset(attrs)
-    |> Repo.insert()
+    project_id = attrs[:project_id] || attrs["project_id"]
+
+    with :ok <- Lifecycle.ensure_project_writable(project_id) do
+      %Stack{}
+      |> Stack.changeset(attrs)
+      |> Repo.insert()
+    end
   end
 
   @doc "Fetch a stack by id. Returns the struct or nil."
