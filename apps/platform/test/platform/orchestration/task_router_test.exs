@@ -464,8 +464,12 @@ defmodule Platform.Orchestration.TaskRouterTest do
       Tasks.broadcast_board({:stage_transitioned, running_review_stage})
       Process.sleep(100)
 
+      # Bug #7 (task 019f70ff-55c2) regression: TaskRouter must NOT auto-flip
+      # a task to in_review just because a manual_approval-only stage went
+      # running. `Platform.Tasks.ReviewRequests.create_review_request/1` is
+      # the sole in_progress → in_review trigger; nothing has filed one here.
       updated_task = Tasks.get_task_detail(task.id)
-      assert updated_task.status == "in_review"
+      assert updated_task.status == "in_progress"
 
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
@@ -1863,6 +1867,86 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       # Stage-A lease has been dropped by the transition handler.
       assert nil == RuntimeSupervision.current_lease_for_stage(task.id, stage_a.id)
+    end
+  end
+
+  # ── Bug #7 (task 019f70ff-55c2) ────────────────────────────────────────
+  # Regression coverage for the deletion of
+  # `TaskRouter.maybe_mark_review_task_in_review/1`. The old helper flipped a
+  # task to `in_review` whenever its running stage's only pending validation
+  # was `manual_approval` — before any agent had produced work or filed a
+  # review request. The canonical trigger is
+  # `Platform.Tasks.ReviewRequests.create_review_request/1`, which is
+  # exercised in `Platform.Tasks.ReviewRequestsTest`.
+  describe "manual_approval-only stage does not auto-flip task to in_review" do
+    test "router keeps a task in_progress while a manual_approval-only stage runs without a review_request",
+         %{task: task, assignee: assignee, plan: plan, stage: stage} do
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, task} = Tasks.transition_task(task, "in_progress")
+
+      # Replace the seeded stage's `test_pass` validation with a single
+      # `manual_approval` validation and flip the stage to running. This is
+      # the exact bug shape reported in task 019f70f0: an execution stage
+      # whose only pending validation is manual_approval must NOT be
+      # misclassified as a review gate.
+      Platform.Repo.delete_all(
+        from(v in Platform.Tasks.Validation, where: v.stage_id == ^stage.id)
+      )
+
+      {:ok, _validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      running_stage =
+        stage
+        |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+        |> Platform.Repo.update!()
+
+      Tasks.broadcast_board({:plan_updated, plan})
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(150)
+
+      # Pre-fix: this assertion fails within ~80ms because the router's init
+      # sweep called `maybe_mark_review_task_in_review/1` and flipped the
+      # task. Post-fix: the router leaves the task alone — only a filed
+      # review request can move it to in_review.
+      updated_task = Tasks.get_task_detail(task.id)
+      assert updated_task.status == "in_progress"
+
+      status = TaskRouter.current_status(task.id)
+      assert status.current_stage_id == running_stage.id
+    end
+  end
+
+  describe "create_review_request/1 remains the sole in_progress -> in_review trigger" do
+    test "filing a review_request against a running manual_approval stage flips task to in_review",
+         %{task: task, stage: stage} do
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, task} = Tasks.transition_task(task, "in_progress")
+
+      # Do NOT start the router — this test locks in that the transition
+      # trigger lives in `ReviewRequests.create_review_request/1`, independent
+      # of any router path.
+      _running_stage =
+        stage
+        |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+        |> Platform.Repo.update!()
+
+      {:ok, manual_validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      {:ok, execution_space} = ExecutionSpace.find_or_create(task.id)
+
+      assert {:ok, _request} =
+               Platform.Tasks.ReviewRequests.create_review_request(%{
+                 validation_id: manual_validation.id,
+                 task_id: task.id,
+                 execution_space_id: execution_space.id,
+                 items: [%{label: "UI review"}]
+               })
+
+      updated_task = Tasks.get_task_detail(task.id)
+      assert updated_task.status == "in_review"
     end
   end
 end

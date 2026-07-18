@@ -169,8 +169,6 @@ defmodule Platform.Orchestration.TaskRouter do
 
     case state.lease_status do
       "active" ->
-        state = maybe_mark_review_task_in_review(state)
-
         cond do
           plan_awaiting_review?(task_id) ->
             # A plan is sitting with the human; do not re-prompt the agent.
@@ -525,8 +523,6 @@ defmodule Platform.Orchestration.TaskRouter do
           send(self(), :dispatch)
           %{state | status: :running}
         else
-          state = maybe_mark_review_task_in_review(state)
-
           if waiting_for_human_review?(state) do
             if stage.status == "running" do
               send(self(), :dispatch)
@@ -757,7 +753,6 @@ defmodule Platform.Orchestration.TaskRouter do
           |> Map.put(:last_dispatch_at, DateTime.utc_now())
           |> Map.put(:task_status, task.status)
           |> maybe_set_stage(stage)
-          |> maybe_mark_review_task_in_review()
 
         state =
           if waiting_for_human_review?(state) do
@@ -783,7 +778,6 @@ defmodule Platform.Orchestration.TaskRouter do
           |> Map.put(:last_dispatch_at, DateTime.utc_now())
           |> Map.put(:task_status, task.status)
           |> maybe_set_stage(stage)
-          |> maybe_mark_review_task_in_review()
 
         state =
           if waiting_for_human_review?(state) do
@@ -1527,26 +1521,6 @@ defmodule Platform.Orchestration.TaskRouter do
     }
   end
 
-  defp maybe_transition_task_to_in_review(task_id) do
-    case Tasks.get_task_detail(task_id) do
-      %{status: "in_progress"} = task ->
-        case Tasks.transition_task(task, "in_review") do
-          {:ok, _updated} ->
-            Logger.info(
-              "[TaskRouter] review gate started — transitioned task #{task_id} to in_review"
-            )
-
-          {:error, reason} ->
-            Logger.warning(
-              "[TaskRouter] failed to transition task #{task_id} to in_review on review gate: #{inspect(reason)}"
-            )
-        end
-
-      _other ->
-        :ok
-    end
-  end
-
   defp ensure_execution_stage_started(state, task_id) do
     task = Tasks.get_task_detail(task_id)
     plan = Tasks.current_plan(task_id)
@@ -1663,14 +1637,6 @@ defmodule Platform.Orchestration.TaskRouter do
   defp heartbeat_suppressible_for_task?(task_id, stage) do
     pending_requests = ReviewRequests.list_pending_for_task(task_id)
     HeartbeatScheduler.heartbeat_suppressible?(stage, pending_requests)
-  end
-
-  defp maybe_mark_review_task_in_review(%State{} = state) do
-    if current_stage_type(state) == "manual_approval" do
-      maybe_transition_task_to_in_review(state.task_id)
-    end
-
-    state
   end
 
   defp current_stage_type(%State{current_stage_id: nil}), do: "coding"
