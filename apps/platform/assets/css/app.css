@@ -702,6 +702,7 @@ body, .font-fabrikam {
   --shadow-card-hover: 0 2px 4px rgb(9 12 16 / 0.06), 0 6px 16px rgb(9 12 16 / 0.08);
   --shadow-dropdown: 0 4px 6px -2px rgb(9 12 16 / 0.08), 0 10px 24px -4px rgb(9 12 16 / 0.12);
   --shadow-modal: 0 8px 12px -4px rgb(9 12 16 / 0.10), 0 24px 48px -12px rgb(9 12 16 / 0.22);
+  --sheet-form-max-width: 36rem; /* 576px — form-modal standard (max-w-xl, 8px grid); desktop width of the New Task / form sheets */
   --duration-fast: 100ms;      /* micro-interactions: hover, press */
   --duration-base: 200ms;      /* standard transitions: reveals, tint fades */
   --duration-slow: 300ms;      /* layout shifts: panels, sheets */
@@ -2652,8 +2653,10 @@ body, .font-fabrikam {
 
   .sheet-body {
     flex: 1;
+    min-width: 0;
     padding: 1.5rem;
     overflow-y: auto;
+    overflow-x: clip;
   }
 
   .sheet-actions {
@@ -2669,11 +2672,11 @@ body, .font-fabrikam {
      short form (Create Project) opens in the same place as a tall one
      (New Task). Marlowe 2026-07-12: dialogs must open aligned to the same
      spot. Entrance slides up 1rem into center; reduced-motion rule below
-     already disables it. Width upgrade (form_modal standard) lands with
-     the Phase 3 Skills PR. */
+     already disables it. Width is the form-modal standard token
+     --sheet-form-max-width (576px; task 019f5e32). */
   @media (min-width: 768px) {
     .sheet-bottom .sheet-panel {
-      max-width: 480px;
+      max-width: var(--sheet-form-max-width);
       left: 50%;
       top: 50%;
       right: auto;

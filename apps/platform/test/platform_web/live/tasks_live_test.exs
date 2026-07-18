@@ -10281,6 +10281,36 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
+  # ── New Task sheet opens (task 019f5e32 stage 2) ──────────────────────
+
+  describe "New Task sheet" do
+    # The create-task sheet's open path had NO coverage before this — nothing
+    # referenced #task-sheet, #create-task-form or toggle_task_sheet. Stage 1
+    # edited that template's markup (tooltip-right -> tooltip-top on both info
+    # bubbles, and a raw inline SVG swapped for the hero icon span), so this
+    # guards against a template break on a path we just touched.
+    #
+    # Scope is deliberately narrow: it asserts the sheet still opens and
+    # renders its form. The actual fix — the 576px panel width and the absent
+    # horizontal scrollbar — is pure browser layout that a server-rendered
+    # LiveView test CANNOT observe; that proof lives in the task-level
+    # e2e_behavior cases, not here.
+
+    test "clicking the desktop New Task trigger opens the sheet with its form", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Closed on mount — otherwise the assertions below would pass trivially.
+      refute has_element?(view, "#task-sheet[data-open='true']")
+
+      view |> element("[data-role='header-new-task']") |> render_click()
+
+      assert has_element?(view, "#task-sheet[data-open='true']")
+      assert has_element?(view, "#create-task-form")
+      assert has_element?(view, "input[name='task[title]']")
+    end
+  end
+
   # ── Pin-to-Chat stage 4 (task 019f62a1) ────────────────────────────────
   #
   # Both the DOM `:if` sponsor gate AND the server-side re-check must
