@@ -62,22 +62,54 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   def init(_opts) do
     Tasks.subscribe_board()
 
-    # Query DB for all tasks that should have running routers
-    tasks = list_should_run_tasks()
-
-    started =
-      Enum.count(tasks, fn task ->
-        case resolve_and_start(task) do
-          :ok -> true
-          _ -> false
-        end
-      end)
+    started = boot_reconcile()
 
     Logger.info("[TaskRouterWatcher] boot: started #{started} routers")
 
     schedule_reconcile()
 
     {:ok, %{}}
+  end
+
+  # Boot-time reconciliation. Isolated from `init/1` and guarded because a
+  # supervisor RESTART of this globally-supervised singleton must not be
+  # able to cascade into a suite-killing failure in test env.
+  #
+  # The watcher and Platform.Repo are sibling children of Platform.Supervisor
+  # (:one_for_one). When the watcher crashes for any reason and the
+  # supervisor restarts it, `init/1` runs `list_should_run_tasks/0` — a Repo
+  # query. The restarted process is NOT in any DataCase sandbox allow-list
+  # (the test that would allow it isn't driving the restart), so the query
+  # raises DBConnection.OwnershipError, or exits `:noproc` if a shared-mode
+  # connection was already torn down. Unguarded, that crashes the restart,
+  # the supervisor retries immediately, and 3 failed restarts in <5ms trip
+  # Platform.Supervisor's max restart intensity — terminating the supervisor
+  # and taking sibling Platform.Repo down with it, cascading "could not
+  # lookup Ecto repo Platform.Repo" across every subsequent DataCase setup.
+  # See notes/2026-07-06-datacase-cascade-rootcause.md for the sibling shape.
+  #
+  # `DBConnection.OwnershipError` is a sandbox-only error class — production
+  # uses a real pool and never raises it — and at real application boot the
+  # Repo is up with no sandbox, so this query succeeds and starts routers
+  # exactly as before. The guards only ever fire under the test sandbox, so
+  # production behaviour is unchanged.
+  defp boot_reconcile do
+    tasks = list_should_run_tasks()
+
+    Enum.count(tasks, fn task ->
+      case resolve_and_start(task) do
+        :ok -> true
+        _ -> false
+      end
+    end)
+  rescue
+    DBConnection.OwnershipError ->
+      Logger.debug("[TaskRouterWatcher] boot reconcile skipped: sandbox connection not owned")
+      0
+  catch
+    :exit, _reason ->
+      Logger.debug("[TaskRouterWatcher] boot reconcile skipped: Repo connection unavailable")
+      0
   end
 
   @impl true
@@ -92,7 +124,7 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   end
 
   def handle_info(:reconcile, state) do
-    {started, stopped} = reconcile()
+    {started, stopped} = safe_reconcile()
 
     # Bug #4 (task 019f708f) — piggyback on the reconcile tick to
     # catch stack members that got stranded at `in_review` after
@@ -107,6 +139,13 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
             "[TaskRouterWatcher] sweep_in_review_stalls raised: #{Exception.message(e)}"
           )
 
+          %{scanned: 0, transitioned: 0, observed: 0}
+      catch
+        # Same sandbox-teardown "owner exited" :exit shape guarded in
+        # resolve_runtime_for_task/1 and boot_reconcile/0 — the sweep's
+        # Repo.all can hit it too. Catch it so the tick never crashes the
+        # watcher (a sandbox-only condition; production sweeps normally).
+        :exit, _reason ->
           %{scanned: 0, transitioned: 0, observed: 0}
       end
 
@@ -218,6 +257,22 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
       # own process, which is NOT part of the sandbox owner chain — the
       # `Repo.get` above raises. Reporting a distinct error tag lets
       # `evaluate_task/1` short-circuit rather than crash the GenServer.
+      {:error, :sandbox_unowned}
+  catch
+    # Same singleton-vs-sandbox race, but the OTHER shape: when a test that
+    # HAS allowed the watcher onto its shared connection exits while this
+    # `Repo.get` is mid-flight, the sandbox connection is torn down and the
+    # query fails as a `DBConnection.ConnectionError` delivered as an EXIT
+    # ("owner #PID exited"), which the `rescue` above does not catch. These
+    # task-board broadcasts fire on nearly every task insert/update across
+    # the suite, so on an unlucky interleaving the watcher crashes several
+    # times inside Platform.Supervisor's restart window and takes sibling
+    # Platform.Repo down — the same cascade `boot_reconcile/0` guards.
+    # "owner exited" is a sandbox-only condition (production has no sandbox
+    # owner), and degrading to `{:error, ...}` just skips starting the router
+    # this cycle — the next task event or reconcile tick retries — so
+    # production behaviour is unchanged.
+    :exit, _reason ->
       {:error, :sandbox_unowned}
   end
 
@@ -420,6 +475,18 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
         "[TaskRouterWatcher] runtime #{runtime_id} reconnected — re-dispatched #{redispatched} task(s)"
       )
     end
+  rescue
+    # `{:runtime_reconnected, _}` is broadcast on `tasks:board` (which the
+    # watcher subscribes to) whenever a federation runtime channel joins, so
+    # runtime-channel tests reach this handler. `list_should_run_tasks/0`
+    # here is the same unguarded Repo.all as the other seams — guard it so a
+    # sandbox-teardown error can't crash the watcher. Sandbox-only condition;
+    # production redispatches normally.
+    DBConnection.OwnershipError ->
+      :ok
+  catch
+    :exit, _reason ->
+      :ok
   end
 
   defp active_lease_present?(task_id, runtime_id) do
@@ -488,6 +555,25 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
     end
   end
 
+  # Guarded wrapper around reconcile/0 for the `:reconcile` handler. Its
+  # `list_should_run_tasks/0` Repo.all can hit the same sandbox-teardown
+  # errors as the other seams (OwnershipError raise or "owner exited" :exit)
+  # when a tick is processed after the allowing test has exited. Degrade to
+  # {0, 0} instead of crashing the watcher — a sandbox-only condition;
+  # production reconciles normally. See boot_reconcile/0 for the cascade this
+  # prevents.
+  defp safe_reconcile do
+    reconcile()
+  rescue
+    DBConnection.OwnershipError ->
+      Logger.debug("[TaskRouterWatcher] reconcile skipped: sandbox connection not owned")
+      {0, 0}
+  catch
+    :exit, _reason ->
+      Logger.debug("[TaskRouterWatcher] reconcile skipped: Repo connection unavailable")
+      {0, 0}
+  end
+
   defp reconcile do
     # Tasks that should have routers
     should_run_tasks = list_should_run_tasks()
@@ -541,6 +627,25 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   end
 
   defp schedule_reconcile do
-    Process.send_after(self(), :reconcile, @reconcile_interval_ms)
+    # The autonomous reconcile tick fires `handle_info(:reconcile)`, whose
+    # `reconcile/0` call (unlike the sweep beside it) is NOT rescued and does
+    # Repo work. In test the watcher is a global singleton allow-listed into
+    # whichever DataCase currently owns the sandbox (test/support/data_case.ex);
+    # a tick that fires after that owning test has exited runs against a
+    # torn-down connection and crashes the watcher — one more restart-count
+    # push toward the cascade that `boot_reconcile/0` above guards against.
+    #
+    # The interval is 5 min, so this only actually fires during a slow full
+    # run (e.g. CI in a slim container). Gate the self-timer off in test (the
+    # flag defaults to `true`, so production still reconciles every 5 min).
+    # The watcher's tests drive reconcile by sending `:reconcile` directly
+    # inside their own sandbox (see task_router_watcher_test.exs), so
+    # reconcile-logic coverage is unaffected — this only removes the
+    # wall-clock self-trigger, mirroring how the other Repo-touching
+    # singletons (SummarizerSweeper, SecuritySweeper, the purgers) are
+    # disabled in config/test.exs and driven directly from their tests.
+    if Application.get_env(:platform, :task_router_watcher_reconcile, true) do
+      Process.send_after(self(), :reconcile, @reconcile_interval_ms)
+    end
   end
 end

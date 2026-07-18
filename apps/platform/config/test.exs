@@ -48,6 +48,22 @@ config :phoenix,
 config :platform, :start_attention_router, false
 config :platform, :start_system_event_scheduler, false
 
+# TaskRouterWatcher autonomous reconcile tick.
+# The watcher boots as a global singleton in test (it's allow-listed into
+# the current DataCase sandbox, see test/support/data_case.ex) so tests can
+# drive it. Its 5-minute self-firing `:reconcile` tick does Repo work that
+# isn't fully rescued in `handle_info(:reconcile)`, so a tick that fires
+# after the owning test has exited crashes the watcher. That crash is only
+# catastrophic because of the restart loop in `init/1` — now guarded by
+# `TaskRouterWatcher.boot_reconcile/0`, the real fix. Disabling the
+# self-timer here removes the trigger too (it otherwise fires only during a
+# slow full run, e.g. CI), mirroring how the other Repo-touching singletons
+# (SummarizerSweeper, SecuritySweeper, the purgers) are disabled in test and
+# driven directly from their test files. Reconcile logic stays covered — the
+# watcher's tests send `:reconcile` synchronously inside their own sandbox.
+# Production defaults to `true` (see TaskRouterWatcher.schedule_reconcile/0).
+config :platform, :task_router_watcher_reconcile, false
+
 # SpacePurger (task 019e95ea stage 3): tests call `sweep/0` directly
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_space_purger, false
