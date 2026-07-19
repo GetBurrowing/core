@@ -235,6 +235,99 @@ defmodule Platform.Tenancy.LifecycleTest do
     end
   end
 
+  # ── Per-child deletion clock (task 019f760f stage 1) ───────────────────
+
+  describe "per-child deletion clock on cascade" do
+    test "schedule_org_deletion stamps each cascade child's own deletion clock with the org's" do
+      admin = admin_user!()
+      org = tenant_org!()
+      proj = project!(org)
+      chan = channel!(org)
+
+      assert {:ok, scheduled} = Tenancy.schedule_org_deletion(admin, org)
+      assert %DateTime{} = scheduled.deletion_scheduled_at
+
+      proj = Repo.reload!(proj)
+      chan = Repo.reload!(chan)
+
+      # Each cascade child inherits the org's OWN deletion timestamp — not nil.
+      assert proj.deletion_scheduled_at == scheduled.deletion_scheduled_at
+      assert %DateTime{} = proj.archived_at
+      assert proj.archived_cascade_org_id == org.id
+
+      assert chan.deletion_scheduled_at == scheduled.deletion_scheduled_at
+      assert %DateTime{} = chan.archived_at
+      assert chan.archived_cascade_org_id == org.id
+    end
+
+    test "archive_org hides children but leaves their deletion clock nil (no countdown on plain archive)" do
+      admin = admin_user!()
+      org = tenant_org!()
+      proj = project!(org)
+      chan = channel!(org)
+
+      assert {:ok, _} = Tenancy.archive_org(admin, org)
+
+      proj = Repo.reload!(proj)
+      chan = Repo.reload!(chan)
+
+      # Archive hides + stamps provenance …
+      assert %DateTime{} = proj.archived_at
+      assert proj.archived_cascade_org_id == org.id
+      assert %DateTime{} = chan.archived_at
+      assert chan.archived_cascade_org_id == org.id
+
+      # … but must NOT start a deletion countdown on the children.
+      assert is_nil(proj.deletion_scheduled_at)
+      assert is_nil(chan.deletion_scheduled_at)
+    end
+
+    test "cancel_org_deletion clears each cascade child's deletion clock and provenance marker" do
+      admin = admin_user!()
+      org = tenant_org!()
+      proj = project!(org)
+      chan = channel!(org)
+
+      assert {:ok, scheduled} = Tenancy.schedule_org_deletion(admin, org)
+
+      # Sanity: children are counting down before the cancel.
+      assert Repo.reload!(proj).deletion_scheduled_at == scheduled.deletion_scheduled_at
+      assert Repo.reload!(chan).deletion_scheduled_at == scheduled.deletion_scheduled_at
+
+      assert {:ok, cancelled} = Tenancy.cancel_org_deletion(admin, scheduled)
+      assert is_nil(cancelled.deletion_scheduled_at)
+
+      proj = Repo.reload!(proj)
+      chan = Repo.reload!(chan)
+
+      # Cancelling the org's deletion must stop the children's clocks too —
+      # otherwise a reprieved org's children keep counting down.
+      assert is_nil(proj.deletion_scheduled_at)
+      assert is_nil(proj.archived_cascade_org_id)
+      assert is_nil(proj.archived_at)
+      assert is_nil(chan.deletion_scheduled_at)
+      assert is_nil(chan.archived_cascade_org_id)
+      assert is_nil(chan.archived_at)
+    end
+
+    test "unarchive_org also clears a cascade child's deletion clock" do
+      admin = admin_user!()
+      org = tenant_org!()
+      proj = project!(org)
+
+      assert {:ok, scheduled} = Tenancy.schedule_org_deletion(admin, org)
+      assert Repo.reload!(proj).deletion_scheduled_at == scheduled.deletion_scheduled_at
+
+      assert {:ok, restored} = Tenancy.unarchive_org(admin, scheduled)
+      assert is_nil(restored.deletion_scheduled_at)
+
+      proj = Repo.reload!(proj)
+      assert is_nil(proj.deletion_scheduled_at)
+      assert is_nil(proj.archived_cascade_org_id)
+      assert is_nil(proj.archived_at)
+    end
+  end
+
   # ── Authorization + root guard ─────────────────────────────────────────
 
   describe "authorization" do
@@ -340,6 +433,43 @@ defmodule Platform.Tenancy.LifecycleTest do
       assert {:ok, cancelled} = Tasks.cancel_project_deletion(admin, scheduled)
       assert is_nil(cancelled.archived_at)
       assert is_nil(cancelled.deletion_scheduled_at)
+    end
+
+    test "unarchive_project clears a cascade child's provenance marker + clock" do
+      admin = admin_user!()
+      org = tenant_org!()
+      proj = project!(org)
+
+      # Hide the project as a cascade child of the org: schedule stamps the
+      # provenance marker AND its own deletion clock on every child.
+      assert {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
+      hidden = Repo.reload!(proj)
+      assert hidden.archived_cascade_org_id == org.id
+      assert %DateTime{} = hidden.deletion_scheduled_at
+
+      # Restoring the single child directly (the future Recovery-hub path)
+      # must clear the stale marker — otherwise a later org restore would
+      # wrongly re-match this live project via cascade_children_query.
+      assert {:ok, restored} = Tasks.unarchive_project(admin, hidden)
+      assert is_nil(restored.archived_at)
+      assert is_nil(restored.deletion_scheduled_at)
+      assert is_nil(restored.archived_cascade_org_id)
+    end
+
+    test "cancel_project_deletion clears a cascade child's provenance marker" do
+      admin = admin_user!()
+      org = tenant_org!()
+      proj = project!(org)
+
+      assert {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
+      hidden = Repo.reload!(proj)
+      assert hidden.archived_cascade_org_id == org.id
+      assert %DateTime{} = hidden.deletion_scheduled_at
+
+      assert {:ok, cancelled} = Tasks.cancel_project_deletion(admin, hidden)
+      assert is_nil(cancelled.archived_at)
+      assert is_nil(cancelled.deletion_scheduled_at)
+      assert is_nil(cancelled.archived_cascade_org_id)
     end
 
     test "rejects a non-admin actor" do

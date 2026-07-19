@@ -202,6 +202,33 @@ defmodule Platform.Chat.SpaceLifecycleTest do
       assert_receive {[:platform, :chat, :space_unarchived], ^ref, _m, meta}
       assert meta.actor_id == admin.id
     end
+
+    test "clears a cascade child's provenance marker and its own deletion clock" do
+      admin = admin_user!()
+
+      # A space hidden by an org cascade carries both the provenance marker
+      # (archived_cascade_org_id) and its own deletion clock. Restoring the
+      # single child directly must clear BOTH — a live space that keeps a
+      # stale marker would be wrongly re-matched on a later org restore.
+      cascade_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+      now = DateTime.utc_now()
+
+      space =
+        channel!()
+        |> Ecto.Changeset.change(
+          archived_at: now,
+          deletion_scheduled_at: now,
+          archived_cascade_org_id: cascade_org_id
+        )
+        |> Repo.update!()
+
+      assert space.archived_cascade_org_id == cascade_org_id
+
+      assert {:ok, restored} = Chat.unarchive_space(admin, space)
+      assert is_nil(restored.archived_at)
+      assert is_nil(restored.deletion_scheduled_at)
+      assert is_nil(restored.archived_cascade_org_id)
+    end
   end
 
   describe "archive_space/1 (system path)" do

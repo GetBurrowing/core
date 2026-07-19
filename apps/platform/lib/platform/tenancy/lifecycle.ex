@@ -124,18 +124,36 @@ defmodule Platform.Tenancy.Lifecycle do
   # chat_space that is NOT already archived (so an independently-archived
   # child keeps its NULL provenance marker and is skipped). Telemetry fires
   # only after commit.
+  #
+  # Each cascade child inherits the org's OWN deletion clock: when scheduling
+  # (`org_attrs` carries `:deletion_scheduled_at`), the child gets the same
+  # timestamp so its countdown starts with the org's; when plain-archiving
+  # (no deletion in `org_attrs`), `child_deletion` is `nil` and the child's
+  # clock stays clear — archive must never start a countdown.
   defp hide_org(actor, %Org{} = org, org_attrs, now, event_name, extra) do
+    child_deletion = Map.get(org_attrs, :deletion_scheduled_at)
+
     Multi.new()
     |> Multi.update(:org, Org.changeset(org, org_attrs))
     |> Multi.update_all(
       :projects,
       unhidden_children_query(Project, org.id),
-      set: [archived_at: now, archived_cascade_org_id: org.id, updated_at: now]
+      set: [
+        archived_at: now,
+        deletion_scheduled_at: child_deletion,
+        archived_cascade_org_id: org.id,
+        updated_at: now
+      ]
     )
     |> Multi.update_all(
       :spaces,
       unhidden_children_query(Space, org.id),
-      set: [archived_at: now, archived_cascade_org_id: org.id, updated_at: now]
+      set: [
+        archived_at: now,
+        deletion_scheduled_at: child_deletion,
+        archived_cascade_org_id: org.id,
+        updated_at: now
+      ]
     )
     |> Repo.transaction()
     |> case do
@@ -151,6 +169,11 @@ defmodule Platform.Tenancy.Lifecycle do
   # Restore in one transaction: re-verify the org still exists (guards
   # against a concurrent hard delete), un-hide only this org's cascade
   # children, then clear the org's own flags. Telemetry fires after commit.
+  #
+  # Clearing `deletion_scheduled_at` on the children is essential: cancelling
+  # an org deletion clears the org's clock, so the cascade children it stamped
+  # must have theirs cleared too — otherwise they keep counting down after the
+  # org they belong to has been reprieved.
   defp restore_org(actor, %Org{} = org, event_name) do
     now = DateTime.utc_now()
 
@@ -164,12 +187,22 @@ defmodule Platform.Tenancy.Lifecycle do
     |> Multi.update_all(
       :projects,
       cascade_children_query(Project, org.id),
-      set: [archived_at: nil, archived_cascade_org_id: nil, updated_at: now]
+      set: [
+        archived_at: nil,
+        deletion_scheduled_at: nil,
+        archived_cascade_org_id: nil,
+        updated_at: now
+      ]
     )
     |> Multi.update_all(
       :spaces,
       cascade_children_query(Space, org.id),
-      set: [archived_at: nil, archived_cascade_org_id: nil, updated_at: now]
+      set: [
+        archived_at: nil,
+        deletion_scheduled_at: nil,
+        archived_cascade_org_id: nil,
+        updated_at: now
+      ]
     )
     |> Multi.update(:org, fn %{verify: fresh} ->
       Org.changeset(fresh, %{archived_at: nil, deletion_scheduled_at: nil})
@@ -346,7 +379,7 @@ defmodule Platform.Tenancy.Lifecycle do
       update_project(
         actor,
         project,
-        %{archived_at: nil, deletion_scheduled_at: nil},
+        %{archived_at: nil, deletion_scheduled_at: nil, archived_cascade_org_id: nil},
         [:platform, :tasks, :project_unarchived],
         %{}
       )
@@ -394,7 +427,7 @@ defmodule Platform.Tenancy.Lifecycle do
         update_project(
           actor,
           project,
-          %{archived_at: nil, deletion_scheduled_at: nil},
+          %{archived_at: nil, deletion_scheduled_at: nil, archived_cascade_org_id: nil},
           [:platform, :tasks, :project_deletion_cancelled],
           %{}
         )

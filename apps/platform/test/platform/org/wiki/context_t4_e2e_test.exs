@@ -732,7 +732,14 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # destination filled at ingest time. Nullable for backfill
       # compatibility; derivation function is the single source of
       # truth for both ingest + promote-time fallback.
-      "20260719000000_add_target_page_key_to_memory_proposals.exs"
+      "20260719000000_add_target_page_key_to_memory_proposals.exs",
+      # Task 019f760f stage 4 — backfill per-child deletion clocks for
+      # cascade children scheduled BEFORE stage 1 (marker set, own
+      # `deletion_scheduled_at` NULL). Stage 2 dropped the org-clock join
+      # in the purger, so those rows would never purge; this stamps their
+      # own clock from their still-scheduled org. Data-only, idempotent;
+      # `down/0` is a no-op.
+      "20260719000001_backfill_cascade_child_deletion_clocks.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

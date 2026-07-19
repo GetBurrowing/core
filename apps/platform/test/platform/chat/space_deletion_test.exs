@@ -277,6 +277,28 @@ defmodule Platform.Chat.SpaceDeletionTest do
       assert {:error, :unauthorized} = Chat.cancel_space_deletion(member, scheduled)
       assert %DateTime{} = Repo.reload!(scheduled).deletion_scheduled_at
     end
+
+    test "clears a cascade child's provenance marker too" do
+      admin = admin_user!()
+      space = channel!()
+      {:ok, scheduled} = Chat.schedule_space_deletion(admin, space)
+
+      # Stamp the cascade provenance marker as an org cascade would, on top of
+      # this channel's own deletion clock.
+      scheduled =
+        scheduled
+        |> Ecto.Changeset.change(archived_cascade_org_id: Tenancy.get_org_by_slug!("fabrikam").id)
+        |> Repo.update!()
+
+      refute is_nil(scheduled.archived_cascade_org_id)
+
+      # Cancelling via the single-child path must clear the stale marker —
+      # otherwise cascade_children_query would wrongly re-match this live
+      # channel on a later org restore.
+      assert {:ok, cancelled} = Chat.cancel_space_deletion(admin, scheduled)
+      assert is_nil(cancelled.deletion_scheduled_at)
+      assert is_nil(cancelled.archived_cascade_org_id)
+    end
   end
 
   # ── SpacePurger.sweep/0 ────────────────────────────────────────────────

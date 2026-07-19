@@ -326,7 +326,11 @@ defmodule Platform.Chat do
   def unarchive_space(actor, %Space{} = space) do
     with_space_lifecycle_authz(actor, space, fn ->
       space
-      |> Space.changeset(%{archived_at: nil})
+      |> Space.changeset(%{
+        archived_at: nil,
+        deletion_scheduled_at: nil,
+        archived_cascade_org_id: nil
+      })
       |> Repo.update()
       |> tap_space_lifecycle_telemetry(:space_unarchived, actor)
     end)
@@ -409,7 +413,7 @@ defmodule Platform.Chat do
 
       true ->
         space
-        |> Space.changeset(%{deletion_scheduled_at: nil})
+        |> Space.changeset(%{deletion_scheduled_at: nil, archived_cascade_org_id: nil})
         |> Repo.update()
         |> tap_space_lifecycle_telemetry(:space_deletion_cancelled, actor)
     end

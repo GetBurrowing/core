@@ -3,22 +3,31 @@ defmodule Platform.Tenancy.ContainerPurger do
   Permanently deletes container children whose scheduled deletion passed
   its retention window (task 019f4eaa stage 4).
 
-  `Platform.Tenancy.Lifecycle` (stage 3) soft-hides containers two ways:
+  `Platform.Tenancy.Lifecycle` (stage 3) soft-hides containers two ways,
+  and as of task 019f760f stage 1 BOTH stamp the child's OWN deletion clock:
 
     * **Directly-scheduled projects** — `schedule_project_deletion/2`
       stamps the project's own `deletion_scheduled_at` (+ `archived_at`).
     * **Cascade-hidden children of a scheduled org** —
       `schedule_org_deletion/2` stamps the ORG's `deletion_scheduled_at`
       and cascade-stamps each active child project / chat_space with
-      `archived_cascade_org_id = org.id` (children do NOT carry their own
-      `deletion_scheduled_at`; the retention clock lives on the org).
+      `archived_cascade_org_id = org.id` AND that same
+      `deletion_scheduled_at` — a per-child countdown that starts with the
+      org's and is cleared again when the org is restored.
 
   This GenServer ticks daily and hard-deletes, past the retention window
   (`Platform.Tenancy.Lifecycle.retention_days/0`):
 
-    1. Projects with their own `deletion_scheduled_at < now - retention`.
-    2. Projects AND chat_spaces whose `archived_cascade_org_id` references
-       an org whose `deletion_scheduled_at < now - retention`.
+    1. Projects with their own `deletion_scheduled_at < now - retention` —
+       one query now covers BOTH directly-scheduled projects and cascade
+       project children, since each carries its own clock.
+    2. Chat_spaces with their own `deletion_scheduled_at < now - retention`
+       AND a non-NULL `archived_cascade_org_id`. That marker scopes this to
+       cascade children only: `Platform.Chat.SpacePurger` purges
+       directly-scheduled channels off the same own-clock predicate, so
+       without the split both purgers would race to delete one row. Cascade
+       channels therefore follow CONTAINER retention; directly-scheduled
+       channels follow channel retention.
 
   Project rows cascade cleanly at the DB level (tasks, epics, task_stacks,
   meetings, platform_files are `ON DELETE :delete_all` on `project_id`);
@@ -43,13 +52,14 @@ defmodule Platform.Tenancy.ContainerPurger do
 
   The sweep runs in one transaction. Every delete re-asserts the full
   "still scheduled + still past window" predicate INSIDE the delete query
-  itself (not just the select) — for cascade children that means the org
-  it hangs off is still scheduled and past window. So a
+  itself (not just the select) — cascade children re-assert their OWN
+  `deletion_scheduled_at` (spaces also re-assert the cascade marker). So a
   `cancel_project_deletion` / `cancel_org_deletion` / `unarchive_org`
-  landing between candidate selection and deletion is respected: the
-  re-check matches zero rows and the row is skipped, never resurrected as a
-  half-purged husk. An impossible row count (> 1 for a primary-key delete)
-  raises and rolls the whole sweep back.
+  landing between candidate selection and deletion — each of which clears
+  the child's own clock — is respected: the re-check matches zero rows and
+  the row is skipped, never resurrected as a half-purged husk. An
+  impossible row count (> 1 for a primary-key delete) raises and rolls the
+  whole sweep back.
 
   Telemetry (`[:platform, :tasks, :project_purged]` and the reused
   `[:platform, :chat, :space_purged]`) fires only AFTER the transaction
@@ -61,13 +71,12 @@ defmodule Platform.Tenancy.ContainerPurger do
 
   require Logger
 
-  import Ecto.Query, only: [from: 2, subquery: 1]
+  import Ecto.Query, only: [from: 2]
 
   alias Platform.Chat.Space
   alias Platform.Repo
   alias Platform.Tasks.Project
   alias Platform.Tenancy.Lifecycle
-  alias Platform.Tenancy.Org
 
   @tick_interval_ms 24 * 60 * 60 * 1000
 
@@ -99,25 +108,17 @@ defmodule Platform.Tenancy.ContainerPurger do
 
     {:ok, {purged_projects, purged_spaces}} =
       Repo.transaction(fn ->
-        direct_projects = Repo.all(directly_scheduled_projects_query(cutoff))
-        direct_ids = MapSet.new(direct_projects, & &1.id)
+        # One own-clock query now covers BOTH directly-scheduled projects and
+        # cascade project children — stage 1 gave cascade children their own
+        # deletion clock, so there is no longer a separate org-join set.
+        projects = Repo.all(directly_scheduled_projects_query(cutoff))
 
-        # A directly-scheduled project has `archived_at` set, so the org
-        # cascade skips it and its `archived_cascade_org_id` stays NULL — the
-        # two candidate sets are disjoint. The reject is belt-and-braces so a
-        # row never gets a redundant second delete + skip-warn.
-        cascade_projects =
-          cutoff
-          |> cascade_child_projects_query()
-          |> Repo.all()
-          |> Enum.reject(&MapSet.member?(direct_ids, &1.id))
-
+        # Cascade child channels carry their own clock too, but SpacePurger
+        # owns directly-scheduled channels off the same own-clock predicate —
+        # scope to the cascade marker so the two purgers never race for a row.
         cascade_spaces = Repo.all(cascade_child_spaces_query(cutoff))
 
-        purged_projects =
-          Enum.filter(direct_projects, &purge_directly_scheduled_project(&1, cutoff)) ++
-            Enum.filter(cascade_projects, &purge_cascade_project(&1, cutoff))
-
+        purged_projects = Enum.filter(projects, &purge_directly_scheduled_project(&1, cutoff))
         purged_spaces = Enum.filter(cascade_spaces, &purge_cascade_space(&1, cutoff))
 
         {purged_projects, purged_spaces}
@@ -140,44 +141,38 @@ defmodule Platform.Tenancy.ContainerPurger do
 
   # ── Candidate selection ────────────────────────────────────────────────
 
-  # Category 1: projects flagged for deletion on their own clock.
+  # Category 1: projects flagged for deletion on their own clock. Post
+  # stage 1 this catches BOTH directly-scheduled projects and cascade
+  # project children — each carries its own `deletion_scheduled_at`, so
+  # there is no separate org-join query anymore.
   defp directly_scheduled_projects_query(cutoff) do
     from(p in Project,
       where: not is_nil(p.deletion_scheduled_at) and p.deletion_scheduled_at < ^cutoff
     )
   end
 
-  # Category 2: projects cascade-hidden by an org whose own retention window
-  # has elapsed. The clock lives on the org — join children to it via the
-  # provenance marker, expressed as a subquery so the same predicate can be
-  # reused verbatim in the race-guarded delete below.
-  defp cascade_child_projects_query(cutoff) do
-    from(p in Project,
-      where: p.archived_cascade_org_id in subquery(scheduled_org_ids_query(cutoff))
-    )
-  end
-
+  # Category 2: chat_spaces cascade-hidden by a scheduled org. As of stage 1
+  # each carries its own deletion clock, so key off it directly — scoped to
+  # the cascade marker (`archived_cascade_org_id`) so this purger owns only
+  # cascade children and never races SpacePurger, which owns directly-
+  # scheduled channels off the same own-clock predicate.
   defp cascade_child_spaces_query(cutoff) do
     from(s in Space,
-      where: s.archived_cascade_org_id in subquery(scheduled_org_ids_query(cutoff))
-    )
-  end
-
-  # Org ids whose deletion is scheduled AND past the retention window. NEVER
-  # selected for deletion themselves — only used to identify their children.
-  defp scheduled_org_ids_query(cutoff) do
-    from(o in Org,
-      where: not is_nil(o.deletion_scheduled_at) and o.deletion_scheduled_at < ^cutoff,
-      select: o.id
+      where:
+        not is_nil(s.deletion_scheduled_at) and s.deletion_scheduled_at < ^cutoff and
+          not is_nil(s.archived_cascade_org_id)
     )
   end
 
   # ── Race-guarded per-candidate deletes ─────────────────────────────────
 
-  # Deletes one directly-scheduled project, re-verifying its own lifecycle
-  # flag IN the delete query so a `cancel_project_deletion` landing between
-  # select and delete is respected. Exposed (`@doc false`) as the test seam
-  # that proves the re-check lives in the query, not only the select.
+  # Deletes one project by its OWN deletion clock, re-verifying that clock
+  # IN the delete query so a `cancel_project_deletion` / `cancel_org_deletion`
+  # / `unarchive_org` landing between select and delete — any of which clears
+  # the clock — is respected. Handles both directly-scheduled projects and
+  # cascade project children (each carries its own clock). Exposed
+  # (`@doc false`) as the test seam that proves the re-check lives in the
+  # query, not only the select.
   @doc false
   @spec purge_directly_scheduled_project(Project.t(), DateTime.t()) :: boolean()
   def purge_directly_scheduled_project(%Project{} = candidate, cutoff) do
@@ -189,31 +184,18 @@ defmodule Platform.Tenancy.ContainerPurger do
     |> delete_one("project", candidate.id)
   end
 
-  # Deletes one cascade-hidden project, re-verifying IN the delete query that
-  # its `archived_cascade_org_id` still points to a scheduled, past-window
-  # org. A `cancel_org_deletion` / `unarchive_org` clears BOTH the org flag
-  # and the child's provenance marker in one transaction, so either change
-  # drops the row out of the subquery → 0 deleted → skipped.
-  @doc false
-  @spec purge_cascade_project(Project.t(), DateTime.t()) :: boolean()
-  def purge_cascade_project(%Project{} = candidate, cutoff) do
-    from(p in Project,
-      where:
-        p.id == ^candidate.id and
-          p.archived_cascade_org_id in subquery(scheduled_org_ids_query(cutoff))
-    )
-    |> delete_one("project", candidate.id)
-  end
-
-  # Deletes one cascade-hidden chat_space, with the same org-anchored
-  # re-check as `purge_cascade_project/2`.
+  # Deletes one cascade-hidden chat_space, re-verifying its OWN clock AND the
+  # cascade marker IN the delete query. A `cancel_org_deletion` /
+  # `unarchive_org` clears BOTH the child's `deletion_scheduled_at` and its
+  # `archived_cascade_org_id` in one transaction, so either change drops the
+  # row out of the re-check → 0 deleted → skipped.
   @doc false
   @spec purge_cascade_space(Space.t(), DateTime.t()) :: boolean()
   def purge_cascade_space(%Space{} = candidate, cutoff) do
     from(s in Space,
       where:
-        s.id == ^candidate.id and
-          s.archived_cascade_org_id in subquery(scheduled_org_ids_query(cutoff))
+        s.id == ^candidate.id and not is_nil(s.deletion_scheduled_at) and
+          s.deletion_scheduled_at < ^cutoff and not is_nil(s.archived_cascade_org_id)
     )
     |> delete_one("chat_space", candidate.id)
   end
@@ -244,9 +226,9 @@ defmodule Platform.Tenancy.ContainerPurger do
 
   # ── Telemetry (bridged into the audit log) ─────────────────────────────
 
-  # `deletion_scheduled_at` is nil for a cascade child (its clock is on the
-  # org) — stringify only when present so the audit bridge's JSON pass never
-  # chokes on a DateTime struct, and never crashes on the nil.
+  # Every purged project — directly-scheduled or cascade child — carries its
+  # own `deletion_scheduled_at`, so stringify it unconditionally for the
+  # audit bridge's JSON pass (which chokes on a raw DateTime struct).
   defp emit_project_purged_telemetry(%Project{} = project) do
     :telemetry.execute(
       [:platform, :tasks, :project_purged],
@@ -261,15 +243,15 @@ defmodule Platform.Tenancy.ContainerPurger do
         project_name: project.name,
         org_id: project.org_id,
         archived_cascade_org_id: project.archived_cascade_org_id,
-        deletion_scheduled_at: iso8601_or_nil(project.deletion_scheduled_at)
+        deletion_scheduled_at: DateTime.to_iso8601(project.deletion_scheduled_at)
       }
     )
   end
 
   # Reuses the `[:platform, :chat, :space_purged]` event `SpacePurger`
-  # already emits + registers. Guards the nil `deletion_scheduled_at` that a
-  # cascade child carries (SpacePurger's own emit stringifies unconditionally
-  # because it only ever purges directly-scheduled channels).
+  # already emits + registers. Every cascade child now carries its own
+  # `deletion_scheduled_at`, so stringify it unconditionally — matching
+  # SpacePurger's own emit.
   defp emit_space_purged_telemetry(%Space{} = space) do
     :telemetry.execute(
       [:platform, :chat, :space_purged],
@@ -284,11 +266,8 @@ defmodule Platform.Tenancy.ContainerPurger do
         space_name: space.name,
         org_id: space.org_id,
         archived_cascade_org_id: space.archived_cascade_org_id,
-        deletion_scheduled_at: iso8601_or_nil(space.deletion_scheduled_at)
+        deletion_scheduled_at: DateTime.to_iso8601(space.deletion_scheduled_at)
       }
     )
   end
-
-  defp iso8601_or_nil(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-  defp iso8601_or_nil(nil), do: nil
 end

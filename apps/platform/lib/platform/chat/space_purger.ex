@@ -12,11 +12,21 @@ defmodule Platform.Chat.SpacePurger do
   foreign keys cascade the space's messages, participants, threads, pins,
   canvases, space_agents, attention routing, attachments, and meetings.
 
+  ## Ownership split with `Platform.Tenancy.ContainerPurger`
+
+  This purger owns ONLY directly-scheduled channels — its candidate query
+  and per-row re-check both require `archived_cascade_org_id IS NULL`.
+  Channels cascade-hidden by a scheduled org carry the marker AND their own
+  deletion clock (task 019f760f); `ContainerPurger` purges those under
+  container retention. Without this `IS NULL` filter both purgers would key
+  off the same own-clock predicate and race to delete one row.
+
   Safety posture (per security review): the sweep runs in one transaction,
-  every delete re-verifies kind + BOTH lifecycle flags in the delete query
-  itself (not just the select), and an impossible row count raises so the
-  whole sweep rolls back. Non-channel rows carrying deletion flags can only
-  come from corruption or a bug — they are never deleted, only warned about.
+  every delete re-verifies kind + the cascade marker + BOTH lifecycle flags
+  in the delete query itself (not just the select), and an impossible row
+  count raises so the whole sweep rolls back. Non-channel rows carrying
+  deletion flags can only come from corruption or a bug — they are never
+  deleted, only warned about.
   """
 
   use GenServer
@@ -65,8 +75,9 @@ defmodule Platform.Chat.SpacePurger do
           Repo.all(
             from(s in Space,
               where:
-                s.kind == "channel" and not is_nil(s.archived_at) and
-                  not is_nil(s.deletion_scheduled_at) and s.deletion_scheduled_at < ^cutoff
+                s.kind == "channel" and is_nil(s.archived_cascade_org_id) and
+                  not is_nil(s.archived_at) and not is_nil(s.deletion_scheduled_at) and
+                  s.deletion_scheduled_at < ^cutoff
             )
           )
 
@@ -80,16 +91,18 @@ defmodule Platform.Chat.SpacePurger do
     {:ok, length(purged)}
   end
 
-  # Deletes one candidate, re-verifying kind and both lifecycle flags in the
-  # delete query itself so a row mutated between select and delete (e.g. a
-  # deletion cancelled mid-sweep) is never purged. Exactly 0 (skip + warn)
-  # or 1 row may be affected — anything else raises, rolling back the sweep.
+  # Deletes one candidate, re-verifying kind, the cascade marker, and both
+  # lifecycle flags in the delete query itself so a row mutated between select
+  # and delete (e.g. a deletion cancelled mid-sweep, or an org cascade
+  # claiming the channel) is never purged. Exactly 0 (skip + warn) or 1 row
+  # may be affected — anything else raises, rolling back the sweep.
   defp purge_candidate(%Space{} = candidate, cutoff) do
     {deleted, _} =
       Repo.delete_all(
         from(s in Space,
           where:
-            s.id == ^candidate.id and s.kind == "channel" and not is_nil(s.archived_at) and
+            s.id == ^candidate.id and s.kind == "channel" and
+              is_nil(s.archived_cascade_org_id) and not is_nil(s.archived_at) and
               not is_nil(s.deletion_scheduled_at) and s.deletion_scheduled_at < ^cutoff
         )
       )
