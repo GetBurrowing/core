@@ -53,7 +53,17 @@ defmodule Platform.Chat.Canvas.Kinds.ActionRow do
   end
 
   attr :node, :map, required: true
+  attr :dom_id_scope, :string, default: nil
+  attr :canvas_id, :string, default: nil
 
+  # Bug B (task 019f70ff): LV's `extractMeta` (phoenix_live_view.js:5390-5394)
+  # reads `element.value` on non-form elements AFTER walking phx-value-*
+  # attributes, and unconditionally overwrites `meta.value` with the DOM
+  # property. HTMLButtonElement.value defaults to "" — so `phx-value-value`
+  # on a <button> was silently clobbered to "" before hitting the server.
+  # We publish the action key as `phx-value-action` (no clash with any
+  # HTMLElement property) and the handler in canvas_hooks.ex reads
+  # `params["action"]` accordingly.
   def render(assigns) do
     props = assigns.node["props"] || %{}
     actions = List.wrap(props["actions"])
@@ -78,10 +88,12 @@ defmodule Platform.Chat.Canvas.Kinds.ActionRow do
       <button
         :for={action <- @actions}
         type="button"
+        data-role="canvas-action-button"
         class={["btn btn-sm", button_class(action["variant"])]}
         phx-click="canvas_action_click"
+        phx-value-canvas-id={@canvas_id}
         phx-value-node-id={@node_id}
-        phx-value-value={action["value"]}
+        phx-value-action={action["value"]}
       >
         {action["label"]}
       </button>

@@ -170,11 +170,31 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   defp handle_event(
          "canvas_action_click",
-         %{"node-id" => node_id, "value" => value} = params,
+         %{"node-id" => node_id} = params,
          socket
        ) do
     canvas_id =
       params["canvas-id"] || (socket.assigns.active_canvas && socket.assigns.active_canvas.id)
+
+    # Read the action value from `params["action"]` (post-Bug-B rename in
+    # action_row.ex). Fall back to `params["value"]` for backward
+    # compatibility with any external caller that still emits the old
+    # phx-value-value key.
+    value = Map.get(params, "action") || Map.get(params, "value") || ""
+
+    if value == "" do
+      # Empty value here means either (a) the source action's "value" is
+      # missing/blank in the canvas document (data-shape problem — schema
+      # requires it, so should not happen for validated docs), or (b) the
+      # rendered attribute was clobbered before reaching the server (see
+      # task 019f70ff Bug B — pre-fix, HTMLButtonElement.value clash in
+      # LV's extractMeta stripped `phx-value-value` in every context). Log
+      # in dev so any future regression surfaces instead of silently
+      # flashing → "".
+      Logger.warning(
+        "[canvas_action_click] empty action value received — canvas=#{inspect(canvas_id)} node_id=#{inspect(node_id)}"
+      )
+    end
 
     with %{} = canvas <- find(socket, canvas_id) do
       CanvasServer.emit_event(canvas.id, %{

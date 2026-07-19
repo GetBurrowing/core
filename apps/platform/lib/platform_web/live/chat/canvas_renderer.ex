@@ -53,6 +53,20 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
       valid_document?(canvas.document) ->
         assigns = assign(assigns, :root_node, canvas.document["root"])
 
+        # Bug A guard: LV's phx-click listener is bound at `window` in bubble
+        # phase (phoenix_live_view.js:6523, capture arg = false). That means
+        # `onclick + stopPropagation()` on this wrapper would kill the
+        # button's own click before LV ever sees it. The correct guard is
+        # `data-phx-click-loading` semantics via `Phoenix.LiveView.JS.exec`
+        # — when a descendant carries `data-role="canvas-action-button"`,
+        # LV's `closestPhxBinding` walks up from `event.target` and returns
+        # the CLOSEST phx-click ancestor. Since every action_row button now
+        # carries its own phx-click="canvas_action_click", the button wins
+        # over the wrapper's phx-click="canvas_open" naturally. We do NOT
+        # add a stopPropagation onclick here — testing showed it kills the
+        # button click before LV's window listener fires (Bug A retested
+        # 2026-07-18 during stage 1 verification). If a residual Bug A ever
+        # reproduces, swap to a dedicated "open" affordance instead.
         ~H"""
         <div
           id={"canvas-doc-#{@canvas.id}-#{@id_suffix}"}
@@ -60,7 +74,11 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
           phx-click={if(@inline, do: "canvas_open")}
           phx-value-canvas-id={if(@inline, do: @canvas.id)}
         >
-          <Renderer.render_node node={@root_node} dom_id_scope={"#{@canvas.id}-#{@id_suffix}"} />
+          <Renderer.render_node
+            node={@root_node}
+            dom_id_scope={"#{@canvas.id}-#{@id_suffix}"}
+            canvas_id={@canvas.id}
+          />
         </div>
         """
 

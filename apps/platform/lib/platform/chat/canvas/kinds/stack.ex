@@ -32,6 +32,7 @@ defmodule Platform.Chat.Canvas.Kinds.Stack do
 
   attr :node, :map, required: true
   attr :dom_id_scope, :string, default: nil
+  attr :canvas_id, :string, default: nil
 
   def render(assigns) do
     props = assigns.node["props"] || %{}
@@ -46,6 +47,7 @@ defmodule Platform.Chat.Canvas.Kinds.Stack do
         :for={child <- @node["children"] || []}
         node={child}
         dom_id_scope={@dom_id_scope}
+        canvas_id={@canvas_id}
       />
     </div>
     """

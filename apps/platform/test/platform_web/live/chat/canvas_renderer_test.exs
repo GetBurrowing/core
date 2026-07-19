@@ -358,6 +358,100 @@ defmodule PlatformWeb.Chat.CanvasRendererTest do
       assert html =~ "phx-click=\"canvas_action_click\""
     end
 
+    test "action_row buttons carry data-role, node-id, and action attrs (task 019f70ff)" do
+      node = %{
+        "id" => "ar-demo",
+        "type" => "action_row",
+        "props" => %{
+          "actions" => [
+            %{"label" => "Approve", "value" => "approve", "variant" => "primary"}
+          ]
+        },
+        "children" => []
+      }
+
+      html = render_node_html(node)
+      # data-role marker lets tests + future e2e scripts locate action
+      # buttons unambiguously. Note we publish the action key as
+      # phx-value-action (NOT phx-value-value) — LV's extractMeta reads
+      # HTMLButtonElement.value AFTER phx-value-* and clobbers the "value"
+      # meta key with the empty string DOM property. See action_row.ex
+      # header comment for the full pre-mortem.
+      assert html =~ ~s|data-role="canvas-action-button"|
+      assert html =~ ~s|phx-value-node-id="ar-demo"|
+      assert html =~ ~s|phx-value-action="approve"|
+      # Regression guard: phx-value-value would silently clobber to "" on
+      # a button element.
+      refute html =~ ~s|phx-value-value=|
+    end
+  end
+
+  describe "canvas_document/1 wiring for action_row (task 019f70ff)" do
+    # Both surfaces (inline chat-message and panel/expanded sidebar) render
+    # through the same CanvasRenderer + Renderer.render_node pipeline. The
+    # fix threads canvas_id through the render tree so action buttons carry
+    # `phx-value-canvas-id` regardless of whether an `active_canvas` is set —
+    # closing Bug B (empty payload in pinned view) at the source.
+
+    defp action_canvas do
+      doc =
+        CanvasDocument.new()
+        |> put_in(["root", "children"], [
+          %{
+            "id" => "ar-demo",
+            "type" => "action_row",
+            "props" => %{
+              "actions" => [
+                %{"label" => "Approve", "value" => "approve", "variant" => "primary"},
+                %{"label" => "Reject", "value" => "reject", "variant" => "danger"}
+              ]
+            },
+            "children" => []
+          }
+        ])
+
+      build_canvas(doc, %{id: "canvas-under-test"})
+    end
+
+    test "inline render surfaces phx-value-canvas-id on every action button" do
+      html = render_canvas(action_canvas(), %{inline: true})
+
+      # Both buttons carry the canvas.id. Rendered twice (two actions) so we
+      # anchor on the pattern rather than counting exact occurrences.
+      assert html =~ ~s|phx-value-canvas-id="canvas-under-test"|
+      assert html =~ ~s|phx-value-action="approve"|
+      assert html =~ ~s|phx-value-action="reject"|
+      assert html =~ ~s|data-role="canvas-action-button"|
+    end
+
+    test "panel render surfaces phx-value-canvas-id on every action button" do
+      html = render_canvas(action_canvas(), %{inline: false})
+
+      assert html =~ ~s|phx-value-canvas-id="canvas-under-test"|
+      assert html =~ ~s|phx-value-action="approve"|
+      assert html =~ ~s|phx-value-action="reject"|
+      assert html =~ ~s|data-role="canvas-action-button"|
+    end
+
+    test "inline wrapper keeps canvas_open on itself; button's own phx-click wins via closestPhxBinding" do
+      html = render_canvas(action_canvas(), %{inline: true})
+
+      # The wrapper still carries phx-click="canvas_open" (that's how empty-
+      # canvas clicks open the sidebar). The button carries its OWN
+      # phx-click="canvas_action_click" AND data-role marker. LV's
+      # closestPhxBinding walks up from event.target and resolves the
+      # closest phx-click ancestor — since the button has phx-click, the
+      # button wins over the wrapper (Bug A no-longer-fires). See extended
+      # comment in canvas_renderer.ex for why we do NOT add an onclick
+      # stopPropagation on the wrapper (it would kill the button click).
+      assert html =~ ~s|phx-click="canvas_open"|
+      assert html =~ ~s|phx-click="canvas_action_click"|
+      assert html =~ ~s|data-role="canvas-action-button"|
+      # Regression guard: no stopPropagation should appear on the wrapper,
+      # since it would prevent LV's window-level click listener from firing.
+      refute html =~ "stopPropagation"
+    end
+
     test "renders embed as a sandboxed iframe" do
       node = %{
         "id" => "e1",
@@ -376,6 +470,142 @@ defmodule PlatformWeb.Chat.CanvasRendererTest do
       node = %{"id" => "x", "type" => "no_such_kind", "props" => %{}, "children" => []}
       html = render_node_html(node)
       assert html =~ "unknown node type"
+    end
+  end
+
+  describe "canvas_document/1 sibling interactive kinds regression (task 019f70ff stage 2)" do
+    # Stage 1 (commit edc1852b + 3e07a26e) added an onclick stopPropagation
+    # guard to the inline canvas wrapper and threaded canvas_id through the
+    # render tree. Stage 2 pins down the invariants for the OTHER interactive
+    # kinds so a future edit to canvas_renderer.ex / renderer.ex can't silently
+    # break form submits or checklist interaction anchors while chasing an
+    # action_row fix.
+
+    defp form_canvas do
+      doc =
+        CanvasDocument.new()
+        |> put_in(["root", "children"], [
+          %{
+            "id" => "f-demo",
+            "type" => "form",
+            "props" => %{
+              "title" => "Feedback",
+              "fields" => [
+                %{"name" => "notes", "label" => "Notes", "type" => "textarea"},
+                %{"name" => "email", "label" => "Email", "type" => "email"}
+              ]
+            },
+            "children" => []
+          }
+        ])
+
+      build_canvas(doc, %{id: "canvas-form"})
+    end
+
+    defp checklist_canvas do
+      doc =
+        CanvasDocument.new()
+        |> put_in(["root", "children"], [
+          %{
+            "id" => "cl-demo",
+            "type" => "checklist",
+            "props" => %{"title" => "Todo"},
+            "children" => [
+              %{
+                "id" => "ci-demo",
+                "type" => "checklist_item",
+                "props" => %{"label" => "Ship stage 2", "state" => "pending"},
+                "children" => []
+              }
+            ]
+          }
+        ])
+
+      build_canvas(doc, %{id: "canvas-checklist"})
+    end
+
+    test "inline form still emits phx-submit=canvas_form_submit + node-id" do
+      html = render_canvas(form_canvas(), %{inline: true})
+
+      # The form kind's phx-submit binding is what CanvasHooks.handle_event/3
+      # dispatches on. Stage 1 threaded canvas_id into container kinds but did
+      # NOT change form.ex — this test locks that in so a future refactor
+      # can't drop phx-submit while shuffling wrapper attributes.
+      assert html =~ ~s|phx-submit="canvas_form_submit"|
+      assert html =~ ~s|phx-value-node-id="f-demo"|
+      # The rendered field controls are what the wrapper's onclick guard has
+      # to leave alone — assert they made it through.
+      assert html =~ ~s|name="form[notes]"|
+      assert html =~ ~s|name="form[email]"|
+      assert html =~ "<textarea"
+    end
+
+    test "panel form still emits phx-submit=canvas_form_submit + node-id" do
+      html = render_canvas(form_canvas(), %{inline: false})
+
+      # Panel (non-inline) surface uses the same Renderer.render_node call
+      # path, so the same invariants must hold. Duplicated deliberately: the
+      # inline vs panel split is where Bug B (task 019f70ff Bug B) hid.
+      assert html =~ ~s|phx-submit="canvas_form_submit"|
+      assert html =~ ~s|phx-value-node-id="f-demo"|
+    end
+
+    test "inline form co-exists with wrapper's phx-click=canvas_open (no stopPropagation regression)" do
+      html = render_canvas(form_canvas(), %{inline: true})
+
+      # Stage 1's final commit (3e07a26e) explicitly REVERTED an earlier
+      # onclick stopPropagation attempt because it killed action_row button
+      # clicks before LV's window-level phx-click listener fired. The
+      # runtime mechanism is now purely LV's closestPhxBinding: form
+      # submissions dispatch on phx-submit (a different event type than
+      # click), so the wrapper's phx-click="canvas_open" doesn't interfere
+      # with canvas_form_submit at all.
+      #
+      # This test locks in the invariants that must hold together:
+      #   1. Wrapper still carries phx-click="canvas_open" (that's how empty-
+      #      canvas clicks open the sidebar).
+      #   2. Form still carries phx-submit="canvas_form_submit".
+      #   3. NO stopPropagation appears anywhere in the wrapper markup
+      #      (matches the existing action_row wrapper assertion — a future
+      #      well-meaning refactor that "protects" form clicks with
+      #      stopPropagation would silently break action_row clicks).
+      assert html =~ ~s|phx-click="canvas_open"|
+      assert html =~ ~s|phx-submit="canvas_form_submit"|
+      refute html =~ "stopPropagation"
+      # The form's own controls must render inside the wrapper — a broken
+      # canvas_id threading (or a wrapper that swallowed children) would
+      # collapse this.
+      assert html =~ "<textarea"
+      assert html =~ ~s|type="email"|
+      assert html =~ ~s|type="submit"|
+    end
+
+    test "inline checklist_item preserves interaction anchors (data-node-id + data-state)" do
+      html = render_canvas(checklist_canvas(), %{inline: true})
+
+      # checklist_item currently renders a passive row (icon + label). Its
+      # `data-node-id` and `data-state` attributes are the anchors any future
+      # toggle interaction — client-side hook, server-side canvas_patch —
+      # would key off of. Stage 1's canvas_id threading routes through
+      # kinds/checklist.ex, so a broken thread would silently drop the child
+      # node's props before render. Lock that in.
+      assert html =~ ~s|data-node-id="ci-demo"|
+      assert html =~ ~s|data-state="pending"|
+      assert html =~ "Ship stage 2"
+      # And the wrapping checklist still shows its title (proves the parent
+      # container render didn't collapse under a canvas_id threading bug).
+      assert html =~ "Todo"
+    end
+
+    test "panel checklist_item preserves interaction anchors (data-node-id + data-state)" do
+      html = render_canvas(checklist_canvas(), %{inline: false})
+
+      # Same invariants must hold on the panel surface — see the form test
+      # above for why we duplicate across inline/panel.
+      assert html =~ ~s|data-node-id="ci-demo"|
+      assert html =~ ~s|data-state="pending"|
+      assert html =~ "Ship stage 2"
+      assert html =~ "Todo"
     end
   end
 end

@@ -490,11 +490,237 @@ defmodule PlatformWeb.ChatLiveTest do
     # silently dropped every click).
     render_click(view, "canvas_action_click", %{
       "node-id" => "ar-demo",
-      "value" => "approve"
+      "action" => "approve"
     })
 
     assert render(view) =~ "Canvas action: ar-demo"
     assert render(view) =~ "approve"
+  end
+
+  test "action_row click without an active_canvas still resolves via phx-value-canvas-id (task 019f70ff)",
+       %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/chat/general", on_error: :warn)
+
+    user = Repo.get_by!(User, email: "chat_test@example.com")
+    space = Repo.get_by!(Chat.Space, slug: "general")
+
+    participant =
+      Repo.get_by(Chat.Participant,
+        space_id: space.id,
+        participant_type: "user",
+        participant_id: user.id
+      ) ||
+        elem(
+          Chat.add_participant(space.id, %{participant_type: "user", participant_id: user.id}),
+          1
+        )
+
+    action_doc = %{
+      "version" => 1,
+      "revision" => 1,
+      "root" => %{
+        "id" => "root",
+        "type" => "stack",
+        "props" => %{},
+        "children" => [
+          %{
+            "id" => "ar-demo",
+            "type" => "action_row",
+            "props" => %{
+              "actions" => [
+                %{"label" => "Approve", "value" => "approve", "variant" => "primary"}
+              ]
+            },
+            "children" => []
+          }
+        ]
+      },
+      "theme" => %{},
+      "bindings" => %{},
+      "meta" => %{}
+    }
+
+    {:ok, canvas, _message} =
+      Chat.create_canvas_with_message(space.id, participant.id, %{
+        "title" => "Action row test — no active",
+        "document" => action_doc
+      })
+
+    # NB: do NOT open the canvas first. Bug A + B pre-fix meant the click
+    # either fired canvas_open (main view) or arrived with an empty value
+    # (pinned view without active_canvas). The fix threads canvas_id into
+    # phx-value-canvas-id on every button, so this event resolves without
+    # any active_canvas set.
+    render_click(view, "canvas_action_click", %{
+      "canvas-id" => canvas.id,
+      "node-id" => "ar-demo",
+      "action" => "approve"
+    })
+
+    assert render(view) =~ "Canvas action: ar-demo"
+    assert render(view) =~ "approve"
+  end
+
+  test "rendered inline action_row markup carries phx-value-canvas-id + data-role (task 019f70ff)",
+       %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/chat/general", on_error: :warn)
+
+    user = Repo.get_by!(User, email: "chat_test@example.com")
+    space = Repo.get_by!(Chat.Space, slug: "general")
+
+    participant =
+      Repo.get_by(Chat.Participant,
+        space_id: space.id,
+        participant_type: "user",
+        participant_id: user.id
+      ) ||
+        elem(
+          Chat.add_participant(space.id, %{participant_type: "user", participant_id: user.id}),
+          1
+        )
+
+    action_doc = %{
+      "version" => 1,
+      "revision" => 1,
+      "root" => %{
+        "id" => "root",
+        "type" => "stack",
+        "props" => %{},
+        "children" => [
+          %{
+            "id" => "ar-demo",
+            "type" => "action_row",
+            "props" => %{
+              "actions" => [
+                %{"label" => "Approve", "value" => "approve", "variant" => "primary"}
+              ]
+            },
+            "children" => []
+          }
+        ]
+      },
+      "theme" => %{},
+      "bindings" => %{},
+      "meta" => %{}
+    }
+
+    {:ok, canvas, _message} =
+      Chat.create_canvas_with_message(space.id, participant.id, %{
+        "title" => "Action row markup test",
+        "document" => action_doc
+      })
+
+    html = render(view)
+
+    # The inline chat-message copy of the canvas MUST include the canvas.id on
+    # the button (so clicks resolve without active_canvas) AND the data-role
+    # marker so the wrapper's onclick stopPropagation guard fires.
+    assert html =~ ~s|phx-value-canvas-id="#{canvas.id}"|
+    assert html =~ ~s|data-role="canvas-action-button"|
+    assert html =~ ~s|phx-value-node-id="ar-demo"|
+    assert html =~ ~s|phx-value-action="approve"|
+  end
+
+  # Task 019f70ff stage 2 — regression coverage for sibling interactive kinds.
+  #
+  # Stage 1 fixed action_row clicks in the inline canvas surface (canvas_id
+  # threaded through Renderer.render_node into every container kind so buttons
+  # carry phx-value-canvas-id; LV's closestPhxBinding then resolves the button
+  # over the wrapper's phx-click="canvas_open"). Stage 2 locks in that the
+  # OTHER interactive kind rendered by the same pipeline — `form` — still
+  # fires its own phx-submit handler and its inline markup exposes the
+  # interaction anchors (phx-submit + phx-value-node-id).
+  #
+  # A checklist_item toggle would parallel this, but checklist_item currently
+  # renders a passive row (no phx-click) — the plan's checklist_item toggle
+  # spec anticipates a future interaction that doesn't yet exist. `form` is
+  # the concrete sibling interactive kind whose end-to-end wiring is
+  # exercisable today.
+  test "form inside an inline canvas dispatches canvas_form_submit end-to-end (task 019f70ff stage 2)",
+       %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/chat/general", on_error: :warn)
+
+    user = Repo.get_by!(User, email: "chat_test@example.com")
+    space = Repo.get_by!(Chat.Space, slug: "general")
+
+    participant =
+      Repo.get_by(Chat.Participant,
+        space_id: space.id,
+        participant_type: "user",
+        participant_id: user.id
+      ) ||
+        elem(
+          Chat.add_participant(space.id, %{participant_type: "user", participant_id: user.id}),
+          1
+        )
+
+    form_doc = %{
+      "version" => 1,
+      "revision" => 1,
+      "root" => %{
+        "id" => "root",
+        "type" => "stack",
+        "props" => %{},
+        "children" => [
+          %{
+            "id" => "f-demo",
+            "type" => "form",
+            "props" => %{
+              "title" => "Stage 2 form regression",
+              "fields" => [
+                %{"name" => "notes", "label" => "Notes", "type" => "textarea"}
+              ]
+            },
+            "children" => []
+          }
+        ]
+      },
+      "theme" => %{},
+      "bindings" => %{},
+      "meta" => %{}
+    }
+
+    {:ok, canvas, _message} =
+      Chat.create_canvas_with_message(space.id, participant.id, %{
+        "title" => "Form submit regression",
+        "document" => form_doc
+      })
+
+    # Assert the inline chat-message copy of the canvas exposes the form's
+    # interaction anchors: phx-submit handler + node-id. If Stage 1's
+    # canvas_id threading through Renderer.render_node ever regressed such
+    # that a container kind swallowed its children's attrs, these assertions
+    # would fail.
+    html_before = render(view)
+    assert html_before =~ ~s|phx-submit="canvas_form_submit"|
+    assert html_before =~ ~s|phx-value-node-id="f-demo"|
+
+    # Open the canvas so canvas_form_submit can resolve the target via
+    # active_canvas fallback (form kind does NOT emit phx-value-canvas-id
+    # today — form_submit relies on active_canvas). Post-open the sidebar
+    # is mounted.
+    render_click(view, "canvas_open", %{"canvas-id" => canvas.id})
+    assert has_element?(view, "#canvas-sidebar")
+
+    # Submit the form — this is what the form kind's phx-submit binding
+    # resolves to on the wire. The handler emits {:canvas_event, canvas_id,
+    # %{"name" => "submitted", ...}}, which CanvasHooks flashes as
+    # "Canvas form submitted: <node-id>".
+    render_submit(view, "canvas_form_submit", %{
+      "node-id" => "f-demo",
+      "form" => %{"notes" => "hello from stage 2"}
+    })
+
+    html_after = render(view)
+    assert html_after =~ "Canvas form submitted: f-demo"
+
+    # Regression guard: submitting the form did not close the canvas as a
+    # side-effect. If a future refactor accidentally routed canvas_form_submit
+    # through canvas_close (or set :active_canvas to nil), this would catch it.
+    assert has_element?(view, "#canvas-sidebar")
   end
 
   test "opening a canvas refetches latest state from the database", %{conn: conn} do

@@ -24,6 +24,7 @@ defmodule Platform.Chat.Canvas.Renderer do
   """
   attr :node, :map, required: true
   attr :dom_id_scope, :string, default: nil
+  attr :canvas_id, :string, default: nil
 
   def render_node(assigns) do
     node = assigns.node
