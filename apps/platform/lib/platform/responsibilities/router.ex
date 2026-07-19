@@ -537,10 +537,16 @@ defmodule Platform.Responsibilities.Router do
 
   defp compute_next_fire(%Responsibility{trigger_config: config, key: key}, %DateTime{} = now) do
     expression = Map.get(config, "expression") || Map.get(config, :expression)
+    # Optional named IANA timezone (e.g. "America/Chicago"). Unknown /
+    # missing / non-binary values are silently ignored so a corrupted
+    # row can't crash the tick — Cron.next_fire_after treats `nil` and
+    # UTC aliases identically. Task 019f70e9 stage 6.
+    timezone = Map.get(config, "timezone") || Map.get(config, :timezone)
+    opts = if is_binary(timezone), do: [timezone: timezone], else: []
 
     if is_binary(expression) do
       with {:ok, spec} <- Cron.parse(expression),
-           {:ok, dt} <- Cron.next_fire_after(now, spec) do
+           {:ok, dt} <- Cron.next_fire_after(now, spec, opts) do
         {:ok, dt}
       else
         other ->

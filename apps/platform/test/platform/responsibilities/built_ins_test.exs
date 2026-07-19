@@ -94,7 +94,14 @@ defmodule Platform.Responsibilities.BuiltInsTest do
       assert row.scope == "per_org"
       assert Enum.sort(row.context_provided) == ["org_identity", "recent_journal"]
       assert row.trigger_config["expression"] == "0 3 * * *"
-      assert row.metadata["target_file_key"] == "org/page/memory.md"
+
+      # Task 019f70e9 stage 7: dreaming writes to today's journal
+      # (`org/journal/YYYY-MM-DD.md`), no longer directly to a static
+      # page. Metadata advertises the target kind + prefix so operators
+      # can reason about the write destination without loading the code.
+      assert row.metadata["target_kind"] == "journal"
+      assert row.metadata["target_prefix"] == "org/journal/"
+      refute Map.has_key?(row.metadata, "target_file_key")
     end
 
     test "upserts meetings.summarize with the expected event_topic spec" do
@@ -225,7 +232,12 @@ defmodule Platform.Responsibilities.BuiltInsTest do
 
     test "Handlers.Dreaming.key/0 matches the registered key" do
       assert Handlers.Dreaming.key() == "memory.dreaming"
-      assert Handlers.Dreaming.memory_file_key() == "org/page/memory.md"
+
+      # Task 019f70e9 stage 7: dreaming no longer writes to
+      # `org/page/memory.md`. `handle_output/3` writes only to today's
+      # journal path so the proposal-review pipeline gates page mutations.
+      journal_key = Handlers.Dreaming.journal_file_key(~D[2026-07-19])
+      assert journal_key == "org/journal/2026-07-19.md"
     end
 
     test "Handlers.MeetingSummarize.key/0 + topic/0 match the registered values" do

@@ -79,7 +79,11 @@ defmodule Platform.MixProject do
       {:gun, "~> 2.1"},
       {:jose, "~> 1.11"},
       {:yaml_elixir, "~> 2.9"},
-      {:nimble_csv, "~> 1.2"}
+      {:nimble_csv, "~> 1.2"},
+      # tzdata: IANA time-zone database backing `DateTime.shift_zone!/2`
+      # for timezone-aware cron triggers (task 019f70e9 stage 6 — 03:00
+      # America/Chicago dreaming firing survives DST transitions).
+      {:tzdata, "~> 1.1"}
     ]
   end
 

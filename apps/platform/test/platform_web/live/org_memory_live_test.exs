@@ -34,6 +34,8 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.Memory.MemoryProposal
+  alias Platform.Memory.Proposals
   alias Platform.MemoryFeedback.Entry, as: FeedbackEntry
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.Journal
@@ -1000,6 +1002,214 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
       assert html =~ "Failed to delete org/page/does-not-exist.md"
       assert Repo.aggregate(FeedbackEntry, :count, :id) == baseline
+    end
+  end
+
+  # ── Proposals tab (stage 4 — task 019f70e9) ─────────────────────────────
+
+  describe "proposals tab & /memory/proposals route (stage 4)" do
+    setup %{conn: conn} do
+      Repo.delete_all(MemoryProposal)
+      Repo.delete_all(WikiPage)
+
+      {:ok, conn: authenticated_conn(conn, create_user!())}
+    end
+
+    defp insert_proposal!(attrs) do
+      base_body = Map.get(attrs, :body, "Some proposal body")
+
+      %MemoryProposal{}
+      |> MemoryProposal.changeset(
+        Map.merge(
+          %{
+            journal_path: "org/journal/2026-07-17.md",
+            block_hash:
+              :crypto.hash(:sha256, base_body <> Ecto.UUID.generate())
+              |> Base.encode16(case: :lower),
+            category: "recurring-theme",
+            confidence: "high",
+            body: base_body,
+            evidence: "Rowan flagged pricing anchors drifting 3x this week."
+          },
+          Map.drop(attrs, [:body])
+        )
+      )
+      |> Repo.insert!()
+    end
+
+    test "GET /memory/proposals mounts OrgMemoryLive with the proposals tab selected",
+         %{conn: conn} do
+      insert_proposal!(%{category: "recurring-theme", confidence: "high", body: "Body A"})
+
+      {:ok, view, html} = live(conn, "/memory/proposals")
+
+      assert view.module == PlatformWeb.OrgMemoryLive
+      # Tab strip shows Proposals as the selected tab.
+      assert has_element?(view, ~s(button[data-tab="proposals"][aria-selected="true"]))
+      # Pane rendered — table + row present.
+      assert has_element?(view, ~s([data-role="proposals-pane"]))
+      assert has_element?(view, ~s([data-role="proposals-table"]))
+      # Right-pane collapsed off :proposals.
+      refute has_element?(view, ~s([data-role="backlinks"]))
+      # Category + confidence badges surface.
+      assert html =~ "recurring-theme"
+      assert html =~ "high"
+    end
+
+    test "renders 3 pending rows + tab-strip count badge; hides badge at 0",
+         %{conn: conn} do
+      _p1 = insert_proposal!(%{category: "strategic-insight", confidence: "medium", body: "B1"})
+      _p2 = insert_proposal!(%{category: "emerging-risk", confidence: "low", body: "B2"})
+      _p3 = insert_proposal!(%{category: "cross-project-pattern", confidence: "high", body: "B3"})
+
+      {:ok, view, html} = live(conn, "/memory/proposals")
+
+      # Three data-proposal-id rows in the stream tbody.
+      assert length(Regex.scan(~r/data-proposal-id="/, html)) == 3
+
+      # Count badge shows "3" in the tab strip.
+      assert has_element?(view, ~s([data-role="proposals-tab-count"]), "3")
+
+      # Header "N pending" pill visible.
+      assert render(view) =~ "3 pending"
+    end
+
+    test "approve_proposal → status:approved + row removed from stream",
+         %{conn: conn} do
+      proposal = insert_proposal!(%{category: "recurring-theme", body: "To approve"})
+
+      {:ok, view, _html} = live(conn, "/memory/proposals")
+
+      assert has_element?(view, ~s([data-proposal-id="#{proposal.id}"]))
+
+      render_click(view, "approve_proposal", %{"id" => proposal.id})
+
+      # DB row flipped.
+      assert %MemoryProposal{status: "approved"} = Repo.get(MemoryProposal, proposal.id)
+
+      # Row is gone from the stream (client-side stream_delete drops the node).
+      html = render(view)
+      refute html =~ ~s(data-proposal-id="#{proposal.id}")
+
+      # Flash confirms.
+      assert html =~ "Approved"
+    end
+
+    test "reject_proposal → status:rejected + feedback captured",
+         %{conn: conn} do
+      proposal = insert_proposal!(%{category: "unresolved-question", body: "To reject"})
+
+      {:ok, view, _html} = live(conn, "/memory/proposals")
+
+      # Open the inline reject form.
+      render_click(view, "show_reject_form", %{"id" => proposal.id})
+      assert has_element?(view, ~s([data-role="reject-form-row"]))
+
+      # Submit the form with feedback text.
+      view
+      |> form("#proposal-reject-form-#{proposal.id}", %{
+        "id" => proposal.id,
+        "feedback" => "Already captured in org/page/pricing.md — not novel."
+      })
+      |> render_submit()
+
+      row = Repo.get(MemoryProposal, proposal.id)
+      assert row.status == "rejected"
+      assert row.feedback == "Already captured in org/page/pricing.md — not novel."
+
+      # Row dropped from stream + form collapsed.
+      html = render(view)
+      refute html =~ ~s(data-proposal-id="#{proposal.id}")
+      refute html =~ ~s(id="proposal-reject-form-#{proposal.id}")
+    end
+
+    test "cancel_reject collapses the inline expansion row without touching DB",
+         %{conn: conn} do
+      proposal = insert_proposal!(%{body: "To keep pending"})
+
+      {:ok, view, _html} = live(conn, "/memory/proposals")
+
+      render_click(view, "show_reject_form", %{"id" => proposal.id})
+      assert has_element?(view, ~s([data-role="reject-form-row"]))
+
+      render_click(view, "cancel_reject", %{"id" => proposal.id})
+      refute has_element?(view, ~s([data-role="reject-form-row"]))
+
+      # Row still in the stream + still pending in DB.
+      assert has_element?(view, ~s([data-proposal-id="#{proposal.id}"]))
+      assert %MemoryProposal{status: "pending"} = Repo.get(MemoryProposal, proposal.id)
+    end
+
+    test "expired proposals do not appear in the list", %{conn: conn} do
+      _fresh = insert_proposal!(%{evidence: "Fresh-evidence-marker", body: "Fresh"})
+
+      # Insert an expired one (expires_at in the past). Evidence
+      # differs from the fresh row so we can test presence/absence in
+      # the rendered HTML (evidence IS surfaced in the table; body is
+      # not — body promotes to page content in stage 8).
+      _expired =
+        insert_proposal!(%{
+          evidence: "Stale-evidence-marker",
+          body: "Stale",
+          expires_at: DateTime.add(DateTime.utc_now(), -1, :day)
+        })
+
+      {:ok, _view, html} = live(conn, "/memory/proposals")
+
+      assert html =~ "Fresh-evidence-marker"
+      refute html =~ "Stale-evidence-marker"
+
+      # Sanity: `list_pending/1` agrees (the LiveView query source).
+      assert [%{body: "Fresh"}] = Proposals.list_pending(workspace_id: nil)
+    end
+
+    test "empty pending state renders the friendly card + no count badge",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/memory/proposals")
+
+      assert has_element?(view, ~s([data-role="proposals-empty-state"]))
+      # The apostrophe HTML-encodes to `&#39;` so we match on the
+      # apostrophe-free suffix.
+      assert render(view) =~ "dreaming is quiet"
+
+      # No count badge in the tab strip when count == 0.
+      refute has_element?(view, ~s([data-role="proposals-tab-count"]))
+      # No table rendered at all.
+      refute has_element?(view, ~s([data-role="proposals-table"]))
+    end
+
+    test "evidence column has the truncate class and title fallback for hover-reveal",
+         %{conn: conn} do
+      long_evidence =
+        "Very long evidence: Rowan noted three times this week that the pricing anchors keep " <>
+          "drifting between quotes, causing SXI members to ask for clarification. Similar drift " <>
+          "observed on the Orion proposal last month."
+
+      insert_proposal!(%{evidence: long_evidence, body: "Long-evidence proposal"})
+
+      {:ok, view, html} = live(conn, "/memory/proposals")
+
+      # Evidence cell has truncate class so mobile viewports collapse it.
+      assert has_element?(view, ~s(td[data-role="evidence-cell"].truncate))
+      # And the full text is preserved in the title attribute for hover reveal.
+      assert html =~ Phoenix.HTML.html_escape(long_evidence) |> Phoenix.HTML.safe_to_string()
+    end
+
+    test "switch_tab preserves the tree + selection when landing on :proposals",
+         %{conn: conn} do
+      {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity\n"})
+      insert_proposal!(%{body: "Toggleable"})
+
+      {:ok, view, _html} = live(conn, "/org_memory/org/page/identity.md")
+
+      view |> element(~s(button[data-tab="proposals"])) |> render_click()
+      assert has_element?(view, ~s(button[data-tab="proposals"][aria-selected="true"]))
+      # Tree survives the tab switch.
+      assert has_element?(view, ~s(button[data-namespace-prefix="org/"]))
+
+      # Return to pages: selection is intact, no navigation happened.
+      view |> element(~s(button[data-tab="pages"])) |> render_click()
+      assert has_element?(view, "h1", "org/page/identity.md")
     end
   end
 end

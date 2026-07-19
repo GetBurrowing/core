@@ -191,7 +191,15 @@ config :platform,
        # (task 019f671f): `resolve_authors/1` now passes `include_archived: true`
        # to `Accounts.get_users_map/2` so historical memory-entry authors still
        # resolve after the author is archived. Rehash absorbs both edits.
-       "2f900b380c4a08bd482357bb9f9a02b29d85ddee905a02af9e4debfc4d157b6d"
+       #
+       # Bumped again by Historian-dreaming task 019f70e9 stage 2:
+       # `Platform.Org.Context.upsert_context_file/3` now calls the
+       # `Platform.Memory.Proposals.ingest_from_journal/3` sweep hook on
+       # journal writes so `<synthesis-proposal>` blocks emitted by the
+       # dreaming loop persist as `memory_proposals` rows. Sweep hook runs
+       # outside the write transaction; journal remains source of truth.
+       # T5 still retires this module — the hook moves with it.
+       "3be90a9a48080f4836169d2b903d508e12359bfb437eb46ebffd9cfde9775b58"
 
 # Stack v2 (task 019f487d, ADR 0045) — Platform.Tasks.Stacks.DepInference
 # resolves its LLM adapter from application env at call time. Tests

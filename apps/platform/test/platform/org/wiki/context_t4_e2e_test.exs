@@ -708,7 +708,31 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # `metadata["merged_into_rollup_at"]` at the changeset boundary,
       # backfill malformed pre-fix stamps. Content-only DELETE via
       # jsonb operator; no schema change.
-      "20260717173915_drop_malformed_merged_into_rollup_at_stamps.exs"
+      "20260717173915_drop_malformed_merged_into_rollup_at_stamps.exs",
+      # Task 019f70e9 stage 2 (Historian dreaming) — persist parsed
+      # `<synthesis-proposal>` blocks so `/memory/proposals` LiveView
+      # (stage 4) lists without re-parsing every journal. Creates
+      # `memory_proposals` table with `(workspace_id, block_hash)`
+      # unique index for idempotent re-ingest, `(status, expires_at)`
+      # index for the hourly TTL sweep. Backend-only; sweep hook fires
+      # from `Platform.Org.Context.upsert_context_file/3` post-tx.
+      "20260718200000_create_memory_proposals.exs",
+      # Task 019f70e9 stage 5 (Historian dreaming) — seed the dreaming
+      # dispatch prompt under both `historian.dreaming` (canonical) and
+      # `memory.dreaming.v1` (legacy responsibility-router lookup key).
+      # Insert-or-force-update so both slugs land on fresh envs where
+      # `Handlers.Dreaming.register/0`'s `default_prompt_template` was
+      # previously an orphan lookup, and existing envs pick up the
+      # single-source-of-truth body advanced in lockstep with the
+      # code ship. Content-only sync; no schema changes.
+      "20260718230000_seed_dreaming_prompt_dual_slug.exs",
+      # Task 019f70e9 stage-8 fix — add `target_page_key` column to
+      # `memory_proposals` so the promotion pipeline
+      # (`Proposals.queue_promotion/1`) has a stable, auditable
+      # destination filled at ingest time. Nullable for backfill
+      # compatibility; derivation function is the single source of
+      # truth for both ingest + promote-time fallback.
+      "20260719000000_add_target_page_key_to_memory_proposals.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

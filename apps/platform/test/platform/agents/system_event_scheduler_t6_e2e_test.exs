@@ -511,20 +511,23 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
       {:ok, _pid} =
         start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
 
+      # Task 019f70e9 stage 6: `"dreaming"` was removed from the
+      # legacy shim (memory.dreaming responsibility now owns its own
+      # cron trigger). `"daily_summary"` remains the only legacy
+      # alias the scheduler still remaps.
       log =
         capture_log(fn ->
           SystemEventScheduler.fire_now("daily_summary")
-          SystemEventScheduler.fire_now("dreaming")
         end)
 
       assert log =~ "legacy event \"daily_summary\""
-      assert log =~ "legacy event \"dreaming\""
 
-      # Both fire paths still produce a message in the agent's system space.
+      # The daily_summary fire still lands a message in the agent's
+      # system space (historian.scheduled template).
       space = system_space_for(agent)
       assert %Space{} = space
 
-      assert length(messages_in(space)) >= 2
+      assert length(messages_in(space)) >= 1
     end
 
     test "unknown event name logs a warning without crashing the scheduler" do

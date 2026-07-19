@@ -82,10 +82,30 @@ defmodule Platform.Responsibilities.Cron do
   the function returns `{:error, :no_match_within_horizon}` rather
   than looping forever. In practice every well-formed spec resolves
   inside the first 12 months.
+
+  ## Options
+
+    * `:timezone` — IANA time-zone name (e.g. `"America/Chicago"`) to
+      interpret the cron spec's minute/hour/day/month/dow in. The
+      returned DateTime is still UTC — only the *matching predicate*
+      runs against the local-time representation. Absent, `nil`, or
+      `"UTC"`/`"Etc/UTC"` are equivalent and preserve the pre-timezone
+      behaviour byte-for-byte. Requires a configured
+      `Calendar.time_zone_database/0` (Tzdata in this app; see
+      `config/config.exs`). DST transitions Just Work: the search
+      walks UTC minute-by-minute and evaluates matches in local time,
+      so the spring-forward gap is naturally skipped and the fall-back
+      overlap is entered once (matching standard cron semantics).
   """
   @spec next_fire_after(DateTime.t(), spec()) ::
           {:ok, DateTime.t()} | {:error, :no_match_within_horizon}
-  def next_fire_after(%DateTime{} = now, spec) when is_map(spec) do
+  @spec next_fire_after(DateTime.t(), spec(), keyword()) ::
+          {:ok, DateTime.t()} | {:error, :no_match_within_horizon | {:bad_timezone, String.t()}}
+  def next_fire_after(now, spec, opts \\ [])
+
+  def next_fire_after(%DateTime{} = now, spec, opts) when is_map(spec) and is_list(opts) do
+    timezone = normalize_timezone(Keyword.get(opts, :timezone))
+
     # Start at the next minute boundary so we never re-fire the
     # current minute we are already past.
     start =
@@ -93,40 +113,72 @@ defmodule Platform.Responsibilities.Cron do
       |> DateTime.add(60, :second)
       |> Map.merge(%{second: 0, microsecond: {0, 6}})
 
-    search(start, spec, 0)
+    search(start, spec, 0, timezone)
   end
+
+  # `nil`, empty, and the UTC aliases collapse to `nil` — no shift
+  # happens at all and the search stays byte-identical to the
+  # pre-timezone code path.
+  defp normalize_timezone(nil), do: nil
+  defp normalize_timezone(""), do: nil
+  defp normalize_timezone("UTC"), do: nil
+  defp normalize_timezone("Etc/UTC"), do: nil
+  defp normalize_timezone(tz) when is_binary(tz), do: tz
 
   # ── Internal: minute-by-minute search ─────────────────────────────────────
 
-  defp search(_candidate, _spec, step) when step > @max_horizon_minutes do
+  defp search(_candidate, _spec, step, _timezone) when step > @max_horizon_minutes do
     {:error, :no_match_within_horizon}
   end
 
-  defp search(%DateTime{} = candidate, spec, step) do
+  defp search(%DateTime{} = candidate_utc, spec, step, timezone) do
+    eval = evaluate_at(candidate_utc, timezone)
+
     cond do
-      matches?(candidate, spec) ->
-        {:ok, candidate}
+      matches?(eval, spec) ->
+        {:ok, candidate_utc}
 
-      not date_matches?(candidate, spec) ->
-        # Skip the entire day — none of the date predicates can be
-        # satisfied by any minute within it. Reset to 00:00 of the next
-        # UTC day so we don't oscillate within the skipped one.
-        next =
-          candidate
-          |> DateTime.add(86_400, :second)
-          |> Map.merge(%{hour: 0, minute: 0, second: 0, microsecond: {0, 6}})
-
-        # Step counter advances by the number of minutes we skipped so
-        # the horizon cap still bounds the recursion.
-        skipped =
-          (24 - candidate.hour) * 60 - candidate.minute
-
-        search(next, spec, step + skipped)
+      not date_matches?(eval, spec) ->
+        # Skip forward until the next day boundary in the *evaluation*
+        # zone. In UTC (no timezone) that's a whole 24h skip; in a
+        # named zone we only skip to the next local midnight because
+        # a UTC day straddles two local days.
+        {next_utc, skipped} = skip_to_next_local_day(candidate_utc, eval, timezone)
+        search(next_utc, spec, step + skipped, timezone)
 
       true ->
-        next = DateTime.add(candidate, 60, :second)
-        search(next, spec, step + 1)
+        next = DateTime.add(candidate_utc, 60, :second)
+        search(next, spec, step + 1, timezone)
     end
+  end
+
+  # Return the DateTime we should feed into the spec-match predicates.
+  # In UTC mode that's just the candidate; in TZ mode we shift.
+  defp evaluate_at(%DateTime{} = dt, nil), do: dt
+
+  defp evaluate_at(%DateTime{} = dt, tz) when is_binary(tz) do
+    DateTime.shift_zone!(dt, tz)
+  end
+
+  # UTC-mode skip: 24h of minutes plus a Map.merge to 00:00 of the
+  # next UTC day (byte-identical to the pre-timezone implementation).
+  defp skip_to_next_local_day(%DateTime{} = utc, _eval, nil) do
+    next =
+      utc
+      |> DateTime.add(86_400, :second)
+      |> Map.merge(%{hour: 0, minute: 0, second: 0, microsecond: {0, 6}})
+
+    skipped = (24 - utc.hour) * 60 - utc.minute
+    {next, skipped}
+  end
+
+  # TZ-mode skip: advance UTC by exactly the number of minutes needed
+  # to land at 00:00 of the next *local* day. No Map.merge — the
+  # resulting UTC DateTime is unlikely to be at 00:00 UTC.
+  defp skip_to_next_local_day(%DateTime{} = utc, %DateTime{} = eval, tz) when is_binary(tz) do
+    skipped_min = (24 - eval.hour) * 60 - eval.minute
+    next = DateTime.add(utc, skipped_min * 60, :second)
+    {next, skipped_min}
   end
 
   defp matches?(%DateTime{} = dt, spec) do

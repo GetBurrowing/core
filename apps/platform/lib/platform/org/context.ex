@@ -31,6 +31,7 @@ defmodule Platform.Org.Context do
   require Logger
 
   alias Platform.Memory
+  alias Platform.Memory.Proposals
   alias Platform.MemoryFeedback
   alias Platform.Org.WikiJournalEntry
   alias Platform.Org.WikiPage
@@ -278,8 +279,47 @@ defmodule Platform.Org.Context do
         %{system_time: System.system_time()},
         %{file_key: file.file_key, version: file.version, workspace_id: file.workspace_id}
       )
+
+      maybe_sweep_journal_for_proposals(file)
     end)
     |> normalize_transaction_result()
+  end
+
+  # Post-write sweep hook: parse the just-persisted content for
+  # `<synthesis-proposal>` blocks and ingest them via
+  # `Platform.Memory.Proposals`. Runs OUTSIDE the write transaction so a
+  # parser bug or DB constraint failure on the proposals side can't roll
+  # a journal write back — the journal is the source of truth, proposals
+  # are a derived read-optimization surface.
+  #
+  # Only fires for journal file_keys per the sweep-hook regex; page
+  # writes flow through the same upsert path but shouldn't be swept.
+  defp maybe_sweep_journal_for_proposals(%WikiPage{file_key: file_key} = file) do
+    if Proposals.journal_path?(file_key) do
+      case Proposals.ingest_from_journal(file.workspace_id, file.file_key, file.content) do
+        {:ok, count} when count > 0 ->
+          Logger.debug(
+            "[memory.proposals] ingested #{count} block(s) from #{file.file_key} " <>
+              "(workspace_id=#{inspect(file.workspace_id)})"
+          )
+
+          :ok
+
+        {:ok, 0} ->
+          :ok
+      end
+    else
+      :ok
+    end
+  rescue
+    e ->
+      # A crash in the sweep hook must never surface as a write failure
+      # — the journal is already durably in Postgres. Log and move on.
+      Logger.error(
+        "[memory.proposals] sweep hook crashed for #{file.file_key}: #{Exception.message(e)}"
+      )
+
+      :ok
   end
 
   @doc """

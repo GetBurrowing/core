@@ -898,12 +898,32 @@ defmodule Platform.Agents.HistorianDispatcher do
     digest = Keyword.get(opts, :activity_digest) || activity_digest()
     deleted_paths_notice = render_deleted_paths_notice()
 
+    # Dreaming templates (`historian.dreaming` + legacy `memory.dreaming.v1`)
+    # carry a `{{rejected_exemplars}}` placeholder that must be pre-rendered
+    # from `Platform.Memory.Proposals.rejected_exemplars/1` so the model
+    # sees prior rejections as few-shot calibration. Other templates never
+    # reference the key — `interpolate/2` treats unreferenced keys as
+    # no-ops, so the extra assign is safe to include unconditionally, but
+    # the DB read is only worth doing on dreaming dispatches.
+    rejected_exemplars =
+      case dreaming_template?(template_slug) do
+        true ->
+          workspace_id =
+            Map.get(extra_metadata, :workspace_id) || Map.get(extra_metadata, "workspace_id")
+
+          render_rejected_exemplars(workspace_id: workspace_id, limit: 3)
+
+        false ->
+          ""
+      end
+
     template_vars =
       Map.merge(
         %{
           date: date,
           activity_digest: digest,
-          deleted_paths_notice: deleted_paths_notice
+          deleted_paths_notice: deleted_paths_notice,
+          rejected_exemplars: rejected_exemplars
         },
         extra_metadata
       )
@@ -1003,6 +1023,61 @@ defmodule Platform.Agents.HistorianDispatcher do
   # is by design — `interpolate/2` treats unreferenced keys as no-ops).
   # Empty window renders `(none in the recent window)` so the section
   # header never leaves a dangling placeholder in the rendered content.
+  # Identify the two dreaming templates that carry the `{{rejected_exemplars}}`
+  # placeholder — kept as a helper (instead of an inlined guard) so a future
+  # dreaming variant slug only has to be added here.
+  @dreaming_template_slugs ~w(historian.dreaming memory.dreaming.v1)
+
+  @spec dreaming_template?(String.t()) :: boolean()
+  defp dreaming_template?(slug) when is_binary(slug),
+    do: slug in @dreaming_template_slugs
+
+  defp dreaming_template?(_), do: false
+
+  # Render prior rejected proposals as a bulleted list of `{body, feedback}`
+  # pairs — the few-shot exemplars the dreaming prompt consumes via the
+  # `{{rejected_exemplars}}` placeholder. Bounded to 3 exemplars per prompt
+  # (matches the default in `Platform.Memory.Proposals.rejected_exemplars/1`).
+  #
+  # The database read is best-effort: a failed lookup (bad workspace scope,
+  # Repo unavailable during boot) renders as the empty-window placeholder
+  # so a dreaming dispatch never fails hard because the exemplars couldn't
+  # be assembled.
+  @spec render_rejected_exemplars(keyword()) :: String.t()
+  defp render_rejected_exemplars(opts) do
+    exemplars =
+      try do
+        Platform.Memory.Proposals.rejected_exemplars(opts)
+      rescue
+        error ->
+          Logger.warning(
+            "[HistorianDispatcher] Proposals.rejected_exemplars/1 raised: " <>
+              Exception.message(error)
+          )
+
+          []
+      end
+
+    case exemplars do
+      [] ->
+        "(no prior rejections in the recent window)"
+
+      rows ->
+        rows
+        |> Enum.map(fn %{body: body, feedback: feedback, category: category} ->
+          feedback_line =
+            case feedback do
+              nil -> ""
+              "" -> ""
+              text -> "\n  - Rowan's feedback: #{text}"
+            end
+
+          "- [#{category}] #{body}#{feedback_line}"
+        end)
+        |> Enum.join("\n")
+    end
+  end
+
   @spec render_deleted_paths_notice() :: String.t()
   defp render_deleted_paths_notice do
     deleted =

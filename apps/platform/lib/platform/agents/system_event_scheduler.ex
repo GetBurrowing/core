@@ -560,12 +560,17 @@ defmodule Platform.Agents.SystemEventScheduler do
     HistorianDispatcher.dispatch(normalized_event, template_slug, extra_metadata)
   end
 
-  # Defensive: legacy callers passing `"daily_summary"` or `"dreaming"` are
-  # remapped to the canonical `"historian"` event. Logged so we can spot
-  # stragglers post-rollup.
-  defp normalize_event(legacy) when legacy in ["daily_summary", "dreaming"] do
+  # Defensive: legacy callers passing `"daily_summary"` are remapped to
+  # the canonical `"historian"` event. Logged so we can spot stragglers
+  # post-rollup. `"dreaming"` was deleted in task 019f70e9 stage 6 —
+  # the memory.dreaming responsibility now owns its own cron trigger
+  # (03:00 America/Chicago) via `Platform.Responsibilities.Router`, so
+  # a stale caller passing `"dreaming"` here falls through to the
+  # `normalize_event/1` catchall and logs "unknown event" (which is
+  # correct — the scheduler no longer owns that firing).
+  defp normalize_event("daily_summary") do
     Logger.warning(
-      "[SystemEventScheduler] legacy event #{inspect(legacy)} received — " <>
+      "[SystemEventScheduler] legacy event \"daily_summary\" received — " <>
         "routing to historian (drop call site after T6 rollup)"
     )
 
@@ -582,6 +587,5 @@ defmodule Platform.Agents.SystemEventScheduler do
   defp template_slug_for(@historian_event), do: "historian.scheduled"
   # Legacy mapping — drop after rollup confirms no straggler call sites.
   defp template_slug_for("daily_summary"), do: "historian.scheduled"
-  defp template_slug_for("dreaming"), do: "historian.scheduled"
   defp template_slug_for(_), do: "historian.scheduled"
 end

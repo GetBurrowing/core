@@ -229,6 +229,11 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Timezone database — Tzdata (IANA rules) backs `DateTime.shift_zone!/2`
+# for timezone-aware cron triggers (task 019f70e9 stage 6). Without this
+# only `Etc/UTC` shifts work; named zones like `America/Chicago` fail.
+config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
+
 config :platform, :oidc, http_adapter: Assent.HTTPAdapter.Httpc
 
 # Import environment specific config. This must remain at the bottom

@@ -1331,6 +1331,286 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     end
   end
 
+  describe "dreaming dispatch templates (historian.dreaming + memory.dreaming.v1)" do
+    # Task 019f70e9 stage 5 extracted the Historian's dreaming-mode prompt
+    # out of the legacy SystemEventScheduler fallback and registered it
+    # under two slugs sharing a single source of truth:
+    #
+    #   * historian.dreaming — canonical (router-owned dispatch path)
+    #   * memory.dreaming.v1 — legacy (Handlers.Dreaming default_prompt_template)
+    #
+    # Byte-identity between the two slugs is load-bearing: the same body
+    # must render on either code path so an edit can't silently diverge
+    # what Historian sees when dispatched via the router vs the
+    # responsibility scheduler.
+
+    @dreaming_slugs ~w(historian.dreaming memory.dreaming.v1)
+
+    @dreaming_migration_path Path.join([
+                               __ENV__.file
+                               |> Path.dirname()
+                               |> Path.dirname()
+                               |> Path.dirname()
+                               |> Path.dirname(),
+                               "priv/repo/migrations/20260718230000_seed_dreaming_prompt_dual_slug.exs"
+                             ])
+
+    Code.compile_file(@dreaming_migration_path)
+
+    test "both dreaming slugs appear in default_templates/0" do
+      defaults = PromptTemplates.default_templates()
+      slugs = Enum.map(defaults, & &1.slug)
+
+      for slug <- @dreaming_slugs do
+        assert slug in slugs,
+               "expected #{slug} to be a registered default template"
+      end
+    end
+
+    test "both dreaming slugs return byte-identical content — single source of truth" do
+      canonical = PromptTemplates.default_content_for_slug("historian.dreaming")
+      legacy = PromptTemplates.default_content_for_slug("memory.dreaming.v1")
+
+      assert is_binary(canonical)
+      assert is_binary(legacy)
+
+      assert canonical == legacy,
+             "historian.dreaming and memory.dreaming.v1 must share byte-identical content — " <>
+               "any drift breaks the single-source-of-truth guarantee that the migration " <>
+               "and both dispatch paths depend on"
+    end
+
+    test "both dreaming slugs declare the same variables list" do
+      canonical =
+        PromptTemplates.default_templates() |> Enum.find(&(&1.slug == "historian.dreaming"))
+
+      legacy =
+        PromptTemplates.default_templates() |> Enum.find(&(&1.slug == "memory.dreaming.v1"))
+
+      assert canonical.variables == legacy.variables,
+             "both dreaming slugs must declare the same variables list"
+
+      for var <-
+            ~w(federation_preamble date workspace_id activity_digest rejected_exemplars skills_reference) do
+        assert var in canonical.variables,
+               "dreaming template must declare #{var} as a variable"
+      end
+    end
+
+    test "both dreaming slugs render without unresolved {{...}} placeholders when supplied full assigns" do
+      :ok = PromptTemplates.seed_defaults()
+
+      assigns = %{
+        federation_preamble: "You are Historian, running under the Fabrikam federation preamble.",
+        date: "2026-07-18",
+        workspace_id: "ws-dreaming-001",
+        activity_digest: "[digest] 12 journal entries, 4 chat threads today.",
+        rejected_exemplars:
+          "- [recurring-theme] Rowan asked about avatar rings twice this month\n  - Rowan's feedback: this is not a durable insight, avoid re-surfacing",
+        skills_reference: "## Skill discovery\n\nDiscover skills via skill_list."
+      }
+
+      for slug <- @dreaming_slugs do
+        assert {:ok, rendered} = PromptTemplates.render_template(slug, assigns)
+        assert is_binary(rendered)
+
+        # No unresolved `{{key}}` placeholder should survive the render —
+        # every variable in the template body must be present in assigns.
+        refute rendered =~ ~r/\{\{\w+\}\}/,
+               "#{slug} rendered content contains an unresolved {{...}} placeholder"
+
+        # Sanity: each supplied assign shows up in the rendered body.
+        assert rendered =~ "ws-dreaming-001", "#{slug} must interpolate workspace_id"
+        assert rendered =~ "2026-07-18", "#{slug} must interpolate date"
+        assert rendered =~ "12 journal entries", "#{slug} must interpolate activity_digest"
+
+        assert rendered =~ "recurring-theme",
+               "#{slug} must interpolate rejected_exemplars"
+
+        assert rendered =~ "federation preamble",
+               "#{slug} must interpolate federation_preamble"
+
+        assert rendered =~ "Skill discovery",
+               "#{slug} must interpolate skills_reference"
+      end
+    end
+
+    test "dreaming template body specifies the six synthesis-proposal categories" do
+      content = PromptTemplates.default_content_for_slug("historian.dreaming")
+
+      for category <-
+            ~w(recurring-theme cross-project-pattern emerging-risk stale-fact-candidate-retirement strategic-insight unresolved-question) do
+        assert content =~ category,
+               "historian.dreaming must document the '#{category}' category"
+      end
+
+      # The block grammar itself must be reproduced verbatim so the
+      # model emits parseable proposals.
+      assert content =~ "<synthesis-proposal"
+      assert content =~ "</synthesis-proposal>"
+      assert content =~ "confidence"
+      assert content =~ "evidence"
+    end
+
+    test "dreaming template body specifies the three MaintenanceSubagent spawn functions" do
+      content = PromptTemplates.default_content_for_slug("historian.dreaming")
+
+      assert content =~ "Platform.Memory.Integrity.scan/1",
+             "dreaming template must name the Integrity.scan/1 entry point"
+
+      for spawn_fun <- ~w(spawn_link_repair spawn_format_normalize spawn_retired_cleanup) do
+        assert content =~ spawn_fun,
+               "dreaming template must name MaintenanceSubagent.#{spawn_fun}/1"
+      end
+
+      # Subagent-per-op discipline is load-bearing — it must be explicit
+      # copy so a future edit can't paraphrase it into "batch the ops in
+      # the parent Historian context".
+      assert content =~ "subagent-per-op" or content =~ "Subagent-per-op",
+             "dreaming template must state the subagent-per-op discipline"
+    end
+
+    test "dreaming template body forbids direct page writes and routes approvals through /memory/proposals" do
+      content = PromptTemplates.default_content_for_slug("historian.dreaming")
+
+      # The whole point of the pipeline: no direct page writes from
+      # dreaming. Rowan approves at /memory/proposals or the change
+      # doesn't land.
+      assert content =~ "/memory/proposals",
+             "dreaming template must reference the /memory/proposals approval surface"
+
+      assert content =~ "NEVER write directly to page" or
+               content =~ "never write directly to page" or
+               content =~ "NEVER write directly to pages" or
+               content =~ "never write directly to pages",
+             "dreaming template must forbid direct page writes"
+    end
+
+    test "dreaming template body specifies the absolute-wikilink format with an explicit example" do
+      content = PromptTemplates.default_content_for_slug("historian.dreaming")
+
+      # The bare-basename anti-pattern is what makes format_dirty entries
+      # in Integrity.scan/1. The template must call it out concretely.
+      assert content =~ "[[org/page/foo/bar.md]]",
+             "dreaming template must give the absolute-link format example"
+
+      assert content =~ "[[bar]]",
+             "dreaming template must give the bare-basename anti-pattern example"
+    end
+
+    test "dreaming template carries the {{rejected_exemplars}} placeholder" do
+      content = PromptTemplates.default_content_for_slug("historian.dreaming")
+
+      assert content =~ "{{rejected_exemplars}}",
+             "dreaming template must carry the {{rejected_exemplars}} placeholder"
+
+      # The section header contextualises the exemplars so the model
+      # knows how to interpret them.
+      assert content =~ "Rejected proposals" or content =~ "rejected proposals",
+             "dreaming template must caption the rejected-exemplars section"
+    end
+
+    test "seed_defaults inserts both dreaming rows on a clean DB" do
+      :ok = PromptTemplates.seed_defaults()
+
+      for slug <- @dreaming_slugs do
+        template = PromptTemplates.get_template_by_slug(slug)
+
+        assert template, "seed_defaults must insert #{slug}"
+
+        expected = PromptTemplates.default_content_for_slug(slug)
+        assert template.content == expected
+      end
+    end
+
+    test "list_templates/0 after seed_defaults/0 includes both dreaming slugs" do
+      :ok = PromptTemplates.seed_defaults()
+
+      slugs = PromptTemplates.list_templates() |> Enum.map(& &1.slug)
+
+      for slug <- @dreaming_slugs do
+        assert slug in slugs,
+               "list_templates/0 must surface #{slug} after seed_defaults/0"
+      end
+    end
+
+    test "20260718230000 dual-slug migration force-updates a stale row to the current default" do
+      # Simulates production upgrade: an older revision of one dreaming
+      # slug exists in the DB with a stale body. Migration must overwrite
+      # it with the current default while leaving the other slug alone
+      # (or seeding it fresh if absent).
+      migration = Platform.Repo.Migrations.SeedDreamingPromptDualSlug
+
+      :ok = PromptTemplates.seed_defaults()
+
+      # Mutate `historian.dreaming` to simulate the pre-refresh state.
+      template = PromptTemplates.get_template_by_slug("historian.dreaming")
+
+      {:ok, _} =
+        PromptTemplates.update_template(template, %{
+          content: "STALE DREAMING BODY — should be overwritten"
+        })
+
+      assert :ok = migration.up()
+
+      for slug <- @dreaming_slugs do
+        row = PromptTemplates.get_template_by_slug(slug)
+        expected = PromptTemplates.default_content_for_slug(slug)
+
+        assert row, "#{slug} must exist after migration"
+
+        assert row.content == expected,
+               "#{slug} must be refreshed to current default content by the migration"
+
+        refute row.content =~ "STALE DREAMING BODY",
+               "#{slug} must have the pre-refresh marker overwritten"
+      end
+    end
+
+    test "20260718230000 dual-slug migration inserts both rows on a DB where neither exists" do
+      # Simulates a fresh env where seed_defaults/0 has never run — the
+      # migration must land both rows so `memory.dreaming.v1` lookup by
+      # `Handlers.Dreaming` never falls through to an empty template
+      # render.
+      migration = Platform.Repo.Migrations.SeedDreamingPromptDualSlug
+
+      # Purge any seeded dreaming rows so we exercise the insert branch.
+      for slug <- @dreaming_slugs do
+        case PromptTemplates.get_template_by_slug(slug) do
+          nil -> :ok
+          template -> {:ok, _} = PromptTemplates.delete_template(template)
+        end
+      end
+
+      assert :ok = migration.up()
+
+      for slug <- @dreaming_slugs do
+        row = PromptTemplates.get_template_by_slug(slug)
+        expected = PromptTemplates.default_content_for_slug(slug)
+
+        assert row, "#{slug} must be inserted by the migration when absent"
+        assert row.content == expected
+      end
+    end
+
+    test "20260718230000 dual-slug migration is idempotent" do
+      # Second run leaves the DB in the same state — no exception, no
+      # duplicate insertion (unique index on slug protects the DB, but
+      # the migration must also not raise).
+      migration = Platform.Repo.Migrations.SeedDreamingPromptDualSlug
+
+      assert :ok = migration.up()
+      assert :ok = migration.up()
+
+      for slug <- @dreaming_slugs do
+        row = PromptTemplates.get_template_by_slug(slug)
+        expected = PromptTemplates.default_content_for_slug(slug)
+
+        assert row.content == expected
+      end
+    end
+  end
+
   describe "architecture.review_plan.v1 (ADR-0044 stage 3)" do
     # The architect plan-review template is seeded by `do_default_templates/0`
     # and rendered by `Handlers.ArchitectureReviewPlan.render_instruction/1`.

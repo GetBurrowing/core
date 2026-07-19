@@ -160,6 +160,11 @@ defmodule PlatformWeb.Router do
       live("/control/usage", UsageLive, :index)
       live("/control/:agent_slug", ControlCenterLive, :show)
       live("/org_memory", OrgMemoryLive, :index)
+      # Task 019f70e9 stage 4 — direct entry to the proposals tab.
+      # `live_action == :proposals` mounts the same OrgMemoryLive and
+      # `handle_params/3` switches view_mode + preloads the pending
+      # stream before first render.
+      live("/memory/proposals", OrgMemoryLive, :proposals)
       # Glob route: path-style file_keys (`org/identity.md`) span multiple
       # segments, so `:show` must match `/org_memory/*file_key`.
       live("/org_memory/*file_key", OrgMemoryLive, :show)

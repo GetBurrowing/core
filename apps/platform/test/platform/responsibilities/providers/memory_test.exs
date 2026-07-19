@@ -78,9 +78,15 @@ defmodule Platform.Responsibilities.Providers.MemoryTest do
                  %{kind: :cron}
                )
 
-      file = OrgContext.get_file(Dreaming.memory_file_key())
+      # Task 019f70e9 stage 7: writes flow to today's journal, not the
+      # legacy `org/page/memory.md` page. The synthesis body lands
+      # alongside an auto-applied maintenance summary in a single
+      # atomic write.
+      journal_key = Dreaming.journal_file_key(Date.utc_today())
+      file = OrgContext.get_file(journal_key)
       assert file
       assert file.content =~ "A curated note"
+      assert file.content =~ "Auto-applied maintenance"
     end
 
     test "tolerates unknown keys without crashing" do

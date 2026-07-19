@@ -138,6 +138,14 @@ defmodule Platform.Audit.TelemetryHandler do
     # the endpoint isn't ready. Metadata carries agent_id, reason atom,
     # actor_type: "system", resource_type: "agent", resource_id.
     [:platform, :meetings, :triage_dispatch, :assignee_unresolvable]
+
+    # NOTE: `[:platform, :memory, :proposal_promoted]` is NOT registered
+    # here. `Platform.Memory.Proposals.queue_promotion/1` (task 019f70e9
+    # stage-8 fix) records that event via `Platform.Audit.record/1`
+    # directly so it lands regardless of whether this handler is
+    # attached in the caller's runtime — mirrors how
+    # `Platform.Memory.MaintenanceSubagent` writes its per-op audit
+    # rows (see maintenance_subagent.ex:record_audit/4).
   ]
 
   @doc "Attach the handler to all registered platform telemetry events."

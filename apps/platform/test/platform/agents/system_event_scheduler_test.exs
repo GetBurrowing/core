@@ -245,6 +245,30 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
         # And the historian agent still got dispatched.
         assert Chat.get_space_by_slug("system-#{agent.slug}") != nil
       end
+
+      # Task 019f70e9 stage 6 regression guard: `"dreaming"` was
+      # removed from `normalize_event/1` and `template_slug_for/1`
+      # because `memory.dreaming` is now a first-class responsibility
+      # row driven by the Router, not a synthetic legacy event on the
+      # scheduler. A stale caller passing `"dreaming"` here MUST fall
+      # through to the catch-all "unknown event" branch rather than
+      # silently rerouting to historian.scheduled.
+      test "fire_now(\"dreaming\") is no longer treated as a legacy alias" do
+        _agent = create_agent(%{}, assign_historian?: true)
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        log =
+          capture_log(fn ->
+            SystemEventScheduler.fire_now("dreaming")
+          end)
+
+        # The old "legacy event \"dreaming\"" line is gone.
+        refute log =~ "legacy event \"dreaming\""
+        # And the catch-all warning fires instead.
+        assert log =~ "unknown event \"dreaming\""
+      end
     end
 
     describe "historian instruction content" do
@@ -287,13 +311,14 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       # paths" section so the Historian doesn't restore backlink
       # targets that were purposefully cleaned up.
       #
-      # Legacy `"dreaming"` event name still resolves through the
-      # scheduler's `normalize_event/1` funnel to the modern
-      # `historian.scheduled` template — the plan spec pins this via the
-      # e2e_behavior case. Firing `"dreaming"` here mirrors that
-      # contract at the unit level.
+      # Task 019f70e9 stage 6: the legacy `"dreaming"` shim was removed
+      # from `normalize_event/1` — the memory.dreaming responsibility
+      # now owns its own cron trigger via
+      # `Platform.Responsibilities.Router`. These bridge tests fire the
+      # canonical `"historian"` event because that's what the scheduler
+      # dispatches today.
 
-      test "dreaming fire renders recent delete rows under 'Intentionally deleted paths'" do
+      test "historian fire renders recent delete rows under 'Intentionally deleted paths'" do
         # Seed two delete rows via the stage-1 capture API so the
         # rendered notice pulls from the real corpus, not a stub.
         {:ok, _} =
@@ -316,9 +341,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
 
-        # Fire the legacy event name so we also cover the
-        # `normalize_event("dreaming")` → historian.scheduled routing.
-        SystemEventScheduler.fire_now("dreaming")
+        SystemEventScheduler.fire_now("historian")
 
         [message | _] = read_system_space_messages(agent)
 
@@ -339,7 +362,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
 
-        SystemEventScheduler.fire_now("dreaming")
+        SystemEventScheduler.fire_now("historian")
 
         [message | _] = read_system_space_messages(agent)
 
@@ -366,7 +389,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
 
-        SystemEventScheduler.fire_now("dreaming")
+        SystemEventScheduler.fire_now("historian")
 
         [message | _] = read_system_space_messages(agent)
 

@@ -17,13 +17,13 @@ defmodule PlatformWeb.OrgMemoryLive do
   State lives here; the pane modules are stateless function components.
 
   Stage 6 adds a tab strip across the top of the main pane —
-  `@view_mode :: :pages | :journal | :search` swaps the main-pane render
-  only. The left tree stays mounted on every tab; the right pane
-  renders only on `:pages` (the grid collapses to two columns on
-  `:journal` / `:search`, giving the feed / results the extra width).
-  Tab switches never touch `:namespace_tree`, `:expanded_prefixes`, or
-  `:selected_page` — `:pages → :search → :pages` returns to the same
-  selected page without a re-fetch.
+  `@view_mode :: :pages | :journal | :search | :proposals` swaps the
+  main-pane render only. The left tree stays mounted on every tab; the
+  right pane renders only on `:pages` (the grid collapses to two
+  columns on the other tabs, giving the feed / results / table the
+  extra width). Tab switches never touch `:namespace_tree`,
+  `:expanded_prefixes`, or `:selected_page` — `:pages → :search →
+  :pages` returns to the same selected page without a re-fetch.
 
   Journal tab: `PlatformWeb.OrgMemoryLive.JournalPane` — append-only
   form over `Wiki.Journal.append/2` + a date-grouped
@@ -35,18 +35,31 @@ defmodule PlatformWeb.OrgMemoryLive do
   (the same gate path agents use; swappable in tests via the
   `:org_memory_tool_surface` app env).
 
+  Proposals tab (task 019f70e9 stage 4 + stage-8 fix):
+  `PlatformWeb.OrgMemoryLive.ProposalsPane` — pending
+  `Platform.Memory.MemoryProposal` rows the Historian's dreaming
+  synthesis proposed, awaiting Rowan's approve / reject decisions.
+  Approve delegates to `Platform.Memory.Proposals.queue_promotion/1`
+  which runs the concrete promotion pipeline (append body to target
+  wiki page, strip source `<synthesis-proposal>` block from journal,
+  record audit event). Reject captures optional feedback that seeds
+  the next dreaming run's few-shot exemplars per
+  `Platform.Memory.Proposals.rejected_exemplars/1`.
+
   Agent gate (design lock §6): the `"save_page"` handler fails closed
   when `current_user` is shaped like a `Platform.Agents.Agent` — UI
   editing is for humans; agents propose changes via `memory_create`.
 
-  Routes: `/org_memory` (`:index`) and `/org_memory/:file_key` (`:show`).
-  Legacy `/org-context*` paths 301-redirect in `PageController`.
+  Routes: `/org_memory` (`:index`), `/org_memory/:file_key` (`:show`),
+  and `/memory/proposals` (`:proposals`, direct entry to the proposals
+  tab). Legacy `/org-context*` paths 301-redirect in `PageController`.
   """
 
   use PlatformWeb, :live_view
 
   alias Platform.Accounts
   alias Platform.Agents.Agent
+  alias Platform.Memory.Proposals
   alias Platform.Org.Context
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.Journal
@@ -54,12 +67,13 @@ defmodule PlatformWeb.OrgMemoryLive do
   alias PlatformWeb.OrgMemoryLive.MarkdownRenderer
   alias PlatformWeb.OrgMemoryLive.NamespaceTree
   alias PlatformWeb.OrgMemoryLive.PageViewer
+  alias PlatformWeb.OrgMemoryLive.ProposalsPane
   alias PlatformWeb.OrgMemoryLive.RightPane
   alias PlatformWeb.OrgMemoryLive.SearchPane
 
   @journal_days_back 14
   @journal_limit 100
-  @tabs ~w(pages journal search)
+  @tabs ~w(pages journal search proposals)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -95,7 +109,19 @@ defmodule PlatformWeb.OrgMemoryLive do
      |> assign(:search_results, [])
      |> assign(:search_performed, false)
      |> assign(:search_truncated, false)
-     |> assign(:search_error, nil)}
+     |> assign(:search_error, nil)
+     |> assign(:proposals_pending_count, count_pending_proposals())
+     |> assign(:show_reject_form_for, nil)
+     |> assign(:proposals, [])}
+  end
+
+  # Live_action-based route entry: `/memory/proposals` mounts with
+  # `socket.assigns.live_action == :proposals`. Preload the pending
+  # stream and switch view_mode BEFORE any first render so users land
+  # directly on the proposals tab without a client-side switch.
+  @impl true
+  def handle_params(_params, _url, %{assigns: %{live_action: :proposals}} = socket) do
+    {:noreply, load_proposals_tab(socket)}
   end
 
   @impl true
@@ -169,7 +195,13 @@ defmodule PlatformWeb.OrgMemoryLive do
   def handle_event("switch_tab", %{"tab" => tab}, socket) when tab in @tabs do
     view_mode = view_mode_for(tab)
     socket = assign(socket, :view_mode, view_mode)
-    socket = if view_mode == :journal, do: load_journal(socket), else: socket
+
+    socket =
+      case view_mode do
+        :journal -> load_journal(socket)
+        :proposals -> load_proposals_tab(socket)
+        _ -> socket
+      end
 
     {:noreply, socket}
   end
@@ -280,6 +312,84 @@ defmodule PlatformWeb.OrgMemoryLive do
      |> assign(:view_mode, :journal)
      |> assign(:journal_focus_date, focus_date)
      |> load_journal()}
+  end
+
+  # ── Events: proposals (stage 4) ─────────────────────────────────────────
+
+  # Approve → `Proposals.approve/2` flips status + `Proposals.queue_promotion/1`
+  # runs the concrete promotion pipeline: appends the body to the target
+  # wiki page, strips the source `<synthesis-proposal>` block from the
+  # journal, and records a `platform.memory.proposal_promoted` audit row
+  # (task 019f70e9 stage-8 fix).
+  #
+  # If promotion fails after approve succeeded, the row stays approved
+  # (the approve is durable) but a flash error is surfaced so Rowan can
+  # retry or investigate. The pending list is re-fetched — cheap because
+  # `list_pending/1` is bounded to 50 rows and Rowan's typical inbox is
+  # single-digit.
+  @impl true
+  def handle_event("approve_proposal", %{"id" => id}, socket) do
+    case Proposals.get(id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Proposal not found — it may have been expired.")}
+
+      proposal ->
+        case Proposals.approve(proposal) do
+          {:ok, approved} ->
+            case Proposals.queue_promotion(approved) do
+              :ok ->
+                {:noreply,
+                 socket
+                 |> load_proposals_tab()
+                 |> put_flash(:info, "Approved — promoted to page.")}
+
+              {:error, reason} ->
+                {:noreply,
+                 socket
+                 |> load_proposals_tab()
+                 |> put_flash(
+                   :error,
+                   "Approved, but promotion failed: #{inspect(reason)}. Row remains approved; check logs to retry."
+                 )}
+            end
+
+          {:error, changeset} ->
+            {:noreply, put_flash(socket, :error, changeset_error_message(changeset))}
+        end
+    end
+  end
+
+  @impl true
+  def handle_event("reject_proposal", %{"id" => id} = params, socket) do
+    feedback = params |> Map.get("feedback", "") |> String.trim()
+    feedback = if feedback == "", do: nil, else: feedback
+
+    case Proposals.get(id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Proposal not found — it may have been expired.")}
+
+      proposal ->
+        case Proposals.reject(proposal, feedback) do
+          {:ok, _rejected} ->
+            {:noreply,
+             socket
+             |> load_proposals_tab()
+             |> put_flash(:info, "Rejected — feedback captured for the next dreaming run.")}
+
+          {:error, changeset} ->
+            {:noreply, put_flash(socket, :error, changeset_error_message(changeset))}
+        end
+    end
+  end
+
+  @impl true
+  def handle_event("show_reject_form", %{"id" => id}, socket) do
+    {:noreply, assign(socket, :show_reject_form_for, id)}
+  end
+
+  @impl true
+  def handle_event("cancel_reject", _params, socket) do
+    {:noreply, assign(socket, :show_reject_form_for, nil)}
   end
 
   # ── Events: editing ─────────────────────────────────────────────────────
@@ -484,13 +594,16 @@ defmodule PlatformWeb.OrgMemoryLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class={[
-      "grid h-full overflow-hidden",
-      if(@view_mode == :pages,
-        do: "grid-cols-[16rem_minmax(0,1fr)_18rem]",
-        else: "grid-cols-[16rem_minmax(0,1fr)]"
-      )
-    ]}>
+    <div
+      class={[
+        "grid h-full overflow-hidden",
+        if(@view_mode == :pages,
+          do: "grid-cols-[16rem_minmax(0,1fr)_18rem]",
+          else: "grid-cols-[16rem_minmax(0,1fr)]"
+        )
+      ]}
+      data-view-mode={@view_mode}
+    >
       <NamespaceTree.namespace_tree
         tree={@namespace_tree}
         expanded_prefixes={@expanded_prefixes}
@@ -498,7 +611,7 @@ defmodule PlatformWeb.OrgMemoryLive do
       />
 
       <div class="flex min-h-0 flex-col overflow-hidden">
-        <.tab_strip view_mode={@view_mode} />
+        <.tab_strip view_mode={@view_mode} proposals_pending_count={@proposals_pending_count} />
 
         <%= case @view_mode do %>
           <% :journal -> %>
@@ -518,6 +631,11 @@ defmodule PlatformWeb.OrgMemoryLive do
               performed={@search_performed}
               truncated={@search_truncated}
               error={@search_error}
+            />
+          <% :proposals -> %>
+            <ProposalsPane.proposals_pane
+              proposals={@proposals}
+              show_reject_form_for={@show_reject_form_for}
             />
           <% :pages -> %>
             <%= if @creating do %>
@@ -558,6 +676,7 @@ defmodule PlatformWeb.OrgMemoryLive do
   # ── Tab strip (stage 6) ─────────────────────────────────────────────────
 
   attr(:view_mode, :atom, required: true)
+  attr(:proposals_pending_count, :integer, default: 0)
 
   defp tab_strip(assigns) do
     ~H"""
@@ -567,14 +686,21 @@ defmodule PlatformWeb.OrgMemoryLive do
       role="tablist"
     >
       <button
-        :for={{tab, label} <- [{"pages", "Pages"}, {"journal", "Journal"}, {"search", "Search"}]}
+        :for={
+          {tab, label} <- [
+            {"pages", "Pages"},
+            {"journal", "Journal"},
+            {"search", "Search"},
+            {"proposals", "Proposals"}
+          ]
+        }
         phx-click="switch_tab"
         phx-value-tab={tab}
         data-tab={tab}
         role="tab"
         aria-selected={to_string(Atom.to_string(@view_mode) == tab)}
         class={[
-          "rounded-t-lg border-x border-t px-4 py-1.5 text-sm transition-colors",
+          "flex items-center gap-1.5 rounded-t-lg border-x border-t px-4 py-1.5 text-sm transition-colors",
           if(Atom.to_string(@view_mode) == tab,
             do: "border-base-300 bg-base-100 font-medium text-base-content",
             else:
@@ -583,6 +709,13 @@ defmodule PlatformWeb.OrgMemoryLive do
         ]}
       >
         {label}
+        <span
+          :if={tab == "proposals" and @proposals_pending_count > 0}
+          class="badge badge-warning badge-xs"
+          data-role="proposals-tab-count"
+        >
+          {@proposals_pending_count}
+        </span>
       </button>
     </div>
     """
@@ -759,6 +892,28 @@ defmodule PlatformWeb.OrgMemoryLive do
   defp view_mode_for("pages"), do: :pages
   defp view_mode_for("journal"), do: :journal
   defp view_mode_for("search"), do: :search
+  defp view_mode_for("proposals"), do: :proposals
+
+  # Load the pending proposals + refresh the pending count.
+  # `workspace_id: nil` == "no filter" per `Proposals.list_pending/1`
+  # docs — the /memory/proposals view is org-scoped, so this matches
+  # the desired shape.
+  defp load_proposals_tab(socket) do
+    pending = Proposals.list_pending(workspace_id: nil)
+
+    socket
+    |> assign(:view_mode, :proposals)
+    |> assign(:proposals_pending_count, length(pending))
+    |> assign(:show_reject_form_for, nil)
+    |> assign(:proposals, pending)
+  end
+
+  # Cheap count for the tab-strip badge — surfaces on every tab so
+  # users see "you have proposals pending" without switching to the
+  # tab. `workspace_id: nil` matches `load_proposals_tab/1`'s scope.
+  defp count_pending_proposals do
+    length(Proposals.list_pending(workspace_id: nil))
+  end
 
   # Reload the journal feed: recent entries for the active namespace,
   # grouped by date (newest day first, entries within a day oldest
