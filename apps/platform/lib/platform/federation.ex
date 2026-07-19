@@ -330,6 +330,91 @@ defmodule Platform.Federation do
     )
   end
 
+  @doc """
+  Dispatch a meeting-triage attention signal to the given agent's linked runtime.
+
+  Verbatim mirror of `dispatch_scribe_attention/2` — kept as a parallel function
+  rather than a shared helper so the telemetry event name and log string stay
+  greppable at the callsite. This is called from
+  `Platform.Meetings.on_scribe_canvas_created/2` after the scribe emits a
+  completion canvas, so the triage_officer agent can pick up the canvas and
+  convert action items into tasks.
+
+  Progressive-enhancement contract: this function always returns `:ok`. Every
+  failure path (agent not found, runtime not linked, broadcast error, endpoint
+  not ready) is swallowed and reported through
+  `[:platform, :meetings, :triage_dispatch, :assignee_unresolvable]` telemetry
+  so the domain-hook caller can invoke it inline without risking the
+  canvas-create path.
+  """
+  @spec dispatch_triage_attention(binary(), map()) :: :ok
+  def dispatch_triage_attention(agent_id, payload)
+      when is_binary(agent_id) and is_map(payload) do
+    case Repo.get(Agent, agent_id) do
+      nil ->
+        emit_triage_dispatch_fallback(agent_id, :agent_not_found)
+        :ok
+
+      %Agent{} = agent ->
+        case get_runtime_for_agent(agent) do
+          nil ->
+            emit_triage_dispatch_fallback(agent_id, :runtime_unresolvable)
+            :ok
+
+          %AgentRuntime{runtime_id: runtime_id} ->
+            broadcast_triage_attention(agent_id, runtime_id, payload)
+        end
+    end
+  end
+
+  defp broadcast_triage_attention(agent_id, runtime_id, payload) do
+    topic = "runtime:#{runtime_id}"
+
+    case PlatformWeb.Endpoint.broadcast(topic, "attention", %{signal: payload}) do
+      :ok ->
+        Logger.info(
+          "[Federation] dispatched meeting_triage_dispatch to #{topic} for agent #{agent_id}"
+        )
+
+        :ok
+
+      {:error, err} ->
+        emit_triage_dispatch_fallback(agent_id, :broadcast_failed, %{
+          broadcast_error: inspect(err)
+        })
+
+        :ok
+    end
+  rescue
+    error in ArgumentError ->
+      Logger.warning(
+        "[Federation] endpoint not ready while dispatching triage attention for agent #{agent_id}: #{Exception.message(error)}"
+      )
+
+      emit_triage_dispatch_fallback(agent_id, :endpoint_not_ready)
+      :ok
+  end
+
+  defp emit_triage_dispatch_fallback(agent_id, reason, extra \\ %{}) do
+    metadata =
+      Map.merge(
+        %{
+          agent_id: agent_id,
+          reason: reason,
+          actor_type: "system",
+          resource_type: "agent",
+          resource_id: agent_id
+        },
+        extra
+      )
+
+    :telemetry.execute(
+      [:platform, :meetings, :triage_dispatch, :assignee_unresolvable],
+      %{count: 1},
+      metadata
+    )
+  end
+
   @doc "List spaces an agent participates in, with the participant's attention_mode."
   def agent_spaces(%Agent{id: agent_id}) do
     from(p in Participant,

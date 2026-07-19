@@ -197,14 +197,126 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     end
 
     with %{} = canvas <- find(socket, canvas_id) do
+      # Broadcast the signal so agent-side subscribers (or the recent-events
+      # panel) see every action click — even ones we handle inline below.
       CanvasServer.emit_event(canvas.id, %{
         "name" => "action",
         "node_id" => node_id,
         "value" => value
       })
-    end
 
-    {:halt, socket}
+      # Route recognized action values inline. Currently: meeting-triage
+      # `junk_batch:<canvas_id>` — see `Platform.Meetings.Triage.junk_batch/2`.
+      # Additional inline routes should land here as new triage-officer
+      # affordances ship; unrecognized values fall through to the generic
+      # emit-only behavior above.
+      handle_canvas_action_value(value, canvas, socket)
+    else
+      _ -> {:halt, socket}
+    end
+  end
+
+  # `junk_batch:<canvas_id>` — opens the confirmation modal owned by
+  # `PlatformWeb.ChatLive` (M5b/019f6e2c stage 4). M5a's Stage 5 shipped
+  # a direct-fire path; the modal step now sits IN FRONT so we get a
+  # human-facing preview count + an empty-batch guard before writing.
+  # `Platform.Meetings.Triage.junk_batch/2` still runs — it fires when
+  # the user clicks confirm in `ChatLive`'s `confirm_junk_batch` handler.
+  #
+  # Authorization runs HERE, at the intercept, so an unauthorized user
+  # never sees the modal and can't craft a `confirm_junk_batch` bypass —
+  # M5a's auth guard still lives in `authorize_junk_batch/2`.
+  #
+  # The `canvas_id` in the value is authoritative (the source-of-truth
+  # canvas the tasks were filed FROM), which may differ from the canvas
+  # currently rendered if the action_row is pinned into a sidebar view.
+  defp handle_canvas_action_value("junk_batch:" <> value_canvas_id, canvas, socket) do
+    target_canvas_id = if value_canvas_id == "", do: canvas.id, else: value_canvas_id
+
+    case authorize_junk_batch(socket, canvas) do
+      :ok ->
+        case Platform.Meetings.Triage.preview_batch(target_canvas_id) do
+          {:ok, %{surviving_task_count: count}} ->
+            {:halt,
+             socket
+             |> assign(:show_junk_batch_modal, true)
+             |> assign(:junk_batch_target, %{
+               canvas_id: target_canvas_id,
+               preview_count: count
+             })}
+
+          {:error, reason} ->
+            Logger.warning(
+              "junk_batch preview failed for canvas=#{target_canvas_id}: #{inspect(reason)}"
+            )
+
+            {:halt, put_flash(socket, :error, "Could not load batch preview.")}
+        end
+
+      :unauthorized ->
+        {:halt,
+         put_flash(
+           socket,
+           :error,
+           "Only the meeting author or an admin can junk this batch."
+         )}
+    end
+  end
+
+  # Unrecognized action values: keep the generic emit-only contract.
+  # Agent-side subscribers still see the click via the CanvasServer.emit_event
+  # broadcast above.
+  defp handle_canvas_action_value(_value, _canvas, socket), do: {:halt, socket}
+
+  # Authorization for junk_batch: allow the source canvas's creator (by
+  # participant id) OR any Fabrikam root admin. `current_user` may be
+  # absent in test/system paths — in that case, admin check falls
+  # through to false and only the participant path can succeed.
+  defp authorize_junk_batch(socket, canvas) do
+    cond do
+      canvas_owner?(socket, canvas) -> :ok
+      admin_user?(socket) -> :ok
+      true -> :unauthorized
+    end
+  end
+
+  defp canvas_owner?(socket, %{created_by: created_by}) when is_binary(created_by) do
+    case socket.assigns do
+      %{current_participant: %{id: participant_id}} when participant_id == created_by -> true
+      _ -> false
+    end
+  end
+
+  defp canvas_owner?(_socket, _canvas), do: false
+
+  # Prefer the `:fabrikam_admin?` assign that `PlatformWeb.LiveAuth`'s
+  # `:default` on_mount populates — it's a pure derivation on the
+  # preloaded `:current_user_record` and avoids a per-click DB hit. Fall
+  # back to a live `Tenancy.fabrikam_admin?/1` lookup for sockets that
+  # didn't ride that on_mount chain (embedded mounts, tests that stub
+  # in a bare user).
+  defp admin_user?(socket) do
+    case socket.assigns do
+      %{fabrikam_admin?: true} ->
+        true
+
+      %{current_user_record: %{} = user} ->
+        Platform.Tenancy.fabrikam_admin?(user)
+
+      %{current_user: %{} = user} ->
+        Platform.Tenancy.fabrikam_admin?(user)
+
+      _ ->
+        false
+    end
+  end
+
+  defp current_user_id(socket) do
+    case socket.assigns do
+      %{current_user_record: %{id: id}} when is_binary(id) -> id
+      %{current_user: %{id: id}} when is_binary(id) -> id
+      _ -> nil
+    end
   end
 
   defp handle_event(

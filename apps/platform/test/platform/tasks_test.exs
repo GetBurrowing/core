@@ -498,4 +498,276 @@ defmodule Platform.TasksTest do
       oidc_sub: "sub-bypass-#{n}"
     })
   end
+
+  describe "similar_open_titles/3 — meeting-triage dedup gate" do
+    setup do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Dedup #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/dedup"
+        })
+
+      {:ok, other_project} =
+        Tasks.create_project(%{
+          name: "Other #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/other"
+        })
+
+      %{project: project, other_project: other_project}
+    end
+
+    test "returns exact-match tasks", %{project: project} do
+      {:ok, existing} =
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+
+      assert [%Platform.Tasks.Task{id: id}] =
+               Tasks.similar_open_titles(project.id, "Provision Neven Fabrikam account")
+
+      assert id == existing.id
+    end
+
+    test "case-insensitive + whitespace-normalized matching", %{project: project} do
+      {:ok, existing} =
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+
+      assert [%Platform.Tasks.Task{id: id}] =
+               Tasks.similar_open_titles(project.id, "provision  neven  FABRIKAM  account")
+
+      assert id == existing.id
+    end
+
+    test "matches near-duplicate above default threshold", %{project: project} do
+      {:ok, existing} =
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+
+      # Small typo variant — Jaro-Winkler ≥ 0.85 territory.
+      matches = Tasks.similar_open_titles(project.id, "Provision Nevan Fabrikam acct")
+
+      assert Enum.any?(matches, fn %{id: id} -> id == existing.id end)
+    end
+
+    test "rejects unrelated titles below threshold", %{project: project} do
+      {:ok, _existing} =
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+
+      assert [] = Tasks.similar_open_titles(project.id, "Refactor billing pipeline")
+    end
+
+    test "opts[:threshold] overrides the default", %{project: project} do
+      {:ok, existing} =
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+
+      # With a very permissive threshold, even weakly-related titles hit.
+      matches =
+        Tasks.similar_open_titles(project.id, "Provision Fabrikam whatever", threshold: 0.5)
+
+      assert Enum.any?(matches, fn %{id: id} -> id == existing.id end)
+
+      # Same call with the default threshold returns empty (0.5 → 0.85).
+      assert [] = Tasks.similar_open_titles(project.id, "Provision Fabrikam whatever")
+    end
+
+    test "wrong project is excluded", %{project: project, other_project: other} do
+      {:ok, _existing} =
+        Tasks.create_task(%{project_id: other.id, title: "Provision Neven Fabrikam account"})
+
+      assert [] = Tasks.similar_open_titles(project.id, "Provision Neven Fabrikam account")
+    end
+
+    test "done + cancelled tasks are excluded", %{project: project} do
+      {:ok, done_task} =
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+
+      # Bypass the transition guard — flip status directly with an
+      # Ecto.Changeset.change/2 update so we can test the query filter
+      # without wiring an approved plan.
+      done_task
+      |> Ecto.Changeset.change(status: "done")
+      |> Repo.update!()
+
+      {:ok, cancelled_task} =
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account 2"})
+
+      cancelled_task
+      |> Ecto.Changeset.change(status: "cancelled")
+      |> Repo.update!()
+
+      assert [] = Tasks.similar_open_titles(project.id, "Provision Neven Fabrikam account")
+      assert [] = Tasks.similar_open_titles(project.id, "Provision Neven Fabrikam account 2")
+    end
+
+    test "soft-deleted tasks are excluded", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+
+      task
+      |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+      |> Repo.update!()
+
+      assert [] = Tasks.similar_open_titles(project.id, "Provision Neven Fabrikam account")
+    end
+
+    test "candidate titles shorter than 6 chars short-circuit to []", %{project: project} do
+      {:ok, _existing} =
+        Tasks.create_task(%{project_id: project.id, title: "Fix"})
+
+      assert [] = Tasks.similar_open_titles(project.id, "Fix")
+      assert [] = Tasks.similar_open_titles(project.id, "abc")
+    end
+
+    test "in_progress + in_review + planning + blocked all count as open", %{project: project} do
+      {:ok, planning_task} =
+        Tasks.create_task(%{project_id: project.id, title: "Ship Q3 launch plan"})
+
+      planning_task
+      |> Ecto.Changeset.change(status: "planning")
+      |> Repo.update!()
+
+      {:ok, blocked_task} =
+        Tasks.create_task(%{project_id: project.id, title: "Ship Q3 launch plan v2"})
+
+      blocked_task
+      |> Ecto.Changeset.change(status: "blocked")
+      |> Repo.update!()
+
+      assert [_ | _] = Tasks.similar_open_titles(project.id, "Ship Q3 launch plan")
+      assert [_ | _] = Tasks.similar_open_titles(project.id, "Ship Q3 launch plan v2")
+    end
+
+    test "non-binary candidate title returns []", %{project: project} do
+      assert [] = Tasks.similar_open_titles(project.id, nil)
+      assert [] = Tasks.similar_open_titles(project.id, 42)
+    end
+  end
+
+  describe "promote/1 — meeting-triage `needs_promotion` flip" do
+    setup do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Promote #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/promote"
+        })
+
+      %{project: project}
+    end
+
+    test "clears needs_promotion + broadcasts :task_updated on the kanban topic",
+         %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Filed under cap",
+          needs_promotion: true
+        })
+
+      # Subscribe to the same kanban topic `update_task/2` broadcasts on
+      # so we know the badge-removal signal reaches the LV.
+      Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")
+
+      assert {:ok, updated} = Tasks.promote(task)
+      assert updated.needs_promotion == false
+
+      task_id = task.id
+      assert_receive {:task_updated, %{id: ^task_id, needs_promotion: false}}, 500
+    end
+
+    test "idempotent — promoting a task whose flag is false is a no-op",
+         %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Already promoted",
+          needs_promotion: false
+        })
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")
+
+      assert {:ok, returned} = Tasks.promote(task)
+      assert returned.id == task.id
+
+      # No broadcast — the idempotent branch skips `update_task/2`.
+      refute_receive {:task_updated, _}, 200
+    end
+
+    # ── M5b (task 019f6e2c) Stage 2 — atomic backlog → planning transition ──
+
+    test "backlog + needs_promotion: transitions status atomically with a single broadcast",
+         %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Backlog triage",
+          status: "backlog",
+          needs_promotion: true
+        })
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")
+
+      assert {:ok, updated} = Tasks.promote(task)
+      assert updated.needs_promotion == false
+      assert updated.status == "planning"
+
+      task_id = task.id
+
+      # Exactly ONE broadcast — the atomic changeset flips both fields
+      # in a single `update_task/2` call, so kanban subscribers see one
+      # `:task_updated`, not two.
+      assert_receive {:task_updated, %{id: ^task_id, status: "planning", needs_promotion: false}},
+                     500
+
+      refute_receive {:task_updated, _}, 200
+    end
+
+    test "planning + needs_promotion: clears flag but does NOT re-transition status",
+         %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Already-planning triage",
+          status: "backlog",
+          needs_promotion: true
+        })
+
+      # Manually flip to planning via a direct changeset to simulate the
+      # task landing in planning by some other path (a router transition,
+      # manual operator move) while still carrying the meeting flag.
+      {:ok, planning_task} =
+        task
+        |> Ecto.Changeset.change(status: "planning")
+        |> Platform.Repo.update()
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")
+
+      assert {:ok, updated} = Tasks.promote(planning_task)
+      assert updated.needs_promotion == false
+      # Status stays put — no downgrade / no re-transition.
+      assert updated.status == "planning"
+
+      task_id = task.id
+
+      assert_receive {:task_updated, %{id: ^task_id, status: "planning", needs_promotion: false}},
+                     500
+
+      refute_receive {:task_updated, _}, 200
+    end
+
+    test "backlog without needs_promotion: no-op, no broadcast, no status change",
+         %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Backlog no-flag",
+          status: "backlog",
+          needs_promotion: false
+        })
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")
+
+      assert {:ok, returned} = Tasks.promote(task)
+      assert returned.status == "backlog"
+      assert returned.needs_promotion == false
+
+      refute_receive {:task_updated, _}, 200
+    end
+  end
 end

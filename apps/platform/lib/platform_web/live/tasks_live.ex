@@ -1355,6 +1355,58 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, assign(socket, :editing_task_title_id, task_id)}
   end
 
+  # Meeting-triage `promote_task` (task 019f5e2b-8d29 stage 2 + M5b/019f6e2c stage 2).
+  # Clears the `needs_promotion` flag on a filed-under-cap task via
+  # `Platform.Tasks.promote/1` — the standard `update_task/2` broadcast
+  # fires, so the kanban badge disappears without a full reload. When
+  # the task was still in `backlog`, `promote/1` also transitions
+  # `status: "planning"` atomically so the router dispatches a planner
+  # without a second write — surface a `Promoted to planning` info flash
+  # iff the status actually moved. Non-transition promotions (already
+  # in planning, etc.) are silent — the badge disappears is feedback enough.
+  #
+  # Guarded on `needs_promotion == true`: promoting an already-clear
+  # task is a no-op (idempotent) and does not spam kanban subscribers
+  # with a redundant :task_updated. Unknown ids surface a flash;
+  # non-flagged tasks silently no-op (button ought not to render, but
+  # this is defense-in-depth against a stale client).
+  def handle_event("promote_task", %{"id" => task_id}, socket) do
+    socket =
+      case Tasks.get_task_record(task_id) do
+        nil ->
+          put_flash(socket, :error, "Task not found.")
+
+        %{needs_promotion: false} ->
+          # Already promoted — nothing to do. Refresh the board so a
+          # stale card that shipped a lingering badge disappears.
+          refresh_board(socket)
+
+        task ->
+          case Tasks.promote(task) do
+            {:ok, updated} ->
+              socket
+              |> refresh_board()
+              |> reload_selected_task()
+              |> maybe_flash_promotion_transition(task, updated)
+
+            {:error, _changeset} ->
+              put_flash(socket, :error, "Could not promote task.")
+          end
+      end
+
+    {:noreply, socket}
+  end
+
+  # Only flash on an actual status change (backlog → planning) so a
+  # promote-in-planning is silent. The badge-disappears + kanban card
+  # reflow is sufficient feedback for the flag-only case.
+  defp maybe_flash_promotion_transition(socket, %{status: same}, %{status: same}), do: socket
+
+  defp maybe_flash_promotion_transition(socket, %{status: "backlog"}, %{status: "planning"}),
+    do: put_flash(socket, :info, "Promoted to planning.")
+
+  defp maybe_flash_promotion_transition(socket, _before, _after), do: socket
+
   def handle_event("update_task_title", _params, %{assigns: %{edit_mode: false}} = socket),
     do: {:noreply, socket}
 
@@ -2947,6 +2999,18 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_info({:task_deleted, _task}, socket) do
+    {:noreply, refresh_board(socket)}
+  end
+
+  # M5b (task 019f6e2c) stage 5: batch soft-delete from
+  # `Platform.Meetings.Triage.junk_batch/2`. One refresh drops every
+  # listed row in a single kanban reflow — cheaper than N sequential
+  # `{:task_deleted, _}` broadcasts at any batch size ≥ 2. The `ids`
+  # and `meta` (canvas_id / count / soft_deleted_at) are informational
+  # for future consumers (e.g. a toast crediting the rollback), but
+  # `refresh_board/1` is a full re-query so we don't need to splice
+  # the delta ourselves.
+  def handle_info({:tasks_batch_deleted, _ids, _meta}, socket) do
     {:noreply, refresh_board(socket)}
   end
 

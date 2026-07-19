@@ -268,7 +268,13 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       provider_specific_guidance: provider_guidance,
       previous_rejection_reason: render_previous_rejection_section(previous_rejection_reason),
       upstream_plans_section: render_upstream_plans_section(parent_plans),
-      skills_reference: @skills_reference
+      skills_reference: @skills_reference,
+      # federation_preamble — canonical Claude Code guidance block
+      # (task 019f5e2a stage 2). Consumed by dispatch.* templates via
+      # `{{federation_preamble}}` after the stage 3 retrofit; the
+      # placeholder resolves harmlessly on any template that doesn't
+      # reference it, so this assign is safe on every branch.
+      federation_preamble: PromptTemplates.federation_preamble()
     }
 
     case PromptTemplates.render_template("dispatch.planning", assigns) do
@@ -302,7 +308,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       git_workflow_block: git_workflow_section(task),
       provider_specific_guidance: provider_guidance,
       skills_reference: @skills_reference,
-      evidence_workflow_reference: @evidence_workflow_reference
+      evidence_workflow_reference: @evidence_workflow_reference,
+      # federation_preamble — canonical Claude Code guidance block
+      # (task 019f5e2a stage 2). See planning branch above for rationale.
+      federation_preamble: PromptTemplates.federation_preamble()
     }
 
     prompt =
@@ -333,7 +342,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         stage_info: stage_info,
         provider_specific_guidance: provider_guidance,
         skills_reference: @skills_reference,
-        evidence_workflow_reference: @evidence_workflow_reference
+        evidence_workflow_reference: @evidence_workflow_reference,
+        # federation_preamble — canonical Claude Code guidance block
+        # (task 019f5e2a stage 2). Also inherited into the e2e review
+        # branch via Map.merge below.
+        federation_preamble: PromptTemplates.federation_preamble()
       }
       |> Map.merge(extra_assigns)
 
@@ -383,7 +396,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       task_slug: task_slug,
       deploy_strategy_type: strategy_type,
       deploy_strategy_config: strategy_config,
-      skills_reference: @skills_reference
+      skills_reference: @skills_reference,
+      # federation_preamble — canonical Claude Code guidance block
+      # (task 019f5e2a stage 2).
+      federation_preamble: PromptTemplates.federation_preamble()
     }
 
     prompt =
@@ -407,7 +423,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       task_status: task.status,
       task_priority: task.priority,
       stage_info: stage_info,
-      skills_reference: @skills_reference
+      skills_reference: @skills_reference,
+      # federation_preamble — canonical Claude Code guidance block
+      # (task 019f5e2a stage 2).
+      federation_preamble: PromptTemplates.federation_preamble()
     }
 
     case PromptTemplates.render_template("dispatch.fallback", assigns) do

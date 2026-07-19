@@ -19,6 +19,8 @@ defmodule PlatformWeb.ChatLive do
 
   use PlatformWeb, :live_view
 
+  require Logger
+
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
   import PlatformWeb.ChatLive.Partials
   import PlatformWeb.Components.ChatHelpers
@@ -265,6 +267,14 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:sidebar_menu_open, false)
       |> assign(:active_space, nil)
       |> assign(:current_participant, nil)
+      # M5b (task 019f6e2c) Stage 4 — junk-batch confirmation modal state.
+      # Opened by `PlatformWeb.ChatLive.CanvasHooks` when a `junk_batch:*`
+      # canvas action_row is clicked; carries the source canvas id + a
+      # cheap preview of how many tasks would soft-delete. `nil` target +
+      # `false` open flag are the resting values. See `confirm_junk_batch`
+      # / `close_junk_batch_modal` below.
+      |> assign(:show_junk_batch_modal, false)
+      |> assign(:junk_batch_target, nil)
       |> assign(:mobile_browser_open, false)
       # Drawer search query (mobile channel search Stage 1). Filters the
       # drawer's rendered sections/DMs in-memory at RENDER time via the
@@ -596,6 +606,75 @@ defmodule PlatformWeb.ChatLive do
      socket
      |> assign(:mobile_browser_open, false)
      |> assign(:drawer_query, "")}
+  end
+
+  # ── Junk-batch confirmation modal (M5b/019f6e2c stage 4) ────────────────
+  #
+  # `CanvasHooks` opens the modal by assigning `:show_junk_batch_modal`
+  # + `:junk_batch_target` when a `junk_batch:*` action_row is clicked;
+  # these two events tear it down and fire the destructive write.
+  # Authorization already ran at the intercept (see
+  # `authorize_junk_batch/2` in `CanvasHooks`) so the confirm handler
+  # trusts that the socket reached this state legitimately. Defense-
+  # in-depth: `Platform.Meetings.Triage.junk_batch/2` is idempotent —
+  # a second confirm on an already-drained canvas returns `{:ok, 0}`
+  # without a duplicate audit row or canvas note.
+  def handle_event("close_junk_batch_modal", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_junk_batch_modal, false)
+     |> assign(:junk_batch_target, nil)}
+  end
+
+  def handle_event("confirm_junk_batch", _params, socket) do
+    case socket.assigns[:junk_batch_target] do
+      %{canvas_id: canvas_id} ->
+        actor_id = confirm_junk_batch_actor_id(socket)
+
+        socket =
+          case Platform.Meetings.Triage.junk_batch(canvas_id, actor_id: actor_id) do
+            {:ok, 0} ->
+              # Defensive branch — the preview should have caught this
+              # and hidden the confirm button. Reaching here means the
+              # last surviving task was junked between preview + confirm.
+              put_flash(socket, :info, "Nothing to roll back — batch already handled.")
+
+            {:ok, n} ->
+              put_flash(
+                socket,
+                :info,
+                "Batch rolled back — #{n} #{if n == 1, do: "task", else: "tasks"} soft-deleted."
+              )
+
+            {:error, reason} ->
+              Logger.warning(
+                "confirm_junk_batch failed for canvas=#{canvas_id}: #{inspect(reason)}"
+              )
+
+              put_flash(socket, :error, "Could not junk this batch.")
+          end
+
+        {:noreply,
+         socket
+         |> assign(:show_junk_batch_modal, false)
+         |> assign(:junk_batch_target, nil)}
+
+      _ ->
+        # Modal open flag flipped without a target — nothing to do.
+        {:noreply,
+         socket
+         |> assign(:show_junk_batch_modal, false)
+         |> assign(:junk_batch_target, nil)}
+    end
+  end
+
+  defp confirm_junk_batch_actor_id(socket) do
+    case socket.assigns do
+      %{current_participant: %{user_id: id}} when is_binary(id) -> id
+      %{current_user_record: %{id: id}} when is_binary(id) -> id
+      %{current_user: %{id: id}} when is_binary(id) -> id
+      _ -> nil
+    end
   end
 
   # ── Drawer search (mobile channel search Stage 1) ─────────────────────

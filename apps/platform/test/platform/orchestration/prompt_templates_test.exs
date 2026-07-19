@@ -179,17 +179,16 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert content =~ "review_request_create" or content =~ "suite_review_request_create"
     end
 
-    test "evidence-capture step routes through hive-local CDP" do
-      # The capture step is interpolated from HeartbeatScheduler's
-      # @evidence_workflow_reference into dispatch.in_progress and
-      # dispatch.in_review. Asserting on the rendered dispatch prompt is
-      # done in heartbeat_scheduler_test; here we check the template
-      # itself still names the placeholder so the evidence-workflow text
-      # actually reaches the agent.
+    test "evidence-capture step routes through hive-local CDP via federation preamble" do
+      # After task 019f5e2a stage 3, the evidence-workflow copy is folded
+      # into `federation_preamble` rather than a standalone
+      # {{evidence_workflow_reference}} placeholder. dispatch.in_review must
+      # keep the `{{federation_preamble}}` placeholder so the capture step
+      # reaches the agent.
       content = PromptTemplates.default_content_for_slug("dispatch.in_review")
 
-      assert content =~ "{{evidence_workflow_reference}}",
-             "dispatch.in_review must keep the evidence_workflow_reference placeholder"
+      assert content =~ "{{federation_preamble}}",
+             "dispatch.in_review must keep the federation_preamble placeholder (Stage 3 retrofit)"
     end
 
     test "routes UI tasks through Saru's advisory design review before the human gate (task 019f4f1d)" do
@@ -207,12 +206,15 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
   end
 
   describe "default_content_for_slug/1 — dispatch.in_progress" do
-    test "carries the evidence_workflow_reference placeholder for the CDP capture step" do
+    test "carries the federation_preamble placeholder for the CDP capture step" do
+      # After task 019f5e2a stage 3, the CDP evidence-capture instructions
+      # ship via `{{federation_preamble}}` rather than a standalone
+      # {{evidence_workflow_reference}} placeholder.
       content = PromptTemplates.default_content_for_slug("dispatch.in_progress")
       assert is_binary(content)
 
-      assert content =~ "{{evidence_workflow_reference}}",
-             "dispatch.in_progress must keep the evidence_workflow_reference placeholder"
+      assert content =~ "{{federation_preamble}}",
+             "dispatch.in_progress must keep the federation_preamble placeholder (Stage 3 retrofit)"
     end
 
     test "uses a single pre-rendered {{git_workflow_block}} variable, not piecewise task_slug" do
@@ -258,8 +260,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         stage_info: "Plan: v1 (stage 1/1 — coding)",
         git_workflow_block: git_block,
         provider_specific_guidance: "",
-        skills_reference: "Use bundled skills.",
-        evidence_workflow_reference: "CDP capture at 127.0.0.1:9222"
+        federation_preamble: PromptTemplates.federation_preamble()
       }
 
       assert {:ok, rendered} = PromptTemplates.render_template("dispatch.in_progress", assigns)
@@ -297,8 +298,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         stage_info: "Plan: v1 (stage 1/1 — coding)",
         git_workflow_block: git_block,
         provider_specific_guidance: "",
-        skills_reference: "Use bundled skills.",
-        evidence_workflow_reference: "CDP capture at 127.0.0.1:9222"
+        federation_preamble: PromptTemplates.federation_preamble()
       }
 
       assert {:ok, rendered} = PromptTemplates.render_template("dispatch.in_progress", assigns)
@@ -374,7 +374,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         execution_space_id: "11111111-1111-1111-1111-111111111111",
         repo_url: "git@github.com:acme/widgets.git",
         task_slug: "deadbeef",
-        skills_reference: "Use bundled skills."
+        federation_preamble: PromptTemplates.federation_preamble()
       }
 
       # Seed the template into the test DB so render_template can find it.
@@ -387,6 +387,108 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert rendered =~ "11111111-1111-1111-1111-111111111111"
       assert rendered =~ "git@github.com:acme/widgets.git"
       assert rendered =~ "deadbeef"
+    end
+  end
+
+  describe "default_content_for_slug/1 — dispatch.triage_dispatch" do
+    # Task 019f5e2b (meeting-to-tasks pipeline stack member M4) Stage 2
+    # ships the real triage-officer runtime body. These guards lock the
+    # body's declared surface — placeholders wired, downstream module
+    # references named, sibling helpers cited so a future edit that
+    # drops one of these tokens is caught before the runtime silently
+    # loses a step. Stage 4 owns these assertions; Stages 1–3 shipped
+    # the code.
+
+    test "exists as a seeded template slug" do
+      content = PromptTemplates.default_content_for_slug("dispatch.triage_dispatch")
+
+      assert is_binary(content),
+             "dispatch.triage_dispatch must be registered in default_templates/0"
+    end
+
+    test "wires the shared federation_preamble + skills_reference placeholders" do
+      content = PromptTemplates.default_content_for_slug("dispatch.triage_dispatch")
+
+      # M1 helper — pulled in as a mustache placeholder so the shared
+      # federation preamble stays in one place.
+      assert content =~ "{{federation_preamble}}",
+             "triage_dispatch must open with the M1 federation_preamble placeholder"
+
+      # Every dispatch template ends with the skills-reference block so
+      # the discovery instruction stays uniform across dispatch kinds.
+      assert content =~ "{{skills_reference}}",
+             "triage_dispatch must close with the shared skills_reference placeholder"
+    end
+
+    test "names the downstream Triage surface + skill slug + canvas API" do
+      content = PromptTemplates.default_content_for_slug("dispatch.triage_dispatch")
+
+      # Stack member E's filing surface — the template must direct the
+      # runtime here rather than reimplementing the filing/dedup loop.
+      assert content =~ "Triage.file_tasks_from_canvas",
+             "triage_dispatch must hand items to E's file_tasks_from_canvas/2 surface"
+
+      # The skill slug the runtime pulls for parse/matching conventions.
+      assert content =~ "meeting-triage-officer",
+             "triage_dispatch must call out the meeting-triage-officer skill by slug"
+
+      # The canvas-loading API the runtime uses at step (a).
+      assert content =~ "canvas_get",
+             "triage_dispatch must direct the runtime to canvas_get for the source canvas"
+
+      # The canonical scribe-completion node kind the runtime iterates.
+      assert content =~ "checklist_item",
+             "triage_dispatch must reference the checklist_item children it walks"
+    end
+
+    test "delegates dedup to Tasks.similar_open_titles/3 (idempotency clause)" do
+      content = PromptTemplates.default_content_for_slug("dispatch.triage_dispatch")
+
+      # E's dedup surface — the runtime must NOT re-implement dedup;
+      # the template's idempotency clause explicitly says so.
+      assert content =~ "similar_open_titles",
+             "triage_dispatch must delegate dedup to Tasks.similar_open_titles/3 (E's surface)"
+    end
+
+    test "emits both triage_dispatch entry + tasks_created_from_meeting completion telemetry" do
+      content = PromptTemplates.default_content_for_slug("dispatch.triage_dispatch")
+
+      # Entry-side telemetry ref — the [:platform, :meetings, :triage_dispatch]
+      # event name is quoted in the template so `Platform.Meetings.TelemetryHandler`
+      # (from stack member E) can attach without a separate handler wired here.
+      assert content =~ "triage_dispatch",
+             "triage_dispatch must reference the entry telemetry event name"
+
+      # Completion-side telemetry ref — the `tasks_created_from_meeting`
+      # event with measurements %{filed_count, skipped_count, fallback_project_count}.
+      assert content =~ "tasks_created_from_meeting",
+             "triage_dispatch must reference the tasks_created_from_meeting completion telemetry event"
+    end
+
+    test "declares all seven variables in the descriptor" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "dispatch.triage_dispatch"))
+
+      assert descriptor,
+             "dispatch.triage_dispatch descriptor must be registered in default_templates/0"
+
+      # Locked against the plan's declared surface — reorderings + accidental
+      # drops both fail this. Matching Enum.sort/1 on both sides so the
+      # test isn't order-sensitive but IS content-sensitive.
+      expected_vars =
+        Enum.sort([
+          "federation_preamble",
+          "space_id",
+          "room_id",
+          "transcript_id",
+          "canvas_id",
+          "execution_space_id",
+          "skills_reference"
+        ])
+
+      assert Enum.sort(descriptor.variables) == expected_vars,
+             "dispatch.triage_dispatch must declare exactly the seven planned variables"
     end
   end
 
@@ -505,12 +607,22 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                                       "priv/repo/migrations/20260716211312_refresh_dispatch_templates_subagent_id_ack.exs"
                                     ])
 
+    @federation_preamble_migration_path Path.join([
+                                          __ENV__.file
+                                          |> Path.dirname()
+                                          |> Path.dirname()
+                                          |> Path.dirname()
+                                          |> Path.dirname(),
+                                          "priv/repo/migrations/20260717000000_retrofit_dispatch_templates_with_federation_preamble.exs"
+                                        ])
+
     # Load the migration module once for this describe block so the tests
     # below can call `up/0` directly. `Code.compile_file/1` is idempotent —
     # subsequent test runs pick up any edits the developer made without a
     # stale binary lying around.
     Code.compile_file(@alarm_silence_migration_path)
     Code.compile_file(@subagent_id_ack_migration_path)
+    Code.compile_file(@federation_preamble_migration_path)
 
     test "seed_defaults seeds dispatch.planning with current default content" do
       :ok = PromptTemplates.seed_defaults()
@@ -694,6 +806,112 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                "#{slug} must remain absent — migration is refresh-only, not seed"
       end
     end
+
+    test "20260717000000 federation-preamble migration refreshes all six dispatch templates idempotently" do
+      # Simulates the production upgrade sequence for task 019f5e2a stage 3:
+      # a prior force-update migration seeded the row with a body that
+      # inlined the Organization Context / Writing to Org Memory / skills /
+      # evidence blocks and referenced {{skills_reference}} /
+      # {{evidence_workflow_reference}} placeholders. This migration
+      # force-refreshes every dispatch row to the current default —
+      # {{federation_preamble}} placeholder + trimmed variables list.
+      migration = Platform.Repo.Migrations.RetrofitDispatchTemplatesWithFederationPreamble
+
+      slugs = ~w(
+        dispatch.planning
+        dispatch.in_progress
+        dispatch.in_review
+        dispatch.review_e2e
+        dispatch.deploying
+        dispatch.fallback
+      )
+
+      # Seed baseline rows (matches what a prior force-update migration
+      # would have left in a production DB — descriptor variables + old
+      # content body).
+      :ok = PromptTemplates.seed_defaults()
+
+      # Mutate each seeded row to simulate the pre-refresh state (an older
+      # body without the federation_preamble placeholder). The migration
+      # must overwrite this regardless of what it finds.
+      for slug <- slugs do
+        template = PromptTemplates.get_template_by_slug(slug)
+
+        stale =
+          template.content
+          |> String.replace("{{federation_preamble}}", "REDACTED_STALE_TOKEN")
+
+        {:ok, _} =
+          PromptTemplates.update_template(template, %{
+            content: stale <> "\n\n<!-- stale marker -->",
+            variables: ["skills_reference", "evidence_workflow_reference"]
+          })
+      end
+
+      # First run — refreshes everything.
+      :ok = migration.up()
+
+      for slug <- slugs do
+        row = PromptTemplates.get_template_by_slug(slug)
+        expected = PromptTemplates.default_content_for_slug(slug)
+
+        assert row.content == expected,
+               "#{slug} must be refreshed to current default content by the migration"
+
+        refute row.content =~ "REDACTED_STALE_TOKEN",
+               "#{slug} must have the pre-refresh marker overwritten"
+
+        refute row.content =~ "<!-- stale marker -->",
+               "#{slug} must have the stale suffix overwritten (not appended)"
+
+        assert row.content =~ "{{federation_preamble}}",
+               "#{slug} must carry the federation_preamble placeholder after migration up/0"
+
+        assert "federation_preamble" in row.variables,
+               "#{slug} must carry the federation_preamble variable declaration after migration up/0"
+      end
+
+      # Second run — same final state (idempotent).
+      :ok = migration.up()
+
+      for slug <- slugs do
+        row = PromptTemplates.get_template_by_slug(slug)
+        expected = PromptTemplates.default_content_for_slug(slug)
+
+        assert row.content == expected,
+               "#{slug} must remain at current default content after a second migration run"
+      end
+    end
+
+    test "20260717000000 federation-preamble migration is a safe no-op when the target rows are missing" do
+      # Same nil-row guard as the earlier refresh migrations — must not
+      # raise, must not insert.
+      slugs = ~w(
+        dispatch.planning
+        dispatch.in_progress
+        dispatch.in_review
+        dispatch.review_e2e
+        dispatch.deploying
+        dispatch.fallback
+      )
+
+      # Purge any seeded dispatch rows so we exercise the nil-row branch.
+      for slug <- slugs do
+        case PromptTemplates.get_template_by_slug(slug) do
+          nil -> :ok
+          template -> {:ok, _} = PromptTemplates.delete_template(template)
+        end
+      end
+
+      migration = Platform.Repo.Migrations.RetrofitDispatchTemplatesWithFederationPreamble
+
+      assert :ok = migration.up()
+
+      for slug <- slugs do
+        assert PromptTemplates.get_template_by_slug(slug) == nil,
+               "#{slug} must remain absent — migration is refresh-only, not seed"
+      end
+    end
   end
 
   describe "nudge slug (task 019f640d stage 4)" do
@@ -749,117 +967,83 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
   end
 
   describe "skill-discovery step in dispatch templates" do
-    # Two groups of dispatch templates carry the skill guidance differently:
-    #
-    #  * `dispatch.fallback` bakes the prompt_templates.ex `skills_reference`
-    #    local directly into its `content` via `#{...}` interpolation, so the
-    #    discovery text is present in `default_content_for_slug/1` verbatim.
-    #  * `dispatch.planning` / `.in_progress` / `.in_review` / `.review_e2e`
-    #    carry a `{{skills_reference}}` placeholder; the discovery text is
-    #    supplied at render time (HeartbeatScheduler passes `@skills_reference`).
-    #    For those, `default_content_for_slug/1` shows the placeholder and
-    #    `render_template/2` shows the interpolated text.
-    #
-    # heartbeat_scheduler_test.exs covers the end-to-end content on the
-    # hardcoded fallback path.
-    @placeholder_slugs ~w(
+    # After task 019f5e2a stage 3 the skill-discovery guidance ships to every
+    # Claude Code dispatch template via the consolidated `{{federation_preamble}}`
+    # placeholder rather than a slug-specific `{{skills_reference}}` variable.
+    # These tests exercise both the descriptor contract (every dispatch slug
+    # embeds the placeholder + declares the variable) and the render-time
+    # interpolation (the resolved output actually carries the discovery text).
+    @all_dispatch_slugs ~w(
       dispatch.planning
       dispatch.in_progress
       dispatch.in_review
       dispatch.review_e2e
+      dispatch.deploying
+      dispatch.fallback
+      dispatch.triage_dispatch
     )
-    @all_dispatch_slugs ["dispatch.fallback" | @placeholder_slugs]
 
-    # Mirrors the prompt_templates.ex `skills_reference` local, used as the
-    # render-time assign so the test exercises the real interpolation path
-    # for the placeholder slugs.
-    @skills_reference_text "## Skill discovery — do this BEFORE you start executing\n\n" <>
-                             "Derive this task's domain. Call the `skill_list` MCP tool yourself. " <>
-                             "Call the `skill_get` MCP tool. " <>
-                             "Discovery happens by calling `skill_list` / `skill_get` yourself."
-
-    test "dispatch.fallback bakes the skill-discovery step directly into its content" do
-      # dispatch.fallback interpolates the prompt_templates.ex `skills_reference`
-      # local with `#{...}`, so the discovery text is present verbatim — this
-      # directly asserts the Stage-1 edit to that local landed.
-      content = PromptTemplates.default_content_for_slug("dispatch.fallback")
-      assert is_binary(content)
-
-      assert content =~ "skill_list",
-             "expected dispatch.fallback to name the skill_list tool"
-
-      assert content =~ "skill_get",
-             "expected dispatch.fallback to name the skill_get tool"
-
-      assert content =~ "Derive this task's domain",
-             "expected dispatch.fallback to carry the discovery-instruction fragment"
-
-      assert content =~ "Skill discovery",
-             "expected dispatch.fallback to carry the skill-discovery section header"
-
-      # Regression guard — discovery must be active tool calls, not a skills-key read.
-      refute content =~ "check the `skills` key"
-      refute content =~ "check the skills key"
-      refute content =~ "read the attached skills object"
-
-      assert content =~ "calling `skill_list` / `skill_get` yourself",
-             "dispatch.fallback discovery must direct the agent to call the tools itself"
-    end
-
-    test "every placeholder dispatch slug wires the {{skills_reference}} placeholder" do
-      for slug <- @placeholder_slugs do
+    test "every dispatch slug embeds the {{federation_preamble}} placeholder" do
+      for slug <- @all_dispatch_slugs do
         content = PromptTemplates.default_content_for_slug(slug)
         assert is_binary(content), "expected #{slug} to be a registered template"
 
-        assert content =~ "{{skills_reference}}",
-               "expected #{slug} to interpolate the skills_reference placeholder"
+        assert content =~ "{{federation_preamble}}",
+               "expected #{slug} to embed the federation_preamble placeholder (Stage 3 retrofit)"
       end
     end
 
-    test "every dispatch slug declares skills_reference as a template variable" do
+    test "every dispatch slug declares federation_preamble as a template variable" do
       for slug <- @all_dispatch_slugs do
         descriptor = Enum.find(PromptTemplates.default_templates(), &(&1.slug == slug))
         assert descriptor, "expected #{slug} to be a registered default template"
 
-        assert "skills_reference" in descriptor.variables,
-               "expected #{slug} to declare skills_reference as a variable"
+        assert "federation_preamble" in descriptor.variables,
+               "expected #{slug} to declare federation_preamble as a variable"
       end
     end
 
-    test "render_template interpolates the skill-discovery step into placeholder slugs" do
+    test "render_template interpolates the skill-discovery step into every dispatch slug" do
       :ok = PromptTemplates.seed_defaults()
 
       assigns = %{
         task_title: "Wire up the task-stack detail panel",
         task_description: "Add a panel showing stack members",
         task_priority: "medium",
+        task_status: "in_progress",
         task_id: "abcd1234",
         task_slug: "abcd1234",
+        stage_id: "stage-1",
+        stage_info: "Plan: v1 (stage 1/1 — coding)",
+        git_workflow_block: "",
+        provider_specific_guidance: "",
+        previous_rejection_reason: "",
+        upstream_plans_section: "",
+        pending_e2e_validations_json: "[]",
         execution_space_id: "11111111-1111-1111-1111-111111111111",
         repo_url: "git@github.com:acme/widgets.git",
-        plan_version: 1,
-        stage_name: "coding",
-        stage_position: 1,
-        validations_summary: "test_pass, lint_pass",
-        skills_reference: @skills_reference_text
+        default_branch: "main",
+        deploy_strategy_type: "manual",
+        deploy_strategy_config: "%{}",
+        federation_preamble: PromptTemplates.federation_preamble()
       }
 
-      for slug <- @placeholder_slugs do
+      for slug <- @all_dispatch_slugs do
         assert {:ok, rendered} = PromptTemplates.render_template(slug, assigns)
 
         assert rendered =~ "skill_list",
-               "expected rendered #{slug} to carry skill_list after {{skills_reference}} interpolation"
+               "expected rendered #{slug} to carry skill_list after {{federation_preamble}} interpolation"
 
         assert rendered =~ "skill_get",
-               "expected rendered #{slug} to carry skill_get after {{skills_reference}} interpolation"
+               "expected rendered #{slug} to carry skill_get after {{federation_preamble}} interpolation"
 
         assert rendered =~ "Derive this task's domain",
                "expected rendered #{slug} to carry the discovery-instruction fragment"
 
-        # The placeholder must be fully consumed — no literal {{skills_reference}}
+        # The placeholder must be fully consumed — no literal {{federation_preamble}}
         # left in the rendered output.
-        refute rendered =~ "{{skills_reference}}",
-               "expected #{slug} to fully interpolate the skills_reference placeholder"
+        refute rendered =~ "{{federation_preamble}}",
+               "expected #{slug} to fully interpolate the federation_preamble placeholder"
       end
     end
 
@@ -874,14 +1058,25 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         task_title: "Regression guard",
         task_description: "Guard the phrasing",
         task_priority: "medium",
+        task_status: "in_progress",
         task_id: "abcd1234",
         task_slug: "abcd1234",
+        stage_id: "stage-1",
+        stage_info: "Plan: v1 (stage 1/1 — coding)",
+        git_workflow_block: "",
+        provider_specific_guidance: "",
+        previous_rejection_reason: "",
+        upstream_plans_section: "",
+        pending_e2e_validations_json: "[]",
         execution_space_id: "11111111-1111-1111-1111-111111111111",
         repo_url: "git@github.com:acme/widgets.git",
-        skills_reference: @skills_reference_text
+        default_branch: "main",
+        deploy_strategy_type: "manual",
+        deploy_strategy_config: "%{}",
+        federation_preamble: PromptTemplates.federation_preamble()
       }
 
-      for slug <- @placeholder_slugs do
+      for slug <- @all_dispatch_slugs do
         assert {:ok, rendered} = PromptTemplates.render_template(slug, assigns)
 
         refute rendered =~ "check the `skills` key",
@@ -1463,8 +1658,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         provider_specific_guidance: "",
         previous_rejection_reason: "",
         upstream_plans_section: "",
-        skills_reference: "",
-        evidence_workflow_reference: "",
+        federation_preamble: "",
         repo_url: "",
         default_branch: "main",
         task_slug: "ack",
@@ -1502,46 +1696,418 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     # T6 adds a "Journal-by-default for non-Historian agents" rule to the
     # two dispatch slugs used by non-Historian agents, making the
     # `<correction target="<page-path>" line="<N>">…</correction>`
-    # convention authoritative copy. The 5/15 force-update migration
-    # (20260520050000) refreshes these rows post-deploy so prod picks up
-    # the new rule even when seed_defaults short-circuits.
+    # convention authoritative copy. After task 019f5e2a stage 3 this rule
+    # ships via the consolidated `federation_preamble` rather than being
+    # inlined into each dispatch template's content — the tests below
+    # verify the rendered dispatch output carries the rule end-to-end.
 
     @non_historian_dispatch_slugs ~w(dispatch.planning dispatch.in_progress)
 
-    test "dispatch.planning + dispatch.in_progress carry the journal-by-default rule" do
+    @non_historian_render_assigns %{
+      task_id: "task-t6",
+      stage_id: "stage-t6",
+      task_title: "T6 render probe",
+      task_description: "T6",
+      task_priority: "medium",
+      stage_info: "Plan: v1 (stage 1/1)",
+      git_workflow_block: "",
+      provider_specific_guidance: "",
+      previous_rejection_reason: "",
+      upstream_plans_section: ""
+    }
+
+    test "dispatch.planning + dispatch.in_progress render the journal-by-default rule" do
+      :ok = PromptTemplates.seed_defaults()
+
+      assigns =
+        Map.put(
+          @non_historian_render_assigns,
+          :federation_preamble,
+          PromptTemplates.federation_preamble()
+        )
+
       for slug <- @non_historian_dispatch_slugs do
-        content = PromptTemplates.default_content_for_slug(slug)
+        {:ok, rendered} = PromptTemplates.render_template(slug, assigns)
 
-        assert is_binary(content), "#{slug} should have default content"
+        assert rendered =~ "Journal-by-default for non-Historian agents",
+               "#{slug} render must carry the 'Journal-by-default' section header (via federation_preamble)"
 
-        assert content =~ "Journal-by-default for non-Historian agents",
-               "#{slug} must carry the 'Journal-by-default' section header"
+        assert rendered =~ "<correction target=",
+               "#{slug} render must document the <correction target=...> block convention"
 
-        assert content =~ "<correction target=",
-               "#{slug} must document the <correction target=...> block convention"
-
-        assert content =~ ":historian_only",
-               "#{slug} must name the :historian_only error code agents will see"
+        assert rendered =~ ":historian_only",
+               "#{slug} render must name the :historian_only error code agents will see"
 
         # Direct page writes by non-Historian agents are explicitly
         # forbidden — the prohibition must be present, not implied.
-        assert content =~ "never call `memory_str_replace`" or
-                 content =~ "never call memory_str_replace",
-               "#{slug} must explicitly forbid calling memory_str_replace against page paths"
+        assert rendered =~ "never call `memory_str_replace`" or
+                 rendered =~ "never call memory_str_replace",
+               "#{slug} render must explicitly forbid calling memory_str_replace against page paths"
       end
     end
 
-    test "dispatch.planning + dispatch.in_progress retain the existing memory_* path routing block" do
+    test "dispatch.planning + dispatch.in_progress render the memory_* path routing block" do
       # Guard against an over-eager edit that removes the path-routing
       # block (the cross-task contract with T5's tool surface) while
-      # adding the journal-by-default rule on top.
-      for slug <- @non_historian_dispatch_slugs do
-        content = PromptTemplates.default_content_for_slug(slug)
+      # keeping the journal-by-default rule. Post-Stage-3 both blocks
+      # ship via `federation_preamble`.
+      :ok = PromptTemplates.seed_defaults()
 
-        assert content =~ "memory_* tool family"
-        assert content =~ "Historian-only writes"
-        assert content =~ "org/journal/<YYYY-MM-DD>.md"
-        assert content =~ "private/<your-agent-id>"
+      assigns =
+        Map.put(
+          @non_historian_render_assigns,
+          :federation_preamble,
+          PromptTemplates.federation_preamble()
+        )
+
+      for slug <- @non_historian_dispatch_slugs do
+        {:ok, rendered} = PromptTemplates.render_template(slug, assigns)
+
+        assert rendered =~ "memory_* tool family"
+        assert rendered =~ "Historian-only writes"
+        assert rendered =~ "org/journal/<YYYY-MM-DD>.md"
+        assert rendered =~ "private/<your-agent-id>"
+      end
+    end
+  end
+
+  describe "federation_preamble/0 (task 019f5e2a stage 1)" do
+    test "returns a non-empty string" do
+      preamble = PromptTemplates.federation_preamble()
+
+      assert is_binary(preamble)
+      assert byte_size(preamble) > 0
+    end
+
+    test "contains every canonical section header exactly once" do
+      preamble = PromptTemplates.federation_preamble()
+
+      headers = [
+        "## Subagent-spawn discipline",
+        "## Organization Context",
+        "## Writing to Org Memory",
+        "## Skill discovery — do this BEFORE you start executing",
+        "## Submitting evidence for a manual_approval validation",
+        "## Tool-name conventions (dot vs underscore)"
+      ]
+
+      for header <- headers do
+        occurrences = preamble |> String.split(header) |> length() |> Kernel.-(1)
+
+        assert occurrences == 1,
+               "expected federation_preamble to contain #{inspect(header)} exactly once, got #{occurrences}"
+      end
+    end
+
+    test "carries key phrases guarding against silent regressions" do
+      preamble = PromptTemplates.federation_preamble()
+
+      # Subagent-spawn discipline anchor
+      assert preamble =~ "run_in_background: true",
+             "subagent-spawn discipline must instruct spawning with run_in_background: true"
+
+      # Org memory anchor
+      assert preamble =~ "memory_search",
+             "federation preamble must reference the memory_search tool"
+
+      # Skill discovery anchor
+      assert preamble =~ "skill_list",
+             "skill-discovery section must reference the skill_list MCP tool"
+
+      # Evidence workflow anchors
+      assert preamble =~ "attachment.upload_start",
+             "evidence workflow must reference the attachment.upload_start tool (dot form)"
+
+      assert preamble =~ "review_request_create",
+             "evidence workflow must reference the review_request_create tool"
+
+      # Tool-name gotcha anchor
+      assert preamble =~ "not in allowed bundles",
+             "tool-name conventions must document the 'not in allowed bundles' gotcha"
+    end
+
+    test "is idempotent — two calls return byte-equal strings" do
+      first = PromptTemplates.federation_preamble()
+      second = PromptTemplates.federation_preamble()
+
+      assert first == second,
+             "federation_preamble/0 must be a compile-time-frozen string, not re-computed per call"
+    end
+  end
+
+  describe "federation_preamble template contract (task 019f5e2a stage 4)" do
+    # Cross-slug drift guards downstream stack members (B: scribe_completion,
+    # D: triage_dispatch) reference in their own plans. Any new dispatch
+    # template that opts into the federation preamble must declare it in
+    # `variables:` AND embed the `{{federation_preamble}}` placeholder in
+    # `content:` — either half alone is a silent regression.
+
+    @stage3_retrofitted_dispatch_slugs ~w(
+      dispatch.planning
+      dispatch.in_progress
+      dispatch.in_review
+      dispatch.review_e2e
+      dispatch.deploying
+      dispatch.fallback
+    )
+
+    test "every descriptor declaring federation_preamble in variables must also embed {{federation_preamble}} in content" do
+      offenders =
+        PromptTemplates.default_templates()
+        |> Enum.filter(fn descriptor ->
+          "federation_preamble" in (descriptor.variables || [])
+        end)
+        |> Enum.reject(fn descriptor ->
+          (descriptor.content || "") =~ "{{federation_preamble}}"
+        end)
+        |> Enum.map(& &1.slug)
+
+      assert offenders == [],
+             "Descriptor(s) declare federation_preamble in variables but do not embed " <>
+               "{{federation_preamble}} in content: #{inspect(offenders)}. Either add the " <>
+               "placeholder to content or drop the variable declaration."
+    end
+
+    test "the six retrofitted dispatch.* slugs all declare federation_preamble in variables" do
+      missing =
+        for slug <- @stage3_retrofitted_dispatch_slugs,
+            descriptor = Enum.find(PromptTemplates.default_templates(), &(&1.slug == slug)),
+            not is_nil(descriptor),
+            "federation_preamble" not in (descriptor.variables || []),
+            do: slug
+
+      assert missing == [],
+             "Dispatch slug(s) missing federation_preamble from variables list: #{inspect(missing)}. " <>
+               "A refactor dropped the variable declaration; add it back or the drift guard is a lie."
+
+      # Also assert every slug is actually a registered descriptor (guards
+      # against a slug being renamed / removed silently).
+      for slug <- @stage3_retrofitted_dispatch_slugs do
+        assert Enum.find(PromptTemplates.default_templates(), &(&1.slug == slug)),
+               "expected #{slug} to be a registered default template"
+      end
+    end
+  end
+
+  describe "federation_preamble render round-trip (task 019f5e2a stage 5)" do
+    # Per-slug fixture-render regression tests. Each dispatch.* template is
+    # rendered with a minimally-viable assigns map (including a real
+    # federation_preamble value) and every canonical section header is
+    # asserted in the output. Also refutes any un-consumed `{{federation_preamble}}`
+    # remnant. These are the guarantee that Stage 3's retrofit didn't drop
+    # a placeholder in one slug or accidentally break the mustache
+    # interpolation flow.
+
+    @stage5_render_assigns %{
+      task_id: "task-render-1",
+      stage_id: "stage-render-1",
+      task_title: "Render probe",
+      task_description: "Render probe body",
+      task_priority: "medium",
+      task_status: "in_progress",
+      task_slug: "renderp",
+      stage_info: "Plan: v1 (stage 1/1 — coding)",
+      git_workflow_block: "",
+      provider_specific_guidance: "",
+      previous_rejection_reason: "",
+      upstream_plans_section: "",
+      pending_e2e_validations_json: "[]",
+      execution_space_id: "11111111-1111-1111-1111-111111111111",
+      repo_url: "git@github.com:acme/widgets.git",
+      default_branch: "main",
+      deploy_strategy_type: "manual",
+      deploy_strategy_config: "%{}"
+    }
+
+    @stage5_expected_headers [
+      "## Subagent-spawn discipline",
+      "## Organization Context",
+      "## Writing to Org Memory",
+      "## Skill discovery — do this BEFORE you start executing",
+      "## Submitting evidence for a manual_approval validation",
+      "## Tool-name conventions (dot vs underscore)"
+    ]
+
+    for slug <-
+          ~w(dispatch.planning dispatch.in_progress dispatch.in_review dispatch.review_e2e dispatch.deploying dispatch.fallback) do
+      @tag slug: slug
+      test "#{slug} render includes all six federation-preamble section headers", %{slug: slug} do
+        :ok = PromptTemplates.seed_defaults()
+
+        assigns =
+          Map.put(
+            @stage5_render_assigns,
+            :federation_preamble,
+            PromptTemplates.federation_preamble()
+          )
+
+        assert {:ok, rendered} = PromptTemplates.render_template(slug, assigns)
+
+        for header <- @stage5_expected_headers do
+          assert rendered =~ header,
+                 "#{slug} render must include #{inspect(header)} (via federation_preamble)"
+        end
+
+        refute rendered =~ "{{federation_preamble}}",
+               "#{slug} render must fully consume the {{federation_preamble}} placeholder"
+      end
+    end
+  end
+
+  describe "default_content_for_slug/1 — dispatch.scribe_completion" do
+    # Task 019f5e2a-9db7 (M2 of the meeting-to-tasks-pipeline stack). Codifies
+    # the 5-card scribe canvas structure proven on the SXI 2026-07-13 meeting
+    # (canvas id 019f5e0c-e6fc-7721-b6de-944302dcfc67). The descriptor is a
+    # `dispatch.*` template so stack member M1's federation_preamble guard
+    # applies: `federation_preamble` MUST appear in the variables list AND
+    # `{{federation_preamble}}` MUST appear in the content body.
+    @scribe_slug "dispatch.scribe_completion"
+    @scribe_expected_variables ~w(
+      space_id
+      room_id
+      transcript_id
+      meeting_name
+      execution_space_id
+      federation_preamble
+      skills_reference
+    )
+    @scribe_action_item_note_keys ~w(owner project_hint priority due_hint source_transcript_id)
+
+    test "descriptor exists in default_templates with the expected variable declarations" do
+      content = PromptTemplates.default_content_for_slug(@scribe_slug)
+      assert is_binary(content), "#{@scribe_slug} must be registered in default_templates/0"
+
+      descriptor = Enum.find(PromptTemplates.default_templates(), &(&1.slug == @scribe_slug))
+      assert descriptor, "#{@scribe_slug} descriptor must appear in default_templates/0"
+
+      for var <- @scribe_expected_variables do
+        assert var in descriptor.variables,
+               "#{@scribe_slug}.variables must include #{inspect(var)}"
+      end
+    end
+
+    test "content carries the {{federation_preamble}} placeholder (stack member M1 drift guard)" do
+      # If a future edit copy-pastes the preamble text inline instead of
+      # referencing it as a mustache slot, the render pipeline breaks (the
+      # placeholder resolves to "" and the shared block goes missing). This
+      # test is the descriptor-scoped guard promised in the task's
+      # acceptance criterion #4.
+      content = PromptTemplates.default_content_for_slug(@scribe_slug)
+
+      assert content =~ "{{federation_preamble}}",
+             "#{@scribe_slug} must embed the federation_preamble placeholder"
+    end
+
+    test "content ships the 5-card canvas structure with all five card headers and labels" do
+      content = PromptTemplates.default_content_for_slug(@scribe_slug)
+
+      for card_number <- ["Card 1", "Card 2", "Card 3", "Card 4", "Card 5"] do
+        assert content =~ card_number,
+               "#{@scribe_slug} must include #{card_number} header"
+      end
+
+      for card_label <- ["Summary", "Decisions", "Action items", "Open questions", "Provenance"] do
+        assert content =~ card_label,
+               "#{@scribe_slug} must include the '#{card_label}' card label"
+      end
+    end
+
+    test "Card 3 documents the JSON note convention with every required key" do
+      content = PromptTemplates.default_content_for_slug(@scribe_slug)
+
+      # All five keys named in prose so the scribe knows the full schema.
+      for key <- @scribe_action_item_note_keys do
+        assert content =~ key,
+               "#{@scribe_slug} Card 3 must document the '#{key}' JSON note key"
+      end
+
+      # A worked example fenced in a ```json block so the scribe has a
+      # copy-paste template.
+      assert content =~ "```json",
+             "#{@scribe_slug} Card 3 must include a fenced ```json code block"
+    end
+
+    test "Card 3 JSON example parses via Jason.decode with all 5 required keys" do
+      # Regression guard: the worked example must be valid JSON. A malformed
+      # example teaches the scribe to emit malformed notes, and the triage
+      # agent's downstream Jason.decode/1 pass will trip on every action item.
+      content = PromptTemplates.default_content_for_slug(@scribe_slug)
+
+      [_, json_block] = Regex.run(~r/```json\n(.*?)\n```/s, content)
+
+      assert {:ok, parsed} = Jason.decode(json_block),
+             "#{@scribe_slug} Card 3 fenced ```json block must parse via Jason.decode/1"
+
+      parsed_keys = Map.keys(parsed) |> Enum.sort()
+      expected_keys = Enum.sort(@scribe_action_item_note_keys)
+
+      assert parsed_keys == expected_keys,
+             "#{@scribe_slug} Card 3 JSON example keys #{inspect(parsed_keys)} must match #{inspect(expected_keys)}"
+    end
+
+    test "content names the dispatch_triage_attention post-canvas hook" do
+      # The canvas alone is not the whole product — the triage hand-off is
+      # what turns action items into tasks. If a future edit strips this
+      # instruction, action items sit stranded on the canvas.
+      content = PromptTemplates.default_content_for_slug(@scribe_slug)
+
+      assert content =~ "dispatch_triage_attention",
+             "#{@scribe_slug} must instruct the scribe to call dispatch_triage_attention/2 after canvas_create"
+    end
+
+    test "render_template fully interpolates every declared placeholder with sample assigns" do
+      :ok = PromptTemplates.seed_defaults()
+
+      federation_preamble_sample =
+        "### Federation preamble\nYou are a Suite agent — read org memory, call skill_list yourself, use CDP at 127.0.0.1:9222 for evidence."
+
+      skills_reference_sample = "## Skill discovery\nCall skill_list yourself."
+
+      assigns = %{
+        federation_preamble: federation_preamble_sample,
+        space_id: "space-abc",
+        room_id: "room-def",
+        transcript_id: "txp-123",
+        meeting_name: "SXI weekly",
+        execution_space_id: "exec-999",
+        skills_reference: skills_reference_sample
+      }
+
+      assert {:ok, rendered} = PromptTemplates.render_template(@scribe_slug, assigns)
+
+      # Injected preamble + skills text made it through.
+      assert rendered =~ "Federation preamble",
+             "rendered #{@scribe_slug} must carry the interpolated federation_preamble text"
+
+      assert rendered =~ "Call skill_list yourself.",
+             "rendered #{@scribe_slug} must carry the interpolated skills_reference text"
+
+      # Signal-payload values interpolated verbatim.
+      assert rendered =~ "space-abc"
+      assert rendered =~ "room-def"
+      assert rendered =~ "txp-123"
+      assert rendered =~ "SXI weekly"
+
+      # No literal placeholders left in the rendered output.
+      for placeholder <-
+            ~w(federation_preamble skills_reference space_id room_id transcript_id meeting_name execution_space_id) do
+        refute rendered =~ "{{#{placeholder}}}",
+               "rendered #{@scribe_slug} must not carry a literal {{#{placeholder}}} placeholder"
+      end
+    end
+
+    test "every dispatch.* slug that declares federation_preamble embeds the placeholder (cross-slug guard)" do
+      # Parametric guard — walks every registered dispatch.* descriptor whose
+      # variables list includes "federation_preamble" and asserts the content
+      # embeds {{federation_preamble}}. Future dispatch templates that opt
+      # into the shared preamble by declaring the variable can silently drop
+      # the placeholder without this test; this catches that regression at
+      # descriptor-registration time.
+      for descriptor <- PromptTemplates.default_templates(),
+          String.starts_with?(descriptor.slug, "dispatch."),
+          "federation_preamble" in descriptor.variables do
+        assert descriptor.content =~ "{{federation_preamble}}",
+               "#{descriptor.slug} declares federation_preamble in .variables but does not embed {{federation_preamble}} in .content"
       end
     end
   end

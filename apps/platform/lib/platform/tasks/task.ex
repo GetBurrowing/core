@@ -103,6 +103,15 @@ defmodule Platform.Tasks.Task do
     # manual-review default for existing rows and callers.
     field(:auto_approve_plan, :boolean, default: false)
 
+    # Meeting-triage `needs_promotion` flag (task 019f5e2b-8d29 stage 2).
+    # Set to true by `Platform.Meetings.Triage.file_tasks_from_canvas/2`
+    # for tasks filed while the per-project triage-backlog count is under
+    # `:meetings_triage_backlog_cap`. Cleared by `Platform.Tasks.promote/1`
+    # when the kanban badge is clicked. See migration
+    # `20260713120000_add_needs_promotion_to_tasks.exs` for the partial
+    # index the kanban filter relies on.
+    field(:needs_promotion, :boolean, default: false)
+
     # `search_vector` (task 019f3dbb stage 1) is a Postgres `tsvector`
     # column, `GENERATED ALWAYS AS (to_tsvector('english', coalesce(title,
     # '') || ' ' || coalesce(description, ''))) STORED` — see migration
@@ -158,7 +167,8 @@ defmodule Platform.Tasks.Task do
       :stack_position,
       :reported_by,
       :deleted_at,
-      :auto_approve_plan
+      :auto_approve_plan,
+      :needs_promotion
     ])
     |> validate_required([:project_id, :title])
     |> validate_inclusion(:status, @statuses)

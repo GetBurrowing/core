@@ -2681,3 +2681,80 @@
      design; this says what it took and keeps the reversal one click away.
      Top-level sibling — pinned chrome must never nest in an :if region. --%>
 <.archive_undo_toast undo={@undo_archive} />
+
+<%!-- Junk-batch confirmation modal (M5b/019f6e2c stage 4). Opened by
+     `PlatformWeb.ChatLive.CanvasHooks` when a `junk_batch:*` canvas
+     action_row is clicked; closed by `close_junk_batch_modal` or the
+     backdrop. Shape mirrors the tasks-live `#reopen-modal` (mobile-first
+     bottom-sheet, centered dialog on sm+). Empty-batch guard: when
+     `preview_count == 0`, the destructive button is hidden entirely
+     and only Close remains — that IS the acceptance-criterion-5
+     empty-state affordance. --%>
+<div
+  :if={@show_junk_batch_modal && @junk_batch_target}
+  class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+  id="junk-batch-modal"
+  data-role="junk-batch-modal"
+>
+  <%!-- Backdrop --%>
+  <div class="absolute inset-0 bg-black/40" phx-click="close_junk_batch_modal" />
+
+  <%!-- Sheet / dialog --%>
+  <div class="relative w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[90vh] overflow-y-auto">
+    <%!-- Header --%>
+    <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+      <div class="min-w-0">
+        <h2 class="text-base font-semibold">Roll back this batch</h2>
+        <p class="mt-0.5 text-xs text-base-content/60">
+          Meeting-triage rollback
+        </p>
+      </div>
+      <button
+        type="button"
+        phx-click="close_junk_batch_modal"
+        class="btn btn-sm btn-ghost btn-square"
+        aria-label="Close"
+      >
+        <span class="hero-x-mark size-4"></span>
+      </button>
+    </div>
+
+    <%!-- Body --%>
+    <div class="flex flex-col gap-3 px-4 py-4">
+      <%= if @junk_batch_target.preview_count > 0 do %>
+        <p class="text-sm text-base-content/80">
+          This will soft-delete
+          <span class="font-semibold" data-role="junk-batch-preview-count">
+            {@junk_batch_target.preview_count}
+          </span>
+          {if @junk_batch_target.preview_count == 1, do: "task", else: "tasks"} filed from this canvas. Continue?
+        </p>
+      <% else %>
+        <p class="text-sm text-base-content/80" data-role="junk-batch-empty-note">
+          Nothing to roll back — every task from this batch has already been handled.
+        </p>
+      <% end %>
+
+      <div class="flex items-center justify-end gap-2 pt-1">
+        <button
+          type="button"
+          phx-click="close_junk_batch_modal"
+          class="btn btn-ghost btn-sm"
+        >
+          Close
+        </button>
+        <button
+          :if={@junk_batch_target.preview_count > 0}
+          type="button"
+          phx-click="confirm_junk_batch"
+          class="btn btn-error btn-sm"
+          data-role="junk-batch-confirm"
+        >
+          Junk {@junk_batch_target.preview_count} {if @junk_batch_target.preview_count == 1,
+            do: "task",
+            else: "tasks"}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

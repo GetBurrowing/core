@@ -169,6 +169,85 @@ defmodule Platform.Orchestration.PromptTemplates do
   @spec task_ack_preamble() :: String.t()
   def task_ack_preamble, do: @task_ack_preamble
 
+  # Federation preamble — canonical block of Claude Code guidance that used
+  # to be duplicated across every dispatch template (task 019f5e2a stage 1
+  # of the meeting-to-tasks-pipeline stack). Consolidates six sections that
+  # every Claude Code dispatch needs BEFORE the template's task-specific
+  # body: subagent spawn discipline, org memory context, org memory writes,
+  # skill discovery, evidence workflow, and tool-name conventions.
+  #
+  # Injected at render time via the `{{federation_preamble}}` mustache
+  # placeholder — see the `dispatch.*` template descriptors in
+  # `do_default_templates/0` and the assigns builder in
+  # `HeartbeatScheduler.dispatch_prompt/4`.
+  #
+  # Downstream stack members (scribe_completion, triage_dispatch) reference
+  # the section headers below as stable anchors — do NOT rename them without
+  # coordinating with those templates.
+  @federation_preamble """
+  ## Subagent-spawn discipline
+
+  Handle this task in a subagent with fresh context, **spawned as a background process**. Spawn it via the Agent tool — `general-purpose` is fine — with `run_in_background: true` so the parent conversation stays responsive while the subagent executes. Brief it with the full dispatch payload above, including the Organization Memory section. Do NOT do this work in the parent conversation. The goals: (1) fresh context per task so the org memory discipline below isn't competing with whatever's already loaded, (2) audit clarity so the task lives in its own conversation tree, (3) parent responsiveness — the parent can keep handling other inbound messages or tasks while the subagent runs.
+
+  The subagent should: read org memory first, do the work, write to org memory on decisions, and report back a tight summary. The parent just spawns, then waits for the task-completion notification (do NOT poll, sleep, or proactively check progress — Claude Code notifies the parent automatically when the background agent finishes) and relays the result.
+
+  ## Organization Context
+  The `context.org` field carries org-level knowledge as a map of `path => content` for curated wiki pages flagged `preamble: true` in accessible namespaces (`org/*` always; your project's `project/<id>/*` when scoped to a task). Each page's content is wrapped in `<!-- BEGIN org-preamble page="<path>" version="<v>" -->` / `<!-- END org-preamble page="<path>" -->` markers so you can distinguish injected preamble from user input. Read these before writing your plan or making non-obvious choices — they often encode constraints, patterns, or prior decisions that apply here. The preamble is budgeted (~4096 tokens); to retrieve anything beyond the preamble, use the `memory_search` tool.
+
+  ## Writing to Org Memory
+  Use the memory_* tool family to read and write organizational knowledge. Path determines routing:
+  - `org/page/...`, `project/<id>/page/...`, `space/<id>/page/...` — Historian-only writes. Other agents propose changes by appending to the journal.
+  - `org/journal/<YYYY-MM-DD>.md`, `project/<id>/journal/<YYYY-MM-DD>.md`, `space/<id>/journal/<YYYY-MM-DD>.md` — any agent appends. The Historian's daily digest curates journal entries up into pages.
+  - `space/<id>/private/<your-agent-id>/...` — your own scratch space; only you can read or write.
+  Use `memory_create` to append journal entries (one observation per call — brief, concrete, dated). Use `memory_search` to recall past entries or page content. Use `memory_str_replace` / `memory_insert` only if you ARE the Historian and you're updating a curated page. Write memory alongside your stage work, not as a final cleanup step.
+
+  ### Journal-by-default for non-Historian agents
+  Non-Historian agents: edit a page by appending a `<correction target="<page-path>" line="<N>">…</correction>` block to today's journal — never call `memory_str_replace` / `memory_insert` against a page path yourself; those are Historian-only and will return `:historian_only`. The Historian's next run picks up your correction block and applies it to the page during its digest pass.
+
+  ## Skill discovery — do this BEFORE you start executing
+
+  Skills encode org conventions you may not have; load the right one before improvising. Discovery is an active step, not a passive read — the payload bundler does NOT always pre-attach the skill you need:
+
+  1. Derive this task's domain from its title and description (e.g. "task stack", "canvas", "migration", "LiveView").
+  2. Call the `skill_list` MCP tool yourself and scan the returned skills for one plausibly matching that domain (a task mentioning "task stack" -> the `task-stack-creation` skill; "canvas" -> a `canvas-*` skill). Do NOT assume the right skill was pre-attached to the payload.
+  3. If a skill matches, call the `skill_get` MCP tool to fetch its full content and follow it as authoritative.
+
+  Discovery happens by calling `skill_list` / `skill_get` yourself — do NOT treat "the `skills` key" or an attached skills object as your discovery mechanism, because you receive rendered text, not an introspectable object.
+
+  If the dispatch context did attach skill content inline, still treat that bundled content as authoritative for this task before trying to rediscover skills from disk. Read and follow any relevant bundled skills — they describe conventions, repo layout, deploy targets, and how to delegate work. Only fall back to filesystem skill lookup if the payload clearly references a path without including the needed content.
+
+  ## Submitting evidence for a manual_approval validation
+
+  Visual evidence (screenshots, rendered UI, diagrams) is the bottleneck where most agents stall. The path that actually works is a four-tool chain. Use it; don't improvise.
+
+  1. **Capture** — drive the local headless Chrome via CDP at `127.0.0.1:9222`. Use the `cdp_capture.sh` helper bundled with the dispatch (or invoke directly): `~/sources/core/apps/platform/priv/scripts/cdp_capture.sh <url> <output.jpg> [--width 375 --height 812]`. The script connects to Chrome's CDP, navigates, waits for network idle, optionally applies an `Emulation.setDeviceMetricsOverride` for mobile viewports, and writes a JPG via `Page.captureScreenshot`. The connectivity check is `curl -s http://127.0.0.1:9222/json/version` returning JSON. For non-browser visuals, fall back to `screen.snapshot`.
+
+  2. **Upload** — call `attachment.upload_start` (reserve a presigned URL), then `curl -X POST --data-binary '@<file>' <upload_url>` with the matching `Content-Type` and your CF-Access headers. The response gives `{id, url}` where `url` is `/chat/attachments/<uuid>` — that's what canvas image nodes accept. Do NOT use `attachment.upload_inline` for anything bigger than ~2 KB; long base64 strings round-trip-corrupt through tool-call envelopes and fail with `data_base64 is not valid base64` (a payload error, not a permissions error — easy to misdiagnose).
+
+  3. **Embed** — call `canvas.create` (or `canvas.patch ["append_child", ...]` on an existing canvas in the execution space) with an `image` node whose `src` is the `/chat/attachments/<uuid>` URL from step 2. Canvas image `src` MUST match `^/chat/attachments/<uuid>$` — external URLs and data URIs are rejected. Group multiple shots in a `stack` of `card`s with markdown captions explaining what's being shown.
+
+  4. **Submit** — call `review_request_create` with `validation_id` set to the `manual_approval` validation (NOT a `validation_evaluate` call — that's only for `test_pass` / `lint_pass`) and `items: [{label, canvas_id}]` pointing at the canvas from step 3. The review items appear inline on the task detail panel with approve/reject buttons. Items can mix `canvas_id` (visual) and `content` (text) — use `content` for tabular evidence, links, test summaries.
+
+  **Do not** post screenshots via `suite_reply_with_media` and call them evidence — those messages don't reliably render in the reviewer's UI and the `manual_approval` gate doesn't watch the chat thread anyway. Evidence flows through `review_request_create`.
+
+  ## Tool-name conventions (dot vs underscore)
+
+  The Suite MCP HTTP endpoint registers tools with dots (`attachment.upload_start`, `canvas.create`, `review_request.create`); the Claude Code MCP wrapper exposes them with underscores (`attachment_upload_start`, `canvas_create`, `review_request_create`). If you fall back to raw curl against `/mcp`, use the dot form or you'll get `not in allowed bundles` (which looks like a permissions denial but is actually a name-lookup miss). When calling via the Claude Code Agent tool's MCP surface, use the underscore form.
+  """
+
+  @doc """
+  Return the canonical federation preamble string.
+
+  Injected into every Claude Code `dispatch.*` template body via the
+  `{{federation_preamble}}` mustache placeholder. Consolidates the
+  subagent-spawn discipline, org memory, skill discovery, evidence workflow,
+  and tool-name convention sections that used to be copy-pasted across each
+  template. See the module attribute for the section-header contract that
+  downstream stack members depend on.
+  """
+  @spec federation_preamble() :: String.t()
+  def federation_preamble, do: @federation_preamble
+
   defp do_default_templates do
     task_ack_preamble = @task_ack_preamble
 
@@ -204,7 +283,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "provider_specific_guidance",
           "previous_rejection_reason",
           "upstream_plans_section",
-          "skills_reference"
+          "federation_preamble"
         ],
         content: """
         #{task_ack_preamble}
@@ -321,20 +400,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project (name, repo_url, tech_stack), epic (name, description, acceptance_criteria), task metadata, current plan with stages, and execution_space_id. Use it for full context when writing your plan.
 
-        ## Organization Context
-        The `context.org` field carries org-level knowledge as a map of `path => content` for curated wiki pages flagged `preamble: true` in accessible namespaces (`org/*` always; your project's `project/<id>/*` when scoped to a task). Each page's content is wrapped in `<!-- BEGIN org-preamble page="<path>" version="<v>" -->` / `<!-- END org-preamble page="<path>" -->` markers so you can distinguish injected preamble from user input. Read these before writing your plan — they often explain constraints, patterns, or prior decisions that should shape your approach. The preamble is budgeted (~4096 tokens); to retrieve anything beyond the preamble, use the memory search tool (shipped separately).
-
-        ## Writing to Org Memory
-        Use the memory_* tool family to read and write organizational knowledge. Path determines routing:
-        - `org/page/...`, `project/<id>/page/...`, `space/<id>/page/...` — Historian-only writes. Other agents propose changes by appending to the journal.
-        - `org/journal/<YYYY-MM-DD>.md`, `project/<id>/journal/<YYYY-MM-DD>.md`, `space/<id>/journal/<YYYY-MM-DD>.md` — any agent appends. The Historian's daily digest curates journal entries up into pages.
-        - `space/<id>/private/<your-agent-id>/...` — your own scratch space; only you can read or write.
-        Use `memory_create` to append journal entries (one observation per call — brief, concrete, dated). Use `memory_search` to recall past entries or page content. Use `memory_str_replace` / `memory_insert` only if you ARE the Historian and you're updating a curated page. Write memory alongside your stage work, not as a final cleanup step.
-
-        ### Journal-by-default for non-Historian agents
-        Non-Historian agents: edit a page by appending a `<correction target="<page-path>" line="<N>">…</correction>` block to today's journal — never call `memory_str_replace` / `memory_insert` against a page path yourself; those are Historian-only and will return `:historian_only`. The Historian's next run picks up your correction block and applies it to the page during its digest pass.
-
-        {{skills_reference}}
+        {{federation_preamble}}
         """
       },
       %{
@@ -350,8 +416,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "stage_info",
           "git_workflow_block",
           "provider_specific_guidance",
-          "skills_reference",
-          "evidence_workflow_reference"
+          "federation_preamble"
         ],
         content: """
         #{task_ack_preamble}
@@ -367,22 +432,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         Start from the concrete stage contract and any attached/bundled skill content in that payload before re-fetching broad task/project context.
         Avoid redundant task/plan lookup churn on the first turn unless an identifier is genuinely missing or the stage contract is ambiguous.
 
-        ## Organization Context
-        The `context.org` field carries org-level knowledge as a map of `path => content` for curated wiki pages flagged `preamble: true` in accessible namespaces (`org/*` always; your project's `project/<id>/*` when scoped to a task). Each page's content is wrapped in `<!-- BEGIN org-preamble page="<path>" version="<v>" -->` / `<!-- END org-preamble page="<path>" -->` markers so you can distinguish injected preamble from user input. Check these before making non-obvious choices — they often encode constraints or prior decisions that apply here. The preamble is budgeted (~4096 tokens); to retrieve anything beyond the preamble, use the memory search tool (shipped separately).
-
-        ## Writing to Org Memory
-        Use the memory_* tool family to read and write organizational knowledge. Path determines routing:
-        - `org/page/...`, `project/<id>/page/...`, `space/<id>/page/...` — Historian-only writes. Other agents propose changes by appending to the journal.
-        - `org/journal/<YYYY-MM-DD>.md`, `project/<id>/journal/<YYYY-MM-DD>.md`, `space/<id>/journal/<YYYY-MM-DD>.md` — any agent appends. The Historian's daily digest curates journal entries up into pages.
-        - `space/<id>/private/<your-agent-id>/...` — your own scratch space; only you can read or write.
-        Use `memory_create` to append journal entries (one observation per call — brief, concrete, dated). Use `memory_search` to recall past entries or page content. Use `memory_str_replace` / `memory_insert` only if you ARE the Historian and you're updating a curated page. Write memory alongside your stage work, not as a final cleanup step.
-
-        ### Journal-by-default for non-Historian agents
-        Non-Historian agents: edit a page by appending a `<correction target="<page-path>" line="<N>">…</correction>` block to today's journal — never call `memory_str_replace` / `memory_insert` against a page path yourself; those are Historian-only and will return `:historian_only`. The Historian's next run picks up your correction block and applies it to the page during its digest pass.
-
-        {{evidence_workflow_reference}}
-
-        {{skills_reference}}
+        {{federation_preamble}}
         """
       },
       %{
@@ -520,8 +570,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "task_title",
           "stage_info",
           "provider_specific_guidance",
-          "skills_reference",
-          "evidence_workflow_reference"
+          "federation_preamble"
         ],
         content: """
         #{task_ack_preamble}
@@ -563,9 +612,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
 
-        {{evidence_workflow_reference}}
-
-        {{skills_reference}}
+        {{federation_preamble}}
         """
       },
       %{
@@ -581,7 +628,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "execution_space_id",
           "repo_url",
           "task_slug",
-          "skills_reference"
+          "federation_preamble"
         ],
         content: """
         Task is in behavioral review — execute each planner-authored e2e_behavior test case and disposition each validation independently.
@@ -652,7 +699,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         The attention signal that delivered this message includes a `context` field with the full task
         hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id.
 
-        {{skills_reference}}
+        {{federation_preamble}}
         """
       },
       %{
@@ -671,7 +718,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "task_slug",
           "deploy_strategy_type",
           "deploy_strategy_config",
-          "skills_reference"
+          "federation_preamble"
         ],
         content: """
         #{task_ack_preamble}
@@ -700,6 +747,216 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
 
+        {{federation_preamble}}
+        """
+      },
+      %{
+        slug: "dispatch.scribe_completion",
+        name: "Scribe Completion Dispatch Prompt",
+        description:
+          "Sent to the scribe agent on `meeting_scribe_completion` attention signals. " <>
+            "Instructs the scribe to produce a 5-card meeting summary canvas " <>
+            "(Summary / Decisions / Action items / Open questions / Provenance) in " <>
+            "the meeting's chat space and hand structured action items off to the " <>
+            "triage agent via `dispatch_triage_attention/2`. Codifies the SXI scribe " <>
+            "canvas structure proven on the 2026-07-13 meeting.",
+        variables: [
+          "space_id",
+          "room_id",
+          "transcript_id",
+          "meeting_name",
+          "execution_space_id",
+          "federation_preamble",
+          "skills_reference"
+        ],
+        content: """
+        #{task_ack_preamble}
+        {{federation_preamble}}
+
+        Meeting `{{meeting_name}}` just ended — produce the 5-card scribe completion canvas.
+
+        ## Signal payload — read these from the attention signal
+
+        - `space_id={{space_id}}` — the meeting's chat space; create the canvas here.
+        - `room_id={{room_id}}` — the LiveKit room the meeting occupied.
+        - `transcript_id={{transcript_id}}` — durable transcript reference for `memory_search` filters.
+        - `execution_space_id={{execution_space_id}}` — your working space for evidence + status updates.
+
+        Fetch meeting + transcript context via `space_get_context` on `{{space_id}}` and direct
+        Meetings context reads keyed by `{{transcript_id}}`. Filter `memory_search` calls with
+        `transcript_id={{transcript_id}}` so other meetings' content does not leak into your canvas.
+
+        ## Deliverable — ONE canvas in `space_id={{space_id}}` with five cards
+
+        Emit the canvas via a single `canvas_create` call rooted at a `stack` containing five `card`
+        nodes in the order below. Do NOT split into multiple canvases. Use `heading` + `markdown` nodes
+        inside cards for prose, and a `checklist` node for the action-items card.
+
+        ### Card 1 — Summary
+
+        Meeting metadata + a two-to-four sentence narrative. Include:
+
+        - Meeting name (`{{meeting_name}}`), date, wall-clock duration.
+        - Participant list (resolved `user:*` identities where possible). If any identity is ambiguous
+          — e.g. the transcriber heard "Harper" but the participant roster has both `user:harper` and
+          `user:saru` on the invite (as on the SXI 2026-07-13 meeting) — flag it inline: "attributed
+          to Harper/Saru — transcriber cannot disambiguate".
+        - Transcript stats: rough turn count, total words (from the transcript summary if available).
+        - Mishearing corrections applied — always call out "Cozoa" → "Fabrikam" and "sweet.cozoa.ai.com"
+          → "suite.example.com" if you saw either token in the raw transcript. Note any other
+          org-specific corrections applied.
+
+        ### Card 2 — Decisions
+
+        Bulleted list. One decision per bullet in the form:
+
+        `**<decision in one sentence>** — decided by <owner>; "<load-bearing quote from transcript>"`
+
+        Prefer quotes short enough to sit inline (under 200 chars). If no clear decision emerged,
+        write "No durable decisions recorded this meeting." — do NOT invent decisions to fill the card.
+
+        ### Card 3 — Action items
+
+        Use a `checklist` node whose children are `checklist_item` nodes. For each action item:
+
+        - `label` — human-readable: `<owner>: <action verb + object> <due-hint>`
+          Example: `"Rowan: draft the SXI Q3 pricing memo by Friday"`.
+        - `note` — **structured JSON** (a stringified JSON object, not prose) with the exact keys
+          below. All keys required; use `null` for any field you cannot determine from the transcript.
+
+        JSON schema (copy-paste template — every action item's `note` MUST parse as this shape):
+
+        ```json
+        {
+          "owner": "user:rowan",
+          "project_hint": "sxi-orion",
+          "priority": "high",
+          "due_hint": "Fri 2026-07-24",
+          "source_transcript_id": "{{transcript_id}}"
+        }
+        ```
+
+        Field semantics:
+
+        - `owner` — canonical `user:<slug>` identity; `null` if unattributed. Do NOT invent slugs.
+        - `project_hint` — project slug the item likely belongs to; `null` if unclear.
+        - `priority` — one of `"high" | "medium" | "low"`; `null` if the meeting did not signal urgency.
+        - `due_hint` — natural-language due date as spoken in the meeting ("Friday", "end of week",
+          "next standup"); `null` if no deadline was mentioned.
+        - `source_transcript_id` — always the current `{{transcript_id}}` so downstream agents can
+          re-anchor the item back to the transcript window.
+
+        The triage agent (dispatched by the post-canvas hook below) reads these `note` payloads to
+        create real tasks — malformed JSON here becomes malformed tasks downstream. Validate each
+        `note` parses via `Jason.decode/1` locally before you emit the canvas.
+
+        ### Card 4 — Open questions
+
+        One question per line with attribution. Format:
+
+        `- <question in question form?> — raised by <owner>`
+
+        These are things the meeting explicitly flagged as unresolved. Do NOT include rhetorical
+        questions from the transcript; only questions the participants agreed needed follow-up.
+
+        ### Card 5 — Provenance
+
+        - `source_transcript_id`: `{{transcript_id}}`
+        - `room_id`: `{{room_id}}`
+        - `meeting_length`: <wall-clock, minutes>
+        - `corrections_applied`: bullet list of every mishearing you fixed in Card 1 (Cozoa→Fabrikam
+          etc.), one bullet each. Empty list explicitly rendered as "- none" if you applied none.
+        - `scribe_run_at`: current UTC timestamp.
+
+        ## After canvas_create — dispatch the triage agent
+
+        Once `canvas_create` returns a `canvas_id`, IMMEDIATELY call
+        `Platform.Federation.dispatch_triage_attention/2` (added by stack member C — this template
+        only references it; do not try to import or verify existence at plan time) with:
+
+        - the new `canvas_id`, so the triage agent can walk Card 3's `checklist_item.note` payloads.
+        - the source signal metadata: `%{transcript_id: "{{transcript_id}}", room_id: "{{room_id}}",
+          space_id: "{{space_id}}", meeting_name: "{{meeting_name}}"}`.
+
+        The triage agent picks up the action items and creates real tasks. Without this dispatch the
+        action items sit stranded on the canvas.
+
+        ## Guardrails
+
+        - **Do not invent participants.** If a `user:*` identity is ambiguous, flag it in Card 1
+          rather than picking one arbitrarily. Downstream tasks routed to the wrong owner are worse
+          than tasks routed to `null`.
+        - **Do not invent decisions or action items.** An empty Card 2 / Card 3 with an honest
+          "nothing recorded" note is preferable to hallucinated content. The triage agent trusts what
+          you write.
+        - **Do not skip the triage dispatch.** The canvas is not the whole product; the triage hand-off
+          is what turns the canvas into tasks.
+        - **Preserve mishearing corrections in Card 5.** Auditors need to know what you changed.
+
+        {{skills_reference}}
+        """
+      },
+      %{
+        slug: "dispatch.triage_dispatch",
+        name: "Triage Dispatch Prompt (meeting scribe-completion → tasks)",
+        description:
+          "Sent to the triage-officer runtime when a scribe-completion canvas is " <>
+            "posted for a meeting. Consumes the checklist_item `actions` section, " <>
+            "files tasks via `Platform.Meetings.Triage.file_tasks_from_canvas/2`, and " <>
+            "appends a summary card to the source canvas.",
+        variables: [
+          "federation_preamble",
+          "space_id",
+          "room_id",
+          "transcript_id",
+          "canvas_id",
+          "execution_space_id",
+          "skills_reference"
+        ],
+        content: """
+        {{federation_preamble}}
+
+        ## Signal context
+
+        You are the triage-officer runtime consuming a `meeting_triage_dispatch` attention signal broadcast by `Platform.Federation.dispatch_triage_attention/2` (stack member C) after the meeting scribe posted a scribe-completion canvas. The signal names five identifiers you will need:
+
+        - `space_id`: `{{space_id}}` — the chat space the meeting lives in.
+        - `room_id`: `{{room_id}}` — the meeting room the transcript belongs to.
+        - `transcript_id`: `{{transcript_id}}` — the source transcript feeding this triage pass.
+        - `canvas_id`: `{{canvas_id}}` — the scribe-completion canvas whose `actions` checklist you consume.
+        - `execution_space_id`: `{{execution_space_id}}` — where progress commentary and any error surfacing goes.
+
+        Before you start, call `skill_get` with slug `meeting-triage-officer` for the canonical parse conventions (JSON note keys, jaro-distance threshold, priority map, assignee inference). Do not improvise; the skill is authoritative.
+
+        ## Deliverable steps
+
+        1. **Load the source canvas.** Call `canvas_get` with `canvas_id={{canvas_id}}` to fetch the scribe-completion canvas document.
+
+        2. **Locate the actions checklist.** Walk the canvas node tree and find the section of kind `checklist` whose title / label is `actions`. Iterate its `checklist_item` children — each represents one candidate task.
+
+        3. **Parse the `note` payload.** For every `checklist_item`, the `note` field is a JSON blob with keys `owner`, `project_hint`, `priority`, `due_hint`, and `source_transcript_id`. Parse it with `Jason.decode/1`. If the JSON is malformed (Jason returns an error), fall back to sensible defaults rather than crashing — treat the whole `note` as free-text description, leave `owner`/`project_hint`/`due_hint` as `nil`, default `priority` to `"medium"`, and use `{{transcript_id}}` as the fallback `source_transcript_id`.
+
+        4. **Resolve the target project.** Call `project_list` to get every project the actor can see. Score each project's name against the parsed `project_hint` using `String.jaro_distance/2`. Accept the highest-scoring match if its score is `>= 0.85`; otherwise fall back to the project that owns the source canvas's space (via `space_id → project_id` lookup). Record which branch you took so the summary card can distinguish `filed` from `fallback_project`.
+
+        5. **Hand parsed items to Triage.** Call `Platform.Meetings.Triage.file_tasks_from_canvas/2` with the source canvas and the parsed checklist items (stack member E's surface). Do NOT reimplement the filing loop yourself. Do NOT reimplement the dedup check yourself — Triage.file_tasks_from_canvas/2 calls `Platform.Tasks.similar_open_titles/3` internally and returns a per-item verdict (`{:filed, task_id}` | `{:skipped_dupe, existing_task_id}` | `{:fallback_project, task_id}`) that you reflect in the summary card.
+
+        6. **Append a summary card to the source canvas.** After `file_tasks_from_canvas/2` returns, patch the source canvas by appending a new `card` node containing a `table` with one row per checklist_item. Columns: `title` (from the checklist_item label), `task_id` (the id returned by Triage, or `-` for skipped items with no filed task), and `status` (one of `filed`, `skipped_dupe`, `fallback_project`). Use `canvas_patch` with the `append_child` operation against the canvas root; do NOT rewrite the whole document.
+
+        ## Idempotency
+
+        Do NOT check for pre-existing tasks yourself — `Platform.Meetings.Triage.file_tasks_from_canvas/2` calls `Platform.Tasks.similar_open_titles/3` internally (added by stack member E). Trust its verdict and reflect skipped items in the summary card with `status: skipped_dupe` and the pre-existing `task_id` in the row rather than a freshly-filed one. Re-broadcasting the same `meeting_triage_dispatch` on the same canvas must produce zero new tasks.
+
+        ## Telemetry
+
+        Emit two events during this dispatch so `Platform.Meetings.TelemetryHandler` (added by stack member E) can observe the pass. Do NOT attach a handler yourself — E's handler is already wired.
+
+        - On dispatch entry, after step 2 counts the checklist items, emit `[:platform, :meetings, :triage_dispatch]` with measurements `%{items: N}` (where `N` is the count of `checklist_item` children under the `actions` section) and metadata `%{canvas_id: {{canvas_id}}, transcript_id: {{transcript_id}}}`.
+        - After `Platform.Meetings.Triage.file_tasks_from_canvas/2` returns, emit `[:platform, :meetings, :tasks_created_from_meeting]` with measurements `%{filed_count: F, skipped_count: S, fallback_project_count: P}` computed from the per-item verdicts, and metadata `%{canvas_id: {{canvas_id}}, transcript_id: {{transcript_id}}}`.
+
+        ## Failure surfacing
+
+        If any step raises or the runtime cannot continue, post a concise error line into `execution_space_id` `{{execution_space_id}}` naming the step that failed (e.g. "canvas_get returned :not_found for {{canvas_id}}") and re-raise so the router observes the crash. Silent swallow is worse than a crash — the router restart path is the correct recovery.
+
         {{skills_reference}}
         """
       },
@@ -715,7 +972,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "task_status",
           "task_priority",
           "stage_info",
-          "skills_reference"
+          "federation_preamble"
         ],
         content: """
         You have been assigned a task.
@@ -728,7 +985,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, current plan with stages, and execution_space_id. Use it for full context.
 
-        #{skills_reference}
+        {{federation_preamble}}
         """
       },
       %{

@@ -267,6 +267,78 @@ defmodule Platform.SkillsTest do
     end
   end
 
+  describe "seed_defaults/0" do
+    # Task 019f5e2b (meeting-to-tasks pipeline stack member M4) Stage 3
+    # introduces the `Platform.Skills.seed_defaults/0` context helper —
+    # mirrors `PromptTemplates.seed_defaults/0` at
+    # `apps/platform/lib/platform/orchestration/prompt_templates.ex`
+    # lines 100–113. Stage 4 owns these assertions; Stage 3 shipped the
+    # code + the meeting-triage-officer descriptor.
+    #
+    # Note: the seeding migration
+    # (`20260717000200_seed_meeting_triage_officer_skill.exs`) already
+    # runs against the sandbox during test-DB setup, so the skill row
+    # is present before these tests begin. The `seed_defaults/0`
+    # invocations below therefore exercise the "already-present
+    # slug → :skip" branch, which is exactly the branch the
+    # idempotency contract cares about.
+
+    test "seeds the meeting-triage-officer skill" do
+      :ok = Skills.seed_defaults()
+
+      skill = Skills.get_skill_by_slug("meeting-triage-officer")
+
+      assert skill,
+             "seed_defaults/0 must insert the meeting-triage-officer skill (or leave it in place)"
+
+      assert skill.name == "Meeting Triage Officer",
+             "seeded name must match the descriptor"
+    end
+
+    test "seeded content covers the parse/matching/priority/dedup contract" do
+      :ok = Skills.seed_defaults()
+
+      skill = Skills.get_skill_by_slug("meeting-triage-officer")
+      assert skill, "meeting-triage-officer must be seeded before this assertion"
+
+      # Locked against the plan's declared surface — every one of these
+      # tokens is load-bearing for the runtime's convention layer. A
+      # future edit that drops one silently loses that convention.
+      for token <- [
+            "jaro_distance",
+            "principal_search",
+            "project_hint",
+            "similar_open_titles",
+            "file_tasks_from_canvas",
+            "checklist_item",
+            "high|medium|low"
+          ] do
+        assert skill.content =~ token,
+               "meeting-triage-officer content must reference #{token}"
+      end
+    end
+
+    test "double-call is a no-op (idempotency)" do
+      # First call — the row may already exist from the migration, or
+      # from the first test in this describe. Either way, capture the
+      # baseline count.
+      :ok = Skills.seed_defaults()
+      baseline = length(Skills.list_skills())
+
+      # Second call — must NOT insert a duplicate row and must NOT
+      # raise a changeset error. This is exactly the idempotency the
+      # docstring promises.
+      :ok = Skills.seed_defaults()
+
+      assert length(Skills.list_skills()) == baseline,
+             "seed_defaults/0 must be idempotent — a second call must not add rows"
+
+      # Sanity: the seed target is still present after two calls.
+      assert Skills.get_skill_by_slug("meeting-triage-officer"),
+             "meeting-triage-officer must still be present after a second seed_defaults/0 call"
+    end
+  end
+
   # ── Helper ──────────────────────────────────────────────────────────────
 
   defp errors_on(changeset) do

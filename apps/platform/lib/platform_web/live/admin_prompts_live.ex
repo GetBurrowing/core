@@ -8,7 +8,8 @@ defmodule PlatformWeb.AdminPromptsLive do
       task_title: "Implement user authentication",
       task_description: "Add OAuth2 login with Google and GitHub providers",
       task_priority: "high",
-      skills_reference: "(skills attached to this task)"
+      skills_reference: "(skills attached to this task)",
+      federation_preamble: "(federation preamble injected at render time)"
     },
     "dispatch.in_progress" => %{
       task_title: "Implement user authentication",
@@ -16,7 +17,8 @@ defmodule PlatformWeb.AdminPromptsLive do
       repo_url: "https://github.com/org/repo",
       default_branch: "main",
       task_slug: "abc12345",
-      skills_reference: "(skills attached to this task)"
+      skills_reference: "(skills attached to this task)",
+      federation_preamble: "(federation preamble injected at render time)"
     },
     "dispatch.in_review" => %{
       task_title: "Implement user authentication",
@@ -24,7 +26,8 @@ defmodule PlatformWeb.AdminPromptsLive do
       repo_url: "https://github.com/org/repo",
       default_branch: "main",
       task_slug: "abc12345",
-      skills_reference: "(skills attached to this task)"
+      skills_reference: "(skills attached to this task)",
+      federation_preamble: "(federation preamble injected at render time)"
     },
     "dispatch.fallback" => %{
       task_title: "Implement user authentication",
@@ -32,7 +35,8 @@ defmodule PlatformWeb.AdminPromptsLive do
       task_status: "backlog",
       task_priority: "medium",
       stage_info: "",
-      skills_reference: "(skills attached to this task)"
+      skills_reference: "(skills attached to this task)",
+      federation_preamble: "(federation preamble injected at render time)"
     },
     "heartbeat" => %{
       task_title: "Implement user authentication",
@@ -53,6 +57,8 @@ defmodule PlatformWeb.AdminPromptsLive do
     "default_branch" => "Project default branch (e.g. main)",
     "task_slug" => "Short task ID for use in branch names",
     "skills_reference" => "Reference to attached skills",
+    "federation_preamble" =>
+      "Consolidated Claude Code federation guidance (subagent spawn, org memory, skill discovery, evidence chain, tool-name conventions)",
     "stage_name" => "Name of the current stage",
     "stage_status" => "Status of the current stage",
     "elapsed" => "Human-readable elapsed time (e.g. '25 minutes')",

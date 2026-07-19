@@ -131,7 +131,13 @@ defmodule Platform.Audit.TelemetryHandler do
     # "task", resource_id (task_id), plus stage_id/silenced_until/reason
     # payload. Emitted synchronously (default handle_event/4 clause) so
     # the audit row exists by the time the tool response returns.
-    [:platform, :orchestration, :alarm_silence]
+    [:platform, :orchestration, :alarm_silence],
+    # Task 019f5e2a — meeting triage dispatch fallback. Emitted by
+    # Platform.Federation.dispatch_triage_attention/2 when the resolved
+    # triage_officer agent has no runtime linked, the broadcast fails, or
+    # the endpoint isn't ready. Metadata carries agent_id, reason atom,
+    # actor_type: "system", resource_type: "agent", resource_id.
+    [:platform, :meetings, :triage_dispatch, :assignee_unresolvable]
   ]
 
   @doc "Attach the handler to all registered platform telemetry events."

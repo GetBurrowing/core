@@ -1078,4 +1078,113 @@ defmodule Platform.MeetingsTest do
                      500
     end
   end
+
+  # ── on_scribe_canvas_created/2 → triage attention dispatch (task 019f5e2a stage 2)
+  #
+  # Server-side hook invoked by the scribe runtime handler after it creates a
+  # completion canvas for a meeting transcript. Resolves the `triage_officer`
+  # role and calls `Federation.dispatch_triage_attention/2`. Nil-role branch is
+  # a silent no-op (avoids audit noise for orgs without triage assigned).
+  describe "on_scribe_canvas_created/2 → triage attention dispatch (task 019f5e2a)" do
+    @triage_event [:platform, :meetings, :triage_dispatch, :assignee_unresolvable]
+
+    defp attach_triage_telemetry! do
+      handler_id = "meetings-test-triage-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :telemetry.attach(
+        handler_id,
+        @triage_event,
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+      :ok
+    end
+
+    test "happy path: broadcasts triage attention on runtime topic when triage role + runtime are wired" do
+      user = create_user!()
+      agent = create_agent!()
+
+      runtime_id = "triage-runtime-#{System.unique_integer([:positive])}"
+      {:ok, runtime} = Federation.register_runtime(user.id, %{runtime_id: runtime_id})
+      {:ok, _linked} = Federation.link_agent(runtime, agent)
+
+      :ok = Roles.unassign_role("triage_officer")
+      {:ok, _} = Roles.assign_role("triage_officer", agent.id)
+
+      PlatformWeb.Endpoint.subscribe("runtime:#{runtime_id}")
+
+      transcript = create_processing_transcript_with_space()
+      transcript_id = transcript.id
+      space_id = transcript.space_id
+      room_id = transcript.room_id
+      canvas_id = Ecto.UUID.generate()
+      canvas = %Platform.Chat.Canvas{id: canvas_id}
+
+      assert :ok = Meetings.on_scribe_canvas_created(transcript, canvas)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: broadcast_topic,
+                       event: "attention",
+                       payload: %{
+                         signal: %{
+                           reason: "meeting_triage_dispatch",
+                           space_id: ^space_id,
+                           room_id: ^room_id,
+                           transcript_id: ^transcript_id,
+                           canvas_id: ^canvas_id
+                         }
+                       }
+                     },
+                     500
+
+      assert broadcast_topic == "runtime:#{runtime_id}"
+    end
+
+    test "no-triage fallback: no broadcast, no telemetry when triage role is unassigned" do
+      attach_triage_telemetry!()
+      :ok = Roles.unassign_role("triage_officer")
+
+      # Subscribe to any runtime topic to prove no spurious deliveries.
+      PlatformWeb.Endpoint.subscribe("runtime:no-triage-#{System.unique_integer([:positive])}")
+
+      transcript = create_processing_transcript_with_space()
+      canvas = %Platform.Chat.Canvas{id: Ecto.UUID.generate()}
+
+      assert :ok = Meetings.on_scribe_canvas_created(transcript, canvas)
+
+      # Silent no-op: no broadcast and no fallback telemetry.
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 100
+      refute_receive {:telemetry, @triage_event, _, _}, 100
+    end
+
+    test "runtime-offline fallback: triage role assigned but no linked runtime → :runtime_unresolvable telemetry" do
+      attach_triage_telemetry!()
+
+      agent = create_agent!()
+      :ok = Roles.unassign_role("triage_officer")
+      {:ok, _} = Roles.assign_role("triage_officer", agent.id)
+
+      transcript = create_processing_transcript_with_space()
+      canvas = %Platform.Chat.Canvas{id: Ecto.UUID.generate()}
+
+      assert :ok = Meetings.on_scribe_canvas_created(transcript, canvas)
+
+      agent_id = agent.id
+
+      assert_receive {:telemetry, @triage_event, %{count: 1},
+                      %{
+                        agent_id: ^agent_id,
+                        reason: :runtime_unresolvable,
+                        actor_type: "system",
+                        resource_type: "agent",
+                        resource_id: ^agent_id
+                      }},
+                     500
+    end
+  end
 end

@@ -442,6 +442,40 @@ defmodule Platform.Tasks do
 
   def maybe_start_planning_on_create(%Task{} = task), do: {:ok, task}
 
+  @doc """
+  Clear the `needs_promotion` flag on `task`, atomically transitioning
+  `backlog → planning` when applicable.
+
+  Meeting-triage flow (task 019f5e2b-8d29 stage 2): filed-under-cap tasks
+  land with `needs_promotion: true` and render a "Needs promotion" badge
+  on the kanban card. Clicking the badge dispatches `promote_task` on
+  `PlatformWeb.TasksLive`, which routes here.
+
+  M5b (task 019f6e2c) extends this: when the task is still in `backlog`,
+  the single `update_task/2` call also flips `status: "planning"` so the
+  planner router dispatches without a second write / second broadcast.
+  If the task's status is anything else (already `planning`, `in_progress`,
+  etc.), only the flag clears — we never downgrade or re-transition.
+
+  Idempotent by construction:
+
+    * `needs_promotion == false` → no-op, no broadcast (returns `{:ok, task}`).
+    * `needs_promotion == true, status == "backlog"` → sets both fields;
+      one `:task_updated` broadcast.
+    * `needs_promotion == true, status != "backlog"` → clears flag only;
+      one `:task_updated` broadcast.
+  """
+  @spec promote(Task.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  def promote(%Task{needs_promotion: false} = task), do: {:ok, task}
+
+  def promote(%Task{needs_promotion: true, status: "backlog"} = task) do
+    update_task(task, %{needs_promotion: false, status: "planning"})
+  end
+
+  def promote(%Task{needs_promotion: true} = task) do
+    update_task(task, %{needs_promotion: false})
+  end
+
   def update_task(%Task{} = task, attrs) do
     task
     |> Task.changeset(attrs)
@@ -767,6 +801,92 @@ defmodule Platform.Tasks do
     |> where([t], is_nil(t.deleted_at))
     |> order_by([t], desc: t.inserted_at)
     |> Repo.all()
+  end
+
+  # ── Meeting-triage dedup helper ────────────────────────────────────────
+  #
+  # Statuses considered "open" for dedup purposes. Explicitly excludes
+  # `done`, `deploying`, `cancelled` — a terminal or shipping task should
+  # NOT block a fresh filing of the same title. `in_review` stays in the
+  # set: two agents shouldn't be filing the same review-pending work.
+  @dedup_open_statuses ~w(backlog planning blocked in_progress in_review)
+
+  # Minimum candidate title length — shorter titles skip the fuzzy compare
+  # entirely to avoid false positives like `String.jaro_distance("fix", "foo")`
+  # which sits at 0.777, tolerably below 0.85 but still noisy under variants.
+  @dedup_min_candidate_length 6
+
+  @doc """
+  Return non-deleted tasks in the same project whose titles are similar to
+  `candidate_title` above a Jaro-Winkler-style threshold.
+
+  Used by `Platform.Meetings.Triage.file_tasks_from_canvas/2` as a cheap
+  dedup gate — when a fuzzy match exists the caller skips the insert and
+  notes the canvas rather than piling a near-duplicate onto the backlog.
+
+  ## Semantics
+
+    * Scope: `t.project_id == project_id AND is_nil(t.deleted_at) AND
+      t.status IN #{inspect(@dedup_open_statuses)}`. Done, deploying, and
+      cancelled tasks are excluded — a terminal task should not block a
+      fresh filing of the same-titled work.
+    * Similarity metric: `String.jaro_distance/2` between the normalized
+      candidate title and each existing normalized title. Normalization
+      lowercases + collapses whitespace so `"Provision Fabrikam Account"` and
+      `"provision  fabrikam  account"` compare equal.
+    * Threshold: `opts[:threshold]` (float) or the application env
+      `:meetings_triage_dedup_threshold` (default `0.85`). Matches at
+      exactly the threshold are included (`>=`).
+    * Candidates whose normalized title is shorter than
+      `#{@dedup_min_candidate_length}` characters short-circuit to `[]`
+      without hitting the DB — avoids `"fix"`-class false positives.
+
+  Returns a (potentially empty) list of `%Task{}` structs ordered by
+  descending similarity so the caller can take the top match.
+  """
+  @spec similar_open_titles(binary(), binary(), keyword()) :: [Task.t()]
+  def similar_open_titles(project_id, candidate_title, opts \\ [])
+
+  def similar_open_titles(_project_id, title, _opts) when not is_binary(title), do: []
+
+  def similar_open_titles(project_id, candidate_title, opts) when is_binary(project_id) do
+    normalized = normalize_title_for_dedup(candidate_title)
+
+    if String.length(normalized) < @dedup_min_candidate_length do
+      []
+    else
+      threshold = dedup_threshold(opts)
+
+      Task
+      |> where([t], t.project_id == ^project_id)
+      |> where([t], is_nil(t.deleted_at))
+      |> where([t], t.status in @dedup_open_statuses)
+      |> Repo.all()
+      |> Enum.map(fn task ->
+        score = String.jaro_distance(normalize_title_for_dedup(task.title), normalized)
+        {task, score}
+      end)
+      |> Enum.filter(fn {_task, score} -> score >= threshold end)
+      |> Enum.sort_by(fn {_task, score} -> score end, :desc)
+      |> Enum.map(fn {task, _score} -> task end)
+    end
+  end
+
+  defp normalize_title_for_dedup(nil), do: ""
+
+  defp normalize_title_for_dedup(title) when is_binary(title) do
+    title
+    |> String.downcase()
+    |> String.replace(~r/\s+/u, " ")
+    |> String.trim()
+  end
+
+  defp dedup_threshold(opts) do
+    Keyword.get(
+      opts,
+      :threshold,
+      Application.get_env(:platform, :meetings_triage_dedup_threshold, 0.85)
+    )
   end
 
   def list_tasks_by_epic(epic_id) do
@@ -2107,6 +2227,21 @@ defmodule Platform.Tasks do
 
   # ── Kanban board queries ─────────────────────────────────────────────────
 
+  # Kanban `@board_topic` event shapes (subscribe with `subscribe_board/0`,
+  # broadcast via `broadcast_board/1`):
+  #
+  #   * `{:task_updated, %Task{}}` — single-row create/update path
+  #     (via `update_task/2`). Preloaded with project/epic/sponsor/plans.
+  #   * `{:task_deleted, %Task{}}` — single-row soft-delete via
+  #     `soft_delete_task/1`.
+  #   * `{:tasks_batch_deleted, [task_id], %{canvas_id, count,
+  #     soft_deleted_at}}` — batch soft-delete (M5b/019f6e2c stage 5).
+  #     Emitted by `Platform.Meetings.Triage.junk_batch/2` after a
+  #     `Repo.update_all/2` transaction. Board LiveViews handle by
+  #     re-running `refresh_board/1` once, dropping every listed row in
+  #     a single reflow (cheaper than N sequential :task_deleted refreshes
+  #     at any batch size ≥ 2). No sibling `:task_deleted` broadcasts fire
+  #     for the same ids — batch is the SOLE signal for that path.
   @board_topic "tasks:board"
 
   @doc "List all tasks with preloaded project and epic, ordered by insertion."

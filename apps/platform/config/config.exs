@@ -69,6 +69,27 @@ config :platform, Platform.Responsibilities,
     Platform.Responsibilities.Handlers.ArchitectureCronSweep
   ]
 
+# Meeting-triage guardrails (task 019f5e2b-8d29). Two independent caps:
+#
+#   * `:meetings_triage_backlog_cap` — per-project count of
+#     `metadata["source"] == "meetings.triage"` tasks that should carry
+#     `needs_promotion: true` (stage 2). Above this, filed tasks land
+#     with the flag cleared so the review UI does not surface an
+#     unbounded backlog burst.
+#   * `:meetings_triage_per_canvas_cap` — per-source-meeting-canvas hard
+#     stop (stage 4). `Platform.Meetings.Triage.file_tasks_from_canvas/2`
+#     refuses to file more than N tasks whose
+#     `metadata["source_canvas_id"]` matches the current canvas, across
+#     ALL invocations for that canvas. Above this, action items are
+#     dropped, a `:triage_cap_hit` telemetry event fires, and a note is
+#     appended to the source canvas.
+#   * `:meetings_triage_dedup_threshold` — Jaro-Winkler similarity
+#     threshold `Platform.Tasks.similar_open_titles/3` uses (stage 1).
+#     Overridable per-call via the `:threshold` opt.
+config :platform, :meetings_triage_backlog_cap, 10
+config :platform, :meetings_triage_per_canvas_cap, 20
+config :platform, :meetings_triage_dedup_threshold, 0.85
+
 # Meeting Producer runtime (task 019f2452). Supervisor gate: when
 # `true`, the boot sequence adds `Platform.Meetings.IntentClassifier`
 # to the child list so it subscribes to `meeting:transcript_chunk` at

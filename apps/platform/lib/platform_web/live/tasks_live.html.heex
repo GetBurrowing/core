@@ -1222,6 +1222,29 @@
                         {Map.get(@review_counts, task.id)} review
                       </span>
 
+                      <%!-- Meeting-triage `needs_promotion` badge (task
+                     019f5e2b-8d29 stage 2, tooltip + icon polished in
+                     task 019f6e2c stage 3). Rendered only for backlog
+                     tasks flagged by the triage filer; clicking dispatches
+                     `promote_task` which clears the flag AND atomically
+                     transitions status → planning via `Platform.Tasks.promote/1`.
+                     Mirrors the review-badge shape (badge-warning +
+                     badge-xs). Backlog-scoped because promotion only
+                     makes sense before the task leaves the entry column.
+                     Browser-native `title=` tooltip — a Tippy hook per
+                     kanban card is overkill for a single-line message. --%>
+                      <button
+                        :if={task.status == "backlog" and task.needs_promotion}
+                        type="button"
+                        class="badge badge-warning badge-xs gap-1 cursor-pointer"
+                        phx-click="promote_task"
+                        phx-value-id={task.id}
+                        data-role="needs-promotion-badge"
+                        title="Filed from a meeting canvas. Click to promote."
+                      >
+                        <span class="hero-arrow-up-circle size-3"></span> Needs promotion
+                      </button>
+
                       <%!-- Plan stage progress --%>
                       <% progress = plan_progress(task) %>
                       <div :if={progress} class="flex flex-1 items-center gap-1">

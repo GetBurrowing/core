@@ -1816,6 +1816,46 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  Hook invoked by the scribe runtime handler after it creates a completion
+  canvas for a meeting transcript. Resolves the `triage_officer` role and
+  dispatches a `meeting_triage_dispatch` attention signal so the triage agent
+  can pick up the canvas and convert action items into tasks.
+
+  Progressive-enhancement contract: nil role assignment is a silent no-op
+  (avoids audit noise for orgs that never assigned a triage_officer). All
+  dispatch failures beyond that are swallowed inside
+  `Federation.dispatch_triage_attention/2` via
+  `[:platform, :meetings, :triage_dispatch, :assignee_unresolvable]` telemetry
+  so the caller sees a clean `:ok` regardless.
+  """
+  @spec on_scribe_canvas_created(Transcript.t(), Platform.Chat.Canvas.t()) :: :ok
+  def on_scribe_canvas_created(%Transcript{} = transcript, %Platform.Chat.Canvas{} = canvas) do
+    case safe_agent_id_for_role("triage_officer") do
+      nil ->
+        :ok
+
+      agent_id when is_binary(agent_id) ->
+        Platform.Federation.dispatch_triage_attention(agent_id, %{
+          reason: "meeting_triage_dispatch",
+          space_id: transcript.space_id,
+          room_id: transcript.room_id,
+          transcript_id: transcript.id,
+          canvas_id: canvas.id
+        })
+    end
+  end
+
+  # Same rescue shape as `Meetings.IntentDispatcher.safe_agent_id_for_role/1`
+  # (line 698) — swallows sandbox-teardown race errors so the hook stays
+  # best-effort. Nil return short-circuits the dispatch above.
+  defp safe_agent_id_for_role(role_key) do
+    Platform.Roles.agent_id_for_role(role_key)
+  rescue
+    DBConnection.OwnershipError -> nil
+    Ecto.NoResultsError -> nil
+  end
+
+  @doc """
   Update the transcript summary text.
   """
   @spec update_transcript_summary(String.t(), String.t()) ::

@@ -561,6 +561,12 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # as `{strategy: "docker_deploy", target: <legacy>}`; idempotent
       # (only touches rows where the new column is still NULL).
       "20260713010000_add_deploy_target_config_to_tasks.exs",
+      # Task 019f5e2b-8d29 stage 2 (meeting-to-tasks pipeline guardrails) —
+      # persistent `needs_promotion :boolean` on `tasks` set by the
+      # triage filer while under the per-project backlog cap. Partial
+      # index on `where needs_promotion = true` so the kanban badge-
+      # counter reads a small hot slice, not the full table.
+      "20260713120000_add_needs_promotion_to_tasks.exs",
       # Task 019f5e7d stage 1 — relax the NOT NULL + composite PK on
       # `org_historian_cursors.workspace_id` so the sentinel-to-nil
       # coercion (extended from PR #537 to the cursor read/write
@@ -667,6 +673,37 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # dispatch. Content-only sync; no schema changes. Mirrors the
       # `force_update_*` pattern at 20260714000050.
       "20260716220000_force_update_historian_scheduled_deleted_paths.exs",
+      # Task 019f5e2a stage 3 (M1 of the meeting-to-tasks-pipeline stack) —
+      # retrofit the six Claude Code dispatch prompt templates so every
+      # runtime dispatch in prod consumes the consolidated
+      # `{{federation_preamble}}` placeholder (introduced in stage 1) rather
+      # than inlining separate Organization Context / Writing to Org Memory /
+      # skill-discovery / evidence-workflow blocks per template. Content-only
+      # sync; no schema changes. Mirrors the force-update pattern at
+      # 20260716211312.
+      "20260717000000_retrofit_dispatch_templates_with_federation_preamble.exs",
+      # Task 019f5e2b (meeting-to-tasks pipeline stack member M4) Stage 1:
+      # seeds the new `dispatch.triage_dispatch` prompt template so the
+      # triage-officer runtime can render the scribe-completion→tasks
+      # dispatch prompt. Idempotent insert-only-if-missing via
+      # `PromptTemplates.seed_defaults/0` — mirrors the
+      # 20260326190000_seed_deploying_prompt_template pattern. Stage 2
+      # adds a force-update migration once the real body lands.
+      "20260717000001_seed_triage_dispatch_template.exs",
+      # Task 019f5e2b Stage 2: force-updates the persisted
+      # `dispatch.triage_dispatch` row so upgraded DBs render the real
+      # triage-officer body (canvas_get → checklist_item parse → Triage
+      # handoff → summary card append) instead of the Stage 1 stub.
+      # `seed_defaults/0` is insert-only; this is the escape hatch.
+      # Mirrors 20260716211312_refresh_dispatch_templates_subagent_id_ack.
+      "20260717000100_force_update_triage_dispatch_template.exs",
+      # Task 019f5e2b Stage 3: seeds the `meeting-triage-officer` skill
+      # row via `Platform.Skills.seed_defaults/0` — first entry in the
+      # new hardcoded `Platform.Skills.do_default_skills/0` list. The
+      # triage-officer runtime calls `skill_get` for this slug before
+      # parsing checklist items. Idempotent insert-only-if-missing;
+      # mirrors the 20260326190000_seed_deploying_prompt_template shape.
+      "20260717000200_seed_meeting_triage_officer_skill.exs",
       # Task 019f708f stage 3 (bug #3): shape-enforce
       # `metadata["merged_into_rollup_at"]` at the changeset boundary,
       # backfill malformed pre-fix stamps. Content-only DELETE via
