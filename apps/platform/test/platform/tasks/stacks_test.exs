@@ -131,6 +131,206 @@ defmodule Platform.Tasks.StacksTest do
     end
   end
 
+  describe "get_stack_for_pull_request/1 and get_stack_for_pull_request_with_strategy/1" do
+    test "strategy 1: matches by rollup_branch (happy path)" do
+      stack = stack_fixture(slug: "gspfp-rollup-branch", name: "Rollup branch match")
+
+      pr = %{
+        "number" => 42,
+        "head" => %{"ref" => stack.rollup_branch},
+        "base" => %{"ref" => "main"}
+      }
+
+      assert {:ok, matched, :rollup_branch} =
+               Stacks.get_stack_for_pull_request_with_strategy(pr)
+
+      assert matched.id == stack.id
+      assert %Stack{id: id} = Stacks.get_stack_for_pull_request(pr)
+      assert id == stack.id
+    end
+
+    test "strategy 2: matches by metadata.rollup_pr.number when rollup_branch is stale" do
+      stack = stack_fixture(slug: "gspfp-pr-number", name: "PR number match")
+
+      # Simulate the meeting-pipeline PR #569 signature: rollup_branch is
+      # stale (points at a branch that no longer matches the PR head), but
+      # metadata.rollup_pr.number is stamped correctly.
+      {:ok, stack} =
+        Stacks.update_stack(stack, %{
+          rollup_branch: "stack/stale-branch",
+          metadata: %{"rollup_pr" => %{"number" => 569, "url" => "https://example/pr/569"}}
+        })
+
+      pr = %{
+        "number" => 569,
+        "head" => %{"ref" => "stack/some-other-branch"},
+        "base" => %{"ref" => "main"}
+      }
+
+      assert {:ok, matched, :pr_number} =
+               Stacks.get_stack_for_pull_request_with_strategy(pr)
+
+      assert matched.id == stack.id
+    end
+
+    test "strategy 3: slug-derived fallback when rollup_branch is stale + no PR-number stamp" do
+      stack = stack_fixture(slug: "gspfp-slug", name: "Slug fallback match")
+
+      # Historical/manually-shepherded stack: rollup_branch was somehow
+      # written to point at a stale/foreign branch and metadata.rollup_pr
+      # was never stamped. The slug convention (`stack/<slug>`) is the
+      # only remaining thread that identifies this stack from a webhook.
+      {:ok, stack} =
+        Stacks.update_stack(stack, %{
+          rollup_branch: "stack/some-stale-branch"
+        })
+
+      pr = %{
+        "number" => 7,
+        "head" => %{"ref" => "stack/gspfp-slug"},
+        "base" => %{"ref" => "main"}
+      }
+
+      assert {:ok, matched, :slug} =
+               Stacks.get_stack_for_pull_request_with_strategy(pr)
+
+      assert matched.id == stack.id
+    end
+
+    test "strategy order: rollup_branch wins over pr_number when both match" do
+      stack = stack_fixture(slug: "gspfp-order", name: "Order priority")
+
+      {:ok, stack} =
+        Stacks.update_stack(stack, %{
+          metadata: %{"rollup_pr" => %{"number" => 123}}
+        })
+
+      pr = %{
+        "number" => 123,
+        "head" => %{"ref" => stack.rollup_branch},
+        "base" => %{"ref" => "main"}
+      }
+
+      assert {:ok, matched, :rollup_branch} =
+               Stacks.get_stack_for_pull_request_with_strategy(pr)
+
+      assert matched.id == stack.id
+    end
+
+    test "strategy order: pr_number wins over slug when rollup_branch is stale" do
+      stack = stack_fixture(slug: "gspfp-order-slug", name: "Order slug")
+
+      {:ok, stack} =
+        Stacks.update_stack(stack, %{
+          rollup_branch: "stack/stale-elsewhere",
+          metadata: %{"rollup_pr" => %{"number" => 456}}
+        })
+
+      pr = %{
+        "number" => 456,
+        "head" => %{"ref" => "stack/gspfp-order-slug"},
+        "base" => %{"ref" => "main"}
+      }
+
+      assert {:ok, matched, :pr_number} =
+               Stacks.get_stack_for_pull_request_with_strategy(pr)
+
+      assert matched.id == stack.id
+    end
+
+    test "returns nil when no strategy matches" do
+      _stack = stack_fixture(slug: "gspfp-nomatch", name: "No match")
+
+      pr = %{
+        "number" => 999_999,
+        "head" => %{"ref" => "feature/unrelated"},
+        "base" => %{"ref" => "main"}
+      }
+
+      assert Stacks.get_stack_for_pull_request_with_strategy(pr) == nil
+      assert Stacks.get_stack_for_pull_request(pr) == nil
+    end
+
+    test "abandoned stacks are excluded from every strategy" do
+      stack = stack_fixture(slug: "gspfp-abandoned", name: "Abandoned")
+
+      {:ok, stack} =
+        Stacks.update_stack(stack, %{
+          metadata: %{"rollup_pr" => %{"number" => 321}}
+        })
+
+      {:ok, _abandoned} = Stacks.abandon_stack(stack, "scope changed")
+
+      # Strategy 1: rollup_branch hit but excluded.
+      pr_by_branch = %{
+        "number" => 1,
+        "head" => %{"ref" => stack.rollup_branch},
+        "base" => %{"ref" => "main"}
+      }
+
+      assert Stacks.get_stack_for_pull_request_with_strategy(pr_by_branch) == nil
+
+      # Strategy 2: pr_number hit but excluded.
+      pr_by_number = %{
+        "number" => 321,
+        "head" => %{"ref" => "stack/other"},
+        "base" => %{"ref" => "main"}
+      }
+
+      assert Stacks.get_stack_for_pull_request_with_strategy(pr_by_number) == nil
+
+      # Strategy 3: slug hit but excluded.
+      pr_by_slug = %{
+        "number" => 2,
+        "head" => %{"ref" => "stack/gspfp-abandoned"},
+        "base" => %{"ref" => "main"}
+      }
+
+      assert Stacks.get_stack_for_pull_request_with_strategy(pr_by_slug) == nil
+    end
+
+    test "non-stack/* head refs skip the slug strategy" do
+      _stack = stack_fixture(slug: "gspfp-nonslug", name: "Non slug")
+
+      pr = %{
+        "number" => 3,
+        "head" => %{"ref" => "task/019f7b7f-something"},
+        "base" => %{"ref" => "main"}
+      }
+
+      assert Stacks.get_stack_for_pull_request_with_strategy(pr) == nil
+    end
+
+    test "malformed head refs (uppercase / leading dash) skip the slug strategy" do
+      _stack = stack_fixture(slug: "gspfp-malformed", name: "Malformed")
+
+      malformed_refs = ["stack/UPPER", "stack/-leading-dash", "stack/", "stack"]
+
+      for ref <- malformed_refs do
+        pr = %{
+          "number" => 4,
+          "head" => %{"ref" => ref},
+          "base" => %{"ref" => "main"}
+        }
+
+        assert Stacks.get_stack_for_pull_request_with_strategy(pr) == nil,
+               "expected nil for malformed head ref #{inspect(ref)}"
+      end
+    end
+
+    test "nil / non-map input returns nil" do
+      assert Stacks.get_stack_for_pull_request_with_strategy(nil) == nil
+      assert Stacks.get_stack_for_pull_request_with_strategy("not a map") == nil
+      assert Stacks.get_stack_for_pull_request(nil) == nil
+    end
+
+    test "missing head or number keys returns nil (no crash)" do
+      assert Stacks.get_stack_for_pull_request_with_strategy(%{}) == nil
+      assert Stacks.get_stack_for_pull_request_with_strategy(%{"number" => nil}) == nil
+      assert Stacks.get_stack_for_pull_request_with_strategy(%{"head" => %{}}) == nil
+    end
+  end
+
   describe "list_stacks/1" do
     test "returns stacks scoped to project_id" do
       {:ok, project_a} = Tasks.create_project(%{name: "Project A"})

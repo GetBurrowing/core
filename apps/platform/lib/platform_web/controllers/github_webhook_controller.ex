@@ -24,8 +24,8 @@ defmodule PlatformWeb.GithubWebhookController do
     AutoMerger,
     Plan,
     PlanEngine,
+    RollupWebhookProcessor,
     Stack,
-    StackDeployer,
     Stacks,
     Stage,
     Task,
@@ -33,16 +33,6 @@ defmodule PlatformWeb.GithubWebhookController do
   }
 
   require Logger
-
-  # Member statuses that are considered valid sources for a rollup-PR
-  # `pr_merged` fan-out (ADR 0041 §"Stack-level deploy"). A member at
-  # `in_review` has finished its work and is waiting on the rollup PR;
-  # a member at `deploying` has been picked up by `StackDeployer` and
-  # is mid-deploy. Anything else — `in_progress`, `stack_pending`,
-  # `done`, `blocked`, etc. — is recorded as an `unexpected_status:*`
-  # anomaly and explicitly NOT passed, to avoid masking workflow bugs
-  # where the webhook arrives out of order.
-  @rollup_fan_out_expected_member_statuses ["in_review", "deploying"]
 
   # ── Plugs ────────────────────────────────────────────────────────────────
 
@@ -381,15 +371,21 @@ defmodule PlatformWeb.GithubWebhookController do
     # warning and fall through to the per-task path (a deliberate no-op for the
     # stack, not an exception).
     try do
-      case Stacks.get_stack_by_rollup_branch(branch) do
-        %Stack{} = stack ->
-          if base_ref == stack.base_branch do
-            process_stack_merged_pr(stack, pr, merged_at, task_id)
+      case Stacks.get_stack_for_pull_request_with_strategy(pr) do
+        {:ok, %Stack{} = stack, strategy} ->
+          Logger.info(
+            "[Webhook] Stack #{stack.id} matched via #{strategy} for PR ##{pr["number"]} " <>
+              "(branch=#{inspect(branch)})"
+          )
+
+          if base_branch_matches?(stack, base_ref) do
+            RollupWebhookProcessor.process_stack_merged_pr(stack, pr, merged_at, task_id)
           else
-            Logger.warning(
-              "[Webhook] PR head=#{branch} matches rollup branch of stack #{stack.id} " <>
-                "but base=#{inspect(base_ref)} != stack.base_branch=#{inspect(stack.base_branch)}; " <>
-                "NOT auto-completing stack"
+            Logger.error(
+              "[Webhook] BASE-BRANCH MISMATCH — stack #{stack.id} matched PR ##{pr["number"]} " <>
+                "via #{strategy} but base_ref=#{inspect(base_ref)} != " <>
+                "stack.base_branch=#{inspect(stack.base_branch)} — NOT cascading; " <>
+                "operator triage required"
             )
 
             if is_binary(task_id) do
@@ -438,6 +434,29 @@ defmodule PlatformWeb.GithubWebhookController do
         conn |> put_status(:unprocessable_entity) |> json(%{status: "error", errors: errors})
     end
   end
+
+  # Whether the merged PR's base branch matches the stack's declared
+  # base for auto-completion.
+  #
+  # Schema default (`stack.ex:51`) is `"main"`, but historical rows
+  # created before that default landed may carry NULL. Fall back to the
+  # owning project's `default_branch` (schema default `"main"` per
+  # `project.ex:13`) so a NULL base_branch never blocks a legitimate
+  # cascade. When both sides are strings, compare exactly — no fuzzy
+  # match; branch names are case-sensitive on the git side.
+  defp base_branch_matches?(%Stack{base_branch: nil} = stack, base_ref)
+       when is_binary(base_ref) do
+    project = stack |> Repo.preload(:project) |> Map.get(:project)
+    project_default = (project && project.default_branch) || "main"
+    base_ref == project_default
+  end
+
+  defp base_branch_matches?(%Stack{base_branch: base_branch}, base_ref)
+       when is_binary(base_branch) and is_binary(base_ref) do
+    base_ref == base_branch
+  end
+
+  defp base_branch_matches?(_stack, _base_ref), do: false
 
   defp maybe_evaluate_pr_merged_validation(task_id, pr, merged_at) do
     task = Tasks.get_task_record(task_id)
@@ -504,359 +523,24 @@ defmodule PlatformWeb.GithubWebhookController do
     end
   end
 
-  # ── Stack rollup-PR fan-out (T6 stages 1 + 2) ───────────────────────────
-
-  # Process a rollup-PR merge end-to-end:
+  # ── Stack rollup-PR fan-out ─────────────────────────────────────────────
   #
-  #   1. Fan `pr_merged` pass out to every member (stage 1 logic).
-  #   2. Transition the stack itself to `done` via
-  #      `Stacks.complete_rollup_merge/2`, recording the per-member
-  #      outcome in `stack.metadata["rollup_merge"]` (stage 2).
+  # The end-to-end cascade — fan out `pr_merged` to every member, flip
+  # the stack to `done`, emit uniform telemetry — was extracted to
+  # `Platform.Tasks.RollupWebhookProcessor` (task 019f7b7f stage 3) so
+  # both this webhook receiver AND the operator recovery Mix task
+  # (`mix platform.stacks.reprocess_rollup_pr`) drive the same code
+  # path. The controller keeps the branch-lookup + base-branch guard
+  # (webhook-specific concerns); the processor owns the actual work.
   #
-  # Idempotency (task 019f5bc4-3521 Case B — strict per-webhook telemetry
-  # parity): NO pre-check short-circuit here. Every real webhook delivery
-  # for a rollup PR routes through the full chain — `fan_out_rollup_merge/3`,
-  # `Stacks.complete_rollup_merge/2`, and `StackDeployer.handle_rollup_pr_merged/2`
-  # — so the terminal `Stacks.cascade_members_to_done/2` emits exactly one
-  # `[:platform, :stacks, :deploy, :cascade_completed]` event per delivery,
-  # including replays (with `cascaded_count: 0` when everyone is already
-  # done). Downstream helpers are individually idempotent:
-  #
-  #   * `fan_out_rollup_merge/3` — members already `done` fall into the
-  #     `unexpected_status` anomaly bucket and skip the per-member
-  #     evaluate/promote work. No writes.
-  #   * `Stacks.complete_rollup_merge/2` — returns `{:ok, stack}` unchanged
-  #     when the stack is already `done` with `metadata["rollup_merge"]`
-  #     populated. No writes, no clobbered history.
-  #   * `StackDeployer.handle_rollup_pr_merged/2` — replay-aware: when
-  #     `metadata.rollup_pr.merged_at` is already stamped, calls
-  #     `cascade_members_to_done/2` for the telemetry emit but does NOT
-  #     re-stamp `merged_at`, re-emit `:pr_merged`, or re-kick the
-  #     rollup-branch delete. Those are "the stack just entered done"
-  #     side-effects, not "the webhook was delivered" side-effects.
-  #
-  # Design intent: dashboards can count webhook deliveries by counting
-  # `:cascade_completed` events, not just first-time completions.
-  defp process_stack_merged_pr(%Stack{} = stack, pr, merged_at, _task_id) do
-    # Stage 2 test seam: when running in `:test` env tests can set
-    # `Application.put_env(:platform, :webhook_stack_fault, fun_or_atom)`
-    # to induce a fault inside the stack-fan-out branch and verify the
-    # outer rescue/fallback path. Never set in :prod/:dev — this guard
-    # short-circuits without that env key.
-    maybe_inject_test_fault()
-
-    base_meta = if is_map(stack.metadata), do: stack.metadata, else: %{}
-    was_already_done = stack.status == "done" and Map.has_key?(base_meta, "rollup_merge")
-
-    if was_already_done do
-      Logger.info(
-        "[Webhook] Stack #{stack.id} rollup-PR replay (status=done, rollup_merge set); " <>
-          "routing through fan-out/cascade chain for telemetry parity — no state changes expected " <>
-          "(PR=#{pr["html_url"]})"
-      )
-    end
-
-    {passed, anomalies} = fan_out_rollup_merge(stack, pr, merged_at)
-    passed_member_ids = Enum.map(passed, & &1.task_id) |> Enum.reject(&is_nil/1)
-
-    # ERROR log guards the "real degradation" case only. On webhook
-    # replays every member is already `done` and appears in `anomalies`
-    # as `unexpected_status` — that's the design intent, not a degradation.
-    # `complete_rollup_merge/2` is idempotent on already-done stacks so
-    # the `degraded=true` flag would not be written anyway.
-    if passed_member_ids == [] and not was_already_done do
-      Logger.error(
-        "[Webhook] Stack #{stack.id} rollup fan-out completed with ZERO passed members " <>
-          "(every member anomalous). PR=#{pr["html_url"]} anomalies=#{inspect(anomalies)}. " <>
-          "Marking stack done with degraded=true; operator triage required."
-      )
-    end
-
-    attrs = %{
-      passed_member_ids: passed_member_ids,
-      anomalies: anomalies,
-      merge_commit_sha: pr["merge_commit_sha"],
-      merged_at: merged_at
-    }
-
-    case Stacks.complete_rollup_merge(stack, attrs) do
-      {:ok, updated} ->
-        unless was_already_done do
-          Logger.info(
-            "[Webhook] Stack #{stack.id} transitioned to done via rollup-merge fan-out " <>
-              "(#{length(passed_member_ids)} member(s) passed, #{length(anomalies)} anomaly/anomalies)"
-          )
-        end
-
-        # Stack v2 stage 5: complete_rollup_merge/2 stamps the
-        # `rollup_merge` metadata subtree + flips status to done,
-        # but does NOT trigger rollup-branch cleanup, member-status
-        # cascade fallback, or the uniform :stacks, :deploy, :pr_merged
-        # telemetry event that stages 3 + 4 established. Route through
-        # `handle_rollup_pr_merged/2` to satisfy those invariants —
-        # its replay branch invokes `cascade_members_to_done/2` so the
-        # `:cascade_completed` telemetry event fires once per delivery.
-        _ = StackDeployer.handle_rollup_pr_merged(updated, pr["merge_commit_sha"])
-
-        :ok
-
-      {:error, reason} ->
-        Logger.warning(
-          "[Webhook] Stack #{stack.id} complete_rollup_merge failed: #{inspect(reason)}"
-        )
-
-        :error
-    end
-  end
-
-  # Pass `pr_merged` for every member of `stack` in a single transaction.
-  #
-  # ADR 0041 §"Validation routing": a stack rollup PR satisfies every
-  # member's `pr_merged` validation simultaneously. We use one
-  # `Repo.transaction/1` so the fan-out is atomic — either every member
-  # validation flips to `passed` or none do. (`PlanEngine.evaluate_validation/2`
-  # opens its own inner transaction; Ecto reentrancy joins it to the
-  # outer one via a savepoint.)
-  #
-  # Anomaly handling: members are expected to be at `in_review` with a
-  # pending `pr_merged` validation on their running review stage. If a
-  # member is in some other state — typically `stack_pending` because
-  # someone merged the rollup PR out of band before deps cleared — we
-  # collect the anomaly and KEEP PROCESSING the remaining members. The
-  # canonical record of these anomalies is `stack.metadata["rollup_merge"]
-  # ["anomalies"]`, written by `Stacks.complete_rollup_merge/2` (stage 2);
-  # this function just returns them to the caller. The webhook handler
-  # must never crash on anomalies; that would let the next retry-delivery
-  # re-run the whole fan-out and pollute metadata.
-  #
-  # Returns `{passed_validations, anomalies}` — `passed_validations` is
-  # the list of updated `%Validation{}` structs, and `anomalies` is a
-  # list of maps each shaped for `metadata["rollup_merge"]["anomalies"]`:
-  # `%{"task_id" => id, "reason" => "...", "recorded_at" => iso8601, ...}`.
-  defp fan_out_rollup_merge(%Stack{} = stack, pr, merged_at) do
-    Logger.info(
-      "[Webhook] Rollup-PR merge detected for stack #{stack.id} " <>
-        "(rollup_branch=#{stack.rollup_branch}, PR=#{pr["html_url"]}); " <>
-        "fanning pr_merged validation pass out to members"
-    )
-
-    members = Stacks.members(stack.id)
-
-    evidence_base = %{
-      "pr_url" => pr["html_url"],
-      "merged_at" => format_merged_at(merged_at),
-      "merged_by" => get_in(pr, ["merged_by", "login"]) || get_in(pr, ["user", "login"]),
-      "merge_commit_sha" => pr["merge_commit_sha"],
-      "stack_id" => stack.id,
-      "stack_rollup_branch" => stack.rollup_branch,
-      "fanned_out_from_stack_rollup_pr" => true
-    }
-
-    Repo.transaction(fn ->
-      Enum.reduce(members, {[], []}, fn member, {passed_acc, anomaly_acc} ->
-        cond do
-          member.status not in @rollup_fan_out_expected_member_statuses ->
-            # Member is in an unexpected status for rollup-merge fan-out.
-            # Per ADR 0041 §"Stack-level deploy", only `in_review` and
-            # `deploying` members are eligible to absorb a rollup-PR
-            # merge. Anything else (`in_progress`, `stack_pending`,
-            # `done`, `blocked`, etc.) is a contract violation that we
-            # record as an anomaly and skip — we deliberately do NOT
-            # call `PlanEngine.evaluate_validation/2` for these members,
-            # even if they happen to have a pending pr_merged validation,
-            # because passing it would mask a real workflow bug.
-            anomaly = %{
-              "task_id" => member.id,
-              "member_status" => member.status,
-              "reason" => "unexpected_status:" <> member.status,
-              "recorded_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-            }
-
-            Logger.warning(
-              "[Webhook] Stack #{stack.id} rollup fan-out: member task " <>
-                "#{member.id} is in unexpected status #{inspect(member.status)} " <>
-                "(expected one of #{inspect(@rollup_fan_out_expected_member_statuses)}); " <>
-                "recording anomaly and skipping"
-            )
-
-            {passed_acc, [anomaly | anomaly_acc]}
-
-          true ->
-            fan_out_member(stack, member, evidence_base, passed_acc, anomaly_acc)
-        end
-      end)
-    end)
-    |> case do
-      {:ok, {passed_acc, anomaly_acc}} ->
-        {Enum.reverse(passed_acc), Enum.reverse(anomaly_acc)}
-
-      {:error, reason} ->
-        {[],
-         [
-           %{
-             "task_id" => nil,
-             "reason" => "transaction_failed",
-             "detail" => inspect(reason),
-             "recorded_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-           }
-         ]}
-    end
-  end
-
-  # Per-member happy path + no-pending anomaly. Extracted so the
-  # `fan_out_rollup_merge/3` body stays readable around the
-  # member-status check that gates the call.
-  defp fan_out_member(stack, member, evidence_base, passed_acc, anomaly_acc) do
-    case find_pending_pr_merged_validation(member.id) do
-      nil ->
-        # No pending pr_merged validation for this member — it
-        # either never got a review-stage plan, is still
-        # `stack_pending` (deps didn't clear before the rollup
-        # merged), or its validation already resolved out of band.
-        anomaly = %{
-          "task_id" => member.id,
-          "member_status" => member.status,
-          "reason" => "no_pending_pr_merged",
-          "recorded_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-        }
-
-        Logger.warning(
-          "[Webhook] Stack #{stack.id} rollup fan-out: member task " <>
-            "#{member.id} (status=#{member.status}) has no pending " <>
-            "pr_merged validation; recording anomaly and skipping"
-        )
-
-        {passed_acc, [anomaly | anomaly_acc]}
-
-      validation ->
-        # Stamp the member's task_id onto the validation evidence
-        # (used by tests and downstream consumers) and remember it on
-        # the returned struct so the caller can collect member ids
-        # without a second DB hit.
-        evidence = Map.merge(evidence_base, %{"member_task_id" => member.id})
-
-        case PlanEngine.evaluate_validation(validation.id, %{
-               status: "passed",
-               evidence: evidence,
-               evaluated_by: "github_webhook"
-             }) do
-          {:ok, updated} ->
-            Logger.info(
-              "[Webhook] Evaluated pr_merged validation #{updated.id} as passed " <>
-                "for stack member task #{member.id} (stack #{stack.id})"
-            )
-
-            # Task 019e2be4 stage 2: stack members never own a per-task
-            # deploy stage (the rollup PR carries the deploy for the whole
-            # stack), so passing `pr_merged` does NOT trigger an
-            # `in_review → deploying → done` cascade through the plan
-            # engine. Promote the member directly to `done` here.
-            #
-            # The `in_review → done` edge in `@valid_task_transitions`
-            # (stage 1's widening) makes this a legal transition for the
-            # automated pipeline; `Tasks.transition_task/2` is the
-            # canonical entry point so `maybe_finalize_transition` for
-            # `done` (sweep_unblocked_dependents + maybe_recompute_stack +
-            # maybe_handle_regression) still fires.
-            #
-            # Idempotency: if the member is already `done` (replay or
-            # out-of-order webhook), `transition_task/2` returns
-            # `{:error, :invalid_transition}` because `done` has no
-            # outbound edges. We swallow that case and treat it as a
-            # no-op so the fan-out still records the member as passed.
-            promote_member_to_done(stack, member)
-
-            # Tag the in-memory struct with the member task id so
-            # `process_stack_merged_pr/4` can build `passed_member_ids`
-            # without re-querying.
-            tagged = Map.put(updated, :task_id, member.id)
-            {[tagged | passed_acc], anomaly_acc}
-
-          {:error, reason} ->
-            anomaly = %{
-              "task_id" => member.id,
-              "member_status" => member.status,
-              "reason" => "evaluate_validation_error",
-              "detail" => inspect(reason),
-              "recorded_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-            }
-
-            Logger.warning(
-              "[Webhook] Stack #{stack.id} rollup fan-out: failed to " <>
-                "evaluate pr_merged for member #{member.id}: #{inspect(reason)}"
-            )
-
-            {passed_acc, [anomaly | anomaly_acc]}
-        end
-    end
-  end
-
-  # Promote a stack member task `in_review → done` after the rollup PR
-  # merges (task 019e2be4 stage 2). See call site in `fan_out_member/4`
-  # for the full rationale. Returns `:ok` on success or recoverable
-  # idempotent no-op; logs and returns `:error` on hard failure but
-  # never raises (the outer transaction must not roll back the
-  # validation pass just because the status flip failed).
-  defp promote_member_to_done(%Stack{} = stack, %Task{status: "done"} = member) do
-    Logger.debug(
-      "[Webhook] Stack #{stack.id} fan-out: member #{member.id} already done; " <>
-        "skipping promote (idempotent replay)"
-    )
-
-    :ok
-  end
-
-  defp promote_member_to_done(%Stack{} = stack, %Task{} = member) do
-    case Tasks.transition_task(member, "done") do
-      {:ok, _updated} ->
-        Logger.info(
-          "[Webhook] Stack #{stack.id} fan-out: member task #{member.id} promoted " <>
-            "#{member.status} → done"
-        )
-
-        :ok
-
-      {:error, :invalid_transition} ->
-        # Should not normally happen — the only valid sources for fan-out
-        # are `in_review` and `deploying`, and stage 1 widened both of
-        # those to allow → done. Log warn rather than crash so the
-        # validation pass still sticks.
-        Logger.warning(
-          "[Webhook] Stack #{stack.id} fan-out: refusing to promote member " <>
-            "#{member.id} from #{member.status} → done (invalid_transition); " <>
-            "leaving status unchanged"
-        )
-
-        :error
-
-      {:error, reason} ->
-        Logger.warning(
-          "[Webhook] Stack #{stack.id} fan-out: failed to promote member " <>
-            "#{member.id} from #{member.status} → done: #{inspect(reason)}"
-        )
-
-        :error
-    end
-  end
+  # The `:webhook_stack_fault` process-dictionary test seam that
+  # verifies the outer rescue path is preserved inside the processor —
+  # `Process.put(:webhook_stack_fault, :raise)` in a test process still
+  # raises through the fan-out, and the outer `try/rescue` here still
+  # catches it and falls back to the per-task path.
 
   defp format_merged_at(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
   defp format_merged_at(_), do: nil
-
-  # Test-only fault seam (stage 2). The defensive try/rescue around the
-  # stack-fan-out branch is meant to swallow unexpected exceptions and
-  # fall back to the per-task path; tests verify that by stashing a
-  # marker on the calling process dictionary (`:webhook_stack_fault`).
-  # Process-dictionary scope means concurrent (`async: true`) tests
-  # cannot leak the fault into one another, since Phoenix runs the
-  # controller in the test's own process when invoked via `post/2`.
-  # Production code paths never set the key, so this returns `:noop`.
-  defp maybe_inject_test_fault do
-    case Process.get(:webhook_stack_fault) do
-      fun when is_function(fun, 0) -> fun.()
-      :raise -> raise "synthetic webhook stack fault (test only)"
-      _ -> :noop
-    end
-  end
 
   defp parse_datetime(nil), do: DateTime.utc_now()
 

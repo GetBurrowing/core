@@ -79,6 +79,124 @@ defmodule Platform.Tasks.Stacks do
   def get_stack_by_rollup_branch(_), do: nil
 
   @doc """
+  Resolve a `%Stack{}` from a GitHub `pull_request` webhook payload map,
+  trying multiple lookup strategies in order until one hits.
+
+  Companion to `get_stack_by_rollup_branch/1` — this is the defensive,
+  self-healing entry point the webhook controller uses so a rollup PR
+  merge cascades to member tasks even when
+  `StackDeployer.maybe_open_stack_pr/1` failed to sync the stack row
+  (operator shepherded the PR manually, historical stack row was created
+  before `metadata.rollup_pr` stamping landed, etc.).
+
+  Strategies tried in order:
+
+    1. **rollup_branch match** — `stacks.rollup_branch == pr["head"]["ref"]`.
+       Preserves existing behavior; happy path when
+       `StackDeployer.maybe_open_stack_pr/1` populated the row correctly.
+
+    2. **PR-number match** — `metadata #>> '{rollup_pr,number}' == pr["number"]`.
+       Catches stacks whose `rollup_branch` field is stale or NULL but
+       whose `metadata.rollup_pr.number` was stamped (either by
+       StackDeployer or by an operator-repair path).
+
+    3. **Slug-derived match** — when `pr["head"]["ref"]` matches
+       `stack/<slug>` (per `rollup_branch_name/1`), extract the slug and
+       look up `stacks.slug == extracted`. Catches historical stacks
+       whose `rollup_branch` was never set at create time but whose
+       branch convention still identifies them.
+
+  Abandoned stacks are excluded from every strategy — an abandoned stack
+  should never re-trigger a member fan-out even if its rollup branch is
+  somehow still open in the repo.
+
+  Returns `%Stack{}` when any strategy matches, `nil` when none do. Use
+  `get_stack_for_pull_request_with_strategy/1` when the caller needs to
+  log which strategy fired (webhook observability).
+  """
+  @spec get_stack_for_pull_request(map() | nil) :: Stack.t() | nil
+  def get_stack_for_pull_request(pr) do
+    case get_stack_for_pull_request_with_strategy(pr) do
+      {:ok, %Stack{} = stack, _strategy} -> stack
+      nil -> nil
+    end
+  end
+
+  @doc """
+  Same lookup as `get_stack_for_pull_request/1` but tags which strategy
+  produced the hit.
+
+  Returns `{:ok, %Stack{}, :rollup_branch | :pr_number | :slug}` on
+  match, `nil` otherwise. The webhook controller uses the tag to log
+  fallback-strategy hits so we can quantify how often
+  `StackDeployer.maybe_open_stack_pr/1` under-stamps stack rows in
+  production.
+  """
+  @spec get_stack_for_pull_request_with_strategy(map() | nil) ::
+          {:ok, Stack.t(), :rollup_branch | :pr_number | :slug} | nil
+  def get_stack_for_pull_request_with_strategy(pr) when is_map(pr) do
+    head_ref = get_in(pr, ["head", "ref"])
+    number = pr["number"]
+
+    with nil <- match_by_rollup_branch(head_ref),
+         nil <- match_by_pr_number(number),
+         nil <- match_by_slug(head_ref) do
+      nil
+    end
+  end
+
+  def get_stack_for_pull_request_with_strategy(_), do: nil
+
+  defp match_by_rollup_branch(head_ref) when is_binary(head_ref) do
+    case get_stack_by_rollup_branch(head_ref) do
+      %Stack{} = stack -> {:ok, stack, :rollup_branch}
+      nil -> nil
+    end
+  end
+
+  defp match_by_rollup_branch(_), do: nil
+
+  defp match_by_pr_number(number) when is_integer(number) and number > 0 do
+    stack =
+      Stack
+      |> where(
+        [s],
+        fragment("(?->'rollup_pr'->>'number')::int", s.metadata) == ^number and
+          s.status != "abandoned"
+      )
+      |> limit(1)
+      |> Repo.one()
+
+    case stack do
+      %Stack{} = s -> {:ok, s, :pr_number}
+      nil -> nil
+    end
+  end
+
+  defp match_by_pr_number(_), do: nil
+
+  defp match_by_slug(head_ref) when is_binary(head_ref) do
+    case Regex.run(~r/^stack\/([a-z0-9][a-z0-9-]*)$/, head_ref) do
+      [_, slug] ->
+        stack =
+          Stack
+          |> where([s], s.slug == ^slug and s.status != "abandoned")
+          |> limit(1)
+          |> Repo.one()
+
+        case stack do
+          %Stack{} = s -> {:ok, s, :slug}
+          nil -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp match_by_slug(_), do: nil
+
+  @doc """
   List stacks, optionally filtered by `:project_id`, `:status`, and/or
   `:sponsor_user_id`.
 

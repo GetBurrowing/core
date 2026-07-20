@@ -1062,8 +1062,13 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           assert json_response(conn, 201)
         end)
 
-      assert log =~ "matches rollup branch of stack #{stack.id}"
-      assert log =~ "NOT auto-completing stack"
+      # Stage 2 (task 019f7b7f) elevated the mismatch log to Logger.error
+      # with a canonical message shape. The stack_id + PR number + strategy
+      # + base_ref + stack.base_branch are all included for operator triage.
+      assert log =~ "BASE-BRANCH MISMATCH"
+      assert log =~ "stack #{stack.id}"
+      assert log =~ "NOT cascading"
+      assert log =~ "operator triage required"
 
       # Stack stays in its prior status (NOT done).
       reloaded_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
@@ -1688,6 +1693,340 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       # would have had to come from THIS test process (setup handler's
       # `self() == test_pid` filter), and Case 3 creates no stack.
       refute_receive {:telemetry, [:platform, :stacks, :deploy, :cascade_completed], _, _}, 200
+    end
+  end
+
+  # ── Task 019f7b7f stage 2: multi-strategy webhook lookup + hardened
+  #    base-branch mismatch. Exercises the three fallback strategies wired
+  #    into the controller via `Stacks.get_stack_for_pull_request_with_strategy/1`
+  #    (stage 1) plus the elevated ERROR-level mismatch log and the
+  #    project-default_branch NULL fallback for `stack.base_branch`.
+  describe "multi-strategy rollup PR lookup (task 019f7b7f stage 2)" do
+    alias Platform.Tasks.Stacks
+
+    # Test env sets `config :logger, level: :warning`. The observability
+    # log the controller emits on a strategy match is at `:info`, so raise
+    # the primary Logger level for these tests to capture it. Restored on
+    # exit so we don't leak into other tests.
+    setup do
+      prev_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: prev_level) end)
+      :ok
+    end
+
+    # A stack whose rollup_branch column is STALE (does not match the
+    # webhook's head ref) but whose metadata.rollup_pr.number DOES match
+    # the webhook's PR number. Every member starts at `in_review` with a
+    # pending pr_merged validation — same steady-state as
+    # `build_stack_with_members!/2`.
+    defp build_stack_with_pr_number_stamped!(pr_number, opts) do
+      slug =
+        Keyword.get(opts, :slug, "pr-number-fallback-#{System.unique_integer([:positive])}")
+
+      rollup_branch = Keyword.get(opts, :rollup_branch, "stack/#{slug}")
+
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "PR Number Fallback #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/pr-number-repo"
+        })
+
+      {:ok, stack} =
+        Stacks.create_stack(%{
+          project_id: project.id,
+          slug: slug,
+          name: "PR Number Fallback",
+          rollup_branch: rollup_branch,
+          metadata: %{
+            "rollup_pr" => %{
+              "number" => pr_number,
+              "url" => "https://github.com/test/pr-number-repo/pull/#{pr_number}",
+              "opened_at" => "2026-07-19T00:00:00Z"
+            }
+          }
+        })
+
+      members =
+        for position <- 1..3 do
+          {:ok, task} =
+            Tasks.create_task(%{
+              project_id: project.id,
+              title: "PR-number member #{position}"
+            })
+
+          {:ok, task} =
+            Tasks.update_task(task, %{
+              stack_id: stack.id,
+              stack_position: position,
+              status: "in_review"
+            })
+
+          {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+          {:ok, stage} =
+            Tasks.create_stage(%{
+              plan_id: plan.id,
+              position: 1,
+              name: "Review",
+              description: "Review stage"
+            })
+
+          {:ok, _} = Tasks.transition_stage(stage, "running")
+
+          {:ok, pr_validation} =
+            Tasks.create_validation(%{stage_id: stage.id, kind: "pr_merged"})
+
+          %{task: task, plan: plan, stage: stage, pr_validation: pr_validation}
+        end
+
+      %{project: project, stack: stack, rollup_branch: rollup_branch, members: members}
+    end
+
+    # A stack with NULL rollup_branch but whose slug matches the
+    # `stack/<slug>` branch convention. Simulates historical stacks
+    # created before rollup_branch stamping landed.
+    defp build_stack_with_null_rollup_branch!(slug) do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Slug Fallback #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/slug-fallback-repo"
+        })
+
+      # Slugs must be lowercase per the schema; the slug fallback regex
+      # only extracts `[a-z0-9][a-z0-9-]*`.
+      {:ok, stack} =
+        Stacks.create_stack(%{
+          project_id: project.id,
+          slug: slug,
+          name: "Slug Fallback",
+          # rollup_branch is required by the Stack changeset, but we
+          # want a stale/mismatched value to prove the slug fallback
+          # kicks in when rollup_branch does NOT match the webhook.
+          rollup_branch: "stack/old-#{slug}-#{System.unique_integer([:positive])}"
+        })
+
+      members =
+        for position <- 1..2 do
+          {:ok, task} =
+            Tasks.create_task(%{
+              project_id: project.id,
+              title: "Slug member #{position}"
+            })
+
+          {:ok, task} =
+            Tasks.update_task(task, %{
+              stack_id: stack.id,
+              stack_position: position,
+              status: "in_review"
+            })
+
+          {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+          {:ok, stage} =
+            Tasks.create_stage(%{
+              plan_id: plan.id,
+              position: 1,
+              name: "Review",
+              description: "Review stage"
+            })
+
+          {:ok, _} = Tasks.transition_stage(stage, "running")
+
+          {:ok, pr_validation} =
+            Tasks.create_validation(%{stage_id: stage.id, kind: "pr_merged"})
+
+          %{task: task, plan: plan, stage: stage, pr_validation: pr_validation}
+        end
+
+      %{project: project, stack: stack, members: members}
+    end
+
+    defp rollup_pr_webhook_body(head_ref, overrides) do
+      pr =
+        Map.merge(
+          %{
+            "merged" => true,
+            "title" => "chore: multi-strategy lookup coverage",
+            "number" => System.unique_integer([:positive]),
+            "html_url" =>
+              "https://github.com/test/multi-strategy-repo/pull/#{System.unique_integer([:positive])}",
+            "merge_commit_sha" => "multi-strategy-#{System.unique_integer([:positive])}",
+            "merged_at" => "2026-07-20T12:00:00Z",
+            "body" => "",
+            "user" => %{"login" => "merge-bot"},
+            "merged_by" => %{"login" => "human-merger"},
+            "head" => %{"ref" => head_ref},
+            "base" => %{"ref" => "main"}
+          },
+          overrides
+        )
+
+      %{"action" => "closed", "pull_request" => pr}
+    end
+
+    test "PR-number fallback fires when rollup_branch is stale but metadata.rollup_pr.number matches",
+         %{conn: conn} do
+      pr_number = System.unique_integer([:positive])
+
+      %{stack: stack, members: members} =
+        build_stack_with_pr_number_stamped!(pr_number,
+          slug: "pr-number-#{System.unique_integer([:positive])}"
+        )
+
+      # Head ref does NOT match stack.rollup_branch — the rollup_branch
+      # strategy will miss. The PR number matches metadata.rollup_pr.number,
+      # so the PR-number fallback must fire.
+      payload =
+        rollup_pr_webhook_body("stack/wildly-different-branch-name", %{
+          "number" => pr_number
+        })
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :info], fn ->
+          conn = post(conn, @github_webhook_path, payload)
+          assert %{"status" => "created"} = json_response(conn, 201)
+        end)
+
+      # Observability log: strategy = pr_number.
+      assert log =~ "Stack #{stack.id} matched via pr_number for PR ##{pr_number}"
+
+      # Fan-out happened — every member's pr_merged flipped to passed.
+      for %{pr_validation: v} <- members do
+        reloaded = Platform.Repo.get!(Platform.Tasks.Validation, v.id)
+        assert reloaded.status == "passed"
+        assert reloaded.evidence["fanned_out_from_stack_rollup_pr"] == true
+      end
+
+      # Stack transitioned to done.
+      reloaded_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      assert reloaded_stack.status == "done"
+    end
+
+    test "slug fallback fires when rollup_branch is stale but stack/<slug> matches",
+         %{conn: conn} do
+      slug = "slug-fallback-#{System.unique_integer([:positive])}"
+
+      %{stack: stack, members: members} = build_stack_with_null_rollup_branch!(slug)
+
+      # Head ref uses the stack/<slug> convention that matches the stack's
+      # slug. rollup_branch (stale) does NOT match, metadata.rollup_pr is
+      # not stamped, so ONLY the slug fallback can succeed.
+      payload = rollup_pr_webhook_body("stack/#{slug}", %{})
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :info], fn ->
+          conn = post(conn, @github_webhook_path, payload)
+          assert %{"status" => "created"} = json_response(conn, 201)
+        end)
+
+      assert log =~ "Stack #{stack.id} matched via slug"
+
+      for %{pr_validation: v} <- members do
+        reloaded = Platform.Repo.get!(Platform.Tasks.Validation, v.id)
+        assert reloaded.status == "passed"
+      end
+
+      reloaded_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      assert reloaded_stack.status == "done"
+    end
+
+    test "base-branch mismatch on strategy match logs ERROR + falls through to per-task path",
+         %{conn: conn} do
+      pr_number = System.unique_integer([:positive])
+
+      %{stack: stack, members: members} =
+        build_stack_with_pr_number_stamped!(pr_number,
+          slug: "base-mismatch-pr-number-#{System.unique_integer([:positive])}"
+        )
+
+      # A companion solo task with its own pending pr_merged validation:
+      # the mismatch guard should fall through to the per-task path when
+      # task_id is present, so we assert the solo task's validation flips.
+      %{task: solo_task, pr_validation: solo_pr_validation} =
+        create_task_with_ci_validation!()
+
+      # Head ref won't match rollup_branch, PR number DOES match — so the
+      # pr_number strategy fires. base_ref is a different branch than
+      # stack.base_branch ("main") — the mismatch guard must trip AND
+      # emit at Logger.error level (task 019f7b7f stage 2 elevation).
+      payload =
+        rollup_pr_webhook_body("task/#{solo_task.id}", %{
+          "number" => pr_number,
+          "base" => %{"ref" => "integration-xyz"}
+        })
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = post(conn, @github_webhook_path, payload)
+          assert %{"status" => "created"} = json_response(conn, 201)
+        end)
+
+      # Elevated log level + canonical message shape (task 019f7b7f stage 2).
+      assert log =~ "[error]"
+      assert log =~ "BASE-BRANCH MISMATCH"
+      assert log =~ "stack #{stack.id}"
+      assert log =~ "PR ##{pr_number}"
+      assert log =~ "via pr_number"
+      assert log =~ "base_ref=\"integration-xyz\""
+      assert log =~ "stack.base_branch=\"main\""
+      assert log =~ "NOT cascading"
+      assert log =~ "operator triage required"
+
+      # Stack did NOT complete — no rollup_merge metadata, status unchanged.
+      reloaded_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      refute reloaded_stack.status == "done"
+      refute Map.has_key?(reloaded_stack.metadata || %{}, "rollup_merge")
+
+      # No stack members were fanned out.
+      for %{pr_validation: v} <- members do
+        reloaded = Platform.Repo.get!(Platform.Tasks.Validation, v.id)
+        refute reloaded.status == "passed"
+      end
+
+      # BUT the per-task path fired for the solo task (task_id present in
+      # branch → per-task fallthrough is preserved by acceptance criterion 4).
+      reloaded_solo = Platform.Repo.get!(Platform.Tasks.Validation, solo_pr_validation.id)
+      assert reloaded_solo.status == "passed"
+      assert reloaded_solo.evaluated_by == "github_webhook"
+      # Not a stack fan-out — went through the per-task path.
+      refute Map.get(reloaded_solo.evidence || %{}, "fanned_out_from_stack_rollup_pr")
+    end
+
+    # NOTE on the base_branch=nil defensive branch of `base_branch_matches?/2`:
+    # the `task_stacks.base_branch` column carries a NOT NULL constraint,
+    # so it is currently impossible to persist a stack row where the base
+    # is NULL. The helper's `%Stack{base_branch: nil}` clause is kept as a
+    # future-proofing defense (in case a migration ever lifts the NOT NULL
+    # to accommodate historical repair paths); an end-to-end DB test for
+    # that branch would need to also lift the DB constraint, which would
+    # be a broader migration than this stage's scope. Reachable coverage is
+    # provided by the ERROR-mismatch test above (exercises the string /
+    # string branch of the helper).
+
+    test "non-rollup PR with no strategy match and no task_id: no-op (unchanged)",
+         %{conn: conn} do
+      # Head branch does NOT match `stack/*`, no stack has this PR number
+      # in metadata, no stack has a slug that could be extracted. The
+      # webhook falls through to the per-task path, but the branch
+      # doesn't encode a task_id either — so the per-task path is a
+      # no-op. Regression guard for acceptance criterion 4.
+      payload =
+        rollup_pr_webhook_body("feature/some-random-branch", %{
+          "number" => System.unique_integer([:positive])
+        })
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = post(conn, @github_webhook_path, payload)
+          assert %{"status" => "created"} = json_response(conn, 201)
+        end)
+
+      # No strategy fired — no observability log line.
+      refute log =~ "Stack "
+      refute log =~ "matched via"
+      # No mismatch guard — no ERROR line.
+      refute log =~ "BASE-BRANCH MISMATCH"
     end
   end
 end
