@@ -41,6 +41,22 @@ defmodule PlatformWeb.LifecycleActions do
         &Tasks.schedule_project_deletion(actor, &1)
       )
 
+  @doc """
+  Schedule an org for deletion, sparing the child ids in `keep_ids` (task
+  019f7600 stage 5 — the "surface & choose" delete confirm). Projects have no
+  children, so `keep_ids` is ignored on that branch and this is identical to
+  `schedule_deletion/3`.
+  """
+  @spec schedule_deletion(actor(), String.t(), String.t(), [String.t()]) :: result()
+  def schedule_deletion(actor, type, id, keep_ids) when is_list(keep_ids),
+    do:
+      dispatch(
+        type,
+        id,
+        &Platform.Tenancy.Lifecycle.schedule_org_deletion(actor, &1, keep_ids),
+        &Tasks.schedule_project_deletion(actor, &1)
+      )
+
   @doc "Reverse an archive — brings a purely-archived container back to active."
   @spec unarchive(actor(), String.t(), String.t()) :: result()
   def unarchive(actor, type, id),
@@ -81,6 +97,25 @@ defmodule PlatformWeb.LifecycleActions do
   end
 
   def cascade_preview(_type, _id), do: %{projects: [], channels: []}
+
+  @doc """
+  The full blast radius of deleting an org: every child project + channel that
+  would be lost with it, in every lifecycle state, ready for the delete confirm's
+  include/keep checklist (task 019f7600 stage 5). `[]` for projects (no children).
+
+  Same slug-or-UUID resolution as `cascade_preview/2` — the Tasks sidebar posts
+  org slugs, Chat/Recovery post UUIDs, and `Lifecycle.purge_preview/1` needs a
+  UUID.
+  """
+  @spec purge_preview(String.t(), String.t()) :: [Platform.Tenancy.Lifecycle.purge_item()]
+  def purge_preview("org", id) do
+    case resolve_org(id) do
+      nil -> []
+      org -> Platform.Tenancy.Lifecycle.purge_preview(org.id)
+    end
+  end
+
+  def purge_preview(_type, _id), do: []
 
   @doc """
   Flat labels for what this resource's cascade is CURRENTLY hiding — channels

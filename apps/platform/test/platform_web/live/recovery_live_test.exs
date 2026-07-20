@@ -1,16 +1,22 @@
 defmodule PlatformWeb.RecoveryLiveTest do
   @moduledoc """
-  The Recovery surface (task 019f4eaa stage 6): lists archived +
-  deletion-scheduled containers and restores them. Fabrikam-admin only.
+  The Recovery hub (task 019f7600 stage 4): lists archived + deletion-scheduled
+  orgs, projects, AND channels from the unified recoverable inventory; groups
+  cascade children under their org; and restores them via selection (leaves) or
+  "Restore all" (containers), with an act-then-confirm success toast. Fabrikam-admin
+  only.
   """
   use PlatformWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
-  alias Platform.{Repo, Tasks, Tenancy}
+  alias Platform.{Chat, Repo, Tasks, Tenancy}
+  alias Platform.Chat.Space
   alias Platform.Tasks.Project
-  alias Platform.Tenancy.OrgMembership
+  alias Platform.Tenancy.{Org, OrgMembership}
+
+  # ── Fixtures ───────────────────────────────────────────────────────────
 
   defp insert_user do
     n = System.unique_integer([:positive])
@@ -41,18 +47,40 @@ defmodule PlatformWeb.RecoveryLiveTest do
     {init_test_session(conn, current_user_id: user.id), user}
   end
 
-  defp create_project(org_slug) do
-    org = Tenancy.get_org_by_slug!(org_slug)
+  # A fresh tenant org parented to Fabrikam — isolated so archiving it can't perturb
+  # a seeded tenant.
+  defp tenant_org!(attrs \\ %{}) do
+    n = System.unique_integer([:positive])
 
-    {:ok, project} =
-      Tasks.create_project(%{
-        name: "Proj #{System.unique_integer([:positive])}",
-        repo_url: "git@github.com:test/repo.git",
-        org_id: org.id
-      })
+    default = %{
+      name: "Tenant #{n}",
+      slug: "tenant_#{n}",
+      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+    }
 
+    %Org{} |> Org.changeset(Map.merge(default, attrs)) |> Repo.insert!()
+  end
+
+  defp project!(org, attrs \\ %{}) do
+    n = System.unique_integer([:positive])
+    {:ok, project} = Tasks.create_project(Map.merge(%{name: "Proj #{n}", org_id: org.id}, attrs))
     project
   end
+
+  defp channel!(org, attrs \\ %{}) do
+    n = System.unique_integer([:positive, :monotonic])
+
+    {:ok, space} =
+      Chat.create_space(
+        Map.merge(%{name: "Chan #{n}", slug: "chan-#{n}", kind: "channel", org_id: org.id}, attrs)
+      )
+
+    space
+  end
+
+  defp row(type, id), do: "[data-role=recovery-row][data-type=#{type}][data-id='#{id}']"
+
+  # ── Fabrikam admin ─────────────────────────────────────────────────────────
 
   describe "fabrikam admin" do
     test "empty state renders when nothing is archived", %{conn: conn} do
@@ -63,130 +91,338 @@ defmodule PlatformWeb.RecoveryLiveTest do
       assert html =~ "Nothing archived"
     end
 
-    # ── What Restore brings back with it (Marlowe's ask, 2026-07-16) ────────
-    #
-    # Cascade children are deliberately NOT rows of their own — they return
-    # with their org, so a separate Restore for them would imply you could
-    # surface a project under a still-hidden org. Marlowe walked exactly this
-    # and asked the reasonable question: then how do I see what's inside?
-    # The row now says so.
-
-    test "an archived org's row lists the children its Restore will bring back", %{conn: conn} do
+    test "an independently-archived channel renders as its own row", %{conn: conn} do
       {conn, admin} = fabrikam_admin_conn(conn)
-      org = Tenancy.get_org_by_slug!("paragon")
-      project = create_project("paragon")
-      {:ok, _} = Tasks.update_project(project, %{name: "Site Expansion"})
+      org = tenant_org!()
+      channel = channel!(org, %{name: "Announcements"})
+      {:ok, _} = Chat.archive_space(admin, channel)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/recovery")
+
+      assert has_element?(view, row("channel", channel.id))
+      assert render(view) =~ "Announcements"
+    end
+
+    test "an archived org groups its cascade children — revealed on expand", %{conn: conn} do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      org = tenant_org!(%{name: "Soylent"})
+      project = project!(org, %{name: "Discovery"})
+      channel = channel!(org, %{name: "Standup"})
 
       {:ok, _} = Tenancy.archive_org(admin, org)
 
       {:ok, view, _html} = live(conn, ~p"/admin/recovery")
 
-      row = "[data-role=recovery-row][data-id='#{org.id}']"
-      assert has_element?(view, "#{row} [data-role=recovery-row-hidden]")
-      assert render(view) =~ "Site Expansion"
+      # The org container row and its expand affordance are present…
+      assert has_element?(view, row("org", org.id))
+      assert has_element?(view, "#{row("org", org.id)} [data-role=expand-toggle]")
+
+      # …but the cascade children are collapsed until the toggle is used.
+      refute has_element?(view, row("project", project.id))
+      refute has_element?(view, row("channel", channel.id))
+
+      view |> element("#{row("org", org.id)} [data-role=expand-toggle]") |> render_click()
+
+      assert has_element?(view, row("project", project.id))
+      assert has_element?(view, row("channel", channel.id))
     end
 
-    test "the row lists ONLY what Restore actually returns — not an inventory", %{conn: conn} do
-      # The honesty property. An independently-archived child has a NULL
-      # provenance marker, so the org's Restore does NOT bring it back — and
-      # the row must not claim it will.
+    test "the selection bar appears only once a leaf row is checked", %{conn: conn} do
       {conn, admin} = fabrikam_admin_conn(conn)
-      org = Tenancy.get_org_by_slug!("paragon")
-
-      cascaded = create_project("paragon")
-      {:ok, _} = Tasks.update_project(cascaded, %{name: "Comes Back"})
-
-      independent = create_project("paragon")
-      {:ok, _} = Tasks.update_project(independent, %{name: "Stays Archived"})
-      {:ok, _} = Tasks.archive_project(admin, Repo.reload!(independent))
-
-      {:ok, _} = Tenancy.archive_org(admin, org)
-
-      {:ok, view, _html} = live(conn, ~p"/admin/recovery")
-
-      hidden =
-        view
-        |> element(
-          "[data-role=recovery-row][data-id='#{org.id}'] [data-role=recovery-row-hidden]"
-        )
-        |> render()
-
-      assert hidden =~ "Comes Back"
-      refute hidden =~ "Stays Archived"
-    end
-
-    test "no hidden line on a project row — a project has no cascade", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
-      project = create_project("sxi")
+      org = tenant_org!()
+      project = project!(org)
       {:ok, _} = Tasks.archive_project(admin, project)
 
       {:ok, view, _html} = live(conn, ~p"/admin/recovery")
 
-      row = "[data-role=recovery-row][data-id='#{project.id}']"
-      assert has_element?(view, row)
-      refute has_element?(view, "#{row} [data-role=recovery-row-hidden]")
+      refute has_element?(view, "[data-role=selection-bar]")
+
+      view |> element("#{row("project", project.id)} [data-role=select]") |> render_click()
+
+      assert has_element?(view, "[data-role=selection-bar]")
+      assert render(view) =~ "1 selected"
     end
 
-    test "lists an archived project and Restore brings it back to active", %{conn: conn} do
+    test "the row selector is a checkbox, not a radio", %{conn: conn} do
       {conn, admin} = fabrikam_admin_conn(conn)
-      project = create_project("soylent")
+      org = tenant_org!()
+      project = project!(org)
       {:ok, _} = Tasks.archive_project(admin, project)
 
       {:ok, view, _html} = live(conn, ~p"/admin/recovery")
 
-      row = "[data-role=recovery-row][data-id='#{project.id}']"
-      assert has_element?(view, row)
-      assert render(view) =~ project.name
+      # The per-row select is a square checkbox (multi-select intent), never a
+      # single-choice radio — locks the control's role after the visual-gate
+      # rework that squared off its (previously circular) corners.
+      assert has_element?(
+               view,
+               "#{row("project", project.id)} input[type=checkbox][data-role=select]"
+             )
 
-      view |> element("#{row} [data-role=restore]") |> render_click()
+      refute has_element?(view, "#{row("project", project.id)} input[type=radio]")
+    end
 
-      # Row leaves the recovery list and the DB row is active again.
-      refute has_element?(view, row)
+    test "Restore selected brings back a leaf and shows the success toast", %{conn: conn} do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      org = tenant_org!()
+      project = project!(org, %{name: "Roadmap"})
+      {:ok, _} = Tasks.archive_project(admin, project)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/recovery")
+
+      view |> element("#{row("project", project.id)} [data-role=select]") |> render_click()
+      view |> element("[data-role=restore-selected]") |> render_click()
+
+      # DB row is active again, its recovery row is gone, and the toast fired.
       refute Repo.get(Project, project.id).archived_at
+      refute has_element?(view, row("project", project.id))
+      assert has_element?(view, "[data-role=recovery-toast]")
+      assert render(view) =~ "Roadmap restored"
     end
 
-    test "a deletion-scheduled project shows under Scheduled and Restore cancels the deletion", %{
-      conn: conn
-    } do
+    # The toast's "View →" quick-link. Assert via an attribute selector (matches
+    # the element on both data-role AND href) rather than a regex over serialized
+    # HTML — Phoenix renders attributes in a non-deterministic order.
+
+    test "the toast View link points at the restored project's files", %{conn: conn} do
       {conn, admin} = fabrikam_admin_conn(conn)
-      project = create_project("sxi")
+      org = tenant_org!()
+      project = project!(org, %{name: "Roadmap"})
+      {:ok, _} = Tasks.archive_project(admin, project)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/recovery")
+
+      view |> element("#{row("project", project.id)} [data-role=select]") |> render_click()
+      view |> element("[data-role=restore-selected]") |> render_click()
+
+      path = ~p"/files/#{project.id}"
+      assert has_element?(view, "[data-role=toast-view][href='#{path}']")
+    end
+
+    test "the toast View link opens the restored channel in chat", %{conn: conn} do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      org = tenant_org!()
+      channel = channel!(org, %{name: "Standup", slug: "standup-view"})
+      {:ok, _} = Chat.archive_space(admin, channel)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/recovery")
+
+      view |> element("#{row("channel", channel.id)} [data-role=select]") |> render_click()
+      view |> element("[data-role=restore-selected]") |> render_click()
+
+      path = ~p"/chat/#{channel.slug}"
+      assert has_element?(view, "[data-role=toast-view][href='#{path}']")
+    end
+
+    test "a multi-item restore shows the toast but no View link", %{conn: conn} do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      org = tenant_org!()
+      alpha = project!(org, %{name: "Alpha"})
+      beta = project!(org, %{name: "Beta"})
+      {:ok, _} = Tasks.archive_project(admin, alpha)
+      {:ok, _} = Tasks.archive_project(admin, beta)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/recovery")
+
+      view |> element("#{row("project", alpha.id)} [data-role=select]") |> render_click()
+      view |> element("#{row("project", beta.id)} [data-role=select]") |> render_click()
+      view |> element("[data-role=restore-selected]") |> render_click()
+
+      assert has_element?(view, "[data-role=recovery-toast]")
+      assert render(view) =~ "2 items restored"
+      refute has_element?(view, "[data-role=toast-view]")
+    end
+
+    test "restoring a cascade child names the org reactivated as a side-effect", %{conn: conn} do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      org = tenant_org!(%{name: "Soylent"})
+      project = project!(org, %{name: "Discovery"})
+
+      {:ok, _} = Tenancy.archive_org(admin, org)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/recovery")
+
+      view |> element("#{row("org", org.id)} [data-role=expand-toggle]") |> render_click()
+      view |> element("#{row("project", project.id)} [data-role=select]") |> render_click()
+      view |> element("[data-role=restore-selected]") |> render_click()
+
+      toast = view |> element("[data-role=recovery-toast]") |> render()
+      assert toast =~ "Discovery restored"
+      assert toast =~ "Soylent reactivated too"
+
+      # The child came back and its org was reactivated with it.
+      refute Repo.get(Project, project.id).archived_at
+      refute Repo.get(Org, org.id).archived_at
+    end
+
+    test "container Restore all brings back the whole subtree", %{conn: conn} do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      org = tenant_org!()
+      project = project!(org)
+      channel = channel!(org)
+
+      {:ok, _} = Tenancy.archive_org(admin, org)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/recovery")
+
+      view |> element("#{row("org", org.id)} [data-role=restore-all]") |> render_click()
+
+      refute has_element?(view, row("org", org.id))
+      refute Repo.get(Org, org.id).archived_at
+      refute Repo.get(Project, project.id).archived_at
+      refute Repo.get(Space, channel.id).archived_at
+      assert has_element?(view, "[data-role=recovery-toast]")
+    end
+
+    test "a deletion-scheduled row shows the Scheduled status", %{conn: conn} do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      org = tenant_org!()
+      project = project!(org)
       {:ok, _} = Tasks.schedule_project_deletion(admin, project)
 
       {:ok, view, _html} = live(conn, ~p"/admin/recovery")
 
-      row = "[data-role=recovery-row][data-id='#{project.id}']"
-      assert has_element?(view, "#{row}[data-status=scheduled]")
-
-      view |> element("#{row} [data-role=restore]") |> render_click()
-
-      refute has_element?(view, row)
-      reloaded = Repo.get(Project, project.id)
-      refute reloaded.archived_at
-      refute reloaded.deletion_scheduled_at
+      assert has_element?(view, "#{row("project", project.id)}[data-status=scheduled]")
+      assert render(view) =~ "Scheduled for deletion"
     end
 
-    test "Restore is the only action offered — on a scheduled row and an archived one",
-         %{conn: conn} do
+    test "Undo re-archives just the restored leaf", %{conn: conn} do
       {conn, admin} = fabrikam_admin_conn(conn)
-      scheduled_project = create_project("sxi")
-      archived_project = create_project("paragon")
-      {:ok, _} = Tasks.schedule_project_deletion(admin, scheduled_project)
-      {:ok, _} = Tasks.archive_project(admin, archived_project)
+      org = tenant_org!()
+      project = project!(org)
+      {:ok, _} = Tasks.archive_project(admin, project)
 
       {:ok, view, _html} = live(conn, ~p"/admin/recovery")
 
-      scheduled_row = "[data-role=recovery-row][data-id='#{scheduled_project.id}']"
-      archived_row = "[data-role=recovery-row][data-id='#{archived_project.id}']"
+      view |> element("#{row("project", project.id)} [data-role=select]") |> render_click()
+      view |> element("[data-role=restore-selected]") |> render_click()
+      refute Repo.get(Project, project.id).archived_at
 
-      assert has_element?(view, "#{scheduled_row}[data-status=scheduled] [data-role=restore]")
-      assert has_element?(view, "#{archived_row}[data-status=archived] [data-role=restore]")
+      view |> element("[data-role=toast-undo]") |> render_click()
 
-      # No intermediate "stop the countdown but stay archived" action: it
-      # duplicated Restore without offering anything Restore does not
-      # (task 019f4eaa review). Restore is the whole recovery vocabulary.
-      refute has_element?(view, "[data-role=keep]")
+      # Re-archived and back in the list.
+      assert Repo.get(Project, project.id).archived_at
+      assert has_element?(view, row("project", project.id))
     end
   end
+
+  # ── Restore all — scheduled-children warning (task 019f7600 stage 5) ────
+
+  describe "restore all warning modal" do
+    test "an org with plain-archived children restores straight away (no warning)", %{conn: conn} do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      org = tenant_org!()
+      project = project!(org)
+      # Plain archive → children hidden with NO countdown → nothing to warn about.
+      {:ok, _} = Tenancy.archive_org(admin, org)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/recovery")
+
+      view |> element("#{row("org", org.id)} [data-role=restore-all]") |> render_click()
+
+      refute has_element?(view, "[data-role=restore-all-modal]")
+      refute Repo.get(Org, org.id).archived_at
+      refute Repo.get(Project, project.id).archived_at
+    end
+
+    test "an org with scheduled children opens the warning instead of restoring", %{conn: conn} do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      org = tenant_org!(%{name: "Soylent"})
+      project = project!(org, %{name: "Discovery"})
+      {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/recovery")
+
+      view |> element("#{row("org", org.id)} [data-role=restore-all]") |> render_click()
+
+      # The modal lists the scheduled child; nothing has been restored yet.
+      assert has_element?(view, "[data-role=restore-all-modal]")
+      assert has_element?(view, "[data-role=keep-scheduled-item][data-id='#{project.id}']")
+      assert render(view) =~ "Discovery"
+      assert Repo.get(Org, org.id).deletion_scheduled_at
+      assert Repo.get(Project, project.id).deletion_scheduled_at
+    end
+
+    test "confirming with the default restores the subtree and cancels the countdowns", %{
+      conn: conn
+    } do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      org = tenant_org!()
+      project = project!(org)
+      channel = channel!(org)
+      {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/recovery")
+
+      view |> element("#{row("org", org.id)} [data-role=restore-all]") |> render_click()
+      view |> element("[data-role=restore-all-confirm]") |> render_click()
+
+      refute has_element?(view, "[data-role=restore-all-modal]")
+      refute Repo.get(Org, org.id).archived_at
+
+      proj = Repo.get(Project, project.id)
+      refute proj.archived_at
+      refute proj.deletion_scheduled_at
+
+      chan = Repo.get(Space, channel.id)
+      refute chan.archived_at
+      refute chan.deletion_scheduled_at
+
+      assert has_element?(view, "[data-role=recovery-toast]")
+    end
+
+    test "keeping a child scheduled restores the org but leaves that child counting down", %{
+      conn: conn
+    } do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      org = tenant_org!()
+      kept = project!(org)
+      revived = project!(org)
+      {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/recovery")
+
+      view |> element("#{row("org", org.id)} [data-role=restore-all]") |> render_click()
+
+      # Mark the first child "keep scheduled", then confirm.
+      view
+      |> element(
+        "[data-role=keep-scheduled-item][data-id='#{kept.id}'] [data-role=keep-scheduled]"
+      )
+      |> render_click()
+
+      view |> element("[data-role=restore-all-confirm]") |> render_click()
+
+      # Org is active again and the other child fully revived …
+      refute Repo.get(Org, org.id).archived_at
+      revived = Repo.get(Project, revived.id)
+      refute revived.archived_at
+      refute revived.deletion_scheduled_at
+
+      # … but the kept child is still scheduled (detached, own clock intact).
+      kept = Repo.get(Project, kept.id)
+      assert kept.deletion_scheduled_at
+      assert is_nil(kept.archived_cascade_org_id)
+    end
+
+    test "Cancel closes the warning without restoring", %{conn: conn} do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      org = tenant_org!()
+      project = project!(org)
+      {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/recovery")
+
+      view |> element("#{row("org", org.id)} [data-role=restore-all]") |> render_click()
+      view |> element("[data-role=restore-all-cancel]") |> render_click()
+
+      refute has_element?(view, "[data-role=restore-all-modal]")
+      assert Repo.get(Org, org.id).deletion_scheduled_at
+      assert Repo.get(Project, project.id).deletion_scheduled_at
+    end
+  end
+
+  # ── Non-admin ──────────────────────────────────────────────────────────
 
   describe "non-admin" do
     test "is refused (redirected away from the recovery route)", %{conn: conn} do

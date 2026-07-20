@@ -34,7 +34,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
   """
   use Phoenix.Component
 
-  import PlatformWeb.CoreComponents, only: [icon: 1, button: 1]
+  import PlatformWeb.CoreComponents, only: [icon: 1, button: 1, chip: 1]
 
   @doc """
   Kebab overflow menu with Archive + Schedule deletion for one container.
@@ -147,78 +147,244 @@ defmodule PlatformWeb.Components.LifecycleControls do
   The affirmative-looking primary is deliberately NOT used — the confirm
   button is `error`-filled because this is the one destructive step.
   """
-  attr :resource, :map, default: nil, doc: "nil when closed; %{type:, id:, name:} when open."
+  attr :resource, :map,
+    default: nil,
+    doc:
+      "nil when closed. A project is `%{type: \"project\", id:, name:, preview:}` (simple confirm). An org is `%{type: \"org\", id:, name:, items: [%{id, name, type, status}], kept: MapSet, acknowledged: boolean}` (surface & choose)."
+
   attr :retention_days, :integer, required: true
 
   def schedule_delete_modal(assigns) do
     ~H"""
+    <%!-- The backdrop carries NO phx-click: the org variant is a form whose
+         checkboxes have no binding of their own, and a backdrop phx-click would
+         be the nearest bound ancestor, closing the modal on every toggle. Both
+         cards use phx-click-away instead — a click outside the card closes it,
+         a click on a control never does. Escape still closes from the window. --%>
     <div
       :if={@resource}
       id="schedule-delete-modal"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 safe-area-x"
-      phx-click="close_delete_modal"
       phx-window-keydown="close_delete_modal"
       phx-key="escape"
       data-role="schedule-delete-modal"
     >
-      <div
-        class="w-full max-w-md rounded-box border border-base-content/10 bg-base-100 p-6 shadow-[var(--shadow-modal)]"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="schedule-delete-title"
-        aria-describedby="schedule-delete-body"
-        phx-click-away="close_delete_modal"
-      >
-        <h2 id="schedule-delete-title" class="text-base font-semibold text-base-content">
-          Schedule deletion for {@resource.name}?
-        </h2>
-        <p id="schedule-delete-body" class="mt-2 text-sm text-base-content/70">
-          {schedule_body(@resource.type)} It stays recoverable from the
-          Recovery view for <span class="font-semibold text-base-content">{@retention_days} days</span>,
-          then it's permanently deleted. You can bring it back any time before then.
-        </p>
-        <%!-- Exactly what the cascade takes with it, by name — Marlowe's call
-             (2026-07-16): the bulk cascade is useful and stays, but a dialog
-             that says "and everything under it" makes you retire a group
-             without seeing what's in it. Absent for projects (they have no
-             cascade) and for an org whose children are all already archived
-             — in both cases nothing else changes, so there's nothing to warn
-             about and the list correctly collapses to nothing. --%>
-        <div
-          :if={cascade_total(@resource) > 0}
-          data-role="schedule-delete-cascade"
-          class="mt-4 rounded-box border border-base-300 bg-base-200/40 p-3"
+      <.org_purge_card
+        :if={@resource.type == "org"}
+        resource={@resource}
+        retention_days={@retention_days}
+      />
+      <.simple_delete_card
+        :if={@resource.type != "org"}
+        resource={@resource}
+        retention_days={@retention_days}
+      />
+    </div>
+    """
+  end
+
+  # ── Simple confirm (projects — no children to surface) ─────────────────
+  attr :resource, :map, required: true
+  attr :retention_days, :integer, required: true
+
+  defp simple_delete_card(assigns) do
+    ~H"""
+    <div
+      class="w-full max-w-md rounded-box border border-base-content/10 bg-base-100 p-6 shadow-[var(--shadow-modal)]"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="schedule-delete-title"
+      aria-describedby="schedule-delete-body"
+      phx-click-away="close_delete_modal"
+    >
+      <h2 id="schedule-delete-title" class="text-base font-semibold text-base-content">
+        Schedule deletion for {@resource.name}?
+      </h2>
+      <p id="schedule-delete-body" class="mt-2 text-sm text-base-content/70">
+        {schedule_body(@resource.type)} It stays recoverable from the
+        Recovery view for <span class="font-semibold text-base-content">{@retention_days} days</span>,
+        then it's permanently deleted. You can bring it back any time before then.
+      </p>
+      <div class="modal-action mt-5 flex justify-end gap-2">
+        <.button variant="ghost" phx-click="close_delete_modal" data-role="schedule-delete-cancel">
+          Cancel
+        </.button>
+        <.button
+          variant="destructive"
+          phx-click="confirm_schedule_deletion"
+          data-role="schedule-delete-confirm"
         >
-          <p class="text-xs font-medium uppercase tracking-wide text-base-content/50">
-            Also hidden ({cascade_total(@resource)})
-          </p>
-          <ul class="mt-2 space-y-1 text-sm text-base-content/80">
-            <li :for={name <- @resource.preview.projects} class="flex items-center gap-2">
-              <.icon name="hero-folder" class="size-3.5 shrink-0 text-base-content/40" />
-              <span class="truncate">{name}</span>
-            </li>
-            <li :for={name <- @resource.preview.channels} class="flex items-center gap-2">
-              <span class="shrink-0 text-base-content/40">#</span>
-              <span class="truncate">{name}</span>
-            </li>
-          </ul>
-        </div>
-        <div class="modal-action mt-5 flex justify-end gap-2">
-          <.button variant="ghost" phx-click="close_delete_modal" data-role="schedule-delete-cancel">
-            Cancel
-          </.button>
-          <.button
-            variant="destructive"
-            phx-click="confirm_schedule_deletion"
-            data-role="schedule-delete-confirm"
-          >
-            Schedule deletion
-          </.button>
-        </div>
+          Schedule deletion
+        </.button>
       </div>
     </div>
     """
   end
+
+  # ── Surface & choose (orgs — task 019f7600 stage 5) ────────────────────
+  #
+  # Deleting an org takes every child with it. This card enumerates ALL of them
+  # (`purge_preview/1`: active, cascade-hidden, and hand-archived alike — the
+  # ones the old "Also hidden" list silently dropped) as an aligned checklist.
+  # Default is delete-everything, matching "Delete <org> permanently"; checking
+  # a row KEEPS that child — it stays archived and recoverable on its own,
+  # surviving the org. A "I understand this is permanent" gate arms the button.
+  attr :resource, :map, required: true
+  attr :retention_days, :integer, required: true
+
+  defp org_purge_card(assigns) do
+    assigns =
+      assign(assigns,
+        kept_count: MapSet.size(assigns.resource.kept),
+        item_count: length(assigns.resource.items)
+      )
+
+    ~H"""
+    <form
+      class="flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col rounded-box border border-base-content/10 bg-base-100 shadow-[var(--shadow-modal)]"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="schedule-delete-title"
+      aria-describedby="schedule-delete-body"
+      phx-click-away="close_delete_modal"
+      phx-change="delete_modal_change"
+      phx-submit="confirm_schedule_deletion"
+    >
+      <div class="border-b border-base-300 p-6 pb-4">
+        <h2 id="schedule-delete-title" class="text-base font-semibold text-base-content">
+          Delete {@resource.name} permanently?
+        </h2>
+        <p id="schedule-delete-body" class="mt-2 text-sm text-base-content/70">
+          Everything below is scheduled for permanent deletion in
+          <span class="font-semibold text-base-content">{@retention_days} days</span>
+          and stays recoverable until then. Check anything you want to keep — it stays archived on its own and survives the delete.
+        </p>
+      </div>
+
+      <div :if={@item_count > 0} class="flex items-center justify-between gap-3 px-6 py-3">
+        <span class="text-xs font-medium uppercase tracking-wide text-base-content/50">
+          <span class="tabular-nums text-base-content">{@kept_count}</span>
+          of <span class="tabular-nums">{@item_count}</span>
+          kept
+        </span>
+        <div class="flex items-center gap-1">
+          <button
+            type="button"
+            phx-click="delete_keep_all"
+            data-role="purge-keep-all"
+            class="focus-visible-ring rounded-lg px-2.5 py-1 text-xs font-medium text-base-content/70 hover:bg-base-200 hover:text-base-content"
+          >
+            Keep all
+          </button>
+          <button
+            type="button"
+            phx-click="delete_include_all"
+            data-role="purge-include-all"
+            class="focus-visible-ring rounded-lg px-2.5 py-1 text-xs font-medium text-base-content/70 hover:bg-base-200 hover:text-base-content"
+          >
+            Delete all
+          </button>
+        </div>
+      </div>
+
+      <ul
+        :if={@item_count > 0}
+        data-role="purge-checklist"
+        class="min-h-0 flex-1 overflow-y-auto border-y border-base-300"
+      >
+        <.purge_row
+          :for={item <- @resource.items}
+          item={item}
+          kept={MapSet.member?(@resource.kept, item.id)}
+        />
+      </ul>
+
+      <p :if={@item_count == 0} class="px-6 py-4 text-sm text-base-content/60">
+        Nothing else is filed under {@resource.name} — deleting it affects only the org.
+      </p>
+
+      <div class="flex flex-col gap-4 p-6 pt-4">
+        <label class="flex items-center gap-2.5 text-sm text-base-content" data-role="purge-ack">
+          <input
+            type="checkbox"
+            name="acknowledge"
+            checked={@resource.acknowledged}
+            class="checkbox checkbox-error checkbox-sm [--radius-selector:0.25rem] focus-visible-ring"
+          />
+          <span>I understand this is permanent.</span>
+        </label>
+        <div class="flex justify-end gap-2">
+          <.button
+            variant="ghost"
+            type="button"
+            phx-click="close_delete_modal"
+            data-role="schedule-delete-cancel"
+          >
+            Cancel
+          </.button>
+          <.button
+            variant="destructive"
+            type="submit"
+            disabled={not @resource.acknowledged}
+            data-role="schedule-delete-confirm"
+          >
+            Delete
+          </.button>
+        </div>
+      </div>
+    </form>
+    """
+  end
+
+  attr :item, :map, required: true
+  attr :kept, :boolean, required: true
+
+  defp purge_row(assigns) do
+    ~H"""
+    <li
+      data-role="purge-item"
+      data-id={@item.id}
+      class="grid grid-cols-[1.25rem_1fr_auto_auto] items-center gap-3 border-b border-base-300/60 px-6 py-2.5 last:border-0"
+    >
+      <input
+        type="checkbox"
+        name="keep[]"
+        value={@item.id}
+        checked={@kept}
+        data-role="purge-keep"
+        class="checkbox checkbox-success checkbox-sm [--radius-selector:0.25rem] focus-visible-ring"
+        aria-label={"Keep #{@item.name}"}
+      />
+      <div class="flex min-w-0 items-center gap-2">
+        <.icon name={purge_icon(@item.type)} class="size-4 shrink-0 text-base-content/40" />
+        <span class={[
+          "truncate text-sm",
+          @kept && "text-base-content",
+          !@kept && "text-base-content/70 line-through decoration-error/40"
+        ]}>
+          {@item.name}
+        </span>
+      </div>
+      <.status_chip status={@item.status} />
+      <.chip tone={if(@kept, do: "success", else: "error")} class="justify-self-end">
+        {if @kept, do: "Keep", else: "Delete"}
+      </.chip>
+    </li>
+    """
+  end
+
+  attr :status, :atom, required: true
+
+  defp status_chip(%{status: :scheduled} = assigns),
+    do: ~H|<.chip tone="warning">Scheduled</.chip>|
+
+  defp status_chip(%{status: :archived} = assigns),
+    do: ~H|<.chip tone="neutral">Archived</.chip>|
+
+  defp status_chip(assigns), do: ~H|<.chip tone="info">Active</.chip>|
+
+  defp purge_icon(:project), do: "hero-folder"
+  defp purge_icon(:channel), do: "hero-hashtag"
 
   @doc """
   Undo toast for an archive. `undo` is `nil` (hidden) or
@@ -278,6 +444,127 @@ defmodule PlatformWeb.Components.LifecycleControls do
     """
   end
 
+  @doc """
+  "Restore all" warning modal for an org whose children are individually
+  counting down to a permanent purge (task 019f7600 stage 5).
+
+  Restoring the org revives the whole subtree, which by default also cancels
+  those countdowns. This card surfaces the scheduled children first — aligned
+  columns of name · type · delete date · outcome — and lets the admin CHECK any
+  child to leave it on its clock ("keep scheduled") while the rest come back.
+  Without it, restoring an org silently left a child ticking toward deletion.
+
+  `restore` is `nil` (closed) or
+  `%{org: %{id:, name:}, children: [%{id, name, type, delete_on}], kept: MapSet}`
+  where `kept` holds the ids the admin chose to keep scheduled.
+  """
+  attr :restore, :map,
+    default: nil,
+    doc: "nil when closed; %{org:, children: [], kept: MapSet} when open."
+
+  def restore_all_modal(assigns) do
+    ~H"""
+    <div
+      :if={@restore}
+      id="restore-all-modal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 safe-area-x"
+      phx-window-keydown="close_restore_modal"
+      phx-key="escape"
+      data-role="restore-all-modal"
+    >
+      <div
+        class="flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col rounded-box border border-base-content/10 bg-base-100 shadow-[var(--shadow-modal)]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="restore-all-title"
+        aria-describedby="restore-all-body"
+        phx-click-away="close_restore_modal"
+      >
+        <div class="border-b border-base-300 p-6 pb-4">
+          <h2 id="restore-all-title" class="text-base font-semibold text-base-content">
+            Restore {@restore.org.name}?
+          </h2>
+          <p id="restore-all-body" class="mt-2 text-sm text-base-content/70">
+            These items are counting down to permanent deletion. Restoring brings them all back too.
+            Check any you'd rather keep scheduled — they stay on their countdown.
+          </p>
+        </div>
+
+        <ul
+          data-role="keep-scheduled-list"
+          class="min-h-0 flex-1 overflow-y-auto border-b border-base-300"
+        >
+          <li
+            :for={child <- @restore.children}
+            data-role="keep-scheduled-item"
+            data-id={child.id}
+            class="grid grid-cols-[1.25rem_1fr_auto_auto] items-center gap-3 border-b border-base-300/60 px-6 py-2.5 last:border-0"
+          >
+            <input
+              type="checkbox"
+              checked={MapSet.member?(@restore.kept, child.id)}
+              phx-click="toggle_keep_scheduled"
+              phx-value-id={child.id}
+              data-role="keep-scheduled"
+              class="checkbox checkbox-warning checkbox-sm [--radius-selector:0.25rem] focus-visible-ring"
+              aria-label={"Keep #{child.name} scheduled for deletion"}
+            />
+            <div class="flex min-w-0 items-center gap-2">
+              <.icon name={purge_icon(child.type)} class="size-4 shrink-0 text-base-content/40" />
+              <span class="truncate text-sm text-base-content">{child.name}</span>
+            </div>
+            <span class="flex items-center gap-1.5 whitespace-nowrap text-xs tabular-nums text-base-content/60">
+              <.icon name="hero-calendar" class="size-3.5 shrink-0" />
+              {child.delete_on}
+            </span>
+            <.chip tone={if(MapSet.member?(@restore.kept, child.id), do: "warning", else: "success")}>
+              {if MapSet.member?(@restore.kept, child.id), do: "Delete scheduled", else: "Restore"}
+            </.chip>
+          </li>
+        </ul>
+
+        <div class="flex justify-end gap-2 p-6 pt-4">
+          <.button variant="ghost" phx-click="close_restore_modal" data-role="restore-all-cancel">
+            Cancel
+          </.button>
+          <.button variant="primary" phx-click="confirm_restore_all" data-role="restore-all-confirm">
+            <.icon name="hero-arrow-uturn-left" class="size-4" /> Restore all
+          </.button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # ── Delete-modal (org "surface & choose") state reducers ───────────────
+  # Kept out of the host LiveViews so both the Tasks and Chat surfaces drive the
+  # same include/keep state without duplicating the logic.
+
+  @doc "Open state for the org delete confirm — nothing kept, gate un-armed."
+  @spec build_org_delete_modal(String.t(), String.t(), [map()]) :: map()
+  def build_org_delete_modal(id, name, items) do
+    %{type: "org", id: id, name: name, items: items, kept: MapSet.new(), acknowledged: false}
+  end
+
+  @doc "Fold a `delete_modal_change` form payload (checked keeps + the gate) into the modal."
+  @spec delete_modal_apply_change(map(), map()) :: map()
+  def delete_modal_apply_change(resource, params) do
+    kept = params |> Map.get("keep", []) |> MapSet.new()
+    acknowledged = truthy?(Map.get(params, "acknowledge"))
+    %{resource | kept: kept, acknowledged: acknowledged}
+  end
+
+  @doc "Mark every child Keep (spare all)."
+  @spec delete_modal_keep_all(map()) :: map()
+  def delete_modal_keep_all(resource),
+    do: %{resource | kept: MapSet.new(Enum.map(resource.items, & &1.id))}
+
+  @doc "Clear every Keep (delete all — the default)."
+  @spec delete_modal_include_all(map()) :: map()
+  def delete_modal_include_all(resource), do: %{resource | kept: MapSet.new()}
+
+  defp truthy?(v), do: v in ["true", "on", true]
+
   # Plain-language "what gets hidden" line, tuned per resource type. The org
   # copy deliberately does NOT enumerate ("its projects and channels") any
   # more — the cascade list below does that by name.
@@ -287,13 +574,4 @@ defmodule PlatformWeb.Components.LifecycleControls do
     do: "This hides the project and its tasks from everyone."
 
   defp schedule_body(_), do: "This hides it from everyone."
-
-  # How many children the cascade would take. Tolerant of a resource with no
-  # `preview` key: every caller supplies one today, but this component is
-  # rendered from two LiveViews and a missing key must not crash the dialog —
-  # it should just fall back to the old, vaguer copy.
-  defp cascade_total(%{preview: %{projects: projects, channels: channels}}),
-    do: length(projects) + length(channels)
-
-  defp cascade_total(_), do: 0
 end

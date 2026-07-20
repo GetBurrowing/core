@@ -1071,10 +1071,21 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :undo_archive, nil)}
   end
 
+  # Orgs open the "surface & choose" checklist (task 019f7600 stage 5): every
+  # child — active, cascade-hidden, or hand-archived — is enumerated so the admin
+  # can keep any of them from the org's purge.
+  def handle_event(
+        "open_delete_modal",
+        %{"type" => "org" = type, "id" => id, "name" => name},
+        socket
+      ) do
+    modal = build_org_delete_modal(id, name, PlatformWeb.LifecycleActions.purge_preview(type, id))
+
+    {:noreply, socket |> assign(:lifecycle_menu_key, nil) |> assign(:delete_modal, modal)}
+  end
+
+  # Channels/projects have no children — the simple confirm (empty `preview`).
   def handle_event("open_delete_modal", %{"type" => type, "id" => id, "name" => name}, socket) do
-    # `preview` is what the cascade would ACTUALLY hide, read at open time, so
-    # the dialog names it rather than saying "and everything under it"
-    # (Marlowe's call, 2026-07-16 — keep bulk cascade, but say what it takes).
     {:noreply,
      socket
      |> assign(:lifecycle_menu_key, nil)
@@ -1090,27 +1101,59 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :delete_modal, nil)}
   end
 
-  def handle_event("confirm_schedule_deletion", _params, socket) do
-    case socket.assigns.delete_modal do
-      %{type: type, id: id} ->
-        case LifecycleActions.schedule_deletion(%{id: socket.assigns.user_id}, type, id) do
-          {:ok, _resource} ->
-            {:noreply,
-             socket
-             |> assign(:delete_modal, nil)
-             |> refresh_chat_containers()
-             |> put_flash(:info, "Scheduled for deletion. You can still restore it before then.")}
+  def handle_event("delete_modal_change", params, socket) do
+    {:noreply, update_delete_modal(socket, &delete_modal_apply_change(&1, params))}
+  end
 
-          {:error, reason} ->
-            {:noreply,
-             socket
-             |> assign(:delete_modal, nil)
-             |> put_flash(:error, LifecycleActions.error_message(reason))}
-        end
+  def handle_event("delete_keep_all", _params, socket) do
+    {:noreply, update_delete_modal(socket, &delete_modal_keep_all/1)}
+  end
+
+  def handle_event("delete_include_all", _params, socket) do
+    {:noreply, update_delete_modal(socket, &delete_modal_include_all/1)}
+  end
+
+  def handle_event("confirm_schedule_deletion", _params, socket) do
+    actor = %{id: socket.assigns.user_id}
+
+    case socket.assigns.delete_modal do
+      # Org: honor the include/keep choices, gated on the acknowledgement.
+      %{type: "org", acknowledged: true, id: id, kept: kept} ->
+        result = LifecycleActions.schedule_deletion(actor, "org", id, MapSet.to_list(kept))
+        {:noreply, finish_schedule_deletion(socket, result)}
+
+      # Gate not armed — ignore the submit, leave the modal open.
+      %{type: "org"} ->
+        {:noreply, socket}
+
+      %{type: type, id: id} ->
+        result = LifecycleActions.schedule_deletion(actor, type, id)
+        {:noreply, finish_schedule_deletion(socket, result)}
 
       _ ->
         {:noreply, assign(socket, :delete_modal, nil)}
     end
+  end
+
+  # Only orgs carry the include/keep modal state; a channel modal is a no-op here.
+  defp update_delete_modal(socket, fun) do
+    case socket.assigns.delete_modal do
+      %{type: "org"} = modal -> assign(socket, :delete_modal, fun.(modal))
+      _ -> socket
+    end
+  end
+
+  defp finish_schedule_deletion(socket, {:ok, _resource}) do
+    socket
+    |> assign(:delete_modal, nil)
+    |> refresh_chat_containers()
+    |> put_flash(:info, "Scheduled for deletion. You can still restore it before then.")
+  end
+
+  defp finish_schedule_deletion(socket, {:error, reason}) do
+    socket
+    |> assign(:delete_modal, nil)
+    |> put_flash(:error, LifecycleActions.error_message(reason))
   end
 
   # Channel drag-drop OR keyboard move. The hook emits the TARGET section's
@@ -2160,22 +2203,41 @@ defmodule PlatformWeb.ChatLive do
   end
 
   # Sidebar-shape invalidation (chat sidebar v3 Stage 4). Fired on the
-  # per-user `chat:sidebar:<user_id>` topic when an admin curation write
-  # (Stage 6) or a personal arrangement change (Stage 5) alters the resolved
-  # sidebar. Recompute `@sidebar_sections` from the current channel list +
-  # the (possibly updated) saved section order. Nothing broadcasts this yet —
-  # the handler exists so the cache-invalidation path is ready for Stage 5/6.
+  # per-user `chat:sidebar:<user_id>` topic when a personal arrangement change
+  # (Stage 5) or an admin action in ANOTHER session — e.g. a Recovery-hub
+  # channel restore (task 019f7600), which broadcasts via
+  # `Lifecycle.restore_space_with_ancestors/2` → `broadcast_sidebar_changed/1`
+  # — moves a channel between the active and archived buckets.
+  #
+  # Re-read BOTH channel lists from the DB, then recompute `@sidebar_sections`
+  # off the FRESH `@channels`. Recomputing off the stale `socket.assigns.channels`
+  # alone (the pre-019f7600 behavior) refreshed the active sub-org sections but
+  # left the collapsed "Archived" group — which renders straight off
+  # `@archived_channels` — still showing a channel that is no longer archived,
+  # until a manual reload. This mirrors the own-session unarchive/navigation
+  # refresh so a cross-session restore drops the archived row live. Embedded
+  # surfaces have no sidebar and never subscribe (see `do_mount/3`), so they
+  # keep their empty lists.
   def handle_info(:sidebar_changed, socket) do
-    {:noreply,
-     assign(
-       socket,
-       :sidebar_sections,
-       resolve_sidebar_sections(
-         socket.assigns.user_id,
-         socket.assigns.channels,
-         socket.assigns.hidden_channel_ids
-       )
-     )}
+    if socket.assigns.embedded do
+      {:noreply, socket}
+    else
+      channels = Chat.list_spaces(kind: "channel")
+      archived_channels = Chat.list_spaces(kind: "channel", archived: true)
+
+      {:noreply,
+       socket
+       |> assign(:channels, channels)
+       |> assign(:archived_channels, archived_channels)
+       |> assign(
+         :sidebar_sections,
+         resolve_sidebar_sections(
+           socket.assigns.user_id,
+           channels,
+           socket.assigns.hidden_channel_ids
+         )
+       )}
+    end
   end
 
   # Shared org-DEFAULT invalidation (chat sidebar Stage 6). Fired on the

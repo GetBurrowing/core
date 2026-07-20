@@ -243,6 +243,41 @@ defmodule Platform.Chat do
     |> Repo.all()
   end
 
+  @doc """
+  List EVERY recoverable channel for the recovery surface — `kind: "channel"`
+  spaces with `archived_at` set, **both** the independently-archived ones and
+  the cascade-hidden children of an archived/deletion-scheduled org (i.e. no
+  `archived_cascade_org_id` filter, unlike the sidebar's `list_spaces/1`).
+
+  Both the plain-archived and the deletion-scheduled states are returned
+  (scheduling also stamps `archived_at`), ordered deletion-scheduled first
+  (soonest deadline first — the rows the admin most needs to act on) then by
+  name. The same ordering as `Tasks.list_recoverable_projects/0` and
+  `Tenancy.list_archived_tenants/0`, so the recovery surface buckets the two
+  states consistently across all three entity types.
+
+  Scoped to `kind: "channel"` on purpose: execution spaces are task audit
+  logs (recovering one would be meaningless — the deletion path already
+  refuses them), and dm/group/meeting spaces are not recovery targets. The
+  unified recovery row this feeds (`Platform.Tenancy.Lifecycle.list_recoverable/0`)
+  types every space row as `:channel`, matching `cascade_hidden/1` /
+  `cascade_preview/1`.
+
+  `archived_cascade_org_id` is left on each struct so the caller can tell an
+  independently-archived channel from a cascade child and resolve the org the
+  child hangs off. Read-only companion to `list_spaces/1`; lifecycle mutators
+  live in `archive_space/2`, `schedule_space_deletion/2`, `unarchive_space/2`.
+  """
+  @spec list_archived_spaces() :: [Space.t()]
+  def list_archived_spaces do
+    Space
+    |> where([s], s.kind == "channel" and not is_nil(s.archived_at))
+    |> Repo.all()
+    |> Enum.sort_by(fn s ->
+      {s.deletion_scheduled_at || ~U[9999-01-01 00:00:00.000000Z], s.name}
+    end)
+  end
+
   @doc "List spaces an agent is a member of via the `chat_participants` roster."
   @spec list_spaces_for_agent(binary(), keyword()) :: [Space.t()]
   def list_spaces_for_agent(agent_id, opts \\ []) when is_binary(agent_id) do

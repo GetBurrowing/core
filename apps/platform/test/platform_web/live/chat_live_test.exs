@@ -2877,6 +2877,34 @@ defmodule PlatformWeb.ChatLiveTest do
 
       refute has_element?(view, "[data-section-key='archived']")
     end
+
+    # Receive-side coverage for the cross-session freshness the Recovery hub
+    # relies on (task 019f7600, V4). A restore in ANOTHER session broadcasts
+    # :sidebar_changed on this user's topic; without a manual reload the sidebar
+    # must drop the no-longer-archived row. Pre-019f7600 the handler recomputed
+    # only @sidebar_sections off the stale @channels and never re-read
+    # @archived_channels, so the Archived group lingered until reload.
+    test "sidebar drops the Archived section live on a :sidebar_changed broadcast", %{conn: conn} do
+      active = insert_channel()
+      archived = insert_archived_channel(%{name: "Old Reports"})
+      conn = authenticated_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{active.slug}")
+
+      assert has_element?(view, "[data-section-key='archived']")
+
+      # Another session reactivates the channel and broadcasts the invalidation.
+      archived
+      |> Ecto.Changeset.change(archived_at: nil)
+      |> Repo.update!()
+
+      user_id = :sys.get_state(view.pid).socket.assigns.user_id
+      Platform.Chat.PubSub.broadcast_sidebar_changed(user_id)
+
+      # No manual reload — the handler re-reads @archived_channels, so the now
+      # empty Archived group disappears.
+      refute has_element?(view, "[data-section-key='archived']")
+    end
   end
 
   # ── Channel deletion (task 019e95ea stage 4) ───────────────────────────────

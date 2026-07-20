@@ -356,4 +356,73 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       assert pushed_id == project.id
     end
   end
+
+  # ── Org delete "surface & choose" (task 019f7600 stage 5) ──────────────
+
+  describe "fabrikam admin — org delete surface & choose" do
+    defp open_org_delete_modal(view) do
+      org_menu = "[data-menu-key='org:soylent']"
+      view |> element("#{org_menu} [data-role=lifecycle-menu-trigger]") |> render_click()
+      view |> element("#{org_menu} [data-role=lifecycle-schedule-delete]") |> render_click()
+      view
+    end
+
+    test "the org delete confirm lists children as a checklist, Delete gated until acknowledged",
+         %{conn: conn} do
+      {conn, _user} = fabrikam_admin_conn(conn)
+      swept = create_project("soylent")
+      kept = create_project("soylent")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      open_org_delete_modal(view)
+
+      assert has_element?(view, "[data-role=purge-checklist]")
+      assert has_element?(view, "[data-role=purge-item][data-id='#{swept.id}']")
+      assert has_element?(view, "[data-role=purge-item][data-id='#{kept.id}']")
+
+      # The destructive button is disabled until the "I understand" gate is armed.
+      assert has_element?(view, "[data-role=schedule-delete-confirm][disabled]")
+    end
+
+    test "keeping a child spares it while the org + the rest are scheduled", %{conn: conn} do
+      {conn, _user} = fabrikam_admin_conn(conn)
+      swept = create_project("soylent")
+      kept = create_project("soylent")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      open_org_delete_modal(view)
+
+      modal =
+        form(view, "#schedule-delete-modal form", %{"keep" => [kept.id], "acknowledge" => "on"})
+
+      render_change(modal)
+      render_submit(modal)
+
+      refute has_element?(view, "[data-role=schedule-delete-modal]")
+
+      # Org + the un-kept project are scheduled …
+      assert Repo.get_by(Org, slug: "soylent").deletion_scheduled_at
+      assert Repo.get(Project, swept.id).deletion_scheduled_at
+      # … the kept project is spared (no clock, survives as its own archived row).
+      refute Repo.get(Project, kept.id).deletion_scheduled_at
+    end
+
+    test "submitting without the acknowledgement schedules nothing and leaves the modal open", %{
+      conn: conn
+    } do
+      {conn, _user} = fabrikam_admin_conn(conn)
+      project = create_project("soylent")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      open_org_delete_modal(view)
+
+      modal = form(view, "#schedule-delete-modal form", %{"keep" => []})
+      render_change(modal)
+      render_submit(modal)
+
+      assert has_element?(view, "[data-role=schedule-delete-modal]")
+      refute Repo.get_by(Org, slug: "soylent").deletion_scheduled_at
+      refute Repo.get(Project, project.id).deletion_scheduled_at
+    end
+  end
 end

@@ -1,124 +1,167 @@
-<div class="flex h-full min-h-0 flex-col">
-  <%!-- Header (mirrors the Admin surface chrome) --%>
-  <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+<div class="relative flex h-full min-h-0 flex-col">
+  <%!-- Header (mirrors the Admin surface chrome) — title left, org filter right --%>
+  <div class="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3">
     <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
       Recovery · Archived &amp; scheduled
     </h1>
+    <form :if={@org_options != []} phx-change="filter_org" class="shrink-0">
+      <select
+        name="org"
+        class="select select-sm select-bordered focus-visible-ring text-sm"
+        aria-label="Filter by org"
+      >
+        <option value="" selected={@org_filter == nil}>All orgs</option>
+        <option :for={{name, id} <- @org_options} value={id} selected={@org_filter == id}>
+          {name}
+        </option>
+      </select>
+    </form>
   </div>
 
-  <div class="flex-1 min-h-0 overflow-y-auto p-4">
-    <div class="mx-auto max-w-5xl">
-      <%= if @entries == [] do %>
-        <.empty_state variant={:standard} icon_name="hero-archive-box">
-          <:title>Nothing archived</:title>
-          <:body>
-            Retired orgs and projects show up here so you can bring them back.
-          </:body>
-        </.empty_state>
-      <% else %>
-        <%!-- Structured table (task 019f4eaa review): one row per retired
-             container, status + dates in columns, a simple Restore action.
-             Scheduled rows sort to the top (soonest permanent-delete first). --%>
-        <div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
-          <table class="w-full border-collapse text-sm">
-            <thead>
-              <tr class="border-b border-base-300 text-left text-xs font-medium uppercase tracking-wide text-base-content/50">
-                <th class="px-4 py-2.5">Name</th>
-                <th class="px-4 py-2.5">Type</th>
-                <th class="px-4 py-2.5">Status</th>
-                <th class="px-4 py-2.5">Archived on</th>
-                <th class="px-4 py-2.5">Auto-deletes</th>
-                <th class="px-4 py-2.5 text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                :for={entry <- @entries}
-                data-role="recovery-row"
-                data-type={entry.type}
-                data-id={entry.id}
-                data-status={if entry.scheduled?, do: "scheduled", else: "archived"}
-                class="border-b border-base-300/50 last:border-0 hover:bg-base-200/40 transition-colors"
-              >
-                <td class="px-4 py-3">
-                  <div class="flex min-w-0 items-center gap-2.5">
-                    <.icon
-                      name={kind_icon(entry.type)}
-                      class="size-4 shrink-0 text-base-content/40"
+  <div class="min-h-0 flex-1 overflow-y-auto p-4">
+    <div class="mx-auto max-w-6xl">
+      <%= cond do %>
+        <% @rows == [] -> %>
+          <.empty_state variant={:standard} icon_name="hero-archive-box">
+            <:title>Nothing archived</:title>
+            <:body>
+              Retired orgs, projects, and channels show up here so you can bring them back.
+            </:body>
+          </.empty_state>
+        <% @top_level == [] -> %>
+          <.empty_state variant={:standard} icon_name="hero-funnel">
+            <:title>Nothing in that org</:title>
+            <:body>
+              No archived containers match this filter. Clear it to see everything recoverable.
+            </:body>
+          </.empty_state>
+        <% true -> %>
+          <%!-- Unified recoverable inventory (task 019f7600 stage 4): a row per
+               org / project / channel. Containers expand to reveal the cascade
+               children they hid; leaf rows carry a checkbox for selective
+               restore via the pinned bulk bar below. --%>
+          <div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
+            <table class="w-full border-collapse text-sm">
+              <thead>
+                <tr class="border-b border-base-300 text-left text-xs font-medium uppercase tracking-wide text-base-content/50">
+                  <th class="w-10 px-4 py-2.5">
+                    <span class="sr-only">Select</span>
+                  </th>
+                  <.sort_header sort={@sort} key={:org} label="Org" />
+                  <.sort_header sort={@sort} key={:name} label="Name" />
+                  <.sort_header sort={@sort} key={:type} label="Type" />
+                  <.sort_header sort={@sort} key={:status} label="Status" />
+                  <.sort_header sort={@sort} key={:archived_at} label="Archived on" />
+                  <.sort_header sort={@sort} key={:deletes_on} label="Deletes on" />
+                  <th class="px-4 py-2.5 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <%= for row <- @top_level do %>
+                  <.recovery_row
+                    row={row}
+                    retention_days={@retention_days}
+                    selected={selected?(@selected, row)}
+                    selectable={row.type != :org}
+                    expandable={row.type == :org and children?(@children_by_org, row.id)}
+                    expanded={MapSet.member?(@expanded, row.id)}
+                    child_count={child_count(@children_by_org, row.id)}
+                  />
+                  <%= if row.type == :org and MapSet.member?(@expanded, row.id) do %>
+                    <.recovery_row
+                      :for={child <- Map.get(@children_by_org, row.id, [])}
+                      row={child}
+                      retention_days={@retention_days}
+                      selected={selected?(@selected, child)}
+                      selectable={true}
+                      indent={true}
                     />
-                    <span class="truncate font-medium text-base-content">{entry.name}</span>
-                  </div>
-                  <%!-- What Restore brings back WITH this row (task 019f4eaa,
-                       Marlowe's ask). Cascade children aren't rows of their own —
-                       they return with their org — but the row must say what's
-                       inside rather than make you restore blind. Same instinct
-                       as the confirm dialog's "ALSO HIDDEN" list, and the same
-                       source of truth: this is exactly the restore query.
-                       Absent for projects (no cascade) and for an org whose
-                       children were archived independently — Restore won't
-                       bring those back, so it must not imply it will. --%>
-                  <p
-                    :if={hidden_labels(entry) != []}
-                    data-role="recovery-row-hidden"
-                    class="mt-1 truncate pl-[26px] text-xs text-base-content/50"
-                    title={Enum.join(hidden_labels(entry), ", ")}
-                  >
-                    Restores {length(hidden_labels(entry))} inside: {Enum.join(
-                      hidden_labels(entry),
-                      ", "
-                    )}
-                  </p>
-                </td>
-                <td class="px-4 py-3 text-base-content/70">{entry.kind_label}</td>
-                <%!-- Status reads as plain text (task 019f4eaa review): the
-                     leading dot was decoration — the word already says it, and
-                     the tone carries the urgency. --%>
-                <td class="px-4 py-3">
-                  <span :if={entry.scheduled?} class="whitespace-nowrap text-warning">
-                    Scheduled for deletion
-                  </span>
-                  <span :if={not entry.scheduled?} class="whitespace-nowrap text-base-content/60">
-                    Archived
-                  </span>
-                </td>
-                <td class="whitespace-nowrap px-4 py-3 tabular-nums text-base-content/70">
-                  {format_date(entry.archived_at)}
-                </td>
-                <td class="whitespace-nowrap px-4 py-3">
-                  <%= if entry.scheduled? do %>
-                    <% {tone, label} = runway(entry.deletion_scheduled_at, @retention_days) %>
-                    <div class="flex flex-col leading-tight">
-                      <span class={["tabular-nums", deadline_class(tone)]}>
-                        {format_date(
-                          permanent_delete_at(entry.deletion_scheduled_at, @retention_days)
-                        )}
-                      </span>
-                      <span class="text-[11px] text-base-content/50">{label}</span>
-                    </div>
-                  <% else %>
-                    <span class="text-base-content/30">—</span>
                   <% end %>
-                </td>
-                <td class="px-4 py-3">
-                  <div class="flex items-center justify-end gap-1.5">
-                    <.button
-                      variant="primary"
-                      phx-click="restore"
-                      phx-value-type={entry.type}
-                      phx-value-id={entry.id}
-                      phx-value-action={if entry.scheduled?, do: "cancel", else: "unarchive"}
-                      data-role="restore"
-                      class="btn btn-primary btn-xs focus-visible-ring"
-                    >
-                      <.icon name="hero-arrow-uturn-left" class="size-3.5" /> Restore
-                    </.button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+                <% end %>
+              </tbody>
+            </table>
+          </div>
       <% end %>
     </div>
   </div>
+
+  <%!-- Pinned chrome: selection bulk bar. A direct sibling of the scroll region
+       (NOT nested in a conditional wrapper that morphdom re-patches) so it stays
+       stable while rows toggle — it mounts on 0→1 selected and unmounts on
+       1→0, and only its count patches in between. --%>
+  <div
+    :if={@selected != %{}}
+    data-role="selection-bar"
+    class="fixed bottom-[calc(1.5rem+var(--bottom-nav-height))] left-1/2 z-40 -translate-x-1/2"
+  >
+    <div class="flex items-center gap-3 rounded-full border border-base-300 bg-base-100 px-4 py-2 shadow-md">
+      <span class="text-sm font-medium tabular-nums text-base-content">
+        {map_size(@selected)} selected
+      </span>
+      <.button
+        variant="primary"
+        phx-click="restore_selected"
+        data-role="restore-selected"
+        class="btn btn-primary btn-sm focus-visible-ring"
+      >
+        <.icon name="hero-arrow-uturn-left" class="size-4" /> Restore selected
+      </.button>
+      <button
+        type="button"
+        phx-click="clear_selection"
+        class="focus-visible-ring rounded px-1 text-sm text-base-content/60 hover:text-base-content"
+      >
+        Clear
+      </button>
+    </div>
+  </div>
+
+  <%!-- Pinned chrome: act-then-confirm success toast. Server-driven show/hide
+       (assign + auto-dismiss timer) — no JS hook and no inline styles, so
+       morphdom has nothing to clear on patch. Sibling of the scroll region. --%>
+  <div
+    :if={@toast}
+    data-role="recovery-toast"
+    role="status"
+    aria-live="polite"
+    class="fixed bottom-[calc(1.5rem+var(--bottom-nav-height))] right-4 z-50 max-w-sm"
+  >
+    <div class="flex items-start gap-3 rounded-lg border border-success/25 bg-base-100 px-4 py-3 shadow-md">
+      <.icon name="hero-check-circle-solid" class="size-5 shrink-0 text-success" />
+      <div class="min-w-0 flex-1">
+        <p class="text-sm text-base-content">{@toast.message}</p>
+        <div class="mt-2 flex items-center gap-4">
+          <.link
+            :if={@toast.view_path}
+            navigate={@toast.view_path}
+            data-role="toast-view"
+            class="focus-visible-ring rounded text-xs font-medium text-primary hover:underline"
+          >
+            View →
+          </.link>
+          <button
+            type="button"
+            phx-click="undo_restore"
+            data-role="toast-undo"
+            class="focus-visible-ring rounded text-xs font-medium text-base-content/70 hover:text-base-content"
+          >
+            Undo
+          </button>
+        </div>
+      </div>
+      <button
+        type="button"
+        phx-click="dismiss_toast"
+        aria-label="Dismiss"
+        class="focus-visible-ring shrink-0 rounded"
+      >
+        <.icon name="hero-x-mark" class="size-4 opacity-40 hover:opacity-70" />
+      </button>
+    </div>
+  </div>
+
+  <%!-- "Restore all" warning: fires when an org's cascade children are on a
+       delete countdown. Default restores them all; the admin can keep specific
+       ones scheduled (task 019f7600 stage 5). --%>
+  <.restore_all_modal restore={@restore_modal} />
 </div>

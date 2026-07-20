@@ -685,11 +685,22 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, assign(socket, :undo_archive, nil)}
   end
 
+  # Orgs open the "surface & choose" checklist (task 019f7600 stage 5): deleting
+  # an org takes every child with it, so enumerate them ALL (active, cascade-
+  # hidden, hand-archived) and let the admin keep any. NB: `id` is an org SLUG on
+  # this surface; LifecycleActions resolves it.
+  def handle_event(
+        "open_delete_modal",
+        %{"type" => "org" = type, "id" => id, "name" => name},
+        socket
+      ) do
+    modal = build_org_delete_modal(id, name, LifecycleActions.purge_preview(type, id))
+
+    {:noreply, socket |> assign(:lifecycle_menu_key, nil) |> assign(:delete_modal, modal)}
+  end
+
+  # Projects have no children — the simple confirm (empty `preview`).
   def handle_event("open_delete_modal", %{"type" => type, "id" => id, "name" => name}, socket) do
-    # `preview` is what the cascade would ACTUALLY hide, read at open time, so
-    # the dialog can name it instead of saying "and everything under it"
-    # (Marlowe's call, 2026-07-16 — keep bulk cascade, but say what it takes).
-    # NB: `id` is an org SLUG on this surface; LifecycleActions resolves it.
     {:noreply,
      socket
      |> assign(:lifecycle_menu_key, nil)
@@ -705,27 +716,68 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, assign(socket, :delete_modal, nil)}
   end
 
+  def handle_event("delete_modal_change", params, socket) do
+    {:noreply, update_delete_modal(socket, &delete_modal_apply_change(&1, params))}
+  end
+
+  def handle_event("delete_keep_all", _params, socket) do
+    {:noreply, update_delete_modal(socket, &delete_modal_keep_all/1)}
+  end
+
+  def handle_event("delete_include_all", _params, socket) do
+    {:noreply, update_delete_modal(socket, &delete_modal_include_all/1)}
+  end
+
   def handle_event("confirm_schedule_deletion", _params, socket) do
     case socket.assigns.delete_modal do
-      %{type: type, id: id} ->
-        case LifecycleActions.schedule_deletion(socket.assigns.current_user_record, type, id) do
-          {:ok, _resource} ->
-            {:noreply,
-             socket
-             |> assign(:delete_modal, nil)
-             |> refresh_containers()
-             |> put_flash(:info, "Scheduled for deletion. You can still restore it before then.")}
+      # Org: honor the include/keep choices, gated on the acknowledgement.
+      %{type: "org", acknowledged: true, id: id, kept: kept} ->
+        keep_ids = MapSet.to_list(kept)
 
-          {:error, reason} ->
-            {:noreply,
-             socket
-             |> assign(:delete_modal, nil)
-             |> put_flash(:error, LifecycleActions.error_message(reason))}
-        end
+        result =
+          LifecycleActions.schedule_deletion(
+            socket.assigns.current_user_record,
+            "org",
+            id,
+            keep_ids
+          )
+
+        {:noreply, finish_schedule_deletion(socket, result)}
+
+      # Gate not armed — ignore the submit, leave the modal open.
+      %{type: "org"} ->
+        {:noreply, socket}
+
+      %{type: type, id: id} ->
+        result =
+          LifecycleActions.schedule_deletion(socket.assigns.current_user_record, type, id)
+
+        {:noreply, finish_schedule_deletion(socket, result)}
 
       _ ->
         {:noreply, assign(socket, :delete_modal, nil)}
     end
+  end
+
+  # Only orgs carry the include/keep modal state; a project modal is a no-op here.
+  defp update_delete_modal(socket, fun) do
+    case socket.assigns.delete_modal do
+      %{type: "org"} = modal -> assign(socket, :delete_modal, fun.(modal))
+      _ -> socket
+    end
+  end
+
+  defp finish_schedule_deletion(socket, {:ok, _resource}) do
+    socket
+    |> assign(:delete_modal, nil)
+    |> refresh_containers()
+    |> put_flash(:info, "Scheduled for deletion. You can still restore it before then.")
+  end
+
+  defp finish_schedule_deletion(socket, {:error, reason}) do
+    socket
+    |> assign(:delete_modal, nil)
+    |> put_flash(:error, LifecycleActions.error_message(reason))
   end
 
   def handle_event("toggle_fab_menu", _params, socket) do

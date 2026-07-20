@@ -24,6 +24,7 @@ defmodule Platform.Tenancy.LifecycleTest do
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tenancy
+  alias Platform.Tenancy.Lifecycle
   alias Platform.Tenancy.Org
   alias Platform.Tenancy.OrgMembership
 
@@ -554,6 +555,524 @@ defmodule Platform.Tenancy.LifecycleTest do
       assert event.resource_type == "project"
       assert event.resource_id == proj.id
       assert event.action == "project_archived"
+    end
+  end
+
+  # ── Unified recoverable read (Recovery hub, task 019f7600 stage 2) ──────
+
+  describe "list_recoverable/0" do
+    defp recoverable_row(rows, type, id) do
+      Enum.find(rows, &(&1.type == type and &1.id == id))
+    end
+
+    test "surfaces archived orgs, projects, and channels — independent, cascade-hidden, and scheduled" do
+      admin = admin_user!()
+
+      # Independently-archived project + channel (own state, no cascade parent).
+      indep_org = tenant_org!()
+      indep_proj = project!(indep_org)
+      indep_chan = channel!(indep_org)
+      {:ok, _} = Tasks.archive_project(admin, indep_proj)
+      {:ok, _} = Chat.archive_space(admin, indep_chan)
+
+      # A deletion-scheduled org that cascade-hides its active project + channel.
+      sched_org = tenant_org!()
+      cascaded_proj = project!(sched_org)
+      cascaded_chan = channel!(sched_org)
+      {:ok, sched_org} = Tenancy.schedule_org_deletion(admin, sched_org)
+
+      rows = Lifecycle.list_recoverable()
+
+      # Org row: scheduled, no cascade parent, `org` field points at itself.
+      org_row = recoverable_row(rows, :org, sched_org.id)
+      assert org_row.status == :scheduled
+      assert is_nil(org_row.cascade_org_id)
+      assert org_row.org.id == sched_org.id
+      assert org_row.name == sched_org.name
+
+      # Independently-archived project + channel: archived, no cascade parent.
+      ip = recoverable_row(rows, :project, indep_proj.id)
+      assert ip.status == :archived
+      assert is_nil(ip.cascade_org_id)
+      assert ip.org.id == indep_org.id
+
+      # Channels now surface at all (the recovery load ignored them before).
+      ic = recoverable_row(rows, :channel, indep_chan.id)
+      assert ic.status == :archived
+      assert is_nil(ic.cascade_org_id)
+
+      # Cascade children: tagged with cascade_org_id and :scheduled. Post-019f760f
+      # (now merged) a scheduled org stamps each cascade child's OWN deletion
+      # clock with the org's, so their deletion_scheduled_at mirrors the org's
+      # rather than staying NULL.
+      cp = recoverable_row(rows, :project, cascaded_proj.id)
+      assert cp.cascade_org_id == sched_org.id
+      assert cp.status == :scheduled
+      assert cp.deletion_scheduled_at == sched_org.deletion_scheduled_at
+
+      cc = recoverable_row(rows, :channel, cascaded_chan.id)
+      assert cc.cascade_org_id == sched_org.id
+      assert cc.status == :scheduled
+      assert cc.deletion_scheduled_at == sched_org.deletion_scheduled_at
+    end
+
+    test "two-state status: own-clock scheduled vs plain archived, per entity type" do
+      admin = admin_user!()
+      org = tenant_org!()
+
+      # Plain-archived org → :archived.
+      {:ok, _} = Tenancy.archive_org(admin, org)
+      assert recoverable_row(Lifecycle.list_recoverable(), :org, org.id).status == :archived
+
+      # Project scheduled on its OWN clock → :scheduled (not a cascade child).
+      proj_org = tenant_org!()
+      scheduled_proj = project!(proj_org)
+      {:ok, _} = Tasks.schedule_project_deletion(admin, scheduled_proj)
+      proj_row = recoverable_row(Lifecycle.list_recoverable(), :project, scheduled_proj.id)
+      assert proj_row.status == :scheduled
+      assert is_nil(proj_row.cascade_org_id)
+      assert %DateTime{} = proj_row.deletion_scheduled_at
+
+      # Channel scheduled on its OWN clock → :scheduled (independent, not cascade).
+      chan_org = tenant_org!()
+      scheduled_chan = channel!(chan_org)
+      {:ok, _} = Chat.schedule_space_deletion(admin, scheduled_chan)
+      chan_row = recoverable_row(Lifecycle.list_recoverable(), :channel, scheduled_chan.id)
+      assert chan_row.status == :scheduled
+      assert is_nil(chan_row.cascade_org_id)
+      assert %DateTime{} = chan_row.deletion_scheduled_at
+    end
+
+    test "the Fabrikam root org never appears, even alongside archived tenants" do
+      admin = admin_user!()
+      org = tenant_org!()
+      {:ok, _} = Tenancy.archive_org(admin, org)
+
+      rows = Lifecycle.list_recoverable()
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      refute Enum.any?(rows, &(&1.type == :org and &1.id == fabrikam.id))
+      # …while the archived tenant is present.
+      assert recoverable_row(rows, :org, org.id)
+    end
+
+    test "active (non-archived) orgs, projects, and channels are excluded" do
+      org = tenant_org!()
+      proj = project!(org)
+      chan = channel!(org)
+
+      rows = Lifecycle.list_recoverable()
+
+      refute recoverable_row(rows, :org, org.id)
+      refute recoverable_row(rows, :project, proj.id)
+      refute recoverable_row(rows, :channel, chan.id)
+    end
+  end
+
+  # ── Selective restore (Recovery hub, task 019f7600 stage 3) ────────────
+
+  describe "restore_project_with_ancestors/2" do
+    test "brings back ONE cascade child + reactivates its org, leaving siblings archived" do
+      admin = admin_user!()
+      org = tenant_org!()
+      target = project!(org)
+      sibling = project!(org)
+
+      # Schedule the org for deletion: both children are cascade-hidden and
+      # inherit the org's OWN deletion clock (task 019f760f).
+      assert {:ok, scheduled} = Tenancy.schedule_org_deletion(admin, org)
+
+      target = Repo.reload!(target)
+      sibling = Repo.reload!(sibling)
+      assert target.archived_cascade_org_id == org.id
+      assert target.deletion_scheduled_at == scheduled.deletion_scheduled_at
+      assert sibling.archived_cascade_org_id == org.id
+      assert sibling.deletion_scheduled_at == scheduled.deletion_scheduled_at
+
+      assert {:ok, restored} = Lifecycle.restore_project_with_ancestors(admin, target)
+
+      # The target is fully live: own flags + provenance marker cleared.
+      assert is_nil(restored.archived_at)
+      assert is_nil(restored.deletion_scheduled_at)
+      assert is_nil(restored.archived_cascade_org_id)
+
+      # The org is reactivated so the restored project has a live parent.
+      org = Repo.reload!(org)
+      assert is_nil(org.archived_at)
+      assert is_nil(org.deletion_scheduled_at)
+
+      # THE KEY ASSERTION: the sibling is untouched — still archived, own clock
+      # and provenance marker intact ("restore everything except this one").
+      sibling_after = Repo.reload!(sibling)
+      assert sibling_after.archived_at == sibling.archived_at
+      assert sibling_after.deletion_scheduled_at == sibling.deletion_scheduled_at
+      assert sibling_after.archived_cascade_org_id == org.id
+    end
+
+    test "returns :not_found when the project was hard-deleted before the click" do
+      admin = admin_user!()
+      org = tenant_org!()
+      proj = project!(org)
+      assert {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
+      proj = Repo.reload!(proj)
+
+      # Simulate the purger hard-deleting between hub render and Restore click.
+      Repo.delete!(proj)
+
+      assert {:error, :not_found} = Lifecycle.restore_project_with_ancestors(admin, proj)
+      # The verify failure rolls back the whole transaction — org stays hidden.
+      assert %DateTime{} = Repo.reload!(org).archived_at
+    end
+
+    test "rejects a non-admin actor and writes nothing" do
+      admin = admin_user!()
+      member = member_user!()
+      org = tenant_org!()
+      proj = project!(org)
+      assert {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
+      proj = Repo.reload!(proj)
+
+      assert {:error, :unauthorized} = Lifecycle.restore_project_with_ancestors(member, proj)
+      assert {:error, :unauthorized} = Lifecycle.restore_project_with_ancestors(nil, proj)
+
+      assert %DateTime{} = Repo.reload!(proj).archived_at
+      assert %DateTime{} = Repo.reload!(org).archived_at
+    end
+  end
+
+  describe "restore_space_with_ancestors/2" do
+    test "brings back ONE channel + reactivates its org, broadcasts sidebar, leaves siblings archived" do
+      admin = admin_user!()
+      org = tenant_org!()
+      target = channel!(org)
+      sibling = channel!(org)
+
+      assert {:ok, scheduled} = Tenancy.schedule_org_deletion(admin, org)
+
+      target = Repo.reload!(target)
+      sibling = Repo.reload!(sibling)
+      assert target.archived_cascade_org_id == org.id
+      assert target.deletion_scheduled_at == scheduled.deletion_scheduled_at
+
+      # A restored channel must re-read the acting admin's sidebar.
+      Chat.PubSub.subscribe_sidebar(admin.id)
+
+      assert {:ok, restored} = Lifecycle.restore_space_with_ancestors(admin, target)
+
+      assert is_nil(restored.archived_at)
+      assert is_nil(restored.deletion_scheduled_at)
+      assert is_nil(restored.archived_cascade_org_id)
+
+      assert_receive :sidebar_changed
+
+      org = Repo.reload!(org)
+      assert is_nil(org.archived_at)
+      assert is_nil(org.deletion_scheduled_at)
+
+      sibling_after = Repo.reload!(sibling)
+      assert sibling_after.archived_at == sibling.archived_at
+      assert sibling_after.deletion_scheduled_at == sibling.deletion_scheduled_at
+      assert sibling_after.archived_cascade_org_id == org.id
+    end
+
+    test "returns :not_found when the channel was hard-deleted before the click" do
+      admin = admin_user!()
+      org = tenant_org!()
+      chan = channel!(org)
+      assert {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
+      chan = Repo.reload!(chan)
+
+      Repo.delete!(chan)
+
+      assert {:error, :not_found} = Lifecycle.restore_space_with_ancestors(admin, chan)
+      assert %DateTime{} = Repo.reload!(org).archived_at
+    end
+
+    test "rejects a non-admin actor — even the space creator (stricter than Chat.unarchive_space/2)" do
+      admin = admin_user!()
+      member = member_user!()
+      org = tenant_org!()
+      # The member is the channel's CREATOR: Chat.unarchive_space/2 would admit
+      # them, but selective restore reactivates the whole org, so it must not.
+      chan = channel!(org, %{created_by: member.id})
+      assert {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
+      chan = Repo.reload!(chan)
+
+      assert {:error, :unauthorized} = Lifecycle.restore_space_with_ancestors(member, chan)
+      assert {:error, :unauthorized} = Lifecycle.restore_space_with_ancestors(nil, chan)
+
+      assert %DateTime{} = Repo.reload!(chan).archived_at
+      assert %DateTime{} = Repo.reload!(org).archived_at
+    end
+  end
+
+  describe "selective restore — audit" do
+    setup do
+      Platform.Audit.TelemetryHandler.detach()
+      Platform.Audit.TelemetryHandler.attach()
+
+      on_exit(fn ->
+        Platform.Audit.TelemetryHandler.detach()
+        Platform.Audit.TelemetryHandler.attach()
+      end)
+
+      :ok
+    end
+
+    test "project restore persists BOTH the project and org unarchive events" do
+      admin = admin_user!()
+      org = tenant_org!()
+      proj = project!(org)
+      assert {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
+      proj = Repo.reload!(proj)
+
+      assert {:ok, _} = Lifecycle.restore_project_with_ancestors(admin, proj)
+
+      assert [pe] = Audit.list(event_type: "platform.tasks.project_unarchived")
+      assert pe.resource_id == proj.id
+      assert pe.actor_id == admin.id
+
+      assert [oe] = Audit.list(event_type: "platform.tenancy.org_unarchived")
+      assert oe.resource_id == org.id
+    end
+
+    test "channel restore persists BOTH the space and org unarchive events" do
+      admin = admin_user!()
+      org = tenant_org!()
+      chan = channel!(org)
+      assert {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
+      chan = Repo.reload!(chan)
+
+      assert {:ok, _} = Lifecycle.restore_space_with_ancestors(admin, chan)
+
+      assert [se] = Audit.list(event_type: "platform.chat.space_unarchived")
+      assert se.resource_id == chan.id
+      assert se.resource_type == "chat_space"
+
+      assert [_] = Audit.list(event_type: "platform.tenancy.org_unarchived")
+    end
+
+    test "restoring an INDEPENDENTLY-archived project emits NO org event (org was never hidden)" do
+      admin = admin_user!()
+      # Org stays active the whole time; only the project is archived on its own.
+      org = tenant_org!()
+      proj = project!(org)
+      assert {:ok, _} = Tasks.archive_project(admin, proj)
+      proj = Repo.reload!(proj)
+
+      assert {:ok, restored} = Lifecycle.restore_project_with_ancestors(admin, proj)
+      assert is_nil(restored.archived_at)
+
+      # The project unarchive IS recorded …
+      assert [_] = Audit.list(event_type: "platform.tasks.project_unarchived")
+      # … but no phantom org_unarchived row for an org that was never hidden.
+      assert [] = Audit.list(event_type: "platform.tenancy.org_unarchived")
+    end
+  end
+
+  # ── Delete "surface & choose" (Recovery hub, task 019f7600 stage 5) ─────
+
+  describe "purge_preview/1" do
+    test "enumerates EVERY child — active, cascade-hidden, and hand-archived — with its status" do
+      admin = admin_user!()
+      org = tenant_org!()
+
+      active_proj = project!(org)
+      active_chan = channel!(org)
+
+      # Hand-archived before any org action: the children `cascade_preview/1`
+      # SILENTLY drops (its `unhidden_children_query` skips already-archived).
+      hand_proj = project!(org)
+      hand_chan = channel!(org)
+      {:ok, _} = Tasks.archive_project(admin, hand_proj)
+      {:ok, _} = Chat.archive_space(admin, hand_chan)
+
+      items = Lifecycle.purge_preview(org.id)
+      by_id = Map.new(items, &{&1.id, &1})
+
+      assert length(items) == 4
+
+      assert by_id[active_proj.id].status == :active
+      assert by_id[active_proj.id].type == :project
+      assert by_id[active_chan.id].status == :active
+      assert by_id[active_chan.id].type == :channel
+
+      # The hand-archived ones ARE surfaced here — the core delete-flow fix.
+      assert by_id[hand_proj.id].status == :archived
+      assert by_id[hand_chan.id].status == :archived
+    end
+
+    test "a child on its own deletion clock reads :scheduled" do
+      admin = admin_user!()
+      org = tenant_org!()
+      proj = project!(org)
+      {:ok, _} = Tasks.schedule_project_deletion(admin, proj)
+
+      item = Enum.find(Lifecycle.purge_preview(org.id), &(&1.id == proj.id))
+      assert item.status == :scheduled
+    end
+
+    test "empty for a non-UUID and for an org with no children" do
+      assert Lifecycle.purge_preview("not-a-uuid") == []
+      assert Lifecycle.purge_preview(tenant_org!().id) == []
+    end
+  end
+
+  describe "schedule_org_deletion/3 (surface & choose)" do
+    test "keeping an item spares it; the rest inherit the org's clock and are swept" do
+      admin = admin_user!()
+      org = tenant_org!()
+      swept = project!(org)
+      kept = project!(org)
+
+      assert {:ok, scheduled} = Lifecycle.schedule_org_deletion(admin, org, [kept.id])
+
+      swept = Repo.reload!(swept)
+      kept = Repo.reload!(kept)
+
+      # Swept child: org's clock + provenance → purged inside the org's window.
+      assert swept.deletion_scheduled_at == scheduled.deletion_scheduled_at
+      assert swept.archived_cascade_org_id == org.id
+      assert %DateTime{} = swept.archived_at
+
+      # Kept child: archived but NO clock and NO provenance → survives the org
+      # deletion as an independently-recoverable row.
+      assert %DateTime{} = kept.archived_at
+      assert is_nil(kept.deletion_scheduled_at)
+      assert is_nil(kept.archived_cascade_org_id)
+    end
+
+    test "an already-archived child is swept when included but untouched when kept" do
+      admin = admin_user!()
+      org = tenant_org!()
+      included = project!(org)
+      kept = project!(org)
+      {:ok, _} = Tasks.archive_project(admin, included)
+      {:ok, _} = Tasks.archive_project(admin, kept)
+      kept_archived_at = Repo.reload!(kept).archived_at
+
+      assert {:ok, scheduled} = Lifecycle.schedule_org_deletion(admin, org, [kept.id])
+
+      included = Repo.reload!(included)
+      kept = Repo.reload!(kept)
+
+      # Included hand-archived child now carries the org's clock → will be purged.
+      assert included.deletion_scheduled_at == scheduled.deletion_scheduled_at
+      assert included.archived_cascade_org_id == org.id
+
+      # Kept hand-archived child is left exactly as it was (archive time intact).
+      assert is_nil(kept.deletion_scheduled_at)
+      assert is_nil(kept.archived_cascade_org_id)
+      assert kept.archived_at == kept_archived_at
+    end
+
+    test "channels honor keep too" do
+      admin = admin_user!()
+      org = tenant_org!()
+      swept = channel!(org)
+      kept = channel!(org)
+
+      assert {:ok, _} = Lifecycle.schedule_org_deletion(admin, org, [kept.id])
+
+      assert %DateTime{} = Repo.reload!(swept).deletion_scheduled_at
+      assert is_nil(Repo.reload!(kept).deletion_scheduled_at)
+    end
+
+    test "the purger sweeps the included child and SPARES the kept one" do
+      admin = admin_user!()
+      org = tenant_org!()
+      swept = project!(org)
+      kept = project!(org)
+
+      assert {:ok, _} = Lifecycle.schedule_org_deletion(admin, org, [kept.id])
+
+      # Backdate the swept child's clock past the retention window.
+      past = DateTime.add(DateTime.utc_now(), -(Lifecycle.retention_days() + 1), :day)
+
+      swept
+      |> Repo.reload!()
+      |> Ecto.Changeset.change(deletion_scheduled_at: past)
+      |> Repo.update!()
+
+      assert {:ok, purged} = Platform.Tenancy.ContainerPurger.sweep()
+      assert purged >= 1
+
+      # Swept child is gone; kept child (no clock) was never a candidate.
+      assert is_nil(Repo.get(Platform.Tasks.Project, swept.id))
+      assert Repo.get(Platform.Tasks.Project, kept.id)
+    end
+
+    test "root guard + admin gate still apply" do
+      admin = admin_user!()
+      member = member_user!()
+      org = tenant_org!()
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      assert {:error, :not_deletable} = Lifecycle.schedule_org_deletion(admin, fabrikam, [])
+      assert {:error, :unauthorized} = Lifecycle.schedule_org_deletion(member, org, [])
+      assert is_nil(Repo.reload!(org).deletion_scheduled_at)
+    end
+  end
+
+  describe "restore_org_selective/3 (keep-scheduled restore)" do
+    test "default (keep nothing) cancels every child's countdown — full subtree revival" do
+      admin = admin_user!()
+      org = tenant_org!()
+      proj = project!(org)
+      chan = channel!(org)
+
+      assert {:ok, scheduled} = Tenancy.schedule_org_deletion(admin, org)
+      assert Repo.reload!(proj).deletion_scheduled_at == scheduled.deletion_scheduled_at
+      assert Repo.reload!(chan).deletion_scheduled_at == scheduled.deletion_scheduled_at
+
+      assert {:ok, restored} = Lifecycle.restore_org_selective(admin, scheduled, [])
+      assert is_nil(restored.archived_at)
+      assert is_nil(restored.deletion_scheduled_at)
+
+      proj = Repo.reload!(proj)
+      chan = Repo.reload!(chan)
+      assert is_nil(proj.archived_at)
+      assert is_nil(proj.deletion_scheduled_at)
+      assert is_nil(proj.archived_cascade_org_id)
+      assert is_nil(chan.archived_at)
+      assert is_nil(chan.deletion_scheduled_at)
+    end
+
+    test "keeping a child leaves its ORIGINAL countdown running while the org + rest revive" do
+      admin = admin_user!()
+      org = tenant_org!()
+      kept = project!(org)
+      revived = project!(org)
+
+      assert {:ok, scheduled} = Tenancy.schedule_org_deletion(admin, org)
+      kept_clock = Repo.reload!(kept).deletion_scheduled_at
+      assert %DateTime{} = kept_clock
+
+      assert {:ok, org_after} = Lifecycle.restore_org_selective(admin, scheduled, [kept.id])
+      assert is_nil(org_after.archived_at)
+      assert is_nil(org_after.deletion_scheduled_at)
+
+      # Kept child keeps its ORIGINAL clock (not a fresh window) and detaches from
+      # the cascade so it reads as an independently-scheduled row.
+      kept = Repo.reload!(kept)
+      assert kept.deletion_scheduled_at == kept_clock
+      assert %DateTime{} = kept.archived_at
+      assert is_nil(kept.archived_cascade_org_id)
+
+      # The other child fully revives.
+      revived = Repo.reload!(revived)
+      assert is_nil(revived.archived_at)
+      assert is_nil(revived.deletion_scheduled_at)
+    end
+
+    test "returns :not_found when the org was hard-deleted before the confirm" do
+      admin = admin_user!()
+      org = tenant_org!()
+      assert {:ok, scheduled} = Tenancy.schedule_org_deletion(admin, org)
+
+      Repo.delete!(Repo.reload!(org))
+
+      assert {:error, :not_found} = Lifecycle.restore_org_selective(admin, scheduled, [])
     end
   end
 end

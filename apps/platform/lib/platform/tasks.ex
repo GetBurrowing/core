@@ -281,6 +281,34 @@ defmodule Platform.Tasks do
     end)
   end
 
+  @doc """
+  List EVERY recoverable project for the recovery surface — every project
+  with `archived_at` set, **both** the independently-archived ones AND the
+  cascade-hidden children of an archived/deletion-scheduled org (no
+  `archived_cascade_org_id` filter, unlike `list_archived_projects/0`).
+
+  The unified read `Platform.Tenancy.Lifecycle.list_recoverable/0` consumes
+  this: it needs the cascade children as rows in their own right (each
+  carrying `archived_cascade_org_id`) so the recovery hub can group them
+  under their org instead of hiding them. `list_archived_projects/0` — which
+  excludes cascade children — stays as the sidebar's independent-only read.
+
+  Returns both the purely-archived and the deletion-scheduled states with
+  `:org` preloaded, ordered deletion-scheduled-first (soonest deadline first)
+  then by name. Read-only; the lifecycle mutators live in
+  `Platform.Tenancy.Lifecycle`.
+  """
+  @spec list_recoverable_projects() :: [Project.t()]
+  def list_recoverable_projects do
+    Project
+    |> where([p], not is_nil(p.archived_at))
+    |> Repo.all()
+    |> Repo.preload(:org)
+    |> Enum.sort_by(fn p ->
+      {p.deletion_scheduled_at || ~U[9999-01-01 00:00:00.000000Z], p.name}
+    end)
+  end
+
   # ── Epics ────────────────────────────────────────────────────────────────
 
   def create_epic(attrs) do
