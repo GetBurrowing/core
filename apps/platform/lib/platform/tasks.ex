@@ -1614,6 +1614,13 @@ defmodule Platform.Tasks do
 
       task = Repo.get!(Task, updated_plan.task_id)
 
+      # Task 019f7b7e stage 2: reserve per-stack Ecto migration timestamps for
+      # any stage whose description says it will author a migration. Runs
+      # INSIDE this transaction so approval + reservation are atomic — a
+      # failed allocation rolls the approval back rather than shipping a plan
+      # whose executor is guaranteed to collide with a sibling.
+      task = reserve_migration_slots_for_plan(updated_plan, task)
+
       previous_task = task
 
       {finalized_task, frozen_messages} =
@@ -1695,6 +1702,100 @@ defmodule Platform.Tasks do
   end
 
   def approve_plan(_plan, _approved_by, _opts), do: {:error, :invalid_transition}
+
+  # ── Migration-slot reservation (task 019f7b7e stage 2) ────────────────────
+  #
+  # Stack members run concurrently on sibling branches. Two members that each
+  # run `mix ecto.gen.migration` within the same second produce identical
+  # filenames, and the rollup merge silently keeps one — the M1/M4 incident
+  # (2026-07-17, commit `fe302787`). We pre-assign each migration-authoring
+  # stage a timestamp from the per-stack allocator at approval time and stash
+  # it on the member task's metadata, where it survives dispatch and
+  # re-dispatch (stage 3 renders it into the executor's prompt).
+  #
+  # Deliberately greedy: a description that merely quotes `create table(` in
+  # passing burns an unused timestamp, which costs nothing. A missed
+  # migration-authoring stage is the collision this task exists to prevent.
+  @migration_marker_regex ~r/priv\/repo\/migrations|mix ecto\.gen\.migration|use Ecto\.Migration|create table\(|alter table\(/i
+
+  # Solo tasks have no sibling to collide with — short-circuit before touching
+  # the allocator so single-task migration flows are completely unchanged.
+  defp reserve_migration_slots_for_plan(%Plan{}, %Task{stack_id: nil} = task), do: task
+
+  defp reserve_migration_slots_for_plan(%Plan{} = plan, %Task{} = task) do
+    stages = plan |> Repo.preload(:stages) |> Map.get(:stages) |> List.wrap()
+    stage_ids = MapSet.new(stages, & &1.id)
+
+    # Idempotency across re-approval (v2 after v1 was rejected): keep only the
+    # reservations whose stage still exists in the current plan, then allocate
+    # solely for migration stages that don't already hold one. Without the
+    # first filter a rejected-and-revised plan leaks a slot per iteration;
+    # without the second, re-approving the same plan double-reserves.
+    kept =
+      task.metadata
+      |> Kernel.||(%{})
+      |> Map.get("reserved_migration_slots", [])
+      |> List.wrap()
+      |> Enum.filter(fn
+        %{"stage_id" => stage_id} -> MapSet.member?(stage_ids, stage_id)
+        _ -> false
+      end)
+
+    already_reserved = MapSet.new(kept, & &1["stage_id"])
+
+    pending =
+      stages
+      |> Enum.filter(&migration_authoring_stage?/1)
+      |> Enum.reject(&MapSet.member?(already_reserved, &1.id))
+      |> Enum.sort_by(& &1.position)
+
+    fresh = Enum.map(pending, &allocate_slot_for_stage!(&1, task))
+
+    reservations = kept ++ fresh
+
+    if reservations == List.wrap(Map.get(task.metadata || %{}, "reserved_migration_slots", [])) do
+      task
+    else
+      metadata = Map.put(task.metadata || %{}, "reserved_migration_slots", reservations)
+
+      # Raw `Repo.update!` rather than `update_task/2`: we are mid-transaction,
+      # and `update_task/2` broadcasts + fires sweep/reingest side effects that
+      # must not escape before commit. The post-commit `{:task_updated, ...}`
+      # broadcast further down `approve_plan/3` covers observers.
+      task
+      |> Task.changeset(%{metadata: metadata})
+      |> Repo.update!()
+    end
+  end
+
+  defp migration_authoring_stage?(%{description: description}) when is_binary(description),
+    do: Regex.match?(@migration_marker_regex, description)
+
+  defp migration_authoring_stage?(_), do: false
+
+  # Raises/rolls back on allocator failure — by design. `Repo.rollback/1`
+  # inside the enclosing `approve_plan/3` transaction aborts the approval, so
+  # an unallocatable slot bounces the approval instead of letting the executor
+  # pick its own colliding timestamp.
+  defp allocate_slot_for_stage!(stage, %Task{} = task) do
+    case Platform.Tasks.Stacks.allocate_migration_slot(task.stack_id) do
+      {:ok, timestamp} ->
+        %{
+          "stage_id" => stage.id,
+          "stage_name" => stage.name,
+          "timestamp" => timestamp,
+          "allocated_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+        }
+
+      {:error, reason} ->
+        Logger.error(
+          "[Tasks] migration slot allocation failed for task=#{task.id} " <>
+            "stack=#{task.stack_id} stage=#{stage.id}: #{inspect(reason)}"
+        )
+
+        Repo.rollback({:migration_slot_allocation_failed, reason})
+    end
+  end
 
   # Stack v2 (task 019f487e stage 3) — manual-mode planning cascade hook.
   #

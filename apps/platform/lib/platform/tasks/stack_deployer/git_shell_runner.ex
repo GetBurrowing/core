@@ -214,6 +214,47 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
   @impl true
   def diff_stat(_args), do: {:error, {:invalid_args, "missing required keys"}}
 
+  # ── list_added_migrations (task 019f7b7e stage 4) ───────────────────────
+
+  @migrations_path "apps/platform/priv/repo/migrations/"
+
+  @impl true
+  def list_added_migrations(%{
+        repo_url: repo_url,
+        base_branch: base_branch,
+        head_branch: head_branch,
+        project_id: project_id
+      })
+      when is_binary(repo_url) and is_binary(base_branch) and is_binary(head_branch) and
+             is_binary(project_id) do
+    clone_path = clone_path_for(project_id)
+
+    with {:ok, _} <- ensure_clone(clone_path, repo_url),
+         {:ok, _} <- git(["fetch", "origin", base_branch, head_branch], cd: clone_path),
+         {:ok, out} <-
+           git(
+             [
+               "diff",
+               "--name-only",
+               "origin/#{base_branch}...origin/#{head_branch}",
+               "--",
+               @migrations_path
+             ],
+             cd: clone_path
+           ) do
+      paths =
+        out
+        |> String.split("\n", trim: true)
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+
+      {:ok, paths}
+    end
+  end
+
+  @impl true
+  def list_added_migrations(_args), do: {:error, {:invalid_args, "missing required keys"}}
+
   # ── revert_member_merge / close_stack_pr (stage 5) ──────────────────────
 
   @impl true

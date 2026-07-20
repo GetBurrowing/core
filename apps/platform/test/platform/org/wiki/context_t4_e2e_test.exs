@@ -739,7 +739,21 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # in the purger, so those rows would never purge; this stamps their
       # own clock from their still-scheduled org. Data-only, idempotent;
       # `down/0` is a no-op.
-      "20260719000001_backfill_cascade_child_deletion_clocks.exs"
+      "20260719000001_backfill_cascade_child_deletion_clocks.exs",
+      # Task 019f7b7e stage 1 — per-stack migration-slot allocator.
+      # Adds nullable `task_stacks.next_migration_slot`, the cursor
+      # `Stacks.allocate_migration_slot/1` advances under a per-stack
+      # advisory lock so concurrent stack members never mint the same
+      # `mix ecto.gen.migration` timestamp (observed 2026-07-17: two
+      # members both produced 20260717000000 and Ecto silently skipped
+      # one). Column-only; readers/writers land in later stages.
+      "20260719120000_add_next_migration_slot_to_task_stacks.exs",
+      # Task 019f7b7e stage 3 — surfaces the reserved slot to the executor.
+      # Force-updates the `dispatch.in_progress` prompt template row so it
+      # carries `{{migration_slot_section}}`; without it the stage-2
+      # reservation is written but never read by the agent doing the work.
+      # Template-content only, no schema change; `down/0` is a no-op.
+      "20260719120100_add_migration_slot_section_to_dispatch_in_progress.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

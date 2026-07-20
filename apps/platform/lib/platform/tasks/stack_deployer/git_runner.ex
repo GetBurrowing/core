@@ -384,6 +384,40 @@ defmodule Platform.Tasks.StackDeployer.GitRunner do
   @callback sha_reachable?(reachability_args()) ::
               {:ok, boolean()} | {:error, term()}
 
+  # ── list_added_migrations (task 019f7b7e stage 4) ───────────────────────
+
+  @typedoc """
+  Arguments for `list_added_migrations/1`. Runs
+  `git diff --name-only <base_branch>...<head_branch> --
+  apps/platform/priv/repo/migrations/` against the project working
+  clone.
+
+  Note the three-dot range: the comparison is against the merge-base, so
+  the result is "migration files `head_branch` ADDS relative to where it
+  forked from `base_branch`" rather than a symmetric difference. That is
+  the set a rollup merge would introduce.
+  """
+  @type list_added_migrations_args :: %{
+          required(:repo_url) => String.t(),
+          required(:base_branch) => String.t(),
+          required(:head_branch) => String.t(),
+          required(:project_id) => String.t()
+        }
+
+  @doc """
+  Return the migration file paths `head_branch` adds relative to
+  `base_branch`, as a list of repo-relative path strings.
+
+  Implementations must fetch both refs first (the clone may be stale)
+  and return `{:ok, paths}` on success or `{:error, reason}` on failure.
+
+  The caller (deployer) treats failure as non-fatal and purely
+  advisory — this feeds the rollup-time collision backstop, which logs
+  but never halts a merge.
+  """
+  @callback list_added_migrations(list_added_migrations_args()) ::
+              {:ok, [String.t()]} | {:error, term()}
+
   @optional_callbacks [
     merge_member_into_rollup: 1,
     open_stack_pr: 1,
@@ -391,7 +425,8 @@ defmodule Platform.Tasks.StackDeployer.GitRunner do
     revert_member_merge: 1,
     close_stack_pr: 1,
     delete_rollup_branch: 1,
-    sha_reachable?: 1
+    sha_reachable?: 1,
+    list_added_migrations: 1
   ]
 end
 

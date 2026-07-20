@@ -487,6 +487,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "stage_id",
           "task_title",
           "stage_info",
+          "migration_slot_section",
           "git_workflow_block",
           "provider_specific_guidance",
           "federation_preamble"
@@ -500,6 +501,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         {{provider_specific_guidance}}
 
         Push evidence using validation_pass or stage_complete as you finish each step. Post commentary to the execution space so reviewers can follow along. Use report_blocker if you are stuck.
+        {{migration_slot_section}}
         {{git_workflow_block}}
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
         Start from the concrete stage contract and any attached/bundled skill content in that payload before re-fetching broad task/project context.

@@ -51,6 +51,17 @@ defmodule Platform.Tasks.StackDeployerTest do
         # don't care about reachability.
         reachable_responses: Keyword.get(opts, :reachable_responses, %{}),
         reachable_default: Keyword.get(opts, :reachable_default, {:ok, true}),
+        # Task 019f7b7e stage 4. The deployer calls
+        # `list_added_migrations/1` TWICE per merge — once for the
+        # member's added migrations (base = rollup) and once for those
+        # already merged onto rollup (base = stack base_branch) — so
+        # tests keyed responses by base_branch rather than queueing a
+        # positional list, which would be brittle against call order.
+        # Default `{:ok, []}` means "no migrations anywhere", the
+        # no-collision case every pre-existing merge test expects.
+        migrations_by_base: Keyword.get(opts, :migrations_by_base, %{}),
+        migrations_default: Keyword.get(opts, :migrations_default, {:ok, []}),
+        migrations_calls: [],
         calls: [],
         merge_calls: [],
         pr_calls: [],
@@ -74,6 +85,7 @@ defmodule Platform.Tasks.StackDeployerTest do
     def close_calls, do: Agent.get(__MODULE__, & &1.close_calls) |> Enum.reverse()
     def delete_calls, do: Agent.get(__MODULE__, & &1.delete_calls) |> Enum.reverse()
     def reachable_calls, do: Agent.get(__MODULE__, & &1.reachable_calls) |> Enum.reverse()
+    def migrations_calls, do: Agent.get(__MODULE__, & &1.migrations_calls) |> Enum.reverse()
 
     @impl true
     def ensure_rollup_branch(args) do
@@ -223,6 +235,16 @@ defmodule Platform.Tasks.StackDeployerTest do
           end
 
         {response, %{state | reachable_calls: [args | state.reachable_calls]}}
+      end)
+    end
+
+    # Task 019f7b7e stage 4: answer keyed on the requested base_branch.
+    @impl true
+    def list_added_migrations(%{base_branch: base} = args) do
+      Agent.get_and_update(__MODULE__, fn state ->
+        response = Map.get(state.migrations_by_base, base, state.migrations_default)
+
+        {response, %{state | migrations_calls: [args | state.migrations_calls]}}
       end)
     end
   end
@@ -3066,6 +3088,206 @@ defmodule Platform.Tasks.StackDeployerTest do
       assert {:error, :not_fast_forwardable, _} = StackDeployer.merge_member_into_rollup(task)
 
       refute_received {:telemetry, [:platform, :stacks, :rollup, :member_merged], _m, _md}
+    end
+  end
+
+  # ── Rollup-time migration collision guard (task 019f7b7e stage 4) ────────
+
+  # The member's branch adds `<ts>_member_thing.exs`; the rollup already
+  # carries `<ts>_sibling_thing.exs` from a merged sibling. Same
+  # timestamp, different filename — the exact shape that makes Ecto
+  # silently skip one migration.
+  defp colliding_runner!(stack, timestamp \\ "20260717000000") do
+    FakeRunner.start_link(
+      merge_responses: [{:ok, %{status: :merged, merge_sha: "c0111de0"}}],
+      migrations_by_base: %{
+        stack.rollup_branch =>
+          {:ok, ["apps/platform/priv/repo/migrations/#{timestamp}_member_thing.exs"]},
+        stack.base_branch =>
+          {:ok, ["apps/platform/priv/repo/migrations/#{timestamp}_sibling_thing.exs"]}
+      }
+    )
+  end
+
+  describe "merge_member_into_rollup/1 — migration collision guard" do
+    test "collision logs ERROR, stamps stack metadata, and the merge STILL proceeds" do
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "mig-collide")
+      {:ok, _} = colliding_runner!(stack)
+      task = review_ready_member!(project, stack)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          # The load-bearing assertion: the guard is advisory. A
+          # detected collision must NOT halt the merge.
+          assert {:ok, %{status: :merged, merge_sha: "c0111de0"}} =
+                   StackDeployer.merge_member_into_rollup(task)
+        end)
+
+      assert log =~ "[StackDeployer] migration filename collision at rollup-merge time"
+      assert log =~ "20260717000000_member_thing.exs"
+      assert log =~ "20260717000000_sibling_thing.exs"
+
+      # Merge really did land — member metadata stamped as normal.
+      assert Tasks.get_task_record(task.id).metadata["merged_into_rollup_at"]["sha"] ==
+               "c0111de0"
+
+      # Stack metadata carries the collision record.
+      reloaded = Repo.get!(Stack, stack.id)
+      assert %{} = collision = reloaded.metadata["migration_collision"]
+      assert collision["offender_task_id"] == task.id
+      assert {:ok, _, _} = DateTime.from_iso8601(collision["at"])
+
+      assert [%{} = entry] = collision["filenames"]
+      assert entry["timestamp"] == "20260717000000"
+      assert entry["member_file"] == "20260717000000_member_thing.exs"
+      assert entry["rollup_file"] == "20260717000000_sibling_thing.exs"
+
+      # Collision is advisory only — the stack is NOT flipped to blocked
+      # the way a genuine merge conflict would be.
+      refute reloaded.status == "blocked"
+    end
+
+    test "collision emits the migration_collision telemetry event" do
+      handler_id =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stack_deployer, :migration_collision]
+        ])
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "mig-collide-telemetry")
+      {:ok, _} = colliding_runner!(stack)
+      task = review_ready_member!(project, stack)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, %{status: :merged}} = StackDeployer.merge_member_into_rollup(task)
+      end)
+
+      assert_receive {[:platform, :stack_deployer, :migration_collision], _ref, %{count: 1}, meta}
+
+      assert meta.stack_id == stack.id
+      assert meta.member_task_id == task.id
+    end
+
+    test "distinct timestamps merge cleanly with no collision recorded" do
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "mig-clean")
+
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [{:ok, %{status: :merged, merge_sha: "c1ea4001"}}],
+          migrations_by_base: %{
+            stack.rollup_branch =>
+              {:ok, ["apps/platform/priv/repo/migrations/20260717000000_member.exs"]},
+            stack.base_branch =>
+              {:ok, ["apps/platform/priv/repo/migrations/20260718000000_sibling.exs"]}
+          }
+        )
+
+      task = review_ready_member!(project, stack)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{status: :merged}} = StackDeployer.merge_member_into_rollup(task)
+        end)
+
+      refute log =~ "migration filename collision"
+      refute Repo.get!(Stack, stack.id).metadata["migration_collision"]
+    end
+
+    test "an identical filename on both sides is NOT a collision" do
+      # Normal after the member rebases onto rollup: the sibling's
+      # already-merged migration shows up on the member's branch too.
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "mig-same-file")
+      shared = "apps/platform/priv/repo/migrations/20260717000000_shared.exs"
+
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [{:ok, %{status: :merged, merge_sha: "5a3e0001"}}],
+          migrations_by_base: %{
+            stack.rollup_branch => {:ok, [shared]},
+            stack.base_branch => {:ok, [shared]}
+          }
+        )
+
+      task = review_ready_member!(project, stack)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{status: :merged}} = StackDeployer.merge_member_into_rollup(task)
+        end)
+
+      refute log =~ "migration filename collision"
+      refute Repo.get!(Stack, stack.id).metadata["migration_collision"]
+    end
+
+    test "the guard queries the member branch and the rollup branch" do
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "mig-args")
+      {:ok, _} = colliding_runner!(stack)
+      task = review_ready_member!(project, stack)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, _} = StackDeployer.merge_member_into_rollup(task)
+      end)
+
+      assert [member_call, rollup_call] = FakeRunner.migrations_calls()
+
+      # Call 1: what this member adds on top of the rollup branch.
+      assert member_call.base_branch == stack.rollup_branch
+      assert String.starts_with?(member_call.head_branch, "task/")
+      assert member_call.repo_url == project.repo_url
+      assert member_call.project_id == project.id
+
+      # Call 2: what siblings already merged onto the rollup branch.
+      assert rollup_call.base_branch == stack.base_branch
+      assert rollup_call.head_branch == stack.rollup_branch
+    end
+
+    test "a runner error in the guard is swallowed and the merge proceeds" do
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "mig-runner-error")
+
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [{:ok, %{status: :merged, merge_sha: "e440c001"}}],
+          migrations_default: {:error, :fetch_failed}
+        )
+
+      task = review_ready_member!(project, stack)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, %{status: :merged, merge_sha: "e440c001"}} =
+                 StackDeployer.merge_member_into_rollup(task)
+      end)
+
+      refute Repo.get!(Stack, stack.id).metadata["migration_collision"]
+    end
+
+    test "migrations without a parseable timestamp prefix are ignored" do
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "mig-unparseable")
+
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [{:ok, %{status: :merged, merge_sha: "04a25e11"}}],
+          migrations_by_base: %{
+            stack.rollup_branch => {:ok, ["apps/platform/priv/repo/migrations/README.md"]},
+            stack.base_branch => {:ok, ["apps/platform/priv/repo/migrations/notes.txt"]}
+          }
+        )
+
+      task = review_ready_member!(project, stack)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{status: :merged}} = StackDeployer.merge_member_into_rollup(task)
+        end)
+
+      refute log =~ "migration filename collision"
     end
   end
 end

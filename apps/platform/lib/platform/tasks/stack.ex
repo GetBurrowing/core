@@ -61,6 +61,12 @@ defmodule Platform.Tasks.Stack do
     field(:auto_plan, :boolean, default: false)
     field(:auto_accept_plan, :boolean, default: false)
 
+    # Per-stack migration-slot cursor. Holds the NEXT free
+    # `mix ecto.gen.migration` timestamp for this stack's members; advanced
+    # one second at a time by `Stacks.allocate_migration_slot/1` under a
+    # per-stack advisory lock. `nil` = never allocated (lazy init to now).
+    field(:next_migration_slot, :naive_datetime)
+
     has_many(:tasks, Platform.Tasks.Task, foreign_key: :stack_id)
 
     timestamps(type: :utc_datetime_usec)
@@ -82,7 +88,8 @@ defmodule Platform.Tasks.Stack do
       :sponsor_user_id,
       :metadata,
       :auto_plan,
-      :auto_accept_plan
+      :auto_accept_plan,
+      :next_migration_slot
     ])
     |> validate_required([:project_id, :slug, :name, :rollup_branch])
     |> validate_inclusion(:status, @statuses)

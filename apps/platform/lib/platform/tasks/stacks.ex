@@ -922,8 +922,45 @@ defmodule Platform.Tasks.Stacks do
         %{stack_id: stack.id, wave_index: wave_index}
       )
 
+      # Stage 4 backstop: audit reserved slots AFTER the wave has been
+      # dispatched, purely as an observability signal. This is
+      # deliberately log-only — a collision here means the reservation
+      # machinery was bypassed (detection-regex miss, hand-authored
+      # plan, executor ignoring the prompt), and blocking the wave on a
+      # backstop would turn a CI-visible problem into a silently stuck
+      # stack. Loud beats stuck.
+      audit_migration_slots_for_log(stack)
+
       {:ok, %{stack: stack, dispatched: dispatched, wave_index: wave_index}}
     end
+  end
+
+  # Never allowed to affect wave dispatch: the audit runs after the
+  # dispatch decision is final, and any failure inside it is swallowed.
+  defp audit_migration_slots_for_log(%Stack{} = stack) do
+    case audit_migration_slots(stack) do
+      {:error, :collision, offenders} ->
+        Logger.error(
+          "[Stacks] migration slot collision detected in stack=#{stack.id}: " <>
+            "#{inspect(offenders)}"
+        )
+
+        :telemetry.execute(
+          [:platform, :stacks, :migration_slot, :collision],
+          %{count: length(offenders)},
+          %{stack_id: stack.id, offenders: offenders}
+        )
+
+      _ ->
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[Stacks] migration slot audit raised for stack=#{stack.id}: #{inspect(error)}"
+      )
+
+      :ok
   end
 
   # A wave is "fully approved" when every member's `current_plan/1`
@@ -3369,4 +3406,180 @@ defmodule Platform.Tasks.Stacks do
   end
 
   def valid_slug?(_), do: false
+
+  # ── Migration-slot allocator ─────────────────────────────────────────────
+
+  @doc """
+  Reserve the next free Ecto migration timestamp for a stack.
+
+  Returns `{:ok, "YYYYMMDDHHMMSS"}` — the canonical filename prefix
+  `mix ecto.gen.migration` produces — guaranteeing that two members of the
+  same stack never receive the same string.
+
+  ## Why this exists
+
+  Stack members implement on independent worktrees and each run
+  `mix ecto.gen.migration` themselves. Two members generating within the
+  same second produce identical `YYYYMMDDHHMMSS` prefixes; Ecto then
+  silently skips one migration and the failure surfaces far downstream as
+  unrelated-looking test breakage (observed 2026-07-17: a 6-member stack
+  where two members both minted `20260717000000`).
+
+  ## Design
+
+  * The cursor is a `NaiveDateTime`, not an integer counter, so timestamps
+    stay chronologically meaningful. A stack dormant for weeks gets a slot
+    reflecting wall clock rather than `base + N`.
+  * `candidate = max(current, now)` means wall-clock jitter (NTP step,
+    clock skew between hosts) can never regress the sequence: the cursor
+    only ever moves forward.
+  * Serialization uses `pg_advisory_xact_lock`, mirroring the rollup-branch
+    idiom in `Platform.Tasks.StackDeployer` rather than `SELECT ... FOR
+    UPDATE`. The key hashes `{"migration_slot", stack_id}` — deliberately
+    NOT `stack_id` alone, which the rollup-branch lock already uses — so
+    allocating a slot never contends with a rollup-branch operation on the
+    same stack.
+  * Transaction-scoped locks release on commit/rollback, so there is no
+    leak path. Under the test sandbox all callers share one connection, so
+    the lock is re-entrant and the connection itself provides the
+    serialization; the observable uniqueness contract is preserved either
+    way.
+  """
+  @spec allocate_migration_slot(Stack.t() | binary()) ::
+          {:ok, String.t()} | {:error, :stack_not_found | Ecto.Changeset.t()}
+  def allocate_migration_slot(%Stack{id: stack_id}), do: allocate_migration_slot(stack_id)
+
+  def allocate_migration_slot(stack_id) when is_binary(stack_id) do
+    result =
+      Repo.transaction(fn ->
+        lock_key = :erlang.phash2({"migration_slot", stack_id}, 2_147_483_647)
+        Repo.query!("SELECT pg_advisory_xact_lock($1)", [lock_key])
+
+        # Read INSIDE the lock — a stack struct passed in by the caller may
+        # carry a stale cursor from before a sibling's allocation.
+        case Repo.get(Stack, stack_id) do
+          nil ->
+            Repo.rollback(:stack_not_found)
+
+          %Stack{} = stack ->
+            now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+            candidate =
+              case stack.next_migration_slot do
+                nil -> now
+                current -> if NaiveDateTime.compare(current, now) == :gt, do: current, else: now
+              end
+
+            next = NaiveDateTime.add(candidate, 1, :second)
+
+            case stack
+                 |> Stack.changeset(%{next_migration_slot: next})
+                 |> Repo.update() do
+              {:ok, _updated} -> Calendar.strftime(candidate, "%Y%m%d%H%M%S")
+              {:error, changeset} -> Repo.rollback(changeset)
+            end
+        end
+      end)
+
+    case result do
+      {:ok, formatted_ts} -> {:ok, formatted_ts}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Audit the migration slots reserved across every member of a stack.
+
+  Flattens `metadata["reserved_migration_slots"]` over all (non-deleted)
+  members and reports any timestamp claimed more than once.
+
+  Returns `{:ok, %{slots: [...], collisions: []}}` when every reserved
+  timestamp is unique, or `{:error, :collision, offenders}` where each
+  offender is `%{timestamp: ts, offenders: [task_id, ...]}`.
+
+  ## Why this exists
+
+  `allocate_migration_slot/1` makes collisions impossible *for slots it
+  issues*. This audit catches the cases where the allocator was never
+  consulted: the plan-approval detection regex missed a migration-authoring
+  stage, a plan was hand-authored, or an executor minted its own timestamp
+  instead of using the reserved one. Those bypass paths are exactly how the
+  2026-07-17 M1/M4 incident produced two members both claiming
+  `20260717000000` — a failure that surfaced far downstream as
+  unrelated-looking test breakage.
+
+  Callers treat this as an observability signal, never a gate:
+  `advance_planning_waves/1` logs and emits telemetry on a collision but
+  still dispatches the wave. A backstop that silently blocks work is worse
+  than the problem it guards against.
+
+  Malformed metadata (non-list value, entries missing `"timestamp"`,
+  blank timestamps) is skipped rather than raising — this runs on the
+  dispatch path and must never be the reason a wave fails.
+  """
+  @spec audit_migration_slots(Stack.t() | binary()) ::
+          {:ok, %{slots: [map()], collisions: []}}
+          | {:error, :collision, [%{timestamp: String.t(), offenders: [String.t()]}]}
+          | {:error, :stack_not_found}
+  def audit_migration_slots(%Stack{} = stack), do: do_audit_migration_slots(stack)
+
+  def audit_migration_slots(stack_id) when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      nil -> {:error, :stack_not_found}
+      %Stack{} = stack -> do_audit_migration_slots(stack)
+    end
+  end
+
+  defp do_audit_migration_slots(%Stack{} = stack) do
+    slots =
+      stack
+      |> members()
+      |> Enum.flat_map(&reserved_slots_for_member/1)
+
+    collisions =
+      slots
+      |> Enum.group_by(& &1.timestamp)
+      |> Enum.filter(fn {_ts, entries} -> length(entries) > 1 end)
+      |> Enum.map(fn {ts, entries} ->
+        %{
+          timestamp: ts,
+          offenders: entries |> Enum.map(& &1.task_id) |> Enum.uniq() |> Enum.sort()
+        }
+      end)
+      |> Enum.sort_by(& &1.timestamp)
+
+    case collisions do
+      [] -> {:ok, %{slots: slots, collisions: []}}
+      _ -> {:error, :collision, collisions}
+    end
+  end
+
+  defp reserved_slots_for_member(%Task{} = task) do
+    entries =
+      case task.metadata do
+        %{} = meta -> Map.get(meta, "reserved_migration_slots")
+        _ -> nil
+      end
+
+    case entries do
+      list when is_list(list) ->
+        Enum.flat_map(list, fn
+          %{"timestamp" => ts} = entry when is_binary(ts) and ts != "" ->
+            [
+              %{
+                task_id: task.id,
+                timestamp: ts,
+                stage_id: Map.get(entry, "stage_id"),
+                stage_name: Map.get(entry, "stage_name")
+              }
+            ]
+
+          _ ->
+            []
+        end)
+
+      _ ->
+        []
+    end
+  end
 end

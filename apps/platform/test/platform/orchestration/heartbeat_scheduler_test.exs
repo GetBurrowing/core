@@ -1983,4 +1983,224 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert assigns.task_slug == "019e2474"
     end
   end
+
+  # Task 019f7b7e stage 3. Stage 2 reserves a per-stack migration timestamp
+  # onto `task.metadata["reserved_migration_slots"]`; this block asserts the
+  # in_progress dispatch actually surfaces it to the executor, and — just as
+  # important — that it stays silent everywhere it shouldn't fire.
+  #
+  # No prompt template rows are seeded in this async test file, so
+  # `render_template/2` returns `{:error, :not_found}` and every assertion
+  # here exercises the HARDCODED fallback path. The DB-template path carries
+  # the matching `{{migration_slot_section}}` placeholder, covered in
+  # `prompt_templates_test.exs`.
+  describe "migration slot section (task 019f7b7e stage 3)" do
+    @slot_stage_id "019f7b84-a342-79fc-8f2c-053c33a6f828"
+    @slot_stack_id "019e2782-09d6-7e2c-9502-c106290e5add"
+
+    defp slot_plan_and_stage(stage_id \\ @slot_stage_id) do
+      stage = %{id: stage_id, position: 3, name: "coding", validations: []}
+      {%{version: 1, stages: [stage]}, stage}
+    end
+
+    defp slot_reservation(stage_id, timestamp) do
+      %{
+        "stage_id" => stage_id,
+        "stage_name" => "Surface reserved slot in dispatch prompt",
+        "timestamp" => timestamp,
+        "allocated_at" => "2026-07-19T12:01:00Z"
+      }
+    end
+
+    defp slot_task(opts) do
+      %{
+        id: "019e2474-11c1-7000-8000-000000000001",
+        title: "Stack member task",
+        status: "in_progress",
+        priority: "high",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: Keyword.get(opts, :stack_id, @slot_stack_id),
+        stack: %{
+          id: @slot_stack_id,
+          slug: "meeting-module",
+          rollup_branch: "stack/meeting-module",
+          metadata: %{}
+        },
+        metadata: Keyword.get(opts, :metadata, %{})
+      }
+    end
+
+    test "renders the full section when a reservation matches the dispatched stage" do
+      {plan, stage} = slot_plan_and_stage()
+
+      task =
+        slot_task(
+          metadata: %{
+            "reserved_migration_slots" => [slot_reservation(@slot_stage_id, "20260719120100")]
+          }
+        )
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "## Reserved migration timestamp"
+      assert prompt =~ "`20260719120100`"
+      # The rename instruction must carry the concrete filename prefix — a
+      # generic "use the reserved timestamp" line is what executors ignore.
+      assert prompt =~ "20260719120100_<name>.exs"
+      assert prompt =~ "Do NOT allocate"
+    end
+
+    test "the reserved section precedes the Git Workflow block" do
+      {plan, stage} = slot_plan_and_stage()
+
+      task =
+        slot_task(
+          metadata: %{
+            "reserved_migration_slots" => [slot_reservation(@slot_stage_id, "20260719120100")]
+          }
+        )
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      slot_at = :binary.match(prompt, "## Reserved migration timestamp") |> elem(0)
+      git_at = :binary.match(prompt, "## Git Workflow (CRITICAL)") |> elem(0)
+
+      assert slot_at < git_at,
+             "the reserved timestamp must be read before the branch/commit instructions"
+    end
+
+    test "filters to the dispatched stage — a sibling stage's reservation does not leak" do
+      # Reservation belongs to stage A; we dispatch stage B. A plan with
+      # migrations in two stages must not show the wrong timestamp.
+      {plan, stage} = slot_plan_and_stage("019f7b84-0000-0000-0000-00000000000b")
+
+      task =
+        slot_task(
+          metadata: %{
+            "reserved_migration_slots" => [
+              slot_reservation("019f7b84-0000-0000-0000-00000000000a", "20260719120100")
+            ]
+          }
+        )
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      refute prompt =~ "## Reserved migration timestamp"
+      refute prompt =~ "20260719120100"
+    end
+
+    test "picks the matching entry out of a multi-stage reservation list" do
+      {plan, stage} = slot_plan_and_stage()
+
+      task =
+        slot_task(
+          metadata: %{
+            "reserved_migration_slots" => [
+              slot_reservation("019f7b84-0000-0000-0000-00000000000a", "20260719120000"),
+              slot_reservation(@slot_stage_id, "20260719120100"),
+              slot_reservation("019f7b84-0000-0000-0000-00000000000c", "20260719120200")
+            ]
+          }
+        )
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "`20260719120100`"
+      refute prompt =~ "20260719120000"
+      refute prompt =~ "20260719120200"
+    end
+
+    test "renders nothing when metadata carries no reserved_migration_slots key" do
+      {plan, stage} = slot_plan_and_stage()
+      task = slot_task(metadata: %{"some_other_key" => "value"})
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      refute prompt =~ "## Reserved migration timestamp"
+    end
+
+    test "renders nothing when the reservation list is empty" do
+      {plan, stage} = slot_plan_and_stage()
+      task = slot_task(metadata: %{"reserved_migration_slots" => []})
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      refute prompt =~ "## Reserved migration timestamp"
+    end
+
+    test "renders nothing for a solo task even if metadata carries a reservation" do
+      # The mechanism is strictly a stack concern — a stray key on a
+      # non-stack task must not produce collision guidance that would
+      # confuse a solo executor.
+      {plan, stage} = slot_plan_and_stage()
+
+      task =
+        slot_task(
+          stack_id: nil,
+          metadata: %{
+            "reserved_migration_slots" => [slot_reservation(@slot_stage_id, "20260719120100")]
+          }
+        )
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      refute prompt =~ "## Reserved migration timestamp"
+      refute prompt =~ "20260719120100"
+    end
+
+    test "renders nothing when the task has no metadata field at all" do
+      # Guards the pre-stage-2 shape: tasks dispatched before the
+      # reservation hook existed have no metadata map preloaded.
+      {plan, stage} = slot_plan_and_stage()
+
+      task =
+        slot_task([])
+        |> Map.delete(:metadata)
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      refute prompt =~ "## Reserved migration timestamp"
+    end
+
+    test "tolerates malformed reservation entries without crashing" do
+      {plan, stage} = slot_plan_and_stage()
+
+      task =
+        slot_task(
+          metadata: %{
+            "reserved_migration_slots" => [
+              "not-a-map",
+              %{"stage_id" => @slot_stage_id},
+              %{"stage_id" => @slot_stage_id, "timestamp" => ""}
+            ]
+          }
+        )
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      refute prompt =~ "## Reserved migration timestamp"
+    end
+
+    test "renders nothing when the reservation list is not a list" do
+      {plan, stage} = slot_plan_and_stage()
+      task = slot_task(metadata: %{"reserved_migration_slots" => %{"stage_id" => "x"}})
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      refute prompt =~ "## Reserved migration timestamp"
+    end
+
+    test "renders nothing when no stage is being dispatched" do
+      task =
+        slot_task(
+          metadata: %{
+            "reserved_migration_slots" => [slot_reservation(@slot_stage_id, "20260719120100")]
+          }
+        )
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, %{version: 1, stages: []}, nil)
+
+      refute prompt =~ "## Reserved migration timestamp"
+    end
+  end
 end

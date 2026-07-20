@@ -684,6 +684,11 @@ defmodule Platform.Tasks.StackDeployer do
         "#{stack.rollup_branch} for stack #{stack.id} (#{repo_url})"
     )
 
+    # Stage 4 backstop (task 019f7b7e): last chance to notice that this
+    # member is about to land a migration whose timestamp a sibling
+    # already claimed. Advisory only — see `check_migration_collision/4`.
+    check_migration_collision(runner, task, stack, repo_url)
+
     start_time = System.monotonic_time()
 
     case runner.merge_member_into_rollup(args) do
@@ -712,6 +717,154 @@ defmodule Platform.Tasks.StackDeployer do
 
         err
     end
+  end
+
+  # ── Rollup-time migration collision guard (task 019f7b7e stage 4) ───────
+  #
+  # Option 3 from the task description, implemented as a LOG-ONLY guard
+  # rather than a rename. Compares the migration filenames this member
+  # adds against those already merged onto the rollup branch by sibling
+  # members, and reports any shared `YYYYMMDDHHMMSS` prefix.
+  #
+  # Deliberately does NOT halt the merge. By the time we get here the
+  # reservation (stages 1-3) should already have prevented the
+  # collision; if it didn't, a loud log plus a metadata stamp gives an
+  # operator something to act on, whereas silently refusing to merge
+  # would strand the whole stack. A rename here would mean mutating a
+  # git tree mid-deploy — a much larger change, deliberately deferred
+  # until this log is observed firing in practice.
+  #
+  # Every failure path is swallowed: a stale clone, a runner that
+  # doesn't implement the callback, or an outright raise must never be
+  # the reason a rollup merge fails.
+  defp check_migration_collision(runner, %TaskRecord{} = task, %Stack{} = stack, repo_url) do
+    if function_exported?(runner, :list_added_migrations, 1) do
+      with {:ok, member_paths} <-
+             runner.list_added_migrations(%{
+               repo_url: repo_url,
+               base_branch: stack.rollup_branch,
+               head_branch: member_branch_for(task),
+               project_id: stack.project_id
+             }),
+           {:ok, rollup_paths} <-
+             runner.list_added_migrations(%{
+               repo_url: repo_url,
+               base_branch: stack.base_branch,
+               head_branch: stack.rollup_branch,
+               project_id: stack.project_id
+             }) do
+        case colliding_migrations(member_paths, rollup_paths) do
+          [] -> :ok
+          filenames -> record_migration_collision(stack, task, filenames)
+        end
+      else
+        {:error, reason} ->
+          Logger.debug(
+            "[StackDeployer] migration collision pre-check skipped for member " <>
+              "#{task.id}: #{inspect(reason)}"
+          )
+
+          :ok
+
+        _other ->
+          :ok
+      end
+    else
+      :ok
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[StackDeployer] migration collision pre-check raised for member " <>
+          "#{task.id}: #{inspect(error)}"
+      )
+
+      :ok
+  end
+
+  # A collision is two DIFFERENT migration filenames sharing the same
+  # leading timestamp — that is precisely what makes Ecto skip one of
+  # them. An identical filename on both sides just means the member's
+  # branch already contains the sibling's merged migration (normal after
+  # a rebase onto rollup), so it is explicitly not a collision.
+  defp colliding_migrations(member_paths, rollup_paths) do
+    rollup_by_ts =
+      rollup_paths
+      |> Enum.map(&Path.basename/1)
+      |> Enum.group_by(&migration_timestamp/1)
+
+    member_paths
+    |> Enum.map(&Path.basename/1)
+    |> Enum.flat_map(fn member_file ->
+      case migration_timestamp(member_file) do
+        nil ->
+          []
+
+        ts ->
+          rollup_by_ts
+          |> Map.get(ts, [])
+          |> Enum.reject(&(&1 == member_file))
+          |> Enum.map(&%{timestamp: ts, member_file: member_file, rollup_file: &1})
+      end
+    end)
+  end
+
+  defp migration_timestamp(filename) do
+    case Regex.run(~r/^(\d{14})_/, filename) do
+      [_, ts] -> ts
+      _ -> nil
+    end
+  end
+
+  defp record_migration_collision(%Stack{} = stack, %TaskRecord{} = task, collisions) do
+    at_iso = DateTime.utc_now() |> DateTime.to_iso8601()
+    base_meta = if is_map(stack.metadata), do: stack.metadata, else: %{}
+
+    filenames =
+      Enum.map(collisions, fn c ->
+        %{
+          "timestamp" => c.timestamp,
+          "member_file" => c.member_file,
+          "rollup_file" => c.rollup_file
+        }
+      end)
+
+    payload = %{
+      "at" => at_iso,
+      "offender_task_id" => task.id,
+      "filenames" => filenames
+    }
+
+    Logger.error(
+      "[StackDeployer] migration filename collision at rollup-merge time: member " <>
+        "#{task.id} adds #{inspect(Enum.map(collisions, & &1.member_file))} which shares a " <>
+        "timestamp with already-merged #{inspect(Enum.map(collisions, & &1.rollup_file))} on " <>
+        "#{stack.rollup_branch} (stack #{stack.id}). Merge is proceeding — Ecto will silently " <>
+        "skip one of these migrations. Rename the member's migration and re-run."
+    )
+
+    case Stacks.update_stack(stack, %{
+           metadata: Map.put(base_meta, "migration_collision", payload)
+         }) do
+      {:ok, _updated} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[StackDeployer] migration collision detected for member #{task.id} but " <>
+            "metadata stamp failed: #{inspect(reason)}"
+        )
+
+        :ok
+    end
+
+    :telemetry.execute(
+      [:platform, :stack_deployer, :migration_collision],
+      %{count: length(collisions)},
+      %{stack_id: stack.id, member_task_id: task.id, filenames: filenames}
+    )
+
+    :ok
   end
 
   # ADR-0042 rollup-lifecycle telemetry. Fires exactly once per

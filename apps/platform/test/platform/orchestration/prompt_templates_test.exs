@@ -309,6 +309,74 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert rendered =~ "## Task Stack Membership"
       assert rendered =~ "stack_id: `019e2782-09d6-7e2c-9502-c106290e5add`"
     end
+
+    # Task 019f7b7e stage 3 — the stage-2 reservation is inert unless the
+    # dispatch template actually renders it.
+    test "carries the {{migration_slot_section}} placeholder before the git workflow block" do
+      content = PromptTemplates.default_content_for_slug("dispatch.in_progress")
+
+      assert content =~ "{{migration_slot_section}}"
+
+      slot_at = :binary.match(content, "{{migration_slot_section}}") |> elem(0)
+      git_at = :binary.match(content, "{{git_workflow_block}}") |> elem(0)
+
+      assert slot_at < git_at,
+             "the reserved migration timestamp must appear before the branch/commit instructions"
+    end
+
+    test "the variables list registers migration_slot_section" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "dispatch.in_progress"))
+
+      assert descriptor
+      assert "migration_slot_section" in descriptor.variables
+    end
+
+    test "render_template interpolates a pre-rendered migration slot section" do
+      :ok = PromptTemplates.seed_defaults()
+
+      slot_section = """
+
+      ## Reserved migration timestamp
+
+      `20260719120100`
+      """
+
+      assigns = %{
+        task_title: "Stack member task",
+        stage_info: "Plan: v1 (stage 3/5 — coding)",
+        migration_slot_section: slot_section,
+        git_workflow_block: "\n## Git Workflow (CRITICAL)\n",
+        provider_specific_guidance: "",
+        federation_preamble: PromptTemplates.federation_preamble()
+      }
+
+      assert {:ok, rendered} = PromptTemplates.render_template("dispatch.in_progress", assigns)
+
+      assert rendered =~ "## Reserved migration timestamp"
+      assert rendered =~ "`20260719120100`"
+      refute rendered =~ "{{migration_slot_section}}"
+    end
+
+    test "an absent migration_slot_section assign renders empty, not a literal placeholder" do
+      # Backwards compatibility: solo tasks and stack members without a
+      # reservation must see a prompt with no leftover mustache tag.
+      :ok = PromptTemplates.seed_defaults()
+
+      assigns = %{
+        task_title: "Ordinary task",
+        stage_info: "Plan: v1 (stage 1/1 — coding)",
+        git_workflow_block: "\n## Git Workflow (CRITICAL)\n",
+        provider_specific_guidance: "",
+        federation_preamble: PromptTemplates.federation_preamble()
+      }
+
+      assert {:ok, rendered} = PromptTemplates.render_template("dispatch.in_progress", assigns)
+
+      refute rendered =~ "{{migration_slot_section}}"
+      refute rendered =~ "## Reserved migration timestamp"
+    end
   end
 
   describe "default_content_for_slug/1 — dispatch.review_e2e" do
@@ -620,9 +688,19 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     # below can call `up/0` directly. `Code.compile_file/1` is idempotent —
     # subsequent test runs pick up any edits the developer made without a
     # stale binary lying around.
+    @migration_slot_section_migration_path Path.join([
+                                             __ENV__.file
+                                             |> Path.dirname()
+                                             |> Path.dirname()
+                                             |> Path.dirname()
+                                             |> Path.dirname(),
+                                             "priv/repo/migrations/20260719120100_add_migration_slot_section_to_dispatch_in_progress.exs"
+                                           ])
+
     Code.compile_file(@alarm_silence_migration_path)
     Code.compile_file(@subagent_id_ack_migration_path)
     Code.compile_file(@federation_preamble_migration_path)
+    Code.compile_file(@migration_slot_section_migration_path)
 
     test "seed_defaults seeds dispatch.planning with current default content" do
       :ok = PromptTemplates.seed_defaults()
@@ -691,6 +769,79 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         assert row.content == expected,
                "#{slug} must remain at current default content after a second migration run"
       end
+    end
+
+    test "20260719120100 migration patches the dispatch.in_progress row with the slot placeholder" do
+      # Task 019f7b7e stage 3. Simulates the production upgrade: the live row
+      # predates the placeholder, the migration runs, the row gains it.
+      migration = Platform.Repo.Migrations.AddMigrationSlotSectionToDispatchInProgress
+
+      :ok = PromptTemplates.seed_defaults()
+
+      # Force the pre-upgrade state — strip the placeholder from the row and
+      # drop it from the registered variables, exactly what a DB seeded
+      # before this stage looks like.
+      template = PromptTemplates.get_template_by_slug("dispatch.in_progress")
+      stale_content = String.replace(template.content, "{{migration_slot_section}}\n", "")
+
+      {:ok, _} =
+        PromptTemplates.update_template(template, %{
+          content: stale_content,
+          variables: Enum.reject(template.variables, &(&1 == "migration_slot_section"))
+        })
+
+      refute PromptTemplates.get_template_by_slug("dispatch.in_progress").content =~
+               "{{migration_slot_section}}"
+
+      :ok = migration.up()
+
+      row = PromptTemplates.get_template_by_slug("dispatch.in_progress")
+
+      assert row.content =~ "{{migration_slot_section}}",
+             "the seeded dispatch.in_progress row must carry the placeholder after the migration"
+
+      assert row.content == PromptTemplates.default_content_for_slug("dispatch.in_progress")
+      assert "migration_slot_section" in row.variables
+
+      # Idempotent — a second run leaves the same state.
+      :ok = migration.up()
+      assert PromptTemplates.get_template_by_slug("dispatch.in_progress").content == row.content
+    end
+
+    test "20260719120100 migration leaves the other dispatch templates untouched" do
+      migration = Platform.Repo.Migrations.AddMigrationSlotSectionToDispatchInProgress
+
+      :ok = PromptTemplates.seed_defaults()
+
+      before =
+        for slug <- ~w(dispatch.planning dispatch.in_review dispatch.deploying),
+            into: %{},
+            do: {slug, PromptTemplates.get_template_by_slug(slug).content}
+
+      :ok = migration.up()
+
+      for {slug, content} <- before do
+        assert PromptTemplates.get_template_by_slug(slug).content == content,
+               "#{slug} must not be rewritten by the in_progress-only migration"
+      end
+    end
+
+    test "20260719120100 migration is a safe no-op when the dispatch.in_progress row is missing" do
+      # Fresh DB — the migration is refresh-only, not seed. `seed_defaults/0`
+      # creates the row with the placeholder already present on first boot.
+      # Purge the row the test DB's own migrations left behind so we actually
+      # exercise the nil branch (same convention as the 20260715220000 test).
+      case PromptTemplates.get_template_by_slug("dispatch.in_progress") do
+        nil -> :ok
+        template -> {:ok, _} = PromptTemplates.delete_template(template)
+      end
+
+      migration = Platform.Repo.Migrations.AddMigrationSlotSectionToDispatchInProgress
+
+      assert :ok = migration.up()
+
+      assert PromptTemplates.get_template_by_slug("dispatch.in_progress") == nil,
+             "dispatch.in_progress must remain absent — migration is refresh-only, not seed"
     end
 
     test "20260715220000 alarm_silence-fallback migration is a safe no-op when the target rows are missing" do

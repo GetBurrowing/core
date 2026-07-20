@@ -306,6 +306,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       # Stack-aware: full-UUID worktree/branch + stack membership block for
       # stack members, legacy 8-char-slug section for non-stack tasks.
       git_workflow_block: git_workflow_section(task),
+      # Reserved Ecto migration timestamp for THIS stage (task 019f7b7e
+      # stage 3). Empty string for solo tasks and for stack members whose
+      # current stage holds no reservation.
+      migration_slot_section: render_migration_slot_section(task, stage),
       provider_specific_guidance: provider_guidance,
       skills_reference: @skills_reference,
       evidence_workflow_reference: @evidence_workflow_reference,
@@ -504,6 +508,69 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   defp render_upstream_plans_section(_), do: ""
+
+  # Task 019f7b7e stage 3 — surface the migration slot reserved at plan
+  # approval (stage 2) so the executor writes the reserved filename instead
+  # of minting its own with `mix ecto.gen.migration`. Two concurrent stack
+  # members both producing `20260717000000_*.exs` is the incident this
+  # closes: Ecto silently skips the second file, so CI drifts from prod.
+  #
+  # Gated on `stack_membership/1`, so a solo task that somehow carries a
+  # stray `reserved_migration_slots` key renders nothing — the reservation
+  # mechanism is strictly a stack concern.
+  #
+  # Entries are filtered to the stage being dispatched. A plan with
+  # migrations in stages 2 and 4 shows stage 2's timestamp only while
+  # stage 2 runs; stage 4's dispatch later shows its own. Anything that
+  # doesn't match renders "" so the template stays backwards-compatible.
+  defp render_migration_slot_section(task, stage) do
+    with %{} <- stack_membership(task),
+         stage_id when is_binary(stage_id) <- contract_id(stage || %{}, :id),
+         [timestamp | _] <- reserved_slot_timestamps(task, stage_id) do
+      migration_slot_block(timestamp)
+    else
+      _ -> ""
+    end
+  end
+
+  defp reserved_slot_timestamps(task, stage_id) do
+    metadata = Map.get(task, :metadata) || Map.get(task, "metadata")
+
+    case metadata do
+      %{} = metadata ->
+        metadata
+        |> Map.get("reserved_migration_slots", [])
+        |> case do
+          entries when is_list(entries) -> entries
+          _ -> []
+        end
+        |> Enum.filter(&(is_map(&1) and Map.get(&1, "stage_id") == stage_id))
+        |> Enum.map(&Map.get(&1, "timestamp"))
+        |> Enum.filter(&(is_binary(&1) and &1 != ""))
+
+      _ ->
+        []
+    end
+  end
+
+  defp migration_slot_block(timestamp) do
+    """
+
+    ## Reserved migration timestamp
+
+    This task is a member of a stack. To prevent Ecto migration filename
+    collisions across concurrent siblings, the following timestamp has
+    been reserved for this stage:
+
+    `#{timestamp}`
+
+    Use it verbatim when creating your migration file. If `mix
+    ecto.gen.migration <name>` produces a different timestamp, RENAME
+    the file to `#{timestamp}_<name>.exs` before commit. Do NOT allocate
+    your own timestamp — collisions with other stack members will silently
+    corrupt the CI DB.
+    """
+  end
 
   defp render_parent_plan_block(%{task_id: task_id, task_title: task_title, plan: plan}) do
     stages = Map.get(plan, :stages, []) || []
@@ -781,6 +848,12 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     ack_preamble =
       render_task_ack_preamble(contract_id(task, :id), contract_id(stage || %{}, :id))
 
+    # Mirrors the `{{migration_slot_section}}` placeholder position in the
+    # DB template: after the evidence paragraph, before the Git Workflow
+    # block that `enrich_in_progress_prompt/3` appends below. Environments
+    # without the seeded template row still get the reservation.
+    migration_slot_section = render_migration_slot_section(task, stage)
+
     """
     #{ack_preamble}
     Plan approved — execute the current stage.
@@ -792,6 +865,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Push evidence using validation_pass or stage_complete as you finish each step. \
     Post commentary to the execution space so reviewers can follow along. \
     Use report_blocker if you are stuck.
+    #{migration_slot_section}
 
     The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
     Start from the concrete stage contract and any attached/bundled skill content in that payload before re-fetching broad task/project context.
