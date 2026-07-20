@@ -84,7 +84,19 @@ defmodule Platform.Tasks.ProjectTest do
 
       assert {:error, _changeset} = Tasks.create_project(%{slug: "no-name"})
 
-      refute_receive {:project_created, _}, 200
+      # Scoped to the slug THIS test attempted, not a bare `_`.
+      #
+      # `projects_lifecycle_topic/0` is a single global topic and this case
+      # is `async: true`, so every concurrently-running case that creates a
+      # project broadcasts here. `Platform.Tasks.StageTest` (also async)
+      # calls `create_project(%{name: "Stage Project"})` in its *setup*, so
+      # it broadcasts once per test in that file — reliably landing inside
+      # this 200ms window and tripping a bare `refute_receive`.
+      #
+      # Matching the slug keeps the guarantee that matters (a failed insert
+      # must not broadcast) while being immune to siblings: no row was
+      # inserted, so nothing carrying slug "no-name" can legitimately exist.
+      refute_receive {:project_created, %{slug: "no-name"}}, 200
     end
   end
 

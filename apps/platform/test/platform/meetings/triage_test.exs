@@ -836,10 +836,10 @@ defmodule Platform.Meetings.TriageTest do
         Triage.file_tasks_from_canvas(canvas, project_id: project.id, action_items: items)
 
       assert {:ok, 2} = Triage.junk_batch(canvas)
-      before_count = Repo.aggregate(Platform.Audit.Event, :count, :id)
+      before_count = junk_audit_count(canvas.id)
 
       assert {:ok, 0} = Triage.junk_batch(canvas)
-      after_count = Repo.aggregate(Platform.Audit.Event, :count, :id)
+      after_count = junk_audit_count(canvas.id)
 
       assert after_count == before_count,
              "expected the idempotent no-op branch to skip the audit insert"
@@ -1198,5 +1198,29 @@ defmodule Platform.Meetings.TriageTest do
 
       refute_receive {:tasks_batch_deleted, _, _}, 200
     end
+  end
+
+  # Counts ONLY the batch-junk audit rows belonging to this canvas.
+  #
+  # The idempotency test previously used
+  # `Repo.aggregate(Platform.Audit.Event, :count, :id)` — a GLOBAL tally.
+  # This case is `async: false`, which puts the sandbox in `{:shared, self()}`
+  # mode, so every process on the node writes through this test's connection.
+  # `Platform.Audit.TelemetryHandler` persists `[:platform, :historian | _]`
+  # events from a spawned `Task.Supervisor` child (telemetry_handler.ex:170,187);
+  # such a child belonging to an earlier test can still be in flight and land
+  # its row here, inflating the global count between the two reads. That fails
+  # an assertion about a code path which provably wrote nothing:
+  # `Triage.junk_batch/2`'s idempotent branch (triage.ex:291-295) returns
+  # `{:ok, 0}` without ever calling `record_junk_audit/4`.
+  #
+  # Scoping to this canvas's own event type asserts exactly the intended
+  # contract and is unaffected by unrelated audit traffic.
+  defp junk_audit_count(canvas_id) do
+    from(e in Platform.Audit.Event,
+      where: e.event_type == "meetings.triage.batch_junked",
+      where: e.resource_id == ^canvas_id
+    )
+    |> Repo.aggregate(:count, :id)
   end
 end

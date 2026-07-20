@@ -48,6 +48,28 @@ config :phoenix,
 config :platform, :start_attention_router, false
 config :platform, :start_system_event_scheduler, false
 
+# Meetings summary config — injected, NOT read from priv/meetings.yml.
+#
+# `priv/meetings.yml` is gitignored (.gitignore:33), so it is absent in CI
+# and present-with-arbitrary-contents on developer machines. When a dev has
+# a local provider configured (e.g. `provider: ollama` pointing at a LAN
+# box), `Meetings.Config.summary/0` resolves to that provider and the
+# summarizer's legacy path makes a REAL HTTP call instead of short-circuiting
+# on `{:error, :no_summary_provider_configured}`. That made four tests fail
+# locally and pass in CI — the suite became a function of the host.
+#
+# Pinning the config here means the test run never touches the filesystem
+# for meetings config. A test that needs a different provider must set this
+# key explicitly (and restore it), not rely on what happens to be on disk.
+config :platform, :meetings_summary, %{
+  provider: :none,
+  model: nil,
+  base_url: nil,
+  api_key_env: nil,
+  max_tokens: 2048,
+  temperature: 0.3
+}
+
 # TaskRouterWatcher autonomous reconcile tick.
 # The watcher boots as a global singleton in test (it's allow-listed into
 # the current DataCase sandbox, see test/support/data_case.ex) so tests can

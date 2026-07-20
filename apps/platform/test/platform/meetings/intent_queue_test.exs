@@ -22,6 +22,24 @@ defmodule Platform.Meetings.IntentQueueTest do
   @rooms ~w(intentq-room-a intentq-room-b intentq-room-sweep intentq-room-fin)
 
   setup do
+    # `claim_pending/1`, `list_stalled/1` and friends deliberately scan EVERY
+    # room — that is what the dispatcher needs from them. So the assertions in
+    # this file are absolute counts over the whole table, and they are only
+    # meaningful if the table starts empty.
+    #
+    # `@rooms` cleanup alone is not enough: six test files enqueue into the
+    # single named `:meeting_intent_queue` table, and a row left behind by any
+    # of them is picked up here. Under ExUnit seed 148473 / --max-cases 8 (the
+    # CI configuration) `intent_classifier_test.exs`'s "room-context" row
+    # survived into this file and broke three tests — `claim_pending(3)`
+    # returned 3 rows instead of 2, and `mark_retry`'s single-row match failed
+    # against a foreign room. Passed locally on other seeds, which is why it
+    # read as a flake rather than an ordering dependency.
+    #
+    # Safe because this case is `async: false` (it owns the named table) and
+    # the table is `:public`.
+    :ets.delete_all_objects(:meeting_intent_queue)
+
     on_exit(fn ->
       for room <- @rooms, do: IntentQueue.drop_for_room(room)
     end)

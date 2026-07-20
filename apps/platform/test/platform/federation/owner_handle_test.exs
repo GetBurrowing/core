@@ -184,7 +184,15 @@ defmodule Platform.Federation.OwnerHandleTest do
       # function returns the same shape regardless of where the mismatch is.
       handle = OwnerHandle.for(@user_id, @salt_a, @peer_org_a, 1)
 
-      first_byte_diff = "B" <> binary_part(handle, 1, 42)
+      # Pick a replacement byte that is guaranteed to DIFFER from the one
+      # it replaces. `@key_v1` is `:crypto.strong_rand_bytes/1` evaluated at
+      # compile time, so `handle` changes on every recompile; hardcoding "B"
+      # here silently produced `first_byte_diff == handle` on roughly 1 in 64
+      # compiles (base64 alphabet), making `verify/5` correctly return
+      # `{:ok, 1}` and failing the assertion. The `last_byte_diff` line below
+      # already guarded against exactly this — the two are now symmetric.
+      first_byte_diff =
+        if(String.first(handle) == "A", do: "B", else: "A") <> binary_part(handle, 1, 42)
 
       last_byte_diff =
         binary_part(handle, 0, 42) <> if String.last(handle) == "A", do: "B", else: "A"

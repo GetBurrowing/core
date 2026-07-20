@@ -10,6 +10,21 @@ defmodule Platform.Meetings.Config do
   This module is intentionally read-on-demand (not cached in a GenServer)
   so that tweaking the YAML during development takes effect immediately
   without a restart.
+
+  ## Injected config (test env)
+
+  `priv/meetings.yml` is gitignored, so whether it exists — and which
+  provider it names — varies per machine. Reading it from a test run makes
+  the outcome a function of the host: a developer with a local Ollama
+  configured gets a real HTTP call (and an `:econnrefused`) where CI, which
+  has no such file, gets `provider: :none`. Tests must not depend on
+  unmanaged disk state.
+
+  Setting `config :platform, :meetings_summary, %{...}` short-circuits the
+  YAML read entirely — the injected map is normalized and returned as-is
+  and no filesystem access happens. `config/test.exs` sets this to the
+  provider-less default so the suite is hermetic regardless of what is on
+  the box. Production leaves the key unset and reads the YAML as before.
   """
 
   @default_summary %{
@@ -21,11 +36,22 @@ defmodule Platform.Meetings.Config do
     temperature: 0.3
   }
 
-  @doc "Returns the resolved `:summary` config as a map with atom keys."
+  @doc """
+  Returns the resolved `:summary` config as a map with atom keys.
+
+  When `:meetings_summary` is set in application config the YAML file is
+  never read (see the "Injected config" section in the moduledoc).
+  """
   def summary do
-    load()
-    |> Map.get("summary", %{})
-    |> normalize_summary()
+    case Application.fetch_env(:platform, :meetings_summary) do
+      {:ok, injected} when is_map(injected) ->
+        Map.merge(@default_summary, atomize_summary(injected))
+
+      _ ->
+        load()
+        |> Map.get("summary", %{})
+        |> normalize_summary()
+    end
   end
 
   @doc "True if a summary provider other than `:none` is configured."
@@ -66,6 +92,28 @@ defmodule Platform.Meetings.Config do
   end
 
   defp normalize_summary(_), do: @default_summary
+
+  # Injected config may use either atom or string keys (config/*.exs
+  # naturally produces atoms; a test setting it dynamically may not).
+  # Unknown keys are dropped so an injected map can't smuggle in fields
+  # the YAML path would never produce.
+  defp atomize_summary(map) do
+    known = Map.keys(@default_summary)
+
+    Enum.reduce(map, %{}, fn {k, v}, acc ->
+      key = if is_binary(k), do: safe_key(k, known), else: k
+
+      if key in known do
+        Map.put(acc, key, if(key == :provider, do: parse_provider(v), else: v))
+      else
+        acc
+      end
+    end)
+  end
+
+  defp safe_key(k, known) do
+    Enum.find(known, fn atom -> Atom.to_string(atom) == k end)
+  end
 
   defp parse_provider(nil), do: :none
   defp parse_provider(p) when is_atom(p), do: p

@@ -964,7 +964,14 @@ defmodule Platform.TenancyTest do
       assert {:ok, membership} =
                Tenancy.promote_to_admin(user, actor_id: Ecto.UUID.generate(), reason: "elevation")
 
-      assert_receive {:audit_event, event}, 500
+      # Audit.subscribe/0 is a GLOBAL topic — a bare `event` binding takes
+      # whichever audit event arrives first, including one broadcast by a
+      # concurrently-running test (observed: "chat.participant.added" under
+      # ExUnit seed 148473 / --max-cases 8). Pattern-match the event_type so
+      # unrelated broadcasts are skipped rather than asserted against.
+      assert_receive {:audit_event, %{event_type: "platform.tenancy.role_change"} = event},
+                     500
+
       assert event.event_type == "platform.tenancy.role_change"
       assert event.action == "promote_to_admin"
       assert event.resource_type == "org_membership"
@@ -983,7 +990,14 @@ defmodule Platform.TenancyTest do
       assert {:ok, membership} =
                Tenancy.revoke_admin(user, actor_id: Ecto.UUID.generate(), reason: "contractor")
 
-      assert_receive {:audit_event, event}, 500
+      # Audit.subscribe/0 is a GLOBAL topic — a bare `event` binding takes
+      # whichever audit event arrives first, including one broadcast by a
+      # concurrently-running test (observed: "chat.participant.added" under
+      # ExUnit seed 148473 / --max-cases 8). Pattern-match the event_type so
+      # unrelated broadcasts are skipped rather than asserted against.
+      assert_receive {:audit_event, %{event_type: "platform.tenancy.role_change"} = event},
+                     500
+
       assert event.event_type == "platform.tenancy.role_change"
       assert event.action == "revoke_admin"
       assert event.resource_id == membership.id
@@ -998,7 +1012,14 @@ defmodule Platform.TenancyTest do
       Platform.Audit.subscribe()
       assert {:ok, _} = Tenancy.promote_to_admin(user)
 
-      assert_receive {:audit_event, event}, 500
+      # Audit.subscribe/0 is a GLOBAL topic — a bare `event` binding takes
+      # whichever audit event arrives first, including one broadcast by a
+      # concurrently-running test (observed: "chat.participant.added" under
+      # ExUnit seed 148473 / --max-cases 8). Pattern-match the event_type so
+      # unrelated broadcasts are skipped rather than asserted against.
+      assert_receive {:audit_event, %{event_type: "platform.tenancy.role_change"} = event},
+                     500
+
       assert event.actor_type == "system"
       assert is_nil(event.actor_id)
     end
