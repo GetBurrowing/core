@@ -6,6 +6,7 @@ defmodule Platform.Chat.AgentResponderTest do
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat
+  alias Platform.Chat.AgentResponder
   alias Platform.Chat.AttentionRouter
   alias Platform.Federation.RuntimePresence
   alias Platform.Repo
@@ -320,6 +321,178 @@ defmodule Platform.Chat.AgentResponderTest do
 
       RuntimePresence.untrack(runtime.runtime_id)
       _ = AgentRuntime
+    end
+  end
+
+  # Chatless system_event signals — the shape the Responsibilities.Router
+  # builds for cron / webhook / event_topic responsibility fires. Before
+  # the fix these tripped a FunctionClauseError inside `load_context/1`
+  # because the only clause required `participant_id + message_id + space_id`,
+  # which cron-fired signals don't carry.
+  describe "cron / responsibility-triggered system_event signals" do
+    test "load_context accepts the cron shape and returns a chat-less context" do
+      agent = create_agent(%{slug: "higgins-cron", name: "Higgins"})
+
+      signal = %{
+        reason: :system_event,
+        metadata: %{
+          feature: "memory",
+          agent_id: agent.id,
+          agent_slug: "higgins-cron",
+          responsibility_key: "memory.dreaming",
+          trigger_kind: :cron
+        }
+      }
+
+      # respond/1 → load_context/1 → dispatch_system_event/2 — no runtime
+      # linked so we exercise the built-in / no-runtime branch (log-and-skip).
+      # The important assertion is that this does NOT raise — pre-fix the
+      # call chain crashed with FunctionClauseError before ever hitting
+      # any dispatch path.
+      assert :ok = AgentResponder.respond(signal)
+    end
+
+    test "missing agent_id maps to :ignore (does not crash)" do
+      signal = %{
+        reason: :system_event,
+        metadata: %{
+          feature: "memory",
+          responsibility_key: "memory.dreaming",
+          trigger_kind: :cron
+        }
+      }
+
+      assert :ok = AgentResponder.respond(signal)
+    end
+
+    test "unknown agent_id maps to :ignore (does not crash)" do
+      signal = %{
+        reason: :system_event,
+        metadata: %{
+          feature: "memory",
+          agent_id: Ecto.UUID.generate(),
+          agent_slug: "ghost",
+          responsibility_key: "memory.dreaming",
+          trigger_kind: :cron
+        }
+      }
+
+      assert :ok = AgentResponder.respond(signal)
+    end
+
+    test "broadcasts a bare signal envelope to the federated agent's runtime" do
+      # Register an external runtime + presence so dispatch_system_event's
+      # federated branch proceeds through the broadcast.
+      runtime_pres = Process.whereis(RuntimePresence) || start_supervised!(RuntimePresence)
+      Sandbox.allow(Repo, self(), runtime_pres)
+
+      owner =
+        Repo.insert!(%User{
+          email: "ar-cron-#{System.unique_integer([:positive])}@example.com",
+          name: "AR Cron Owner",
+          oidc_sub: "oidc-ar-cron-#{System.unique_integer([:positive])}"
+        })
+
+      runtime_token = "rt-cron-#{System.unique_integer([:positive])}"
+
+      runtime =
+        Repo.insert!(%AgentRuntime{
+          owner_user_id: owner.id,
+          status: "active",
+          runtime_id: runtime_token,
+          display_name: "higgins-runtime"
+        })
+
+      RuntimePresence.track(runtime.runtime_id)
+
+      agent =
+        create_agent(%{
+          slug: "higgins",
+          name: "Higgins",
+          runtime_type: "external",
+          runtime_id: runtime.id
+        })
+
+      topic = "runtime:#{runtime.runtime_id}"
+      :ok = PlatformWeb.Endpoint.subscribe(topic)
+
+      signal = %{
+        reason: :system_event,
+        metadata: %{
+          feature: "memory",
+          agent_id: agent.id,
+          agent_slug: "higgins",
+          responsibility_key: "memory.dreaming",
+          trigger_kind: :cron
+        }
+      }
+
+      assert :ok = AgentResponder.respond(signal)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "attention",
+                       payload: %{signal: broadcast_signal}
+                     },
+                     1500
+
+      assert broadcast_signal.reason == :system_event
+      assert broadcast_signal.agent_id == agent.id
+      assert broadcast_signal.agent_slug == "higgins"
+      assert broadcast_signal.responsibility_key == "memory.dreaming"
+      assert broadcast_signal.feature == "memory"
+      assert broadcast_signal.trigger_kind == :cron
+
+      RuntimePresence.untrack(runtime.runtime_id)
+      _ = AgentRuntime
+    end
+
+    test "federated agent with offline runtime dead-letters instead of crashing" do
+      runtime_pres = Process.whereis(RuntimePresence) || start_supervised!(RuntimePresence)
+      Sandbox.allow(Repo, self(), runtime_pres)
+
+      owner =
+        Repo.insert!(%User{
+          email: "ar-cron-off-#{System.unique_integer([:positive])}@example.com",
+          name: "AR Cron Offline Owner",
+          oidc_sub: "oidc-ar-cron-off-#{System.unique_integer([:positive])}"
+        })
+
+      runtime_token = "rt-cron-off-#{System.unique_integer([:positive])}"
+
+      runtime =
+        Repo.insert!(%AgentRuntime{
+          owner_user_id: owner.id,
+          status: "active",
+          runtime_id: runtime_token,
+          display_name: "higgins-runtime-offline"
+        })
+
+      # NOT tracked — presence is empty for this runtime.
+
+      agent =
+        create_agent(%{
+          slug: "higgins-off",
+          name: "Higgins Offline",
+          runtime_type: "external",
+          runtime_id: runtime.id
+        })
+
+      signal = %{
+        reason: :system_event,
+        metadata: %{
+          feature: "memory",
+          agent_id: agent.id,
+          agent_slug: "higgins-off",
+          responsibility_key: "memory.dreaming",
+          trigger_kind: :cron
+        }
+      }
+
+      # The offline-runtime branch returns {:error, :runtime_offline}
+      # from dispatch_system_event/2; the important behaviour is that
+      # the pipeline reaches that structured error instead of raising.
+      assert {:error, :runtime_offline} = AgentResponder.respond(signal)
     end
   end
 end

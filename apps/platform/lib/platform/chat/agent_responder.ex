@@ -104,11 +104,20 @@ defmodule Platform.Chat.AgentResponder do
         "[AgentResponder] context loaded, agent=#{context.agent.slug} runtime_type=#{context.agent.runtime_type} runtime_id=#{inspect(context.agent.runtime_id)}"
       )
 
-      if context.agent.runtime_type == "external" do
-        Logger.info("[AgentResponder] dispatching to external runtime")
-        dispatch_to_external(signal, context)
-      else
-        dispatch_to_built_in(signal, context)
+      cond do
+        # Cron / responsibility-triggered system_event with no chat surface.
+        # The Responsibilities.Router builds these signals without
+        # participant/message/space, so the chat-context dispatch paths
+        # would nil-deref. Route to a runtime-broadcast-only path.
+        is_nil(context.message) ->
+          dispatch_system_event(signal, context)
+
+        context.agent.runtime_type == "external" ->
+          Logger.info("[AgentResponder] dispatching to external runtime")
+          dispatch_to_external(signal, context)
+
+        true ->
+          dispatch_to_built_in(signal, context)
       end
     else
       {:error, :ignore} ->
@@ -315,6 +324,166 @@ defmodule Platform.Chat.AgentResponder do
       {:error, reason} -> {:error, reason}
       _ -> {:error, :ignore}
     end
+  end
+
+  # Cron / responsibility-triggered system_event. The Responsibilities.Router
+  # (`Platform.Responsibilities.Router.build_native_signal/3`) constructs
+  # signals without chat-context keys — only `reason: :system_event` and a
+  # metadata map carrying `agent_id`, `responsibility_key`, `feature`,
+  # `trigger_kind`, `agent_slug`. Load the target agent and hand back a
+  # chat-less context; downstream `dispatch_system_event/2` routes the
+  # broadcast to the agent's runtime with a bare `%{signal: ...}` envelope.
+  defp load_context(%{reason: :system_event, metadata: %{agent_id: agent_id} = metadata} = signal)
+       when is_binary(agent_id) do
+    case Repo.get(Agent, agent_id) do
+      %Agent{} = agent ->
+        {:ok,
+         %{
+           signal: signal,
+           agent: agent,
+           agent_participant: nil,
+           message: nil,
+           user_message: nil,
+           history: [],
+           responsibility_key: Map.get(metadata, :responsibility_key),
+           metadata: metadata
+         }}
+
+      _ ->
+        Logger.warning(
+          "[AgentResponder] system_event dispatch skipped — agent #{inspect(agent_id)} not found " <>
+            "(responsibility=#{inspect(Map.get(metadata, :responsibility_key))})"
+        )
+
+        {:error, :ignore}
+    end
+  end
+
+  # Any other signal shape (missing chat keys, missing metadata.agent_id) is
+  # unroutable. Log-and-ignore so a malformed signal never crashes the
+  # responder pipeline again.
+  defp load_context(signal) do
+    Logger.warning(
+      "[AgentResponder] load_context ignoring signal with unroutable shape: " <>
+        inspect(Map.take(signal, [:reason, :participant_id, :message_id, :space_id, :metadata]))
+    )
+
+    {:error, :ignore}
+  end
+
+  # ── System-event dispatch (cron / webhook / event_topic responsibility fires) ─
+
+  # For federated / external-runtime agents (Higgins's runtime shape), broadcast
+  # the responsibility fire to the agent's runtime channel with a bare
+  # `%{signal: ...}` envelope — mirrors `Federation.dispatch_scribe_attention/2`
+  # so the runtime side has a single well-known payload shape for
+  # chat-less attention signals.
+  defp dispatch_system_event(
+         _signal,
+         %{agent: %Agent{runtime_type: "external", runtime_id: runtime_pk} = agent} = context
+       )
+       when is_binary(runtime_pk) do
+    responsibility_key = context[:responsibility_key]
+
+    case Platform.Federation.get_runtime(runtime_pk) do
+      nil ->
+        Logger.warning(
+          "[AgentResponder] system_event dispatch skipped — runtime #{runtime_pk} not found " <>
+            "(agent=#{agent.slug} responsibility=#{inspect(responsibility_key)})"
+        )
+
+        {:error, :runtime_not_found}
+
+      runtime ->
+        broadcast_system_event(runtime, agent, context)
+    end
+  end
+
+  defp dispatch_system_event(_signal, %{agent: %Agent{slug: slug} = agent} = context) do
+    # Built-in / no-runtime agent: cron fires against these flow through the
+    # deterministic responsibility handler path (e.g.
+    # `Handlers.Dreaming.handle_output/3`) after `ExternalAgents.Dispatcher`
+    # returns — chat-triggered dispatch doesn't apply. Log-and-skip so the
+    # native dispatcher path stays a strict no-op instead of crashing.
+    Logger.info(
+      "[AgentResponder] built-in agent #{slug} received system_event " <>
+        "responsibility=#{inspect(context[:responsibility_key])} runtime_type=#{inspect(agent.runtime_type)} — " <>
+        "chat-context dispatch skipped"
+    )
+
+    :ok
+  end
+
+  defp broadcast_system_event(runtime, %Agent{} = agent, context) do
+    topic = "runtime:#{runtime.runtime_id}"
+    responsibility_key = context[:responsibility_key]
+
+    if RuntimePresence.online?(runtime.runtime_id) do
+      payload = %{signal: build_system_event_signal(agent, context)}
+
+      Logger.info(
+        "[AgentResponder] broadcasting system_event to #{topic} " <>
+          "responsibility=#{inspect(responsibility_key)} agent=#{agent.slug}"
+      )
+
+      case PlatformWeb.Endpoint.broadcast(topic, "attention", payload) do
+        :ok ->
+          :telemetry.execute(
+            [:platform, :federation, :delivery_success],
+            %{system_time: System.system_time()},
+            %{runtime_id: runtime.runtime_id, agent_id: agent.id}
+          )
+
+          :ok
+
+        {:error, reason} ->
+          Logger.error(
+            "[AgentResponder] system_event broadcast failed to #{topic}: #{inspect(reason)}"
+          )
+
+          {:error, :broadcast_failed}
+      end
+    else
+      Logger.error(
+        "[AgentResponder] DEAD LETTER: runtime #{runtime.runtime_id} not in presence — " <>
+          "system_event for agent #{agent.slug} responsibility=#{inspect(responsibility_key)} unreachable (topic=#{topic})"
+      )
+
+      DeadLetterBuffer.record(%{
+        runtime_id: runtime.runtime_id,
+        agent_id: agent.id,
+        agent_slug: agent.slug,
+        space_id: nil,
+        reason: :runtime_offline,
+        timestamp: DateTime.utc_now()
+      })
+
+      :telemetry.execute(
+        [:platform, :federation, :delivery_failed],
+        %{system_time: System.system_time()},
+        %{
+          runtime_id: runtime.runtime_id,
+          agent_id: agent.id,
+          reason: :runtime_offline
+        }
+      )
+
+      {:error, :runtime_offline}
+    end
+  end
+
+  defp build_system_event_signal(%Agent{} = agent, context) do
+    metadata = context[:metadata] || %{}
+
+    %{
+      reason: :system_event,
+      agent_id: agent.id,
+      agent_slug: agent.slug
+    }
+    |> maybe_put(:responsibility_key, context[:responsibility_key])
+    |> maybe_put(:feature, Map.get(metadata, :feature))
+    |> maybe_put(:trigger_kind, Map.get(metadata, :trigger_kind))
+    |> Map.put(:metadata, metadata)
   end
 
   defp persist_reply(context, reply) do
