@@ -2735,29 +2735,14 @@
       data-role="stack-detail-body"
     >
       <%!-- Left column: dep DAG. `.dag` matches the mock chrome
-           (rounded base-300 backdrop, modest padding). The container is a
-           user-resizable box (`.stack-graph-resize-container`) — desktop
-           uses the native CSS `resize: both` corner handle; coarse-pointer
-           (mobile) hides the native handle and uses the custom
-           `[data-role=stack-detail-dag-resize-handle]` touch button as its
-           sibling. `phx-update="ignore"` is load-bearing: the JS hook
-           (`StackGraphResize`, wired in stage 2) writes inline width/height
-           on this element, and LV would otherwise clobber those styles on
-           every diff of `@selected_stack_members`. Same footgun that the
-           resizable sidebar avoids via `updated()` — ignoring is cleaner
-           here because the container has no server-driven markup other than
-           the SVG child, whose viewBox is stable across diffs. The SVG
-           fills the container (`w-full h-full`); `preserveAspectRatio`
-           keeps the graph legible as the aspect changes. --%>
+           (rounded base-300 backdrop, modest padding). The SVG fills the
+           container (`w-full h-full`); `preserveAspectRatio` keeps the
+           graph legible as the aspect changes. Stage 3 will add the
+           expand-to-modal affordance atop this container. --%>
       <div
         id="stack-detail-dag-container"
-        class="stack-graph-resize-container dag rounded bg-base-300 p-2 relative overflow-auto"
+        class="dag relative rounded bg-base-300 p-2"
         data-role="stack-detail-dag"
-        data-desktop-default-w="800"
-        data-desktop-default-h="600"
-        data-mobile-default-h="420"
-        phx-hook="StackGraphResize"
-        phx-update="ignore"
       >
         <svg
           viewBox={"0 0 #{dag_w} #{dag_h}"}
@@ -2823,32 +2808,20 @@
             </g>
           <% end %>
         </svg>
-        <%!-- Custom touch resize handle. Desktop uses the native `resize: both`
-             CSS handle (also bottom-right); this button overlays the same
-             corner so the two visual affordances land in the same spot. CSS
-             hides this button on fine-pointer viewports so it doesn't
-             clash with the native corner. `touch-none` stops the browser
-             from swallowing touchmove for page scroll during the drag.
-             The stage-3 hook wires the actual touchstart/move/end. --%>
+        <%!-- Expand-to-modal affordance (stage 3 of task 019f487e). Ghost
+             icon-button positioned top-right of the dep-graph container;
+             semantic-token colors only (no hard-coded hex). On click,
+             sets `:stack_graph_expanded` true so the fullscreen modal
+             renders (see the modal block below the review-canvas modal).
+             --%>
         <button
           type="button"
-          aria-label="Resize dep graph"
-          data-role="stack-detail-dag-resize-handle"
-          class="stack-graph-resize-handle absolute bottom-1 right-1 h-6 w-6 rounded-sm bg-base-content/10 hover:bg-base-content/20 items-center justify-center cursor-nwse-resize touch-none"
+          aria-label="Expand dep graph"
+          data-role="stack-detail-dag-expand"
+          phx-click="open_stack_graph_expand"
+          class="btn btn-ghost btn-sm btn-square absolute top-1 right-1 text-base-content/60 hover:bg-base-content/10 max-sm:h-11 max-sm:w-11 max-sm:min-h-[44px] max-sm:min-w-[44px]"
         >
-          <svg
-            viewBox="0 0 12 12"
-            xmlns="http://www.w3.org/2000/svg"
-            class="h-3 w-3 opacity-70"
-            aria-hidden="true"
-          >
-            <path
-              d="M11 1 L1 11 M11 5 L5 11 M11 9 L9 11"
-              stroke="currentColor"
-              stroke-width="1.2"
-              fill="none"
-            />
-          </svg>
+          <span class="hero-arrows-pointing-out size-4" aria-hidden="true"></span>
         </button>
       </div>
       <%!-- Right column: linear members list (T8 stage 4). One row per
@@ -3353,6 +3326,111 @@
           show_header={false}
           dom_id_base="tasks-review-modal"
         />
+      </div>
+    </div>
+  </div>
+
+  <%!-- Stack dep-graph fullscreen modal. Mirrors the active_review_canvas
+       modal chrome above; body re-renders the same stack_dag_layout SVG at
+       a much larger container size so 6+ node stacks are legible. Escape
+       key close pattern matches the reaction-picker at chat_live.html.heex
+       :988. Mobile: card fills viewport via max-sm:* utility overrides so
+       tiny iPhone-class canvases reclaim every pixel. --%>
+  <div
+    :if={@stack_graph_expanded && @selected_stack_members not in [nil, []]}
+    id="stack-detail-dag-modal"
+    data-role="stack-detail-dag-modal"
+    class="fixed inset-0 z-50 flex items-center justify-center px-4 py-6 max-sm:p-0"
+    phx-window-keydown="close_stack_graph_expand"
+    phx-key="Escape"
+  >
+    <div
+      class="absolute inset-0 bg-black/50"
+      phx-click="close_stack_graph_expand"
+      data-role="stack-detail-dag-modal-backdrop"
+      aria-hidden="true"
+    />
+    <div class="relative z-10 flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-2xl max-sm:h-screen max-sm:max-h-none max-sm:w-screen max-sm:rounded-none max-sm:border-0">
+      <div class="flex items-center justify-between border-b border-base-300 px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+        <div class="min-w-0">
+          <div class="truncate text-sm font-semibold">Stack dep graph</div>
+          <div class="text-xs text-base-content/60">
+            {length(@selected_stack_members)} members
+          </div>
+        </div>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm btn-square"
+          phx-click="close_stack_graph_expand"
+          aria-label="Close dep graph"
+          data-role="stack-detail-dag-modal-close"
+        >
+          <span class="hero-x-mark size-4"></span>
+        </button>
+      </div>
+      <div class="flex-1 overflow-auto p-4 pb-[max(1rem,env(safe-area-inset-bottom))] bg-base-300">
+        <% dag_modal = stack_dag_layout(@selected_stack_members)
+        {mw, mh} = dag_modal.viewbox %>
+        <svg
+          viewBox={"0 0 #{mw} #{mh}"}
+          preserveAspectRatio="xMidYMid meet"
+          xmlns="http://www.w3.org/2000/svg"
+          class="w-full h-full min-h-[60vh] block"
+          data-role="stack-detail-dag-modal-svg"
+        >
+          <%= for edge <- dag_modal.edges do %>
+            <line
+              x1={edge.x1}
+              y1={edge.y1}
+              x2={edge.x2}
+              y2={edge.y2}
+              stroke="#7b5cff"
+              stroke-width="1.4"
+              stroke-dasharray="6,4"
+              data-role="stack-detail-dag-modal-edge"
+              data-from-id={edge.from_id}
+              data-to-id={edge.to_id}
+            />
+          <% end %>
+          <%= for node <- dag_modal.nodes do %>
+            <% style = dag_node_style(node.status) %>
+            <g data-role="stack-detail-dag-modal-node" data-node-id={node.id}>
+              <rect
+                x={node.x}
+                y={node.y}
+                width={node.w}
+                height={node.h}
+                rx="6"
+                fill={style.fill}
+                stroke={style.stroke}
+                stroke-width="1.2"
+                stroke-dasharray={style.dasharray}
+                data-status={node.status}
+              />
+              <text
+                x={node.x + 12}
+                y={node.y + 18}
+                font-size="11"
+                font-weight="700"
+                fill={style.num_color}
+              >
+                {node.num}
+              </text>
+              <text x={node.x + 26} y={node.y + 18} font-size="9" fill={style.text}>
+                {dag_node_label(node.label)}
+              </text>
+              <text
+                x={node.x + 26}
+                y={node.y + 34}
+                font-size="7"
+                letter-spacing="0.5"
+                fill={style.caption_color}
+              >
+                {style.caption}
+              </text>
+            </g>
+          <% end %>
+        </svg>
       </div>
     </div>
   </div>

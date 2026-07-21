@@ -7608,128 +7608,10 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ ~s(data-role="stack-detail-dag")
       assert html =~ ~s(data-role="stack-detail-dag-svg")
       # Wrapped in the .dag chrome (rounded base-300 backdrop) per mock.
-      assert html =~ "dag rounded bg-base-300 p-2"
-    end
-
-    # Stack v2 stage 1: the container is now a resizable box hosting a
-    # StackGraphResize hook (wired in stage 2). Assert the chrome the hook
-    # depends on — class, id, hook name, and `phx-update="ignore"` (the
-    # invariant that lets the hook's inline width/height survive LV diffs
-    # of `@selected_stack_members`). Assertions target the opening tag so
-    # we don't accidentally match an attribute that appears elsewhere in
-    # the panel (e.g. a coincidental `stack-detail-dag-container` string).
-    test "dep-DAG container carries the resizable chrome (class + id + hook + phx-update ignore)",
-         %{conn: conn, stack: stack} do
-      html = open_panel(conn, stack)
-      tag = open_tag_for(html, "stack-detail-dag")
-
-      assert tag =~ ~s(id="stack-detail-dag-container"),
-             "expected id=stack-detail-dag-container on the DAG container: #{tag}"
-
-      assert tag =~ "stack-graph-resize-container",
-             "expected class to include stack-graph-resize-container: #{tag}"
-
-      assert tag =~ ~s(phx-hook="StackGraphResize"),
-             "expected phx-hook=StackGraphResize on the container: #{tag}"
-
-      # phx-update=ignore is load-bearing: without it LV would clobber
-      # the inline style.width/height the hook writes on drag.
-      assert tag =~ ~s(phx-update="ignore"),
-             "expected phx-update=ignore on the container: #{tag}"
-    end
-
-    test "dep-DAG container renders the touch drag-handle button child",
-         %{conn: conn, stack: stack} do
-      html = open_panel(conn, stack)
-
-      # Drag-handle button lives inside the container. The
-      # `data-role=stack-detail-dag-resize-handle` marker is what the
-      # stage-3 JS hook queries; `touch-none` is what stops the browser
-      # from swallowing touchmove for scroll during a mobile drag.
-      assert html =~ ~s(data-role="stack-detail-dag-resize-handle"),
-             "expected drag-handle button with data-role=stack-detail-dag-resize-handle"
-
-      # Match the actual opening tag so we can spot-check both attrs on
-      # the same element (not two unrelated hits scattered across the
-      # panel).
-      [[button_tag]] =
-        Regex.scan(
-          ~r/<button[^>]*data-role="stack-detail-dag-resize-handle"[^>]*>/,
-          html
-        )
-
-      assert button_tag =~ "touch-none",
-             "expected touch-none class on the drag-handle: #{button_tag}"
-
-      assert button_tag =~ ~s(aria-label="Resize dep graph"),
-             "expected aria-label on the drag-handle: #{button_tag}"
-    end
-
-    # Stack v2 stage 4: dataset defaults are the hook's source-of-truth for
-    # initial sizing (see `stack_graph_resize.js#defaultsForViewport`). If
-    # any of these three attributes drifts or disappears the hook falls
-    # back to hardcoded literals — silently on desktop, visibly on mobile.
-    # Lock them at the markup layer so a template refactor can't quietly
-    # break the contract.
-    test "dep-DAG container declares dataset defaults for the hook",
-         %{conn: conn, stack: stack} do
-      html = open_panel(conn, stack)
-      tag = open_tag_for(html, "stack-detail-dag")
-
-      assert tag =~ ~s(data-desktop-default-w="800"),
-             "expected data-desktop-default-w=800 on the DAG container: #{tag}"
-
-      assert tag =~ ~s(data-desktop-default-h="600"),
-             "expected data-desktop-default-h=600 on the DAG container: #{tag}"
-
-      assert tag =~ ~s(data-mobile-default-h="420"),
-             "expected data-mobile-default-h=420 on the DAG container: #{tag}"
-    end
-
-    # Stack v2 stage 4: id, class, hook, and phx-update="ignore" must land
-    # on exactly ONE element. A duplicate would give LV two hook instances
-    # racing the same inline style writes — the kind of bug that only
-    # surfaces once persistence starts colliding across surfaces. The
-    # opening-tag regex is anchored to `data-role="stack-detail-dag"` so
-    # future template additions can't shadow the id (a coincidental
-    # `id="…-container"` substring elsewhere wouldn't count as a match).
-    test "dep-DAG container renders exactly one instance with all hook chrome",
-         %{conn: conn, stack: stack} do
-      html = open_panel(conn, stack)
-
-      containers =
-        Regex.scan(
-          ~r/<div[^>]*data-role="stack-detail-dag"[^>]*>/,
-          html
-        )
-
-      assert length(containers) == 1,
-             "expected exactly one dep-DAG container element, got #{length(containers)}"
-
-      [[tag]] = containers
-
-      assert tag =~ ~s(id="stack-detail-dag-container"), "id missing on #{tag}"
-      assert tag =~ "stack-graph-resize-container", "class missing on #{tag}"
-      assert tag =~ ~s(phx-hook="StackGraphResize"), "hook missing on #{tag}"
-      assert tag =~ ~s(phx-update="ignore"), "phx-update=ignore missing on #{tag}"
-    end
-
-    # Stack v2 stage 4: exactly ONE drag-handle button child. Two handles
-    # would double-wire the stage-3 touchstart listener and produce two
-    # `document.addEventListener('touchmove', ...)` calls per drag — a
-    # silent leak that only surfaces under coarse-pointer.
-    test "dep-DAG container renders exactly one resize-handle button",
-         %{conn: conn, stack: stack} do
-      html = open_panel(conn, stack)
-
-      handles =
-        Regex.scan(
-          ~r/<button[^>]*data-role="stack-detail-dag-resize-handle"[^>]*>/,
-          html
-        )
-
-      assert length(handles) == 1,
-             "expected exactly one resize-handle button, got #{length(handles)}"
+      # Stage 3 of task 019f487e added `relative` for the expand-button
+      # positioning context; assert the semantic classes individually so
+      # future harmless class additions don't tickle this assertion.
+      assert html =~ "dag relative rounded bg-base-300 p-2"
     end
 
     test "DAG SVG carries preserveAspectRatio=xMidYMid meet",
@@ -7737,14 +7619,14 @@ defmodule PlatformWeb.TasksLiveTest do
       html = open_panel(conn, stack)
       svg = panel_svg_block(html)
 
-      # preserveAspectRatio keeps the topological layout legible as the
-      # container aspect changes under user resize — no squish/stretch.
+      # preserveAspectRatio keeps the topological layout legible if the
+      # container aspect changes — no squish/stretch.
       assert svg =~ ~s(preserveAspectRatio="xMidYMid meet"),
              "expected preserveAspectRatio=xMidYMid meet on the DAG SVG"
 
-      # SVG must fill its (now resizable) container, not size intrinsically.
+      # SVG fills its container, not intrinsic size.
       assert svg =~ "h-full",
-             "expected h-full class on the DAG SVG so it fills the resized container"
+             "expected h-full class on the DAG SVG so it fills the container"
     end
 
     test "DAG edges render as dashed purple lines with no arrowhead marker",
@@ -7970,6 +7852,622 @@ defmodule PlatformWeb.TasksLiveTest do
       ys = dag_rect_ys(html)
       assert length(ys) == 4
       assert Enum.all?(ys, &(&1 >= 0))
+    end
+  end
+
+  describe "stack-detail dep-graph — no v1 resize chrome" do
+    # Stack v2 (task 019f487e) stage 2 tripwires. Rowan's rejection of the
+    # v1 drag/resize implementation was explicit: "The dragging
+    # implementation in its current form is not good and needs to be
+    # removed entirely." These four tests are the guard rail — if anyone
+    # re-introduces the drag chrome via a merge, rebase, or copy-paste
+    # from the pre-strip history, CI fails immediately.
+    #
+    # Three of the four are pure file-level assertions (no LiveView
+    # boot), so they run fast and would still fire even if the
+    # stack-detail render path is broken. The fourth boots a stack-detail
+    # drawer with a seeded 3-member stack and refutes the drag chrome in
+    # the rendered HTML — the belt-and-suspenders check that catches a
+    # regression that reintroduces markup without touching the JS/CSS.
+
+    test "stack_graph_resize.js hook file is not present" do
+      path =
+        Path.expand("../../../assets/js/hooks/stack_graph_resize.js", __DIR__)
+
+      refute File.exists?(path),
+             "v1 StackGraphResize hook file must not exist at #{path}"
+    end
+
+    test "assets/js/hooks/index.js does not register StackGraphResize" do
+      path = Path.expand("../../../assets/js/hooks/index.js", __DIR__)
+      contents = File.read!(path)
+
+      refute contents =~ "StackGraphResize",
+             "assets/js/hooks/index.js must not import or export StackGraphResize"
+    end
+
+    test "app.css contains no .stack-graph-resize-* classes" do
+      path = Path.expand("../../../assets/css/app.css", __DIR__)
+      contents = File.read!(path)
+
+      refute contents =~ "stack-graph-resize-container",
+             "app.css must not define .stack-graph-resize-container"
+
+      refute contents =~ "stack-graph-resize-handle",
+             "app.css must not define .stack-graph-resize-handle"
+    end
+
+    test "stack-detail render carries no drag-handle DOM", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "no-resize-chrome",
+          slug: "no-resize-chrome"
+        )
+
+      m1 = create_member(stack, 1, "Frontend", "done", merged: true)
+      m2 = create_member(stack, 2, "Backend", "in_review")
+      m3 = create_member(stack, 3, "Deploy", "stack_pending")
+
+      {:ok, _m2} =
+        Tasks.update_task(m2, %{
+          dependencies: [%{"task_id" => m1.id, "kind" => "blocks"}]
+        })
+
+      {:ok, _m3} =
+        Tasks.update_task(m3, %{
+          dependencies: [%{"task_id" => m2.id, "kind" => "blocks"}]
+        })
+
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+      stack = Repo.get!(Stack, stack.id)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      refute html =~ ~s(data-role="stack-detail-dag-resize-handle"),
+             "expected no v1 drag-handle button in stack-detail render"
+
+      refute html =~ ~s(phx-hook="StackGraphResize"),
+             "expected no StackGraphResize hook binding in stack-detail render"
+
+      # Scope the phx-update="ignore" refute to the dep-graph container
+      # so an unrelated ignore attribute elsewhere on the page (e.g. a
+      # future embed) can't false-positive this tripwire.
+      dag_open_tag =
+        case Regex.run(
+               ~r/<div[^>]*id="stack-detail-dag-container"[^>]*>/,
+               html
+             ) do
+          [tag] -> tag
+          _ -> nil
+        end
+
+      refute is_nil(dag_open_tag),
+             "expected #stack-detail-dag-container in stack-detail render"
+
+      refute dag_open_tag =~ ~s(phx-update="ignore"),
+             "expected no phx-update=ignore on the dep-graph container: #{dag_open_tag}"
+
+      refute dag_open_tag =~ "stack-graph-resize-container",
+             "expected no v1 resize class on the dep-graph container: #{dag_open_tag}"
+    end
+  end
+
+  describe "stack detail panel — dep-graph fullscreen modal (task 019f487e stage 3)" do
+    # Rowan's v2 direction after rejecting the drag/resize v1: an
+    # expand-to-modal affordance in the top-right of the dep-graph
+    # container that "blows up" the graph into a fullscreen modal for
+    # legible inspection. The modal is transient socket state — no
+    # ClientState persistence, no hook — and its lifecycle is bound to
+    # the underlying `:selected_stack_members`.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "dep-graph-modal",
+          slug: "dep-graph-modal"
+        )
+
+      m1 = create_member(stack, 1, "Frontend", "done", merged: true)
+      m2 = create_member(stack, 2, "Backend", "in_review")
+      m3 = create_member(stack, 3, "Deploy", "stack_pending")
+
+      {:ok, _m2} =
+        Tasks.update_task(m2, %{
+          dependencies: [%{"task_id" => m1.id, "kind" => "blocks"}]
+        })
+
+      {:ok, _m3} =
+        Tasks.update_task(m3, %{
+          dependencies: [%{"task_id" => m2.id, "kind" => "blocks"}]
+        })
+
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+      stack = Repo.get!(Stack, stack.id)
+
+      {:ok, conn: conn, project: project, stack: stack}
+    end
+
+    test "dep-graph container carries expand button with open_stack_graph_expand handler",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      # Exactly one expand button, positioned inside the dep-graph
+      # container (data-role tripwire).
+      buttons =
+        Regex.scan(
+          ~r/<button[^>]*data-role="stack-detail-dag-expand"[^>]*>/,
+          html
+        )
+
+      assert length(buttons) == 1,
+             "expected exactly one stack-detail-dag-expand button, got #{length(buttons)}"
+
+      [[button_tag]] = buttons
+
+      assert button_tag =~ ~s(phx-click="open_stack_graph_expand"),
+             "expected the expand button to fire open_stack_graph_expand: #{button_tag}"
+
+      # Semantic-token regression guard — no hard-coded color literals,
+      # only the muted-foreground token + hover elevation.
+      assert button_tag =~ "text-base-content/60",
+             "expected muted-foreground semantic token on expand button: #{button_tag}"
+
+      assert button_tag =~ "hover:bg-base-content/10",
+             "expected hover elevation semantic token on expand button: #{button_tag}"
+
+      # aria-label present for screen readers.
+      assert button_tag =~ ~s(aria-label="Expand dep graph"),
+             "expected aria-label on expand button: #{button_tag}"
+    end
+
+    test "open_stack_graph_expand event renders modal SVG with same node count as inline",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      inline_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      inline_nodes =
+        Regex.scan(~r/data-role="stack-detail-dag-node"/, inline_html)
+        |> length()
+
+      # Sanity: fixture has 3 members → 3 inline nodes.
+      assert inline_nodes == 3
+
+      modal_html = render_click(view, "open_stack_graph_expand", %{})
+
+      # Modal root present.
+      assert modal_html =~ ~s(data-role="stack-detail-dag-modal"),
+             "expected the fullscreen modal to appear after open_stack_graph_expand"
+
+      # Modal node count matches inline count exactly (same underlying
+      # `stack_dag_layout/1` output feeds both SVGs).
+      modal_nodes =
+        Regex.scan(~r/data-role="stack-detail-dag-modal-node"/, modal_html)
+        |> length()
+
+      assert modal_nodes == inline_nodes,
+             "expected modal to render #{inline_nodes} nodes to match inline, got #{modal_nodes}"
+    end
+
+    test "close via X button clears :stack_graph_expanded",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      opened = render_click(view, "open_stack_graph_expand", %{})
+      assert opened =~ ~s(data-role="stack-detail-dag-modal")
+
+      closed = render_click(view, "close_stack_graph_expand", %{})
+
+      refute closed =~ ~s(data-role="stack-detail-dag-modal"),
+             "expected the modal div to be gone after close event"
+
+      refute :sys.get_state(view.pid).socket.assigns.stack_graph_expanded,
+             "expected :stack_graph_expanded to be false after close"
+    end
+
+    test "close via backdrop click clears :stack_graph_expanded",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      opened = render_click(view, "open_stack_graph_expand", %{})
+      assert opened =~ ~s(data-role="stack-detail-dag-modal-backdrop")
+
+      # Backdrop is a bare div with phx-click="close_stack_graph_expand" —
+      # firing that event is what the click handler triggers.
+      closed = render_click(view, "close_stack_graph_expand", %{})
+
+      refute closed =~ ~s(data-role="stack-detail-dag-modal"),
+             "expected the modal div to be gone after backdrop click"
+    end
+
+    test "Escape key close via phx-window-keydown clears :stack_graph_expanded",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      opened = render_click(view, "open_stack_graph_expand", %{})
+      assert opened =~ ~s(data-role="stack-detail-dag-modal")
+
+      # `phx-window-keydown="close_stack_graph_expand"` at the modal root
+      # — render_keydown dispatches the server-side event directly.
+      closed = render_keydown(view, "close_stack_graph_expand", %{"key" => "Escape"})
+
+      refute closed =~ ~s(data-role="stack-detail-dag-modal"),
+             "expected the modal to close on Escape keydown"
+    end
+
+    test "closing stack detail resets :stack_graph_expanded",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      opened = render_click(view, "open_stack_graph_expand", %{})
+      assert opened =~ ~s(data-role="stack-detail-dag-modal")
+
+      assert :sys.get_state(view.pid).socket.assigns.stack_graph_expanded
+
+      _ = render_click(view, "close_stack_detail", %{})
+
+      refute :sys.get_state(view.pid).socket.assigns.stack_graph_expanded,
+             "expected :stack_graph_expanded false after closing the stack drawer — modal cannot outlive its underlying stack"
+    end
+
+    test "modal chrome mirrors active_review_canvas structural shape",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = render_click(view, "open_stack_graph_expand", %{})
+
+      # Outer modal root: mirrors the review-canvas modal wrapper
+      # (tasks_live.html.heex lines around the @active_review_canvas
+      # block). Tripwire if the mirrored pattern drifts.
+      [outer_tag] =
+        Regex.run(
+          ~r/<div[^>]*data-role="stack-detail-dag-modal"[^>]*>/,
+          html
+        )
+
+      assert outer_tag =~ "fixed inset-0 z-50 flex items-center justify-center px-4 py-6",
+             "expected mirrored review-canvas outer chrome on modal root: #{outer_tag}"
+
+      # Inner card: mirrors the review-canvas inner container's max-h /
+      # max-w / rounded / shadow shape.
+      assert html =~ "max-h-[90vh] w-full max-w-6xl",
+             "expected mirrored review-canvas inner card sizing (max-h-[90vh] w-full max-w-6xl)"
+
+      assert html =~ "rounded-2xl border border-base-300 bg-base-100 shadow-2xl",
+             "expected mirrored review-canvas inner card chrome (rounded, border, shadow)"
+    end
+  end
+
+  describe "stack dep-graph modal — legibility + regression (task 019f487e stage 4)" do
+    # Stage 4 lock-in: cement the stage-3 modal shape so a future refactor
+    # (mobile-utility trim, safe-area strip, hex-color creep, silent
+    # re-introduction of the v1 drag chrome) trips a red test rather than
+    # a Rowan-facing UI regression. Purely test-only stage — no template
+    # or LiveView code edits.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "dep-graph-modal-6",
+          slug: "dep-graph-modal-6"
+        )
+
+      # 6-task branching diamond mirroring the e2e_behavior fixture:
+      #   m1 → m2 → m3 → m5 → m6
+      #        m2 → m4 → m5
+      # 6 edges total (1→2, 2→3, 2→4, 3→5, 4→5, 5→6) — exercises a
+      # multi-parent converge on m5 which is the shape that made the
+      # cramped inline view unreadable and motivated the modal.
+      m1 = create_member(stack, 1, "Frontend", "done", merged: true)
+      m2 = create_member(stack, 2, "Backend", "in_review")
+      m3 = create_member(stack, 3, "Deploy", "stack_pending")
+      m4 = create_member(stack, 4, "Docs", "stack_pending")
+      m5 = create_member(stack, 5, "Release", "stack_pending")
+      m6 = create_member(stack, 6, "Announce", "stack_pending")
+
+      {:ok, _} =
+        Tasks.update_task(m2, %{dependencies: [%{"task_id" => m1.id, "kind" => "blocks"}]})
+
+      {:ok, _} =
+        Tasks.update_task(m3, %{dependencies: [%{"task_id" => m2.id, "kind" => "blocks"}]})
+
+      {:ok, _} =
+        Tasks.update_task(m4, %{dependencies: [%{"task_id" => m2.id, "kind" => "blocks"}]})
+
+      {:ok, _} =
+        Tasks.update_task(m5, %{
+          dependencies: [
+            %{"task_id" => m3.id, "kind" => "blocks"},
+            %{"task_id" => m4.id, "kind" => "blocks"}
+          ]
+        })
+
+      {:ok, _} =
+        Tasks.update_task(m6, %{dependencies: [%{"task_id" => m5.id, "kind" => "blocks"}]})
+
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+      stack = Repo.get!(Stack, stack.id)
+
+      member_ids = Enum.map([m1, m2, m3, m4, m5, m6], & &1.id)
+
+      {:ok, conn: conn, project: project, stack: stack, member_ids: member_ids}
+    end
+
+    # Helper: open the drawer, then click the expand button — return the
+    # modal-open HTML. All lock-in tests exercise the modal, so factoring
+    # this out keeps each test focused on its assertion.
+    defp open_modal(conn, stack) do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      render_click(view, "open_stack_graph_expand", %{})
+    end
+
+    # Extract the opening tag of the outer modal root (the div carrying
+    # data-role="stack-detail-dag-modal"). Non-greedy so we stop at the
+    # first `>` — attribute values in this codebase don't contain literal
+    # `>` characters.
+    defp modal_root_tag(html) do
+      case Regex.run(~r/<div[^>]*data-role="stack-detail-dag-modal"[^>]*>/, html) do
+        [tag] -> tag
+        _ -> ""
+      end
+    end
+
+    # Extract the inner card's opening tag — the sibling of the backdrop
+    # that carries `relative z-10 flex max-h-[90vh]`. Anchor on that
+    # class prefix so we uniquely target the modal card and not any
+    # incidentally-`relative z-10` element elsewhere in the render.
+    defp modal_card_tag(html) do
+      case Regex.run(~r/<div class="relative z-10 flex max-h-\[90vh\][^"]*">/, html) do
+        [tag] -> tag
+        _ -> ""
+      end
+    end
+
+    test "modal renders 6 nodes and matching edge count for a branching-diamond stack",
+         %{conn: conn, stack: stack, member_ids: member_ids} do
+      html = open_modal(conn, stack)
+
+      node_count =
+        Regex.scan(~r/data-role="stack-detail-dag-modal-node"/, html)
+        |> length()
+
+      assert node_count == 6,
+             "expected 6 modal nodes for the 6-task diamond fixture, got #{node_count}"
+
+      edge_count =
+        Regex.scan(~r/data-role="stack-detail-dag-modal-edge"/, html)
+        |> length()
+
+      # 6 explicit dep declarations (1→2, 2→3, 2→4, 3→5, 4→5, 5→6) —
+      # `stack_dag_layout/1` dedupes per source but this fixture has no
+      # duplicates so we render one edge per declaration.
+      assert edge_count == 6,
+             "expected 6 modal edges for the 6-task diamond fixture, got #{edge_count}"
+
+      # Every seeded task id shows up as a data-node-id in the modal —
+      # no orphan render, no missing member.
+      rendered_ids =
+        Regex.scan(
+          ~r/data-role="stack-detail-dag-modal-node" data-node-id="([^"]+)"/,
+          html
+        )
+        |> Enum.map(fn [_, id] -> id end)
+        |> MapSet.new()
+
+      assert rendered_ids == MapSet.new(member_ids),
+             "expected modal node ids to match every seeded task id"
+
+      # `preserveAspectRatio="xMidYMid meet"` is load-bearing — dropping
+      # it collapses the SVG's aspect ratio on wide viewports and the
+      # graph reappears squished. Regression tripwire.
+      assert html =~ ~s(preserveAspectRatio="xMidYMid meet"),
+             "expected modal SVG to declare preserveAspectRatio=xMidYMid meet"
+
+      # `min-h-[60vh]` guards against a WebKit flex-parent intrinsic-
+      # sizing quirk that renders the SVG at zero height when the
+      # container is `flex-1 overflow-auto`. Tripwire.
+      assert html =~ "min-h-[60vh]",
+             "expected modal SVG to carry min-h-[60vh] for WebKit flex-parent legibility"
+    end
+
+    test "modal card carries mobile-fullscreen utility overrides",
+         %{conn: conn, stack: stack} do
+      html = open_modal(conn, stack)
+      card = modal_card_tag(html)
+
+      refute card == "",
+             "expected to locate the modal card opening tag; got empty match"
+
+      # The full set of max-sm:* utility overrides that reclaim viewport
+      # pixels on iPhone-class canvases. Trimming any of these silently
+      # degrades the mobile experience — which was the original v1
+      # complaint's root cause.
+      for token <- [
+            "max-sm:h-screen",
+            "max-sm:max-h-none",
+            "max-sm:w-screen",
+            "max-sm:rounded-none",
+            "max-sm:border-0"
+          ] do
+        assert card =~ token,
+               "expected modal card to carry #{token}; got: #{card}"
+      end
+    end
+
+    test "modal header carries safe-area top padding for iOS PWA",
+         %{conn: conn, stack: stack} do
+      html = open_modal(conn, stack)
+
+      # The header is the flex row that opens the card — anchor the regex
+      # on the `px-4 py-3` padding pattern unique to the modal header
+      # (other flex rows in the tasks drawer use `px-3 py-3` — see the
+      # T8-stage-5 status-glyph header). Scan for the FIRST header that
+      # actually carries the safe-area token so we don't false-negative
+      # on unrelated flex rows.
+      header_tag =
+        case Regex.run(
+               ~r/<div class="flex items-center justify-between border-b border-base-300 px-4 py-3[^"]*">/,
+               html
+             ) do
+          [tag] -> tag
+          _ -> ""
+        end
+
+      refute header_tag == "",
+             "expected to locate the modal header opening tag; got empty match"
+
+      assert header_tag =~ "pt-[max(0.75rem,env(safe-area-inset-top))]",
+             "expected modal header to carry iOS-PWA safe-area top padding; got: #{header_tag}"
+    end
+
+    test "modal body carries safe-area bottom padding for home-indicator clearance",
+         %{conn: conn, stack: stack} do
+      html = open_modal(conn, stack)
+
+      # The body is the scroll region that hosts the modal SVG — anchor
+      # on `flex-1 overflow-auto p-4` (uniquely used by the modal body).
+      body_tag =
+        case Regex.run(~r/<div class="flex-1 overflow-auto p-4[^"]*">/, html) do
+          [tag] -> tag
+          _ -> ""
+        end
+
+      refute body_tag == "",
+             "expected to locate the modal body opening tag; got empty match"
+
+      assert body_tag =~ "pb-[max(1rem,env(safe-area-inset-bottom))]",
+             "expected modal body to carry home-indicator safe-area bottom padding; got: #{body_tag}"
+    end
+
+    test "modal Escape wiring is present", %{conn: conn, stack: stack} do
+      html = open_modal(conn, stack)
+      root = modal_root_tag(html)
+
+      refute root == "",
+             "expected to locate the modal root opening tag; got empty match"
+
+      assert root =~ ~s(phx-window-keydown="close_stack_graph_expand"),
+             "expected modal root to declare phx-window-keydown=close_stack_graph_expand; got: #{root}"
+
+      assert root =~ ~s(phx-key="Escape"),
+             "expected modal root to declare phx-key=Escape; got: #{root}"
+    end
+
+    test "no v1 resize chrome anywhere in stack-detail render (superset regression)",
+         %{conn: conn, stack: stack} do
+      # Render both the inline drawer AND the modal — a resize-chrome
+      # regression could ride in on either surface, so we assert against
+      # the union of both HTMLs.
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      inline_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      modal_html = render_click(view, "open_stack_graph_expand", %{})
+      combined = inline_html <> modal_html
+
+      for needle <- [
+            "stack-graph-resize-container",
+            "stack-graph-resize-handle",
+            ~s(phx-hook="StackGraphResize"),
+            "stack-detail-dag-resize-handle",
+            "data-desktop-default-w=",
+            "data-mobile-default-h="
+          ] do
+        refute combined =~ needle,
+               "expected zero v1 resize chrome; #{inspect(needle)} appears in stack-detail render"
+      end
+
+      # `phx-update="ignore"` on the inline dep-graph container is a v1
+      # anti-pattern that would freeze the SVG from LiveView re-renders.
+      # Scope the assertion to the container's opening tag specifically
+      # so we don't false-positive on legitimate `phx-update="ignore"`
+      # usage elsewhere in the tasks page.
+      container_tag =
+        case Regex.run(
+               ~r/<div[^>]*id="stack-detail-dag-container"[^>]*>/,
+               inline_html
+             ) do
+          [tag] -> tag
+          _ -> ""
+        end
+
+      refute container_tag == "",
+             "expected to locate #stack-detail-dag-container opening tag; got empty match"
+
+      refute container_tag =~ ~s(phx-update="ignore"),
+             "expected no phx-update=ignore on #stack-detail-dag-container; got: #{container_tag}"
+    end
+
+    test "expand button uses only semantic tokens, no hard-coded color",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      [button_tag] =
+        Regex.run(~r/<button[^>]*data-role="stack-detail-dag-expand"[^>]*>/, html)
+
+      # Semantic-token positive: muted-foreground token present.
+      assert button_tag =~ "text-base-content/60",
+             "expected expand button to use text-base-content/60 semantic token; got: #{button_tag}"
+
+      # No hard-coded hex color literal (matches Rowan's directive that
+      # the button chrome stays purely semantic — the only surviving hex
+      # in the wider dep-graph is the `#7b5cff` edge stroke, and it must
+      # not leak onto the button).
+      refute button_tag =~ "#",
+             "expected no hex color literal on expand button; got: #{button_tag}"
+
+      # No color-family utilities that would bypass the theme system.
+      for bad_token <- [
+            "text-purple",
+            "text-blue",
+            "text-red",
+            "text-green",
+            "text-yellow",
+            "text-pink",
+            "text-indigo",
+            "text-orange"
+          ] do
+        refute button_tag =~ bad_token,
+               "expected no hard-coded color utility on expand button; #{inspect(bad_token)} appears in: #{button_tag}"
+      end
+    end
+
+    test "expand button meets iOS HIG 44x44 tap-target on mobile",
+         %{conn: conn, stack: stack} do
+      # Case 4 e2e fix (task 019f487e): the stage-3 button rendered at 28x28
+      # on 375px viewports (btn-sm + ghost padding), well below the iOS HIG
+      # 44px thumb-target minimum. Mobile-only `max-sm:*` utility overrides
+      # force >=44x44 on <640px viewports without affecting desktop chrome
+      # (btn-sm stays ~32px at >=sm). This tripwire prevents a designer
+      # trimming the overrides and silently regressing the mobile experience.
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      [button_tag] =
+        Regex.run(~r/<button[^>]*data-role="stack-detail-dag-expand"[^>]*>/, html)
+
+      for token <- [
+            "max-sm:h-11",
+            "max-sm:w-11",
+            "max-sm:min-h-[44px]",
+            "max-sm:min-w-[44px]"
+          ] do
+        assert button_tag =~ token,
+               "expected expand button to carry #{token} for iOS HIG 44x44 tap-target; got: #{button_tag}"
+      end
     end
   end
 

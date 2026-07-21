@@ -418,6 +418,12 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:review_output_ids, MapSet.new())
      |> assign(:output_canvases, [])
      |> assign(:active_review_canvas, nil)
+     # Stack dep-graph fullscreen modal (stage 3 of task 019f487e). Purely
+     # ephemeral socket state — no ClientState persistence, no hook — and
+     # MUST be cleared alongside `:active_review_canvas` on every drawer
+     # reset path so the modal cannot outlive its underlying
+     # `:selected_stack_members`.
+     |> assign(:stack_graph_expanded, false)
      |> assign(:review_feedback_open, MapSet.new())
      |> assign(:review_items_feedback, %{})
      |> assign(:attached_skills, [])
@@ -494,6 +500,7 @@ defmodule PlatformWeb.TasksLive do
            |> assign(:review_output_ids, review_output_ids)
            |> assign(:output_canvases, output_canvases)
            |> assign(:active_review_canvas, nil)
+           |> assign(:stack_graph_expanded, false)
            |> assign(:attached_skills, attached_skills)
            |> assign(:available_skills, Skills.list_skills())
            |> assign(:page_title, "Tasks · #{task.title}")}
@@ -519,6 +526,7 @@ defmodule PlatformWeb.TasksLive do
            |> assign(:review_output_ids, MapSet.new())
            |> assign(:output_canvases, [])
            |> assign(:active_review_canvas, nil)
+           |> assign(:stack_graph_expanded, false)
            |> put_flash(:error, "Task not found.")}
         end
 
@@ -542,6 +550,7 @@ defmodule PlatformWeb.TasksLive do
          |> assign(:review_output_ids, MapSet.new())
          |> assign(:output_canvases, [])
          |> assign(:active_review_canvas, nil)
+         |> assign(:stack_graph_expanded, false)
          |> put_flash(:error, "Invalid task ID.")}
     end
   end
@@ -1026,6 +1035,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign_stack_review_state(nil)
      |> assign(:show_stack_feedback_overlay, false)
      |> assign(:show_stack_detail, false)
+     |> assign(:stack_graph_expanded, false)
      |> push_patch(to: ~p"/tasks/#{task_id}")}
   end
 
@@ -1096,7 +1106,8 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:selected_stack_member_review_counts, %{})
      |> assign_stack_review_state(nil)
      |> assign(:show_stack_feedback_overlay, false)
-     |> assign(:show_stack_detail, false)}
+     |> assign(:show_stack_detail, false)
+     |> assign(:stack_graph_expanded, false)}
   end
 
   # Stage-3 of task 019e2c27 (Stack-Level Review Rollup): toggle the
@@ -1245,6 +1256,7 @@ defmodule PlatformWeb.TasksLive do
          |> assign_stack_review_state(nil)
          |> assign(:show_stack_feedback_overlay, false)
          |> assign(:show_stack_detail, false)
+         |> assign(:stack_graph_expanded, false)
          |> put_flash(:info, "Stack abandoned.")}
 
       {:error, _changeset} ->
@@ -1337,6 +1349,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:review_output_ids, MapSet.new())
      |> assign(:output_canvases, [])
      |> assign(:active_review_canvas, nil)
+     |> assign(:stack_graph_expanded, false)
      |> assign(:confirm_delete, false)
      |> assign(:edit_mode, false)
      |> push_patch(to: ~p"/tasks")}
@@ -2102,6 +2115,7 @@ defmodule PlatformWeb.TasksLive do
         |> assign_stack_review_state(nil)
         |> assign(:show_stack_feedback_overlay, false)
         |> assign(:show_stack_detail, false)
+        |> assign(:stack_graph_expanded, false)
 
       %Stack{} = stack ->
         {members, counts} = load_stack_member_panel_data(stack)
@@ -2588,6 +2602,19 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_event("close_review_canvas", _params, socket) do
     {:noreply, assign(socket, :active_review_canvas, nil)}
+  end
+
+  # Stack dep-graph fullscreen modal open/close (stage 3 of task 019f487e).
+  # Mirrors the `open_review_canvas` / `close_review_canvas` shape above —
+  # bare assign, no pattern-match on `:selected_stack` because the modal's
+  # `:if` guard in the template already checks
+  # `@stack_graph_expanded && @selected_stack_members not in [nil, []]`.
+  def handle_event("open_stack_graph_expand", _params, socket) do
+    {:noreply, assign(socket, :stack_graph_expanded, true)}
+  end
+
+  def handle_event("close_stack_graph_expand", _params, socket) do
+    {:noreply, assign(socket, :stack_graph_expanded, false)}
   end
 
   def handle_event(
