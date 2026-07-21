@@ -61,10 +61,13 @@ function fakeTrack(kind = "video") {
     kind,
     detachCalls: [],
     _attachedEls: [],
-    attach() {
-      const el = fakeVideoEl()
-      this._attachedEls.push(el)
-      return el
+    // The hook now creates the <video> itself and passes it to attach(el)
+    // (task 019f8153). Record the element it hands us; fall back to minting one
+    // for any legacy zero-arg caller.
+    attach(el) {
+      const element = el || fakeVideoEl()
+      this._attachedEls.push(element)
+      return element
     },
     detach(el) {
       this.detachCalls.push(el === undefined ? null : el)
@@ -114,6 +117,7 @@ function buildTile(identity) {
   tile._identity = identity
   tile._videoEl = null
   tile._attachedTrack = null
+  tile._elementInfo = null
   return tile
 }
 
@@ -126,10 +130,19 @@ function markVideo(el) {
 describe("MeetingVideoTile attach/detach lifecycle", () => {
   beforeEach(() => {
     globalThis.console = globalThis.console || { warn() {} }
+    // The hook now creates its own <video> via document.createElement (task
+    // 019f8153). node has no DOM, so provide a minimal fake that returns the
+    // same lightweight video stub the rest of the suite uses.
+    globalThis.document = {
+      createElement() {
+        return fakeVideoEl()
+      },
+    }
   })
 
   afterEach(() => {
     delete globalThis.__livekit_room
+    delete globalThis.document
   })
 
   it("attaches a track into its own slot and reveals the video", () => {
@@ -283,112 +296,9 @@ describe("MeetingVideoTile attach/detach lifecycle", () => {
     expect(track._attachedEls.length).toBe(0)
   })
 
-  // ── Resize-kick: adaptive-stream re-engagement on layout jump ─────────
-  //
-  // The Room is constructed with `adaptiveStream: true`, which pauses
-  // subscriptions whose <video> element shrinks below an SDK threshold
-  // and doesn't always cleanly resume when the element grows back. On
-  // gallery layout changes (2p → 3p adds a row and shrinks every existing
-  // tile), that manifests as "when a new user joins, the first non-local
-  // user's video disappears until you switch stage mode". These tests
-  // exercise `_resizeKick` — the manual publication.setSubscribed(false→true)
-  // toggle that kicks a stuck subscription back into "actively sending
-  // frames".
-
-  it("resize-kick toggles setSubscribed(false)→setSubscribed(true) on the matching remote publication", () => {
-    const tile = buildTile("user:1")
-    const track = fakeTrack()
-    tile._attach(track, { isLocal: false })
-
-    const setCalls = []
-    const pub = {
-      track,
-      setSubscribed(v) {
-        setCalls.push(v)
-      },
-    }
-    // Non-matching participant to prove the walk filters by identity.
-    const otherPub = {
-      track: fakeTrack(),
-      setSubscribed() {
-        throw new Error("must not be called on a different-identity pub")
-      },
-    }
-    tile._room = {
-      remoteParticipants: new Map([
-        [
-          "user:2",
-          { identity: "user:2", trackPublications: new Map([["other", otherPub]]) },
-        ],
-        [
-          "user:1",
-          { identity: "user:1", trackPublications: new Map([["pub", pub]]) },
-        ],
-      ]),
-    }
-
-    tile._resizeKick()
-
-    expect(setCalls).toEqual([false, true])
-  })
-
-  it("resize-kick is a no-op when no track is attached (initial mount resize)", () => {
-    const tile = buildTile("user:1")
-    const pub = {
-      track: fakeTrack(),
-      setSubscribed() {
-        throw new Error("must not be called when no track is attached")
-      },
-    }
-    tile._room = {
-      remoteParticipants: new Map([
-        ["user:1", { identity: "user:1", trackPublications: new Map([["pub", pub]]) }],
-      ]),
-    }
-
-    // No _attach() call → _attachedTrack stays null.
-    tile._resizeKick()
-    // No throw + no assertion failure = pass.
-  })
-
-  it("resize-kick bails on a local-dock tile — MeetingClient owns the local video, we don't poke it", () => {
-    const tile = buildTile("user:1")
-    tile._localDock = true
-    // Pretend we have an attached track even though local-dock tiles don't
-    // actually attach — the guard should catch _localDock BEFORE the track
-    // check, so the pub.setSubscribed must never fire.
-    tile._attachedTrack = fakeTrack()
-
-    const pub = {
-      track: tile._attachedTrack,
-      setSubscribed() {
-        throw new Error("must not toggle subscription on a local-dock tile")
-      },
-    }
-    tile._room = {
-      remoteParticipants: new Map([
-        ["user:1", { identity: "user:1", trackPublications: new Map([["pub", pub]]) }],
-      ]),
-    }
-
-    tile._resizeKick()
-    // No throw = pass.
-  })
-
-  it("resize-kick tolerates a publication with no setSubscribed method (older SDK / test fake)", () => {
-    const tile = buildTile("user:1")
-    const track = fakeTrack()
-    tile._attach(track, { isLocal: false })
-
-    // No setSubscribed on the pub — the walk must skip it, not throw.
-    const pub = { track }
-    tile._room = {
-      remoteParticipants: new Map([
-        ["user:1", { identity: "user:1", trackPublications: new Map([["pub", pub]]) }],
-      ]),
-    }
-
-    tile._resizeKick()
-    // No throw = pass.
-  })
+  // NOTE: the adaptive-stream resize-kick (`_resizeKick` and friends, PR #519)
+  // was removed in task 019f8153 in favor of the StableTileElementInfo custom
+  // ElementInfo, which prevents the false-negative pause at the source. Those
+  // tests were deleted with the mechanism. The custom-ElementInfo behavior is
+  // covered by test/hooks/meeting_video_tile_adaptive.test.js (added stage 2).
 })

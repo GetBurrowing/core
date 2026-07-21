@@ -102,6 +102,32 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
            still tracks `data-has-video` correctly even though morphdom
            skips this subtree on subsequent patches.
 
+           ── Contract (task 019f8153, custom-ElementInfo fix) — LOAD-BEARING ──
+           The stable `id={"video-slot-#{@id_prefix}-#{@identity}"}` (below)
+           and `phx-update="ignore"` are not merely a morphdom nicety; they
+           are a hard prerequisite for the JS custom-ElementInfo fix. The
+           `MeetingVideoTile` hook attaches exactly ONE stable `<video>` node
+           into this slot and hands a direct reference to it to
+           `StableTileElementInfo.element`. That hook is now the SOLE LiveKit
+           visibility oracle — the SDK's own default IntersectionObserver
+           watcher is intentionally never installed (the hook pre-registers
+           its ElementInfo via `observeElementInfo` BEFORE `track.attach(el)`).
+           So the `<video>` MUST remain a single node morphdom never replaces
+           across LiveView patches: if it were swapped, the SDK's stored
+           element reference would dangle and the tile would black-screen with
+           no resume.
+
+           Any future change that (a) removes `phx-update="ignore"`, (b)
+           alters the slot-id derivation so the id is no longer stable per
+           identity, or (c) lets the server render children INTO this slot
+           (morphdom would then reconcile — and drop — the injected `<video>`)
+           resurrects the exact black-tile class this task eliminated. Cross-
+           reference `assets/js/hooks/meeting_video_tile.js` (the `_attach`
+           boundary note + `StableTileElementInfo`) and the slot-identity
+           regression test `test/platform_web/live/meeting_live_test.exs`
+           ("[data-video-slot] identity stability across state-touching
+           events").
+
            Avatar fallback below intentionally stays morphdom-driven so
            per-render attribute changes (name, avatar_url) still flow. --%>
       <div

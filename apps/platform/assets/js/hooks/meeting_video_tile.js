@@ -14,11 +14,168 @@
  * meeting_room.js). The hook gracefully no-ops when no room is available and
  * binds once a `livekit:room-connected` event fires.
  */
+import { RemoteVideoTrack } from "livekit-client"
+
+/**
+ * StableTileElementInfo — a custom LiveKit `ElementInfo` implementation (see the
+ * interface in livekit-client's RemoteVideoTrack.d.ts) that we pre-register on
+ * an adaptive-stream remote video track BEFORE calling `track.attach(el)`.
+ *
+ * Why this exists (the structural fix, task 019f8153):
+ * The Room is built with `adaptiveStream: true` (meeting_client.js:479). On a
+ * bare zero-arg `track.attach()`, the SDK installs its OWN default
+ * `HTMLElementInfo`, whose IntersectionObserver watches the inner <video>
+ * element directly. During a morphdom patch — a caption-slot sibling
+ * detach/re-append, a mute/speaking-ring flip, or a participant-join re-layout
+ * — that inner <video> can be transiently unmounted or measured mid-reflow, so
+ * the default watcher reports a false "not visible", the SDK pauses the
+ * subscription, and the tile goes black with no clean resume. PR #519's
+ * resize-kick papered over that reactively (toggling setSubscribed off/on after
+ * the pause); this eliminates the false signal at the source.
+ *
+ * By measuring and observing the OUTER, `phx-update="ignore"` tile element
+ * (`hookEl` = `this.el`) — which morphdom never replaces across LiveView
+ * patches — visibility and dimensions stay stable, while `width()`/`height()`
+ * still report the real outer pixel size so the SDK's adaptive-bitrate /
+ * pixel-density optimization keeps working.
+ *
+ * SDK contract (verified against the installed livekit-client 2.18.1 esm
+ * bundle, `observeElementInfo` + `updateVisibility` + `HTMLElementInfo`):
+ *   - `observeElementInfo(info)` ASSIGNS `info.handleResize` and
+ *     `info.handleVisibilityChanged` onto our object, then calls
+ *     `info.observe()`. Our observers MUST invoke those callbacks, or the SDK
+ *     never re-evaluates and the whole fix is inert.
+ *   - `updateVisibility()` reads `info.visible` and `info.visibilityChangedAt`
+ *     (honoring a 100ms REACTION_DELAY), so on a visibility flip we stamp
+ *     `visibilityChangedAt = Date.now()` THEN call `handleVisibilityChanged`.
+ *   - `updateDimensions()` reads `info.width()`/`info.height()`.
+ * This mirrors the SDK's own `HTMLElementInfo.observe()` callback shape.
+ */
+class StableTileElementInfo {
+  constructor(hookEl, videoEl) {
+    this._hookEl = hookEl
+    // ElementInfo.element — the SDK matches its attach() guard against this, and
+    // StableTileElementInfo holds a direct reference to the single stable
+    // <video> node. See the [data-video-slot] contract note in video_tile.ex.
+    this.element = videoEl
+    this.pictureInPicture = false
+    this.visibilityChangedAt = 0
+    // Optimistic default (matches the SDK's HTMLElementInfo) — assume the tile
+    // intersects the viewport until our IntersectionObserver proves otherwise,
+    // so we never emit a spurious initial pause.
+    this._intersecting = true
+    this._mounted = true
+    // Assigned by the SDK inside observeElementInfo(); called with ?. below.
+    this.handleResize = undefined
+    this.handleVisibilityChanged = undefined
+    this._resizeObserver = null
+    this._intersectionObserver = null
+    this._onDocVisibility = null
+    this._lastVisible = undefined
+  }
+
+  // OUTER tile dimensions — real pixel size, so adaptive bitrate keeps working.
+  width() {
+    return this._hookEl ? this._hookEl.clientWidth : 0
+  }
+
+  height() {
+    return this._hookEl ? this._hookEl.clientHeight : 0
+  }
+
+  // Visible iff the hook is mounted, the outer tile has real size, the tab is
+  // not hidden, and the tile intersects the document viewport. Measuring the
+  // OUTER element is what makes this immune to inner-<video> morphdom churn.
+  get visible() {
+    return (
+      this._mounted &&
+      !!this._hookEl &&
+      this._hookEl.clientWidth > 0 &&
+      this._hookEl.clientHeight > 0 &&
+      (typeof document === "undefined" ||
+        document.visibilityState !== "hidden") &&
+      this._intersecting
+    )
+  }
+
+  observe() {
+    // (a) ResizeObserver on the OUTER tile → drives the SDK's handleResize
+    // (updateDimensions) and re-checks visibility (a shrink to 0×0 is a
+    // genuine hide the IntersectionObserver would not otherwise report).
+    if (typeof ResizeObserver !== "undefined") {
+      this._resizeObserver = new ResizeObserver(() => {
+        this.handleResize?.()
+        this._reevaluateVisibility()
+      })
+      this._resizeObserver.observe(this._hookEl)
+    }
+
+    // (b) document visibilitychange → tab backgrounded/foregrounded.
+    if (typeof document !== "undefined") {
+      this._onDocVisibility = () => this._reevaluateVisibility()
+      document.addEventListener("visibilitychange", this._onDocVisibility)
+    }
+
+    // (c) A single document-rooted IntersectionObserver (root:null == the
+    // document viewport) on the OUTER tile → tile scrolled off-screen.
+    if (typeof IntersectionObserver !== "undefined") {
+      this._intersectionObserver = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (entry.target === this._hookEl) {
+              this._intersecting = entry.isIntersecting
+            }
+          }
+          this._reevaluateVisibility()
+        },
+        { root: null },
+      )
+      this._intersectionObserver.observe(this._hookEl)
+    }
+
+    this._lastVisible = this.visible
+  }
+
+  // Recompute visibility; when it flips, stamp visibilityChangedAt (the SDK
+  // reads it to honor REACTION_DELAY) THEN notify the SDK — mirroring the
+  // SDK's own HTMLElementInfo.onVisibilityChanged ordering.
+  _reevaluateVisibility() {
+    const now = this.visible
+    if (now === this._lastVisible) return
+    this._lastVisible = now
+    this.visibilityChangedAt = Date.now()
+    this.handleVisibilityChanged?.()
+  }
+
+  stopObserving() {
+    this._mounted = false
+    if (this._resizeObserver) {
+      try {
+        this._resizeObserver.disconnect()
+      } catch (_) {}
+      this._resizeObserver = null
+    }
+    if (this._intersectionObserver) {
+      try {
+        this._intersectionObserver.disconnect()
+      } catch (_) {}
+      this._intersectionObserver = null
+    }
+    if (this._onDocVisibility && typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", this._onDocVisibility)
+      this._onDocVisibility = null
+    }
+  }
+}
+
 const MeetingVideoTile = {
   mounted() {
     this._identity = this.el.dataset.participant
     this._videoEl = null
     this._attachedTrack = null
+    // Custom LiveKit ElementInfo for adaptive remote tracks (task 019f8153).
+    // Null unless we've pre-registered one for an adaptive remote track.
+    this._elementInfo = null
     // v2 (task 019e42f6): the LOCAL participant's tile carries
     // `data-local-dock="true"`. The single persistent local <video> is owned
     // and reparented by the page-level MeetingClient hook (into
@@ -34,7 +191,6 @@ const MeetingVideoTile = {
     this._boundLocalUnpublished = this._onLocalUnpublished.bind(this)
 
     this._tryBind()
-    this._installResizeKick()
   },
 
   updated() {
@@ -49,7 +205,6 @@ const MeetingVideoTile = {
   destroyed() {
     this._detach()
     this._unbind()
-    this._teardownResizeKick()
   },
 
   // ── Private ────────────────────────────────────────────────────────────
@@ -180,6 +335,21 @@ const MeetingVideoTile = {
     this._detach()
   },
 
+  // Attach ordering is LOAD-BEARING (task 019f8153): for an adaptive-stream
+  // remote track we create the <video> ourselves and call
+  // `track.observeElementInfo(customInfo)` BEFORE `track.attach(el)`. The
+  // element-arg attach() overload then finds our pre-registered ElementInfo
+  // (`elementInfos.find(i => i.element === el)`) and SKIPS installing the SDK's
+  // default HTMLElementInfo watcher — the false-negative visibility oracle that
+  // black-screened tiles across morphdom patches. A bare `track.attach()` would
+  // install that default watcher; because we pre-register first, our
+  // StableTileElementInfo is the SOLE visibility oracle the SDK consults for
+  // this track (its default IntersectionObserver watcher is never installed).
+  // See StableTileElementInfo above, the
+  // [data-video-slot] contract note in video_tile.ex, and the regression tests:
+  // assets/test/hooks/meeting_video_tile_adaptive.test.js (harness),
+  // meeting_video_tile_contract.test.js (SDK seam), and
+  // test/platform_web/live/meeting_live_test.exs (slot identity/phx-update).
   _attach(track, participant) {
     // v2 (task 019e42f6): a local-dock tile never attaches its own track —
     // MeetingClient owns the single persistent local <video> and reparents it
@@ -192,7 +362,9 @@ const MeetingVideoTile = {
 
     this._detach()
 
-    const el = track.attach()
+    // Create the <video> ourselves (same attrs as before) instead of a zero-arg
+    // track.attach(), which would make the SDK install its default watcher.
+    const el = document.createElement("video")
     el.autoplay = true
     el.playsInline = true
     el.muted = true // video element; audio is handled separately by MeetingClient
@@ -201,6 +373,22 @@ const MeetingVideoTile = {
       // Mirror local feeds so they read like a mirror, matching meeting_client.
       el.style.transform = "scaleX(-1)"
     }
+
+    // Adaptive-stream remote tracks: pre-register our stable ElementInfo BEFORE
+    // attach so the SDK's default watcher is never installed (see the boundary
+    // note above). Non-adaptive / non-remote tracks keep the plain attach path.
+    if (track instanceof RemoteVideoTrack && track.isAdaptiveStream) {
+      const customInfo = new StableTileElementInfo(this.el, el)
+      try {
+        track.observeElementInfo(customInfo)
+        this._elementInfo = customInfo
+      } catch (e) {
+        console.warn("[MeetingVideoTile] observeElementInfo failed:", e)
+        this._elementInfo = null
+      }
+    }
+
+    track.attach(el)
 
     slot.appendChild(el)
     this._videoEl = el
@@ -215,88 +403,24 @@ const MeetingVideoTile = {
     this.el.dataset.hasVideo = "true"
   },
 
-  // ── Adaptive-stream resize kick ────────────────────────────────────────
-  //
-  // LiveKit's Room is constructed with `adaptiveStream: true` in
-  // `meeting_client.js` — the SDK auto-pauses subscribed video tracks whose
-  // <video> elements are hidden or below a minimum visible size, and resumes
-  // them when the element grows back. That saves bandwidth on off-screen
-  // tiles, but has a rough edge on layout jumps:
-  //
-  // When a new remote participant joins, the gallery grid shape changes
-  // (e.g. 2-tile 1x2 → 3-tile 1x3), and EVERY existing tile briefly resizes
-  // — sometimes through a very-small intermediate frame or a
-  // display:none-adjacent state during morphdom's patch. Adaptive stream
-  // pauses the affected subscription, and doesn't always cleanly resume
-  // when the tile settles at its new size — the SDK's ResizeObserver
-  // firing order + our own DOM patch order don't line up perfectly, so
-  // the subscription stays paused. The user sees the pre-join tile go
-  // black; switching stage_mode remounts the tile which triggers
-  // `_syncExistingTrack`, which re-attaches fresh, and the video returns.
-  //
-  // Fix: watch this tile's OUTER element for size changes, and after the
-  // change settles (250ms debounce so we fire once per burst, not once per
-  // resize frame), toggle the remote publication's subscription off/on to
-  // force adaptive stream to re-evaluate. `setSubscribed(true)` alone is
-  // idempotent when the SDK thinks it's already subscribed, so the toggle
-  // pair is what actually kicks it back into "actively sending frames".
-  //
-  // Local tiles bail — MeetingClient owns the local <video> and this hook
-  // never attaches its own track for a local-dock tile (see `_attach`).
-  _installResizeKick() {
-    if (typeof ResizeObserver === "undefined") return
-    this._resizeObserver = new ResizeObserver(() => this._scheduleResizeKick())
-    this._resizeObserver.observe(this.el)
-  },
-
-  _teardownResizeKick() {
-    if (this._resizeObserver) {
-      try { this._resizeObserver.disconnect() } catch (_) {}
-      this._resizeObserver = null
-    }
-    if (this._resizeKickTimer) {
-      clearTimeout(this._resizeKickTimer)
-      this._resizeKickTimer = null
-    }
-  },
-
-  _scheduleResizeKick() {
-    if (this._resizeKickTimer) clearTimeout(this._resizeKickTimer)
-    this._resizeKickTimer = setTimeout(() => this._resizeKick(), 250)
-  },
-
-  _resizeKick() {
-    this._resizeKickTimer = null
-    if (this._localDock || !this._room) return
-    // Only nudge if we have an attached track that adaptive stream might
-    // have paused. If nothing is attached the normal track-subscribed path
-    // will run when the track arrives — no work to do here.
-    if (!this._attachedTrack) return
-
-    // Find the RemoteTrackPublication for our currently-attached track and
-    // toggle its subscription. Walking remoteParticipants is O(participants
-    // × publications-per-participant) — cheap even in a big meeting.
-    const remotes = this._room.remoteParticipants
-    if (!remotes) return
-    for (const participant of remotes.values()) {
-      if (participant.identity !== this._identity) continue
-      const pubs = participant.trackPublications || participant.tracks
-      if (!pubs) continue
-      for (const pub of pubs.values()) {
-        if (pub.track !== this._attachedTrack) continue
-        if (typeof pub.setSubscribed !== "function") continue
-        try {
-          pub.setSubscribed(false)
-          pub.setSubscribed(true)
-        } catch (_) {
-          /* participant may have disconnected between iterations */
-        }
-        return
-      }
-    }
-  },
-
   _detach() {
+    // Tear down the custom ElementInfo first (task 019f8153): stop the SDK
+    // observing it, then disconnect our own observers. Both guarded — the track
+    // may already be gone, or stopObservingElementInfo may be a no-op.
+    if (this._elementInfo) {
+      try {
+        this._attachedTrack?.stopObservingElementInfo(this._elementInfo)
+      } catch (_) {
+        /* track may already be detached */
+      }
+      try {
+        this._elementInfo.stopObserving()
+      } catch (_) {
+        /* observers may already be disconnected */
+      }
+      this._elementInfo = null
+    }
+
     if (this._attachedTrack) {
       try {
         if (this._videoEl) {

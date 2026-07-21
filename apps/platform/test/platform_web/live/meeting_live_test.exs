@@ -4065,4 +4065,162 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert length(after_broadcast.participants) == 2
     end
   end
+
+  # ── [data-video-slot] identity stability (task 019f8153 stage 4) ─────────────
+  #
+  # The StableTileElementInfo JS fix (task 019f8153 stage 1,
+  # assets/js/hooks/meeting_video_tile.js) holds a DIRECT reference to the
+  # `<video>` the hook injects into `[data-video-slot]`, and that hook is now
+  # the SOLE LiveKit visibility oracle — the SDK's default IntersectionObserver
+  # watcher is intentionally never installed. The slot's stable
+  # `id={"video-slot-#{@id_prefix}-#{@identity}"}` + `phx-update="ignore"`
+  # (video_tile.ex) are what keep morphdom from ever replacing that node across
+  # LiveView patches. Any future server-side change that moves the slot out of
+  # its `ignore` boundary or perturbs the id derivation would resurrect the
+  # black-tile class this task eliminated — as a SILENT production regression.
+  # This block trips on it at CI time instead. See also the two vitest hook
+  # regression tests (meeting_video_tile_adaptive.test.js /
+  # meeting_video_tile_contract.test.js).
+  #
+  # The events are a MODULE-LEVEL {event, params} list so a reviewer appends a
+  # new toggle here the moment one lands (acceptance #6): every currently-known
+  # state-touching MeetingLive event must leave the gallery slots byte-identical.
+  @slot_identity_events [
+    {"toggle_captions_meeting", %{}},
+    # The mic-toggle event path — handled by the attached MeetingHooks
+    # `:meeting_events` handle_event hook (meeting_hooks.ex); under
+    # `?no_autojoin=true` the guest variant handles it.
+    {"meeting_toggle_mic", %{}},
+    # A no-op re-assert of the already-active gallery mode. The gallery↔screen
+    # REMOUNT is exercised separately (see the mode-swap test below).
+    {"set_stage_mode", %{"mode" => "gallery"}},
+    {"toggle_chat_panel", %{}},
+    {"toggle_participant_rail", %{}},
+    {"toggle_meeting_chat_pane", %{}}
+  ]
+
+  # Parse every `[data-video-slot]` opening tag out of a rendered LiveView
+  # snapshot into an `id => phx-update` map. Regex (not Floki) mirrors this
+  # file's house style — Floki isn't a direct dep here. The slot carries no
+  # server-rendered children (the `<video>` is injected client-side), so the
+  # opening tag holds the full contract we assert on.
+  defp video_slot_map(html) do
+    ~r/<div[^>]*\bdata-video-slot\b[^>]*>/
+    |> Regex.scan(html)
+    |> List.flatten()
+    |> Map.new(fn tag ->
+      [_, id] = Regex.run(~r/\bid="([^"]*)"/, tag)
+
+      phx_update =
+        case Regex.run(~r/\bphx-update="([^"]*)"/, tag) do
+          [_, value] -> value
+          nil -> nil
+        end
+
+      {id, phx_update}
+    end)
+  end
+
+  describe "[data-video-slot] identity stability across state-touching events" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "slot-identity", name: "Slot Identity"})
+      {conn, _user} = authenticated_conn(conn)
+
+      # Two live humans → exactly two gallery tiles. `?no_autojoin=true` keeps
+      # the viewer out of the roster so the count is deterministic (mirrors the
+      # "renders one VideoTile per human participant" test above).
+      {_ada, ada_id} = seed_meeting_presence(space, "user", "Ada Lovelace")
+      {_grace, grace_id} = seed_meeting_presence(space, "user", "Grace Hopper")
+
+      {:ok, conn: conn, meeting: meeting, space: space, ada_id: ada_id, grace_id: grace_id}
+    end
+
+    test "every currently-known state-touching event leaves the gallery slot ids + phx-update byte-identical",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # Default mount is gallery mode. Baseline: two gallery-tile slots, each
+      # keyed by identity and carrying `phx-update="ignore"`.
+      baseline = video_slot_map(html)
+
+      assert map_size(baseline) == 2
+
+      assert Enum.all?(
+               Map.keys(baseline),
+               &String.starts_with?(&1, "video-slot-gallery-tile-")
+             )
+
+      assert Enum.all?(Map.values(baseline), &(&1 == "ignore"))
+
+      for {event, params} <- @slot_identity_events do
+        after_map = video_slot_map(render_click(view, event, params))
+
+        assert after_map == baseline,
+               "event #{inspect(event)} perturbed a [data-video-slot] id or phx-update " <>
+                 "(the injected <video> would go black in production). " <>
+                 "before=#{inspect(baseline)} after=#{inspect(after_map)}"
+      end
+
+      # Byte-identical again after the full sequence.
+      assert video_slot_map(render(view)) == baseline
+    end
+
+    test "a {:participant_joined, _} broadcast adds a new slot and leaves the two existing ids unchanged",
+         %{conn: conn, meeting: meeting, space: space} do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      baseline = video_slot_map(html)
+      assert map_size(baseline) == 2
+
+      # Seed a third live human, then deliver the granular room-topic event the
+      # LiveKit webhook fires (meeting_live.ex handle_info/2 →
+      # refresh_participants re-reads the roster from the DB, so the row must
+      # exist first).
+      {new_participant, _new_id} = seed_meeting_presence(space, "user", "Katherine Johnson")
+      send(view.pid, {:participant_joined, new_participant})
+
+      after_map = video_slot_map(render(view))
+
+      # The two pre-existing gallery slots are byte-identical…
+      for {id, phx_update} <- baseline do
+        assert Map.get(after_map, id) == phx_update,
+               "existing slot #{id} changed after a participant joined"
+      end
+
+      # …and exactly one new slot appeared, also under `phx-update="ignore"`.
+      assert map_size(after_map) == 3
+      new_ids = Map.keys(after_map) -- Map.keys(baseline)
+      assert length(new_ids) == 1
+      assert Enum.all?(new_ids, &String.starts_with?(&1, "video-slot-gallery-tile-"))
+      assert after_map[hd(new_ids)] == "ignore"
+    end
+
+    test "gallery↔screen deliberately remounts tiles, but the gallery slot id is deterministic from identity",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      baseline = video_slot_map(html)
+      assert map_size(baseline) == 2
+
+      # Switch to Screen: the gallery grid unmounts and the bottom strip mounts
+      # its tiles under the DISTINCT `strip-tile` id prefix (video_tile.ex
+      # id_prefix doc) — so NO `gallery-tile` slot survives the swap. This is
+      # the intended remount, not node reuse.
+      screen_map = video_slot_map(render_click(view, "set_stage_mode", %{"mode" => "screen"}))
+
+      refute Enum.any?(
+               Map.keys(screen_map),
+               &String.starts_with?(&1, "video-slot-gallery-tile-")
+             ),
+             "gallery-tile slots must remount away when leaving gallery mode"
+
+      # Switch back to Gallery: because the id is a pure function of identity,
+      # the gallery slot map is byte-identical to the original mount — the fix's
+      # stability guarantee is that the id is DETERMINISTIC, not that the node
+      # object is reused across the mode swap.
+      back_map = video_slot_map(render_click(view, "set_stage_mode", %{"mode" => "gallery"}))
+
+      assert back_map == baseline
+    end
+  end
 end
