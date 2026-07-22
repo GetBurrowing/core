@@ -103,6 +103,31 @@ defmodule PlatformWeb.ChatLive do
   #   * embedded surface seeds inline from `session["chat_space_slug"]`
   #     because URL params don't flow to nested LVs and `handle_params/3`
   #     is forbidden on child LVs anyway.
+  @doc """
+  The PubSub subscribe set for presence/typing, scoped for external users
+  (rbac-external-users M10).
+
+  Internal users (and the anonymous/generated session id) are unrestricted —
+  they subscribe to every space in `all_spaces`. External users are intersected
+  against their `chat_participants` membership (`Chat.Presence.external_scope_space_ids/1`)
+  so internal-only channel topics — which `Chat.list_spaces(kind: "channel")` returns
+  workspace-wide with no membership filter — never reach their session.
+
+  Public only so the subscribe-scope decision is unit-testable without a
+  LiveView; not part of the ChatLive public API.
+  """
+  @spec presence_subscribe_space_ids([%{id: binary()}], binary()) :: [binary()]
+  def presence_subscribe_space_ids(all_spaces, user_id) do
+    ids = Enum.map(all_spaces, & &1.id)
+
+    if Platform.Tenancy.external_user?(%{id: user_id}) do
+      scope = Platform.Chat.Presence.external_scope_space_ids(user_id)
+      Enum.filter(ids, &MapSet.member?(scope, &1))
+    else
+      ids
+    end
+  end
+
   defp do_mount(session, socket, opts) do
     embedded? = Keyword.fetch!(opts, :embedded?)
     user_id = session["current_user_id"] || Ecto.UUID.generate()
@@ -344,7 +369,23 @@ defmodule PlatformWeb.ChatLive do
     # has no sidebar to keep in sync, so the cross-space subscriptions
     # would just be noise.
     if connected?(socket) and not embedded? do
-      Enum.each(all_spaces, &ChatPubSub.subscribe(&1.id))
+      # M10 (presence/typing scope, rbac-external-users): external users must
+      # receive presence + typing ONLY within spaces they are a chat_participant
+      # of. We INTERSECT the subscribe set with their allowlisted scope
+      # (`presence_subscribe_space_ids/2`) rather than swapping in the membership
+      # list — an intersect can only ever REMOVE non-allowlisted topics, so it is
+      # correct and order-independent regardless of whether M5/M7 have already
+      # narrowed `channels` on the merge branch. Internal users are unrestricted.
+      #
+      # BOUNDARY: we scope ONLY the SUBSCRIBE set here. The rendered sidebar
+      # assigns (`:channels` / `:spaces` / `channel_sections`) belong to M5 and
+      # are deliberately left workspace-wide on this branch — the data FEED
+      # (presence/typing) is already scoped even where the render is not, and the
+      # two agree once M5's filtered render merges.
+      all_spaces
+      |> presence_subscribe_space_ids(user_id)
+      |> Enum.each(&ChatPubSub.subscribe/1)
+
       ChatPubSub.subscribe_spaces()
       # Per-user sidebar-invalidation topic (Stage 4): a `:sidebar_changed`
       # broadcast (Stage 5 personal arrangement writes) triggers a resolver
