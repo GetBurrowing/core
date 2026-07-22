@@ -134,20 +134,43 @@ defmodule PlatformWeb.ChatLive do
     # Only consulted on the embedded path; standalone uses handle_params.
     embedded_space_slug = if embedded?, do: session["chat_space_slug"]
 
+    # rbac-external-users M5: the chrome-less external chat surface. M4's
+    # `:external_chat` live_session (served on the `chat.` host) merges
+    # `chat_mode => "external"` into the connect session; we read it here and,
+    # when set, build M7's read-scope ONCE (`ExternalScope.for_user/1` — a
+    # single `external?` EXISTS) and thread it into every rail read so the
+    # external user's rail lists ONLY the spaces they are a `chat_participants`
+    # member of. `@external?` defaults false on every internal / embedded /
+    # app-host path, so the internal surface is byte-for-byte untouched.
+    #
+    # BOUNDARY: M5 owns the RENDER branch only. The scope threaded here filters
+    # what the rail SHOWS; the guarantee that an external user cannot REACH an
+    # off-limits space is M6's plug + M7's query filter, not this render. A nil
+    # `external_scope` is pass-through everywhere (`ExternalScope.scope_spaces/2`),
+    # so passing it on the internal path is a zero-behavior-change no-op.
+    external? = session["chat_mode"] == "external"
+    external_scope = if external?, do: Platform.Chat.ExternalScope.for_user(user_id)
+
     channels =
-      if embedded?, do: [], else: Chat.list_spaces(kind: "channel")
+      if embedded?, do: [], else: Chat.list_spaces(kind: "channel", scope: external_scope)
 
     # Archived channels (task 019e95ea stage 2) feed ONLY the sidebar's
     # collapsed "Archived" group — they are deliberately kept out of
     # `channels` / `channel_sections/4` so no active bucket renders them.
+    # External users get NONE: the archived group is an internal discovery
+    # surface (design canvas §1 non-goals).
     archived_channels =
-      if embedded?, do: [], else: Chat.list_spaces(kind: "channel", archived: true)
+      if embedded? or external?,
+        do: [],
+        else: Chat.list_spaces(kind: "channel", archived: true)
 
     dm_conversations =
       if embedded? do
         []
       else
-        conversations = if user_id, do: Chat.list_user_conversations(user_id), else: []
+        conversations =
+          if user_id, do: Chat.list_user_conversations(user_id, scope: external_scope), else: []
+
         Enum.filter(conversations, fn s -> s.kind in ["dm", "group"] end)
       end
 
@@ -158,8 +181,11 @@ defmodule PlatformWeb.ChatLive do
     # by the `:task_pin_added` / `:task_pin_removed` handlers below. Empty
     # in embedded mode: the meeting-embed only paints ONE space and has
     # no sidebar to populate.
+    # External users get no pinned task-exec section either (design canvas §1
+    # non-goal — task execution spaces are an internal discovery surface), so
+    # short-circuit the email lookup that feeds it to `nil` → `[]`.
     current_user_email =
-      if embedded?, do: nil, else: fetch_user_email_for_pins(user_id)
+      if embedded? or external?, do: nil, else: fetch_user_email_for_pins(user_id)
 
     pinned_task_spaces =
       case current_user_email do
@@ -171,6 +197,18 @@ defmodule PlatformWeb.ChatLive do
       socket
       |> assign(:page_title, "Chat")
       |> assign(:user_id, user_id)
+      # rbac-external-users M5: the render-branch flag + the read-scope it is
+      # keyed on. `@external?` gates the discovery chrome off in the template
+      # (sub-org headers, admin entry, new-channel, scope-pills, archived /
+      # pinned-task sections) and `@external_scope` is re-threaded through the
+      # rail reloads in `handle_params/3` + the channel-list broadcasts so a
+      # later nav / space_created can never re-broaden the rail past the
+      # allowlist. `@external_user` backs the top-bar identity chip (M4's
+      # `:external` layout is chrome-less, so the branding / identity / logout
+      # bar is rendered inside ChatLive here).
+      |> assign(:external?, external?)
+      |> assign(:external_scope, external_scope)
+      |> assign(:external_user, if(external?, do: Accounts.get_user(user_id)))
       # Pin-to-Chat stage 4: stash the acting user's email so the pin
       # broadcast filter (`participant_id == current_user_email`) doesn't
       # need to re-hit `Accounts.get_user/1` on every arriving event.
@@ -565,10 +603,19 @@ defmodule PlatformWeb.ChatLive do
       participants = Chat.list_participants(space.id)
       page_title = space_page_title(space, participants, socket.assigns.user_id)
 
-      # Refresh sidebar lists
-      channels = Chat.list_spaces(kind: "channel")
-      archived_channels = Chat.list_spaces(kind: "channel", archived: true)
-      user_convos = Chat.list_user_conversations(socket.assigns.user_id)
+      # Refresh sidebar lists. rbac-external-users M5: re-thread the same
+      # `@external_scope` the mount used so a channel-to-channel nav re-derives
+      # the SAME filtered rail rather than re-broadening it workspace-wide.
+      # Internal / nil scope is pass-through, so the internal path is unchanged.
+      scope = socket.assigns.external_scope
+      channels = Chat.list_spaces(kind: "channel", scope: scope)
+
+      archived_channels =
+        if socket.assigns.external?,
+          do: [],
+          else: Chat.list_spaces(kind: "channel", archived: true)
+
+      user_convos = Chat.list_user_conversations(socket.assigns.user_id, scope: scope)
       dm_convos = Enum.filter(user_convos, fn s -> s.kind in ["dm", "group"] end)
 
       {:noreply,
@@ -1328,8 +1375,18 @@ defmodule PlatformWeb.ChatLive do
   # linger in the rail until the next navigation.
   defp refresh_chat_containers(socket) do
     socket
-    |> assign(:channels, Chat.list_spaces(kind: "channel"))
+    |> assign(:channels, rail_channels(socket))
     |> recompute_sidebar()
+  end
+
+  # The rail's channel list, scoped to the acting user. rbac-external-users M5:
+  # every reload of `:channels` after mount (nav, `:space_created` broadcast,
+  # org-archive refresh, unarchive) must re-apply `@external_scope` or a
+  # workspace-wide `list_spaces` would re-broaden an external user's rail past
+  # their allowlist. For internal / anonymous sessions `@external_scope` is nil
+  # and this is a pass-through — the internal rail is byte-for-byte unchanged.
+  defp rail_channels(socket) do
+    Chat.list_spaces(kind: "channel", scope: socket.assigns[:external_scope])
   end
 
   # Current ordered channel ids for a section, read from the already-resolved
@@ -1955,7 +2012,7 @@ defmodule PlatformWeb.ChatLive do
               socket.assigns.current_participant ||
                 ensure_participant(updated.id, socket.assigns.user_id)
 
-            channels = Chat.list_spaces(kind: "channel")
+            channels = rail_channels(socket)
             archived_channels = Chat.list_spaces(kind: "channel", archived: true)
             dm_convos = socket.assigns.dm_conversations
 
@@ -2153,7 +2210,11 @@ defmodule PlatformWeb.ChatLive do
     # topic for unread counts.
     ChatPubSub.subscribe(space.id)
 
-    channels = Chat.list_spaces(kind: "channel")
+    # rbac-external-users M5: scope the reload so a channel created elsewhere in
+    # the workspace never pops into an external user's rail (the external
+    # session is subscribed to the space-lifecycle topic for its own allowlisted
+    # channels). Pass-through for internal sessions.
+    channels = rail_channels(socket)
     dm_conversations = socket.assigns.dm_conversations
 
     {:noreply,
