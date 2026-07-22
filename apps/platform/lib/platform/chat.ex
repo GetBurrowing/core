@@ -55,6 +55,7 @@ defmodule Platform.Chat do
   alias Platform.Chat.MessageVersions
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
+  alias Platform.Tenancy
 
   # ── Spaces ─────────────────────────────────────────────────────────────────
 
@@ -524,14 +525,64 @@ defmodule Platform.Chat do
   # ── Conversations (DM / Group / Channel creation) ─────────────────────────
 
   @doc """
+  Is `initiator_user_id` allowed to open/hold a DM with the given target?
+
+  The single, reusable server-side predicate composing M1's
+  `Platform.Tenancy.may_dm_org?/2`. Both the DM/conversation CREATE seam
+  (`find_or_create_dm/4`, `create_group_conversation/3`) and the message
+  SEND seam (`ensure_dm_send_allowed/2`) call this so enforcement never
+  diverges between the two.
+
+  Rules:
+
+    * Internal initiator (`not Tenancy.external_user?/1`) → `true`.
+      Internal users keep today's unrestricted DM behavior; this predicate
+      only constrains external initiators.
+    * External initiator, `target_type == "agent"` → `false`. Deliberate
+      deny: the external chat surface is scoped to allowlisted humans;
+      agent DMs are out of scope for external users.
+    * External initiator, `target_type == "user"` → `true` iff ANY of the
+      target's orgs is in the initiator's DM allowlist. This uniformly
+      covers external→allowlisted-org member AND SXI↔SXI (a second
+      external user whose org is the same allowlisted org).
+  """
+  @spec external_dm_permitted?(binary(), String.t(), binary()) :: boolean()
+  def external_dm_permitted?(initiator_user_id, target_type, target_id) do
+    cond do
+      not Tenancy.external_user?(%{id: initiator_user_id}) ->
+        true
+
+      target_type == "agent" ->
+        false
+
+      target_type == "user" ->
+        %{id: target_id}
+        |> Tenancy.list_user_memberships()
+        |> Enum.map(& &1.org_id)
+        |> Enum.any?(&Tenancy.may_dm_org?(initiator_user_id, &1))
+
+      true ->
+        false
+    end
+  end
+
+  @doc """
   Find an existing DM between initiator and target, or create one.
 
   `target_type` is "user" or "agent", `target_id` is the UUID.
   Returns `{:ok, space}`.
   """
   @spec find_or_create_dm(binary(), String.t(), binary(), keyword()) ::
-          {:ok, Space.t()} | {:error, term()}
+          {:ok, Space.t()} | {:error, :dm_not_allowed | term()}
   def find_or_create_dm(user_id, target_type, target_id, _opts \\ []) do
+    if external_dm_permitted?(user_id, target_type, target_id) do
+      do_find_or_create_dm(user_id, target_type, target_id)
+    else
+      {:error, :dm_not_allowed}
+    end
+  end
+
+  defp do_find_or_create_dm(user_id, target_type, target_id) do
     # Look for an existing DM space where both participants are active
     existing =
       from(s in Space,
@@ -607,62 +658,84 @@ defmodule Platform.Chat do
   If only 1 other participant, redirects to find_or_create_dm.
   """
   @spec create_group_conversation(binary(), [map()], keyword()) ::
-          {:ok, Space.t()} | {:error, term()}
+          {:ok, Space.t()} | {:error, :dm_not_allowed | term()}
   def create_group_conversation(user_id, participant_specs, _opts \\ []) do
-    # If only one other participant, create a DM instead
-    if length(participant_specs) == 1 do
-      [spec] = participant_specs
+    # If only one other participant, create a DM instead. That branch
+    # delegates to `find_or_create_dm/4`, which inherits the allowlist
+    # guard; the multi-participant branch needs its own check below.
+    cond do
+      length(participant_specs) == 1 ->
+        [spec] = participant_specs
+        type = Map.get(spec, :type) || Map.get(spec, "type")
+        id = Map.get(spec, :id) || Map.get(spec, "id")
+        find_or_create_dm(user_id, type, id)
+
+      not all_participants_dm_permitted?(user_id, participant_specs) ->
+        {:error, :dm_not_allowed}
+
+      true ->
+        do_create_group_conversation(user_id, participant_specs)
+    end
+  end
+
+  # True unless the initiator is external and some participant spec is not
+  # a permitted DM target. Internal initiators always pass (the predicate
+  # short-circuits to `true` for them).
+  defp all_participants_dm_permitted?(user_id, participant_specs) do
+    Enum.all?(participant_specs, fn spec ->
       type = Map.get(spec, :type) || Map.get(spec, "type")
       id = Map.get(spec, :id) || Map.get(spec, "id")
-      find_or_create_dm(user_id, type, id)
-    else
-      multi =
-        Multi.new()
-        |> Multi.insert(
-          :space,
-          Space.changeset(%Space{}, %{
-            kind: "group",
-            is_direct: false,
-            created_by: user_id
-          })
-        )
-        |> Multi.run(:creator, fn _repo, %{space: space} ->
-          add_participant(space.id, %{
-            participant_type: "user",
-            participant_id: user_id,
-            display_name: user_display_name(user_id),
-            joined_at: DateTime.utc_now()
-          })
-        end)
+      external_dm_permitted?(user_id, type, id)
+    end)
+  end
 
-      multi =
-        participant_specs
-        |> Enum.with_index()
-        |> Enum.reduce(multi, fn {spec, idx}, multi ->
-          type = Map.get(spec, :type) || Map.get(spec, "type")
-          id = Map.get(spec, :id) || Map.get(spec, "id")
+  defp do_create_group_conversation(user_id, participant_specs) do
+    multi =
+      Multi.new()
+      |> Multi.insert(
+        :space,
+        Space.changeset(%Space{}, %{
+          kind: "group",
+          is_direct: false,
+          created_by: user_id
+        })
+      )
+      |> Multi.run(:creator, fn _repo, %{space: space} ->
+        add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user_id,
+          display_name: user_display_name(user_id),
+          joined_at: DateTime.utc_now()
+        })
+      end)
 
-          Multi.run(multi, {:participant, idx}, fn _repo, %{space: space} ->
-            if type == "agent" do
-              case Repo.get(Agent, id) do
-                %Agent{} = agent -> add_agent_participant(space.id, agent)
-                nil -> {:error, :agent_not_found}
-              end
-            else
-              add_participant(space.id, %{
-                participant_type: "user",
-                participant_id: id,
-                display_name: user_display_name(id),
-                joined_at: DateTime.utc_now()
-              })
+    multi =
+      participant_specs
+      |> Enum.with_index()
+      |> Enum.reduce(multi, fn {spec, idx}, multi ->
+        type = Map.get(spec, :type) || Map.get(spec, "type")
+        id = Map.get(spec, :id) || Map.get(spec, "id")
+
+        Multi.run(multi, {:participant, idx}, fn _repo, %{space: space} ->
+          if type == "agent" do
+            case Repo.get(Agent, id) do
+              %Agent{} = agent -> add_agent_participant(space.id, agent)
+              nil -> {:error, :agent_not_found}
             end
-          end)
+          else
+            add_participant(space.id, %{
+              participant_type: "user",
+              participant_id: id,
+              display_name: user_display_name(id),
+              joined_at: DateTime.utc_now()
+            })
+          end
         end)
+      end)
 
-      case Repo.transaction(multi) do
-        {:ok, %{space: space}} -> {:ok, space}
-        {:error, _step, reason, _} -> {:error, reason}
-      end
+    case Repo.transaction(multi) do
+      {:ok, %{space: space}} -> {:ok, space}
+      {:error, _step, reason, _} -> {:error, reason}
     end
   end
 
@@ -1067,9 +1140,14 @@ defmodule Platform.Chat do
   Optional: `:thread_id`, `:content`, `:structured_content`, `:metadata`.
   """
   @spec post_message(map(), keyword()) ::
-          {:ok, Message.t()} | {:error, :space_archived | Ecto.Changeset.t()}
+          {:ok, Message.t()}
+          | {:error, :space_archived | :dm_not_allowed | Ecto.Changeset.t()}
   def post_message(attrs, opts \\ []) do
-    with :ok <- ensure_space_writable(attrs[:space_id] || attrs["space_id"]) do
+    space_id = attrs[:space_id] || attrs["space_id"]
+    participant_id = attrs[:participant_id] || attrs["participant_id"]
+
+    with :ok <- ensure_space_writable(space_id),
+         :ok <- ensure_dm_send_allowed(space_id, participant_id) do
       do_post_message(attrs, opts)
     end
   end
@@ -1112,10 +1190,15 @@ defmodule Platform.Chat do
   `:byte_size`, and `:storage_key`.
   """
   @spec post_message_with_attachments(map(), [map()], keyword()) ::
-          {:ok, Message.t(), [Attachment.t()]} | {:error, term()}
+          {:ok, Message.t(), [Attachment.t()]}
+          | {:error, :space_archived | :dm_not_allowed | term()}
   def post_message_with_attachments(attrs, attachment_attrs_list, opts \\ [])
       when is_list(attachment_attrs_list) do
-    with :ok <- ensure_space_writable(attrs[:space_id] || attrs["space_id"]) do
+    space_id = attrs[:space_id] || attrs["space_id"]
+    participant_id = attrs[:participant_id] || attrs["participant_id"]
+
+    with :ok <- ensure_space_writable(space_id),
+         :ok <- ensure_dm_send_allowed(space_id, participant_id) do
       do_post_message_with_attachments(attrs, attachment_attrs_list, opts)
     end
   end
@@ -3571,6 +3654,42 @@ defmodule Platform.Chat do
   end
 
   defp ensure_space_writable(_), do: :ok
+
+  # Defense-in-depth guard at the message-SEND seam. Catches the residual
+  # cases the create-seam guard misses: a DM created before the sender was
+  # marked external, a DM whose allowlist was revoked after creation, a
+  # group the external user was added to, or a caller posting to a
+  # `space_id` directly. Mirrors `external_dm_permitted?/3` so create-time
+  # and send-time enforcement never diverge.
+  defp ensure_dm_send_allowed(space_id, author_participant_pk)
+       when is_binary(space_id) and is_binary(author_participant_pk) do
+    with %Space{kind: kind} when kind in ["dm", "group"] <- Repo.get(Space, space_id),
+         %Participant{participant_type: "user", participant_id: author_user_id} <-
+           get_participant(author_participant_pk),
+         true <- Tenancy.external_user?(%{id: author_user_id}) do
+      other_user_ids =
+        from(p in Participant,
+          where:
+            p.space_id == ^space_id and p.participant_type == "user" and
+              p.participant_id != ^author_user_id,
+          select: p.participant_id
+        )
+        |> Repo.all()
+
+      if Enum.all?(other_user_ids, &external_dm_permitted?(author_user_id, "user", &1)) do
+        :ok
+      else
+        {:error, :dm_not_allowed}
+      end
+    else
+      # Not a DM/group, agent author, internal author, or missing rows —
+      # not gated here (channels governed by membership + M6/M7; internal
+      # traffic short-circuits before any per-participant work).
+      _ -> :ok
+    end
+  end
+
+  defp ensure_dm_send_allowed(_space_id, _author_participant_pk), do: :ok
 
   # Variant for write paths addressed by message rather than space.
   defp ensure_message_space_writable(%Message{space_id: space_id}),
