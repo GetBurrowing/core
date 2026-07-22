@@ -818,6 +818,29 @@ defmodule Platform.Chat do
   def get_participant(id), do: Repo.get(Participant, id)
 
   @doc """
+  Fast existence check: is `user_id` a `"user"` participant of `space_id`?
+
+  The auth-hot-path counterpart to `find_user_participant/2`, which loads
+  every row via `list_participants/1`. This issues a single `Repo.exists?`
+  query (idiomatic here — chat.ex:1182/1219/1645/2594) and is what
+  `PlatformWeb.Plugs.ExternalUserScope` uses to gate an external user on
+  `/chat/:slug` without an N-row load. Only `participant_type == "user"`
+  rows count — an agent-type row sharing the same id is not a match.
+  """
+  @spec participant?(binary(), binary()) :: boolean()
+  def participant?(space_id, user_id) when is_binary(space_id) and is_binary(user_id) do
+    Repo.exists?(
+      from(p in Participant,
+        where:
+          p.space_id == ^space_id and p.participant_type == "user" and
+            p.participant_id == ^user_id
+      )
+    )
+  end
+
+  def participant?(_, _), do: false
+
+  @doc """
   List participants in a space (ADR 0038: all rows are active).
 
   ## Options

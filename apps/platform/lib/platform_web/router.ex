@@ -51,6 +51,15 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.RequireAuth)
   end
 
+  # Authorization gate for external users (rbac-external-users M6, task
+  # 019f8837). MUST run AFTER `:require_auth` — it reads the assigns that
+  # RequireAuth sets. Kept as a SEPARATE pipeline (rather than appended
+  # inside `:require_auth`) so the auth-vs-authz seam stays legible and
+  # other scopes can opt in independently. No-op for internal users.
+  pipeline :enforce_external_scope do
+    plug(PlatformWeb.Plugs.ExternalUserScope)
+  end
+
   # JSON-API auth: same session check as :require_auth but returns 401 JSON
   # on failure instead of redirecting. Mounted on /api/* routes that need
   # an authenticated browser session (e.g. PATCH /api/messages/:id).
@@ -182,7 +191,7 @@ defmodule PlatformWeb.Router do
   # host-constrained default scope), not achievable by adding this scope
   # alone. See `router_external_chat_host_test.exs` for the exact contract.
   scope "/", PlatformWeb, host: "chat." do
-    pipe_through([:browser, :require_auth])
+    pipe_through([:browser, :require_auth, :enforce_external_scope])
 
     live_session :external_chat,
       on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
@@ -194,7 +203,7 @@ defmodule PlatformWeb.Router do
   end
 
   scope "/", PlatformWeb do
-    pipe_through([:browser, :require_auth])
+    pipe_through([:browser, :require_auth, :enforce_external_scope])
 
     # Root redirects to /chat
     get("/", PageController, :home)
