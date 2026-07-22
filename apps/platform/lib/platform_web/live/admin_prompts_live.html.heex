@@ -1,4 +1,18 @@
 <div class="flex h-full min-h-0 flex-col">
+  <.breadcrumb segments={
+    if @selected_template do
+      [
+        %{label: "Admin", navigate: ~p"/admin"},
+        %{label: "Prompts", navigate: ~p"/admin/prompts"},
+        %{label: @selected_template.slug, navigate: nil}
+      ]
+    else
+      [
+        %{label: "Admin", navigate: ~p"/admin"},
+        %{label: "Prompts", navigate: nil}
+      ]
+    end
+  } />
   <%!-- Header --%>
   <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
     <div class="flex items-center gap-3">

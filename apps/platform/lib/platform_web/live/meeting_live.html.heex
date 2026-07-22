@@ -193,6 +193,28 @@
       >
       </div>
 
+      <%!-- Breadcrumb escape hatch (task 019f62c8 stage 3). The shared
+         `PlatformWeb.CoreComponents.breadcrumb/1` from stage 2 — the
+         deterministic "take me UP to root" affordance that complements
+         route-resume's "take me back to where I was". Renders
+         `Meetings › <meeting name>`, the root segment navigating to the
+         Meetings list (/meetings) and the meeting name as the inert
+         current page.
+
+         SHELL CHROME ONLY: gated on `@shell?` (== `chrome_mode == :shell`).
+         The guest `meet.` surface (`chrome_mode == :none`, `:in_meeting`)
+         reaches this SAME `@meeting != nil` shell tree, so without this
+         gate a guest would get an authenticated back-to-list link into a
+         surface they can't access. Mirrors the `@shell?` gating already
+         applied to the chat panel / copy-guest-link / rail-collapse hooks. --%>
+      <.breadcrumb
+        :if={@shell?}
+        segments={[
+          %{label: "Meetings", navigate: ~p"/meetings"},
+          %{label: @meeting.name, navigate: nil}
+        ]}
+      />
+
       <%!-- ── Top bar ──────────────────────────────────────────────────────── --%>
       <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
         <%!-- Meeting name --%>

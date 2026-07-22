@@ -1,4 +1,8 @@
 <div class="relative flex h-full min-h-0 flex-col">
+  <.breadcrumb segments={[
+    %{label: "Admin", navigate: ~p"/admin"},
+    %{label: "Recovery", navigate: nil}
+  ]} />
   <%!-- Header (mirrors the Admin surface chrome) — title left, org filter right --%>
   <div class="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3">
     <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">

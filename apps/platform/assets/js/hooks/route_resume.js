@@ -65,6 +65,18 @@ const MODULE_TO_PATH = Object.fromEntries(
   PATH_MODULE_MAP.map(([path, mod]) => [mod, path])
 );
 
+// Resume entries expire after 3 hours (task 019f62c8). Without a TTL the
+// saved subpage lived in localStorage indefinitely — across hours and across
+// a fresh deploy — so clicking a module tile (e.g. the Admin gear) kept
+// resuming a long-dead subpage like `/admin/users` instead of the module
+// root. A fresh return within the window still resumes your last spot; a
+// stale read is treated as missing by ClientState.get (expire-on-read +
+// self-clean), the click intercept bails, and normal LiveView navigation to
+// the module root proceeds. 3h per Rowan: long enough to feel like "take me
+// back to where I was" within a work session, short enough that a next-day
+// or post-deploy visit lands on root.
+const RESUME_TTL_MS = 3 * 60 * 60 * 1000;
+
 // Extract a moduleId from a URL pathname. Returns null when nothing in the
 // allowlist matches — those routes silently skip both save and resume.
 // Callers may pass a full path+search (e.g. `/tasks?sponsor=mine`); the
@@ -153,7 +165,11 @@ const RouteResume = {
     // to the module. Fragment intentionally excluded — LV navigations don't
     // preserve hashes and re-emitting them would confuse the browser scroll
     // anchor. See task 019f487e Case 5.
-    ClientState.set("route_resume", mod, path + search);
+    // Pass a TTL so the entry ages out (see RESUME_TTL_MS). ClientState wraps
+    // the value in a `{v, e}` envelope; a read after `e` returns the default
+    // (null) and cleans the stale key, so the click intercept falls back to
+    // the module root instead of resuming a dead subpage.
+    ClientState.set("route_resume", mod, path + search, { ttlMs: RESUME_TTL_MS });
   },
 
   _maybeInterceptClick(event) {
@@ -243,5 +259,6 @@ export {
   sameModulePrefix,
   stripQueryAndFragment,
   PATH_MODULE_MAP,
+  RESUME_TTL_MS,
 };
 export default RouteResume;

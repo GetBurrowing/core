@@ -381,6 +381,68 @@ defmodule PlatformWeb.CoreComponents do
   end
 
   @doc """
+  Renders a breadcrumb trail for module subpages — the deterministic
+  "take me up to root" escape hatch that complements route-resume
+  (task 019f62c8). Ancestor segments render as `<.link navigate={...}>`
+  so a user stuck on a subpage always has a self-serve way back up;
+  the final segment is inert current-page text.
+
+  Honors the shell's Fabrikam × shadcn re-skin tokens: the uppercase
+  tracking-wider eyebrow grammar used across the admin headers, a muted
+  `base-content` trail, `primary` on hover for the clickable ancestors,
+  and a `hero-chevron-right` separator. Not a redesign — a light,
+  consistent affordance.
+
+  ## Examples
+
+      <.breadcrumb segments={[
+        %{label: "Admin", navigate: ~p"/admin"},
+        %{label: "User Access", navigate: nil}
+      ]} />
+  """
+  attr(:segments, :list,
+    required: true,
+    doc:
+      "ordered segments, root first. Each is a map " <>
+        "%{label: String.t(), navigate: String.t() | nil}: a non-nil :navigate renders a " <>
+        "`<.link navigate>` ancestor, a nil :navigate is the inert current page."
+  )
+
+  attr(:class, :any, default: nil, doc: "optional container class override")
+
+  def breadcrumb(assigns) do
+    ~H"""
+    <nav aria-label="Breadcrumb" data-role="breadcrumb" class={["px-4 pt-3 text-xs", @class]}>
+      <ol class="flex flex-wrap items-center gap-1.5">
+        <li :for={{seg, i} <- Enum.with_index(@segments)} class="flex items-center gap-1.5">
+          <span
+            :if={i > 0}
+            class="hero-chevron-right size-3 text-base-content/30"
+            aria-hidden="true"
+          />
+          <.link
+            :if={seg.navigate}
+            navigate={seg.navigate}
+            data-role="breadcrumb-link"
+            class="font-medium uppercase tracking-wider text-base-content/50 transition-colors hover:text-primary"
+          >
+            {seg.label}
+          </.link>
+          <span
+            :if={!seg.navigate}
+            data-role="breadcrumb-current"
+            class="font-medium uppercase tracking-wider text-base-content/70"
+            aria-current="page"
+          >
+            {seg.label}
+          </span>
+        </li>
+      </ol>
+    </nav>
+    """
+  end
+
+  @doc """
   Renders a table with generic styling.
 
   ## Examples

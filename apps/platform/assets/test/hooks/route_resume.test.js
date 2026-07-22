@@ -4,6 +4,7 @@ import RouteResume, {
   sameModulePrefix,
   stripQueryAndFragment,
   PATH_MODULE_MAP,
+  RESUME_TTL_MS,
 } from "../../js/hooks/route_resume.js"
 import ClientState, { __resetForTests } from "../../js/client_state.js"
 
@@ -638,5 +639,113 @@ describe("RouteResume click intercept", () => {
     // stopped so LV (if present) can't fire a competing navigation.
     expect(evt.propagationStopped).toBe(true)
     expect(assigns).toEqual(["/chat/abc"])
+  })
+})
+
+// ── Resume TTL (task 019f62c8) ────────────────────────────────────────
+//
+// The bug: the resume entry NEVER EXPIRED. `_persistCurrentPath` wrote via
+// `ClientState.set(...)` with no opts, so a saved subpage (e.g.
+// `/admin/users`) survived indefinitely — across hours and across a fresh
+// deploy — and the Admin gear kept resuming a long-dead subpage instead of
+// landing on the module root `/admin`.
+//
+// The fix: `_persistCurrentPath` now passes `{ ttlMs: RESUME_TTL_MS }`
+// (3 hours). ClientState wraps the value in a `{v, e}` envelope whose `e` is
+// the absolute expiry epoch; `ClientState.get` returns the value before `e`
+// and the default (null) after, proactively cleaning the stale key. These
+// tests exercise both edges through the hook + intercept.
+
+describe("RouteResume resume TTL", () => {
+  let shims
+  let historyRedirect
+
+  beforeEach(() => {
+    shims = installShims()
+    __resetForTests()
+    historyRedirect = vi.fn()
+    shims.win.liveSocket = { historyRedirect }
+  })
+
+  afterEach(() => {
+    uninstallShims()
+    __resetForTests()
+  })
+
+  it("uses a 3-hour resume TTL", () => {
+    // Named-constant documentation guard: keep the value Rowan approved.
+    expect(RESUME_TTL_MS).toBe(3 * 60 * 60 * 1000)
+  })
+
+  it("persists the resume entry as a {v, e} TTL envelope, not a bare value", () => {
+    shims.win.location.pathname = "/admin/users"
+    const before = Date.now()
+    const hook = buildHook()
+    hook.mounted()
+    const after = Date.now()
+
+    // The raw stored value must be the TTL envelope so it can age out.
+    const raw = shims.storage.__raw.get("suite:route_resume:admin")
+    expect(raw).toBeTypeOf("string")
+    const parsed = JSON.parse(raw)
+    expect(parsed).toHaveProperty("v", "/admin/users")
+    expect(parsed).toHaveProperty("e")
+    // Expiry sits RESUME_TTL_MS in the future (bounded by the read window).
+    expect(parsed.e).toBeGreaterThanOrEqual(before + RESUME_TTL_MS)
+    expect(parsed.e).toBeLessThanOrEqual(after + RESUME_TTL_MS)
+  })
+
+  it("resumes the last subpage within the TTL window", () => {
+    // Fresh return, well inside 3h: the Admin gear resumes /admin/users.
+    shims.win.location.pathname = "/admin/users"
+    const hook = buildHook()
+    hook.mounted()
+
+    // Read-back through the public API sees the live value.
+    expect(ClientState.get("route_resume", "admin")).toBe("/admin/users")
+
+    // Navigate away, then click the Admin gear (bare /admin href).
+    const anchor = makeAnchor({ moduleId: "admin", href: "/admin" })
+    const evt = makeClickEvent(anchor)
+    shims.doc.dispatchClick(evt)
+
+    expect(evt.defaultPrevented).toBe(true)
+    expect(evt.propagationStopped).toBe(true)
+    expect(historyRedirect).toHaveBeenCalledTimes(1)
+    expect(historyRedirect).toHaveBeenCalledWith(
+      evt,
+      "/admin/users",
+      "push",
+      null,
+      anchor,
+    )
+  })
+
+  it("ignores a stale (expired-envelope) resume so the gear falls back to module root", () => {
+    // Simulate the "fresh deploy / hours later" condition: an already-expired
+    // envelope for `admin` was left in localStorage from a prior session.
+    // Seed it directly (past `e`) and mount on a non-allowlisted path so the
+    // initial _persistCurrentPath() does not overwrite it.
+    shims.win.location.pathname = "/unlisted"
+    shims.storage.__raw.set(
+      "suite:route_resume:admin",
+      JSON.stringify({ v: "/admin/users", e: Date.now() - 1 }),
+    )
+
+    const hook = buildHook()
+    hook.mounted()
+
+    // Clicking the Admin gear must NOT resume — the intercept sees the
+    // expired read as missing and lets normal LV navigation to /admin run.
+    const anchor = makeAnchor({ moduleId: "admin", href: "/admin" })
+    const evt = makeClickEvent(anchor)
+    shims.doc.dispatchClick(evt)
+
+    expect(evt.defaultPrevented).toBe(false)
+    expect(historyRedirect).not.toHaveBeenCalled()
+
+    // ClientState.get expires-on-read and self-cleans, so the stale envelope
+    // is gone after the intercept probed it.
+    expect(shims.storage.__raw.has("suite:route_resume:admin")).toBe(false)
   })
 })
