@@ -31,6 +31,7 @@ defmodule Platform.Agents.Historian do
   import Ecto.Query
 
   alias Platform.Agents.HistorianCursor
+  alias Platform.Chat
   alias Platform.Repo
 
   @corpora ~w(pages journal messages transcripts)
@@ -330,8 +331,21 @@ defmodule Platform.Agents.Historian do
   # chat_message_versions and don't affect the pending-bytes signal.
   # workspace_id is unused here in V1 (chat_messages has no workspace_id
   # column; org-scope V1 fan-out sweeps the whole table).
+  # External-user spaces are excluded from the internal Historian byte-sizing
+  # so the window slicer plans against exactly the rows the internal digest
+  # (`ActivityDigest` default `:internal` scope) will build — keeping the byte
+  # signal and the digest selection on the same predicate (stack member 12,
+  # rbac-external-users). Empty (no external users) → `NOT IN ^[]` is a no-op,
+  # leaving all-internal orgs' sums byte-for-byte unchanged. Single seam so
+  # the four call sites stay uniform and tests can reason about one predicate.
+  defp internal_excluded_space_ids, do: Chat.external_space_ids()
+
   defp sum_corpus_bytes("messages", _workspace_id, last_at) do
-    query = from(m in "chat_messages")
+    exclude = internal_excluded_space_ids()
+
+    query =
+      from(m in "chat_messages", where: m.space_id not in type(^exclude, {:array, :binary_id}))
+
     query = apply_cursor_filter(query, :inserted_at, last_at)
 
     query
@@ -344,7 +358,13 @@ defmodule Platform.Agents.Historian do
   # accumulate during a recording. Byte size = summary + JSON-encoded
   # segments (cheap approximation; the char/4 heuristic absorbs the slack).
   defp sum_corpus_bytes("transcripts", _workspace_id, last_at) do
-    query = from(t in "meeting_transcripts")
+    exclude = internal_excluded_space_ids()
+
+    query =
+      from(t in "meeting_transcripts",
+        where: t.space_id not in type(^exclude, {:array, :binary_id})
+      )
+
     query = apply_cursor_filter(query, :updated_at, last_at)
 
     query
@@ -435,8 +455,12 @@ defmodule Platform.Agents.Historian do
   # (chat_messages has no workspace_id column — mirrors the sum
   # variant at `sum_corpus_bytes("messages", ...)`).
   defp per_day_bytes_query("messages", _workspace_id, start_at, end_at) do
+    exclude = internal_excluded_space_ids()
+
     from(m in "chat_messages",
-      where: m.inserted_at >= ^start_at and m.inserted_at < ^end_at,
+      where:
+        m.inserted_at >= ^start_at and m.inserted_at < ^end_at and
+          m.space_id not in type(^exclude, {:array, :binary_id}),
       group_by: fragment("date_trunc('day', ?)", m.inserted_at),
       select: %{
         day: fragment("date_trunc('day', ?)", m.inserted_at),
@@ -451,8 +475,12 @@ defmodule Platform.Agents.Historian do
   # ...)`). No workspace filter — meeting_transcripts has no
   # workspace_id column in V1.
   defp per_day_bytes_query("transcripts", _workspace_id, start_at, end_at) do
+    exclude = internal_excluded_space_ids()
+
     from(t in "meeting_transcripts",
-      where: t.updated_at >= ^start_at and t.updated_at < ^end_at,
+      where:
+        t.updated_at >= ^start_at and t.updated_at < ^end_at and
+          t.space_id not in type(^exclude, {:array, :binary_id}),
       group_by: fragment("date_trunc('day', ?)", t.updated_at),
       select: %{
         day: fragment("date_trunc('day', ?)", t.updated_at),

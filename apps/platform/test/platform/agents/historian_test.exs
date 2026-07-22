@@ -795,4 +795,113 @@ defmodule Platform.Agents.HistorianTest do
 
     transcript
   end
+
+  # ── External-space exclusion in byte-sizing (M12, rbac-external-users) ───
+
+  # Creates a real external user (org_memberships.external == true) and adds
+  # them as a participant of `space_id`, so `Chat.external_space_ids/0`
+  # classifies that space external. Returns the participant.
+  defp insert_external_participant(space_id) do
+    n = System.unique_integer([:positive])
+
+    user =
+      %Platform.Accounts.User{}
+      |> Platform.Accounts.User.changeset(%{
+        email: "hx-#{n}@example.com",
+        name: "Ext #{n}",
+        oidc_sub: "hx-#{n}"
+      })
+      |> Repo.insert!()
+
+    {:ok, _} =
+      Platform.Tenancy.mark_membership_external(%{
+        user_id: user.id,
+        org_id: Platform.TenancyFixtures.tenant_org_id("sxi")
+      })
+
+    {:ok, participant} =
+      Chat.add_participant(space_id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        display_name: "Ext",
+        joined_at: DateTime.utc_now()
+      })
+
+    participant
+  end
+
+  describe "byte-sizing excludes external-user spaces (M12)" do
+    test "pending_windows_input omits external message/transcript bytes; pages/journal untouched" do
+      ws = Ecto.UUID.generate()
+      today = Date.utc_today()
+
+      internal = insert_channel_space("fabrikam-eng")
+      ip = insert_user_participant(internal.id, "Fabrikam")
+      insert_message_at!(internal.id, ip.id, "internal-msg", today)
+      insert_transcript_at!(%{space_id: internal.id, summary: "internal-mtg"}, today)
+
+      external = insert_channel_space("sxi-support")
+      ep = insert_external_participant(external.id)
+      insert_message_at!(external.id, ep.id, String.duplicate("E", 200), today)
+      insert_transcript_at!(%{space_id: external.id, summary: String.duplicate("X", 200)}, today)
+
+      # Space-scoped corpora that must NOT be touched by the external filter.
+      insert_journal!(ws, "journal-body")
+      insert_page_at!(ws, "pg", "page-body", today)
+
+      input = Historian.pending_windows_input(ws)
+
+      {_, mbytes} = input.messages
+      assert mbytes == byte_size("internal-msg")
+
+      {_, tbytes} = input.transcripts
+      assert tbytes >= byte_size("internal-mtg")
+      assert tbytes < byte_size("internal-mtg") + 200
+
+      {_, jbytes} = input.journal
+      assert jbytes == byte_size("journal-body")
+
+      {_, pbytes} = input.pages
+      assert pbytes == byte_size("page-body")
+    end
+
+    test "pending_bytes_per_day('messages') excludes external-space bytes" do
+      today = Date.utc_today()
+      start_at = DateTime.new!(today, ~T[00:00:00], "Etc/UTC")
+      end_at = DateTime.new!(Date.add(today, 1), ~T[00:00:00], "Etc/UTC")
+
+      internal = insert_channel_space("fabrikam-eng")
+      ip = insert_user_participant(internal.id, "Fabrikam")
+      insert_message_at!(internal.id, ip.id, "internal-msg", today)
+
+      external = insert_channel_space("sxi-support")
+      ep = insert_external_participant(external.id)
+      insert_message_at!(external.id, ep.id, String.duplicate("E", 200), today)
+
+      per_day = Historian.pending_bytes_per_day("messages", start_at, end_at)
+      total = per_day |> Map.values() |> Enum.sum()
+
+      assert total == byte_size("internal-msg")
+    end
+
+    test "zero external users → sums identical (NOT IN ^[] is a no-op)" do
+      ws = Ecto.UUID.generate()
+      today = Date.utc_today()
+
+      internal = insert_channel_space("fabrikam-eng")
+      ip = insert_user_participant(internal.id, "Fabrikam")
+      insert_message_at!(internal.id, ip.id, "internal-msg", today)
+      insert_transcript_at!(%{space_id: internal.id, summary: "internal-mtg"}, today)
+
+      assert Chat.external_space_ids() == []
+
+      input = Historian.pending_windows_input(ws)
+
+      {_, mbytes} = input.messages
+      assert mbytes == byte_size("internal-msg")
+
+      {_, tbytes} = input.transcripts
+      assert tbytes >= byte_size("internal-mtg")
+    end
+  end
 end

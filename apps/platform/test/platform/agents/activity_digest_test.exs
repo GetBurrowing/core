@@ -340,4 +340,111 @@ defmodule Platform.Agents.ActivityDigestTest do
 
   defp maybe_put_change(changeset, key, value),
     do: Ecto.Changeset.put_change(changeset, key, value)
+
+  # ── External-user scope partition (M12, rbac-external-users) ─────────────
+
+  defp external_user! do
+    n = System.unique_integer([:positive])
+
+    user =
+      %Platform.Accounts.User{}
+      |> Platform.Accounts.User.changeset(%{
+        email: "hx-#{n}@example.com",
+        name: "Ext #{n}",
+        oidc_sub: "hx-#{n}"
+      })
+      |> Repo.insert!()
+
+    {:ok, _} =
+      Platform.Tenancy.mark_membership_external(%{
+        user_id: user.id,
+        org_id: Platform.TenancyFixtures.tenant_org_id("sxi")
+      })
+
+    user
+  end
+
+  describe "build/3 :internal + build_external/3 (M12)" do
+    setup do
+      ext = external_user!()
+
+      internal = insert_space(%{name: "fabrikam-eng"})
+      ip = insert_participant(internal.id, %{display_name: "Fabrikam"})
+
+      insert_message(internal.id, ip.id, %{
+        content: "internal chatter",
+        inserted_at: within_window()
+      })
+
+      insert_transcript(%{
+        space_id: internal.id,
+        summary: "internal meeting notes",
+        started_at: within_window(),
+        completed_at: within_window()
+      })
+
+      external = insert_space(%{name: "sxi-support"})
+      ep = insert_participant(external.id, %{participant_id: ext.id, display_name: "Ext"})
+
+      insert_message(external.id, ep.id, %{
+        content: "external chatter",
+        inserted_at: within_window()
+      })
+
+      insert_transcript(%{
+        space_id: external.id,
+        summary: "external meeting notes",
+        started_at: within_window(),
+        completed_at: within_window()
+      })
+
+      %{ext: ext}
+    end
+
+    test "build/2 (default :internal) keeps internal content, omits the external space" do
+      result = ActivityDigest.build(@window_start, @window_end)
+
+      assert result =~ "#fabrikam-eng"
+      assert result =~ "internal chatter"
+      assert result =~ "internal meeting notes"
+
+      refute result =~ "external chatter"
+      refute result =~ "external meeting notes"
+      refute result =~ "sxi-support"
+    end
+
+    test "build_external/3 is the mirror — external content only, no internal", %{ext: ext} do
+      result = ActivityDigest.build_external(ext.id, @window_start, @window_end)
+
+      assert result =~ "external chatter"
+      assert result =~ "external meeting notes"
+
+      refute result =~ "internal chatter"
+      refute result =~ "internal meeting notes"
+      refute result =~ "fabrikam-eng"
+    end
+  end
+
+  describe "build_external/3 edges (M12)" do
+    test "external user with no participations yields the empty fallback" do
+      ext = external_user!()
+      result = ActivityDigest.build_external(ext.id, @window_start, @window_end)
+      assert result =~ "_No activity in this window._"
+    end
+
+    test "build/2 is unchanged with no external users (regression)" do
+      internal = insert_space(%{name: "fabrikam-eng"})
+      ip = insert_participant(internal.id, %{display_name: "Fabrikam"})
+
+      insert_message(internal.id, ip.id, %{
+        content: "internal chatter",
+        inserted_at: within_window()
+      })
+
+      assert Platform.Chat.external_space_ids() == []
+
+      result = ActivityDigest.build(@window_start, @window_end)
+      assert result =~ "internal chatter"
+    end
+  end
 end

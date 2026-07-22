@@ -10,6 +10,22 @@ defmodule Platform.Agents.ActivityDigest do
   DMs, archived spaces, deleted messages, and log-only messages are excluded
   by the underlying queries (`Chat.list_messages_since/2`,
   `Meetings.list_transcripts_since/2`, `Tasks.list_tasks_updated_since/2`).
+
+  ## External-user scope partition (stack member 12, rbac-external-users)
+
+  The message + transcript corpora partition on the M1 `external` marker in
+  BOTH directions, threaded via the `:scope` opt on the underlying queries:
+
+    * `:internal` (the default for `build/2`, `build/3` and `build_windowed/1`)
+      — OMITS any external-user space/DM (and mixed Fabrikam+external spaces) from
+      the Fabrikam-internal digest. With zero external users this is a no-op, so
+      an all-internal org's output is byte-for-byte unchanged.
+    * `build_external/3` — the mirror direction: builds a summary restricted to
+      one external user's allowlisted spaces (`{:external_spaces, ids}`), which
+      intrinsically OMITS Fabrikam-internal content.
+
+  Pages, journal, and task corpora have no space dimension, so scope does not
+  apply to them; `build_external/3` therefore covers only chat + meetings.
   """
 
   import Ecto.Query
@@ -32,10 +48,15 @@ defmodule Platform.Agents.ActivityDigest do
   Empty windows yield an italicised `_No activity in this window._` line
   under the header so the agent can detect and handle the quiet case.
   """
-  @spec build(DateTime.t(), DateTime.t()) :: String.t()
-  def build(%DateTime{} = window_start, %DateTime{} = window_end) do
-    messages = Chat.list_messages_since(window_start, window_end: window_end)
-    transcripts = Meetings.list_transcripts_since(window_start, window_end: window_end)
+  @spec build(DateTime.t(), DateTime.t(), keyword()) :: String.t()
+  def build(%DateTime{} = window_start, %DateTime{} = window_end, opts \\ []) do
+    scope = Keyword.get(opts, :scope, :internal)
+
+    messages = Chat.list_messages_since(window_start, window_end: window_end, scope: scope)
+
+    transcripts =
+      Meetings.list_transcripts_since(window_start, window_end: window_end, scope: scope)
+
     tasks = Tasks.list_tasks_updated_since(window_start, window_end: window_end)
 
     space_names = fetch_space_names(messages, transcripts)
@@ -45,6 +66,52 @@ defmodule Platform.Agents.ActivityDigest do
         digest_messages(messages, space_names),
         digest_transcripts(transcripts, space_names),
         digest_task_events(tasks)
+      ]
+      |> Enum.reject(&(&1 == nil))
+
+    body =
+      case sections do
+        [] -> "_No activity in this window._"
+        sections -> Enum.join(sections, "\n\n")
+      end
+
+    header = "## Activity since #{format_datetime(window_start)} (UTC)"
+    header <> "\n\n" <> body
+  end
+
+  @doc """
+  Builds an external-user-facing digest for `user_id` over the half-open
+  window `[window_start, window_end)`.
+
+  Resolves the external user's allowlisted spaces via
+  `Chat.participant_space_ids_for_user/1` and scopes the chat + meeting
+  corpora to exactly those spaces (`scope: {:external_spaces, ids}`). Because
+  an external user only ever participates in their allowlisted spaces, this
+  intrinsically OMITS all Fabrikam-internal content. Pages, journal and task
+  events are org-scoped (not space-scoped) and are therefore left out of the
+  external summary entirely.
+
+  Ships inert on the external side — no dispatcher wires this yet (M13
+  notifications is the likely first consumer); the scoped builder is exposed
+  now so that caller inherits a correct-by-construction exclusion.
+  """
+  @spec build_external(binary(), DateTime.t(), DateTime.t()) :: String.t()
+  def build_external(user_id, %DateTime{} = window_start, %DateTime{} = window_end)
+      when is_binary(user_id) do
+    space_ids = Chat.participant_space_ids_for_user(user_id)
+    scope = {:external_spaces, space_ids}
+
+    messages = Chat.list_messages_since(window_start, window_end: window_end, scope: scope)
+
+    transcripts =
+      Meetings.list_transcripts_since(window_start, window_end: window_end, scope: scope)
+
+    space_names = fetch_space_names(messages, transcripts)
+
+    sections =
+      [
+        digest_messages(messages, space_names),
+        digest_transcripts(transcripts, space_names)
       ]
       |> Enum.reject(&(&1 == nil))
 
@@ -81,12 +148,18 @@ defmodule Platform.Agents.ActivityDigest do
   stays uniform across the two paths.
   """
   @spec build_windowed(map()) :: String.t()
-  def build_windowed(%{
-        corpus: corpus,
-        window_start: %DateTime{} = ws,
-        window_end: %DateTime{} = we
-      }) do
-    body = corpus_body(corpus, ws, we)
+  def build_windowed(
+        %{
+          corpus: corpus,
+          window_start: %DateTime{} = ws,
+          window_end: %DateTime{} = we
+        } = input
+      ) do
+    # Default `:internal` when the dispatcher omits `:scope`, so the existing
+    # `HistorianDispatcher.dispatch_one_window/12` path needs no change.
+    scope = Map.get(input, :scope, :internal)
+
+    body = corpus_body(corpus, ws, we, scope)
 
     header =
       "## #{corpus_heading(corpus)} since #{format_datetime(ws)} (UTC)" <>
@@ -95,8 +168,8 @@ defmodule Platform.Agents.ActivityDigest do
     header <> "\n\n" <> body
   end
 
-  defp corpus_body(:messages, ws, we) do
-    messages = Chat.list_messages_since(ws, window_end: we)
+  defp corpus_body(:messages, ws, we, scope) do
+    messages = Chat.list_messages_since(ws, window_end: we, scope: scope)
     space_names = fetch_space_names(messages, [])
 
     case digest_messages(messages, space_names) do
@@ -105,8 +178,8 @@ defmodule Platform.Agents.ActivityDigest do
     end
   end
 
-  defp corpus_body(:transcripts, ws, we) do
-    transcripts = Meetings.list_transcripts_since(ws, window_end: we)
+  defp corpus_body(:transcripts, ws, we, scope) do
+    transcripts = Meetings.list_transcripts_since(ws, window_end: we, scope: scope)
     space_names = fetch_space_names([], transcripts)
 
     case digest_transcripts(transcripts, space_names) do
@@ -115,10 +188,11 @@ defmodule Platform.Agents.ActivityDigest do
     end
   end
 
-  defp corpus_body(:pages, ws, we) do
+  defp corpus_body(:pages, ws, we, _scope) do
     # V1 org-scope only for the Historian sweep (workspace_id is nil in
     # the caller). The Wiki accessor filters by workspace as an option;
     # matching Historian's byte-sum which walks `is_nil(workspace_id)`.
+    # Pages are org-wiki, not space-scoped — `scope` does not apply.
     pages = Wiki.list_pages_updated_since(ws, window_end: we, workspace_id: nil)
 
     case digest_pages(pages) do
@@ -127,7 +201,8 @@ defmodule Platform.Agents.ActivityDigest do
     end
   end
 
-  defp corpus_body(:journal, ws, we) do
+  defp corpus_body(:journal, ws, we, _scope) do
+    # Journal is org-wiki, not space-scoped — `scope` does not apply.
     entries =
       Wiki.list_journal_entries_since(ws, window_end: we, workspace_id: nil)
 
@@ -137,7 +212,7 @@ defmodule Platform.Agents.ActivityDigest do
     end
   end
 
-  defp corpus_body(_other, _ws, _we), do: "_(unknown corpus)_"
+  defp corpus_body(_other, _ws, _we, _scope), do: "_(unknown corpus)_"
 
   defp corpus_heading(:messages), do: "Chat"
   defp corpus_heading(:transcripts), do: "Meetings"

@@ -1609,6 +1609,7 @@ defmodule Platform.Meetings do
   @spec list_transcripts_since(DateTime.t(), keyword()) :: [Transcript.t()]
   def list_transcripts_since(%DateTime{} = window_start, opts \\ []) do
     window_end = Keyword.get(opts, :window_end, DateTime.utc_now())
+    scope = Keyword.get(opts, :scope, :internal)
 
     from(t in Transcript,
       where:
@@ -1618,7 +1619,22 @@ defmodule Platform.Meetings do
           t.completed_at < ^window_end,
       order_by: [asc: t.completed_at]
     )
+    |> apply_digest_scope(scope)
     |> Repo.all()
+  end
+
+  # External-space digest partition (stack member 12, rbac-external-users).
+  # Mirrors `Chat.list_messages_since/2`'s `:scope` opt on the transcript
+  # corpus: `:internal` (default) excludes external-user spaces from the
+  # Fabrikam-internal digest; `{:external_spaces, ids}` restricts to an external
+  # user's allowlisted spaces. See `Chat.external_space_ids/0`.
+  defp apply_digest_scope(query, :internal) do
+    exclude = Chat.external_space_ids()
+    where(query, [t], t.space_id not in ^exclude)
+  end
+
+  defp apply_digest_scope(query, {:external_spaces, space_ids}) do
+    where(query, [t], t.space_id in ^space_ids)
   end
 
   @doc """
