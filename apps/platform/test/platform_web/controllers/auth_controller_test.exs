@@ -1,9 +1,17 @@
 defmodule PlatformWeb.AuthControllerTest do
   use PlatformWeb.ConnCase
 
+  import Ecto.Query
+
   alias Platform.Accounts
   alias Platform.Accounts.User
+  alias Platform.Chat
   alias Platform.Repo
+  alias Platform.Tenancy
+  alias Platform.Tenancy.ExternalDmAllowlistEntry
+  alias Platform.Tenancy.ExternalGrants
+  alias Platform.Tenancy.Org
+  alias Platform.Tenancy.OrgMembership
 
   setup do
     on_exit(fn -> Application.delete_env(:platform, :oidc_mock_response) end)
@@ -182,6 +190,82 @@ defmodule PlatformWeb.AuthControllerTest do
     end
   end
 
+  describe "external admission routing (M2 stage 3)" do
+    test "dev_login with a pre-staged grant lands :full — session, /chat, materialized membership",
+         %{conn: conn} do
+      slug = "extfull#{System.unique_integer([:positive])}"
+      target_org = tenant_org!()
+      space = channel!(target_org)
+
+      {:ok, _grant} =
+        ExternalGrants.create_grant(%{
+          email: "#{slug}@localhost",
+          oidc_sub: "dev-#{slug}",
+          target_org_id: target_org.id,
+          space_grants: [%{"space_id" => space.id, "role" => "member"}],
+          dm_allowlist_org_ids: [target_org.id]
+        })
+
+      conn =
+        %{conn | host: "chat.localhost"}
+        |> init_test_session(%{})
+        |> PlatformWeb.AuthController.dev_login(%{"as" => slug})
+
+      assert redirected_to(conn, 302) == ~p"/chat"
+      user_id = get_session(conn, :current_user_id)
+      assert user_id
+      # Full admission plants NO holding key.
+      assert get_session(conn, :external_admission) == nil
+
+      membership = Repo.get_by!(OrgMembership, user_id: user_id, org_id: target_org.id)
+      assert membership.external == true
+    end
+
+    test "dev_login with no grant on the external surface lands :holding — session, holding key, /welcome, zero scoped rows",
+         %{conn: conn} do
+      slug = "exthold#{System.unique_integer([:positive])}"
+
+      conn =
+        %{conn | host: "chat.localhost"}
+        |> init_test_session(%{})
+        |> PlatformWeb.AuthController.dev_login(%{"as" => slug})
+
+      # M3 stage 2 flipped `post_login_path(:holding)` from the `/chat`
+      # placeholder to the dedicated holding landing `/welcome`.
+      assert redirected_to(conn, 302) == ~p"/welcome"
+      user_id = get_session(conn, :current_user_id)
+      assert user_id
+
+      assert %{state: :holding, user_id: ^user_id} =
+               holding = get_session(conn, :external_admission)
+
+      assert holding.reason in [:missing_claim, :awaiting_grant, :unknown]
+
+      assert Repo.aggregate(
+               from(p in Chat.Participant, where: p.participant_id == ^user_id),
+               :count
+             ) == 0
+
+      assert Repo.aggregate(
+               from(e in ExternalDmAllowlistEntry, where: e.user_id == ^user_id),
+               :count
+             ) == 0
+    end
+
+    test "ordinary internal dev_login is unchanged — :full, no holding key", %{conn: conn} do
+      slug = "internal#{System.unique_integer([:positive])}"
+
+      conn =
+        conn
+        |> init_test_session(%{})
+        |> PlatformWeb.AuthController.dev_login(%{"as" => slug})
+
+      assert redirected_to(conn, 302) == ~p"/chat"
+      assert get_session(conn, :current_user_id)
+      assert get_session(conn, :external_admission) == nil
+    end
+  end
+
   test "GET /auth/logout clears the session and redirects to the end-session endpoint", %{
     conn: conn
   } do
@@ -217,6 +301,27 @@ defmodule PlatformWeb.AuthControllerTest do
       },
       overrides
     )
+  end
+
+  defp tenant_org!(attrs \\ %{}) do
+    n = System.unique_integer([:positive])
+
+    default = %{
+      name: "Tenant #{n}",
+      slug: "tenant_#{n}",
+      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+    }
+
+    %Org{} |> Org.changeset(Map.merge(default, attrs)) |> Repo.insert!()
+  end
+
+  defp channel!(org) do
+    n = System.unique_integer([:positive, :monotonic])
+
+    {:ok, space} =
+      Chat.create_space(%{name: "Chan #{n}", slug: "chan-#{n}", kind: "channel", org_id: org.id})
+
+    space
   end
 
   defp insert_user(attrs \\ %{}) do

@@ -106,6 +106,25 @@ defmodule Platform.Chat.Presence do
   end
 
   @doc """
+  The set of space_ids an EXTERNAL user may receive presence/typing for — a
+  `MapSet` of the spaces they are a `chat_participants` member of
+  (rbac-external-users M10).
+
+  This is the allowlist the `ChatLive` subscribe loop intersects the
+  workspace-wide topic set against, and the same set the `PresenceHooks`
+  consumer guards check membership in — one source of truth for both the
+  subscription and the consumption scope.
+
+  Internal (non-external) callers pass `nil` downstream, meaning "no
+  restriction": their presence/typing behavior is unchanged. Only external
+  users are narrowed to this set, so no internal path regresses.
+  """
+  @spec external_scope_space_ids(binary()) :: MapSet.t(binary())
+  def external_scope_space_ids(user_id) when is_binary(user_id) do
+    user_id |> Chat.list_member_space_ids() |> MapSet.new()
+  end
+
+  @doc """
   Return runtime-backed presence for the configured native agent in a space.
   """
   @spec native_agent_presence(binary(), keyword()) :: map()

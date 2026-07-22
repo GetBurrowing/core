@@ -5333,4 +5333,51 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
     agent
   end
+
+  # ── M11: external-principal chat scoping (pure) ──────────────────────
+
+  describe "external chat allowlist + scope_for_external/2" do
+    @chat_names ~w(send_media react space_list space_get_context space_get_messages space_search_messages)
+
+    test "external_chat_tools/0 is exactly the six chat tool names" do
+      assert ToolSurface.external_chat_tools() == MapSet.new(@chat_names)
+    end
+
+    test "external_chat_tool?/1 recognises chat tools and rejects the rest" do
+      assert ToolSurface.external_chat_tool?("send_media")
+      assert ToolSurface.external_chat_tool?("react")
+      assert ToolSurface.external_chat_tool?("space_list")
+      refute ToolSurface.external_chat_tool?("task_create")
+      refute ToolSurface.external_chat_tool?("canvas_create")
+      refute ToolSurface.external_chat_tool?("space_leave")
+      refute ToolSurface.external_chat_tool?("principal_search")
+    end
+
+    test "scope_for_external(_, true) yields exactly the six chat tools from a broad surface" do
+      tools = ToolSurface.list_tools(~w(messaging task canvas space context_read))
+      scoped = ToolSurface.scope_for_external(tools, true)
+
+      names = scoped |> Enum.map(& &1.name) |> Enum.sort()
+      assert names == Enum.sort(@chat_names)
+
+      # None of the non-chat tools survive — including the mutating
+      # space_leave and the context_read extras.
+      refute "task_create" in names
+      refute "canvas.create" in names
+      refute "space_leave" in names
+      refute "principal_search" in names
+      refute "canvas_list" in names
+    end
+
+    test "scope_for_external(_, false) is the identity function" do
+      tools = ToolSurface.list_tools(~w(messaging task canvas space context_read))
+      assert ToolSurface.scope_for_external(tools, false) == tools
+    end
+
+    test "intersection is fail-closed: no chat bundle granted → empty, never injected" do
+      # allowed_bundles = [task] only — no messaging/space/context_read.
+      tools = ToolSurface.list_tools(~w(task))
+      assert ToolSurface.scope_for_external(tools, true) == []
+    end
+  end
 end

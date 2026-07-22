@@ -50,10 +50,12 @@ defmodule Platform.Chat do
     Thread
   }
 
+  alias Platform.Chat.ExternalScope
   alias Platform.Chat.Canvas.Versions, as: CanvasVersions
   alias Platform.Chat.MessageVersions
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
+  alias Platform.Tenancy
 
   # ── Spaces ─────────────────────────────────────────────────────────────────
 
@@ -147,9 +149,25 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "Fetch a space by primary key. Returns `nil` if not found."
-  @spec get_space(binary()) :: Space.t() | nil
-  def get_space(id), do: Repo.get(Space, id)
+  @doc """
+  Fetch a space by primary key. Returns `nil` if not found.
+
+  ## Options
+
+    * `:scope` — an optional `%Platform.Chat.ExternalScope{}`. When it is an
+      external scope, a space the user does not participate in resolves to
+      `nil` (a 404-shaped miss, not a leak). Absent / nil / internal scopes are
+      pass-through, so `get_space/1` and every existing caller are unchanged.
+  """
+  @spec get_space(binary(), keyword()) :: Space.t() | nil
+  def get_space(id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    case Repo.get(Space, id) do
+      nil -> nil
+      space -> if ExternalScope.visible_space_id?(id, scope), do: space, else: nil
+    end
+  end
 
   @doc """
   Fetch a space by slug.
@@ -163,6 +181,10 @@ defmodule Platform.Chat do
       be derived from the user's session (e.g. `/chat/general` resolving to
       *this user's* tenant General, not the oldest cross-tenant match).
 
+    * `:scope` — optional `%Platform.Chat.ExternalScope{}`. For an external
+      scope a slug outside the caller's participant set resolves to `nil`
+      (a 404, not a leak). Absent / nil / internal scopes are pass-through.
+
   When `:org_id` is absent (or nil), the legacy behavior is preserved: the
   oldest matching row by `inserted_at` is returned. This back-compat path is
   what every pre-existing caller relies on — system-channel lookups,
@@ -173,7 +195,9 @@ defmodule Platform.Chat do
   """
   @spec get_space_by_slug(String.t(), keyword()) :: Space.t() | nil
   def get_space_by_slug(slug, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
     query = where(Space, [s], s.slug == ^slug)
+    query = ExternalScope.scope_spaces(query, scope)
 
     query =
       case Keyword.get(opts, :org_id) do
@@ -200,6 +224,11 @@ defmodule Platform.Chat do
     * `:workspace_id` — filter by workspace
     * `:kind`         — filter by kind ("channel", "dm", "group")
     * `:archived`     — `true` for archived only, `false` (default) for active only
+    * `:scope`        — optional `%Platform.Chat.ExternalScope{}`. For an
+      external scope the result is narrowed to the caller's participant spaces
+      (so `list_spaces(kind: "channel", scope: ext)` returns ONLY their
+      channels, never the full channel set). Absent / nil / internal scopes are
+      pass-through.
 
   Spaces flagged for deletion (`deletion_scheduled_at` set, task 019e95ea
   stage 3) are excluded from BOTH branches: the default branch already
@@ -211,6 +240,7 @@ defmodule Platform.Chat do
   def list_spaces(opts \\ []) do
     {archived, opts} = Keyword.pop(opts, :archived, false)
     {include_execution, opts} = Keyword.pop(opts, :include_execution, false)
+    {scope, opts} = Keyword.pop(opts, :scope)
 
     base =
       if archived do
@@ -240,6 +270,7 @@ defmodule Platform.Chat do
       {:kind, kind}, q -> where(q, [s], s.kind == ^kind)
       _other, q -> q
     end)
+    |> ExternalScope.scope_spaces(scope)
     |> Repo.all()
   end
 
@@ -295,6 +326,38 @@ defmodule Platform.Chat do
       )
 
     base = if kind, do: where(base, [s], s.kind == ^kind), else: base
+    Repo.all(base)
+  end
+
+  @doc """
+  List the space_ids a human user is a `chat_participants` member of — the
+  allowlisted set for external-user presence/typing scope (rbac-external-users
+  M10).
+
+  Mirrors `list_spaces_for_agent/2` but keyed on a `participant_type: "user"`
+  participant and selecting `p.space_id` rather than the `Space` structs.
+  Archived spaces are excluded (`s.archived_at IS NULL`); `chat_participants`
+  has no `archived_at` column of its own (see the `Participant` schema), so
+  membership is scoped purely on the space's archive state, exactly as
+  `list_spaces_for_agent/2` does for agents. An optional `:kind` opt filters
+  `s.kind`.
+  """
+  @spec list_member_space_ids(binary(), keyword()) :: [binary()]
+  def list_member_space_ids(user_id, opts \\ []) when is_binary(user_id) do
+    kind = Keyword.get(opts, :kind)
+
+    base =
+      from(p in Participant,
+        join: s in Space,
+        on: s.id == p.space_id,
+        where:
+          p.participant_type == "user" and
+            p.participant_id == ^user_id and
+            is_nil(s.archived_at),
+        select: p.space_id
+      )
+
+    base = if kind, do: where(base, [_p, s], s.kind == ^kind), else: base
     Repo.all(base)
   end
 
@@ -494,14 +557,64 @@ defmodule Platform.Chat do
   # ── Conversations (DM / Group / Channel creation) ─────────────────────────
 
   @doc """
+  Is `initiator_user_id` allowed to open/hold a DM with the given target?
+
+  The single, reusable server-side predicate composing M1's
+  `Platform.Tenancy.may_dm_org?/2`. Both the DM/conversation CREATE seam
+  (`find_or_create_dm/4`, `create_group_conversation/3`) and the message
+  SEND seam (`ensure_dm_send_allowed/2`) call this so enforcement never
+  diverges between the two.
+
+  Rules:
+
+    * Internal initiator (`not Tenancy.external_user?/1`) → `true`.
+      Internal users keep today's unrestricted DM behavior; this predicate
+      only constrains external initiators.
+    * External initiator, `target_type == "agent"` → `false`. Deliberate
+      deny: the external chat surface is scoped to allowlisted humans;
+      agent DMs are out of scope for external users.
+    * External initiator, `target_type == "user"` → `true` iff ANY of the
+      target's orgs is in the initiator's DM allowlist. This uniformly
+      covers external→allowlisted-org member AND SXI↔SXI (a second
+      external user whose org is the same allowlisted org).
+  """
+  @spec external_dm_permitted?(binary(), String.t(), binary()) :: boolean()
+  def external_dm_permitted?(initiator_user_id, target_type, target_id) do
+    cond do
+      not Tenancy.external_user?(%{id: initiator_user_id}) ->
+        true
+
+      target_type == "agent" ->
+        false
+
+      target_type == "user" ->
+        %{id: target_id}
+        |> Tenancy.list_user_memberships()
+        |> Enum.map(& &1.org_id)
+        |> Enum.any?(&Tenancy.may_dm_org?(initiator_user_id, &1))
+
+      true ->
+        false
+    end
+  end
+
+  @doc """
   Find an existing DM between initiator and target, or create one.
 
   `target_type` is "user" or "agent", `target_id` is the UUID.
   Returns `{:ok, space}`.
   """
   @spec find_or_create_dm(binary(), String.t(), binary(), keyword()) ::
-          {:ok, Space.t()} | {:error, term()}
+          {:ok, Space.t()} | {:error, :dm_not_allowed | term()}
   def find_or_create_dm(user_id, target_type, target_id, _opts \\ []) do
+    if external_dm_permitted?(user_id, target_type, target_id) do
+      do_find_or_create_dm(user_id, target_type, target_id)
+    else
+      {:error, :dm_not_allowed}
+    end
+  end
+
+  defp do_find_or_create_dm(user_id, target_type, target_id) do
     # Look for an existing DM space where both participants are active
     existing =
       from(s in Space,
@@ -577,62 +690,84 @@ defmodule Platform.Chat do
   If only 1 other participant, redirects to find_or_create_dm.
   """
   @spec create_group_conversation(binary(), [map()], keyword()) ::
-          {:ok, Space.t()} | {:error, term()}
+          {:ok, Space.t()} | {:error, :dm_not_allowed | term()}
   def create_group_conversation(user_id, participant_specs, _opts \\ []) do
-    # If only one other participant, create a DM instead
-    if length(participant_specs) == 1 do
-      [spec] = participant_specs
+    # If only one other participant, create a DM instead. That branch
+    # delegates to `find_or_create_dm/4`, which inherits the allowlist
+    # guard; the multi-participant branch needs its own check below.
+    cond do
+      length(participant_specs) == 1 ->
+        [spec] = participant_specs
+        type = Map.get(spec, :type) || Map.get(spec, "type")
+        id = Map.get(spec, :id) || Map.get(spec, "id")
+        find_or_create_dm(user_id, type, id)
+
+      not all_participants_dm_permitted?(user_id, participant_specs) ->
+        {:error, :dm_not_allowed}
+
+      true ->
+        do_create_group_conversation(user_id, participant_specs)
+    end
+  end
+
+  # True unless the initiator is external and some participant spec is not
+  # a permitted DM target. Internal initiators always pass (the predicate
+  # short-circuits to `true` for them).
+  defp all_participants_dm_permitted?(user_id, participant_specs) do
+    Enum.all?(participant_specs, fn spec ->
       type = Map.get(spec, :type) || Map.get(spec, "type")
       id = Map.get(spec, :id) || Map.get(spec, "id")
-      find_or_create_dm(user_id, type, id)
-    else
-      multi =
-        Multi.new()
-        |> Multi.insert(
-          :space,
-          Space.changeset(%Space{}, %{
-            kind: "group",
-            is_direct: false,
-            created_by: user_id
-          })
-        )
-        |> Multi.run(:creator, fn _repo, %{space: space} ->
-          add_participant(space.id, %{
-            participant_type: "user",
-            participant_id: user_id,
-            display_name: user_display_name(user_id),
-            joined_at: DateTime.utc_now()
-          })
-        end)
+      external_dm_permitted?(user_id, type, id)
+    end)
+  end
 
-      multi =
-        participant_specs
-        |> Enum.with_index()
-        |> Enum.reduce(multi, fn {spec, idx}, multi ->
-          type = Map.get(spec, :type) || Map.get(spec, "type")
-          id = Map.get(spec, :id) || Map.get(spec, "id")
+  defp do_create_group_conversation(user_id, participant_specs) do
+    multi =
+      Multi.new()
+      |> Multi.insert(
+        :space,
+        Space.changeset(%Space{}, %{
+          kind: "group",
+          is_direct: false,
+          created_by: user_id
+        })
+      )
+      |> Multi.run(:creator, fn _repo, %{space: space} ->
+        add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user_id,
+          display_name: user_display_name(user_id),
+          joined_at: DateTime.utc_now()
+        })
+      end)
 
-          Multi.run(multi, {:participant, idx}, fn _repo, %{space: space} ->
-            if type == "agent" do
-              case Repo.get(Agent, id) do
-                %Agent{} = agent -> add_agent_participant(space.id, agent)
-                nil -> {:error, :agent_not_found}
-              end
-            else
-              add_participant(space.id, %{
-                participant_type: "user",
-                participant_id: id,
-                display_name: user_display_name(id),
-                joined_at: DateTime.utc_now()
-              })
+    multi =
+      participant_specs
+      |> Enum.with_index()
+      |> Enum.reduce(multi, fn {spec, idx}, multi ->
+        type = Map.get(spec, :type) || Map.get(spec, "type")
+        id = Map.get(spec, :id) || Map.get(spec, "id")
+
+        Multi.run(multi, {:participant, idx}, fn _repo, %{space: space} ->
+          if type == "agent" do
+            case Repo.get(Agent, id) do
+              %Agent{} = agent -> add_agent_participant(space.id, agent)
+              nil -> {:error, :agent_not_found}
             end
-          end)
+          else
+            add_participant(space.id, %{
+              participant_type: "user",
+              participant_id: id,
+              display_name: user_display_name(id),
+              joined_at: DateTime.utc_now()
+            })
+          end
         end)
+      end)
 
-      case Repo.transaction(multi) do
-        {:ok, %{space: space}} -> {:ok, space}
-        {:error, _step, reason, _} -> {:error, reason}
-      end
+    case Repo.transaction(multi) do
+      {:ok, %{space: space}} -> {:ok, space}
+      {:error, _step, reason, _} -> {:error, reason}
     end
   end
 
@@ -664,9 +799,17 @@ defmodule Platform.Chat do
   @doc """
   List all non-archived spaces where the user is an active participant,
   ordered by most recent message (or inserted_at).
+
+  This path JOINs `chat_participants` on the caller's own `user_id`, so it is
+  INHERENTLY scoped to the caller's spaces — for an external caller it is the
+  naturally-scoped read. The optional `:scope` opt applies
+  `ExternalScope.scope_spaces/2` anyway as belt-and-suspenders defense in
+  depth. Absent / nil / internal scopes are pass-through.
   """
-  @spec list_user_conversations(binary()) :: [Space.t()]
-  def list_user_conversations(user_id) do
+  @spec list_user_conversations(binary(), keyword()) :: [Space.t()]
+  def list_user_conversations(user_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
     from(s in Space,
       join: p in Participant,
       on: p.space_id == s.id,
@@ -679,6 +822,7 @@ defmodule Platform.Chat do
       order_by: [desc: fragment("COALESCE(MAX(?), ?)", m.inserted_at, s.inserted_at)],
       select: s
     )
+    |> ExternalScope.scope_spaces(scope)
     |> Repo.all()
   end
 
@@ -816,6 +960,29 @@ defmodule Platform.Chat do
   @doc "Fetch a participant by primary key. Returns `nil` if not found."
   @spec get_participant(binary()) :: Participant.t() | nil
   def get_participant(id), do: Repo.get(Participant, id)
+
+  @doc """
+  Fast existence check: is `user_id` a `"user"` participant of `space_id`?
+
+  The auth-hot-path counterpart to `find_user_participant/2`, which loads
+  every row via `list_participants/1`. This issues a single `Repo.exists?`
+  query (idiomatic here — chat.ex:1182/1219/1645/2594) and is what
+  `PlatformWeb.Plugs.ExternalUserScope` uses to gate an external user on
+  `/chat/:slug` without an N-row load. Only `participant_type == "user"`
+  rows count — an agent-type row sharing the same id is not a match.
+  """
+  @spec participant?(binary(), binary()) :: boolean()
+  def participant?(space_id, user_id) when is_binary(space_id) and is_binary(user_id) do
+    Repo.exists?(
+      from(p in Participant,
+        where:
+          p.space_id == ^space_id and p.participant_type == "user" and
+            p.participant_id == ^user_id
+      )
+    )
+  end
+
+  def participant?(_, _), do: false
 
   @doc """
   List participants in a space (ADR 0038: all rows are active).
@@ -1005,9 +1172,14 @@ defmodule Platform.Chat do
   Optional: `:thread_id`, `:content`, `:structured_content`, `:metadata`.
   """
   @spec post_message(map(), keyword()) ::
-          {:ok, Message.t()} | {:error, :space_archived | Ecto.Changeset.t()}
+          {:ok, Message.t()}
+          | {:error, :space_archived | :dm_not_allowed | Ecto.Changeset.t()}
   def post_message(attrs, opts \\ []) do
-    with :ok <- ensure_space_writable(attrs[:space_id] || attrs["space_id"]) do
+    space_id = attrs[:space_id] || attrs["space_id"]
+    participant_id = attrs[:participant_id] || attrs["participant_id"]
+
+    with :ok <- ensure_space_writable(space_id),
+         :ok <- ensure_dm_send_allowed(space_id, participant_id) do
       do_post_message(attrs, opts)
     end
   end
@@ -1050,10 +1222,17 @@ defmodule Platform.Chat do
   `:byte_size`, and `:storage_key`.
   """
   @spec post_message_with_attachments(map(), [map()], keyword()) ::
-          {:ok, Message.t(), [Attachment.t()]} | {:error, term()}
+          {:ok, Message.t(), [Attachment.t()]}
+          | {:error, :space_archived | :dm_not_allowed | :out_of_external_scope | term()}
   def post_message_with_attachments(attrs, attachment_attrs_list, opts \\ [])
       when is_list(attachment_attrs_list) do
-    with :ok <- ensure_space_writable(attrs[:space_id] || attrs["space_id"]) do
+    space_id = attrs[:space_id] || attrs["space_id"]
+    participant_id = attrs[:participant_id] || attrs["participant_id"]
+    poster_user_id = Keyword.get(opts, :poster_user_id)
+
+    with :ok <- ensure_space_writable(space_id),
+         :ok <- ensure_dm_send_allowed(space_id, participant_id),
+         :ok <- ensure_external_upload_allowed(space_id, poster_user_id) do
       do_post_message_with_attachments(attrs, attachment_attrs_list, opts)
     end
   end
@@ -1103,9 +1282,22 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "Fetch a message by primary key (integer). Returns `nil` if not found."
-  @spec get_message(binary()) :: Message.t() | nil
-  def get_message(id), do: Repo.get(Message, id)
+  @doc """
+  Fetch a message by primary key. Returns `nil` if not found.
+
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) gates the message
+  on its space: for an external caller a message in a non-participant space
+  resolves to `nil`. Absent / nil / internal scopes are pass-through.
+  """
+  @spec get_message(binary(), keyword()) :: Message.t() | nil
+  def get_message(id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    case Repo.get(Message, id) do
+      nil -> nil
+      msg -> if ExternalScope.visible_space_id?(msg.space_id, scope), do: msg, else: nil
+    end
+  end
 
   @doc """
   List non-deleted messages in a space, newest first.
@@ -1125,6 +1317,7 @@ defmodule Platform.Chat do
     after_id = Keyword.get(opts, :after_id)
     thread_id = Keyword.get(opts, :thread_id)
     top_level_only = Keyword.get(opts, :top_level_only, false)
+    scope = Keyword.get(opts, :scope)
 
     base =
       from(m in Message,
@@ -1143,7 +1336,9 @@ defmodule Platform.Chat do
     base = if before_id, do: where(base, [m], m.id < ^before_id), else: base
     base = if after_id, do: where(base, [m], m.id > ^after_id), else: base
 
-    Repo.all(base)
+    base
+    |> ExternalScope.scope_by_space_id(scope)
+    |> Repo.all()
   end
 
   @doc """
@@ -1162,6 +1357,7 @@ defmodule Platform.Chat do
     before_id = Keyword.get(opts, :before_id)
     thread_id = Keyword.get(opts, :thread_id)
     top_level_only = Keyword.get(opts, :top_level_only, false)
+    scope = Keyword.get(opts, :scope)
 
     base =
       from(m in Message,
@@ -1179,7 +1375,9 @@ defmodule Platform.Chat do
 
     base = if before_id, do: where(base, [m], m.id < ^before_id), else: base
 
-    Repo.exists?(base)
+    base
+    |> ExternalScope.scope_by_space_id(scope)
+    |> Repo.exists?()
   end
 
   @doc """
@@ -1199,6 +1397,7 @@ defmodule Platform.Chat do
     after_id = Keyword.get(opts, :after_id)
     thread_id = Keyword.get(opts, :thread_id)
     top_level_only = Keyword.get(opts, :top_level_only, false)
+    scope = Keyword.get(opts, :scope)
 
     base =
       from(m in Message,
@@ -1216,7 +1415,9 @@ defmodule Platform.Chat do
 
     base = if after_id, do: where(base, [m], m.id > ^after_id), else: base
 
-    Repo.exists?(base)
+    base
+    |> ExternalScope.scope_by_space_id(scope)
+    |> Repo.exists?()
   end
 
   @doc """
@@ -1230,13 +1431,18 @@ defmodule Platform.Chat do
   changes, avoiding the N+1 that would result from per-message
   `get_message/1` calls.
   """
-  @spec get_messages_by_ids([binary()]) :: [Message.t()]
-  def get_messages_by_ids([]), do: []
+  @spec get_messages_by_ids([binary()], keyword()) :: [Message.t()]
+  def get_messages_by_ids(ids, opts \\ [])
 
-  def get_messages_by_ids(ids) when is_list(ids) do
+  def get_messages_by_ids([], _opts), do: []
+
+  def get_messages_by_ids(ids, opts) when is_list(ids) do
+    scope = Keyword.get(opts, :scope)
+
     from(m in Message,
       where: m.id in ^ids and is_nil(m.deleted_at)
     )
+    |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
   end
 
@@ -1267,6 +1473,7 @@ defmodule Platform.Chat do
     include_kinds = Keyword.get(opts, :include_kinds, ~w(channel group))
     content_types = Keyword.get(opts, :content_types, ~w(text agent_action))
     include_archived = Keyword.get(opts, :include_archived, false)
+    scope = Keyword.get(opts, :scope, :internal)
 
     query =
       from(m in Message,
@@ -1282,6 +1489,8 @@ defmodule Platform.Chat do
         order_by: [asc: m.inserted_at]
       )
 
+    query = apply_digest_scope(query, scope)
+
     query =
       if include_archived do
         # Deletion-flagged spaces must vanish from search immediately even
@@ -1292,6 +1501,81 @@ defmodule Platform.Chat do
       end
 
     Repo.all(query)
+  end
+
+  # ── External-space digest partition (stack member 12, rbac-external-users) ──
+  #
+  # The Historian's activity digest partitions message/transcript selection
+  # by the M1 `external` marker in BOTH directions:
+  #   * `:internal` (default) — exclude external-user spaces/DMs from the
+  #     Fabrikam-internal digest.
+  #   * `{:external_spaces, ids}` — restrict to the external user's
+  #     allowlisted spaces for an external-user-facing summary.
+  # `external_space_ids/0` and `participant_space_ids_for_user/1` supply the
+  # two id-sets; `list_messages_since/2` and `Meetings.list_transcripts_since/2`
+  # thread the `:scope` opt.
+
+  defp apply_digest_scope(query, :internal) do
+    exclude = external_space_ids()
+    where(query, [m, s], s.id not in ^exclude)
+  end
+
+  defp apply_digest_scope(query, {:external_spaces, space_ids}) do
+    where(query, [m, s], s.id in ^space_ids)
+  end
+
+  @doc """
+  Distinct chat space ids that carry any external-visible content — i.e.
+  spaces where at least one external user (a user holding an
+  `org_memberships.external == true` membership, per M1) participates.
+
+  A MIXED space (both a Fabrikam human and an external user as participants)
+  classifies as external here: its content is already visible to an
+  external party, so it belongs to the external surface and is excluded
+  from the pure Fabrikam-internal Historian digest.
+
+  Returns `[]` when there are no external memberships (fast path — the
+  internal digest's `NOT IN ^[]` filter is then a no-op, leaving all-internal
+  orgs byte-for-byte unchanged).
+  """
+  @spec external_space_ids() :: [binary()]
+  def external_space_ids do
+    external_user_ids =
+      Tenancy.list_orgs()
+      |> Enum.flat_map(&Tenancy.list_external_memberships(&1.id))
+      |> Enum.map(& &1.user_id)
+      |> Enum.uniq()
+
+    case external_user_ids do
+      [] ->
+        []
+
+      ids ->
+        from(p in Participant,
+          where: p.participant_type == "user" and p.participant_id in ^ids,
+          distinct: true,
+          select: p.space_id
+        )
+        |> Repo.all()
+    end
+  end
+
+  @doc """
+  Distinct chat space ids the given external `user_id` participates in.
+
+  This is the allowlisted-space set that scopes an external-user-facing
+  summary: an external user is only ever a participant of their allowlisted
+  spaces, so scoping a digest to this set intrinsically excludes
+  Fabrikam-internal content.
+  """
+  @spec participant_space_ids_for_user(binary()) :: [binary()]
+  def participant_space_ids_for_user(user_id) when is_binary(user_id) do
+    from(p in Participant,
+      where: p.participant_type == "user" and p.participant_id == ^user_id,
+      distinct: true,
+      select: p.space_id
+    )
+    |> Repo.all()
   end
 
   @doc """
@@ -1391,16 +1675,26 @@ defmodule Platform.Chat do
 
   def search_messages(space_id, query, opts) do
     limit = Keyword.get(opts, :limit, 20)
+    scope = Keyword.get(opts, :scope)
     trimmed_query = String.trim(query)
 
     if trimmed_query == "" do
       []
     else
-      from(m in Message,
-        where:
-          m.space_id == ^space_id and
-            is_nil(m.deleted_at) and
-            fragment("search_vector @@ websearch_to_tsquery('english', ?)", ^trimmed_query),
+      # Apply the external scope to the row filter FIRST — an out-of-scope
+      # `space_id` (the M6-bypassed case) yields zero rows BEFORE `ts_headline`
+      # ever runs, so no highlighted fragment of an off-limits message is
+      # produced (design canvas §9).
+      base =
+        from(m in Message,
+          where:
+            m.space_id == ^space_id and
+              is_nil(m.deleted_at) and
+              fragment("search_vector @@ websearch_to_tsquery('english', ?)", ^trimmed_query)
+        )
+        |> ExternalScope.scope_by_space_id(scope)
+
+      from(m in base,
         select_merge: %{
           search_rank:
             fragment(
@@ -2302,12 +2596,23 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "Fetch a canvas. Returns `nil` if not found or soft-deleted."
-  @spec get_canvas(binary()) :: Canvas.t() | nil
-  def get_canvas(id) do
+  @doc """
+  Fetch a canvas. Returns `nil` if not found or soft-deleted.
+
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) gates the canvas
+  on its `space_id`: for an external caller a canvas in a non-participant space
+  resolves to `nil`. Absent / nil / internal scopes are pass-through.
+  """
+  @spec get_canvas(binary(), keyword()) :: Canvas.t() | nil
+  def get_canvas(id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
     case Repo.get(Canvas, id) do
-      %Canvas{deleted_at: nil} = canvas -> canvas
-      _ -> nil
+      %Canvas{deleted_at: nil} = canvas ->
+        if ExternalScope.visible_space_id?(canvas.space_id, scope), do: canvas, else: nil
+
+      _ ->
+        nil
     end
   end
 
@@ -2316,8 +2621,15 @@ defmodule Platform.Chat do
   Restore flow, which specifically needs to load a soft-deleted canvas to
   un-delete it. Returns `nil` only if no row with the given id exists.
   """
-  @spec get_canvas_with_deleted(binary()) :: Canvas.t() | nil
-  def get_canvas_with_deleted(id), do: Repo.get(Canvas, id)
+  @spec get_canvas_with_deleted(binary(), keyword()) :: Canvas.t() | nil
+  def get_canvas_with_deleted(id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    case Repo.get(Canvas, id) do
+      nil -> nil
+      canvas -> if ExternalScope.visible_space_id?(canvas.space_id, scope), do: canvas, else: nil
+    end
+  end
 
   @doc "Update canvas metadata/title. Document changes go through `patch_canvas/2`."
   @spec update_canvas(Canvas.t(), map()) ::
@@ -2344,13 +2656,23 @@ defmodule Platform.Chat do
     result
   end
 
-  @doc "List canvases in a space (excluding soft-deleted), oldest first."
-  @spec list_canvases(binary()) :: [Canvas.t()]
-  def list_canvases(space_id) do
+  @doc """
+  List canvases in a space (excluding soft-deleted), oldest first.
+
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) yields `[]` when
+  the `space_id` is out of the external caller's participant set (canvas embeds
+  from an off-limits space can't be resolved from an external session). Absent
+  / nil / internal scopes are pass-through.
+  """
+  @spec list_canvases(binary(), keyword()) :: [Canvas.t()]
+  def list_canvases(space_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
     from(c in Canvas,
       where: c.space_id == ^space_id and is_nil(c.deleted_at),
       order_by: [asc: c.inserted_at]
     )
+    |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
   end
 
@@ -2536,9 +2858,24 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "Fetch an attachment by primary key. Returns `nil` if not found."
-  @spec get_attachment(binary()) :: Attachment.t() | nil
-  def get_attachment(id), do: Repo.get(Attachment, id)
+  @doc """
+  Fetch an attachment by primary key. Returns `nil` if not found.
+
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) gates the
+  attachment on its `space_id`: for an external caller an attachment in a
+  non-participant space resolves to `nil`. Legacy `space_id: nil` rows have no
+  space to scope and pass through. Absent / nil / internal scopes are
+  pass-through.
+  """
+  @spec get_attachment(binary(), keyword()) :: Attachment.t() | nil
+  def get_attachment(id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    case Repo.get(Attachment, id) do
+      nil -> nil
+      att -> if ExternalScope.visible_space_id?(att.space_id, scope), do: att, else: nil
+    end
+  end
 
   @doc """
   Fetch an attachment for the viewer.
@@ -2548,14 +2885,17 @@ defmodule Platform.Chat do
   introduced in ADR 0039) have no parent message to check, so they pass
   through as long as the row exists.
   """
-  @spec get_visible_attachment(binary()) :: Attachment.t() | nil
-  def get_visible_attachment(id) do
+  @spec get_visible_attachment(binary(), keyword()) :: Attachment.t() | nil
+  def get_visible_attachment(id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
     from(a in Attachment,
       left_join: m in Message,
       on: m.id == a.message_id,
       where: a.id == ^id and (is_nil(a.message_id) or is_nil(m.deleted_at)),
       select: a
     )
+    |> ExternalScope.scope_by_space_id(scope)
     |> Repo.one()
   end
 
@@ -2583,12 +2923,34 @@ defmodule Platform.Chat do
         nil
 
       %Attachment{space_id: nil} = attachment ->
-        attachment
+        # M9 (rbac-external-users): the nil-space (legacy / canvas-orphan) branch
+        # used to pass through UNCONDITIONALLY — the one download leak for an
+        # external user, who has no space to scope on. Fail closed for external
+        # principals; internal users and agent runtimes keep the pass-through
+        # (a nil-space row is a pre-backfill artifact an internal caller may
+        # still need). The space-bound branch below is unchanged — its
+        # `principal_is_member?/2` already equals M7's read-scope membership.
+        if external_principal?(principal), do: nil, else: attachment
 
       %Attachment{space_id: space_id} = attachment ->
         if principal_is_member?(space_id, principal), do: attachment, else: nil
     end
   end
+
+  @doc """
+  Is the download `principal` an external user? (M9, rbac-external-users.)
+
+  Consumes M7's `Platform.Tenancy.external_user?/1` — the single by-user
+  predicate; this must NOT re-implement it. `external_user?/1` matches on a
+  struct/map carrying an `:id`, so a `{:user, uid}` principal is wrapped as
+  `%{id: uid}`. Runtime (agent) principals are never external.
+  """
+  @spec external_principal?({:user, binary()} | {:runtime, AgentRuntime.t()} | term()) ::
+          boolean()
+  def external_principal?({:user, user_id}) when is_binary(user_id),
+    do: Tenancy.external_user?(%{id: user_id})
+
+  def external_principal?(_), do: false
 
   defp principal_is_member?(space_id, {:user, user_id}) when is_binary(user_id) do
     Repo.exists?(
@@ -2608,25 +2970,45 @@ defmodule Platform.Chat do
 
   defp principal_is_member?(_space_id, _principal), do: false
 
-  @doc "List attachments for a message, oldest first."
-  @spec list_attachments(binary()) :: [Attachment.t()]
-  def list_attachments(message_id) do
+  @doc """
+  List attachments for a message, oldest first.
+
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) drops attachments
+  whose `space_id` is out of the external caller's participant set. Absent /
+  nil / internal scopes are pass-through.
+  """
+  @spec list_attachments(binary(), keyword()) :: [Attachment.t()]
+  def list_attachments(message_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
     from(a in Attachment,
       where: a.message_id == ^message_id,
       order_by: [asc: a.inserted_at]
     )
+    |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
   end
 
-  @doc "Batch-load attachments for a list of message IDs in a single query."
-  @spec list_attachments_for_messages([binary()]) :: %{binary() => [Attachment.t()]}
-  def list_attachments_for_messages([]), do: %{}
+  @doc """
+  Batch-load attachments for a list of message IDs in a single query.
 
-  def list_attachments_for_messages(message_ids) do
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) drops attachments
+  whose `space_id` is out of the external caller's participant set. Absent /
+  nil / internal scopes are pass-through.
+  """
+  @spec list_attachments_for_messages([binary()], keyword()) :: %{binary() => [Attachment.t()]}
+  def list_attachments_for_messages(message_ids, opts \\ [])
+
+  def list_attachments_for_messages([], _opts), do: %{}
+
+  def list_attachments_for_messages(message_ids, opts) do
+    scope = Keyword.get(opts, :scope)
+
     from(a in Attachment,
       where: a.message_id in ^message_ids,
       order_by: [asc: a.inserted_at]
     )
+    |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
     |> Enum.group_by(& &1.message_id)
   end
@@ -3406,6 +3788,64 @@ defmodule Platform.Chat do
   end
 
   defp ensure_space_writable(_), do: :ok
+
+  # Defense-in-depth guard at the message-SEND seam. Catches the residual
+  # cases the create-seam guard misses: a DM created before the sender was
+  # marked external, a DM whose allowlist was revoked after creation, a
+  # group the external user was added to, or a caller posting to a
+  # `space_id` directly. Mirrors `external_dm_permitted?/3` so create-time
+  # and send-time enforcement never diverge.
+  defp ensure_dm_send_allowed(space_id, author_participant_pk)
+       when is_binary(space_id) and is_binary(author_participant_pk) do
+    with %Space{kind: kind} when kind in ["dm", "group"] <- Repo.get(Space, space_id),
+         %Participant{participant_type: "user", participant_id: author_user_id} <-
+           get_participant(author_participant_pk),
+         true <- Tenancy.external_user?(%{id: author_user_id}) do
+      other_user_ids =
+        from(p in Participant,
+          where:
+            p.space_id == ^space_id and p.participant_type == "user" and
+              p.participant_id != ^author_user_id,
+          select: p.participant_id
+        )
+        |> Repo.all()
+
+      if Enum.all?(other_user_ids, &external_dm_permitted?(author_user_id, "user", &1)) do
+        :ok
+      else
+        {:error, :dm_not_allowed}
+      end
+    else
+      # Not a DM/group, agent author, internal author, or missing rows —
+      # not gated here (channels governed by membership + M6/M7; internal
+      # traffic short-circuits before any per-participant work).
+      _ -> :ok
+    end
+  end
+
+  defp ensure_dm_send_allowed(_space_id, _author_participant_pk), do: :ok
+
+  # M9 (rbac-external-users): bind attachment writes to the external scope so a
+  # file only ever lands in a space the uploader is a `chat_participants` member
+  # of (an allowlisted SXI location). Threaded into `post_message_with_attachments/3`
+  # as a second guard alongside `ensure_space_writable/1`, mirroring how M8 added
+  # `ensure_dm_send_allowed/2` on the send seam.
+  #
+  # `poster_user_id` is nil for `post_message/2` and every pre-existing caller,
+  # and non-external for internal + agent + system callers — all pass through
+  # unchanged because `ExternalScope.for_user/1` yields a non-external scope and
+  # `visible_space_id?/2` is then unconditionally true. Only an EXTERNAL poster
+  # is narrowed, and to the SAME participant set M7 uses for reads, so
+  # upload-scope and read-scope cannot drift.
+  defp ensure_external_upload_allowed(space_id, poster_user_id) do
+    scope = ExternalScope.for_user(poster_user_id)
+
+    if ExternalScope.visible_space_id?(space_id, scope) do
+      :ok
+    else
+      {:error, :out_of_external_scope}
+    end
+  end
 
   # Variant for write paths addressed by message rather than space.
   defp ensure_message_space_writable(%Message{space_id: space_id}),

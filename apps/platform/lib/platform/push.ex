@@ -15,6 +15,16 @@ defmodule Platform.Push do
   alias Platform.Chat.Participant
   alias Platform.Push.Subscription
   alias Platform.Repo
+  alias Platform.Tenancy
+
+  # External-safe preview copy (M13). An external user's push transits an
+  # untrusted third-party push service (FCM/APNs/Mozilla autopush), so the
+  # internal sender name / message content / channel or meeting name must be
+  # redacted server-side. All three strings live here so the safe copy has a
+  # single source of truth.
+  @external_safe_title "New message"
+  @external_safe_body "You have a new message"
+  @external_safe_url "/chat"
 
   # ── Public API ──────────────────────────────────────────────────────────────
 
@@ -65,6 +75,12 @@ defmodule Platform.Push do
         from(s in Subscription, where: s.participant_id == ^participant_id)
         |> Repo.all()
 
+      # Redact the payload for external recipients before it leaves the box.
+      # The archived guard above still wins — an archived external user is
+      # suppressed entirely and never reaches this swap. Internal recipients
+      # get the byte-identical payload they get today.
+      payload = preview_for_recipient(participant_id, payload)
+
       json = Jason.encode!(payload)
 
       Enum.each(subscriptions, fn sub ->
@@ -101,6 +117,69 @@ defmodule Platform.Push do
   end
 
   defp archived_user_participant?(_), do: false
+
+  @doc """
+  Resolve the notification payload for a specific recipient.
+
+  If `participant_id` resolves to an EXTERNAL user, emit a
+  `[:platform, :push, :external_safe_preview]` telemetry event and return the
+  generic `external_safe_preview/1` (redacting sender name, message/meeting
+  body, channel/meeting name, and the deep-link url). Otherwise return the
+  payload unchanged.
+
+  Kept public (not private) so callers and behavioral tests can assert the
+  redaction deterministically without VAPID keys or a live push endpoint.
+  """
+  @spec preview_for_recipient(binary(), map()) :: map()
+  def preview_for_recipient(participant_id, payload) do
+    if external_user_participant?(participant_id) do
+      :telemetry.execute(
+        [:platform, :push, :external_safe_preview],
+        %{count: 1},
+        %{participant_id: participant_id}
+      )
+
+      external_safe_preview(payload)
+    else
+      payload
+    end
+  end
+
+  @doc """
+  Build the fixed generic preview shown to external recipients.
+
+  Ignores every sensitive field of the incoming payload and returns the
+  redacted copy. The url is rewritten to `/chat` because an internal
+  `/meetings/<slug>` deep-link both leaks an internal slug and 403s for an
+  external user.
+  """
+  @spec external_safe_preview(map()) :: map()
+  def external_safe_preview(_payload) do
+    %{
+      title: @external_safe_title,
+      body: @external_safe_body,
+      url: @external_safe_url
+    }
+  end
+
+  # Return true when `participant_id` resolves to a `chat_participants` row
+  # whose `participant_type == "user"` AND the referenced user is external
+  # (holds at least one `external: true` org membership). Agent participants
+  # and unknown rows return false — they pass through unchanged. Mirrors the
+  # shape of `archived_user_participant?/1`.
+  @spec external_user_participant?(binary()) :: boolean()
+  defp external_user_participant?(participant_id) when is_binary(participant_id) do
+    case Repo.get(Participant, participant_id) do
+      %Participant{participant_type: "user", participant_id: user_id}
+      when is_binary(user_id) ->
+        Tenancy.external_user?(%{id: user_id})
+
+      _ ->
+        false
+    end
+  end
+
+  defp external_user_participant?(_), do: false
 
   @doc "List all push subscriptions for a participant."
   @spec list_subscriptions(binary()) :: [Subscription.t()]

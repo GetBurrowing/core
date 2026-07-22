@@ -80,8 +80,31 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     |> assign(:has_agent_participant, false)
     |> assign(:agent_status, :offline)
     |> assign(:agent_typing_pids, MapSet.new())
+    # M10 (presence/typing scope, rbac-external-users): the allowlisted set of
+    # space_ids an EXTERNAL user may receive presence/typing for. `nil` means
+    # internal / no-restriction (the common case) — the consumer guards below
+    # short-circuit to today's behavior on nil, so no internal session
+    # regresses. Seeded here at mount (before any presence_diff / agent_typing
+    # can arrive) so the guards are armed for the whole session, not only after
+    # the first `enter_space/4`.
+    |> assign(:external_scope_space_ids, external_scope_for(socket.assigns[:user_id]))
     |> attach_hook(:presence_info, :handle_info, &handle_info/2)
   end
+
+  # M10: compute the external presence/typing scope for a mounting user. An
+  # internal user (or the anonymous/generated session id) yields `nil` — no
+  # restriction. An external user yields a `MapSet` of the spaces they are a
+  # chat_participant of. Reuses `Platform.Tenancy.external_user?/1` (M1) as the
+  # single external predicate — this stage does NOT redefine it.
+  defp external_scope_for(user_id) when is_binary(user_id) do
+    if Platform.Tenancy.external_user?(%{id: user_id}) do
+      ChatPresence.external_scope_space_ids(user_id)
+    else
+      nil
+    end
+  end
+
+  defp external_scope_for(_user_id), do: nil
 
   @doc "Untrack the current user from a space. Call before navigating away."
   @spec leave_space(Phoenix.LiveView.Socket.t(), binary() | nil) :: Phoenix.LiveView.Socket.t()
@@ -110,7 +133,11 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     user_id = socket.assigns.user_id
     agent_presence = ensure_native_agent_presence(space.id)
 
-    if connected?(socket) && participant do
+    # M10: an external user must not surface in the presence roster of a space
+    # that is not in their allowlisted scope, even if they somehow reached it as
+    # active_space. `space_in_external_scope?/2` is `true` for internal (nil
+    # scope) sessions, so this only ever narrows external users — no regression.
+    if connected?(socket) && participant && space_in_external_scope?(socket, space.id) do
       display_name = resolve_display_name(user_id, participant)
 
       ChatPresence.track_in_space(self(), space.id, user_id, %{
@@ -197,13 +224,21 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   end
 
   defp handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
-    online_count =
-      case socket.assigns[:active_space] do
-        %{id: space_id} -> ChatPresence.online_count(space_id)
-        _ -> 0
-      end
+    if external_active_out_of_scope?(socket) do
+      # M10: external session whose active_space is NOT in the allowlisted
+      # scope — drop the diff without recomputing online_count. Belt-and-
+      # suspenders behind the stage-2 subscribe filter (which should already
+      # keep this topic off the process); the count is left untouched.
+      {:halt, socket}
+    else
+      online_count =
+        case socket.assigns[:active_space] do
+          %{id: space_id} -> ChatPresence.online_count(space_id)
+          _ -> 0
+        end
 
-    {:halt, assign(socket, :online_count, online_count)}
+      {:halt, assign(socket, :online_count, online_count)}
+    end
   end
 
   defp handle_info(:refresh_agent_presence, socket) do
@@ -226,7 +261,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
          {:agent_typing, %{typing: typing, participant_id: participant_id} = payload},
          socket
        ) do
-    if space_scoped_to_active?(payload, socket) do
+    if space_scoped_to_active?(payload, socket) and typing_in_external_scope?(payload, socket) do
       apply_agent_typing(socket, typing, participant_id)
     else
       {:cont, socket}
@@ -251,6 +286,60 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   # deploy window and can be removed once federation runtimes are known to
   # have rebooted.
   defp space_scoped_to_active?(_payload, _socket), do: true
+
+  # ── M10 external presence/typing scope guards ────────────────────────
+  #
+  # All three predicates treat a `nil` scope (internal / no-restriction) as
+  # "always allowed", so internal sessions keep today's behavior exactly. Only
+  # an external session (scope is a `MapSet`) is narrowed.
+
+  # `presence_diff`: true when this is an external session whose active_space is
+  # NOT in the allowlisted scope, i.e. the diff must be dropped. Public
+  # (`@doc false`) only so the scope decision is unit-testable without a full
+  # LiveView — same convention as `apply_agent_typing/3` above.
+  @doc false
+  def external_active_out_of_scope?(socket) do
+    case socket.assigns[:external_scope_space_ids] do
+      nil ->
+        false
+
+      %MapSet{} = scope ->
+        case socket.assigns[:active_space] do
+          %{id: space_id} -> not MapSet.member?(scope, space_id)
+          _ -> false
+        end
+    end
+  end
+
+  # `{:agent_typing, …}`: for an external session, the broadcast only applies
+  # when its `:space_id` is in the allowlisted scope. A payload with no
+  # `:space_id` (pre-fix rolling-deploy broadcast) cannot be verified, so an
+  # external session drops it (fail-closed). Internal (nil) always passes.
+  # Public (`@doc false`) for unit testing only.
+  @doc false
+  def typing_in_external_scope?(payload, socket) do
+    case socket.assigns[:external_scope_space_ids] do
+      nil ->
+        true
+
+      %MapSet{} = scope ->
+        case payload do
+          %{space_id: space_id} -> MapSet.member?(scope, space_id)
+          _ -> false
+        end
+    end
+  end
+
+  # `enter_space/4` presence write: only track an external user into a space
+  # that is in their allowlisted scope. Internal (nil) always tracks. Public
+  # (`@doc false`) for unit testing only.
+  @doc false
+  def space_in_external_scope?(socket, space_id) do
+    case socket.assigns[:external_scope_space_ids] do
+      nil -> true
+      %MapSet{} = scope -> MapSet.member?(scope, space_id)
+    end
+  end
 
   # Public for unit-test access (cross-LV `:composite_status` write must
   # stay wrapped in `%AsyncResult{}` — see test in
@@ -430,6 +519,10 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       participant_type: "agent",
       name: name,
       display_name: name,
+      # The underlying principal id (agent_id). rbac-external-users M5 stage 4
+      # reads this so the @-mention filter can reason about the participant by
+      # identity; agents are dropped wholesale on the external surface anyway.
+      principal_id: participant.participant_id || participant.id,
       avatar_url: participant.avatar_url,
       avatar_seed: participant.participant_id || participant.id,
       # Agents are never "archived" in the user-lifecycle sense — the flag
@@ -449,6 +542,10 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       participant_type: "user",
       name: name,
       display_name: name,
+      # The underlying principal id (user_id). rbac-external-users M5 stage 4
+      # reads this so the @-mention filter can check `external_dm_permitted?/3`
+      # against the mentioned human — mention scope == DM scope == enforcement.
+      principal_id: participant.participant_id,
       avatar_url: participant.avatar_url || (user && user.avatar_url),
       avatar_seed: participant_avatar_seed(participant, user),
       # `participants_map` intentionally still contains archived users so

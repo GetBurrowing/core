@@ -42,6 +42,31 @@ defmodule Platform.Federation.ToolSurface do
   # `content_truncated` boolean on the returned map.
   @message_content_cap 64_000
 
+  # ── External-principal chat allowlist (M11, rbac-external-users) ───────
+  #
+  # These are exactly the tools an EXTERNAL principal (a runtime whose
+  # owner holds an `org_memberships` row with `external: true`) needs to
+  # hold a scoped chat conversation:
+  #
+  #   * send_media            — post a message/attachment into a space
+  #   * react                 — react to a message
+  #   * space_list            — see the spaces they participate in
+  #   * space_get_context     — read a space's context
+  #   * space_get_messages    — read a space's messages
+  #   * space_search_messages — search within a space
+  #
+  # Everything else — all of task/plan/review/canvas/memory/skill/
+  # attachment/federation/files, plus the mutating `space_leave` — is
+  # blocked for external principals per the RBAC v1 design (canvas
+  # 019f4d7f §4 "Federation MCP" row + §11 mcp item: "block all non-chat
+  # tools entirely"). A name-level allowlist (rather than a bundle
+  # allowlist) expresses "chat tools" precisely: the `space` bundle mixes
+  # `space_list` with the mutating `space_leave`, and `context_read` mixes
+  # message reads with `canvas_get`/`principal_search`.
+  @external_chat_tools MapSet.new(
+                         ~w(send_media react space_list space_get_context space_get_messages space_search_messages)
+                       )
+
   @doc "Known capability bundle names."
   def all_bundles, do: @bundles
 
@@ -64,6 +89,32 @@ defmodule Platform.Federation.ToolSurface do
     |> Enum.uniq()
     |> Enum.flat_map(&tools_for_bundle/1)
   end
+
+  @doc "The set of tool names an external principal may see/call (chat only)."
+  def external_chat_tools, do: @external_chat_tools
+
+  @doc "Is `name` a chat tool an external principal is allowed to use?"
+  def external_chat_tool?(name) when is_binary(name),
+    do: MapSet.member?(@external_chat_tools, name)
+
+  @doc """
+  Reduce a tool list to the external-chat allowlist when `external?` is true.
+
+  When `external?` is `false` this is the identity function — internal
+  principals are unaffected.
+
+  CRITICAL PROPERTY: this is an INTERSECTION applied AFTER `list_tools/1`,
+  so it can only ever REMOVE tools, never add one. An external runtime
+  whose `allowed_bundles` do not include a chat bundle still gets zero
+  chat tools (fail-closed) — the filter never grants a capability the
+  runtime's bundles did not already include. The existing bundle scope
+  remains the outer bound; external-restriction is layered inside it
+  (defense-in-depth).
+  """
+  def scope_for_external(tools, true),
+    do: Enum.filter(tools, &MapSet.member?(@external_chat_tools, &1.name))
+
+  def scope_for_external(tools, false), do: tools
 
   defp tools_for_bundle("canvas"), do: tag(canvas_tools(), "canvas")
   defp tools_for_bundle("messaging"), do: tag(messaging_tools(), "messaging")

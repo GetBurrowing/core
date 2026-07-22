@@ -34,6 +34,8 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
   import Phoenix.Component, only: [assign: 3]
   import Phoenix.LiveView, only: [attach_hook: 4]
 
+  alias Platform.Chat
+
   @default_source "compose-form"
   @max_suggestions 8
 
@@ -59,7 +61,15 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
   defp handle_event("mention_query", %{"query" => query} = params, socket) do
     source = Map.get(params, "source", @default_source)
     participants = socket.assigns[:participants_map] || %{}
-    suggestions = build_suggestions(query, participants)
+
+    # rbac-external-users M5 stage 4: thread the render-branch flag + acting user
+    # so the external surface's @-mention dropdown offers only allowlisted-org
+    # humans (no agents). Internal sessions pass `external?: false` → unchanged.
+    suggestions =
+      build_suggestions(query, participants,
+        external?: socket.assigns[:external?] == true,
+        user_id: socket.assigns[:user_id]
+      )
 
     {:halt,
      socket
@@ -90,19 +100,50 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
   autocomplete) → prepend the `here` broadcast sentinel when the query is
   a prefix of "here" (empty query included) → truncate to
   `@max_suggestions`.
+
+  ## External scope (rbac-external-users M5 stage 4)
+
+  `opts` threads the external render branch: `external?: true` + `user_id:`
+  drops (a) agent participants and (b) any human the external user may not
+  DM/mention, reusing M8's `Chat.external_dm_permitted?/3` so mention scope ==
+  DM scope == enforcement. A `permit_fn/3` opt overrides that predicate purely
+  (for tests) so this stays a DB-free pure function under test. The `@here`
+  sentinel is prepended AFTER the scope filter and is never dropped — it
+  broadcasts only within the current allowlisted space. Internal callers pass
+  `external?: false` (the default) and get today's behavior unchanged.
   """
-  @spec build_suggestions(String.t() | nil, map()) :: [map()]
-  def build_suggestions(query, participants_map) when is_map(participants_map) do
+  @spec build_suggestions(String.t() | nil, map(), keyword()) :: [map()]
+  def build_suggestions(query, participants_map, opts \\ []) when is_map(participants_map) do
     query_lower = String.downcase(query || "")
 
     participants =
       participants_map
       |> Map.values()
       |> Enum.filter(&matches?(&1, query_lower))
+      |> filter_external_scope(Keyword.get(opts, :external?, false), opts)
 
     query_lower
     |> prepend_here_sentinel(participants)
     |> Enum.take(@max_suggestions)
+  end
+
+  # Internal surface: no additional scope filter (identity of the archived-drop
+  # + prefix filter already applied above).
+  defp filter_external_scope(participants, false, _opts), do: participants
+
+  # External surface: defense-in-depth on top of M6/M7's space scoping. Drop
+  # agent participants outright, and keep only humans the external user may DM
+  # (M8's predicate, injectable via `:permit_fn` for pure tests). A participant
+  # with no resolvable principal id is dropped closed rather than open.
+  defp filter_external_scope(participants, true, opts) do
+    user_id = Keyword.get(opts, :user_id)
+    permit? = Keyword.get(opts, :permit_fn, &Chat.external_dm_permitted?/3)
+
+    Enum.filter(participants, fn
+      %{participant_type: "agent"} -> false
+      %{principal_id: pid} when is_binary(pid) -> permit?.(user_id, "user", pid)
+      _ -> false
+    end)
   end
 
   # Archived-user participants live in `participants_map` for historical

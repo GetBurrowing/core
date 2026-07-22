@@ -49,8 +49,128 @@
 
        Stage 3 will wire drag-and-drop on the `.channel-section-drag-handle`
        affordance; today it's a static `☰` glyph that fades in on hover. --%>
+  <%!-- rbac-external-users M5: the chrome-less external space rail. When
+       `@external?` (M4 merges `chat_mode: "external"` into the connect session
+       on the `chat.` host), ChatLive renders THIS branch INSTEAD of the internal
+       discovery rail below — a single flat allowlisted-space list with NO sub-org
+       section headers, NO pinned-task / archived sections, and NO new-channel /
+       scope-pill / edit-layout / admin chrome (each of which leaks the internal
+       workspace org tree). M4's `:external` app layout is chrome-less, so the Fabrikam
+       branding + identity chip + logout that the icon-rail normally carries are
+       rendered here at the rail head. Two paths, one ChatLive — mirrors the
+       shipped `meet.` guest branch. Semantic DaisyUI tokens only (Fabrikam cyan
+       primary is themed in app.css); mobile-first single column with
+       env(safe-area-inset-*) padding. --%>
   <aside
-    :if={!@embedded}
+    :if={@external?}
+    id="chat-external-rail"
+    data-role="external-rail"
+    class="flex w-72 max-w-[80vw] flex-shrink-0 flex-col border-r border-base-300 bg-base-200 lg:w-64"
+  >
+    <header
+      class="flex-shrink-0 border-b border-base-300"
+      style="padding-top: env(safe-area-inset-top); padding-left: env(safe-area-inset-left);"
+      data-role="external-rail-header"
+    >
+      <div class="flex items-center justify-between px-3 py-2.5">
+        <div class="flex items-center gap-2 min-w-0" data-role="brand-chip">
+          <img src={~p"/images/logo.svg"} alt="Fabrikam" class="size-6 flex-shrink-0" />
+          <span class="truncate text-sm font-semibold tracking-tight text-base-content">
+            Fabrikam
+          </span>
+        </div>
+        <a
+          href={~p"/auth/logout"}
+          class="btn btn-ghost btn-sm btn-square"
+          aria-label="Log out"
+          data-role="external-logout"
+        >
+          <span class="hero-arrow-right-start-on-rectangle size-5"></span>
+        </a>
+      </div>
+      <%!-- Identity chip: who the external user is signed in as. Avatar + name
+           only — NO org label (that would leak internal structure per canvas
+           §7). --%>
+      <div
+        :if={@external_user}
+        class="flex items-center gap-2 border-t border-base-300 px-3 py-2"
+        data-role="external-identity"
+      >
+        <.human_avatar
+          name={@external_user.name || @external_user.email || "You"}
+          avatar_url={@external_user.avatar_url}
+          seed={@external_user.oidc_sub || @external_user.email || @external_user.id}
+          size="sm"
+          class="flex-shrink-0"
+        />
+        <span class="truncate text-sm text-base-content">
+          {@external_user.name || @external_user.email}
+        </span>
+      </div>
+    </header>
+
+    <% external_spaces = @channels ++ @dm_conversations %>
+    <nav
+      class="flex-1 overflow-y-auto py-2"
+      aria-label="Your spaces"
+      data-role="external-space-list"
+    >
+      <%= if external_spaces == [] do %>
+        <%!-- Calm zero-allowlist empty state (Saru direction). NEVER the internal
+             "browse other channels" new-user hint — that would advertise a
+             discovery surface that does not exist for this user. --%>
+        <div
+          class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center"
+          data-role="external-empty"
+        >
+          <span class="hero-chat-bubble-left-right size-8 text-base-content/30"></span>
+          <p class="text-sm font-medium text-base-content/70">Nothing here yet</p>
+          <p class="text-xs text-base-content/50">
+            Your conversations will appear here.
+          </p>
+        </div>
+      <% else %>
+        <.link
+          :for={space <- external_spaces}
+          navigate={~p"/chat/#{space_nav_target(space)}"}
+          class={[
+            "channel-row",
+            @active_space && @active_space.id == space.id && "channel-row--active"
+          ]}
+        >
+          <span :if={space.kind == "channel"} class="text-base-content/40">#</span>
+          <span class="truncate flex-1">
+            {if space.kind == "channel",
+              do: space.name,
+              else: sidebar_display_name(space, @user_id)}
+          </span>
+          <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+            <span class="channel-row-unread-pill">
+              {unread_label(Map.get(@unread_counts, space.id, 0))}
+            </span>
+          <% end %>
+        </.link>
+      <% end %>
+    </nav>
+
+    <%!-- External users MAY start DMs to allowlisted humans (the picker is
+         filtered to exactly that set in stage 3), so this one affordance stays —
+         it is NOT internal-discovery chrome. --%>
+    <button
+      type="button"
+      phx-click="new_conversation_open"
+      aria-label="New conversation"
+      data-role="external-new-conversation"
+      class="flex-shrink-0 flex items-center gap-2 w-full border-t border-base-300 px-3 py-2 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors"
+      style="padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));"
+    >
+      <span class="hero-plus size-4"></span>
+      <span>New conversation</span>
+    </button>
+  </aside>
+
+  <aside
+    :if={!@embedded and !@external?}
     id="chat-sidebar"
     phx-hook="ResizableSidebar"
     class="hidden lg:flex relative flex-shrink-0 flex-col border-r border-base-content/10 bg-base-200"
@@ -841,8 +961,11 @@
     />
   </aside>
 
-  <%!-- Mobile channel browser overlay — suppressed when embedded. --%>
-  <%= if @mobile_browser_open and !@embedded do %>
+  <%!-- Mobile channel browser overlay — suppressed when embedded, and for
+       external users (rbac-external-users M5): its sectioned org-tree browser,
+       new-channel affordance, and scope-pills are all internal-discovery chrome.
+       The external rail above is the single flat surface for those users. --%>
+  <%= if @mobile_browser_open and !@embedded and !@external? do %>
     <div
       id="mobile-channel-browser"
       class="fixed inset-0 z-40 flex flex-col bg-base-100 lg:hidden safe-area-x"
@@ -1527,7 +1650,8 @@
                  pill's tap target to >=44x44px (app.css): the shared
                  `.scope-pill-hit-expand` overlay only clears the 24px WCAG floor
                  and would be clipped by this row's overflow-hidden. --%>
-            <% mobile_header_scope = PlatformWeb.ChatLive.space_scope_atom(@active_space) %>
+            <% mobile_header_scope =
+              !@external? && PlatformWeb.ChatLive.space_scope_atom(@active_space) %>
             <span
               :if={mobile_header_scope}
               class="chat-header-scope-pill-mobile flex-shrink-0"
@@ -1558,7 +1682,8 @@
                  event with the channel's scope. Active state is implied
                  from `@scope_filter` so a clicked-again pill reads as the
                  currently-selected filter. --%>
-            <% header_scope = PlatformWeb.ChatLive.space_scope_atom(@active_space) %>
+            <% header_scope =
+              !@external? && PlatformWeb.ChatLive.space_scope_atom(@active_space) %>
             <span :if={header_scope} class="chat-header-scope-pill">
               <.scope_pill
                 scope={header_scope}
@@ -2403,19 +2528,26 @@
   current_user_id={@user_id}
 />
 
+<%!-- New-channel creation is internal-only chrome — external users never see a
+     new-channel affordance, so the modal is also gated off their surface. --%>
 <.live_component
-  :if={!@embedded}
+  :if={!@embedded and !@external?}
   module={NewChannelComponent}
   id="chat-new-channel"
   open={@show_new_channel_modal}
 />
 
+<%!-- rbac-external-users M5 stage 3: the DM picker IS available to external
+     users, but filtered to allowlisted-org humans (no agents). Thread the
+     render-branch flag + acting user so the component can apply
+     `Chat.external_dm_permitted?/3` at picker-build time. --%>
 <.live_component
   :if={!@embedded}
   module={NewConversationComponent}
   id="chat-new-conversation"
   open={@show_new_conversation_modal}
   user_id={@user_id}
+  external?={@external?}
 />
 
 <%!--

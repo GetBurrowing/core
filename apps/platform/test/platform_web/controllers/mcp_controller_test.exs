@@ -1,9 +1,12 @@
 defmodule PlatformWeb.MCPControllerTest do
   use PlatformWeb.ConnCase, async: false
 
+  import Platform.TenancyFixtures
+
   alias Platform.Accounts.User
   alias Platform.Agents.AgentRuntime
   alias Platform.Repo
+  alias Platform.Tenancy
 
   defp create_runtime(attrs \\ %{}) do
     user =
@@ -160,6 +163,99 @@ defmodule PlatformWeb.MCPControllerTest do
 
       %{"error" => %{"code" => code}} = json_response(conn, 200)
       assert code == -32602
+    end
+  end
+
+  describe "external-principal tool scoping (M11)" do
+    @broad_bundles ~w(messaging space context_read task canvas)
+    @chat_names ~w(send_media react space_list space_get_context space_get_messages space_search_messages)
+
+    defp mark_owner_external(runtime) do
+      {:ok, _} =
+        Tenancy.mark_membership_external(%{
+          user_id: runtime.owner_user_id,
+          org_id: fabrikam_org_id()
+        })
+
+      runtime
+    end
+
+    test "external owner with broad bundles sees ONLY the six chat tools", %{conn: conn} do
+      {runtime, token} = create_runtime(%{allowed_bundles: @broad_bundles})
+      mark_owner_external(runtime)
+
+      conn = mcp_post(conn, token, rpc("tools/list"))
+      %{"result" => %{"tools" => tools}} = json_response(conn, 200)
+
+      names = tools |> Enum.map(& &1["name"]) |> Enum.sort()
+      assert names == Enum.sort(@chat_names)
+      refute "task_create" in names
+      refute "canvas.create" in names
+      refute "space_leave" in names
+    end
+
+    test "external owner: tools/call task_create is forbidden with -32001", %{conn: conn} do
+      {runtime, token} = create_runtime(%{allowed_bundles: @broad_bundles})
+      mark_owner_external(runtime)
+
+      conn =
+        mcp_post(conn, token, rpc("tools/call", %{"name" => "task_create", "arguments" => %{}}))
+
+      %{"error" => %{"code" => code, "message" => message}} = json_response(conn, 200)
+      assert code == -32001
+      assert message =~ "not in allowed bundles"
+    end
+
+    test "external owner: react is NOT gated (chat tool reaches execution)", %{conn: conn} do
+      {runtime, token} = create_runtime(%{allowed_bundles: @broad_bundles})
+      mark_owner_external(runtime)
+
+      conn =
+        mcp_post(conn, token, rpc("tools/call", %{"name" => "react", "arguments" => %{}}))
+
+      resp = json_response(conn, 200)
+      # The external-scope gate must not reject react; it passes authorize
+      # and reaches ToolSurface.execute (which may then return its own
+      # arg-level result, but never the -32001 forbidden error).
+      refute get_in(resp, ["error", "code"]) == -32001
+    end
+
+    test "external owner with only [task] bundle sees an EMPTY surface (fail-closed)", %{
+      conn: conn
+    } do
+      {runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+      mark_owner_external(runtime)
+
+      conn = mcp_post(conn, token, rpc("tools/list"))
+      %{"result" => %{"tools" => tools}} = json_response(conn, 200)
+      assert tools == []
+
+      # send_media is a chat tool but was never granted → still -32001.
+      conn2 =
+        build_conn()
+        |> mcp_post(token, rpc("tools/call", %{"name" => "send_media", "arguments" => %{}}))
+
+      %{"error" => %{"code" => code}} = json_response(conn2, 200)
+      assert code == -32001
+    end
+
+    test "internal owner with the same bundles is UNAFFECTED", %{conn: conn} do
+      # Default create_runtime owner has no external membership → internal.
+      {_runtime, token} = create_runtime(%{allowed_bundles: @broad_bundles})
+
+      conn = mcp_post(conn, token, rpc("tools/list"))
+      %{"result" => %{"tools" => tools}} = json_response(conn, 200)
+      names = Enum.map(tools, & &1["name"])
+      assert "task_create" in names
+      assert "canvas.create" in names
+
+      conn2 =
+        build_conn()
+        |> mcp_post(token, rpc("tools/call", %{"name" => "task_create", "arguments" => %{}}))
+
+      resp = json_response(conn2, 200)
+      # Not blocked by the external gate (may fail its own arg validation).
+      refute get_in(resp, ["error", "code"]) == -32001
     end
   end
 

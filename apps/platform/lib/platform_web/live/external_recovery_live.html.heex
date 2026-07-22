@@ -1,0 +1,105 @@
+<div class="flex h-full min-h-0 flex-col">
+  <%!-- Header --%>
+  <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+    <div class="flex items-center gap-3">
+      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+        Admin · External Logins
+      </h1>
+      <span class="badge badge-ghost badge-sm" data-role="queue-count">{length(@queue)}</span>
+      <span
+        :if={@new_count > 0}
+        class="badge badge-primary badge-sm gap-1"
+        data-role="new-login-badge"
+      >
+        <span class="hero-bell-alert size-3"></span>
+        {@new_count} new
+      </span>
+    </div>
+  </div>
+
+  <%!-- Queue --%>
+  <div class="flex-1 min-h-0 overflow-y-auto p-4">
+    <div
+      :if={@queue == []}
+      class="flex h-full flex-col items-center justify-center gap-2 text-base-content/40"
+      data-role="empty-queue"
+    >
+      <span class="hero-check-circle size-8"></span>
+      <p class="text-sm">No external logins are awaiting setup.</p>
+    </div>
+
+    <div :if={@queue != []} class="mx-auto max-w-4xl space-y-3">
+      <div
+        :for={row <- @queue}
+        data-role="queue-row"
+        data-user-id={row.user_id}
+        class="rounded-lg border border-base-300 bg-base-200 p-4"
+      >
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="hero-user-circle size-5 text-base-content/50"></span>
+              <span class="text-sm font-medium text-base-content truncate">
+                {display_name(row.user)}
+              </span>
+              <span :if={row.reason} class="badge badge-ghost badge-xs">{row.reason}</span>
+            </div>
+            <div class="mt-1 text-xs text-base-content/60 truncate">{row.email}</div>
+            <div class="mt-0.5 text-xs text-base-content/40">
+              Signed in {relative_time(row.last_seen_at)}
+            </div>
+          </div>
+        </div>
+
+        <%!-- Compact one-click Grant form: target org + optional channel +
+             per-org DM allowlist. Submits to recover/3. --%>
+        <form
+          phx-submit="grant"
+          data-role="grant-form"
+          class="mt-3 flex flex-wrap items-end gap-3 border-t border-base-300 pt-3"
+        >
+          <input type="hidden" name="user_id" value={row.user_id} />
+
+          <label class="flex flex-col gap-1">
+            <span class="text-xs font-medium text-base-content/60">Target org</span>
+            <select
+              name="target_org_id"
+              required
+              data-role="grant-org"
+              class="select select-sm select-bordered bg-base-100"
+            >
+              <option :for={org <- @orgs} value={org.id}>{org.name}</option>
+            </select>
+          </label>
+
+          <label class="flex flex-col gap-1">
+            <span class="text-xs font-medium text-base-content/60">Channel</span>
+            <select
+              name="space_id"
+              data-role="grant-space"
+              class="select select-sm select-bordered bg-base-100"
+            >
+              <option value="">— No channel —</option>
+              <option :for={space <- @grant_spaces} value={space.id}>{space.name}</option>
+            </select>
+          </label>
+
+          <label class="flex items-center gap-2 pb-1.5">
+            <input
+              type="checkbox"
+              name="allow_dm"
+              value="true"
+              class="checkbox checkbox-sm checkbox-primary"
+              data-role="grant-allow-dm"
+            />
+            <span class="text-xs font-medium text-base-content/60">Allow DMs in this org</span>
+          </label>
+
+          <button type="submit" class="btn btn-sm btn-primary gap-2" data-role="grant-button">
+            <span class="hero-check size-4"></span> Grant access
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>

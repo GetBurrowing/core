@@ -14,6 +14,10 @@ defmodule Platform.Application do
     Platform.Chat.TelemetryHandler.attach()
     Platform.Meetings.TelemetryHandler.attach()
     Platform.Memory.TelemetryHandler.attach()
+    # rbac-external-users M3 stage 3 (task 019f8837): fan out an admin
+    # notification + live-append broadcast on every ungranted (holding)
+    # external login.
+    Platform.Accounts.ExternalAdmissionNotifier.attach()
 
     children =
       (maybe_chat_storage_boot_check() ++
