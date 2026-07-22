@@ -72,7 +72,12 @@ if config_env() != :test do
     app_url: app_url,
     # PKCE (RFC 7636): set OIDC_PKCE_ENABLED=true when the provider enforces it.
     # Defaults to false for compatibility with providers that don't support PKCE.
-    pkce_enabled: System.get_env("OIDC_PKCE_ENABLED") in ["true", "1"]
+    pkce_enabled: System.get_env("OIDC_PKCE_ENABLED") in ["true", "1"],
+    # rbac-external-users M2 stage 1: the id-token claim NAME/value that marks
+    # a login as SXI-external. Static token-claim config, not a provider API
+    # call (ADR-0004). Falls back to the config.exs defaults.
+    external_group: System.get_env("OIDC_EXTERNAL_GROUP") || "sxi-external",
+    external_claim: System.get_env("OIDC_EXTERNAL_CLAIM") || "groups"
 
   config :platform, PlatformWeb.Endpoint,
     http: [port: String.to_integer(System.get_env("PORT", "4000"))]

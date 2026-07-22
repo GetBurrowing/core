@@ -2,6 +2,7 @@ defmodule PlatformWeb.AuthController do
   use PlatformWeb, :controller
 
   alias Platform.Accounts
+  alias Platform.Accounts.ExternalAdmission
   alias Platform.OIDC
 
   def login(conn, _params) do
@@ -35,10 +36,19 @@ defmodule PlatformWeb.AuthController do
         "session_state=#{inspect(session_params && String.slice(to_string(session_params[:state] || ""), 0, 8))}..."
     )
 
+    # rbac-external-users M2 stage 3: derive the admission surface from the
+    # request host. M4 owns the live `chat.` live_session/router/layout — this
+    # host-prefix check only picks the admission INPUT and does not tread on
+    # that route work.
+    surface = login_surface(conn)
+
     with true <- is_map(session_params) and session_params[:state] == state,
          {:ok, auth} <- OIDC.callback(params, session_params),
          {:ok, oidc_user} <- extract_oidc_user(auth),
-         {:ok, user} <- find_or_create_capturing_email(oidc_user) do
+         {:ok, %ExternalAdmission.Result{} = result} <-
+           admit_capturing_email(oidc_user, surface) do
+      user = result.user
+
       :telemetry.execute(
         [:platform, :auth, :callback],
         %{system_time: System.system_time()},
@@ -58,7 +68,7 @@ defmodule PlatformWeb.AuthController do
       |> put_session(:current_user_id, user.id)
       |> maybe_put_id_token(auth)
       |> maybe_put_end_session_endpoint(session_params)
-      |> redirect(to: ~p"/")
+      |> land_admission(result, ~p"/")
     else
       false ->
         emit_callback_failure(conn, :invalid_state)
@@ -77,17 +87,43 @@ defmodule PlatformWeb.AuthController do
     end
   end
 
-  # Wrap `Accounts.find_or_create_from_oidc/1` so the archived-user
-  # rejection carries the OIDC-claim email through the `with` chain into
-  # the telemetry emitter. The email isn't on the (nonexistent) session
-  # yet, and the OIDC callback params don't include it — the OIDC
-  # exchange did — so we bind it here.
-  defp find_or_create_capturing_email(%{email: email} = oidc_user) do
-    case Accounts.find_or_create_from_oidc(oidc_user) do
-      {:ok, user} -> {:ok, user}
+  # Wrap `ExternalAdmission.admit/2` so the archived-user rejection carries
+  # the OIDC-claim email through the `with` chain into the telemetry emitter.
+  # The email isn't on the (nonexistent) session yet, and the OIDC callback
+  # params don't include it — the OIDC exchange did — so we bind it here.
+  # `admit/2` returns a `%Result{}` on success (full OR holding), or an
+  # `{:error, _}` straight from `find_or_create_from_oidc/1` (archived etc).
+  defp admit_capturing_email(%{email: email} = oidc_user, surface) do
+    case ExternalAdmission.admit(oidc_user, surface: surface) do
+      %ExternalAdmission.Result{} = result -> {:ok, result}
       {:error, :user_archived} -> {:error, {:user_archived, email}}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # rbac-external-users M2 stage 3: `:external` when the request arrives on
+  # the `chat.` host, else `:app`. (M4 owns the real external live_session.)
+  defp login_surface(conn) do
+    if String.starts_with?(to_string(conn.host), "chat."), do: :external, else: :app
+  end
+
+  # Land the session on the right surface. `:full` keeps the caller's normal
+  # redirect (`/` for callback, `/chat` for dev_login) UNCHANGED. `:holding`
+  # STILL establishes the session — the user IS authenticated; access is
+  # fenced downstream (M6/M7), not by withholding the session — plants the
+  # `:external_admission` seam key M3 reads, and redirects to a valid route.
+  defp land_admission(conn, %ExternalAdmission.Result{state: :full}, full_path) do
+    redirect(conn, to: full_path)
+  end
+
+  defp land_admission(conn, %ExternalAdmission.Result{state: :holding} = result, _full_path) do
+    conn
+    |> put_session(:external_admission, %{
+      state: :holding,
+      reason: result.reason,
+      user_id: result.user.id
+    })
+    |> redirect(to: ExternalAdmission.post_login_path(result))
   end
 
   def callback(conn, _params) do
@@ -109,23 +145,33 @@ defmodule PlatformWeb.AuthController do
           {"dev-#{slug}", "#{slug}@localhost", "Dev #{String.capitalize(slug)}"}
       end
 
-    case Accounts.find_or_create_from_oidc(%{sub: sub, email: email, name: name}) do
-      {:ok, user} ->
-        space = Platform.Chat.get_space_by_slug("general")
+    # Mirror the OIDC callback: route through admission so the dev/e2e path
+    # stays honest for holding + archived, not only for the happy path.
+    surface = login_surface(conn)
 
-        if space do
-          Platform.Chat.add_participant(space.id, %{
-            participant_type: "user",
-            participant_id: user.id,
-            display_name: user.name || name,
-            joined_at: DateTime.utc_now()
-          })
+    case ExternalAdmission.admit(%{sub: sub, email: email, name: name}, surface: surface) do
+      %ExternalAdmission.Result{} = result ->
+        user = result.user
+
+        # Add to `general` ONLY for a full INTERNAL dev user. Holding users get
+        # zero scoped content; a full EXTERNAL user's spaces come from the grant.
+        if result.state == :full and not result.external? do
+          space = Platform.Chat.get_space_by_slug("general")
+
+          if space do
+            Platform.Chat.add_participant(space.id, %{
+              participant_type: "user",
+              participant_id: user.id,
+              display_name: user.name || name,
+              joined_at: DateTime.utc_now()
+            })
+          end
         end
 
         conn
         |> put_session(:current_user_id, user.id)
         |> put_session(:oidc_id_token, "dev-id-token")
-        |> redirect(to: ~p"/chat")
+        |> land_admission(result, ~p"/chat")
 
       {:error, :user_archived} ->
         # Same interstitial the OIDC callback renders — dev_login
@@ -265,9 +311,16 @@ defmodule PlatformWeb.AuthController do
 
     picture = normalize_optional_string(user["picture"])
 
+    # rbac-external-users M2 stage 1: READ (never fetch) the external-user
+    # marker claim so downstream admission can distinguish an external login
+    # from an internal one. Orthogonal to the admin|member role axis —
+    # `find_or_create_from_oidc/1` ignores this extra key.
+    external_claim? = OIDC.external_claim?(user)
+
     case {user["sub"], user["email"], name} do
       {sub, email, n} when is_binary(sub) and is_binary(email) and is_binary(n) ->
-        {:ok, %{sub: sub, email: email, name: n, avatar_url: picture}}
+        {:ok,
+         %{sub: sub, email: email, name: n, avatar_url: picture, external_claim?: external_claim?}}
 
       _ ->
         {:error, :invalid_oidc_user}
