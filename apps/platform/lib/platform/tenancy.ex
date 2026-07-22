@@ -77,6 +77,7 @@ defmodule Platform.Tenancy do
   import Ecto.Query
 
   alias Platform.Repo
+  alias Platform.Tenancy.ExternalDmAllowlistEntry
   alias Platform.Tenancy.Org
   alias Platform.Tenancy.OrgMembership
 
@@ -291,6 +292,198 @@ defmodule Platform.Tenancy do
   end
 
   def load_membership(_), do: nil
+
+  # ── External-user marker (stack member 1, rbac-external-users) ─────────
+  #
+  # `external` is an ADDITIVE boolean on org_memberships, ORTHOGONAL to
+  # `role` — never a role value, never touched by the email-domain
+  # self-healing machinery. See `Platform.Tenancy.OrgMembership` @moduledoc.
+
+  @doc """
+  Upsert an `org_memberships` row for `{user_id, org_id}` with
+  `external: true`.
+
+  Accepts an attrs map with `:user_id` and `:org_id` (both required) and
+  an optional `:role` (defaults to `"member"` — external users are
+  member-level participants). If a membership already exists for the pair
+  its `external` flag is flipped to `true`; the existing `role` is
+  preserved unless `:role` is supplied. If none exists a new row is
+  inserted at the given/default role with `external: true`.
+
+  Idempotent — re-calling on an already-external row is a no-op write that
+  still returns `{:ok, membership}`, so the pending-grant apply path (and a
+  double login) can't double-provision.
+
+  Returns `{:ok, membership}` or `{:error, changeset}`.
+
+  ## Examples
+
+      iex> Platform.Tenancy.mark_membership_external(%{user_id: u.id, org_id: o.id})
+      {:ok, %OrgMembership{external: true, role: "member"}}
+  """
+  @spec mark_membership_external(%{
+          :user_id => binary(),
+          :org_id => binary(),
+          optional(:role) => String.t()
+        }) :: {:ok, OrgMembership.t()} | {:error, Ecto.Changeset.t()}
+  def mark_membership_external(%{user_id: user_id, org_id: org_id} = attrs)
+      when is_binary(user_id) and is_binary(org_id) do
+    role = Map.get(attrs, :role, "member")
+
+    case Repo.get_by(OrgMembership, user_id: user_id, org_id: org_id) do
+      nil ->
+        %OrgMembership{}
+        |> OrgMembership.changeset(%{
+          user_id: user_id,
+          org_id: org_id,
+          role: role,
+          external: true
+        })
+        |> Repo.insert()
+
+      %OrgMembership{external: true} = existing ->
+        # Already external — idempotent no-op.
+        {:ok, existing}
+
+      %OrgMembership{} = existing ->
+        existing
+        |> OrgMembership.changeset(%{external: true})
+        |> Repo.update()
+    end
+  end
+
+  @doc """
+  List the external memberships for an org (`external == true`), most
+  recent first. Accepts an `%Org{}` struct or an org id string.
+  """
+  @spec list_external_memberships(Org.t() | binary()) :: [OrgMembership.t()]
+  def list_external_memberships(%Org{id: org_id}), do: list_external_memberships(org_id)
+
+  def list_external_memberships(org_id) when is_binary(org_id) do
+    OrgMembership
+    |> where([m], m.org_id == ^org_id and m.external == true)
+    |> order_by([m], desc: m.inserted_at)
+    |> Repo.all()
+  end
+
+  @doc """
+  Is the user an external user? Returns `true` iff they hold at least one
+  membership with `external == true` (in any org).
+
+  This is the by-user predicate downstream segregation enforcement
+  (M6/M7/M8) keys off. Accepts a `%User{}` or any map/struct carrying an
+  `:id`. Returns `false` for `nil` or non-user input.
+  """
+  @spec external_user?(any()) :: boolean()
+  def external_user?(%{id: user_id}) when is_binary(user_id) do
+    Repo.exists?(
+      from(m in OrgMembership, where: m.user_id == ^user_id and m.external == true, select: 1)
+    )
+  end
+
+  def external_user?(_), do: false
+
+  # ── Per-org DM allowlist (stack member 1, rbac-external-users) ─────────
+  #
+  # One `external_dm_allowlist_entries` row means "this user may DM anyone
+  # in `allowed_org_id`". M8 consumes `may_dm_org?/2`.
+
+  @doc """
+  Allow `user` to DM anyone in `org` (per-org granularity).
+
+  Idempotent — a duplicate `(user, org)` pair does not error and leaves a
+  single row (upsert via the unique index). Accepts `%User{}`/`%Org{}`
+  structs or bare id strings for either argument.
+
+  Returns `{:ok, entry}` or `{:error, changeset}`.
+  """
+  @spec allow_dm(map() | binary(), map() | binary()) ::
+          {:ok, ExternalDmAllowlistEntry.t()} | {:error, Ecto.Changeset.t()}
+  def allow_dm(user, org) do
+    user_id = id_of(user)
+    org_id = id_of(org)
+
+    %ExternalDmAllowlistEntry{}
+    |> ExternalDmAllowlistEntry.changeset(%{user_id: user_id, allowed_org_id: org_id})
+    |> Repo.insert(
+      on_conflict: :nothing,
+      conflict_target: [:user_id, :allowed_org_id]
+    )
+    |> case do
+      # on_conflict: :nothing returns a struct with a nil id when the row
+      # already existed — re-read the canonical row so callers always get a
+      # persisted entry.
+      {:ok, %ExternalDmAllowlistEntry{id: nil}} ->
+        {:ok, Repo.get_by!(ExternalDmAllowlistEntry, user_id: user_id, allowed_org_id: org_id)}
+
+      other ->
+        other
+    end
+  end
+
+  @doc """
+  May `user` DM members of `org`? Returns a boolean — the exact existence
+  check M8 issues. Accepts structs or bare id strings.
+  """
+  @spec may_dm_org?(map() | binary(), map() | binary()) :: boolean()
+  def may_dm_org?(user, org) do
+    user_id = id_of(user)
+    org_id = id_of(org)
+
+    if is_binary(user_id) and is_binary(org_id) do
+      Repo.exists?(
+        from(e in ExternalDmAllowlistEntry,
+          where: e.user_id == ^user_id and e.allowed_org_id == ^org_id,
+          select: 1
+        )
+      )
+    else
+      false
+    end
+  end
+
+  @doc """
+  List the orgs `user` may DM (as `%Org{}` structs), oldest allow first.
+  Accepts a `%User{}`/struct with `:id` or a bare user id string.
+  """
+  @spec list_dm_allowlist(map() | binary()) :: [Org.t()]
+  def list_dm_allowlist(user) do
+    user_id = id_of(user)
+
+    from(e in ExternalDmAllowlistEntry,
+      join: o in Org,
+      on: o.id == e.allowed_org_id,
+      where: e.user_id == ^user_id,
+      order_by: [asc: e.inserted_at],
+      select: o
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Revoke `user`'s DM access to `org`. Idempotent — revoking a
+  non-existent entry is a no-op. Returns `{:ok, count}` where `count` is
+  the number of rows deleted (0 or 1).
+  """
+  @spec revoke_dm(map() | binary(), map() | binary()) :: {:ok, non_neg_integer()}
+  def revoke_dm(user, org) do
+    user_id = id_of(user)
+    org_id = id_of(org)
+
+    {count, _} =
+      from(e in ExternalDmAllowlistEntry,
+        where: e.user_id == ^user_id and e.allowed_org_id == ^org_id
+      )
+      |> Repo.delete_all()
+
+    {:ok, count}
+  end
+
+  # Extract an id from a struct/map (`%{id: ...}`) or pass through a bare
+  # id string.
+  defp id_of(%{id: id}) when is_binary(id), do: id
+  defp id_of(id) when is_binary(id), do: id
+  defp id_of(_), do: nil
 
   # ── Role helpers ──────────────────────────────────────────────────────
 

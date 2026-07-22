@@ -758,7 +758,14 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # (`deleted_at` + partial index over deleted rows) backing
       # `Platform.Files.delete_file/2` / `restore_file/2` with the
       # 30-day restore window.
-      "20260720010000_add_deleted_at_to_platform_files.exs"
+      "20260720010000_add_deleted_at_to_platform_files.exs",
+      # Task 019f8837 (rbac-external-users stack member M1): the three
+      # foundational schema migrations — external marker on
+      # org_memberships, per-org DM allowlist, and pending external
+      # grants. M1 is the only stack member that adds migrations.
+      "20260722000001_add_external_to_org_memberships.exs",
+      "20260722000002_create_external_dm_allowlist_entries.exs",
+      "20260722000003_create_pending_external_grants.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

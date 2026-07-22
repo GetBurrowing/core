@@ -16,6 +16,24 @@ defmodule Platform.Tenancy.OrgMembership do
   Edit `@roles` here and the CHECK constraint in
   `priv/repo/migrations/.._create_org_memberships.exs` together — they
   must stay in sync.
+
+  ## External marker (orthogonal to role)
+
+  `external` is an ADDITIVE boolean flag, **not** a third role value. It
+  is the privilege-orthogonal segregation marker for external users:
+
+    * `role` answers "how much privilege?" (`admin | member`).
+    * `external` answers "is this an external (non-tenant-native)
+      participant?" (`true | false`, default `false`).
+
+  A scoped external user is a `member`-level participant in allowlisted
+  spaces that additionally carries `external: true`; downstream stack
+  members (M6/M7/M8) enforce the segregation. Modelling the two axes
+  independently keeps 'external admin' expressible and avoids widening
+  `org_memberships_role_check`. The self-healing email-domain machinery
+  (`derive_role_from_email/1`, `apply_derived_role/1`) never touches
+  `external` — it is set only via `Platform.Tenancy.mark_membership_external/1`
+  and the pending-grant apply path.
   """
 
   use Ecto.Schema
@@ -31,6 +49,9 @@ defmodule Platform.Tenancy.OrgMembership do
     belongs_to(:org, Platform.Tenancy.Org)
 
     field(:role, :string)
+    # Orthogonal external-user marker (stack member 1, rbac-external-users).
+    # NOT a role value — see the "External marker" section in @moduledoc.
+    field(:external, :boolean, default: false)
     # When set, the self-healing hook in `Platform.Accounts` skips
     # evaluation for this row — manual grant wins. See Stage 3 migration
     # `20260519220000_add_roles_locked_at_to_org_memberships.exs`.
@@ -45,7 +66,7 @@ defmodule Platform.Tenancy.OrgMembership do
 
   def changeset(membership, attrs) do
     membership
-    |> cast(attrs, [:user_id, :org_id, :role, :roles_locked_at])
+    |> cast(attrs, [:user_id, :org_id, :role, :external, :roles_locked_at])
     |> validate_required([:user_id, :org_id, :role])
     |> validate_inclusion(:role, @roles)
     |> unique_constraint([:user_id, :org_id])
