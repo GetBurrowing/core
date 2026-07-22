@@ -1471,6 +1471,7 @@ defmodule Platform.Chat do
     include_kinds = Keyword.get(opts, :include_kinds, ~w(channel group))
     content_types = Keyword.get(opts, :content_types, ~w(text agent_action))
     include_archived = Keyword.get(opts, :include_archived, false)
+    scope = Keyword.get(opts, :scope, :internal)
 
     query =
       from(m in Message,
@@ -1486,6 +1487,8 @@ defmodule Platform.Chat do
         order_by: [asc: m.inserted_at]
       )
 
+    query = apply_digest_scope(query, scope)
+
     query =
       if include_archived do
         # Deletion-flagged spaces must vanish from search immediately even
@@ -1496,6 +1499,81 @@ defmodule Platform.Chat do
       end
 
     Repo.all(query)
+  end
+
+  # ── External-space digest partition (stack member 12, rbac-external-users) ──
+  #
+  # The Historian's activity digest partitions message/transcript selection
+  # by the M1 `external` marker in BOTH directions:
+  #   * `:internal` (default) — exclude external-user spaces/DMs from the
+  #     Fabrikam-internal digest.
+  #   * `{:external_spaces, ids}` — restrict to the external user's
+  #     allowlisted spaces for an external-user-facing summary.
+  # `external_space_ids/0` and `participant_space_ids_for_user/1` supply the
+  # two id-sets; `list_messages_since/2` and `Meetings.list_transcripts_since/2`
+  # thread the `:scope` opt.
+
+  defp apply_digest_scope(query, :internal) do
+    exclude = external_space_ids()
+    where(query, [m, s], s.id not in ^exclude)
+  end
+
+  defp apply_digest_scope(query, {:external_spaces, space_ids}) do
+    where(query, [m, s], s.id in ^space_ids)
+  end
+
+  @doc """
+  Distinct chat space ids that carry any external-visible content — i.e.
+  spaces where at least one external user (a user holding an
+  `org_memberships.external == true` membership, per M1) participates.
+
+  A MIXED space (both a Fabrikam human and an external user as participants)
+  classifies as external here: its content is already visible to an
+  external party, so it belongs to the external surface and is excluded
+  from the pure Fabrikam-internal Historian digest.
+
+  Returns `[]` when there are no external memberships (fast path — the
+  internal digest's `NOT IN ^[]` filter is then a no-op, leaving all-internal
+  orgs byte-for-byte unchanged).
+  """
+  @spec external_space_ids() :: [binary()]
+  def external_space_ids do
+    external_user_ids =
+      Tenancy.list_orgs()
+      |> Enum.flat_map(&Tenancy.list_external_memberships(&1.id))
+      |> Enum.map(& &1.user_id)
+      |> Enum.uniq()
+
+    case external_user_ids do
+      [] ->
+        []
+
+      ids ->
+        from(p in Participant,
+          where: p.participant_type == "user" and p.participant_id in ^ids,
+          distinct: true,
+          select: p.space_id
+        )
+        |> Repo.all()
+    end
+  end
+
+  @doc """
+  Distinct chat space ids the given external `user_id` participates in.
+
+  This is the allowlisted-space set that scopes an external-user-facing
+  summary: an external user is only ever a participant of their allowlisted
+  spaces, so scoping a digest to this set intrinsically excludes
+  Fabrikam-internal content.
+  """
+  @spec participant_space_ids_for_user(binary()) :: [binary()]
+  def participant_space_ids_for_user(user_id) when is_binary(user_id) do
+    from(p in Participant,
+      where: p.participant_type == "user" and p.participant_id == ^user_id,
+      distinct: true,
+      select: p.space_id
+    )
+    |> Repo.all()
   end
 
   @doc """
