@@ -201,6 +201,15 @@ if config_env() == :prod do
   # meet.<host> get rejected by Phoenix.Socket.Transport.check_origin/2.
   meet_host = System.get_env("MEET_HOST")
 
+  # CHAT_HOST is a sibling domain (e.g. "chat.example.com") that serves the
+  # external-chat surface (rbac-external-users M4, PR #584). Same rationale
+  # as MEET_HOST: distinct hostname from PHX_HOST, but LiveView WebSocket
+  # upgrades still terminate against the same Phoenix endpoint. Add to
+  # check_origin so socket handshakes from chat.<host> aren't rejected by
+  # Phoenix.Socket.Transport.check_origin/2. Unset → no chat-host origin
+  # allowlisted; external ChatLive socket connects fail 403.
+  chat_host = System.get_env("CHAT_HOST")
+
   config :platform, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :platform, PlatformWeb.Endpoint,
@@ -213,7 +222,9 @@ if config_env() == :prod do
         "https://#{host}",
         "https://www.#{host}",
         "//*.#{host}"
-      ] ++ if(meet_host, do: ["https://#{meet_host}"], else: []),
+      ] ++
+        if(meet_host, do: ["https://#{meet_host}"], else: []) ++
+        if(chat_host, do: ["https://#{chat_host}"], else: []),
     secret_key_base: secret_key_base
 end
 
