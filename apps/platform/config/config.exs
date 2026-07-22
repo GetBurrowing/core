@@ -234,7 +234,14 @@ config :phoenix, :json_library, Jason
 # only `Etc/UTC` shifts work; named zones like `America/Chicago` fail.
 config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
 
-config :platform, :oidc, http_adapter: Assent.HTTPAdapter.Httpc
+# `external_group`/`external_claim` (rbac-external-users M2 stage 1): the
+# STATIC id-token claim NAME + value that marks a login as an SXI-external
+# user. Read-only token consumption — ADR-0004 (no outbound IdP call).
+# runtime.exs threads the prod value via OIDC_EXTERNAL_GROUP.
+config :platform, :oidc,
+  http_adapter: Assent.HTTPAdapter.Httpc,
+  external_group: "sxi-external",
+  external_claim: "groups"
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

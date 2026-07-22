@@ -1,5 +1,6 @@
 defmodule Platform.OIDC do
   @default_scope "openid email profile"
+  @default_external_claim "groups"
 
   # Returns {:ok, %{url: url, session_params: %{state:, nonce:, code_verifier:, ...}}}
   # Callers must store the full session_params and pass them back to callback/2.
@@ -34,6 +35,44 @@ defmodule Platform.OIDC do
   end
 
   def app_url, do: config!(:app_url)
+
+  # -- External-user marker claim (rbac-external-users M2 stage 1) --
+  #
+  # These READ a static id-token claim — no outbound IdP call (ADR-0004).
+
+  @doc "The claim VALUE that marks a login as SXI-external (e.g. `\"sxi-external\"`)."
+  def external_group, do: config(:external_group)
+
+  @doc "The claim NAME to inspect for the external marker (default `\"groups\"`)."
+  def external_claim, do: config(:external_claim) || @default_external_claim
+
+  @doc """
+  Pure predicate: does `claims` (a string-keyed claims map) carry the
+  configured external marker?
+
+  Nil-safe and tolerant of the claim being a list, a bare string, or
+  absent/malformed — anything that is not the configured group (or a list
+  containing it) yields `false`. Returns `false` when no `external_group`
+  is configured, so an unset marker never accidentally flags users.
+  """
+  @spec external_claim?(map()) :: boolean()
+  def external_claim?(claims) when is_map(claims) do
+    group = external_group()
+
+    if is_binary(group) and group != "" do
+      claims
+      |> Map.get(external_claim())
+      |> claim_contains?(group)
+    else
+      false
+    end
+  end
+
+  def external_claim?(_claims), do: false
+
+  defp claim_contains?(value, group) when is_list(value), do: Enum.any?(value, &(&1 == group))
+  defp claim_contains?(value, group) when is_binary(value), do: value == group
+  defp claim_contains?(_value, _group), do: false
 
   def callback_url do
     URI.merge(app_url(), "/auth/oidc/callback")
