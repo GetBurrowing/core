@@ -247,6 +247,27 @@ defmodule PlatformWeb.Router do
       live("/org_memory/*file_key", OrgMemoryLive, :show)
     end
 
+    # rbac-external-users M3 stage 2 (task 019f8837): the zero-access
+    # "your workspace is being set up" holding landing. It gets its OWN
+    # `live_session` — NOT the `:authenticated` one above, whose `:shell`
+    # layout would render the icon rail (a discovery leak that breaks
+    # zero-access) — paired with the chrome-less `:holding` layout. Same
+    # `on_mount: [ShellLive, {LiveAuth, :default}]` prefix so
+    # `current_user_record` + membership assigns are present; ShellLive
+    # tolerates a holding user (current_user_id set, zero scoped rows).
+    #
+    # A no-host route matches BOTH the app host and M4's future `chat.`
+    # host — M4's chat scope claims only `/chat` + `/chat/:slug`, so
+    # `/welcome` falls through to here on either host with one route. The
+    # default scope's `:enforce_external_scope` plug is a no-op for holding
+    # users (they hold no external membership, so `external_user?/1` is
+    # false), so it does not fence `/welcome`.
+    live_session :external_holding,
+      on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
+      layout: {PlatformWeb.Layouts, :holding} do
+      live("/welcome", ExternalHoldingLive, :index)
+    end
+
     # MT/RBAC stack 2 (task 019e3c4a) — `/admin/*` lives in its own
     # `live_session` so the `:ensure_admin` hook can halt-and-redirect
     # non-admin mounts. Keeps the same `ShellLive` + `LiveAuth :default`
@@ -260,6 +281,10 @@ defmodule PlatformWeb.Router do
       layout: {PlatformWeb.Layouts, :shell} do
       live("/admin", AdminLive, :index)
       live("/admin/recovery", RecoveryLive, :index)
+      # rbac-external-users M3 stage 4 (task 019f8837): the Fabrikam-admin
+      # recovery queue for external logins awaiting setup. Inherits the
+      # `:ensure_admin` gate + `:shell` chrome from this live_session.
+      live("/admin/external-logins", ExternalRecoveryLive, :index)
       live("/admin/users", UserAccessLive, :index)
       live("/admin/prompts", AdminPromptsLive, :index)
       live("/admin/prompts/:slug", AdminPromptsLive, :edit)

@@ -32,6 +32,14 @@ defmodule Platform.Audit.TelemetryHandler do
     [:platform, :auth, :callback],
     [:platform, :auth, :logout],
     [:platform, :auth, :access_blocked],
+    # rbac-external-users M3 stage 3 (task 019f8837) — external admission
+    # decisions emitted by `Platform.Accounts.ExternalAdmission` on every
+    # login. Persisted here (sync auth path) so each `action: "holding"`
+    # row becomes the DURABLE "external login awaiting setup" record the
+    # M3 stage-4 recovery queue queries (`ExternalAdmission.awaiting_setup/0`)
+    # — no bespoke table. Metadata carries reason/email/external?; actor_id
+    # is the user id. `action` is "full" | "holding" | "recovered".
+    [:platform, :auth, :external_admission],
     # Stage 3 of task 019e41a9 — emitted by
     # `Platform.Tenancy.promote_to_admin/2` and `revoke_admin/2`.
     [:platform, :tenancy, :role_change],
