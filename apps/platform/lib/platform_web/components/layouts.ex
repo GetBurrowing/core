@@ -175,6 +175,50 @@ defmodule PlatformWeb.Layouts do
     """
   end
 
+  @doc """
+  INERT external-chat app layout (rbac-external-users M4 scaffold, task
+  019f8837).
+
+  Ships DARK: this layout is only selected by the `:external_chat`
+  live_session on the `chat.` host scope wired in the router, and no
+  environment declares a `chat.` host until the M14 subdomain go-live. So
+  in every currently-reachable environment this function is never rendered
+  — it exists so M5 has a shell-less wrapper to mount the external ChatLive
+  branch (filtered rails / DM picker) into, and so M6/M7 have a surface to
+  attach scope enforcement to.
+
+  Structurally identical to the guest-meeting `guest/1` layout above (which
+  the `meet.` guest scope pairs with `chrome_mode: "none"`): a null-ish
+  outer wrapper that deliberately does NOT render `<.shell_layout>`,
+  `<.icon_rail>`, `<.bottom_rail>`, or any auth-side chrome — that chrome
+  lives in `shell.html.heex`, and omitting the `:shell` layout is exactly
+  what makes the external surface chrome-less.
+
+  Uses `h-dvh` (definite `height: 100dvh`), NOT `min-h-dvh`, matching the
+  guest layout's documented gallery-sizing fix (see `guest/1`): a definite
+  viewport height so `h-full` percentages propagate cleanly to every leaf
+  that establishes a size-query / flex context.
+
+  ## Why no `:external_root` root layout (a divergence from `meet.`)
+
+  The `meet.` guest scope added a stripped `guest_root/1` (see above) that
+  drops the PWA manifest + VAPID push key, because unauthenticated meeting
+  guests get no push. External chat users are authenticated real OIDC
+  accounts and DO get PWA push (design canvas §10-8), so the `chat.` scope
+  reuses the existing full `:root` document head unchanged — only the APP
+  layout is swapped to `:external`. Hence this module adds exactly one
+  function and no root layout.
+  """
+  def external(assigns) do
+    ~H"""
+    <main class="h-dvh bg-base-100 text-base-content">
+      {@inner_content}
+    </main>
+
+    <.flash_group flash={assigns[:flash] || %{}} />
+    """
+  end
+
   @doc "Returns a Tailwind color class for the agent status indicator."
   def agent_status_color(:online), do: "bg-success"
   def agent_status_color(:thinking), do: "bg-sky-400"
