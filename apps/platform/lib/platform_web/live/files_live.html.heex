@@ -353,6 +353,14 @@
         >
           <span class="hero-link size-4"></span> Copy link
         </button>
+        <%!-- Flex spacer: destructive separation — Delete is right-
+             aligned, never glued to the constructive verbs. --%>
+        <span class="flex-1" aria-hidden="true"></span>
+        <.delete_file_button
+          file={@selected_file}
+          can_delete={can_delete?(@current_user_id)}
+          id={"files-detail-delete-" <> @selected_file.id}
+        />
       </div>
 
       <dl class="grid grid-cols-3 gap-2 text-xs text-base-content/60">
@@ -491,6 +499,14 @@
         >
           <span class="hero-link size-4"></span> Copy link
         </button>
+        <span class="flex-1" aria-hidden="true"></span>
+        <.delete_file_button
+          file={@selected_file}
+          can_delete={can_delete?(@current_user_id)}
+          id={"files-detail-delete-mobile-" <> @selected_file.id}
+          data_role="files-detail-delete-mobile"
+          class="min-h-11"
+        />
       </div>
 
       <%= case preview_mode(@selected_file) do %>
@@ -628,4 +644,9 @@
       </div>
     </div>
   </div>
+
+  <%!-- Undo toast for optimistic file deletes. TOP-LEVEL sibling —
+       pinned chrome must never live inside an :if region that can
+       toggle (it would remount and lose its announce). --%>
+  <.file_undo_toast toast={@undo_toast} />
 </div>

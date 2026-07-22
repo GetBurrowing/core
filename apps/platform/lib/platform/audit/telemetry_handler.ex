@@ -137,7 +137,24 @@ defmodule Platform.Audit.TelemetryHandler do
     # triage_officer agent has no runtime linked, the broadcast fails, or
     # the endpoint isn't ready. Metadata carries agent_id, reason atom,
     # actor_type: "system", resource_type: "agent", resource_id.
-    [:platform, :meetings, :triage_dispatch, :assignee_unresolvable]
+    [:platform, :meetings, :triage_dispatch, :assignee_unresolvable],
+    # Task 019f7cb0 stage 2 — file soft-delete lifecycle. Emitted by
+    # `Platform.Files.delete_file/2` and `restore_file/2` after the DB
+    # write commits. Metadata carries actor_id, actor_type: "user",
+    # resource_type: "file", resource_id, project_id, org_id, file_name.
+    # Sync (default handle_event clause) so tests can assert the audit
+    # row immediately after the call returns.
+    [:platform, :files, :file_deleted],
+    [:platform, :files, :file_restored],
+    # Task 019f7cb0 stage 3 — permanent purge after the retention window.
+    # Emitted by `Platform.Files.Purger` (actor_type: "system", actor_id
+    # nil — timer purges have no acting user) once a soft-deleted file's
+    # bytes + row are permanently erased. Metadata carries resource_type
+    # "file", resource_id, project_id, org_id, file_name, storage_key,
+    # byte_size, and the stringified deleted_at. Sync (default
+    # handle_event clause) so tests can assert the audit row immediately
+    # after `sweep/1` returns.
+    [:platform, :files, :file_purged]
 
     # NOTE: `[:platform, :memory, :proposal_promoted]` is NOT registered
     # here. `Platform.Memory.Proposals.queue_promotion/1` (task 019f70e9

@@ -753,7 +753,12 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # carries `{{migration_slot_section}}`; without it the stage-2
       # reservation is written but never read by the agent doing the work.
       # Template-content only, no schema change; `down/0` is a no-op.
-      "20260719120100_add_migration_slot_section_to_dispatch_in_progress.exs"
+      "20260719120100_add_migration_slot_section_to_dispatch_in_progress.exs",
+      # Task 019f7cb0 stage 2: soft-delete marker on platform_files
+      # (`deleted_at` + partial index over deleted rows) backing
+      # `Platform.Files.delete_file/2` / `restore_file/2` with the
+      # 30-day restore window.
+      "20260720010000_add_deleted_at_to_platform_files.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

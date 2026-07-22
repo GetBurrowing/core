@@ -42,18 +42,24 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     @impl true
-    def delete(_ids, _config), do: {:ok, 0}
+    def delete(ids, config) do
+      # file_delete scrub-assertion hook: tests that pass `notify_delete:
+      # self()` to `install_memory_stub/2` receive the scrubbed ids.
+      if pid = Keyword.get(config, :notify_delete), do: send(pid, {:memory_stub_delete, ids})
+      {:ok, length(ids)}
+    end
 
     @impl true
     def health(_c), do: :ok
   end
 
-  defp install_memory_stub(results) do
+  defp install_memory_stub(results, extra \\ []) do
     prev = Application.get_env(:platform, :memory_service, [])
 
-    Application.put_env(:platform, :memory_service,
-      provider: MemoryStub,
-      search_results: results
+    Application.put_env(
+      :platform,
+      :memory_service,
+      [provider: MemoryStub, search_results: results] ++ extra
     )
 
     on_exit(fn -> Application.put_env(:platform, :memory_service, prev) end)
@@ -1333,6 +1339,101 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
 
       assert_receive {:file_deleted, file_id}, 500
       assert file_id == file.id
+    end
+
+    # ── Soft-delete semantics (task 019f7cb0 stage 4 rewire) ────────────
+
+    test "soft-deletes: row retained with deleted_at for the 30-day undo window",
+         %{agent_sxi: agent, project_a: project} do
+      file = create_file(project, filename: "undoable.txt", body: "undoable")
+
+      assert {:ok, %{deleted: true}} =
+               ToolSurface.execute(
+                 "file_delete",
+                 %{"file_id" => file.id},
+                 context_for(agent)
+               )
+
+      # Invisible on the normal read path…
+      refute Files.get_file(file.id)
+
+      # …but the row still exists for restore (the Purger owns permanent
+      # removal after retention).
+      assert %Files.File{deleted_at: %DateTime{}} =
+               Files.get_file(file.id, include_deleted: true)
+    end
+
+    test "scrubs the AI search index under the file id",
+         %{agent_sxi: agent, project_a: project} do
+      install_memory_stub([], notify_delete: self())
+      file = create_file(project, filename: "indexed.txt", body: "indexed")
+
+      assert {:ok, %{deleted: true}} =
+               ToolSurface.execute(
+                 "file_delete",
+                 %{"file_id" => file.id},
+                 context_for(agent)
+               )
+
+      assert_receive {:memory_stub_delete, ids}, 500
+      assert ids == [file.id]
+    end
+
+    test "audit-logs the delete with the acting agent attributed",
+         %{agent_sxi: agent, project_a: project} do
+      # Guarantee the telemetry→audit bridge is attached (same defensive
+      # dance as Platform.Files.SoftDeleteTest — attach is idempotent-ish
+      # via detach-first, and this module is async: false).
+      Platform.Audit.TelemetryHandler.detach()
+      Platform.Audit.TelemetryHandler.attach()
+
+      on_exit(fn ->
+        Platform.Audit.TelemetryHandler.detach()
+        Platform.Audit.TelemetryHandler.attach()
+      end)
+
+      file = create_file(project, filename: "audited.txt", body: "audited")
+
+      assert {:ok, %{deleted: true}} =
+               ToolSurface.execute(
+                 "file_delete",
+                 %{"file_id" => file.id},
+                 context_for(agent)
+               )
+
+      assert [event] = Platform.Audit.list(event_type: "platform.files.file_deleted")
+      assert event.actor_id == agent.id
+      assert event.actor_type == "agent"
+      assert event.resource_type == "file"
+      assert event.resource_id == file.id
+    end
+
+    test "refuses a caller with no resolvable agent identity; row untouched",
+         %{project_a: project} do
+      file = create_file(project, filename: "anon.txt", body: "anon")
+
+      assert {:error, %{code: :unauthorized, recoverable: false}} =
+               ToolSurface.execute("file_delete", %{"file_id" => file.id}, %{})
+
+      assert Files.get_file(file.id), "row must survive an unattributable delete"
+    end
+
+    test "refuses a file in an archived project with :project_archived",
+         %{agent_sxi: agent, project_a: project} do
+      file = create_file(project, filename: "frozen.txt", body: "frozen")
+
+      project
+      |> Tasks.Project.changeset(%{archived_at: DateTime.utc_now()})
+      |> Repo.update!()
+
+      assert {:error, %{code: :project_archived, recoverable: false}} =
+               ToolSurface.execute(
+                 "file_delete",
+                 %{"file_id" => file.id},
+                 context_for(agent)
+               )
+
+      assert Files.get_file(file.id), "row must survive a delete against an archived project"
     end
   end
 end

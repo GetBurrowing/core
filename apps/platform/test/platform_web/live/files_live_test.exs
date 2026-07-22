@@ -194,10 +194,10 @@ defmodule PlatformWeb.FilesLiveTest do
 
       assert html =~ "going-away.txt"
 
-      # The file_delete MCP tool removes the row + broadcasts on the
-      # project topic. Simulate the post-row-delete + broadcast sequence.
-      {:ok, _} = Files.delete_file(file)
-      :ok = Files.broadcast_deleted(project.id, file.id)
+      # The file_delete MCP tool soft-deletes via `Files.delete_file/2`,
+      # which broadcasts {:file_deleted, id} on the project topic itself
+      # (task 019f7cb0 stage 4) — no separate broadcast call.
+      {:ok, _} = Files.delete_file(%{id: Ecto.UUID.generate()}, file)
 
       html_after = render(view)
       refute html_after =~ "going-away.txt"
@@ -696,6 +696,203 @@ defmodule PlatformWeb.FilesLiveTest do
 
       result = PlatformWeb.FilesLive.filtered_and_sorted([a, b], "", "name_asc")
       assert result == [b, a]
+    end
+  end
+
+  describe "delete + undo (stage 5)" do
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Delete Undo Project")
+      {:ok, conn: conn, project: project}
+    end
+
+    test "Delete button renders enabled in the desktop aside and the mobile drawer",
+         %{conn: conn, project: project} do
+      file = seed_file(project, %{name: "keeper.txt"})
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      # Extract each button, then assert attributes individually —
+      # Phoenix attr order is non-deterministic, never regex across it.
+      desktop = view |> element("#files-detail-delete-#{file.id}") |> render()
+      assert desktop =~ "hero-trash"
+      assert desktop =~ "Delete"
+      assert desktop =~ "text-error"
+      assert desktop =~ ~s(phx-click="delete_file")
+      assert desktop =~ ~s(data-role="files-detail-delete")
+      # Enabled: no disabled affordances (semantic state, not styling).
+      refute desktop =~ "aria-disabled"
+      refute desktop =~ "opacity-50"
+
+      mobile = view |> element("#files-detail-delete-mobile-#{file.id}") |> render()
+      assert mobile =~ ~s(data-role="files-detail-delete-mobile")
+      assert mobile =~ ~s(phx-click="delete_file")
+      # >=44px hit area at btn-sm visual size (design direction, mobile).
+      assert mobile =~ "min-h-11"
+      refute mobile =~ "aria-disabled"
+    end
+
+    test "delete click removes the row, closes the pane, and shows the undo toast",
+         %{conn: conn, project: project} do
+      file = seed_file(project, %{name: "doomed.txt"})
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      html = view |> element("#files-detail-delete-#{file.id}") |> render_click()
+
+      # Optimistic: row gone + both detail surfaces closed, no dialog.
+      refute html =~ "data-file-id=\"#{file.id}\""
+      refute html =~ ~s(data-role="files-detail-panel")
+      refute html =~ ~s(data-role="files-detail-mobile")
+
+      # The toast IS the confirmation: filename + Undo action.
+      assert html =~ ~s(data-role="files-undo-toast")
+      assert html =~ "doomed.txt deleted"
+      assert html =~ ~s(data-role="files-undo-button")
+      assert html =~ ~s(phx-click="undo_delete")
+
+      # Soft-deleted server-side — invisible on every read path.
+      assert Files.get_file(file.id) == nil
+    end
+
+    test "undo click restores the row and clears the toast",
+         %{conn: conn, project: project} do
+      file = seed_file(project, %{name: "phoenix.txt"})
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+      view |> element("#files-detail-delete-#{file.id}") |> render_click()
+
+      html = view |> element("[data-role='files-undo-button']") |> render_click()
+
+      assert html =~ "data-file-id=\"#{file.id}\""
+      refute html =~ ~s(data-role="files-undo-toast")
+
+      # Restored server-side (visible again on the read paths).
+      assert %Files.File{} = Files.get_file(file.id)
+    end
+
+    test "toast expiry clears the toast without restoring the file",
+         %{conn: conn, project: project} do
+      file = seed_file(project, %{name: "expired.txt"})
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+      view |> element("#files-detail-delete-#{file.id}") |> render_click()
+
+      # Drive the LV-side timer message directly instead of sleeping 8s.
+      send(view.pid, {:clear_undo_toast, file.id})
+      html = render(view)
+
+      refute html =~ ~s(data-role="files-undo-toast")
+      refute html =~ "data-file-id=\"#{file.id}\""
+      # Still soft-deleted — expiry never restores.
+      assert Files.get_file(file.id) == nil
+    end
+
+    test "a consecutive delete replaces the toast and a stale timer can't clear it",
+         %{conn: conn, project: project} do
+      file_a = seed_file(project, %{name: "first.txt"})
+      file_b = seed_file(project, %{name: "second.txt"})
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      view |> element("tr[data-file-id='#{file_a.id}']") |> render_click()
+      view |> element("#files-detail-delete-#{file_a.id}") |> render_click()
+      view |> element("tr[data-file-id='#{file_b.id}']") |> render_click()
+      html = view |> element("#files-detail-delete-#{file_b.id}") |> render_click()
+
+      # One toast at a time — newest delete wins.
+      assert html =~ "second.txt deleted"
+      refute html =~ "first.txt deleted"
+
+      # A late timer message for the replaced toast (cancel_timer race)
+      # must not clear the newer one — the id guard holds it open.
+      send(view.pid, {:clear_undo_toast, file_a.id})
+      assert render(view) =~ "second.txt deleted"
+    end
+
+    test "{:file_restored, id} broadcast from another session reinserts the row",
+         %{conn: conn, project: project} do
+      file = seed_file(project, %{name: "other-tab.txt"})
+      actor = %{id: Ecto.UUID.generate()}
+
+      {:ok, view, html} = live(conn, ~p"/files/#{project.id}")
+      assert html =~ "other-tab.txt"
+
+      # Deleted elsewhere (context broadcasts {:file_deleted, id} itself).
+      {:ok, deleted} = Files.delete_file(actor, file)
+      refute render(view) =~ "other-tab.txt"
+
+      # Restored elsewhere — the LV's new {:file_restored, id} subscriber
+      # re-fetches and reinserts without a refresh.
+      {:ok, _restored} = Files.restore_file(actor, deleted)
+      html_after = render(view)
+      assert html_after =~ "other-tab.txt"
+      assert html_after =~ "data-file-id=\"#{file.id}\""
+    end
+
+    test "undo after the purger removed the row shows a graceful note, never crashes",
+         %{conn: conn, project: project} do
+      file = seed_file(project, %{name: "purged.txt"})
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+      view |> element("#files-detail-delete-#{file.id}") |> render_click()
+
+      # Simulate the 30-day sweeper purging the row mid-undo —
+      # restore_file/2 has no window check, so this is the stale path.
+      Files.File |> Repo.get(file.id) |> Repo.delete!()
+
+      html = view |> element("[data-role='files-undo-button']") |> render_click()
+
+      assert html =~ "permanently removed"
+      refute html =~ "data-file-id=\"#{file.id}\""
+      refute html =~ ~s(data-role="files-undo-toast")
+      assert Process.alive?(view.pid)
+    end
+  end
+
+  describe "delete_file_button/1 (component)" do
+    # The /files route sits behind RequireAuth, so the unpermitted state
+    # is unreachable through the router today — the disabled render path
+    # is a defensive rail and is unit-tested at the component boundary.
+
+    test "unpermitted state renders disabled-but-visible with aria-disabled + tooltip" do
+      file = %Files.File{id: Ecto.UUID.generate(), name: "locked.txt"}
+
+      html =
+        render_component(&PlatformWeb.Components.FileDeleteUI.delete_file_button/1,
+          file: file,
+          can_delete: false,
+          id: "test-delete"
+        )
+
+      assert html =~ ~s(aria-disabled="true")
+      assert html =~ "opacity-50"
+      assert html =~ "Sign in to delete files"
+      # Persistent controls: still rendered, never hidden.
+      assert html =~ "Delete"
+      assert html =~ "hero-trash"
+    end
+
+    test "permitted state renders without the disabled affordances" do
+      file = %Files.File{id: Ecto.UUID.generate(), name: "open.txt"}
+
+      html =
+        render_component(&PlatformWeb.Components.FileDeleteUI.delete_file_button/1,
+          file: file,
+          can_delete: true,
+          id: "test-delete"
+        )
+
+      refute html =~ "aria-disabled"
+      refute html =~ "opacity-50"
+      refute html =~ "title="
+      assert html =~ ~s(phx-click="delete_file")
+      assert html =~ ~s(phx-value-id="#{file.id}")
     end
   end
 

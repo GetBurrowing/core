@@ -103,6 +103,7 @@ defmodule Platform.Application do
       |> maybe_add_security_sweeper()
       |> maybe_add_space_purger()
       |> maybe_add_container_purger()
+      |> maybe_add_file_purger()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -179,6 +180,20 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_container_purger, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Tenancy.ContainerPurger)
+    else
+      children
+    end
+  end
+
+  # FilePurger (task 019f7cb0 stage 3): daily hard-delete of soft-deleted
+  # files whose 30-day restore window elapsed — stored bytes + row (chunk
+  # and extracted-text rows cascade at the DB level). Needs Repo. Disabled
+  # in config/test.exs — tests call `sweep/1` directly inside the DataCase
+  # sandbox.
+  defp maybe_add_file_purger(children) do
+    if Application.get_env(:platform, :start_file_purger, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Files.Purger)
     else
       children
     end

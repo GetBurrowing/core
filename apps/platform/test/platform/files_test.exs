@@ -297,23 +297,11 @@ defmodule Platform.FilesTest do
     end
   end
 
-  describe "delete_file/1" do
-    test "removes the row but leaves bytes alone (caller owns storage)" do
-      {:ok, project} = Tasks.create_project(%{name: "Delete Me"})
-
-      {:ok, file} =
-        Files.create_file(%{
-          project_id: project.id,
-          content_type: "text/plain",
-          byte_size: 1,
-          storage_key: "files/#{project.id}/del/d.txt",
-          content_hash: String.duplicate("a", 64)
-        })
-
-      assert {:ok, _deleted} = Files.delete_file(file)
-      assert Files.get_file(file.id) == nil
-    end
-  end
+  # NOTE: the legacy hard-delete `delete_file/1` was removed in task
+  # 019f7cb0 stage 4 (the MCP `file_delete` tool was its last caller —
+  # it now rides the soft-delete `delete_file/2`). Soft delete + restore
+  # are covered in `Platform.Files.SoftDeleteTest`; permanent removal in
+  # `Platform.Files.PurgerTest`.
 
   describe "update_ingest_status/2" do
     test "flips a file row through the lifecycle" do

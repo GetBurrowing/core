@@ -358,7 +358,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "file_delete",
         description:
-          "Delete a file (ADR 0042). Removes the underlying R2/S3 object FIRST, then the `platform_files` row. Idempotent — re-deleting a non-existent file returns the standard `:not_found` envelope rather than crashing. Broadcasts `{:file_deleted, file_id}` on the project topic so live UIs (FilesLive) drop the row without a manual refresh.",
+          "Delete a file (ADR 0042). REVERSIBLE for 30 days: the file is soft-deleted — hidden from every list/read/search surface and scrubbed from the AI search index, but restorable by a human (Undo in the Files UI) until the 30-day retention window lapses, after which it is permanently purged. The delete is audit-logged with you (the calling agent) attributed. Idempotent — re-deleting a non-existent or already-deleted file returns the standard `:not_found` envelope rather than crashing. Broadcasts `{:file_deleted, file_id}` on the project topic so live UIs (FilesLive) drop the row without a manual refresh.",
         parameters: %{
           file_id: %{
             type: "string",
@@ -374,9 +374,9 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns: "%{file_id, deleted: true}",
         limitations:
-          "Authorization mirrors file_list / file_get_text. Unknown `file_id` → `:not_found` (idempotent — second delete looks the same as a never-existed id). Tenant-pinned agents deleting a sibling-org file → `unauthorized: …` envelope. Storage object deletion is best-effort and `:ok`-on-missing; if the row delete fails after the object is gone the caller sees an error envelope but the bytes are not restored — re-issuing the call clears the row.",
+          "Authorization mirrors file_list / file_get_text. Unknown `file_id` → `:not_found` (idempotent — a second delete looks the same as a never-existed id). Tenant-pinned agents deleting a sibling-org file → `unauthorized: …` envelope. Deleting does NOT free storage immediately — bytes are retained for the 30-day undo window and reclaimed by the retention sweeper. Deleting a file in an archived project → `:project_archived`. There is no agent-facing restore tool — undo is human-driven from the Files UI.",
         when_to_use:
-          "When a file should be removed from a project entirely — either to retract content or to free storage. For just dropping the extracted-text cache without removing the row, use the appropriate Files context helper directly (no public tool for that today)."
+          "When a file should be removed from a project — retracting stale or superseded content. Deletes are reversible for 30 days, so prefer deleting a wrong upload over leaving it searchable; but don't use delete to free storage (bytes persist until the retention window lapses)."
       }
     ]
   end
@@ -6439,25 +6439,50 @@ defmodule Platform.Federation.ToolSurface do
          {:ok, project} <- fetch_project_for_files(file.project_id, "file_delete"),
          :ok <- authorize_org_filter_for_explicit(args, context),
          :ok <- authorize_file_access(context, project) do
-      # Object first, row second. If the row delete fails we'd rather not
-      # have orphaned a hard-to-find bytes-only object. Storage keys embed
-      # the project_id so this can't blow away a sibling row's bytes in
-      # another project.
-      _ = Platform.Files.Storage.delete(file.storage_key)
-
-      case Platform.Files.delete_file(file) do
+      # Task 019f7cb0 stage 4: agent deletes ride the same soft-delete
+      # path as humans. `Platform.Files.delete_file/2` marks the row
+      # deleted (30-day restore window — the Purger owns permanent
+      # removal of row AND stored bytes after retention), scrubs the AI
+      # search index, writes the audit row with the acting agent
+      # attributed, and broadcasts {:file_deleted, id} on the project
+      # topic — so no Storage.delete and no handler-side broadcast here.
+      case Platform.Files.delete_file(file_delete_actor(context), file) do
         {:ok, _deleted} ->
-          _ = Platform.Files.broadcast_deleted(project.id, file.id)
           {:ok, %{file_id: file.id, deleted: true}}
 
-        {:error, changeset} ->
+        {:error, :already_deleted} ->
+          # Race: another caller soft-deleted the row between our
+          # `get_file` and the write. Same envelope as the get-miss —
+          # a re-delete must look identical to a never-existed id.
+          file_delete_not_found_error(file.id)
+
+        {:error, :unauthorized} ->
           {:error,
            %{
-             error: "file_delete: row delete failed (#{inspect(changeset.errors)})",
+             error: "file_delete: caller identity could not be resolved for audit attribution",
+             code: :unauthorized,
+             recoverable: false,
+             suggestion:
+               "Deletes are audit-logged and require an acting agent. Call through the MCP endpoint (which always supplies agent_id) rather than bare-invoking the tool surface."
+           }}
+
+        {:error, :project_archived} ->
+          {:error,
+           %{
+             error: "file_delete: project is archived (read-only)",
+             code: :project_archived,
+             recoverable: false,
+             suggestion:
+               "Archived projects refuse writes. Unarchive the project before deleting its files."
+           }}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:error,
+           %{
+             error: "file_delete: row update failed (#{inspect(changeset.errors)})",
              code: :delete_failed,
              recoverable: true,
-             suggestion:
-               "Underlying object may have been removed; re-issuing the call clears the row when the conflict resolves."
+             suggestion: "Transient write failure — re-issue the call."
            }}
       end
     else
@@ -6990,6 +7015,30 @@ defmodule Platform.Federation.ToolSurface do
        suggestion:
          "Idempotent: a re-delete of an already-deleted file yields this envelope. Confirm the file_id via file_list if you expected the row to exist."
      }}
+  end
+
+  # Actor for `Platform.Files.delete_file/2` audit attribution (task
+  # 019f7cb0 stage 4). MCP callers are agents — resolve the acting agent
+  # the same way `load_agent/1` does, falling back to the raw
+  # `context.agent_id` when the row isn't loadable (the id is still the
+  # truthful attribution). Non-UUID ids are dropped rather than passed
+  # through: `Platform.Audit.Event` casts actor_id as Ecto.UUID, and a
+  # junk id would make the bridged audit insert fail silently. `nil`
+  # (no resolvable identity) makes `delete_file/2` refuse with
+  # `:unauthorized` — every delete must be attributable.
+  defp file_delete_actor(context) do
+    case load_agent(context) do
+      %Agent{id: id} ->
+        %{id: id, type: "agent"}
+
+      nil ->
+        with id when is_binary(id) <- is_map(context) && Map.get(context, :agent_id),
+             {:ok, uuid} <- Ecto.UUID.cast(id) do
+          %{id: uuid, type: "agent"}
+        else
+          _ -> nil
+        end
+    end
   end
 
   # ── file_add helpers (ADR-0042 Files MCP Stage 3) ─────────────────────

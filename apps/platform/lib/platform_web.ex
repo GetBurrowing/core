@@ -90,6 +90,7 @@ defmodule PlatformWeb do
       import PlatformWeb.AvatarComponents
       import PlatformWeb.Components.ActionPatterns
       import PlatformWeb.Components.EmptyState
+      import PlatformWeb.Components.FileDeleteUI
       import PlatformWeb.Components.LifecycleControls
       import PlatformWeb.Components.ScopePill
       import PlatformWeb.Components.Sheet

@@ -132,7 +132,11 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # :start_space_purger (which is channel-specific by contract); this one
     # hard-deletes deletion-scheduled projects and the cascade-hidden
     # children of deletion-scheduled orgs once the retention window elapses.
-    :start_container_purger
+    :start_container_purger,
+    # Task 019f7cb0 stage 3 — file retention purger. Hard-deletes
+    # soft-deleted platform_files (bytes + row) once the 30-day restore
+    # window elapses. Tests call `Platform.Files.Purger.sweep/1` directly.
+    :start_file_purger
   ]
 
   # ── Assertion 1: Task-Supervisor rescue audit ─────────────────────

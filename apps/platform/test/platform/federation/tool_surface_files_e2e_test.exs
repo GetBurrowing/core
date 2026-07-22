@@ -9,7 +9,9 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
     * B — PDF extraction via files-service round-trip
     * C — cross-org auth rejection on all 5 tools
     * D — search snippet correctness (2-of-3 matches, snippet text)
-    * E — idempotent delete + storage cleanup
+    * E — idempotent delete. Originally asserted hard-delete storage
+      cleanup; task 019f7cb0 stage 4 flipped the tool to soft delete, so
+      E now asserts bytes + row are RETAINED for the 30-day undo window.
 
   These tests drive `Platform.Federation.ToolSurface.execute/3` — the
   same code path the `/mcp` endpoint dispatches to.
@@ -497,12 +499,12 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
     file
   end
 
-  # ── Case E: idempotent delete + storage cleanup ───────────────────────
+  # ── Case E: idempotent soft delete + bytes retained for undo ──────────
 
-  describe "[Case E] idempotent delete + storage cleanup" do
+  describe "[Case E] idempotent soft delete + bytes retained for undo" do
     setup :with_tmp_storage_root
 
-    test "first delete OK, second delete :not_found, get_metadata :not_found, storage absent",
+    test "first delete OK, second delete :not_found, get_metadata :not_found, bytes retained",
          %{agent_sxi: agent, project_sxi: project, storage_root: storage_root} do
       install_memory_stub([])
 
@@ -541,8 +543,11 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
                  context_for(agent)
                )
 
-      # Storage cleanup: underlying on-disk file gone
-      refute File.exists?(on_disk_path), "on-disk bytes must be removed after delete"
+      # Task 019f7cb0 stage 4: delete is SOFT — the on-disk bytes stay
+      # for the 30-day undo window (the Purger reclaims them after
+      # retention). A missing object here would make restore lossy.
+      assert File.exists?(on_disk_path),
+             "on-disk bytes must be RETAINED after soft delete (undo window)"
 
       # Second delete: :not_found envelope, NOT a crash (wrap in try/rescue)
       second_result =
@@ -569,8 +574,13 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
                  context_for(agent)
                )
 
-      # No orphan: DB row also gone
-      refute Files.get_file(file_id), "DB row must be gone after delete"
+      # Soft delete: invisible on the read path, but the row is retained
+      # (deleted_at set) so a human can restore it within the window.
+      refute Files.get_file(file_id), "row must be hidden after delete"
+
+      assert %Platform.Files.File{deleted_at: %DateTime{}} =
+               Files.get_file(file_id, include_deleted: true),
+             "row must be retained with deleted_at for the undo window"
     end
   end
 end

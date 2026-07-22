@@ -48,6 +48,12 @@ defmodule Platform.Files.File do
     field(:content_hash, :string)
     field(:ingest_status, :string, default: "pending")
 
+    # Soft-delete marker (task 019f7cb0 stage 2). Set/cleared exclusively by
+    # `Platform.Files.delete_file/2` and `restore_file/2` via a dedicated
+    # change — deliberately NOT in `@cast_fields`, so bulk attrs can never
+    # flip a row in or out of the deleted state.
+    field(:deleted_at, :utc_datetime_usec)
+
     timestamps(type: :utc_datetime_usec)
   end
 

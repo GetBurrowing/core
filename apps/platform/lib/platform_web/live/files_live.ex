@@ -43,6 +43,21 @@ defmodule PlatformWeb.FilesLive do
   `{:file_deleted, file_id}` on the same topic; the LV drops the row
   from local state and clears the detail pane if it was selected.
 
+  ## Delete + undo (task 019f7cb0 stage 5)
+
+  The detail-pane Delete button soft-deletes via
+  `Platform.Files.delete_file/2` — optimistic removal with NO confirm
+  dialog (ratified: undo over consent). The context broadcasts
+  `{:file_deleted, file_id}` itself, so this LV never re-broadcasts; the
+  click handler still drops the row in-place for same-tab snappiness
+  (the broadcast converges other tabs). An ~8s undo toast
+  (`PlatformWeb.Components.FileDeleteUI`) offers
+  `Platform.Files.restore_file/2`; `{:file_restored, file_id}` from any
+  session re-inserts the row via the same single-row refresh the ingest
+  events use. `restore_file/2` has no window check — a row purged
+  mid-undo (30-day sweeper) surfaces as a graceful "couldn't restore"
+  flash, never a crash.
+
   ## Out of scope
 
   Chat-attachment → Files promotion is a separate stack — this surface
@@ -61,6 +76,11 @@ defmodule PlatformWeb.FilesLive do
 
   @max_upload_size 50_000_000
   @max_upload_entries 10
+
+  # Undo window for the delete toast (design direction: ~8 seconds).
+  # Soft delete keeps the row recoverable server-side for 30 days after
+  # the toast dies — the toast is the fast path, not the only path.
+  @undo_toast_ms 8_000
 
   # ── Mount / handle_params ────────────────────────────────────────────────
 
@@ -94,6 +114,7 @@ defmodule PlatformWeb.FilesLive do
      |> assign(:semantic_results, [])
      |> assign(:semantic_search_state, :idle)
      |> assign(:show_upload_sheet, false)
+     |> assign(:undo_toast, nil)
      |> assign(:subscribed_project_id, nil)
      |> assign(:upload_batch, empty_upload_batch())
      |> allow_upload(:files,
@@ -167,6 +188,36 @@ defmodule PlatformWeb.FilesLive do
      socket
      |> assign(:selected_file, nil)
      |> assign(:selected_file_text, nil)}
+  end
+
+  # Optimistic delete — no confirm dialog (ratified design: undo over
+  # consent). The disabled button still emits clicks (aria-disabled is
+  # advisory), so the actor check here is the real rail.
+  def handle_event("delete_file", %{"id" => file_id}, socket) do
+    case {delete_actor(socket), find_known_file(socket, file_id)} do
+      {nil, _file} ->
+        {:noreply, put_flash(socket, :error, "Sign in to delete files.")}
+
+      {_actor, nil} ->
+        {:noreply, socket}
+
+      {actor, file} ->
+        do_delete_file(socket, actor, file)
+    end
+  end
+
+  def handle_event("undo_delete", _params, socket) do
+    case socket.assigns.undo_toast do
+      nil ->
+        {:noreply, socket}
+
+      %{file: file, timer: timer} ->
+        Process.cancel_timer(timer)
+
+        socket
+        |> assign(:undo_toast, nil)
+        |> restore_deleted_file(delete_actor(socket), file)
+    end
   end
 
   def handle_event("toggle_upload_sheet", _params, socket) do
@@ -247,25 +298,38 @@ defmodule PlatformWeb.FilesLive do
   end
 
   def handle_info({:file_deleted, file_id}, socket) do
-    files = Enum.reject(socket.assigns.files, &(&1.id == file_id))
+    {:noreply, drop_file_row(socket, file_id)}
+  end
 
-    selected_drop? =
-      case socket.assigns.selected_file do
-        %Files.File{id: ^file_id} -> true
-        _ -> false
-      end
-
+  # Another session (or our own undo — idempotent) restored a
+  # soft-deleted file: re-fetch and re-insert via the same single-row
+  # refresh the ingest events use. A toast still offering undo for this
+  # file is stale — the file is already back — so clear it.
+  def handle_info({:file_restored, file_id}, socket) do
     socket =
-      if selected_drop? do
-        socket
-        |> assign(:selected_file, nil)
-        |> assign(:selected_file_text, nil)
-        |> assign(:highlight_snippet, nil)
-      else
-        socket
+      case socket.assigns.undo_toast do
+        %{file: %Files.File{id: ^file_id}, timer: timer} ->
+          Process.cancel_timer(timer)
+          assign(socket, :undo_toast, nil)
+
+        _ ->
+          socket
       end
 
-    {:noreply, assign(socket, :files, files)}
+    {:noreply, refresh_file(socket, file_id)}
+  end
+
+  # Undo window elapsed. Guard on the file id so a late-arriving timer
+  # message from a replaced toast (consecutive deletes race
+  # Process.cancel_timer) can't clear the newer toast.
+  def handle_info({:clear_undo_toast, file_id}, socket) do
+    case socket.assigns.undo_toast do
+      %{file: %Files.File{id: ^file_id}} ->
+        {:noreply, assign(socket, :undo_toast, nil)}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   def handle_info(_other, socket), do: {:noreply, socket}
@@ -573,6 +637,172 @@ defmodule PlatformWeb.FilesLive do
     end
   end
 
+  # ── Delete + undo internals (task 019f7cb0 stage 5) ────────────────────
+
+  # Actor map for Platform.Files.delete_file/2 / restore_file/2 — the
+  # platform's actor-first convention. An untyped map audits as "user",
+  # which is correct here; nil (no session user) fails the context's
+  # presence gate.
+  defp delete_actor(%{assigns: %{current_user_id: user_id}}) when is_binary(user_id),
+    do: %{id: user_id}
+
+  defp delete_actor(_socket), do: nil
+
+  # The Delete button acts on the detail pane's file, which normally sits
+  # in @files too — but a semantic-search hit can select a row outside
+  # the loaded list, so check the selection first.
+  defp find_known_file(socket, file_id) do
+    case socket.assigns.selected_file do
+      %Files.File{id: ^file_id} = file -> file
+      _ -> Enum.find(socket.assigns.files, &(&1.id == file_id))
+    end
+  end
+
+  defp do_delete_file(socket, actor, file) do
+    case Files.delete_file(actor, file) do
+      {:ok, deleted} ->
+        # The context already broadcast {:file_deleted, id} for other
+        # sessions; drop the row here too so this tab doesn't wait on
+        # its own PubSub round-trip (drop_file_row is idempotent).
+        {:noreply,
+         socket
+         |> drop_file_row(deleted.id)
+         |> show_undo_toast(deleted)}
+
+      {:error, :already_deleted} ->
+        # Another session (or the MCP tool) beat us to it — converge
+        # silently; their broadcast may not have reached us yet.
+        {:noreply, drop_file_row(socket, file.id)}
+
+      {:error, :project_archived} ->
+        {:noreply,
+         put_flash(socket, :error, "This project is archived — its files can't be deleted.")}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "Sign in to delete files.")}
+
+      {:error, _changeset} ->
+        {:noreply,
+         put_flash(socket, :error, "Couldn't delete #{display_name(file)}. Please try again.")}
+    end
+  end
+
+  # Remove a row from local state and clear the detail pane if it was
+  # showing that file. Shared by the {:file_deleted, _} broadcast and the
+  # optimistic click path — both may fire for the same delete, so this
+  # must stay idempotent.
+  defp drop_file_row(socket, file_id) do
+    files = Enum.reject(socket.assigns.files, &(&1.id == file_id))
+
+    selected_drop? =
+      case socket.assigns.selected_file do
+        %Files.File{id: ^file_id} -> true
+        _ -> false
+      end
+
+    socket =
+      if selected_drop? do
+        socket
+        |> assign(:selected_file, nil)
+        |> assign(:selected_file_text, nil)
+        |> assign(:highlight_snippet, nil)
+      else
+        socket
+      end
+
+    assign(socket, :files, files)
+  end
+
+  # One toast at a time: a consecutive delete replaces the toast and its
+  # timer (cancel-or-race is handled by the id guard in handle_info).
+  defp show_undo_toast(socket, %Files.File{} = deleted) do
+    cancel_undo_timer(socket)
+    timer = Process.send_after(self(), {:clear_undo_toast, deleted.id}, @undo_toast_ms)
+
+    assign(socket, :undo_toast, %{
+      file: deleted,
+      name: display_name(deleted),
+      timer: timer
+    })
+  end
+
+  defp cancel_undo_timer(%{assigns: %{undo_toast: %{timer: timer}}}),
+    do: Process.cancel_timer(timer)
+
+  defp cancel_undo_timer(_socket), do: :ok
+
+  defp restore_deleted_file(socket, nil, _file) do
+    {:noreply, put_flash(socket, :error, "Sign in to restore files.")}
+  end
+
+  defp restore_deleted_file(socket, actor, file) do
+    case safe_restore(actor, file) do
+      {:ok, restored} ->
+        # Reinsert directly from the re-fetched row the context returns;
+        # the {:file_restored, _} broadcast also lands here and converges
+        # idempotently via refresh_file/2.
+        {:noreply, insert_file_row(socket, restored)}
+
+      {:error, :not_deleted} ->
+        # Already restored elsewhere (double-undo race) — just make sure
+        # the row is showing.
+        {:noreply, refresh_file(socket, file.id)}
+
+      {:error, :not_found} ->
+        # The 30-day sweeper purged the row mid-undo. restore_file/2 has
+        # no window check, so this surfaces as a stale update — tell the
+        # user plainly instead of crashing.
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Couldn't restore #{display_name(file)} — it has been permanently removed."
+         )}
+
+      {:error, :project_archived} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "This project is archived — #{display_name(file)} can't be restored."
+         )}
+
+      {:error, _other} ->
+        {:noreply, put_flash(socket, :error, "Couldn't restore #{display_name(file)}.")}
+    end
+  end
+
+  # A purged row makes Repo.update raise Ecto.StaleEntryError inside
+  # restore_file/2 — normalize it to the :not_found the caller handles.
+  defp safe_restore(actor, file) do
+    Files.restore_file(actor, file)
+  rescue
+    Ecto.StaleEntryError -> {:error, :not_found}
+  end
+
+  # Insert-or-replace a single row in local state; sort order is applied
+  # at render time by filtered_and_sorted/3, so list position is
+  # irrelevant. Ignores rows for projects other than the selected one
+  # (an undo can fire after the user navigated away).
+  defp insert_file_row(socket, %Files.File{} = file) do
+    if file.project_id == socket.assigns.selected_project_id do
+      files = socket.assigns.files
+
+      files =
+        if Enum.any?(files, &(&1.id == file.id)) do
+          Enum.map(files, fn f -> if f.id == file.id, do: file, else: f end)
+        else
+          [file | files]
+        end
+
+      assign(socket, :files, files)
+    else
+      socket
+    end
+  end
+
+  defp display_name(%Files.File{} = file), do: file.name || file.original_filename || "file"
+
   defp run_semantic_search(socket, query) do
     project_id = socket.assigns.selected_project_id
 
@@ -661,6 +891,15 @@ defmodule PlatformWeb.FilesLive do
   defp apply_sort(files, "size_asc"), do: Enum.sort_by(files, & &1.byte_size, :asc)
   defp apply_sort(files, "type_asc"), do: Enum.sort_by(files, & &1.content_type)
   defp apply_sort(files, _), do: apply_sort(files, "date_desc")
+
+  @doc """
+  Whether the current viewer may delete (and restore) files. Mirrors the
+  page's only mutation gate — actor presence (`current_user_id` in the
+  session; the context adds no role check, per the ratified stage-2
+  scope). The route sits behind RequireAuth, so this is a defensive rail
+  for the disabled-button render path rather than a reachable state.
+  """
+  def can_delete?(current_user_id), do: is_binary(current_user_id)
 
   @doc false
   def status_badge_class("ingested"), do: "badge badge-success badge-sm"

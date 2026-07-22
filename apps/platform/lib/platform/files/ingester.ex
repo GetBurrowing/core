@@ -177,7 +177,7 @@ defmodule Platform.Files.Ingester do
             )
         end
 
-        entry = build_entry(file, text, pages)
+        entry = memory_entry(file, text, pages)
 
         case Memory.ingest([entry]) do
           {:ok, _count} ->
@@ -230,7 +230,17 @@ defmodule Platform.Files.Ingester do
   # per-chunk list we'll trade this for the real ids.
   defp synthetic_chunk_id(%Platform.Files.File{id: id}), do: "file:" <> to_string(id)
 
-  defp build_entry(file, text, pages) do
+  @doc """
+  Builds the `Platform.Memory` entry for a file's extracted text — the
+  exact shape the ingest pipeline indexes (entry id == file id, so
+  `Platform.Memory.delete([file.id])` is the matching scrub key).
+
+  Public so `Platform.Files.restore_file/2` (task 019f7cb0 stage 2) can
+  re-index a restored file from the cached extracted text without
+  duplicating this shape or re-running extraction.
+  """
+  @spec memory_entry(Platform.Files.File.t(), String.t(), [String.t()] | nil) :: map()
+  def memory_entry(file, text, pages) do
     %{
       id: file.id,
       content: text,
