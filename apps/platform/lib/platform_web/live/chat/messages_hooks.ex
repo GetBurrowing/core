@@ -1535,7 +1535,14 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       true ->
         case persist_uploaded_attachments(socket, upload_name) do
           {:ok, pending_attachments} ->
-            case Chat.post_message_with_attachments(attrs, pending_attachments, from_pid: self()) do
+            # M9 (rbac-external-users): thread the composing user's id so the
+            # external upload-scope gate fires at the write seam even if the
+            # filtered composer (M5) is bypassed. Internal / nil users pass
+            # through; `:out_of_external_scope` reuses the failure flash below.
+            case Chat.post_message_with_attachments(attrs, pending_attachments,
+                   from_pid: self(),
+                   poster_user_id: socket.assigns[:user_id]
+                 ) do
               {:ok, msg, saved_attachments} ->
                 {:ok, socket, msg, saved_attachments}
 
