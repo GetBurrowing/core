@@ -1223,14 +1223,16 @@ defmodule Platform.Chat do
   """
   @spec post_message_with_attachments(map(), [map()], keyword()) ::
           {:ok, Message.t(), [Attachment.t()]}
-          | {:error, :space_archived | :dm_not_allowed | term()}
+          | {:error, :space_archived | :dm_not_allowed | :out_of_external_scope | term()}
   def post_message_with_attachments(attrs, attachment_attrs_list, opts \\ [])
       when is_list(attachment_attrs_list) do
     space_id = attrs[:space_id] || attrs["space_id"]
     participant_id = attrs[:participant_id] || attrs["participant_id"]
+    poster_user_id = Keyword.get(opts, :poster_user_id)
 
     with :ok <- ensure_space_writable(space_id),
-         :ok <- ensure_dm_send_allowed(space_id, participant_id) do
+         :ok <- ensure_dm_send_allowed(space_id, participant_id),
+         :ok <- ensure_external_upload_allowed(space_id, poster_user_id) do
       do_post_message_with_attachments(attrs, attachment_attrs_list, opts)
     end
   end
@@ -2921,12 +2923,34 @@ defmodule Platform.Chat do
         nil
 
       %Attachment{space_id: nil} = attachment ->
-        attachment
+        # M9 (rbac-external-users): the nil-space (legacy / canvas-orphan) branch
+        # used to pass through UNCONDITIONALLY — the one download leak for an
+        # external user, who has no space to scope on. Fail closed for external
+        # principals; internal users and agent runtimes keep the pass-through
+        # (a nil-space row is a pre-backfill artifact an internal caller may
+        # still need). The space-bound branch below is unchanged — its
+        # `principal_is_member?/2` already equals M7's read-scope membership.
+        if external_principal?(principal), do: nil, else: attachment
 
       %Attachment{space_id: space_id} = attachment ->
         if principal_is_member?(space_id, principal), do: attachment, else: nil
     end
   end
+
+  @doc """
+  Is the download `principal` an external user? (M9, rbac-external-users.)
+
+  Consumes M7's `Platform.Tenancy.external_user?/1` — the single by-user
+  predicate; this must NOT re-implement it. `external_user?/1` matches on a
+  struct/map carrying an `:id`, so a `{:user, uid}` principal is wrapped as
+  `%{id: uid}`. Runtime (agent) principals are never external.
+  """
+  @spec external_principal?({:user, binary()} | {:runtime, AgentRuntime.t()} | term()) ::
+          boolean()
+  def external_principal?({:user, user_id}) when is_binary(user_id),
+    do: Tenancy.external_user?(%{id: user_id})
+
+  def external_principal?(_), do: false
 
   defp principal_is_member?(space_id, {:user, user_id}) when is_binary(user_id) do
     Repo.exists?(
@@ -3800,6 +3824,28 @@ defmodule Platform.Chat do
   end
 
   defp ensure_dm_send_allowed(_space_id, _author_participant_pk), do: :ok
+
+  # M9 (rbac-external-users): bind attachment writes to the external scope so a
+  # file only ever lands in a space the uploader is a `chat_participants` member
+  # of (an allowlisted SXI location). Threaded into `post_message_with_attachments/3`
+  # as a second guard alongside `ensure_space_writable/1`, mirroring how M8 added
+  # `ensure_dm_send_allowed/2` on the send seam.
+  #
+  # `poster_user_id` is nil for `post_message/2` and every pre-existing caller,
+  # and non-external for internal + agent + system callers — all pass through
+  # unchanged because `ExternalScope.for_user/1` yields a non-external scope and
+  # `visible_space_id?/2` is then unconditionally true. Only an EXTERNAL poster
+  # is narrowed, and to the SAME participant set M7 uses for reads, so
+  # upload-scope and read-scope cannot drift.
+  defp ensure_external_upload_allowed(space_id, poster_user_id) do
+    scope = ExternalScope.for_user(poster_user_id)
+
+    if ExternalScope.visible_space_id?(space_id, scope) do
+      :ok
+    else
+      {:error, :out_of_external_scope}
+    end
+  end
 
   # Variant for write paths addressed by message rather than space.
   defp ensure_message_space_writable(%Message{space_id: space_id}),

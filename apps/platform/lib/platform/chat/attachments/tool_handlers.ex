@@ -267,6 +267,20 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
            recoverable: false
          }}
 
+      # M9 (rbac-external-users): a USER-principal presign must be authorized on
+      # real membership BEFORE any pending row is reserved or URL minted — no
+      # signed upload URL for a space the requester is not in. Checked AHEAD of
+      # the agent branch precisely because `assert_agent_in_space/2` has a loose
+      # fallback (authorizes on the mere presence of *a* participant_id) that
+      # would otherwise green-light a user principal for any space.
+      #
+      # The presign path is agent-context today; this is forward-hardening for
+      # user-principal presigns so "no URL for a non-member space" is a property
+      # of the seam itself. Consumes M7's ExternalScope (external users) so
+      # upload-scope == read-scope; internal users take a plain membership check.
+      is_binary(Map.get(context, :user_id)) ->
+        require_user_member(space_id, Map.get(context, :user_id))
+
       assert_agent_in_space(space_id, context) ->
         :ok
 
@@ -277,6 +291,28 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
              "attachment: agent #{inspect(Map.get(context, :agent_id))} is not a participant in space #{inspect(space_id)} — join the space first.",
            recoverable: false
          }}
+    end
+  end
+
+  defp require_user_member(space_id, user_id) do
+    scope = Platform.Chat.ExternalScope.for_user(user_id)
+
+    authorized? =
+      if scope.external? do
+        Platform.Chat.ExternalScope.visible_space_id?(space_id, scope)
+      else
+        Chat.user_in_space?(user_id, space_id)
+      end
+
+    if authorized? do
+      :ok
+    else
+      {:error,
+       %{
+         error:
+           "attachment: user #{inspect(user_id)} is not a participant in space #{inspect(space_id)} — no upload URL issued.",
+         recoverable: false
+       }}
     end
   end
 
