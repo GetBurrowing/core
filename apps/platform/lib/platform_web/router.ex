@@ -125,6 +125,74 @@ defmodule PlatformWeb.Router do
     end
   end
 
+  # ── External-chat host scope (rbac-external-users M4, task 019f8837) ──
+  #
+  # INERT / DARK scaffold. Mirrors the `meet.` guest scope structurally
+  # (see the `meet.` scope near the bottom of this file) but for the
+  # authenticated external-chat surface. Phoenix matches on `conn.host`
+  # starting with `chat.`, so `chat.example.com` (prod),
+  # `chat.localhost` (dev via /etc/hosts), and `chat.<any>` route here
+  # while the default `app.*` / `localhost` domain does not. No environment
+  # declares a `chat.` host until the M14 subdomain go-live, so this route
+  # is unreachable without an explicit spoofed host header — it ships dark.
+  #
+  # The `:external_chat` live_session pairs the shell-less `:external`
+  # layout with a `chat_mode: "external"` session key (merged into the
+  # connect session and flowed to `ChatLive.mount/3`, the same mechanism as
+  # meet.'s `chrome_mode: "none"`). Layouts are locked at the live_session
+  # boundary, so this seam is what lets ChatLive serve BOTH the
+  # authenticated `/chat` shell surface (default host) AND the shell-less
+  # `chat.` external surface without a router-topology surprise. The
+  # `chat_mode` key is dormant until M5 branches ChatLive on it.
+  #
+  # ── PLACEMENT: this scope is deliberately defined BEFORE the default
+  # authenticated `scope "/"` below — a divergence from `meet.`, which
+  # sits at the end of the file. Reason: `/chat` and `/chat/:space_slug`
+  # OVERLAP the default scope's paths. Phoenix generates one
+  # `__match_route__/3` clause per route in definition order and the FIRST
+  # matching clause wins; the default `/chat` route carries a
+  # match-any-host pattern, so if it were defined first it would win even
+  # on `chat.localhost` and shadow `:external_chat` entirely. Defining the
+  # host-constrained `chat.` clause first means it wins on the chat host,
+  # while its `"chat." <> _` host guard makes it a no-op on the default
+  # host (which then falls through to the authenticated `/chat` below).
+  # `meet.` never hit this because `/:slug/:token` overlaps no default
+  # route, so its end-placement was safe; ours is not.
+  #
+  # ── Three deliberate divergences from `meet.` (all beyond placement):
+  #   1. `pipe_through([:browser, :require_auth])`, NOT the guest pipeline
+  #      — external users are authenticated real OIDC accounts (design
+  #      canvas §3/§6), not anonymous guests.
+  #   2. Reuses the `:browser` pipeline's full `:root` document head (PWA
+  #      push, canvas §10-8) rather than a stripped guest_root — external
+  #      users get push, so only the APP layout is swapped, to `:external`.
+  #   3. Reuses `on_mount: [ShellLive, {LiveAuth, :default}]` — identical
+  #      to the `:authenticated` live_session below — so ChatLive mounts
+  #      with the assigns its current template references and renders
+  #      WITHOUT crashing while inert. M5 replaces this mount chain with
+  #      the external branch; M6/M7 add scope auth. No `/` root redirect
+  #      (the external landing UX is M5's call) and no endpoint/config
+  #      change (the host scope is the whole mechanism, exactly like meet.).
+  #
+  # NOTE (M4 dormancy limit, surfaced for M6/M7): route omission does NOT
+  # limit this host's surface. The default authenticated `scope "/"` below
+  # carries a match-any-host pattern, so /tasks, /admin, /org_memory, etc.
+  # still resolve on `chat.localhost` via that scope. Restricting the chat
+  # host to only /chat is scope-enforcement work owned by M6/M7 (or a
+  # host-constrained default scope), not achievable by adding this scope
+  # alone. See `router_external_chat_host_test.exs` for the exact contract.
+  scope "/", PlatformWeb, host: "chat." do
+    pipe_through([:browser, :require_auth])
+
+    live_session :external_chat,
+      on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
+      layout: {PlatformWeb.Layouts, :external},
+      session: %{"chat_mode" => "external"} do
+      live("/chat", ChatLive, :index)
+      live("/chat/:space_slug", ChatLive, :show)
+    end
+  end
+
   scope "/", PlatformWeb do
     pipe_through([:browser, :require_auth])
 
