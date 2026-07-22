@@ -219,6 +219,40 @@ defmodule PlatformWeb.Layouts do
     """
   end
 
+  @doc """
+  Minimal, chrome-less layout for the external HOLDING landing
+  (rbac-external-users M3 stage 2, task 019f8837).
+
+  Selected only by the `:external_holding` live_session, which serves
+  `PlatformWeb.ExternalHoldingLive` at `/welcome` to an incompletely-
+  provisioned external user. Structurally mirrors the guest-meeting
+  `guest/1` layout above: a null-ish outer wrapper that deliberately does
+  NOT render `<.shell_layout>`, `<.icon_rail>`, `<.bottom_rail>`, or any
+  auth-side chrome. Omitting the `:shell` layout is exactly what makes the
+  holding surface zero-access by construction — no space list, no
+  discovery, no path to another surface (the brand chip + logout are the
+  only affordances, carried in the LiveView template).
+
+  Uses `h-dvh` (definite `height: 100dvh`), NOT `min-h-dvh`, matching the
+  documented guest/external height posture — external users hit this from
+  mobile, so the card centers cleanly and `env(safe-area-inset-*)` padding
+  in the template keeps content clear of the notch / home indicator.
+
+  BOUNDARY: M4 (task 019f8837-2722) introduces a SEPARATE `:external`
+  layout (above) for the authenticated `chat.` host surface. `holding/1`
+  is kept independent (different name, no collision); the two may be
+  unified later, but M3 does not depend on M4.
+  """
+  def holding(assigns) do
+    ~H"""
+    <main class="h-dvh bg-base-100 text-base-content">
+      {@inner_content}
+    </main>
+
+    <.flash_group flash={assigns[:flash] || %{}} />
+    """
+  end
+
   @doc "Returns a Tailwind color class for the agent status indicator."
   def agent_status_color(:online), do: "bg-success"
   def agent_status_color(:thinking), do: "bg-sky-400"

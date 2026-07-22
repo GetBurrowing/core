@@ -1,0 +1,58 @@
+<%!--
+  Zero-access holding landing. Brand chip + logout are the ONLY affordances
+  — deliberately NO icon rail, NO bottom nav, NO space/discovery list.
+  Semantic DaisyUI tokens only (Fabrikam cyan primary theming lives in app.css).
+  env(safe-area-inset-*) padding keeps content clear of the notch / home
+  indicator on mobile, where external users overwhelmingly hit this.
+--%>
+<div
+  class="flex h-full flex-col"
+  style="padding-top: env(safe-area-inset-top); padding-right: env(safe-area-inset-right); padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left);"
+  data-role="holding-root"
+>
+  <header
+    class="flex items-center justify-between px-4 py-3 sm:px-6"
+    data-role="holding-header"
+  >
+    <div class="flex items-center gap-2" data-role="brand-chip">
+      <img src={~p"/images/logo.svg"} alt="Fabrikam" class="size-7" />
+      <span class="text-sm font-semibold tracking-tight text-base-content">Fabrikam</span>
+    </div>
+
+    <a href={~p"/auth/logout"} class="btn btn-ghost btn-sm gap-2" data-role="holding-logout">
+      <span class="hero-arrow-right-start-on-rectangle size-4"></span>
+      <span class="hidden sm:inline">Log out</span>
+    </a>
+  </header>
+
+  <main class="flex flex-1 items-center justify-center px-4 pb-10">
+    <div
+      class="w-full max-w-md rounded-2xl border border-base-300 bg-base-200 p-8 text-center shadow-sm"
+      data-role="holding-card"
+    >
+      <div class="mx-auto mb-5 flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+        <span class="hero-sparkles size-6"></span>
+      </div>
+
+      <h1 class="text-xl font-semibold text-base-content">
+        You're in — your workspace is being set up
+      </h1>
+
+      <p class="mt-3 text-sm leading-relaxed text-base-content/60">
+        Thanks for signing in. We're getting everything ready for you. This page
+        updates on its own the moment your access is live — there's no need to
+        refresh or sign in again.
+      </p>
+
+      <div
+        class="mt-6 flex items-center justify-center gap-2 text-xs font-medium text-base-content/50"
+        aria-live="polite"
+        data-role="holding-status"
+      >
+        <span class="inline-block size-2 animate-pulse rounded-full bg-primary" aria-hidden="true">
+        </span>
+        Waiting for setup to complete…
+      </div>
+    </div>
+  </main>
+</div>

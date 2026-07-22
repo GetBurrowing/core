@@ -52,6 +52,12 @@ defmodule Platform.Accounts.ExternalAdmission do
 
   @telemetry_event [:platform, :auth, :external_admission]
 
+  # Lookback window + scan cap for `awaiting_setup/0`. Holding logins are
+  # rare; a 30-day window at 500 rows comfortably covers a live queue
+  # without an unbounded scan.
+  @awaiting_lookback_days 30
+  @awaiting_scan_limit 500
+
   defmodule Result do
     @moduledoc "The admission decision M3 consumes. See `ExternalAdmission`."
     @enforce_keys [:user, :state, :external?]
@@ -88,14 +94,17 @@ defmodule Platform.Accounts.ExternalAdmission do
   end
 
   @doc """
-  Post-login redirect target for a result. `:full` and `:holding` both land
-  on `"/chat"` (a valid existing route) for now — no dead-end even before M3
-  ships the dedicated holding surface. M3 branches on the `:external_admission`
-  session key to render the holding UI on whatever route it owns.
+  Post-login redirect target for a result. `:full` lands on `"/chat"`;
+  `:holding` lands on `"/welcome"` — the dedicated holding surface M3
+  ships (`PlatformWeb.ExternalHoldingLive`). M2 built this fn as the seam
+  M3 flips; the `:holding` clause was a `/chat` placeholder until M3 stood
+  up the holding landing. The holding LiveView branches on the
+  `:external_admission` session key and, for a non-holding session, bounces
+  an ordinary internal user straight to `/chat`.
   """
   @spec post_login_path(Result.t()) :: String.t()
   def post_login_path(%Result{state: :full}), do: "/chat"
-  def post_login_path(%Result{state: :holding}), do: "/chat"
+  def post_login_path(%Result{state: :holding}), do: "/welcome"
 
   @doc """
   PubSub topic for a target user's admission events. Single source of truth
@@ -130,7 +139,76 @@ defmodule Platform.Accounts.ExternalAdmission do
     end
   end
 
+  @doc """
+  The admin recovery queue's backing rows: external logins still awaiting
+  setup (M3 stage 4 consumes this).
+
+  Reads the DURABLE queue source stage 3 established — recent
+  `platform.auth.external_admission` / action `"holding"` `Audit.Event`
+  rows — dedups by `actor_id` (keeping the most-recent login per user),
+  resolves each to a `%User{}`, and DROPS any user who is now provisioned
+  (holds an external `org_membership` via `Tenancy.external_user?/1`, i.e.
+  a grant already applied). What remains is genuinely-still-holding logins.
+
+  Returns a list of `%{user:, user_id:, email:, reason:, last_seen_at:}`
+  maps, newest login first.
+  """
+  @spec awaiting_setup() :: [
+          %{
+            user: Accounts.User.t(),
+            user_id: binary(),
+            email: String.t() | nil,
+            reason: String.t() | nil,
+            last_seen_at: DateTime.t()
+          }
+        ]
+  def awaiting_setup do
+    since =
+      DateTime.add(DateTime.utc_now(), -@awaiting_lookback_days * 24 * 60 * 60, :second)
+
+    Platform.Audit.list(
+      event_type: "platform.auth.external_admission",
+      since: since,
+      limit: @awaiting_scan_limit
+    )
+    |> Enum.filter(&(&1.action == "holding"))
+    # `Audit.list/1` orders ascending by id; reverse so the most-recent
+    # holding login per user wins the `uniq_by` dedup below.
+    |> Enum.reverse()
+    |> Enum.uniq_by(& &1.actor_id)
+    |> Enum.map(&build_awaiting_row/1)
+    |> Enum.reject(fn
+      nil -> true
+      # Drop users already provisioned by an applied grant — they've been
+      # recovered and are no longer awaiting setup.
+      row -> Tenancy.external_user?(row.user)
+    end)
+  end
+
   # -- internals --
+
+  defp build_awaiting_row(%{actor_id: actor_id, metadata: metadata, inserted_at: at}) do
+    case Accounts.get_user(actor_id) do
+      nil ->
+        nil
+
+      user ->
+        %{
+          user: user,
+          user_id: user.id,
+          email: user.email,
+          reason: metadata_reason(metadata),
+          last_seen_at: at
+        }
+    end
+  end
+
+  defp build_awaiting_row(_), do: nil
+
+  defp metadata_reason(metadata) when is_map(metadata),
+    do: Map.get(metadata, "reason") || Map.get(metadata, :reason)
+
+  defp metadata_reason(_), do: nil
 
   defp decide(user, oidc_user, surface) do
     external_claim? = Map.get(oidc_user, :external_claim?, false)

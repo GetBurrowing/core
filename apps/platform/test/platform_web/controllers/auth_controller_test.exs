@@ -221,7 +221,7 @@ defmodule PlatformWeb.AuthControllerTest do
       assert membership.external == true
     end
 
-    test "dev_login with no grant on the external surface lands :holding — session, holding key, /chat, zero scoped rows",
+    test "dev_login with no grant on the external surface lands :holding — session, holding key, /welcome, zero scoped rows",
          %{conn: conn} do
       slug = "exthold#{System.unique_integer([:positive])}"
 
@@ -230,8 +230,9 @@ defmodule PlatformWeb.AuthControllerTest do
         |> init_test_session(%{})
         |> PlatformWeb.AuthController.dev_login(%{"as" => slug})
 
-      # Not a dead-end — a valid route.
-      assert redirected_to(conn, 302) == ~p"/chat"
+      # M3 stage 2 flipped `post_login_path(:holding)` from the `/chat`
+      # placeholder to the dedicated holding landing `/welcome`.
+      assert redirected_to(conn, 302) == ~p"/welcome"
       user_id = get_session(conn, :current_user_id)
       assert user_id
 
