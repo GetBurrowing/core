@@ -14,6 +14,7 @@ defmodule PlatformWeb.MCPController do
 
   alias Platform.Chat
   alias Platform.Federation.ToolSurface
+  alias Platform.Tenancy
 
   @protocol_version "2025-06-18"
   @server_name "startup-suite"
@@ -67,8 +68,8 @@ defmodule PlatformWeb.MCPController do
 
   defp dispatch("tools/list", _params, runtime) do
     tools =
-      runtime.allowed_bundles
-      |> ToolSurface.list_tools()
+      runtime
+      |> effective_tools()
       |> Enum.map(&to_mcp_tool/1)
 
     {:ok, %{tools: tools}}
@@ -101,10 +102,29 @@ defmodule PlatformWeb.MCPController do
 
   # ── Authorization ───────────────────────────────────────────────────
 
-  defp authorize_tool(name, runtime) do
-    scoped = ToolSurface.list_tools(runtime.allowed_bundles)
+  # Single source of truth for the tool set a runtime may see AND call.
+  # `tools/list` maps over this and `authorize_tool/2` checks membership
+  # against it, so the visible set and the callable set are provably
+  # identical — a tool can never be listed-but-blocked or blocked-but-
+  # listed. For an external principal the bundle-scoped list is further
+  # intersected with the chat allowlist (fail-closed, only removes); for
+  # an internal principal `scope_for_external(_, false)` is identity, so
+  # behavior is byte-for-byte unchanged.
+  defp effective_tools(runtime) do
+    runtime.allowed_bundles
+    |> ToolSurface.list_tools()
+    |> ToolSurface.scope_for_external(external_principal?(runtime))
+  end
 
-    if Enum.any?(scoped, &(&1.name == name)),
+  # An external principal is a runtime whose owner holds any org_membership
+  # marked `external: true` (M1's column). One indexed `Repo.exists?` per
+  # request. `Tenancy.external_user?/1` matches a map carrying `:id`, so we
+  # wrap the raw `owner_user_id` — a nil owner falls through to `false`.
+  defp external_principal?(runtime),
+    do: Tenancy.external_user?(%{id: runtime.owner_user_id})
+
+  defp authorize_tool(name, runtime) do
+    if Enum.any?(effective_tools(runtime), &(&1.name == name)),
       do: :ok,
       else: {:error, :forbidden}
   end

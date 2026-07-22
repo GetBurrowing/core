@@ -101,9 +101,16 @@ defmodule Platform.Tenancy.ExternalUsersTest do
       normal_user = create_user!()
       membership!(normal_user, org, "member")
 
+      # A user with no memberships at all is not external (M11 gate relies
+      # on this: a runtime whose owner has zero memberships → internal).
+      no_membership_user = create_user!()
+
       assert Tenancy.external_user?(ext_user)
       refute Tenancy.external_user?(normal_user)
+      refute Tenancy.external_user?(no_membership_user)
       refute Tenancy.external_user?(nil)
+      # Nil-safe on the by-id map shape M11's controller passes.
+      refute Tenancy.external_user?(%{id: nil})
     end
 
     test "mark_membership_external/1 flips an existing normal membership and is idempotent" do
