@@ -50,6 +50,7 @@ defmodule Platform.Chat do
     Thread
   }
 
+  alias Platform.Chat.ExternalScope
   alias Platform.Chat.Canvas.Versions, as: CanvasVersions
   alias Platform.Chat.MessageVersions
   alias Platform.Chat.PubSub, as: ChatPubSub
@@ -147,9 +148,25 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "Fetch a space by primary key. Returns `nil` if not found."
-  @spec get_space(binary()) :: Space.t() | nil
-  def get_space(id), do: Repo.get(Space, id)
+  @doc """
+  Fetch a space by primary key. Returns `nil` if not found.
+
+  ## Options
+
+    * `:scope` — an optional `%Platform.Chat.ExternalScope{}`. When it is an
+      external scope, a space the user does not participate in resolves to
+      `nil` (a 404-shaped miss, not a leak). Absent / nil / internal scopes are
+      pass-through, so `get_space/1` and every existing caller are unchanged.
+  """
+  @spec get_space(binary(), keyword()) :: Space.t() | nil
+  def get_space(id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    case Repo.get(Space, id) do
+      nil -> nil
+      space -> if ExternalScope.visible_space_id?(id, scope), do: space, else: nil
+    end
+  end
 
   @doc """
   Fetch a space by slug.
@@ -163,6 +180,10 @@ defmodule Platform.Chat do
       be derived from the user's session (e.g. `/chat/general` resolving to
       *this user's* tenant General, not the oldest cross-tenant match).
 
+    * `:scope` — optional `%Platform.Chat.ExternalScope{}`. For an external
+      scope a slug outside the caller's participant set resolves to `nil`
+      (a 404, not a leak). Absent / nil / internal scopes are pass-through.
+
   When `:org_id` is absent (or nil), the legacy behavior is preserved: the
   oldest matching row by `inserted_at` is returned. This back-compat path is
   what every pre-existing caller relies on — system-channel lookups,
@@ -173,7 +194,9 @@ defmodule Platform.Chat do
   """
   @spec get_space_by_slug(String.t(), keyword()) :: Space.t() | nil
   def get_space_by_slug(slug, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
     query = where(Space, [s], s.slug == ^slug)
+    query = ExternalScope.scope_spaces(query, scope)
 
     query =
       case Keyword.get(opts, :org_id) do
@@ -200,6 +223,11 @@ defmodule Platform.Chat do
     * `:workspace_id` — filter by workspace
     * `:kind`         — filter by kind ("channel", "dm", "group")
     * `:archived`     — `true` for archived only, `false` (default) for active only
+    * `:scope`        — optional `%Platform.Chat.ExternalScope{}`. For an
+      external scope the result is narrowed to the caller's participant spaces
+      (so `list_spaces(kind: "channel", scope: ext)` returns ONLY their
+      channels, never the full channel set). Absent / nil / internal scopes are
+      pass-through.
 
   Spaces flagged for deletion (`deletion_scheduled_at` set, task 019e95ea
   stage 3) are excluded from BOTH branches: the default branch already
@@ -211,6 +239,7 @@ defmodule Platform.Chat do
   def list_spaces(opts \\ []) do
     {archived, opts} = Keyword.pop(opts, :archived, false)
     {include_execution, opts} = Keyword.pop(opts, :include_execution, false)
+    {scope, opts} = Keyword.pop(opts, :scope)
 
     base =
       if archived do
@@ -240,6 +269,7 @@ defmodule Platform.Chat do
       {:kind, kind}, q -> where(q, [s], s.kind == ^kind)
       _other, q -> q
     end)
+    |> ExternalScope.scope_spaces(scope)
     |> Repo.all()
   end
 
@@ -664,9 +694,17 @@ defmodule Platform.Chat do
   @doc """
   List all non-archived spaces where the user is an active participant,
   ordered by most recent message (or inserted_at).
+
+  This path JOINs `chat_participants` on the caller's own `user_id`, so it is
+  INHERENTLY scoped to the caller's spaces — for an external caller it is the
+  naturally-scoped read. The optional `:scope` opt applies
+  `ExternalScope.scope_spaces/2` anyway as belt-and-suspenders defense in
+  depth. Absent / nil / internal scopes are pass-through.
   """
-  @spec list_user_conversations(binary()) :: [Space.t()]
-  def list_user_conversations(user_id) do
+  @spec list_user_conversations(binary(), keyword()) :: [Space.t()]
+  def list_user_conversations(user_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
     from(s in Space,
       join: p in Participant,
       on: p.space_id == s.id,
@@ -679,6 +717,7 @@ defmodule Platform.Chat do
       order_by: [desc: fragment("COALESCE(MAX(?), ?)", m.inserted_at, s.inserted_at)],
       select: s
     )
+    |> ExternalScope.scope_spaces(scope)
     |> Repo.all()
   end
 
@@ -1103,9 +1142,22 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "Fetch a message by primary key (integer). Returns `nil` if not found."
-  @spec get_message(binary()) :: Message.t() | nil
-  def get_message(id), do: Repo.get(Message, id)
+  @doc """
+  Fetch a message by primary key. Returns `nil` if not found.
+
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) gates the message
+  on its space: for an external caller a message in a non-participant space
+  resolves to `nil`. Absent / nil / internal scopes are pass-through.
+  """
+  @spec get_message(binary(), keyword()) :: Message.t() | nil
+  def get_message(id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    case Repo.get(Message, id) do
+      nil -> nil
+      msg -> if ExternalScope.visible_space_id?(msg.space_id, scope), do: msg, else: nil
+    end
+  end
 
   @doc """
   List non-deleted messages in a space, newest first.
@@ -1125,6 +1177,7 @@ defmodule Platform.Chat do
     after_id = Keyword.get(opts, :after_id)
     thread_id = Keyword.get(opts, :thread_id)
     top_level_only = Keyword.get(opts, :top_level_only, false)
+    scope = Keyword.get(opts, :scope)
 
     base =
       from(m in Message,
@@ -1143,7 +1196,9 @@ defmodule Platform.Chat do
     base = if before_id, do: where(base, [m], m.id < ^before_id), else: base
     base = if after_id, do: where(base, [m], m.id > ^after_id), else: base
 
-    Repo.all(base)
+    base
+    |> ExternalScope.scope_by_space_id(scope)
+    |> Repo.all()
   end
 
   @doc """
@@ -1162,6 +1217,7 @@ defmodule Platform.Chat do
     before_id = Keyword.get(opts, :before_id)
     thread_id = Keyword.get(opts, :thread_id)
     top_level_only = Keyword.get(opts, :top_level_only, false)
+    scope = Keyword.get(opts, :scope)
 
     base =
       from(m in Message,
@@ -1179,7 +1235,9 @@ defmodule Platform.Chat do
 
     base = if before_id, do: where(base, [m], m.id < ^before_id), else: base
 
-    Repo.exists?(base)
+    base
+    |> ExternalScope.scope_by_space_id(scope)
+    |> Repo.exists?()
   end
 
   @doc """
@@ -1199,6 +1257,7 @@ defmodule Platform.Chat do
     after_id = Keyword.get(opts, :after_id)
     thread_id = Keyword.get(opts, :thread_id)
     top_level_only = Keyword.get(opts, :top_level_only, false)
+    scope = Keyword.get(opts, :scope)
 
     base =
       from(m in Message,
@@ -1216,7 +1275,9 @@ defmodule Platform.Chat do
 
     base = if after_id, do: where(base, [m], m.id > ^after_id), else: base
 
-    Repo.exists?(base)
+    base
+    |> ExternalScope.scope_by_space_id(scope)
+    |> Repo.exists?()
   end
 
   @doc """
@@ -1230,13 +1291,18 @@ defmodule Platform.Chat do
   changes, avoiding the N+1 that would result from per-message
   `get_message/1` calls.
   """
-  @spec get_messages_by_ids([binary()]) :: [Message.t()]
-  def get_messages_by_ids([]), do: []
+  @spec get_messages_by_ids([binary()], keyword()) :: [Message.t()]
+  def get_messages_by_ids(ids, opts \\ [])
 
-  def get_messages_by_ids(ids) when is_list(ids) do
+  def get_messages_by_ids([], _opts), do: []
+
+  def get_messages_by_ids(ids, opts) when is_list(ids) do
+    scope = Keyword.get(opts, :scope)
+
     from(m in Message,
       where: m.id in ^ids and is_nil(m.deleted_at)
     )
+    |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
   end
 
@@ -1391,16 +1457,26 @@ defmodule Platform.Chat do
 
   def search_messages(space_id, query, opts) do
     limit = Keyword.get(opts, :limit, 20)
+    scope = Keyword.get(opts, :scope)
     trimmed_query = String.trim(query)
 
     if trimmed_query == "" do
       []
     else
-      from(m in Message,
-        where:
-          m.space_id == ^space_id and
-            is_nil(m.deleted_at) and
-            fragment("search_vector @@ websearch_to_tsquery('english', ?)", ^trimmed_query),
+      # Apply the external scope to the row filter FIRST — an out-of-scope
+      # `space_id` (the M6-bypassed case) yields zero rows BEFORE `ts_headline`
+      # ever runs, so no highlighted fragment of an off-limits message is
+      # produced (design canvas §9).
+      base =
+        from(m in Message,
+          where:
+            m.space_id == ^space_id and
+              is_nil(m.deleted_at) and
+              fragment("search_vector @@ websearch_to_tsquery('english', ?)", ^trimmed_query)
+        )
+        |> ExternalScope.scope_by_space_id(scope)
+
+      from(m in base,
         select_merge: %{
           search_rank:
             fragment(
@@ -2302,12 +2378,23 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "Fetch a canvas. Returns `nil` if not found or soft-deleted."
-  @spec get_canvas(binary()) :: Canvas.t() | nil
-  def get_canvas(id) do
+  @doc """
+  Fetch a canvas. Returns `nil` if not found or soft-deleted.
+
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) gates the canvas
+  on its `space_id`: for an external caller a canvas in a non-participant space
+  resolves to `nil`. Absent / nil / internal scopes are pass-through.
+  """
+  @spec get_canvas(binary(), keyword()) :: Canvas.t() | nil
+  def get_canvas(id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
     case Repo.get(Canvas, id) do
-      %Canvas{deleted_at: nil} = canvas -> canvas
-      _ -> nil
+      %Canvas{deleted_at: nil} = canvas ->
+        if ExternalScope.visible_space_id?(canvas.space_id, scope), do: canvas, else: nil
+
+      _ ->
+        nil
     end
   end
 
@@ -2316,8 +2403,15 @@ defmodule Platform.Chat do
   Restore flow, which specifically needs to load a soft-deleted canvas to
   un-delete it. Returns `nil` only if no row with the given id exists.
   """
-  @spec get_canvas_with_deleted(binary()) :: Canvas.t() | nil
-  def get_canvas_with_deleted(id), do: Repo.get(Canvas, id)
+  @spec get_canvas_with_deleted(binary(), keyword()) :: Canvas.t() | nil
+  def get_canvas_with_deleted(id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    case Repo.get(Canvas, id) do
+      nil -> nil
+      canvas -> if ExternalScope.visible_space_id?(canvas.space_id, scope), do: canvas, else: nil
+    end
+  end
 
   @doc "Update canvas metadata/title. Document changes go through `patch_canvas/2`."
   @spec update_canvas(Canvas.t(), map()) ::
@@ -2344,13 +2438,23 @@ defmodule Platform.Chat do
     result
   end
 
-  @doc "List canvases in a space (excluding soft-deleted), oldest first."
-  @spec list_canvases(binary()) :: [Canvas.t()]
-  def list_canvases(space_id) do
+  @doc """
+  List canvases in a space (excluding soft-deleted), oldest first.
+
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) yields `[]` when
+  the `space_id` is out of the external caller's participant set (canvas embeds
+  from an off-limits space can't be resolved from an external session). Absent
+  / nil / internal scopes are pass-through.
+  """
+  @spec list_canvases(binary(), keyword()) :: [Canvas.t()]
+  def list_canvases(space_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
     from(c in Canvas,
       where: c.space_id == ^space_id and is_nil(c.deleted_at),
       order_by: [asc: c.inserted_at]
     )
+    |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
   end
 
@@ -2536,9 +2640,24 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "Fetch an attachment by primary key. Returns `nil` if not found."
-  @spec get_attachment(binary()) :: Attachment.t() | nil
-  def get_attachment(id), do: Repo.get(Attachment, id)
+  @doc """
+  Fetch an attachment by primary key. Returns `nil` if not found.
+
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) gates the
+  attachment on its `space_id`: for an external caller an attachment in a
+  non-participant space resolves to `nil`. Legacy `space_id: nil` rows have no
+  space to scope and pass through. Absent / nil / internal scopes are
+  pass-through.
+  """
+  @spec get_attachment(binary(), keyword()) :: Attachment.t() | nil
+  def get_attachment(id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    case Repo.get(Attachment, id) do
+      nil -> nil
+      att -> if ExternalScope.visible_space_id?(att.space_id, scope), do: att, else: nil
+    end
+  end
 
   @doc """
   Fetch an attachment for the viewer.
@@ -2548,14 +2667,17 @@ defmodule Platform.Chat do
   introduced in ADR 0039) have no parent message to check, so they pass
   through as long as the row exists.
   """
-  @spec get_visible_attachment(binary()) :: Attachment.t() | nil
-  def get_visible_attachment(id) do
+  @spec get_visible_attachment(binary(), keyword()) :: Attachment.t() | nil
+  def get_visible_attachment(id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
     from(a in Attachment,
       left_join: m in Message,
       on: m.id == a.message_id,
       where: a.id == ^id and (is_nil(a.message_id) or is_nil(m.deleted_at)),
       select: a
     )
+    |> ExternalScope.scope_by_space_id(scope)
     |> Repo.one()
   end
 
@@ -2608,25 +2730,45 @@ defmodule Platform.Chat do
 
   defp principal_is_member?(_space_id, _principal), do: false
 
-  @doc "List attachments for a message, oldest first."
-  @spec list_attachments(binary()) :: [Attachment.t()]
-  def list_attachments(message_id) do
+  @doc """
+  List attachments for a message, oldest first.
+
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) drops attachments
+  whose `space_id` is out of the external caller's participant set. Absent /
+  nil / internal scopes are pass-through.
+  """
+  @spec list_attachments(binary(), keyword()) :: [Attachment.t()]
+  def list_attachments(message_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
     from(a in Attachment,
       where: a.message_id == ^message_id,
       order_by: [asc: a.inserted_at]
     )
+    |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
   end
 
-  @doc "Batch-load attachments for a list of message IDs in a single query."
-  @spec list_attachments_for_messages([binary()]) :: %{binary() => [Attachment.t()]}
-  def list_attachments_for_messages([]), do: %{}
+  @doc """
+  Batch-load attachments for a list of message IDs in a single query.
 
-  def list_attachments_for_messages(message_ids) do
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) drops attachments
+  whose `space_id` is out of the external caller's participant set. Absent /
+  nil / internal scopes are pass-through.
+  """
+  @spec list_attachments_for_messages([binary()], keyword()) :: %{binary() => [Attachment.t()]}
+  def list_attachments_for_messages(message_ids, opts \\ [])
+
+  def list_attachments_for_messages([], _opts), do: %{}
+
+  def list_attachments_for_messages(message_ids, opts) do
+    scope = Keyword.get(opts, :scope)
+
     from(a in Attachment,
       where: a.message_id in ^message_ids,
       order_by: [asc: a.inserted_at]
     )
+    |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
     |> Enum.group_by(& &1.message_id)
   end
