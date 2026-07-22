@@ -10,6 +10,8 @@ defmodule Platform.PushTest do
   alias Platform.Push
   alias Platform.Push.Subscription
   alias Platform.Repo
+  alias Platform.Tenancy
+  alias Platform.TenancyFixtures
 
   # ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -66,6 +68,36 @@ defmodule Platform.PushTest do
         [:platform, :push, :suppressed_archived_user],
         fn _event, measurements, metadata, _cfg ->
           send(parent, {:suppressed_archived_user, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok
+  end
+
+  # Mark a user external in the seeded fabrikam org (M13 external-preview fixtures).
+  defp mark_external(user) do
+    {:ok, _} =
+      Tenancy.mark_membership_external(%{
+        user_id: user.id,
+        org_id: TenancyFixtures.fabrikam_org_id()
+      })
+
+    user
+  end
+
+  defp attach_external_preview_handler do
+    handler_id = "push-test-external-preview-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:platform, :push, :external_safe_preview],
+        fn _event, measurements, metadata, _cfg ->
+          send(parent, {:external_safe_preview, measurements, metadata})
         end,
         nil
       )
@@ -175,6 +207,155 @@ defmodule Platform.PushTest do
 
       # And no subscription row leaked.
       assert Repo.all(Subscription) == []
+    end
+  end
+
+  describe "external_safe_preview/1 (Stage 1)" do
+    test "returns the fixed generic map regardless of input" do
+      assert Push.external_safe_preview(%{
+               title: "Rowan Ellis in Suite",
+               body: "internal roadmap: shipping the Acme deal Friday",
+               url: "/chat"
+             }) == %{
+               title: "New message",
+               body: "You have a new message",
+               url: "/chat"
+             }
+    end
+
+    test "drops every sensitive string from a chat-shaped payload" do
+      preview =
+        Push.external_safe_preview(%{
+          title: "Rowan Ellis in Suite",
+          body: "internal roadmap: shipping the Acme deal Friday",
+          url: "/chat"
+        })
+
+      values = preview |> Map.values() |> Enum.join(" ")
+      refute values =~ "Rowan Ellis"
+      refute values =~ "internal roadmap"
+      refute values =~ "Acme"
+    end
+
+    test "drops the meeting name and internal slug from a meeting-shaped payload" do
+      preview =
+        Push.external_safe_preview(%{
+          title: "Alex Kim started a meeting",
+          body: "Q3 Board Prep",
+          url: "/meetings/q3-board-prep"
+        })
+
+      values = preview |> Map.values() |> Enum.join(" ")
+      refute values =~ "Alex Kim"
+      refute values =~ "Q3 Board Prep"
+      refute values =~ "q3-board-prep"
+      assert preview.url == "/chat"
+    end
+  end
+
+  describe "preview_for_recipient/2 (Stage 2)" do
+    test "external recipient: returns generic preview and fires telemetry once" do
+      attach_external_preview_handler()
+
+      space = create_space()
+      user = insert_user(name: "Xavier External") |> mark_external()
+      participant = add_user_participant(space.id, user)
+
+      payload = %{
+        title: "Rowan Ellis in Suite",
+        body: "internal roadmap: shipping the Acme deal Friday",
+        url: "/chat"
+      }
+
+      assert Push.preview_for_recipient(participant.id, payload) == %{
+               title: "New message",
+               body: "You have a new message",
+               url: "/chat"
+             }
+
+      assert_received {:external_safe_preview, %{count: 1}, %{participant_id: pid}}
+      assert pid == participant.id
+      refute_received {:external_safe_preview, _, _}
+    end
+
+    test "internal member recipient: returns payload byte-identical, no telemetry" do
+      attach_external_preview_handler()
+
+      space = create_space()
+      user = insert_user(name: "Ian Internal")
+
+      {:ok, _} =
+        %Platform.Tenancy.OrgMembership{}
+        |> Platform.Tenancy.OrgMembership.changeset(%{
+          user_id: user.id,
+          org_id: TenancyFixtures.fabrikam_org_id(),
+          role: "member"
+        })
+        |> Repo.insert()
+
+      participant = add_user_participant(space.id, user)
+
+      payload = %{
+        title: "Rowan Ellis in Suite",
+        body: "internal roadmap: shipping the Acme deal Friday",
+        url: "/chat"
+      }
+
+      assert Push.preview_for_recipient(participant.id, payload) == payload
+      refute_received {:external_safe_preview, _, _}
+    end
+
+    test "agent participant: pass-through unchanged, no telemetry" do
+      attach_external_preview_handler()
+
+      space = create_space()
+
+      {:ok, participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "agent",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Zip",
+          joined_at: DateTime.utc_now()
+        })
+
+      payload = %{title: "Rowan Ellis in Suite", body: "x", url: "/chat"}
+
+      assert Push.preview_for_recipient(participant.id, payload) == payload
+      refute_received {:external_safe_preview, _, _}
+    end
+
+    test "unknown participant: pass-through unchanged, no telemetry" do
+      attach_external_preview_handler()
+
+      payload = %{title: "t", body: "b", url: "/chat"}
+      assert Push.preview_for_recipient(Ecto.UUID.generate(), payload) == payload
+      refute_received {:external_safe_preview, _, _}
+    end
+
+    test "archived external recipient: archived guard wins, no preview swap, no send" do
+      attach_suppressed_handler()
+      attach_external_preview_handler()
+
+      space = create_space()
+      user = insert_user(name: "Ada ArchivedExternal") |> mark_external()
+      participant = add_user_participant(space.id, user)
+      _sub = subscribe(participant.id)
+
+      {:ok, _archived} = Accounts.archive_user(user)
+
+      log =
+        capture_log(fn ->
+          assert Push.send_notification(participant.id, %{title: "t", body: "b"}) == :ok
+        end)
+
+      refute log =~ "VAPID keys not configured",
+             "archived guard must short-circuit before do_send_push; log: #{log}"
+
+      # Archived wins: the archived telemetry fires, the external-preview one
+      # does not (the two guards compose, no double handling).
+      assert_received {:suppressed_archived_user, %{count: 1}, %{participant_id: pid}}
+      assert pid == participant.id
+      refute_received {:external_safe_preview, _, _}
     end
   end
 end
