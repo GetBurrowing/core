@@ -329,6 +329,38 @@ defmodule Platform.Chat do
     Repo.all(base)
   end
 
+  @doc """
+  List the space_ids a human user is a `chat_participants` member of — the
+  allowlisted set for external-user presence/typing scope (rbac-external-users
+  M10).
+
+  Mirrors `list_spaces_for_agent/2` but keyed on a `participant_type: "user"`
+  participant and selecting `p.space_id` rather than the `Space` structs.
+  Archived spaces are excluded (`s.archived_at IS NULL`); `chat_participants`
+  has no `archived_at` column of its own (see the `Participant` schema), so
+  membership is scoped purely on the space's archive state, exactly as
+  `list_spaces_for_agent/2` does for agents. An optional `:kind` opt filters
+  `s.kind`.
+  """
+  @spec list_member_space_ids(binary(), keyword()) :: [binary()]
+  def list_member_space_ids(user_id, opts \\ []) when is_binary(user_id) do
+    kind = Keyword.get(opts, :kind)
+
+    base =
+      from(p in Participant,
+        join: s in Space,
+        on: s.id == p.space_id,
+        where:
+          p.participant_type == "user" and
+            p.participant_id == ^user_id and
+            is_nil(s.archived_at),
+        select: p.space_id
+      )
+
+    base = if kind, do: where(base, [_p, s], s.kind == ^kind), else: base
+    Repo.all(base)
+  end
+
   @doc "Update a space's attributes."
   @spec update_space(Space.t(), map()) :: {:ok, Space.t()} | {:error, Ecto.Changeset.t()}
   def update_space(%Space{} = space, attrs) do
