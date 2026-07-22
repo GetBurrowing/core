@@ -1058,4 +1058,33 @@ defmodule Platform.ChatTest do
       assert ExecutionSpace.find_by_task_id(task.id).id == exec_space.id
     end
   end
+
+  describe "participant?/2" do
+    test "true for a seeded user participant of the space" do
+      space = create_space()
+      user_id = Ecto.UUID.generate()
+      create_participant(space.id, %{participant_id: user_id})
+
+      assert Chat.participant?(space.id, user_id)
+    end
+
+    test "false for a user who is not a participant" do
+      space = create_space()
+      create_participant(space.id, %{participant_id: Ecto.UUID.generate()})
+
+      refute Chat.participant?(space.id, Ecto.UUID.generate())
+    end
+
+    test "false for an agent-type row sharing the same id (user-only match)" do
+      space = create_space()
+      shared_id = Ecto.UUID.generate()
+      create_participant(space.id, %{participant_type: "agent", participant_id: shared_id})
+
+      refute Chat.participant?(space.id, shared_id)
+    end
+
+    test "false for non-binary args" do
+      refute Chat.participant?(nil, nil)
+    end
+  end
 end
