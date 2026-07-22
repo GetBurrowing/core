@@ -1280,6 +1280,14 @@ defmodule Platform.Tasks.StackDeployer do
         )
 
         _ = Stacks.cascade_members_to_done(stack, :webhook)
+
+        # TAIL-stall fix (2026-07-22): belt-and-braces sweep of any
+        # `no_op_wait_for_rollup` member that reached `deploying` after the
+        # first delivery already stamped `merged_at`. `cascade_members_to_done/2`
+        # above is a one-shot fan-out; a member flipped to `deploying` late
+        # (e.g. by the in_review stall sweep) needs this idempotent sweep to
+        # reach `done`.
+        _ = Stacks.sweep_deploying_members_to_done(stack)
         {:ok, stack}
 
       is_nil(rollup_pr) ->
@@ -1299,6 +1307,11 @@ defmodule Platform.Tasks.StackDeployer do
             "rollup-merge handler is no-op"
         )
 
+        # TAIL-stall fix (2026-07-22): even on this previously-leaking no-op
+        # branch, sweep any `no_op_wait_for_rollup` member stranded at
+        # `deploying` to `done`. Idempotent — a stack whose members are all
+        # already `done` sweeps nothing.
+        _ = Stacks.sweep_deploying_members_to_done(stack)
         {:ok, stack}
 
       true ->
@@ -1350,6 +1363,13 @@ defmodule Platform.Tasks.StackDeployer do
         # :dispatched (stage 3) and :pr_rejected (stage 4) event shapes
         # so dashboards can build one uniform deploy-lifecycle panel.
         cascade = Stacks.cascade_members_to_done(updated, :webhook)
+
+        # TAIL-stall fix (2026-07-22): after the one-shot fan-out, sweep any
+        # `no_op_wait_for_rollup` member left at `deploying` to `done`. The
+        # cascade above flips every not-done member, but a member that lands
+        # at `deploying` on a later tick still needs this idempotent sweep.
+        _ = Stacks.sweep_deploying_members_to_done(updated)
+
         member_count = length(Stacks.members(updated))
         duration_ms = deploy_duration_ms_in_deploying(base_meta, now)
 

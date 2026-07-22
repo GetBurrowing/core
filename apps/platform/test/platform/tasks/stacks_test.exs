@@ -6082,6 +6082,363 @@ defmodule Platform.Tasks.StacksTest do
     %{project: project}
   end
 
+  # ── Deploy-tail sweep (TAIL-stall fix, 2026-07-22) ─────────────────────
+  describe "sweep_deploying_members_to_done/1" do
+    test "sweeps no_op_wait_for_rollup members at deploying to done, skips others" do
+      {stack, [m1, m2]} = no_op_stack_of(2)
+
+      # Both members at `deploying`, no per-task deploy strategy override, so
+      # both resolve to no_op_wait_for_rollup.
+      m1 = force_status(m1, "deploying")
+      _m2 = force_status(m2, "deploying")
+
+      assert {:ok, swept} = Stacks.sweep_deploying_members_to_done(stack)
+      assert Enum.map(swept, & &1.id) |> Enum.sort() == Enum.sort([m1.id, m2.id])
+      assert Tasks.get_task_record(m1.id).status == "done"
+      assert Tasks.get_task_record(m2.id).status == "done"
+
+      # Idempotent: a second sweep finds nothing to move.
+      assert {:ok, []} = Stacks.sweep_deploying_members_to_done(stack)
+    end
+
+    test "leaves a member not at deploying untouched" do
+      {stack, [m1, m2]} = no_op_stack_of(2)
+
+      m1 = force_status(m1, "deploying")
+      # m2 stays at its default status (backlog) — not a sweep candidate.
+
+      assert {:ok, swept} = Stacks.sweep_deploying_members_to_done(stack)
+      assert Enum.map(swept, & &1.id) == [m1.id]
+      assert Tasks.get_task_record(m1.id).status == "done"
+      assert Tasks.get_task_record(m2.id).status == "backlog"
+    end
+
+    test "does not sweep a member with a task-level deploy_strategy override" do
+      {stack, [m1, _m2]} = no_op_stack_of(2)
+
+      # A task-level strategy override wins in resolve_deploy_strategy/1, so
+      # this member is NOT a no_op_wait_for_rollup member.
+      {:ok, m1} = Tasks.update_task(m1, %{deploy_strategy: %{"type" => "manual"}})
+      m1 = force_status(m1, "deploying")
+
+      assert {:ok, []} = Stacks.sweep_deploying_members_to_done(stack)
+      assert Tasks.get_task_record(m1.id).status == "deploying"
+    end
+  end
+
+  describe "complete_no_op_member_if_rollup_merged/1" do
+    test "completes a single deploying no_op member when the rollup PR is merged" do
+      {stack, [m1, _m2]} = no_op_stack_of(2)
+      _ = stamp_rollup_merged(stack)
+      m1 = force_status(m1, "deploying")
+
+      assert {:ok, done} = Stacks.complete_no_op_member_if_rollup_merged(m1)
+      assert done.status == "done"
+      assert Tasks.get_task_record(m1.id).status == "done"
+    end
+
+    test "noops when the rollup PR is not merged yet" do
+      {_stack, [m1, _m2]} = no_op_stack_of(2)
+      m1 = force_status(m1, "deploying")
+
+      assert :noop = Stacks.complete_no_op_member_if_rollup_merged(m1)
+      assert Tasks.get_task_record(m1.id).status == "deploying"
+    end
+
+    test "noops for a member that is not at deploying" do
+      {stack, [m1, _m2]} = no_op_stack_of(2)
+      _ = stamp_rollup_merged(stack)
+      # m1 stays at backlog.
+
+      assert :noop = Stacks.complete_no_op_member_if_rollup_merged(m1)
+      assert Tasks.get_task_record(m1.id).status == "backlog"
+    end
+
+    test "noops for a non-stack task" do
+      {:ok, project} = Tasks.create_project(%{name: "Non-stack " <> short_id()})
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Plain"})
+
+      assert :noop = Stacks.complete_no_op_member_if_rollup_merged(task)
+    end
+  end
+
+  describe "handle_rollup_pr_merged/2 sweeps stranded deploying members (wiring)" do
+    test "the is_nil(rollup_pr) done-branch no longer leaks a deploying member" do
+      {stack, [m1, _m2]} = no_op_stack_of(2)
+      m1 = force_status(m1, "deploying")
+
+      # Force the stack to `done` with NO rollup_pr metadata — the branch
+      # that previously returned {:ok, stack} with no cascade AND no sweep.
+      {:ok, done_stack} = Stacks.update_stack(stack, %{status: "done"})
+
+      assert {:ok, _} = Platform.Tasks.StackDeployer.handle_rollup_pr_merged(done_stack)
+      assert Tasks.get_task_record(m1.id).status == "done"
+    end
+  end
+
+  # ── Deploy-transition promote helper (Stage 2, 2026-07-22) ─────────────
+  describe "member_deploy_transition_ready?/1" do
+    test "true for an in_review member with merge stamp + all validations passed + no pending review" do
+      {_stack, member} = deploy_ready_member()
+      assert Stacks.member_deploy_transition_ready?(Tasks.get_task_record(member.id))
+    end
+
+    test "false when the merged_into_rollup_at stamp is missing" do
+      {_stack, member} = deploy_ready_member(stamp: false)
+      refute Stacks.member_deploy_transition_ready?(Tasks.get_task_record(member.id))
+    end
+
+    test "false when a validation is still pending" do
+      {_stack, member} = deploy_ready_member(pending_validation: true)
+      refute Stacks.member_deploy_transition_ready?(Tasks.get_task_record(member.id))
+    end
+  end
+
+  describe "advance_member_to_deploying/1" do
+    test "advances a ready in_review member to deploying" do
+      {_stack, member} = deploy_ready_member()
+
+      assert {:ok, updated} = Stacks.advance_member_to_deploying(Tasks.get_task_record(member.id))
+      assert updated.status == "deploying"
+      assert Tasks.get_task_record(member.id).status == "deploying"
+    end
+
+    test "noop for a non-stack task" do
+      {:ok, project} = Tasks.create_project(%{name: "Plain adv " <> short_id()})
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Plain"})
+      assert :noop = Stacks.advance_member_to_deploying(task)
+    end
+
+    test "noop for a member not at in_review" do
+      {_stack, member} = deploy_ready_member()
+      member = force_status(Tasks.get_task_record(member.id), "in_progress")
+      assert :noop = Stacks.advance_member_to_deploying(member)
+    end
+
+    test "noop when the deploy-ready contract is not satisfied" do
+      {_stack, member} = deploy_ready_member(stamp: false)
+      assert :noop = Stacks.advance_member_to_deploying(Tasks.get_task_record(member.id))
+      assert Tasks.get_task_record(member.id).status == "in_review"
+    end
+
+    test "self-completes to done when the rollup PR has already merged" do
+      {stack, member} = deploy_ready_member()
+      _ = stamp_rollup_merged(stack)
+
+      # advance returns the post-deploying struct; the deploying finalize
+      # hook then fires complete_no_op_member_if_rollup_merged/1 as a
+      # side-effect, walking the DB row straight through to done.
+      assert {:ok, _updated} =
+               Stacks.advance_member_to_deploying(Tasks.get_task_record(member.id))
+
+      assert Tasks.get_task_record(member.id).status == "done"
+    end
+  end
+
+  # ── Event-driven promote on last e2e pass (Stage 3, 2026-07-22) ────────
+  describe "PlanEngine.evaluate_validation/2 advances a member to deploying on the last pass" do
+    test "member stays in_review until the LAST validation passes, then flips to deploying" do
+      {_stack, member, [v1, v2]} = pending_review_member(2)
+
+      assert Tasks.get_task_record(member.id).status == "in_review"
+
+      # Pass all but the last — member stays in_review (gate still closed).
+      {:ok, _} = PlanEngine.evaluate_validation(v1.id, %{status: "passed"})
+      assert Tasks.get_task_record(member.id).status == "in_review"
+
+      # Pass the final one — the same evaluate_validation call path advances
+      # the member in_review -> deploying, no reconcile sweep involved.
+      {:ok, _} = PlanEngine.evaluate_validation(v2.id, %{status: "passed"})
+      assert Tasks.get_task_record(member.id).status == "deploying"
+    end
+
+    test "does not advance while any validation remains pending" do
+      {_stack, member, [v1, _v2]} = pending_review_member(2)
+
+      {:ok, _} = PlanEngine.evaluate_validation(v1.id, %{status: "passed"})
+      assert Tasks.get_task_record(member.id).status == "in_review"
+    end
+  end
+
+  # Like deploy_ready_member/1 but leaves ALL validations pending and returns
+  # their structs so a caller can drive them through PlanEngine. Returns
+  # `{stack, member, [validation, ...]}`.
+  defp pending_review_member(count) when count > 0 do
+    {:ok, project} = Tasks.create_project(%{name: "Pending review " <> short_id()})
+    slug = "pending-rev-" <> short_id()
+
+    {:ok, stack} =
+      Stacks.create_stack(%{
+        project_id: project.id,
+        slug: slug,
+        name: "Pending Review Stack",
+        rollup_branch: Stacks.rollup_branch_name(slug)
+      })
+
+    {:ok, task} =
+      Tasks.create_task(%{project_id: project.id, title: "Pending member " <> short_id()})
+
+    {:ok, attached} = Stacks.add_task(stack, task)
+
+    {:ok, member} =
+      Tasks.update_task(attached, %{
+        status: "in_review",
+        deploy_target: "production",
+        metadata: %{
+          "merged_into_rollup_at" => %{
+            "sha" => "c0ffee01",
+            "at" => DateTime.to_iso8601(DateTime.utc_now())
+          }
+        }
+      })
+
+    {:ok, plan} = Tasks.create_plan(%{task_id: member.id, status: "approved", version: 1})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        position: 1,
+        name: "Task-level review",
+        status: "running"
+      })
+
+    validations =
+      Enum.map(1..count, fn i ->
+        {:ok, v} =
+          Tasks.create_validation(%{
+            stage_id: stage.id,
+            kind: "test_pass",
+            status: "pending",
+            title: "check #{i}"
+          })
+
+        v
+      end)
+
+    {stack, Tasks.get_task_record(member.id), validations}
+  end
+
+  # Build a single stack member ready to advance in_review -> deploying:
+  # attached to a stack with a live rollup_branch, deploy_target set,
+  # merged_into_rollup_at stamped, and an approved plan whose validations
+  # are all passed. Options:
+  #   * `stamp:` (default true) — whether to write merged_into_rollup_at
+  #   * `pending_validation:` (default false) — leave one validation pending
+  # Returns `{stack, member}`.
+  defp deploy_ready_member(opts \\ []) do
+    stamp? = Keyword.get(opts, :stamp, true)
+    pending? = Keyword.get(opts, :pending_validation, false)
+
+    {:ok, project} = Tasks.create_project(%{name: "Deploy-ready " <> short_id()})
+    slug = "deploy-ready-" <> short_id()
+
+    {:ok, stack} =
+      Stacks.create_stack(%{
+        project_id: project.id,
+        slug: slug,
+        name: "Deploy Ready Stack",
+        rollup_branch: Stacks.rollup_branch_name(slug)
+      })
+
+    {:ok, task} =
+      Tasks.create_task(%{project_id: project.id, title: "Ready member " <> short_id()})
+
+    {:ok, attached} = Stacks.add_task(stack, task)
+
+    metadata =
+      if stamp? do
+        %{
+          "merged_into_rollup_at" => %{
+            "sha" => "c1ea4001",
+            "at" => DateTime.to_iso8601(DateTime.utc_now())
+          }
+        }
+      else
+        %{}
+      end
+
+    {:ok, member} =
+      Tasks.update_task(attached, %{
+        status: "in_review",
+        deploy_target: "production",
+        metadata: metadata
+      })
+
+    {:ok, plan} = Tasks.create_plan(%{task_id: member.id, status: "approved", version: 1})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        position: 1,
+        name: "Task-level review",
+        status: "running"
+      })
+
+    {:ok, _} = Tasks.create_validation(%{stage_id: stage.id, kind: "lint_pass", status: "passed"})
+
+    {:ok, _} =
+      Tasks.create_validation(%{
+        stage_id: stage.id,
+        kind: "test_pass",
+        status: if(pending?, do: "pending", else: "passed")
+      })
+
+    {stack, Tasks.get_task_record(member.id)}
+  end
+
+  # Build a stack of `count` members that each resolve to
+  # no_op_wait_for_rollup (stack has a live rollup_branch, no per-task
+  # deploy_strategy override). Returns `{stack, members}` in position order.
+  defp no_op_stack_of(count) when count > 0 do
+    {:ok, project} = Tasks.create_project(%{name: "No-op Stack " <> short_id()})
+    slug = "noop-tail-" <> short_id()
+
+    {:ok, stack} =
+      Stacks.create_stack(%{
+        project_id: project.id,
+        slug: slug,
+        name: "No-op Tail Stack",
+        rollup_branch: Stacks.rollup_branch_name(slug)
+      })
+
+    members =
+      Enum.map(1..count, fn i ->
+        {:ok, task} =
+          Tasks.create_task(%{project_id: project.id, title: "Tail member #{i} " <> short_id()})
+
+        {:ok, attached} = Stacks.add_task(stack, task)
+        attached
+      end)
+
+    {stack, members}
+  end
+
+  # Force a task to a given status via a direct changeset write, bypassing
+  # the transition guards (setup-only).
+  defp force_status(%Task{} = task, status) do
+    task
+    |> Task.changeset(%{status: status})
+    |> Repo.update!()
+  end
+
+  # Stamp the stack's rollup_pr metadata as merged (hex sha placeholder).
+  defp stamp_rollup_merged(%Stack{} = stack) do
+    meta = stack.metadata || %{}
+
+    rollup_pr =
+      meta
+      |> Map.get("rollup_pr", %{})
+      |> Map.merge(%{
+        "number" => 1,
+        "merged_at" => DateTime.to_iso8601(DateTime.utc_now())
+      })
+
+    {:ok, updated} =
+      Stacks.update_stack(stack, %{metadata: Map.put(meta, "rollup_pr", rollup_pr)})
+
+    updated
+  end
+
   # Attach a telemetry handler that forwards
   # `[:platform, :stacks, :deploy, :dispatched]` events to the test
   # process for `assert_receive`. Returns `{:ok, handler_id}` — the

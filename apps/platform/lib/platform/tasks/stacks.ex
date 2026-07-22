@@ -2305,7 +2305,20 @@ defmodule Platform.Tasks.Stacks do
   def cascade_members_to_done(%Stack{} = stack, trigger)
       when trigger in [:webhook, :backfill] do
     all_members = members(stack)
-    to_transition = Enum.reject(all_members, &(&1.status == "done"))
+
+    # TAIL-stall fix (2026-07-22): never force-complete a member that is still
+    # mid-review — one whose current plan carries any pending/running
+    # validation (`member_has_open_validations?/1`). The rollup-merge cascade
+    # is "make sure everyone READY is done", not "ram every member to done":
+    # a member with open validations still owes its own review. It completes
+    # on its own afterward — once its last validation passes it advances to
+    # `deploying` and self-completes via
+    # `complete_no_op_member_if_rollup_merged/1` (the rollup PR is already
+    # merged by then). Members with NO validations remain vacuously
+    # completable, preserving the fan-out-fallback contract for members that
+    # shipped without a per-task deploy stage.
+    to_transition =
+      Enum.reject(all_members, &(&1.status == "done" or member_has_open_validations?(&1)))
 
     # Stage 3 (019f5bc4-3521): wrap the per-member reduce in a
     # `Repo.transaction/1` so a single illegal transition rolls back
@@ -2415,6 +2428,146 @@ defmodule Platform.Tasks.Stacks do
 
     :ok
   end
+
+  @doc """
+  Sweep every stack member sitting at `deploying` with a
+  `no_op_wait_for_rollup` deploy strategy to `done`.
+
+  ## Why this exists (incident: stack-member lifecycle TAIL stall, 2026-07-22)
+
+  A `no_op_wait_for_rollup` member has no per-member deploy of its own —
+  it ships when the stack's single rollup PR merges. `cascade_members_to_done/2`
+  already handles this on the FIRST real rollup-merge delivery, but it
+  leaks in two ways this helper closes as belt-and-braces:
+
+    * `handle_rollup_pr_merged/2`'s `is_nil(rollup_pr)` branch returns
+      `{:ok, stack}` with NO cascade at all (test-seam / manually-flipped
+      stacks), and
+    * a member that only reaches `deploying` AFTER the merge webhook fired
+      (e.g. flipped there by the 15-min `in_review` stall sweep) is never
+      revisited by the one-shot cascade — exactly how M5 stranded.
+
+  Unlike `cascade_members_to_done/2` — which rolls the whole transaction
+  back if a single member can't legally reach `done` — this helper is
+  strictly additive and log-and-swallows a failed transition (mirroring
+  `commence_open_gate/1` / `sweep_stack_dependents/1`): a member that can't
+  advance is skipped, never a reason to abandon its siblings, and NEVER a
+  reason to roll back the triggering rollup-merge. Idempotent: members
+  already `done`, not at `deploying`, or resolving to any other strategy
+  are skipped. Returns `{:ok, swept}` where `swept` is the list of members
+  freshly transitioned to `done` by THIS call.
+  """
+  @spec sweep_deploying_members_to_done(Stack.t() | binary()) :: {:ok, [Task.t()]}
+  def sweep_deploying_members_to_done(%Stack{id: stack_id}),
+    do: sweep_deploying_members_to_done(stack_id)
+
+  def sweep_deploying_members_to_done(stack_id) when is_binary(stack_id) do
+    candidates =
+      stack_id
+      |> members()
+      |> Enum.filter(&no_op_deploying_member?/1)
+
+    {:ok, swept} =
+      Repo.transaction(fn ->
+        Enum.reduce(candidates, [], fn member, acc ->
+          case Tasks.transition_task(member, "done") do
+            {:ok, updated} ->
+              [updated | acc]
+
+            other ->
+              Logger.warning(
+                "[Stacks.sweep_deploying_members_to_done] member #{member.id} " <>
+                  "(status=#{member.status}) could not be swept deploying->done: " <>
+                  inspect(other)
+              )
+
+              acc
+          end
+        end)
+        |> Enum.reverse()
+      end)
+
+    {:ok, swept}
+  end
+
+  @doc """
+  Complete a SINGLE member `deploying -> done` iff its stack's rollup PR is
+  already merged and its resolved deploy strategy is `no_op_wait_for_rollup`.
+
+  This is the symmetric per-member trigger for the after-the-merge race:
+  a member that only reaches `deploying` AFTER the rollup PR already merged
+  (its `metadata["rollup_pr"]["merged_at"]` is stamped) would otherwise wait
+  for a webhook that already fired. Called from the `deploying`
+  finalize-transition hook so the member self-completes the instant it lands.
+
+  Log-and-swallow, idempotent, never raises: any member that is not a
+  `no_op_wait_for_rollup` member at `deploying`, or whose stack's rollup PR
+  has not merged yet, yields `:noop`. Returns `{:ok, task}` on a successful
+  completion.
+  """
+  @spec complete_no_op_member_if_rollup_merged(Task.t() | binary()) ::
+          {:ok, Task.t()} | :noop
+  def complete_no_op_member_if_rollup_merged(task_id) when is_binary(task_id) do
+    case Repo.get(Task, task_id) do
+      %Task{} = task -> complete_no_op_member_if_rollup_merged(task)
+      nil -> :noop
+    end
+  end
+
+  def complete_no_op_member_if_rollup_merged(%Task{stack_id: nil}), do: :noop
+
+  def complete_no_op_member_if_rollup_merged(%Task{stack_id: stack_id} = task)
+      when is_binary(stack_id) do
+    with true <- no_op_deploying_member?(task),
+         %Stack{} = stack <- Repo.get(Stack, stack_id),
+         true <- rollup_pr_merged?(stack) do
+      case Tasks.transition_task(task, "done") do
+        {:ok, updated} ->
+          Logger.info(
+            "[Stacks.complete_no_op_member_if_rollup_merged] member #{task.id} " <>
+              "reached deploying after rollup PR merge; self-completed to done"
+          )
+
+          {:ok, updated}
+
+        other ->
+          Logger.warning(
+            "[Stacks.complete_no_op_member_if_rollup_merged] member #{task.id} " <>
+              "could not self-complete deploying->done: " <> inspect(other)
+          )
+
+          :noop
+      end
+    else
+      _ -> :noop
+    end
+  end
+
+  def complete_no_op_member_if_rollup_merged(_), do: :noop
+
+  # A member eligible for the deploy-tail sweep: status is `deploying` and
+  # its resolved deploy strategy is `no_op_wait_for_rollup` (a stack member
+  # with a live rollup branch, per `Tasks.resolve_deploy_strategy/1`).
+  defp no_op_deploying_member?(%Task{status: "deploying"} = task) do
+    case Tasks.resolve_deploy_strategy(task) do
+      %{"type" => "no_op_wait_for_rollup"} -> true
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp no_op_deploying_member?(_), do: false
+
+  # True iff the stack's rollup PR has recorded a `merged_at` stamp.
+  defp rollup_pr_merged?(%Stack{metadata: meta}) when is_map(meta) do
+    case Map.get(meta, "rollup_pr") do
+      %{"merged_at" => merged_at} when is_binary(merged_at) and merged_at != "" -> true
+      _ -> false
+    end
+  end
+
+  defp rollup_pr_merged?(_), do: false
 
   @doc """
   Return the stack members flattened into the order they should be merged
@@ -2771,6 +2924,171 @@ defmodule Platform.Tasks.Stacks do
 
       {:ok, promoted}
     end
+  end
+
+  # ── Deploy-tail promotion (TAIL-stall fix, 2026-07-22) ───────────────────
+
+  @doc """
+  Whether a stack member at `in_review` is ready to advance to `deploying`.
+
+  The single source of truth for the deploy-tail readiness contract,
+  shared by BOTH the event path (`advance_member_to_deploying/1`, fired on
+  the last review-stage validation pass) and the timer path
+  (`TaskRouterWatcher.sweep_in_review_stalls/0`, the 5-min backstop). A
+  member is ready for the `in_review -> deploying` transition when:
+
+    * its branch has been merged into the rollup — `metadata["merged_into_rollup_at"]`
+      is stamped (`member_has_merged_into_rollup_at?/1`); AND
+    * every validation on every stage of its current approved plan is
+      `passed` (`member_review_validations_all_passed?/1`); AND
+    * it has no still-pending review request (`member_pending_review_requests?/1`).
+
+  Before this hoist the predicate lived only inside the watcher, reachable
+  only on the reconcile tick. Extracting it lets the event path fire the
+  exact same gate the instant the last validation passes.
+
+  Distinct from the private `member_deploy_ready?/1` used by
+  `deploy_ready?/1`: that gates the STACK-level rollup-PR open (member at
+  in_review/deploying with all non-deploy validations passed); THIS gates
+  the per-member `in_review -> deploying` transition and additionally
+  requires the rollup-merge stamp + no pending review request.
+  """
+  @spec member_deploy_transition_ready?(Task.t()) :: boolean()
+  def member_deploy_transition_ready?(%Task{} = task) do
+    member_has_merged_into_rollup_at?(task) and
+      member_review_validations_all_passed?(task) and
+      not member_pending_review_requests?(task)
+  end
+
+  @doc """
+  True iff the member's `metadata["merged_into_rollup_at"]` stamp is present.
+  """
+  @spec member_has_merged_into_rollup_at?(Task.t()) :: boolean()
+  def member_has_merged_into_rollup_at?(%Task{metadata: meta}) when is_map(meta),
+    do: Map.has_key?(meta, "merged_into_rollup_at")
+
+  def member_has_merged_into_rollup_at?(_task), do: false
+
+  @doc """
+  True iff every validation on every stage of the member's current approved
+  plan is `passed`. Missing plan / no stages / any-not-passed → false. A plan
+  with zero validations is NOT considered passed (we want evidence, not
+  silence).
+  """
+  @spec member_review_validations_all_passed?(Task.t()) :: boolean()
+  def member_review_validations_all_passed?(%Task{id: task_id}) do
+    case Tasks.current_plan(task_id) do
+      %{stages: stages} when is_list(stages) ->
+        all_validations =
+          Enum.flat_map(stages, fn stage ->
+            case stage.validations do
+              vs when is_list(vs) -> vs
+              _ -> []
+            end
+          end)
+
+        all_validations != [] and Enum.all?(all_validations, &(&1.status == "passed"))
+
+      _ ->
+        false
+    end
+  end
+
+  @doc """
+  True iff the member has at least one pending review request.
+  """
+  @spec member_pending_review_requests?(Task.t()) :: boolean()
+  def member_pending_review_requests?(%Task{id: task_id}) do
+    ReviewRequests.list_pending_for_task(task_id) != []
+  end
+
+  # True iff the member's current approved plan carries any pending/running
+  # validation (review work still outstanding). A member with no current plan
+  # or no validations has none open (vacuously false). Used by
+  # `cascade_members_to_done/2` to leave mid-review members alone.
+  defp member_has_open_validations?(%Task{id: task_id}) do
+    case Tasks.current_plan(task_id) do
+      %{stages: stages} when is_list(stages) ->
+        stages
+        |> Enum.flat_map(fn stage ->
+          case stage.validations do
+            vs when is_list(vs) -> vs
+            _ -> []
+          end
+        end)
+        |> Enum.any?(&(&1.status in ["pending", "running"]))
+
+      _ ->
+        false
+    end
+  end
+
+  @doc """
+  Advance a stack member `in_review -> deploying` on the triggering event.
+
+  Modeled on `try_promote/1`: the promote-on-event helper for the deploy
+  tail. Takes a `%Task{}` or task id. Returns:
+
+    * `{:ok, task}` on a successful `in_review -> deploying` transition;
+    * `:noop` when the task is not a stack member, is not at `in_review`,
+      or its deploy-ready contract (`member_deploy_ready?/1`) is not yet
+      satisfied — the periodic sweep remains the backstop; and
+    * `:noop` (log-and-swallow) on any transition error, so a caller inside
+      a validation-update transaction is never rolled back by a promote
+      failure.
+
+  Uses `Tasks.transition_task/2` so the `deploying` finalize hook runs — a
+  member whose rollup PR has ALREADY merged self-completes straight to
+  `done` via `complete_no_op_member_if_rollup_merged/1`.
+  """
+  @spec advance_member_to_deploying(Task.t() | binary()) :: {:ok, Task.t()} | :noop
+  def advance_member_to_deploying(task_id) when is_binary(task_id) do
+    case Repo.get(Task, task_id) do
+      %Task{} = task -> advance_member_to_deploying(task)
+      nil -> :noop
+    end
+  end
+
+  def advance_member_to_deploying(%Task{stack_id: nil}), do: :noop
+
+  def advance_member_to_deploying(%Task{status: status}) when status != "in_review", do: :noop
+
+  def advance_member_to_deploying(%Task{} = task) do
+    if member_deploy_transition_ready?(task) do
+      case Tasks.transition_task(task, "deploying") do
+        {:ok, updated} ->
+          Logger.info(
+            "[Stacks.advance_member_to_deploying] member #{task.id} in_review -> deploying"
+          )
+
+          {:ok, updated}
+
+        other ->
+          Logger.warning(
+            "[Stacks.advance_member_to_deploying] member #{task.id} could not advance " <>
+              "in_review -> deploying: " <> inspect(other)
+          )
+
+          :noop
+      end
+    else
+      :noop
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[Stacks.advance_member_to_deploying] raised for member #{task.id}: " <>
+          Exception.message(e)
+      )
+
+      :noop
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[Stacks.advance_member_to_deploying] exited for member #{task.id}: " <> inspect(reason)
+      )
+
+      :noop
   end
 
   # ── Regression handling (ADR 0041 §"Status divergence handling") ─────────

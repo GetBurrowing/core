@@ -182,6 +182,23 @@ defmodule Platform.Tasks.PlanEngine do
 
       %Task{} = task ->
         _ = StackDeployer.handle_member_transition(task, :validation_passed, :in_review)
+
+        # TAIL-stall fix (2026-07-22), direction (2): advance the member
+        # `in_review -> deploying` ON this last-validation-pass event instead
+        # of waiting up to 15 min for the reconcile sweep. The merge
+        # re-trigger above runs FIRST so `merged_into_rollup_at` is stamped
+        # before the deploy-ready gate checks it; we reload to observe the
+        # fresh stamp. `advance_member_to_deploying/1` self-guards
+        # (returns `:noop` unless the member is deploy-ready) and
+        # log-and-swallows, so an async merge that has not stamped yet is a
+        # harmless no-op and the periodic sweep remains the backstop. This is
+        # the direct analog of the commencement fix's post-commit promote
+        # hook — promote on the triggering event, idempotent, never disturb
+        # the validation write.
+        task
+        |> Repo.reload!()
+        |> Stacks.advance_member_to_deploying()
+
         :ok
     end
   rescue
@@ -189,7 +206,8 @@ defmodule Platform.Tasks.PlanEngine do
     # deployer-side lookup or dispatch fails.
     error ->
       Logger.warning(
-        "[PlanEngine] stack-member merge re-trigger failed: #{Exception.message(error)}"
+        "[PlanEngine] stack-member merge re-trigger / deploy promote failed: " <>
+          Exception.message(error)
       )
 
       :ok

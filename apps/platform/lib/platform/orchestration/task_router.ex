@@ -264,6 +264,35 @@ defmodule Platform.Orchestration.TaskRouter do
 
         {:noreply, state}
 
+      settled_stack_member_no_work?(task, state.task_id) ->
+        # TAIL-stall fix (2026-07-22), direction (3): suppress dispatch for a
+        # SETTLED stack member — one whose current plan has NO pending/running
+        # validation AND NO running stage (a pending review request is already
+        # handled by the clause above). There is nothing an executor could ack
+        # or act on, so a prompt here is exactly the stale re-dispatch the
+        # incident logged: a `manual_approval` review with every approval
+        # already passed, and a `no_op_wait_for_rollup` deploy — both of which
+        # return "no running stage" on `task_ack` and spin. Once stages 1-3
+        # walk the member to `done` it leaves the active set and the router
+        # stops on its own; this guard closes the residual race where the
+        # member briefly settles before the tail transition fires. Non-stack
+        # tasks are never suppressed. Observe-only telemetry keeps the
+        # condition visible on dashboards without changing behavior for any
+        # task with genuinely pending work.
+        Logger.info(
+          "[TaskRouter] suppressed stale dispatch for settled stack member " <>
+            "task=#{state.task_id} (no pending validation, no running stage)"
+        )
+
+        emit_dispatch_suppressed_telemetry(state.task_id)
+
+        state =
+          state
+          |> Map.put(:task_status, task.status)
+          |> clear_liveness()
+
+        {:noreply, state}
+
       true ->
         do_dispatch(state, task)
     end
@@ -1557,6 +1586,52 @@ defmodule Platform.Orchestration.TaskRouter do
   defp current_running_stage(plan) do
     (plan.stages || [])
     |> Enum.find(&(&1.status == "running"))
+  end
+
+  # TAIL-stall fix (2026-07-22), direction (3): a settled stack member has an
+  # approved plan with NO running stage and NO open (pending/running)
+  # validation — nothing an executor could ack or act on. Only stack members
+  # are eligible for suppression (the incident was a stack-tail deadlock);
+  # non-stack tasks always fall through to normal dispatch. Requires a
+  # non-nil current plan so a planning-phase member (no approved plan yet)
+  # is never suppressed — it still needs a dispatch to author its plan.
+  # Best-effort: any lookup error yields `false` (never suppress on error).
+  defp settled_stack_member_no_work?(task, task_id) do
+    if is_binary(Map.get(task, :stack_id)) do
+      case Tasks.current_plan(task_id) do
+        nil -> false
+        plan -> current_running_stage(plan) == nil and not any_open_validation?(plan)
+      end
+    else
+      false
+    end
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  defp any_open_validation?(nil), do: false
+
+  defp any_open_validation?(plan) do
+    (plan.stages || [])
+    |> Enum.flat_map(fn stage ->
+      case stage.validations do
+        vs when is_list(vs) -> vs
+        _ -> []
+      end
+    end)
+    |> Enum.any?(&(&1.status in ["pending", "running"]))
+  end
+
+  defp emit_dispatch_suppressed_telemetry(task_id) do
+    :telemetry.execute(
+      [:platform, :orchestration, :dispatch_suppressed],
+      %{count: 1},
+      %{task_id: task_id, reason: :settled_stack_member}
+    )
+
+    :ok
   end
 
   defp first_pending_stage(nil), do: nil

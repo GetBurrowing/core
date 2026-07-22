@@ -3196,6 +3196,26 @@ defmodule Platform.Tasks do
     :ok
   end
 
+  # TAIL-stall fix (2026-07-22): a stack member that reaches `deploying`
+  # AFTER its rollup PR already merged must self-complete to `done` — the
+  # rollup-merge webhook already fired and won't be re-delivered, so nothing
+  # else would move it. Runs the same generic housekeeping as the fallback
+  # head PLUS the per-member deploy-tail trigger. The helper self-guards
+  # (`:noop` unless the member is a `no_op_wait_for_rollup` member whose
+  # stack rollup PR is stamped merged) and log-and-swallows, so a member
+  # legitimately awaiting the merge simply stays at `deploying` and the
+  # rollup-merge sweep remains the backstop.
+  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, "deploying") do
+    if current_phase(previous) != current_phase(task) do
+      maybe_apply_phase_assignee(task)
+    end
+
+    maybe_recompute_stack(task)
+    maybe_handle_regression(previous, task, "deploying")
+    _ = Platform.Tasks.Stacks.complete_no_op_member_if_rollup_merged(task)
+    :ok
+  end
+
   defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, new_status) do
     if current_phase(previous) != current_phase(task) do
       maybe_apply_phase_assignee(task)

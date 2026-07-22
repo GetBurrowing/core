@@ -1949,4 +1949,123 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert updated_task.status == "in_review"
     end
   end
+
+  describe "settled stack-member dispatch suppression (TAIL-stall fix, 2026-07-22)" do
+    test "a settled stack member (no running stage, no open validation) suppresses dispatch",
+         %{assignee: assignee} do
+      # Build a stack member whose plan is fully settled: stage passed, both
+      # validations passed, no pending review request. This is the incident
+      # shape — a member the router would otherwise re-dispatch a stale
+      # prompt it can't act on.
+      {:ok, project} = Tasks.create_project(%{name: "Settled member #{unique()}"})
+      slug = "settled-#{unique()}"
+
+      {:ok, stack} =
+        Platform.Tasks.Stacks.create_stack(%{
+          project_id: project.id,
+          slug: slug,
+          name: "Settled Stack #{slug}",
+          rollup_branch: Platform.Tasks.Stacks.rollup_branch_name(slug)
+        })
+
+      {:ok, member} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Settled member #{unique()}",
+          status: "deploying",
+          stack_id: stack.id,
+          deploy_target: "production"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: member.id, status: "approved", version: 1})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 1,
+          name: "Task-level review",
+          status: "passed"
+        })
+
+      {:ok, _} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass", status: "passed"})
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      handler_ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :orchestration, :dispatch_suppressed]
+        ])
+
+      on_exit(fn -> :telemetry.detach(handler_ref) end)
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: member.id, assignee: assignee)
+
+      member_id = member.id
+
+      # The initial :dispatch scheduled by init/1 hits the settled-member
+      # guard and emits observe-only telemetry instead of dispatching.
+      assert_receive {[:platform, :orchestration, :dispatch_suppressed], ^handler_ref,
+                      %{count: 1}, %{task_id: ^member_id, reason: :settled_stack_member}},
+                     1_000
+
+      # No dispatch/attention broadcast is emitted for the settled member.
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     300
+    end
+
+    test "a stack member with a still-pending validation is NOT suppressed", %{
+      assignee: assignee
+    } do
+      {:ok, project} = Tasks.create_project(%{name: "Working member #{unique()}"})
+      slug = "working-#{unique()}"
+
+      {:ok, stack} =
+        Platform.Tasks.Stacks.create_stack(%{
+          project_id: project.id,
+          slug: slug,
+          name: "Working Stack #{slug}",
+          rollup_branch: Platform.Tasks.Stacks.rollup_branch_name(slug)
+        })
+
+      {:ok, member} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Working member #{unique()}",
+          status: "in_progress",
+          stack_id: stack.id,
+          deploy_target: "production"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: member.id, status: "approved", version: 1})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 1,
+          name: "coding",
+          status: "running"
+        })
+
+      {:ok, _} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass", status: "pending"})
+
+      handler_ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :orchestration, :dispatch_suppressed]
+        ])
+
+      on_exit(fn -> :telemetry.detach(handler_ref) end)
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: member.id, assignee: assignee)
+
+      # A member with genuinely pending work must never be suppressed.
+      refute_receive {[:platform, :orchestration, :dispatch_suppressed], ^handler_ref, _, _}, 400
+    end
+  end
+
+  defp unique, do: System.unique_integer([:positive]) |> Integer.to_string()
 end

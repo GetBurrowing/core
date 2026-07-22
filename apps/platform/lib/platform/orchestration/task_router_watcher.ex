@@ -33,7 +33,7 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   alias Platform.Orchestration.{RuntimeSupervision, TaskRouterSupervisor}
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{ReviewRequests, Task}
+  alias Platform.Tasks.{Stacks, Task}
 
   @reconcile_interval_ms 5 * 60 * 1_000
 
@@ -347,12 +347,18 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   end
 
   defp handle_in_review_stall_candidate(%Task{} = task, acc) do
+    # Single source of truth: the sub-predicates hoisted into
+    # `Platform.Tasks.Stacks` (TAIL-stall fix, 2026-07-22) are shared with
+    # the event path (`Stacks.advance_member_to_deploying/1`). The sweep
+    # keeps the granular observe-only telemetry reasons; the transition
+    # itself routes through the same `advance_member_to_deploying/1` the
+    # event path uses, so both walk the identical readiness gate.
     cond do
-      not has_merged_into_rollup_at?(task) ->
+      not Stacks.member_has_merged_into_rollup_at?(task) ->
         emit_stall_telemetry(task, %{action: :observed_only, reason: :no_stamp_or_no_stack})
         %{acc | observed: acc.observed + 1}
 
-      not review_validations_all_passed?(task) ->
+      not Stacks.member_review_validations_all_passed?(task) ->
         # Validations still pending — the task is legitimately awaiting
         # something. Observation only.
         emit_stall_telemetry(task, %{
@@ -362,7 +368,7 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
 
         %{acc | observed: acc.observed + 1}
 
-      pending_review_requests?(task) ->
+      Stacks.member_pending_review_requests?(task) ->
         emit_stall_telemetry(task, %{action: :observed_only, reason: :pending_review_requests})
         %{acc | observed: acc.observed + 1}
 
@@ -371,44 +377,8 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
     end
   end
 
-  defp has_merged_into_rollup_at?(%Task{metadata: meta}) when is_map(meta),
-    do: Map.has_key?(meta, "merged_into_rollup_at")
-
-  defp has_merged_into_rollup_at?(_task), do: false
-
-  # Confirm every validation on every stage of the current approved
-  # plan is `passed`. Missing plan / no stages / any-not-passed → false.
-  defp review_validations_all_passed?(%Task{id: task_id}) do
-    case Tasks.current_plan(task_id) do
-      nil ->
-        false
-
-      %{stages: stages} when is_list(stages) ->
-        all_validations =
-          stages
-          |> Enum.flat_map(fn stage ->
-            case stage.validations do
-              vs when is_list(vs) -> vs
-              _ -> []
-            end
-          end)
-
-        # A plan with zero validations at all cannot be considered
-        # "fully passed" for the purpose of auto-advancing — we want
-        # evidence, not silence.
-        all_validations != [] and Enum.all?(all_validations, &(&1.status == "passed"))
-
-      _ ->
-        false
-    end
-  end
-
-  defp pending_review_requests?(%Task{id: task_id}) do
-    ReviewRequests.list_pending_for_task(task_id) != []
-  end
-
   defp auto_transition_stalled(%Task{} = task, acc) do
-    case Tasks.transition_task_status(task, "deploying") do
+    case Stacks.advance_member_to_deploying(task) do
       {:ok, _updated} ->
         Logger.info(
           "[TaskRouterWatcher] in_review stall auto-transitioned task #{task.id} " <>
@@ -418,15 +388,19 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
         emit_stall_telemetry(task, %{action: :auto_transitioned_to_deploying})
         %{acc | transitioned: acc.transitioned + 1}
 
-      {:error, reason} ->
+      :noop ->
+        # The shared readiness gate declined (or the transition failed and
+        # was log-and-swallowed inside advance_member_to_deploying/1). The
+        # cond above already confirmed the observable preconditions, so this
+        # is a transient/racing state — surface it as observe-only.
         Logger.warning(
           "[TaskRouterWatcher] in_review stall detected on task #{task.id} but " <>
-            "transition to deploying failed: #{inspect(reason)}"
+            "advance_member_to_deploying/1 returned :noop"
         )
 
         emit_stall_telemetry(task, %{
           action: :observed_only,
-          reason: {:transition_failed, reason}
+          reason: :advance_noop
         })
 
         %{acc | observed: acc.observed + 1}
