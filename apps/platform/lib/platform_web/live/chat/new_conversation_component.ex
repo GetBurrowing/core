@@ -20,9 +20,14 @@ defmodule PlatformWeb.ChatLive.NewConversationComponent do
     * `{:new_conversation_flash, kind, msg}` — parent attaches a flash
 
   ## Attrs
-    * `:id`       — component id
-    * `:open`     — whether the modal is visible
-    * `:user_id`  — current user's id (to exclude self from picker)
+    * `:id`         — component id
+    * `:open`       — whether the modal is visible
+    * `:user_id`    — current user's id (to exclude self from picker)
+    * `:external?`  — rbac-external-users M5: when true (the chrome-less
+                      external chat surface), the picker drops agents entirely
+                      and filters the human list to only those the external
+                      user may DM (`Chat.external_dm_permitted?/3`, M8). Default
+                      false — the internal picker is unchanged.
   """
 
   use PlatformWeb, :live_component
@@ -32,14 +37,15 @@ defmodule PlatformWeb.ChatLive.NewConversationComponent do
 
   @impl true
   def update(%{open: true} = assigns, socket) do
-    users = Accounts.list_users()
-    agents = Chat.list_agents_for_picker()
+    external? = assigns[:external?] == true
+    user_id = assigns[:user_id]
 
     {:ok,
      socket
      |> assign(assigns)
-     |> assign(:users, users)
-     |> assign(:agents, agents)
+     |> assign(:external?, external?)
+     |> assign(:users, picker_users(external?, user_id, ""))
+     |> assign(:agents, picker_agents(external?, ""))
      |> assign(:query, "")
      |> assign(:selected, [])}
   end
@@ -48,6 +54,7 @@ defmodule PlatformWeb.ChatLive.NewConversationComponent do
     {:ok,
      socket
      |> assign(assigns)
+     |> assign_new(:external?, fn -> false end)
      |> assign_new(:users, fn -> [] end)
      |> assign_new(:agents, fn -> [] end)
      |> assign_new(:query, fn -> "" end)
@@ -61,22 +68,14 @@ defmodule PlatformWeb.ChatLive.NewConversationComponent do
   end
 
   def handle_event("new_conversation_search", %{"value" => query}, socket) do
-    users = Accounts.list_users(query: query)
-    agents = Chat.list_agents_for_picker()
-
-    filtered_agents =
-      if query == "" do
-        agents
-      else
-        pattern = String.downcase(query)
-        Enum.filter(agents, fn a -> String.contains?(String.downcase(a.name || ""), pattern) end)
-      end
+    external? = socket.assigns[:external?] == true
+    user_id = socket.assigns.user_id
 
     {:noreply,
      socket
      |> assign(:query, query)
-     |> assign(:users, users)
-     |> assign(:agents, filtered_agents)}
+     |> assign(:users, picker_users(external?, user_id, query))
+     |> assign(:agents, picker_agents(external?, query))}
   end
 
   def handle_event("new_conversation_toggle", %{"type" => type, "id" => id}, socket) do
@@ -249,6 +248,41 @@ defmodule PlatformWeb.ChatLive.NewConversationComponent do
       </div>
     </div>
     """
+  end
+
+  # rbac-external-users M5 stage 3. The picker must SHOW only what M8 would
+  # permit so the UI can't offer a DM the backend (`Chat.external_dm_permitted?/3`
+  # — the shared create+send gate) will reject. Reusing that same predicate at
+  # build time keeps picker scope == enforcement scope (canvas §9 cl-9-7: the
+  # human autocomplete filter is server-side and identical to enforcement). The
+  # filter is applied on BOTH open and every keystroke, so typing a
+  # non-allowlisted name can never surface them.
+  #
+  # Internal mode (external? == false) is the unchanged full user list.
+  defp picker_users(false, _user_id, query), do: Accounts.list_users(query: query)
+
+  defp picker_users(true, user_id, query) do
+    query
+    |> then(&Accounts.list_users(query: &1))
+    |> Enum.filter(fn candidate ->
+      Chat.external_dm_permitted?(user_id, "user", candidate.id)
+    end)
+  end
+
+  # External users get NO agent surface (canvas §7/§1 — the external chat
+  # surface is scoped to allowlisted humans). Internal mode keeps the existing
+  # name-prefix agent filter.
+  defp picker_agents(true, _query), do: []
+
+  defp picker_agents(false, query) do
+    agents = Chat.list_agents_for_picker()
+
+    if query == "" do
+      agents
+    else
+      pattern = String.downcase(query)
+      Enum.filter(agents, fn a -> String.contains?(String.downcase(a.name || ""), pattern) end)
+    end
   end
 
   defp selected_name(%{type: "user", id: id}, users, _agents) do

@@ -519,6 +519,10 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       participant_type: "agent",
       name: name,
       display_name: name,
+      # The underlying principal id (agent_id). rbac-external-users M5 stage 4
+      # reads this so the @-mention filter can reason about the participant by
+      # identity; agents are dropped wholesale on the external surface anyway.
+      principal_id: participant.participant_id || participant.id,
       avatar_url: participant.avatar_url,
       avatar_seed: participant.participant_id || participant.id,
       # Agents are never "archived" in the user-lifecycle sense — the flag
@@ -538,6 +542,10 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       participant_type: "user",
       name: name,
       display_name: name,
+      # The underlying principal id (user_id). rbac-external-users M5 stage 4
+      # reads this so the @-mention filter can check `external_dm_permitted?/3`
+      # against the mentioned human — mention scope == DM scope == enforcement.
+      principal_id: participant.participant_id,
       avatar_url: participant.avatar_url || (user && user.avatar_url),
       avatar_seed: participant_avatar_seed(participant, user),
       # `participants_map` intentionally still contains archived users so
