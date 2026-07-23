@@ -3,7 +3,7 @@ defmodule Platform.Responsibilities.Handlers.Dreaming do
   `memory.dreaming` responsibility provider (ADR-0041 M8 stages 2 + 7).
 
   Implements the M1 `Platform.Responsibilities.Provider` behaviour for
-  the 03:00 America/Chicago "dreaming" run that consolidates recent
+  the 05:00 America/Chicago "dreaming" run that consolidates recent
   journal entries into long-term curated knowledge. Historically lived
   in `Platform.Agents.SystemEventScheduler`'s legacy `dreaming` event
   (collapsed into `historian` by T6), now owns its own responsibility
@@ -14,8 +14,12 @@ defmodule Platform.Responsibilities.Handlers.Dreaming do
 
     * `key` — `"memory.dreaming"`
     * `feature` — `"memory"`
-    * `trigger_kind` — `cron` with `expression: "0 3 * * *"` and
-      `timezone: "America/Chicago"` — 03:00 local daily, year-round.
+    * `trigger_kind` — `cron` with `expression: "0 5 * * *"` and
+      `timezone: "America/Chicago"` — 05:00 local daily, year-round.
+      05:00 (not 03:00) so the run is clear of openclaw's 03:00 internal
+      dreaming pass, and so 05:00 CDT ≈ 10:00 UTC lands *between* the
+      SystemEventScheduler summary anchors (after 06:00, before 12:00) —
+      no scheduled `historian.scheduled` summary is in-flight when it fires.
       Survives DST because the Router walks UTC minutes but evaluates
       the match predicate in the configured zone (task 019f70e9 stage 6).
     * `scope` — `per_org`
@@ -114,14 +118,19 @@ defmodule Platform.Responsibilities.Handlers.Dreaming do
         key: @key,
         feature: "memory",
         trigger_kind: "cron",
-        # 03:00 America/Chicago year-round. Task 019f70e9 stage 6 —
-        # Rowan's local overnight is when the model has the least
-        # contention. Router.compute_next_fire pulls `timezone` out of
-        # trigger_config and hands it to Cron.next_fire_after, which
-        # walks UTC minutes but evaluates matches in the named zone so
-        # the fire time survives DST transitions.
+        # 05:00 America/Chicago year-round. Moved 03:00 → 05:00
+        # (task 019f905e) to stop two Historian-dreaming overlaps that
+        # produced a zero-proposal run: 05:00 clears openclaw's 03:00
+        # internal dreaming pass, and 05:00 CDT ≈ 10:00 UTC sits between
+        # the SystemEventScheduler summary anchors (0/6/12/18 UTC) —
+        # after the 06:00 anchor, before the 12:00 one — so no scheduled
+        # `historian.scheduled` summary is in-flight when this fires.
+        # Router.compute_next_fire pulls `timezone` out of trigger_config
+        # and hands it to Cron.next_fire_after, which walks UTC minutes
+        # but evaluates matches in the named zone so the fire time
+        # survives DST transitions.
         trigger_config: %{
-          "expression" => "0 3 * * *",
+          "expression" => "0 5 * * *",
           "timezone" => "America/Chicago"
         },
         scope: "per_org",

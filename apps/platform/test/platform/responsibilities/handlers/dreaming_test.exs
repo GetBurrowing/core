@@ -43,7 +43,7 @@ defmodule Platform.Responsibilities.Handlers.DreamingTest do
       feature: "memory",
       trigger_kind: "cron",
       trigger_config: %{
-        "expression" => "0 3 * * *",
+        "expression" => "0 5 * * *",
         "timezone" => "America/Chicago"
       },
       scope: "per_org",
@@ -72,7 +72,7 @@ defmodule Platform.Responsibilities.Handlers.DreamingTest do
       assert spec.trigger_kind == "cron"
 
       assert spec.trigger_config == %{
-               "expression" => "0 3 * * *",
+               "expression" => "0 5 * * *",
                "timezone" => "America/Chicago"
              }
 

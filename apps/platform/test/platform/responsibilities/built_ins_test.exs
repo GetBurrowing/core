@@ -93,7 +93,9 @@ defmodule Platform.Responsibilities.BuiltInsTest do
       assert row.trigger_kind == "cron"
       assert row.scope == "per_org"
       assert Enum.sort(row.context_provided) == ["org_identity", "recent_journal"]
-      assert row.trigger_config["expression"] == "0 3 * * *"
+      # Task 019f905e: dreaming cron moved 03:00 → 05:00 America/Chicago.
+      assert row.trigger_config["expression"] == "0 5 * * *"
+      assert row.trigger_config["timezone"] == "America/Chicago"
 
       # Task 019f70e9 stage 7: dreaming writes to today's journal
       # (`org/journal/YYYY-MM-DD.md`), no longer directly to a static

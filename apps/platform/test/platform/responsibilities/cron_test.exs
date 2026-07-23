@@ -121,4 +121,54 @@ defmodule Platform.Responsibilities.CronTest do
       assert chicago.minute == 0
     end
   end
+
+  describe "next_fire_after/3 — memory.dreaming 05:00 America/Chicago (task 019f905e)" do
+    # Handlers.Dreaming moved 03:00 → 05:00 America/Chicago. The fire
+    # time must stay pinned to 05:00 *local* on both sides of the DST
+    # boundary (not a fixed UTC hour): 10:00 UTC in summer (CDT, UTC-5)
+    # and 11:00 UTC in winter (CST, UTC-6). Both assertions in one test
+    # so a broken zone shift can't pass one and fail the other.
+
+    test "0 5 * * * in America/Chicago fires at 10:00 UTC in July (CDT)" do
+      # July 15 2026 at 00:00 UTC is safely before 05:00 America/Chicago
+      # that same date (which is 10:00 UTC on 2026-07-15).
+      {:ok, spec} = Cron.parse("0 5 * * *")
+      now_utc = ~U[2026-07-15 00:00:00Z]
+
+      assert {:ok, %DateTime{} = next} =
+               Cron.next_fire_after(now_utc, spec, timezone: "America/Chicago")
+
+      assert next.time_zone == "Etc/UTC"
+      assert next.year == 2026
+      assert next.month == 7
+      assert next.day == 15
+      assert next.hour == 10
+      assert next.minute == 0
+
+      chicago = DateTime.shift_zone!(next, "America/Chicago")
+      assert chicago.hour == 5
+      assert chicago.minute == 0
+    end
+
+    test "0 5 * * * in America/Chicago fires at 11:00 UTC in January (CST)" do
+      # January 15 2026 — well outside any DST transition window;
+      # America/Chicago is CST (UTC-6) so 05:00 local == 11:00 UTC.
+      {:ok, spec} = Cron.parse("0 5 * * *")
+      now_utc = ~U[2026-01-15 00:00:00Z]
+
+      assert {:ok, %DateTime{} = next} =
+               Cron.next_fire_after(now_utc, spec, timezone: "America/Chicago")
+
+      assert next.time_zone == "Etc/UTC"
+      assert next.year == 2026
+      assert next.month == 1
+      assert next.day == 15
+      assert next.hour == 11
+      assert next.minute == 0
+
+      chicago = DateTime.shift_zone!(next, "America/Chicago")
+      assert chicago.hour == 5
+      assert chicago.minute == 0
+    end
+  end
 end
