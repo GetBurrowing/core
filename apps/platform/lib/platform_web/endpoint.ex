@@ -55,6 +55,11 @@ defmodule PlatformWeb.Endpoint do
 
   plug(Plug.MethodOverride)
   plug(Plug.Head)
-  plug(Plug.Session, @session_options)
+  # SessionCookieDomain wraps Plug.Session to inject a runtime-configured cookie
+  # `Domain` (SESSION_COOKIE_DOMAIN, prod-only) on the Set-Cookie WRITE path.
+  # The `@session_options` attribute and both socket `connect_info` reads above
+  # stay untouched: `Domain` only matters when writing the cookie, not when the
+  # LiveView socket reads/verifies the already-signed cookie. See the plug.
+  plug(PlatformWeb.Plugs.SessionCookieDomain, @session_options)
   plug(PlatformWeb.Router)
 end

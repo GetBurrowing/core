@@ -15,6 +15,28 @@ if System.get_env("PHX_SERVER") do
   config :platform, PlatformWeb.Endpoint, server: true
 end
 
+# ── Session cookie domain (cross-subdomain OIDC login fix) ────────────────────
+# The `_platform_session` cookie is host-only by default (no `Domain`), so a
+# login started on `chat.example.com` loses its OIDC `state` cookie when
+# Pocket-ID redirects the callback to `suite.example.com` → "Invalid
+# OIDC state". Setting SESSION_COOKIE_DOMAIN=.example.com shares the
+# cookie across every `*.example.com` host so the state survives the
+# cross-host redirect. `SameSite=Lax` is intentionally retained — it is correct
+# for the top-level GET navigation redirect back from Pocket-ID.
+#
+# Only the prod container sets this var; dev, test, CI, and localhost leave it
+# unset, so no key is written and the cookie stays host-only (unchanged).
+# Tradeoff: a domain-wide cookie reaches every `*.example.com` subdomain
+# — already the accepted pattern here (oauth2-proxy runs
+# OAUTH2_PROXY_COOKIE_DOMAINS=.example.com).
+case System.get_env("SESSION_COOKIE_DOMAIN") do
+  domain when is_binary(domain) and domain != "" ->
+    config :platform, :session_cookie_domain, domain
+
+  _ ->
+    :ok
+end
+
 vault_key =
   case {config_env(), System.get_env("VAULT_MASTER_KEY")} do
     {:prod, nil} ->
