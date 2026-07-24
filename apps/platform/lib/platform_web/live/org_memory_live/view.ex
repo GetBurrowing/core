@@ -65,6 +65,7 @@ defmodule PlatformWeb.OrgMemoryLive do
   alias Platform.Org.Wiki.Journal
   alias PlatformWeb.OrgMemoryLive.JournalPane
   alias PlatformWeb.OrgMemoryLive.MarkdownRenderer
+  alias PlatformWeb.OrgMemoryLive.MobileShell
   alias PlatformWeb.OrgMemoryLive.NamespaceTree
   alias PlatformWeb.OrgMemoryLive.PageViewer
   alias PlatformWeb.OrgMemoryLive.ProposalsPane
@@ -112,6 +113,8 @@ defmodule PlatformWeb.OrgMemoryLive do
      |> assign(:search_error, nil)
      |> assign(:proposals_pending_count, count_pending_proposals())
      |> assign(:show_reject_form_for, nil)
+     |> assign(:tree_drawer_open, false)
+     |> assign(:expanded_diffs, MapSet.new())
      |> assign(:proposals, [])}
   end
 
@@ -170,7 +173,13 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   @impl true
   def handle_event("select_page", %{"file_key" => file_key}, socket) do
-    {:noreply, push_patch(socket, to: ~p"/org_memory/#{String.split(file_key, "/")}")}
+    # Close-on-select for the mobile tree drawer (task 019f9282). The
+    # desktop rail ignores `:tree_drawer_open`, so assigning false is a
+    # no-op there — the tree/expansion/selection invariants are untouched.
+    {:noreply,
+     socket
+     |> assign(:tree_drawer_open, false)
+     |> push_patch(to: ~p"/org_memory/#{String.split(file_key, "/")}")}
   end
 
   @impl true
@@ -183,6 +192,23 @@ defmodule PlatformWeb.OrgMemoryLive do
          MapSet.put(expanded, prefix)
        end
      end)}
+  end
+
+  # ── Events: mobile tree drawer (task 019f9282) ──────────────────────────
+
+  # The slide-out namespace tree drawer on the mobile (`lg:hidden`)
+  # branch. Desktop is unaffected — the left rail is always visible
+  # behind `hidden lg:grid`, so `:tree_drawer_open` is a mobile-only
+  # concern. Opening/closing never touches `:namespace_tree`,
+  # `:expanded_prefixes`, or `:selected_page`.
+  @impl true
+  def handle_event("open_tree_drawer", _params, socket) do
+    {:noreply, assign(socket, :tree_drawer_open, true)}
+  end
+
+  @impl true
+  def handle_event("close_tree_drawer", _params, socket) do
+    {:noreply, assign(socket, :tree_drawer_open, false)}
   end
 
   # ── Events: tabs (stage 6) ──────────────────────────────────────────────
@@ -392,6 +418,18 @@ defmodule PlatformWeb.OrgMemoryLive do
     {:noreply, assign(socket, :show_reject_form_for, nil)}
   end
 
+  # Mobile-only (task 019f9282): toggle the "show full diff" expansion of
+  # a long proposal card. Server-held so it survives LiveView patches
+  # (unlike a client-only checkbox). Desktop renders the full table and
+  # ignores this assign.
+  @impl true
+  def handle_event("toggle_proposal_diff", %{"id" => id}, socket) do
+    {:noreply,
+     update(socket, :expanded_diffs, fn set ->
+       if MapSet.member?(set, id), do: MapSet.delete(set, id), else: MapSet.put(set, id)
+     end)}
+  end
+
   # ── Events: editing ─────────────────────────────────────────────────────
 
   @impl true
@@ -594,81 +632,127 @@ defmodule PlatformWeb.OrgMemoryLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div
-      class={[
-        "grid h-full overflow-hidden",
-        if(@view_mode == :pages,
-          do: "grid-cols-[16rem_minmax(0,1fr)_18rem]",
-          else: "grid-cols-[16rem_minmax(0,1fr)]"
-        )
-      ]}
-      data-view-mode={@view_mode}
-    >
-      <NamespaceTree.namespace_tree
-        tree={@namespace_tree}
-        expanded_prefixes={@expanded_prefixes}
-        selected_file_key={@selected_page && @selected_page.file_key}
-      />
+    <div class="h-full overflow-hidden">
+      <%!-- Desktop three-pane grid — unchanged, guarded behind
+           `hidden lg:grid` (task 019f9282). Renders byte-identically
+           to before on lg+ viewports. --%>
+      <div
+        class={[
+          "hidden h-full overflow-hidden lg:grid",
+          if(@view_mode == :pages,
+            do: "grid-cols-[16rem_minmax(0,1fr)_18rem]",
+            else: "grid-cols-[16rem_minmax(0,1fr)]"
+          )
+        ]}
+        data-view-mode={@view_mode}
+      >
+        <NamespaceTree.namespace_tree
+          tree={@namespace_tree}
+          expanded_prefixes={@expanded_prefixes}
+          selected_file_key={@selected_page && @selected_page.file_key}
+        />
 
-      <div class="flex min-h-0 flex-col overflow-hidden">
-        <.tab_strip view_mode={@view_mode} proposals_pending_count={@proposals_pending_count} />
+        <div class="flex min-h-0 flex-col overflow-hidden">
+          <.tab_strip view_mode={@view_mode} proposals_pending_count={@proposals_pending_count} />
 
-        <%= case @view_mode do %>
-          <% :journal -> %>
-            <JournalPane.journal_pane
-              groups={@journal_groups}
-              draft={@journal_draft}
-              namespace={journal_namespace(@selected_page)}
-              focus_date={@journal_focus_date}
-            />
-          <% :search -> %>
-            <SearchPane.search_pane
-              query={@search_query}
-              corpus={@search_corpus}
-              namespace={@search_namespace}
-              namespaces={top_level_namespaces(@namespace_tree)}
-              results={@search_results}
-              performed={@search_performed}
-              truncated={@search_truncated}
-              error={@search_error}
-            />
-          <% :proposals -> %>
-            <ProposalsPane.proposals_pane
-              proposals={@proposals}
-              show_reject_form_for={@show_reject_form_for}
-            />
-          <% :pages -> %>
-            <%= if @creating do %>
-              <.create_panel
-                new_file_key={@new_file_key}
-                new_file_template={@new_file_template}
-                pages={@pages}
+          <%= case @view_mode do %>
+            <% :journal -> %>
+              <JournalPane.journal_pane
+                groups={@journal_groups}
+                draft={@journal_draft}
+                namespace={journal_namespace(@selected_page)}
+                focus_date={@journal_focus_date}
               />
-            <% else %>
-              <PageViewer.page_viewer
-                page={@selected_page}
-                editing={@editing}
-                editor_content={@editor_content}
-                preview_html={@preview_html}
-                save_error={@save_error}
-                confirm_delete={@confirm_delete}
-                fm_form={@fm_form}
-                fm_complex={@fm_complex}
+            <% :search -> %>
+              <SearchPane.search_pane
+                query={@search_query}
+                corpus={@search_corpus}
+                namespace={@search_namespace}
+                namespaces={top_level_namespaces(@namespace_tree)}
+                results={@search_results}
+                performed={@search_performed}
+                truncated={@search_truncated}
+                error={@search_error}
               />
-            <% end %>
-        <% end %>
-      </div>
+            <% :proposals -> %>
+              <ProposalsPane.proposals_pane
+                proposals={@proposals}
+                show_reject_form_for={@show_reject_form_for}
+              />
+            <% :pages -> %>
+              <%= if @creating do %>
+                <.create_panel
+                  new_file_key={@new_file_key}
+                  new_file_template={@new_file_template}
+                  pages={@pages}
+                />
+              <% else %>
+                <PageViewer.page_viewer
+                  page={@selected_page}
+                  editing={@editing}
+                  editor_content={@editor_content}
+                  preview_html={@preview_html}
+                  save_error={@save_error}
+                  confirm_delete={@confirm_delete}
+                  fm_form={@fm_form}
+                  fm_complex={@fm_complex}
+                />
+              <% end %>
+          <% end %>
+        </div>
 
-      <%!-- Backlinks/meta make sense only against a selected page —
+        <%!-- Backlinks/meta make sense only against a selected page —
            the right pane renders on :pages only and the grid collapses
            to two columns on the other tabs (judgment call: the feed /
            results get the extra width instead of an empty aside). --%>
-      <RightPane.right_pane
-        :if={@view_mode == :pages}
+        <RightPane.right_pane
+          :if={@view_mode == :pages}
+          page={@selected_page}
+          backlinks={@backlinks}
+          updated_by_display={@updated_by_display}
+        />
+      </div>
+
+      <%!-- Mobile branch (`lg:hidden`) — task 019f9282. --%>
+      <MobileShell.mobile_shell
+        view_mode={@view_mode}
+        proposals_pending_count={@proposals_pending_count}
+        tree_drawer_open={@tree_drawer_open}
+        namespace_tree={@namespace_tree}
+        expanded_prefixes={@expanded_prefixes}
+        creating={@creating}
         page={@selected_page}
+        preview_html={@preview_html}
+        editing={@editing}
+        editor_content={@editor_content}
+        save_error={@save_error}
+        confirm_delete={@confirm_delete}
         backlinks={@backlinks}
         updated_by_display={@updated_by_display}
-      />
+        journal_groups={@journal_groups}
+        journal_namespace={journal_namespace(@selected_page)}
+        journal_draft={@journal_draft}
+        journal_focus_date={@journal_focus_date}
+        search_query={@search_query}
+        search_corpus={@search_corpus}
+        search_namespace={@search_namespace}
+        namespaces={top_level_namespaces(@namespace_tree)}
+        search_results={@search_results}
+        search_performed={@search_performed}
+        search_truncated={@search_truncated}
+        search_error={@search_error}
+        proposals={@proposals}
+        show_reject_form_for={@show_reject_form_for}
+        expanded_diffs={@expanded_diffs}
+      >
+        <:create_panel>
+          <.create_panel
+            new_file_key={@new_file_key}
+            new_file_template={@new_file_template}
+            pages={@pages}
+          />
+        </:create_panel>
+      </MobileShell.mobile_shell>
     </div>
     """
   end

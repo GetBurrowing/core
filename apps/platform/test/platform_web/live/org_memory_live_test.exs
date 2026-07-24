@@ -185,7 +185,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      view |> element(~s(button[phx-click="show_create"])) |> render_click()
+      view |> element(~s([data-view-mode] button[phx-click="show_create"])) |> render_click()
       render_click(view, "create_file", %{"file_key" => "org/custom.md"})
 
       # The page lands on the gate-recognised key; the flat key was
@@ -204,7 +204,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       space_id = Ecto.UUID.generate()
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      view |> element(~s(button[phx-click="show_create"])) |> render_click()
+      view |> element(~s([data-view-mode] button[phx-click="show_create"])) |> render_click()
       render_click(view, "create_file", %{"file_key" => "org/page/already.md"})
       assert %WikiPage{} = Wiki.get_page("org/page/already.md")
       assert Wiki.get_page("org/page/page/already.md") == nil
@@ -220,7 +220,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      view |> element(~s(button[phx-click="show_create"])) |> render_click()
+      view |> element(~s([data-view-mode] button[phx-click="show_create"])) |> render_click()
       render_click(view, "create_file", %{"file_key" => "project/not-a-uuid/notes.md"})
 
       assert %WikiPage{} = Wiki.get_page("project/not-a-uuid/notes.md")
@@ -286,7 +286,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
       view
-      |> element(~s(button[data-file-key="org/page/identity.md"]))
+      |> element(~s([data-view-mode] button[data-file-key="org/page/identity.md"]))
       |> render_click()
 
       path = assert_patch(view)
@@ -307,13 +307,13 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       file_key = "project/#{project_id}/page/decisions.md"
 
       view
-      |> element(~s(button[data-namespace-prefix="project/#{project_id}/"]))
+      |> element(~s([data-view-mode] button[data-namespace-prefix="project/#{project_id}/"]))
       |> render_click()
 
       assert has_element?(view, ~s(button[data-file-key="#{file_key}"]))
 
       view
-      |> element(~s(button[data-file-key="#{file_key}"]))
+      |> element(~s([data-view-mode] button[data-file-key="#{file_key}"]))
       |> render_click()
 
       path = assert_patch(view)
@@ -472,7 +472,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
         live(conn, "/org_memory/" <> URI.encode_www_form("org/page/identity.md"))
 
       view
-      |> element(~s(button[phx-click="start_edit"]))
+      |> element(~s([data-view-mode] button[phx-click="start_edit"]))
       |> render_click()
 
       # The flat frontmatter renders as a form with a preamble checkbox
@@ -639,8 +639,16 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       assert has_element?(view, ~s([data-role="tab-strip"] button[data-tab="pages"]), "Pages")
       assert has_element?(view, ~s([data-role="tab-strip"] button[data-tab="journal"]), "Journal")
       assert has_element?(view, ~s([data-role="tab-strip"] button[data-tab="search"]), "Search")
-      assert has_element?(view, ~s(button[data-tab="pages"][aria-selected="true"]))
-      assert has_element?(view, ~s(button[data-tab="search"][aria-selected="false"]))
+
+      assert has_element?(
+               view,
+               ~s([data-role="tab-strip"] button[data-tab="pages"][aria-selected="true"])
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-role="tab-strip"] button[data-tab="search"][aria-selected="false"])
+             )
     end
 
     test "tab switches preserve the namespace tree, expansion, and selected page (critical invariant)",
@@ -649,7 +657,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
       # Expand a deeper folder so we can verify expansion survives.
       view
-      |> element(~s(button[data-namespace-prefix="project/#{project_id}/"]))
+      |> element(~s([data-view-mode] button[data-namespace-prefix="project/#{project_id}/"]))
       |> render_click()
 
       assert has_element?(
@@ -658,7 +666,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
              )
 
       # :pages → :search → :journal → :pages, no patch in between.
-      view |> element(~s(button[data-tab="search"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="search"])) |> render_click()
 
       # Tree (and the expanded deep folder) stay mounted on every tab.
       assert has_element?(view, ~s(button[data-namespace-prefix="org/"]))
@@ -668,14 +676,14 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
                ~s(button[data-file-key="project/#{project_id}/page/decisions.md"])
              )
 
-      view |> element(~s(button[data-tab="journal"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="journal"])) |> render_click()
 
       assert has_element?(
                view,
                ~s(button[data-file-key="project/#{project_id}/page/decisions.md"])
              )
 
-      view |> element(~s(button[data-tab="pages"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="pages"])) |> render_click()
 
       # Same selected page, no re-fetch / no navigation: the viewer
       # heading and the tree's selected styling are intact.
@@ -690,15 +698,15 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       assert has_element?(view, "h2", "Page Details")
       assert has_element?(view, ~s([data-role="backlinks"]))
 
-      view |> element(~s(button[data-tab="journal"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="journal"])) |> render_click()
       refute has_element?(view, "h2", "Page Details")
       refute has_element?(view, ~s([data-role="backlinks"]))
 
-      view |> element(~s(button[data-tab="search"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="search"])) |> render_click()
       refute has_element?(view, "h2", "Page Details")
       refute has_element?(view, ~s([data-role="backlinks"]))
 
-      view |> element(~s(button[data-tab="pages"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="pages"])) |> render_click()
       assert has_element?(view, ~s([data-role="backlinks"]))
     end
   end
@@ -717,7 +725,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
     test "journal is append-only: renders with no delete affordance", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      view |> element(~s(button[data-tab="journal"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="journal"])) |> render_click()
       html = render(view)
 
       assert html =~ "Journal"
@@ -732,7 +740,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
          %{conn: conn, user: user} do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      view |> element(~s(button[data-tab="journal"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="journal"])) |> render_click()
 
       view
       |> form("#org-memory-journal-form", %{"content" => "Shipped the wiki tabs."})
@@ -756,7 +764,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
     test "blank submission appends nothing", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      view |> element(~s(button[data-tab="journal"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="journal"])) |> render_click()
 
       view
       |> form("#org-memory-journal-form", %{"content" => "   "})
@@ -773,7 +781,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
       {:ok, view, _html} = live(conn, "/org_memory/project/#{project_id}/page/decisions.md")
 
-      view |> element(~s(button[data-tab="journal"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="journal"])) |> render_click()
 
       view
       |> form("#org-memory-journal-form", %{"content" => "Project-scoped note."})
@@ -814,7 +822,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      view |> element(~s(button[data-tab="search"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="search"])) |> render_click()
 
       view
       |> form("#org-memory-search-form", %{
@@ -834,7 +842,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
     test "corpus + namespace filters pass through as source/namespace args", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      view |> element(~s(button[data-tab="search"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="search"])) |> render_click()
 
       view
       |> form("#org-memory-search-form", %{
@@ -851,7 +859,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
     test "results render with visible source tags, score, and rank info", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      view |> element(~s(button[data-tab="search"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="search"])) |> render_click()
 
       view
       |> form("#org-memory-search-form", %{"query" => "deployment"})
@@ -870,7 +878,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
     test "page hit click-through patches back to :pages on the hit's path", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      view |> element(~s(button[data-tab="search"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="search"])) |> render_click()
 
       view
       |> form("#org-memory-search-form", %{"query" => "deployment"})
@@ -884,7 +892,11 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       assert URI.decode(path) == "/org_memory/org/page/identity.md"
 
       # Back on the Pages tab with the hit selected (right pane returns).
-      assert has_element?(view, ~s(button[data-tab="pages"][aria-selected="true"]))
+      assert has_element?(
+               view,
+               ~s([data-role="tab-strip"] button[data-tab="pages"][aria-selected="true"])
+             )
+
       assert has_element?(view, "h1", "org/page/identity.md")
       assert has_element?(view, ~s([data-role="backlinks"]))
     end
@@ -893,7 +905,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      view |> element(~s(button[data-tab="search"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="search"])) |> render_click()
 
       view
       |> form("#org-memory-search-form", %{"query" => "deployment"})
@@ -903,14 +915,18 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       |> element(~s([data-source-tag="journal"] button[phx-click="open_result_journal"]))
       |> render_click()
 
-      assert has_element?(view, ~s(button[data-tab="journal"][aria-selected="true"]))
+      assert has_element?(
+               view,
+               ~s([data-role="tab-strip"] button[data-tab="journal"][aria-selected="true"])
+             )
+
       assert has_element?(view, ~s([data-role="journal-pane"]))
     end
 
     test "message hit links to the chat space", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      view |> element(~s(button[data-tab="search"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="search"])) |> render_click()
 
       view
       |> form("#org-memory-search-form", %{"query" => "deployment"})
@@ -925,7 +941,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
     test "blank query clears results without dispatching", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      view |> element(~s(button[data-tab="search"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="search"])) |> render_click()
 
       view
       |> form("#org-memory-search-form", %{"query" => "   "})
@@ -1045,7 +1061,11 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
       assert view.module == PlatformWeb.OrgMemoryLive
       # Tab strip shows Proposals as the selected tab.
-      assert has_element?(view, ~s(button[data-tab="proposals"][aria-selected="true"]))
+      assert has_element?(
+               view,
+               ~s([data-role="tab-strip"] button[data-tab="proposals"][aria-selected="true"])
+             )
+
       # Pane rendered — table + row present.
       assert has_element?(view, ~s([data-role="proposals-pane"]))
       assert has_element?(view, ~s([data-role="proposals-table"]))
@@ -1202,13 +1222,18 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
       {:ok, view, _html} = live(conn, "/org_memory/org/page/identity.md")
 
-      view |> element(~s(button[data-tab="proposals"])) |> render_click()
-      assert has_element?(view, ~s(button[data-tab="proposals"][aria-selected="true"]))
+      view |> element(~s([data-role="tab-strip"] button[data-tab="proposals"])) |> render_click()
+
+      assert has_element?(
+               view,
+               ~s([data-role="tab-strip"] button[data-tab="proposals"][aria-selected="true"])
+             )
+
       # Tree survives the tab switch.
       assert has_element?(view, ~s(button[data-namespace-prefix="org/"]))
 
       # Return to pages: selection is intact, no navigation happened.
-      view |> element(~s(button[data-tab="pages"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="pages"])) |> render_click()
       assert has_element?(view, "h1", "org/page/identity.md")
     end
   end

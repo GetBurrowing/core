@@ -88,7 +88,7 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
     {:ok, view, _html} = live(conn, "/org_memory/org/page/identity.md")
 
     view
-    |> element(~s(button[phx-click="start_edit"]))
+    |> element(~s([data-view-mode] button[phx-click="start_edit"]))
     |> render_click()
 
     # Modify the textarea contents — the MarkdownEditor hook pushes
@@ -267,7 +267,7 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
     conn = authenticated_conn(conn, create_user!())
     {:ok, view, _html} = live(conn, "/org_memory/org/page/playbook.md")
 
-    view |> element(~s(button[phx-click="start_edit"])) |> render_click()
+    view |> element(~s([data-view-mode] button[phx-click="start_edit"])) |> render_click()
 
     # Checkbox starts unticked (preamble: false).
     assert has_element?(
@@ -292,7 +292,7 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
     # Reload (fresh re-mount of the same URL — the script's "reload"):
     # the frontmatter editor now shows preamble: true (checked box).
     {:ok, view2, _html} = live(conn, "/org_memory/org/page/playbook.md")
-    view2 |> element(~s(button[phx-click="start_edit"])) |> render_click()
+    view2 |> element(~s([data-view-mode] button[phx-click="start_edit"])) |> render_click()
 
     assert has_element?(
              view2,
