@@ -266,6 +266,101 @@ defmodule PlatformWeb.AuthControllerTest do
     end
   end
 
+  describe "chat-host pinning (task 019f9257)" do
+    setup do
+      prev = Application.get_env(:platform, :chat_host)
+      Application.put_env(:platform, :chat_host, "chat.localhost")
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:platform, :chat_host, prev),
+          else: Application.delete_env(:platform, :chat_host)
+      end)
+
+      :ok
+    end
+
+    test "dev_login external :full is redirected to the ABSOLUTE chat-host /chat", %{conn: conn} do
+      slug = "extpin#{System.unique_integer([:positive])}"
+      target_org = tenant_org!()
+      space = channel!(target_org)
+
+      {:ok, _grant} =
+        ExternalGrants.create_grant(%{
+          email: "#{slug}@localhost",
+          oidc_sub: "dev-#{slug}",
+          target_org_id: target_org.id,
+          space_grants: [%{"space_id" => space.id, "role" => "member"}],
+          dm_allowlist_org_ids: [target_org.id]
+        })
+
+      conn =
+        %{conn | host: "chat.localhost"}
+        |> init_test_session(%{})
+        |> PlatformWeb.AuthController.dev_login(%{"as" => slug})
+
+      # Absolute chat-host URL, not the host-relative ~p"/chat".
+      assert redirected_to(conn, 302) == "https://chat.localhost/chat"
+      assert get_session(conn, :current_user_id)
+    end
+
+    test "dev_login INTERNAL :full is unchanged — host-relative /chat even with CHAT_HOST set",
+         %{conn: conn} do
+      slug = "intpin#{System.unique_integer([:positive])}"
+
+      conn =
+        conn
+        |> init_test_session(%{})
+        |> PlatformWeb.AuthController.dev_login(%{"as" => slug})
+
+      assert redirected_to(conn, 302) == ~p"/chat"
+      assert get_session(conn, :current_user_id)
+    end
+
+    test "OIDC callback for an external :full user is redirected to the chat host", %{conn: conn} do
+      target_org = tenant_org!()
+      space = channel!(target_org)
+
+      {:ok, _grant} =
+        ExternalGrants.create_grant(%{
+          email: "user@example.com",
+          oidc_sub: "test-subject",
+          target_org_id: target_org.id,
+          space_grants: [%{"space_id" => space.id, "role" => "member"}],
+          dm_allowlist_org_ids: [target_org.id]
+        })
+
+      mock_oidc_response(%{
+        user: base_claims(),
+        userinfo: base_claims(),
+        id_token: base_claims()
+      })
+
+      conn =
+        %{conn | host: "chat.localhost"}
+        |> init_test_session(oidc_session_params: %{state: "expected-state", nonce: "n"})
+        |> get(~p"/auth/oidc/callback?code=test-code&state=expected-state")
+
+      assert redirected_to(conn, 302) == "https://chat.localhost/chat"
+      assert get_session(conn, :current_user_id)
+    end
+
+    test "OIDC callback for an INTERNAL :full user is unchanged — host-relative /", %{conn: conn} do
+      mock_oidc_response(%{
+        user: base_claims(),
+        userinfo: base_claims(),
+        id_token: base_claims()
+      })
+
+      conn =
+        conn
+        |> init_test_session(oidc_session_params: %{state: "expected-state", nonce: "n"})
+        |> get(~p"/auth/oidc/callback?code=test-code&state=expected-state")
+
+      assert redirected_to(conn, 302) == ~p"/"
+    end
+  end
+
   test "GET /auth/logout clears the session and redirects to the end-session endpoint", %{
     conn: conn
   } do

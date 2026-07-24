@@ -4,6 +4,7 @@ defmodule PlatformWeb.AuthController do
   alias Platform.Accounts
   alias Platform.Accounts.ExternalAdmission
   alias Platform.OIDC
+  alias PlatformWeb.ExternalRedirect
 
   def login(conn, _params) do
     :telemetry.execute(
@@ -112,8 +113,20 @@ defmodule PlatformWeb.AuthController do
   # STILL establishes the session — the user IS authenticated; access is
   # fenced downstream (M6/M7), not by withholding the session — plants the
   # `:external_admission` seam key M3 reads, and redirects to a valid route.
-  defp land_admission(conn, %ExternalAdmission.Result{state: :full}, full_path) do
-    redirect(conn, to: full_path)
+  defp land_admission(conn, %ExternalAdmission.Result{state: :full} = result, full_path) do
+    # task 019f9257: PIN external full users to the chat host. OIDC login is
+    # anchored to the suite host (runtime.exs OIDC redirect), so a host-relative
+    # redirect lands an external user on suite. — where the internal
+    # `:authenticated` live_session previously leaked every channel. Send them to
+    # the ABSOLUTE chat-host external surface instead. Internal full users keep
+    # today's EXACT host-relative redirect (`/` for callback, `/chat` for
+    # dev_login); when CHAT_HOST is unconfigured (dev/test) external users also
+    # fall back to host-relative so local flows are unchanged.
+    if result.external? and ExternalRedirect.chat_host_configured?() do
+      redirect(conn, external: ExternalRedirect.chat_url("/chat"))
+    else
+      redirect(conn, to: full_path)
+    end
   end
 
   defp land_admission(conn, %ExternalAdmission.Result{state: :holding} = result, _full_path) do

@@ -75,7 +75,8 @@ defmodule PlatformWeb.ExternalHoldingLiveTest do
   end
 
   describe "seamless recovery" do
-    test "a :recovered broadcast push-navigates the holding tab to /chat", %{conn: conn} do
+    test "a :recovered broadcast push-navigates the holding tab to /chat (CHAT_HOST unset)",
+         %{conn: conn} do
       user = create_user!()
 
       {:ok, view, _html} = conn |> holding_conn(user) |> live("/welcome")
@@ -90,6 +91,35 @@ defmodule PlatformWeb.ExternalHoldingLiveTest do
       send(view.pid, {:external_admission, :recovered, user.id, result})
 
       assert_redirect(view, "/chat")
+    end
+
+    test "with CHAT_HOST configured, recovery redirects to the ABSOLUTE chat-host surface (task 019f9257)",
+         %{conn: conn} do
+      prev = Application.get_env(:platform, :chat_host)
+      Application.put_env(:platform, :chat_host, "chat.localhost")
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:platform, :chat_host, prev),
+          else: Application.delete_env(:platform, :chat_host)
+      end)
+
+      user = create_user!()
+
+      {:ok, view, _html} = conn |> holding_conn(user) |> live("/welcome")
+
+      result = %ExternalAdmission.Result{
+        user: user,
+        state: :full,
+        reason: nil,
+        external?: true
+      }
+
+      send(view.pid, {:external_admission, :recovered, user.id, result})
+
+      # Full cross-host navigation to the scoped external surface, not a
+      # same-host push_navigate that would strand the user on suite.
+      assert_redirect(view, "https://chat.localhost/chat")
     end
   end
 end

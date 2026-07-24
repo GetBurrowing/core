@@ -228,6 +228,75 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
     end
   end
 
+  # ── task 019f9257: pin external users to the chat host ──────────────────
+  #
+  # When CHAT_HOST is configured, an external user hitting the internal /chat
+  # index on the SUITE host is redirected (302) to the absolute chat-host
+  # surface instead of mounting the internal :authenticated live_session. No
+  # loop when already on the chat host; internal users untouched; unset
+  # CHAT_HOST preserves today's pass-through.
+  describe "external users — chat-host pin fence (task 019f9257)" do
+    setup do
+      prev = Application.get_env(:platform, :chat_host)
+      Application.put_env(:platform, :chat_host, "chat.localhost")
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:platform, :chat_host, prev),
+          else: Application.delete_env(:platform, :chat_host)
+      end)
+
+      :ok
+    end
+
+    # Same as `run/3` but with an explicit request host.
+    defp run_on_host(path, host, user, membership) do
+      Phoenix.ConnTest.build_conn(:get, path)
+      |> Map.put(:host, host)
+      |> Plug.Conn.put_private(:phoenix_format, "html")
+      |> Plug.Conn.assign(:current_user, user)
+      |> Plug.Conn.assign(:current_user_org_membership, membership)
+      |> ExternalUserScope.call(ExternalUserScope.init([]))
+    end
+
+    test "external user on the suite host → 302 to the absolute chat-host /chat", ctx do
+      for path <- ["/", "/chat"] do
+        conn = run_on_host(path, "suite.localhost", ctx.ext_user, ctx.ext_membership)
+        assert conn.halted, "expected fence to halt on #{path}"
+        assert conn.status == 302
+        assert Plug.Conn.get_resp_header(conn, "location") == ["https://chat.localhost/chat"]
+      end
+    end
+
+    test "external user ALREADY on the chat host → falls through (no redirect loop)", ctx do
+      conn = run_on_host("/chat", "chat.localhost", ctx.ext_user, ctx.ext_membership)
+      refute conn.halted
+    end
+
+    test "external user on the chat host can still reach a scoped space", ctx do
+      conn =
+        run_on_host(
+          "/chat/" <> ctx.space_a.slug,
+          "chat.localhost",
+          ctx.ext_user,
+          ctx.ext_membership
+        )
+
+      refute conn.halted
+    end
+
+    test "internal user on the suite host is unaffected by the fence", ctx do
+      conn = run_on_host("/chat", "suite.localhost", ctx.int_user, ctx.int_membership)
+      refute conn.halted
+    end
+
+    test "CHAT_HOST unset → external user on suite host passes through (dev/test)", ctx do
+      Application.delete_env(:platform, :chat_host)
+      conn = run_on_host("/chat", "suite.localhost", ctx.ext_user, ctx.ext_membership)
+      refute conn.halted
+    end
+  end
+
   describe "defensive no-op" do
     test "no current_user assign → conn unchanged", _ctx do
       conn =

@@ -21,6 +21,7 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
 
   alias Platform.Chat
   alias Platform.Tenancy
+  alias PlatformWeb.ExternalRedirect
 
   def init(opts), do: opts
 
@@ -47,13 +48,35 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
   # users without per-route wiring (canvas §8 "zero everything else").
   defp gate_external(conn, user) do
     case conn.path_info do
-      # Root redirects into /chat; the index list is filtered by M5/M7.
-      [] -> conn
-      ["chat"] -> conn
+      # Root redirects into /chat; the index list is filtered by M5/M7. But an
+      # external user reaching the internal /chat index on the SUITE host must
+      # be PINNED to the chat host (task 019f9257) — otherwise they mount the
+      # internal :authenticated live_session. Fence them to the chat-host
+      # external surface; fall through when already on the chat host (no loop)
+      # or when CHAT_HOST is unset (dev/test).
+      [] -> fence_to_chat_host(conn) || conn
+      ["chat"] -> fence_to_chat_host(conn) || conn
       ["chat", slug] -> gate_space(conn, user, slug)
       _ -> deny(conn, user, "external_non_chat_route")
     end
   end
+
+  # task 019f9257: redirect an external user off the internal /chat index to the
+  # absolute chat-host external surface. Returns a halted conn (302) when the
+  # redirect applies, or `nil` to fall through. Guards:
+  #   * only when CHAT_HOST is configured (`ExternalRedirect.chat_host_configured?/0`)
+  #     — dev/test leave it unset and keep today's pass-through;
+  #   * never when the request is ALREADY on the chat host (avoid a redirect loop).
+  # Internal users never reach here (the caller gates on `Tenancy.external_user?/1`).
+  defp fence_to_chat_host(conn) do
+    if ExternalRedirect.chat_host_configured?() and not on_chat_host?(conn) do
+      conn
+      |> Phoenix.Controller.redirect(external: ExternalRedirect.chat_url("/chat"))
+      |> halt()
+    end
+  end
+
+  defp on_chat_host?(conn), do: String.starts_with?(to_string(conn.host), "chat.")
 
   defp gate_space(conn, user, slug) do
     if authorized_space?(user, resolve_space(conn, slug)) do

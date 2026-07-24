@@ -37,6 +37,7 @@ defmodule PlatformWeb.ExternalHoldingLive do
   use PlatformWeb, :live_view
 
   alias Platform.Accounts.ExternalAdmission
+  alias PlatformWeb.ExternalRedirect
   alias PlatformWeb.Layouts
 
   @impl true
@@ -71,7 +72,17 @@ defmodule PlatformWeb.ExternalHoldingLive do
   # re-auth. `%{state: :full}` matches both the `%Result{}` struct and a bare
   # map, so a benign re-broadcast (double-grant race) is handled identically.
   def handle_info({:external_admission, :recovered, _uid, %{state: :full}}, socket) do
-    {:noreply, push_navigate(socket, to: ~p"/chat")}
+    # task 019f9257: the recovering user is an external user (holding is
+    # external-only), waiting on `suite./welcome`. Pin them to the chat host so
+    # /welcome transitions to their SCOPED external surface, not the leaky
+    # suite-host `/chat`. LiveView `push_navigate` cannot cross hosts, so use a
+    # full redirect to the absolute chat-host URL when CHAT_HOST is configured;
+    # fall back to a same-host `push_navigate` in dev/test.
+    if ExternalRedirect.chat_host_configured?() do
+      {:noreply, redirect(socket, external: ExternalRedirect.chat_url("/chat"))}
+    else
+      {:noreply, push_navigate(socket, to: ~p"/chat")}
+    end
   end
 
   # Tolerate any other message shape without crashing the holding tab.

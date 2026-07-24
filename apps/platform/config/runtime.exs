@@ -236,6 +236,13 @@ if config_env() == :prod do
   # allowlisted; external ChatLive socket connects fail 403.
   chat_host = System.get_env("CHAT_HOST")
 
+  # Expose CHAT_HOST to request-time code (not just check_origin). External
+  # users must be PINNED to this host: `PlatformWeb.ExternalRedirect.chat_url/1`
+  # reads `:chat_host` to build absolute `https://<chat_host>/chat` redirects
+  # (task 019f9257 — admission, grant-recovery, and the internal-/chat fence).
+  # Unset (dev/test/CI) → the helper falls back to host-relative `/chat`.
+  config :platform, :chat_host, chat_host
+
   config :platform, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :platform, PlatformWeb.Endpoint,

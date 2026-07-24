@@ -134,22 +134,37 @@ defmodule PlatformWeb.ChatLive do
     # Only consulted on the embedded path; standalone uses handle_params.
     embedded_space_slug = if embedded?, do: session["chat_space_slug"]
 
-    # rbac-external-users M5: the chrome-less external chat surface. M4's
-    # `:external_chat` live_session (served on the `chat.` host) merges
-    # `chat_mode => "external"` into the connect session; we read it here and,
-    # when set, build M7's read-scope ONCE (`ExternalScope.for_user/1` — a
-    # single `external?` EXISTS) and thread it into every rail read so the
-    # external user's rail lists ONLY the spaces they are a `chat_participants`
-    # member of. `@external?` defaults false on every internal / embedded /
-    # app-host path, so the internal surface is byte-for-byte untouched.
+    # rbac-external-users M5: the chrome-less external chat surface. Derive the
+    # read-scope + render flag from the user's IDENTITY, never from the host-set
+    # `chat_mode` session key.
+    #
+    # SECURITY (task 019f9257): `chat_mode => "external"` is merged ONLY by M4's
+    # `:external_chat` live_session on the `chat.` host. On the suite (`:app`)
+    # host the internal `:authenticated` live_session carries NO `chat_mode`, so
+    # keying `external?`/`external_scope` off it left an external user served on
+    # the suite host with `external_scope = nil` → `Chat.list_spaces(scope: nil)`
+    # is pass-through → EVERY channel across EVERY org leaked into their rail.
+    #
+    # FIX: build M7's read-scope ONCE via `ExternalScope.for_user/1` (a single
+    # membership `EXISTS`) UNCONDITIONALLY, and derive `external?` from the
+    # struct's precomputed flag. `for_user/1` yields `external?: false` for every
+    # internal id → `scope_spaces/2` is pass-through → the internal rail is
+    # byte-for-byte unchanged; and an external identity can NEVER be scoped `nil`
+    # regardless of host or live_session. The scope is then threaded into every
+    # rail read so the external user's rail lists ONLY the spaces they are a
+    # `chat_participants` member of.
+    #
+    # Embedded is an internal meeting surface (the LiveKit chat pane) — it paints
+    # ONE space, populates no sidebar, and must never render external chrome, so
+    # it short-circuits to a nil (pass-through) scope and `external? = false`.
     #
     # BOUNDARY: M5 owns the RENDER branch only. The scope threaded here filters
     # what the rail SHOWS; the guarantee that an external user cannot REACH an
-    # off-limits space is M6's plug + M7's query filter, not this render. A nil
-    # `external_scope` is pass-through everywhere (`ExternalScope.scope_spaces/2`),
-    # so passing it on the internal path is a zero-behavior-change no-op.
-    external? = session["chat_mode"] == "external"
-    external_scope = if external?, do: Platform.Chat.ExternalScope.for_user(user_id)
+    # off-limits space is M6's plug + M7's query filter, not this render.
+    external_scope =
+      if embedded?, do: nil, else: Platform.Chat.ExternalScope.for_user(user_id)
+
+    external? = match?(%Platform.Chat.ExternalScope{external?: true}, external_scope)
 
     channels =
       if embedded?, do: [], else: Chat.list_spaces(kind: "channel", scope: external_scope)

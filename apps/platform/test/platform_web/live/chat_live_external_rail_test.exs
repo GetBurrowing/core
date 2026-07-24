@@ -160,4 +160,83 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
       refute html =~ ~s(data-role="external-empty")
     end
   end
+
+  # ── task 019f9257: the suite-host cross-tenant leak regression ──────────────
+  #
+  # The reported defect: an external user served on the SUITE (default) host
+  # under the internal `:authenticated` live_session — which carries NO
+  # `chat_mode` session key — was scoped `nil` and saw EVERY channel workspace-
+  # wide (the reporter, granted only Orion, saw the Fabrikam-internal General).
+  # Stage 1 derives the scope from IDENTITY, so the leak cannot happen on ANY
+  # host / live_session. These cases pin that: NO `chat_mode`, NO `chat.` host.
+  describe "suite-host identity-derived scope (no chat_mode leak — task 019f9257)" do
+    setup %{conn: conn} do
+      org = tenant_org!()
+      ext = external_user!(org)
+
+      # The external user is a participant of exactly ONE channel (their grant).
+      granted = channel!("Orion", org_id: org.id) |> join!(ext)
+      # A Fabrikam-internal channel the external user has NO participant row for.
+      off_limits = channel!("General")
+
+      %{conn: conn, ext: ext, granted: granted, off_limits: off_limits}
+    end
+
+    test "external user on the SUITE host WITHOUT chat_mode sees ONLY their granted channel",
+         %{conn: conn, ext: ext, granted: granted, off_limits: off_limits} do
+      # Default host (no with_chat_host), no chat_mode session — exactly the
+      # internal `:authenticated` path the leak lived on.
+      {:ok, _view, html} =
+        conn
+        |> authed(ext)
+        |> live("/chat/#{granted.slug}")
+
+      # Scope is derived from identity → the rail lists ONLY the granted space.
+      assert html =~ granted.name
+      refute html =~ off_limits.name
+
+      # And because the identity is external, the chrome-less rail renders even
+      # here — the discovery chrome that would enumerate all channels is off.
+      assert html =~ ~s(data-role="external-rail")
+      refute html =~ "New channel"
+    end
+
+    test "the /chat index on the suite host is likewise scoped, no all-channels leak",
+         %{conn: conn, ext: ext, granted: granted, off_limits: off_limits} do
+      {:ok, _view, html} =
+        conn
+        |> authed(ext)
+        |> live_settled("/chat")
+
+      assert html =~ granted.name
+      refute html =~ off_limits.name
+      assert html =~ ~s(data-role="external-rail")
+    end
+
+    test "an INTERNAL user on the suite host is completely unaffected (sees General)",
+         %{conn: conn, off_limits: off_limits} do
+      internal = create_user!("Ingrid Internal")
+      join!(off_limits, internal)
+
+      {:ok, _view, html} =
+        conn
+        |> authed(internal)
+        |> live("/chat/#{off_limits.slug}")
+
+      # Identity-derived scope is a no-op for internal users: full internal rail,
+      # General visible, external branch dormant.
+      assert html =~ off_limits.name
+      assert html =~ ~s(id="chat-sidebar")
+      refute html =~ ~s(data-role="external-rail")
+    end
+  end
+
+  # `live/2` follows the `/chat` → first-space redirect so the index cases can
+  # assert against the landed rail (same live_session, unchanged layout).
+  defp live_settled(conn, path) do
+    case live(conn, path) do
+      {:error, {kind, %{to: to}}} when kind in [:live_redirect, :redirect] -> live(conn, to)
+      ok -> ok
+    end
+  end
 end
