@@ -20,7 +20,7 @@ defmodule Platform.Inbox.Item do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting)
+  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting task_sponsor_assigned)
   @source_types ~w(chat_message task review_request meeting)
 
   @type t :: %__MODULE__{}

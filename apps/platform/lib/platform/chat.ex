@@ -1581,6 +1581,27 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  Distinct chat_participants ROW ids (the `id` PK, which
+  `push_subscriptions.participant_id` references) for the given human
+  `user_id` across every space they participate in.
+
+  A user has one participant row per space, so this returns the full set of
+  push targets for that user. Returns `[]` when the user has no participant
+  rows (then a caller's push fan-out is simply a no-op). Distinct from
+  `participant_space_ids_for_user/1` (which selects `space_id`); this selects
+  the participant PK used by `Platform.Push.send_notification/2`.
+  """
+  @spec participant_ids_for_user(binary()) :: [binary()]
+  def participant_ids_for_user(user_id) when is_binary(user_id) do
+    from(p in Participant,
+      where: p.participant_type == "user" and p.participant_id == ^user_id,
+      distinct: true,
+      select: p.id
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Returns the deduplicated list of participant ids (the chat_participants
   `id` column, the same value used as the `chat:participant:<id>` PubSub
   topic suffix) entitled to receive `{:message_edited, payload}` for this

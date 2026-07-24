@@ -1552,7 +1552,12 @@ defmodule PlatformWeb.TasksLive do
           put_flash(socket, :error, "Task not found.")
 
         task ->
-          case Tasks.update_task(task, attrs) do
+          # Thread the acting human as the actor so the M4 (019f9251)
+          # sponsor-assigned producer can skip the self-sponsor case (a user
+          # assigning themselves gets no inbox row / push).
+          actor = {:user, socket.assigns[:current_user_id]}
+
+          case Tasks.update_task(task, attrs, actor: actor) do
             {:ok, _updated} ->
               # Refresh the originating session immediately so the change is
               # visible without waiting for the broadcast round-trip.

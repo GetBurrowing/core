@@ -3190,7 +3190,7 @@ defmodule Platform.Federation.ToolSurface do
   # phase transition — this fixes the historical silent-clobber where a
   # `task_create` flat assignee was overwritten when the task moved out
   # of planning.
-  def execute("task_create", args, _context) do
+  def execute("task_create", args, context) do
     # Legacy defaults preserved for wire compatibility: title, status,
     # priority, and auto_approve_plan drop to their historical defaults
     # only when the key is entirely absent (Map.put_new). Present-and-nil
@@ -3208,7 +3208,8 @@ defmodule Platform.Federation.ToolSurface do
              current_phase: "planning"
            ),
          :ok <- TaskAttrs.check_auto_approve_preconditions(flat_attrs, phase_attrs, nil),
-         {:ok, task} <- Tasks.create_task(flat_attrs),
+         {:ok, task} <-
+           Tasks.create_task(flat_attrs, actor: actor_from_mcp_context(context)),
          {:ok, task} <- maybe_apply_phase_assignees(task, phase_attrs) do
       # Preload sponsor so the return envelope shows the shape a
       # subsequent `task_get` would — the `create_task` result may not
@@ -3647,7 +3648,7 @@ defmodule Platform.Federation.ToolSurface do
           # (the predicate reads phase-resolved assignees, not the
           # pre-update snapshot).
           with :ok <- auto_check,
-               {:ok, updated} <- maybe_update_task(task, non_status_flat),
+               {:ok, updated} <- maybe_update_task(task, non_status_flat, actor),
                {:ok, updated} <- maybe_apply_phase_assignees(updated, phase_attrs),
                :ok <- maybe_check_plan_gate(updated, status_change, actor),
                {:ok, updated} <- maybe_transition_status(updated, status_change) do
@@ -3740,8 +3741,8 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  defp maybe_update_task(task, attrs) when map_size(attrs) == 0, do: {:ok, task}
-  defp maybe_update_task(task, attrs), do: Tasks.update_task(task, attrs)
+  defp maybe_update_task(task, attrs, _actor) when map_size(attrs) == 0, do: {:ok, task}
+  defp maybe_update_task(task, attrs, actor), do: Tasks.update_task(task, attrs, actor: actor)
 
   defp maybe_transition_status(task, nil), do: {:ok, task}
 

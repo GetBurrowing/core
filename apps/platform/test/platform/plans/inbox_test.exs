@@ -109,7 +109,10 @@ defmodule Platform.Tasks.PlanSubmitInboxTest do
 
       assert {:ok, %Plan{status: "pending_review"}} = submit(plan)
 
-      assert [item] = Inbox.list_unread_for_user(sponsor.id)
+      # Scope to the plan-review kind: creating a sponsored task now also
+      # emits a `task_sponsor_assigned` row (M4, task 019f9251), so the
+      # unfiltered inbox holds two rows.
+      assert [item] = Inbox.list_unread_for_user(sponsor.id, kind: "task_plan_review")
       assert item.kind == "task_plan_review"
       assert item.source_type == "task"
       assert item.source_id == task.id
@@ -151,7 +154,10 @@ defmodule Platform.Tasks.PlanSubmitInboxTest do
       # Precondition met (stage + exec/review assignees) → plan auto-approves.
       assert {:ok, %Plan{status: "approved"}} = submit(plan)
 
-      assert Inbox.list_unread_for_user(sponsor.id) == []
+      # No plan-review row (auto-approve has no human gate). The sponsored
+      # create still emits a `task_sponsor_assigned` row (M4, 019f9251), so
+      # scope to the plan-review kind here.
+      assert Inbox.list_unread_for_user(sponsor.id, kind: "task_plan_review") == []
       refute_receive {:inbox_item_added, _}, 50
     end
   end
@@ -202,7 +208,12 @@ defmodule Platform.Tasks.PlanSubmitInboxTest do
 
       assert {:ok, %Plan{status: "pending_review"}} = submit(plan)
 
-      assert Inbox.list_unread_for_user(sponsor.id) == []
+      # Self-notify guard suppresses the plan-review row. The task's create
+      # emitted a `task_sponsor_assigned` row (M4, 019f9251) — and note that
+      # here the sponsor IS the planning assignee, NOT the create actor
+      # (no actor threaded), so the sponsor-assigned emit is not self-skipped.
+      # Scope to the plan-review kind to assert the guard.
+      assert Inbox.list_unread_for_user(sponsor.id, kind: "task_plan_review") == []
       refute_receive {:inbox_item_added, _}, 50
     end
   end
@@ -230,7 +241,9 @@ defmodule Platform.Tasks.PlanSubmitInboxTest do
       Inbox.subscribe(sponsor.id)
 
       assert {:ok, %Plan{status: "pending_review"} = submitted_v1} = submit(plan_v1)
-      assert [v1_row] = Inbox.list_unread_for_user(sponsor.id)
+      # Scope to plan-review rows — the sponsored create also emitted one
+      # `task_sponsor_assigned` row (M4, 019f9251).
+      assert [v1_row] = Inbox.list_unread_for_user(sponsor.id, kind: "task_plan_review")
       assert_receive {:inbox_item_added, %Inbox.Item{id: v1_id}}
       assert v1_id == v1_row.id
 
@@ -242,7 +255,7 @@ defmodule Platform.Tasks.PlanSubmitInboxTest do
 
       assert {:ok, %Plan{status: "pending_review"}} = submit(plan_v2)
 
-      rows = Inbox.list_unread_for_user(sponsor.id)
+      rows = Inbox.list_unread_for_user(sponsor.id, kind: "task_plan_review")
       assert length(rows) == 2
       assert v1_row.id in Enum.map(rows, & &1.id)
 

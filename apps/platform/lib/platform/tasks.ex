@@ -379,13 +379,13 @@ defmodule Platform.Tasks do
 
   # ── Tasks (persistent) ──────────────────────────────────────────────────
 
-  def create_task(attrs) do
+  def create_task(attrs, opts \\ []) do
     with :ok <- Lifecycle.ensure_project_writable(project_id_from(attrs)) do
-      do_create_task(attrs)
+      do_create_task(attrs, opts)
     end
   end
 
-  defp do_create_task(attrs) do
+  defp do_create_task(attrs, opts) do
     %Task{}
     |> Task.changeset(attrs)
     |> Repo.insert()
@@ -398,6 +398,10 @@ defmodule Platform.Tasks do
         # and Platform.Tasks.Indexer for the failure model.
         _ = References.upsert_from_description(task)
         _ = Memory.ingest_async([Indexer.build_entry(task)])
+        # M4 (019f9251): sponsor-assigned inbox + push. The before-state is
+        # nil (fresh insert), so emit whenever the new task already carries
+        # a sponsor. Side-effect only — `ok` is preserved verbatim.
+        _ = maybe_emit_sponsor_assigned(nil, task, opts)
         ok
 
       error ->
@@ -506,7 +510,7 @@ defmodule Platform.Tasks do
     update_task(task, %{needs_promotion: false})
   end
 
-  def update_task(%Task{} = task, attrs) do
+  def update_task(%Task{} = task, attrs, opts \\ []) do
     task
     |> Task.changeset(attrs)
     |> Repo.update()
@@ -517,6 +521,10 @@ defmodule Platform.Tasks do
         maybe_sweep_stack_after_update(task, updated)
         maybe_refresh_references(task, updated)
         maybe_reingest_task(task, updated)
+        # M4 (019f9251): sponsor-assigned inbox + push. `task` is the
+        # before struct, `updated` the after — emit only on a genuine
+        # change to a NEW user. Side-effect only — {:ok, updated} preserved.
+        _ = maybe_emit_sponsor_assigned(task.sponsor_user_id, updated, opts)
         {:ok, updated}
 
       error ->
@@ -557,6 +565,103 @@ defmodule Platform.Tasks do
   defp feature_area_from(nil), do: nil
   defp feature_area_from(%{} = metadata), do: Map.get(metadata, "feature_area")
   defp feature_area_from(_), do: nil
+
+  # M4 (task 019f9251): emit a `task_sponsor_assigned` inbox row — and a
+  # VAPID push — to a user the moment they become a task's ADR-0042 sponsor.
+  # Mirrors the M3 analog `maybe_emit_plan_review_inbox/1`: private,
+  # side-effect-only (the caller's write result is preserved verbatim),
+  # fired POST-COMMIT and wrapped in rescue/catch :exit so an Inbox/PubSub/
+  # push failure can NEVER stall the task write or its board broadcast.
+  #
+  # `before_sponsor_id` is the prior `sponsor_user_id` (nil on create); the
+  # `%Task{}` is the post-write struct. Both write seams
+  # (`do_create_task/2`, `update_task/3`) funnel here — and both MCP
+  # `task_update` and the web board route through `update_task/3` — so this
+  # single producer covers every sponsor-write path.
+  #
+  # PUSH-GAP NOTE (task 019f9251 finding): `Platform.Inbox.emit/1` does NOT
+  # push — it only inserts one row and broadcasts `{:inbox_item_added, item}`.
+  # NO existing inbox producer pushes either: chat mentions (chat.ex),
+  # `maybe_emit_plan_review_inbox/1` (above), and review_requests
+  # (tasks/review_requests.ex) all call `Inbox.emit` with no VAPID fan-out.
+  # This producer wires push for `task_sponsor_assigned` ONLY; the shared
+  # no-push gap on the other producers is a FLAGGED FOLLOW-UP, deliberately
+  # not fixed here.
+  defp maybe_emit_sponsor_assigned(before_sponsor_id, %Task{} = task, opts) do
+    new_sponsor_id = task.sponsor_user_id
+
+    if sponsor_assigned_emit?(before_sponsor_id, new_sponsor_id, opts) do
+      title = "You're now sponsoring: #{task.title}"
+      body = task.description && String.slice(task.description, 0, 200)
+      url = "/tasks/#{task.id}"
+
+      with {:ok, _item} <-
+             Platform.Inbox.emit(%{
+               user_id: new_sponsor_id,
+               kind: "task_sponsor_assigned",
+               source_type: "task",
+               source_id: task.id,
+               title: title,
+               body: body,
+               url: url
+             }) do
+        push_sponsor_assigned(new_sponsor_id, %{title: title, body: body, url: url})
+      end
+
+      :ok
+    else
+      :ok
+    end
+  rescue
+    e ->
+      Logger.warning("[Inbox] task_sponsor_assigned emit crashed: #{Exception.message(e)}")
+
+      {:error, :inbox_emit_failed}
+  catch
+    :exit, reason ->
+      Logger.warning("[Inbox] task_sponsor_assigned emit exited: #{inspect(reason)}")
+
+      {:error, :inbox_emit_failed}
+  end
+
+  # Gate the sponsor-assigned emit. Emit ONLY when the new sponsor is a real
+  # user AND it differs from the prior sponsor (nil→user OR userA→userB).
+  # This inherently suppresses: clear (new value nil), no-op (unchanged),
+  # and unrelated-field updates (sponsor unchanged). SELF-SPONSOR SKIP: when
+  # the acting user IS the new sponsor (a human assigning themselves via the
+  # web board), suppress — the actor is threaded as `opts[:actor]` and
+  # normalized to a user id; agent/system/absent actors never collide.
+  defp sponsor_assigned_emit?(before_sponsor_id, new_sponsor_id, opts) do
+    is_binary(new_sponsor_id) and
+      new_sponsor_id != before_sponsor_id and
+      actor_user_id(opts) != new_sponsor_id
+  end
+
+  defp actor_user_id(opts) do
+    case Keyword.get(opts, :actor) do
+      {:user, id} -> id
+      _ -> nil
+    end
+  end
+
+  # Push fan-out for the sponsor-assigned item. `Platform.Push` is keyed on
+  # `chat_participants.id` (the participant ROW PK, NOT user_id), and a user
+  # has many participant rows, so resolve ALL of the sponsor's user-typed
+  # participant row ids and fan out to each. Routed through the
+  # `notifications_module()` indirection (mirroring meeting_notifier) so
+  # tests can swap in a Recorder double, and because the real
+  # `fan_out_to_humans/3` short-circuits push in :test env. Payload keys are
+  # `title`/`body`/`url` (the shape `fan_out_to_humans/3` pattern-matches)
+  # and match the inbox row. No `:exclude_participant_id` — the self-sponsor
+  # gate already guarantees the sponsor is not the actor.
+  defp push_sponsor_assigned(user_id, %{title: _, body: _, url: _} = payload) do
+    participant_ids = Platform.Chat.participant_ids_for_user(user_id)
+    notifications_module().fan_out_to_humans(participant_ids, payload, [])
+  end
+
+  defp notifications_module do
+    Application.get_env(:platform, :notifications_module, Platform.Notifications)
+  end
 
   # ADR 0041 stack-internal dep sweep. When a stack member's
   # `metadata["merged_into_rollup_at"]` transitions from nil/absent to a
