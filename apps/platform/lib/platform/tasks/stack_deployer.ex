@@ -172,6 +172,26 @@ defmodule Platform.Tasks.StackDeployer do
   end
 
   @doc """
+  Gap 1 FIX 1 (task 019f921d): idempotently ensure the stack's rollup
+  branch exists on origin before a member merge.
+
+  Thin delegate to `create_rollup_branch/1`, which is already idempotent:
+  it short-circuits with `:already_exists` when the branch is present and
+  stamps `metadata["rollup_branch_ready"]`. Named `ensure_rollup_branch/1`
+  so the merge path reads as an explicit guarantee ("ensure before merge")
+  and so the two subsystems can't drift on which entry point creates the
+  branch.
+
+  Returns `{:ok, create_result()}` on success (branch present or freshly
+  created) or `{:error, reason}` when the branch cannot be made to exist —
+  the caller (`do_merge_member/3`) escalates that into
+  `{:error, {:rollup_branch_unavailable, reason}}` instead of merging into
+  a non-existent ref.
+  """
+  @spec ensure_rollup_branch(Stack.t()) :: {:ok, create_result()} | {:error, term()}
+  def ensure_rollup_branch(%Stack{} = stack), do: create_rollup_branch(stack)
+
+  @doc """
   Hook called by `Platform.Tasks.Stacks.start_stack/1` after the status
   cascade completes successfully.
 
@@ -275,7 +295,10 @@ defmodule Platform.Tasks.StackDeployer do
   # async and non-async branches so `async?: false` mode behaves
   # identically.
   defp attempt_member_merge(%TaskRecord{} = task) do
-    log_merge_result(task, merge_member_into_rollup(task))
+    result = merge_member_into_rollup(task)
+    log_merge_result(task, result)
+    maybe_escalate_merge_error(task, result)
+    :ok
   rescue
     e ->
       stacktrace = __STACKTRACE__
@@ -286,11 +309,35 @@ defmodule Platform.Tasks.StackDeployer do
           Exception.format(:error, e, stacktrace)
       )
 
-      record_merge_blocker(task, message)
+      record_merge_blocker(task, "Rollup merge raised: #{message}")
       :ok
   end
 
-  defp record_merge_blocker(%TaskRecord{id: task_id}, exception_message) do
+  # Gap 1 FIX 2 (task 019f921d): a `{:error, reason}` RETURN from
+  # `merge_member_into_rollup/1` (network blip, auth misconfig, git shell
+  # failure, or the new `{:rollup_branch_unavailable, _}`) was previously
+  # only logged by `log_merge_result/2`, silently stranding the member in
+  # `deploying`. File the same needs_human blocker a raise would, so a
+  # failed merge surfaces / self-heals instead of vanishing.
+  #
+  # Benign outcomes are NOT escalated and must NOT double-file:
+  #   * `{:ok, _}` (merged / already_merged / not_ready) — success or no-op.
+  #   * `{:error, :not_fast_forwardable, _}` — records its own divergence
+  #     paused_reason; the human rebases, not a blocker.
+  #   * `{:error, :conflict, _}` — records its own conflict + flips the
+  #     stack to blocked; a blocker row would be redundant.
+  defp maybe_escalate_merge_error(_task, {:ok, _}), do: :ok
+  defp maybe_escalate_merge_error(_task, {:error, :not_fast_forwardable, _}), do: :ok
+  defp maybe_escalate_merge_error(_task, {:error, :conflict, _}), do: :ok
+
+  defp maybe_escalate_merge_error(%TaskRecord{} = task, {:error, reason}) do
+    record_merge_blocker(task, "Rollup merge returned error: #{inspect(reason)}")
+    :ok
+  end
+
+  defp maybe_escalate_merge_error(_task, _other), do: :ok
+
+  defp record_merge_blocker(%TaskRecord{id: task_id}, description) do
     attrs = %{
       "task_id" => task_id,
       "phase" => "execution",
@@ -299,7 +346,7 @@ defmodule Platform.Tasks.StackDeployer do
       "execution_space_id" => execution_space_id_for_task(task_id),
       "payload" => %{
         "stage_id" => nil,
-        "description" => "Rollup merge raised: #{exception_message}",
+        "description" => description,
         "needs_human" => true,
         "reported_by" => "stack_deployer"
       }
@@ -684,6 +731,36 @@ defmodule Platform.Tasks.StackDeployer do
         "#{stack.rollup_branch} for stack #{stack.id} (#{repo_url})"
     )
 
+    # Gap 1 FIX 1 (task 019f921d): guarantee the rollup branch exists on
+    # origin BEFORE the merge shell-out. A silently-lost async
+    # `create_rollup_branch/1` (fired fire-and-forget from
+    # `handle_stack_transition/3` / `handle_stack_created/1`) would
+    # otherwise leave us merging into a non-existent ref, failing every
+    # member merge and stranding the whole stack. `ensure_rollup_branch/1`
+    # is idempotent (short-circuits on `:already_exists`). If the branch
+    # cannot be made to exist, escalate rather than attempt the merge.
+    case ensure_rollup_branch(stack) do
+      {:ok, _ensure_result} ->
+        do_merge_member_after_ensure(runner, task, stack, repo_url, member_branch, args)
+
+      {:error, reason} ->
+        Logger.error(
+          "[StackDeployer] cannot merge member #{task.id}: rollup branch " <>
+            "#{stack.rollup_branch} unavailable for stack #{stack.id}: #{inspect(reason)}"
+        )
+
+        {:error, {:rollup_branch_unavailable, reason}}
+    end
+  end
+
+  defp do_merge_member_after_ensure(
+         runner,
+         %TaskRecord{} = task,
+         %Stack{} = stack,
+         repo_url,
+         member_branch,
+         args
+       ) do
     # Stage 4 backstop (task 019f7b7e): last chance to notice that this
     # member is about to land a migration whose timestamp a sibling
     # already claimed. Advisory only — see `check_migration_collision/4`.
@@ -922,10 +999,25 @@ defmodule Platform.Tasks.StackDeployer do
       })
 
     case Tasks.update_task(task, %{metadata: new_metadata}) do
-      {:ok, _updated} ->
+      {:ok, updated} ->
         Logger.info(
           "[StackDeployer] stamped merged_into_rollup_at on task #{task.id} (sha=#{merge_sha})"
         )
+
+        # Gap 2 (task 019f921d): advance this freshly-stamped member
+        # `in_review -> deploying` CAUSALLY after its own merge stamp. The
+        # deploy tail (`in_review -> deploying`) previously fired only on a
+        # later validation-pass event (`maybe_retrigger_stack_member_merge`)
+        # or the 5-min sweep — so a member whose async merge stamp landed
+        # AFTER its validations passed got stranded at `in_review` (M2-M5),
+        # while M6/M7 merely won that race. Driving the advance here, off
+        # the stamp we just wrote, makes it deterministic and consistent for
+        # EVERY member. `updated` carries the new stamp so
+        # `member_deploy_transition_ready?/1` sees it. Idempotent +
+        # log-and-swallow (advance self-guards on status/readiness, so the
+        # redundant `maybe_retrigger_stack_member_merge` + periodic sweep
+        # never double-transition).
+        _ = Stacks.advance_member_to_deploying(updated)
 
         # Stage 4 hook: every successful per-member rollup merge fires
         # the stack-level PR-open gate. The gate is itself idempotent
@@ -2044,13 +2136,17 @@ defmodule Platform.Tasks.StackDeployer do
       Enum.all?(members, &member_sha_reachable?(&1, stack))
   end
 
-  defp member_ready_for_pr?(%TaskRecord{status: status, metadata: meta})
-       when status in ["in_review", "deploying"] and is_map(meta) do
-    case Map.get(meta, "merged_into_rollup_at") do
-      %{"sha" => sha} when is_binary(sha) and sha != "" -> true
-      _ -> false
-    end
-  end
+  # Gap 4 (task 019f921d): the stack-PR-open readiness gate now delegates to
+  # the SHARED `Stacks.member_landed_on_rollup?/1` predicate so it can never
+  # drift from the dep-clearance gate (`Stacks.threshold_cleared?/1`) again.
+  # This widens acceptance to a `done` member (previously only
+  # `in_review`/`deploying`) and to a bare-string `merged_into_rollup_at`
+  # stamp (previously only a `%{"sha" => _}` map) — the exact
+  # genuinely-finished shape that was being rejected, leaving the stack
+  # stuck at `deploying` with no rollup PR. The sha git-reachability check
+  # for MAP-shaped stamps is preserved separately in `member_sha_reachable?/2`
+  # (a bare-string stamp skips it, matching `dep_sha_reachable?/5`).
+  defp member_ready_for_pr?(%TaskRecord{} = member), do: Stacks.member_landed_on_rollup?(member)
 
   defp member_ready_for_pr?(_member), do: false
 

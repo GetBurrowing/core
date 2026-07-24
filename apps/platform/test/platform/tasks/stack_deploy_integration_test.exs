@@ -36,13 +36,24 @@ defmodule Platform.Tasks.StackDeployIntegrationTest do
         ensure_calls: [],
         merge_calls: [],
         pr_calls: [],
-        delete_calls: []
+        delete_calls: [],
+        # Gap 1 (task 019f921d) integration knob: number of leading
+        # `ensure_rollup_branch` calls to FAIL, simulating a lost/dropped
+        # async create at stack-start. The merge-time ensure that follows
+        # must self-heal the missing branch.
+        fail_ensures: 0
       }
 
       Agent.start_link(fn -> initial end, name: __MODULE__)
     end
 
     def stop, do: Agent.stop(__MODULE__)
+
+    # Simulate the initial async rollup-branch create being lost: the next
+    # `n` ensure calls return {:error, ...}; subsequent calls succeed.
+    def fail_next_ensures(n) when is_integer(n) and n >= 0 do
+      Agent.update(__MODULE__, fn s -> %{s | fail_ensures: n} end)
+    end
 
     def ensure_calls, do: Agent.get(__MODULE__, & &1.ensure_calls) |> Enum.reverse()
     def merge_calls, do: Agent.get(__MODULE__, & &1.merge_calls) |> Enum.reverse()
@@ -51,14 +62,27 @@ defmodule Platform.Tasks.StackDeployIntegrationTest do
 
     @impl true
     def ensure_rollup_branch(args) do
-      Agent.update(__MODULE__, fn s -> %{s | ensure_calls: [args | s.ensure_calls]} end)
-      {:ok, %{status: :created, base_sha: "base00000"}}
+      Agent.get_and_update(__MODULE__, fn s ->
+        s = %{s | ensure_calls: [args | s.ensure_calls]}
+
+        if s.fail_ensures > 0 do
+          {{:error, :simulated_lost_create}, %{s | fail_ensures: s.fail_ensures - 1}}
+        else
+          {{:ok, %{status: :created, base_sha: "base00000"}}, s}
+        end
+      end)
     end
 
     @impl true
     def merge_member_into_rollup(args) do
       Agent.update(__MODULE__, fn s -> %{s | merge_calls: [args | s.merge_calls]} end)
-      {:ok, %{status: :merged, merge_sha: "m#{System.unique_integer([:positive])}"}}
+      # Hex-shaped sha so the `merged_into_rollup_at` map-shape validator
+      # (Bug #3) accepts the stamp stamp_merged writes.
+      {:ok,
+       %{
+         status: :merged,
+         merge_sha: "deadbe" <> Integer.to_string(System.unique_integer([:positive]))
+       }}
     end
 
     @impl true
@@ -224,6 +248,116 @@ defmodule Platform.Tasks.StackDeployIntegrationTest do
     end
   end
 
+  # ── Gap composition (task 019f921d): forming → done, zero hand-recon ────
+  #
+  # The guard that proves the FOUR fixes work TOGETHER — the thing missing
+  # when the Inbox stack needed hand-reconciliation at every step. A
+  # synthetic 3-member stack (M1 root; M2 dep M1; M3 dep M2) walks:
+  #   forming → commence → members merge (branch self-healed) → members
+  #   auto-advance in_review→deploying off their own stamp → rollup PR opens
+  #   (recognizing a done+bare-string member) → rollup PR merges → all done
+  # with NO manual stage_complete / status poke / rpc reconciliation.
+
+  describe "four-gap composition: synthetic stack, full lifecycle, zero hand-reconciliation" do
+    test "forming → members merged → auto-advance → PR opens (mixed shapes) → merged → all done",
+         %{conn: conn} do
+      # Gap 1: the initial async rollup-branch create is LOST — the first
+      # ensure (fired by commence's handle_stack_transition) fails; the
+      # merge-time ensure must self-heal it.
+      FakeRunner.fail_next_ensures(1)
+
+      %{stack: stack, members: [m1, m2, m3], rollup_branch: rollup_branch} =
+        build_forming_stack!("gap-compose", 3)
+
+      # Members start at backlog on a `forming` stack.
+      assert Stacks.get_stack(stack.id).status == "forming"
+
+      # ── Gap 3: commence the forming-but-ready stack (no manual flip) ──
+      assert {:ok, %{stack: commenced}} = Stacks.commence_if_ready(stack)
+      assert commenced.status == "in_progress"
+      assert Tasks.get_task_record(m1.task.id).status == "in_progress"
+      assert Tasks.get_task_record(m2.task.id).status == "stack_pending"
+      assert Tasks.get_task_record(m3.task.id).status == "stack_pending"
+
+      # The initial ensure (from the commence transition) was attempted and
+      # FAILED — the rollup branch was NOT created up front.
+      assert length(FakeRunner.ensure_calls()) == 1
+
+      # ── Gaps 1+2: drive M1 to review-ready; passing its LAST validation
+      # merges it (ensure self-heals the branch) and auto-advances it
+      # in_review → deploying off its own stamp — no extra validation event.
+      drive_member_to_merged!(m1)
+
+      m1_rec = Tasks.get_task_record(m1.task.id)
+      assert m1_rec.status == "deploying", "M1 should auto-advance to deploying off its stamp"
+      # Stamp is the canonical map shape.
+      assert is_map(m1_rec.metadata["merged_into_rollup_at"])
+      assert is_binary(m1_rec.metadata["merged_into_rollup_at"]["sha"])
+
+      # Gap 1 self-heal: a SUCCESSFUL ensure ran at merge time (call #2)
+      # after the failed initial create, and the merge landed.
+      assert length(FakeRunner.ensure_calls()) >= 2
+      assert Enum.any?(FakeRunner.merge_calls(), &(&1.member_task_id == m1.task.id))
+
+      # M1's merge stamp unblocked the dependent M2 → in_progress (no poke).
+      assert Tasks.get_task_record(m2.task.id).status == "in_progress"
+
+      # ── Drive M2 the same way; it unblocks M3. ──
+      drive_member_to_merged!(m2)
+      assert Tasks.get_task_record(m2.task.id).status == "deploying"
+      assert Tasks.get_task_record(m3.task.id).status == "in_progress"
+
+      # ── Gap 4 setup: leave M3 in the exact stranded shape from the
+      # incident — `done` with a BARE-STRING merged_into_rollup_at stamp
+      # (the manual-reconciliation shape the OLD deploy gate rejected). We
+      # bypass the map-shape validator to reproduce that legacy shape.
+      m3.task
+      |> Ecto.Changeset.change(%{
+        status: "done",
+        metadata:
+          Map.put(
+            m3.task.metadata || %{},
+            "merged_into_rollup_at",
+            DateTime.utc_now() |> DateTime.to_iso8601()
+          )
+      })
+      |> Repo.update!()
+
+      # ── Gap 4 + self-heal: simulate the fire-and-forget PR-open being
+      # DROPPED — flip the stack to `deploying` with NO rollup_pr (as
+      # dispatch_stack_deploy would, minus the open that never landed).
+      {:ok, _} = Stacks.update_stack(Stacks.get_stack(stack.id), %{status: "deploying"})
+      assert is_nil(Stacks.get_stack(stack.id).metadata["rollup_pr"])
+
+      pr_calls_before = length(FakeRunner.pr_calls())
+
+      # The durable reconcile re-fires maybe_open_stack_pr and the gate now
+      # recognizes ALL members ready — M1/M2 deploying+map AND M3
+      # done+bare-string — so the PR opens on retry (no :not_ready).
+      assert Stacks.reconcile_deploying_stacks() == 1
+      assert length(FakeRunner.pr_calls()) == pr_calls_before + 1
+
+      reopened = Stacks.get_stack(stack.id)
+      assert reopened.status == "deploying"
+      assert reopened.metadata["rollup_pr"]["number"] == 4242
+
+      # A second reconcile is idempotent — no duplicate open.
+      assert Stacks.reconcile_deploying_stacks() == 0
+      assert length(FakeRunner.pr_calls()) == pr_calls_before + 1
+
+      # ── Terminal: the rollup PR merges (GitHub webhook) → stack done +
+      # every member done + rollup branch cleaned up. Zero hand-recon.
+      payload = rollup_merged_payload(rollup_branch)
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      assert Stacks.get_stack(stack.id).status == "done"
+      assert Tasks.get_task_record(m1.task.id).status == "done"
+      assert Tasks.get_task_record(m2.task.id).status == "done"
+      assert Tasks.get_task_record(m3.task.id).status == "done"
+    end
+  end
+
   # ── Regression: non-stacked task still gets its per-task deploy stage ─
 
   describe "non-stacked task regression guard" do
@@ -382,6 +516,93 @@ defmodule Platform.Tasks.StackDeployIntegrationTest do
       end
 
     %{project: project, stack: stack, rollup_branch: rollup_branch, members: members}
+  end
+
+  # Gap-composition fixture: a `forming` stack whose N members form a
+  # dependency chain (M2 dep M1, M3 dep M2), each at `backlog` with an
+  # approved plan, a single running review stage, a pending `test_pass`
+  # validation, and `deploy_target` set (so the in_review→deploying advance
+  # resolves the no_op_wait_for_rollup strategy). NOTHING is pre-stamped —
+  # the merge stamps land through the real merge path.
+  defp build_forming_stack!(slug, member_count) when member_count > 0 do
+    rollup_branch = "stack/#{slug}"
+
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: "Gap Compose #{System.unique_integer([:positive])}",
+        repo_url: "https://github.com/test/gap-compose-repo"
+      })
+
+    {:ok, stack} =
+      Stacks.create_stack(%{
+        project_id: project.id,
+        slug: slug,
+        name: "Stack #{slug}",
+        base_branch: "main",
+        rollup_branch: rollup_branch
+      })
+
+    {members, _prev} =
+      Enum.reduce(1..member_count, {[], nil}, fn position, {acc, prev} ->
+        deps = if prev, do: [%{"task_id" => prev.id, "kind" => "blocks"}], else: []
+
+        {:ok, task} =
+          Tasks.create_task(%{
+            project_id: project.id,
+            title: "Member #{position}",
+            dependencies: deps
+          })
+
+        {:ok, task} =
+          Tasks.update_task(task, %{
+            stack_id: stack.id,
+            stack_position: position,
+            deploy_target: "production"
+          })
+
+        {:ok, plan} =
+          Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+        {:ok, stage} =
+          Tasks.create_stage(%{
+            plan_id: plan.id,
+            position: 1,
+            name: "Task-level review",
+            status: "running"
+          })
+
+        {:ok, validation} = Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass"})
+
+        member = %{task: task, plan: plan, stage: stage, validation: validation}
+        {[member | acc], task}
+      end)
+
+    %{
+      project: project,
+      stack: Stacks.get_stack(stack.id),
+      rollup_branch: rollup_branch,
+      members: Enum.reverse(members)
+    }
+  end
+
+  # Drive a commenced member (at in_progress) to a merged+advanced state via
+  # the real engine path only: move it to in_review (its executor finishing
+  # execution), then pass its LAST review validation. That single pass
+  # re-fires the rollup merge (which ensures the branch, Gap 1) and advances
+  # the member in_review→deploying off its own fresh stamp (Gap 2) — no
+  # manual stage_complete, no status poke.
+  defp drive_member_to_merged!(%{task: task, validation: validation}) do
+    task = Tasks.get_task_record(task.id)
+    {:ok, _} = Tasks.transition_task(task, "in_review")
+
+    {:ok, _} =
+      PlanEngine.evaluate_validation(validation.id, %{
+        status: "passed",
+        evaluated_by: "test",
+        evidence: %{"result" => "ok"}
+      })
+
+    :ok
   end
 
   defp rollup_merged_payload(rollup_branch) do

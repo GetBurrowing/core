@@ -162,7 +162,14 @@ defmodule Platform.Audit.TelemetryHandler do
     # byte_size, and the stringified deleted_at. Sync (default
     # handle_event clause) so tests can assert the audit row immediately
     # after `sweep/1` returns.
-    [:platform, :files, :file_purged]
+    [:platform, :files, :file_purged],
+    # Task 019f921d Gap 3 — commencement-gate anomaly alerting. Emitted by
+    # `Platform.Tasks.Stacks.CommencementGate.open?/1` on EVERY gate check
+    # (high volume). The handler clause below persists an audit row + warns
+    # ONLY on the exact bug signature `open=false AND blocked_by_count=0`
+    # ("stack not in_progress but no plan gap" — the state that stranded the
+    # Inbox stack in `forming`); benign checks are dropped without a write.
+    [:platform, :stacks, :commencement, :gate_check]
 
     # NOTE: `[:platform, :memory, :proposal_promoted]` is NOT registered
     # here. `Platform.Memory.Proposals.queue_promotion/1` (task 019f70e9
@@ -214,6 +221,42 @@ defmodule Platform.Audit.TelemetryHandler do
     end)
 
     :ok
+  end
+
+  # Task 019f921d Gap 3 — the commencement gate_check fires on every
+  # `open?/1` call (very high volume), so we must NOT persist a row per
+  # check. Persist + warn ONLY on the anomaly signature: the gate is closed
+  # (`open == false`) yet there is no plan gap (`blocked_by_count == 0`) —
+  # i.e. the stack is not `in_progress` despite every member plan being
+  # approved, the precise deadlock that stranded the Inbox stack. All other
+  # gate_checks (open, or blocked by a real plan gap) are dropped silently.
+  def handle_event(
+        [:platform, :stacks, :commencement, :gate_check] = event_name,
+        measurements,
+        metadata,
+        config
+      ) do
+    open = Map.get(metadata, :open, false)
+    blocked_by_count = Map.get(measurements, :blocked_by_count, 0)
+
+    if open == false and blocked_by_count == 0 do
+      Logger.warning(
+        "[TelemetryHandler] commencement gate_check anomaly: stack=#{inspect(Map.get(metadata, :stack_id))} " <>
+          "task=#{inspect(Map.get(metadata, :task_id))} open=false blocked_by_count=0 " <>
+          "— stack not in_progress but no plan gap (forming-lockout signature)"
+      )
+
+      enriched =
+        metadata
+        |> Map.put(:resource_type, "stack")
+        |> Map.put(:resource_id, Map.get(metadata, :stack_id))
+        |> Map.put(:action, "gate_check_anomaly")
+        |> Map.put(:actor_type, "system")
+
+      persist_or_skip(event_name, measurements, enriched, config)
+    else
+      :ok
+    end
   end
 
   def handle_event(event_name, measurements, metadata, config) do

@@ -2759,6 +2759,99 @@ defmodule Platform.Tasks.StacksTest do
     end
   end
 
+  # ── Gap 3 (task 019f921d): forming-lockout self-heal + no-regress ────────
+  describe "commence_if_ready/1" do
+    test "commences a forming-but-ready stack: flips to in_progress and opens the gate" do
+      {:ok, project} = Tasks.create_project(%{name: "Commence ready"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, root} = Tasks.create_task(%{project_id: project.id, title: "M1 root"})
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "M2 depends on M1",
+          dependencies: [%{"task_id" => root.id, "kind" => "blocks"}]
+        })
+
+      {:ok, _} = Stacks.add_task(stack, root)
+      {:ok, _} = Stacks.add_task(stack, child)
+      {:ok, _} = Tasks.create_plan(%{task_id: root.id, status: "approved"})
+      {:ok, _} = Tasks.create_plan(%{task_id: child.id, status: "approved"})
+
+      # Stack sat in `forming` (start_stack never fired / lost the flip) —
+      # the exact Inbox deadlock. commence_if_ready must self-heal it.
+      assert {:ok, %{stack: updated}} = Stacks.commence_if_ready(stack)
+      assert updated.status == "in_progress"
+
+      # The gate now opens for the root (was refused while forming).
+      root_record = Tasks.get_task_record(root.id)
+      assert Platform.Tasks.Stacks.CommencementGate.open?(root_record) == true
+      assert Tasks.get_task_record(root.id).status == "in_progress"
+    end
+
+    test "no-op when plans are not ready (stays forming)" do
+      {:ok, project} = Tasks.create_project(%{name: "Commence not ready"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      # Only one member has an approved plan.
+      {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
+
+      assert :noop = Stacks.commence_if_ready(stack)
+      assert Stacks.get_stack!(stack.id).status == "forming"
+    end
+
+    test "no-op (idempotent) when the stack is already past forming" do
+      stack = stack_fixture()
+      {:ok, started} = Stacks.update_stack(stack, %{status: "in_progress"})
+      assert :noop = Stacks.commence_if_ready(started)
+      assert Stacks.get_stack!(stack.id).status == "in_progress"
+    end
+  end
+
+  describe "no-regress guard: an executing stack cannot return to forming" do
+    test "update_stack/2 drops a -> forming change from in_progress" do
+      stack = stack_fixture()
+      {:ok, running} = Stacks.update_stack(stack, %{status: "in_progress"})
+
+      assert {:ok, guarded} = Stacks.update_stack(running, %{status: "forming"})
+      # The regressive change was dropped, not applied.
+      assert guarded.status == "in_progress"
+      assert Stacks.get_stack!(stack.id).status == "in_progress"
+    end
+
+    test "recompute_stack_status/1 over an empty member list does not regress an in_progress stack" do
+      stack = stack_fixture()
+      {:ok, running} = Stacks.update_stack(stack, %{status: "in_progress"})
+
+      # No members ⇒ rollup_status_for([]) == "forming"; the guard must
+      # prevent the recompute from re-closing the gate.
+      assert {:ok, result} = Stacks.recompute_stack_status(running)
+      assert result.status == "in_progress"
+      assert Stacks.get_stack!(stack.id).status == "in_progress"
+    end
+
+    test "guard holds for in_review and deploying too" do
+      for status <- ["in_review", "deploying"] do
+        stack = stack_fixture()
+        {:ok, running} = Stacks.update_stack(stack, %{status: status})
+        assert {:ok, guarded} = Stacks.update_stack(running, %{status: "forming"})
+        assert guarded.status == status
+      end
+    end
+
+    test "a genuine forming stack (no execution phase yet) CAN still be set to forming (no false guard)" do
+      # A brand-new stack is at forming; an idempotent forming write is fine.
+      stack = stack_fixture()
+      assert stack.status == "forming"
+      assert {:ok, still} = Stacks.update_stack(stack, %{status: "forming"})
+      assert still.status == "forming"
+    end
+  end
+
   describe "start_planning/1" do
     test "manual mode single-member stack transitions the member to planning" do
       {:ok, project} = Tasks.create_project(%{name: "Start planning single"})
@@ -5376,42 +5469,48 @@ defmodule Platform.Tasks.StacksTest do
       refute_receive {:stack_gate_opened, _, _}, 100
     end
 
-    test "gate open does NOT auto-transition any member (all stay at stack_pending / backlog)" do
-      # Belt-and-braces: verify the broadcast is a SIGNAL and does not
-      # cascade any member's status. The caller must explicitly kick
-      # each root via `Tasks.transition_task/2` (or MCP `task_start`).
-      {:ok, project} = Tasks.create_project(%{name: "Gate no auto-transition"})
+    test "gate open commences a forming-but-ready stack, respecting dependency order (Gap 3, task 019f921d)" do
+      # Gap 3 (task 019f921d) changes the old signal-only contract: a
+      # `forming`-but-ready stack now auto-commences on the LAST-plan
+      # approval (`commence_if_ready/1` fires just before
+      # `:stack_gate_opened`), so a ready stack can never stay stuck in
+      # `forming` — the deadlock that stranded every Inbox member. The
+      # commence still respects the in-stack DAG: only roots reach
+      # `in_progress`; dependents stay `stack_pending` until their deps
+      # clear (that ordering is NOT auto-skipped by the gate).
+      {:ok, project} = Tasks.create_project(%{name: "Gate commence on ready"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, root_a} = Tasks.create_task(%{project_id: project.id, title: "Root A"})
-      {:ok, root_b} = Tasks.create_task(%{project_id: project.id, title: "Root B"})
+      {:ok, root} = Tasks.create_task(%{project_id: project.id, title: "Root"})
 
-      {:ok, _} = Stacks.add_task(stack, root_a)
-      {:ok, _} = Stacks.add_task(stack, root_b)
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child depends on Root",
+          dependencies: [%{"task_id" => root.id, "kind" => "blocks"}]
+        })
 
-      # After stack_start, roots would go to in_progress. To exercise
-      # the pure last-approval path without the stack cascade, we
-      # instead park BOTH members at `stack_pending` up-front and only
-      # then approve the last plan. This mirrors the mid-flight state
-      # where stack_start already ran + parked non-root members, and a
-      # later plan approval flips the gate for a still-parked member.
-      set_member_status(stack, root_a, "stack_pending")
-      set_member_status(stack, root_b, "stack_pending")
+      {:ok, _} = Stacks.add_task(stack, root)
+      {:ok, _} = Stacks.add_task(stack, child)
 
-      {:ok, _} = Tasks.create_plan(%{task_id: root_a.id, status: "approved"})
-      {:ok, b_draft} = Tasks.create_plan(%{task_id: root_b.id})
-      {:ok, b_pending} = Tasks.submit_plan_for_review(b_draft)
+      # Root already approved; the child's approval is the LAST plan, which
+      # flips the commencement gate closed → open on a still-`forming` stack.
+      {:ok, _} = Tasks.create_plan(%{task_id: root.id, status: "approved"})
+      {:ok, c_draft} = Tasks.create_plan(%{task_id: child.id})
+      {:ok, c_pending} = Tasks.submit_plan_for_review(c_draft)
 
       :ok = Tasks.subscribe_board()
 
-      assert {:ok, _} = Tasks.approve_plan(b_pending, "system")
+      assert {:ok, _} = Tasks.approve_plan(c_pending, "system")
 
       assert_receive {:stack_gate_opened, _, _}
 
-      # Neither member was flipped out of `stack_pending` by the gate
-      # broadcast — that's the caller's job.
-      assert Tasks.get_task_record(root_a.id).status == "stack_pending"
-      assert Tasks.get_task_record(root_b.id).status == "stack_pending"
+      # The forming stack self-healed to in_progress; the root reached
+      # in_progress; the dependent child stays stack_pending (dep order
+      # preserved — the gate does NOT leapfrog dependencies).
+      assert Stacks.get_stack!(stack.id).status == "in_progress"
+      assert Tasks.get_task_record(root.id).status == "in_progress"
+      assert Tasks.get_task_record(child.id).status == "stack_pending"
     end
   end
 

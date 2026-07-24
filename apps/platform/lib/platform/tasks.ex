@@ -1762,6 +1762,15 @@ defmodule Platform.Tasks do
         # calling `Tasks.transition_task/2` per-member in dep order.
         case gate_transition do
           {:opened, stack, executable_ids} ->
+            # Gap 3 self-heal (task 019f921d): the moment the last member
+            # plan is approved, drive a `forming`-but-ready stack open so
+            # the commencement gate is actually open by the time
+            # subscribers react to `:stack_gate_opened` and transition
+            # members to `in_progress`. Idempotent + log-and-swallow: a
+            # stack already `in_progress` is a no-op, and a cascade failure
+            # never rolls back the (already-committed) approval.
+            _ = Platform.Tasks.Stacks.commence_if_ready(stack)
+
             broadcast_board({:stack_gate_opened, stack.id, executable_ids})
 
             Logger.info(

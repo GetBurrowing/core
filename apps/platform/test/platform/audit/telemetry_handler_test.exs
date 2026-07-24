@@ -198,6 +198,50 @@ defmodule Platform.Audit.TelemetryHandlerTest do
     end
   end
 
+  # Task 019f921d Gap 3 — the commencement gate_check fires on every gate
+  # evaluation; the handler must persist + warn ONLY on the forming-lockout
+  # signature (open=false AND blocked_by_count=0), and drop every benign
+  # check without a write.
+  describe "commencement gate_check anomaly alerting (Gap 3)" do
+    test "persists an audit row on the open=false, blocked_by_count=0 signature" do
+      stack_id = Ecto.UUID.generate()
+      task_id = Ecto.UUID.generate()
+
+      :telemetry.execute(
+        [:platform, :stacks, :commencement, :gate_check],
+        %{blocked_by_count: 0},
+        %{stack_id: stack_id, task_id: task_id, open: false}
+      )
+
+      assert [event] = Audit.list(event_type: "platform.stacks.commencement.gate_check")
+      assert event.action == "gate_check_anomaly"
+      assert event.resource_type == "stack"
+      assert event.resource_id == stack_id
+      assert event.metadata["task_id"] == task_id
+      assert event.metadata["open"] == "false"
+    end
+
+    test "does NOT persist when the gate is open (open=true)" do
+      :telemetry.execute(
+        [:platform, :stacks, :commencement, :gate_check],
+        %{blocked_by_count: 0},
+        %{stack_id: Ecto.UUID.generate(), task_id: Ecto.UUID.generate(), open: true}
+      )
+
+      assert Audit.list(event_type: "platform.stacks.commencement.gate_check") == []
+    end
+
+    test "does NOT persist when blocked by a real plan gap (blocked_by_count > 0)" do
+      :telemetry.execute(
+        [:platform, :stacks, :commencement, :gate_check],
+        %{blocked_by_count: 2},
+        %{stack_id: Ecto.UUID.generate(), task_id: Ecto.UUID.generate(), open: false}
+      )
+
+      assert Audit.list(event_type: "platform.stacks.commencement.gate_check") == []
+    end
+  end
+
   describe "actor_org_id threading (ADR 0040)" do
     test "actor_org_id from telemetry metadata persists to audit_events.actor_org_id" do
       user_id = Ecto.UUID.generate()

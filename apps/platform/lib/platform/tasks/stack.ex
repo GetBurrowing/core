@@ -19,6 +19,7 @@ defmodule Platform.Tasks.Stack do
 
   use Ecto.Schema
   import Ecto.Changeset
+  require Logger
 
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
@@ -74,6 +75,14 @@ defmodule Platform.Tasks.Stack do
 
   def statuses, do: @statuses
 
+  # Gap 3 no-regress guard (task 019f921d): once a stack has opened into an
+  # execution phase, nothing may move it back to `forming` — that would
+  # re-close `CommencementGate.open?/1` for every live member (the exact
+  # deadlock that stranded the Inbox stack). A stray `recompute_stack_status`
+  # over a transiently-empty member list, or an errant update, must not
+  # regress the gate.
+  @execution_phase_statuses ~w(in_progress in_review deploying done)
+
   def changeset(stack, attrs) do
     stack
     |> cast(attrs, [
@@ -93,6 +102,7 @@ defmodule Platform.Tasks.Stack do
     ])
     |> validate_required([:project_id, :slug, :name, :rollup_branch])
     |> validate_inclusion(:status, @statuses)
+    |> guard_no_forming_regression()
     |> validate_format(:slug, ~r/^[a-z0-9][a-z0-9-]*$/,
       message: "must be lowercase alphanumeric with hyphens"
     )
@@ -100,5 +110,32 @@ defmodule Platform.Tasks.Stack do
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:epic_id)
     |> foreign_key_constraint(:sponsor_user_id)
+  end
+
+  # Drop (skip) a `-> forming` status change when the persisted status is
+  # already an execution phase, rather than erroring — a stray recompute is
+  # a silent no-op, not a crash for its caller. Emits telemetry + a warning
+  # so the anomaly is observable.
+  defp guard_no_forming_regression(changeset) do
+    current = changeset.data.status
+
+    case get_change(changeset, :status) do
+      "forming" when current in @execution_phase_statuses ->
+        :telemetry.execute(
+          [:platform, :stacks, :status_regression_blocked],
+          %{count: 1},
+          %{stack_id: changeset.data.id, from: current, to: "forming"}
+        )
+
+        Logger.warning(
+          "[Stack] blocked forming-regression for stack #{changeset.data.id} " <>
+            "(current=#{current}); dropping status change"
+        )
+
+        delete_change(changeset, :status)
+
+      _ ->
+        changeset
+    end
   end
 end

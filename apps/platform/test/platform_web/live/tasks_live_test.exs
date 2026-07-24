@@ -7372,9 +7372,15 @@ defmodule PlatformWeb.TasksLiveTest do
       for {raw_status, expected_class} <- cases do
         fresh = Repo.get!(Stack, stack.id)
 
+        # Force each raw status directly for the rendering check. We bypass
+        # `Stack.changeset/2` via `Ecto.Changeset.change/2` because the Gap 3
+        # no-regress guard (task 019f921d) now blocks a `-> forming` change
+        # from an execution-phase status through the schema changeset — a
+        # production invariant that would otherwise stop this test from
+        # forcing `deploying -> forming` purely to assert the cell tone.
         {:ok, _} =
           fresh
-          |> Stack.changeset(%{status: raw_status})
+          |> Ecto.Changeset.change(status: raw_status)
           |> Repo.update()
 
         html = open_panel(conn, Repo.get!(Stack, stack.id))

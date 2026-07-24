@@ -149,10 +149,32 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
           %{scanned: 0, transitioned: 0, observed: 0}
       end
 
+    # Gap 3 + Gap 4 (task 019f921d) — piggyback the same 5-min tick to
+    # self-heal the two fire-and-forget stack-lifecycle gaps: commence any
+    # `forming`-but-ready stack, and re-fire the rollup-PR open for any
+    # stack stranded at `deploying` with no `rollup_pr`. Both are idempotent
+    # and log-and-swallow; a failure here never crashes the watcher.
+    lifecycle_result =
+      try do
+        Stacks.reconcile_stack_lifecycle()
+      rescue
+        e ->
+          Logger.warning(
+            "[TaskRouterWatcher] reconcile_stack_lifecycle raised: #{Exception.message(e)}"
+          )
+
+          %{commenced: 0, pr_reopened: 0}
+      catch
+        :exit, _reason ->
+          %{commenced: 0, pr_reopened: 0}
+      end
+
     Logger.info(
       "[TaskRouterWatcher] reconcile: started #{started}, stopped #{stopped}; " <>
         "in_review stall sweep: scanned=#{stall_result.scanned}, " <>
-        "transitioned=#{stall_result.transitioned}, observed=#{stall_result.observed}"
+        "transitioned=#{stall_result.transitioned}, observed=#{stall_result.observed}; " <>
+        "stack lifecycle: commenced=#{lifecycle_result.commenced}, " <>
+        "pr_reopened=#{lifecycle_result.pr_reopened}"
     )
 
     schedule_reconcile()

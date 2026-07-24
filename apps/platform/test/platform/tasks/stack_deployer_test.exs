@@ -1094,10 +1094,12 @@ defmodule Platform.Tasks.StackDeployerTest do
              |> Platform.Repo.all() == []
     end
 
-    test "runner {:error, reason} tuples do NOT fire a blocker (only raises do)" do
-      # A tagged-tuple failure is already a normal, non-crashing outcome
-      # (see `log_merge_result/2`); the blocker path is reserved for
-      # actual exceptions escaping the merge fn.
+    # Gap 1 FIX 2 (task 019f921d) INVERTS the previous contract: a
+    # `{:error, reason}` RETURN from the merge (git shell failure, auth,
+    # network) now escalates a needs_human blocker instead of silently
+    # stranding the member in `deploying`. See the dedicated escalation
+    # tests below for the full benign/escalate matrix.
+    test "runner {:error, reason} return NOW fires a needs_human blocker (Gap 1 FIX 2)" do
       {:ok, _} =
         FakeRunner.start_link(merge_responses: [{:error, {:git_failed, ["push"], 128, "auth"}}])
 
@@ -1109,10 +1111,308 @@ defmodule Platform.Tasks.StackDeployerTest do
 
       import Ecto.Query
 
+      events =
+        Platform.Orchestration.RuntimeEvent
+        |> where([e], e.task_id == ^task.id and e.event_type == "execution.blocked")
+        |> Platform.Repo.all()
+
+      assert [event] = events
+      assert event.runtime_id == "stack_deployer"
+      assert event.payload["needs_human"] == true
+      assert event.payload["reported_by"] == "stack_deployer"
+      assert event.payload["description"] =~ "Rollup merge returned error"
+      assert event.payload["description"] =~ "git_failed"
+    end
+  end
+
+  # ── Gap 1 (task 019f921d): durable rollup-branch creation ────────────────
+  #
+  # FIX 1 — `do_merge_member/3` ensures the rollup branch exists before the
+  # merge shell-out (a lost async create otherwise merges into a missing
+  # ref). FIX 2 — `attempt_member_merge/1` escalates `{:error, _}` RETURNS,
+  # not just raises, to a needs_human blocker; benign outcomes do NOT
+  # double-file.
+
+  describe "Gap 1 FIX 1: do_merge_member ensures the rollup branch" do
+    test "ensures a missing rollup branch (branch absent → ensure creates → merge succeeds)" do
+      # `responses` feeds the ensure_rollup_branch runner call; a fresh
+      # `:created` result proves the branch was absent and ensure made it.
+      {:ok, _} =
+        FakeRunner.start_link(
+          responses: [{:ok, %{status: :created, base_sha: "basecafe"}}],
+          merge_responses: [{:ok, %{status: :merged, merge_sha: "abcdef01"}}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap1-ensure")
+      task = review_ready_member!(project, stack)
+
+      assert {:ok, %{status: :merged, merge_sha: "abcdef01"}} =
+               StackDeployer.merge_member_into_rollup(task)
+
+      # ensure_rollup_branch was invoked (branch was created) BEFORE the merge.
+      assert [ensure_call] = FakeRunner.calls()
+      assert ensure_call.rollup_branch == stack.rollup_branch
+      assert [merge_call] = FakeRunner.merge_calls()
+      assert merge_call.member_task_id == task.id
+
+      # Member stamped — the merge actually landed.
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.metadata["merged_into_rollup_at"]["sha"] == "abcdef01"
+    end
+
+    test "already-existing rollup branch short-circuits ensure and still merges" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          responses: [{:ok, %{status: :already_exists, base_sha: "basecafe"}}],
+          merge_responses: [{:ok, %{status: :merged, merge_sha: "abcdef02"}}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap1-exists")
+      task = review_ready_member!(project, stack)
+
+      assert {:ok, %{status: :merged, merge_sha: "abcdef02"}} =
+               StackDeployer.merge_member_into_rollup(task)
+
+      assert [_ensure] = FakeRunner.calls()
+      assert [_merge] = FakeRunner.merge_calls()
+    end
+
+    test "persistent ensure failure returns {:error, {:rollup_branch_unavailable, _}} and does NOT merge" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          # Every ensure attempt fails.
+          responses: [],
+          default: {:error, :ensure_boom},
+          merge_responses: [{:ok, %{status: :merged, merge_sha: "should-not-happen"}}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap1-unavailable")
+      task = review_ready_member!(project, stack)
+
+      assert {:error, {:rollup_branch_unavailable, :ensure_boom}} =
+               StackDeployer.merge_member_into_rollup(task)
+
+      # The merge runner was NEVER invoked — we refuse to merge into a
+      # branch we could not ensure.
+      assert FakeRunner.merge_calls() == []
+
+      # Member NOT stamped.
+      reloaded = Tasks.get_task_record(task.id)
+      assert is_nil(get_in(reloaded.metadata || %{}, ["merged_into_rollup_at"]))
+    end
+  end
+
+  describe "Gap 1 FIX 2: attempt_member_merge escalates error returns" do
+    test "a {:rollup_branch_unavailable, _} error return fires a needs_human blocker" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          responses: [],
+          default: {:error, :ensure_boom}
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap1-esc-branch")
+      task = stack_member_at_in_review!(project, stack)
+
+      assert :ok = StackDeployer.handle_member_transition(task, "in_progress", "in_review")
+
+      import Ecto.Query
+
+      assert [event] =
+               Platform.Orchestration.RuntimeEvent
+               |> where([e], e.task_id == ^task.id and e.event_type == "execution.blocked")
+               |> Platform.Repo.all()
+
+      assert event.payload["needs_human"] == true
+      assert event.payload["description"] =~ "rollup_branch_unavailable"
+    end
+
+    test "benign {:ok, :not_ready} does NOT fire a blocker" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap1-benign-notready")
+      # A member at in_progress (not in_review) yields {:ok, :not_ready}.
+      task = stack_member_at_in_progress!(project, stack)
+
+      assert :ok = StackDeployer.handle_member_transition(task, "in_progress", "in_review")
+
+      import Ecto.Query
+
       assert Platform.Orchestration.RuntimeEvent
              |> where([e], e.task_id == ^task.id and e.event_type == "execution.blocked")
              |> Platform.Repo.all() == []
     end
+
+    test "benign {:ok, :already_merged} does NOT fire a blocker" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap1-benign-merged")
+      task = stack_member_at_in_review!(project, stack)
+
+      {:ok, _} =
+        Tasks.update_task(task, %{
+          metadata: %{
+            "merged_into_rollup_at" => %{
+              "sha" => "deadbeef",
+              "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+            }
+          }
+        })
+
+      task = Tasks.get_task_record(task.id)
+
+      assert :ok = StackDeployer.handle_member_transition(task, "in_progress", "in_review")
+
+      import Ecto.Query
+
+      assert Platform.Orchestration.RuntimeEvent
+             |> where([e], e.task_id == ^task.id and e.event_type == "execution.blocked")
+             |> Platform.Repo.all() == []
+    end
+
+    test "conflict return does NOT double-file a blocker (records its own conflict)" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [
+            {:error, :conflict, %{files: ["lib/foo.ex"], output: "CONFLICT"}}
+          ]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap1-conflict-nodup")
+      task = stack_member_at_in_review!(project, stack)
+
+      assert :ok = StackDeployer.handle_member_transition(task, "in_progress", "in_review")
+
+      import Ecto.Query
+
+      assert Platform.Orchestration.RuntimeEvent
+             |> where([e], e.task_id == ^task.id and e.event_type == "execution.blocked")
+             |> Platform.Repo.all() == []
+    end
+
+    test "divergence (:not_fast_forwardable) return does NOT double-file a blocker" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [
+            {:error, :not_fast_forwardable, %{member_sha: "m", rollup_sha: "r", output: "not ff"}}
+          ]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap1-diverge-nodup")
+      task = stack_member_at_in_review!(project, stack)
+
+      assert :ok = StackDeployer.handle_member_transition(task, "in_progress", "in_review")
+
+      import Ecto.Query
+
+      assert Platform.Orchestration.RuntimeEvent
+             |> where([e], e.task_id == ^task.id and e.event_type == "execution.blocked")
+             |> Platform.Repo.all() == []
+    end
+  end
+
+  # ── Gap 2 (task 019f921d): stamp_merged advances the deploy tail ─────────
+  #
+  # A plan-complete member whose async merge stamp lands AFTER its
+  # validations passed was stranded at `in_review` (M2-M5) because the
+  # advance fired only on a validation-pass event or the 5-min sweep.
+  # `stamp_merged/2` now drives `advance_member_to_deploying/1` off the
+  # stamp it just wrote, causally, for EVERY member. Stack members carry a
+  # `deploy_target` in production (the deploy-tail resolves
+  # `no_op_wait_for_rollup`); the fixtures set it to mirror that.
+
+  describe "Gap 2: stamp_merged advances member in_review -> deploying" do
+    test "a merged member auto-advances to deploying with NO later validation-pass event" do
+      {:ok, _} =
+        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "abcdef11"}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap2-advance")
+      # A second, unmerged member keeps the stack-PR gate `:not_ready`, so
+      # this test isolates the per-member deploy-tail advance.
+      _other = unmerged_member!(project, stack, position: 2)
+      task = deployable_review_ready_member!(project, stack)
+
+      assert {:ok, %{status: :merged, merge_sha: "abcdef11"}} =
+               StackDeployer.merge_member_into_rollup(task)
+
+      # The member advanced in_review -> deploying purely off its own merge
+      # stamp — no validation-pass event was fired after the merge.
+      assert Tasks.get_task_record(task.id).status == "deploying"
+    end
+
+    test "advance is idempotent: a second merge attempt does not double-transition or crash" do
+      {:ok, _} =
+        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "abcdef22"}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap2-idempotent")
+      _other = unmerged_member!(project, stack, position: 2)
+      task = deployable_review_ready_member!(project, stack)
+
+      assert {:ok, %{status: :merged}} = StackDeployer.merge_member_into_rollup(task)
+      assert Tasks.get_task_record(task.id).status == "deploying"
+
+      # Re-running the merge sees the existing stamp → {:ok, :already_merged},
+      # never re-stamps and never re-advances.
+      reloaded = Tasks.get_task_record(task.id)
+      assert {:ok, :already_merged} = StackDeployer.merge_member_into_rollup(reloaded)
+      assert Tasks.get_task_record(task.id).status == "deploying"
+
+      # And an explicit redundant advance (the maybe_retrigger backstop) is
+      # a no-op, not a crash or double-transition (self-guards on status).
+      assert :noop = Stacks.advance_member_to_deploying(Tasks.get_task_record(task.id))
+      assert Tasks.get_task_record(task.id).status == "deploying"
+    end
+
+    test "a member at deploying whose rollup PR already merged self-completes to done (existing path unbroken)" do
+      {:ok, _} =
+        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "abcdef33"}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap2-selfcomplete")
+      task = deployable_review_ready_member!(project, stack)
+
+      assert {:ok, %{status: :merged}} = StackDeployer.merge_member_into_rollup(task)
+
+      # Stamp the stack's rollup PR as merged, then drive the deploying
+      # member: the existing complete_no_op_member_if_rollup_merged path
+      # must still self-complete deploying -> done.
+      stack = Stacks.get_stack(stack.id)
+      base_meta = if is_map(stack.metadata), do: stack.metadata, else: %{}
+
+      {:ok, _} =
+        Stacks.update_stack(stack, %{
+          metadata:
+            Map.put(base_meta, "rollup_pr", %{
+              "number" => 4242,
+              "url" => "https://github.com/test/repo/pull/4242",
+              "merged_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+            })
+        })
+
+      member = Tasks.get_task_record(task.id)
+      assert member.status == "deploying"
+      assert {:ok, done} = Stacks.complete_no_op_member_if_rollup_merged(member)
+      assert done.status == "done"
+    end
+  end
+
+  # A review-ready stack member that also carries a `deploy_target` (like a
+  # real dispatched stack member), so the `in_review -> deploying` advance
+  # resolves the `no_op_wait_for_rollup` strategy instead of failing with
+  # `:no_deploy_target_resolved`.
+  defp deployable_review_ready_member!(project, stack) do
+    task = review_ready_member!(project, stack)
+    {:ok, _} = Tasks.update_task(task, %{deploy_target: "production"})
+    Tasks.get_task_record(task.id)
   end
 
   # Bug #1 test helper: a stack member sitting AT in_review with a passed
@@ -1644,6 +1944,98 @@ defmodule Platform.Tasks.StackDeployerTest do
     end
   end
 
+  # ── Gap 4 (task 019f921d): unified deploy-gate contract + durable PR-open ─
+  #
+  # (1) member_ready_for_pr?/1 now delegates to the SHARED
+  #     Stacks.member_landed_on_rollup?/1, so a genuinely-finished member
+  #     (`done` + a bare-string stamp — the promote/sweep + manual-recon
+  #     shape) is no longer rejected by the deploy gate. (2) A durable
+  #     reconcile (Stacks.reconcile_deploying_stacks/0) re-fires the
+  #     fire-and-forget rollup-PR open for a stack stranded at `deploying`.
+
+  describe "Gap 4: unified deploy-gate contract (done + bare-string member)" do
+    test "a fully-done stack with mismatched member shapes opens the rollup PR (no :not_ready false-negative)" do
+      pr_url = "https://github.com/test/repo/pull/589"
+
+      {:ok, _} =
+        FakeRunner.start_link(pr_responses: [{:ok, %{number: 589, url: pr_url}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap4-mixed")
+
+      # The exact shapes that stranded the Inbox stack: one member at
+      # `deploying` with a `%{"sha"=>...}` MAP stamp, the other at `done`
+      # with a BARE-STRING stamp.
+      m1 = merged_member!(project, stack, sha: "a1b2c3d", position: 1)
+      {:ok, _} = Tasks.update_task(m1, %{status: "deploying"})
+      _m2 = done_bare_string_member!(project, stack, position: 2)
+
+      # Stack already dispatched to deploying with NO rollup_pr yet.
+      {:ok, stack} = Stacks.update_stack(stack, %{status: "deploying"})
+
+      assert {:ok, %{status: :opened, number: 589, url: ^pr_url}} =
+               StackDeployer.maybe_open_stack_pr(stack)
+
+      assert [_pr_call] = FakeRunner.pr_calls()
+
+      # A second invocation is idempotent.
+      assert {:ok, :already_open} =
+               StackDeployer.maybe_open_stack_pr(Stacks.get_stack(stack.id))
+
+      assert length(FakeRunner.pr_calls()) == 1
+    end
+  end
+
+  describe "Gap 4: reconcile_deploying_stacks/0 (durable PR-open retry)" do
+    test "re-fires maybe_open_stack_pr for a deploying stack that lost its fire-and-forget open" do
+      pr_url = "https://github.com/test/repo/pull/601"
+
+      {:ok, _} =
+        FakeRunner.start_link(pr_responses: [{:ok, %{number: 601, url: pr_url}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap4-reconcile")
+
+      _m1 = merged_member!(project, stack, sha: "reca111", position: 1)
+      _m2 = merged_member!(project, stack, sha: "reca222", position: 2)
+
+      # Stack was dispatched to deploying but the async open never landed —
+      # no rollup_pr metadata.
+      {:ok, _} = Stacks.update_stack(stack, %{status: "deploying"})
+
+      assert Stacks.reconcile_deploying_stacks() == 1
+
+      # The PR opened on retry and the stamp is now durable.
+      assert [_pr_call] = FakeRunner.pr_calls()
+      reloaded = Stacks.get_stack(stack.id)
+      assert reloaded.metadata["rollup_pr"]["number"] == 601
+    end
+
+    test "is a no-op when rollup_pr is already stamped (idempotent)" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gap4-already-open")
+
+      _m1 = merged_member!(project, stack, sha: "alr0001", position: 1)
+
+      {:ok, _} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{
+            "rollup_pr" => %{
+              "number" => 42,
+              "url" => "https://github.com/test/repo/pull/42",
+              "opened_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+            }
+          }
+        })
+
+      assert Stacks.reconcile_deploying_stacks() == 0
+      assert FakeRunner.pr_calls() == []
+    end
+  end
+
   # ── handle_rollup_pr_merged/1 → rollup branch delete (stage 3) ───────────
 
   describe "handle_rollup_pr_merged/1 — deletes rollup branch on success" do
@@ -2097,6 +2489,35 @@ defmodule Platform.Tasks.StackDeployerTest do
   end
 
   # ── Stage 4 helpers ───────────────────────────────────────────────────────
+
+  # Gap 4 fixture: a member at `done` carrying a BARE-STRING
+  # `merged_into_rollup_at` stamp — the legacy / manual-reconciliation shape
+  # (predates the Bug#3 map-shape validator). We bypass `Tasks.update_task`'s
+  # changeset validator via a raw `Ecto.Changeset.change` since that
+  # validator now rejects non-map stamps for NEW writes; this reproduces the
+  # exact end-state that the deploy gate must still accept.
+  defp done_bare_string_member!(project, stack, opts) do
+    position = Keyword.get(opts, :position, 1)
+
+    {:ok, task} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "Done bare-string member #{uniq()}",
+        status: "in_review"
+      })
+
+    {:ok, task} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: position})
+
+    base_meta = if is_map(task.metadata), do: task.metadata, else: %{}
+
+    task
+    |> Ecto.Changeset.change(%{
+      status: "done",
+      metadata:
+        Map.put(base_meta, "merged_into_rollup_at", DateTime.utc_now() |> DateTime.to_iso8601())
+    })
+    |> Platform.Repo.update!()
+  end
 
   defp merged_member!(project, stack, opts) do
     sha = Keyword.fetch!(opts, :sha)

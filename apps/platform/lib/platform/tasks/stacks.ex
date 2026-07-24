@@ -437,6 +437,153 @@ defmodule Platform.Tasks.Stacks do
     end
   end
 
+  @doc """
+  Gap 3 self-heal (task 019f921d): idempotently commence a `forming` stack
+  that is actually ready, so a stack can NEVER stay stuck in `forming` with
+  every member plan approved — the state that closed `CommencementGate` for
+  all seven Inbox members and forced hand-reconciliation.
+
+  When `stack.status == "forming"` AND `CommencementGate.plans_ready?/1`,
+  runs the same commence path as `start_stack/1` (the `do_start_stack/1`
+  flip + root/non-root cascade). No-op for any other status, or when plans
+  are not ready. Unlike `start_stack/1`, this is log-and-swallow (mirrors
+  `sweep_stack_dependents/1`): a cascade failure never propagates to the
+  caller, which is a broadcast handler or the periodic reconcile tick.
+
+  Wired into (a) the last-plan-approval broadcast path
+  (`Tasks.approve_plan/3`, `:stack_gate_opened`) and (b) the periodic
+  reconcile (`TaskRouterWatcher`), so a `forming`-but-ready stack is driven
+  open from both an event and a timer.
+
+  Returns the `do_start_stack/1` result on a real commence, or `:noop`.
+  """
+  @spec commence_if_ready(Stack.t() | binary()) ::
+          {:ok, map()} | {:partial, map()} | {:error, term()} | :noop
+  def commence_if_ready(stack_id) when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      %Stack{} = stack -> commence_if_ready(stack)
+      nil -> :noop
+    end
+  end
+
+  def commence_if_ready(%Stack{status: "forming"} = stack) do
+    if CommencementGate.plans_ready?(stack) do
+      Logger.info("[Stacks.commence_if_ready] stack #{stack.id} is forming-but-ready; commencing")
+
+      do_start_stack(stack)
+    else
+      :noop
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[Stacks.commence_if_ready] raised for stack #{stack.id}: #{Exception.message(e)}"
+      )
+
+      :noop
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[Stacks.commence_if_ready] exited for stack #{stack.id}: #{inspect(reason)}"
+      )
+
+      :noop
+  end
+
+  def commence_if_ready(%Stack{}), do: :noop
+
+  @doc """
+  Gap 3 + Gap 4 periodic reconcile (task 019f921d): the timer-side backstop
+  for the two fire-and-forget lifecycle gaps. Finds every non-terminal
+  stack and:
+
+    * commences it if it is `forming`-but-ready (`commence_if_ready/1`), and
+    * re-fires the rollup-PR open for any stack stuck at `deploying` with no
+      `metadata["rollup_pr"]` (`reconcile_deploying_stacks/0`).
+
+  Invoked from `TaskRouterWatcher`'s 5-minute reconcile tick. Log-and-swallow
+  throughout: a single bad stack never aborts the sweep. Returns a summary
+  map for the caller's reconcile log line.
+  """
+  @spec reconcile_stack_lifecycle() :: %{
+          commenced: non_neg_integer(),
+          pr_reopened: non_neg_integer()
+        }
+  def reconcile_stack_lifecycle do
+    commenced =
+      Stack
+      |> where([s], s.status == "forming")
+      |> Repo.all()
+      |> Enum.reduce(0, fn stack, acc ->
+        case commence_if_ready(stack) do
+          {:ok, _} -> acc + 1
+          {:partial, _} -> acc + 1
+          _ -> acc
+        end
+      end)
+
+    pr_reopened = reconcile_deploying_stacks()
+
+    %{commenced: commenced, pr_reopened: pr_reopened}
+  end
+
+  @doc """
+  Gap 4 durable rollup-PR-open reconcile (task 019f921d): re-fire
+  `StackDeployer.maybe_open_stack_pr/1` for every stack stuck at
+  `deploying` with no `metadata["rollup_pr"]` — the fire-and-forget
+  open that never landed for the Inbox stack. Safe to re-run because the
+  deployer's gate is idempotent (`pr_already_opened?/1` short-circuits once
+  `metadata["rollup_pr"]` is stamped). Returns the count of stacks whose PR
+  actually opened on this pass.
+  """
+  @spec reconcile_deploying_stacks() :: non_neg_integer()
+  def reconcile_deploying_stacks do
+    Stack
+    |> where([s], s.status == "deploying")
+    |> Repo.all()
+    |> Enum.reject(&rollup_pr_stamped?/1)
+    |> Enum.reduce(0, fn stack, acc ->
+      case safe_reopen_stack_pr(stack) do
+        {:ok, %{status: :opened}} -> acc + 1
+        _ -> acc
+      end
+    end)
+  end
+
+  defp rollup_pr_stamped?(%Stack{metadata: meta}) when is_map(meta) do
+    case Map.get(meta, "rollup_pr") do
+      %{} = pr -> Map.has_key?(pr, "number") or Map.get(pr, "status") == "opening"
+      _ -> false
+    end
+  end
+
+  defp rollup_pr_stamped?(_), do: false
+
+  defp safe_reopen_stack_pr(%Stack{} = stack) do
+    Logger.info(
+      "[Stacks.reconcile_deploying_stacks] stack #{stack.id} is deploying with no " <>
+        "rollup_pr; re-firing maybe_open_stack_pr"
+    )
+
+    StackDeployer.maybe_open_stack_pr(stack)
+  rescue
+    e ->
+      Logger.warning(
+        "[Stacks.reconcile_deploying_stacks] maybe_open_stack_pr raised for stack " <>
+          "#{stack.id}: #{Exception.message(e)}"
+      )
+
+      :error
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[Stacks.reconcile_deploying_stacks] maybe_open_stack_pr exited for stack " <>
+          "#{stack.id}: #{inspect(reason)}"
+      )
+
+      :error
+  end
+
   # ADR 0041 Status cascade — entering a stack.
   #
   # Members at `backlog` are dragged forward to whatever target the
@@ -2799,12 +2946,36 @@ defmodule Platform.Tasks.Stacks do
   # reachability, so accept the stamp as-is.
   defp dep_sha_reachable?(_dep, _repo_url, _rollup_branch, _project_id, _stack_id), do: true
 
-  defp threshold_cleared?(%{status: status, metadata: metadata})
-       when status in ["in_review", "deploying", "done"] do
-    is_map(metadata) and not is_nil(Map.get(metadata, "merged_into_rollup_at"))
+  @doc """
+  Single source of truth (task 019f921d Gap 4) for "this member has landed
+  on the rollup branch", consumed by BOTH the dep-clearance gate
+  (`threshold_cleared?/1`) and the stack-PR-open gate
+  (`StackDeployer.member_ready_for_pr?/1`) so the two subsystems cannot
+  drift onto different status+stamp-shape contracts — the mismatch that
+  rejected a genuinely-`done` member with a bare-string stamp and stranded
+  the Inbox stack's rollup PR at `:not_ready`.
+
+  A member has landed when its status is one of
+  `in_review`/`deploying`/`done` AND it carries a non-nil
+  `merged_into_rollup_at` stamp — the canonical `%{"sha" => sha}` map OR a
+  bare ISO8601 string (the promote/sweep + manual-reconciliation shape).
+
+  Deliberately permissive on stamp shape, mirroring the pre-existing
+  `threshold_cleared?` contract exactly. The sha git-reachability check is
+  layered on TOP by each caller (`member_sha_reachable?/2` /
+  `dep_sha_reachable?/5`): a map stamp gets verified, a bare-string stamp
+  skips it. It is NOT folded in here, so the "landed" predicate stays a
+  cheap pure check and the two gates share one definition.
+  """
+  @spec member_landed_on_rollup?(Task.t() | map()) :: boolean()
+  def member_landed_on_rollup?(%{status: status, metadata: metadata})
+      when status in ["in_review", "deploying", "done"] and is_map(metadata) do
+    not is_nil(Map.get(metadata, "merged_into_rollup_at"))
   end
 
-  defp threshold_cleared?(_), do: false
+  def member_landed_on_rollup?(_), do: false
+
+  defp threshold_cleared?(dep), do: member_landed_on_rollup?(dep)
 
   @doc """
   Promote a `stack_pending` member to `in_progress` iff its in-stack deps
