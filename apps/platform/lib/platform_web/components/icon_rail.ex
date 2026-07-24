@@ -65,6 +65,14 @@ defmodule PlatformWeb.Components.IconRail do
     doc: "when true, rail collapses to icon-only (56px); when false, expands to 224px with labels"
   )
 
+  attr(:inbox_unread_count, :integer,
+    default: 0,
+    doc:
+      "current user's non-dismissed inbox count; renders an attention badge on the Inbox tile. " <>
+        "0 omits the badge node entirely. Desktop icon_rail/1 only — the mobile bottom_rail " <>
+        "Inbox badge is a separate future stage."
+  )
+
   attr(:destinations, :list,
     default: nil,
     doc:
@@ -177,6 +185,7 @@ defmodule PlatformWeb.Components.IconRail do
         cluster="live"
         active_key={@active_key}
         sidebar_collapsed={@sidebar_collapsed}
+        inbox_unread_count={@inbox_unread_count}
       />
 
       <.rail_eyebrow label="Working" sidebar_collapsed={@sidebar_collapsed} />
@@ -185,6 +194,7 @@ defmodule PlatformWeb.Components.IconRail do
         cluster="working"
         active_key={@active_key}
         sidebar_collapsed={@sidebar_collapsed}
+        inbox_unread_count={@inbox_unread_count}
       />
 
       <div class="mt-auto" aria-hidden="true"></div>
@@ -198,6 +208,7 @@ defmodule PlatformWeb.Components.IconRail do
           cluster="admin"
           active_key={@active_key}
           sidebar_collapsed={@sidebar_collapsed}
+          inbox_unread_count={@inbox_unread_count}
         />
       <% end %>
     </nav>
@@ -230,6 +241,7 @@ defmodule PlatformWeb.Components.IconRail do
   attr(:cluster, :string, required: true)
   attr(:active_key, :atom, default: nil)
   attr(:sidebar_collapsed, :boolean, default: false)
+  attr(:inbox_unread_count, :integer, default: 0)
 
   defp rail_cluster(assigns) do
     ~H"""
@@ -244,7 +256,22 @@ defmodule PlatformWeb.Components.IconRail do
           aria-current={aria_current_for(dest, @active_key)}
           title={dest.label}
         >
-          <.icon name={dest.hero_icon} class="icon-rail-icon size-5 flex-shrink-0" />
+          <%!-- Icon wrapped in a relative anchor so the Inbox unread badge can
+               pin to its top-right corner. The badge is icon-anchored (not
+               label-anchored) so it survives the collapsed rail. Hidden at 0:
+               badge_text/1 returns nil, so the `:if` drops the node from the
+               DOM entirely rather than rendering an empty/transparent pill. --%>
+          <span class="relative flex-shrink-0">
+            <.icon name={dest.hero_icon} class="icon-rail-icon size-5" />
+            <span
+              :if={dest.key == :inbox && badge_text(@inbox_unread_count)}
+              class="badge badge-error badge-xs absolute -top-1.5 -right-1.5 min-w-[1rem] px-1 leading-none tabular-nums pointer-events-none"
+              data-role="inbox-badge"
+              aria-label={"#{@inbox_unread_count} unread"}
+            >
+              {badge_text(@inbox_unread_count)}
+            </span>
+          </span>
           <span :if={!@sidebar_collapsed} class="icon-rail-label">{dest.label}</span>
         </.link>
         <.link
@@ -415,6 +442,19 @@ defmodule PlatformWeb.Components.IconRail do
   defp aria_current_for(dest, active_key) do
     if dest.key == active_key, do: "page", else: nil
   end
+
+  # Inbox unread-badge label. Returns nil at 0 (badge node omitted from the
+  # DOM), the integer as a string for 1..99, and "99+" for anything above 99
+  # (ADR-0022 DM-badge overflow grammar). Non-integer inputs are treated as 0.
+  defp badge_text(count) when is_integer(count) do
+    cond do
+      count <= 0 -> nil
+      count > 99 -> "99+"
+      true -> Integer.to_string(count)
+    end
+  end
+
+  defp badge_text(_), do: nil
 
   # Canonical 10-entry destination list. Order within a cluster determines
   # render order in the rail. Paths marked `# TODO` don't have routes yet

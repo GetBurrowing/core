@@ -1207,6 +1207,7 @@ defmodule Platform.Chat do
     case result do
       {:ok, msg} ->
         reinvite_and_pin_mentioned(msg)
+        emit_inbox_for_mentions(msg)
         publish_message_posted(msg, opts)
         {:ok, msg}
 
@@ -1274,6 +1275,7 @@ defmodule Platform.Chat do
           |> Enum.map(fn {_key, attachment} -> attachment end)
 
         reinvite_and_pin_mentioned(message)
+        emit_inbox_for_mentions(message)
         publish_message_posted(message, opts)
         {:ok, message, attachments}
 
@@ -3140,6 +3142,81 @@ defmodule Platform.Chat do
   end
 
   defp reinvite_and_pin_mentioned(_), do: :ok
+
+  # ── Inbox producer (task 019f904c-904d — M2) ───────────────────────────────
+  #
+  # Emit one durable inbox row per @mentioned USER for a freshly-posted message.
+  # Fires AFTER a successful insert/commit, exactly like
+  # `reinvite_and_pin_mentioned/1` — a post-commit side-effect that must NEVER
+  # crash the post. It hooks ONLY the create seam, so no-backfill-on-edit and
+  # no-retro-delete-on-delete are guaranteed STRUCTURALLY: the edit/delete paths
+  # are untouched.
+  #
+  # Recipient resolution: the mentioned USER participants of the space. For a
+  # user participant the `participant_id` field IS the user_id, so it maps
+  # straight to `Platform.Inbox.emit/1`'s `:user_id`. The author is excluded at
+  # the USER level (across every space they participate in) via
+  # `msg.author_user_id`, and the recipient set is deduped by user. Each
+  # surviving user is gated through the single `inbox_emit_allowed?/2` seam so
+  # the RBAC M6/M7 external-scope predicate drops in without touching the loop.
+  defp emit_inbox_for_mentions(%Message{space_id: space_id, content: content} = msg)
+       when is_binary(content) do
+    space = Repo.get(Space, space_id)
+
+    if space do
+      space_id
+      |> list_participants()
+      |> Enum.filter(&(&1.participant_type == "user"))
+      |> Enum.filter(&Platform.Chat.AttentionRouter.mentioned?(&1, msg))
+      |> Enum.reject(&(&1.participant_id == msg.author_user_id))
+      |> Enum.uniq_by(& &1.participant_id)
+      |> Enum.each(fn p ->
+        if inbox_emit_allowed?(p.participant_id, space) do
+          Platform.Inbox.emit(%{
+            user_id: p.participant_id,
+            kind: "chat_mention",
+            source_type: "chat_message",
+            source_id: msg.id,
+            title: mention_inbox_title(msg, space),
+            body: String.slice(content, 0, 200),
+            url: "/chat/#{space.slug}?message=#{msg.id}"
+          })
+        end
+      end)
+    end
+
+    :ok
+  rescue
+    error ->
+      # A post-commit side-effect must never surface to the caller. Log and
+      # move on — the message is already durably persisted.
+      Logger.error(
+        "[Inbox] emit_inbox_for_mentions failed for message #{inspect(msg.id)}: " <>
+          Exception.format(:error, error, __STACKTRACE__)
+      )
+
+      :ok
+  end
+
+  defp emit_inbox_for_mentions(_), do: :ok
+
+  # External-scope gate seam (task 019f904c-904d — M2). The RBAC M6/M7
+  # predicate (`Platform.Chat.ExternalScope`) is NOT in the repo yet; until it
+  # lands the effective gate is space participation — a user only appears in
+  # `list_participants/1` for spaces they belong to, which already enforces
+  # "external users only get inbox rows for allowlisted spaces". Kept as ONE
+  # predicate so the M6/M7 call drops in here without touching the emit loop.
+  defp inbox_emit_allowed?(_user_id, _space), do: true
+
+  # Inbox title for a chat mention. For DM spaces the space has no meaningful
+  # `name`, so the label is the DM PEER's display name — in a 2-party DM the
+  # peer relative to any recipient is the author (recipients exclude the
+  # author), so `author_display_name` is exactly the peer name.
+  defp mention_inbox_title(%Message{} = msg, %Space{} = space),
+    do: "@Mention from #{msg.author_display_name} in ##{space_label(space, msg)}"
+
+  defp space_label(%Space{kind: "dm"}, %Message{author_display_name: peer}), do: peer
+  defp space_label(%Space{name: name}, _msg), do: name
 
   # Single-tenant/default-org setups leave `workspace_id: nil` on both
   # agents and spaces; in that case skip the scope filter and trust the

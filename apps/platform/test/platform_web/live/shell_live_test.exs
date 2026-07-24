@@ -391,6 +391,134 @@ defmodule PlatformWeb.ShellLiveTest do
   end
 
   # ---------------------------------------------------------------------
+  # Inbox unread-count badge live wiring (task 019f904d / M7)
+  #
+  # ShellLive owns the desktop icon-rail Inbox badge: it computes the
+  # mount-time count via Platform.Inbox.unread_count/1, subscribes the
+  # connected socket to inbox:<user_id>, and increments/decrements the
+  # `inbox_unread_count` assign in place on {:inbox_item_added,_} /
+  # {:inbox_item_dismissed,_} — no re-query. The component render contract
+  # is covered by IconRailTest; these check the end-to-end wiring.
+  # ---------------------------------------------------------------------
+  describe "inbox unread badge live wiring" do
+    alias Platform.Inbox
+
+    defp inbox_attrs(user_id) do
+      %{
+        user_id: user_id,
+        kind: "chat_mention",
+        source_type: "chat_message",
+        source_id: Ecto.UUID.generate(),
+        title: "You were mentioned",
+        body: "…",
+        url: "/chat/x"
+      }
+    end
+
+    defp inbox_badge_text(html) do
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-role="inbox-badge"]))
+      |> LazyHTML.text()
+      |> String.trim()
+    end
+
+    test "rail badge reflects the seeded unread count at mount", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      {:ok, _} = Inbox.emit(inbox_attrs(user_id))
+      {:ok, _} = Inbox.emit(inbox_attrs(user_id))
+      {:ok, _} = Inbox.emit(inbox_attrs(user_id))
+
+      {:ok, view, html} = live(conn, ~p"/tasks")
+
+      assert :sys.get_state(view.pid).socket.assigns.inbox_unread_count == 3
+      assert inbox_badge_text(html) == "3"
+    end
+
+    test "an inbox_item_added broadcast increments the badge live (no reload)", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      {:ok, _} = Inbox.emit(inbox_attrs(user_id))
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert :sys.get_state(view.pid).socket.assigns.inbox_unread_count == 1
+
+      # emit/1 broadcasts {:inbox_item_added, item} on inbox:<user_id>, which
+      # the subscribed shell increments on.
+      {:ok, _} = Inbox.emit(inbox_attrs(user_id))
+      _ = render(view)
+
+      assert :sys.get_state(view.pid).socket.assigns.inbox_unread_count == 2
+      assert inbox_badge_text(render(view)) == "2"
+    end
+
+    test "dismissing an item decrements the badge live", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      {:ok, _} = Inbox.emit(inbox_attrs(user_id))
+      {:ok, item2} = Inbox.emit(inbox_attrs(user_id))
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert :sys.get_state(view.pid).socket.assigns.inbox_unread_count == 2
+
+      {:ok, _} = Inbox.mark_dismissed(item2.id, user_id)
+      _ = render(view)
+
+      assert :sys.get_state(view.pid).socket.assigns.inbox_unread_count == 1
+    end
+
+    test "the badge floors at 0 and disappears when the last item is dismissed", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      {:ok, item} = Inbox.emit(inbox_attrs(user_id))
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert :sys.get_state(view.pid).socket.assigns.inbox_unread_count == 1
+
+      {:ok, _} = Inbox.mark_dismissed(item.id, user_id)
+      _ = render(view)
+      assert :sys.get_state(view.pid).socket.assigns.inbox_unread_count == 0
+
+      # A stray extra dismiss broadcast (e.g. a race) must floor at 0, never
+      # go negative.
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        Inbox.topic(user_id),
+        {:inbox_item_dismissed, item}
+      )
+
+      html = render(view)
+      assert :sys.get_state(view.pid).socket.assigns.inbox_unread_count == 0
+      # Badge node absent from the DOM at 0.
+      refute html =~ ~s(data-role="inbox-badge")
+    end
+
+    test "a second user's inbox items do not leak into this user's badge", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      other =
+        Repo.insert!(%User{
+          email: "inbox_other_#{System.unique_integer([:positive])}@example.com",
+          name: "Other",
+          oidc_sub: "oidc-inbox-other-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, _} = Inbox.emit(inbox_attrs(user_id))
+      {:ok, _} = Inbox.emit(inbox_attrs(other.id))
+      {:ok, _} = Inbox.emit(inbox_attrs(other.id))
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert :sys.get_state(view.pid).socket.assigns.inbox_unread_count == 1
+    end
+  end
+
+  # ---------------------------------------------------------------------
   # Meeting state hydration (task 019ee06b Stage 2)
   #
   # The shell's mini-bar relies on a synchronous hydration from

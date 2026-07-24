@@ -765,7 +765,12 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # grants. M1 is the only stack member that adds migrations.
       "20260722000001_add_external_to_org_memberships.exs",
       "20260722000002_create_external_dm_allowlist_entries.exs",
-      "20260722000003_create_pending_external_grants.exs"
+      "20260722000003_create_pending_external_grants.exs",
+      # Task 019f904c (inbox-system stack member M1): the notification
+      # source contract — `inbox_items` table (durable per-user attention
+      # rows) backing `Platform.Inbox.emit/1`. M1 is the only stack member
+      # that adds a migration.
+      "20260723185711_create_inbox_items.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

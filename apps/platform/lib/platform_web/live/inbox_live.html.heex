@@ -1,0 +1,107 @@
+<div class="h-full overflow-y-auto" data-role="inbox-surface">
+  <div class="mx-auto max-w-3xl p-6">
+    <header class="mb-6">
+      <h1 class="text-2xl font-bold text-base-content">Inbox</h1>
+      <p class="mt-1 text-sm text-base-content/60">
+        Everything waiting on you across Suite. Dismiss what's handled; open an item to jump to it.
+      </p>
+    </header>
+
+    <%!-- Empty inbox: no section headers, no rows — just the calm minimal
+         state. Sections below are each gated on their own count, so when
+         every count is zero only this renders. --%>
+    <.empty_state
+      :if={@review_count == 0 and @mention_count == 0 and @meeting_count == 0}
+      variant={:minimal}
+    >
+      <:body>
+        You're all caught up. Tasks with plans needing review, your channel
+        mentions, and meetings about to start will land here as they happen.
+      </:body>
+    </.empty_state>
+
+    <div class="space-y-8">
+      <%!-- Awaiting your review --%>
+      <section
+        :if={@review_count > 0}
+        aria-labelledby="inbox-section-review"
+        data-role="inbox-section"
+        data-section="review"
+      >
+        <h2
+          id="inbox-section-review"
+          class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50"
+        >
+          Awaiting your review
+        </h2>
+        <ul
+          id="inbox-review-list"
+          role="list"
+          class="space-y-2"
+          phx-update="stream"
+        >
+          <.inbox_item
+            :for={{dom_id, item} <- @streams.review_items}
+            id={dom_id}
+            item={item}
+          />
+        </ul>
+      </section>
+
+      <%!-- Mentions (grouped by space via per-row label + adjacency) --%>
+      <section
+        :if={@mention_count > 0}
+        aria-labelledby="inbox-section-mentions"
+        data-role="inbox-section"
+        data-section="mentions"
+      >
+        <h2
+          id="inbox-section-mentions"
+          class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50"
+        >
+          Mentions
+        </h2>
+        <ul
+          id="inbox-mention-list"
+          role="list"
+          class="space-y-2"
+          phx-update="stream"
+        >
+          <.inbox_item
+            :for={{dom_id, item} <- @streams.mention_items}
+            id={dom_id}
+            item={item}
+            space_label={mention_space_label(item)}
+          />
+        </ul>
+      </section>
+
+      <%!-- Meetings --%>
+      <section
+        :if={@meeting_count > 0}
+        aria-labelledby="inbox-section-meetings"
+        data-role="inbox-section"
+        data-section="meetings"
+      >
+        <h2
+          id="inbox-section-meetings"
+          class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50"
+        >
+          Meetings
+        </h2>
+        <ul
+          id="inbox-meeting-list"
+          role="list"
+          class="space-y-2"
+          phx-update="stream"
+        >
+          <.inbox_item
+            :for={{dom_id, item} <- @streams.meeting_items}
+            id={dom_id}
+            item={item}
+          />
+        </ul>
+      </section>
+    </div>
+  </div>
+</div>

@@ -18,6 +18,8 @@ defmodule Platform.Tasks do
   require Logger
 
   alias Platform.{Artifacts, Context, Execution, Memory}
+  alias Platform.Accounts
+  alias Platform.Agents.Agent
   alias Platform.Context.Session
   alias Platform.Execution.Run
 
@@ -1426,7 +1428,19 @@ defmodule Platform.Tasks do
         # Router-shape changes.
         _ = fire_architecture_review_plan(updated)
         broadcast_board({:plan_updated, updated})
-        maybe_auto_approve(updated)
+
+        case maybe_auto_approve(updated) do
+          {:ok, settled} = result ->
+            # M3 (task 019f904c): notify the task sponsor that a plan is
+            # awaiting human review. Fires against the SETTLED plan so an
+            # auto-approved plan (no human gate) skips the notification.
+            # Side-effect only — the return value is preserved verbatim.
+            _ = maybe_emit_plan_review_inbox(settled)
+            result
+
+          other ->
+            other
+        end
 
       error ->
         error
@@ -1456,6 +1470,93 @@ defmodule Platform.Tasks do
       Logger.warning("[Responsibilities] architecture.review_plan exited: #{inspect(reason)}")
 
       {:error, :architect_crashed}
+  end
+
+  # M3 (task 019f904c): emit a `task_plan_review` inbox row to the task
+  # SPONSOR when a plan lands in `pending_review` for human review.
+  #
+  # Fires against the SETTLED plan (post `maybe_auto_approve/1`): an
+  # auto-approved plan has no human gate, so the `status == "pending_review"`
+  # check alone suppresses the row. Wrapped in try/rescue/catch :exit
+  # (mirroring `fire_architecture_review_plan/1`) so an Inbox/PubSub failure
+  # can never stall the plan_submit → pending_review transition or the board
+  # broadcast. No dedup — a v2 plan superseding a rejected v1 travels this
+  # same path and simply emits another row (M1 "dismiss = gone" model).
+  defp maybe_emit_plan_review_inbox(%Plan{} = settled) do
+    case Repo.get(Task, settled.task_id) do
+      nil ->
+        :ok
+
+      %Task{} = task ->
+        {planner_id, planner_type} = assignee_for_phase(task, "planning")
+
+        if plan_review_inbox_emit?(settled, task, planner_id, planner_type) do
+          plan = Repo.preload(settled, stages: :validations)
+          stage_count = length(plan.stages)
+
+          validation_count =
+            Enum.reduce(plan.stages, 0, fn s, acc -> acc + length(s.validations) end)
+
+          Platform.Inbox.emit(%{
+            user_id: task.sponsor_user_id,
+            kind: "task_plan_review",
+            source_type: "task",
+            source_id: task.id,
+            title: "Plan ready for review: #{task.title}",
+            body:
+              "Planner: #{planner_display_name(task)} · Stages: #{stage_count} · Validations: #{validation_count}",
+            url: "/tasks/#{task.id}"
+          })
+
+          :ok
+        else
+          :ok
+        end
+    end
+  rescue
+    e ->
+      Logger.warning("[Inbox] task_plan_review emit crashed: #{Exception.message(e)}")
+
+      {:error, :inbox_emit_failed}
+  catch
+    :exit, reason ->
+      Logger.warning("[Inbox] task_plan_review emit exited: #{inspect(reason)}")
+
+      {:error, :inbox_emit_failed}
+  end
+
+  # Gate for the sponsor plan-review inbox row. Emit ONLY when the plan is
+  # still awaiting a human gate, the task opted into review (not auto-approve),
+  # a sponsor exists, the task is not terminal, and the sponsor did not author
+  # the plan themselves (self-notify guard).
+  defp plan_review_inbox_emit?(%Plan{} = settled, %Task{} = task, planner_id, planner_type) do
+    settled.status == "pending_review" and
+      task.auto_approve_plan == false and
+      is_binary(task.sponsor_user_id) and
+      task.status not in ~w(done cancelled) and
+      not (planner_type == "user" and planner_id == task.sponsor_user_id)
+  end
+
+  # Resolve a human-readable name for the task's planning-phase assignee, for
+  # the inbox row body. Falls back to "the planner" when the assignee is
+  # unset or the referenced row is missing.
+  defp planner_display_name(%Task{} = task) do
+    case assignee_for_phase(task, "planning") do
+      {id, "agent"} when is_binary(id) ->
+        case Repo.get(Agent, id) do
+          %Agent{name: name} when is_binary(name) -> name
+          _ -> "the planner"
+        end
+
+      {id, "user"} when is_binary(id) ->
+        case Accounts.get_user(id) do
+          %Accounts.User{name: name} when is_binary(name) -> name
+          _ -> "the planner"
+        end
+
+      _ ->
+        "the planner"
+    end
   end
 
   # Auto-approve branch (task 019f25f2 stage 2 + Stack v2 stage 4): fire when

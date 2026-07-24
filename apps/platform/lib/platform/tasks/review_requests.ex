@@ -21,6 +21,9 @@ defmodule Platform.Tasks.ReviewRequests do
 
   require Logger
 
+  alias Platform.Accounts
+  alias Platform.Agents.Agent
+  alias Platform.Inbox
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{PlanEngine, ReviewItem, ReviewRequest, Validation}
@@ -117,6 +120,8 @@ defmodule Platform.Tasks.ReviewRequests do
               execution_space_id: request.execution_space_id
             }
           })
+
+          maybe_emit_reviewer_inbox(request)
 
           ok
 
@@ -319,6 +324,8 @@ defmodule Platform.Tasks.ReviewRequests do
       }
     })
 
+    maybe_dismiss_reviewer_inbox(request)
+
     :resolved
   end
 
@@ -350,6 +357,100 @@ defmodule Platform.Tasks.ReviewRequests do
         :ok
     end
   end
+
+  # ── Inbox producer (human reviewer attention rows) ───────────────────────
+
+  # Post-commit, best-effort: emit exactly one durable inbox row for a human
+  # reviewer when a review request is created and awaiting their decision. A
+  # failure here must never roll back or error the already-created request.
+  defp maybe_emit_reviewer_inbox(request) do
+    with %{} = task <- Tasks.get_task_detail(request.task_id),
+         {:user, reviewer_uid} <- reviewer_user_id(task),
+         # Self-review never pages the same human who filed it.
+         false <- reviewer_uid == request.submitted_by,
+         # Only PENDING human decisions surface; auto-resolved requests emit none.
+         "pending" <- request.status do
+      validation =
+        Validation
+        |> Repo.get(request.validation_id)
+        |> Repo.preload(:stage)
+
+      stage_position = validation && validation.stage && validation.stage.position
+      item_count = length(request.items)
+      requester = requester_display_name(request.submitted_by)
+
+      Inbox.emit(%{
+        user_id: reviewer_uid,
+        kind: "review_request_pending",
+        source_type: "review_request",
+        source_id: request.id,
+        title: "Review request: #{task.title} · Stage #{stage_position}",
+        body: "Requester: #{requester} · Items: #{item_count}",
+        url: "/tasks/#{task.id}#review-#{request.id}"
+      })
+
+      :ok
+    else
+      _ -> :ok
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[ReviewRequests] failed to emit reviewer inbox row for request #{request.id}: #{inspect(error)}"
+      )
+
+      :ok
+  end
+
+  # Post-resolution, best-effort: clear the reviewer's inbox row so a resolved
+  # request leaves their unread list. Covers both approve-all and reject paths.
+  defp maybe_dismiss_reviewer_inbox(request) do
+    with %{} = task <- Tasks.get_task_detail(request.task_id),
+         {:user, reviewer_uid} <- reviewer_user_id(task) do
+      Inbox.dismiss_by_source(reviewer_uid, "review_request", request.id)
+      :ok
+    else
+      _ -> :ok
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[ReviewRequests] failed to dismiss reviewer inbox row for request #{request.id}: #{inspect(error)}"
+      )
+
+      :ok
+  end
+
+  # Resolve the review-phase assignee to a human user, or `:skip`. The inbox is
+  # a human surface — agent-type / role-resolved (agent) reviewers get their
+  # runtime signal instead and fall through to `:skip`.
+  defp reviewer_user_id(task) do
+    case Tasks.assignee_for_phase(task, "review") do
+      {uid, "user"} when is_binary(uid) -> {:user, uid}
+      _ -> :skip
+    end
+  end
+
+  # Best-effort human-readable name for whoever submitted the request: a user's
+  # name/email, else an agent's name/slug, else the raw id. Handles nil.
+  defp requester_display_name(nil), do: "Unknown"
+
+  defp requester_display_name(submitted_by) when is_binary(submitted_by) do
+    cond do
+      user = Accounts.get_user(submitted_by) ->
+        user.name || user.email || submitted_by
+
+      agent = Repo.get(Agent, submitted_by) ->
+        agent.name || agent.slug || submitted_by
+
+      true ->
+        submitted_by
+    end
+  rescue
+    _ -> submitted_by
+  end
+
+  defp requester_display_name(submitted_by), do: to_string(submitted_by)
 
   defp normalize_string_keys(map) when is_map(map) do
     Map.new(map, fn

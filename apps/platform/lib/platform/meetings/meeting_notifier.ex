@@ -151,10 +151,11 @@ defmodule Platform.Meetings.MeetingNotifier do
         _ -> "Someone"
       end
 
-    recipients =
-      meeting.chat_space_id
-      |> Chat.list_participants(participant_type: "user")
-      |> Enum.map(& &1.id)
+    # Single recipient source for BOTH the #440 push path and the inbox path:
+    # the meeting's backing chat space's human participants.
+    user_participants = Chat.list_participants(meeting.chat_space_id, participant_type: "user")
+
+    recipients = Enum.map(user_participants, & &1.id)
 
     payload = %{
       title: "#{host_display_name} started a meeting",
@@ -167,13 +168,71 @@ defmodule Platform.Meetings.MeetingNotifier do
         "project=#{meeting.project_id} recipients=#{length(recipients)}"
     )
 
+    # #440 push fan-out — must stay byte-for-byte identical (no regression).
     notifications_module().fan_out_to_humans(recipients, payload,
       exclude_participant_id: meeting.host_participant_id
     )
+
+    # Parallel, additive inbox fan-out: one durable Inbox row per invited
+    # human. Independent of the push path above — a per-recipient failure
+    # never aborts the push or the remaining rows.
+    fan_out_inbox(meeting, user_participants, host_display_name)
+  end
+
+  # Emit one `meeting_starting` inbox row per invited human, skipping the
+  # host (no self-row) and anyone already active in the meeting (no attention
+  # needed). `invitee_count` is the candidate count (user participants minus
+  # host), independent of the already-active skip.
+  defp fan_out_inbox(%Meeting{} = meeting, user_participants, host_display_name) do
+    active_user_ids =
+      meeting.chat_space_id
+      |> Meetings.active_participants_for_space()
+      |> Enum.map(& &1.user_id)
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new()
+
+    invitees =
+      Enum.reject(user_participants, fn p -> p.id == meeting.host_participant_id end)
+
+    invitee_count = length(invitees)
+
+    Enum.each(invitees, fn participant ->
+      # For a `participant_type: "user"` chat row, participant_id holds the
+      # users.id FK.
+      user_id = participant.participant_id
+
+      unless MapSet.member?(active_user_ids, user_id) do
+        emit_inbox_row(meeting, user_id, host_display_name, invitee_count)
+      end
+    end)
+  end
+
+  defp emit_inbox_row(%Meeting{} = meeting, user_id, host_display_name, invitee_count) do
+    inbox_module().emit(%{
+      user_id: user_id,
+      kind: "meeting_starting",
+      source_type: "meeting",
+      source_id: meeting.id,
+      title: "Meeting started: #{meeting.name}",
+      body: "Host: #{host_display_name} · #{invitee_count} invited",
+      url: "/meetings/#{meeting.id}"
+    })
+  rescue
+    error ->
+      Logger.warning(
+        "[MeetingNotifier] inbox emit failed — meeting=#{meeting.id} " <>
+          "user=#{user_id}: #{inspect(error)}"
+      )
+
+      :error
   end
 
   defp notifications_module do
     Application.get_env(:platform, :notifications_module, Platform.Notifications)
+  end
+
+  defp inbox_module do
+    Application.get_env(:platform, :inbox_module, Platform.Inbox)
   end
 
   defp maybe_subscribe_project(state, project_id) do

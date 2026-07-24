@@ -532,4 +532,108 @@ defmodule PlatformWeb.Components.IconRailTest do
   defp count_data_destination_matches(html) do
     Regex.scan(~r/data-destination="[^"]+"/, html) |> length()
   end
+
+  # ---------------------------------------------------------------------
+  # Inbox unread badge (task 019f904d / M7)
+  #
+  # `inbox_unread_count` renders an attention pill on the Inbox tile only.
+  # 0 omits the badge node entirely (not a transparent/empty pill); 1..99
+  # render the integer; >99 renders "99+" (ADR-0022 overflow grammar). The
+  # badge is icon-anchored so it survives the collapsed rail, and uses the
+  # destructive/accent semantic slot (`badge-error`) — no raw hex.
+  # ---------------------------------------------------------------------
+  describe "icon_rail/1 inbox unread badge" do
+    defp render_rail_with_count(count, opts \\ %{}) do
+      assigns =
+        Map.merge(
+          %{
+            current_path: "/chat",
+            is_fabrikam_user: false,
+            sidebar_collapsed: false,
+            inbox_unread_count: count
+          },
+          opts
+        )
+
+      rendered_to_string(~H"""
+      <.icon_rail
+        current_path={@current_path}
+        is_fabrikam_user={@is_fabrikam_user}
+        sidebar_collapsed={@sidebar_collapsed}
+        inbox_unread_count={@inbox_unread_count}
+      />
+      """)
+    end
+
+    defp inbox_badge_text(doc) do
+      doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> LazyHTML.text() |> String.trim()
+    end
+
+    test "count 0 renders the Inbox tile with NO badge node present" do
+      doc = render_rail_with_count(0) |> LazyHTML.from_fragment()
+
+      # The Inbox tile itself still renders — only the badge node is absent.
+      assert doc |> LazyHTML.query(~s([data-destination="inbox"])) |> Enum.count() == 1
+      assert doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> Enum.count() == 0
+    end
+
+    test "count 3 renders a badge containing \"3\" on the Inbox tile" do
+      doc = render_rail_with_count(3) |> LazyHTML.from_fragment()
+
+      assert doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> Enum.count() == 1
+      assert inbox_badge_text(doc) == "3"
+    end
+
+    test "count 99 renders \"99\" (no overflow marker at the boundary)" do
+      doc = render_rail_with_count(99) |> LazyHTML.from_fragment()
+      assert inbox_badge_text(doc) == "99"
+    end
+
+    test "count 150 renders \"99+\" (overflow)" do
+      doc = render_rail_with_count(150) |> LazyHTML.from_fragment()
+      assert inbox_badge_text(doc) == "99+"
+    end
+
+    test "the badge attaches ONLY to the Inbox tile — not Chat/Tasks/etc." do
+      doc = render_rail_with_count(5) |> LazyHTML.from_fragment()
+
+      # Exactly one badge in the whole rail...
+      assert doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> Enum.count() == 1
+      # ...nested under the Inbox tile...
+      assert doc
+             |> LazyHTML.query(~s([data-destination="inbox"] [data-role="inbox-badge"]))
+             |> Enum.count() == 1
+
+      # ...and not under any sibling tile.
+      assert doc
+             |> LazyHTML.query(~s([data-destination="chat"] [data-role="inbox-badge"]))
+             |> Enum.count() == 0
+
+      assert doc
+             |> LazyHTML.query(~s([data-destination="tasks"] [data-role="inbox-badge"]))
+             |> Enum.count() == 0
+    end
+
+    test "the badge renders in BOTH collapsed and expanded rail (icon-anchored)" do
+      for collapsed <- [true, false] do
+        doc =
+          render_rail_with_count(4, %{sidebar_collapsed: collapsed}) |> LazyHTML.from_fragment()
+
+        assert doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> Enum.count() == 1,
+               "expected an Inbox badge with sidebar_collapsed=#{collapsed}"
+
+        assert inbox_badge_text(doc) == "4"
+      end
+    end
+
+    test "the badge uses the destructive/accent semantic slot (badge-error), no raw hex" do
+      doc = render_rail_with_count(3) |> LazyHTML.from_fragment()
+
+      [class] =
+        doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> LazyHTML.attribute("class")
+
+      assert class =~ "badge-error"
+      refute class =~ ~r/#[0-9a-fA-F]{3,6}/
+    end
+  end
 end

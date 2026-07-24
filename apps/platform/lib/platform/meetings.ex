@@ -958,11 +958,47 @@ defmodule Platform.Meetings do
         maybe_backfill_identity(existing, metadata)
 
       nil ->
-        participant_joined(
-          room,
-          Map.merge(fk, %{display_name: display_name, metadata: metadata})
-        )
+        case participant_joined(
+               room,
+               Map.merge(fk, %{display_name: display_name, metadata: metadata})
+             ) do
+          {:ok, _participant} = ok ->
+            # Genuinely new active row = a real join (not a reconnect/backfill):
+            # clear this user's meeting_starting inbox row for the space's live
+            # meeting. Fire-and-forget — never fails the join.
+            maybe_dismiss_meeting_inbox(room, parsed)
+            ok
+
+          error ->
+            error
+        end
     end
+  end
+
+  # Only a resolvable user identity dismisses; agent/guest/unknown are no-ops.
+  # A nil live meeting is a safe no-op, and any dismissal error is swallowed so
+  # it can't fail the join.
+  defp maybe_dismiss_meeting_inbox(%Room{space_id: space_id}, {:user, user_id}) do
+    case get_live_meeting_for_space(space_id) do
+      %Meeting{} = meeting ->
+        inbox_module().dismiss_by_source(user_id, "meeting", meeting.id)
+
+      nil ->
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[Meetings] inbox dismiss_by_source failed — user=#{user_id}: #{inspect(error)}"
+      )
+
+      :error
+  end
+
+  defp maybe_dismiss_meeting_inbox(_room, _parsed), do: :ok
+
+  defp inbox_module do
+    Application.get_env(:platform, :inbox_module, Platform.Inbox)
   end
 
   # Idempotently backfill `metadata["identity"]` on an existing active row

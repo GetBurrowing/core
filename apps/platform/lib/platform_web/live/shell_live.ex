@@ -12,6 +12,7 @@ defmodule PlatformWeb.ShellLive do
   alias Platform.Chat.Presence, as: ChatPresence
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Chat.SpaceAgentPresence
+  alias Platform.Inbox
   alias Platform.Meetings
   alias Platform.Meetings.State, as: MeetingState
   alias Platform.Repo
@@ -82,6 +83,12 @@ defmodule PlatformWeb.ShellLive do
         # the count.
         Platform.Tasks.subscribe_board()
 
+        # Only authenticated user sessions subscribe to their inbox topic —
+        # anonymous/non-user mounts skip it (the is_binary guard IS the
+        # `type: :user` gate). External users are real user records, so they
+        # subscribe and get their own scoped count.
+        if is_binary(raw_user_id), do: Inbox.subscribe(raw_user_id)
+
         socket
         |> assign_async(
           [:roster_items, :composite_status, :principal_name],
@@ -105,6 +112,7 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:active_module, active_module)
       |> assign(:is_fabrikam_user, is_fabrikam_user)
       |> assign(:tasks_count, compute_tasks_count(raw_user_id))
+      |> assign(:inbox_unread_count, compute_inbox_count(raw_user_id))
       |> assign(:roster_open, false)
       |> assign(:show_presence_panel, false)
       |> assign(:meeting_active, false)
@@ -310,6 +318,22 @@ defmodule PlatformWeb.ShellLive do
           else
             {:cont, assign(socket, :tasks_count, new_count)}
           end
+
+        _msg, socket ->
+          {:cont, socket}
+      end)
+      # Inbox PubSub (inbox:<user_id>) → keep the icon-rail unread badge live.
+      # Increment/decrement in place (no re-query) — the same cheap ADR-0022
+      # DM-badge approach the Tasks badge and the mount-time count agree on.
+      # Dismiss floors at 0 so a race (dismiss arriving before the mount count
+      # settled) can never render a negative.
+      |> attach_hook(:inbox_count_refresh, :handle_info, fn
+        {:inbox_item_added, _item}, socket ->
+          {:cont, assign(socket, :inbox_unread_count, socket.assigns.inbox_unread_count + 1)}
+
+        {:inbox_item_dismissed, _item}, socket ->
+          {:cont,
+           assign(socket, :inbox_unread_count, max(socket.assigns.inbox_unread_count - 1, 0))}
 
         _msg, socket ->
           {:cont, socket}
@@ -721,4 +745,18 @@ defmodule PlatformWeb.ShellLive do
       Logger.warning("[ShellLive] tasks_count compute failed: #{inspect(e)}")
       0
   end
+
+  # Initial unread count for the desktop icon-rail Inbox badge. Fail-open like
+  # compute_tasks_count — a count error renders 0 (badge hidden) rather than
+  # blocking the shell mount. Anonymous/non-user mounts (nil id) are 0 too.
+  defp compute_inbox_count(user_id) when is_binary(user_id) do
+    Inbox.unread_count(user_id)
+  rescue
+    e ->
+      require Logger
+      Logger.warning("[ShellLive] inbox_count compute failed: #{inspect(e)}")
+      0
+  end
+
+  defp compute_inbox_count(_), do: 0
 end
