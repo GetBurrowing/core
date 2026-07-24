@@ -1355,7 +1355,7 @@
         </span>
         <button
           class={[
-            "btn btn-sm btn-square",
+            "btn btn-sm btn-square max-sm:h-11 max-sm:w-11 max-sm:min-h-[44px] max-sm:min-w-[44px]",
             if(@edit_mode, do: "btn-primary", else: "btn-ghost")
           ]}
           phx-click="toggle_edit_mode"
@@ -1369,7 +1369,7 @@
         </button>
         <button
           :if={deletable_task?(@selected_task)}
-          class="btn btn-sm btn-ghost btn-square text-error"
+          class="btn btn-sm btn-ghost btn-square text-error max-sm:h-11 max-sm:w-11 max-sm:min-h-[44px] max-sm:min-w-[44px]"
           phx-click="request_delete_task"
           title="Delete task"
           aria-label="Delete task"
@@ -1388,7 +1388,7 @@
         <button
           :if={sponsor?(@selected_task, @current_user_id)}
           class={[
-            "btn btn-sm btn-square",
+            "btn btn-sm btn-square max-sm:h-11 max-sm:w-11 max-sm:min-h-[44px] max-sm:min-w-[44px]",
             if(pinned_by_me?(@selected_task, @current_user_id, @my_pinned_task_ids),
               do: "btn-primary",
               else: "btn-ghost"
@@ -1420,7 +1420,7 @@
           </span>
         </button>
         <button
-          class="btn btn-sm btn-ghost btn-square"
+          class="btn btn-sm btn-ghost btn-square max-sm:h-11 max-sm:w-11 max-sm:min-h-[44px] max-sm:min-w-[44px]"
           phx-click="close_detail"
           aria-label="Close task details"
         >

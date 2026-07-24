@@ -11266,4 +11266,106 @@ defmodule PlatformWeb.TasksLiveTest do
       assert Repo.get(Task, task.id).status == "in_review"
     end
   end
+
+  # ── Task-detail header buttons — 44x44 tap-target on mobile (task 019f923b stage 2) ──
+  #
+  # Task 019f923b measured the four header buttons on the task-detail
+  # slide-in panel (Edit-mode toggle, Delete, Pin-to-Chat toggle, Close)
+  # at ~28x28 on 375x812 iPhone viewports — btn-sm + ghost/primary padding
+  # lands below the iOS HIG 44px thumb-target minimum. The fix mirrors
+  # commit f7a62d9b (dep-graph expand button, Case 4 e2e): add mobile-only
+  # `max-sm:h-11 max-sm:w-11 max-sm:min-h-[44px] max-sm:min-w-[44px]` so
+  # each button hits >=44x44 on <640px viewports while desktop keeps
+  # btn-sm's ~32px chrome. These four assertions are the regression fence
+  # — a future refactor that trims the overrides silently degrades the
+  # mobile tap-target and this describe block catches it.
+  #
+  # LiveView renders the full class attribute regardless of viewport, so
+  # no browser-emulation gymnastics are required — parse the rendered
+  # HTML for each button and confirm all four `max-sm:*` tokens are
+  # present in its class string.
+  describe "task-detail header buttons — 44x44 tap target on mobile (task 019f923b stage 2)" do
+    @tap_target_tokens ~w(max-sm:h-11 max-sm:w-11 max-sm:min-h-[44px] max-sm:min-w-[44px])
+
+    test "edit-mode toggle carries the four max-sm:* tap-target tokens",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Tap-target: edit toggle"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      [button_tag] =
+        Regex.run(~r/<button[^>]*data-role="edit-mode-toggle"[^>]*>/, html)
+
+      for token <- @tap_target_tokens do
+        assert button_tag =~ token,
+               "expected edit-mode toggle to carry #{token} for iOS HIG 44x44 tap-target; got: #{button_tag}"
+      end
+    end
+
+    test "delete button carries the four max-sm:* tap-target tokens",
+         %{conn: conn} do
+      project = create_project()
+      # Default `create_task` status is `"backlog"` which is in
+      # `Task.deletable_statuses/0`, so `deletable_task?/1` returns true
+      # and the delete button is rendered.
+      task = create_task(project, %{title: "Tap-target: delete"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      [button_tag] =
+        Regex.run(~r/<button[^>]*phx-click="request_delete_task"[^>]*>/, html)
+
+      for token <- @tap_target_tokens do
+        assert button_tag =~ token,
+               "expected delete button to carry #{token} for iOS HIG 44x44 tap-target; got: #{button_tag}"
+      end
+    end
+
+    test "pin-to-chat toggle carries the four max-sm:* tap-target tokens",
+         %{conn: conn} do
+      # Pin-to-Chat button is sponsor-gated (`:if={sponsor?(...)}`), so
+      # authenticate as the sponsor user and set `sponsor_user_id` on the
+      # task or the button never renders and the Regex.run below returns
+      # nil.
+      project = create_project()
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      task =
+        create_task(project, %{
+          title: "Tap-target: pin",
+          status: "backlog",
+          sponsor_user_id: user.id
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      [button_tag] =
+        Regex.run(~r/<button[^>]*data-role="task-chat-pin-toggle"[^>]*>/, html)
+
+      for token <- @tap_target_tokens do
+        assert button_tag =~ token,
+               "expected pin-to-chat toggle to carry #{token} for iOS HIG 44x44 tap-target; got: #{button_tag}"
+      end
+    end
+
+    test "close button carries the four max-sm:* tap-target tokens",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Tap-target: close"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      [button_tag] =
+        Regex.run(~r/<button[^>]*phx-click="close_detail"[^>]*>/, html)
+
+      for token <- @tap_target_tokens do
+        assert button_tag =~ token,
+               "expected close button to carry #{token} for iOS HIG 44x44 tap-target; got: #{button_tag}"
+      end
+    end
+  end
 end

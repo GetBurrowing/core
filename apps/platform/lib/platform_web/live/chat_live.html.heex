@@ -1855,6 +1855,110 @@
         </div>
       </header>
 
+      <%!-- Mobile Pinned strip (task 019f923b Stage 1). `lg:hidden` mirrors the
+           `hidden lg:flex` gate on <aside id="chat-sidebar">: without this
+           strip, pinned spaces (both task-exec pins from `@pinned_task_spaces`
+           and channel pins from `@channel_sections.pinned`) are unreachable
+           on <lg viewports because the desktop rail is hidden.
+
+           Renders horizontally-scrollable chips that mirror the desktop
+           rail's mental model — `hero-map-pin-mini` for task-exec pins
+           (matches the desktop rail header at chat_live.html.heex:353) and
+           `hero-bookmark-solid` for channel pins (matches chat_live.html.heex:311).
+           Chips carry the unread badge from `unread_label/1` when the
+           space has unread messages, using the same visual language as the
+           channel-pills strip immediately below.
+
+           Auto-hides when BOTH lists are empty — no permanent header. The
+           `:if` OR-guard means a user with only pinned tasks (or only pinned
+           channels, once channel-pinning ships) still gets the strip; the
+           strip only disappears when the user has no pins at all.
+
+           Sits ABOVE the channel-pills strip so pinned spaces are the first
+           navigation surface a user sees when landing in a channel on mobile.
+           Pinned channels intentionally re-appear in the channel-pills strip
+           below (via `Sidebar.flatten_sections/1`) — that duplication is
+           deliberate visual emphasis on pinned items, not a bug to
+           deduplicate.
+
+           NOTE: channel-level pinning is not yet wired end-to-end
+           (`channel_sections/4` receives `MapSet.new()` for `pinned_channel_ids`
+           at every call site today), so the channel-chip branch below
+           renders zero chips in production. Unit tests exercise the task
+           branch; the channel-chip render will be covered by the task-level
+           e2e_behavior gate once channel-pinning lands. --%>
+      <nav
+        :if={
+          @active_space && !@embedded &&
+            (@pinned_task_spaces != [] || @channel_sections.pinned != [])
+        }
+        class="lg:hidden flex items-center gap-2 overflow-x-auto px-4 py-2 border-b border-base-content/10 bg-base-200/40"
+        style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
+        aria-label="Pinned"
+        data-role="mobile-pinned-strip"
+      >
+        <.link
+          :for={space <- @pinned_task_spaces}
+          navigate={~p"/chat/#{space_nav_target(space)}"}
+          data-role="mobile-pinned-task-chip"
+          data-space-id={space.id}
+          class={[
+            "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0",
+            if(@active_space.id == space.id,
+              do: "bg-primary text-primary-content",
+              else: "bg-base-100 text-base-content/80 border border-base-content/10"
+            )
+          ]}
+        >
+          <span class={[
+            "hero-map-pin-mini size-3.5",
+            if(@active_space.id == space.id,
+              do: "text-primary-content/80",
+              else: "text-base-content/40"
+            )
+          ]}>
+          </span>
+          <span class="truncate max-w-[10rem]">
+            {Platform.Tasks.ChatPins.display_name_for_space(space)}
+          </span>
+          <span
+            :if={unread_label(Map.get(@unread_counts, space.id, 0))}
+            class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
+          >
+            {unread_label(Map.get(@unread_counts, space.id, 0))}
+          </span>
+        </.link>
+        <.link
+          :for={space <- @channel_sections.pinned}
+          navigate={~p"/chat/#{space_nav_target(space)}"}
+          data-role="mobile-pinned-channel-chip"
+          data-space-id={space.id}
+          class={[
+            "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0",
+            if(@active_space.id == space.id,
+              do: "bg-primary text-primary-content",
+              else: "bg-base-100 text-base-content/80 border border-base-content/10"
+            )
+          ]}
+        >
+          <span class={[
+            "hero-bookmark-solid size-3.5",
+            if(@active_space.id == space.id,
+              do: "text-primary-content/80",
+              else: "text-base-content/40"
+            )
+          ]}>
+          </span>
+          <span class="truncate max-w-[10rem]">{space.name}</span>
+          <span
+            :if={unread_label(Map.get(@unread_counts, space.id, 0))}
+            class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
+          >
+            {unread_label(Map.get(@unread_counts, space.id, 0))}
+          </span>
+        </.link>
+      </nav>
+
       <%!-- Mobile-only channel pills strip — Refined Option A nav (Marlowe approval 2026-05-10).
            Replaces the previous tap-channel-name-to-open-browser flow. Horizontally
            scrollable pills with the active channel highlighted; the magnifying-glass
