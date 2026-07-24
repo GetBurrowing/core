@@ -323,17 +323,24 @@ defmodule PlatformWeb.ShellLive do
           {:cont, socket}
       end)
       # Inbox PubSub (inbox:<user_id>) → keep the icon-rail unread badge live.
-      # Increment/decrement in place (no re-query) — the same cheap ADR-0022
-      # DM-badge approach the Tasks badge and the mount-time count agree on.
-      # Dismiss floors at 0 so a race (dismiss arriving before the mount count
-      # settled) can never render a negative.
+      # On ANY inbox event, RECOMPUTE the count from the DB via
+      # `Inbox.unread_count/1` (one indexed COUNT) and re-assign — exactly like
+      # the Tasks badge (`compute_tasks_count`). The old running +1 / -1 counter
+      # drifted: it only reacted to add/dismiss, so a `mark_read` or a
+      # `dismiss_by_source` rollup dismissal (now broadcast as `:inbox_changed`)
+      # silently desynced the badge from the list. Recomputing from the shared
+      # `unread_scope/1` is the single source of truth, so badge and list agree.
+      # We stay `:cont` so InboxLive's own `handle_info` still runs on `/inbox`.
       |> attach_hook(:inbox_count_refresh, :handle_info, fn
-        {:inbox_item_added, _item}, socket ->
-          {:cont, assign(socket, :inbox_unread_count, socket.assigns.inbox_unread_count + 1)}
+        {evt, _payload}, socket
+        when evt in [:inbox_item_added, :inbox_item_dismissed, :inbox_item_read, :inbox_changed] ->
+          new_count = compute_inbox_count(socket.assigns[:current_user_id])
 
-        {:inbox_item_dismissed, _item}, socket ->
-          {:cont,
-           assign(socket, :inbox_unread_count, max(socket.assigns.inbox_unread_count - 1, 0))}
+          if new_count == socket.assigns.inbox_unread_count do
+            {:cont, socket}
+          else
+            {:cont, assign(socket, :inbox_unread_count, new_count)}
+          end
 
         _msg, socket ->
           {:cont, socket}

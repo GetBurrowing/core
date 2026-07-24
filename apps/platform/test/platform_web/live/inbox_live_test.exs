@@ -321,6 +321,77 @@ defmodule PlatformWeb.InboxLiveTest do
     end
   end
 
+  # ── Badge / list unification (one unread source of truth) ──────────────
+
+  describe "badge equals streamed rows (unified unread scope)" do
+    # The desktop icon-rail badge (rendered by ShellLive into the shell layout)
+    # and the /inbox row list must show the SAME number at all times. They used
+    # to drift because the badge filtered read/dismissed in SQL while the list
+    # applied the read filter in Elixir, and silent mutations (mark_read,
+    # dismiss_by_source) never told the badge to recompute. Both now build on
+    # `Inbox.unread_scope/1`; these are the three events that drifted.
+
+    defp badge_number(view) do
+      text =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="inbox-badge"]))
+        |> LazyHTML.text()
+        |> String.trim()
+
+      case Integer.parse(text) do
+        {n, _} -> n
+        # No badge element renders at 0 (it's hidden) → count as 0.
+        :error -> 0
+      end
+    end
+
+    defp streamed_row_count(view) do
+      view
+      |> render()
+      |> String.split(~s(data-role="inbox-item"))
+      |> length()
+      |> Kernel.-(1)
+    end
+
+    test "badge == row count after emit, after mark_read, and after dismiss_by_source",
+         %{conn: conn} do
+      user = insert_user()
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      # Empty: both zero.
+      assert badge_number(lv) == 0
+      assert streamed_row_count(lv) == 0
+
+      # After emit: the added rows show and the badge matches.
+      a = emit!(user, kind: "chat_mention", title: "mention a", url: "/chat/general")
+
+      b =
+        emit!(user,
+          kind: "meeting_starting",
+          source_type: "meeting",
+          title: "meeting b",
+          url: "/meetings/standup"
+        )
+
+      assert streamed_row_count(lv) == 2
+      assert badge_number(lv) == streamed_row_count(lv)
+
+      # After mark_read (a silent read that broadcasts :inbox_changed): the read
+      # row drops from BOTH the list and the badge.
+      {:ok, _} = Inbox.mark_read(a.id, user.id)
+      assert streamed_row_count(lv) == 1
+      assert badge_number(lv) == streamed_row_count(lv)
+
+      # After dismiss_by_source (the rollup dismissal path, broadcasts
+      # :inbox_changed): both fall to zero together.
+      {:ok, _} = Inbox.dismiss_by_source(user.id, "meeting", b.source_id)
+      assert streamed_row_count(lv) == 0
+      assert badge_number(lv) == streamed_row_count(lv)
+    end
+  end
+
   # ── Open (mark read + navigate) ────────────────────────────────────────
 
   describe "open" do

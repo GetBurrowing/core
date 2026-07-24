@@ -358,35 +358,62 @@ defmodule Platform.Tasks.ReviewRequests do
     end
   end
 
-  # ── Inbox producer (human reviewer attention rows) ───────────────────────
+  # ── Inbox producer (task-SPONSOR review-attention rows) ──────────────────
 
-  # Post-commit, best-effort: emit exactly one durable inbox row for a human
-  # reviewer when a review request is created and awaiting their decision. A
-  # failure here must never roll back or error the already-created request.
+  @doc """
+  Whether `task_id` has ANY pending review request.
+
+  The predicate behind both the per-task inbox rollup (leave the row while work
+  remains) and `Platform.Inbox.reconcile_for_user/1` (dismiss the row once no
+  pending review remains). One indexed EXISTS.
+  """
+  @spec task_has_pending_reviews?(binary()) :: boolean()
+  def task_has_pending_reviews?(task_id) when is_binary(task_id) do
+    Repo.exists?(
+      from(rr in ReviewRequest, where: rr.task_id == ^task_id and rr.status == "pending")
+    )
+  end
+
+  def task_has_pending_reviews?(_), do: false
+
+  @doc "Resolve the owning task id for a review-request id, or nil if it's gone."
+  @spec task_id_for_request(binary()) :: binary() | nil
+  def task_id_for_request(request_id) when is_binary(request_id) do
+    Repo.one(from(rr in ReviewRequest, where: rr.id == ^request_id, select: rr.task_id))
+  end
+
+  def task_id_for_request(_), do: nil
+
+  # Post-commit, best-effort: surface a review gate to the human who OWNS the
+  # task — its ADR-0042 SPONSOR — not the review-phase technical assignee
+  # (which is an agent on agent-run tasks, so the old routing emitted nothing).
+  #
+  # Rolled up PER TASK: at most ONE live `(sponsor, "task_review", task.id)`
+  # row regardless of how many review gates the task fans out. The row means
+  # "this task has review(s) awaiting you" and deep-links to the task detail
+  # (where every review lives), not a per-request anchor.
+  #
+  # A failure here must never roll back or error the already-created request.
   defp maybe_emit_reviewer_inbox(request) do
     with %{} = task <- Tasks.get_task_detail(request.task_id),
-         {:user, reviewer_uid} <- reviewer_user_id(task),
-         # Self-review never pages the same human who filed it.
-         false <- reviewer_uid == request.submitted_by,
+         {:user, sponsor_uid} <- sponsor_user_id(task),
+         # Never self-notify the human who filed the review.
+         false <- sponsor_uid == request.submitted_by,
          # Only PENDING human decisions surface; auto-resolved requests emit none.
-         "pending" <- request.status do
-      validation =
-        Validation
-        |> Repo.get(request.validation_id)
-        |> Repo.preload(:stage)
-
-      stage_position = validation && validation.stage && validation.stage.position
-      item_count = length(request.items)
+         "pending" <- request.status,
+         # Per-task rollup: if a live row already exists for this (sponsor,
+         # task), fold into it — no duplicate insert.
+         false <- Inbox.active_source_row?(sponsor_uid, "task_review", task.id) do
       requester = requester_display_name(request.submitted_by)
 
       Inbox.emit(%{
-        user_id: reviewer_uid,
+        user_id: sponsor_uid,
         kind: "review_request_pending",
-        source_type: "review_request",
-        source_id: request.id,
-        title: "Review request: #{task.title} · Stage #{stage_position}",
-        body: "Requester: #{requester} · Items: #{item_count}",
-        url: "/tasks/#{task.id}#review-#{request.id}"
+        source_type: "task_review",
+        source_id: task.id,
+        title: "Review awaiting you: #{task.title}",
+        body: "Requested by #{requester}",
+        url: "/tasks/#{task.id}"
       })
 
       :ok
@@ -396,18 +423,22 @@ defmodule Platform.Tasks.ReviewRequests do
   rescue
     error ->
       Logger.warning(
-        "[ReviewRequests] failed to emit reviewer inbox row for request #{request.id}: #{inspect(error)}"
+        "[ReviewRequests] failed to emit sponsor inbox row for request #{request.id}: #{inspect(error)}"
       )
 
       :ok
   end
 
-  # Post-resolution, best-effort: clear the reviewer's inbox row so a resolved
-  # request leaves their unread list. Covers both approve-all and reject paths.
+  # Post-resolution, best-effort: clear the rolled-up (sponsor, task) row ONLY
+  # when the task has NO remaining pending review requests. `resolve_request/1`
+  # has already marked this request (and same-validation siblings) resolved in
+  # the DB before this runs, so the pending check reflects the post-resolution
+  # state. If other review gates on the task remain pending, the row stays.
   defp maybe_dismiss_reviewer_inbox(request) do
     with %{} = task <- Tasks.get_task_detail(request.task_id),
-         {:user, reviewer_uid} <- reviewer_user_id(task) do
-      Inbox.dismiss_by_source(reviewer_uid, "review_request", request.id)
+         {:user, sponsor_uid} <- sponsor_user_id(task),
+         false <- task_has_pending_reviews?(task.id) do
+      Inbox.dismiss_by_source(sponsor_uid, "task_review", task.id)
       :ok
     else
       _ -> :ok
@@ -415,21 +446,17 @@ defmodule Platform.Tasks.ReviewRequests do
   rescue
     error ->
       Logger.warning(
-        "[ReviewRequests] failed to dismiss reviewer inbox row for request #{request.id}: #{inspect(error)}"
+        "[ReviewRequests] failed to dismiss sponsor inbox row for request #{request.id}: #{inspect(error)}"
       )
 
       :ok
   end
 
-  # Resolve the review-phase assignee to a human user, or `:skip`. The inbox is
-  # a human surface — agent-type / role-resolved (agent) reviewers get their
-  # runtime signal instead and fall through to `:skip`.
-  defp reviewer_user_id(task) do
-    case Tasks.assignee_for_phase(task, "review") do
-      {uid, "user"} when is_binary(uid) -> {:user, uid}
-      _ -> :skip
-    end
-  end
+  # Resolve the task SPONSOR to a human user id, or `:skip`. Rowan's directive:
+  # review items route to the sponsor (the human who owns the task), never fan
+  # out to a separate review-phase assignee.
+  defp sponsor_user_id(%{sponsor_user_id: uid}) when is_binary(uid), do: {:user, uid}
+  defp sponsor_user_id(_), do: :skip
 
   # Best-effort human-readable name for whoever submitted the request: a user's
   # name/email, else an agent's name/slug, else the raw id. Handles nil.

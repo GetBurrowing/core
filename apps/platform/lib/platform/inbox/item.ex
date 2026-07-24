@@ -21,7 +21,12 @@ defmodule Platform.Inbox.Item do
   @foreign_key_type :binary_id
 
   @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting task_sponsor_assigned)
-  @source_types ~w(chat_message task review_request meeting)
+  # `task_review` is the per-task rollup source for review-gate attention rows:
+  # one durable row per (sponsor, task) regardless of how many review requests
+  # the task fans out (see `Platform.Tasks.ReviewRequests`). Kept distinct from
+  # the plain `task` source so a rollup dismissal never touches a
+  # `task_sponsor_assigned` / `task_plan_review` row that shares the task id.
+  @source_types ~w(chat_message task review_request meeting task_review)
 
   @type t :: %__MODULE__{}
 

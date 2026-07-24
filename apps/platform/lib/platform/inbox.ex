@@ -70,6 +70,46 @@ defmodule Platform.Inbox do
   defp maybe_filter_kind(query, kind), do: where(query, [i], i.kind == ^kind)
 
   @doc """
+  The single canonical "unread" scope — the Ecto query the badge COUNT and the
+  `/inbox` list both build on, so the two can never diverge again (the
+  #589/#592 badge-vs-list drift). A row is unread iff it is neither dismissed
+  (`dismissed_at`) nor read (`read_at`), scoped to `user_id`.
+
+  Returns a composable query (no `order_by`, no execution) — callers add their
+  own ordering/aggregation:
+
+    * `unread_count/1` → `Repo.aggregate(unread_scope(user_id), :count)`
+    * `InboxLive.load_items/1` →
+      `unread_scope(user_id) |> order_by(desc: :inserted_at) |> Repo.all()`
+  """
+  @spec unread_scope(Ecto.UUID.t()) :: Ecto.Query.t()
+  def unread_scope(user_id) do
+    from(i in Item,
+      where: i.user_id == ^user_id and is_nil(i.dismissed_at) and is_nil(i.read_at)
+    )
+  end
+
+  @doc """
+  Whether a live (non-dismissed) inbox row already exists for a source triple.
+
+  The producer-side dedup seam: before emitting a rolled-up review row a
+  producer checks this so a task with N review gates yields exactly ONE
+  `(user, source_type, source_id)` inbox row instead of N. Read status is
+  irrelevant — a read-but-not-dismissed rollup row still represents the live
+  attention, so it blocks a duplicate insert.
+  """
+  @spec active_source_row?(Ecto.UUID.t(), String.t(), Ecto.UUID.t()) :: boolean()
+  def active_source_row?(user_id, source_type, source_id) do
+    Repo.exists?(
+      from(i in Item,
+        where:
+          i.user_id == ^user_id and i.source_type == ^source_type and
+            i.source_id == ^source_id and is_nil(i.dismissed_at)
+      )
+    )
+  end
+
+  @doc """
   Count a user's unread, non-dismissed inbox items — the live-badge number.
 
   A single aggregate query, cheaper than materializing rows just to take a
@@ -86,12 +126,7 @@ defmodule Platform.Inbox do
   """
   @spec unread_count(Ecto.UUID.t()) :: non_neg_integer()
   def unread_count(user_id) do
-    Repo.aggregate(
-      from(i in Item,
-        where: i.user_id == ^user_id and is_nil(i.dismissed_at) and is_nil(i.read_at)
-      ),
-      :count
-    )
+    Repo.aggregate(unread_scope(user_id), :count)
   end
 
   @doc """
@@ -102,7 +137,26 @@ defmodule Platform.Inbox do
   `{:error, :not_found}`.
   """
   @spec mark_read(Ecto.UUID.t(), Ecto.UUID.t()) :: {:ok, Item.t()} | {:error, :not_found}
-  def mark_read(item_id, user_id), do: set_timestamp(item_id, user_id, :read_at)
+  def mark_read(item_id, user_id) do
+    case set_timestamp(item_id, user_id, :read_at) do
+      {:ok, item} = ok ->
+        # Reading drops a row from `unread_scope/1` (the badge count and the
+        # `/inbox` list), yet it mutates neither via an add/dismiss event —
+        # this used to be a SILENT mutation the live badge missed. Broadcast a
+        # coarse `{:inbox_changed, user_id}` so every mounted shell recomputes
+        # the badge from the DB and InboxLive re-derives its list. A cross-user
+        # guard miss (`{:error, :not_found}`) broadcasts nothing.
+        broadcast_changed(item.user_id)
+        ok
+
+      other ->
+        other
+    end
+  end
+
+  defp broadcast_changed(user_id) do
+    Phoenix.PubSub.broadcast(Platform.PubSub, topic(user_id), {:inbox_changed, user_id})
+  end
 
   @doc """
   Mark an item dismissed for `user_id` (removes it from the unread list).
@@ -159,8 +213,73 @@ defmodule Platform.Inbox do
       )
       |> Repo.update_all(set: [dismissed_at: now])
 
+    # Source-keyed dismissal is another silent mutation the live badge used to
+    # miss (it broadcast NOTHING). When it actually cleared rows, broadcast the
+    # coarse `{:inbox_changed, user_id}` so shells recompute the badge and
+    # InboxLive re-derives. A no-op (count 0) stays quiet.
+    if count > 0, do: broadcast_changed(user_id)
+
     {:ok, count}
   end
+
+  @doc """
+  Lazy reconciler: dismiss any live review-attention row whose underlying task
+  no longer has a pending review request for this user.
+
+  Rowan's "simple & reliable" self-healing seam (no push coupling): rather than
+  chase every resolution path to dismiss the rolled-up row, InboxLive calls
+  this at load so a stale `review_request_pending` row (e.g. the last review
+  resolved without the rollup dismiss firing, or an out-of-band resolution)
+  drops off on next view. Only review-kind rows are considered — mentions,
+  meetings and sponsor-assignment rows are untouched.
+
+  Review rows key their source three ways historically: `task_review`
+  (the per-task rollup, `source_id` = task id), plain `task`, or the legacy
+  per-request `review_request` (`source_id` = request id). The task is resolved
+  from each, then `Platform.Tasks.ReviewRequests.task_has_pending_reviews?/1`
+  decides. Unresolvable rows (source row already gone) are left alone.
+  """
+  @spec reconcile_for_user(Ecto.UUID.t()) :: :ok
+  def reconcile_for_user(user_id) when is_binary(user_id) do
+    Repo.all(
+      from(i in Item,
+        where:
+          i.user_id == ^user_id and is_nil(i.dismissed_at) and
+            i.kind == "review_request_pending"
+      )
+    )
+    |> Enum.each(fn item ->
+      if review_row_stale?(item), do: mark_dismissed(item.id, user_id)
+    end)
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  def reconcile_for_user(_), do: :ok
+
+  # Stale iff the resolved task has no pending review requests. Unresolvable
+  # task ids (nil) are treated as NOT stale — we never dismiss a row we cannot
+  # positively confirm is dead.
+  defp review_row_stale?(item) do
+    case review_row_task_id(item) do
+      task_id when is_binary(task_id) ->
+        not Platform.Tasks.ReviewRequests.task_has_pending_reviews?(task_id)
+
+      _ ->
+        false
+    end
+  end
+
+  defp review_row_task_id(%Item{source_type: st, source_id: sid})
+       when st in ["task", "task_review"],
+       do: sid
+
+  defp review_row_task_id(%Item{source_type: "review_request", source_id: sid}),
+    do: Platform.Tasks.ReviewRequests.task_id_for_request(sid)
+
+  defp review_row_task_id(_), do: nil
 
   defp set_timestamp(item_id, user_id, field) do
     query = from(i in Item, where: i.id == ^item_id and i.user_id == ^user_id)

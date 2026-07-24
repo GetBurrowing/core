@@ -42,10 +42,12 @@ defmodule PlatformWeb.InboxLive do
 
   use PlatformWeb, :live_view
 
+  import Ecto.Query, only: [order_by: 3]
   import PlatformWeb.Components.InboxItem, only: [inbox_item: 1]
 
   alias Platform.Inbox
   alias Platform.Inbox.Item
+  alias Platform.Repo
 
   @sections [:review, :mentions, :meetings]
 
@@ -53,9 +55,12 @@ defmodule PlatformWeb.InboxLive do
   def mount(_params, session, socket) do
     user_id = session["current_user_id"] || current_user_id(socket)
 
-    if connected?(socket) and is_binary(user_id) do
-      Inbox.subscribe(user_id)
-    end
+    # NOTE: we deliberately do NOT subscribe to the inbox topic here. ShellLive
+    # (the `on_mount` hook on every authenticated surface, this LV included)
+    # already subscribes the LV process to `inbox:<user_id>` exactly once.
+    # Subscribing again here delivered every `{:inbox_item_added}` twice to the
+    # one process — the badge jumped +2 on `/inbox`. One subscribe per process;
+    # our `handle_info/2` clauses below still receive every event.
 
     items = if is_binary(user_id), do: load_items(user_id), else: []
 
@@ -86,6 +91,19 @@ defmodule PlatformWeb.InboxLive do
       {:noreply, socket}
     end
   end
+
+  # Silent-mutation + cross-surface events (a `mark_read`, a `dismiss_by_source`
+  # rollup dismissal, a reconcile, or a dismissal originating on another tab)
+  # don't map to a single streamed row we can patch, so re-derive the whole
+  # list from `unread_scope/1`. `init_sections/2` resets the three streams, so
+  # the rendered rows always equal exactly what the badge counts. This is the
+  # unified source-of-truth: same scope, same diff.
+  def handle_info({:inbox_changed, _user_id}, socket), do: {:noreply, reload_sections(socket)}
+
+  def handle_info({:inbox_item_dismissed, %Item{}}, socket),
+    do: {:noreply, reload_sections(socket)}
+
+  def handle_info({:inbox_item_read, %Item{}}, socket), do: {:noreply, reload_sections(socket)}
 
   def handle_info(_other, socket), do: {:noreply, socket}
 
@@ -222,10 +240,27 @@ defmodule PlatformWeb.InboxLive do
 
   # ── Internals ──────────────────────────────────────────────────────────
 
+  # THE list source of truth: the same `unread_scope/1` the badge COUNT builds
+  # on, ordered newest-first. The old `list_unread_for_user + Enum.reject(read)`
+  # two-step let the read filter live in Elixir while the badge filtered in SQL
+  # — the two drifted (#589/#592). Now both are one query. A lazy reconcile
+  # runs first so a stale review row (task's reviews all resolved) is dismissed
+  # before it's ever selected.
   defp load_items(user_id) do
+    Inbox.reconcile_for_user(user_id)
+
     user_id
-    |> Inbox.list_unread_for_user()
-    |> Enum.reject(&(not is_nil(&1.read_at)))
+    |> Inbox.unread_scope()
+    |> order_by([i], desc: i.inserted_at)
+    |> Repo.all()
+  end
+
+  # Re-derive all three section streams from the DB (used by the coarse
+  # re-derive handle_info clauses above).
+  defp reload_sections(socket) do
+    user_id = socket.assigns.current_user_id
+    items = if is_binary(user_id), do: load_items(user_id), else: []
+    init_sections(socket, items)
   end
 
   defp current_user_id(socket) do
