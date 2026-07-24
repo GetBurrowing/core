@@ -35,6 +35,7 @@ defmodule PlatformWeb.ExternalRecoveryLive do
   alias Platform.Accounts.ExternalAdmissionNotifier
   alias Platform.Chat
   alias Platform.Tenancy
+  alias Platform.Tenancy.ExternalGrants
 
   @impl true
   def mount(_params, _session, socket) do
@@ -52,6 +53,7 @@ defmodule PlatformWeb.ExternalRecoveryLive do
       |> assign(:orgs, Tenancy.list_orgs())
       |> assign(:grant_spaces, Chat.list_spaces(kind: "channel"))
       |> load_queue()
+      |> load_provisioned()
 
     {:ok, socket}
   end
@@ -69,15 +71,12 @@ defmodule PlatformWeb.ExternalRecoveryLive do
         {:noreply, put_flash(socket, :error, "That user no longer exists.")}
 
       target_user ->
-        # Double-grant race guard: if the user was already provisioned (a
-        # concurrent admin won, or the queue row is stale), don't re-create a
-        # grant — `create_grant/1` is a plain insert and would collide on the
-        # per-email unique index. Just refresh; the row drops off.
+        # An already-provisioned external user can't be re-`create_grant`'d —
+        # a second insert collides on the per-email unique index. Instead of a
+        # no-op, ADD the selected channels to them (idempotent participant
+        # inserts). A fresh (still-holding) user goes through full recovery.
         if Tenancy.external_user?(target_user) do
-          {:noreply,
-           socket
-           |> put_flash(:info, "#{display_name(target_user)} was already granted access.")
-           |> load_queue()}
+          add_channels(socket, target_user, params)
         else
           do_grant(socket, admin_user, target_user, params)
         end
@@ -130,25 +129,83 @@ defmodule PlatformWeb.ExternalRecoveryLive do
     end
   end
 
+  # Append the selected channels to an already-provisioned external user
+  # without going back through `recover/3`/`create_grant` (which would
+  # collide on the per-email unique index). Idempotent participant inserts.
+  defp add_channels(socket, target_user, params) do
+    case grant_attrs(target_user, params).space_grants do
+      [] ->
+        {:noreply,
+         socket
+         |> put_flash(
+           :info,
+           "Select at least one channel to add for #{display_name(target_user)}."
+         )
+         |> load_provisioned()}
+
+      space_grants ->
+        case ExternalGrants.add_space_participants(target_user, space_grants) do
+          :ok ->
+            {:noreply,
+             socket
+             |> put_flash(
+               :info,
+               "Added #{length(space_grants)} channel(s) for #{display_name(target_user)}."
+             )
+             |> load_provisioned()}
+
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, "Could not add channels. Try again.")}
+        end
+    end
+  end
+
   # Build the `create_grant/1` attrs from the compact form. The target
-  # user's email is the grant identity; the optional channel becomes a
-  # single `space_grants` entry; the DM checkbox allowlists the target org.
+  # user's email is the grant identity; the checked channels each become a
+  # `space_grants` entry (0..N — an empty selection is a valid org-only
+  # grant); the DM checkbox allowlists the target org.
   defp grant_attrs(target_user, params) do
     org_id = Map.get(params, "target_org_id")
-    space_id = presence(Map.get(params, "space_id"))
+    space_ids = selected_space_ids(params)
     allow_dm? = Map.get(params, "allow_dm") in ["true", "on", true]
 
     %{
       email: target_user.email,
       oidc_sub: target_user.oidc_sub,
       target_org_id: org_id,
-      space_grants: if(space_id, do: [%{"space_id" => space_id, "role" => "member"}], else: []),
+      space_grants: Enum.map(space_ids, &%{"space_id" => &1, "role" => "member"}),
       dm_allowlist_org_ids: if(allow_dm? and org_id, do: [org_id], else: [])
     }
   end
 
+  # Checkbox inputs named `space_ids[]` arrive as a list under the
+  # `"space_ids"` param key. Tolerate a legacy single `"space_id"`, drop
+  # blanks, and dedup so a channel is granted at most once.
+  defp selected_space_ids(params) do
+    (List.wrap(Map.get(params, "space_ids")) ++ List.wrap(Map.get(params, "space_id")))
+    |> Enum.map(&presence/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
   defp load_queue(socket) do
     assign(socket, :queue, ExternalAdmission.awaiting_setup())
+  end
+
+  # Provisioned external users + the channels they're already in, for the
+  # add-channels surface. `awaiting_setup/0` deliberately drops these rows,
+  # so they need their own source.
+  defp load_provisioned(socket) do
+    provisioned =
+      Enum.map(Tenancy.list_external_users(), fn user ->
+        %{
+          user: user,
+          user_id: user.id,
+          member_space_ids: Chat.list_member_space_ids(user.id, kind: "channel")
+        }
+      end)
+
+    assign(socket, :provisioned, provisioned)
   end
 
   defp presence(nil), do: nil
@@ -161,6 +218,96 @@ defmodule PlatformWeb.ExternalRecoveryLive do
   defp to_string_reason(_), do: nil
 
   # ── Template helpers ───────────────────────────────────────────────────
+
+  @doc """
+  Mobile-first, scale-ready channel picker for a grant/add-channels form.
+
+  Built to stay usable with 40+ channels on a 375px viewport: a search box
+  filters the list as you type, the list scrolls inside its own capped-height
+  container (so the Grant button never gets pushed off-screen), and a live
+  "N selected" badge keeps the current selection legible while browsing.
+
+  Filtering is client-side (`ChannelPicker` hook), so a checked channel is
+  never dropped by a search — filtered-out rows stay in the DOM (hidden) and
+  their checked value still submits; checked rows also stay visible even when
+  they don't match the query. `checked_ids` pre-checks channels; `disabled_ids`
+  renders those as locked (already joined). Semantic DaisyUI token slots only
+  (`exploring` brand — Fabrikam cyan `primary`, no hardcoded palette).
+  """
+  attr :id, :string, required: true
+  attr :spaces, :list, required: true
+  attr :checked_ids, :list, default: []
+  attr :disabled_ids, :list, default: []
+
+  def channel_checkboxes(assigns) do
+    ~H"""
+    <div id={"channel-picker-#{@id}"} phx-hook="ChannelPicker" data-role="channel-picker">
+      <div class="mb-2 flex items-center gap-2">
+        <div class="relative flex-1">
+          <span class="hero-magnifying-glass pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-base-content/40">
+          </span>
+          <input
+            type="text"
+            data-role="channel-search"
+            autocomplete="off"
+            placeholder="Search channels…"
+            aria-label="Search channels"
+            class="input input-sm input-bordered h-11 w-full bg-base-100 pl-9"
+          />
+        </div>
+        <span
+          data-role="selected-count"
+          class="badge badge-ghost badge-sm whitespace-nowrap"
+          aria-live="polite"
+        >
+          0 selected
+        </span>
+      </div>
+
+      <div
+        class="max-h-72 overflow-y-auto rounded-lg border border-base-300 bg-base-100"
+        data-role="channel-checklist"
+      >
+        <p
+          :if={@spaces == []}
+          class="px-3 py-3 text-xs text-base-content/50"
+          data-role="channel-empty"
+        >
+          No channels available.
+        </p>
+        <p
+          class="hidden px-3 py-3 text-xs text-base-content/50"
+          data-role="channel-empty-filter"
+        >
+          No channels match your search.
+        </p>
+        <label
+          :for={space <- @spaces}
+          class="flex min-h-11 cursor-pointer items-center gap-3 border-b border-base-200 px-3 py-2 last:border-b-0 hover:bg-base-200"
+          data-role="channel-option"
+          data-space-id={space.id}
+          data-channel-name={String.downcase(space.name)}
+        >
+          <input
+            type="checkbox"
+            name="space_ids[]"
+            value={space.id}
+            checked={space.id in @checked_ids}
+            disabled={space.id in @disabled_ids}
+            class="checkbox checkbox-sm checkbox-primary"
+          />
+          <span class="text-sm text-base-content">{space.name}</span>
+          <span
+            :if={space.id in @disabled_ids}
+            class="badge badge-ghost badge-xs ml-auto"
+          >
+            joined
+          </span>
+        </label>
+      </div>
+    </div>
+    """
+  end
 
   @doc false
   def display_name(%{name: name}) when is_binary(name) and name != "", do: name

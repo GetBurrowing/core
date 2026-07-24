@@ -20,7 +20,7 @@
   <%!-- Queue --%>
   <div class="flex-1 min-h-0 overflow-y-auto p-4">
     <div
-      :if={@queue == []}
+      :if={@queue == [] and @provisioned == []}
       class="flex h-full flex-col items-center justify-center gap-2 text-base-content/40"
       data-role="empty-queue"
     >
@@ -51,12 +51,13 @@
           </div>
         </div>
 
-        <%!-- Compact one-click Grant form: target org + optional channel +
-             per-org DM allowlist. Submits to recover/3. --%>
+        <%!-- Grant form: target org + a multi-select checkbox list of
+             channels (0..N) + per-org DM allowlist. Mobile-first — stacks
+             vertically so it stays usable at 375px. Submits to recover/3. --%>
         <form
           phx-submit="grant"
           data-role="grant-form"
-          class="mt-3 flex flex-wrap items-end gap-3 border-t border-base-300 pt-3"
+          class="mt-3 flex flex-col gap-3 border-t border-base-300 pt-3"
         >
           <input type="hidden" name="user_id" value={row.user_id} />
 
@@ -72,19 +73,14 @@
             </select>
           </label>
 
-          <label class="flex flex-col gap-1">
-            <span class="text-xs font-medium text-base-content/60">Channel</span>
-            <select
-              name="space_id"
-              data-role="grant-space"
-              class="select select-sm select-bordered bg-base-100"
-            >
-              <option value="">— No channel —</option>
-              <option :for={space <- @grant_spaces} value={space.id}>{space.name}</option>
-            </select>
-          </label>
+          <div class="flex flex-col gap-1">
+            <span class="text-xs font-medium text-base-content/60">
+              Channels <span class="text-base-content/40">· select any number</span>
+            </span>
+            <.channel_checkboxes id={"grant-#{row.user_id}"} spaces={@grant_spaces} />
+          </div>
 
-          <label class="flex items-center gap-2 pb-1.5">
+          <label class="flex items-center gap-2">
             <input
               type="checkbox"
               name="allow_dm"
@@ -95,10 +91,71 @@
             <span class="text-xs font-medium text-base-content/60">Allow DMs in this org</span>
           </label>
 
-          <button type="submit" class="btn btn-sm btn-primary gap-2" data-role="grant-button">
+          <button
+            type="submit"
+            class="btn btn-sm btn-primary gap-2 self-start"
+            data-role="grant-button"
+          >
             <span class="hero-check size-4"></span> Grant access
           </button>
         </form>
+      </div>
+    </div>
+
+    <%!-- Add-channels surface for ALREADY-provisioned external users. They
+         drop off the queue above, so they get their own section; channels
+         they already belong to render checked + locked. --%>
+    <div
+      :if={@provisioned != []}
+      class="mx-auto mt-6 max-w-4xl"
+      data-role="provisioned-section"
+    >
+      <h2 class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+        Provisioned external users · add channels
+      </h2>
+      <div class="space-y-3">
+        <div
+          :for={row <- @provisioned}
+          data-role="provisioned-row"
+          data-user-id={row.user_id}
+          class="rounded-lg border border-base-300 bg-base-200 p-4"
+        >
+          <div class="flex items-center gap-2">
+            <span class="hero-user-circle size-5 text-base-content/50"></span>
+            <span class="text-sm font-medium text-base-content truncate">
+              {display_name(row.user)}
+            </span>
+            <span class="badge badge-ghost badge-xs">external</span>
+          </div>
+
+          <form
+            phx-submit="grant"
+            data-role="add-channels-form"
+            class="mt-3 flex flex-col gap-3 border-t border-base-300 pt-3"
+          >
+            <input type="hidden" name="user_id" value={row.user_id} />
+
+            <div class="flex flex-col gap-1">
+              <span class="text-xs font-medium text-base-content/60">
+                Add channels <span class="text-base-content/40">· already-joined are locked</span>
+              </span>
+              <.channel_checkboxes
+                id={"add-#{row.user_id}"}
+                spaces={@grant_spaces}
+                checked_ids={row.member_space_ids}
+                disabled_ids={row.member_space_ids}
+              />
+            </div>
+
+            <button
+              type="submit"
+              class="btn btn-sm btn-primary gap-2 self-start"
+              data-role="add-channels-button"
+            >
+              <span class="hero-plus size-4"></span> Add channels
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   </div>

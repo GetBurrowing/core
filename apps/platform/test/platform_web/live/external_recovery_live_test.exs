@@ -13,14 +13,19 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
   """
   use PlatformWeb.ConnCase, async: false
 
+  import Ecto.Query
   import Phoenix.LiveViewTest
 
+  alias Platform.Accounts.ExternalAdmission
   alias Platform.Accounts.ExternalAdmissionNotifier
   alias Platform.Accounts.User
+  alias Platform.Chat
+  alias Platform.Chat.Participant
   alias Platform.Repo
   alias Platform.Tenancy
   alias Platform.Tenancy.Org
   alias Platform.Tenancy.OrgMembership
+  alias Platform.Tenancy.PendingExternalGrant
 
   # ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -88,6 +93,23 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
 
   defp reload_user(%User{id: id}), do: Repo.get(User, id)
 
+  defp create_channel!(name) do
+    n = System.unique_integer([:positive])
+    {:ok, space} = Chat.create_space(%{name: name, slug: "chan-#{n}", kind: "channel"})
+    space
+  end
+
+  defp participant_space_ids(user_id) do
+    Participant
+    |> where([p], p.participant_type == "user" and p.participant_id == ^user_id)
+    |> select([p], p.space_id)
+    |> Repo.all()
+  end
+
+  defp pending_grant_count(email) do
+    Repo.aggregate(from(g in PendingExternalGrant, where: g.email == ^email), :count)
+  end
+
   # ── Tests ────────────────────────────────────────────────────────────────
 
   describe "queue" do
@@ -133,6 +155,143 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
       # Grant applied → user is now external → row drops off the queue.
       assert Tenancy.external_user?(reload_user(holding))
       refute has_element?(view, ~s([data-role=queue-row][data-user-id="#{holding.id}"]))
+    end
+
+    test "granting 2+ channels in one submit creates a participant row per channel", %{
+      conn: conn
+    } do
+      admin = create_fabrikam_admin!()
+      target_org = create_org!()
+      chan_a = create_channel!("Orion")
+      chan_b = create_channel!("Bug Reports")
+
+      holding = create_user!(%{name: "Multi Grant"})
+      record_holding!(holding)
+
+      {:ok, view, _html} = conn |> authenticated_conn(admin) |> live("/admin/external-logins")
+
+      view
+      |> element(
+        ~s([data-role=queue-row][data-user-id="#{holding.id}"] form[data-role=grant-form])
+      )
+      |> render_submit(%{
+        "user_id" => holding.id,
+        "target_org_id" => target_org.id,
+        "space_ids" => [chan_a.id, chan_b.id]
+      })
+
+      # Both channels materialized — not just the first.
+      assert Tenancy.external_user?(reload_user(holding))
+      ids = participant_space_ids(holding.id)
+      assert chan_a.id in ids
+      assert chan_b.id in ids
+      refute has_element?(view, ~s([data-role=queue-row][data-user-id="#{holding.id}"]))
+    end
+
+    test "granting with zero channels still provisions the org and adds no participants", %{
+      conn: conn
+    } do
+      admin = create_fabrikam_admin!()
+      target_org = create_org!()
+
+      holding = create_user!(%{name: "Org Only"})
+      record_holding!(holding)
+
+      {:ok, view, _html} = conn |> authenticated_conn(admin) |> live("/admin/external-logins")
+
+      view
+      |> element(
+        ~s([data-role=queue-row][data-user-id="#{holding.id}"] form[data-role=grant-form])
+      )
+      |> render_submit(%{"user_id" => holding.id, "target_org_id" => target_org.id})
+
+      # Org-only grant is valid: external membership, no channel participants.
+      assert Tenancy.external_user?(reload_user(holding))
+      assert participant_space_ids(holding.id) == []
+      refute has_element?(view, ~s([data-role=queue-row][data-user-id="#{holding.id}"]))
+    end
+  end
+
+  describe "add channels to an already-provisioned user" do
+    setup %{conn: conn} do
+      admin = create_fabrikam_admin!()
+      target_org = create_org!()
+      chan_a = create_channel!("Orion")
+      chan_b = create_channel!("Bug Reports")
+
+      user = create_user!(%{name: "Add More"})
+
+      {:ok, _result} =
+        ExternalAdmission.recover(admin, user, %{
+          email: user.email,
+          oidc_sub: user.oidc_sub,
+          target_org_id: target_org.id,
+          space_grants: [%{"space_id" => chan_a.id, "role" => "member"}],
+          dm_allowlist_org_ids: []
+        })
+
+      %{conn: conn, admin: admin, user: user, chan_a: chan_a, chan_b: chan_b}
+    end
+
+    test "adding a second channel appends a participant row and keeps the first", %{
+      conn: conn,
+      admin: admin,
+      user: user,
+      chan_a: chan_a,
+      chan_b: chan_b
+    } do
+      assert Tenancy.external_user?(reload_user(user))
+      assert participant_space_ids(user.id) == [chan_a.id]
+
+      {:ok, view, _html} = conn |> authenticated_conn(admin) |> live("/admin/external-logins")
+
+      # Provisioned users surface in their own add-channels section, not the queue.
+      assert has_element?(view, ~s([data-role=provisioned-row][data-user-id="#{user.id}"]))
+      refute has_element?(view, ~s([data-role=queue-row][data-user-id="#{user.id}"]))
+
+      view
+      |> element(
+        ~s([data-role=provisioned-row][data-user-id="#{user.id}"] form[data-role=add-channels-form])
+      )
+      |> render_submit(%{"user_id" => user.id, "space_ids" => [chan_b.id]})
+
+      ids = participant_space_ids(user.id)
+      assert chan_a.id in ids
+      assert chan_b.id in ids
+
+      # No second pending-grant row — the append path avoids the email unique index.
+      assert pending_grant_count(user.email) == 1
+    end
+
+    test "re-adding the same channel is idempotent", %{
+      conn: conn,
+      admin: admin,
+      user: user,
+      chan_b: chan_b
+    } do
+      {:ok, view, _html} = conn |> authenticated_conn(admin) |> live("/admin/external-logins")
+
+      form = fn ->
+        view
+        |> element(
+          ~s([data-role=provisioned-row][data-user-id="#{user.id}"] form[data-role=add-channels-form])
+        )
+        |> render_submit(%{"user_id" => user.id, "space_ids" => [chan_b.id]})
+      end
+
+      form.()
+      form.()
+
+      count =
+        Repo.aggregate(
+          from(p in Participant,
+            where: p.participant_id == ^user.id and p.space_id == ^chan_b.id
+          ),
+          :count
+        )
+
+      assert count == 1
+      assert pending_grant_count(user.email) == 1
     end
   end
 

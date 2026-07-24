@@ -105,6 +105,37 @@ defmodule Platform.Tenancy.ExternalGrants do
     end)
   end
 
+  @doc """
+  Add channel participants for an ALREADY-provisioned external user without
+  creating a second `pending_external_grants` row (which would collide on the
+  partial per-email unique index). Inserts one `chat_participants` row per
+  `space_grants` entry, idempotently (`on_conflict: :nothing`), inside a
+  single transaction so a partial failure rolls back cleanly.
+
+  `space_grants` is the same list-of-`%{"space_id" => id, "role" => role}`
+  shape the apply path consumes; it reuses the private `add_participants/2`.
+  Re-adding a channel the user is already in is a harmless no-op.
+
+  Returns `:ok` or `{:error, reason}`.
+  """
+  @spec add_space_participants(%{id: binary()} | binary(), [map()]) :: :ok | {:error, any()}
+  def add_space_participants(%{id: user_id}, space_grants),
+    do: add_space_participants(user_id, space_grants)
+
+  def add_space_participants(user_id, space_grants)
+      when is_binary(user_id) and is_list(space_grants) do
+    Repo.transaction(fn ->
+      case add_participants(space_grants, user_id) do
+        :ok -> :ok
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, :ok} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @doc "Delete a pending grant."
   @spec delete_grant(PendingExternalGrant.t()) ::
           {:ok, PendingExternalGrant.t()} | {:error, Ecto.Changeset.t()}

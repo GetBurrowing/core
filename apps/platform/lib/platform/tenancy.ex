@@ -76,6 +76,7 @@ defmodule Platform.Tenancy do
 
   import Ecto.Query
 
+  alias Platform.Accounts.User
   alias Platform.Repo
   alias Platform.Tenancy.ExternalDmAllowlistEntry
   alias Platform.Tenancy.Org
@@ -364,6 +365,25 @@ defmodule Platform.Tenancy do
     |> where([m], m.org_id == ^org_id and m.external == true)
     |> order_by([m], desc: m.inserted_at)
     |> Repo.all()
+  end
+
+  @doc """
+  List the distinct users who hold at least one `external == true`
+  membership (in any org) — the already-provisioned external users. Backs
+  the admin add-channels surface, since `ExternalAdmission.awaiting_setup/0`
+  deliberately drops provisioned users from its queue.
+  """
+  @spec list_external_users() :: [User.t()]
+  def list_external_users do
+    from(m in OrgMembership,
+      join: u in User,
+      on: u.id == m.user_id,
+      where: m.external == true,
+      order_by: [asc: u.name, asc: u.email],
+      select: u
+    )
+    |> Repo.all()
+    |> Enum.uniq_by(& &1.id)
   end
 
   @doc """
