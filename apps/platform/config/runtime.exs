@@ -99,7 +99,11 @@ if config_env() != :test do
     # a login as SXI-external. Static token-claim config, not a provider API
     # call (ADR-0004). Falls back to the config.exs defaults.
     external_group: System.get_env("OIDC_EXTERNAL_GROUP") || "sxi-external",
-    external_claim: System.get_env("OIDC_EXTERNAL_CLAIM") || "groups"
+    external_claim: System.get_env("OIDC_EXTERNAL_CLAIM") || "groups",
+    # OIDC authorization scope. Must include `groups` so Pocket-ID releases the
+    # external-user group claim that external_claim?/1 inspects. Nil when unset,
+    # falling back to the groups-inclusive @default_scope in Platform.OIDC.
+    scope: System.get_env("OIDC_SCOPE")
 
   config :platform, PlatformWeb.Endpoint,
     http: [port: String.to_integer(System.get_env("PORT", "4000"))]

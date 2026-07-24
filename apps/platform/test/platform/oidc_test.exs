@@ -8,6 +8,49 @@ defmodule Platform.OIDCTest do
 
   alias Platform.OIDC
 
+  describe "authorize_url/0 scope" do
+    test "requests the `groups` scope so Pocket-ID releases the external-user claim" do
+      {:ok, %{url: url}} = OIDC.authorize_url()
+
+      scope =
+        url
+        |> URI.parse()
+        |> Map.get(:query)
+        |> URI.decode_query()
+        |> Map.get("scope")
+
+      assert scope
+      assert scope =~ "groups"
+      # The full default scope is threaded through unchanged.
+      assert scope == "openid email profile groups"
+    end
+
+    test "an OIDC_SCOPE override (config :scope) replaces the default" do
+      original = Application.get_env(:platform, :oidc, [])
+
+      try do
+        Application.put_env(
+          :platform,
+          :oidc,
+          Keyword.put(original, :scope, "openid email profile groups roles")
+        )
+
+        {:ok, %{url: url}} = OIDC.authorize_url()
+
+        scope =
+          url
+          |> URI.parse()
+          |> Map.get(:query)
+          |> URI.decode_query()
+          |> Map.get("scope")
+
+        assert scope == "openid email profile groups roles"
+      after
+        Application.put_env(:platform, :oidc, original)
+      end
+    end
+  end
+
   describe "external_group/0 + external_claim/0" do
     test "read the configured marker value and claim name (test defaults)" do
       # config/config.exs base defaults (survive the test.exs :oidc merge).

@@ -8,6 +8,7 @@ defmodule Platform.TestOIDCStrategy do
         "client_id" => config[:client_id],
         "nonce" => nonce,
         "redirect_uri" => config[:redirect_uri],
+        "scope" => get_in(config, [:authorization_params, :scope]),
         "state" => state
       })
 

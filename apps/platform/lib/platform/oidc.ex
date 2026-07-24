@@ -1,5 +1,5 @@
 defmodule Platform.OIDC do
-  @default_scope "openid email profile"
+  @default_scope "openid email profile groups"
   @default_external_claim "groups"
 
   # Returns {:ok, %{url: url, session_params: %{state:, nonce:, code_verifier:, ...}}}
@@ -89,7 +89,7 @@ defmodule Platform.OIDC do
       issuer: issuer,
       site: issuer,
       base_url: issuer,
-      authorization_params: [scope: @default_scope],
+      authorization_params: [scope: config(:scope) || @default_scope],
       redirect_uri: callback_url(),
       discovery_document_uri: issuer <> "/.well-known/openid-configuration",
       user_url: issuer <> "/userinfo",
