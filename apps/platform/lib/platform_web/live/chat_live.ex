@@ -2515,6 +2515,26 @@ defmodule PlatformWeb.ChatLive do
   defp drawer_filter_spaces(spaces, query),
     do: Enum.filter(spaces, &drawer_match?(&1.name, query))
 
+  # Flat external switcher list (task 019f9257-a83e): the external mobile
+  # switcher renders `@channels ++ @dm_conversations` as ONE flat list (no
+  # sub-org sections), so its filter matches channels on `space.name` and
+  # DM/group rows on their computed display name — the same label split the
+  # rows themselves render. Kept separate from `drawer_filter_spaces`
+  # (name-only) and `drawer_filter_dms` (display-name-only) because this list
+  # mixes both kinds.
+  defp drawer_filter_external_spaces(spaces, "", _user_id), do: spaces
+
+  defp drawer_filter_external_spaces(spaces, query, user_id) do
+    Enum.filter(spaces, fn space ->
+      label =
+        if space.kind == "channel",
+          do: space.name,
+          else: sidebar_display_name(space, user_id)
+
+      drawer_match?(label, query)
+    end)
+  end
+
   # DM rows are labeled by their computed display name (the other
   # participant / group title), so that is what the filter must match —
   # a DM's underlying space.name is not what the user sees.

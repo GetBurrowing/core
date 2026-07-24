@@ -231,6 +231,113 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
     end
   end
 
+  # ── task 019f9257-a83e: mobile-responsive external surface ──────────────────
+  #
+  # The external rail was `flex` with no responsive gate, so at 375px it ate
+  # ~288px beside the message pane and the conversation collapsed to a sliver;
+  # every internal mobile affordance was `!@external?`-gated, so external users
+  # had NO mobile channel switcher. These cases pin the fix: the rail is now
+  # `hidden lg:flex` (desktop-only), the `lg:hidden` pills strip is fed the
+  # external user's granted `@channels` (not the empty `@sidebar_sections`), and
+  # a FLAT `#external-mobile-switcher` overlay mirrors the internal drawer shell
+  # WITHOUT its org-tree / new-channel / scope-pill discovery chrome.
+  describe "mobile-responsive external surface (task 019f9257-a83e)" do
+    setup %{conn: conn} do
+      org = tenant_org!()
+      ext = external_user!(org)
+      chan_a = channel!("Design Review", org_id: org.id) |> join!(ext)
+      chan_b = channel!("General Room", org_id: org.id) |> join!(ext)
+      off_limits = channel!("Secret Ops")
+
+      %{conn: conn, ext: ext, chan_a: chan_a, chan_b: chan_b, off_limits: off_limits}
+    end
+
+    test "external rail carries the hidden lg:flex gate so it collapses on mobile",
+         %{conn: conn, ext: ext, chan_a: chan_a} do
+      {:ok, view, _html} =
+        conn |> with_chat_host() |> authed(ext) |> live("/chat/#{chan_a.slug}")
+
+      rail = view |> element(~s([data-role="external-rail"])) |> render()
+      # Mirrors the internal #chat-sidebar gate: desktop-only, hidden < lg.
+      assert rail =~ "hidden lg:flex"
+    end
+
+    test "mobile pills strip enumerates ONLY the external user's granted channels",
+         %{conn: conn, ext: ext, chan_a: chan_a, chan_b: chan_b, off_limits: off_limits} do
+      {:ok, view, _html} =
+        conn |> with_chat_host() |> authed(ext) |> live("/chat/#{chan_a.slug}")
+
+      pills = view |> element(~s(nav[aria-label="Channel switcher"])) |> render()
+      # Fed by @channels (not the empty external @sidebar_sections) — before the
+      # fix external channels never appeared in the pills at all.
+      assert pills =~ chan_a.name
+      assert pills =~ chan_b.name
+      refute pills =~ off_limits.name
+    end
+
+    test "search button opens the FLAT external switcher — brand/identity kept, no discovery chrome",
+         %{conn: conn, ext: ext, chan_a: chan_a, chan_b: chan_b, off_limits: off_limits} do
+      {:ok, view, html} =
+        conn |> with_chat_host() |> authed(ext) |> live("/chat/#{chan_a.slug}")
+
+      # Closed by default while a space is active.
+      refute html =~ ~s(data-role="external-mobile-switcher")
+
+      view
+      |> element(~s(button[aria-label="Search channels and direct messages"]))
+      |> render_click()
+
+      overlay = view |> element(~s([data-role="external-mobile-switcher"])) |> render()
+
+      # Flat allowlisted list — both granted channels, nothing off-limits.
+      assert overlay =~ chan_a.name
+      assert overlay =~ chan_b.name
+      refute overlay =~ off_limits.name
+
+      # Brand + identity + logout move into the overlay header (chrome-less layout).
+      assert overlay =~ "Fabrikam"
+      assert overlay =~ ext.name
+      assert overlay =~ ~p"/auth/logout"
+      assert overlay =~ "New conversation"
+
+      # NONE of the internal drawer's discovery chrome.
+      refute overlay =~ ~s(id="mobile-channel-browser")
+      refute overlay =~ "channel-section-header"
+      refute overlay =~ "New channel"
+    end
+
+    test "no-space landing shows the switcher by default — the list IS the landing",
+         %{conn: conn} do
+      org = tenant_org!()
+      zero = external_user!(org)
+
+      {:ok, _view, html} =
+        conn |> with_chat_host() |> authed(zero) |> live("/chat")
+
+      # With no active space, the mobile switcher renders as the landing surface.
+      assert html =~ ~s(data-role="external-mobile-switcher")
+      assert html =~ "Nothing here yet"
+    end
+
+    test "the external mobile switcher never renders for an internal user", %{conn: conn} do
+      internal = create_user!("Iris Internal")
+      channel = channel!("Internal General") |> join!(internal)
+
+      {:ok, view, html} =
+        conn |> authed(internal) |> live("/chat/#{channel.slug}")
+
+      refute html =~ ~s(data-role="external-mobile-switcher")
+
+      # The internal search button opens the INTERNAL browser, never the external one.
+      view
+      |> element(~s(button[aria-label="Search channels and direct messages"]))
+      |> render_click()
+
+      assert render(view) =~ ~s(id="mobile-channel-browser")
+      refute render(view) =~ ~s(data-role="external-mobile-switcher")
+    end
+  end
+
   # `live/2` follows the `/chat` → first-space redirect so the index cases can
   # assert against the landed rail (same live_session, unchanged layout).
   defp live_settled(conn, path) do
