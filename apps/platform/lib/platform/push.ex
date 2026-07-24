@@ -95,6 +95,105 @@ defmodule Platform.Push do
     end
   end
 
+  @doc """
+  Send a web push notification to a *user*, deduplicated by endpoint.
+
+  A user has one `chat_participants` row per space they're in, and the same
+  physical device (browser endpoint) is subscribed under each of those rows.
+  `send_notification/2` keys on a single participant row, so a user-targeted
+  producer that fanned out across every participant row would hit the SAME
+  endpoint once per space — the duplicate-push storm (task 019f9251 follow-up:
+  one sponsor assignment → hundreds of participant rows → the same ~15 devices
+  pinged ~10× each).
+
+  This resolves every subscription across all of the user's user-typed
+  participant rows, collapses them to one row per distinct `endpoint`, and
+  delivers exactly once per endpoint. Prefer this over `send_notification/2`
+  for anything addressed to a *user* rather than a specific participant/space.
+
+  Inherits `send_notification/2`'s two guards, evaluated once at the user level
+  (every resolved row belongs to `user_id`, so the decision is uniform):
+  archived users are suppressed with the same telemetry, and external users get
+  the redacted `external_safe_preview/1`. 410-expired subscriptions are pruned
+  by `do_send_push/2` exactly as in the per-participant path.
+  """
+  @spec send_to_user(binary(), map()) :: :ok
+  def send_to_user(user_id, %{title: _, body: _} = payload) when is_binary(user_id) do
+    if archived_user?(user_id) do
+      :telemetry.execute(
+        [:platform, :push, :suppressed_archived_user],
+        %{count: 1},
+        %{user_id: user_id}
+      )
+
+      :ok
+    else
+      subscriptions = distinct_endpoint_subscriptions(user_id)
+
+      # Redact once at the user level before the payload leaves the box (all
+      # resolved rows belong to `user_id`, so external-ness is uniform).
+      payload = preview_for_user(user_id, payload)
+
+      json = Jason.encode!(payload)
+
+      Enum.each(subscriptions, fn sub ->
+        case do_send_push(sub, json) do
+          {:ok, _} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("[Push] failed to send to #{sub.endpoint}: #{inspect(reason)}")
+        end
+      end)
+    end
+  end
+
+  # One `push_subscriptions` row per distinct endpoint for `user_id`, resolved
+  # across ALL of the user's user-typed participant rows. `DISTINCT ON
+  # (endpoint)` ordered by `endpoint, inserted_at DESC` keeps the newest row for
+  # each endpoint; p256dh/auth are per-endpoint, so any row for an endpoint
+  # carries usable keys and newest is simply the most defensible pick.
+  @spec distinct_endpoint_subscriptions(binary()) :: [Subscription.t()]
+  defp distinct_endpoint_subscriptions(user_id) do
+    from(s in Subscription,
+      join: p in Participant,
+      on: p.id == s.participant_id,
+      where: p.participant_type == "user" and p.participant_id == ^user_id,
+      distinct: s.endpoint,
+      order_by: [asc: s.endpoint, desc: s.inserted_at]
+    )
+    |> Repo.all()
+  end
+
+  # User-level twin of `archived_user_participant?/1`: suppress push to a user
+  # whose `users` row carries a non-nil `archived_at`.
+  @spec archived_user?(binary()) :: boolean()
+  defp archived_user?(user_id) when is_binary(user_id) do
+    case Repo.get(User, user_id) do
+      %User{archived_at: nil} -> false
+      %User{archived_at: _} -> true
+      _ -> false
+    end
+  end
+
+  # User-level twin of `preview_for_recipient/2`: external users get the
+  # redacted generic copy (same telemetry event, emitted once per user
+  # notification); internal users get the payload unchanged.
+  @spec preview_for_user(binary(), map()) :: map()
+  defp preview_for_user(user_id, payload) do
+    if Tenancy.external_user?(%{id: user_id}) do
+      :telemetry.execute(
+        [:platform, :push, :external_safe_preview],
+        %{count: 1},
+        %{user_id: user_id}
+      )
+
+      external_safe_preview(payload)
+    else
+      payload
+    end
+  end
+
   # Return true when `participant_id` resolves to a `chat_participants` row
   # whose `participant_type == "user"` AND the referenced `users` row exists
   # with a non-nil `archived_at`. Unknown participant rows and agent

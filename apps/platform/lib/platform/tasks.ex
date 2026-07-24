@@ -644,19 +644,20 @@ defmodule Platform.Tasks do
     end
   end
 
-  # Push fan-out for the sponsor-assigned item. `Platform.Push` is keyed on
-  # `chat_participants.id` (the participant ROW PK, NOT user_id), and a user
-  # has many participant rows, so resolve ALL of the sponsor's user-typed
-  # participant row ids and fan out to each. Routed through the
-  # `notifications_module()` indirection (mirroring meeting_notifier) so
-  # tests can swap in a Recorder double, and because the real
-  # `fan_out_to_humans/3` short-circuits push in :test env. Payload keys are
-  # `title`/`body`/`url` (the shape `fan_out_to_humans/3` pattern-matches)
-  # and match the inbox row. No `:exclude_participant_id` — the self-sponsor
-  # gate already guarantees the sponsor is not the actor.
+  # Push fan-out for the sponsor-assigned item. The sponsor is a *user*, not a
+  # single participant row — and a user has one `chat_participants` row per
+  # space. The old path resolved every such row and fanned out per row, which
+  # meant the same physical device (endpoint), subscribed under many rows, got
+  # pinged once per space: the duplicate-push storm (task 019f9251 follow-up).
+  # `fan_out_to_user/3` delegates to `Push.send_to_user/2`, which deduplicates
+  # by endpoint and delivers exactly once per device. Routed through the
+  # `notifications_module()` indirection (mirroring meeting_notifier) so tests
+  # can swap in a Recorder double, and because the real `fan_out_to_user/3`
+  # short-circuits push in :test env. Payload keys are `title`/`body`/`url` (the
+  # shape both the notifier and the inbox row use). The self-sponsor gate
+  # already guarantees the sponsor is not the actor.
   defp push_sponsor_assigned(user_id, %{title: _, body: _, url: _} = payload) do
-    participant_ids = Platform.Chat.participant_ids_for_user(user_id)
-    notifications_module().fan_out_to_humans(participant_ids, payload, [])
+    notifications_module().fan_out_to_user(user_id, payload)
   end
 
   defp notifications_module do

@@ -58,6 +58,21 @@ defmodule Platform.PushTest do
     sub
   end
 
+  # Subscribe a SPECIFIC endpoint under a participant row. The same physical
+  # device (endpoint) is subscribed under many participant rows of the same
+  # user — the exact shape that produced the duplicate-push storm.
+  defp subscribe_endpoint(participant_id, endpoint) do
+    n = System.unique_integer([:positive])
+
+    {:ok, sub} =
+      Push.subscribe(participant_id, %{
+        endpoint: endpoint,
+        keys: %{p256dh: "p256dh-#{n}", auth: "auth-#{n}"}
+      })
+
+    sub
+  end
+
   defp attach_suppressed_handler do
     handler_id = "push-test-suppressed-#{System.unique_integer([:positive])}"
     parent = self()
@@ -356,6 +371,70 @@ defmodule Platform.PushTest do
       assert_received {:suppressed_archived_user, %{count: 1}, %{participant_id: pid}}
       assert pid == participant.id
       refute_received {:external_safe_preview, _, _}
+    end
+  end
+
+  describe "send_to_user/2 endpoint dedup (#592 duplicate-storm fix)" do
+    test "same endpoint under many participant rows → exactly ONE push per endpoint" do
+      user = insert_user(name: "Heavy User")
+
+      # Three spaces → three user-typed participant rows for the SAME user,
+      # modelling a heavy user active in many channels.
+      participants =
+        for _ <- 1..3 do
+          space = create_space()
+          add_user_participant(space.id, user)
+        end
+
+      # The same physical device (endpoint E1) is subscribed under ALL three
+      # participant rows — exactly the shape that fanned one assignment out to
+      # the same device once per space.
+      endpoint_shared = "https://push.example.com/device/shared"
+      Enum.each(participants, &subscribe_endpoint(&1.id, endpoint_shared))
+
+      # Plus a second distinct device (E2) under one of the rows.
+      endpoint_other = "https://push.example.com/device/other"
+      subscribe_endpoint(hd(participants).id, endpoint_other)
+
+      # 3 rows for E1 + 1 row for E2 = 4 subscription rows, 2 distinct endpoints.
+      assert Repo.aggregate(Subscription, :count) == 4
+
+      # With VAPID unconfigured (test default) each do_send_push logs exactly
+      # one "VAPID keys not configured" line, so counting that line counts the
+      # deliveries attempted. Endpoint-dedup must make it 2 (one per distinct
+      # endpoint), NOT 4 (one per subscription row).
+      log =
+        capture_log(fn ->
+          assert Push.send_to_user(user.id, %{title: "hi", body: "there", url: "/x"}) == :ok
+        end)
+
+      deliveries =
+        log |> String.split("VAPID keys not configured") |> length() |> Kernel.-(1)
+
+      assert deliveries == 2,
+             "expected one delivery per distinct endpoint (2), got #{deliveries}; log: #{log}"
+    end
+
+    test "archived user: suppressed with telemetry, no delivery attempted" do
+      attach_suppressed_handler()
+
+      space = create_space()
+      user = insert_user(name: "Archived Heavy")
+      participant = add_user_participant(space.id, user)
+      subscribe_endpoint(participant.id, "https://push.example.com/device/z")
+
+      {:ok, _archived} = Accounts.archive_user(user)
+
+      log =
+        capture_log(fn ->
+          assert Push.send_to_user(user.id, %{title: "hi", body: "there", url: "/x"}) == :ok
+        end)
+
+      refute log =~ "VAPID keys not configured",
+             "archived user must short-circuit before any delivery"
+
+      assert_received {:suppressed_archived_user, %{count: 1}, %{user_id: uid}}
+      assert uid == user.id
     end
   end
 end

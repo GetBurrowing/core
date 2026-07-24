@@ -6,10 +6,12 @@ defmodule Platform.Tasks.SponsorAssignedInboxTest do
 
   Push is asserted via a Recorder double injected through the
   `:notifications_module` app env (mirroring
-  `Platform.Meetings.MeetingNotifierTest.Recorder`): `fan_out_to_humans/3` is
-  captured as `{:notif, participant_ids, payload, opts}` so a push-expected
-  case can `assert_receive` and a no-push case can `refute_receive`. `async:
-  false` because the test swaps `Application` env.
+  `Platform.Meetings.MeetingNotifierTest.Recorder`): `fan_out_to_user/3` is
+  captured as `{:notif, user_id, payload, opts}` so a push-expected case can
+  `assert_receive` and a no-push case can `refute_receive`. The producer now
+  targets the sponsor by *user id* (endpoint-dedup happens inside
+  `Platform.Push.send_to_user/2`), not by a pre-resolved participant-row list.
+  `async: false` because the test swaps `Application` env.
   """
 
   use Platform.DataCase, async: false
@@ -23,17 +25,17 @@ defmodule Platform.Tasks.SponsorAssignedInboxTest do
 
   defmodule Recorder do
     @moduledoc """
-    Test double for `Platform.Notifications`. Records each
-    `fan_out_to_humans/3` call as `{:notif, participant_ids, payload, opts}`.
+    Test double for `Platform.Notifications`. Records each `fan_out_to_user/3`
+    call as `{:notif, user_id, payload, opts}`.
     """
     def install(pid \\ self()) do
       :persistent_term.put({__MODULE__, :owner}, pid)
     end
 
-    def fan_out_to_humans(participant_ids, payload, opts \\ []) do
+    def fan_out_to_user(user_id, payload, opts \\ []) do
       case :persistent_term.get({__MODULE__, :owner}, nil) do
         nil -> :ok
-        owner -> send(owner, {:notif, participant_ids, payload, opts})
+        owner -> send(owner, {:notif, user_id, payload, opts})
       end
 
       :ok
@@ -64,8 +66,10 @@ defmodule Platform.Tasks.SponsorAssignedInboxTest do
     })
   end
 
-  # Give a user a user-typed chat_participants row so `participant_ids_for_user/1`
-  # resolves a push target. Returns the participant ROW id (the push key).
+  # Give a user a user-typed chat_participants row (a realistic push target).
+  # Endpoint-dedup resolution now lives in `Platform.Push.send_to_user/2`; the
+  # Recorder double captures the user-targeted call, so this row exists mainly
+  # to make the fixture realistic. Returns the participant ROW id.
   defp push_target!(user) do
     n = System.unique_integer([:positive, :monotonic])
     {:ok, space} = Chat.create_space(%{name: "Space #{n}", slug: "sp-#{n}", kind: "channel"})
@@ -88,7 +92,7 @@ defmodule Platform.Tasks.SponsorAssignedInboxTest do
     project: project
   } do
     sponsor = insert_user()
-    participant_id = push_target!(sponsor)
+    _participant_id = push_target!(sponsor)
     desc = String.duplicate("A", 150) <> String.duplicate("B", 100)
 
     {:ok, task} =
@@ -113,10 +117,10 @@ defmodule Platform.Tasks.SponsorAssignedInboxTest do
     assert item.body == String.slice(desc, 0, 200)
     assert String.length(item.body) == 200
 
-    # Push fan-out invoked once, targeting the sponsor's participant id(s),
-    # with a payload matching the row.
-    assert_receive {:notif, ids, payload, _opts}
-    assert participant_id in ids
+    # Push fan-out invoked once, targeting the sponsor by user id, with a
+    # payload matching the row.
+    assert_receive {:notif, target_user_id, payload, _opts}
+    assert target_user_id == sponsor.id
     assert payload == %{title: item.title, body: item.body, url: item.url}
     refute_receive {:notif, _, _, _}
   end
@@ -125,7 +129,7 @@ defmodule Platform.Tasks.SponsorAssignedInboxTest do
 
   test "update_task nil→user emits one row + push", %{project: project} do
     sponsor = insert_user()
-    participant_id = push_target!(sponsor)
+    _participant_id = push_target!(sponsor)
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "T"})
 
     {:ok, updated} =
@@ -136,8 +140,8 @@ defmodule Platform.Tasks.SponsorAssignedInboxTest do
     assert updated.sponsor_user_id == sponsor.id
     assert [item] = rows_for(sponsor.id)
     assert item.source_id == task.id
-    assert_receive {:notif, ids, %{title: _, body: _, url: _}, _}
-    assert participant_id in ids
+    assert_receive {:notif, target_user_id, %{title: _, body: _, url: _}, _}
+    assert target_user_id == sponsor.id
     refute_receive {:notif, _, _, _}
   end
 
@@ -147,7 +151,7 @@ defmodule Platform.Tasks.SponsorAssignedInboxTest do
     user_a = insert_user()
     user_b = insert_user()
     _pa = push_target!(user_a)
-    pb = push_target!(user_b)
+    _pb = push_target!(user_b)
 
     # Create already sponsored by A — drain A's create push + row.
     {:ok, task} =
@@ -165,8 +169,8 @@ defmodule Platform.Tasks.SponsorAssignedInboxTest do
     # B gets exactly one row + push; A gets no NEW row.
     assert [b_row] = rows_for(user_b.id)
     assert b_row.source_id == task.id
-    assert_receive {:notif, ids, _payload, _}
-    assert pb in ids
+    assert_receive {:notif, target_user_id, _payload, _}
+    assert target_user_id == user_b.id
     refute_receive {:notif, _, _, _}
     assert length(rows_for(user_a.id)) == 1
   end

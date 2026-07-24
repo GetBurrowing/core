@@ -72,6 +72,44 @@ defmodule Platform.Notifications do
     :ok
   end
 
+  @doc """
+  Fan out a push notification to a single *user*, deduplicated by endpoint.
+
+  Unlike `fan_out_to_humans/3` (which takes pre-resolved participant-row ids and
+  sends once per row), this takes a `user_id` and delegates to
+  `Platform.Push.send_to_user/2`, which resolves the user's subscriptions across
+  every participant row and collapses them to one send per distinct endpoint.
+  This is the correct entry point for any *user-targeted* producer (sponsor
+  assignment, etc.): it structurally prevents the per-participant-row duplicate
+  storm rather than relying on callers to pre-dedup.
+
+  Same policy as `fan_out_to_humans/3`: returns `:ok` synchronously and runs
+  delivery in a single background `Task`, short-circuited in `:test` env (the
+  spawned Task would otherwise race Ecto sandbox teardown). `opts` is accepted
+  for signature symmetry and future use; there are currently no options.
+  """
+  @spec fan_out_to_user(binary(), map(), keyword()) :: :ok
+  def fan_out_to_user(user_id, payload, opts \\ [])
+
+  def fan_out_to_user(user_id, %{title: _, body: _, url: _} = payload, _opts)
+      when is_binary(user_id) do
+    if Application.get_env(:platform, :env) != :test do
+      Task.start(fn ->
+        try do
+          Platform.Push.send_to_user(user_id, payload)
+        rescue
+          e ->
+            Logger.warning(
+              "[Notifications] send_to_user failed for #{user_id}: " <>
+                Exception.message(e)
+            )
+        end
+      end)
+    end
+
+    :ok
+  end
+
   # ── Internal (exposed for tests) ───────────────────────────────────────────
 
   @doc false
