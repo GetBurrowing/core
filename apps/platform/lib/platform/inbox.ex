@@ -70,18 +70,26 @@ defmodule Platform.Inbox do
   defp maybe_filter_kind(query, kind), do: where(query, [i], i.kind == ^kind)
 
   @doc """
-  Count a user's non-dismissed inbox items.
+  Count a user's unread, non-dismissed inbox items — the live-badge number.
 
-  A single aggregate query — the live-badge counterpart to
-  `list_unread_for_user/2`, cheaper than materializing rows just to take a
-  length. Scoping is inherent: only rows whose `user_id` matches are counted,
-  so an external user's count is naturally limited to their own (allowlisted)
-  rows without an extra scope filter.
+  A single aggregate query, cheaper than materializing rows just to take a
+  length. It counts exactly what the Inbox surface renders: rows that are
+  neither read (`read_at`) nor dismissed (`dismissed_at`). Read-but-not-dismissed
+  rows are excluded here just as `InboxLive` drops them from the list, so the
+  badge and the list can never diverge (a read item inflating the badge while
+  showing nothing was the #589/#592 badge/list bug). This is intentionally
+  narrower than `list_unread_for_user/2`, which still surfaces read rows.
+
+  Scoping is inherent: only rows whose `user_id` matches are counted, so an
+  external user's count is naturally limited to their own (allowlisted) rows
+  without an extra scope filter.
   """
   @spec unread_count(Ecto.UUID.t()) :: non_neg_integer()
   def unread_count(user_id) do
     Repo.aggregate(
-      from(i in Item, where: i.user_id == ^user_id and is_nil(i.dismissed_at)),
+      from(i in Item,
+        where: i.user_id == ^user_id and is_nil(i.dismissed_at) and is_nil(i.read_at)
+      ),
       :count
     )
   end

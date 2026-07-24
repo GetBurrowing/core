@@ -90,7 +90,7 @@ defmodule Platform.InboxTest do
   end
 
   describe "unread_count/1" do
-    test "counts non-dismissed rows and excludes dismissed ones" do
+    test "counts unread, non-dismissed rows and excludes read AND dismissed ones" do
       user = insert_user()
 
       assert Inbox.unread_count(user.id) == 0
@@ -101,12 +101,36 @@ defmodule Platform.InboxTest do
 
       assert Inbox.unread_count(user.id) == 3
 
-      # Read does NOT decrement (orthogonal to dismissal); dismiss does.
+      # The badge must match what the Inbox list renders. The list drops
+      # read-but-not-dismissed rows, so the count decrements on read too —
+      # otherwise a read item inflates the badge while showing nothing in the
+      # list (the #589/#592 badge/list divergence bug).
       {:ok, _} = Inbox.mark_read(a.id, user.id)
-      assert Inbox.unread_count(user.id) == 3
+      assert Inbox.unread_count(user.id) == 2
 
       {:ok, _} = Inbox.mark_dismissed(c.id, user.id)
-      assert Inbox.unread_count(user.id) == 2
+      assert Inbox.unread_count(user.id) == 1
+    end
+
+    test "badge equals the read-filtered list the Inbox surface renders" do
+      user = insert_user()
+
+      {:ok, _a} = Inbox.emit(valid_attrs(user, %{title: "A"}))
+      {:ok, b} = Inbox.emit(valid_attrs(user, %{title: "B"}))
+      {:ok, c} = Inbox.emit(valid_attrs(user, %{title: "C"}))
+
+      # Read one, dismiss one — leaving a single unread, non-dismissed row.
+      {:ok, _} = Inbox.mark_read(b.id, user.id)
+      {:ok, _} = Inbox.mark_dismissed(c.id, user.id)
+
+      # The Inbox surface renders list_unread_for_user minus read rows.
+      rendered =
+        user.id
+        |> Inbox.list_unread_for_user()
+        |> Enum.reject(&(not is_nil(&1.read_at)))
+
+      assert length(rendered) == 1
+      assert Inbox.unread_count(user.id) == length(rendered)
     end
 
     test "is scoped per user — a second user's rows do not leak into the count" do

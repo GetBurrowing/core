@@ -5,7 +5,8 @@ defmodule PlatformWeb.InboxLive do
   It aggregates the things waiting on the viewer across Suite as a live,
   sectioned, dismissable list, backed by `Platform.Inbox`:
 
-    * **Awaiting your review** — `review_request_pending` + `task_plan_review`
+    * **Awaiting your review** — `review_request_pending`, `task_plan_review`,
+      `task_sponsor_assigned` (and any unknown/future kind, which defaults here)
     * **Mentions** — `chat_mention`, grouped by space
     * **Meetings** — `meeting_starting`
 
@@ -70,20 +71,19 @@ defmodule PlatformWeb.InboxLive do
 
   @impl true
   def handle_info({:inbox_item_added, %Item{} = item}, socket) do
-    cond do
-      # Defensive: a read/dismissed row never belongs in the live list.
-      not is_nil(item.dismissed_at) or not is_nil(item.read_at) ->
-        {:noreply, socket}
+    # Defensive: a read/dismissed row never belongs in the live list. Every
+    # kind maps to a real section (`section_for/1` is total), so there is no
+    # "unroutable" case to drop.
+    if is_nil(item.dismissed_at) and is_nil(item.read_at) do
+      section = section_for(item.kind)
 
-      section = section_for(item.kind) ->
-        {:noreply,
-         socket
-         |> stream_insert(stream_name(section), decorate(item), at: 0)
-         |> update_count(section, +1)
-         |> track_section(item.id, section)}
-
-      true ->
-        {:noreply, socket}
+      {:noreply,
+       socket
+       |> stream_insert(stream_name(section), decorate(item), at: 0)
+       |> update_count(section, +1)
+       |> track_section(item.id, section)}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -154,9 +154,7 @@ defmodule PlatformWeb.InboxLive do
   end
 
   defp section_map(items) do
-    for item <- items, section = section_for(item.kind), not is_nil(section), into: %{} do
-      {item.id, section}
-    end
+    for item <- items, into: %{}, do: {item.id, section_for(item.kind)}
   end
 
   defp track_section(socket, id, section) do
@@ -172,10 +170,19 @@ defmodule PlatformWeb.InboxLive do
   defp update_count(socket, :meetings, delta),
     do: assign(socket, :meeting_count, max(socket.assigns.meeting_count + delta, 0))
 
-  defp section_for(kind) when kind in ~w(review_request_pending task_plan_review), do: :review
+  defp section_for(kind)
+       when kind in ~w(review_request_pending task_plan_review task_sponsor_assigned),
+       do: :review
+
   defp section_for("chat_mention"), do: :mentions
   defp section_for("meeting_starting"), do: :meetings
-  defp section_for(_), do: nil
+  # Unknown/future kinds route to :review — a real, rendered section with a
+  # stream, count and template — rather than a nil section that streams into no
+  # `phx-update` container and silently vanishes. `InboxItem.kind_label/1` +
+  # `kind_icon/1` have generic fallbacks, so any routed kind renders. Adding a
+  # new section atom instead would require wiring init_sections + stream setup +
+  # stream_name/1 + a count assign + the template, so reuse :review.
+  defp section_for(_), do: :review
 
   defp stream_name(:review), do: :review_items
   defp stream_name(:mentions), do: :mention_items

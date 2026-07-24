@@ -97,6 +97,70 @@ defmodule PlatformWeb.InboxLiveTest do
       assert has_element?(lv, "#inbox-item-#{review.id}")
     end
 
+    test "a task_sponsor_assigned item renders in the review section (not dropped)",
+         %{conn: conn} do
+      user = insert_user()
+
+      sponsor =
+        emit!(user,
+          kind: "task_sponsor_assigned",
+          source_type: "task",
+          title: "You're now sponsoring: Ship the thing",
+          url: "/tasks/#{Ecto.UUID.generate()}"
+        )
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      # section_for/1 routes the kind to :review, so the row is streamed and
+      # rendered rather than grouped under a nil section and vanishing.
+      assert has_element?(lv, ~s([data-section="review"]))
+      assert has_element?(lv, row_selector(sponsor))
+      assert render(lv) =~ "You&#39;re now sponsoring: Ship the thing"
+    end
+
+    test "a live-broadcast task_sponsor_assigned row streams into the review section",
+         %{conn: conn} do
+      user = insert_user()
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      refute has_element?(lv, ~s([data-section="review"]))
+
+      sponsor =
+        emit!(user,
+          kind: "task_sponsor_assigned",
+          source_type: "task",
+          title: "You're now sponsoring: Live one",
+          url: "/tasks/#{Ecto.UUID.generate()}"
+        )
+
+      # The {:inbox_item_added} PubSub path uses the same section_for/1, so the
+      # previously-hidden review section appears with the streamed row.
+      assert has_element?(lv, ~s([data-section="review"]))
+      assert has_element?(lv, row_selector(sponsor))
+    end
+
+    test "an unknown/future kind still renders (catch-all routes to review)",
+         %{conn: conn} do
+      user = insert_user()
+
+      # Bypass the emit changeset's kind allow-list to simulate a kind the
+      # server knows about but this LiveView's section_for/1 has no explicit
+      # clause for — it must still render, not vanish.
+      item =
+        Repo.insert!(%Item{
+          user_id: user.id,
+          kind: "some_future_kind",
+          source_type: "task",
+          source_id: Ecto.UUID.generate(),
+          title: "A brand new kind of notification"
+        })
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      assert has_element?(lv, ~s([data-section="review"]))
+      assert has_element?(lv, row_selector(item))
+    end
+
     test "a single-category inbox renders only that section", %{conn: conn} do
       user = insert_user()
       emit!(user, kind: "chat_mention", title: "only a mention")
