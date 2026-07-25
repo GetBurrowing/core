@@ -1626,6 +1626,404 @@ defmodule Platform.Orchestration.TaskRouterTest do
     end
   end
 
+  describe "stage-level suppression is edge-triggered (task 019f9b34)" do
+    # Sibling of the plan-level block above. The STAGE-level copy
+    # ("Dispatch suppressed: awaiting human review on a manual_approval
+    # validation") posted once per router tick instead of once per suppression
+    # episode: measured 1 -> 2 -> 3 -> 4 over three injected dispatches, and 7
+    # for the fuller production shape (boot + 3 dispatches + 2
+    # `:review_request_pending` re-broadcasts).
+    #
+    # Why the 019e00cb predicate gate cannot cover this on its own:
+    # `HeartbeatScheduler.heartbeat_suppressible?/2` returns false unless EVERY
+    # pending validation on the stage is a `manual_approval` linked to an open
+    # review request. The setup fixture seeds a `test_pass` on the stage, so a
+    # single co-pending automated validation makes the predicate false forever
+    # and the elision never engages. That co-pending `test_pass` is the entire
+    # production shape under test here — do NOT drop it.
+    #
+    # Six sites park the router on the stage gate. Stage 1 of 019f9b34 found
+    # the plan's four-site analysis incomplete: the `{:review_request_pending}`
+    # handler does NOT open a mid-task episode (the router is already
+    # `:waiting_human` by the time it runs). The real opener is the tail of
+    # `do_dispatch/2`, which parks silently, and `{:task_updated}` is a second
+    # silent park site. Both now narrate, edge-gated. `do_dispatch/2` gates on
+    # `entry_status` captured at function entry, because `state.status` is set
+    # to `:running` unconditionally before its tail park — the `state.status`
+    # edge is useless there.
+
+    # TRAP 1 — SUBSTRING COLLISION. Do NOT reuse `suppression_logs_since/2`:
+    # it filters on the loose "awaiting human review", which matches BOTH the
+    # stage copy and the plan copy ("Dispatch suppressed: plan is awaiting
+    # human review — approve or reject the plan to resume"). That collision
+    # already cost a cycle on 019f9ae5 and is why `plan_gate_logs/1` exists.
+    # This filter is copy-specific to the stage gate.
+    #
+    # TRAP 2 — COUNT FROM ZERO, NEVER FROM A POST-`start_link` BASELINE. The
+    # execution space is created inside `init/1`, so a boot-time emission
+    # lands before any test can snapshot a baseline and
+    # `suppression_logs_since/2`'s `Enum.drop/2` silently swallows it.
+    # Counting from zero is the only way to assert exactly-one ACROSS the boot
+    # emission plus subsequent ticks. Same reasoning as `plan_gate_logs/1`.
+    defp stage_gate_logs(space_id) do
+      space_id
+      |> ExecutionSpace.list_messages_with_participants()
+      |> Enum.map(& &1.content)
+      |> Enum.filter(&String.contains?(&1, "awaiting human review on a manual_approval"))
+    end
+
+    # The THIRD suppression copy, emitted by call sites that pass no `:reason`
+    # (the `{:stage_transitioned, ...}` site). It shares no substring with
+    # either of the other two, so a loose filter would silently miss it.
+    defp generic_gate_logs(space_id) do
+      space_id
+      |> ExecutionSpace.list_messages_with_participants()
+      |> Enum.map(& &1.content)
+      |> Enum.filter(
+        &String.contains?(
+          &1,
+          "Heartbeat suppressed: waiting for manual approval before more agent work"
+        )
+      )
+    end
+
+    defp mark_stage_running(stage) do
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+    end
+
+    # Opens a manual_approval ALONGSIDE the fixture's pending `test_pass`.
+    defp open_stage_review_request(task, stage, space, label) do
+      {:ok, manual_validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      {:ok, request} =
+        Platform.Tasks.ReviewRequests.create_review_request(%{
+          validation_id: manual_validation.id,
+          task_id: task.id,
+          execution_space_id: space.id,
+          items: [%{label: label}]
+        })
+
+      {manual_validation, request}
+    end
+
+    test "mixed-validation stage narrates the park once, not once per dispatch", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      running_stage = mark_stage_running(stage)
+
+      # Start while nothing is pending so the router parks in `:running` —
+      # that is what makes the subsequent park a genuine
+      # `:running -> :waiting_human` transition rather than a boot-into-parked.
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+      assert stage_gate_logs(space.id) == []
+
+      open_stage_review_request(task, running_stage, space, "Solo check")
+      Process.sleep(200)
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      # Three explicit dispatches — the path `TaskRouterWatcher` injects on
+      # every runtime reconnect, and the one that leaked.
+      send(pid, :dispatch)
+      Process.sleep(150)
+      send(pid, :dispatch)
+      Process.sleep(150)
+      send(pid, :dispatch)
+      Process.sleep(150)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     400
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      logs = stage_gate_logs(space.id)
+
+      # MUTATION CHECK (2026-07-25, all six sites at once): this same scenario
+      # yields 5 stage-gate lines with every stage-1 guard reverted, and 0 with
+      # only the `do_dispatch/2` tail emission reverted — the episode opener,
+      # which is silent on `main`. Both directions fail this assertion.
+      assert length(logs) == 1,
+             "expected exactly one stage-gate suppression log across three ticks, got: #{inspect(logs)}"
+
+      assert String.contains?(hd(logs), "awaiting human review on a manual_approval")
+    end
+
+    test "re-broadcasting the park signal does not re-log into an open episode", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      running_stage = mark_stage_running(stage)
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      open_stage_review_request(task, running_stage, space, "Solo check")
+      Process.sleep(200)
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+      assert length(stage_gate_logs(space.id)) == 1
+
+      # PubSub re-delivery of the same park signal (a runtime reconnect
+      # re-subscribes and the broadcast is replayed).
+      send(pid, {:review_request_pending, %{task_id: task.id}})
+      Process.sleep(150)
+      send(pid, {:review_request_pending, %{task_id: task.id}})
+      Process.sleep(150)
+
+      # ...and a repeated `{:stage_transitioned, ...}` for the SAME running
+      # stage, which exercises the third (reason-less, generic-copy) site.
+      send(pid, {:stage_transitioned, running_stage})
+      Process.sleep(150)
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      assert length(stage_gate_logs(space.id)) == 1,
+             "re-broadcasts must not re-log into an already-open episode, got: #{inspect(stage_gate_logs(space.id))}"
+
+      assert generic_gate_logs(space.id) == [],
+             "the reason-less `{:stage_transitioned, ...}` site must stay edge-guarded, got: #{inspect(generic_gate_logs(space.id))}"
+    end
+
+    test "the episode re-arms after disposition — the guard is an edge, not a latch", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      running_stage = mark_stage_running(stage)
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      {_validation, request} =
+        open_stage_review_request(task, running_stage, space, "First gate")
+
+      Process.sleep(200)
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+      assert length(stage_gate_logs(space.id)) == 1
+
+      # Disposition the ONLY item. The stage does not complete — the fixture's
+      # `test_pass` is still pending — so the router returns to `:running` on
+      # the same stage, which is exactly the shape that must re-arm the edge.
+      {:ok, _} = Platform.Tasks.ReviewRequests.approve_item(hd(request.items).id, "rowan")
+      Process.sleep(250)
+
+      assert TaskRouter.current_status(task.id).status == :running
+
+      # A genuinely NEW episode.
+      open_stage_review_request(task, running_stage, space, "Second gate")
+      Process.sleep(200)
+
+      send(pid, :dispatch)
+      Process.sleep(150)
+      send(pid, :dispatch)
+      Process.sleep(150)
+
+      logs = stage_gate_logs(space.id)
+
+      # Two episodes, two lines — and no more than one per episode despite the
+      # extra dispatches. Without this test a `status`-latching bug would pass
+      # the two tests above while permanently silencing the log.
+      assert length(logs) == 2,
+             "expected exactly one line per suppression episode across two episodes, got: #{inspect(logs)}"
+    end
+
+    test "the plan gate is unregressed and never emits the stage copy", %{
+      task: task,
+      assignee: assignee,
+      plan: plan
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, _task} = Tasks.transition_task(task, "planning")
+
+      # Flip the fixture plan in place — `plan_awaiting_review?/1` keys off
+      # `Tasks.latest_plan/1`, so an accidental v2 would silently change what
+      # is under test.
+      _pending_plan = mark_plan_pending_review(plan)
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      send(pid, :dispatch)
+      Process.sleep(150)
+      send(pid, :dispatch)
+      Process.sleep(150)
+      send(pid, :dispatch)
+      Process.sleep(150)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     400
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      assert length(plan_gate_logs(space.id)) == 1,
+             "019f9ae5 regression: expected exactly one plan-gate log, got: #{inspect(plan_gate_logs(space.id))}"
+
+      # The plan branch is ordered ahead of the stage branch in the `:dispatch`
+      # handler, so while the plan is provisional the STAGE copy must never
+      # appear. This is the assertion the loose `suppression_logs_since/2`
+      # filter cannot make.
+      assert stage_gate_logs(space.id) == [],
+             "the stage copy must never be emitted while the plan is provisional, got: #{inspect(stage_gate_logs(space.id))}"
+    end
+
+    test "a router that BOOTS into an open gate narrates once with the stage-gate copy", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      running_stage = mark_stage_running(stage)
+
+      {:ok, space} = ExecutionSpace.find_or_create(task.id)
+      open_stage_review_request(task, running_stage, space, "Boot gate")
+
+      # An active lease is what routes `init/1` into its
+      # `waiting_for_human_review?/1` branch (the branch every production boot
+      # path takes: gateway restart, `TaskRouterWatcher.boot_reconcile/0`).
+      {:ok, _event} =
+        Platform.Orchestration.record_runtime_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => assignee.id,
+          "event_type" => "execution.progress",
+          "payload" => %{"summary" => "waiting for review"}
+        })
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(250)
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      # `init/1` is episode start by definition, so it is deliberately the ONE
+      # unguarded emitter — and with the handler now edge-triggered it is the
+      # SOLE emitter for this shape (init emits, parks, then delegates via
+      # `send(self(), :dispatch)`, which correctly skips).
+      assert length(stage_gate_logs(space.id)) == 1,
+             "expected exactly one stage-gate log from init/1 + its delegated dispatch, got: #{inspect(stage_gate_logs(space.id))}"
+
+      # ...and it must be the stage-gate copy, not the reason-less generic one.
+      # Without the explicit `reason:` on the `init/1` call, a boot-into-parked
+      # episode falls through to "Heartbeat suppressed: waiting for manual
+      # approval..." and becomes ungreppable by the stage-gate copy — one
+      # episode, two different strings depending on how the router got there.
+      assert generic_gate_logs(space.id) == [],
+             "boot-time stage-gate episodes must use the stage-gate copy, got: #{inspect(generic_gate_logs(space.id))}"
+    end
+
+    test "a task update is narrated when it is the first site to observe the open gate", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      running_stage = mark_stage_running(stage)
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      open_stage_review_request(task, running_stage, space, "First gate")
+      Process.sleep(200)
+      assert length(stage_gate_logs(space.id)) == 1
+
+      # Return the router to `:running` while the gate is STILL open. This is
+      # real: `handle_info({:review_request_resolved, ...})` sets `:running`
+      # unconditionally, without checking whether OTHER requests on the stage
+      # remain pending, so a multi-gate stage lands here for real. Injecting
+      # the broadcast keeps it deterministic (a real `approve_item/2` fans out
+      # several racing broadcasts) — same technique as the plan-gate test that
+      # injects `{:plan_updated, pending_plan}` directly.
+      send(pid, {:review_request_resolved, %{task_id: task.id, outcome: :passed}})
+      Process.sleep(150)
+      assert TaskRouter.current_status(task.id).status == :running
+
+      # `{:task_updated}` is a silent park site on `main`: it flips the router
+      # to `:waiting_human` without narrating. If it is the first site to
+      # observe the still-open gate, the episode goes unnarrated entirely.
+      send(pid, {:task_updated, Tasks.get_task_detail(task.id)})
+      Process.sleep(150)
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      assert length(stage_gate_logs(space.id)) == 2,
+             "the `{:task_updated}` park site must narrate the episode it opens, got: #{inspect(stage_gate_logs(space.id))}"
+
+      # ...and it is edge-triggered like every other site: `{:task_updated}`
+      # fires from many places in `tasks.ex`, so an unconditional log here
+      # would be the pile-up this task set out to fix.
+      send(pid, {:task_updated, Tasks.get_task_detail(task.id)})
+      Process.sleep(150)
+      send(pid, {:task_updated, Tasks.get_task_detail(task.id)})
+      Process.sleep(150)
+
+      assert length(stage_gate_logs(space.id)) == 2,
+             "repeated task updates must not re-log into an open episode, got: #{inspect(stage_gate_logs(space.id))}"
+    end
+  end
+
   describe "dispatch suppression predicate (task 019e00cb stage 2)" do
     # Predicate `HeartbeatScheduler.heartbeat_suppressible?/2` gates the
     # `maybe_log_heartbeat_suppressed/3` call — when the running stage is

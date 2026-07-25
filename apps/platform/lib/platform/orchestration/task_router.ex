@@ -195,9 +195,27 @@ defmodule Platform.Orchestration.TaskRouter do
             {:ok, %{state | status: :waiting_human}}
 
           waiting_for_human_review?(state) ->
+            # Deliberately NOT guarded on `state.status != :waiting_human`
+            # (task 019f9b34): `init/1` IS episode start by definition, so
+            # there is no prior episode to suppress against. This mirrors the
+            # two plan-gate `init/1` emissions above and below, left unguarded
+            # for the same reason.
+            #
+            # The explicit `:reason` is now load-bearing. This branch emits,
+            # parks at `:waiting_human`, then delegates via
+            # `send(self(), :dispatch)` (see the comment below). With the
+            # stage-level handler now edge-triggered, it will correctly SKIP —
+            # making this call the SOLE emitter for a boot-into-parked
+            # episode. Without the reason it would fall through to the generic
+            # "waiting for manual approval" copy, and boot-time stage-gate
+            # episodes would be ungreppable by the stage-gate copy. Passing it
+            # keeps exactly one consistent, greppable line per episode. No
+            # string constant changes or is added — "awaiting_human_review"
+            # already maps to existing copy.
             maybe_log_heartbeat_suppressed(
               state,
-              find_stage(Tasks.current_plan(task_id), state.current_stage_id)
+              find_stage(Tasks.current_plan(task_id), state.current_stage_id),
+              reason: "awaiting_human_review"
             )
 
             # Deliberate delegation, not a contradiction: this send is
@@ -342,11 +360,31 @@ defmodule Platform.Orchestration.TaskRouter do
         # `pending_review_request?/1` and `ReviewRequests.list_pending_for_task/1`.
         plan = Tasks.current_plan(state.task_id)
 
-        maybe_log_heartbeat_suppressed(
-          state,
-          find_stage(plan, state.current_stage_id),
-          reason: "awaiting_human_review"
-        )
+        # Edge-triggered on the `:waiting_human` transition (task 019f9b34),
+        # mirroring the plan-gate guard above. The 019e00cb predicate gate
+        # inside `maybe_log_heartbeat_suppressed/3` cannot cover this on its
+        # own: `HeartbeatScheduler.heartbeat_suppressible?/2` returns false
+        # unless EVERY pending validation is a `manual_approval` linked to an
+        # open review request, so a single co-pending `test_pass` on the same
+        # stage makes the predicate false forever and the elision never
+        # engages — the line then re-posted on every injected dispatch
+        # (measured 1 -> 2 -> 3 -> 4 over three ticks). The predicate stays as
+        # an independent second elision layer; this is an edge layer in front
+        # of it, NOT a replacement.
+        #
+        # Accepted semantics: a genuinely NEW second review request opened
+        # while the router is already parked will not emit a second line. The
+        # episode is still ongoing and the review_request row is itself the
+        # visible signal — same reasoning as the plan-gate precedent. The edge
+        # re-arms on disposition, where `{:review_request_resolved, ...}` sets
+        # `status: :running`.
+        if state.status != :waiting_human do
+          maybe_log_heartbeat_suppressed(
+            state,
+            find_stage(plan, state.current_stage_id),
+            reason: "awaiting_human_review"
+          )
+        end
 
         state =
           state
@@ -494,6 +532,19 @@ defmodule Platform.Orchestration.TaskRouter do
 
     state =
       if waiting_for_human_review?(state) do
+        # Another silent park site (task 019f9b34): `{:task_updated}` fires
+        # from many places in `tasks.ex`, so this must stay edge-triggered or
+        # it becomes the pile-up it is meant to prevent. Narrating here covers
+        # the shape where the task transition — not a dispatch — is what first
+        # observes the open review request.
+        if state.status != :waiting_human do
+          maybe_log_heartbeat_suppressed(
+            state,
+            find_stage(Tasks.current_plan(state.task_id), state.current_stage_id),
+            reason: "awaiting_human_review"
+          )
+        end
+
         state |> clear_liveness() |> Map.put(:status, :waiting_human)
       else
         state
@@ -649,7 +700,17 @@ defmodule Platform.Orchestration.TaskRouter do
               send(self(), :dispatch)
             end
 
-            maybe_log_heartbeat_suppressed(state, stage)
+            # Edge-triggered (task 019f9b34): stage broadcasts repeat for the
+            # same running stage, and this call passes no `:reason` so it
+            # emits the generic "waiting for manual approval" copy. Same bug
+            # class as the `:dispatch` and `:review_request_pending` sites —
+            # the 019e00cb predicate cannot elide it on a mixed-validation
+            # stage, because `heartbeat_suppressible?/2` needs EVERY pending
+            # validation to be a `manual_approval` with an open review request.
+            if state.status != :waiting_human do
+              maybe_log_heartbeat_suppressed(state, stage)
+            end
+
             state |> clear_liveness() |> Map.put(:status, :waiting_human)
           else
             # When a new stage becomes running, re-dispatch so the agent gets
@@ -758,7 +819,15 @@ defmodule Platform.Orchestration.TaskRouter do
     plan = Tasks.current_plan(state.task_id)
     stage = find_stage(plan, state.current_stage_id) || current_running_stage(plan)
 
-    maybe_log_heartbeat_suppressed(state, stage, reason: "awaiting_human_review")
+    # Edge-triggered (task 019f9b34): a repeated `:review_request_pending`
+    # broadcast must not re-log into an already-parked episode. The 019e00cb
+    # predicate alone cannot elide it — `heartbeat_suppressible?/2` is false
+    # whenever any pending validation on the stage is not a `manual_approval`
+    # linked to an open review request, which is the common mixed-validation
+    # shape.
+    if state.status != :waiting_human do
+      maybe_log_heartbeat_suppressed(state, stage, reason: "awaiting_human_review")
+    end
 
     state =
       state
@@ -824,6 +893,14 @@ defmodule Platform.Orchestration.TaskRouter do
   defp do_dispatch(state, task) do
     plan = Tasks.current_plan(state.task_id)
     stage = current_running_stage(plan)
+
+    # Capture the INCOMING status before the unconditional
+    # `Map.put(:status, :running)` below overwrites it. Both tail branches of
+    # this function re-check `waiting_for_human_review?/1` and can park the
+    # router at `:waiting_human`; those parks need an edge, and by then
+    # `state.status` has already been clobbered to `:running`. See the
+    # episode-start narration at those two sites (task 019f9b34).
+    entry_status = state.status
 
     # Stage-level responsibility routing (task 019f5d47 — progressive enhancement).
     # `state.assignee` stays fixed on the phase assignee so bookkeeping keys off
@@ -893,6 +970,23 @@ defmodule Platform.Orchestration.TaskRouter do
 
         state =
           if waiting_for_human_review?(state) do
+            # EPISODE START for the stage gate (task 019f9b34). This tail park
+            # is silent on main, and it is the site that actually opens a
+            # mid-task suppression episode: a review request created while the
+            # router is running lands here (the `:dispatch` handler's
+            # `pending_review_request?/1` branch was false on entry, which is
+            # why control reached `do_dispatch/2` at all), parks at
+            # `:waiting_human`, and every downstream narrating site then sees
+            # an already-parked router and correctly skips. Without an
+            # emission here the episode would be narrated ZERO times.
+            #
+            # Edge is `entry_status`, not `state.status`: the latter was set to
+            # `:running` unconditionally a few lines above, so it would emit on
+            # every dispatch — the 019e00cb pile-up regression.
+            if entry_status != :waiting_human do
+              maybe_log_heartbeat_suppressed(state, stage, reason: "awaiting_human_review")
+            end
+
             state |> clear_liveness() |> Map.put(:status, :waiting_human)
           else
             state
@@ -918,6 +1012,13 @@ defmodule Platform.Orchestration.TaskRouter do
 
         state =
           if waiting_for_human_review?(state) do
+            # Same episode-start narration as the `{:ok, ...}` tail above
+            # (task 019f9b34); this branch parks identically on a failed
+            # dispatch and must not leave the episode unnarrated.
+            if entry_status != :waiting_human do
+              maybe_log_heartbeat_suppressed(state, stage, reason: "awaiting_human_review")
+            end
+
             state |> clear_liveness() |> Map.put(:status, :waiting_human)
           else
             state
