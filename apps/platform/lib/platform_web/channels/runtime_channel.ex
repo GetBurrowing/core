@@ -12,6 +12,7 @@ defmodule PlatformWeb.RuntimeChannel do
   alias Platform.Chat
   alias Platform.Federation
   alias Platform.Federation.RuntimePresence
+  alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolSurface
 
   @valid_client_products ~w(openclaw claude_channel)
@@ -29,8 +30,18 @@ defmodule PlatformWeb.RuntimeChannel do
       {client_info, declared?} = resolve_client_info(params)
       socket = assign(socket, :client_info, client_info)
 
+      # Load the row ONCE and stash it. It drives the last_connected_at
+      # touch, the client_info persist and the connect log line below, and
+      # — via the `:runtime` assign — the bundle-scoped `capabilities`
+      # push in handle_info(:send_capabilities, _). A nil here means the
+      # row vanished between RuntimeSocket.connect/3 and join/3; the join
+      # still succeeds (unchanged semantics) but the capabilities push
+      # fails closed to an empty set.
+      runtime = Federation.get_runtime(socket.assigns.runtime_pk)
+      socket = assign(socket, :runtime, runtime)
+
       # Ensure the runtime's agent has a last_connected_at timestamp
-      if runtime = Federation.get_runtime(socket.assigns.runtime_pk) do
+      if runtime do
         Platform.Agents.AgentRuntime.changeset(runtime, %{
           last_connected_at: DateTime.utc_now()
         })
@@ -91,8 +102,35 @@ defmodule PlatformWeb.RuntimeChannel do
 
   @impl true
   def handle_info(:send_capabilities, socket) do
-    tools = ToolSurface.tool_definitions()
+    # Advertise only what this runtime may actually call. Previously this
+    # pushed the entire catalogue regardless of `allowed_bundles`, so the
+    # advertised surface and the (HTTP-side) authorized surface disagreed.
+    # `ToolAuthorization.effective_tools/1` is the same function
+    # `MCPController`'s `tools/list` maps over, so the two transports now
+    # advertise identically for a given runtime.
+    #
+    # Fail closed on a missing row: an absent runtime gets an empty set,
+    # never the full surface.
+    {tools, external?} =
+      case socket.assigns[:runtime] do
+        nil ->
+          {[], false}
+
+        runtime ->
+          {ToolAuthorization.effective_tools(runtime),
+           ToolAuthorization.external_principal?(runtime)}
+      end
+
     push(socket, "capabilities", %{tools: tools, tool_count: length(tools)})
+
+    # Emitted so a surprise shrink in prod is observable directly rather
+    # than inferred from a log grep.
+    :telemetry.execute(
+      [:platform, :federation, :capabilities_pushed],
+      %{tool_count: length(tools)},
+      %{runtime_id: socket.assigns.runtime_id, external: external?}
+    )
+
     send(self(), :send_spaces_manifest)
     {:noreply, socket}
   end
@@ -242,36 +280,11 @@ defmodule PlatformWeb.RuntimeChannel do
       "[RuntimeChannel] tool_call received: tool=#{tool} call_id=#{call_id} runtime=#{runtime_id}"
     )
 
-    start_time = System.monotonic_time(:millisecond)
-
     RuntimePresence.touch(runtime_id)
-    space_id = Map.get(args, "space_id")
-    agent_participant_id = get_agent_participant_id(socket, space_id)
 
-    context = %{
-      space_id: space_id,
-      agent_id: socket.assigns[:agent_id],
-      agent_participant_id: agent_participant_id,
-      runtime_id: socket.assigns.runtime_id
-    }
-
-    result = ToolSurface.execute(tool, args, context)
-    elapsed = System.monotonic_time(:millisecond) - start_time
-
-    case result do
-      {:ok, data} ->
-        Logger.info(
-          "[RuntimeChannel] tool_result ok: tool=#{tool} call_id=#{call_id} runtime=#{runtime_id} elapsed=#{elapsed}ms"
-        )
-
-        push(socket, "tool_result", %{call_id: call_id, status: "ok", result: data})
-
-      {:error, error} ->
-        Logger.warning(
-          "[RuntimeChannel] tool_result error: tool=#{tool} call_id=#{call_id} runtime=#{runtime_id} elapsed=#{elapsed}ms error=#{inspect(error)}"
-        )
-
-        push(socket, "tool_result", %{call_id: call_id, status: "error", error: error})
+    case authorize_tool_call(tool, socket) do
+      :ok -> execute_tool_call(tool, args, call_id, socket)
+      {:error, :forbidden} -> deny_tool_call(tool, call_id, socket)
     end
 
     {:noreply, socket}
@@ -460,6 +473,86 @@ defmodule PlatformWeb.RuntimeChannel do
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────
+
+  # Authorization gate for `tool_call`. Reads the grant FRESH on every call
+  # rather than reusing the join-time `:runtime` assign, which is an
+  # advertisement snapshot only.
+  #
+  # openclaw sockets stay joined for days (the channel re-tracks presence
+  # every 30s precisely because connections outlive process restarts), so a
+  # cached grant would let a capability revoked in Control Center keep
+  # working until the runtime happened to reconnect — a worse failure mode
+  # than the bug this closes. The cost is one primary-key `Repo.get` plus
+  # the indexed `Repo.exists?` inside `Tenancy.external_user?/1`: exactly
+  # what the HTTP path already pays per request.
+  #
+  # A vanished row denies. Fail closed, never fall through to execution.
+  defp authorize_tool_call(tool, socket) do
+    case Federation.get_runtime(socket.assigns.runtime_pk) do
+      nil -> {:error, :forbidden}
+      runtime -> ToolAuthorization.authorize(tool, runtime)
+    end
+  end
+
+  defp execute_tool_call(tool, args, call_id, socket) do
+    runtime_id = socket.assigns.runtime_id
+    start_time = System.monotonic_time(:millisecond)
+
+    space_id = Map.get(args, "space_id")
+    agent_participant_id = get_agent_participant_id(socket, space_id)
+
+    context = %{
+      space_id: space_id,
+      agent_id: socket.assigns[:agent_id],
+      agent_participant_id: agent_participant_id,
+      runtime_id: runtime_id
+    }
+
+    result = ToolSurface.execute(tool, args, context)
+    elapsed = System.monotonic_time(:millisecond) - start_time
+
+    case result do
+      {:ok, data} ->
+        Logger.info(
+          "[RuntimeChannel] tool_result ok: tool=#{tool} call_id=#{call_id} runtime=#{runtime_id} elapsed=#{elapsed}ms"
+        )
+
+        push(socket, "tool_result", %{call_id: call_id, status: "ok", result: data})
+
+      {:error, error} ->
+        Logger.warning(
+          "[RuntimeChannel] tool_result error: tool=#{tool} call_id=#{call_id} runtime=#{runtime_id} elapsed=#{elapsed}ms error=#{inspect(error)}"
+        )
+
+        push(socket, "tool_result", %{call_id: call_id, status: "error", error: error})
+    end
+  end
+
+  # Denial frame shape is load-bearing: the message MUST sit at `error.error`
+  # as a string, because openclaw-suite-channel's suite-client.ts rejects with
+  # `payload.error?.error || "Tool call failed"`. Any other shape reaches the
+  # agent as the useless generic string. The wording matches the `-32001`
+  # message MCPController returns for the same refusal so both transports
+  # produce identical, greppable operator-facing text.
+  defp deny_tool_call(tool, call_id, socket) do
+    runtime_id = socket.assigns.runtime_id
+
+    Logger.warning(
+      "[RuntimeChannel] tool_call denied: tool=#{tool} call_id=#{call_id} runtime=#{runtime_id} reason=forbidden"
+    )
+
+    :telemetry.execute(
+      [:platform, :federation, :tool_call_denied],
+      %{system_time: System.system_time()},
+      %{runtime_id: runtime_id, tool: tool, reason: :forbidden}
+    )
+
+    push(socket, "tool_result", %{
+      call_id: call_id,
+      status: "error",
+      error: %{error: "tool '#{tool}' not in allowed bundles", code: "forbidden"}
+    })
+  end
 
   defp schedule_presence_retrack do
     Process.send_after(self(), :presence_retrack, @presence_retrack_interval_ms)

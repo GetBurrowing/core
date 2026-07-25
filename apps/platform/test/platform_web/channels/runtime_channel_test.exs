@@ -5,6 +5,8 @@ defmodule PlatformWeb.RuntimeChannelTest do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Federation
+  alias Platform.Federation.ToolAuthorization
+  alias Platform.Federation.ToolSurface
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
   alias Platform.Tasks
@@ -142,6 +144,110 @@ defmodule PlatformWeb.RuntimeChannelTest do
       _ = :sys.get_state(joined_socket.channel_pid)
 
       assert Platform.Federation.RuntimePresence.online?(ctx.runtime.runtime_id)
+    end
+  end
+
+  defp join_and_capture_capabilities(runtime, raw_token) do
+    {:ok, socket} =
+      connect(PlatformWeb.RuntimeSocket, %{
+        "runtime_id" => runtime.runtime_id,
+        "token" => raw_token
+      })
+
+    {:ok, _reply, _joined} = subscribe_and_join(socket, "runtime:#{runtime.runtime_id}", %{})
+
+    assert_push("capabilities", payload)
+    payload
+  end
+
+  # Regression guard for the bug this task fixes: the push used to be
+  # `ToolSurface.tool_definitions()` — the whole catalogue — regardless
+  # of the runtime's `allowed_bundles`. It must now be exactly the set
+  # `ToolAuthorization.effective_tools/1` resolves, which is also what
+  # `/mcp tools/list` returns for the same runtime.
+  describe "capabilities push" do
+    test "is scoped to the runtime's granted bundles, not the full catalogue", ctx do
+      # register_runtime/2 yields AgentRuntime.default_allowed_bundles/0 —
+      # six bundles, with canvas/task/plan/memory/review absent.
+      payload = join_and_capture_capabilities(ctx.runtime, ctx.raw_token)
+
+      expected = ToolAuthorization.effective_tools(ctx.runtime)
+
+      assert payload.tool_count == length(payload.tools)
+      assert payload.tool_count == length(expected)
+      assert Enum.map(payload.tools, & &1.name) == Enum.map(expected, & &1.name)
+
+      # Strictly narrower than the full surface, and specifically missing
+      # tools from bundles this runtime was never granted.
+      assert payload.tool_count > 0
+      assert payload.tool_count < length(ToolSurface.tool_definitions())
+
+      names = Enum.map(payload.tools, & &1.name)
+      assert "federation_status" in names
+      refute "task_create" in names
+      refute "canvas.create" in names
+    end
+
+    test "a federation-only runtime is pushed exactly federation_status", ctx do
+      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["federation"])
+
+      payload = join_and_capture_capabilities(runtime, ctx.raw_token)
+
+      assert Enum.map(payload.tools, & &1.name) == ["federation_status"]
+      assert payload.tool_count == 1
+    end
+
+    test "a runtime with no bundles is pushed zero tools", ctx do
+      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, [])
+
+      payload = join_and_capture_capabilities(runtime, ctx.raw_token)
+
+      assert payload.tools == []
+      assert payload.tool_count == 0
+    end
+
+    test "fails closed to an empty set when the runtime row is gone at join time", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      # The row disappears between connect/3 (which authenticated against
+      # it) and join/3. The join still succeeds; the push must NOT fall
+      # back to the full surface.
+      Repo.delete!(ctx.runtime)
+
+      {:ok, _reply, joined} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      assert joined.assigns.runtime == nil
+      assert_push("capabilities", payload)
+      assert payload == %{tools: [], tool_count: 0}
+    end
+
+    test "emits capabilities_pushed telemetry carrying the scoped count", ctx do
+      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["federation"])
+
+      handler_id = "capabilities-pushed-test-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :federation, :capabilities_pushed],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:capabilities_pushed, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      _payload = join_and_capture_capabilities(runtime, ctx.raw_token)
+
+      assert_receive {:capabilities_pushed, %{tool_count: 1}, metadata}
+      assert metadata.runtime_id == runtime.runtime_id
+      assert metadata.external == false
     end
   end
 
@@ -426,6 +532,12 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
   describe "tool_call" do
     test "executes tool and returns result", ctx do
+      # `canvas` is NOT in AgentRuntime.default_allowed_bundles/0, and
+      # `tool_call` is now gated on the same authorization path as /mcp, so
+      # the grant has to be explicit. Fixing the fixture rather than widening
+      # the default grant is the point of the change.
+      {:ok, _granted} = Federation.update_allowed_bundles(ctx.runtime, ["canvas"])
+
       {:ok, socket} =
         connect(PlatformWeb.RuntimeSocket, %{
           "runtime_id" => ctx.runtime.runtime_id,
@@ -473,5 +585,146 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert result.kind == "stack"
       assert result.title == "Runtime Canvas"
     end
+
+    # The vulnerability this task closes: before the gate, the channel
+    # executed anything it was asked to, so `allowed_bundles` was advisory
+    # over WebSocket and a default-grant runtime could create tasks.
+    test "denies a tool outside the runtime's granted bundles, before executing it", ctx do
+      project = create_project()
+      before_count = Repo.aggregate(Tasks.Task, :count)
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      # `task` is not in the default grant. These args are otherwise valid —
+      # the tool would have created a real row if it had been executed.
+      push(socket, "tool_call", %{
+        "call_id" => "call-denied",
+        "tool" => "task_create",
+        "args" => %{"project_id" => project.id, "title" => "should never exist"}
+      })
+
+      assert_push "tool_result", %{call_id: "call-denied", status: "error", error: error}
+
+      # Shape matters: openclaw-suite-channel rejects with
+      # `payload.error?.error`, so the message must be a string at error.error.
+      assert error.error == "tool 'task_create' not in allowed bundles"
+      assert error.code == "forbidden"
+
+      assert Repo.aggregate(Tasks.Task, :count) == before_count
+      assert Repo.get_by(Tasks.Task, title: "should never exist") == nil
+    end
+
+    test "emits tool_call_denied telemetry on a refusal", ctx do
+      handler_id = "tool-call-denied-test-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :federation, :tool_call_denied],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:tool_call_denied, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-telemetry",
+        "tool" => "memory_delete",
+        "args" => %{}
+      })
+
+      assert_receive {:tool_call_denied, measurements, metadata}
+      assert is_integer(measurements.system_time)
+      assert metadata.runtime_id == ctx.runtime.runtime_id
+      assert metadata.tool == "memory_delete"
+      assert metadata.reason == :forbidden
+    end
+
+    # The reason the gate re-reads the row per call instead of reusing the
+    # join-time `:runtime` assign: openclaw sockets stay joined for days, so
+    # a Control Center revocation has to bite on a LIVE socket rather than at
+    # next reconnect.
+    test "a bundle revoked mid-connection takes effect without a rejoin", ctx do
+      {:ok, _granted} = Federation.update_allowed_bundles(ctx.runtime, ["task"])
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-before",
+        "tool" => "task_list",
+        "args" => %{}
+      })
+
+      assert_push "tool_result", %{call_id: "call-before", status: "ok"}
+
+      # Revoke everything WITHOUT touching the socket — no rejoin, no
+      # reconnect, same channel process.
+      runtime = Federation.get_runtime(ctx.runtime.id)
+      {:ok, _revoked} = Federation.update_allowed_bundles(runtime, [])
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-after",
+        "tool" => "task_list",
+        "args" => %{}
+      })
+
+      assert_push "tool_result", %{call_id: "call-after", status: "error", error: error}
+      assert error.error == "tool 'task_list' not in allowed bundles"
+      assert error.code == "forbidden"
+    end
+
+    test "denies when the runtime row vanished after connect", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      Repo.delete!(ctx.runtime)
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-gone",
+        "tool" => "space_list",
+        "args" => %{}
+      })
+
+      assert_push "tool_result", %{call_id: "call-gone", status: "error", error: error}
+      assert error.error == "tool 'space_list' not in allowed bundles"
+      assert error.code == "forbidden"
+    end
+  end
+
+  defp create_project(attrs \\ %{}) do
+    default = %{name: "Channel Test Project #{System.unique_integer([:positive])}"}
+    {:ok, project} = Tasks.create_project(Map.merge(default, attrs))
+    project
   end
 end

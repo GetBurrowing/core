@@ -8,13 +8,19 @@ defmodule PlatformWeb.MCPController do
   Auth is handled upstream by `PlatformWeb.Plugs.RuntimeBearerAuth`; the
   authenticated runtime lives at `conn.assigns.runtime` and its
   `allowed_bundles` field scopes both `tools/list` and `tools/call`.
+
+  Capability scoping itself is NOT implemented here. Both `tools/list` and
+  `tools/call` delegate to `Platform.Federation.ToolAuthorization`, the single
+  enforcement point shared with the WebSocket transport
+  (`PlatformWeb.RuntimeChannel`), so the two transports cannot answer
+  differently.
   """
 
   use PlatformWeb, :controller
 
   alias Platform.Chat
+  alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolSurface
-  alias Platform.Tenancy
 
   @protocol_version "2025-06-18"
   @server_name "startup-suite"
@@ -69,7 +75,7 @@ defmodule PlatformWeb.MCPController do
   defp dispatch("tools/list", _params, runtime) do
     tools =
       runtime
-      |> effective_tools()
+      |> ToolAuthorization.effective_tools()
       |> Enum.map(&to_mcp_tool/1)
 
     {:ok, %{tools: tools}}
@@ -77,7 +83,7 @@ defmodule PlatformWeb.MCPController do
 
   defp dispatch("tools/call", %{"name" => name, "arguments" => args}, runtime)
        when is_binary(name) and is_map(args) do
-    case authorize_tool(name, runtime) do
+    case ToolAuthorization.authorize(name, runtime) do
       :ok ->
         context = build_context(args, runtime)
 
@@ -98,35 +104,6 @@ defmodule PlatformWeb.MCPController do
 
   defp dispatch(method, _params, _runtime) do
     {:error, -32601, "method not found: #{method}"}
-  end
-
-  # ── Authorization ───────────────────────────────────────────────────
-
-  # Single source of truth for the tool set a runtime may see AND call.
-  # `tools/list` maps over this and `authorize_tool/2` checks membership
-  # against it, so the visible set and the callable set are provably
-  # identical — a tool can never be listed-but-blocked or blocked-but-
-  # listed. For an external principal the bundle-scoped list is further
-  # intersected with the chat allowlist (fail-closed, only removes); for
-  # an internal principal `scope_for_external(_, false)` is identity, so
-  # behavior is byte-for-byte unchanged.
-  defp effective_tools(runtime) do
-    runtime.allowed_bundles
-    |> ToolSurface.list_tools()
-    |> ToolSurface.scope_for_external(external_principal?(runtime))
-  end
-
-  # An external principal is a runtime whose owner holds any org_membership
-  # marked `external: true` (M1's column). One indexed `Repo.exists?` per
-  # request. `Tenancy.external_user?/1` matches a map carrying `:id`, so we
-  # wrap the raw `owner_user_id` — a nil owner falls through to `false`.
-  defp external_principal?(runtime),
-    do: Tenancy.external_user?(%{id: runtime.owner_user_id})
-
-  defp authorize_tool(name, runtime) do
-    if Enum.any?(effective_tools(runtime), &(&1.name == name)),
-      do: :ok,
-      else: {:error, :forbidden}
   end
 
   # ── Execution context ───────────────────────────────────────────────
