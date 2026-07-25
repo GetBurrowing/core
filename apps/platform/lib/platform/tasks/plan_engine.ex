@@ -231,9 +231,31 @@ defmodule Platform.Tasks.PlanEngine do
 
       case current_stage(stages) do
         nil ->
-          # All stages are terminal — complete the plan
-          {:ok, completed} = complete_plan(plan)
-          Repo.preload(completed, stages_query())
+          # `current_stage/1` returns nil for [passed, failed] exactly as it does
+          # for [passed, passed] — it looks only for a running or pending stage.
+          # This branch used to call `complete_plan/1` unconditionally, which on
+          # 2026-07-25 completed task 019f9ae5's plan at 20:58:58 while its
+          # stage 3 sat `failed`; the stale `completed` later rode a
+          # `{:plan_updated}` broadcast into the router and marked the task
+          # `done` eight minutes before its PR merged (task 019f9b34).
+          # Mirror `maybe_advance_next/3`'s all-terminal guard instead, and
+          # route completion through the deploy-aware seam.
+          cond do
+            stages == [] ->
+              # Degenerate plan with no stages at all — nothing to deploy,
+              # preserve the historical completion behavior.
+              {:ok, completed} = complete_plan(plan)
+              Repo.preload(completed, stages_query())
+
+            Enum.all?(stages, &(&1.status in ~w(passed skipped))) ->
+              maybe_inject_deploy_or_complete(plan, stages)
+
+            true ->
+              # A failed stage is present — leave the plan alone. The failed
+              # stage reopens when its validations flip (see
+              # `maybe_advance_resolved_stage/1`).
+              Repo.preload(plan, stages_query())
+          end
 
         stage ->
           case stage_verdict(stage) do
@@ -826,6 +848,13 @@ defmodule Platform.Tasks.PlanEngine do
   end
 
   defp inject_deploy_stage(plan, task, stage_def, strategy) do
+    # Invariant repair (task 019f9b34): a plan that hosts a running deploy stage
+    # is not `completed`. This seam owns that invariant — with the `advance/1`
+    # guard in place nothing should reach here with a completed plan, so the
+    # warning firing is itself the signal that another premature-completion path
+    # exists.
+    plan = uncomplete_plan_for_deploy(plan)
+
     # Create the deploy stage record
     {:ok, deploy_stage} =
       Tasks.create_stage(%{
@@ -905,6 +934,32 @@ defmodule Platform.Tasks.PlanEngine do
     |> Enum.map(& &1.position)
     |> Enum.max(fn -> 0 end)
   end
+
+  # Flip a `completed` plan back to `approved` immediately before a deploy stage
+  # is injected into it. `Plan.changeset/2` validates status by inclusion with no
+  # transition graph, so completed -> approved is a legal write. Any other status
+  # passes through untouched.
+  defp uncomplete_plan_for_deploy(%Plan{status: "completed"} = plan) do
+    Logger.warning(
+      "[PlanEngine] plan #{plan.id} (task #{plan.task_id}) was `completed` while a deploy " <>
+        "stage was about to be injected — reverting to `approved`. A plan hosting a running " <>
+        "deploy stage must never be completed; see task 019f9b34."
+    )
+
+    case plan |> Plan.changeset(%{status: "approved"}) |> Repo.update() do
+      {:ok, reopened} ->
+        reopened
+
+      {:error, reason} ->
+        Logger.warning(
+          "[PlanEngine] failed to revert plan #{plan.id} to approved: #{inspect(reason)}"
+        )
+
+        plan
+    end
+  end
+
+  defp uncomplete_plan_for_deploy(%Plan{} = plan), do: plan
 
   defp complete_plan(%Plan{} = plan) do
     case plan

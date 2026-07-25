@@ -74,6 +74,27 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
     }
   end
 
+  # Task 019f9b34 — the exact production shape of incident 019f9ae5:
+  # plan `completed`, task `done`, deploy stage still `running`, `pr_merged`
+  # still `pending`. We go around `Tasks.transition_task/2` and the plan
+  # transition helpers on purpose: this is a state the engine should never
+  # produce, and the point is to reproduce it, not to ask for it.
+  defp create_task_in_production_shape! do
+    fixture = create_task_with_ci_validation!()
+
+    plan =
+      fixture.plan
+      |> Ecto.Changeset.change(%{status: "completed"})
+      |> Platform.Repo.update!()
+
+    task =
+      fixture.task
+      |> Ecto.Changeset.change(%{status: "done"})
+      |> Platform.Repo.update!()
+
+    %{fixture | plan: plan, task: task}
+  end
+
   defp merged_pr_payload(overrides \\ %{}) do
     Map.merge(
       %{
@@ -429,6 +450,107 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       assert a_after.status == "passed"
       assert b_after.status == "pending"
     end
+
+    # ── Task 019f9b34: plan-status drift, end to end ──────────────────────
+
+    test "auto-evaluates pr_merged even when the plan is completed and the task done",
+         %{conn: conn} do
+      %{task: task, pr_validation: pr_validation} = create_task_in_production_shape!()
+
+      payload =
+        merged_pr_payload(%{
+          "pull_request" => %{
+            "merged" => true,
+            "title" => "fix: land the deploy anyway",
+            "number" => System.unique_integer([:positive]),
+            "html_url" => "https://github.com/test/ci-repo/pull/603",
+            "merge_commit_sha" => "0ff1ce0ff1ce",
+            "merged_at" => "2026-07-25T21:18:05Z",
+            "body" => "",
+            "user" => %{"login" => "agent-bot"},
+            "merged_by" => %{"login" => "rowan"},
+            "head" => %{"ref" => "task/#{task.id}"}
+          }
+        })
+
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      updated = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
+
+      assert updated.status == "passed",
+             "a merged PR must auto-pass pr_merged regardless of the plan's " <>
+               "bookkeeping status (task 019f9b34)"
+
+      assert updated.evaluated_by == "github_webhook"
+      assert updated.evidence["pr_url"] == "https://github.com/test/ci-repo/pull/603"
+      assert updated.evidence["merge_commit_sha"] == "0ff1ce0ff1ce"
+      assert updated.evidence["merged_by"] == "rowan"
+      assert is_binary(updated.evidence["merged_at"])
+    end
+
+    test "stays scoped to the merged task when both tasks have drifted plans",
+         %{conn: conn} do
+      %{task: task_a, pr_validation: pr_validation_a} = create_task_in_production_shape!()
+      %{pr_validation: pr_validation_b} = create_task_in_production_shape!()
+
+      payload =
+        merged_pr_payload(%{
+          "pull_request" => %{
+            "merged" => true,
+            "title" => "feat: merge drifted A only",
+            "number" => System.unique_integer([:positive]),
+            "html_url" => "https://github.com/test/ci-repo/pull/604",
+            "merge_commit_sha" => "bbbbbbb",
+            "merged_at" => "2026-07-25T21:18:05Z",
+            "body" => "",
+            "user" => %{"login" => "rowan"},
+            "head" => %{"ref" => "task/#{task_a.id}"}
+          }
+        })
+
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      assert Platform.Repo.get!(Platform.Tasks.Validation, pr_validation_a.id).status == "passed"
+
+      assert Platform.Repo.get!(Platform.Tasks.Validation, pr_validation_b.id).status == "pending",
+             "with the plan filter gone, the join to `t.id` is the only thing scoping " <>
+               "the query — it must still hold"
+    end
+
+    test "logs the no-match case at warning level, not debug", %{conn: conn} do
+      task = create_task!()
+
+      payload =
+        merged_pr_payload(%{
+          "pull_request" => %{
+            "merged" => true,
+            "title" => "chore: nothing to validate",
+            "number" => System.unique_integer([:positive]),
+            "html_url" => "https://github.com/test/repo/pull/605",
+            "merge_commit_sha" => "cafebabe",
+            "merged_at" => "2026-07-25T21:18:05Z",
+            "body" => "",
+            "user" => %{"login" => "rowan"},
+            "head" => %{"ref" => "task/#{task.id}"}
+          }
+        })
+
+      # `level: :warning` means a `Logger.debug` emission captures as "" and
+      # this assertion fails — the level is what is being pinned here, not
+      # just the message text.
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          conn = post(conn, @github_webhook_path, payload)
+          assert %{"status" => "created"} = json_response(conn, 201)
+        end)
+
+      assert log =~ "No pending pr_merged validation matched"
+      assert log =~ task.id
+      assert log =~ "https://github.com/test/repo/pull/605"
+      assert log =~ "cafebabe"
+    end
   end
 
   # ── HMAC signature verification tests ───────────────────────────────────
@@ -587,6 +709,65 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
 
       assert found != nil
       assert found.id == ci_check_val.id
+    end
+
+    # ── Task 019f9b34: plan-status drift ──────────────────────────────────
+    #
+    # These call the query functions directly (no HTTP request), so they are
+    # the load-bearing regression assertions for the filter removal.
+
+    test "finds the validation when the plan has drifted to completed and the task to done" do
+      %{task: task, plan: plan, pr_validation: pr_validation} =
+        create_task_in_production_shape!()
+
+      # Precondition: we really are in the drifted production shape.
+      assert plan.status == "completed"
+      assert Platform.Repo.get!(Platform.Tasks.Task, task.id).status == "done"
+      assert Platform.Repo.get!(Platform.Tasks.Stage, pr_validation.stage_id).status == "running"
+
+      found =
+        PlatformWeb.GithubWebhookController.find_pending_pr_merged_validation(task.id)
+
+      assert found != nil,
+             "a completed plan must not hide a pending pr_merged validation on a " <>
+               "running deploy stage (task 019f9b34)"
+
+      assert found.id == pr_validation.id
+    end
+
+    test "find_pending_ci_validation/1 also survives plan-status drift" do
+      %{task: task, ci_validation: ci_validation} = create_task_in_production_shape!()
+
+      found = PlatformWeb.GithubWebhookController.find_pending_ci_validation(task.id)
+
+      assert found != nil
+      assert found.id == ci_validation.id
+    end
+
+    test "still returns nil when the deploy stage is not running (negative control)" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Drift Negative #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/drift-negative"
+        })
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Not started"})
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Deploy: PR merge"})
+
+      # Stage deliberately left `pending` — never transitioned to running.
+      {:ok, _pr_validation} = Tasks.create_validation(%{stage_id: stage.id, kind: "pr_merged"})
+
+      plan |> Ecto.Changeset.change(%{status: "completed"}) |> Platform.Repo.update!()
+
+      assert Platform.Repo.get!(Platform.Tasks.Stage, stage.id).status == "pending"
+
+      assert PlatformWeb.GithubWebhookController.find_pending_pr_merged_validation(task.id) == nil,
+             "dropping the plan filter must not widen the query into 'any pending " <>
+               "validation anywhere' — `s.status == \"running\"` still does the scoping"
     end
   end
 

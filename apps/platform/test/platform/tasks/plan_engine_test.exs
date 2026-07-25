@@ -214,6 +214,75 @@ defmodule Platform.Tasks.PlanEngineTest do
       # Plan should NOT be completed because s2 failed
       refute updated_plan.status == "completed"
     end
+
+    # ── Task 019f9b34: `advance/1`'s nil-current-stage branch ──────────────
+    #
+    # `current_stage/1` returns nil for [passed, failed] exactly as it does for
+    # [passed, passed]. The nil branch used to call `complete_plan/1`
+    # unconditionally, so a SECOND `advance/1` on a plan with a failed stage
+    # silently completed it. That is incident 019f9ae5 in three lines.
+
+    test "a second advance/1 does not complete a plan that still has a failed stage", %{
+      plan: plan
+    } do
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, s2} = Tasks.create_stage(%{plan_id: plan.id, position: 2, name: "Deploy"})
+
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+      {:ok, _} = PlanEngine.advance(plan.id)
+
+      {:ok, v1} = Tasks.create_validation(%{stage_id: s2.id, kind: "test_pass"})
+      Tasks.evaluate_validation(v1.id, "failed", %{})
+      {:ok, _} = PlanEngine.advance(plan.id)
+
+      # Second call: no stage is running or pending, so `current_stage/1`
+      # returns nil. The plan must still NOT complete.
+      assert {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+      refute updated_plan.status == "completed",
+             "a plan with a failed stage must not complete via advance/1's nil branch (019f9b34)"
+
+      assert Platform.Repo.get!(Platform.Tasks.Plan, plan.id).status != "completed"
+      assert Platform.Repo.get!(Platform.Tasks.Stage, s2.id).status == "failed"
+    end
+
+    test "three-stage production shape: [passed, passed, failed] never completes, then does once resolved",
+         %{plan: plan} do
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, s2} = Tasks.create_stage(%{plan_id: plan.id, position: 2, name: "Verify"})
+      {:ok, s3} = Tasks.create_stage(%{plan_id: plan.id, position: 3, name: "Task-level review"})
+
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+      {:ok, _} = PlanEngine.advance(plan.id)
+      {:ok, _} = PlanEngine.advance(plan.id)
+
+      # s3 is running now; fail its validation.
+      {:ok, v3} = Tasks.create_validation(%{stage_id: s3.id, kind: "manual_approval"})
+      Tasks.evaluate_validation(v3.id, "failed", %{})
+      {:ok, _} = PlanEngine.advance(plan.id)
+
+      assert Platform.Repo.get!(Platform.Tasks.Stage, s2.id).status == "passed"
+      assert Platform.Repo.get!(Platform.Tasks.Stage, s3.id).status == "failed"
+
+      # This is the call the executor's `stage_complete` made on 2026-07-25.
+      assert {:ok, drifted_plan} = PlanEngine.advance(plan.id)
+
+      refute drifted_plan.status == "completed",
+             "[passed, passed, failed] must not complete the plan (019f9ae5 timeline)"
+
+      # The guard defers completion, it does not deadlock it: resolving s3
+      # completes the plan.
+      {:ok, _} = PlanEngine.evaluate_validation(v3.id, %{status: "passed"})
+
+      assert Platform.Repo.get!(Platform.Tasks.Stage, s3.id).status == "passed"
+      assert Platform.Repo.get!(Platform.Tasks.Plan, plan.id).status == "completed"
+    end
+
+    test "a plan with zero stages still completes via advance/1", %{plan: plan} do
+      assert {:ok, updated_plan} = PlanEngine.advance(plan.id)
+      assert updated_plan.stages == []
+      assert updated_plan.status == "completed"
+    end
   end
 
   # ── Deploy stage injection ─────────────────────────────────────────────
@@ -261,6 +330,80 @@ defmodule Platform.Tasks.PlanEngineTest do
       # Task should be in deploying status
       updated_task = Tasks.get_task_record(task.id)
       assert updated_task.status == "deploying"
+    end
+
+    test "injects the deploy stage when advance/1 finds every stage already terminal",
+         %{project: project} do
+      # Task 019f9b34: the all-terminal case now routes through
+      # `maybe_inject_deploy_or_complete/2` instead of `complete_plan/1`, so a
+      # deployable task gets its deploy stage even when `advance/1` is called on
+      # a plan whose stages are already passed (the idempotent `stage_complete`
+      # path). Before the fix this branch completed the plan outright.
+      strategy = %{"type" => "pr_merge", "config" => %{"require_ci_pass" => true}}
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "All-terminal deployable task",
+          status: "in_progress",
+          deploy_strategy: strategy,
+          deploy_target: "production"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, running} = PlanEngine.start_stage(s1.id)
+      {:ok, _passed} = Tasks.transition_stage(running, "passed")
+
+      # No running and no pending stage → `current_stage/1` returns nil.
+      assert {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+      refute updated_plan.status == "completed",
+             "a plan owing a deploy stage must not complete via advance/1's nil branch"
+
+      deploy_stage = Enum.find(updated_plan.stages, &(&1.name == "Deploy: PR merge"))
+      assert deploy_stage != nil, "deploy stage must be injected from the all-terminal branch"
+      assert deploy_stage.status == "running"
+
+      assert Tasks.get_task_record(task.id).status == "deploying"
+    end
+
+    test "reverts a drifted `completed` plan to `approved` when injecting a deploy stage",
+         %{project: project} do
+      # Task 019f9b34 change B: `inject_deploy_stage/4` owns the invariant that a
+      # plan hosting a running deploy stage is not `completed`. Force the drifted
+      # state directly (bypassing the engine) to prove the repair.
+      strategy = %{"type" => "pr_merge", "config" => %{"require_ci_pass" => true}}
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Drifted plan deployable task",
+          status: "in_progress",
+          deploy_strategy: strategy,
+          deploy_target: "production"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, running} = PlanEngine.start_stage(s1.id)
+      {:ok, _passed} = Tasks.transition_stage(running, "passed")
+
+      # Reproduce the production drift: plan `completed` while work remains.
+      plan
+      |> Ecto.Changeset.change(%{status: "completed"})
+      |> Platform.Repo.update!()
+
+      assert {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+      assert updated_plan.status == "approved",
+             "injecting a deploy stage must reopen a drifted `completed` plan (019f9b34)"
+
+      deploy_stage = Enum.find(updated_plan.stages, &(&1.name == "Deploy: PR merge"))
+      assert deploy_stage != nil
+      assert deploy_stage.status == "running"
+
+      assert Platform.Repo.get!(Platform.Tasks.Plan, plan.id).status == "approved"
     end
 
     test "completes plan normally when strategy is none", %{project: project} do

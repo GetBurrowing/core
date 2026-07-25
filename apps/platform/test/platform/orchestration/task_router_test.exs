@@ -2340,6 +2340,117 @@ defmodule Platform.Orchestration.TaskRouterTest do
   end
 
   # ────────────────────────────────────────────────────────────────────
+  # deploying -> done requires a settled deploy stage (task 019f9b34)
+  # ────────────────────────────────────────────────────────────────────
+  #
+  # Incident 019f9ae5: `inject_deploy_stage/4` created the deploy stage,
+  # transitioned the task to `deploying`, then broadcast `{:plan_updated,
+  # plan}` carrying a STALE `completed` status. The router's
+  # `deploying -> done` arm trusted that status and marked the task `done`
+  # at 21:10:06.840 — eight minutes before the PR merged, with the deploy
+  # stage still `running`. The guard makes the task status independent of
+  # the plan row's bookkeeping.
+
+  describe "deploying -> done requires a settled deploy stage (task 019f9b34)" do
+    defp seed_running_deploy_stage!(plan, status) do
+      {:ok, deploy_stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 2,
+          name: "Deploy: PR merge",
+          description: "Deploy via PR merge"
+        })
+
+      {:ok, _validation} =
+        Tasks.create_validation(%{stage_id: deploy_stage.id, kind: "pr_merged"})
+
+      deploy_stage
+      |> Ecto.Changeset.change(%{status: status, started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+    end
+
+    defp drift_plan_to_completed!(plan) do
+      plan
+      |> Ecto.Changeset.change(%{status: "completed"})
+      |> Platform.Repo.update!()
+    end
+
+    test "a stale `completed` broadcast does NOT flip the task to done while the deploy stage is running",
+         %{task: task, assignee: assignee, plan: plan} do
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(50)
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, task} = Tasks.transition_task(task, "in_progress")
+      {:ok, _task} = Tasks.transition_task(task, "deploying")
+
+      _deploy_stage = seed_running_deploy_stage!(plan, "running")
+      completed_plan = drift_plan_to_completed!(plan)
+
+      Tasks.broadcast_board({:plan_updated, completed_plan})
+      Process.sleep(150)
+
+      updated_task = Tasks.get_task_detail(task.id)
+
+      assert updated_task.status == "deploying",
+             "a running deploy stage must hold the task at deploying — a `completed` plan is " <>
+               "not evidence the deploy landed (task 019f9b34 / incident 019f9ae5)"
+    end
+
+    test "a settled (passed) deploy stage still promotes the task to done", %{
+      task: task,
+      assignee: assignee,
+      plan: plan
+    } do
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(50)
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, task} = Tasks.transition_task(task, "in_progress")
+      {:ok, _task} = Tasks.transition_task(task, "deploying")
+
+      _deploy_stage = seed_running_deploy_stage!(plan, "passed")
+      completed_plan = drift_plan_to_completed!(plan)
+
+      Tasks.broadcast_board({:plan_updated, completed_plan})
+      Process.sleep(150)
+
+      updated_task = Tasks.get_task_detail(task.id)
+
+      assert updated_task.status == "done",
+             "the guard must not be inert-and-passing: a passed deploy stage still completes the task"
+    end
+
+    test "a plan with no deploy stage at all still promotes the task to done", %{
+      task: task,
+      assignee: assignee,
+      plan: plan,
+      stage: stage
+    } do
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(50)
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, task} = Tasks.transition_task(task, "in_progress")
+      {:ok, _task} = Tasks.transition_task(task, "deploying")
+
+      stage
+      |> Ecto.Changeset.change(%{status: "passed", completed_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      completed_plan = drift_plan_to_completed!(plan)
+
+      Tasks.broadcast_board({:plan_updated, completed_plan})
+      Process.sleep(150)
+
+      updated_task = Tasks.get_task_detail(task.id)
+
+      assert updated_task.status == "done",
+             "the empty-deploy-stage filter must default to settled, not lock the task out of done"
+    end
+  end
+
+  # ────────────────────────────────────────────────────────────────────
   # Stage-scoped blocker handling (task 019f6791 stage 3)
   # ────────────────────────────────────────────────────────────────────
   #

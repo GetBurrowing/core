@@ -87,6 +87,10 @@ defmodule PlatformWeb.GithubWebhookController do
     if task_id do
       case find_pending_ci_validation(task_id) do
         nil ->
+          # Stays at `debug` on purpose (task 019f9b34): this fires on every
+          # `check_suite.completed` / `workflow_run.completed` for a task
+          # branch — i.e. on every push during execution, long before any
+          # deploy stage exists. Promoting it would drown the log.
           Logger.debug(
             "[Webhook] No pending ci_passed validation for task #{task_id} (branch: #{branch})"
           )
@@ -159,7 +163,8 @@ defmodule PlatformWeb.GithubWebhookController do
         join: t in Task,
         on: t.id == p.task_id,
         where: t.id == ^task_id,
-        where: p.status in ~w(approved),
+        # Task 019f9b34: the plan's status is deliberately NOT filtered here —
+        # see `find_pending_pr_merged_validation/1` below for the full rationale.
         where: s.status == "running",
         where: v.kind == "ci_passed",
         where: v.status == "pending",
@@ -200,6 +205,10 @@ defmodule PlatformWeb.GithubWebhookController do
           # Find the pending pr_merged validation for this task
           case find_pending_pr_merged_validation(task_id) do
             nil ->
+              # Stays at `debug` on purpose (task 019f9b34): this fires after
+              # every CI success on the task branch while auto-merge is
+              # configured, which is routinely long before any deploy stage
+              # exists. Genuinely a normal no-op.
               Logger.debug(
                 "[Webhook] No pending pr_merged validation for auto-merge on task #{task_id}"
               )
@@ -253,7 +262,14 @@ defmodule PlatformWeb.GithubWebhookController do
         join: t in Task,
         on: t.id == p.task_id,
         where: t.id == ^task_id,
-        where: p.status in ~w(approved),
+        # Task 019f9b34: the plan's status is deliberately NOT filtered here.
+        # The plan's lifecycle status is engine bookkeeping and it has drifted
+        # from the stage's actual state in production before (a plan read
+        # `completed` while its deploy stage was still `running`), which made
+        # this query return nil and hung the deploy indefinitely. A deploy that
+        # has genuinely happened must be recordable no matter what the plan row
+        # claims. The `join: p in Plan` stays — it is the only path from
+        # Validation → Stage → Plan → Task — but nothing is filtered on it.
         where: s.status == "running",
         where: v.kind in ~w(pr_merged ci_check),
         where: v.status == "pending",
@@ -354,13 +370,28 @@ defmodule PlatformWeb.GithubWebhookController do
     # PRs — on unexpected exception we log ERROR with stacktrace and
     # fall back to the per-task path on the original branch.
     #
-    # NOTE on webhook delivery reliability: during T2-T5 dogfooding we
-    # observed that `pull_request.closed` events did not always reach
-    # this controller, forcing admin-passthrough on `pr_merged` for
-    # those merges. Stage 1 here ensures that WHEN the webhook fires
-    # for a rollup PR, all member validations are processed correctly;
-    # it does NOT fix delivery itself (that investigation is GitHub-
-    # side / nginx / gateway and pending separately).
+    # NOTE on admin-passthrough of `pr_merged`. An operator having to
+    # hand-pass a `pr_merged` validation has TWO distinct causes, and
+    # they live at different layers — do not assume the first one:
+    #
+    #   (a) Non-delivery. During T2-T5 dogfooding we observed that
+    #       `pull_request.closed` events did not always reach this
+    #       controller. That investigation is GitHub-side / nginx /
+    #       gateway and is still open.
+    #
+    #   (b) A delivered event whose validation lookup returned nil.
+    #       Task 019f9b34 (incident 019f9ae5, 2026-07-25): GitHub
+    #       delivered, this controller returned HTTP 201, and the
+    #       changelog row was written — delivery was perfect and the
+    #       QUERY was the miss, because `find_pending_pr_merged_validation/1`
+    #       filtered on `plan.status == "approved"` while the plan had
+    #       already drifted to `completed`. Fixed by removing that
+    #       filter, plus the now-`warning`-level no-match log in
+    #       `do_evaluate_pr_merged_validation/3` so cause (b) is
+    #       visible instead of silent.
+    #
+    # T6 stage 1 here ensures that WHEN the webhook fires for a rollup
+    # PR, all member validations are processed correctly.
     #
     # Stage 3 (T6 hardening): base-branch guard. `get_stack_by_rollup_branch/1`
     # matches ONLY on the PR head ref. A PR whose head is `stack/<slug>` but
@@ -487,7 +518,18 @@ defmodule PlatformWeb.GithubWebhookController do
   defp do_evaluate_pr_merged_validation(task_id, pr, merged_at) do
     case find_pending_pr_merged_validation(task_id) do
       nil ->
-        Logger.debug("[Webhook] No pending pr_merged validation for task #{task_id} on PR merge")
+        # Task 019f9b34: this line used to be `Logger.debug`, which is exactly
+        # why the 2026-07-25 incident was invisible — the webhook returned 201,
+        # the changelog row was written, and the only trace of the miss was a
+        # suppressed debug line. It is at `warning` now and accepts the volume
+        # (one line per merged task PR on `none`-strategy projects, plus
+        # redeliveries for an already-passed validation).
+        Logger.warning(
+          "[Webhook] No pending pr_merged validation matched task #{task_id} for merged PR " <>
+            "#{pr["html_url"]} (sha #{pr["merge_commit_sha"]}). The merge is real but no deploy " <>
+            "validation was auto-passed — if a deploy stage is running for this task it will " <>
+            "hang. See task 019f9b34."
+        )
 
         :ok
 

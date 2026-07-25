@@ -735,7 +735,7 @@ defmodule Platform.Orchestration.TaskRouter do
   # in_review   → deploying (review plan done, deploy stage injected by PlanEngine)
   # deploying   → done      (deploy stage passed)
   def handle_info(
-        {:plan_updated, %{task_id: task_id, status: "completed"} = _plan},
+        {:plan_updated, %{task_id: task_id, status: "completed"} = plan},
         %State{task_id: task_id} = state
       ) do
     task = Tasks.get_task_detail(task_id)
@@ -743,10 +743,33 @@ defmodule Platform.Orchestration.TaskRouter do
     if task do
       {target_status, log_label} =
         case task.status do
-          "in_progress" -> {"in_review", "execution plan completed"}
-          "in_review" -> {"deploying", "review plan completed"}
-          "deploying" -> {"done", "deploy completed"}
-          other -> {nil, other}
+          "in_progress" ->
+            {"in_review", "execution plan completed"}
+
+          "in_review" ->
+            {"deploying", "review plan completed"}
+
+          "deploying" ->
+            # A `completed` plan is NOT sufficient evidence that the deploy
+            # landed — see task 019f9b34 / incident 019f9ae5, where a stale
+            # `completed` broadcast emitted by `inject_deploy_stage/4` flipped
+            # the task to `done` eight minutes before its PR merged, with the
+            # deploy stage still `running`. Require the deploy stage itself to
+            # be terminal before promoting deploying -> done.
+            if deploy_stage_settled?(Map.get(plan, :id)) do
+              {"done", "deploy completed"}
+            else
+              Logger.warning(
+                "[TaskRouter] held task #{task_id} at deploying — plan #{inspect(Map.get(plan, :id))} " <>
+                  "broadcast `completed` but its deploy stage is #{inspect(unsettled_deploy_statuses(Map.get(plan, :id)))}. " <>
+                  "Something upstream completed the plan early (see task 019f9b34)."
+              )
+
+              {nil, "deploy stage still running — holding at deploying"}
+            end
+
+          other ->
+            {nil, other}
         end
 
       if target_status do
@@ -2082,6 +2105,34 @@ defmodule Platform.Orchestration.TaskRouter do
   defp deploy_stage?(stage) do
     name = String.downcase(stage.name || "")
     String.starts_with?(name, "deploy:")
+  end
+
+  # True when every deploy stage on the plan has reached a terminal state.
+  # `Enum.all?/2` over an empty list is `true`, which is the right default: a
+  # plan with no deploy stage at all is unaffected by this guard.
+  defp deploy_stage_settled?(nil), do: true
+
+  defp deploy_stage_settled?(plan_id) do
+    plan_id
+    |> deploy_stages()
+    |> Enum.all?(&(&1.status in ~w(passed skipped)))
+  end
+
+  # Diagnostic companion to `deploy_stage_settled?/1` — the statuses of the
+  # deploy stages that are holding the task back, for the warning log.
+  defp unsettled_deploy_statuses(plan_id) do
+    plan_id
+    |> deploy_stages()
+    |> Enum.reject(&(&1.status in ~w(passed skipped)))
+    |> Enum.map(&"#{&1.name}=#{&1.status}")
+  end
+
+  defp deploy_stages(nil), do: []
+
+  defp deploy_stages(plan_id) do
+    plan_id
+    |> Tasks.list_stages()
+    |> Enum.filter(&deploy_stage?/1)
   end
 
   # ── Deploy failure handling ────────────────────────────────────────────
