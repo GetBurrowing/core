@@ -18,6 +18,7 @@ defmodule Platform.Meetings do
 
   alias Platform.Agents.Agent
   alias Platform.Chat
+  alias Platform.Chat.ExternalScope
   alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript}
   alias Platform.Meetings.GuestInvite
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
@@ -27,32 +28,136 @@ defmodule Platform.Meetings do
 
   # ── Meeting records (ADR 0042) ────────────────────────────────────────────
   #
-  # SCAFFOLD: the authoritative Meeting context API is owned by sibling
-  # task 019e2474-11c1 ("Meetings: schema, context, MCP create_meeting
-  # tool") in the meeting-module-basic-v2 stack. The function below is
-  # the minimal read surface that `PlatformWeb.MeetingLive` (this stack
-  # member's embedded chat panel) binds against. At rollup, reconcile
-  # with the sibling's broader context API.
+  # SLUG READS: there is deliberately NO unscoped slug lookup on this
+  # module. `meetings` carries `unique_index(:meetings, [:project_id,
+  # :slug])` — a slug is unique per project, NOT globally — so any
+  # `Repo.get_by(Meeting, slug: slug)` is both an authorization hole
+  # (it crosses org boundaries) and a latent 500 (`get_by/3` raises
+  # `Ecto.MultipleResultsError` on more than one match). The public
+  # arity-1 `get_meeting_by_slug/1` that used to live here was removed
+  # in task 019f9b14 stage 3 for exactly that reason; `meeting_authz_test`
+  # and `meetings_test` both assert it cannot come back.
+  #
+  # Reach for one of these instead:
+  #
+  #   * `fetch_meeting_for_user/2` — user-facing reads. Scopes the query
+  #     to the viewer's orgs in SQL and returns `{:error, :ambiguous}`
+  #     rather than guessing when a slug matches in two of them.
+  #   * `get_meeting_by_slug/2` — internal reads with an explicit
+  #     `project_id` in hand (e.g. `dedupe_slug/4`). Not an
+  #     authorization surface; the caller has already chosen the project.
+  #   * `resolve_guest_invite/2` — the guest ingress. Authority is the
+  #     signed token, whose payload now carries `meeting_id`; the
+  #     slug-only fallback for legacy tokens refuses ambiguous matches
+  #     instead of picking one.
 
   @doc """
-  Fetch a meeting by its URL slug, preloading the bound `:chat_space`.
+  Fetch a meeting by URL slug **as a specific viewer**, scoped to the orgs
+  that viewer belongs to. Preloads `:chat_space` on success.
 
-  Returns the `%Meeting{}` (with `:chat_space` populated) or `nil` when
-  no meeting matches. `MeetingLive` treats `nil` as a clean not-found
-  and redirects rather than crashing. The chat space's `slug` is needed
-  to drive the embedded `live_render(ChatLive)` panel.
+  Returns `{:ok, meeting}`, `{:error, :not_found}`, or `{:error, :ambiguous}`.
 
-  Sibling task 019e2474-11c1 ships a project-scoped `(project_id,
-  slug)` arity. This single-arg lookup is what the `/meetings/:slug`
-  route binds against pre-rollup; at rollup we reconcile to the
-  project-scoped version.
+  ## Why the context and not an `on_mount` hook
+
+  The check lives here, in `Platform.Meetings`, rather than in a
+  `PlatformWeb.LiveAuth` hook. Three reasons:
+
+    1. The predicate needs the meeting row itself — it is the meeting's
+       `project_id -> projects.org_id` that gets compared against membership.
+       An `on_mount` gate would have to load the meeting to decide and then
+       `handle_params/3` would load it again: two queries, two chances to
+       drift apart.
+    2. An `on_mount` protects exactly one route. This context is what every
+       future caller (MCP tool, controller, agent path, LiveComponent)
+       reaches for, so the gate is inherited rather than re-derived.
+    3. The hook is silently bypassable. `/meetings` and `/meetings/:slug` are
+       the same LiveView in the same `live_session :authenticated`. Today the
+       index links out with `navigate=`, so a mount hook would re-run — but
+       switching that one word to `patch=` stops `on_mount` firing and leaves
+       only `handle_params/3`. A gate a one-word template edit disables is
+       not a gate.
+
+  ## Semantics
+
+    * A `nil` user — or anything without a binary `:id` — is
+      `{:error, :not_found}`. An anonymous mount is never authorized.
+    * The org filter is applied **in the query**, not after the fetch, so the
+      database is the enforcement point and there is no window in which an
+      unauthorized row exists in memory.
+    * The read uses `limit: 2` + `Repo.all/1` rather than `Repo.get_by/2`.
+      `meetings` carries `unique_index(:meetings, [:project_id, :slug])` —
+      slug is unique **per project**, not globally — so `Repo.get_by/2` raises
+      `Ecto.MultipleResultsError` as soon as two projects pick the same slug.
+      Two rows returns `{:error, :ambiguous}`; a slug-only URL genuinely
+      cannot disambiguate and this function will not pick one for you.
+    * Root (Fabrikam) admins bypass the org-membership filter — see
+      `Platform.Chat` and `Platform.Chat.Sidebar` for the same precedent.
+      Without it a root operator who is not an explicit member of a tenant org
+      would lose access to that tenant's meetings. The ambiguity handling
+      still applies to them.
+    * External users are additionally narrowed by
+      `Platform.Chat.ExternalScope.visible_space_id?/2` against the meeting's
+      bound chat space. That helper is pass-through for non-external scopes,
+      so internal users pay nothing. A failing external check returns
+      `{:error, :not_found}`, not a distinct error — an external user must not
+      learn that the meeting exists.
+
+  ## Honest limit — this is org isolation, not project isolation
+
+  There is no `project_members` table in this codebase. The finest membership
+  grain that exists is `org_memberships`. Worse,
+  `Platform.Accounts.find_or_create_from_oidc/1` gives **every** new user an
+  `org_memberships` row in the Fabrikam root org. So this function does **not**
+  create per-project isolation within a single org: every Fabrikam-org user can
+  still read every Fabrikam-org meeting, by design.
+
+  What it closes is the cross-**org** read — a Soylent user reading a
+  Wayne-Tech meeting, an external user reading an internal one, an
+  unauthenticated mount reading anything. Per-project ACLs are a separate ADR
+  and are deliberately not invented here.
   """
-  @spec get_meeting_by_slug(String.t()) :: Meeting.t() | nil
-  def get_meeting_by_slug(slug) when is_binary(slug) do
-    case Repo.get_by(Meeting, slug: slug) do
-      nil -> nil
-      meeting -> Repo.preload(meeting, :chat_space)
+  @spec fetch_meeting_for_user(map() | nil, String.t()) ::
+          {:ok, Meeting.t()} | {:error, :not_found} | {:error, :ambiguous}
+  def fetch_meeting_for_user(%{id: user_id} = user, slug)
+      when is_binary(user_id) and is_binary(slug) do
+    slug
+    |> viewer_meeting_query(user_id, Platform.Tenancy.fabrikam_admin?(user))
+    |> Repo.all()
+    |> case do
+      [] ->
+        {:error, :not_found}
+
+      [meeting] ->
+        if ExternalScope.visible_space_id?(meeting.chat_space_id, ExternalScope.for_user(user)) do
+          {:ok, Repo.preload(meeting, :chat_space)}
+        else
+          {:error, :not_found}
+        end
+
+      [_ | _] ->
+        {:error, :ambiguous}
     end
+  end
+
+  def fetch_meeting_for_user(_user, _slug), do: {:error, :not_found}
+
+  defp viewer_meeting_query(slug, _user_id, true = _root_admin?) do
+    from(m in Meeting, where: m.slug == ^slug, limit: 2)
+  end
+
+  defp viewer_meeting_query(slug, user_id, false = _root_admin?) do
+    viewer_org_ids =
+      from(om in Platform.Tenancy.OrgMembership,
+        where: om.user_id == ^user_id,
+        select: om.org_id
+      )
+
+    from(m in Meeting,
+      join: p in Platform.Tasks.Project,
+      on: p.id == m.project_id,
+      where: m.slug == ^slug and p.org_id in subquery(viewer_org_ids),
+      limit: 2
+    )
   end
 
   # ── Configuration ─────────────────────────────────────────────────────────
@@ -467,12 +572,41 @@ defmodule Platform.Meetings do
     * `GuestInvite.verify/1` — signature + expiry check.
     * URL-vs-payload `meeting_slug` tampering guard — payload slug must
       equal the URL slug (else `{:error, :invalid}`).
-    * `get_meeting_by_slug/1` — meeting existence + `:chat_space` preload
-      (a deleted meeting whose token was signed pre-deletion resolves to
-      `{:error, :invalid}`).
+    * Meeting resolution + `:chat_space` preload (a deleted meeting whose
+      token was signed pre-deletion resolves to `{:error, :invalid}`).
     * Display-name branching — `nil` in the payload signals the
       self-entry flow (`:name_entry`), a non-empty binary lands the guest
       straight `:in_meeting`.
+
+  ## How the meeting is resolved, and why it is not a slug lookup
+
+  Possession of a valid token IS the authority here — that is the design,
+  and it is a sound one (dedicated signing key, `Plug.Crypto` `max_age`,
+  an independent payload expiry, and the slug tamper guard above). Guests
+  have no org memberships by definition, so there is deliberately no
+  membership check on this path.
+
+  What the token did not do until task 019f9b14 stage 3 is name its
+  subject unambiguously. `meetings` is only `unique_index(:meetings,
+  [:project_id, :slug])`, so `standup` can exist in two projects in two
+  different orgs. Resolving by slug alone therefore either raised
+  `Ecto.MultipleResultsError` (a 500 on a public, unauthenticated
+  ingress) or — had it been "fixed" by taking the first match — would
+  have admitted a guest holding org A's token into org B's meeting and
+  its LiveKit room.
+
+  So:
+
+    * Token carries `meeting_id` (every token minted since that stage):
+      resolve by id, then require the loaded row's `slug` to equal the
+      URL slug. The id makes the subject exact; the slug re-check is
+      defence in depth against a payload whose two identifiers disagree.
+    * Token carries no `meeting_id` (legacy, pre-stage tokens): fall back
+      to `resolve_meeting_by_slug_unambiguous/1`, which returns the
+      meeting on exactly one match and `{:error, :invalid}` on zero or
+      two-plus. An ambiguous legacy token is refused rather than gambling
+      on a project, and the lookup never raises. With the 24h default
+      expiry these age out within a day.
 
   `PlatformWeb.MeetingLive` (with `chrome_mode: :none` on the `meet.`
   host scope) mounts against this resolver so guest-surface behavior
@@ -510,19 +644,51 @@ defmodule Platform.Meetings do
         # what the host shared with the guest.
         {:error, :invalid}
 
-      {:ok, %{meeting_slug: ^slug, display_name: display_name}} ->
-        case get_meeting_by_slug(slug) do
-          nil ->
+      {:ok, %{meeting_slug: ^slug, display_name: display_name} = payload} ->
+        case resolve_invited_meeting(payload, slug) do
+          {:error, :invalid} ->
             # Signature checked out but the target meeting has been
-            # deleted or the slug never existed. Treat as invalid.
+            # deleted, never existed, or (legacy slug-only token) the
+            # slug matches more than one meeting and we refuse to guess.
             {:error, :invalid}
 
-          meeting when is_binary(display_name) ->
+          {:ok, meeting} when is_binary(display_name) ->
             {:ok, %{state: :in_meeting, meeting: meeting, display_name: display_name}}
 
-          meeting ->
+          {:ok, meeting} ->
             {:ok, %{state: :name_entry, meeting: meeting}}
         end
+    end
+  end
+
+  # Id-bearing token: the payload names its subject exactly. Still require
+  # the row's slug to match the URL slug the host actually shared.
+  defp resolve_invited_meeting(%{meeting_id: meeting_id}, slug) when is_binary(meeting_id) do
+    case Repo.get(Meeting, meeting_id) do
+      %Meeting{slug: ^slug} = meeting -> {:ok, Repo.preload(meeting, :chat_space)}
+      _ -> {:error, :invalid}
+    end
+  rescue
+    # A tampered-but-resigned payload could carry a non-UUID id. Ecto
+    # raises on the cast rather than returning nil; a public ingress must
+    # not 500 on that.
+    Ecto.Query.CastError -> {:error, :invalid}
+  end
+
+  defp resolve_invited_meeting(_payload, slug), do: resolve_meeting_by_slug_unambiguous(slug)
+
+  # Legacy (pre-019f9b14) slug-only token. `limit: 2` + `Repo.all` so 0 / 1 /
+  # many are distinguishable without `Repo.get_by/3`'s
+  # `Ecto.MultipleResultsError`. Safe-fail on both 0 and 2+: an ambiguous
+  # token is refused, never resolved to an arbitrary project's meeting.
+  defp resolve_meeting_by_slug_unambiguous(slug) when is_binary(slug) do
+    Meeting
+    |> where([m], m.slug == ^slug)
+    |> limit(2)
+    |> Repo.all()
+    |> case do
+      [meeting] -> {:ok, Repo.preload(meeting, :chat_space)}
+      _none_or_ambiguous -> {:error, :invalid}
     end
   end
 

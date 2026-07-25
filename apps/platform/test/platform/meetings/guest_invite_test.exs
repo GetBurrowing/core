@@ -49,6 +49,81 @@ defmodule Platform.Meetings.GuestInviteTest do
       assert is_nil(payload.guest_space_id)
     end
 
+    # ── meeting_id (task 019f9b14 stage 3) ───────────────────────────────
+    #
+    # The token is a legitimate bearer capability, but `meeting_slug` alone
+    # does not identify a meeting: slug is unique per project, not globally.
+    # `meeting_id` pins the subject. It is optional in verify for exactly
+    # the same reason `guest_space_id` is — tokens already in the wild must
+    # keep working until they expire.
+
+    test "roundtrips a meeting_id when provided" do
+      expires_at = future_ts(3600)
+      meeting_id = Ecto.UUID.generate()
+
+      token =
+        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", meeting_id: meeting_id)
+
+      assert {:ok, payload} = GuestInvite.verify(token)
+      assert payload.meeting_id == meeting_id
+    end
+
+    test "a legacy token minted without meeting_id still verifies and yields meeting_id: nil" do
+      expires_at = future_ts(3600)
+      space_id = Ecto.UUID.generate()
+
+      # Exactly the pre-019f9b14 mint shape: guest_space_id but no meeting_id.
+      token =
+        GuestInvite.sign("standup-2026-07", expires_at, nil, guest_space_id: space_id)
+
+      assert {:ok, payload} = GuestInvite.verify(token)
+      assert is_nil(payload.meeting_id)
+      # And the rest of the payload is untouched by the new key.
+      assert payload.meeting_slug == "standup-2026-07"
+      assert payload.guest_space_id == space_id
+      assert is_nil(payload.display_name)
+    end
+
+    test "meeting_id: nil roundtrips as nil" do
+      expires_at = future_ts(3600)
+      token = GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", meeting_id: nil)
+
+      assert {:ok, payload} = GuestInvite.verify(token)
+      assert is_nil(payload.meeting_id)
+    end
+
+    test "meeting_id and guest_space_id roundtrip together" do
+      expires_at = future_ts(3600)
+      meeting_id = Ecto.UUID.generate()
+      space_id = Ecto.UUID.generate()
+
+      token =
+        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks",
+          guest_space_id: space_id,
+          meeting_id: meeting_id
+        )
+
+      assert {:ok, payload} = GuestInvite.verify(token)
+      assert payload.meeting_id == meeting_id
+      assert payload.guest_space_id == space_id
+    end
+
+    test "sign_with_default_expiry passes meeting_id through" do
+      meeting_id = Ecto.UUID.generate()
+      token = GuestInvite.sign_with_default_expiry("weekly-sync", nil, meeting_id: meeting_id)
+
+      assert {:ok, payload} = GuestInvite.verify(token)
+      assert payload.meeting_id == meeting_id
+    end
+
+    test "a non-binary meeting_id raises ArgumentError at sign" do
+      expires_at = future_ts(3600)
+
+      assert_raise ArgumentError, ~r/meeting_id must be a binary or nil/, fn ->
+        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", meeting_id: 42)
+      end
+    end
+
     test "roundtrips self-entry (display_name = nil)" do
       expires_at = future_ts(3600)
       token = GuestInvite.sign("open-mic", expires_at, nil)

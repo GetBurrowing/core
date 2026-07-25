@@ -25,7 +25,15 @@ defmodule PlatformWeb.MeetingLiveTest do
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Tasks.Project
+  alias Platform.Tenancy.OrgMembership
 
+  # Org plumbing (task 019f9b14 stage 2): `/meetings/:slug` now resolves
+  # through `Meetings.fetch_meeting_for_user/2`, which requires the viewer to
+  # hold an `org_memberships` row in the meeting's org. Real users always have
+  # one — `Accounts.find_or_create_from_oidc/1` inserts a Fabrikam-root membership
+  # on signup — so the fixture mirrors that shape. `@example.com` keeps
+  # `derive_role_from_email/1` at `:member`; a `@example.com` address would
+  # derive admin and blanket-bypass the check these tests rely on.
   defp authenticated_conn(conn, user \\ nil) do
     user =
       user ||
@@ -35,7 +43,17 @@ defmodule PlatformWeb.MeetingLiveTest do
           oidc_sub: "oidc-meeting-test-#{System.unique_integer([:positive])}"
         })
 
+    member!(user, Platform.TenancyFixtures.fabrikam_org_id())
+
     {init_test_session(conn, current_user_id: user.id), user}
+  end
+
+  defp member!(user, org_id, role \\ "member") do
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: org_id, role: role})
+    |> Repo.insert!()
+
+    user
   end
 
   defp create_space do
@@ -52,8 +70,10 @@ defmodule PlatformWeb.MeetingLiveTest do
   defp create_project do
     # ADR 0042: projects require an org_id. Default to the root Fabrikam org so
     # legacy fixtures (which never named an org) keep working untouched.
-    org_id = Platform.TenancyFixtures.fabrikam_org_id()
+    create_project(Platform.TenancyFixtures.fabrikam_org_id())
+  end
 
+  defp create_project(org_id) do
     {:ok, project} =
       %Project{}
       |> Project.changeset(%{
@@ -182,6 +202,96 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert {:error, {:live_redirect, %{to: "/meetings"}}} =
                live(conn, ~p"/meetings/does-not-exist")
+    end
+  end
+
+  describe "route authorization (:show)" do
+    # The gate is `Meetings.fetch_meeting_for_user/2`, keyed off
+    # `:current_user_record` (the real User with `:org_memberships`), NOT the
+    # `:user_id` assign — `mount/3` fabricates a UUID for sessionless mounts,
+    # so `:user_id` is a canvas-author placeholder and never an authz subject.
+
+    test "a viewer with no membership in the meeting's org is redirected away", %{conn: conn} do
+      project = create_project(Platform.TenancyFixtures.tenant_org_id("soylent"))
+      {meeting, _space} = create_meeting(%{project: project, name: "Soylent Only"})
+
+      # Fabrikam-root membership at :member level — the shape every OIDC signup
+      # has, and not a membership in the meeting's org.
+      {conn, _user} = authenticated_conn(conn)
+
+      assert {:error, {:live_redirect, %{to: "/meetings"}}} =
+               live(conn, ~p"/meetings/#{meeting.slug}")
+    end
+
+    test "denial is indistinguishable from a genuinely absent slug", %{conn: conn} do
+      project = create_project(Platform.TenancyFixtures.tenant_org_id("soylent"))
+      {meeting, _space} = create_meeting(%{project: project, name: "Oracle Probe"})
+      {conn, _user} = authenticated_conn(conn)
+
+      assert {:error, {:live_redirect, %{to: "/meetings", flash: denied}}} =
+               live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert {:error, {:live_redirect, %{to: "/meetings", flash: absent}}} =
+               live(conn, ~p"/meetings/no-such-meeting-at-all")
+
+      assert denied["error"] == "Meeting not found."
+      assert denied == absent
+    end
+
+    test "a denied mount subscribes to none of the meeting's topics", %{conn: conn} do
+      project = create_project(Platform.TenancyFixtures.tenant_org_id("wayne_tech"))
+      {meeting, space} = create_meeting(%{project: project, name: "No Side Effects"})
+      {conn, _user} = authenticated_conn(conn)
+
+      # The test process joins the topics the success body would have
+      # subscribed the viewer to, so a broadcast proves they are live.
+      ChatPubSub.subscribe(space.id)
+      MeetingsPubSub.subscribe_presence(space.id)
+
+      assert {:error, {:live_redirect, %{to: "/meetings"}}} =
+               live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # `:auto_join` mints a LiveKit token and flips a scheduled meeting to
+      # live. A denied mount must never reach it.
+      assert Repo.get!(Meeting, meeting.id).status == "scheduled"
+      assert Meetings.active_participants_for_space(space.id) == []
+    end
+
+    test "a member of the meeting's org mounts normally", %{conn: conn} do
+      org_id = Platform.TenancyFixtures.tenant_org_id("soylent")
+      project = create_project(org_id)
+      {meeting, _space} = create_meeting(%{project: project, name: "Soylent Standup"})
+      {conn, user} = authenticated_conn(conn)
+      member!(user, org_id)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ meeting.name
+      assert html =~ ~s(data-intent-panel-host="true")
+    end
+
+    test "a slug matching meetings in two of the viewer's orgs gets the ambiguity flash",
+         %{conn: conn} do
+      soylent_id = Platform.TenancyFixtures.tenant_org_id("soylent")
+      wayne_tech_id = Platform.TenancyFixtures.tenant_org_id("wayne_tech")
+
+      {meeting, _space} =
+        create_meeting(%{project: create_project(soylent_id), slug: "standup", name: "A"})
+
+      {_other, _space} =
+        create_meeting(%{project: create_project(wayne_tech_id), slug: "standup", name: "B"})
+
+      {conn, user} = authenticated_conn(conn)
+      member!(user, soylent_id)
+      member!(user, wayne_tech_id)
+
+      # Notably this does NOT raise Ecto.MultipleResultsError, which the
+      # unscoped `Repo.get_by(Meeting, slug: slug)` read did.
+      assert {:error, {:live_redirect, %{to: "/meetings", flash: flash}}} =
+               live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert flash["error"] ==
+               "That link matches more than one meeting. Open it from the Meetings list."
     end
   end
 

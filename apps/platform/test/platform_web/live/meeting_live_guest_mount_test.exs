@@ -566,6 +566,18 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
           oidc_sub: "oidc-shell-reg-#{System.unique_integer([:positive])}"
         })
 
+      # Org plumbing (task 019f9b14 stage 2): `/meetings/:slug` resolves
+      # through the org-scoped `Meetings.fetch_meeting_for_user/2`, so the
+      # viewer needs the Fabrikam-root membership every real OIDC signup gets.
+      # `create_meeting/0` below builds its project in that same org.
+      Repo.insert!(
+        Platform.Tenancy.OrgMembership.changeset(%Platform.Tenancy.OrgMembership{}, %{
+          user_id: user.id,
+          org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+          role: "member"
+        })
+      )
+
       meeting = create_meeting()
 
       # Seed a chat participant row for the viewer so the host-only
@@ -598,6 +610,210 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       assert html =~ ~s(data-role="meeting-mic")
       assert html =~ ~s(data-pane="left-rail")
       assert html =~ ~s(data-pane="center-stage")
+    end
+  end
+
+  # ── Both token shapes land the same four states (task 019f9b14 stage 3) ──
+  #
+  # Every OTHER test in this module mints with `GuestInvite.sign(slug,
+  # expires_at, name)` — i.e. the LEGACY, slug-only shape — so the legacy
+  # path is already covered across all four states above. This block is the
+  # id-bearing parallel: `meeting_id` in the payload, which is what
+  # `MeetingLive`'s "Copy guest link" now mints. Guest ingress must be
+  # byte-for-byte identical between the two.
+  #
+  # It also pins the collision case, which is the reason `meeting_id` exists:
+  # `unique_index(:meetings, [:project_id, :slug])` makes a slug unique per
+  # project only, so the same URL can name two meetings in two orgs. An
+  # id-bearing token resolves to ITS meeting; a legacy token refuses rather
+  # than guessing, and — the bug this stage closes — neither one 500s.
+
+  describe "guest mount — meeting_id-bearing tokens (task 019f9b14 stage 3)" do
+    defp meeting_in_new_project(slug) do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Guest Collision Project #{System.unique_integer([:positive])}",
+          org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        })
+
+      {:ok, meeting} =
+        Meetings.create_meeting(%{
+          project_id: project.id,
+          name: "Collision Standup #{System.unique_integer([:positive])}",
+          slug: slug
+        })
+
+      Repo.preload(meeting, :chat_space)
+    end
+
+    test "id-bearing token with a display_name lands :in_meeting, same as legacy",
+         %{conn: conn} do
+      meeting = create_meeting()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+
+      token =
+        GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks",
+          guest_space_id: meeting.chat_space_id,
+          meeting_id: meeting.id
+        )
+
+      {:ok, view, html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting.slug}/#{token}")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.state == :in_meeting
+      assert assigns.meeting.id == meeting.id
+      assert assigns.display_name == "Juno Fairbanks"
+      assert assigns.chrome_mode == :none
+      assert %Chat.Space{} = assigns.meeting.chat_space
+      assert html =~ ~s(id="meeting-client")
+      assert html =~ "Juno Fairbanks (guest)"
+    end
+
+    test "id-bearing token with nil display_name lands :name_entry and submits through",
+         %{conn: conn} do
+      meeting = create_meeting()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      token = GuestInvite.sign(meeting.slug, expires_at, nil, meeting_id: meeting.id)
+
+      {:ok, view, html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting.slug}/#{token}")
+
+      assert html =~ ~s(phx-submit="submit_name")
+      assert %Meeting{} = :sys.get_state(view.pid).socket.assigns.meeting
+      assert :sys.get_state(view.pid).socket.assigns.state == :name_entry
+
+      render_hook(view, "submit_name", %{"guest" => %{"name" => "Juno Fairbanks"}})
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.state == :in_meeting
+      assert assigns.display_name == "Juno Fairbanks"
+      assert_push_event(view, "join-meeting", %{token: pushed})
+      assert is_binary(pushed) and pushed != ""
+    end
+
+    test "expired id-bearing token still lands :expired", %{conn: conn} do
+      meeting = create_meeting()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.-(60)
+
+      token =
+        GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks", meeting_id: meeting.id)
+
+      {:ok, view, html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting.slug}/#{token}")
+
+      assert :sys.get_state(view.pid).socket.assigns.state == :expired
+      assert html =~ "This invite has expired"
+      refute html =~ ~s(id="meeting-client")
+    end
+
+    test "tampered id-bearing token still lands :invalid", %{conn: conn} do
+      meeting = create_meeting()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      good = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks", meeting_id: meeting.id)
+      tampered = String.replace(good, ~r/./, "X", global: false)
+
+      {:ok, view, html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting.slug}/#{tampered}")
+
+      assert :sys.get_state(view.pid).socket.assigns.state == :invalid
+      assert html =~ "Invite link is not valid"
+    end
+
+    test "id-bearing token whose id names a DIFFERENT meeting than the URL slug is :invalid",
+         %{conn: conn} do
+      meeting_a = create_meeting()
+      meeting_b = create_meeting()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+
+      # Payload slug agrees with the URL, so the pre-existing tamper guard
+      # passes; the id disagrees. Both identifiers must line up.
+      token =
+        GuestInvite.sign(meeting_a.slug, expires_at, "Juno Fairbanks", meeting_id: meeting_b.id)
+
+      {:ok, view, html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting_a.slug}/#{token}")
+
+      assert :sys.get_state(view.pid).socket.assigns.state == :invalid
+      assert html =~ "Invite link is not valid"
+    end
+
+    test "colliding slug: each id-bearing token admits to ITS OWN meeting, no 500",
+         %{conn: conn} do
+      slug = "guest-collision-#{System.unique_integer([:positive])}"
+      meeting_a = meeting_in_new_project(slug)
+      meeting_b = meeting_in_new_project(slug)
+
+      refute meeting_a.id == meeting_b.id
+      assert meeting_a.slug == meeting_b.slug
+
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      token_a = GuestInvite.sign(slug, expires_at, "Guest A", meeting_id: meeting_a.id)
+      token_b = GuestInvite.sign(slug, expires_at, "Guest B", meeting_id: meeting_b.id)
+
+      {:ok, view_a, _html} = conn |> with_meet_host() |> live("/#{slug}/#{token_a}")
+      {:ok, view_b, _html} = conn |> with_meet_host() |> live("/#{slug}/#{token_b}")
+
+      assigns_a = :sys.get_state(view_a.pid).socket.assigns
+      assigns_b = :sys.get_state(view_b.pid).socket.assigns
+
+      assert assigns_a.state == :in_meeting
+      assert assigns_b.state == :in_meeting
+      assert assigns_a.meeting.id == meeting_a.id
+      assert assigns_b.meeting.id == meeting_b.id
+      # The LiveKit rooms are distinct — this is the cross-org admission
+      # path the id closes.
+      refute assigns_a.meeting.chat_space_id == assigns_b.meeting.chat_space_id
+    end
+
+    test "colliding slug + LEGACY slug-only token: :invalid, and the ingress does not crash",
+         %{conn: conn} do
+      slug = "guest-legacy-collision-#{System.unique_integer([:positive])}"
+      _meeting_a = meeting_in_new_project(slug)
+      _meeting_b = meeting_in_new_project(slug)
+
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      # No meeting_id — a token minted before this stage.
+      token = GuestInvite.sign(slug, expires_at, "Juno Fairbanks")
+
+      # Pre-fix this mount raised `Ecto.MultipleResultsError` from
+      # `Repo.get_by(Meeting, slug: slug)` — a 500 on the public guest
+      # ingress. It must now render the ordinary invalid card instead.
+      {:ok, view, html} = conn |> with_meet_host() |> live("/#{slug}/#{token}")
+
+      assert :sys.get_state(view.pid).socket.assigns.state == :invalid
+      assert html =~ "Invite link is not valid"
+    end
+
+    test "LEGACY slug-only token on a unique slug is unaffected by the change",
+         %{conn: conn} do
+      meeting = create_meeting()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+
+      # The exact pre-019f9b14 mint shape from MeetingLive: guest_space_id
+      # present, meeting_id absent.
+      token =
+        GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks",
+          guest_space_id: meeting.chat_space_id
+        )
+
+      {:ok, view, html} = conn |> with_meet_host() |> live("/#{meeting.slug}/#{token}")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.state == :in_meeting
+      assert assigns.meeting.id == meeting.id
+      assert assigns.display_name == "Juno Fairbanks"
+      assert html =~ ~s(id="meeting-client")
     end
   end
 end

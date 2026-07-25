@@ -813,6 +813,174 @@ defmodule Platform.MeetingsTest do
       assert {:error, :invalid} =
                Meetings.resolve_guest_invite("some-meeting", "definitely-not-a-token")
     end
+
+    # ── meeting_id-bound tokens (task 019f9b14 stage 3) ──────────────────
+    #
+    # `meetings` carries `unique_index(:meetings, [:project_id, :slug])`, so
+    # the same slug can legally exist in two projects in two different orgs.
+    # Before this stage the resolver looked the meeting up by slug alone via
+    # `Repo.get_by/3`, which RAISES `Ecto.MultipleResultsError` on the second
+    # match — a 500 on a public, unauthenticated ingress. And "just take the
+    # first row" would have admitted a guest holding org A's token into org
+    # B's meeting and its LiveKit room. These pin both halves.
+
+    defp create_colliding_meetings!(slug) do
+      project_a = create_project!()
+      project_b = create_project!()
+
+      {:ok, meeting_a} =
+        Meetings.create_meeting(%{project_id: project_a.id, name: "Standup A", slug: slug})
+
+      {:ok, meeting_b} =
+        Meetings.create_meeting(%{project_id: project_b.id, name: "Standup B", slug: slug})
+
+      {Platform.Repo.preload(meeting_a, :chat_space),
+       Platform.Repo.preload(meeting_b, :chat_space)}
+    end
+
+    test "an id-bearing token resolves to ITS meeting when two projects share the slug" do
+      slug = "shared-standup-#{System.unique_integer([:positive])}"
+      {meeting_a, meeting_b} = create_colliding_meetings!(slug)
+
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+
+      token_a =
+        GuestInvite.sign(slug, expires_at, "Juno Fairbanks", meeting_id: meeting_a.id)
+
+      token_b =
+        GuestInvite.sign(slug, expires_at, "Juno Fairbanks", meeting_id: meeting_b.id)
+
+      assert {:ok, %{state: :in_meeting, meeting: resolved_a}} =
+               Meetings.resolve_guest_invite(slug, token_a)
+
+      assert {:ok, %{state: :in_meeting, meeting: resolved_b}} =
+               Meetings.resolve_guest_invite(slug, token_b)
+
+      # Same URL slug, two different tokens, two different meetings. This is
+      # the cross-org admission path the id closes.
+      assert resolved_a.id == meeting_a.id
+      assert resolved_b.id == meeting_b.id
+      refute resolved_a.id == resolved_b.id
+      assert %Chat.Space{} = resolved_a.chat_space
+      assert %Chat.Space{} = resolved_b.chat_space
+    end
+
+    test "an id-bearing token whose meeting was deleted resolves to :invalid" do
+      meeting = create_meeting!()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks", meeting_id: meeting.id)
+
+      Platform.Repo.delete!(%Meeting{id: meeting.id})
+
+      assert {:error, :invalid} = Meetings.resolve_guest_invite(meeting.slug, token)
+    end
+
+    test "an id-bearing token whose meeting's slug no longer matches the URL is :invalid" do
+      meeting_a = create_meeting!()
+      meeting_b = create_meeting!()
+
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+
+      # Payload's slug agrees with the URL (so the existing tamper guard
+      # passes) but the id points at a different meeting. Defence in depth:
+      # the two identifiers must agree with each other, not just with the URL.
+      token =
+        GuestInvite.sign(meeting_a.slug, expires_at, "Juno Fairbanks", meeting_id: meeting_b.id)
+
+      assert {:error, :invalid} = Meetings.resolve_guest_invite(meeting_a.slug, token)
+    end
+
+    test "an id-bearing token carrying a non-UUID meeting_id is :invalid, not a crash" do
+      meeting = create_meeting!()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks", meeting_id: "not-a-uuid")
+
+      assert {:error, :invalid} = Meetings.resolve_guest_invite(meeting.slug, token)
+    end
+
+    # ── Legacy (pre-019f9b14) slug-only tokens ───────────────────────────
+    #
+    # These are in the wild with a 24h expiry. Backwards compatibility is
+    # load-bearing until they age out.
+
+    test "a legacy slug-only token with a unique slug still resolves :in_meeting" do
+      meeting = create_meeting!()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+
+      # Exactly the old mint shape — guest_space_id, no meeting_id.
+      token =
+        GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks",
+          guest_space_id: meeting.chat_space_id
+        )
+
+      assert {:ok, %{state: :in_meeting, meeting: resolved, display_name: "Juno Fairbanks"}} =
+               Meetings.resolve_guest_invite(meeting.slug, token)
+
+      assert resolved.id == meeting.id
+      assert %Chat.Space{} = resolved.chat_space
+    end
+
+    test "a legacy slug-only token with a unique slug still resolves :name_entry" do
+      meeting = create_meeting!()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      token = GuestInvite.sign(meeting.slug, expires_at, nil)
+
+      assert {:ok, %{state: :name_entry, meeting: resolved}} =
+               Meetings.resolve_guest_invite(meeting.slug, token)
+
+      assert resolved.id == meeting.id
+      assert %Chat.Space{} = resolved.chat_space
+    end
+
+    test "a legacy slug-only token with a COLLIDING slug is :invalid and does not raise" do
+      slug = "ambiguous-standup-#{System.unique_integer([:positive])}"
+      {_meeting_a, _meeting_b} = create_colliding_meetings!(slug)
+
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      token = GuestInvite.sign(slug, expires_at, "Juno Fairbanks")
+
+      # The whole point: refuse rather than gamble on a project, and — the
+      # bug this stage closes — never raise `Ecto.MultipleResultsError` on
+      # the public guest ingress.
+      assert {:error, :invalid} = Meetings.resolve_guest_invite(slug, token)
+    end
+
+    test "the ambiguous legacy path raises nothing at all" do
+      slug = "ambiguous-noraise-#{System.unique_integer([:positive])}"
+      {_a, _b} = create_colliding_meetings!(slug)
+
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      token = GuestInvite.sign(slug, expires_at, nil)
+
+      # Explicit: any exception (not just MultipleResultsError) fails here.
+      result =
+        try do
+          Meetings.resolve_guest_invite(slug, token)
+        rescue
+          e -> flunk("resolve_guest_invite/2 raised #{inspect(e.__struct__)}")
+        end
+
+      assert result == {:error, :invalid}
+    end
+  end
+
+  # ── The unscoped slug read is gone (task 019f9b14 stage 3) ───────────────
+  #
+  # `get_meeting_by_slug/1` was a public, unscoped `Repo.get_by(Meeting,
+  # slug: slug)`. It was both a cross-org read and a latent 500. Deleting it
+  # is the fix; this pins that it cannot be reintroduced silently. The
+  # arity-2 (explicit project_id, used by `dedupe_slug/4`) is NOT an
+  # authorization surface and deliberately stays.
+  describe "unscoped slug read surface (task 019f9b14 stage 3)" do
+    test "Platform.Meetings does not export an arity-1 get_meeting_by_slug" do
+      Code.ensure_loaded!(Platform.Meetings)
+      refute function_exported?(Platform.Meetings, :get_meeting_by_slug, 1)
+    end
+
+    test "the project-scoped arity-2 lookup is still exported" do
+      Code.ensure_loaded!(Platform.Meetings)
+      assert function_exported?(Platform.Meetings, :get_meeting_by_slug, 2)
+    end
   end
 
   # ── mint_guest_join_bundle/2 (task 019f498d stage 2) ─────────────────────

@@ -48,6 +48,18 @@ defmodule PlatformWeb.MeetingLiveGuestInviteTest do
         oidc_sub: "oidc-guestinvite-#{System.unique_integer([:positive])}"
       })
 
+    # Org plumbing (task 019f9b14 stage 2): `/meetings/:slug` now resolves
+    # through the org-scoped `Meetings.fetch_meeting_for_user/2`. Mirror the
+    # Fabrikam-root membership every OIDC signup gets; `create_project/0` below
+    # builds the meeting's project in that same org.
+    Repo.insert!(
+      Platform.Tenancy.OrgMembership.changeset(%Platform.Tenancy.OrgMembership{}, %{
+        user_id: user.id,
+        org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+        role: "member"
+      })
+    )
+
     {init_test_session(conn, current_user_id: user.id), user}
   end
 
@@ -259,6 +271,11 @@ defmodule PlatformWeb.MeetingLiveGuestInviteTest do
       assert payload.meeting_slug == meeting.slug
       assert payload.display_name == "Juno Fairbanks"
       assert is_binary(payload.guest_space_id)
+      # Task 019f9b14 stage 3: the mint site pins the token's subject with
+      # the meeting id. Slug alone is unique per project only, so without
+      # this a signed token cannot name one meeting unambiguously. This is
+      # the only mint site in the codebase.
+      assert payload.meeting_id == meeting.id
 
       # Exactly one new guest space was provisioned.
       after_count = count_guest_spaces_for_meeting(meeting)

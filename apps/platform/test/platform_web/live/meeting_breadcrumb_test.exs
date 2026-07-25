@@ -79,6 +79,18 @@ defmodule PlatformWeb.MeetingBreadcrumbTest do
           oidc_sub: "oidc-bc-shell-#{System.unique_integer([:positive])}"
         })
 
+      # Org plumbing (task 019f9b14 stage 2): `/meetings/:slug` resolves
+      # through the org-scoped `Meetings.fetch_meeting_for_user/2`, so the
+      # viewer needs the Fabrikam-root membership every OIDC signup gets —
+      # `create_meeting/1` puts the project in that same org.
+      Repo.insert!(
+        Platform.Tenancy.OrgMembership.changeset(%Platform.Tenancy.OrgMembership{}, %{
+          user_id: user.id,
+          org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+          role: "member"
+        })
+      )
+
       {:ok, view, _html} =
         conn
         |> Phoenix.ConnTest.init_test_session(current_user_id: user.id)

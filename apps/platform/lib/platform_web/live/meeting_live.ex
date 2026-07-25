@@ -363,7 +363,7 @@ defmodule PlatformWeb.MeetingLive do
   # already resolved the invite + seeded every assign the guest states
   # need (`:state` in `[:expired, :invalid, :name_entry, :in_meeting]`).
   # handle_params is a no-op here to avoid the shell-path
-  # `Meetings.get_meeting_by_slug/1` re-lookup and MeetingHooks.attach/2
+  # `Meetings.fetch_meeting_for_user/2` re-lookup and MeetingHooks.attach/2
   # (which requires a binary user_id and would double-subscribe the guest
   # to per-space PubSub). Guarded on `:state` presence rather than
   # `:chrome_mode == :none` alone so the stage-1 `/_probe/:slug` smoke
@@ -374,20 +374,60 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, socket}
   end
 
+  # Authorization gate for the `:show` action (task 019f9b14 stage 2).
+  #
+  # The subject is `:current_user_record` — the real `%Platform.Accounts.User{}`
+  # with `:org_memberships` preloaded, assigned by
+  # `PlatformWeb.ShellLive.on_mount(:default)`, which is first in the
+  # `:authenticated` live_session's `on_mount` list and therefore always
+  # present before `handle_params/3` runs. Deliberately NOT `:user_id`:
+  # `mount/3` above falls back to `Ecto.UUID.generate()` when the session
+  # carries no `current_user_id`, and a fabricated UUID would make any
+  # authorization decision built on it meaningless. Bracket access so the
+  # shell-less guest live_session yields `nil` rather than a KeyError if this
+  # clause is ever reached from there — `fetch_meeting_for_user/2` denies nil.
+  #
+  # The gate has to precede the whole success body, not just the row read:
+  # that body subscribes the viewer to the meeting's chat PubSub, presence and
+  # room topics, builds the participant list, loads the canvas, attaches
+  # MeetingHooks, and sends `:auto_join`, which mints a LiveKit token. A denied
+  # mount must reach none of that.
   def handle_params(%{"slug" => slug} = params, _url, socket) do
-    case Meetings.get_meeting_by_slug(slug) do
-      nil ->
+    case Meetings.fetch_meeting_for_user(socket.assigns[:current_user_record], slug) do
+      {:error, :not_found} ->
         # Clean not-found path — no MatchError / Ecto.NoResultsError
         # bubbles. Also clear the client's saved `route_resume:meetings`
         # entry so the Meetings tile falls back to `/meetings` on the next
         # click rather than looping right back into this nil resolve.
+        #
+        # An unauthorized viewer lands here too, with a byte-identical flash
+        # to a genuinely absent slug. That is deliberate: two distinct
+        # messages would turn this route into a slug-existence oracle. The
+        # context collapses the external-user denial into `:not_found` for
+        # the same reason.
         {:noreply,
          socket
          |> handle_route_stale("meetings")
          |> put_flash(:error, "Meeting not found.")
          |> push_navigate(to: ~p"/meetings")}
 
-      meeting ->
+      {:error, :ambiguous} ->
+        # The viewer belongs to two orgs that each own a meeting with this
+        # slug (slug is unique per project, not globally). Not a security
+        # signal — the viewer is entitled to both — so "Meeting not found."
+        # would be a lie. Say so plainly and send them to the list, which
+        # links by an unambiguous route. `handle_route_stale/2` keeps the
+        # client's `route_resume:meetings` entry from looping them back in.
+        {:noreply,
+         socket
+         |> handle_route_stale("meetings")
+         |> put_flash(
+           :error,
+           "That link matches more than one meeting. Open it from the Meetings list."
+         )
+         |> push_navigate(to: ~p"/meetings")}
+
+      {:ok, meeting} ->
         if connected?(socket) do
           if meeting.chat_space_id do
             ChatPubSub.subscribe(meeting.chat_space_id)
@@ -472,6 +512,11 @@ defmodule PlatformWeb.MeetingLive do
     # the index lists every meeting; per-project subscription keeps
     # `{:meeting_created, _}` / `{:meeting_ended, _}` / `{:meeting_started, _}`
     # broadcasts flowing in.
+    # TODO(scope): `list_projects/0` + `list_all_meetings/0` are unscoped —
+    # this index renders every meeting in every org to every authenticated
+    # user, a separate name/existence leak from the `:show` one fixed above.
+    # Left out of task 019f9b14 deliberately (fixing it changes rendered
+    # output); filed as its own task.
     projects = Tasks.list_projects()
     project_ids = Enum.map(projects, & &1.id)
 
@@ -717,7 +762,8 @@ defmodule PlatformWeb.MeetingLive do
   #      space; the space id is threaded through the signed token so the
   #      guest-ingress path can bind writes.
   #   2. a signed HMAC token (`Platform.Meetings.GuestInvite.sign/4`)
-  #      carrying `{meeting_slug, expires_at, display_name, guest_space_id}`.
+  #      carrying
+  #      `{meeting_slug, expires_at, display_name, guest_space_id, meeting_id}`.
   #   3. a URL of the form
   #      `https://<meeting_guest_host>/<meeting_slug>/<token>` that maps
   #      back into `MeetingLive` under the `meet.` host scope (with
@@ -772,7 +818,14 @@ defmodule PlatformWeb.MeetingLive do
             meeting.slug,
             expires_at,
             display_name,
-            guest_space_id: guest_space.id
+            guest_space_id: guest_space.id,
+            # `meeting_id` (task 019f9b14 stage 3) pins the token's
+            # subject. Slug alone is unique only per project, so without
+            # this a signed token for one org's `standup` is
+            # indistinguishable from another org's. This is the only
+            # mint site in the codebase, so every newly-issued token is
+            # unambiguous from here on.
+            meeting_id: meeting.id
           )
 
         host = Application.get_env(:platform, :meeting_guest_host, "meet.example.com")
