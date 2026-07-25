@@ -37,6 +37,116 @@ defmodule Platform.Chat.ActiveAgentStoreTest do
     end
   end
 
+  describe "get_last_agent/1" do
+    test "returns nil for unknown space" do
+      assert ActiveAgentStore.get_last_agent(
+               "nonexistent-space-#{:erlang.unique_integer([:positive])}"
+             ) ==
+               nil
+    end
+
+    test "matches the active agent after set_active/2", %{space_id: space_id} do
+      agent_id = Ecto.UUID.generate()
+
+      ActiveAgentStore.set_active(space_id, agent_id)
+
+      assert ActiveAgentStore.get_active(space_id) == agent_id
+      assert ActiveAgentStore.get_last_agent(space_id) == agent_id
+    end
+
+    test "is retained after clear_active/1", %{space_id: space_id} do
+      agent_id = Ecto.UUID.generate()
+
+      ActiveAgentStore.set_active(space_id, agent_id)
+      assert :ok = ActiveAgentStore.clear_active(space_id)
+
+      assert ActiveAgentStore.get_active(space_id) == nil
+      assert ActiveAgentStore.get_last_agent(space_id) == agent_id
+    end
+
+    test "survives repeated clear_active/1 calls", %{space_id: space_id} do
+      agent_id = Ecto.UUID.generate()
+
+      ActiveAgentStore.set_active(space_id, agent_id)
+      assert :ok = ActiveAgentStore.clear_active(space_id)
+      assert :ok = ActiveAgentStore.clear_active(space_id)
+
+      assert ActiveAgentStore.get_active(space_id) == nil
+      assert ActiveAgentStore.get_last_agent(space_id) == agent_id
+    end
+
+    test "is retained after a matching clear_if_match/2", %{space_id: space_id} do
+      agent_id = Ecto.UUID.generate()
+
+      ActiveAgentStore.set_active(space_id, agent_id)
+      assert :ok = ActiveAgentStore.clear_if_match(space_id, agent_id)
+
+      assert ActiveAgentStore.get_active(space_id) == nil
+      assert ActiveAgentStore.get_last_agent(space_id) == agent_id
+    end
+
+    test "is unchanged by a non-matching clear_if_match/2", %{space_id: space_id} do
+      agent_a = Ecto.UUID.generate()
+      agent_b = Ecto.UUID.generate()
+
+      ActiveAgentStore.set_active(space_id, agent_a)
+      assert :ok = ActiveAgentStore.clear_if_match(space_id, agent_b)
+
+      assert ActiveAgentStore.get_active(space_id) == agent_a
+      assert ActiveAgentStore.get_last_agent(space_id) == agent_a
+    end
+
+    @tag timeout: 5_000
+    test "is retained after the inactivity timeout fires", %{space_id: space_id} do
+      original = Application.get_env(:platform, :active_agent_timeout_ms)
+      Application.put_env(:platform, :active_agent_timeout_ms, 50)
+
+      on_exit(fn ->
+        if original do
+          Application.put_env(:platform, :active_agent_timeout_ms, original)
+        else
+          Application.delete_env(:platform, :active_agent_timeout_ms)
+        end
+      end)
+
+      agent_id = Ecto.UUID.generate()
+      ActiveAgentStore.set_active(space_id, agent_id)
+      assert ActiveAgentStore.get_active(space_id) == agent_id
+
+      Process.sleep(150)
+
+      assert ActiveAgentStore.get_active(space_id) == nil
+      assert ActiveAgentStore.get_last_agent(space_id) == agent_id
+    end
+
+    test "moves to the new agent when re-armed with a different agent", %{space_id: space_id} do
+      agent_a = Ecto.UUID.generate()
+      agent_b = Ecto.UUID.generate()
+
+      ActiveAgentStore.set_active(space_id, agent_a)
+      assert ActiveAgentStore.get_last_agent(space_id) == agent_a
+
+      ActiveAgentStore.set_active(space_id, agent_b)
+
+      assert ActiveAgentStore.get_active(space_id) == agent_b
+      assert ActiveAgentStore.get_last_agent(space_id) == agent_b
+    end
+
+    test "re-arms cleanly from a released row", %{space_id: space_id} do
+      agent_a = Ecto.UUID.generate()
+      agent_b = Ecto.UUID.generate()
+
+      ActiveAgentStore.set_active(space_id, agent_a)
+      ActiveAgentStore.clear_active(space_id)
+
+      # The retained row carries a nil timer_ref — re-arming must not raise.
+      assert :ok = ActiveAgentStore.set_active(space_id, agent_b)
+
+      assert ActiveAgentStore.get_active(space_id) == agent_b
+      assert ActiveAgentStore.get_last_agent(space_id) == agent_b
+    end
+  end
+
   describe "clear_active/1" do
     test "clears the active agent", %{space_id: space_id} do
       agent_id = Ecto.UUID.generate()

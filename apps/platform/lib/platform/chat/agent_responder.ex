@@ -86,7 +86,6 @@ defmodule Platform.Chat.AgentResponder do
   @routable_reasons [
     :mention,
     :directed,
-    :sticky,
     :active_agent,
     :watch,
     :multi_mention,

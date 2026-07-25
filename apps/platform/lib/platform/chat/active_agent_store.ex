@@ -8,12 +8,25 @@ defmodule Platform.Chat.ActiveAgentStore do
 
   ## Read path
 
-  `get_active/1` reads directly from ETS for speed — no GenServer round-trip.
+  `get_active/1` and `get_last_agent/1` read directly from ETS for speed — no
+  GenServer round-trip.
 
   ## Write path
 
   `set_active/2`, `clear_active/1`, and `clear_if_match/2` are GenServer calls
   that serialise mutations and manage per-space timers.
+
+  ## Row shape
+
+  Rows are 4-tuples:
+
+      {space_id, active_agent_participant_id | nil, last_agent_participant_id | nil, timer_ref | nil}
+
+  Releasing the mutex (explicit clear, match-guarded clear, or inactivity
+  timeout) *retains* the row with a `nil` active field rather than deleting it,
+  so `last_agent_participant_id` survives as a memory of who was most recently
+  armed. Callers that only care about the mutex should keep using
+  `get_active/1`, which still returns `nil` once the mutex is released.
 
   ## PubSub
 
@@ -52,7 +65,24 @@ defmodule Platform.Chat.ActiveAgentStore do
   @spec get_active(binary()) :: binary() | nil
   def get_active(space_id) do
     case :ets.lookup(@table, space_id) do
-      [{^space_id, agent_participant_id, _timer_ref}] -> agent_participant_id
+      [{^space_id, agent_participant_id, _last, _timer_ref}] -> agent_participant_id
+      [] -> nil
+    end
+  end
+
+  @doc """
+  Return the most recently active `agent_participant_id` for `space_id`, or `nil`.
+
+  Unlike `get_active/1` this survives the mutex being released — the row is
+  retained (with a `nil` active field) on clear and on inactivity timeout, so
+  the last agent to hold the mutex is still known.
+
+  Reads directly from ETS (no GenServer call) for minimal latency.
+  """
+  @spec get_last_agent(binary()) :: binary() | nil
+  def get_last_agent(space_id) do
+    case :ets.lookup(@table, space_id) do
+      [{^space_id, _active, last_agent_participant_id, _timer_ref}] -> last_agent_participant_id
       [] -> nil
     end
   end
@@ -94,7 +124,8 @@ defmodule Platform.Chat.ActiveAgentStore do
     timer_ref =
       Process.send_after(self(), {:timeout, space_id, agent_participant_id}, timeout_ms())
 
-    :ets.insert(@table, {space_id, agent_participant_id, timer_ref})
+    # The newly-armed agent is also the new "last" agent for the space.
+    :ets.insert(@table, {space_id, agent_participant_id, agent_participant_id, timer_ref})
     broadcast_change(space_id, agent_participant_id)
 
     {:reply, :ok, state}
@@ -102,7 +133,7 @@ defmodule Platform.Chat.ActiveAgentStore do
 
   def handle_call({:clear_active, space_id}, _from, state) do
     cancel_existing_timer(space_id)
-    :ets.delete(@table, space_id)
+    release(space_id)
     broadcast_change(space_id, nil)
 
     {:reply, :ok, state}
@@ -110,9 +141,9 @@ defmodule Platform.Chat.ActiveAgentStore do
 
   def handle_call({:clear_if_match, space_id, agent_participant_id}, _from, state) do
     case :ets.lookup(@table, space_id) do
-      [{^space_id, ^agent_participant_id, timer_ref}] ->
-        Process.cancel_timer(timer_ref)
-        :ets.delete(@table, space_id)
+      [{^space_id, ^agent_participant_id, _last, timer_ref}] ->
+        cancel_timer(timer_ref)
+        release(space_id)
         broadcast_change(space_id, nil)
 
       _other ->
@@ -126,8 +157,8 @@ defmodule Platform.Chat.ActiveAgentStore do
   def handle_info({:timeout, space_id, agent_participant_id}, state) do
     # Use the match-guarded clear so a newer agent isn't accidentally evicted.
     case :ets.lookup(@table, space_id) do
-      [{^space_id, ^agent_participant_id, _timer_ref}] ->
-        :ets.delete(@table, space_id)
+      [{^space_id, ^agent_participant_id, _last, _timer_ref}] ->
+        release(space_id)
         broadcast_change(space_id, nil)
 
       _other ->
@@ -139,12 +170,30 @@ defmodule Platform.Chat.ActiveAgentStore do
 
   # ── Helpers ─────────────────────────────────────────────────────────────────
 
+  # Release the mutex while retaining the row so `get_last_agent/1` keeps
+  # working. The agent that was active becomes the new "last"; if the space was
+  # already released we keep whatever "last" it already carried. A space with no
+  # row at all stays absent — there is nothing to remember.
+  defp release(space_id) do
+    case :ets.lookup(@table, space_id) do
+      [{^space_id, active, last, _timer_ref}] ->
+        :ets.insert(@table, {space_id, nil, active || last, nil})
+
+      [] ->
+        :ok
+    end
+  end
+
   defp cancel_existing_timer(space_id) do
     case :ets.lookup(@table, space_id) do
-      [{^space_id, _agent, timer_ref}] -> Process.cancel_timer(timer_ref)
+      [{^space_id, _active, _last, timer_ref}] -> cancel_timer(timer_ref)
       [] -> :ok
     end
   end
+
+  # Rows that were cleared but retained carry a `nil` timer_ref.
+  defp cancel_timer(nil), do: :ok
+  defp cancel_timer(timer_ref) when is_reference(timer_ref), do: Process.cancel_timer(timer_ref)
 
   defp timeout_ms do
     Application.get_env(:platform, :active_agent_timeout_ms, 900_000)

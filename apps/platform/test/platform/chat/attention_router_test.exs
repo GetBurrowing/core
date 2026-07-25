@@ -433,41 +433,30 @@ defmodule Platform.Chat.AttentionRouterTest do
     end
   end
 
-  describe "no mention + no active + watch ON + primary agent" do
-    test "routes to primary agent and sets as active" do
+  describe "no mention + no active" do
+    test "returns empty (silence) and does not arm the principal agent" do
       agent = create_agent(%{name: "Zip"})
 
-      space =
-        create_space(%{
-          kind: "group",
-          watch_enabled: true,
-          primary_agent_id: agent.id
-        })
-
+      space = create_space(%{kind: "group"})
       user = create_participant(space.id)
 
-      {:ok, agent_participant} =
-        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
-
+      Chat.add_agent_participant(space.id, agent, display_name: "Zip")
       Chat.add_space_agent(space.id, agent.id, role: "principal")
 
       message = create_message(space.id, user.id, %{content: "hello everyone"})
-      agent_participant_id = agent_participant.id
 
-      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :watch}]} =
-               AttentionRouter.route(message)
+      assert {:ok, []} = AttentionRouter.route(message)
 
-      # Agent should now be active
-      assert ActiveAgentStore.get_active(space.id) == agent_participant_id
+      # Nothing may arm the mutex behind the user's back — only an @mention
+      # (or the execution task-assignee path) opens the eye.
+      assert ActiveAgentStore.get_active(space.id) == nil
 
-      assert_receive {:agent_chat_called, "hello everyone", _opts}, 500
+      refute_receive {:agent_chat_called, _, _}, 200
       drain()
     end
-  end
 
-  describe "no mention + no active + watch OFF" do
-    test "returns empty (silence)" do
-      space = create_space(%{kind: "channel", watch_enabled: false})
+    test "returns empty (silence) in a channel" do
+      space = create_space(%{kind: "channel"})
       user = create_participant(space.id)
       agent = create_agent(%{name: "Zip"})
 
@@ -520,15 +509,10 @@ defmodule Platform.Chat.AttentionRouterTest do
   end
 
   describe "mention → active agent → no mention flow" do
-    test "mention sets active, followup routes via active_agent, watch routes primary" do
+    test "mention sets active, followup routes via active_agent, clearing falls silent" do
       agent = create_agent(%{name: "Zip"})
 
-      space =
-        create_space(%{
-          kind: "channel",
-          watch_enabled: true,
-          primary_agent_id: agent.id
-        })
+      space = create_space(%{kind: "channel"})
 
       user = create_participant(space.id)
 
@@ -552,29 +536,27 @@ defmodule Platform.Chat.AttentionRouterTest do
       assert {:ok, [%{participant_id: ^agent_participant_id, reason: :active_agent}]} =
                AttentionRouter.route(followup)
 
-      # Step 3: clear active agent, next message should use watch
+      # Step 3: closing the eye is final — the next un-addressed message
+      # routes to nobody and does not re-arm the agent.
       ActiveAgentStore.clear_active(space.id)
-      watch_msg = create_message(space.id, user.id, %{content: "new topic"})
+      after_close = create_message(space.id, user.id, %{content: "new topic"})
 
-      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :watch}]} =
-               AttentionRouter.route(watch_msg)
+      assert {:ok, []} = AttentionRouter.route(after_close)
+      assert ActiveAgentStore.get_active(space.id) == nil
 
       drain()
     end
   end
 
   describe "stale active agent cleanup" do
-    test "clears mutex and falls through to watch when active agent has left" do
+    test "clears the mutex when the active agent has left" do
       agent = create_agent(%{name: "Zip"})
       agent2 = create_agent(%{name: "Zip2"})
 
-      # Set agent2 as primary so watch mode picks it up after stale mutex clears
-      space =
-        create_space(%{
-          kind: "group",
-          watch_enabled: true,
-          primary_agent_id: agent2.id
-        })
+      # Two agents so the stale-vs-present distinction is still exercised:
+      # agent is dismissed, agent2 stays in the roster and must NOT inherit
+      # the eye.
+      space = create_space(%{kind: "group"})
 
       user = create_participant(space.id)
 
@@ -583,7 +565,7 @@ defmodule Platform.Chat.AttentionRouterTest do
 
       Chat.add_space_agent(space.id, agent.id, role: "principal")
 
-      {:ok, agent2_participant} =
+      {:ok, _agent2_participant} =
         Chat.add_agent_participant(space.id, agent2, display_name: "Zip2")
 
       Chat.add_space_agent(space.id, agent2.id, role: "member")
@@ -594,16 +576,15 @@ defmodule Platform.Chat.AttentionRouterTest do
       # Dismiss the first agent (hard-delete post-ADR-0038)
       {:ok, _} = Chat.remove_participant(agent_participant)
 
-      # Send a message — should NOT silently drop; should clear stale mutex
-      # and fall through to watch routing (which picks up agent2)
       message = create_message(space.id, user.id, %{content: "feedback for agent"})
       {:ok, decisions} = AttentionRouter.route(message)
 
-      # The stale active agent mutex should have been cleared
-      assert ActiveAgentStore.get_active(space.id) != agent_participant.id
+      # The stale mutex is cleared outright — not handed to the remaining agent
+      assert ActiveAgentStore.get_active(space.id) == nil
 
-      # Should have routed to agent2 via watch, not returned empty
-      assert length(decisions) > 0
+      # Eye closed, so nobody hears the message
+      assert decisions == []
+      refute_receive {:agent_chat_called, _, _}, 200
 
       drain()
     end
@@ -631,6 +612,177 @@ defmodule Platform.Chat.AttentionRouterTest do
 
       # Mutex should still be set (agent is still an active participant)
       assert ActiveAgentStore.get_active(space.id) == agent_participant.id
+
+      drain()
+    end
+  end
+
+  # The header eye IS the mutex (task 019f9790). Before this task three
+  # header controls disagreed with one another and none of them was the
+  # thing that actually routed messages; `watch_enabled` + `primary_agent_id`
+  # could re-arm an agent behind the user's back. These tests pin the
+  # lifecycle the eye now promises, end to end through the router.
+  describe "eye-as-mutex lifecycle" do
+    setup do
+      agent = create_agent(%{name: "Zip"})
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
+
+      Chat.add_space_agent(space.id, agent.id, role: "principal")
+
+      %{space: space, user: user, agent: agent, agent_participant: agent_participant}
+    end
+
+    test "an @mention opens the eye and is remembered as the last agent", %{
+      space: space,
+      user: user,
+      agent_participant: agent_participant
+    } do
+      message = create_message(space.id, user.id, %{content: "hey @zip help me"})
+      agent_participant_id = agent_participant.id
+
+      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :mention}]} =
+               AttentionRouter.route(message)
+
+      # Stage 2's widened ETS row: arming by mention populates both fields, so
+      # a later close still knows who to offer on re-open.
+      assert ActiveAgentStore.get_active(space.id) == agent_participant_id
+      assert ActiveAgentStore.get_last_agent(space.id) == agent_participant_id
+
+      assert_receive {:agent_chat_called, "hey @zip help me", _opts}, 500
+      drain()
+    end
+
+    test "an open eye routes unaddressed messages and preserves last-agent memory", %{
+      space: space,
+      user: user,
+      agent_participant: agent_participant
+    } do
+      ActiveAgentStore.set_active(space.id, agent_participant.id)
+      agent_participant_id = agent_participant.id
+
+      message = create_message(space.id, user.id, %{content: "and also do this"})
+
+      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :active_agent}]} =
+               AttentionRouter.route(message)
+
+      # The router refreshes the TTL via `set_active/2` on every routed
+      # message; `last` must survive that refresh unchanged.
+      assert ActiveAgentStore.get_active(space.id) == agent_participant_id
+      assert ActiveAgentStore.get_last_agent(space.id) == agent_participant_id
+
+      assert_receive {:agent_chat_called, "and also do this", _opts}, 500
+      drain()
+    end
+
+    test "a closed eye means silence — the agent is not called at all", %{
+      space: space,
+      user: user,
+      agent_participant: agent_participant
+    } do
+      # Open the eye the way a user would, then close it.
+      mention = create_message(space.id, user.id, %{content: "@zip you there?"})
+      assert {:ok, [%{reason: :mention}]} = AttentionRouter.route(mention)
+      assert_receive {:agent_chat_called, "@zip you there?", _opts}, 500
+
+      ActiveAgentStore.clear_active(space.id)
+      assert ActiveAgentStore.get_active(space.id) == nil
+
+      after_close = create_message(space.id, user.id, %{content: "ok humans only now"})
+
+      assert {:ok, []} = AttentionRouter.route(after_close)
+
+      # The whole point of stage 5: no `route_watch/2` fallback may survive to
+      # re-arm the agent behind the user's back.
+      refute_receive {:agent_chat_called, _, _}, 200
+      assert ActiveAgentStore.get_active(space.id) == nil
+      assert ActiveAgentStore.get_last_agent(space.id) == agent_participant.id
+
+      drain()
+    end
+
+    test "closing the eye does not poison the @mention path", %{
+      space: space,
+      user: user,
+      agent_participant: agent_participant
+    } do
+      ActiveAgentStore.set_active(space.id, agent_participant.id)
+      ActiveAgentStore.clear_active(space.id)
+      assert ActiveAgentStore.get_active(space.id) == nil
+
+      agent_participant_id = agent_participant.id
+      mention = create_message(space.id, user.id, %{content: "@zip back to you"})
+
+      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :mention}]} =
+               AttentionRouter.route(mention)
+
+      assert ActiveAgentStore.get_active(space.id) == agent_participant_id
+
+      assert_receive {:agent_chat_called, "@zip back to you", _opts}, 500
+      drain()
+    end
+
+    test "an agent DM stays :directed even after the mutex is cleared for that space" do
+      # DMs have no eye control at all — `route_agents/3` answers `:directed`
+      # unconditionally, so mutex state must not reach them.
+      space = create_space(%{kind: "dm"})
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Nova"})
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Nova")
+
+      ActiveAgentStore.set_active(space.id, agent_participant.id)
+      ActiveAgentStore.clear_active(space.id)
+      assert ActiveAgentStore.get_active(space.id) == nil
+
+      message = create_message(space.id, user.id, %{content: "just us two"})
+      agent_participant_id = agent_participant.id
+
+      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :directed}]} =
+               AttentionRouter.route(message)
+
+      assert_receive {:agent_chat_called, "just us two", _opts}, 500
+      drain()
+    end
+
+    @tag timeout: 10_000
+    test "the eye falls closed on TTL expiry but the space still remembers the agent", %{
+      space: space,
+      user: user,
+      agent_participant: agent_participant
+    } do
+      original = Application.get_env(:platform, :active_agent_timeout_ms)
+      Application.put_env(:platform, :active_agent_timeout_ms, 50)
+
+      on_exit(fn ->
+        if original do
+          Application.put_env(:platform, :active_agent_timeout_ms, original)
+        else
+          Application.delete_env(:platform, :active_agent_timeout_ms)
+        end
+      end)
+
+      mention = create_message(space.id, user.id, %{content: "@zip quick one"})
+      assert {:ok, [%{reason: :mention}]} = AttentionRouter.route(mention)
+      assert_receive {:agent_chat_called, "@zip quick one", _opts}, 500
+      assert ActiveAgentStore.get_active(space.id) == agent_participant.id
+
+      # Let the inactivity timer fire.
+      Process.sleep(150)
+      assert ActiveAgentStore.get_active(space.id) == nil
+
+      after_expiry = create_message(space.id, user.id, %{content: "much later"})
+
+      assert {:ok, []} = AttentionRouter.route(after_expiry)
+      refute_receive {:agent_chat_called, _, _}, 200
+
+      # Expiry closes the eye but keeps the memory, so click-to-resume still
+      # offers the agent the user was last talking to.
+      assert ActiveAgentStore.get_last_agent(space.id) == agent_participant.id
 
       drain()
     end

@@ -487,17 +487,13 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     |> Enum.join(" & ")
   end
 
-  @doc "Build label for the primary agent when in listening mode."
-  def primary_agent_label(%{primary_agent_id: nil}, _participants), do: "Agent"
-
-  def primary_agent_label(%{primary_agent_id: primary_agent_id}, participants) do
-    case Enum.find(participants, fn p ->
-           p.participant_type == "agent" && p.participant_id == primary_agent_id
-         end) do
-      %{display_name: name} when is_binary(name) and name != "" -> name
-      _ -> resolve_agent_name_by_id(primary_agent_id)
-    end
-  end
+  # `primary_agent_label/2` used to live here. Its only caller was the dimmed
+  # "{primary} listening" hint in the chat header, deleted in task 019f9790
+  # stage 4 along with the other two competing agent controls. Agent naming for
+  # the eye comes from `ActiveAgentHooks.resolve_agent_name/2`, which resolves
+  # the *armed* agent rather than `space.primary_agent_id` — the primary is a
+  # roster @mention-eligibility role, never a default responder. Its private
+  # helper `resolve_agent_name_by_id/1` went with it (no other callers).
 
   # ── Identity helpers (shared between Presence and other features) ──
 
@@ -594,13 +590,6 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
 
       true ->
         "user"
-    end
-  end
-
-  defp resolve_agent_name_by_id(agent_id) do
-    case Repo.get(Platform.Agents.Agent, agent_id) do
-      %{name: name} when is_binary(name) -> name
-      _ -> "Agent"
     end
   end
 

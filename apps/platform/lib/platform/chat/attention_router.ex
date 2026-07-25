@@ -11,8 +11,10 @@ defmodule Platform.Chat.AttentionRouter do
   4. **Multi @mention** — route to all mentioned agents, clear the mutex.
   5. **No mention + active agent** — route to the mutex holder, refresh timeout.
   6. **Execution spaces + no active** — route to the assigned task agent.
-  7. **No mention + no active + watch ON + primary agent** — activate and route.
-  8. **No mention + no active + watch OFF** — silence (empty list).
+  7. **No mention + no active** — silence (empty list). The mutex is the only
+     thing that can arm an agent for un-addressed messages; there is no
+     `watch_enabled`/`primary_agent_id` fallback (removed — it silently
+     reopened the eye the user had just closed).
 
   ## Human participant routing
 
@@ -384,7 +386,8 @@ defmodule Platform.Chat.AttentionRouter do
     end
   end
 
-  # No @mention — check mutex, then execution fallback/watch, then silence
+  # No @mention — check mutex, then the execution task-assignee fallback,
+  # then silence
   defp route_no_mention(
          %Space{kind: "execution"} = space,
          %Message{participant_id: author_id},
@@ -409,15 +412,17 @@ defmodule Platform.Chat.AttentionRouter do
         [%{participant_id: assignee_participant_id, reason: reason}]
 
       _ ->
-        route_execution_active_or_watch(space, agent_recipients)
+        route_execution_active_agent(space, agent_recipients)
     end
   end
 
   defp route_no_mention(%Space{} = space, _message, agent_recipients) do
     case ActiveAgentStore.get_active(space.id) do
       nil ->
-        # No active agent — check watch mode
-        route_watch(space, agent_recipients)
+        # No active agent — the eye is closed, so nobody hears this (ADR 0027).
+        # There is deliberately no fallback: arming an agent here would reopen
+        # the eye the user just closed.
+        []
 
       active_participant_id ->
         # Active agent exists — verify participant is still in the recipients
@@ -432,7 +437,7 @@ defmodule Platform.Chat.AttentionRouter do
           # participant in the space (post-ADR-0038 the row either exists or
           # has been hard-deleted). If they are, they're the message author
           # and we skip routing. If the row is gone, the mutex is stale —
-          # clear it and fall through to watch-mode.
+          # clear it and fall silent.
           still_active =
             Repo.exists?(from(p in Participant, where: p.id == ^active_participant_id))
 
@@ -440,18 +445,19 @@ defmodule Platform.Chat.AttentionRouter do
             # Author is still present — skip routing for this message.
             []
           else
-            # Stale mutex — clear and fall through to watch routing.
+            # Stale mutex — clear it. Nobody is armed now, so nobody hears
+            # this message.
             ActiveAgentStore.clear_active(space.id)
-            route_watch(space, agent_recipients)
+            []
           end
         end
     end
   end
 
-  defp route_execution_active_or_watch(%Space{} = space, agent_recipients) do
+  defp route_execution_active_agent(%Space{} = space, agent_recipients) do
     case ActiveAgentStore.get_active(space.id) do
       nil ->
-        route_watch(space, agent_recipients)
+        []
 
       active_participant_id ->
         if Enum.any?(agent_recipients, &(&1.id == active_participant_id)) do
@@ -465,7 +471,7 @@ defmodule Platform.Chat.AttentionRouter do
             []
           else
             ActiveAgentStore.clear_active(space.id)
-            route_watch(space, agent_recipients)
+            []
           end
         end
     end
@@ -486,26 +492,6 @@ defmodule Platform.Chat.AttentionRouter do
   end
 
   defp execution_space_task_id(_space), do: nil
-
-  defp route_watch(
-         %Space{watch_enabled: true, primary_agent_id: primary_agent_id} = space,
-         agent_recipients
-       )
-       when is_binary(primary_agent_id) and primary_agent_id != "" do
-    # Find the participant record for the primary agent
-    primary_participant =
-      Enum.find(agent_recipients, fn p -> p.participant_id == primary_agent_id end)
-
-    if primary_participant do
-      ActiveAgentStore.set_active(space.id, primary_participant.id)
-      [%{participant_id: primary_participant.id, reason: :watch}]
-    else
-      # Primary agent not in space as participant — silence
-      []
-    end
-  end
-
-  defp route_watch(_space, _agent_recipients), do: []
 
   defp return_empty, do: []
 

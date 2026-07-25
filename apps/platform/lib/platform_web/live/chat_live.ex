@@ -30,7 +30,6 @@ defmodule PlatformWeb.ChatLive do
   alias Phoenix.LiveView.JS
   alias Platform.Accounts
   alias Platform.Chat
-  alias Platform.Chat.ActiveAgentStore
   alias Platform.Chat.HiddenChannels
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Chat.Sidebar
@@ -1919,44 +1918,12 @@ defmodule PlatformWeb.ChatLive do
 
   # ── End upload staging dialog events ──────────────────────────────────
 
-  def handle_event("toggle_watch", _params, socket) do
-    space = socket.assigns.active_space
-    new_watch = !space.watch_enabled
-
-    case Chat.update_space(space, %{watch_enabled: new_watch}) do
-      {:ok, updated_space} ->
-        socket = assign(socket, :active_space, updated_space)
-
-        socket =
-          if new_watch do
-            # Watch turned ON — if no active agent and there's a primary agent, activate it
-            if is_nil(ActiveAgentStore.get_active(space.id)) &&
-                 is_binary(space.primary_agent_id) do
-              primary_participant =
-                space.id
-                |> Chat.list_participants(participant_type: "agent")
-                |> Enum.find(fn p -> p.participant_id == space.primary_agent_id end)
-
-              if primary_participant do
-                ActiveAgentStore.set_active(space.id, primary_participant.id)
-              end
-
-              socket
-            else
-              socket
-            end
-          else
-            # Watch turned OFF — clear active agent immediately
-            ActiveAgentStore.clear_active(space.id)
-            socket
-          end
-
-        {:noreply, socket}
-
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Could not update watch setting.")}
-    end
-  end
+  # `handle_event("toggle_watch", ...)` used to live here. Deleted with the
+  # header control that called it (task 019f9790 stage 4): the eye is now the
+  # agent mutex, and a second, persisted flag that could disagree with it was
+  # the whole bug. This was the only writer of `chat_spaces.watch_enabled` in
+  # `lib/`; the column stays (no migration) and `AttentionRouter` stops reading
+  # it in stage 5.
 
   # Coordinator: open a canvas and close the thread panel.
   def handle_event("canvas_open", %{"canvas-id" => canvas_id}, socket) do

@@ -384,7 +384,13 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             <label class="label"><span class="label-text">Role</span></label>
             <select name="role" class="select select-bordered w-full">
               <option value="member" selected>Member</option>
-              <option value="principal">Principal (default responder)</option>
+              <%!-- `principal` gates @mention eligibility
+                    (`attention_router.ex:360`, `role in ["principal",
+                    "member"]`) and blocks removal at `shell.html.heex:169`. It
+                    has never been a default responder — the old label claimed
+                    a behaviour the router does not implement (task 019f9790
+                    stage 4). --%>
+              <option value="principal">Principal (can be @mentioned)</option>
             </select>
           </div>
           <div class="flex justify-end gap-2">

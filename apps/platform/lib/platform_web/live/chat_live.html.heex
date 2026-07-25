@@ -1964,57 +1964,79 @@
             <span>{length(@pins)} pinned</span>
           </button>
 
-          <%!-- Active agent indicator --%>
-          <span
-            :if={@active_agent_participant_id != nil}
-            class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-success"
-          >
-            <span>🟢</span>
-            <span class="hidden md:inline">Talking to {@active_agent_name || "Agent"}</span>
-            <button
-              phx-click="active_agent_clear"
-              class="ml-1 text-base-content/40 hover:text-error transition-colors"
-              title="Clear active agent"
-            >
-              <span class="hero-x-mark size-3"></span>
-            </button>
-          </span>
-          <span
-            :if={
-              @active_agent_participant_id == nil && @active_space.watch_enabled &&
-                (@agent_presence[:joined?] || @has_agent_participant)
-            }
-            class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-success/60"
-          >
-            <span>🟢</span>
-            <span class="hidden md:inline">
-              {PresenceHooks.primary_agent_label(@active_space, @space_participants)} listening
-            </span>
-          </span>
+          <%!-- Agent eye — the ONE control for the agent mutex (task 019f9790
+               stage 4). It replaces three competing header controls that used
+               to sit here: the "Talking to {name}" pill with its own x-mark
+               sub-button, the dimmed "{primary} listening" hint, and the
+               `watch_enabled` toggle. Those three could disagree with each
+               other and none of them was the thing that actually routes
+               messages. This button IS the mutex (`ActiveAgentStore`):
 
-          <%!-- Watch toggle (hidden for DM spaces — always ON) --%>
+                 open   — a mutex is held; the next message goes to that agent.
+                          Click closes it (`active_agent_clear`).
+                 closed — no mutex, but `ActiveAgentHooks.resolve_armable/2`
+                          found a defensible target. Click opens it
+                          (`active_agent_arm`).
+                 inert  — no mutex and no defensible target (several agents, no
+                          history). Rendered `disabled` rather than hidden so
+                          the header never reflows as agents join or leave.
+
+               DM spaces render nothing: `attention_router.ex:343` makes DMs
+               unconditionally `:directed`, so there is nothing here to toggle
+               and offering the control would be a lie.
+
+               `data-role` / `data-eye-state` exist so tests assert on state
+               rather than on Tailwind classes. `min-h-11 min-w-11` gives the
+               iOS-HIG 44px touch target on mobile (measured: 20px tall without
+               it); released at `md` so the desktop hover surface still matches
+               the sibling pin/settings buttons. --%>
+          <% eye_state =
+            cond do
+              @active_agent_participant_id != nil -> "open"
+              @active_agent_armable_id != nil -> "closed"
+              true -> "inert"
+            end %>
           <button
             :if={
               (@agent_presence[:joined?] || @has_agent_participant) && @active_space.kind != "dm"
             }
-            phx-click="toggle_watch"
+            data-role="agent-eye"
+            data-eye-state={eye_state}
+            disabled={eye_state == "inert"}
+            phx-click={
+              case eye_state do
+                "open" -> "active_agent_clear"
+                "closed" -> "active_agent_arm"
+                _inert -> nil
+              end
+            }
             class={[
-              "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
-              !@active_space.watch_enabled && "!bg-warning/20 !text-warning"
+              "flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs transition-colors md:min-h-0 md:min-w-0",
+              eye_state == "open" && "text-success hover:bg-base-300",
+              eye_state == "closed" &&
+                "text-base-content/50 hover:text-base-content hover:bg-base-300",
+              eye_state == "inert" && "text-base-content/50 opacity-50"
             ]}
             title={
-              if @active_space.watch_enabled,
-                do: "Disable watch — agent won't auto-respond",
-                else: "Enable watch — agent will auto-respond"
+              case eye_state do
+                "open" ->
+                  "Your next message goes to #{@active_agent_name || "Agent"} — click to talk to people only"
+
+                "closed" ->
+                  "Click to resume with #{@active_agent_armable_name || "the agent"}"
+
+                _inert ->
+                  "No agent is listening — @mention an agent to open the eye"
+              end
             }
           >
             <span class={[
               "size-4",
-              if(@active_space.watch_enabled, do: "hero-eye", else: "hero-eye-slash")
+              if(eye_state == "open", do: "hero-eye", else: "hero-eye-slash")
             ]}>
             </span>
-            <span class="hidden md:inline">
-              {if @active_space.watch_enabled, do: "watching", else: "paused"}
+            <span :if={eye_state == "open"} class="hidden md:inline">
+              {@active_agent_name || "Agent"}
             </span>
           </button>
 
