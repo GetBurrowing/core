@@ -1246,6 +1246,386 @@ defmodule Platform.Orchestration.TaskRouterTest do
     end
   end
 
+  describe "plan-level pending_review suppression (task 019f9ae5)" do
+    # Stage 1 added a PLAN-level guard to `handle_info(:dispatch, state)`.
+    # `init/1` always had one, but every OTHER `:dispatch` injector bypasses
+    # init and landed straight in `do_dispatch/2`:
+    # `TaskRouterWatcher.redispatch_for_runtime/1` fires a raw
+    # `send(pid, :dispatch)` for every should-run task on each runtime
+    # reconnect (the confirmed source of the 10-day re-dispatch loop on task
+    # 019f6779), plus `force_dispatch/1`, the ~10 in-module
+    # `send(self(), :dispatch)` sites and the 1s retry timer. Every test here
+    # therefore uses an EXPLICIT `send(pid, :dispatch)` — that is the path
+    # that leaked, and it is the only way to exercise the handler branch.
+    #
+    # The fixture plan is flipped in place rather than re-created:
+    # `plan_awaiting_review?/1` keys off `Tasks.latest_plan/1` (highest
+    # version regardless of status), so an accidental v2 would silently
+    # change what is under test.
+
+    defp mark_plan_pending_review(plan) do
+      plan
+      |> Ecto.Changeset.change(%{status: "pending_review"})
+      |> Platform.Repo.update!()
+    end
+
+    defp suppression_logs_since(space_id, drop_count) do
+      space_id
+      |> ExecutionSpace.list_messages_with_participants()
+      |> Enum.drop(drop_count)
+      |> Enum.map(& &1.content)
+      |> Enum.filter(&String.contains?(&1, "awaiting human review"))
+    end
+
+    # Every plan-gate line in the space, from the beginning — the init-time
+    # emission lands before a test can take a baseline (the space itself is
+    # created inside `init/1`), so this counts from zero instead of dropping.
+    defp plan_gate_logs(space_id) do
+      space_id
+      |> ExecutionSpace.list_messages_with_participants()
+      |> Enum.map(& &1.content)
+      |> Enum.filter(&String.contains?(&1, "plan is awaiting human review"))
+    end
+
+    test "pending_review plan suppresses an explicitly injected :dispatch", %{
+      task: task,
+      assignee: assignee,
+      plan: plan
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      _pending_plan = mark_plan_pending_review(plan)
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # `init/1` refuses to schedule the initial dispatch, so nothing should
+      # arrive before we force the issue.
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     400
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      # `init/1` narrates the park in the execution space at episode start.
+      # This is the human-facing half of the feature: a suppressed task must
+      # explain itself, not go quiet. An earlier revision of this test asserted
+      # ZERO lines here — that encoded the defect the e2e review caught
+      # (validation 019f9aea-95bc-7a84-bf3e-333bc165798b): the handler's log is
+      # edge-triggered on `state.status != :waiting_human`, and a router that
+      # boots into a `pending_review` plan is ALREADY `:waiting_human`, so the
+      # edge never fires. That is the production shape, not a corner case.
+      init_logs = plan_gate_logs(space.id)
+
+      assert length(init_logs) == 1,
+             "expected exactly one plan-gate suppression log from init/1, got: #{inspect(init_logs)}"
+
+      assert String.contains?(hd(init_logs), "plan is awaiting human review")
+
+      send(pid, :dispatch)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     400
+
+      # Second tick — the guard must hold, and must not start narrating.
+      send(pid, :dispatch)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     400
+
+      Process.sleep(50)
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      # ...and stays silent on every subsequent tick. `init/1` parked this
+      # router in `:waiting_human` before either dispatch, so the handler's
+      # edge condition is false and neither tick adds a line. That is the
+      # anti-spam property task 019e00cb fixed — an unconditional log here
+      # would post once per injected dispatch, and `TaskRouterWatcher` injects
+      # one per runtime reconnect. Net contract: exactly one line per
+      # suppression episode, zero on repeats.
+      assert plan_gate_logs(space.id) == init_logs
+    end
+
+    test "the plan-level suppression log is edge-triggered: one line per episode, not per tick",
+         %{task: task, assignee: assignee, plan: plan} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      # Start while the fixture plan is still `approved` so the router parks
+      # in `:running` — that is what makes the next dispatch a genuine
+      # `:running -> :waiting_human` transition.
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      # Flip the plan WITHOUT broadcasting `{:plan_updated, ...}` — a
+      # broadcast would drive the router to `:waiting_human` through the
+      # plan_updated handler and rob the dispatch handler of the edge.
+      _pending_plan = mark_plan_pending_review(plan)
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+      baseline_count = length(ExecutionSpace.list_messages_with_participants(space.id))
+
+      send(pid, :dispatch)
+      Process.sleep(150)
+
+      send(pid, :dispatch)
+      Process.sleep(150)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     400
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      logs = suppression_logs_since(space.id, baseline_count)
+
+      assert length(logs) == 1,
+             "expected exactly one plan-gate suppression log across two ticks, got: #{inspect(logs)}"
+
+      assert String.contains?(hd(logs), "plan is awaiting human review")
+    end
+
+    test "a running router narrates the park when the plan is submitted for review", %{
+      task: task,
+      assignee: assignee,
+      plan: plan
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+      assert plan_gate_logs(space.id) == []
+
+      pending_plan = mark_plan_pending_review(plan)
+
+      # The board broadcast the router would receive from `Tasks.submit_plan/2`.
+      send(pid, {:plan_updated, pending_plan})
+      Process.sleep(150)
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      logs = plan_gate_logs(space.id)
+
+      assert length(logs) == 1,
+             "expected the plan_updated handler to narrate the park once, got: #{inspect(logs)}"
+
+      # A re-broadcast of the same pending plan must not double-post.
+      send(pid, {:plan_updated, pending_plan})
+      Process.sleep(150)
+
+      assert plan_gate_logs(space.id) == logs
+    end
+
+    test "approved plan still dispatches — the plan guard is not over-broad", %{
+      task: task,
+      assignee: assignee
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      # Fixture plan is `approved` (setup line ~35) — untouched here.
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      send(pid, :dispatch)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      Process.sleep(50)
+      refute TaskRouter.current_status(task.id).status == :waiting_human
+    end
+
+    test "approving the plan wakes the router — suppression is not a one-way door", %{
+      task: task,
+      assignee: assignee,
+      plan: plan
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, _task} = Tasks.transition_task(task, "planning")
+      pending_plan = mark_plan_pending_review(plan)
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # Prove suppression PRECEDED resumption — otherwise a green assertion
+      # below could just be the un-suppressed dispatch we were trying to stop.
+      send(pid, :dispatch)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     400
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      {:ok, _approved} = Tasks.approve_plan(pending_plan, "rowan")
+
+      # Resumption chain: `approve_plan/3` -> `apply_dispatch_gate/1` moves the
+      # task to `in_progress` in-transaction -> post-commit
+      # `broadcast_board({:plan_updated, approved})` -> the router's
+      # plan_updated handler sets `:running` and calls
+      # `ensure_execution_stage_started/2` -> `PlanEngine.start_stage/1` on the
+      # fixture's pending stage -> `{:stage_transitioned, stage}` -> the
+      # router's stage handler `send(self(), :dispatch)` -> the plan guard is
+      # now false because `latest_plan.status == "approved"`.
+      #
+      # Note that resumption does NOT depend on the router's `status` field:
+      # the `:dispatch` handler never reads `state.status` for gating (only for
+      # the edge-triggered log), so parking in `:waiting_human` cannot lock a
+      # task out.
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     2_000
+
+      Process.sleep(50)
+      assert TaskRouter.current_status(task.id).status == :running
+    end
+
+    test "approved plan with an open manual_approval request keeps the STAGE-level reason", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+      initial_count = length(ExecutionSpace.list_messages_with_participants(space.id))
+
+      {:ok, manual_validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      {:ok, _request} =
+        Platform.Tasks.ReviewRequests.create_review_request(%{
+          validation_id: manual_validation.id,
+          task_id: task.id,
+          execution_space_id: space.id,
+          items: [%{label: "Solo check"}]
+        })
+
+      Process.sleep(100)
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      send(pid, :dispatch)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     400
+
+      Process.sleep(50)
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      logs = suppression_logs_since(space.id, initial_count)
+
+      # The new plan-level branch is ordered AHEAD of the stage-level one, but
+      # `plan_awaiting_review?/1` is false here (plan is `approved`), so the
+      # stage gate must still own this suppression — same copy as before.
+      assert Enum.any?(logs, &String.contains?(&1, "awaiting human review on a manual_approval"))
+
+      refute Enum.any?(logs, &String.contains?(&1, "plan is awaiting human review"))
+    end
+
+    test "pending e2e_behavior validation with an approved plan still dispatches", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      # No review request — e2e_behavior is agent-driven (the review agent runs
+      # the script and dispositions via validation_evaluate), so neither the
+      # plan gate nor the stage gate may claim it.
+      {:ok, _e2e_validation} =
+        Tasks.create_validation(%{
+          stage_id: stage.id,
+          kind: "e2e_behavior",
+          evaluation_payload: %{
+            "setup" => "seed a task",
+            "actions" => "send :dispatch",
+            "expected" => "attention broadcast"
+          }
+        })
+
+      Process.sleep(100)
+
+      send(pid, :dispatch)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      Process.sleep(50)
+      refute TaskRouter.current_status(task.id).status == :waiting_human
+    end
+  end
+
   describe "dispatch suppression predicate (task 019e00cb stage 2)" do
     # Predicate `HeartbeatScheduler.heartbeat_suppressible?/2` gates the
     # `maybe_log_heartbeat_suppressed/3` call — when the running stage is

@@ -176,6 +176,22 @@ defmodule Platform.Orchestration.TaskRouter do
               "[TaskRouter] init suppressed dispatch for task=#{task_id}: plan awaiting human review"
             )
 
+            # Narrate the park in the EXECUTION SPACE once, at the start of the
+            # suppression episode. The `:dispatch` handler's plan-gate log is
+            # edge-triggered on `state.status != :waiting_human`, and every
+            # production path into this branch (gateway restart,
+            # `TaskRouterWatcher.boot_reconcile/0`, `force_dispatch/1`,
+            # `redispatch_for_runtime/1`) parks the router HERE before any
+            # dispatch lands — so that edge never occurred and the only trace
+            # was the Logger line above, invisible to the human being asked to
+            # approve the plan. Mirrors the `waiting_for_human_review?/1`
+            # branch below, which already emits before delegating.
+            maybe_log_heartbeat_suppressed(
+              state,
+              find_stage(Tasks.current_plan(task_id), state.current_stage_id),
+              reason: "awaiting_plan_review"
+            )
+
             {:ok, %{state | status: :waiting_human}}
 
           waiting_for_human_review?(state) ->
@@ -184,6 +200,15 @@ defmodule Platform.Orchestration.TaskRouter do
               find_stage(Tasks.current_plan(task_id), state.current_stage_id)
             )
 
+            # Deliberate delegation, not a contradiction: this send is
+            # guaranteed to land in the `:dispatch` handler's stage-level
+            # suppression branch. `waiting_for_human_review?/1` implies
+            # `pending_review_request?/1` — both of its disjuncts require a
+            # non-empty `ReviewRequests.list_pending_for_task/1`. Routing
+            # through the handler keeps `clear_liveness/1`, `task_status`
+            # hydration and the suppression log in ONE place instead of
+            # duplicating them here. Only safe while the handler retains its
+            # `pending_review_request?/1` branch.
             send(self(), :dispatch)
             {:ok, %{state | status: :waiting_human}}
 
@@ -200,6 +225,15 @@ defmodule Platform.Orchestration.TaskRouter do
           # gateway/deploy restart) must not act as an unguarded heartbeat.
           Logger.info(
             "[TaskRouter] init suppressed dispatch for task=#{task_id}: plan awaiting human review"
+          )
+
+          # Same episode-start emission as the lease-active branch above; see
+          # the comment there for why the handler's edge trigger cannot cover
+          # this shape.
+          maybe_log_heartbeat_suppressed(
+            state,
+            find_stage(Tasks.current_plan(task_id), state.current_stage_id),
+            reason: "awaiting_plan_review"
           )
 
           {:ok, %{state | status: :waiting_human}}
@@ -239,9 +273,67 @@ defmodule Platform.Orchestration.TaskRouter do
         Logger.warning("[TaskRouter] task #{state.task_id} not found, stopping")
         {:stop, :normal, state}
 
+      plan_awaiting_review?(state.task_id) ->
+        # Pre-dispatch guard, PLAN level (task 019f9ae5). `init/1` already
+        # refuses to schedule a dispatch while the latest plan is
+        # `pending_review`, but every OTHER `:dispatch` injector bypasses
+        # `init/1` entirely and landed straight in `do_dispatch/2`:
+        #
+        #   * `TaskRouterWatcher.redispatch_for_runtime/1` — a raw
+        #     `send(pid, :dispatch)` for every should-run task on each
+        #     `{:runtime_reconnected, runtime_id}`. A `planning` task with no
+        #     active lease is not filtered by `active_lease_present?/2`, so
+        #     every runtime reconnect re-prompted the agent. This is the
+        #     confirmed source of the 10-day re-dispatch loop on task 019f6779.
+        #   * `TaskRouterWatcher.force_dispatch/1`.
+        #   * The ~10 in-module `send(self(), :dispatch)` sites plus the
+        #     `Process.send_after(self(), :dispatch, 1_000)` retry.
+        #
+        # One guard in the handler covers all of them; guarding per-caller
+        # would not.
+        #
+        # This branch is deliberately ordered AHEAD of the stage-level
+        # `pending_review_request?/1` clause below: the plan gate is the
+        # coarser, earlier-in-lifecycle gate. While the latest plan is
+        # `pending_review` the whole plan — and therefore any stage-level
+        # review request hanging off it — is provisional, and the human's
+        # actionable next step is to approve/reject the PLAN, not to
+        # disposition a validation. When the plan is `approved`,
+        # `plan_awaiting_review?/1` is false and control falls through to the
+        # stage-level clause unchanged.
+        #
+        # Accepted semantics: `plan_awaiting_review?/1` keys off
+        # `Tasks.latest_plan/1` (highest version regardless of status), so
+        # submitting a v2 while v1 is approved and executing also suppresses
+        # dispatch. That matches `init/1`'s existing behavior and is desired —
+        # a plan sitting with the human outranks in-flight agent work.
+        #
+        # Logging is edge-triggered on the `:waiting_human` transition.
+        # `maybe_log_heartbeat_suppressed/3` only elides its log when every
+        # pending validation is a manual_approval linked to an OPEN review
+        # request; in the plan-pending case there are no review requests, so
+        # an unconditional call would post on every injected dispatch — the
+        # exact execution-space pile-up task 019e00cb fixed.
+        if state.status != :waiting_human do
+          maybe_log_heartbeat_suppressed(
+            state,
+            find_stage(Tasks.current_plan(state.task_id), state.current_stage_id),
+            reason: "awaiting_plan_review"
+          )
+        end
+
+        state =
+          state
+          |> Map.put(:task_status, task.status)
+          |> clear_liveness()
+          |> Map.put(:status, :waiting_human)
+
+        {:noreply, state}
+
       pending_review_request?(state.task_id) ->
-        # Pre-dispatch guard: a manual_approval review is open against this
-        # task; suppress the dispatch entirely until a human dispositions it.
+        # Pre-dispatch guard, STAGE level: a manual_approval review is open
+        # against this task; suppress the dispatch entirely until a human
+        # dispositions it.
         #
         # Invariant: `e2e_behavior` validations DO NOT suppress dispatch.
         # They are agent-driven (the review agent runs the script and
@@ -625,6 +717,22 @@ defmodule Platform.Orchestration.TaskRouter do
     state =
       case plan.status do
         "pending_review" ->
+          # A router that was `:running` when the plan got submitted parks
+          # here, never reaching the `:dispatch` handler's edge-triggered
+          # plan-gate log — so narrate the park at episode start, exactly as
+          # `init/1` does for a router that boots into the same condition.
+          # Guarded on the same edge the handler uses: if we are ALREADY
+          # `:waiting_human` the episode has been narrated (or a stage-level
+          # gate is already parked here), so stay silent rather than
+          # double-posting on a re-broadcast.
+          if state.status != :waiting_human do
+            maybe_log_heartbeat_suppressed(
+              state,
+              find_stage(Tasks.current_plan(task_id), state.current_stage_id),
+              reason: "awaiting_plan_review"
+            )
+          end
+
           state |> clear_liveness() |> Map.put(:status, :waiting_human)
 
         "approved" ->
@@ -1341,6 +1449,9 @@ defmodule Platform.Orchestration.TaskRouter do
 
       message =
         case reason do
+          "awaiting_plan_review" ->
+            "Dispatch suppressed: plan is awaiting human review — approve or reject the plan to resume"
+
           "awaiting_human_review" ->
             "Dispatch suppressed: awaiting human review on a manual_approval validation"
 
