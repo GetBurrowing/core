@@ -33,31 +33,40 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
   ## Negative verification (this was actually run — do not take it on trust)
 
   Each of the three slots was reverted in turn, on top of `540bf700`,
-  by replacing its `ContextProviders.gather_context/2` clause body with
-  the pre-stage-3 world for that slot — the catch-all
-  `{:error, {:unknown_slot, slot}}`. Behavioural failures, no compile
-  error, and each revert fires a *different* assertion while the others
-  stay green:
+  by deleting its `ContextProviders.gather_context/2` clause so the slot
+  falls into the catch-all — the pre-stage-3 world for that slot,
+  `{:error, {:unknown_slot, slot}}`. All three are behavioural failures:
+  the module compiles, every module the tests reference exists, and the
+  revert is observable only in what arrives at the model. Each revert
+  fires a *different* assertion in test 1 while the ones around it stay
+  green.
 
-    * **`:plan_payload` reverted** — the handler's `do_gather_context/1`
-      propagates the refusal, the Router's context-refusal arm returns
+    * **`:plan_payload` deleted** — 4 of 6 tests fail. In test 1 the
+      handler propagates the refusal, the Router's context-refusal arm
+      returns
       `{:error, {:context_gather_refused, {:unknown_slot, :plan_payload}}}`
-      and **no HTTP request is made at all**. The dispatch assertion
-      (`assert {:ok, :dispatched}`) fires first. Note this contradicts
-      the stage brief, which predicted all four content assertions
-      would fail: after stage 2 a `:plan_payload` refusal stops the
-      dispatch before a prompt is built, so the content assertions
-      never execute.
-    * **`:sibling_tasks` reverted** — the dispatch still happens (the
-      slot is optional by design), the sibling block degrades to
-      `[scope: no_anchor] ...` and only
-      `assert user =~ @sibling_sentinel` fires. The plan_payload and
-      adr_index assertions above and below it stay green — they are
-      the positive controls for this revert.
-    * **`:adr_index` reverted** — the dispatch still happens, the ADR
-      block degrades to "(ADR index unavailable — ...)" and only
-      `assert user =~ @adr_sentinel` fires. Every plan_payload and
-      sibling assertion stays green.
+      and **no HTTP request is made at all**, so the dispatch assertion
+      fires before any content assertion runs. This contradicts the
+      stage brief, which predicted all four content assertions would
+      fail: since stage 2, a `:plan_payload` refusal stops the dispatch
+      *before* a prompt is built.
+    * **`:sibling_tasks` deleted** — 3 of 6 tests fail. The dispatch
+      still succeeds (this slot never refuses, by design), the sibling
+      block degrades to `[scope: no_anchor] ...`, and test 1 fails on
+      `assert user =~ @sibling_sentinel`. The three `:plan_payload`
+      assertions above it and the two `:adr_index` assertions below it
+      stay green — they are the positive controls for this revert.
+    * **`:adr_index` deleted** — 3 of 6 tests fail. The dispatch still
+      succeeds, the ADR block degrades to "(ADR index unavailable —
+      ...)", and test 1 fails on `assert user =~ @adr_sentinel`. Every
+      `:plan_payload` and `:sibling_tasks` assertion stays green.
+
+  The inventory test (test 2) fires under all three, naming the slot
+  that lost its resolver in the diff. Its opposite direction was
+  verified separately by *adding* a `gather_context(:open_prs, _)`
+  clause on top of `540bf700`: test 2 alone failed, with `open_prs`
+  missing from the "declared but unresolved" side. The two sentinel /
+  reason tests stayed green through all four reversions.
 
   ## The ADR sentinel is a fixture, not the live `docs/decisions/`
 
