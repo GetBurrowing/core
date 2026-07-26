@@ -43,6 +43,30 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
   @lib_root Path.expand("../../../lib/platform", __DIR__)
   @application_ex Path.expand("../../../lib/platform/application.ex", __DIR__)
 
+  # THE single definition of "this line spawns work under a Task
+  # supervisor". Used by BOTH the offender scan and the @known_safe rot
+  # guard — they must stay identical or the rot guard silently stops
+  # verifying the thing it exists to verify. Do not inline a copy.
+  #
+  # Two widenings landed 2026-07-25 (task 019f9b13-a89d), because this
+  # audit SHOULD have caught `lib/platform/tasks/stacks.ex:2288` and did
+  # not:
+  #
+  #   * `[a-z_]*task_supervisor\(\)` — the old alternation only accepted
+  #     the exact accessor name `task_supervisor()`, so
+  #     `stack_deployer_task_supervisor()` (stacks.ex) slid straight
+  #     past and the whole file was invisible to the scan. Any
+  #     `<prefix>_task_supervisor()` accessor now matches.
+  #
+  #   * `(?:Elixir\.)?` — the fix for that bug writes the OTP call as
+  #     `Elixir.Task.Supervisor.async_nolink/2` (the module aliases
+  #     `Platform.Tasks.Task`, so a bare `Task.` there means the Ecto
+  #     schema). Without this the audit would have gone blind again the
+  #     moment the bug was fixed. See
+  #     `task_alias_shadowing_audit_test.exs` in this directory for the
+  #     guard against that shadowing shape itself.
+  @task_supervisor_site_regex ~r/(?:Elixir\.)?Task\.Supervisor\.(?:async_nolink|start_child)\(\s*(?:Platform\.TaskSupervisor|[a-z_]*task_supervisor\(\))/
+
   # Modules that call `Task.Supervisor.(async_nolink|start_child)` under
   # `Platform.TaskSupervisor` but do NOT need a `rescue
   # DBConnection.OwnershipError` clause. Each entry MUST cite the reason
@@ -76,6 +100,20 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # the synchronous body and NO `Task.Supervisor` spawn happens in
     # test env. Production takes the async branch but production
     # doesn't use the sandbox.
+    #
+    # EXCEPTION (2026-07-25, task 019f9b13-a89d stage 3): that "every
+    # branch takes the synchronous body" claim is no longer globally
+    # true. The describe block `"dispatch_stack_deploy/1 — async: true
+    # branch (regression: Task alias shadowing)"` in
+    # test/platform/tasks/stacks_test.exs flips `:async` to `true` via
+    # `Application.put_env` in its setup (restored by `on_exit`), so
+    # real `Task.Supervisor` children DO spawn for the duration of those
+    # three tests. They are safe by construction, not by config: the
+    # test file is `async: false` under DataCase shared sandbox mode, and
+    # each test monitors the spawned child and awaits its `:DOWN` before
+    # returning, so no child outlives the sandbox checkin. Any FUTURE
+    # test that flips `:async` to `true` must do the same, or this
+    # exemption stops holding.
     "lib/platform/tasks/stack_deployer.ex",
 
     # `Platform.Meetings.SummarizerSweeper` (lines 290, 358) uses
@@ -156,10 +194,7 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
           full = Path.join(@lib_root |> Path.dirname() |> Path.dirname(), relative_path)
           source = File.read!(full)
 
-          not Regex.match?(
-            ~r/Task\.Supervisor\.(?:async_nolink|start_child)\(\s*(?:Platform\.TaskSupervisor|task_supervisor\(\))/,
-            source
-          )
+          not Regex.match?(@task_supervisor_site_regex, source)
         end)
 
       assert stale == [], """
@@ -267,12 +302,7 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
         source
         |> String.split("\n")
         |> Enum.with_index(1)
-        |> Enum.filter(fn {line, _idx} ->
-          Regex.match?(
-            ~r/Task\.Supervisor\.(?:async_nolink|start_child)\(\s*(?:Platform\.TaskSupervisor|task_supervisor\(\))/,
-            line
-          )
-        end)
+        |> Enum.filter(fn {line, _idx} -> Regex.match?(@task_supervisor_site_regex, line) end)
         |> Enum.map(fn {_line, idx} -> idx end)
 
       relative_path = Path.relative_to(absolute_path, lib_dir)

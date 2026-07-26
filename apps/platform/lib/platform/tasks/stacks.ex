@@ -2171,8 +2171,14 @@ defmodule Platform.Tasks.Stacks do
        with `%{count: 1}` measurements and metadata
        `%{stack_id, member_count, duration_ms_from_first_member_ready}`.
     5. Async-calls `StackDeployer.maybe_open_stack_pr/1` under the same
-       `Task.Supervisor` used by the deployer's other async triggers,
-       mirroring `StackDeployer.trigger_maybe_open_stack_pr/1`.
+       `Elixir.Task.Supervisor` used by the deployer's other async
+       triggers, mirroring `StackDeployer.trigger_maybe_open_stack_pr/1`.
+       `Platform.Tasks.Task` is aliased in this module, so a bare `Task.`
+       here means the SCHEMA — the OTP call is spelled `Elixir.Task.`.
+       The PR-open body runs inside `run_deploy_pr_open/1`, which
+       rescues every exception: an async PR-open failure is logged and
+       NEVER propagates to this function's return value. The dispatch
+       result reflects the state transition only, not the PR outcome.
 
   Returns:
 
@@ -2280,20 +2286,61 @@ defmodule Platform.Tasks.Stacks do
   end
 
   # Mirrors `StackDeployer.trigger_maybe_open_stack_pr/1` — same
-  # `Task.Supervisor` + `async: true|false` config knobs so tests can
+  # `Elixir.Task.Supervisor` + `async: true|false` config knobs so tests can
   # observe the runner call synchronously via
   # `Application.put_env(:platform, :stack_deployer, async: false)`.
+  #
+  # `Platform.Tasks.Task` is aliased at line 22, so a bare `Task.` in this
+  # module means the SCHEMA — the OTP call below must be written out as
+  # `Elixir.Task.Supervisor` or it resolves to the nonexistent
+  # `Platform.Tasks.Task.Supervisor`.
+  #
+  # Returns the spawned `Elixir.Task` struct from the async branch (mirroring
+  # `StackDeployer.handle_member_transition/3`) so callers — in practice the
+  # test suite — can await completion instead of polling. The only production
+  # caller discards it. The sync branch returns `:ok`.
   defp trigger_stack_deploy_pr_open(stack_id) when is_binary(stack_id) do
     if stack_deployer_async?() do
-      Task.Supervisor.async_nolink(stack_deployer_task_supervisor(), fn ->
-        log_deploy_pr_open(stack_id, StackDeployer.maybe_open_stack_pr(stack_id))
+      Elixir.Task.Supervisor.async_nolink(stack_deployer_task_supervisor(), fn ->
+        run_deploy_pr_open(stack_id)
       end)
+    else
+      run_deploy_pr_open(stack_id)
+    end
+  end
+
+  # `Elixir.Task.Supervisor.async_nolink/2` discards the child's crash — nobody
+  # links, nobody awaits — so an exception raised by
+  # `StackDeployer.maybe_open_stack_pr/1` (git conflict, network, disk) would
+  # strand the stack in `deploying` with nothing in the log. Same shape as
+  # `StackDeployer.attempt_member_merge/1`, and called from BOTH branches of
+  # `trigger_stack_deploy_pr_open/1` so `async: false` and `async: true` behave
+  # identically.
+  #
+  # The `DBConnection.OwnershipError` clause must come FIRST: under
+  # `async: true` in the test env the spawned child sits outside the DataCase
+  # sandbox owner chain, so a teardown race releases the connection out from
+  # under it. That is a test-harness artifact, not a deploy failure, and it is
+  # logged at warning rather than error so it cannot be mistaken for one.
+  defp run_deploy_pr_open(stack_id) when is_binary(stack_id) do
+    log_deploy_pr_open(stack_id, StackDeployer.maybe_open_stack_pr(stack_id))
+    :ok
+  rescue
+    DBConnection.OwnershipError ->
+      Logger.warning(
+        "[Stacks] dispatch_stack_deploy stack #{stack_id} PR-open skipped: " <>
+          "sandbox connection released"
+      )
 
       :ok
-    else
-      log_deploy_pr_open(stack_id, StackDeployer.maybe_open_stack_pr(stack_id))
+
+    e ->
+      Logger.error(
+        "[Stacks] dispatch_stack_deploy stack #{stack_id} PR-open raised: " <>
+          "#{Exception.message(e)}\n" <> Exception.format(:error, e, __STACKTRACE__)
+      )
+
       :ok
-    end
   end
 
   defp log_deploy_pr_open(stack_id, {:ok, outcome}) do

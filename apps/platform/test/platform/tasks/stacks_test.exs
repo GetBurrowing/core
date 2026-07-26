@@ -1782,6 +1782,118 @@ defmodule Platform.Tasks.StacksTest do
     end
   end
 
+  # ── Regression: the `async: true` spawn branch ─────────────────────────
+  #
+  # WHY THIS BLOCK EXISTS. `config/test.exs:170-172` pins
+  # `config :platform, :stack_deployer, async: false` for the WHOLE suite.
+  # That single line is what hid `Stacks.trigger_stack_deploy_pr_open/1`'s
+  # spawn branch (lib/platform/tasks/stacks.ex:2304) from every test ever
+  # written: no test in this repo has executed it, so a
+  # `Task.Supervisor.async_nolink/2` call that resolved — via the module's
+  # `alias Platform.Tasks.{... Task}` — to the nonexistent
+  # `Platform.Tasks.Task.Supervisor` shipped green for its entire life and
+  # only ever raised in production, inside `PlanEngine`.
+  #
+  # This describe block flips `:async` to `true` for its own tests only,
+  # via `Application.put_env` in setup with an `on_exit` restore, and is
+  # the ONLY coverage of the production-default branch. Do NOT "simplify"
+  # it by editing `config/test.exs`: flipping the global default would
+  # rewire dozens of unrelated stack tests onto async paths they were
+  # never written for.
+  describe "dispatch_stack_deploy/1 — async: true branch (regression: Task alias shadowing)" do
+    alias Platform.Tasks.StacksTest.DispatchNoopRunner
+    alias Platform.Tasks.StacksTest.DispatchRaisingRunner
+
+    setup :install_dispatch_noop_runner_async
+
+    test "async branch dispatches without raising UndefinedFunctionError", %{project: project} do
+      stack = seed_deploy_ready_stack!(project)
+
+      # THE REGRESSION ASSERTION. Pre-fix this call raises
+      # `UndefinedFunctionError` for
+      # `Platform.Tasks.Task.Supervisor.async_nolink/2`: module resolution
+      # for `async_nolink/2` happens in the CALLING process, so the caller
+      # dies before `dispatch_stack_deploy/1` can return — here the test
+      # process, in production `PlanEngine` mid-transition.
+      assert {:ok, :dispatched} = Stacks.dispatch_stack_deploy(stack)
+
+      # Barrier, not a sleep: the spawned child hands back its own pid and
+      # we wait for its :DOWN, so the child is dead before the test
+      # returns and sandbox teardown cannot race it.
+      assert {:ok, child_pid} = await_async_pr_open!()
+      refute child_pid == self()
+
+      reloaded = Stacks.get_stack(stack.id)
+      assert reloaded.status == "deploying"
+      assert is_binary(reloaded.metadata["first_deploy_ready_at"])
+
+      assert [pr_call] = DispatchNoopRunner.pr_calls()
+      assert pr_call.stack_id == stack.id
+    end
+
+    test "async branch actually opens the rollup PR off the calling process", %{project: project} do
+      stack = seed_deploy_ready_stack!(project)
+
+      test_pid = self()
+      handler_id = "async-pr-opened-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stack_deployer, :pr_opened],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      try do
+        assert {:ok, :dispatched} = Stacks.dispatch_stack_deploy(stack)
+
+        # `finalize_pr_opened/3` (stack_deployer.ex:2304-2308) emits this
+        # from whichever process ran the PR-open. Telemetry is the
+        # deterministic hook — no polling of `pr_calls/0` in a sleep loop.
+        assert_receive {:telemetry, [:platform, :stack_deployer, :pr_opened], _measurements,
+                        %{stack_id: id}},
+                       2_000
+
+        assert id == stack.id
+
+        # ...and that process was NOT the caller. This is the whole point
+        # of the async branch.
+        assert {:ok, child_pid} = await_async_pr_open!()
+        refute child_pid == self()
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "async branch survives a raising git runner", %{project: project} do
+      stack = seed_deploy_ready_stack!(project)
+
+      Application.put_env(:platform, :stack_deployer,
+        git_runner: DispatchRaisingRunner,
+        async: true
+      )
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          # Hazard A (stage 2): the child's crash must not reach the
+          # caller — `async_nolink/2` does not link, and
+          # `Stacks.run_deploy_pr_open/1` rescues.
+          assert {:ok, :dispatched} = Stacks.dispatch_stack_deploy(stack)
+          assert {:ok, _child_pid} = await_async_pr_open!()
+        end)
+
+      # ...and it must not vanish either: an unlogged raise would strand
+      # the stack in `deploying` with nothing to debug from.
+      assert log =~ "PR-open raised"
+      assert log =~ DispatchRaisingRunner.raise_message()
+
+      assert Stacks.get_stack(stack.id).status == "deploying"
+    end
+  end
+
   describe "members_in_merge_order/1" do
     test "linear chain a→b→c returns foundational-first [a, b, c]" do
       {:ok, project} = Tasks.create_project(%{name: "Merge order chain"})
@@ -6110,7 +6222,8 @@ defmodule Platform.Tasks.StacksTest do
         fn ->
           %{
             pr_response: {:ok, %{number: 42, url: "https://github.com/test/repo/pull/42"}},
-            pr_calls: []
+            pr_calls: [],
+            notify_pid: nil
           }
         end,
         name: __MODULE__
@@ -6121,6 +6234,13 @@ defmodule Platform.Tasks.StacksTest do
 
     def pr_calls, do: Agent.get(__MODULE__, & &1.pr_calls) |> Enum.reverse()
 
+    # Subscribe `pid` to `open_stack_pr/1` invocations. Used only by the
+    # `async: true` describe block, which needs the pid of the process
+    # that actually ran the runner.
+    def notify(pid) when is_pid(pid) do
+      Agent.update(__MODULE__, &Map.put(&1, :notify_pid, pid))
+    end
+
     @impl true
     def ensure_rollup_branch(_args), do: {:ok, %{status: :already_exists, base_sha: nil}}
 
@@ -6128,11 +6248,23 @@ defmodule Platform.Tasks.StacksTest do
     def merge_member_into_rollup(_args),
       do: {:ok, %{status: :merged, merge_sha: "0000000000000000000000000000000000000000"}}
 
+    # When a `notify_pid` is registered, hand back the pid of the process
+    # that invoked the runner. Under `async: true` that is the
+    # `Elixir.Task.Supervisor` child, which gives the async regression
+    # tests a deterministic barrier (monitor + `:DOWN`) instead of a
+    # `Process.sleep`. Unset in the synchronous describe block, so nothing
+    # is sent there and those tests are unaffected.
     @impl true
     def open_stack_pr(args) do
-      Agent.get_and_update(__MODULE__, fn state ->
-        {state.pr_response, %{state | pr_calls: [args | state.pr_calls]}}
-      end)
+      {response, notify_pid} =
+        Agent.get_and_update(__MODULE__, fn state ->
+          {{state.pr_response, Map.get(state, :notify_pid)},
+           %{state | pr_calls: [args | state.pr_calls]}}
+        end)
+
+      if is_pid(notify_pid), do: send(notify_pid, {:dispatch_pr_open_called, self()})
+
+      response
     end
 
     @impl true
@@ -6150,6 +6282,43 @@ defmodule Platform.Tasks.StacksTest do
     # per-SHA reachability responses.
     @impl true
     def sha_reachable?(_args), do: {:ok, true}
+  end
+
+  # Hazard-A twin of `DispatchNoopRunner`: every callback delegates,
+  # except `open_stack_pr/1`, which records the call through the shared
+  # Agent (so the async barrier still fires) and then raises. Pins the
+  # stage-2 rescue in `Stacks.run_deploy_pr_open/1`.
+  defmodule DispatchRaisingRunner do
+    @moduledoc false
+    @behaviour Platform.Tasks.StackDeployer.GitRunner
+
+    @raise_message "simulated git failure opening rollup PR"
+
+    def raise_message, do: @raise_message
+
+    @impl true
+    def ensure_rollup_branch(args), do: DispatchNoopRunner.ensure_rollup_branch(args)
+
+    @impl true
+    def merge_member_into_rollup(args), do: DispatchNoopRunner.merge_member_into_rollup(args)
+
+    @impl true
+    def diff_stat(args), do: DispatchNoopRunner.diff_stat(args)
+
+    @impl true
+    def revert_member_merge(args), do: DispatchNoopRunner.revert_member_merge(args)
+
+    @impl true
+    def close_stack_pr(args), do: DispatchNoopRunner.close_stack_pr(args)
+
+    @impl true
+    def sha_reachable?(args), do: DispatchNoopRunner.sha_reachable?(args)
+
+    @impl true
+    def open_stack_pr(args) do
+      _ = DispatchNoopRunner.open_stack_pr(args)
+      raise RuntimeError, @raise_message
+    end
   end
 
   defp install_dispatch_noop_runner(_ctx) do
@@ -6179,6 +6348,63 @@ defmodule Platform.Tasks.StacksTest do
       })
 
     %{project: project}
+  end
+
+  # Async twin of `install_dispatch_noop_runner/1`: same `DispatchNoopRunner`
+  # Agent (it is `name: __MODULE__`-registered and therefore reachable from
+  # the supervised child), same `on_exit` restore of the previous config —
+  # the only differences are `async: true` and the pid subscription that
+  # makes the spawn observable. The `on_exit` installed by the delegate
+  # captured the config as it stood BEFORE this block, so it restores
+  # correctly even for tests that swap the runner again mid-test.
+  defp install_dispatch_noop_runner_async(ctx) do
+    result = install_dispatch_noop_runner(ctx)
+
+    Application.put_env(:platform, :stack_deployer,
+      git_runner: DispatchNoopRunner,
+      async: true
+    )
+
+    DispatchNoopRunner.notify(self())
+
+    result
+  end
+
+  # Both deploy gates open — completed plans, `in_review` members, and
+  # `merged_into_rollup_at` stamps — mirroring the synchronous "both gates"
+  # test, so `maybe_open_stack_pr/1` genuinely reaches the runner rather
+  # than short-circuiting on `all_members_ready?/1`.
+  defp seed_deploy_ready_stack!(project) do
+    stack = stack_fixture(project_id: project.id)
+
+    {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+    {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+    {:ok, _} = Stacks.add_task(stack, a)
+    {:ok, _} = Stacks.add_task(stack, b)
+
+    seed_completed_plan!(a)
+    seed_completed_plan!(b)
+    set_member_status(stack, a, "in_review")
+    set_member_status(stack, b, "in_review")
+    stamp_member_merged_into_rollup!(a, "aaaaaaa1")
+    stamp_member_merged_into_rollup!(b, "bbbbbbb2")
+
+    stack
+  end
+
+  # Deterministic barrier for the `async: true` describe block. The runner
+  # runs INSIDE the spawned child, so the pid it sends back is the child's;
+  # we monitor it and wait for `:DOWN`. That both proves the work ran off
+  # the calling process and guarantees the child is dead before the test
+  # returns, so DataCase teardown can never release the sandbox connection
+  # out from under a live DB user. Deliberately not `Process.sleep`.
+  defp await_async_pr_open!(timeout \\ 2_000) do
+    assert_receive {:dispatch_pr_open_called, child_pid}, timeout
+
+    ref = Process.monitor(child_pid)
+    assert_receive {:DOWN, ^ref, :process, ^child_pid, _reason}, timeout
+
+    {:ok, child_pid}
   end
 
   # ── Deploy-tail sweep (TAIL-stall fix, 2026-07-22) ─────────────────────
