@@ -18,6 +18,7 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
   alias Platform.Org.WikiPage
   alias Platform.Repo
   alias Platform.Responsibilities.ContextProviders
+  alias Platform.Tasks
 
   import Ecto.Query
 
@@ -317,6 +318,254 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
     test "returns {:error, :missing_payload} when the trigger carried none" do
       assert {:error, :missing_payload} =
                ContextProviders.gather_context(:trigger_payload, %{})
+    end
+  end
+
+  # ── :plan_payload ─────────────────────────────────────────────────────────
+  #
+  # The architecture pass runs strictly AFTER plan submission (ADR-0046),
+  # so "no plan resolvable" is a wiring bug rather than an empty state —
+  # this slot refuses instead of returning a tolerant empty payload, and
+  # the Router's context-refusal arm turns that into a stopped dispatch.
+
+  defp plan_project do
+    {:ok, project} =
+      Tasks.create_project(%{name: "Ctx Plan Project #{System.unique_integer([:positive])}"})
+
+    project
+  end
+
+  defp plan_task(project_id, attrs \\ %{}) do
+    {:ok, task} =
+      Tasks.create_task(
+        Map.merge(
+          %{
+            project_id: project_id,
+            title: "Plan Payload Task",
+            description: "Give the architect the intent the plan was written against.",
+            status: "planning"
+          },
+          attrs
+        )
+      )
+
+    task
+  end
+
+  defp bare_plan(task_id, status \\ "pending_review") do
+    {:ok, plan} = Tasks.create_plan(%{task_id: task_id})
+
+    plan
+    |> Ecto.Changeset.change(status: status)
+    |> Repo.update!()
+  end
+
+  defp add_stage(plan_id, position, attrs \\ %{}) do
+    {:ok, stage} =
+      Tasks.create_stage(
+        Map.merge(
+          %{
+            plan_id: plan_id,
+            position: position,
+            name: "Stage #{position}",
+            description: "Stage #{position} description",
+            status: "pending"
+          },
+          attrs
+        )
+      )
+
+    stage
+  end
+
+  defp add_validation(stage_id, kind, attrs \\ %{}) do
+    {:ok, validation} =
+      Tasks.create_validation(Map.merge(%{stage_id: stage_id, kind: kind}, attrs))
+
+    validation
+  end
+
+  defp three_stage_plan do
+    project = plan_project()
+    task = plan_task(project.id)
+    plan = bare_plan(task.id)
+
+    # Inserted out of order on purpose — the slot sorts by position.
+    for position <- [3, 1, 2], do: add_stage(plan.id, position)
+
+    %{project: project, task: task, plan: plan}
+  end
+
+  describe "gather_context/2 — :plan_payload refusals" do
+    # PAIRED POSITIVE CONTROL for the three refusal assertions below. A
+    # resolver that errored unconditionally would pass all of them; this
+    # one test is what makes them observations rather than a tautology.
+    test "resolves a real plan — the control the refusals are measured against" do
+      %{plan: plan} = three_stage_plan()
+
+      assert {:ok, %{plan_payload: %{stage_count: 3}}} =
+               ContextProviders.gather_context(:plan_payload, %{plan: plan})
+    end
+
+    test "returns {:error, :no_plan_payload} for an empty context" do
+      assert {:error, :no_plan_payload} = ContextProviders.gather_context(:plan_payload, %{})
+    end
+
+    test "returns {:error, :no_plan_payload} for a plan_id that resolves to nothing" do
+      assert {:error, :no_plan_payload} =
+               ContextProviders.gather_context(:plan_payload, %{plan_id: Ecto.UUID.generate()})
+    end
+
+    test "returns {:error, :no_plan_payload} for a task that has no plans" do
+      task = plan_task(plan_project().id)
+
+      assert {:error, :no_plan_payload} =
+               ContextProviders.gather_context(:plan_payload, %{task_id: task.id})
+    end
+
+    test "returns {:error, :no_plan_payload} when every plan on the task is dead" do
+      task = plan_task(plan_project().id)
+      _superseded = bare_plan(task.id, "superseded")
+      _rejected = bare_plan(task.id, "rejected")
+
+      assert {:error, :no_plan_payload} =
+               ContextProviders.gather_context(:plan_payload, %{task_id: task.id})
+    end
+
+    test "a malformed plan_id refuses rather than raising" do
+      assert {:error, :no_plan_payload} =
+               ContextProviders.gather_context(:plan_payload, %{plan_id: "not-a-uuid"})
+    end
+  end
+
+  describe "gather_context/2 — :plan_payload resolution" do
+    test "resolves from a plan_id, including a string-keyed one" do
+      %{plan: plan} = three_stage_plan()
+
+      assert {:ok, %{plan_payload: from_atom}} =
+               ContextProviders.gather_context(:plan_payload, %{plan_id: plan.id})
+
+      assert {:ok, %{plan_payload: from_string}} =
+               ContextProviders.gather_context(:plan_payload, %{"plan_id" => plan.id})
+
+      assert from_atom.plan_id == plan.id
+      assert from_string.plan_id == plan.id
+    end
+
+    test "resolves the latest non-superseded/non-rejected plan from a bare task_id" do
+      task = plan_task(plan_project().id)
+
+      superseded = bare_plan(task.id, "superseded")
+      live = bare_plan(task.id, "approved")
+
+      assert live.version > superseded.version
+
+      assert {:ok, %{plan_payload: payload}} =
+               ContextProviders.gather_context(:plan_payload, %{task_id: task.id})
+
+      assert payload.plan_id == live.id
+      assert payload.plan_status == "approved"
+    end
+
+    test "carries the task intent the plan was written against" do
+      project = plan_project()
+      task = plan_task(project.id, %{title: "Wire the thing", description: "Because ADR-0046."})
+      plan = bare_plan(task.id)
+
+      assert {:ok, %{plan_payload: payload}} =
+               ContextProviders.gather_context(:plan_payload, %{plan: plan})
+
+      assert payload.task_id == task.id
+      assert payload.task_title == "Wire the thing"
+      assert payload.task_description == "Because ADR-0046."
+      assert payload.task_status == "planning"
+      assert payload.project_id == project.id
+      assert payload.plan_version == plan.version
+      assert Map.has_key?(payload, :epic_id)
+      assert Map.has_key?(payload, :stack_id)
+    end
+
+    test "sorts stages by position and reports stage_count" do
+      %{plan: plan} = three_stage_plan()
+
+      assert {:ok, %{plan_payload: payload}} =
+               ContextProviders.gather_context(:plan_payload, %{plan: plan})
+
+      assert payload.stage_count == 3
+      assert Enum.map(payload.stages, & &1.position) == [1, 2, 3]
+    end
+
+    test "truncates the task description at 1200 and stage descriptions at 600" do
+      project = plan_project()
+      task = plan_task(project.id, %{description: String.duplicate("t", 5_000)})
+      plan = bare_plan(task.id)
+      add_stage(plan.id, 1, %{description: String.duplicate("s", 5_000)})
+
+      assert {:ok, %{plan_payload: payload}} =
+               ContextProviders.gather_context(:plan_payload, %{plan: plan})
+
+      assert String.length(payload.task_description) == 1201
+      assert String.ends_with?(payload.task_description, "…")
+
+      [stage] = payload.stages
+      assert String.length(stage.description) == 601
+      assert String.ends_with?(stage.description, "…")
+    end
+  end
+
+  describe "gather_context/2 — :plan_payload validation gates" do
+    setup do
+      project = plan_project()
+      task = plan_task(project.id)
+      plan = bare_plan(task.id)
+      stage = add_stage(plan.id, 1, %{name: "Gated Stage", status: "running"})
+
+      add_validation(stage.id, "test_pass")
+      add_validation(stage.id, "manual_approval")
+
+      add_validation(stage.id, "e2e_behavior", %{
+        evaluation_payload: %{
+          "setup" => "seed a plan with three stages",
+          "actions" => "call gather_context/2 with an empty map",
+          "expected" => String.duplicate("e", 500)
+        }
+      })
+
+      _ungated = add_stage(plan.id, 2, %{name: "Ungated Stage"})
+
+      %{plan: plan, stage: stage}
+    end
+
+    test "surfaces every validation kind on the stage", %{plan: plan} do
+      assert {:ok, %{plan_payload: payload}} =
+               ContextProviders.gather_context(:plan_payload, %{plan: plan})
+
+      [gated, ungated] = payload.stages
+
+      kinds = Enum.map(gated.validations, & &1.kind)
+      assert "test_pass" in kinds
+      assert "manual_approval" in kinds
+      assert "e2e_behavior" in kinds
+      assert Enum.all?(gated.validations, &(&1.status == "pending"))
+
+      assert gated.status == "running"
+      assert ungated.validations == []
+      assert ungated.e2e_expected == []
+    end
+
+    test "carries the e2e `expected` truncated to 200 and never setup/actions", %{plan: plan} do
+      assert {:ok, %{plan_payload: payload}} =
+               ContextProviders.gather_context(:plan_payload, %{plan: plan})
+
+      [gated | _] = payload.stages
+
+      assert [expected] = gated.e2e_expected
+      assert String.length(expected) == 201
+      assert String.ends_with?(expected, "…")
+
+      serialised = inspect(payload, limit: :infinity, printable_limit: :infinity)
+      refute serialised =~ "seed a plan with three stages"
+      refute serialised =~ "call gather_context/2 with an empty map"
     end
   end
 

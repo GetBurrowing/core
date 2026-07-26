@@ -227,13 +227,123 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
              "adr_index must be a list (empty is fine when docs/decisions isn't reachable)"
     end
 
-    test "handles missing plan payload without crashing" do
-      # The progressive-enhancement contract requires no side effect when
-      # the payload is malformed; the handler must still return {:ok, ctx}.
-      assert {:ok, ctx} = ArchitectureReviewPlan.gather_context(responsibility(), %{})
+    test "refuses the dispatch when no plan is resolvable" do
+      # ADR-0046 puts the architecture pass strictly after plan
+      # submission, so an unresolvable plan is a wiring bug, not an empty
+      # state. Before task 019f9b28-6ca7 this returned `{:ok, empty}` and
+      # an LLM was dispatched to review nothing; the Router's
+      # context-refusal arm (stage 2) now stops the dispatch instead.
+      assert {:error, :no_plan_payload} =
+               ArchitectureReviewPlan.gather_context(responsibility(), %{})
 
-      assert is_map(ctx.plan_payload)
-      assert ctx.sibling_tasks == []
+      assert {:error, :no_plan_payload} =
+               ArchitectureReviewPlan.gather_context(responsibility(), %{
+                 plan_id: Ecto.UUID.generate()
+               })
+    end
+
+    test "still resolves when the trigger carried only a task_id", ctx do
+      # Paired positive control for the refusal above: the same callback,
+      # the thinnest legitimate trigger shape, must succeed.
+      assert {:ok, gathered} =
+               ArchitectureReviewPlan.gather_context(responsibility(), %{
+                 task_id: ctx.task_under_review.id
+               })
+
+      assert gathered.plan_payload.plan_id == ctx.plan_under_review.id
+      assert Enum.any?(gathered.sibling_tasks, &(&1.task_id == ctx.sibling_planning.id))
+    end
+  end
+
+  # ── plan_payload slot content ─────────────────────────────────────────────
+
+  describe "gather_context/2 — plan_payload gates + intent" do
+    setup do
+      project = make_project("Gate Surface Project")
+
+      task =
+        make_task(project.id,
+          title: "Gate Surface Task",
+          status: "planning",
+          extra: [description: "Surface every gate kind so the architect can see the holes."]
+        )
+
+      plan = make_plan(task.id)
+
+      {:ok, gated} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 1,
+          name: "Gated Stage",
+          description: "Has all three gate kinds."
+        })
+
+      {:ok, _} = Tasks.create_validation(%{stage_id: gated.id, kind: "test_pass"})
+      {:ok, _} = Tasks.create_validation(%{stage_id: gated.id, kind: "manual_approval"})
+
+      {:ok, _} =
+        Tasks.create_validation(%{
+          stage_id: gated.id,
+          kind: "e2e_behavior",
+          evaluation_payload: %{
+            "setup" => "seed an unreviewed plan",
+            "actions" => "fire architecture.review_plan",
+            "expected" => "the architect annotation names the colliding module"
+          }
+        })
+
+      {:ok, _ungated} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 2,
+          name: "Ungated Stage",
+          description: "No gates at all."
+        })
+
+      :ok = PromptTemplates.seed_defaults()
+
+      %{plan: plan, task: task}
+    end
+
+    test "emits the validation kinds the old private summariser preloaded and dropped", %{
+      plan: plan
+    } do
+      {:ok, gathered} =
+        ArchitectureReviewPlan.gather_context(responsibility(), %{plan: plan})
+
+      [gated, ungated] = gathered.plan_payload.stages
+
+      assert Enum.map(gated.validations, & &1.kind) |> Enum.sort() ==
+               ["e2e_behavior", "manual_approval", "test_pass"]
+
+      assert gated.e2e_expected == ["the architect annotation names the colliding module"]
+      assert ungated.validations == []
+    end
+
+    test "emits the task description so the plan can be judged against its intent", %{plan: plan} do
+      {:ok, gathered} =
+        ArchitectureReviewPlan.gather_context(responsibility(), %{plan: plan})
+
+      assert gathered.plan_payload.task_description =~ "Surface every gate kind"
+      assert gathered.plan_payload.stage_count == 2
+    end
+
+    test "render_instruction/1 puts stage names, gate kinds and the intent in the prompt", %{
+      plan: plan
+    } do
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      assert rendered =~ "Gated Stage"
+      assert rendered =~ "Ungated Stage"
+      assert rendered =~ "test_pass"
+      assert rendered =~ "manual_approval"
+      assert rendered =~ "e2e_behavior"
+      assert rendered =~ "e2e expects: the architect annotation names the colliding module"
+      assert rendered =~ "Surface every gate kind"
+      assert rendered =~ "(none — this stage is unprotected)"
     end
   end
 
@@ -256,6 +366,20 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
       for key <- [:plan_payload, :sibling_tasks, :adr_index] do
         assert Map.has_key?(arity_1, key)
       end
+    end
+
+    test "renders the refusal as a map rather than propagating the error tuple" do
+      # The arity-2 Provider callback refuses; this convenience wrapper
+      # must still hand back something formattable, because
+      # `render_instruction/1` and eight call sites in this file assume a
+      # map.
+      refused = ArchitectureReviewPlan.gather_context(%{})
+
+      assert refused.plan_payload.missing? == true
+      assert refused.plan_payload.error == :no_plan_payload
+      assert refused.sibling_tasks == []
+
+      assert ArchitectureReviewPlan.render_instruction(refused) =~ "no plan summary available"
     end
   end
 

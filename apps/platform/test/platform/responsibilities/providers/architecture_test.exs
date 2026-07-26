@@ -177,15 +177,18 @@ defmodule Platform.Responsibilities.Providers.ArchitectureTest do
 
   describe "gather_context/2" do
     test "delegates to the matching handler" do
+      # Was `assert {:ok, ctx}` with a plan_payload key: an empty trigger
+      # used to yield the handler's tolerant empty context. Task
+      # 019f9b28-6ca7 stage 3 made the review-plan handler refuse an
+      # unresolvable plan, so the delegation proof is now the handler's
+      # OWN refusal reason — `:no_plan_payload`, which is distinct from
+      # this shim's `:unknown_architecture_responsibility` and could not
+      # come from the Router's generic fallback. Payload-shape coverage
+      # lives in the two DataCase suites; this file stays DB-free.
       log =
         capture_log(fn ->
-          assert {:ok, ctx} =
+          assert {:error, :no_plan_payload} =
                    ArchitectureProvider.gather_context(review_plan_responsibility(), %{})
-
-          # The review-plan handler's own empty-payload shape — proof the
-          # call reached the handler rather than a generic fallback.
-          assert Map.has_key?(ctx, :plan_payload)
-          assert Map.has_key?(ctx, :adr_index)
         end)
 
       assert log =~ "[architecture.review_plan]"

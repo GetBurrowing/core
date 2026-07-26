@@ -41,15 +41,28 @@ defmodule Platform.Responsibilities.ContextProviders do
   explicit empty/`missing?` marker instead. Making optional context
   fatal is how a refusal mechanism gets disabled by the first false
   positive.
+
+  `:plan_payload` is on the required side of that line, deliberately.
+  ADR-0046 places the architecture pass strictly *after* plan
+  submission, so every trigger that asks for this slot carries a plan,
+  a plan id, or a task whose latest plan is the one under review. "No
+  plan resolvable" is therefore not a legitimate empty state on any
+  path that requests it — it is a wiring bug, and dispatching an LLM to
+  review nothing is how that bug stays invisible. Contrast
+  `:recent_journal`, where zero entries is a healthy Tuesday.
   """
 
   require Logger
+
+  import Ecto.Query, only: [from: 2]
 
   alias Platform.Chat
   alias Platform.Meetings
   alias Platform.Meetings.SummaryPrompt
   alias Platform.Meetings.Transcript
   alias Platform.Org.Context, as: OrgContext
+  alias Platform.Repo
+  alias Platform.Tasks.Plan
 
   @type slot ::
           :org_identity
@@ -58,6 +71,18 @@ defmodule Platform.Responsibilities.ContextProviders do
           | :current_message
           | :current_meeting
           | :trigger_payload
+          | :plan_payload
+
+  # A plan in one of these statuses is no longer the task's live plan, so
+  # resolving `:plan_payload` from a bare `task_id` skips them.
+  @dead_plan_statuses ~w(superseded rejected)
+
+  # Truncation budgets for `:plan_payload`. Sized so an 8-stage plan lands
+  # around 7 kB / ~1.8k tokens, leaving room in the ~4096-token preamble
+  # for the sibling-task and ADR slots.
+  @task_description_limit 1200
+  @stage_description_limit 600
+  @e2e_expected_limit 200
 
   @doc """
   Materialise a single slot into the shape M1 providers consume.
@@ -82,6 +107,12 @@ defmodule Platform.Responsibilities.ContextProviders do
       `{:error, :invalid_meeting_id}` / `{:error, :not_found}`.
     * `:trigger_payload` — echoes `opts[:payload]` straight through.
       `{:error, :missing_payload}` when the trigger carried none.
+    * `:plan_payload` — the plan under review: its stages, each stage's
+      validation gates, and the task intent the plan was written
+      against. Resolves from `opts[:plan]` (a `%Plan{}`), else
+      `opts[:plan_id]`, else the latest non-superseded/non-rejected plan
+      for `opts[:task_id]`. **Returns `{:error, :no_plan_payload}` when
+      nothing resolves** — see "Required vs optional slots" below.
 
   `opts` may be a keyword list or a map; map keys may be atoms or
   strings (the router hands `trigger_meta` through verbatim and both
@@ -222,9 +253,112 @@ defmodule Platform.Responsibilities.ContextProviders do
     end
   end
 
+  def gather_context(:plan_payload, opts) do
+    case resolve_plan(to_keyword(opts)) do
+      %Plan{} = plan -> {:ok, %{plan_payload: plan_payload(plan)}}
+      nil -> {:error, :no_plan_payload}
+    end
+  end
+
   def gather_context(slot, _opts) do
     {:error, {:unknown_slot, slot}}
   end
+
+  # ── :plan_payload helpers ─────────────────────────────────────────────────
+
+  # Mirrors the cond ladder the architecture handler used to own. Atom
+  # and string keys both land here because `to_keyword/1` coerces them,
+  # with atom keys taking precedence.
+  defp resolve_plan(opts) do
+    plan = Keyword.get(opts, :plan)
+    plan_id = Keyword.get(opts, :plan_id)
+    task_id = Keyword.get(opts, :task_id)
+
+    cond do
+      match?(%Plan{}, plan) -> plan
+      is_binary(plan_id) -> load_plan(plan_id)
+      is_binary(task_id) -> latest_live_plan(task_id)
+      true -> nil
+    end
+  end
+
+  defp load_plan(plan_id) do
+    case safe(fn -> Repo.get(Plan, plan_id) end) do
+      {:ok, plan} -> plan
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp latest_live_plan(task_id) do
+    query =
+      from(p in Plan,
+        where: p.task_id == ^task_id and p.status not in @dead_plan_statuses,
+        order_by: [desc: p.version],
+        limit: 1
+      )
+
+    case safe(fn -> Repo.one(query) end) do
+      {:ok, plan} -> plan
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp plan_payload(%Plan{} = plan) do
+    plan = Repo.preload(plan, [:task, stages: :validations])
+    task = plan.task
+    stages = plan.stages |> List.wrap() |> Enum.sort_by(& &1.position)
+
+    %{
+      plan_id: plan.id,
+      plan_version: plan.version,
+      plan_status: plan.status,
+      task_id: task && task.id,
+      task_title: task && task.title,
+      task_description: task && truncate(task.description, @task_description_limit),
+      task_status: task && task.status,
+      project_id: task && task.project_id,
+      epic_id: task && task.epic_id,
+      stack_id: task && task.stack_id,
+      stage_count: length(stages),
+      stages: Enum.map(stages, &stage_payload/1)
+    }
+  end
+
+  defp stage_payload(stage) do
+    validations = stage.validations |> List.wrap() |> Enum.sort_by(& &1.kind)
+
+    %{
+      position: stage.position,
+      name: stage.name,
+      description: truncate(stage.description, @stage_description_limit),
+      status: stage.status,
+      validations: Enum.map(validations, &%{kind: &1.kind, status: &1.status}),
+      e2e_expected: e2e_expected(validations)
+    }
+  end
+
+  # Only the `expected` string of each `e2e_behavior` gate. The architect
+  # needs to see WHETHER a stage is protected and by what kind of gate,
+  # not the adversarial script — `setup` / `actions` are the largest
+  # fields on a plan and add nothing to a module-boundary judgement.
+  defp e2e_expected(validations) do
+    validations
+    |> Enum.filter(&(&1.kind == "e2e_behavior"))
+    |> Enum.map(&expected_string(&1.evaluation_payload))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&truncate(&1, @e2e_expected_limit))
+  end
+
+  defp expected_string(%{"expected" => expected}) when is_binary(expected), do: expected
+  defp expected_string(%{expected: expected}) when is_binary(expected), do: expected
+  defp expected_string(_payload), do: nil
+
+  defp truncate(str, max_len) when is_binary(str) and byte_size(str) > max_len do
+    String.slice(str, 0, max_len) <> "…"
+  end
+
+  defp truncate(str, _max_len) when is_binary(str), do: str
+  defp truncate(_str, _max_len), do: nil
 
   # ── helpers ────────────────────────────────────────────────────────────────
 

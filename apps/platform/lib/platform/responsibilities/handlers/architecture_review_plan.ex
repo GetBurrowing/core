@@ -61,6 +61,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
+  alias Platform.Responsibilities.ContextProviders
   alias Platform.Responsibilities.Responsibility
   alias Platform.Tasks
   alias Platform.Tasks.Plan
@@ -122,22 +123,9 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   # ── Provider callbacks ─────────────────────────────────────────────────────
 
   @impl true
-  def gather_context(_responsibility, ctx) when is_map(ctx) do
-    plan = extract_plan(ctx)
+  def gather_context(_responsibility, ctx) when is_map(ctx), do: do_gather_context(ctx)
 
-    if plan do
-      {:ok, do_gather_context(plan)}
-    else
-      Logger.warning(
-        "[architecture.review_plan] gather_context called without plan payload — " <>
-          "keys=#{inspect(Map.keys(ctx))}"
-      )
-
-      {:ok, empty_context()}
-    end
-  end
-
-  def gather_context(_responsibility, _ctx), do: {:ok, empty_context()}
+  def gather_context(_responsibility, _ctx), do: {:error, :no_plan_payload}
 
   @doc """
   Assemble the architect prompt context from the plan payload the
@@ -147,12 +135,17 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   without standing up a fully-populated Router pipeline. Accepts the
   same map shape `Platform.Tasks.fire_architecture_review_plan/1`
   publishes: `%{plan: %Plan{}, plan_id: id, task_id: id}`.
+
+  Unlike the arity-2 Provider callback this **always returns a map** —
+  the refusal is rendered as `plan_payload.error` so callers that just
+  want something to format keep getting one. Dispatch decisions must use
+  the arity-2 callback, which propagates `{:error, :no_plan_payload}`.
   """
   @spec gather_context(map()) :: map()
   def gather_context(ctx) when is_map(ctx) do
-    case extract_plan(ctx) do
-      nil -> empty_context()
-      %Plan{} = plan -> do_gather_context(plan)
+    case do_gather_context(ctx) do
+      {:ok, gathered} -> gathered
+      {:error, reason} -> empty_context(reason)
     end
   end
 
@@ -258,18 +251,6 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
 
   # ── Internals ─────────────────────────────────────────────────────────────
 
-  defp extract_plan(ctx) when is_map(ctx) do
-    cond do
-      match?(%Plan{}, Map.get(ctx, :plan)) -> Map.get(ctx, :plan)
-      match?(%Plan{}, Map.get(ctx, "plan")) -> Map.get(ctx, "plan")
-      is_binary(Map.get(ctx, :plan_id)) -> load_plan(Map.get(ctx, :plan_id))
-      is_binary(Map.get(ctx, "plan_id")) -> load_plan(Map.get(ctx, "plan_id"))
-      true -> nil
-    end
-  end
-
-  defp extract_plan(_), do: nil
-
   defp load_plan(plan_id) when is_binary(plan_id) do
     Repo.get(Plan, plan_id)
   rescue
@@ -287,56 +268,57 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   defp ensure_task_id(id) when is_binary(id), do: :ok
   defp ensure_task_id(_), do: {:error, :missing_task_id}
 
-  defp do_gather_context(%Plan{} = plan) do
-    plan = Repo.preload(plan, [:task, stages: :validations])
+  # The plan payload is no longer materialised here — `ContextProviders`
+  # is the single per-slot resolver (task 019f9b28-6ca7 stage 1) and
+  # `:plan_payload` is a slot like any other. A refusal propagates: the
+  # Router's context-refusal arm stops the dispatch rather than sending
+  # the architect an empty plan to review.
+  defp do_gather_context(ctx) do
+    case ContextProviders.gather_context(:plan_payload, ctx) do
+      {:ok, %{plan_payload: payload}} ->
+        {:ok,
+         %{
+           plan_payload: payload,
+           sibling_tasks: sibling_task_summaries(payload),
+           adr_index: adr_index(),
+           similar_tasks: similar_tasks_hint(payload)
+         }}
 
-    %{
-      plan_payload: plan_summary_map(plan),
-      sibling_tasks: sibling_task_summaries(plan),
-      adr_index: adr_index(),
-      similar_tasks: similar_tasks_hint(plan)
-    }
+      {:error, reason} ->
+        Logger.warning(
+          "[architecture.review_plan] gather_context could not resolve a plan — " <>
+            "refusing dispatch reason=#{inspect(reason)} keys=#{inspect(ctx_keys(ctx))}"
+        )
+
+        {:error, reason}
+    end
   end
 
-  defp empty_context do
+  defp ctx_keys(ctx) when is_map(ctx), do: Map.keys(ctx)
+  defp ctx_keys(_ctx), do: []
+
+  defp empty_context(reason) do
     %{
-      plan_payload: %{missing?: true, note: "no plan payload supplied"},
+      plan_payload: %{
+        missing?: true,
+        error: reason,
+        note: "no plan payload supplied (#{inspect(reason)})"
+      },
       sibling_tasks: [],
       adr_index: [],
       similar_tasks: []
     }
   end
 
-  defp plan_summary_map(%Plan{} = plan) do
-    task = plan.task
-
-    %{
-      plan_id: plan.id,
-      plan_version: plan.version,
-      plan_status: plan.status,
-      task_id: task && task.id,
-      task_title: task && task.title,
-      task_status: task && task.status,
-      project_id: task && task.project_id,
-      stages:
-        for stage <- plan.stages || [] do
-          %{
-            stage_id: stage.id,
-            name: Map.get(stage, :name),
-            position: Map.get(stage, :position),
-            description: Map.get(stage, :description)
-          }
-        end
-    }
-  end
-
-  defp sibling_task_summaries(%Plan{task: nil}), do: []
-
-  defp sibling_task_summaries(%Plan{task: %TaskSchema{} = task} = plan) do
-    task.project_id
+  # Driven by the resolved payload rather than the `%Plan{}` struct, so
+  # the sibling walk works identically whether the trigger carried a
+  # plan, a plan_id, or only a task_id.
+  defp sibling_task_summaries(%{project_id: project_id, task_id: task_id})
+       when is_binary(project_id) do
+    project_id
     |> Tasks.list_tasks_by_project()
     |> Enum.reject(fn %TaskSchema{} = t ->
-      t.id == plan.task_id or t.status not in @in_flight_statuses
+      t.id == task_id or t.status not in @in_flight_statuses
     end)
     |> Enum.map(&sibling_task_summary/1)
   rescue
@@ -347,6 +329,8 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
 
       []
   end
+
+  defp sibling_task_summaries(_payload), do: []
 
   defp sibling_task_summary(%TaskSchema{} = task) do
     plans =
@@ -390,19 +374,28 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
     _ -> []
   end
 
-  defp similar_tasks_hint(%Plan{} = plan) do
-    cond do
-      Code.ensure_loaded?(Tasks) and function_exported?(Tasks, :similar_tasks, 2) ->
-        try do
-          apply(Tasks, :similar_tasks, [plan, []])
-        rescue
-          _ -> []
-        end
+  # Probe for the (still-unlanded) `Tasks.similar_tasks/2`. It takes a
+  # `%Plan{}`, so the plan is re-read from the payload's id — a query
+  # that only ever runs once the helper actually exists.
+  defp similar_tasks_hint(%{plan_id: plan_id}) when is_binary(plan_id) do
+    if Code.ensure_loaded?(Tasks) and function_exported?(Tasks, :similar_tasks, 2) do
+      case load_plan(plan_id) do
+        %Plan{} = plan ->
+          try do
+            apply(Tasks, :similar_tasks, [plan, []])
+          rescue
+            _ -> []
+          end
 
-      true ->
-        []
+        _ ->
+          []
+      end
+    else
+      []
     end
   end
+
+  defp similar_tasks_hint(_payload), do: []
 
   defp adr_index do
     with root when is_binary(root) <- repo_root(),
@@ -466,28 +459,65 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   end
 
   defp format_plan_summary(%{} = payload) do
-    stage_lines =
-      payload
-      |> Map.get(:stages, [])
-      |> Enum.map(fn stage ->
-        pos = Map.get(stage, :position, "?")
-        name = Map.get(stage, :name) || "(unnamed)"
-        desc = Map.get(stage, :description) || ""
-
-        "  - stage #{pos} — #{name}: #{truncate(desc, 220)}"
-      end)
-      |> Enum.join("\n")
+    stages = Map.get(payload, :stages) || []
+    stage_lines = Enum.map_join(stages, "\n", &format_stage_line/1)
 
     """
     Task: #{Map.get(payload, :task_title) || "(untitled)"} (task_id: #{Map.get(payload, :task_id)})
     Task status: #{Map.get(payload, :task_status)}
+    Task intent:
+    #{format_task_description(Map.get(payload, :task_description))}
+
     Plan version: #{Map.get(payload, :plan_version)} (status: #{Map.get(payload, :plan_status)})
     Project: #{Map.get(payload, :project_id)}
 
-    Stages:
+    Stages (#{Map.get(payload, :stage_count, length(stages))}):
     #{stage_lines}
     """
     |> String.trim_trailing()
+  end
+
+  defp format_task_description(nil), do: "  (no task description recorded)"
+  defp format_task_description(""), do: "  (no task description recorded)"
+
+  defp format_task_description(description) when is_binary(description) do
+    description
+    |> String.split("\n")
+    |> Enum.map_join("\n", &("  " <> &1))
+  end
+
+  # The gates are the point: the architect must be able to tell a stage
+  # that is protected from one that is not, and by what kind of gate.
+  # Descriptions arrive pre-truncated from the `:plan_payload` slot —
+  # re-truncating here would silently shrink the budget the slot sized.
+  defp format_stage_line(stage) do
+    pos = Map.get(stage, :position, "?")
+    name = Map.get(stage, :name) || "(unnamed)"
+    desc = Map.get(stage, :description) || ""
+    status = Map.get(stage, :status) || "pending"
+
+    header = "  - stage #{pos} — #{name} [#{status}]: #{desc}"
+
+    [header, format_gates(Map.get(stage, :validations) || [])]
+    |> Enum.concat(format_e2e_expectations(Map.get(stage, :e2e_expected) || []))
+    |> Enum.join("\n")
+  end
+
+  defp format_gates([]), do: "    gates: (none — this stage is unprotected)"
+
+  defp format_gates(validations) when is_list(validations) do
+    rendered =
+      Enum.map_join(validations, ", ", fn validation ->
+        "#{Map.get(validation, :kind)}(#{Map.get(validation, :status)})"
+      end)
+
+    "    gates: " <> rendered
+  end
+
+  defp format_e2e_expectations([]), do: []
+
+  defp format_e2e_expectations(expectations) when is_list(expectations) do
+    Enum.map(expectations, &"    e2e expects: #{&1}")
   end
 
   defp format_sibling_tasks([]), do: "(no in-flight sibling tasks in this project)"
