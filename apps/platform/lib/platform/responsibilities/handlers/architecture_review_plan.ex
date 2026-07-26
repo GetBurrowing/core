@@ -9,11 +9,11 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   `try/rescue/catch :exit` guard mandated by the progressive-enhancement
   contract. This stage 3 revision fills in the real content:
 
-    * `gather_context/2` composes two `ContextProviders` slots and reads
-      the `docs/decisions/` ADR filesystem listing. Neither payload is
-      built here any more — `Platform.Responsibilities.ContextProviders`
-      is the single per-slot resolver, so the Router's batch path and
-      this handler see identical payloads.
+    * `gather_context/2` composes three `ContextProviders` slots. No
+      payload is built here any more —
+      `Platform.Responsibilities.ContextProviders` is the single
+      per-slot resolver, so the Router's batch path and this handler
+      see identical payloads.
 
       `:plan_payload` (task 019f9b28-6ca7 stage 3) REFUSES an
       unresolvable plan and the refusal propagates out of
@@ -28,6 +28,14 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
       implementation here walked every in-flight task in the project
       with no limit at all; the slot caps the project window at 10 and
       discloses every drop in the rendered block.
+
+      `:adr_index` (stage 5) never refuses either, and for a reason
+      that belongs to the deployment rather than the trigger: release
+      images ship no `docs/`, so an unreachable directory is the
+      production steady state. It is keyed on FILENAME, not number —
+      `docs/decisions/` holds four numbers that each name two different
+      ADRs — and carries status, collision and supersession flags so
+      the architect can tell a live decision from a retired one.
     * `render_instruction/1` renders `architecture.review_plan.v1` from
       the DB (falls back to the hardcoded template body when the DB
       row is missing so early-boot dispatch doesn't crash).
@@ -100,10 +108,24 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
     tasks: []
   }
 
-  # ADR index lives at `docs/decisions/` relative to the repo root. In
-  # test / sandboxed builds the path may not resolve (test cwd differs);
-  # we fall back to an empty list rather than crashing.
-  @adr_dir_from_repo_root "docs/decisions"
+  # Shape of the `:adr_index` slot when the directory can't be read.
+  # Same role as `@empty_siblings`: the slot never errors, so this
+  # covers the defensive arm and the refusal-rendering path in
+  # `empty_context/1`. Kept in sync with
+  # `ContextProviders.unavailable_index/2`.
+  @unavailable_adr_index %{
+    available?: false,
+    reason: :adr_dir_unreachable,
+    dir: nil,
+    total: 0,
+    shown: 0,
+    truncated?: false,
+    dropped: 0,
+    dropped_files: [],
+    number_collisions: %{},
+    title_collisions: %{},
+    entries: []
+  }
 
   @doc "Canonical key for this responsibility."
   @spec key() :: String.t()
@@ -222,8 +244,9 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
     system =
       "You are the Architect on the Suite plan-review path (ADR-0044). " <>
         "Your outputs are additive annotations posted to the plan's execution space — " <>
-        "you do not block plan approval. Cite tasks by id and ADRs by number so the " <>
-        "human reviewer can jump to sources."
+        "you do not block plan approval. Cite tasks by id and ADRs by FILENAME — " <>
+        "`docs/decisions/` reuses numbers across different ADRs, so a number is not a " <>
+        "reference the human reviewer can follow."
 
     {:ok, %{system: system, user: user}}
   end
@@ -329,7 +352,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
         note: "no plan payload supplied (#{inspect(reason)})"
       },
       sibling_tasks: @empty_siblings,
-      adr_index: [],
+      adr_index: @unavailable_adr_index,
       similar_tasks: []
     }
   end
@@ -386,46 +409,32 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
 
   defp similar_tasks_hint(_payload), do: []
 
+  # The ADR walk is no longer materialised here either — it is the
+  # `:adr_index` slot on `ContextProviders`, which owns the directory
+  # resolution, the header parse, and the collision / supersession
+  # flags. What used to be here emitted `%{file: name}` and nothing
+  # else, and the prompt told the model to cite by number: this
+  # directory has four numbers held by two ADRs each, so that
+  # instruction produced confident citations of the wrong document.
+  #
+  # Like `:sibling_tasks`, this slot NEVER refuses. A prod release
+  # image ships no `docs/` at all, so an unreachable index is the
+  # steady state there — refusing on it would stop the architect
+  # dispatching in production. It comes back `available?: false` with a
+  # reason instead, and the renderer turns that into an explicit
+  # instruction not to cite ADRs rather than into silence.
   defp adr_index do
-    with root when is_binary(root) <- repo_root(),
-         adr_dir <- Path.join(root, @adr_dir_from_repo_root),
-         true <- File.dir?(adr_dir),
-         entries when is_list(entries) <- File.ls(adr_dir) |> unwrap_ls() do
-      entries
-      |> Enum.filter(&String.ends_with?(&1, ".md"))
-      |> Enum.sort()
-      |> Enum.map(&%{file: &1})
-    else
-      _ -> []
-    end
-  rescue
-    _ -> []
-  end
+    case ContextProviders.gather_context(:adr_index, %{}) do
+      {:ok, %{adr_index: index}} ->
+        index
 
-  defp unwrap_ls({:ok, entries}), do: entries
-  defp unwrap_ls({:error, _}), do: []
-  defp unwrap_ls(list) when is_list(list), do: list
+      other ->
+        Logger.warning(
+          "[architecture.review_plan] adr_index slot returned an unexpected shape: " <>
+            "#{inspect(other)} — rendering the unavailable block"
+        )
 
-  # Walk up from the current file's dir until we find `docs/decisions/`.
-  # In test builds `System.cwd()` can point at
-  # `apps/platform`; in prod release builds we look at the priv root and
-  # walk back to the repo. Return `nil` when we can't find it — callers
-  # fall back to an empty ADR list.
-  defp repo_root do
-    __ENV__.file
-    |> Path.expand()
-    |> find_ancestor_with_dir(@adr_dir_from_repo_root, 8)
-  end
-
-  defp find_ancestor_with_dir(_path, _dir, 0), do: nil
-
-  defp find_ancestor_with_dir(path, dir, depth) do
-    parent = Path.dirname(path)
-
-    cond do
-      parent == path -> nil
-      File.dir?(Path.join(parent, dir)) -> parent
-      true -> find_ancestor_with_dir(parent, dir, depth - 1)
+        @unavailable_adr_index
     end
   end
 
@@ -437,7 +446,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
       plan_summary: format_plan_summary(Map.get(context, :plan_payload)),
       sibling_tasks: format_sibling_tasks(Map.get(context, :sibling_tasks, @empty_siblings)),
       open_prs: format_open_prs(Map.get(context, :open_prs, [])),
-      adr_index: format_adr_index(Map.get(context, :adr_index, []))
+      adr_index: format_adr_index(Map.get(context, :adr_index, @unavailable_adr_index))
     }
   end
 
@@ -607,13 +616,105 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
     end)
   end
 
-  defp format_adr_index([]), do: "(ADR index unavailable — `docs/decisions/` not found)"
-
-  defp format_adr_index(entries) when is_list(entries) do
-    Enum.map_join(entries, "\n", fn entry ->
-      "- #{Map.get(entry, :file, "(unknown)")}"
-    end)
+  # An unreadable index must arrive as an INSTRUCTION, not as silence.
+  # A model handed an empty ADR block reads it as "this codebase has no
+  # architectural decisions" and reasons from that; handed this line it
+  # knows the walk failed and that any ADR it names would be invented.
+  defp format_adr_index(%{available?: false} = payload) do
+    "(ADR index unavailable — #{adr_unavailable_reason(Map.get(payload, :reason))}. " <>
+      "Do not cite ADRs by number or filename in this pass; say the index was unavailable " <>
+      "instead of naming a decision you cannot see.)"
   end
+
+  defp format_adr_index(%{entries: entries} = payload) when is_list(entries) do
+    Enum.join([adr_index_header(payload) | Enum.map(entries, &format_adr_entry/1)], "\n")
+  end
+
+  defp format_adr_index(_payload),
+    do: "(ADR index unavailable — the slot returned an unrecognised shape)"
+
+  defp adr_unavailable_reason(:adr_dir_empty),
+    do: "`docs/decisions/` resolved but holds no `.md` files"
+
+  defp adr_unavailable_reason(:adr_dir_unreadable),
+    do: "`docs/decisions/` exists but could not be listed"
+
+  defp adr_unavailable_reason(_reason),
+    do: "`docs/decisions/` was not found — release images do not ship `docs/`"
+
+  # The header carries the one instruction that makes the block usable:
+  # cite by filename. `docs/decisions/` holds four numbers that name two
+  # different ADRs each, so "ADR-0044" is not a reference — it is a
+  # coin flip the model has no way of knowing it is making.
+  defp adr_index_header(payload) do
+    collisions = map_size(Map.get(payload, :number_collisions) || %{})
+    total = Map.get(payload, :total, 0)
+    shown = Map.get(payload, :shown, total)
+
+    counts =
+      if Map.get(payload, :truncated?) do
+        "Showing the #{shown} highest-numbered of #{total} ADRs in `docs/decisions/` " <>
+          "(#{Map.get(payload, :dropped, 0)} older ADR(s) omitted: " <>
+          "#{Enum.join(Map.get(payload, :dropped_files) || [], ", ")})."
+      else
+        "All #{total} ADRs in `docs/decisions/`."
+      end
+
+    ambiguity =
+      if collisions > 0 do
+        " CITE ADRs BY FILENAME, NOT BY NUMBER — #{collisions} number(s) in this directory " <>
+          "are each shared by more than one ADR, and the shared entries are flagged below."
+      else
+        " Cite ADRs by filename."
+      end
+
+    counts <> ambiguity
+  end
+
+  defp format_adr_entry(entry) do
+    title = Map.get(entry, :title) || "(title not recorded)"
+    status = Map.get(entry, :status) || "(status not recorded)"
+
+    header = "- #{Map.get(entry, :file, "(unknown)")} — #{title} [#{status}]"
+
+    Enum.join([header | adr_entry_flags(entry)], "\n")
+  end
+
+  defp adr_entry_flags(entry) do
+    number_flag =
+      if Map.get(entry, :number_ambiguous) do
+        ["  ⚠ number #{Map.get(entry, :number)} is shared by another ADR — cite by filename"]
+      else
+        []
+      end
+
+    title_flag =
+      if Map.get(entry, :title_ambiguous) do
+        ["  ⚠ another ADR carries this same title — cite by filename"]
+      else
+        []
+      end
+
+    number_flag ++
+      title_flag ++ Enum.map(Map.get(entry, :superseded_by) || [], &adr_supersession/1)
+  end
+
+  # A partial supersession is rendered as one, with the superseding
+  # document's own words attached. ADR-0013 retired the attention-routing
+  # SECTIONS of ADR-0008; reporting 0008 as dead would retire a live
+  # decision, which is the same lie in the opposite direction.
+  defp adr_supersession(%{partial?: true} = ref) do
+    "  ⚠ partially superseded by #{Map.get(ref, :file)} — #{Map.get(ref, :note)}"
+  end
+
+  defp adr_supersession(ref) do
+    "  ⚠ superseded by #{Map.get(ref, :file)}" <> adr_supersession_source(ref)
+  end
+
+  defp adr_supersession_source(%{source: :manual, note: note}) when is_binary(note),
+    do: " (#{note})"
+
+  defp adr_supersession_source(_ref), do: ""
 
   # Fallback interpolation when the DB row is missing — the hardcoded
   # default body carries the same `{{variable}}` placeholders, so we

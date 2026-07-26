@@ -241,9 +241,15 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
       assert payload.project_id == ctx.project.id
     end
 
-    test "populates adr_index from docs/decisions when reachable" do
-      # In the test build the file lookup may or may not resolve, but the
-      # slot must always be a list (never crash the context gather).
+    test "populates adr_index with parsed, flagged entries" do
+      # Task 019f9b28-6ca7 stage 5: this test previously asserted
+      # `is_list(gathered.adr_index)` with the comment "empty is fine
+      # when docs/decisions isn't reachable" — which is precisely the
+      # silent degradation the `:adr_index` slot removes. A bare list of
+      # filenames cannot distinguish "unreachable" from "no decisions",
+      # and it cannot say that four numbers in this directory name two
+      # ADRs each. The slot returns a payload with `available?` and
+      # per-entry flags instead.
       project = make_project("ADR Index Test Project")
       task = make_task(project.id, title: "ADR Index Task", status: "planning")
       plan = make_plan(task.id)
@@ -251,8 +257,24 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
       {:ok, gathered} =
         ArchitectureReviewPlan.gather_context(responsibility(), %{plan: plan})
 
-      assert is_list(gathered.adr_index),
-             "adr_index must be a list (empty is fine when docs/decisions isn't reachable)"
+      index = gathered.adr_index
+
+      assert is_map(index)
+      assert Map.has_key?(index, :available?)
+      assert Map.has_key?(index, :entries)
+
+      if index.available? do
+        assert index.total == length(index.entries)
+
+        for entry <- index.entries do
+          assert is_binary(entry.file)
+          assert Map.has_key?(entry, :number_ambiguous)
+          assert Map.has_key?(entry, :superseded_by)
+        end
+      else
+        assert index.entries == []
+        assert index.reason in [:adr_dir_unreachable, :adr_dir_unreadable, :adr_dir_empty]
+      end
     end
 
     test "refuses the dispatch when no plan is resolvable" do
@@ -491,6 +513,106 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
       assert is_binary(rendered)
       assert rendered != ""
       assert rendered =~ "Architect"
+    end
+  end
+
+  # ── ADR-index rendering ───────────────────────────────────────────────────
+
+  describe "render_instruction/1 — ADR index block" do
+    setup do
+      project = make_project("ADR Render Project")
+      task = make_task(project.id, title: "ADR Render Task", status: "planning")
+      plan = make_plan(task.id)
+
+      :ok = PromptTemplates.seed_defaults()
+
+      %{plan: plan}
+    end
+
+    test "renders title, status and the cite-by-filename instruction", %{plan: plan} do
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      assert rendered =~ "0044-architect-responsibility.md — Architect Responsibility [Accepted]"
+      assert rendered =~ "CITE ADRs BY FILENAME, NOT BY NUMBER"
+    end
+
+    test "flags the colliding numbers inline, next to the entry", %{plan: plan} do
+      # DETECTOR-adjacent: the old renderer printed 50 bare filenames.
+      # A model reading that block has no way to know "ADR-0044" names
+      # two documents, and the prompt used to tell it to cite by number.
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      assert rendered =~ "⚠ number 0044 is shared by another ADR — cite by filename"
+      assert rendered =~ "⚠ number 0017 is shared by another ADR — cite by filename"
+    end
+
+    test "names the superseding document on the superseded entry", %{plan: plan} do
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      assert rendered =~ "⚠ superseded by 0041-org-memory-v2-wiki-system.md"
+      assert rendered =~ "⚠ superseded by 0036-canvases-first-class-collaboration-surfaces.md"
+
+      # Partial supersessions say so rather than retiring a live ADR.
+      assert rendered =~
+               "⚠ partially superseded by 0013-attention-routing-and-channel-policy.md"
+    end
+
+    test "the prompt no longer instructs the model to cite ADRs by number", %{plan: plan} do
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      refute rendered =~ "Prefer citing the ADR by number"
+
+      {:ok, %{system: system}} =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.build_prompt()
+
+      refute system =~ "ADRs by number"
+      assert system =~ "FILENAME"
+    end
+
+    test "a truncated index says so and names what it dropped", %{plan: plan} do
+      # Stage 4's rule, applied here: a bound is only honest if the
+      # rendered block admits to it. "All 49 ADRs" and "showing 5 of 49"
+      # are different claims and the model cannot tell them apart from
+      # the list alone.
+      Application.put_env(:platform, :adr_index_limit, 5)
+      on_exit(fn -> Application.delete_env(:platform, :adr_index_limit) end)
+
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      assert rendered =~ "Showing the 5 highest-numbered of 49 ADRs"
+      assert rendered =~ "older ADR(s) omitted"
+      assert rendered =~ "0001-repository-shape-and-boundary.md"
+      refute rendered =~ "0001-repository-shape-and-boundary.md — Repository Shape"
+    end
+
+    test "an unavailable index renders an instruction, not silence", %{plan: plan} do
+      Application.put_env(:platform, :adr_dir, "/nonexistent/docs/decisions")
+      on_exit(fn -> Application.delete_env(:platform, :adr_dir) end)
+
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      assert rendered =~ "ADR index unavailable"
+      assert rendered =~ "Do not cite ADRs by number or filename in this pass"
     end
   end
 

@@ -915,6 +915,301 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
     end
   end
 
+  # ── :adr_index ────────────────────────────────────────────────────────────
+
+  defp adr_index(opts \\ []) do
+    if dir = Keyword.get(opts, :dir) do
+      Application.put_env(:platform, :adr_dir, dir)
+      on_exit(fn -> Application.delete_env(:platform, :adr_dir) end)
+    end
+
+    {:ok, %{adr_index: index}} = ContextProviders.gather_context(:adr_index, [])
+    index
+  end
+
+  defp fixture_adr_dir, do: Path.expand("../../support/fixtures/adr_decisions", __DIR__)
+
+  defp entry_for(index, file), do: Enum.find(index.entries, &(&1.file == file))
+
+  describe "gather_context/2 — :adr_index against a fixture directory" do
+    setup do
+      %{index: adr_index(dir: fixture_adr_dir())}
+    end
+
+    test "flags every file sharing a number, and leaves unique numbers alone", %{index: index} do
+      assert entry_for(index, "0099-first-of-two.md").number_ambiguous
+      assert entry_for(index, "0099-second-of-two.md").number_ambiguous
+
+      assert index.number_collisions["0099"] ==
+               ["0099-first-of-two.md", "0099-second-of-two.md"]
+
+      # POSITIVE CONTROL. Without this the ambiguity flag could be
+      # hardcoded true and both assertions above would still pass.
+      control = entry_for(index, "0102-unique-and-clean.md")
+      refute control.number_ambiguous
+      refute control.title_ambiguous
+      assert control.superseded_by == []
+    end
+
+    test "flags two files sharing a title, which is the 0027/0028 shape", %{index: index} do
+      assert entry_for(index, "0108-same-title-a.md").title_ambiguous
+      assert entry_for(index, "0109-same-title-b.md").title_ambiguous
+
+      # The title is the index's citation key; two files answering to it
+      # is exactly as unusable as two files answering to a number.
+      assert index.title_collisions["same title under two numbers"] ==
+               ["0108-same-title-a.md", "0109-same-title-b.md"]
+    end
+
+    test "a **Supersedes:** header stamps the OLDER entry, not the newer one", %{index: index} do
+      superseded = entry_for(index, "0098-old-decision.md")
+
+      assert [%{file: "0100-supersedes-ninety-eight.md", partial?: false, source: :header}] =
+               superseded.superseded_by
+
+      # The newer document is not marked dead by its own header.
+      assert entry_for(index, "0100-supersedes-ninety-eight.md").superseded_by == []
+    end
+
+    test "a qualified supersession header is recorded as PARTIAL", %{index: index} do
+      # `**Supersedes:** Routing sections of ADR 0104` retires part of
+      # 0104, not 0104. Reporting it as fully superseded would kill a
+      # live decision — the mirror image of the defect this slot exists
+      # to fix.
+      assert [ref] = entry_for(index, "0104-partially-superseded.md").superseded_by
+
+      assert ref.partial?
+      assert ref.file == "0103-partially-supersedes-one-oh-four.md"
+      assert ref.note == "Routing sections of ADR 0104"
+    end
+
+    test "reads all three status spellings and reports a genuinely absent one as nil", %{
+      index: index
+    } do
+      # Line-initial, list item, and section heading all occur in the
+      # real `docs/decisions/`. Matching only the first would report a
+      # dozen ADRs as unrecorded when their status is written right
+      # there.
+      assert entry_for(index, "0100-supersedes-ninety-eight.md").status == "Accepted"
+      assert entry_for(index, "0105-bulleted-status.md").status == "Accepted"
+      assert entry_for(index, "0106-heading-status.md").status == "Draft"
+
+      assert entry_for(index, "0101-no-status-recorded.md").status == nil
+      # An empty `## Status` section must not pick up the next heading.
+      assert entry_for(index, "0107-empty-status-section.md").status == nil
+    end
+
+    test "strips the ADR-number prefix from titles", %{index: index} do
+      assert entry_for(index, "0098-old-decision.md").title == "Old Decision"
+
+      assert entry_for(index, "0100-supersedes-ninety-eight.md").title ==
+               "Supersedes Ninety Eight"
+    end
+
+    test "a cap discloses what it dropped, and drops the OLDEST first" do
+      # The cap does not bite at 49 ADRs. A bound that has never run is
+      # a bound whose disclosure has never run either — and a silent cap
+      # reads to the model as "that was everything".
+      Application.put_env(:platform, :adr_index_limit, 3)
+      on_exit(fn -> Application.delete_env(:platform, :adr_index_limit) end)
+
+      index = adr_index(dir: fixture_adr_dir())
+
+      assert index.truncated?
+      assert index.shown == 3
+      assert index.total == 13
+      assert index.dropped == 10
+      assert length(index.dropped_files) == 10
+
+      # Highest-numbered kept: the newest decisions are the ones a plan
+      # under review is most likely to contradict.
+      assert Enum.map(index.entries, & &1.file) == [
+               "0107-empty-status-section.md",
+               "0108-same-title-a.md",
+               "0109-same-title-b.md"
+             ]
+
+      assert "0098-old-decision.md" in index.dropped_files
+      refute Enum.any?(index.entries, &(&1.file == "0098-old-decision.md"))
+    end
+
+    test "does not inherit the live repo's manual supersessions", %{index: index} do
+      # `@manual_supersessions` names a superseding FILE. A fixture
+      # directory that doesn't contain it must not be told one of its
+      # ADRs was retired by a document that isn't there.
+      for entry <- index.entries, ref <- entry.superseded_by do
+        assert ref.source == :header
+      end
+    end
+  end
+
+  describe "gather_context/2 — :adr_index against the real docs/decisions" do
+    setup do
+      index = adr_index()
+      assert index.available?, "docs/decisions/ must resolve in the test build"
+      %{index: index, dir: index.dir}
+    end
+
+    test "indexes every .md file in the directory", %{index: index, dir: dir} do
+      on_disk = dir |> File.ls!() |> Enum.filter(&String.ends_with?(&1, ".md")) |> Enum.sort()
+
+      assert index.total == length(on_disk)
+      assert Enum.map(index.entries, & &1.file) == on_disk
+      refute index.truncated?
+    end
+
+    test "flags every number the directory actually shares — computed, not hardcoded" do
+      # DETECTOR for this stage. The index that shipped before emitted
+      # `%{file: name}` and nothing else; revert to it and this fails
+      # because no entry carries `number_ambiguous` at all.
+      index = adr_index()
+
+      shared =
+        index.entries
+        |> Enum.group_by(& &1.number)
+        |> Enum.filter(fn {number, group} -> is_binary(number) and length(group) > 1 end)
+
+      assert shared != [],
+             "docs/decisions/ is expected to have duplicate ADR numbers; if the repair task " <>
+               "landed, delete this assertion rather than the flag"
+
+      for {number, group} <- shared, entry <- group do
+        assert entry.number_ambiguous,
+               "#{entry.file} shares number #{number} with " <>
+                 "#{inspect(Enum.map(group, & &1.file))} but is not flagged"
+      end
+
+      # POSITIVE CONTROL on real data: a uniquely-numbered ADR stays
+      # unflagged, so the assertion above cannot pass by the flag being
+      # unconditionally true.
+      unique =
+        Enum.find(index.entries, fn entry ->
+          entry.number_ambiguous == false and entry.number != nil
+        end)
+
+      assert unique, "at least one ADR must hold its number alone"
+      refute unique.number_ambiguous
+    end
+
+    test "0033 is reported as superseded by 0041, from 0041's own header", %{index: index} do
+      # The supersession is recorded ONLY on the newer document; 0033
+      # still says `**Status:** Accepted`. An index that repeats the
+      # status without the reverse edge hands the architect a retired
+      # decision labelled live.
+      assert [%{file: "0041-org-memory-v2-wiki-system.md", source: :header, partial?: false}] =
+               entry_for(index, "0033-org-level-context-management.md").superseded_by
+
+      assert entry_for(index, "0033-org-level-context-management.md").status =~ "Accepted"
+    end
+
+    test "0008 is reported as PARTIALLY superseded — it is still live", %{index: index} do
+      # 0013's header reads "Attention routing sections of ADR 0008".
+      # Chat Backend Architecture is very much alive; only its
+      # attention-routing sections moved.
+      assert [ref] = entry_for(index, "0008-chat-backend-architecture.md").superseded_by
+
+      assert ref.partial?
+      assert ref.file == "0013-attention-routing-and-channel-policy.md"
+      assert ref.note =~ "Attention routing sections"
+    end
+
+    test "0012 is reported as superseded by 0036 via the manual whitelist", %{index: index} do
+      assert [%{file: "0036-canvases-first-class-collaboration-surfaces.md", source: :manual}] =
+               entry_for(index, "0012-agent-driven-live-canvas-architecture.md").superseded_by
+    end
+
+    test "the manual supersession whitelist still matches its source line", %{dir: dir} do
+      # SELF-VERIFYING EXEMPTION. `@manual_supersessions` exists because
+      # 0036 records the supersession in prose, and regexing prose marks
+      # live decisions dead. The exemption has to be able to detect its
+      # own staleness: rewrite 0036's `**Related:**` line and this goes
+      # red instead of the index quietly asserting a supersession the
+      # repo no longer records.
+      for {number, manual} <- ContextProviders.manual_supersessions() do
+        body = File.read!(Path.join(dir, manual.by))
+
+        assert body =~ manual.evidence,
+               "#{manual.by} no longer contains the line the ADR-#{number} supersession was " <>
+                 "derived from (#{inspect(manual.evidence)}) — re-derive the whitelist entry " <>
+                 "or drop it"
+      end
+    end
+
+    test "the byte-identical 0027/0028 pair is flagged as a title collision", %{index: index} do
+      assert entry_for(index, "0027-federated-execution-leases-and-runtime-adapters.md").title_ambiguous
+
+      assert entry_for(index, "0028-federated-execution-leases-and-runtime-adapters.md").title_ambiguous
+    end
+
+    test "statuses come back for all three spellings used in the repo", %{index: index} do
+      # 0001 writes `- **Status:** Accepted`, 0005 writes a `## Status`
+      # section, 0045 writes `**Status:** Proposed`. All three are
+      # recorded statuses; only a parser that reads one spelling would
+      # call the others unrecorded.
+      assert entry_for(index, "0001-repository-shape-and-boundary.md").status == "Accepted"
+      assert entry_for(index, "0005-event-stream-architecture.md").status == "Accepted"
+      assert entry_for(index, "0045-task-stacks-v2.md").status == "Proposed"
+
+      unrecorded = Enum.filter(index.entries, &is_nil(&1.status))
+
+      assert unrecorded == [],
+             "every ADR in docs/decisions/ records a status in one of the three spellings; " <>
+               "unparsed: #{inspect(Enum.map(unrecorded, & &1.file))}"
+    end
+
+    test "every entry carries a filename, which is the only unique key here", %{index: index} do
+      for entry <- index.entries do
+        assert is_binary(entry.file)
+        assert String.ends_with?(entry.file, ".md")
+      end
+    end
+  end
+
+  describe "gather_context/2 — :adr_index when the directory can't be read" do
+    test "an unresolvable directory is {:ok, unavailable}, never a refusal" do
+      # Prod release images ship no `docs/`, so this is the production
+      # steady state. Refusing here would stop the architect dispatch
+      # in prod under stage 2's context-refusal arm — the definitive
+      # false positive.
+      Application.put_env(:platform, :adr_dir, "/nonexistent/docs/decisions")
+      on_exit(fn -> Application.delete_env(:platform, :adr_dir) end)
+
+      assert {:ok, %{adr_index: index}} = ContextProviders.gather_context(:adr_index, [])
+
+      assert index.available? == false
+      assert index.reason == :adr_dir_unreachable
+      assert index.entries == []
+      assert index.total == 0
+    end
+
+    test "a configured override never silently falls back to the live repo" do
+      Application.put_env(:platform, :adr_dir, "/nonexistent/docs/decisions")
+      on_exit(fn -> Application.delete_env(:platform, :adr_dir) end)
+
+      assert {:error, :adr_dir_unreachable} = ContextProviders.adr_dir()
+    end
+
+    test "a resolvable but empty directory reports :adr_dir_empty, not :adr_dir_unreachable" do
+      # "Nobody shipped docs/" and "somebody deleted the ADRs" are
+      # different events. Both are non-refusing; collapsing them loses
+      # the only signal that the second one happened.
+      dir = Path.join(System.tmp_dir!(), "adr-empty-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      Application.put_env(:platform, :adr_dir, dir)
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :adr_dir)
+        File.rm_rf!(dir)
+      end)
+
+      assert {:ok, %{adr_index: index}} = ContextProviders.gather_context(:adr_index, [])
+
+      assert index.available? == false
+      assert index.reason == :adr_dir_empty
+      assert index.dir == dir
+    end
+  end
+
   describe "gather_context/2 — unknown slot" do
     test "returns {:error, {:unknown_slot, _}} for slots this module doesn't materialise" do
       assert {:error, {:unknown_slot, :not_a_real_slot}} =

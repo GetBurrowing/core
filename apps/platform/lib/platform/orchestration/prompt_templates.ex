@@ -1300,8 +1300,10 @@ defmodule Platform.Orchestration.PromptTemplates do
         2. **Superseded pattern re-introduction.** Scan the ADR index for `Supersedes:` or
            `Superseded by:` refs against the plan's declared files or approaches. If the plan
            re-introduces a pattern an ADR retired, name the ADR and quote the guidance the
-           plan appears to contradict. Prefer citing the ADR by number (e.g. ADR-0034) so
-           Rowan can jump to the source.
+           plan appears to contradict. Cite the ADR by filename (e.g.
+           `0044-architect-responsibility.md`); numbers are NOT unique in this directory —
+           several are shared by two different ADRs, and the index below flags which. A
+           number-only citation sends Rowan to the wrong document.
 
         3. **Duplicate abstraction.** Is another in-flight plan already building the same
            helper / context / component this plan proposes? Cite both tasks side-by-side so

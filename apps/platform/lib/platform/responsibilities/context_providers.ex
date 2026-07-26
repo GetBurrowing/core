@@ -99,6 +99,60 @@ defmodule Platform.Responsibilities.ContextProviders do
   of it as a leading `[scope: …] showing N of M …` line. A block that
   silently drops half the siblings is the same failure mode as an index
   that silently mis-numbers an ADR: the model reads absence as evidence.
+
+  ## `:adr_index` — why it is keyed on title, not number
+
+  `docs/decisions/` does not have unique ADR numbers. Four numbers
+  (0017, 0036, 0042, 0044) are each held by two different documents, so
+  "ADR-0044" names both *Architect Responsibility* and *Task assignment
+  — single source of truth*. An index that hands the architect a number
+  hands it an ambiguity it cannot see, and the model cites one meaning
+  the other, confidently. Every entry therefore carries `file` (the only
+  unique key in this directory), `title`, `status`, and explicit
+  `number_ambiguous` / `title_ambiguous` / `superseded_by` flags —
+  **all computed from the directory at gather time, never hardcoded**,
+  so the eventual numbering-repair task makes the flags go quiet on
+  their own instead of leaving a stale list behind.
+
+  Also on the optional side of the refusal line, and for a reason that
+  is a property of the deployment rather than of the trigger: **prod
+  release images do not ship `docs/`.** An unreachable ADR directory is
+  the steady state there, so refusing would stop the architect from
+  running at all in production — the definitive false positive. Two
+  distinct non-refusing failures are reported instead, because
+  "unreadable" and "genuinely empty" are different facts:
+
+    * `:adr_dir_unreachable` — no directory resolved (release image,
+      or the ancestor walk ran out of parents).
+    * `:adr_dir_empty` — a directory resolved and holds zero `.md`
+      files. Somebody deleted the ADRs; that is not the same event as
+      "we are running from a release tarball".
+    * `:adr_dir_unreadable` — the directory exists but `File.ls/1`
+      refused it (permissions).
+
+  All three render as an instruction *not to cite ADRs in this pass*,
+  never as silence. `available?: false` with an empty entry list is a
+  statement; an empty list on its own is indistinguishable from "there
+  are no architectural decisions", which is a lie about this codebase.
+
+  ### Supersessions have two sources, and one of them is a whitelist
+
+  A `**Supersedes:**` header in the newer document builds a reverse map
+  onto the older one. Prose is **not** scanned: regexing bodies for
+  "superseded by this ADR" marks live decisions dead, which is worse
+  than the gap it closes. The single prose-only supersession that
+  matters (0012 → 0036) is a one-entry whitelist in
+  `@manual_supersessions`, and it carries the exact source line it was
+  derived from so a test can assert that line still exists. A whitelist
+  that cannot detect its own staleness is how the class comes back.
+
+  Header supersessions are not all total, either. `0013`'s header reads
+  *"Attention routing sections of ADR 0008"* — ADR-0008 is very much
+  alive, only part of it moved. Anything that is not a bare `ADR-NNNN`
+  reference is flagged `partial?: true` and rendered as *"partially
+  superseded by"* with the header text quoted, because telling the
+  architect that Chat Backend Architecture is dead would be exactly the
+  failure this slot exists to prevent.
   """
 
   require Logger
@@ -126,6 +180,7 @@ defmodule Platform.Responsibilities.ContextProviders do
           | :trigger_payload
           | :plan_payload
           | :sibling_tasks
+          | :adr_index
 
   # A plan in one of these statuses is no longer the task's live plan, so
   # resolving `:plan_payload` from a bare `task_id` skips them.
@@ -174,6 +229,86 @@ defmodule Platform.Responsibilities.ContextProviders do
   # nothing that can collide with the plan under review.
   @live_sibling_plan_statuses ~w(pending_review approved)
 
+  # ── :adr_index budgets and parse surface ──────────────────────────────────
+
+  @adr_dir_from_repo_root "docs/decisions"
+
+  # Header window. Every field this slot extracts (title, status,
+  # supersedes) lives in the first few lines of an ADR; a full read of
+  # 49 documents to recover three header fields is ~1.5 MB of file IO
+  # per dispatch for nothing.
+  @adr_header_lines 20
+
+  # 49 ADRs today. MEASURED, not estimated: the rendered block is
+  # 6.8 kB / ~1.7k tokens — filename ~48, title ~40, status ~20, plus
+  # the 9 collision / supersession warning lines. The stage brief's
+  # ~4.8 kB arithmetic assumed 95-char entries; real filenames and
+  # titles run longer, so the honest number is written here rather than
+  # the flattering one. That still fits beside `:plan_payload` (~7 kB)
+  # and `:sibling_tasks` (5.4 kB at its project-window ceiling, and
+  # that ceiling is a worst case that a standalone task never reaches)
+  # in the ~16 kB preamble.
+  #
+  # No per-ADR body summary: the alternative is the first paragraph of
+  # each `## Context` at roughly 5x the bytes, and these titles are
+  # already descriptive one-liners. Statuses ARE capped — one ADR
+  # records "Accepted (2026-03-22) — amended 2026-07-15 (task 019f640d;
+  # see amendment section at bottom)", which is a changelog, not a
+  # status.
+  #
+  # The cap is set ABOVE the current corpus deliberately. It exists so
+  # the block cannot grow without bound, not to trim anything today —
+  # `truncated?` is false at 49 and the arithmetic above stays true
+  # until the directory nearly doubles. When it does bite it drops the
+  # LOWEST-numbered ADRs, because the newest decisions are the ones a
+  # plan under review is most likely to contradict, and it names every
+  # dropped file in `dropped_files` so the renderer can say so.
+  @adr_index_limit 80
+  @adr_status_limit 60
+
+  # Three status spellings occur in `docs/decisions/`, and only one of
+  # them starts the line. Matching `^**Status:**` alone would report
+  # "(status not recorded)" for a dozen ADRs whose status is written
+  # right there — including 0001-0004, which are Accepted and load
+  # bearing. A slot built to stop the index lying does not get to lie
+  # about this.
+  #
+  #   `**Status:** Accepted`      — 0009+ (line-initial)
+  #   `- **Status:** Accepted`    — 0001-0004, 0030, 0031 (list item)
+  #   `## Status\n\nAccepted`     — 0005-0008, 0023, 0024 (section)
+  @adr_status_line ~r/^\s*(?:[-*]\s+)?\*\*Status:?\*\*\s*(.+)$/u
+  @adr_status_heading ~r/^#+\s+Status\s*$/iu
+
+  @adr_heading ~r/^#\s+\S/u
+  @adr_title_prefix ~r/^(?:ADR[-\s–—]*)?\d{4}\s*(?:[-:.–—]\s*)?/u
+  @adr_supersedes_line ~r/^\s*(?:[-*]\s+)?\*\*Supersedes:?\*\*\s*(.+)$/u
+  @adr_reference ~r/ADR[-\s–—]*(\d{3,4})/u
+
+  # A supersession header is TOTAL only when it is a bare reference,
+  # optionally followed by the superseded ADR's title in parentheses.
+  # Anything else ("Attention routing sections of ADR 0008") is partial
+  # and rendered as such — ADR-0008 is alive.
+  @adr_total_supersession ~r/^ADR[-\s–—]*\d{3,4}\s*(?:\([^)]*\))?\s*[.,;]?$/u
+
+  # The one supersession recorded in prose rather than in a header.
+  # 0036 retires 0012 on its `**Related:**` line and again in its
+  # "Related ADRs and successor context" section; it never writes a
+  # `**Supersedes:**` header, and scanning bodies for phrases like
+  # "superseded by this ADR" produces false positives that mark LIVE
+  # decisions dead. So: a whitelist — with the exact source line it was
+  # derived from, asserted by a test against the real file. Rewrite
+  # 0036 and the suite goes red instead of the index going quietly
+  # wrong.
+  @manual_supersessions %{
+    "0012" => %{
+      by: "0036-canvases-first-class-collaboration-surfaces.md",
+      evidence: "ADR 0012 (Agent-Driven Live Canvas Architecture — superseded by this ADR)",
+      note:
+        "recorded in prose on 0036's **Related:** line and in its successor-context " <>
+          "section, never as a **Supersedes:** header"
+    }
+  }
+
   @doc """
   Materialise a single slot into the shape M1 providers consume.
 
@@ -210,6 +345,16 @@ defmodule Platform.Responsibilities.ContextProviders do
       else `opts[:plan_id]`. **Never returns `{:error, _}`** — an
       unresolvable anchor is `scope: :no_anchor` and a genuinely
       sibling-less task is `scope: :none`, both with `{:ok, ...}`.
+    * `:adr_index` — every `docs/decisions/*.md` as
+      `%{file:, number:, title:, status:, number_ambiguous:,
+      title_ambiguous:, superseded_by: [...]}`, keyed for citation on
+      `file` because numbers are not unique in that directory.
+      Directory resolution order: `config :platform, :adr_dir`, then an
+      ancestor walk from this module's compile-time path, then an
+      ancestor walk from `File.cwd!/0`. **Never returns `{:error, _}`**
+      — an unreachable / unreadable / empty directory is
+      `available?: false` with a `reason`, which the renderer turns
+      into an explicit "do not cite ADRs in this pass" instruction.
 
   `opts` may be a keyword list or a map; map keys may be atoms or
   strings (the router hands `trigger_meta` through verbatim and both
@@ -367,9 +512,54 @@ defmodule Platform.Responsibilities.ContextProviders do
     {:ok, %{sibling_tasks: payload}}
   end
 
+  def gather_context(:adr_index, _opts) do
+    {:ok, %{adr_index: adr_index()}}
+  end
+
   def gather_context(slot, _opts) do
     {:error, {:unknown_slot, slot}}
   end
+
+  @doc """
+  The `docs/decisions/` directory this slot reads, or the reason it
+  could not be resolved.
+
+  Public so tests can compute expectations (collisions, entry counts)
+  from the live directory instead of hardcoding a snapshot of it — a
+  hardcoded list goes stale the moment the numbering-repair task lands
+  and then certifies whatever it happens to say.
+  """
+  @spec adr_dir() :: {:ok, String.t()} | {:error, :adr_dir_unreachable}
+  def adr_dir do
+    configured = Application.get_env(:platform, :adr_dir)
+
+    cond do
+      is_binary(configured) ->
+        # No fallback when an override is configured. A test that points
+        # at a fixture dir and silently gets the live repo instead is
+        # worse than a failing test.
+        if File.dir?(configured), do: {:ok, configured}, else: {:error, :adr_dir_unreachable}
+
+      dir = walk_for_adr_dir(__ENV__.file) ->
+        {:ok, dir}
+
+      dir = walk_for_adr_dir(safe_cwd()) ->
+        {:ok, dir}
+
+      true ->
+        {:error, :adr_dir_unreachable}
+    end
+  end
+
+  @doc """
+  The prose-only supersessions this slot stamps by hand, each with the
+  source line it was derived from.
+
+  Public so the self-verification test asserts against the actual
+  whitelist rather than a copy of it.
+  """
+  @spec manual_supersessions() :: %{String.t() => map()}
+  def manual_supersessions, do: @manual_supersessions
 
   # ── :plan_payload helpers ─────────────────────────────────────────────────
 
@@ -663,6 +853,269 @@ defmodule Platform.Responsibilities.ContextProviders do
     case safe(fn -> Repo.all(query) end) do
       {:ok, list} when is_list(list) -> list
       _other -> []
+    end
+  end
+
+  # ── :adr_index helpers ────────────────────────────────────────────────────
+
+  defp adr_index do
+    case adr_dir() do
+      {:ok, dir} -> index_from_dir(dir)
+      {:error, reason} -> unavailable_index(reason, nil)
+    end
+  end
+
+  defp index_from_dir(dir) do
+    case safe(fn -> File.ls!(dir) end) do
+      {:ok, names} ->
+        names
+        |> Enum.filter(&String.ends_with?(&1, ".md"))
+        |> Enum.sort()
+        |> case do
+          [] -> unavailable_index(:adr_dir_empty, dir)
+          files -> build_adr_index(dir, files)
+        end
+
+      {:error, _reason} ->
+        unavailable_index(:adr_dir_unreadable, dir)
+    end
+  end
+
+  # `available?: false` carries a reason and an empty entry list rather
+  # than just an empty list, because "there are no ADRs" and "I could
+  # not read the ADRs" are different facts and only one of them is ever
+  # true of this codebase.
+  defp unavailable_index(reason, dir) do
+    %{
+      available?: false,
+      reason: reason,
+      dir: dir,
+      total: 0,
+      shown: 0,
+      truncated?: false,
+      dropped: 0,
+      dropped_files: [],
+      number_collisions: %{},
+      title_collisions: %{},
+      entries: []
+    }
+  end
+
+  defp build_adr_index(dir, files) do
+    parsed = Enum.map(files, &parse_adr(dir, &1))
+
+    number_collisions = collisions_by(parsed, & &1.number)
+    title_collisions = collisions_by(parsed, &normalised_title/1)
+    supersessions = supersession_map(parsed)
+
+    entries =
+      Enum.map(parsed, fn entry ->
+        %{
+          file: entry.file,
+          number: entry.number,
+          title: entry.title,
+          status: entry.status,
+          number_ambiguous: Map.has_key?(number_collisions, entry.number),
+          title_ambiguous: Map.has_key?(title_collisions, normalised_title(entry)),
+          superseded_by:
+            supersessions
+            |> Map.get(entry.number, [])
+            |> Enum.reject(&(&1.file == entry.file))
+        }
+      end)
+
+    # Drop the lowest-numbered ADRs first when the cap bites, then
+    # restore filename order for rendering.
+    {kept, dropped} =
+      entries
+      |> Enum.sort_by(&{&1.number || "", &1.file}, :desc)
+      |> Enum.split(adr_index_limit())
+
+    %{
+      available?: true,
+      reason: nil,
+      dir: dir,
+      total: length(entries),
+      shown: length(kept),
+      truncated?: dropped != [],
+      dropped: length(dropped),
+      dropped_files: dropped |> Enum.map(& &1.file) |> Enum.sort(),
+      number_collisions: number_collisions,
+      title_collisions: title_collisions,
+      entries: Enum.sort_by(kept, & &1.file)
+    }
+  end
+
+  # Overridable so the truncation path is reachable from a test. A cap
+  # that only fires once the corpus doubles is a cap nobody has ever
+  # run; the disclosure it produces is the part that has to work.
+  defp adr_index_limit do
+    case Application.get_env(:platform, :adr_index_limit) do
+      limit when is_integer(limit) and limit > 0 -> limit
+      _other -> @adr_index_limit
+    end
+  end
+
+  # Every number (or title) held by more than one file, computed from
+  # the directory. Nothing here is hardcoded, so the repair task makes
+  # these go quiet without a code change.
+  defp collisions_by(parsed, key_fun) do
+    parsed
+    |> Enum.group_by(key_fun)
+    |> Enum.reject(fn {key, group} -> is_nil(key) or length(group) < 2 end)
+    |> Map.new(fn {key, group} -> {key, group |> Enum.map(& &1.file) |> Enum.sort()} end)
+  end
+
+  defp normalised_title(%{title: title}) when is_binary(title),
+    do: title |> String.trim() |> String.downcase()
+
+  defp normalised_title(_entry), do: nil
+
+  defp supersession_map(parsed) do
+    present = MapSet.new(parsed, & &1.file)
+
+    parsed
+    |> Enum.flat_map(fn entry ->
+      Enum.map(entry.supersedes, fn ref ->
+        {ref.number, %{file: entry.file, note: ref.note, partial?: ref.partial?, source: :header}}
+      end)
+    end)
+    |> Kernel.++(manual_supersession_pairs(present))
+    |> Enum.group_by(fn {number, _ref} -> number end, fn {_number, ref} -> ref end)
+  end
+
+  # Only stamped when the superseding document is actually in the
+  # directory being indexed — otherwise a fixture directory would
+  # inherit the live repo's whitelist and report a supersession by a
+  # file that isn't there.
+  defp manual_supersession_pairs(present) do
+    for {number, manual} <- @manual_supersessions, MapSet.member?(present, manual.by) do
+      {number, %{file: manual.by, note: manual.note, partial?: false, source: :manual}}
+    end
+  end
+
+  defp parse_adr(dir, file) do
+    lines = adr_header(Path.join(dir, file))
+
+    %{
+      file: file,
+      number: adr_number(file),
+      title: adr_title(lines),
+      status: adr_status(lines),
+      supersedes: adr_supersedes(lines)
+    }
+  end
+
+  # `Enum.take/2` over the line stream, never `File.read!/1`: three
+  # header fields do not justify reading 49 whole documents.
+  defp adr_header(path) do
+    case safe(fn -> path |> File.stream!() |> Enum.take(@adr_header_lines) end) do
+      {:ok, lines} -> Enum.map(lines, &String.trim_trailing/1)
+      {:error, _reason} -> []
+    end
+  end
+
+  defp adr_number(file) do
+    case Regex.run(~r/^(\d{4})/, file) do
+      [_full, number] -> number
+      _other -> nil
+    end
+  end
+
+  defp adr_title(lines) do
+    case Enum.find(lines, &Regex.match?(@adr_heading, &1)) do
+      nil ->
+        nil
+
+      line ->
+        line
+        |> String.replace_prefix("#", "")
+        |> String.trim()
+        |> String.replace(@adr_title_prefix, "", global: false)
+        |> String.trim()
+        |> presence()
+    end
+  end
+
+  defp adr_status(lines) do
+    case Enum.find_value(lines, &capture_first(@adr_status_line, &1)) do
+      nil -> lines |> status_under_heading() |> truncate(@adr_status_limit)
+      value -> value |> String.trim() |> presence() |> truncate(@adr_status_limit)
+    end
+  end
+
+  # `## Status` followed by a blank line and the value (0005-0008,
+  # 0023, 0024). A following heading means the section is empty — that
+  # is `nil`, not the next section's title.
+  defp status_under_heading(lines) do
+    lines
+    |> Enum.drop_while(&(not Regex.match?(@adr_status_heading, &1)))
+    |> Enum.drop(1)
+    |> Enum.find(&(String.trim(&1) != ""))
+    |> case do
+      nil -> nil
+      "#" <> _rest -> nil
+      line -> line |> String.trim() |> presence()
+    end
+  end
+
+  defp adr_supersedes(lines) do
+    lines
+    |> Enum.find_value(&capture_first(@adr_supersedes_line, &1))
+    |> case do
+      nil ->
+        []
+
+      value ->
+        note = String.trim(value)
+        partial? = not Regex.match?(@adr_total_supersession, note)
+
+        @adr_reference
+        |> Regex.scan(note)
+        |> Enum.map(fn [_full, number] -> String.pad_leading(number, 4, "0") end)
+        |> Enum.uniq()
+        |> Enum.map(&%{number: &1, note: note, partial?: partial?})
+    end
+  end
+
+  defp capture_first(regex, line) do
+    case Regex.run(regex, line) do
+      [_full, captured] -> captured
+      _other -> nil
+    end
+  end
+
+  defp presence(""), do: nil
+  defp presence(value), do: value
+
+  defp walk_for_adr_dir(nil), do: nil
+
+  defp walk_for_adr_dir(path) when is_binary(path) do
+    path
+    |> Path.expand()
+    |> find_ancestor_with_dir(@adr_dir_from_repo_root, 8)
+    |> case do
+      nil -> nil
+      root -> Path.join(root, @adr_dir_from_repo_root)
+    end
+  end
+
+  defp find_ancestor_with_dir(_path, _dir, 0), do: nil
+
+  defp find_ancestor_with_dir(path, dir, depth) do
+    parent = Path.dirname(path)
+
+    cond do
+      parent == path -> nil
+      File.dir?(Path.join(parent, dir)) -> parent
+      true -> find_ancestor_with_dir(parent, dir, depth - 1)
+    end
+  end
+
+  defp safe_cwd do
+    case File.cwd() do
+      {:ok, cwd} -> Path.join(cwd, ".")
+      {:error, _reason} -> nil
     end
   end
 
