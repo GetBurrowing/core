@@ -47,15 +47,21 @@ defmodule Platform.Responsibilities.Router do
   When `fire_trigger/3` lands on an `:external` assignee, it dispatches
   via `Platform.ExternalAgents.Dispatcher.dispatch/3` and then calls
   `handle_output/3` on the per-feature provider module. The provider is
-  resolved by camelcasing the responsibility's `feature` field and
-  prepending `Platform.Responsibilities.Providers.` — so
-  `feature == "meetings"` resolves to
+  resolved through the explicit registry in
+  `Platform.Responsibilities.Providers` — `feature == "meetings"` maps to
   `Platform.Responsibilities.Providers.Meetings`. The handler is
-  optional: missing modules / missing `handle_output/3` log
-  `[ResponsibilityRouter] no output handler for <key>` and return `:ok`
+  optional: an unresolved provider / missing `handle_output/3` logs
+  `[ResponsibilityRouter] no output handler for <key>` and returns `:ok`
   rather than crashing. This keeps stage 6 a no-op for feature areas
   whose providers haven't grown a handler yet (e.g. M6-only deploys
   before M8 lands `meetings.summarize`).
+
+  That log line used to be a single `Logger.info` covering three very
+  different situations. Task 019f9b28 stage 2 split it by what
+  `Providers.feature_provider/1` returns: `:error` (nothing registered —
+  actionable, `:warning`), `{:retired, why}` (deliberate, `:debug`), and
+  `{:ok, module}` that nonetheless fails the `handle_output/3` probe (a
+  contract break in a module we ship — `:error` level).
 
   ## Quantum-vs-minimal decision (recorded)
 
@@ -118,7 +124,7 @@ defmodule Platform.Responsibilities.Router do
   alias Platform.ExternalAgents.Dispatcher, as: ExternalDispatcher
   alias Platform.Repo
   alias Platform.Responsibilities
-  alias Platform.Responsibilities.{ContextGatherer, Cron, Responsibility}
+  alias Platform.Responsibilities.{ContextGatherer, Cron, Providers, Responsibility}
 
   @typedoc """
   The three outcomes `fire_trigger/3` distinguishes (ADR-0046).
@@ -1240,29 +1246,76 @@ defmodule Platform.Responsibilities.Router do
         end
 
       true ->
-        Logger.info("[ResponsibilityRouter] no output handler for #{responsibility.key}")
-        :ok
+        log_missing_output_handler(responsibility)
     end
   end
 
   defp invoke_handle_output(%Responsibility{} = responsibility, _parsed, _meta) do
-    Logger.info("[ResponsibilityRouter] no output handler for #{responsibility.key}")
+    log_missing_output_handler(responsibility)
+  end
+
+  # One log line, three causes — told apart. Before task 019f9b28 stage 2
+  # this was a bare `Logger.info`, so a provider module that was never
+  # written (`architecture.*`, for months) and a feature that deliberately
+  # has none (`security.*`) produced byte-identical output.
+  #
+  # Deliberately `:warning` and not `:error` for the unregistered case:
+  # `router_test.exs` seeds ad-hoc `feature: "test_feature_<n>"` rows and
+  # operators can `upsert_by_key/1` arbitrary ones. Screaming at error
+  # level for every ad-hoc feature trains people to ignore the line —
+  # exactly the rot this change exists to prevent. Loud drift detection
+  # belongs where the population is closed: Registry boot and CI.
+  defp log_missing_output_handler(%Responsibility{key: key, feature: feature}) do
+    case Providers.feature_provider(feature) do
+      {:retired, reason} ->
+        Logger.debug(
+          "[ResponsibilityRouter] no output handler for #{key} — feature=#{inspect(feature)} " <>
+            "is retired by design: #{reason}"
+        )
+
+      :error ->
+        Logger.warning(
+          "[ResponsibilityRouter] no output handler for #{key} — feature=#{inspect(feature)} " <>
+            "has no provider registered. Fix: add it to " <>
+            "Platform.Responsibilities.Providers @feature_providers, or to @retired with a reason."
+        )
+
+      {:ok, module} ->
+        Logger.error(
+          "[ResponsibilityRouter] no output handler for #{key} — provider #{inspect(module)} " <>
+            "is registered for feature=#{inspect(feature)} but failed the handle_output/3 " <>
+            "probe (loaded?=#{Code.ensure_loaded?(module)}). This is a contract break in a " <>
+            "module we ship, not a routing gap."
+        )
+    end
+
     :ok
   end
 
-  # Convention: `<feature>` → `Platform.Responsibilities.Providers.<Camelcased>`.
-  # `feature == "meetings"` resolves to
-  # `Platform.Responsibilities.Providers.Meetings`. Returns `nil` if the
-  # camelcase fails (e.g. an empty / non-binary feature).
-  defp provider_module_for(feature) when is_binary(feature) and feature != "" do
-    Module.concat([Platform.Responsibilities.Providers, Macro.camelize(feature)])
+  # Resolve the provider module through the explicit registry in
+  # `Platform.Responsibilities.Providers` (task 019f9b28 stage 2). This
+  # used to camelcase `feature` and prepend the Providers namespace,
+  # which made "module never written" and "feature deliberately has no
+  # provider" the same value at every consumption point — see that
+  # module's moduledoc for the argument.
+  #
+  # Both non-`{:ok, _}` outcomes still collapse to `nil` HERE, because
+  # each caller only needs a module-or-nothing to decide whether to
+  # invoke a callback. The distinction is made where it is actionable:
+  # `log_missing_output_handler/1` and `log_native_prompt_fidelity/3`.
+  defp provider_module_for(feature) do
+    case Providers.feature_provider(feature) do
+      {:ok, module} -> module
+      {:retired, _reason} -> nil
+      :error -> nil
+    end
   end
-
-  defp provider_module_for(_), do: nil
 
   # ── Native / federated dispatch ───────────────────────────────────────────
 
   defp dispatch_native(%Responsibility{} = responsibility, agent, trigger_meta, kind, rendered) do
+    log_native_prompt_fidelity(responsibility, agent, rendered)
+
     signal = build_native_signal(responsibility, agent, trigger_meta, rendered)
 
     Logger.info(
@@ -1337,11 +1390,29 @@ defmodule Platform.Responsibilities.Router do
     end)
   end
 
-  # Flatten `build_prompt_via_provider/2`'s return into the prompt text the
-  # federated runtime receives. `:legacy` (no provider, or a provider with
-  # no `build_prompt/1`) and a provider refusal both yield `nil`, which
-  # `maybe_put/3` drops — so those signals stay byte-for-byte what they
-  # were before this change rather than carrying empty-prompt garbage.
+  # THE FOURTH COLLAPSE POINT (found while auditing task 019f9b28).
+  #
+  # `rendered_prompt_text/1` maps BOTH `:legacy` (no provider at all, or a
+  # provider with no `build_prompt/1`) and `{:error, reason}` (a provider
+  # that explicitly refused to build one) to `nil`, which `maybe_put/3`
+  # then drops. So a federated runtime receives a byte-identical bare
+  # signal whether the architect refused to speak or was never asked —
+  # the same indistinguishability the registry exists to kill, one layer
+  # further down.
+  #
+  # The *value* stays collapsed here on purpose: the external path aborts
+  # on `{:error, _}` (`dispatch_external/5`) but changing what native
+  # dispatch sends or returns is explicitly out of scope for this stage,
+  # and `fire_trigger/3`'s return contract is a sibling stack member's
+  # work. What this stage can and does fix is the observability: see
+  # `log_native_prompt_fidelity/3`, which emits a different, actionable
+  # line for each of the three causes before the signal goes out.
+  #
+  # The shapes are enumerated rather than caught wholesale so a new return
+  # from `build_prompt_via_provider/2` has to be considered here instead
+  # of silently becoming `nil`; the trailing catch-all remains because a
+  # `nil` prompt beats a FunctionClauseError inside a plan-submit
+  # transaction.
   defp rendered_prompt_text({:messages, messages}) when is_list(messages) do
     text =
       messages
@@ -1352,7 +1423,47 @@ defmodule Platform.Responsibilities.Router do
     if text == "", do: nil, else: text
   end
 
+  defp rendered_prompt_text(:legacy), do: nil
+  defp rendered_prompt_text({:error, _reason}), do: nil
   defp rendered_prompt_text(_), do: nil
+
+  defp log_native_prompt_fidelity(_responsibility, _agent, {:messages, _messages}), do: :ok
+
+  defp log_native_prompt_fidelity(%Responsibility{} = responsibility, agent, {:error, reason}) do
+    Logger.warning(
+      "[ResponsibilityRouter] provider build_prompt refused but native dispatch proceeds " <>
+        "with no prompt key=#{responsibility.key} agent=#{agent_slug(agent)} " <>
+        "reason=#{inspect(reason)} — the external path would have aborted here"
+    )
+
+    :ok
+  end
+
+  defp log_native_prompt_fidelity(%Responsibility{} = responsibility, _agent, :legacy) do
+    case Providers.feature_provider(responsibility.feature) do
+      {:ok, module} ->
+        Logger.debug(
+          "[ResponsibilityRouter] native signal carries no prompt key=#{responsibility.key} — " <>
+            "provider #{inspect(module)} ships no build_prompt/1"
+        )
+
+      {:retired, reason} ->
+        Logger.debug(
+          "[ResponsibilityRouter] native signal carries no prompt key=#{responsibility.key} — " <>
+            "feature=#{inspect(responsibility.feature)} is retired by design: #{reason}"
+        )
+
+      :error ->
+        Logger.warning(
+          "[ResponsibilityRouter] native signal carries no prompt key=#{responsibility.key} — " <>
+            "feature=#{inspect(responsibility.feature)} has no provider registered. Fix: add " <>
+            "it to Platform.Responsibilities.Providers @feature_providers, or to @retired " <>
+            "with a reason."
+        )
+    end
+
+    :ok
+  end
 
   defp native_reason_for(:chat_pattern), do: :mention
   defp native_reason_for(:webhook), do: :system_event

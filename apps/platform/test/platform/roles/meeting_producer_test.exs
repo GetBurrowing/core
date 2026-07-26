@@ -190,20 +190,17 @@ defmodule Platform.Roles.MeetingProducerTest do
   end
 
   describe "provider resolution (Router convention + Meetings shim)" do
-    test "Router's provider-resolution convention resolves meetings → Providers.Meetings" do
+    test "Router's provider registry resolves meetings → Providers.Meetings" do
       # `Platform.Responsibilities.Router.provider_module_for/1` is
-      # private on purpose. Its convention — camelcase the feature and
-      # prepend `Platform.Responsibilities.Providers.` — is documented
-      # in the Router module and mirrored here. If the convention
-      # changes (e.g. a namespace refactor) this test breaks alongside
-      # the Router's own tests, giving one loud signal instead of a
-      # silent runtime `no output handler for <key>` log.
-      resolved =
-        Module.concat([
-          Platform.Responsibilities.Providers,
-          Macro.camelize(@feature)
-        ])
-
+      # private on purpose; it delegates to the explicit registry in
+      # `Platform.Responsibilities.Providers`, which is public. This used
+      # to mirror the old camelcase-the-feature convention — task
+      # 019f9b28 stage 2 deleted that convention precisely because a
+      # derived name cannot tell "provider missing" from "provider not
+      # wanted". Asserting against the registry keeps the same "one loud
+      # signal instead of a silent `no output handler for <key>` log"
+      # property without re-encoding a name rule.
+      assert {:ok, resolved} = Platform.Responsibilities.Providers.feature_provider(@feature)
       assert resolved == Platform.Responsibilities.Providers.Meetings
 
       # The module must be loadable — a stale alias would resolve at
