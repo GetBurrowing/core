@@ -1806,17 +1806,23 @@ defmodule Platform.Responsibilities.RouterTest do
 
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      log =
-        capture_log([level: :warning], fn ->
-          assert {:error, {:context_gather_refused, :deliberate}} =
-                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      {fire_result, log} =
+        with_log([level: :warning], fn ->
+          Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
+
+      # STRONGEST ASSERTION FIRST, deliberately. A return-tuple match would
+      # also go red on a revert, but it would go red on a SHAPE. This goes
+      # red on the observable fact the stage exists to change: bytes left
+      # the process, headed for a paid endpoint, carrying context the
+      # provider said it could not supply.
+      refute_receive :dispatched_anyway, 100
+
+      assert fire_result == {:error, {:context_gather_refused, :deliberate}}
 
       assert log =~ "provider gather_context refused dispatch"
       assert log =~ "key=#{key}"
       assert log =~ ":deliberate"
-
-      refute_receive :dispatched_anyway, 100
 
       assert_receive {:failed_telemetry, _meas,
                       %{key: ^key, dispatch_kind: :external, reason: reason}}
@@ -1942,18 +1948,18 @@ defmodule Platform.Responsibilities.RouterTest do
       # point: it pins the log-LEVEL half of the raise-vs-refusal split.
       # A broken gatherer is a defect (:error); a provider that said no is
       # a decision (:warning), and the refusal line must NOT show up.
-      error_log =
-        capture_log([level: :error], fn ->
-          assert {:error, {:context_gather_refused, {:provider_gather_raised, message}}} =
-                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
-
-          assert message =~ "gatherer exploded"
+      {fire_result, error_log} =
+        with_log([level: :error], fn ->
+          Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
+
+      refute_receive :dispatched_anyway, 100
+
+      assert {:error, {:context_gather_refused, {:provider_gather_raised, message}}} = fire_result
+      assert message =~ "gatherer exploded"
 
       assert error_log =~ "provider gather_context raised"
       refute error_log =~ "provider gather_context refused dispatch"
-
-      refute_receive :dispatched_anyway, 100
 
       assert_receive {:failed_telemetry, _meas,
                       %{key: ^key, dispatch_kind: :external, reason: reason}}
@@ -2612,17 +2618,19 @@ defmodule Platform.Responsibilities.RouterTest do
 
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      log =
-        capture_log([level: :warning], fn ->
-          assert {:error, {:context_gather_refused, :no_plan_payload}} =
-                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      {fire_result, log} =
+        with_log([level: :warning], fn ->
+          Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 
-      assert log =~ "provider gather_context refused dispatch"
-
-      # The CaptureDispatcher from this describe's setup would have
-      # received a signal carrying a prompt built over generic context.
+      # Ordered before the return-value match on purpose — see the note in
+      # the external refusal test. The CaptureDispatcher from this
+      # describe's setup would otherwise have received a signal carrying a
+      # prompt built over generic context.
       refute_receive {:captured_signal, _signal}, 100
+
+      assert fire_result == {:error, {:context_gather_refused, :no_plan_payload}}
+      assert log =~ "provider gather_context refused dispatch"
 
       assert_receive {:failed_telemetry, _meas, %{key: ^key, dispatch_kind: :native}}
 
