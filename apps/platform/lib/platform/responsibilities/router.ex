@@ -850,11 +850,9 @@ defmodule Platform.Responsibilities.Router do
 
           :ok
 
-        %{kind: "external"} = agent ->
-          dispatch_external(responsibility, agent, trigger_meta)
-
-        %{kind: kind} = agent when kind in ["native", "local", "federated"] ->
-          dispatch_native(responsibility, agent, trigger_meta, kind)
+        %{kind: kind} = agent
+        when kind in ["external", "native", "local", "federated"] ->
+          dispatch_assignee(responsibility, agent, trigger_meta, kind)
 
         other ->
           Logger.warning(
@@ -896,9 +894,21 @@ defmodule Platform.Responsibilities.Router do
     end
   end
 
-  # ── External dispatch ─────────────────────────────────────────────────────
+  # ── Shared dispatch preamble ──────────────────────────────────────────────
 
-  defp dispatch_external(%Responsibility{} = responsibility, agent, trigger_meta) do
+  # Both external and federated/native assignees are *sent a prompt*. An
+  # external agent is an API endpoint that returns a response; a
+  # federated/native agent is a runtime that receives a prompt payload and
+  # acts on it. Nothing about gathering context or rendering the prompt is
+  # HTTP-specific, so both happen here — above the external/native branch —
+  # and the two paths differ only in envelope: an HTTP body for external,
+  # a signal payload for federated.
+  #
+  # Before this, `gather_context_via_provider/3` and
+  # `build_prompt_via_provider/2` lived inside `dispatch_external/3` only,
+  # so a native assignee (e.g. the federated architect runtime) received a
+  # bare system_event with no rendered prompt and no context.
+  defp dispatch_assignee(%Responsibility{} = responsibility, agent, trigger_meta, kind) do
     provider_module = provider_module_for(responsibility.feature)
 
     context =
@@ -906,7 +916,24 @@ defmodule Platform.Responsibilities.Router do
       |> gather_context_via_provider(responsibility, trigger_meta)
       |> Map.put(:__responsibility__, responsibility)
 
-    case build_prompt_via_provider(provider_module, context) do
+    rendered = build_prompt_via_provider(provider_module, context)
+
+    case kind do
+      "external" -> dispatch_external(responsibility, agent, trigger_meta, context, rendered)
+      _ -> dispatch_native(responsibility, agent, trigger_meta, kind, rendered)
+    end
+  end
+
+  # ── External dispatch ─────────────────────────────────────────────────────
+
+  defp dispatch_external(
+         %Responsibility{} = responsibility,
+         agent,
+         trigger_meta,
+         context,
+         rendered
+       ) do
+    case rendered do
       {:error, reason} ->
         Logger.warning(
           "[ResponsibilityRouter] provider build_prompt refused dispatch " <>
@@ -1136,8 +1163,8 @@ defmodule Platform.Responsibilities.Router do
 
   # ── Native / federated dispatch ───────────────────────────────────────────
 
-  defp dispatch_native(%Responsibility{} = responsibility, agent, trigger_meta, kind) do
-    signal = build_native_signal(responsibility, agent, trigger_meta)
+  defp dispatch_native(%Responsibility{} = responsibility, agent, trigger_meta, kind, rendered) do
+    signal = build_native_signal(responsibility, agent, trigger_meta, rendered)
 
     Logger.info(
       "[ResponsibilityRouter] #{kind} dispatch key=#{responsibility.key} " <>
@@ -1157,26 +1184,62 @@ defmodule Platform.Responsibilities.Router do
   # when there isn't one (e.g. cron-fired native responsibilities) — the
   # AgentResponder treats nil ids as "synthesize a system instruction"
   # and the historian path is the precedent.
-  defp build_native_signal(%Responsibility{} = responsibility, agent, trigger_meta) do
+  defp build_native_signal(%Responsibility{} = responsibility, agent, trigger_meta, rendered) do
     reason = native_reason_for(Map.get(trigger_meta, :kind))
 
-    base = %{
-      reason: reason,
-      metadata: %{
+    metadata =
+      %{
         responsibility_key: responsibility.key,
         feature: responsibility.feature,
         trigger_kind: Map.get(trigger_meta, :kind),
         agent_id: Map.get(agent, :id) || Map.get(agent, "id"),
         agent_slug: agent_slug(agent)
       }
-    }
+      |> put_trigger_scalars(trigger_meta)
+      |> maybe_put(:prompt, rendered_prompt_text(rendered))
 
-    base
+    %{reason: reason, metadata: metadata}
     |> maybe_put(:message_id, Map.get(trigger_meta, :message_id))
     |> maybe_put(:space_id, Map.get(trigger_meta, :space_id))
     |> maybe_put(:participant_id, Map.get(trigger_meta, :participant_id))
     |> maybe_put(:meeting_id, Map.get(trigger_meta, :meeting_id))
   end
+
+  # Scalar correlation ids the receiving runtime needs to act on the fire.
+  #
+  # Deliberately a WHITELIST, never `Map.merge(trigger_meta)`: the
+  # plan-submit hook (`Platform.Tasks.fire_architecture_review_plan/1`)
+  # publishes a full `%Plan{}` struct under `:plan`, and the chat path
+  # carries a frozen history snapshot under `:metadata`. Forwarding either
+  # would push an unbounded payload onto a websocket — see commit
+  # `babba0bf` for the same reasoning on the chat side.
+  @native_trigger_scalar_keys [:task_id, :plan_id, :stage_id, :project_id]
+
+  defp put_trigger_scalars(metadata, trigger_meta) do
+    Enum.reduce(@native_trigger_scalar_keys, metadata, fn key, acc ->
+      case Map.get(trigger_meta, key) do
+        value when is_binary(value) -> Map.put(acc, key, value)
+        _ -> acc
+      end
+    end)
+  end
+
+  # Flatten `build_prompt_via_provider/2`'s return into the prompt text the
+  # federated runtime receives. `:legacy` (no provider, or a provider with
+  # no `build_prompt/1`) and a provider refusal both yield `nil`, which
+  # `maybe_put/3` drops — so those signals stay byte-for-byte what they
+  # were before this change rather than carrying empty-prompt garbage.
+  defp rendered_prompt_text({:messages, messages}) when is_list(messages) do
+    text =
+      messages
+      |> Enum.map(&Map.get(&1, :content))
+      |> Enum.filter(&(is_binary(&1) and &1 != ""))
+      |> Enum.join("\n\n")
+
+    if text == "", do: nil, else: text
+  end
+
+  defp rendered_prompt_text(_), do: nil
 
   defp native_reason_for(:chat_pattern), do: :mention
   defp native_reason_for(:webhook), do: :system_event

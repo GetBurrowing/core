@@ -148,7 +148,7 @@ defmodule Platform.Responsibilities.Providers.Meetings do
   @doc """
   Provider-level `build_prompt/1` (task 019f2570 bug 1 fix).
 
-  The Router's `dispatch_external/3` calls this after
+  The Router's `dispatch_assignee/4` calls this after
   `gather_context/2` — when it returns `{:ok, %{system:, user:}}` the
   Router hands the pre-built prompt to
   `Platform.ExternalAgents.Dispatcher.dispatch/4` and skips the

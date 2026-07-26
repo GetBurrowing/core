@@ -326,10 +326,13 @@ defmodule Platform.Chat.AgentResponder do
   end
 
   # Cron / responsibility-triggered system_event. The Responsibilities.Router
-  # (`Platform.Responsibilities.Router.build_native_signal/3`) constructs
+  # (`Platform.Responsibilities.Router.build_native_signal/4`) constructs
   # signals without chat-context keys — only `reason: :system_event` and a
   # metadata map carrying `agent_id`, `responsibility_key`, `feature`,
-  # `trigger_kind`, `agent_slug`. Load the target agent and hand back a
+  # `trigger_kind`, `agent_slug`, the rendered `prompt`, and any scalar
+  # `task_id` / `plan_id` / `stage_id` / `project_id`. `metadata` is kept
+  # whole here so new Router-side keys reach the runtime without a second
+  # edit. Load the target agent and hand back a
   # chat-less context; downstream `dispatch_system_event/2` routes the
   # broadcast to the agent's runtime with a bare `%{signal: ...}` envelope.
   defp load_context(%{reason: :system_event, metadata: %{agent_id: agent_id} = metadata} = signal)
@@ -482,6 +485,12 @@ defmodule Platform.Chat.AgentResponder do
     |> maybe_put(:responsibility_key, context[:responsibility_key])
     |> maybe_put(:feature, Map.get(metadata, :feature))
     |> maybe_put(:trigger_kind, Map.get(metadata, :trigger_kind))
+    # The Router renders the responsibility's prompt (when its provider
+    # implements `build_prompt/1`) and stashes it under `metadata.prompt`.
+    # Lift it to the top level too so a federated runtime can read
+    # `signal.prompt` without digging — mirrors :feature / :trigger_kind.
+    # Omitted entirely when there's no rendered prompt.
+    |> maybe_put(:prompt, Map.get(metadata, :prompt))
     |> Map.put(:metadata, metadata)
   end
 

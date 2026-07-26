@@ -1648,6 +1648,78 @@ defmodule Platform.Responsibilities.RouterTest do
       user = Enum.find(decoded["messages"], &(&1["role"] == "user"))
       assert user["content"] =~ "quarterly"
     end
+
+    # ── fix/render-prompt-for-federated-dispatch — external guard ──────────
+    #
+    # Hoisting `gather_context_via_provider/3` + `build_prompt_via_provider/2`
+    # above the external/native branch must leave the external path
+    # bit-identical. This pins the FULL outbound messages list (not just a
+    # `=~` probe) so a regression in the shared preamble shows up here.
+    test "external dispatch body is unchanged by the shared prompt preamble" do
+      feature_str = "router_ext_guard_#{System.unique_integer([:positive])}"
+
+      provider_name =
+        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
+
+      Module.create(
+        provider_name,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: {:ok, %{who: "Ada"}}
+
+          @impl true
+          def build_prompt(ctx), do: {:ok, %{system: "SYS", user: "USER #{ctx.who}"}}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end,
+        Macro.Env.location(__ENV__)
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          default_prompt_template: "unseeded.slug.v1"
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:guard_body, body})
+
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      capture_log([level: :info], fn ->
+        assert :ok =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      end)
+
+      assert_receive {:guard_body, raw_body}
+      decoded = Jason.decode!(raw_body)
+
+      assert decoded["messages"] == [
+               %{"role" => "system", "content" => "SYS"},
+               %{"role" => "user", "content" => "USER Ada"}
+             ]
+    end
   end
 
   # ── M6 stage 6: federated/native regression ─────────────────────────────
@@ -1826,6 +1898,308 @@ defmodule Platform.Responsibilities.RouterTest do
 
       reloaded = Repo.get!(Agent, agent.id)
       assert reloaded.last_successful_fire_at == fired_at
+    end
+
+    # ── fix/render-prompt-for-federated-dispatch ──────────────────────────
+    #
+    # Before this fix `gather_context_via_provider/3` and
+    # `build_prompt_via_provider/2` lived inside `dispatch_external/3`
+    # only, so a native/federated assignee received a bare system_event
+    # with no rendered prompt. External agents are API endpoints that
+    # return a response; federated agents are runtimes that receive a
+    # prompt payload and act. BOTH are sent a prompt.
+
+    # Defines an ad-hoc provider module at the canonical
+    # `Platform.Responsibilities.Providers.<Camelized>` name the Router
+    # resolves from `feature`. Mirrors the external-dispatch tests above.
+    defp define_native_provider(feature_str, body) do
+      provider_name =
+        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
+
+      Module.create(provider_name, body, Macro.Env.location(__ENV__))
+
+      provider_name
+    end
+
+    # Flatten every nested term reachable from `signal` so a payload guard
+    # can assert on things buried under `:metadata` rather than only the
+    # top level.
+    defp walk_terms(term) when is_struct(term), do: [term]
+
+    defp walk_terms(term) when is_map(term) do
+      [term | Enum.flat_map(term, fn {k, v} -> walk_terms(k) ++ walk_terms(v) end)]
+    end
+
+    defp walk_terms(term) when is_list(term), do: Enum.flat_map(term, &walk_terms/1)
+    defp walk_terms(term), do: [term]
+
+    defp all_map_keys(signal) do
+      signal
+      |> walk_terms()
+      |> Enum.filter(&(is_map(&1) and not is_struct(&1)))
+      |> Enum.flat_map(&Map.keys/1)
+    end
+
+    test "native dispatch carries the provider's rendered prompt and scalar trigger ids" do
+      feature_str = "router_fed_prompt_#{System.unique_integer([:positive])}"
+
+      define_native_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: {:ok, %{plan_title: "Ship the thing"}}
+
+          @impl true
+          def build_prompt(ctx) do
+            {:ok,
+             %{
+               system: "You are the architect.",
+               user: "Review this plan: #{ctx.plan_title}"
+             }}
+          end
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "event_topic",
+          trigger_config: %{"topic" => "plan:submitted"},
+          default_prompt_template: "architecture.review_plan.v1"
+        })
+
+      _agent = wire_native_assignee(key)
+
+      plan_id = Ecto.UUID.generate()
+      task_id = Ecto.UUID.generate()
+
+      capture_log([level: :info], fn ->
+        assert :ok =
+                 Router.fire_trigger(
+                   row,
+                   %{
+                     kind: :event_topic,
+                     fired_at: DateTime.utc_now(),
+                     plan_id: plan_id,
+                     task_id: task_id
+                   },
+                   %{}
+                 )
+      end)
+
+      assert_receive {:captured_signal, signal}
+
+      # THE fix detector: the rendered prompt text reaches the runtime.
+      assert is_binary(signal.metadata.prompt)
+      assert signal.metadata.prompt =~ "You are the architect."
+      assert signal.metadata.prompt =~ "Review this plan: Ship the thing"
+
+      # The un-seeded template slug is NOT what gets sent.
+      refute signal.metadata.prompt =~ "architecture.review_plan.v1"
+
+      # Scalar correlation ids the runtime needs to act on the fire.
+      assert signal.metadata.plan_id == plan_id
+      assert signal.metadata.task_id == task_id
+
+      # Pre-existing keys are untouched.
+      assert signal.reason == :system_event
+      assert signal.metadata.responsibility_key == key
+      assert signal.metadata.trigger_kind == :event_topic
+    end
+
+    test "native dispatch omits scalar trigger ids that are absent or non-binary" do
+      key = "routertest.fed_scalars_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      _agent = wire_native_assignee(key)
+
+      capture_log([level: :info], fn ->
+        assert :ok =
+                 Router.fire_trigger(
+                   row,
+                   %{
+                     kind: :cron,
+                     fired_at: DateTime.utc_now(),
+                     task_id: Ecto.UUID.generate(),
+                     # Non-binary — must be dropped, not coerced.
+                     stage_id: 42,
+                     project_id: nil
+                   },
+                   %{}
+                 )
+      end)
+
+      assert_receive {:captured_signal, signal}
+
+      assert is_binary(signal.metadata.task_id)
+      refute Map.has_key?(signal.metadata, :stage_id)
+      refute Map.has_key?(signal.metadata, :project_id)
+      refute Map.has_key?(signal.metadata, :plan_id)
+    end
+
+    test "native dispatch with no provider build_prompt/1 omits :prompt entirely (no empty garbage)" do
+      feature_str = "router_fed_noprompt_#{System.unique_integer([:positive])}"
+
+      define_native_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          # NB: no `build_prompt/1`.
+          @impl true
+          def gather_context(_r, _m), do: {:ok, %{topic: "quarterly"}}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          default_prompt_template: "Please cover the {topic} update."
+        })
+
+      agent = wire_native_assignee(key)
+
+      capture_log([level: :info], fn ->
+        assert :ok =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      end)
+
+      assert_receive {:captured_signal, signal}
+
+      # No `build_prompt/1` → the signal is byte-for-byte what it was
+      # before this change: no `:prompt` key at all, not "" and not nil.
+      refute Map.has_key?(signal.metadata, :prompt)
+
+      assert signal.reason == :system_event
+      assert signal.metadata.responsibility_key == key
+      assert signal.metadata.agent_slug == agent.slug
+      assert signal.metadata.trigger_kind == :cron
+    end
+
+    test "no provider module at all still dispatches natively without a :prompt key" do
+      key = "routertest.fed_noprovider_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: "definitely_not_a_real_feature_#{System.unique_integer([:positive])}",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      _agent = wire_native_assignee(key)
+
+      capture_log([level: :info], fn ->
+        assert :ok =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      end)
+
+      assert_receive {:captured_signal, signal}
+      refute Map.has_key?(signal.metadata, :prompt)
+      assert signal.metadata.responsibility_key == key
+    end
+
+    test "native signal never carries a %Plan{} struct or :frozen_history (payload guard)" do
+      feature_str = "router_fed_payload_#{System.unique_integer([:positive])}"
+
+      define_native_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: {:ok, %{}}
+
+          @impl true
+          def build_prompt(_ctx), do: {:ok, %{system: "sys", user: "usr"}}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "event_topic",
+          trigger_config: %{"topic" => "plan:submitted"}
+        })
+
+      _agent = wire_native_assignee(key)
+
+      plan_id = Ecto.UUID.generate()
+
+      # Exactly the shape `Platform.Tasks.fire_architecture_review_plan/1`
+      # publishes (tasks.ex:1562) plus the chat path's frozen snapshot.
+      trigger_meta = %{
+        kind: :event_topic,
+        fired_at: DateTime.utc_now(),
+        plan_id: plan_id,
+        task_id: Ecto.UUID.generate(),
+        plan: %Platform.Tasks.Plan{id: plan_id, status: "pending_review"},
+        metadata: %{frozen_history: Enum.map(1..50, &"history line #{&1}")}
+      }
+
+      capture_log([level: :info], fn ->
+        assert :ok = Router.fire_trigger(row, trigger_meta, %{})
+      end)
+
+      assert_receive {:captured_signal, signal}
+
+      # The prompt still made it — this guard must not pass vacuously.
+      assert signal.metadata.prompt =~ "usr"
+      assert signal.metadata.plan_id == plan_id
+
+      terms = walk_terms(signal)
+      refute Enum.any?(terms, &match?(%Platform.Tasks.Plan{}, &1))
+
+      keys = all_map_keys(signal)
+      refute :frozen_history in keys
+      refute :plan in keys
+      refute "history line 1" in terms
     end
   end
 

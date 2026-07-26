@@ -125,11 +125,14 @@ defmodule Platform.Responsibilities.Provider do
   Build the (system + user) LLM prompt from a gathered context map
   (task 019f2570 bug 1 fix).
 
-  The Router probes for this callback in `dispatch_external/3` after
-  calling `gather_context/2`. When present, the returned messages are
+  The Router probes for this callback in `dispatch_assignee/4` after
+  calling `gather_context/2` — for external *and* native/federated
+  assignees alike. For an external agent the returned messages are
   passed to `Platform.ExternalAgents.Dispatcher.dispatch/4` verbatim —
   bypassing the un-seeded `default_prompt_template` render path
-  entirely so providers own their full prompt end-to-end.
+  entirely so providers own their full prompt end-to-end. For a
+  native/federated agent the same rendered text rides the dispatch
+  signal as `metadata.prompt`.
 
   Returning `{:error, term}` short-circuits the dispatch — the Router
   logs at `:warning` and does NOT fire the LLM call. Typical use case:
