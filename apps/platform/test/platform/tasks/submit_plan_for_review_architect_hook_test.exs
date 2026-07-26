@@ -464,4 +464,237 @@ defmodule Platform.Tasks.SubmitPlanForReviewArchitectHookTest do
     assert %Task{status: "planning"} = Tasks.get_task_record(task.id)
     assert %Task{status: "planning"} = Tasks.get_task_record(task_b.id)
   end
+
+  # ── ADR-0046 member 4 stage 3: the hook PERSISTS the fire result ───────
+  #
+  # Member 1 (wave 1) made the Router honest and centralised the
+  # fire-result → outcome mapping in `Responsibilities.outcome/1`.
+  # Member 019f9b27 stage 4 made this hook OBSERVE the result (log +
+  # telemetry). This stage makes it DURABLE: the outcome lands in
+  # `tasks.planning_step_outcomes["architecture"]`, and the
+  # `tasks.planning_step` cursor moves to `"architecting"` for the
+  # duration of the dispatch and back to `"planning"` afterwards.
+  #
+  # Everything here reads the row back from the database. A log line is
+  # not evidence a merge-time reader can consult.
+  describe "submit_plan_for_review/1 — architecture step outcome persistence" do
+    defp architecture_entry(task_id) do
+      Task
+      |> Repo.get!(task_id)
+      |> Map.fetch!(:planning_step_outcomes)
+      |> Map.get("architecture")
+    end
+
+    # ── DETECTOR ────────────────────────────────────────────────────────
+    #
+    # The one mandatory detector for this task. Two submits down the SAME
+    # code path, differing only in why the architect did not review:
+    #
+    #   A — nobody holds `architecture.review_plan`  → `not_applicable`
+    #   B — an agent holds it and the endpoint is down → `failed`
+    #
+    # Against pre-member-1 code these are indistinguishable: the Router
+    # laundered both into a flat `:ok`, so both would record the same
+    # value and the inequality below cannot pass. That conflation is the
+    # bug ADR-0046:83 forbids — `not_applicable` is the progressive-
+    # enhancement path, `failed` is a gate that was supposed to run and
+    # did not.
+    #
+    # Written as a direct inequality rather than two equalities so that a
+    # future refactor collapsing the two values fails ONE named test
+    # instead of two unrelated ones.
+    test "DETECTOR: an unfilled architect and a failed dispatch record DIFFERENT outcomes",
+         %{plan: plan, task: task, project: project} do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      # ── A: no architect holds the responsibility ──────────────────────
+      capture_log([level: :info], fn ->
+        assert {:ok, %Plan{status: "pending_review"}} = Tasks.submit_plan_for_review(plan)
+      end)
+
+      entry_a = architecture_entry(task.id)
+
+      # ── B: an architect holds it, but its endpoint answers 503 ────────
+      {:ok, task_b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Hook Test Task B (endpoint down)",
+          status: "planning"
+        })
+
+      {:ok, plan_b} = Tasks.create_plan(%{task_id: task_b.id})
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, :architect_plan_hook_dispatch_test})
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+      end)
+
+      # Reuses the module-level fixture from the "endpoint down" describe
+      # above — an HTTP assignee is the only kind whose failure the Router
+      # can actually observe (see the Router moduledoc's honesty limit).
+      _agent = wire_external_architect!()
+
+      test_pid = self()
+
+      Req.Test.stub(:architect_plan_hook_dispatch_test, fn conn ->
+        send(test_pid, {:external_dispatch, conn.request_path})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(503, ~s({"error":"down"}))
+      end)
+
+      capture_log([level: :info], fn ->
+        assert {:ok, %Plan{status: "pending_review"}} = Tasks.submit_plan_for_review(plan_b)
+      end)
+
+      # Mechanism proof: the Router really resolved an assignee and really
+      # called the endpoint, so "failed" below is not an artefact of the
+      # hook short-circuiting somewhere earlier.
+      assert_receive {:external_dispatch, "/chat/completions"}
+
+      entry_b = architecture_entry(task_b.id)
+
+      # ── the detector proper ───────────────────────────────────────────
+      refute entry_a["outcome"] == entry_b["outcome"]
+
+      assert entry_a["outcome"] == "not_applicable"
+      assert entry_b["outcome"] == "failed"
+
+      # `failed` carries WHY; `not_applicable` has nothing to explain.
+      assert is_binary(entry_b["detail"])
+      assert entry_a["detail"] == nil
+
+      # Both paths still returned {:ok, plan} — neither stalled the flow.
+      assert %Plan{status: "pending_review"} = Repo.get!(Plan, plan.id)
+      assert %Plan{status: "pending_review"} = Repo.get!(Plan, plan_b.id)
+    end
+
+    # ── GUARD: the happy path ───────────────────────────────────────────
+    test "GUARD: a dispatched architect records \"complete\" with a timestamp and no detail",
+         %{plan: plan, task: task} do
+      override_native_dispatcher(NoopDispatcher, :maybe_dispatch)
+      _agent = wire_architect_assignee()
+
+      capture_log([level: :info], fn ->
+        assert {:ok, %Plan{status: "pending_review"}} = Tasks.submit_plan_for_review(plan)
+      end)
+
+      entry = architecture_entry(task.id)
+
+      assert entry["outcome"] == "complete"
+      assert entry["detail"] == nil
+      assert {:ok, _, _} = DateTime.from_iso8601(entry["recorded_at"])
+
+      # A complete step is not a failed gate — the stage-4 merge-time
+      # readers must see nothing here.
+      refute Tasks.planning_gate_failed?(Repo.get!(Task, task.id))
+    end
+
+    # ── GUARD: belt and braces ──────────────────────────────────────────
+    #
+    # The plan flow must not stall AND the failure must not evaporate.
+    # Before this stage the first half held and the second did not: the
+    # crash was rescued into `{:error, :architect_crashed}` and then
+    # thrown away by `_ =`.
+    test "GUARD: a raising handler still yields {:ok, pending_review} AND records \"failed\"",
+         %{plan: plan, task: task} do
+      override_native_dispatcher(__MODULE__.CrashingDispatcher, :maybe_dispatch)
+      _agent = wire_architect_assignee()
+
+      capture_log([level: :info], fn ->
+        assert {:ok, %Plan{status: "pending_review"}} = Tasks.submit_plan_for_review(plan)
+      end)
+
+      assert %Plan{status: "pending_review"} = Repo.get!(Plan, plan.id)
+
+      entry = architecture_entry(task.id)
+
+      assert entry["outcome"] == "failed"
+      assert is_binary(entry["detail"])
+
+      # And it reaches the single "a gate did not run" predicate that
+      # stage 4's two merge-time writers consult.
+      reloaded = Repo.get!(Task, task.id)
+      assert Tasks.planning_gate_failed?(reloaded)
+      assert [%{step: "architecture", detail: detail}] = Tasks.failed_planning_steps(reloaded)
+      assert is_binary(detail)
+    end
+
+    # ── GUARD: the cursor moves, and moves back ─────────────────────────
+    #
+    # `"planning"` is the column DEFAULT, so asserting the final value
+    # alone is vacuous. Two things defeat that here:
+    #   1. the cursor is parked at `"designing"` BEFORE the submit, so
+    #      ending at `"planning"` can only be a write; and
+    #   2. the mid-flight `"architecting"` value is observed through the
+    #      board broadcast, which proves the first move happened rather
+    #      than inferring it from the end state.
+    test "GUARD: the cursor moves to architecting during the fire and back to planning",
+         %{plan: plan, task: task} do
+      override_native_dispatcher(NoopDispatcher, :maybe_dispatch)
+      _agent = wire_architect_assignee()
+
+      {:ok, _} = Tasks.set_planning_step(task.id, :designing)
+      assert %Task{planning_step: "designing"} = Repo.get!(Task, task.id)
+
+      Tasks.subscribe_board()
+      task_id = task.id
+
+      capture_log([level: :info], fn ->
+        assert {:ok, %Plan{status: "pending_review"}} = Tasks.submit_plan_for_review(plan)
+      end)
+
+      # Member 8's dependency: the card live-refreshes off these.
+      assert_receive {:task_updated, %Task{id: ^task_id, planning_step: "architecting"}}
+      assert_receive {:task_updated, %Task{id: ^task_id, planning_step: "planning"}}
+
+      assert %Task{planning_step: "planning"} = Repo.get!(Task, task_id)
+
+      # ADR-0046 does not add a status. The cursor is a sub-phase of
+      # `status == "planning"`, and the transition table is untouched.
+      assert %Task{status: "planning"} = Repo.get!(Task, task_id)
+    end
+
+    # ── GUARD (paired positive control for the test above) ──────────────
+    #
+    # Same assertion on a submit with NO architect. If the cursor logic
+    # were somehow conditional on an assignee being present, the test
+    # above would still pass and this one would not.
+    test "GUARD: a submit with no architect also parks the cursor back at planning",
+         %{plan: plan, task: task} do
+      {:ok, _} = Tasks.set_planning_step(task.id, :designing)
+
+      Tasks.subscribe_board()
+      task_id = task.id
+
+      capture_log([level: :info], fn ->
+        assert {:ok, %Plan{status: "pending_review"}} = Tasks.submit_plan_for_review(plan)
+      end)
+
+      assert_receive {:task_updated, %Task{id: ^task_id, planning_step: "architecting"}}
+      assert_receive {:task_updated, %Task{id: ^task_id, planning_step: "planning"}}
+
+      assert %Task{planning_step: "planning"} = Repo.get!(Task, task_id)
+      assert architecture_entry(task_id)["outcome"] == "not_applicable"
+    end
+
+    # ── GUARD: the mapping is not re-derived here ───────────────────────
+    #
+    # Stage 2 bound `tasks.ex` to `Responsibilities.outcome/1`. This stage
+    # adds the production call site, so re-assert the binding at the point
+    # where a future editor is most tempted to write `case fire_result do`.
+    test "GUARD: submit_plan_for_review/1 records via record_planning_step/3, not a local case" do
+      source = File.read!("lib/platform/tasks.ex")
+
+      assert source =~ "record_architecture_planning_step(updated.task_id, fire_result)"
+      assert source =~ "Platform.Responsibilities.outcome("
+      refute source =~ ~r/defp?\s+outcome\(/
+    end
+  end
 end

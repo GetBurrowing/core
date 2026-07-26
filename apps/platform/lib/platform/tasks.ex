@@ -1721,7 +1721,37 @@ defmodule Platform.Tasks do
         # 019f3440). The Router internally swallows dispatch crashes
         # too; this belt-and-braces wrap protects against future
         # Router-shape changes.
-        _ = fire_architecture_review_plan(updated)
+        #
+        # ADR-0046 member 4 stage 3: the fire result is no longer thrown
+        # away. The cursor moves to `:architecting` for the duration of the
+        # dispatch (what the task genuinely IS while the architect is being
+        # asked), the outcome is persisted, and the cursor returns to
+        # `:planning`. Everything here is side-effect only — the
+        # `{:ok, plan}` return of this function is preserved verbatim,
+        # matching `maybe_emit_plan_review_inbox/1` below.
+        #
+        # SCOPE BOUNDARY vs the sibling ADR-0046 stack members:
+        #   * Member 5 owns the architecture GATE — blocking approval on the
+        #     recorded outcome and redefining `auto_approve_plan`. This code
+        #     only RECORDS; `maybe_auto_approve/1` below is untouched and no
+        #     approval behaviour changes. Member 5's seam is the second
+        #     cursor move: it stops returning the cursor to `:planning`
+        #     until the gate resolves.
+        #   * Member 7 owns the DESIGN step. `record_planning_step/3`
+        #     accepts `:design` and is tested, but has no production caller
+        #     yet — deliberate, not an oversight (see its `@doc`).
+        #   * Member 8 owns card rendering. Nothing here touches a `.heex`,
+        #     `assets/`, or a LiveView; the `{:task_updated, _}` broadcast
+        #     that `set_planning_step/2` and `record_planning_step/3` emit
+        #     is the whole of member 8's dependency on this stage.
+        _ = move_planning_cursor(updated.task_id, :architecting)
+
+        fire_result = fire_architecture_review_plan(updated)
+
+        _ = record_architecture_planning_step(updated.task_id, fire_result)
+
+        _ = move_planning_cursor(updated.task_id, :planning)
+
         broadcast_board({:plan_updated, updated})
 
         case maybe_auto_approve(updated) do
@@ -1804,6 +1834,82 @@ defmodule Platform.Tasks do
       Logger.warning("[Responsibilities] architecture.review_plan exited: #{inspect(reason)}")
 
       {:error, :architect_crashed}
+  end
+
+  # ADR-0046 member 4 stage 3. Persists the architecture step's outcome.
+  #
+  # Runs OUTSIDE `fire_architecture_review_plan/1`'s rescue, on purpose: the
+  # fire result is captured first and recorded second, so a crash in the
+  # RECORDER can never be logged as "the architect crashed" and can never be
+  # mapped onto `"failed"` for the architecture step. A persistence bug must
+  # not be attributed to the architect.
+  #
+  # It carries its OWN envelope for a different reason.
+  # `Platform.Responsibilities.outcome/1` deliberately has no catch-all
+  # clause, so a fire-result shape it has never seen raises
+  # `FunctionClauseError` — and its `@doc` instructs call sites that cannot
+  # afford a raise to wrap it in the same envelope the hooks already use for
+  # `fire/2`. This is such a call site twice over: `submit_plan_for_review/1`
+  # is fire-and-forget by the ADR-0044 contract, and `plan_submit` in
+  # `Platform.Federation.ToolSurface` is a live agent-facing caller, so an
+  # unrecognised Router return value must not turn into a failed plan
+  # submission. (`submit_plan_for_review/1` is not itself transaction-nested
+  # — checked: no caller wraps it in `Repo.transaction/1`. This envelope is
+  # what keeps that true for a future one.)
+  #
+  # An unmapped shape is loud but harmless: logged at :error with the shape
+  # verbatim, and NOTHING is written. The `"architecture"` key stays absent,
+  # which is distinguishable from all three of complete / not_applicable /
+  # failed. It is specifically NOT recorded as `"failed"` — that silent
+  # mis-map is the exact thing member 1's missing catch-all exists to
+  # prevent (ADR-0046:83).
+  defp record_architecture_planning_step(task_id, fire_result) do
+    record_planning_step(task_id, :architecture, fire_result)
+  rescue
+    e ->
+      Logger.error(
+        "[Responsibilities] architecture.review_plan outcome unrecorded " <>
+          "task=#{inspect(task_id)} fire_result=#{inspect(fire_result)} " <>
+          "error=#{Exception.message(e)}"
+      )
+
+      {:error, :planning_step_unrecorded}
+  catch
+    :exit, reason ->
+      Logger.error(
+        "[Responsibilities] architecture.review_plan outcome unrecorded " <>
+          "task=#{inspect(task_id)} fire_result=#{inspect(fire_result)} " <>
+          "exit=#{inspect(reason)}"
+      )
+
+      {:error, :planning_step_unrecorded}
+  end
+
+  # ADR-0046 member 4 stage 3. Cursor-only sibling of the above, same
+  # non-raising contract for the same reason: a cursor move is bookkeeping
+  # and must never be able to stall the `draft → pending_review` transition.
+  # `set_planning_step/2` already RETURNS `{:error, changeset}` for an
+  # out-of-domain value and `{:error, :task_not_found}` for a missing row;
+  # the envelope covers what it cannot (a PubSub or DB fault under the
+  # broadcast).
+  defp move_planning_cursor(task_id, step) do
+    set_planning_step(task_id, step)
+  rescue
+    e ->
+      Logger.warning(
+        "[Tasks] planning cursor move failed task=#{inspect(task_id)} " <>
+          "step=#{inspect(step)} error=#{Exception.message(e)}"
+      )
+
+      {:error, :planning_cursor_unmoved}
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[Tasks] planning cursor move exited task=#{inspect(task_id)} " <>
+          "step=#{inspect(step)} exit=#{inspect(reason)}"
+      )
+
+      {:error, :planning_cursor_unmoved}
   end
 
   # M3 (task 019f904c): emit a `task_plan_review` inbox row to the task
