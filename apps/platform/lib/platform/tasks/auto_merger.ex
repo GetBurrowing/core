@@ -28,6 +28,30 @@ defmodule Platform.Tasks.AutoMerger do
 
   Defense-in-depth: even if a caller forgets the predicate, the
   task-aware `execute_merge/4` short-circuits the shell-out.
+
+  ## Planning-gate guard (ADR-0046 member 4, stage 4)
+
+  Auto-merge means, by definition, that no human approves the merge. So
+  "a failed planning gate surfaces to whoever approves the merge" is
+  unsatisfiable on this path unless auto-merge yields. `execute_merge/4`
+  therefore refuses — AHEAD of the stack-member guard — when
+  `Tasks.planning_gate_failed?/1` is true, returning
+  `{:error, :planning_gate_failed, detail}` without shelling out.
+
+  `record_merge_result/2`'s existing 3-tuple clause routes that to a
+  FAILED `pr_merged` validation carrying `"error_type" =>
+  "planning_gate_failed"`, so the refusal is durable and visible in the
+  UI rather than a log line nobody reads at merge time.
+
+  This is narrower than it looks and stays consistent with ADR-0046
+  decision 7 ("failure falls open, visibly"): the branch is still
+  pushed, the PR is still opened, no executor is ever blocked. The only
+  thing withheld is the MACHINE merge.
+
+  `"not_applicable"` never trips this guard. Nobody holding the
+  responsibility is progressive enhancement, not a missing gate
+  (ADR-0046:83); the predicate is `Tasks.failed_planning_steps/1`, which
+  reports `"failed"` only.
   """
 
   alias Platform.Tasks
@@ -85,6 +109,15 @@ defmodule Platform.Tasks.AutoMerger do
 
   Behavior:
 
+    * Failed planning gate (`Tasks.planning_gate_failed?/1`) — returns
+      `{:error, :planning_gate_failed, detail}` WITHOUT shelling out.
+      Checked FIRST, ahead of the stack-member guard: a gate that was
+      expected to run and didn't is a stronger refusal than "someone
+      else merges this", and a stack member in that state should not
+      have its own deploy stage self-satisfy either. It does not strand
+      the stack — rollup fan-out runs through
+      `Stacks.cascade_members_to_done/2`, a status flip, not a
+      validation evaluation.
     * Stack member (`Tasks.dispatch_deploy_for_task/1` returns
       `{:error, :stack_ships_atomically}`) — returns
       `{:ok, :deferred}` WITHOUT shelling out. The stack rollup PR
@@ -100,6 +133,25 @@ defmodule Platform.Tasks.AutoMerger do
   @spec execute_merge(TaskRecord.t() | nil, String.t(), pos_integer(), String.t()) ::
           {:ok, String.t() | :deferred} | {:error, atom(), String.t()}
   def execute_merge(%TaskRecord{} = task, repo_url, pr_number, method) do
+    if Tasks.planning_gate_failed?(task) do
+      detail = planning_gate_detail(task)
+
+      Logger.warning(
+        "[AutoMerger] task #{task.id} has a failed planning gate; refusing to auto-merge " <>
+          "PR ##{pr_number} on #{repo_url} — #{detail}"
+      )
+
+      {:error, :planning_gate_failed, detail}
+    else
+      execute_merge_after_planning_gate(task, repo_url, pr_number, method)
+    end
+  end
+
+  def execute_merge(nil, repo_url, pr_number, method) do
+    execute_merge(repo_url, pr_number, method)
+  end
+
+  defp execute_merge_after_planning_gate(%TaskRecord{} = task, repo_url, pr_number, method) do
     case Tasks.dispatch_deploy_for_task(task) do
       :ok ->
         execute_merge(repo_url, pr_number, method)
@@ -114,8 +166,21 @@ defmodule Platform.Tasks.AutoMerger do
     end
   end
 
-  def execute_merge(nil, repo_url, pr_number, method) do
-    execute_merge(repo_url, pr_number, method)
+  # Names the step AND carries the recorded `detail` so the failed
+  # `pr_merged` validation's evidence says WHY the gate did not run, not
+  # merely THAT it didn't. Built from `Tasks.failed_planning_steps/1`,
+  # the same single definition the PR-body renderer reads.
+  defp planning_gate_detail(%TaskRecord{} = task) do
+    steps =
+      task
+      |> Tasks.failed_planning_steps()
+      |> Enum.map_join("; ", fn %{step: step, detail: detail} ->
+        "#{step} — #{detail || "no detail recorded"}"
+      end)
+
+    "Auto-merge refused: a planning gate was expected to run and failed to dispatch " <>
+      "(#{steps}). This is a dispatch failure, not a skip — a step nobody holds is " <>
+      "recorded as not_applicable and does not block. Review the change and merge by hand."
   end
 
   @doc """

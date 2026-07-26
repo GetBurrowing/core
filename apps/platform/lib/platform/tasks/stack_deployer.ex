@@ -2361,7 +2361,7 @@ defmodule Platform.Tasks.StackDeployer do
     """
     Rollup PR for stack **#{stack.name}** (`#{stack.rollup_branch}` → `#{stack.base_branch}`).
 
-    ## Members
+    #{planning_gate_section(members)}## Members
 
     #{member_section}#{diff_section}
 
@@ -2370,6 +2370,48 @@ defmodule Platform.Tasks.StackDeployer do
     """
     |> String.trim_trailing()
     |> Kernel.<>("\n")
+  end
+
+  # ADR-0046 member 4, stage 4 — WRITER 1.
+  #
+  # The rollup PR body is composed here, server-side, and handed
+  # pre-formatted to `GitRunner.open_stack_pr/1` (see `git_runner.ex`:
+  # the runner generates neither title nor body). That makes it the one
+  # PR surface no agent in the loop can quietly drop — which is the
+  # whole point: a `Logger.warning` at merge time is read by nobody.
+  #
+  # ONLY `"failed"` renders. `"not_applicable"` is the progressive-
+  # enhancement path (nobody holds the responsibility) and must never be
+  # conflated with a gate that was expected to run and didn't
+  # (ADR-0046:83). The distinction is not re-derived from
+  # `planning_step_outcomes` here — `Tasks.failed_planning_steps/1` is
+  # the single definition, so this renderer cannot drift from the
+  # auto-merge guard in `AutoMerger.execute_merge/4`.
+  #
+  # When no member has a failed gate this returns `""` — no empty
+  # heading, so a clean stack's body is byte-identical to the pre-ADR
+  # body.
+  defp planning_gate_section(members) do
+    case Enum.flat_map(members, &planning_gate_lines/1) do
+      [] ->
+        ""
+
+      lines ->
+        "## ⚠️ Gates that did not run\n\n" <>
+          Enum.join(lines, "\n") <>
+          "\n\nThese planning steps were expected to run and failed to dispatch. " <>
+          "They are dispatch failures, NOT skips — a step nobody holds is recorded " <>
+          "as `not_applicable` and is deliberately not listed here. Review the " <>
+          "corresponding change by hand before merging.\n\n"
+    end
+  end
+
+  defp planning_gate_lines(%TaskRecord{} = task) do
+    title = task.title || "(untitled)"
+
+    Enum.map(Tasks.failed_planning_steps(task), fn %{step: step, detail: detail} ->
+      "- **#{title}** — `#{step}` — #{detail || "no detail recorded"}"
+    end)
   end
 
   defp member_line(%TaskRecord{} = task) do
@@ -2381,7 +2423,22 @@ defmodule Platform.Tasks.StackDeployer do
 
     title = task.title || "(untitled)"
     url = task_url(task)
-    "- [#{title}](#{url}) — sha #{sha}"
+    "- [#{title}](#{url}) — sha #{sha}#{planning_gate_marker(task)}"
+  end
+
+  # Names the step(s) rather than hardcoding "ARCHITECTURE": the design
+  # gate lands with ADR-0046 member 7 and this marker must not lie about
+  # which gate went missing when it does.
+  defp planning_gate_marker(%TaskRecord{} = task) do
+    case Tasks.failed_planning_steps(task) do
+      [] ->
+        ""
+
+      steps ->
+        names = Enum.map_join(steps, " + ", &String.upcase(&1.step))
+        noun = if length(steps) > 1, do: "GATES DID NOT RUN", else: "GATE DID NOT RUN"
+        " — ⚠️ #{names} #{noun}"
+    end
   end
 
   defp task_url(%TaskRecord{id: id}) when is_binary(id) do
