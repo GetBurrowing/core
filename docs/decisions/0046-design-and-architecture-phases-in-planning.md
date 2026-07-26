@@ -87,6 +87,31 @@ Two states are insufficient. Each step resolves to one of:
 Three items are load-bearing and none is optional:
 
 1. **`fire_trigger/3` must return a real result.** Until it can express failure, "track the failure" ships as a no-op and nothing surfaces for months.
+
+   **Shipped** — task `019f9b27`. Read the contract from here, not from source. `Platform.Responsibilities.Router.fire_trigger/2,3` and `Router.fire/2` return:
+
+   ```elixir
+   @type fire_outcome :: {:ok, :dispatched} | {:ok, :unfilled} | {:error, term()}
+   ```
+
+   `Router.fire/2` additionally answers `{:ok, :unknown_responsibility}` for a key with no seeded row — an unseeded key is a progressive-enhancement state, identical in kind to an unfilled assignee, so it belongs in the ok channel. `Platform.Responsibilities.fire/2` now returns the Router value verbatim; it no longer launders every outcome into `:ok`.
+
+   `Platform.Responsibilities.outcome/1` is the single mapper onto the per-step vocabulary above. Members 2–9 call it rather than re-deriving the mapping — if each derives it independently, one of them maps `unfilled` to `failed` and re-opens the conflation this table forbids:
+
+   | Return | `outcome/1` |
+   | --- | --- |
+   | `{:ok, :dispatched}` | `:complete` |
+   | `{:ok, :unfilled}` | `:not_applicable` |
+   | `{:ok, :unknown_responsibility}` | `:not_applicable` |
+   | `{:error, _reason}` | `:failed` |
+
+   `outcome/1` deliberately has **no catch-all clause**, so an unhandled future shape raises `FunctionClauseError` at the call site instead of silently mis-mapping. Call sites inside an Ecto transaction must therefore match the shape themselves before calling it. The Router's own non-raising contract is unchanged and load-bearing: the two lifecycle hooks fire inside a plan-submit transition and inside `evaluate_validation/2`'s transaction, so dispatch failure is *returned*, never raised — a raise there would roll back the validation update.
+
+   Two limits the value does **not** cover, so downstream members do not over-trust it:
+
+   - On the **native** dispatch branch, `{:ok, :dispatched}` means *handoff accepted*, not *agent responded*. `Platform.Chat.AgentResponder.maybe_dispatch/1` wraps the work in `Task.start/1` outside sync mode and returns `:ok` unconditionally, so post-handoff native failure is still invisible. Closing that is separate work. The external branch is honest: there, `{:ok, :dispatched}` means the endpoint answered.
+   - `:complete` means the dispatch returned, which is weaker than the "output was captured" wording in the table above. The `handle_output` leg reports separately and a step can be `:complete` with no canvas attached.
+
 2. **`Providers.Architecture` must exist.** Without the shim every `architecture.*` dispatch black-holes, and the feature is UI over a discarded call.
 3. **Context resolvers must exist** for `plan_payload`, `sibling_tasks` and `adr_index`. `handlers/architecture_review_plan.ex:106` declares all three; none is a `ContextGatherer` resolver, so all three currently resolve to `nil`. The architect would receive an empty context even after the shim lands.
 
