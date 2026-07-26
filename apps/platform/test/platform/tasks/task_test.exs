@@ -1525,6 +1525,185 @@ defmodule Platform.Tasks.TaskTest do
     end
   end
 
+  # ADR-0046 member 4 (task 019f9b28-ab82) stage 1. Schema only — there
+  # is no production writer for these fields until stage 2, so every test
+  # below is a GUARD, not a detector: none of them can detonate against
+  # the unfixed tree, because the field they assert on does not exist
+  # there. What each one DOES do is carry a paired positive control, so a
+  # future refactor cannot make them pass vacuously.
+  describe "planning_step + planning_step_outcomes (ADR-0046 member 4)" do
+    test "planning_steps/0, planning_step_keys/0, planning_step_outcomes/0 expose the domains" do
+      assert Task.planning_steps() == ~w(designing planning architecting)
+      assert Task.planning_step_keys() == ~w(design architecture)
+      assert Task.planning_step_outcomes() == ~w(complete not_applicable failed)
+    end
+
+    test "no planning sub-phase leaked into statuses/0" do
+      # The hard constraint on this task: planning_step is a cursor, not
+      # a status. If either value shows up here, the status-transition
+      # table has been expanded and this task overstepped.
+      refute "designing" in Task.statuses()
+      refute "architecting" in Task.statuses()
+      assert length(Task.statuses()) == 9
+    end
+
+    test "create_task/1 defaults planning_step to \"planning\" and outcomes to %{}", %{
+      project: project
+    } do
+      assert {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Fresh task"})
+      assert task.planning_step == "planning"
+      assert task.planning_step_outcomes == %{}
+
+      reloaded = Repo.get!(Task, task.id)
+      assert reloaded.planning_step == "planning"
+      assert reloaded.planning_step_outcomes == %{}
+    end
+
+    # GUARD (paired positive control). The first half asserts the narrow
+    # changeset does not carry :status. On its own that assertion also
+    # passes against a changeset that casts NOTHING, so the second half
+    # runs the identical attrs through changeset/2 and asserts :status
+    # DOES change there — proving the assertion can tell the two apart.
+    test "planning_step_changeset/2 cannot smuggle a :status change; changeset/2 can", %{
+      project: project
+    } do
+      attrs = %{status: "done", planning_step: "architecting"}
+      task = %Task{project_id: project.id, title: "Cursor", status: "backlog"}
+
+      narrow = Task.planning_step_changeset(task, attrs)
+
+      assert narrow.valid?
+      assert get_change(narrow, :planning_step) == "architecting"
+      assert get_change(narrow, :status) == nil
+      refute Map.has_key?(narrow.changes, :status)
+
+      # Positive control: the same attrs, the wide changeset.
+      wide = Task.changeset(task, attrs)
+      assert get_change(wide, :status) == "done"
+      # ...and symmetrically, the wide changeset does not touch the
+      # planning cursor: the field is absent from its cast list.
+      assert get_change(wide, :planning_step) == nil
+    end
+
+    test "update_task/3 does not change planning_step", %{project: project} do
+      assert {:ok, task} =
+               Tasks.create_task(%{project_id: project.id, title: "Unguarded surface"})
+
+      assert {:ok, updated} = Tasks.update_task(task, %{planning_step: "architecting"})
+      assert updated.planning_step == "planning"
+      assert Repo.get!(Task, task.id).planning_step == "planning"
+    end
+
+    test "planning_step outside the domain is invalid" do
+      changeset = Task.planning_step_changeset(%Task{}, %{planning_step: "reviewing"})
+
+      refute changeset.valid?
+      assert "is invalid" in errors_on(changeset).planning_step
+
+      # Positive control: each legal value in the same position is valid.
+      for step <- Task.planning_steps() do
+        assert Task.planning_step_changeset(%Task{}, %{planning_step: step}).valid?
+      end
+    end
+
+    # GUARD (paired positive control). A writer must not be able to
+    # introduce a fourth outcome value — every reader added by this stack
+    # branches on the three-value table, and an unknown string would have
+    # to be guessed about (which is how not_applicable/failed collapse).
+    test "an unknown outcome value is rejected, and \"failed\" in the same position is accepted" do
+      invalid =
+        Task.planning_step_changeset(%Task{}, %{
+          planning_step_outcomes: %{"architecture" => %{"outcome" => "skipped"}}
+        })
+
+      refute invalid.valid?
+      assert Enum.any?(errors_on(invalid).planning_step_outcomes, &(&1 =~ "skipped"))
+
+      valid =
+        Task.planning_step_changeset(%Task{}, %{
+          planning_step_outcomes: %{"architecture" => %{"outcome" => "failed"}}
+        })
+
+      assert valid.valid?
+    end
+
+    test "every member of planning_step_outcomes/0 is accepted in the same position" do
+      for outcome <- Task.planning_step_outcomes() do
+        changeset =
+          Task.planning_step_changeset(%Task{}, %{
+            planning_step_outcomes: %{"architecture" => %{"outcome" => outcome}}
+          })
+
+        assert changeset.valid?, "outcome #{inspect(outcome)} should be accepted"
+      end
+    end
+
+    test "an unknown step key is rejected" do
+      changeset =
+        Task.planning_step_changeset(%Task{}, %{
+          planning_step_outcomes: %{"security" => %{"outcome" => "failed"}}
+        })
+
+      refute changeset.valid?
+      assert Enum.any?(errors_on(changeset).planning_step_outcomes, &(&1 =~ "security"))
+
+      # Positive control: both legal keys, together, in one map.
+      valid =
+        Task.planning_step_changeset(%Task{}, %{
+          planning_step_outcomes: %{
+            "design" => %{"outcome" => "not_applicable"},
+            "architecture" => %{"outcome" => "complete"}
+          }
+        })
+
+      assert valid.valid?
+    end
+
+    test "an entry without a string \"outcome\" key is rejected" do
+      changeset =
+        Task.planning_step_changeset(%Task{}, %{
+          planning_step_outcomes: %{"architecture" => %{"recorded_at" => "2026-07-26T00:00:00Z"}}
+        })
+
+      refute changeset.valid?
+
+      not_a_map =
+        Task.planning_step_changeset(%Task{}, %{
+          planning_step_outcomes: %{"architecture" => "failed"}
+        })
+
+      refute not_a_map.valid?
+    end
+
+    test "an empty outcomes map is valid (nothing recorded yet)" do
+      assert Task.planning_step_changeset(%Task{}, %{planning_step_outcomes: %{}}).valid?
+    end
+
+    test "a full outcome entry round-trips through the database", %{project: project} do
+      assert {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Round trip"})
+
+      entry = %{
+        "outcome" => "failed",
+        "recorded_at" => "2026-07-26T00:00:00.000000Z",
+        "detail" => "econnrefused"
+      }
+
+      assert {:ok, saved} =
+               task
+               |> Task.planning_step_changeset(%{
+                 planning_step: "architecting",
+                 planning_step_outcomes: %{"architecture" => entry}
+               })
+               |> Repo.update()
+
+      assert saved.planning_step == "architecting"
+
+      reloaded = Repo.get!(Task, task.id)
+      assert reloaded.planning_step == "architecting"
+      assert reloaded.planning_step_outcomes == %{"architecture" => entry}
+    end
+  end
+
   defp errors_on(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
       Regex.replace(~r"%{(\w+)}", message, fn _, key ->

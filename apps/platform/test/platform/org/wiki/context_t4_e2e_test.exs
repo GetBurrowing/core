@@ -799,6 +799,8 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # prior-conversation window (AC16). Update-only — the 20260707 seed
       # already created the row on every migrated environment.
       "20260726000100_update_intent_classify_prompt_with_corrections.exs",
+      # ADR-0046 member 4 — planning_step + per-step outcomes.
+      "20260726045711_add_planning_step_to_tasks.exs",
       # Task 019f9b28-6ca7 stage 5: the `architecture.review_plan.v1`
       # body told the architect to "prefer citing the ADR by number",
       # which `docs/decisions/` cannot honour — four numbers each name

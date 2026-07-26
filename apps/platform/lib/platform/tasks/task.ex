@@ -61,6 +61,33 @@ defmodule Platform.Tasks.Task do
   @deploy_target_config_strategies ~w(pr_merge docker_deploy skill_driven manual project_files)
   def deploy_target_config_strategies, do: @deploy_target_config_strategies
 
+  # ADR-0046 planning sub-phases (task 019f9b28-ab82 member 4).
+  #
+  # `@planning_steps` is the cursor domain for `planning_step` — where
+  # inside the planning phase the task currently is. NOT a status: no
+  # `designing`/`architecting` entry is added to `@statuses` and the
+  # `@valid_task_transitions` table in `Platform.Tasks` is untouched.
+  #
+  # `@planning_step_keys` is the domain of the KEYS in
+  # `planning_step_outcomes` — the steps that have a dispatchable
+  # responsibility behind them. Note it is not the same list as
+  # `@planning_steps`: plain `planning` dispatches nothing, so it has no
+  # outcome to record.
+  #
+  # `@planning_step_outcomes` is the three-value outcome table. All three
+  # accessors are public functions rather than bare attributes because
+  # later stages of this task, and ADR-0046 members 5/7/8, all need to
+  # read them — a caller that hardcodes its own copy of the list is
+  # exactly how the conflation class comes back.
+  @planning_steps ~w(designing planning architecting)
+  def planning_steps, do: @planning_steps
+
+  @planning_step_keys ~w(design architecture)
+  def planning_step_keys, do: @planning_step_keys
+
+  @planning_step_outcomes ~w(complete not_applicable failed)
+  def planning_step_outcomes, do: @planning_step_outcomes
+
   schema "tasks" do
     belongs_to(:project, Platform.Tasks.Project)
     belongs_to(:epic, Platform.Tasks.Epic)
@@ -112,6 +139,33 @@ defmodule Platform.Tasks.Task do
     # index the kanban filter relies on.
     field(:needs_promotion, :boolean, default: false)
 
+    # ADR-0046 planning sub-phase cursor (task 019f9b28-ab82 member 4).
+    # One of `@planning_steps`; `"planning"` is the backfilled value for
+    # every pre-existing row (see migration
+    # `20260726045711_add_planning_step_to_tasks.exs`). Written ONLY via
+    # `planning_step_changeset/2` — deliberately absent from
+    # `changeset/2`'s cast list, see the comment there.
+    field(:planning_step, :string, default: "planning")
+
+    # ADR-0046 per-step outcome record. String-keyed map from a member of
+    # `@planning_step_keys` to
+    # `%{"outcome" => o, "recorded_at" => iso8601, "detail" => str | nil}`
+    # where `o` is one of `@planning_step_outcomes`:
+    #
+    #   * `"complete"`        — the step's responsibility was dispatched.
+    #   * `"not_applicable"`  — nobody holds the role, or the
+    #     responsibility is unknown. The progressive-enhancement path;
+    #     renders nothing, blocks nothing.
+    #   * `"failed"`          — the step was expected to run and the
+    #     dispatch failed.
+    #
+    # `not_applicable` and `failed` MUST NEVER COLLAPSE INTO ONE VALUE.
+    # That collapse is ADR-0046:83: a gate that never ran became
+    # indistinguishable from a gate that ran and passed. Anything that
+    # maps a fire result onto this table must go through
+    # `Platform.Responsibilities.outcome/1` rather than re-deriving it.
+    field(:planning_step_outcomes, :map, default: %{})
+
     # `search_vector` (task 019f3dbb stage 1) is a Postgres `tsvector`
     # column, `GENERATED ALWAYS AS (to_tsvector('english', coalesce(title,
     # '') || ' ' || coalesce(description, ''))) STORED` — see migration
@@ -145,6 +199,19 @@ defmodule Platform.Tasks.Task do
 
   def deletable?(%__MODULE__{status: status}), do: status in @deletable_statuses
 
+  # DELIBERATELY ABSENT from the cast list below: `:planning_step` and
+  # `:planning_step_outcomes` (ADR-0046 member 4). This is load-bearing
+  # in both directions:
+  #
+  #   * `changeset/2` casts `:status`, which makes `Tasks.update_task/3`
+  #     a fully unguarded status writer (`promote/1` uses it that way).
+  #     Routing planning_step writes through it would put the new fields
+  #     on that same unguarded surface.
+  #   * Symmetrically, a caller holding only `planning_step_changeset/2`
+  #     cannot smuggle a `:status` change through it.
+  #
+  # One narrow changeset buys both properties. Do not "simplify" by
+  # merging the two cast lists.
   def changeset(task, attrs) do
     task
     |> cast(attrs, [
@@ -181,6 +248,96 @@ defmodule Platform.Tasks.Task do
     |> foreign_key_constraint(:epic_id)
     |> foreign_key_constraint(:stack_id)
     |> foreign_key_constraint(:sponsor_user_id)
+  end
+
+  @doc """
+  Narrow changeset for the ADR-0046 planning sub-phase fields.
+
+  Casts ONLY `:planning_step` and `:planning_step_outcomes`. Anything
+  else in `attrs` — including `:status` — is ignored, by design: this
+  changeset is the entire write surface for the planning fields, and it
+  must not double as a status writer. See the comment above
+  `changeset/2`.
+
+  Validations:
+
+    * `:planning_step` must be in `planning_steps/0`.
+    * `:planning_step_outcomes` must be a string-keyed map whose keys are
+      all in `planning_step_keys/0` and whose every value is a map with
+      an `"outcome"` in `planning_step_outcomes/0`. Unknown outcome
+      strings are REJECTED, not coerced — a writer must not be able to
+      introduce a fourth outcome value that downstream readers would
+      then have to guess about.
+  """
+  def planning_step_changeset(task, attrs) do
+    task
+    |> cast(attrs, [:planning_step, :planning_step_outcomes])
+    |> validate_inclusion(:planning_step, @planning_steps)
+    |> validate_planning_step_outcomes()
+  end
+
+  # `planning_step_outcomes` must be a string-keyed map from a member of
+  # `@planning_step_keys` to a map carrying an `"outcome"` drawn from
+  # `@planning_step_outcomes`. `%{}` (nothing recorded yet) is valid.
+  # Extra keys inside an entry — `"recorded_at"`, `"detail"` — are
+  # permitted; only `"outcome"` is pinned, because it is the value the
+  # stage-4 merge-time guard branches on.
+  defp validate_planning_step_outcomes(changeset) do
+    case get_change(changeset, :planning_step_outcomes) do
+      nil ->
+        changeset
+
+      outcomes when is_map(outcomes) ->
+        changeset
+        |> validate_planning_step_outcome_keys(outcomes)
+        |> validate_planning_step_outcome_values(outcomes)
+
+      _other ->
+        add_error(changeset, :planning_step_outcomes, "must be a map")
+    end
+  end
+
+  defp validate_planning_step_outcome_keys(changeset, outcomes) do
+    bad_keys = Map.keys(outcomes) -- @planning_step_keys
+
+    if bad_keys == [] do
+      changeset
+    else
+      add_error(
+        changeset,
+        :planning_step_outcomes,
+        "contains invalid step keys: #{inspect(bad_keys)} (allowed: #{inspect(@planning_step_keys)})"
+      )
+    end
+  end
+
+  defp validate_planning_step_outcome_values(changeset, outcomes) do
+    Enum.reduce(outcomes, changeset, fn {step, entry}, acc ->
+      case entry do
+        %{"outcome" => outcome} when is_binary(outcome) ->
+          if outcome in @planning_step_outcomes do
+            acc
+          else
+            add_error(
+              acc,
+              :planning_step_outcomes,
+              "#{inspect(step)} has invalid outcome #{inspect(outcome)} " <>
+                "(allowed: #{inspect(@planning_step_outcomes)})"
+            )
+          end
+
+        %{} ->
+          add_error(
+            acc,
+            :planning_step_outcomes,
+            "#{inspect(step)} must include a string \"outcome\" key " <>
+              "(one of: #{Enum.join(@planning_step_outcomes, ", ")})"
+          )
+
+        _other ->
+          add_error(acc, :planning_step_outcomes, "#{inspect(step)} entry must be a map")
+      end
+    end)
   end
 
   # `phase_assignees` keys must be in `@phases`. Each value should be a map
