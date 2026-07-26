@@ -1,44 +1,63 @@
 defmodule Platform.Responsibilities.ContextProviders do
   @moduledoc """
-  Built-in context providers for the cross-cutting slots both Hal's
-  `memory.daily_summary` and the upcoming `meetings.summarize` responsibility
-  request (ADR-0041 M8 stage 1).
+  **The single per-slot context resolver for the platform.** Every
+  symbolic name declared on a `responsibility.context_provided` list is
+  materialised here and nowhere else.
 
-  Where `Platform.Responsibilities.ContextGatherer` returns a single
-  flat `%{name => payload}` map across the platform-owned symbolic
-  names, this module exposes the per-slot materialisers in the shape
-  M1's `Provider.gather_context/2` contract expects:
+  Each slot is a `gather_context/2` clause in the shape M1's
+  `Provider.gather_context/2` contract expects:
 
       gather_context(:org_identity, opts) :: {:ok, %{org_identity: payload}} | {:error, term()}
 
-  Two reasons to keep it separate from `ContextGatherer`:
+  Two consumers, one resolver:
 
-    1. The Provider behaviour wants `{:ok, map}` / `{:error, term}` —
-       ContextGatherer's tolerant "always-returns-a-map, missing values
-       become `nil`" contract is the right choice for the router's
-       batch gather but a poor fit for per-slot error surfacing
-       (Hal's first nightly on a fresh org must distinguish "file
-       missing" from "DB down").
+    * **Per-slot callers** — handlers (`Handlers.DailySummary`,
+      `Handlers.MeetingSummarize`, `Handlers.Dreaming`,
+      `Handlers.ProposeLongTerm`) call a single slot directly and act on
+      the `{:error, reason}` tuple. Hal's first nightly on a fresh org
+      must distinguish "file missing" from "DB down", so refusals are
+      expressed per slot, not flattened.
 
-    2. Stages 2 and 3 register the responsibilities that name these
-       slots in their `context_provided` list; routing them through a
-       single, named module keeps the provider/registry wiring clean
-       (`{Platform.Responsibilities.ContextProviders, :gather_context, []}`
-       rather than scattering closures).
+    * **The router's batch path** — `Platform.Responsibilities.ContextGatherer`
+      is a thin *adapter* over this module. It fans a list of symbolic
+      names across `gather_context/2` and folds the results into the
+      tolerant `%{name => payload}` map the Dispatcher's template render
+      expects, degrading every `{:error, _}` to `nil`. It resolves
+      nothing itself.
 
-  Adding new slots: extend `gather_context/2` with a new clause AND
-  add the resolver to `ContextGatherer` (so the router's batch path
-  also picks it up).
+  ## Adding new slots
+
+  Add ONE `gather_context/2` clause here and widen `t:slot/0`. That is
+  the whole change — the router's batch path picks it up through the
+  adapter by construction. Do **not** add a matching resolver to
+  `ContextGatherer`; it has none left to match.
+
+  ## Required vs optional slots
+
+  A slot returns `{:error, reason}` only when its absence should be able
+  to *stop a dispatch* (see the router's context-refusal arm). Context
+  that is legitimately empty on a healthy path — an org with no journal
+  entries, a task with no siblings — returns `{:ok, ...}` with an
+  explicit empty/`missing?` marker instead. Making optional context
+  fatal is how a refusal mechanism gets disabled by the first false
+  positive.
   """
 
   require Logger
 
+  alias Platform.Chat
   alias Platform.Meetings
   alias Platform.Meetings.SummaryPrompt
   alias Platform.Meetings.Transcript
   alias Platform.Org.Context, as: OrgContext
 
-  @type slot :: :org_identity | :recent_journal | :meeting_transcript
+  @type slot ::
+          :org_identity
+          | :recent_journal
+          | :meeting_transcript
+          | :current_message
+          | :current_meeting
+          | :trigger_payload
 
   @doc """
   Materialise a single slot into the shape M1 providers consume.
@@ -55,6 +74,18 @@ defmodule Platform.Responsibilities.ContextProviders do
       transcript and formats segments via `SummaryPrompt.format_segments/1`.
       Returns `{:error, :not_found}` if no transcript with that ID exists,
       `{:error, :missing_transcript_id}` if no ID provided.
+    * `:current_message` — requires `opts[:message_id]`. Returns the raw
+      `%Platform.Chat.Message{}`. `{:error, :missing_message_id}` /
+      `{:error, :invalid_message_id}` / `{:error, :not_found}`.
+    * `:current_meeting` — requires `opts[:meeting_id]`. Returns the raw
+      `%Platform.Meetings.Meeting{}`. `{:error, :missing_meeting_id}` /
+      `{:error, :invalid_meeting_id}` / `{:error, :not_found}`.
+    * `:trigger_payload` — echoes `opts[:payload]` straight through.
+      `{:error, :missing_payload}` when the trigger carried none.
+
+  `opts` may be a keyword list or a map; map keys may be atoms or
+  strings (the router hands `trigger_meta` through verbatim and both
+  key forms occur in the wild). Atom keys win over their string twin.
   """
   @spec gather_context(slot(), keyword() | map()) :: {:ok, map()} | {:error, term()}
   def gather_context(slot, opts \\ [])
@@ -150,6 +181,47 @@ defmodule Platform.Responsibilities.ContextProviders do
     end
   end
 
+  def gather_context(:current_message, opts) do
+    case Keyword.get(to_keyword(opts), :message_id) do
+      nil ->
+        {:error, :missing_message_id}
+
+      id when is_binary(id) ->
+        case safe(fn -> Chat.get_message(id) end) do
+          {:ok, nil} -> {:error, :not_found}
+          {:ok, message} -> {:ok, %{current_message: message}}
+          {:error, reason} -> {:error, reason}
+        end
+
+      _other ->
+        {:error, :invalid_message_id}
+    end
+  end
+
+  def gather_context(:current_meeting, opts) do
+    case Keyword.get(to_keyword(opts), :meeting_id) do
+      nil ->
+        {:error, :missing_meeting_id}
+
+      id when is_binary(id) ->
+        case safe(fn -> Meetings.get_meeting(id) end) do
+          {:ok, nil} -> {:error, :not_found}
+          {:ok, meeting} -> {:ok, %{current_meeting: meeting}}
+          {:error, reason} -> {:error, reason}
+        end
+
+      _other ->
+        {:error, :invalid_meeting_id}
+    end
+  end
+
+  def gather_context(:trigger_payload, opts) do
+    case Keyword.get(to_keyword(opts), :payload) do
+      nil -> {:error, :missing_payload}
+      payload -> {:ok, %{trigger_payload: payload}}
+    end
+  end
+
   def gather_context(slot, _opts) do
     {:error, {:unknown_slot, slot}}
   end
@@ -158,16 +230,29 @@ defmodule Platform.Responsibilities.ContextProviders do
 
   defp to_keyword(opts) when is_list(opts), do: opts
 
+  # Coercion is per-key, not all-or-nothing. The router hands
+  # `trigger_meta` straight through and it routinely carries string keys
+  # nobody has ever turned into an atom; dropping the whole opts list
+  # because one sibling key failed `String.to_existing_atom/1` would
+  # silently blank the slot's real id. Atom pairs are placed first so an
+  # atom key wins over its string twin (`Keyword.get/2` takes the first
+  # match), matching the `meta[:x] || meta["x"]` precedence the batch
+  # adapter used to apply.
   defp to_keyword(opts) when is_map(opts) do
-    Enum.map(opts, fn
-      {k, v} when is_atom(k) -> {k, v}
-      {k, v} when is_binary(k) -> {String.to_existing_atom(k), v}
-    end)
+    {atom_pairs, rest} = Enum.split_with(opts, fn {k, _v} -> is_atom(k) end)
+
+    atom_pairs ++ Enum.flat_map(rest, &coerce_pair/1)
+  end
+
+  defp to_keyword(_), do: []
+
+  defp coerce_pair({k, v}) when is_binary(k) do
+    [{String.to_existing_atom(k), v}]
   rescue
     ArgumentError -> []
   end
 
-  defp to_keyword(_), do: []
+  defp coerce_pair(_pair), do: []
 
   defp max_end_time([]), do: 0
 

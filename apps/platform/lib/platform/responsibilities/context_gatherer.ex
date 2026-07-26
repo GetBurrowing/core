@@ -1,50 +1,47 @@
 defmodule Platform.Responsibilities.ContextGatherer do
   @moduledoc """
-  Materialises the symbolic context names declared on
-  `responsibility.context_provided` into a real context map the
-  Dispatcher can substitute into a prompt template (ADR-0041 M6 stage 6).
+  **Batch adapter over `Platform.Responsibilities.ContextProviders`.**
+  This module resolves nothing. It fans a list of symbolic context names
+  across the single per-slot resolver and folds the results into the flat,
+  tolerant `%{name => payload}` map the Dispatcher's template render
+  expects (ADR-0041 M6 stage 6).
 
-  ## Built-in symbolic names
-
-    * `:org_identity`       → `Platform.Org.Context.get_file("ORG_IDENTITY.md")`
-    * `:recent_journal`     → `Platform.Org.Context.recent_memory(7, [])`
-    * `:meeting_transcript` → `Platform.Meetings.get_transcript(trigger_meta[:transcript_id])`
-       formatted via `Platform.Meetings.SummaryPrompt.format_segments/1`
-    * `:current_message`    → `Platform.Chat.get_message(trigger_meta[:message_id])`
-    * `:current_meeting`    → `Platform.Meetings.get_meeting(trigger_meta[:meeting_id])`
-    * `:trigger_payload`    → `trigger_meta[:payload]`
-
-  Names are deliberately atoms (not strings) so we can pattern-match on
-  them without `String.to_atom/1` churn. The Router can pass the
-  declared list of strings through `Enum.map(&String.to_existing_atom/1)`
-  before calling `gather/2` — unknown atoms log a warning and resolve to
-  `nil` rather than crashing the dispatch pipeline.
-
-  ## Adding new symbolic names
-
-  M8+ providers can extend the recognised set by implementing
-  `Platform.Responsibilities.Provider.gather_context/2` directly and
-  returning a fully populated context map without going through this
-  module. ContextGatherer covers the cross-cutting, platform-owned
-  names; per-provider context (e.g. meeting transcript, project
-  metadata) belongs in the provider's own `gather_context/2`.
+  Adding a new symbolic name is a one-file change in `ContextProviders`;
+  it becomes reachable from this path by construction. There is nothing
+  to add here.
 
   ## Tolerant lookup
 
-  Every call site is wrapped in defensive guards:
+  `gather/2`'s contract is unchanged and every call site still depends on
+  it:
 
-    * Each upstream lookup is wrapped in `try/rescue` so an upstream
-      raise (e.g. `Platform.Org.Context` not loaded in a stripped
-      build, or a chat message id pointing at a stale row) degrades to
-      `nil` in the returned map rather than aborting the gather.
-    * Missing IDs in `trigger_meta` (e.g. `:current_message` with no
-      `:message_id`) skip the lookup and emit `nil`.
-    * Unknown symbolic names log a `:warning` and put `nil` in the map
-      so providers can ship new `context_provided` entries without a
-      synchronous ContextGatherer release.
+    * **Always returns a map, never raises.** Any `{:error, reason}` from
+      the resolver — missing id, unknown row, upstream raise — degrades to
+      `nil` under the requested key. A resolver that raises outright is
+      caught here too.
+    * **Unknown symbolic names** log a `:warning` and put `nil` in the
+      map, so a provider can ship a new `context_provided` entry without a
+      synchronous release of the resolver.
+    * **Unknown strings with no existing atom** log a warning and are
+      dropped entirely (no atom-table leak, and no key to hang `nil` on).
+
+  ## `:__slot_errors__`
+
+  Degrading an error to `nil` throws the reason away, which is how "the
+  transcript id was missing" and "the transcript row is gone" became the
+  same value. The reason is now retained under the `:__slot_errors__` key
+  — a `%{name => reason}` map — which is present **only when at least one
+  slot failed.** Callers that just want the tolerant map are unaffected;
+  callers that need to tell a refusal from an absence have somewhere to
+  look. An unknown symbolic name is not recorded there: it is a wiring
+  bug, already logged, and not a slot that failed to resolve.
   """
 
   require Logger
+
+  alias Platform.Responsibilities.ContextProviders
+
+  @slot_errors_key :__slot_errors__
 
   @typedoc "Context map keyed by the symbolic name as an atom."
   @type context_map :: %{optional(atom()) => term()}
@@ -54,7 +51,7 @@ defmodule Platform.Responsibilities.ContextGatherer do
 
   `symbolic_names` may be a list of atoms or strings. String entries
   are coerced to atoms via `String.to_existing_atom/1`; unknown strings
-  log a warning and resolve to `nil` (no atom-table leak).
+  log a warning and are dropped (no atom-table leak).
 
   Always returns a map. Never raises.
   """
@@ -63,7 +60,7 @@ defmodule Platform.Responsibilities.ContextGatherer do
       when is_list(symbolic_names) and is_map(trigger_meta) do
     Enum.reduce(symbolic_names, %{}, fn raw_name, acc ->
       case coerce_name(raw_name) do
-        {:ok, name} -> Map.put(acc, name, resolve(name, trigger_meta))
+        {:ok, name} -> put_slot(acc, name, trigger_meta)
         :error -> acc
       end
     end)
@@ -88,140 +85,56 @@ defmodule Platform.Responsibilities.ContextGatherer do
 
   defp coerce_name(_), do: :error
 
-  # ── resolvers ─────────────────────────────────────────────────────────────
+  # ── adaptation ────────────────────────────────────────────────────────────
 
-  defp resolve(:org_identity, _trigger_meta) do
-    safe_call(fn ->
-      if Code.ensure_loaded?(Platform.Org.Context) and
-           function_exported?(Platform.Org.Context, :get_file, 1) do
-        Platform.Org.Context.get_file("ORG_IDENTITY.md")
-      else
-        nil
-      end
-    end)
-  end
+  defp put_slot(acc, name, trigger_meta) do
+    case safe_gather(name, trigger_meta) do
+      {:ok, %{^name => payload}} ->
+        Map.put(acc, name, payload)
 
-  defp resolve(:recent_journal, _trigger_meta) do
-    safe_call(fn ->
-      if Code.ensure_loaded?(Platform.Org.Context) and
-           function_exported?(Platform.Org.Context, :recent_memory, 2) do
-        Platform.Org.Context.recent_memory(7, [])
-      else
-        nil
-      end
-    end)
-  end
+      {:ok, other} when is_map(other) ->
+        # The resolver keyed its payload under something other than the
+        # requested name. Merge it rather than dropping it, but still
+        # honour "the requested key is always present".
+        acc |> Map.put(name, nil) |> Map.merge(other)
 
-  defp resolve(:meeting_transcript, trigger_meta) do
-    case Map.get(trigger_meta, :transcript_id) || Map.get(trigger_meta, "transcript_id") do
-      id when is_binary(id) ->
-        safe_call(fn ->
-          if Code.ensure_loaded?(Platform.Meetings) and
-               function_exported?(Platform.Meetings, :get_transcript, 1) do
-            case Platform.Meetings.get_transcript(id) do
-              nil ->
-                nil
+      {:error, {:unknown_slot, _}} ->
+        Logger.warning("[ContextGatherer] unknown name=#{inspect(name)}, returning nil")
+        Map.put(acc, name, nil)
 
-              %Platform.Meetings.Transcript{} = transcript ->
-                format_transcript_payload(transcript)
-            end
-          else
-            nil
-          end
-        end)
+      {:error, reason} ->
+        acc |> Map.put(name, nil) |> record_slot_error(name, reason)
 
-      _ ->
-        nil
+      other ->
+        Logger.warning(
+          "[ContextGatherer] resolver returned an unexpected shape for name=#{inspect(name)} " <>
+            "result=#{inspect(other)} — returning nil"
+        )
+
+        acc |> Map.put(name, nil) |> record_slot_error(name, {:unexpected_shape, other})
     end
   end
 
-  defp resolve(:current_message, trigger_meta) do
-    case Map.get(trigger_meta, :message_id) || Map.get(trigger_meta, "message_id") do
-      id when is_binary(id) ->
-        safe_call(fn ->
-          if Code.ensure_loaded?(Platform.Chat) and
-               function_exported?(Platform.Chat, :get_message, 1) do
-            Platform.Chat.get_message(id)
-          else
-            nil
-          end
-        end)
-
-      _ ->
-        nil
-    end
+  defp record_slot_error(acc, name, reason) do
+    Map.update(acc, @slot_errors_key, %{name => reason}, &Map.put(&1, name, reason))
   end
 
-  defp resolve(:current_meeting, trigger_meta) do
-    case Map.get(trigger_meta, :meeting_id) || Map.get(trigger_meta, "meeting_id") do
-      id when is_binary(id) ->
-        safe_call(fn ->
-          if Code.ensure_loaded?(Platform.Meetings) and
-               function_exported?(Platform.Meetings, :get_meeting, 1) do
-            Platform.Meetings.get_meeting(id)
-          else
-            nil
-          end
-        end)
-
-      _ ->
-        nil
-    end
-  end
-
-  defp resolve(:trigger_payload, trigger_meta) do
-    Map.get(trigger_meta, :payload) || Map.get(trigger_meta, "payload")
-  end
-
-  defp resolve(name, _trigger_meta) do
-    Logger.warning("[ContextGatherer] unknown name=#{inspect(name)}, returning nil")
-    nil
-  end
-
-  # Build the materialised `:meeting_transcript` payload from a Transcript
-  # row — formatted speaker-attributed text plus the segment count and
-  # cumulative duration. Handlers downstream (e.g. M8 MeetingSummarize)
-  # consume the `formatted_text` field directly when constructing the
-  # LLM prompt; the count/duration are surfaced for telemetry.
-  defp format_transcript_payload(%Platform.Meetings.Transcript{} = transcript) do
-    segments = transcript.segments || []
-
-    %{
-      transcript_id: transcript.id,
-      formatted_text: Platform.Meetings.SummaryPrompt.format_segments(segments),
-      segment_count: length(segments),
-      duration_ms: transcript_duration_ms(segments)
-    }
-  end
-
-  defp transcript_duration_ms([]), do: 0
-
-  defp transcript_duration_ms(segments) do
-    segments
-    |> Enum.map(fn segment ->
-      end_time = segment["end_time"] || segment[:end_time] || 0
-      if is_number(end_time), do: end_time, else: 0
-    end)
-    |> Enum.max(fn -> 0 end)
-    |> trunc()
-  end
-
-  # Wrap upstream lookups so a missing module / raised exception
-  # degrades to `nil` in the gathered context rather than killing the
-  # entire dispatch pipeline.
-  defp safe_call(fun) when is_function(fun, 0) do
-    fun.()
+  # The per-slot resolver is contracted to return `{:ok, map}` /
+  # `{:error, term}`, but `gather/2` promises it never raises regardless
+  # of what a future slot does. Belt and braces.
+  defp safe_gather(name, trigger_meta) do
+    ContextProviders.gather_context(name, trigger_meta)
   rescue
     error ->
       Logger.warning(
         "[ContextGatherer] lookup raised: #{Exception.message(error)} — returning nil"
       )
 
-      nil
+      {:error, {:exception, Exception.message(error)}}
   catch
     :exit, reason ->
       Logger.warning("[ContextGatherer] lookup exited: #{inspect(reason)} — returning nil")
 
-      nil
+      {:error, {:exit, reason}}
   end
 end

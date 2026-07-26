@@ -10,6 +10,8 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
   """
   use Platform.DataCase, async: false
 
+  alias Platform.Chat
+  alias Platform.Chat.Message
   alias Platform.Meetings
   alias Platform.Meetings.SummaryPrompt
   alias Platform.Org.Context, as: OrgContext
@@ -30,6 +32,31 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
           ]
       )
     )
+  end
+
+  defp post_message do
+    slug = "ctxprov-#{System.unique_integer([:positive])}"
+
+    {:ok, space} =
+      Chat.create_space(%{name: "Ctx Prov #{slug}", slug: slug, kind: "channel"})
+
+    {:ok, participant} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: Ecto.UUID.generate(),
+        display_name: "Ctx Author",
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, message} =
+      Chat.post_message(%{
+        space_id: space.id,
+        participant_id: participant.id,
+        content_type: "text",
+        content: "context-provider test message"
+      })
+
+    message
   end
 
   defp sample_segments do
@@ -195,6 +222,101 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
       assert payload.segment_count == 0
       assert payload.duration_ms == 0
       assert payload.formatted_text == ""
+    end
+  end
+
+  # Slots ported in from ContextGatherer when the two materialisers
+  # collapsed onto this module. The batch adapter degrades every tuple
+  # below to `nil`; these assert the reason it degrades from, which is
+  # the whole point of the port.
+  describe "gather_context/2 — :current_message" do
+    test "returns {:error, :missing_message_id} when opts has no message_id" do
+      assert {:error, :missing_message_id} =
+               ContextProviders.gather_context(:current_message, [])
+    end
+
+    test "returns {:error, :invalid_message_id} for a non-binary id" do
+      assert {:error, :invalid_message_id} =
+               ContextProviders.gather_context(:current_message, message_id: 42)
+    end
+
+    test "returns {:error, :not_found} for an unknown message id" do
+      assert {:error, :not_found} =
+               ContextProviders.gather_context(:current_message,
+                 message_id: Ecto.UUID.generate()
+               )
+    end
+
+    test "loads a real message and returns it under :current_message" do
+      message = post_message()
+
+      assert {:ok, %{current_message: %Message{id: id}}} =
+               ContextProviders.gather_context(:current_message, message_id: message.id)
+
+      assert id == message.id
+    end
+
+    test "reads a string-keyed message_id out of a raw trigger_meta map" do
+      message = post_message()
+
+      assert {:ok, %{current_message: %Message{id: id}}} =
+               ContextProviders.gather_context(:current_message, %{
+                 "message_id" => message.id
+               })
+
+      assert id == message.id
+    end
+
+    test "an unconvertible sibling key does not blank the slot's real id" do
+      # The router hands `trigger_meta` through verbatim and it routinely
+      # carries string keys that were never atoms. Per-key coercion means
+      # the junk key is dropped, not the whole opts list.
+      message = post_message()
+
+      bogus = "never_an_atom_#{System.unique_integer([:positive])}"
+
+      assert {:ok, %{current_message: %Message{id: id}}} =
+               ContextProviders.gather_context(:current_message, %{
+                 "message_id" => message.id,
+                 bogus => "junk"
+               })
+
+      assert id == message.id
+    end
+  end
+
+  describe "gather_context/2 — :current_meeting" do
+    test "returns {:error, :missing_meeting_id} when opts has no meeting_id" do
+      assert {:error, :missing_meeting_id} =
+               ContextProviders.gather_context(:current_meeting, [])
+    end
+
+    test "returns {:error, :not_found} for an unknown meeting id" do
+      assert {:error, :not_found} =
+               ContextProviders.gather_context(:current_meeting,
+                 meeting_id: Ecto.UUID.generate()
+               )
+    end
+  end
+
+  describe "gather_context/2 — :trigger_payload" do
+    test "echoes the payload straight through" do
+      payload = %{"event" => "test", "value" => 42}
+
+      assert {:ok, %{trigger_payload: ^payload}} =
+               ContextProviders.gather_context(:trigger_payload, %{payload: payload})
+    end
+
+    test "tolerates a string-keyed payload" do
+      payload = %{"hello" => "world"}
+
+      assert {:ok, %{trigger_payload: ^payload}} =
+               ContextProviders.gather_context(:trigger_payload, %{"payload" => payload})
+    end
+
+    test "returns {:error, :missing_payload} when the trigger carried none" do
+      assert {:error, :missing_payload} =
+               ContextProviders.gather_context(:trigger_payload, %{})
     end
   end
 
