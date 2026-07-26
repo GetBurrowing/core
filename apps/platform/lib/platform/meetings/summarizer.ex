@@ -106,7 +106,16 @@ defmodule Platform.Meetings.Summarizer do
                space_id: space_id
              }
            }) do
-        :ok ->
+        # ADR-0046 member 1 stage 1: the Router now returns
+        # `{:ok, :dispatched} | {:ok, :unfilled} | {:error, reason}`. Both ok
+        # shapes are collapsed here for now so this stage changes no
+        # behaviour on the success side; stage 3 of that task splits
+        # `{:ok, :unfilled}` off to `run_summary_legacy/3` (the bridge gate
+        # at `router_meetings_summarize_filled?/0` can race an unassign).
+        # What DOES change now: the `{:error, _}` branch below is finally
+        # reachable — a failed dispatch used to arrive here as `:ok` and the
+        # summary was silently lost.
+        {:ok, _} ->
           :ok
 
         {:error, reason} ->

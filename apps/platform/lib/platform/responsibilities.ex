@@ -268,6 +268,14 @@ defmodule Platform.Responsibilities do
   # lands should not stall the caller. The Router already logs
   # `[ResponsibilityRouter] fire/2 no row for key=` so the miss is
   # visible in operator logs.
+  #
+  # NOTE (ADR-0046 member 1, stage 1): `Router.fire_trigger/3` now returns
+  # `{:ok, :dispatched} | {:ok, :unfilled} | {:error, term()}` instead of a
+  # flat `:ok`. This function still flattens both ok shapes so its own
+  # observable behaviour is unchanged for now; a genuine dispatch failure
+  # does surface as `{:error, reason}` (previously impossible). Stage 2 of
+  # that task deletes this normalisation entirely and adds
+  # `Responsibilities.outcome/1`.
 
   @doc """
   Fire a responsibility trigger by canonical key.
@@ -294,7 +302,7 @@ defmodule Platform.Responsibilities do
   @spec fire(atom() | binary(), map()) :: :ok | {:error, term()}
   def fire(key, trigger_meta \\ %{}) when is_map(trigger_meta) do
     case Platform.Responsibilities.Router.fire(key, trigger_meta) do
-      :ok ->
+      {:ok, _} ->
         :ok
 
       {:error, :unknown_responsibility} ->

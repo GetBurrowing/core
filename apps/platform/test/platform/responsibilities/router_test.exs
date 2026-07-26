@@ -412,7 +412,7 @@ defmodule Platform.Responsibilities.RouterTest do
   # ── M6 stage 2: fire_trigger/3 pipeline ─────────────────────────────────
 
   describe "fire_trigger/3 — unfilled assignee" do
-    test "logs unfilled, emits telemetry, returns :ok without crashing" do
+    test "logs unfilled, emits telemetry, returns {:ok, :unfilled} without crashing" do
       row =
         insert!(%{
           key: "routertest.unfilled_#{System.unique_integer([:positive])}",
@@ -435,7 +435,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok =
+          assert {:ok, :unfilled} =
                    Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 
@@ -538,7 +538,8 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok = Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
+          assert {:ok, :dispatched} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
         end)
 
       assert log =~ "[ResponsibilityRouter] native dispatch key=#{row.key}"
@@ -1171,7 +1172,8 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok = Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
+          assert {:ok, :dispatched} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
         end)
 
       assert log =~ "[ResponsibilityRouter] external dispatch ok key=#{key}"
@@ -1220,7 +1222,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :warning], fn ->
-          assert :ok =
+          assert {:error, {:dispatch_failed, _}} =
                    Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 
@@ -1304,7 +1306,7 @@ defmodule Platform.Responsibilities.RouterTest do
       trigger_meta = %{kind: :cron, fired_at: DateTime.utc_now(), correlation: "abc"}
 
       capture_log([level: :info], fn ->
-        assert :ok = Router.fire_trigger(row, trigger_meta, %{})
+        assert {:ok, :dispatched} = Router.fire_trigger(row, trigger_meta, %{})
       end)
 
       assert_receive {:handle_output_invoked, ^key, "ho_invoked", meta}
@@ -1334,7 +1336,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok =
+          assert {:ok, :dispatched} =
                    Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 
@@ -1405,7 +1407,7 @@ defmodule Platform.Responsibilities.RouterTest do
       }
 
       capture_log([level: :info], fn ->
-        assert :ok = Router.fire_trigger(row, trigger_meta, %{})
+        assert {:ok, :dispatched} = Router.fire_trigger(row, trigger_meta, %{})
       end)
 
       # Provider callback must be invoked with the full trigger_meta
@@ -1481,7 +1483,7 @@ defmodule Platform.Responsibilities.RouterTest do
       end)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
       end)
 
@@ -1563,7 +1565,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :warning], fn ->
-          assert :ok =
+          assert {:error, {:build_prompt_refused, _}} =
                    Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 
@@ -1636,7 +1638,7 @@ defmodule Platform.Responsibilities.RouterTest do
       end)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
       end)
 
@@ -1708,7 +1710,7 @@ defmodule Platform.Responsibilities.RouterTest do
       end)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
       end)
 
@@ -1817,7 +1819,7 @@ defmodule Platform.Responsibilities.RouterTest do
       agent = wire_native_assignee(key)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(
                    row,
                    %{kind: :cron, fired_at: DateTime.utc_now()},
@@ -1857,7 +1859,7 @@ defmodule Platform.Responsibilities.RouterTest do
       space_id = Ecto.UUID.generate()
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(
                    row,
                    %{
@@ -1891,7 +1893,8 @@ defmodule Platform.Responsibilities.RouterTest do
       fired_at = ~U[2026-06-23 15:00:00.000000Z]
 
       capture_log([level: :info], fn ->
-        assert :ok = Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
+        assert {:ok, :dispatched} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
       end)
 
       assert_receive {:captured_signal, _signal}
@@ -1988,7 +1991,7 @@ defmodule Platform.Responsibilities.RouterTest do
       task_id = Ecto.UUID.generate()
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(
                    row,
                    %{
@@ -2034,7 +2037,7 @@ defmodule Platform.Responsibilities.RouterTest do
       _agent = wire_native_assignee(key)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(
                    row,
                    %{
@@ -2094,7 +2097,7 @@ defmodule Platform.Responsibilities.RouterTest do
       agent = wire_native_assignee(key)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
       end)
 
@@ -2124,7 +2127,7 @@ defmodule Platform.Responsibilities.RouterTest do
       _agent = wire_native_assignee(key)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
       end)
 
@@ -2184,7 +2187,7 @@ defmodule Platform.Responsibilities.RouterTest do
       }
 
       capture_log([level: :info], fn ->
-        assert :ok = Router.fire_trigger(row, trigger_meta, %{})
+        assert {:ok, :dispatched} = Router.fire_trigger(row, trigger_meta, %{})
       end)
 
       assert_receive {:captured_signal, signal}
@@ -2225,8 +2228,8 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          # No assignee → unfilled telemetry + :ok return.
-          assert :ok = Router.fire(key, %{kind: :cron})
+          # No assignee → unfilled telemetry + {:ok, :unfilled} return.
+          assert {:ok, :unfilled} = Router.fire(key, %{kind: :cron})
         end)
 
       assert log =~ "unfilled responsibility=#{key}"
@@ -2240,8 +2243,191 @@ defmodule Platform.Responsibilities.RouterTest do
       _row = insert!(%{key: key})
 
       capture_log([level: :info], fn ->
-        assert :ok = Router.fire(atom_shorthand, %{kind: :cron})
+        assert {:ok, :unfilled} = Router.fire(atom_shorthand, %{kind: :cron})
       end)
+    end
+  end
+
+  # ── ADR-0046 return contract ──────────────────────────────────────────────
+  #
+  # These four are FIX DETECTORS, not guards: every one of them fails against
+  # the pre-ADR-0046 Router, which returned a flat `:ok` from all of these
+  # paths (and, on the native branch, emitted `:fired` telemetry even when
+  # nothing dispatched).
+  defmodule RaisingNativeDispatcher do
+    @moduledoc false
+    def maybe_dispatch(_signal), do: raise(RuntimeError, "native dispatcher exploded")
+  end
+
+  describe "fire_trigger/3 — ADR-0046 return contract" do
+    defp put_native_dispatcher(mod) do
+      previous = Application.get_env(:platform, :responsibility_router_native_dispatcher)
+
+      Application.put_env(
+        :platform,
+        :responsibility_router_native_dispatcher,
+        {mod, :maybe_dispatch}
+      )
+
+      on_exit(fn ->
+        if previous do
+          Application.put_env(:platform, :responsibility_router_native_dispatcher, previous)
+        else
+          Application.delete_env(:platform, :responsibility_router_native_dispatcher)
+        end
+      end)
+    end
+
+    defp attach_fire_telemetry do
+      test_pid = self()
+      suffix = System.unique_integer([:positive])
+
+      for {event, tag} <- [{:fired, :fired_telemetry}, {:failed, :failed_telemetry}] do
+        handler_id = "router-contract-#{event}-#{suffix}"
+
+        :telemetry.attach(
+          handler_id,
+          [:platform, :responsibility, event],
+          fn _event, measurements, metadata, pid ->
+            send(pid, {tag, measurements, metadata})
+          end,
+          test_pid
+        )
+
+        on_exit(fn -> :telemetry.detach(handler_id) end)
+      end
+
+      :ok
+    end
+
+    test "external dispatch failure returns {:error, {:dispatch_failed, _}}, not :ok" do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, :router_external_dispatch_test})
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+      end)
+
+      key = "routertest.contract_ext_fail_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      _agent = wire_external_assignee(key)
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(503, ~s({"error":"down"}))
+      end)
+
+      capture_log([level: :warning], fn ->
+        assert {:error, {:dispatch_failed, reason}} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+
+        # The underlying reason survives the wrap — a consumer can still tell
+        # an HTTP error from a contract violation.
+        assert inspect(reason) =~ "http_error"
+      end)
+    end
+
+    test "unfilled responsibility returns {:ok, :unfilled} and emits no :failed telemetry" do
+      key = "routertest.contract_unfilled_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      :ok = attach_fire_telemetry()
+
+      capture_log([level: :info], fn ->
+        assert {:ok, :unfilled} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      end)
+
+      # "nobody holds it" is NOT a failure — this is the ADR-0046
+      # not_applicable-vs-failed distinction the old flat `:ok` erased.
+      refute_receive {:failed_telemetry, _meas, _meta}, 100
+      refute_receive {:fired_telemetry, _meas, _meta}, 100
+    end
+
+    test "native handoff returns {:ok, :dispatched} and emits :fired telemetry" do
+      put_native_dispatcher(NoopNativeDispatcher)
+
+      key = "routertest.contract_native_ok_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      agent = wire_native_assignee(key)
+      :ok = attach_fire_telemetry()
+
+      fired_at = ~U[2026-07-26 09:00:00.000000Z]
+
+      capture_log([level: :info], fn ->
+        assert {:ok, :dispatched} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
+      end)
+
+      # POSITIVE CONTROL for the raising-dispatcher case below: it proves the
+      # `:fired` telemetry mechanism works here, so that test's ABSENCE
+      # assertion is a real observation rather than a handler that never fires.
+      assert_receive {:fired_telemetry, _meas, %{key: ^key, dispatch_kind: :native}}
+      refute_receive {:failed_telemetry, _meas, _meta}, 100
+
+      assert Repo.get!(Agent, agent.id).last_successful_fire_at == fired_at
+    end
+
+    test "raising native dispatcher returns {:error, {:native_dispatch_raised, _}}, emits :failed and NOT :fired" do
+      put_native_dispatcher(RaisingNativeDispatcher)
+
+      key = "routertest.contract_native_raise_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      agent = wire_native_assignee(key)
+      :ok = attach_fire_telemetry()
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert {:error, {:native_dispatch_raised, message}} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+
+          assert message =~ "native dispatcher exploded"
+        end)
+
+      assert log =~ "[ResponsibilityRouter] native dispatcher raised"
+      assert log =~ "[ResponsibilityRouter] native dispatch failed key=#{key}"
+
+      assert_receive {:failed_telemetry, _meas, %{key: ^key, dispatch_kind: :native}}
+
+      # The old code emitted `:fired` unconditionally after the discarded
+      # `call_agent_responder/1` result, so this refute is the detector.
+      refute_receive {:fired_telemetry, _meas, _meta}, 100
+
+      # And nothing was stamped — a raised handoff is not a successful fire.
+      assert Repo.get!(Agent, agent.id).last_successful_fire_at == nil
     end
   end
 end

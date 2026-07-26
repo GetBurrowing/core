@@ -288,7 +288,7 @@ defmodule Platform.Review.RouterHeartbeatE2EReviewTest do
 
       # Fire the router path synchronously (mirrors run_summary/1 shape).
       capture_log(fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  ResponsibilityRouter.fire(:meetings_summarize, %{
                    kind: :event_topic,
                    topic: "meeting:finished",

@@ -255,7 +255,7 @@ defmodule Platform.Review.MeetingSummarizeE2EReviewTest do
       # pubsub tick keeps the test synchronous without changing
       # semantics.
       capture_log(fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  ResponsibilityRouter.fire(:meetings_summarize, %{
                    kind: :event_topic,
                    topic: "meeting:finished",
@@ -316,7 +316,7 @@ defmodule Platform.Review.MeetingSummarizeE2EReviewTest do
       stub_dispatcher_ok(canned)
 
       capture_log(fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  ResponsibilityRouter.fire(:meetings_summarize, %{
                    kind: :event_topic,
                    topic: "meeting:finished",
@@ -347,7 +347,7 @@ defmodule Platform.Review.MeetingSummarizeE2EReviewTest do
       stub_dispatcher_ok(canned)
 
       capture_log(fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  ResponsibilityRouter.fire(:meetings_summarize, %{
                    kind: :event_topic,
                    topic: "meeting:finished",
@@ -456,7 +456,7 @@ defmodule Platform.Review.MeetingSummarizeE2EReviewTest do
       log =
         capture_log(fn ->
           # Fire path 1: direct router.fire (deterministic, no pubsub race).
-          assert :ok =
+          assert {:error, {:build_prompt_refused, :no_transcript_text}} =
                    ResponsibilityRouter.fire(:meetings_summarize, %{
                      kind: :event_topic,
                      topic: "meeting:finished",

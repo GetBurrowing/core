@@ -85,6 +85,22 @@ defmodule Platform.Responsibilities.Router do
       health-check endpoint).
     * `dispatch/3` — stage 1 stub that logs and returns
       `{:error, :not_implemented_yet}`. Stage 2 fills this in.
+
+  ## Fire outcomes (ADR-0046)
+
+  `fire_trigger/2,3` returns `t:fire_outcome/0` —
+  `{:ok, :dispatched} | {:ok, :unfilled} | {:error, term()}` — so a caller
+  can tell "nobody holds this responsibility" apart from "the dispatch
+  died". ADR-0046 requires a per-step `not_applicable | complete | failed`
+  and those two states used to be the same `:ok`.
+
+  **Honesty limit, native path.** `Platform.Chat.AgentResponder.maybe_dispatch/1`
+  returns `:ok` unconditionally because outside sync mode it wraps the work
+  in `Task.start/1`. So `{:ok, :dispatched}` from a native/federated
+  assignee means **the handoff was accepted**, never **the agent
+  responded** — post-handoff native failure is still invisible. Do not
+  over-trust the value on that path. See `fire_trigger/3` for the full
+  contract.
   """
 
   use GenServer
@@ -96,6 +112,25 @@ defmodule Platform.Responsibilities.Router do
   alias Platform.Repo
   alias Platform.Responsibilities
   alias Platform.Responsibilities.{ContextGatherer, Cron, Responsibility}
+
+  @typedoc """
+  The three outcomes `fire_trigger/3` distinguishes (ADR-0046).
+
+    * `{:ok, :dispatched}` — an assignee was resolved and the dispatch was
+      handed off (external: an HTTP response was parsed; native/federated:
+      the signal was accepted). Maps to the ADR's `complete`.
+    * `{:ok, :unfilled}` — no agent holds the responsibility. A normal,
+      expected system state under the ADR-0041 progressive-enhancement
+      contract, NOT a failure. Maps to the ADR's `not_applicable`.
+    * `{:error, term()}` — an assignee existed and the dispatch died.
+      Maps to the ADR's `failed`.
+
+  `not_applicable` and `failed` must never be conflated
+  (`docs/decisions/0046-design-and-architecture-phases-in-planning.md`), which
+  is why the unfilled case lives in the ok channel with its own tag rather
+  than sharing a bare `:ok` with success.
+  """
+  @type fire_outcome :: {:ok, :dispatched} | {:ok, :unfilled} | {:error, term()}
 
   @default_check_interval_ms :timer.seconds(60)
 
@@ -788,10 +823,18 @@ defmodule Platform.Responsibilities.Router do
   # ALL trigger kinds (cron now; event_topic, chat_pattern, webhook in
   # later stages) funnel through `fire_trigger/3` so the
   # role-resolution → dispatch → stamp pipeline lives in exactly one
-  # place. The function never raises: an unfilled responsibility
-  # emits telemetry + an info log and returns `:ok`. This is the
-  # "progressive enhancement" contract from ADR-0041 — an empty Roles
-  # table is a perfectly valid system state.
+  # place. The function never raises: every failure mode is caught and
+  # returned as `{:error, reason}`. An unfilled responsibility emits
+  # telemetry + an info log and returns `{:ok, :unfilled}` — that is the
+  # "progressive enhancement" contract from ADR-0041, an empty Roles
+  # table is a perfectly valid system state, and it is deliberately a
+  # DIFFERENT value from both success and failure.
+  #
+  # NON-RAISING IS LOAD-BEARING: `Platform.Tasks.fire_architecture_review_plan/1`
+  # fires inside the plan-submit transition and
+  # `Platform.Tasks.PlanEngine.after_stage_completed/1` fires inside
+  # `evaluate_validation/2`'s Ecto transaction. A raise from here rolls back a
+  # validation update. Return the error, never raise it.
 
   @doc """
   Fire a trigger through the canonical pipeline.
@@ -799,37 +842,65 @@ defmodule Platform.Responsibilities.Router do
   Looks up the assignee via `Platform.Roles.assignee_for/1`, then:
 
     * if no agent is assigned → telemetry
-      `[:platform, :responsibility, :unfilled]` + info log, returns `:ok`
-    * if the agent is `kind == "external"` → gather context via
-      `ContextGatherer.gather/2`, call
-      `Platform.ExternalAgents.Dispatcher.dispatch/3`, hand the parsed
-      response to the provider's `handle_output/3` (when present),
-      stamp `last_successful_fire_at`, emit
-      `[:platform, :responsibility, :fired]` telemetry.
+      `[:platform, :responsibility, :unfilled]` + info log, returns
+      `{:ok, :unfilled}`
+    * if the agent is `kind == "external"` → gather context via the
+      provider (falling back to `ContextGatherer.gather/2`), render the
+      prompt, call `Platform.ExternalAgents.Dispatcher.dispatch/3`, hand
+      the parsed response to the provider's `handle_output/3` (when
+      present), stamp `last_successful_fire_at`, emit
+      `[:platform, :responsibility, :fired]` telemetry, and return
+      `{:ok, :dispatched}`.
     * if the agent is `kind == "native"` (alias: `"local"` /
       `"federated"`) → build the AgentResponder signal shape (mirrors
-      `Platform.Agents.HistorianDispatcher`'s) and hand off via
-      `Platform.Chat.AgentResponder.maybe_dispatch/1`. The Router
+      `Platform.Agents.HistorianDispatcher`'s, carrying the rendered
+      prompt under `metadata.prompt`) and hand off via
+      `Platform.Chat.AgentResponder.maybe_dispatch/1`. On acceptance:
+      stamp, emit `fired`, return `{:ok, :dispatched}`. The Router
       remains a drop-in dispatch surface for the existing native path —
       `SystemEventScheduler` keeps running alongside until M8 cuts the
       historian event over to a responsibility row.
 
-  Failure modes (HTTP error, contract violation, native context
-  resolution) log + emit `[:platform, :responsibility, :failed]` and
-  return `:ok` — the Router never crashes the GenServer for a single
-  fired trigger.
+  ## Return contract
+
+  See `t:fire_outcome/0`. The three values are mutually exclusive and
+  callers are expected to branch on them:
+
+    * `{:ok, :dispatched}` — handed off
+    * `{:ok, :unfilled}` — nobody holds the responsibility
+    * `{:error, reason}` — an assignee existed and the dispatch died
+
+  Failure modes (HTTP error, contract violation, provider refusal, a
+  raising native dispatcher, an unknown assignee shape, a caught exit)
+  log, emit `[:platform, :responsibility, :failed]`, and return
+  `{:error, reason}` — the Router never crashes the GenServer, and never
+  raises, for a single fired trigger.
+
+  ## Honesty limit on the native path (do not over-trust `:dispatched`)
+
+  `Platform.Chat.AgentResponder.maybe_dispatch/1` returns `:ok`
+  unconditionally: outside sync mode it wraps the real work in
+  `Task.start/1`, so the return value is observed before the agent has
+  done anything. Therefore `{:ok, :dispatched}` on the native/federated
+  path means **the handoff was accepted**, never **the agent responded**.
+  A native agent that fails after handoff is still invisible here. Making
+  post-handoff native failure observable requires a completion signal from
+  an artifact the agent produces (a canvas attach, a validation write) and
+  is deliberately out of scope for this contract. The external path is
+  stronger: it has actually parsed an HTTP response by the time it returns
+  `{:ok, :dispatched}`.
 
   Called from `handle_info(:tick, …)` for cron triggers, and from the
   event_topic, chat_pattern, and webhook handlers. Public so tests
   can drive it directly without standing up a fully-populated cron
   schedule.
   """
-  @spec fire_trigger(Responsibility.t(), map()) :: :ok
+  @spec fire_trigger(Responsibility.t(), map()) :: fire_outcome()
   def fire_trigger(%Responsibility{} = responsibility, trigger_meta) when is_map(trigger_meta) do
     fire_trigger(responsibility, trigger_meta, %{})
   end
 
-  @spec fire_trigger(Responsibility.t(), map(), map()) :: :ok
+  @spec fire_trigger(Responsibility.t(), map(), map()) :: fire_outcome()
   def fire_trigger(%Responsibility{} = responsibility, trigger_meta, _state)
       when is_map(trigger_meta) do
     try do
@@ -848,19 +919,21 @@ defmodule Platform.Responsibilities.Router do
             %{key: responsibility.key, feature: responsibility.feature}
           )
 
-          :ok
+          {:ok, :unfilled}
 
         %{kind: kind} = agent
         when kind in ["external", "native", "local", "federated"] ->
           dispatch_assignee(responsibility, agent, trigger_meta, kind)
 
         other ->
+          # A real defect, not a progressive-enhancement path: something
+          # resolved an assignee we cannot dispatch to.
           Logger.warning(
             "[ResponsibilityRouter] unknown assignee shape key=#{responsibility.key} " <>
               "assignee=#{inspect(other)}"
           )
 
-          :ok
+          {:error, {:unknown_assignee_shape, inspect(other)}}
       end
     rescue
       DBConnection.OwnershipError ->
@@ -868,13 +941,15 @@ defmodule Platform.Responsibilities.Router do
         # ContextGatherer.gather, dispatch_native → context resolution, etc.)
         # raised from a Task.Supervised child whose $callers chain doesn't reach
         # the DataCase sandbox owner. Contract: the Router never crashes the
-        # GenServer for a single fired trigger — swallow at :debug.
+        # GenServer for a single fired trigger — swallow at :debug. The
+        # dispatch genuinely did not complete, so `failed` is the honest
+        # answer; do NOT report success here.
         Logger.debug(
           "[ResponsibilityRouter] fire_trigger swallowed sandbox-owned DB call " <>
             "key=#{responsibility.key}"
         )
 
-        :ok
+        {:error, {:sandbox_ownership, responsibility.key}}
 
       error ->
         Logger.warning(
@@ -882,7 +957,7 @@ defmodule Platform.Responsibilities.Router do
             Exception.message(error)
         )
 
-        :ok
+        {:error, {:fire_raised, Exception.message(error)}}
     catch
       :exit, reason ->
         Logger.warning(
@@ -890,7 +965,7 @@ defmodule Platform.Responsibilities.Router do
             inspect(reason)
         )
 
-        :ok
+        {:error, {:fire_exited, reason}}
     end
   end
 
@@ -941,7 +1016,7 @@ defmodule Platform.Responsibilities.Router do
         )
 
         emit_failed_telemetry(responsibility, agent, :external, {:build_prompt_refused, reason})
-        :ok
+        {:error, {:build_prompt_refused, reason}}
 
       {:messages, messages} ->
         run_external_dispatch(responsibility, agent, trigger_meta, context, messages: messages)
@@ -970,7 +1045,7 @@ defmodule Platform.Responsibilities.Router do
         safe_stamp_last_fire(agent, Map.get(trigger_meta, :fired_at) || DateTime.utc_now())
 
         emit_fired_telemetry(responsibility, agent, :external)
-        :ok
+        {:ok, :dispatched}
 
       {:error, reason} ->
         Logger.warning(
@@ -979,7 +1054,7 @@ defmodule Platform.Responsibilities.Router do
         )
 
         emit_failed_telemetry(responsibility, agent, :external, reason)
-        :ok
+        {:error, {:dispatch_failed, reason}}
     end
   end
 
@@ -1171,12 +1246,26 @@ defmodule Platform.Responsibilities.Router do
         "agent=#{agent_slug(agent)} signal=#{inspect(Map.take(signal, [:reason, :space_id]))}"
     )
 
-    _ = call_agent_responder(signal)
+    # The stamp + `fired` telemetry are conditional on the handoff being
+    # accepted. They used to fire unconditionally, which reported a
+    # successful dispatch even when the native dispatcher was missing or
+    # raised.
+    case call_agent_responder(signal) do
+      {:ok, :dispatched} ->
+        safe_stamp_last_fire(agent, Map.get(trigger_meta, :fired_at) || DateTime.utc_now())
 
-    safe_stamp_last_fire(agent, Map.get(trigger_meta, :fired_at) || DateTime.utc_now())
+        emit_fired_telemetry(responsibility, agent, :native)
+        {:ok, :dispatched}
 
-    emit_fired_telemetry(responsibility, agent, :native)
-    :ok
+      {:error, reason} ->
+        Logger.warning(
+          "[ResponsibilityRouter] #{kind} dispatch failed key=#{responsibility.key} " <>
+            "agent=#{agent_slug(agent)} reason=#{inspect(reason)}"
+        )
+
+        emit_failed_telemetry(responsibility, agent, :native, reason)
+        {:error, reason}
+    end
   end
 
   # Builds an AgentResponder-shaped signal so the Router is a drop-in
@@ -1255,6 +1344,10 @@ defmodule Platform.Responsibilities.Router do
   # {Module, :function})` so unit tests don't have to stand up a real
   # AgentResponder + chat space + sandbox-permitted Task. Production
   # always uses `Platform.Chat.AgentResponder.maybe_dispatch/1`.
+  #
+  # `{:ok, :dispatched}` here means the HANDOFF was accepted, not that the
+  # agent responded — see the honesty-limit section on `fire_trigger/3`.
+  @spec call_agent_responder(map()) :: {:ok, :dispatched} | {:error, term()}
   defp call_agent_responder(signal) do
     {mod, fun} =
       Application.get_env(
@@ -1264,14 +1357,17 @@ defmodule Platform.Responsibilities.Router do
       )
 
     if Code.ensure_loaded?(mod) and function_exported?(mod, fun, 1) do
-      apply(mod, fun, [signal])
+      case apply(mod, fun, [signal]) do
+        {:error, reason} -> {:error, {:native_dispatch_failed, reason}}
+        _ -> {:ok, :dispatched}
+      end
     else
       Logger.info(
         "[ResponsibilityRouter] native dispatcher #{inspect(mod)}.#{fun}/1 not loaded — " <>
           "skipping native dispatch"
       )
 
-      :ok
+      {:error, {:native_dispatcher_unavailable, mod, fun}}
     end
   rescue
     error ->
@@ -1280,7 +1376,7 @@ defmodule Platform.Responsibilities.Router do
           Exception.message(error)
       )
 
-      :ok
+      {:error, {:native_dispatch_raised, Exception.message(error)}}
   end
 
   # ── Telemetry helpers ─────────────────────────────────────────────────────
