@@ -305,8 +305,11 @@ defmodule Platform.Push do
     end
   end
 
+  # VAPID keys are platform-scoped and read from supervised processes that carry
+  # no user or agent identity, so the access is attributed to the platform itself
+  # via an explicit `{:system, nil}` accessor rather than an omitted option.
   defp vault_get(slug) do
-    case Platform.Vault.get(slug) do
+    case Platform.Vault.get(slug, accessor: {:system, nil}) do
       {:ok, value} -> value
       _ -> nil
     end

@@ -770,7 +770,14 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # source contract — `inbox_items` table (durable per-user attention
       # rows) backing `Platform.Inbox.emit/1`. M1 is the only stack member
       # that adds a migration.
-      "20260723185711_create_inbox_items.exs"
+      "20260723185711_create_inbox_items.exs",
+      # Task 019f9b13 stage 4 (vault authorization audit): supersedes
+      # 20260314070000's ON DELETE CASCADE on
+      # `vault_access_log.credential_id` with ON DELETE SET NULL plus
+      # denormalised `credential_slug` / `credential_scope_type`, so
+      # revoking a credential no longer destroys the audit trail that
+      # records the revocation. The only schema stage in the task.
+      "20260725220000_retain_vault_access_log_on_credential_delete.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

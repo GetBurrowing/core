@@ -2,6 +2,8 @@ defmodule Platform.Vault.OAuthTest do
   use Platform.DataCase
 
   alias Platform.Vault
+  alias Platform.Vault.AccessLog
+  alias Platform.Vault.Credential
   alias Platform.Vault.OAuth
 
   # ---------------------------------------------------------------------------
@@ -270,6 +272,65 @@ defmodule Platform.Vault.OAuthTest do
 
     test "returns error for unknown slug" do
       assert {:error, :not_found} = OAuth.refresh("missing-oauth")
+    end
+
+    # Regression guard for the explicit `accessor: {:system, nil}` threaded
+    # through OAuth's Vault calls. The refresh path reads the credential and
+    # then rotates it; both operations must land in the audit trail attributed
+    # to the platform itself, so that tightening rotate authority later cannot
+    # silently take token refresh offline.
+    test "logs the read and the rotation against the system accessor" do
+      credential = Repo.get_by!(Credential, slug: "anthropic-oauth")
+
+      assert {:ok, _} = OAuth.refresh("anthropic-oauth")
+
+      rows =
+        AccessLog
+        |> where([l], l.credential_id == ^credential.id)
+        |> Repo.all()
+
+      actions = Enum.map(rows, & &1.action)
+
+      assert "use" in actions,
+             "refresh/1 must record the credential read, got: #{inspect(actions)}"
+
+      assert "rotate" in actions,
+             "refresh/1 must record the rotation, got: #{inspect(actions)}"
+
+      refute "denied" in actions
+
+      assert Enum.all?(rows, &(&1.accessor_type == "system")),
+             "every OAuth-driven access must be attributed to the system accessor, got: " <>
+               inspect(Enum.map(rows, & &1.accessor_type))
+
+      # The client-credential read is attributed the same way.
+      client = Repo.get_by!(Credential, slug: "anthropic-oauth-client")
+
+      client_rows =
+        AccessLog
+        |> where([l], l.credential_id == ^client.id)
+        |> Repo.all()
+
+      assert Enum.any?(client_rows, &(&1.action == "use" and &1.accessor_type == "system"))
+    end
+
+    # The access-log assertion above cannot on its own detect a dropped
+    # accessor, because `parse_accessor/1` maps a nil accessor to the same
+    # "system" string. Telemetry carries the accessor verbatim, so this is the
+    # assertion that actually fails if the `accessor:` option is ever removed
+    # from OAuth's Vault calls.
+    test "passes the system accessor verbatim, not an implicit nil" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:platform, :vault, :credential_used]])
+
+      assert {:ok, _} = OAuth.refresh("anthropic-oauth")
+
+      assert_receive {[:platform, :vault, :credential_used], ^ref, _measurements,
+                      %{slug: "anthropic-oauth", accessor: accessor}}
+
+      assert accessor == {:system, nil},
+             "OAuth must declare its accessor explicitly; got #{inspect(accessor)}"
+
+      :telemetry.detach(ref)
     end
   end
 end

@@ -178,6 +178,28 @@ config :platform,
        :cve_scan_osv_client,
        Platform.Security.Scanners.CveScan.OsvClient
 
+# Vault workspace-scope rollback switch (task 019f9b13-1fe8 stage 3).
+#
+# TEMPORARY. `Platform.Vault` refuses every permission on a `"workspace"`-scoped
+# credential unless the accessor holds an explicit AccessGrant, because there is
+# nothing to check membership against: no `workspaces` table was ever created
+# (`priv/repo/migrations/20260314060001_create_vault_tables.exs` still carries
+# `# TODO: add foreign key to workspaces once the workspaces table exists`),
+# `workspace_id` has no foreign key anywhere in the schema, and org membership
+# (ADR-0042) relates users to orgs while vault accessors are agents and
+# integrations.
+#
+# Setting this to `true` restores the old permissive behaviour verbatim — every
+# accessor, including a nil one, and every permission — and logs a warning per
+# allowed access. It is a roll-forward valve for an undiscovered dependent, NOT
+# an operational knob: there is no correct production reason to turn it on, and
+# no production code creates a workspace-scoped credential today.
+#
+# The agreed direction is to delete the `workspace_id` column outright in
+# follow-up work. This flag is expected to be removed in the same change. If the
+# column is gone and this key is still here, delete it.
+config :platform, Platform.Vault, allow_unscoped_workspace_access: false
+
 # LiveKit webhook HMAC-JWT signature enforcement (task 019f3312 stage 2 —
 # phantom-fix v4). When `true` (prod default), every request to
 # `/api/webhooks/livekit` MUST carry a valid `Authorization: <jwt>` header

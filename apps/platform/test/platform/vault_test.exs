@@ -2,6 +2,7 @@ defmodule Platform.VaultTest do
   use Platform.DataCase, async: true
 
   import Ecto.Query
+  import ExUnit.CaptureLog
 
   alias Platform.Vault
   alias Platform.Vault.AccessGrant
@@ -20,6 +21,34 @@ defmodule Platform.VaultTest do
     extra = Keyword.drop(opts, [:value])
     {:ok, cred} = Vault.put(slug, :api_key, value, [scope: scope] ++ extra)
     cred
+  end
+
+  defp grant!(%Credential{id: credential_id}, grantee_id, permissions) do
+    Repo.insert!(%AccessGrant{
+      credential_id: credential_id,
+      grantee_type: "agent",
+      grantee_id: grantee_id,
+      permissions: permissions
+    })
+  end
+
+  defp logs_for(%Credential{id: credential_id}) do
+    from(l in AccessLog, where: l.credential_id == ^credential_id, order_by: [asc: l.inserted_at])
+    |> Repo.all()
+  end
+
+  # Matches on the denormalised slug rather than the association, so it keeps
+  # working after the credential — and therefore credential_id — is gone.
+  defp logs_for_slug(slug) do
+    from(l in AccessLog,
+      where: l.credential_slug == ^slug,
+      order_by: [asc: l.inserted_at, asc: l.id]
+    )
+    |> Repo.all()
+  end
+
+  defp actions_for(%Credential{} = cred) do
+    cred |> logs_for() |> Enum.map(& &1.action) |> Enum.sort()
   end
 
   # ── put/4 ────────────────────────────────────────────────────────────────────
@@ -339,7 +368,7 @@ defmodule Platform.VaultTest do
 
       assert {:ok, "old-value"} = Vault.get(slug)
 
-      assert {:ok, rotated} = Vault.rotate(slug, "new-value")
+      assert {:ok, rotated} = Vault.rotate(slug, "new-value", accessor: {:system, nil})
       assert rotated.slug == slug
       assert is_nil(rotated.encrypted_data), "encrypted_data must be stripped from rotate result"
 
@@ -353,7 +382,7 @@ defmodule Platform.VaultTest do
       before = Repo.get_by!(Credential, slug: slug)
       assert is_nil(before.rotated_at)
 
-      {:ok, _} = Vault.rotate(slug, "new-value")
+      {:ok, _} = Vault.rotate(slug, "new-value", accessor: {:system, nil})
 
       after_rotate = Repo.get_by!(Credential, slug: slug)
       assert %DateTime{} = after_rotate.rotated_at
@@ -366,7 +395,7 @@ defmodule Platform.VaultTest do
       ref =
         :telemetry_test.attach_event_handlers(self(), [[:platform, :vault, :credential_rotated]])
 
-      {:ok, _} = Vault.rotate(slug, "new-value")
+      {:ok, _} = Vault.rotate(slug, "new-value", accessor: {:system, nil})
 
       assert_receive {[:platform, :vault, :credential_rotated], ^ref, _measurements, meta}
       assert meta.slug == slug
@@ -376,6 +405,125 @@ defmodule Platform.VaultTest do
 
     test "returns :not_found for an unknown slug" do
       assert {:error, :not_found} = Vault.rotate("nonexistent-#{System.unique_integer()}", "v")
+    end
+  end
+
+  # ── rotate/3 — access control ────────────────────────────────────────────────
+
+  describe "rotate/3 access control" do
+    test "the owning agent may rotate its own credential" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("rot-owner")
+      insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+
+      assert {:ok, rotated} = Vault.rotate(slug, "v2", accessor: {:agent, owner_id})
+      assert is_nil(rotated.encrypted_data)
+      assert {:ok, "v2"} = Vault.get(slug, accessor: {:agent, owner_id})
+    end
+
+    test "a use-only grantee may read but may not rotate" do
+      owner_id = Ecto.UUID.generate()
+      grantee_id = Ecto.UUID.generate()
+      slug = unique_slug("rot-use-only")
+
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+      grant!(cred, grantee_id, ["use"])
+
+      assert {:error, :access_denied} =
+               Vault.rotate(slug, "pwned", accessor: {:agent, grantee_id})
+
+      # Read authority is untouched, and the stored value never changed.
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, grantee_id})
+    end
+
+    test "a grantee holding \"rotate\" may rotate" do
+      owner_id = Ecto.UUID.generate()
+      rotator_id = Ecto.UUID.generate()
+      slug = unique_slug("rot-granted")
+
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+      grant!(cred, rotator_id, ["use", "rotate"])
+
+      assert {:ok, _} = Vault.rotate(slug, "v2", accessor: {:agent, rotator_id})
+      assert {:ok, "v2"} = Vault.get(slug, accessor: {:agent, rotator_id})
+    end
+
+    test "a nil accessor may not rotate an agent-scoped credential" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("rot-nil")
+      insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+
+      assert {:error, :access_denied} = Vault.rotate(slug, "pwned")
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, owner_id})
+    end
+
+    test "a non-privileged agent may not rotate a platform-scoped credential, but the system accessor may" do
+      stranger_id = Ecto.UUID.generate()
+      slug = unique_slug("rot-plat")
+      insert_credential!(slug, value: "v1", scope: {:platform, nil})
+
+      # Reading a platform credential is open — that is what the shared provider
+      # keys depend on — but rotating one is not.
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, stranger_id})
+
+      assert {:error, :access_denied} =
+               Vault.rotate(slug, "pwned", accessor: {:agent, stranger_id})
+
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, stranger_id})
+
+      assert {:ok, _} = Vault.rotate(slug, "v2", accessor: {:system, nil})
+      assert {:ok, "v2"} = Vault.get(slug, accessor: {:agent, stranger_id})
+    end
+
+    test "a denied rotation leaves the stored value untouched and writes no rotate log row" do
+      owner_id = Ecto.UUID.generate()
+      stranger_id = Ecto.UUID.generate()
+      slug = unique_slug("rot-untouched")
+
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+
+      assert {:error, :access_denied} =
+               Vault.rotate(slug, "pwned", accessor: {:agent, stranger_id})
+
+      row = Repo.get!(Credential, cred.id)
+      assert is_nil(row.rotated_at), "a refused rotation must not stamp rotated_at"
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, owner_id})
+      assert actions_for(cred) == ["denied", "use"]
+    end
+
+    test "a denied rotation writes a denied access-log row naming the accessor" do
+      owner_id = Ecto.UUID.generate()
+      stranger_id = Ecto.UUID.generate()
+      slug = unique_slug("rot-deny-log")
+
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+
+      assert {:error, :access_denied} =
+               Vault.rotate(slug, "pwned", accessor: {:agent, stranger_id})
+
+      assert [log] = logs_for(cred)
+      assert log.action == "denied"
+      assert log.accessor_type == "agent"
+      assert log.accessor_id == stranger_id
+    end
+
+    test "a denied rotation emits access_denied telemetry carrying the accessor" do
+      owner_id = Ecto.UUID.generate()
+      stranger_id = Ecto.UUID.generate()
+      slug = unique_slug("rot-deny-tel")
+
+      insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+
+      ref = :telemetry_test.attach_event_handlers(self(), [[:platform, :vault, :access_denied]])
+
+      assert {:error, :access_denied} =
+               Vault.rotate(slug, "pwned", accessor: {:agent, stranger_id})
+
+      assert_receive {[:platform, :vault, :access_denied], ^ref, _measurements, meta}
+      assert meta.slug == slug
+      assert meta.accessor == {:agent, stranger_id}
+
+      :telemetry.detach(ref)
     end
   end
 
@@ -444,7 +592,7 @@ defmodule Platform.VaultTest do
       slug = unique_slug("del")
       insert_credential!(slug, scope: {:platform, nil})
 
-      assert {:ok, _} = Vault.delete(slug)
+      assert {:ok, _} = Vault.delete(slug, accessor: {:system, nil})
       assert Repo.get_by(Credential, slug: slug) == nil
     end
 
@@ -453,14 +601,9 @@ defmodule Platform.VaultTest do
       slug = unique_slug("del-grants")
       {:ok, cred} = Vault.put(slug, :api_key, "secret", scope: {:platform, nil})
 
-      Repo.insert!(%AccessGrant{
-        credential_id: cred.id,
-        grantee_type: "agent",
-        grantee_id: agent_id,
-        permissions: ["use"]
-      })
+      grant!(cred, agent_id, ["use"])
 
-      assert {:ok, _} = Vault.delete(slug)
+      assert {:ok, _} = Vault.delete(slug, accessor: {:system, nil})
 
       grants = from(g in AccessGrant, where: g.credential_id == ^cred.id) |> Repo.all()
       assert grants == [], "grants should be deleted along with credential"
@@ -473,7 +616,7 @@ defmodule Platform.VaultTest do
       ref =
         :telemetry_test.attach_event_handlers(self(), [[:platform, :vault, :credential_revoked]])
 
-      assert {:ok, _} = Vault.delete(slug)
+      assert {:ok, _} = Vault.delete(slug, accessor: {:system, nil})
 
       assert_receive {[:platform, :vault, :credential_revoked], ^ref, _measurements, meta}
       assert meta.slug == slug
@@ -483,6 +626,412 @@ defmodule Platform.VaultTest do
 
     test "returns :not_found for an unknown slug" do
       assert {:error, :not_found} = Vault.delete("no-such-cred-#{System.unique_integer()}")
+    end
+  end
+
+  # ── delete/2 — access-log retention ──────────────────────────────────────────
+  #
+  # The point of the whole task's third defect. delete/2 used to purge these rows
+  # in application code, so the "revoke" entry it writes was destroyed
+  # microseconds after it was written and there was nothing to assert. The DB
+  # half (ON DELETE SET NULL) landed in the previous stage and is proved
+  # independently in test/platform/vault/access_log_test.exs via a raw
+  # Repo.delete/1; these cases prove Vault.delete/2 itself no longer destroys the
+  # trail it just wrote.
+
+  describe "delete/2 access-log retention" do
+    test "the revoke entry survives the deletion it recorded" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("del-retain-revoke")
+
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+
+      assert {:ok, _} = Vault.delete(slug, accessor: {:agent, owner_id})
+      assert Repo.get(Credential, cred.id) == nil
+
+      assert [revoke] = logs_for_slug(slug)
+      assert revoke.action == "revoke"
+      assert is_nil(revoke.credential_id), "the FK is SET NULL, not CASCADE"
+      assert revoke.credential_slug == slug
+      assert revoke.credential_scope_type == "agent"
+      assert revoke.accessor_type == "agent"
+      assert revoke.accessor_id == owner_id
+    end
+
+    test "the pre-delete history survives too, not just the revoke entry" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("del-retain-history")
+
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, owner_id})
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, owner_id})
+      assert {:ok, _} = Vault.rotate(slug, "v2", accessor: {:agent, owner_id})
+      assert length(logs_for(cred)) == 3
+
+      assert {:ok, _} = Vault.delete(slug, accessor: {:agent, owner_id})
+
+      entries = logs_for_slug(slug)
+      assert Enum.map(entries, & &1.action) == ["use", "use", "rotate", "revoke"]
+      assert Enum.all?(entries, &is_nil(&1.credential_id))
+      assert Enum.all?(entries, &(&1.credential_slug == slug))
+      assert Enum.all?(entries, &(&1.accessor_id == owner_id))
+    end
+
+    test "access_log/2 reads the retained trail back after the credential is gone" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("del-retain-read")
+
+      insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, owner_id})
+      assert {:ok, _} = Vault.delete(slug, accessor: {:agent, owner_id})
+
+      # Newest first, so the deletion is the head of the trail.
+      assert ["revoke", "use"] = Enum.map(Vault.access_log(slug), & &1.action)
+    end
+
+    test "a denied deletion leaves the credential, its grants and the trail intact" do
+      owner_id = Ecto.UUID.generate()
+      stranger_id = Ecto.UUID.generate()
+      slug = unique_slug("del-retain-denied")
+
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+      grant!(cred, stranger_id, ["use"])
+
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, stranger_id})
+      assert {:error, :access_denied} = Vault.delete(slug, accessor: {:agent, stranger_id})
+
+      assert Repo.get(Credential, cred.id) != nil
+      assert Repo.all(from(g in AccessGrant, where: g.credential_id == ^cred.id)) != []
+
+      # Still attached to the live credential — nothing was nulled or purged.
+      assert ["denied", "use"] = Enum.map(Vault.access_log(slug), & &1.action)
+      assert Enum.all?(Vault.access_log(slug), &(&1.credential_id == cred.id))
+    end
+
+    test "the slug is re-creatable after a delete and the old trail stays distinguishable" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("del-retain-reuse")
+
+      first = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, owner_id})
+      assert {:ok, _} = Vault.delete(slug, accessor: {:agent, owner_id})
+
+      second = insert_credential!(slug, value: "v2", scope: {:agent, owner_id})
+      assert second.id != first.id
+      assert {:ok, "v2"} = Vault.get(slug, accessor: {:agent, owner_id})
+
+      entries = Enum.reverse(Vault.access_log(slug))
+      assert Enum.map(entries, & &1.action) == ["use", "revoke", "use"]
+
+      {old, new} = Enum.split(entries, 2)
+      assert Enum.all?(old, &is_nil(&1.credential_id)), "history of the destroyed credential"
+      assert Enum.all?(new, &(&1.credential_id == second.id)), "history of the live one"
+    end
+  end
+
+  # ── access_log/2 ─────────────────────────────────────────────────────────────
+
+  describe "access_log/2" do
+    test "returns entries newest first" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("alog-order")
+
+      insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, owner_id})
+      assert {:ok, _} = Vault.rotate(slug, "v2", accessor: {:agent, owner_id})
+
+      assert ["rotate", "use"] = Enum.map(Vault.access_log(slug), & &1.action)
+    end
+
+    test "accepts a %Credential{} as well as a slug" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("alog-struct")
+
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, owner_id})
+
+      assert Enum.map(Vault.access_log(cred), & &1.id) ==
+               Enum.map(Vault.access_log(slug), & &1.id)
+    end
+
+    test "honours :limit, keeping the newest entries" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("alog-limit")
+
+      insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+      for _ <- 1..3, do: assert({:ok, "v1"} = Vault.get(slug, accessor: {:agent, owner_id}))
+      assert {:ok, _} = Vault.rotate(slug, "v2", accessor: {:agent, owner_id})
+
+      assert length(Vault.access_log(slug)) == 4
+      assert ["rotate", "use"] = Enum.map(Vault.access_log(slug, limit: 2), & &1.action)
+    end
+
+    test "returns [] for a slug that never existed" do
+      assert Vault.access_log("no-such-cred-#{System.unique_integer([:positive])}") == []
+    end
+
+    test "finds rows written before the denormalised columns existed" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("alog-legacy")
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+
+      # A pre-migration-shaped row: credential_id set, slug/scope null. The
+      # backfill covered these, but a row can only be found by id while its
+      # credential lives, which is why the query unions the two.
+      Repo.insert!(%AccessLog{
+        credential_id: cred.id,
+        accessor_type: "agent",
+        accessor_id: owner_id,
+        action: "use",
+        metadata: %{}
+      })
+
+      assert [entry] = Vault.access_log(slug)
+      assert entry.credential_id == cred.id
+      assert is_nil(entry.credential_slug)
+    end
+  end
+
+  # ── delete/2 — access control ────────────────────────────────────────────────
+
+  describe "delete/2 access control" do
+    test "the owning agent may delete its own credential" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("del-owner")
+      insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+
+      assert {:ok, _} = Vault.delete(slug, accessor: {:agent, owner_id})
+      assert Repo.get_by(Credential, slug: slug) == nil
+    end
+
+    test "a use-only grantee may read but may not delete" do
+      owner_id = Ecto.UUID.generate()
+      grantee_id = Ecto.UUID.generate()
+      slug = unique_slug("del-use-only")
+
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+      grant!(cred, grantee_id, ["use"])
+
+      assert {:error, :access_denied} = Vault.delete(slug, accessor: {:agent, grantee_id})
+
+      assert Repo.get(Credential, cred.id) != nil
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, grantee_id})
+    end
+
+    test "rotate authority does not imply revoke authority" do
+      owner_id = Ecto.UUID.generate()
+      rotator_id = Ecto.UUID.generate()
+      slug = unique_slug("del-rot-grant")
+
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+      grant!(cred, rotator_id, ["use", "rotate"])
+
+      assert {:ok, _} = Vault.rotate(slug, "v2", accessor: {:agent, rotator_id})
+      assert {:error, :access_denied} = Vault.delete(slug, accessor: {:agent, rotator_id})
+      assert Repo.get(Credential, cred.id) != nil
+    end
+
+    test "a grantee holding \"revoke\" may delete" do
+      owner_id = Ecto.UUID.generate()
+      revoker_id = Ecto.UUID.generate()
+      slug = unique_slug("del-revoke-grant")
+
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+      grant!(cred, revoker_id, ["use", "revoke"])
+
+      assert {:ok, _} = Vault.delete(slug, accessor: {:agent, revoker_id})
+      assert Repo.get(Credential, cred.id) == nil
+    end
+
+    test "a nil accessor may not delete an agent-scoped credential" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("del-nil")
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+
+      assert {:error, :access_denied} = Vault.delete(slug)
+      assert Repo.get(Credential, cred.id) != nil
+    end
+
+    test "a non-privileged agent may not delete a platform-scoped credential, but the system accessor may" do
+      stranger_id = Ecto.UUID.generate()
+      slug = unique_slug("del-plat")
+      cred = insert_credential!(slug, value: "v1", scope: {:platform, nil})
+
+      assert {:error, :access_denied} = Vault.delete(slug, accessor: {:agent, stranger_id})
+      assert Repo.get(Credential, cred.id) != nil
+      assert {:ok, "v1"} = Vault.get(slug, accessor: {:agent, stranger_id})
+
+      assert {:ok, _} = Vault.delete(slug, accessor: {:system, nil})
+      assert Repo.get(Credential, cred.id) == nil
+    end
+
+    test "a denied deletion destroys nothing and writes a denied log row instead of a revoke row" do
+      owner_id = Ecto.UUID.generate()
+      stranger_id = Ecto.UUID.generate()
+      slug = unique_slug("del-deny-log")
+
+      cred = insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+      grant!(cred, stranger_id, ["use"])
+
+      assert {:error, :access_denied} = Vault.delete(slug, accessor: {:agent, stranger_id})
+
+      assert [log] = logs_for(cred)
+      assert log.action == "denied"
+      assert log.accessor_type == "agent"
+      assert log.accessor_id == stranger_id
+
+      refute "revoke" in actions_for(cred)
+      assert Repo.get(Credential, cred.id) != nil
+
+      grants = from(g in AccessGrant, where: g.credential_id == ^cred.id) |> Repo.all()
+      assert length(grants) == 1, "a refused deletion must not cascade to grants"
+    end
+
+    test "a denied deletion emits access_denied telemetry carrying the accessor" do
+      owner_id = Ecto.UUID.generate()
+      stranger_id = Ecto.UUID.generate()
+      slug = unique_slug("del-deny-tel")
+
+      insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+
+      ref = :telemetry_test.attach_event_handlers(self(), [[:platform, :vault, :access_denied]])
+
+      assert {:error, :access_denied} = Vault.delete(slug, accessor: {:agent, stranger_id})
+
+      assert_receive {[:platform, :vault, :access_denied], ^ref, _measurements, meta}
+      assert meta.slug == slug
+      assert meta.accessor == {:agent, stranger_id}
+
+      :telemetry.detach(ref)
+    end
+  end
+
+  # ── workspace scope ──────────────────────────────────────────────────────────
+
+  describe "workspace-scoped credentials" do
+    test "get/2 is denied for agent, system and nil accessors, and logs every refusal" do
+      slug = unique_slug("ws-get")
+
+      cred =
+        insert_credential!(slug, value: "ws-secret", scope: {:workspace, Ecto.UUID.generate()})
+
+      assert {:error, :access_denied} = Vault.get(slug, accessor: {:agent, Ecto.UUID.generate()})
+      assert {:error, :access_denied} = Vault.get(slug, accessor: {:system, nil})
+      assert {:error, :access_denied} = Vault.get(slug)
+
+      assert actions_for(cred) == ["denied", "denied", "denied"],
+             "every refused read must leave a trace"
+    end
+
+    test "get/2 denial emits access_denied telemetry" do
+      slug = unique_slug("ws-get-tel")
+      agent_id = Ecto.UUID.generate()
+      insert_credential!(slug, value: "ws-secret", scope: {:workspace, Ecto.UUID.generate()})
+
+      ref = :telemetry_test.attach_event_handlers(self(), [[:platform, :vault, :access_denied]])
+
+      assert {:error, :access_denied} = Vault.get(slug, accessor: {:agent, agent_id})
+
+      assert_receive {[:platform, :vault, :access_denied], ^ref, _measurements, meta}
+      assert meta.slug == slug
+      assert meta.accessor == {:agent, agent_id}
+
+      :telemetry.detach(ref)
+    end
+
+    test "rotate/3 is denied for agent, system and nil accessors and mutates nothing" do
+      slug = unique_slug("ws-rotate")
+
+      cred =
+        insert_credential!(slug, value: "ws-secret", scope: {:workspace, Ecto.UUID.generate()})
+
+      assert {:error, :access_denied} =
+               Vault.rotate(slug, "pwned", accessor: {:agent, Ecto.UUID.generate()})
+
+      assert {:error, :access_denied} = Vault.rotate(slug, "pwned", accessor: {:system, nil})
+      assert {:error, :access_denied} = Vault.rotate(slug, "pwned")
+
+      assert Repo.get(Credential, cred.id).encrypted_data == "ws-secret"
+      assert is_nil(Repo.get(Credential, cred.id).rotated_at)
+      assert actions_for(cred) == ["denied", "denied", "denied"]
+      refute "rotate" in actions_for(cred)
+    end
+
+    test "delete/2 is denied for agent, system and nil accessors and destroys nothing" do
+      slug = unique_slug("ws-delete")
+
+      cred =
+        insert_credential!(slug, value: "ws-secret", scope: {:workspace, Ecto.UUID.generate()})
+
+      grant!(cred, Ecto.UUID.generate(), ["use"])
+
+      assert {:error, :access_denied} =
+               Vault.delete(slug, accessor: {:agent, Ecto.UUID.generate()})
+
+      assert {:error, :access_denied} = Vault.delete(slug, accessor: {:system, nil})
+      assert {:error, :access_denied} = Vault.delete(slug)
+
+      assert Repo.get(Credential, cred.id) != nil
+      assert actions_for(cred) == ["denied", "denied", "denied"]
+      refute "revoke" in actions_for(cred)
+
+      grants = from(g in AccessGrant, where: g.credential_id == ^cred.id) |> Repo.all()
+      assert length(grants) == 1, "a refused deletion must not cascade to grants"
+    end
+
+    test "an explicit grant is an open path, so the escape hatch is not the only one" do
+      slug = unique_slug("ws-grant")
+      reader_id = Ecto.UUID.generate()
+      rotator_id = Ecto.UUID.generate()
+
+      cred =
+        insert_credential!(slug, value: "ws-secret", scope: {:workspace, Ecto.UUID.generate()})
+
+      grant!(cred, reader_id, ["use"])
+      grant!(cred, rotator_id, ["use", "rotate"])
+
+      assert {:ok, "ws-secret"} = Vault.get(slug, accessor: {:agent, reader_id})
+      assert {:error, :access_denied} = Vault.rotate(slug, "v2", accessor: {:agent, reader_id})
+
+      assert {:ok, _} = Vault.rotate(slug, "v2", accessor: {:agent, rotator_id})
+      assert {:ok, "v2"} = Vault.get(slug, accessor: {:agent, rotator_id})
+      assert {:error, :access_denied} = Vault.delete(slug, accessor: {:agent, rotator_id})
+    end
+
+    test "the escape hatch restores access for every accessor and logs a warning" do
+      slug = unique_slug("ws-hatch")
+      agent_id = Ecto.UUID.generate()
+      insert_credential!(slug, value: "ws-secret", scope: {:workspace, Ecto.UUID.generate()})
+
+      # Application config is global; only workspace-scoped credentials read this
+      # key and this module is the only place that creates one, so flipping it
+      # here cannot leak into a concurrently running test module.
+      original = Application.get_env(:platform, Vault, [])
+      on_exit(fn -> Application.put_env(:platform, Vault, original) end)
+
+      Application.put_env(
+        :platform,
+        Vault,
+        Keyword.put(original, :allow_unscoped_workspace_access, true)
+      )
+
+      log =
+        capture_log(fn ->
+          assert {:ok, "ws-secret"} = Vault.get(slug, accessor: {:agent, agent_id})
+          # The hatch restores the old behaviour verbatim, nil accessor included.
+          assert {:ok, "ws-secret"} = Vault.get(slug)
+        end)
+
+      assert log =~ slug
+      assert log =~ "allow_unscoped_workspace_access"
+      assert log =~ agent_id
+      assert log =~ "temporary"
+    end
+
+    test "the escape hatch ships off" do
+      refute Application.get_env(:platform, Vault, [])[:allow_unscoped_workspace_access],
+             "allow_unscoped_workspace_access must default to false"
     end
   end
 

@@ -16,6 +16,18 @@ defmodule Platform.Vault.OAuth do
   method. The `{state, code_verifier}` pair is held in a named ETS table
   (`:vault_oauth_states`) and consumed on the first matching callback.
 
+  ## Vault access
+
+  Every `Platform.Vault` call made here runs on behalf of the platform itself,
+  not a user or agent: `authorize_url/2`, `handle_callback/2` and `refresh/1`
+  are driven by controller callbacks and by `Platform.Vault.RefreshWorker`,
+  none of which carry a caller identity. They therefore pass an explicit
+  `accessor: {:system, nil}` rather than omitting the option. The resulting
+  `vault_access_log` rows are unchanged (`parse_accessor/1` already mapped a
+  missing accessor to `"system"`), but the attribution is now declared at the
+  call site instead of falling out of a nil default — which is what lets the
+  access gate distinguish "the platform did this" from "nobody said".
+
   ## HTTP
 
   Token exchange and refresh are performed via `Req`. In tests you can
@@ -68,7 +80,8 @@ defmodule Platform.Vault.OAuth do
           {:ok, String.t(), String.t()} | {:error, term()}
   def authorize_url(provider, opts \\ []) do
     with {:ok, config} <- provider_config(provider),
-         {:ok, client_json} <- Vault.get("#{provider}-oauth-client"),
+         {:ok, client_json} <-
+           Vault.get("#{provider}-oauth-client", accessor: {:system, nil}),
          {:ok, %{"client_id" => client_id, "client_secret" => client_secret}} <-
            Jason.decode(client_json) do
       callback_uri = Keyword.fetch!(opts, :callback_uri)
@@ -165,18 +178,19 @@ defmodule Platform.Vault.OAuth do
 
   def refresh(slug) when is_binary(slug) do
     result =
-      with {:ok, raw} <- Vault.get(slug),
+      with {:ok, raw} <- Vault.get(slug, accessor: {:system, nil}),
            {:ok, tokens} <- Jason.decode(raw),
            provider <- tokens["provider"] || provider_from_slug(slug),
            {:ok, config} <- provider_config(provider),
-           {:ok, client_json} <- Vault.get("#{provider}-oauth-client"),
+           {:ok, client_json} <-
+             Vault.get("#{provider}-oauth-client", accessor: {:system, nil}),
            {:ok, %{"client_id" => client_id, "client_secret" => client_secret}} <-
              Jason.decode(client_json),
            {:ok, new_tokens} <-
              do_refresh(config.token_url, client_id, client_secret, tokens["refresh_token"]) do
         updated_payload = Jason.encode!(Map.merge(tokens, new_tokens))
 
-        Vault.rotate(slug, updated_payload)
+        Vault.rotate(slug, updated_payload, accessor: {:system, nil})
       end
 
     case result do
@@ -237,7 +251,8 @@ defmodule Platform.Vault.OAuth do
 
   defp exchange_and_store(provider, code, code_verifier) do
     with {:ok, config} <- provider_config(provider),
-         {:ok, client_json} <- Vault.get("#{provider}-oauth-client"),
+         {:ok, client_json} <-
+           Vault.get("#{provider}-oauth-client", accessor: {:system, nil}),
          {:ok, %{"client_id" => client_id, "client_secret" => client_secret}} <-
            Jason.decode(client_json),
          {:ok, tokens} <-

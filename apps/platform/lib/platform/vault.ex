@@ -1,7 +1,74 @@
 defmodule Platform.Vault do
-  @moduledoc "General-purpose encrypted credential store."
+  @moduledoc """
+  General-purpose encrypted credential store.
+
+  ## Authorization
+
+  Every read and every mutation is checked against the credential's scope and
+  any explicit `Platform.Vault.AccessGrant` rows, and every outcome — granted or
+  denied — is written to the vault access log. That log outlives the credential
+  it describes, including through `delete/2`; read it with `access_log/2`.
+
+  **Read authority is not write authority.** Three permissions are recognised,
+  sharing one vocabulary with `AccessGrant.permissions` and the action strings
+  documented on `Platform.Vault.AccessLog`:
+
+    * `:use`    — `get/2`, grant string `"use"`
+    * `:rotate` — `rotate/3`, grant string `"rotate"`
+    * `:revoke` — `delete/2`, grant string `"revoke"`
+
+  Platform-scoped credentials stay readable by any accessor — the shared
+  provider keys every agent depends on live there — but rotating or revoking one
+  requires a privileged accessor (`{:system, _}` or `{:platform, _}`) or an
+  explicit grant carrying the matching permission. Grants written before this
+  vocabulary existed carry `["use"]` and therefore confer read only, which is
+  the intended fail-closed default.
+
+  ## Scopes
+
+  `scope_type` is one of `"platform"`, `"agent"`, `"integration"` or
+  `"workspace"`. **New credentials should use `platform` or `agent` scope.**
+
+  `"workspace"` scope is deny-by-default for every permission, including `:use`
+  and including the `{:system, _}` accessor. The only open path is an explicit
+  `AccessGrant`. This is not a policy choice about workspaces; it is the absence
+  of anything to check. There is no `workspaces` table — the vault's own
+  migration carries `# TODO: add foreign key to workspaces once the workspaces
+  table exists`, and `workspace_id` has never had a foreign key anywhere in the
+  schema. There is no workspace-membership schema, and the live tenancy model
+  (`Platform.Tenancy`, ADR-0042) relates orgs to *users*, while vault accessors
+  are agents and integrations. Agent-to-org membership does not exist as a
+  concept yet, so a real membership check cannot be written.
+
+  The `workspace_id` column is vestigial scaffolding and the agreed direction is
+  to delete it outright in follow-up work. Failing closed is the interim state
+  until then; it costs nothing today because no production code creates a
+  workspace-scoped credential.
+
+  ### The escape hatch is temporary
+
+      config :platform, Platform.Vault, allow_unscoped_workspace_access: true
+
+  restores the pre-fix permissive behaviour verbatim — every accessor (including
+  a `nil` one) and every permission — and logs a warning naming the slug and
+  accessor on each use. It exists so a deployment that turns up an undiscovered
+  dependent can roll forward instead of reverting the gate. It is **not** an
+  operational knob and **not** a permission model, and it is expected to be
+  removed together with the `workspace_id` column. If you are reading this after
+  that column is gone, this flag should have gone with it.
+
+  ## Known limit
+
+  The accessor tuple is caller-asserted, not cryptographically bound — any
+  in-BEAM caller can pass `{:system, nil}`. This closes "anyone who knows a slug
+  can destroy it" and makes destructive intent explicit and auditable; it is not
+  a capability boundary against a hostile in-process caller. Binding caller
+  identity at the MCP/LiveView/channel edge is separate work.
+  """
 
   import Ecto.Query
+
+  require Logger
 
   alias Platform.Repo
   alias Platform.Vault.AccessGrant
@@ -10,6 +77,9 @@ defmodule Platform.Vault do
 
   # Sentinel UUID used when the accessor is anonymous/system (accessor_id NOT NULL in DB).
   @system_accessor_id "00000000-0000-0000-0000-000000000000"
+
+  # Accessor types allowed to mutate platform-scoped credentials without a grant.
+  @privileged_accessor_types ~w(system platform)
 
   # ── Public API ──────────────────────────────────────────────────────────────
 
@@ -145,8 +215,10 @@ defmodule Platform.Vault do
   @doc """
   Retrieve and decrypt a credential by slug.
 
-  Access is checked against the credential's scope and any explicit grants.
-  Every call — granted or denied — is written to the vault access log.
+  Requires the `:use` permission: platform-scoped credentials are readable by
+  any accessor, otherwise the accessor must own the credential's scope or hold
+  a grant listing `"use"`. Every call — granted or denied — is written to the
+  vault access log.
 
   ## Options
 
@@ -165,7 +237,7 @@ defmodule Platform.Vault do
         {:error, :not_found}
 
       cred ->
-        case check_access(cred, accessor) do
+        case check_access(cred, accessor, :use) do
           :ok ->
             now = DateTime.utc_now()
 
@@ -180,20 +252,12 @@ defmodule Platform.Vault do
               %{credential_id: cred.id, slug: slug, accessor: accessor}
             )
 
-            log_access(cred.id, accessor, "use", %{})
+            log_access(cred, accessor, "use", %{})
 
             {:ok, updated.encrypted_data}
 
           {:error, :access_denied} ->
-            :telemetry.execute(
-              [:platform, :vault, :access_denied],
-              %{system_time: System.system_time()},
-              %{credential_id: cred.id, slug: slug, accessor: accessor}
-            )
-
-            log_access(cred.id, accessor, "denied", %{})
-
-            {:error, :access_denied}
+            deny(cred, slug, accessor)
         end
     end
   end
@@ -201,47 +265,65 @@ defmodule Platform.Vault do
   @doc """
   Atomically replace a credential's encrypted value.
 
+  Requires the `:rotate` permission. Reading a credential does not confer the
+  authority to overwrite it: on a platform-scoped credential the accessor must
+  be privileged (`{:system, _}` or `{:platform, _}`) or hold a grant listing
+  `"rotate"`; on an agent- or integration-scoped credential it must own the
+  scope or hold such a grant. A refused rotation mutates nothing, emits
+  `[:platform, :vault, :access_denied]` and writes a `"denied"` access-log row.
+
   ## Options
 
-    * `:accessor` - `{accessor_type, accessor_id}` performing the rotation
+    * `:accessor`     - `{accessor_type, accessor_id}` performing the rotation
+    * `:workspace_id` - workspace context (used to narrow the lookup)
   """
   @spec rotate(String.t(), binary(), keyword()) ::
-          {:ok, Credential.t()} | {:error, :not_found | any()}
+          {:ok, Credential.t()} | {:error, :not_found | :access_denied | any()}
   def rotate(slug, new_value, opts \\ []) do
     accessor = Keyword.get(opts, :accessor)
 
-    case Repo.get_by(Credential, slug: slug) do
+    case lookup_by_slug(slug, opts) do
       nil ->
         {:error, :not_found}
 
       credential ->
-        now = DateTime.utc_now()
+        case check_access(credential, accessor, :rotate) do
+          {:error, :access_denied} ->
+            deny(credential, slug, accessor)
 
-        result =
-          Repo.transaction(fn ->
-            case credential
-                 |> Credential.changeset(%{encrypted_data: new_value, rotated_at: now})
-                 |> Repo.update() do
-              {:ok, updated} -> updated
-              {:error, changeset} -> Repo.rollback(changeset)
-            end
-          end)
-
-        case result do
-          {:ok, updated} ->
-            :telemetry.execute(
-              [:platform, :vault, :credential_rotated],
-              %{system_time: System.system_time()},
-              %{credential_id: credential.id, slug: slug}
-            )
-
-            log_access(credential.id, accessor, "rotate", %{})
-
-            {:ok, strip_encrypted(updated)}
-
-          {:error, reason} ->
-            {:error, reason}
+          :ok ->
+            do_rotate(credential, slug, new_value, accessor)
         end
+    end
+  end
+
+  defp do_rotate(credential, slug, new_value, accessor) do
+    now = DateTime.utc_now()
+
+    result =
+      Repo.transaction(fn ->
+        case credential
+             |> Credential.changeset(%{encrypted_data: new_value, rotated_at: now})
+             |> Repo.update() do
+          {:ok, updated} -> updated
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end)
+
+    case result do
+      {:ok, updated} ->
+        :telemetry.execute(
+          [:platform, :vault, :credential_rotated],
+          %{system_time: System.system_time()},
+          %{credential_id: credential.id, slug: slug}
+        )
+
+        log_access(credential, accessor, "rotate", %{})
+
+        {:ok, strip_encrypted(updated)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -302,54 +384,77 @@ defmodule Platform.Vault do
   @doc """
   Delete a credential and cascade to access grants.
 
-  The access log entry is written before deletion (FK constraint).
+  Requires the `:revoke` permission, which is separate from `:rotate` — the
+  authority to replace a value does not imply the authority to destroy it. On a
+  platform-scoped credential the accessor must be privileged (`{:system, _}` or
+  `{:platform, _}`) or hold a grant listing `"revoke"`; on an agent- or
+  integration-scoped credential it must own the scope or hold such a grant. A
+  refused deletion destroys nothing, emits `[:platform, :vault, :access_denied]`
+  and writes a `"denied"` access-log row.
+
+  The credential and its access grants are destroyed; **the access log is
+  retained**. A `"revoke"` entry is written inside the deleting transaction and
+  survives it: the foreign key is `ON DELETE SET NULL`, so each retained row
+  keeps its `credential_slug`, `credential_scope_type`, accessor and action with
+  only `credential_id` nulled. Read the surviving history with `access_log/2`.
 
   ## Options
 
-    * `:accessor` - `{accessor_type, accessor_id}` performing the deletion
+    * `:accessor`     - `{accessor_type, accessor_id}` performing the deletion
+    * `:workspace_id` - workspace context (used to narrow the lookup)
   """
   @spec delete(String.t(), keyword()) ::
-          {:ok, Credential.t()} | {:error, :not_found | any()}
+          {:ok, Credential.t()} | {:error, :not_found | :access_denied | any()}
   def delete(slug, opts \\ []) do
     accessor = Keyword.get(opts, :accessor)
 
-    case Repo.get_by(Credential, slug: slug) do
+    case lookup_by_slug(slug, opts) do
       nil ->
         {:error, :not_found}
 
       credential ->
-        # Log BEFORE deletion — vault_access_log FK has on_delete: :nothing.
-        log_access(credential.id, accessor, "revoke", %{})
-
-        result =
-          Repo.transaction(fn ->
-            # Grants are cascade-deleted by the DB (on_delete: :delete_all).
-            from(g in AccessGrant, where: g.credential_id == ^credential.id)
-            |> Repo.delete_all()
-
-            # Access logs have on_delete: :nothing — must delete manually.
-            from(l in AccessLog, where: l.credential_id == ^credential.id)
-            |> Repo.delete_all()
-
-            case Repo.delete(credential) do
-              {:ok, deleted} -> deleted
-              {:error, changeset} -> Repo.rollback(changeset)
-            end
-          end)
-
-        case result do
-          {:ok, deleted} ->
-            :telemetry.execute(
-              [:platform, :vault, :credential_revoked],
-              %{system_time: System.system_time()},
-              %{credential_id: credential.id, slug: slug}
-            )
-
-            {:ok, deleted}
-
-          {:error, reason} ->
-            {:error, reason}
+        case check_access(credential, accessor, :revoke) do
+          {:error, :access_denied} -> deny(credential, slug, accessor)
+          :ok -> do_delete(credential, slug, accessor)
         end
+    end
+  end
+
+  defp do_delete(credential, slug, accessor) do
+    result =
+      Repo.transaction(fn ->
+        # Written INSIDE the transaction. Ordering no longer matters — the FK is
+        # ON DELETE SET NULL, so this row outlives the credential and the
+        # database nulls its credential_id a few statements below. Writing it
+        # here rather than before the transaction means a rolled-back deletion
+        # leaves no phantom "revoke" claiming a destruction that never happened.
+        log_access(credential, accessor, "revoke", %{})
+
+        # Grants ARE subordinate to the credential — unlike the log, they carry
+        # no history worth keeping once the thing they authorize is gone. The DB
+        # cascades them (on_delete: :delete_all); doing it explicitly is
+        # harmless and keeps the intent visible at the call site.
+        from(g in AccessGrant, where: g.credential_id == ^credential.id)
+        |> Repo.delete_all()
+
+        case Repo.delete(credential) do
+          {:ok, deleted} -> deleted
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end)
+
+    case result do
+      {:ok, deleted} ->
+        :telemetry.execute(
+          [:platform, :vault, :credential_revoked],
+          %{system_time: System.system_time()},
+          %{credential_id: credential.id, slug: slug}
+        )
+
+        {:ok, deleted}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -377,6 +482,60 @@ defmodule Platform.Vault do
     |> Enum.map(&strip_encrypted/1)
   end
 
+  @doc """
+  Read a credential's access log, newest first.
+
+  Takes a slug or a `%Platform.Vault.Credential{}`. The history outlives the
+  credential — `delete/2` retains it with `credential_id` nulled — so the query
+  matches on `credential_id` *or* the denormalised `credential_slug`, and a slug
+  whose credential has been destroyed still returns its full trail, ending in
+  the `"revoke"` entry that recorded the destruction.
+
+  The union matters in both directions: matching only on `credential_id` would
+  lose everything the moment the credential is deleted, and matching only on
+  `credential_slug` would miss any row written before the denormalised columns
+  existed and not caught by the backfill. Rows for a *re-created* credential at
+  the same slug are returned too — that is deliberate, the slug is the audit
+  subject — and the old ones are distinguishable by `credential_id` being nil.
+
+  ## Options
+
+    * `:limit` - maximum number of entries, default `100`
+  """
+  @spec access_log(String.t() | Credential.t(), keyword()) :: [AccessLog.t()]
+  def access_log(credential_or_slug, opts \\ [])
+
+  def access_log(%Credential{id: credential_id, slug: slug}, opts) do
+    query_access_log(credential_id, slug, opts)
+  end
+
+  def access_log(slug, opts) when is_binary(slug) do
+    credential_id =
+      from(c in Credential, where: c.slug == ^slug, select: c.id, limit: 1)
+      |> Repo.one()
+
+    query_access_log(credential_id, slug, opts)
+  end
+
+  defp query_access_log(credential_id, slug, opts) do
+    limit = Keyword.get(opts, :limit, 100)
+
+    # id is a UUIDv7, so it breaks inserted_at ties in insertion order rather
+    # than arbitrarily — entries written in the same microsecond (a delete
+    # writes its "revoke" alongside whatever preceded it) still read back in the
+    # order they happened.
+    base = from(l in AccessLog, order_by: [desc: l.inserted_at, desc: l.id], limit: ^limit)
+
+    base =
+      if credential_id do
+        where(base, [l], l.credential_slug == ^slug or l.credential_id == ^credential_id)
+      else
+        where(base, [l], l.credential_slug == ^slug)
+      end
+
+    Repo.all(base)
+  end
+
   # ── Private: Lookup ──────────────────────────────────────────────────────────
 
   defp lookup_by_slug(slug, opts) do
@@ -393,69 +552,179 @@ defmodule Platform.Vault do
 
   # ── Private: Access Control ──────────────────────────────────────────────────
 
-  # Platform-scoped: accessible by any accessor.
-  defp check_access(%Credential{scope_type: "platform"}, _accessor), do: :ok
+  # `permission` is one of :use | :rotate | :revoke. See the moduledoc for the
+  # shared vocabulary; grant_permission/1 maps it to the AccessGrant string.
 
-  # Workspace-scoped: always allow for now (membership enforcement coming later).
-  defp check_access(%Credential{scope_type: "workspace"}, _accessor), do: :ok
+  # Platform-scoped reads: accessible by any accessor. Unchanged — the shared
+  # provider credentials every agent reads live at this scope.
+  defp check_access(%Credential{scope_type: "platform"}, _accessor, :use), do: :ok
 
-  # Agent-scoped: owner or explicit grant.
+  # Platform-scoped writes: privileged accessors, or an explicit grant carrying
+  # the permission. A nil/unknown accessor falls through to the catch-all deny —
+  # {:system, nil} must be stated to be honoured, it is not the default.
   defp check_access(
-         %Credential{scope_type: "agent", scope_id: scope_id} = cred,
-         {:agent, accessor_id}
-       ) do
-    if scope_id == accessor_id do
+         %Credential{scope_type: "platform"} = cred,
+         {accessor_type, accessor_id},
+         permission
+       )
+       when permission in [:rotate, :revoke] do
+    if to_string(accessor_type) in @privileged_accessor_types do
       :ok
     else
-      check_explicit_grant(cred, "agent", accessor_id)
+      check_explicit_grant(cred, to_string(accessor_type), accessor_id, permission)
     end
   end
 
-  # Integration-scoped: owner or explicit grant.
+  # Workspace-scoped: deny by default, for every permission and every accessor
+  # type. There is no membership to evaluate — no `workspaces` table was ever
+  # created, `workspace_id` has no foreign key anywhere, and org membership
+  # (ADR-0042) relates users to orgs while vault accessors are agents and
+  # integrations. An explicit AccessGrant is the only authorization signal that
+  # actually exists at this scope, so it is the only open path. See the moduledoc:
+  # the column is slated for deletion and this clause is the interim state.
   defp check_access(
-         %Credential{scope_type: "integration", scope_id: scope_id} = cred,
-         {:integration, accessor_id}
+         %Credential{scope_type: "workspace"} = cred,
+         {accessor_type, accessor_id},
+         permission
+       ) do
+    case check_explicit_grant(cred, to_string(accessor_type), accessor_id, permission) do
+      :ok ->
+        :ok
+
+      {:error, :access_denied} ->
+        workspace_escape_hatch(cred, {accessor_type, accessor_id}, permission)
+    end
+  end
+
+  # Workspace-scoped with a nil or otherwise shapeless accessor: no grant row can
+  # match it, so the escape hatch is all that is left. Matching on the accessor
+  # SHAPE rather than on `parse_accessor/1`'s output is deliberate — parsing maps
+  # nil to the same "system" string as {:system, nil} and would quietly make an
+  # absent accessor privileged.
+  defp check_access(%Credential{scope_type: "workspace"} = cred, accessor, permission) do
+    workspace_escape_hatch(cred, accessor, permission)
+  end
+
+  # Agent-scoped: the owner holds full authority over its own credential.
+  defp check_access(
+         %Credential{scope_type: "agent", scope_id: scope_id} = cred,
+         {:agent, accessor_id},
+         permission
        ) do
     if scope_id == accessor_id do
       :ok
     else
-      check_explicit_grant(cred, "integration", accessor_id)
+      check_explicit_grant(cred, "agent", accessor_id, permission)
+    end
+  end
+
+  # Integration-scoped: the owner holds full authority over its own credential.
+  defp check_access(
+         %Credential{scope_type: "integration", scope_id: scope_id} = cred,
+         {:integration, accessor_id},
+         permission
+       ) do
+    if scope_id == accessor_id do
+      :ok
+    else
+      check_explicit_grant(cred, "integration", accessor_id, permission)
     end
   end
 
   # Cross-type access to restricted scopes: check explicit grants only.
-  defp check_access(%Credential{scope_type: type} = cred, {accessor_type, accessor_id})
+  defp check_access(
+         %Credential{scope_type: type} = cred,
+         {accessor_type, accessor_id},
+         permission
+       )
        when type in ["agent", "integration"] do
-    check_explicit_grant(cred, to_string(accessor_type), accessor_id)
+    check_explicit_grant(cred, to_string(accessor_type), accessor_id, permission)
   end
 
   # All other cases (nil accessor, unknown accessor type): deny.
-  defp check_access(_credential, _accessor), do: {:error, :access_denied}
+  defp check_access(_credential, _accessor, _permission), do: {:error, :access_denied}
 
-  defp check_explicit_grant(%Credential{id: credential_id}, grantee_type, grantee_id) do
-    grant =
-      from(g in AccessGrant,
-        where:
-          g.credential_id == ^credential_id and
-            g.grantee_type == ^grantee_type and
-            g.grantee_id == ^grantee_id and
-            fragment("? = ANY(?)", ^"use", g.permissions),
-        limit: 1
-      )
-      |> Repo.one()
+  defp check_explicit_grant(%Credential{id: credential_id}, grantee_type, grantee_id, permission) do
+    # A grantee_id that is not a UUID can never match a grant row, and handing it
+    # to the query would raise rather than deny. Fail closed instead.
+    case Ecto.UUID.cast(grantee_id) do
+      :error ->
+        {:error, :access_denied}
 
-    if grant, do: :ok, else: {:error, :access_denied}
+      {:ok, grantee_uuid} ->
+        required = grant_permission(permission)
+
+        grant =
+          from(g in AccessGrant,
+            where:
+              g.credential_id == ^credential_id and
+                g.grantee_type == ^grantee_type and
+                g.grantee_id == ^grantee_uuid and
+                fragment("? = ANY(?)", ^required, g.permissions),
+            limit: 1
+          )
+          |> Repo.one()
+
+        if grant, do: :ok, else: {:error, :access_denied}
+    end
   end
+
+  # Temporary rollback switch for the workspace deny-by-default clause above.
+  # Off by default; when on it restores the old permissive behaviour verbatim and
+  # says so loudly, once per allowed access, naming the slug and the accessor so
+  # the exception is greppable in logs. Expected to be deleted along with the
+  # `workspace_id` column — see the moduledoc.
+  defp workspace_escape_hatch(%Credential{} = cred, accessor, permission) do
+    if Application.get_env(:platform, __MODULE__, [])[:allow_unscoped_workspace_access] do
+      Logger.warning(
+        "vault: allowing #{permission} on workspace-scoped credential #{cred.slug} for " <>
+          "accessor #{inspect(accessor)} because :allow_unscoped_workspace_access is enabled. " <>
+          "This escape hatch is temporary and goes away with the workspace_id column."
+      )
+
+      :ok
+    else
+      {:error, :access_denied}
+    end
+  end
+
+  # Permission atom -> AccessGrant.permissions string. Deliberately shares the
+  # dictionary with Platform.Vault.AccessLog's action strings.
+  defp grant_permission(:use), do: "use"
+  defp grant_permission(:rotate), do: "rotate"
+  defp grant_permission(:revoke), do: "revoke"
 
   # ── Private: Audit Logging ───────────────────────────────────────────────────
 
+  # Single refusal path shared by get/2, rotate/3 and delete/2. A refused
+  # destructive attempt that leaves no trace would be a second bug, so every
+  # denial emits telemetry AND writes a "denied" access-log row before returning.
+  defp deny(%Credential{} = cred, slug, accessor) do
+    :telemetry.execute(
+      [:platform, :vault, :access_denied],
+      %{system_time: System.system_time()},
+      %{credential_id: cred.id, slug: slug, accessor: accessor}
+    )
+
+    log_access(cred, accessor, "denied", %{})
+
+    {:error, :access_denied}
+  end
+
+  # Takes the whole credential, not just its id, so slug and scope can be
+  # denormalised onto the row. The FK is ON DELETE SET NULL, so credential_id is
+  # gone the moment the credential is destroyed and these copies are the only
+  # thing that keeps a retained entry readable.
+  #
   # Synchronous for v1 simplicity. Can be made async with Task.start + Sandbox.allow
   # for production hardening.
-  defp log_access(credential_id, accessor, action, metadata) do
+  defp log_access(%Credential{} = credential, accessor, action, metadata) do
     {accessor_type, accessor_id} = parse_accessor(accessor)
 
     Repo.insert(%AccessLog{
-      credential_id: credential_id,
+      credential_id: credential.id,
+      credential_slug: credential.slug,
+      credential_scope_type: credential.scope_type,
       accessor_type: accessor_type,
       accessor_id: accessor_id,
       action: action,
