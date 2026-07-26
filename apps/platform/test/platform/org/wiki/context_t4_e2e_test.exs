@@ -798,7 +798,16 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # `{{correction_exemplars}}` few-shot block above the
       # prior-conversation window (AC16). Update-only — the 20260707 seed
       # already created the row on every migrated environment.
-      "20260726000100_update_intent_classify_prompt_with_corrections.exs"
+      "20260726000100_update_intent_classify_prompt_with_corrections.exs",
+      # Task 019f9b28-6ca7 stage 5: the `architecture.review_plan.v1`
+      # body told the architect to "prefer citing the ADR by number",
+      # which `docs/decisions/` cannot honour — four numbers each name
+      # two different ADRs. `seed_defaults/0` is INSERT-only and the
+      # 20260708123000 force-update already claimed this row on every
+      # migrated environment, so the new guidance needs its own
+      # overwrite to reach a deployed prompt. Update-only; no schema
+      # change.
+      "20260726210000_force_update_architect_review_plan_citation_guidance.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()
