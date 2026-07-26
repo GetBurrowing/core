@@ -7,6 +7,7 @@ defmodule Platform.Changelog do
   """
 
   import Ecto.Query
+  require Logger
 
   alias Platform.Changelog.ChangelogEntry
   alias Platform.Repo
@@ -139,11 +140,34 @@ defmodule Platform.Changelog do
 
   # ── Task ID extraction ──────────────────────────────────────────────────
 
+  # Full 8-4-4-4-12 UUID directly after a `task/` / `task-` / `pr/` marker.
+  @branch_full_uuid ~r/(?:task|pr)[\/\-]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
+
+  # Fallback: the *longest* hex-and-dash run after the marker.
+  #
+  # This deliberately captures more than the 8-char prefix the original
+  # implementation took. Task ids are UUIDv7 and therefore time-ordered, so
+  # tasks filed seconds apart routinely share their first 8 hex characters —
+  # `task/019f9b11-97d7` and `task/019f9b11-3bde` are two different tasks.
+  # Truncating to 8 chars threw away the disambiguator that the branch name
+  # was carrying on purpose, and the lookup then picked an arbitrary twin.
+  #
+  # The trailing `(?:-[0-9a-f]+)*` stops at the first non-hex segment, so a
+  # descriptive suffix (`task/019f9b11-97d7-runtime-channel`) still yields
+  # `019f9b11-97d7`. A suffix that happens to be all-hex (`...-fed`) is
+  # captured too and simply resolves to no task — no attribution, which is
+  # the safe outcome. See `find_task_by_prefix/1`.
+  @branch_prefix ~r/(?:task|pr)[\/\-]([0-9a-f]{8}(?:-[0-9a-f]+)*)/i
+
   @doc """
   Extract a task ID from a PR branch name.
 
-  Looks for patterns like `task/019d219a`, `pr-019d219a`, or raw UUIDs.
-  Returns the full task_id if a matching task exists, otherwise nil.
+  Looks for patterns like `task/019d219a`, `task/019d219a-67a8`, `pr-019d219a`,
+  or raw UUIDs. Returns the full task_id if exactly one matching task exists,
+  otherwise nil.
+
+  Partial prefixes that match more than one task resolve to `nil` rather than
+  to an arbitrary match — see `find_task_by_prefix/1`.
 
   ## Examples
 
@@ -157,35 +181,37 @@ defmodule Platform.Changelog do
 
   def extract_task_id_from_branch(branch) when is_binary(branch) do
     # Try full UUID first
-    full_uuid =
-      ~r/(?:task|pr)[\/\-]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
-
-    case Regex.run(full_uuid, branch) do
+    case Regex.run(@branch_full_uuid, branch) do
       [_, uuid] ->
         if task_exists?(uuid), do: uuid, else: nil
 
       _ ->
-        # Try prefix match (e.g. task/019d219a)
-        case Regex.run(~r/(?:task|pr)[\/\-]([0-9a-f]{8})/i, branch) do
+        # Try prefix match (e.g. task/019d219a, task/019d219a-67a8)
+        case Regex.run(@branch_prefix, branch) do
           [_, prefix] -> find_task_by_prefix(prefix)
           _ -> nil
         end
     end
   end
 
+  # Same longest-hex-run rule as `@branch_prefix`, after a `Task:` /
+  # `Closes #task/` marker. Captures a full UUID when one is present.
+  @body_task_ref ~r/(?:task[:\s]+|closes\s+#?task[\/\-])([0-9a-f]{8}(?:-[0-9a-f]+)*)/i
+
   @doc """
   Extract a task ID from PR body text.
 
   Looks for patterns like `Task: 019d219a...` or `Closes #task/019d219a...`.
+
+  Shares `find_task_by_prefix/1` with the branch path, so partial references
+  that match more than one task resolve to `nil` rather than to an arbitrary
+  match.
   """
   def extract_task_id_from_body(nil), do: nil
 
   def extract_task_id_from_body(body) when is_binary(body) do
     # Look for task UUID patterns in the body
-    case Regex.run(
-           ~r/(?:task[:\s]+|closes\s+#?task[\/\-])([0-9a-f]{8}(?:-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?)/i,
-           body
-         ) do
+    case Regex.run(@body_task_ref, body) do
       [_, match] ->
         if String.length(match) == 36 do
           if task_exists?(match), do: match, else: nil
@@ -205,21 +231,48 @@ defmodule Platform.Changelog do
     _ -> false
   end
 
+  # Resolve a partial task id, failing closed when it is ambiguous.
+  #
+  # This used to run `limit: 1` with no `order_by` and no ambiguity check, so a
+  # prefix shared by several tasks returned an arbitrary row *as a success*.
+  # That is not a cosmetic mis-attribution: the caller in
+  # `PlatformWeb.GithubWebhookController` uses the resolved id to auto-pass the
+  # task's `pr_merged` validation, so one merge silently satisfied a different
+  # task's deploy gate and marked unmerged code as shipped.
+  #
+  # A wrong attribution is strictly worse than no attribution, so on more than
+  # one match we return `nil` and log. Fetching `limit: 2` is enough to tell
+  # "exactly one" from "more than one" without counting the whole table.
   defp find_task_by_prefix(prefix) do
     import Ecto.Query
 
-    # Use LIKE on the text representation of the UUID
+    # Use LIKE on the text representation of the UUID. `prefix` comes from a
+    # `[0-9a-f-]` capture, so it cannot carry LIKE wildcards.
     pattern = "#{prefix}%"
 
-    case Repo.one(
-           from(t in Platform.Tasks.Task,
-             where: fragment("CAST(? AS text) LIKE ?", t.id, ^pattern),
-             limit: 1,
-             select: t.id
-           )
-         ) do
-      nil -> nil
-      id -> id
+    matches =
+      Repo.all(
+        from(t in Platform.Tasks.Task,
+          where: fragment("CAST(? AS text) LIKE ?", t.id, ^pattern),
+          limit: 2,
+          select: t.id
+        )
+      )
+
+    case matches do
+      [id] ->
+        id
+
+      [] ->
+        nil
+
+      [_, _] = ids ->
+        Logger.warning(
+          "Changelog: task-id prefix #{inspect(prefix)} is ambiguous " <>
+            "(matches at least #{inspect(ids)}); refusing to attribute"
+        )
+
+        nil
     end
   rescue
     _ -> nil
