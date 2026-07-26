@@ -11,8 +11,15 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
 
     * `gather_context/2` walks the sibling task tree in the plan's
       project (excluding self + excluding done/cancelled), fetches active
-      plans + their stage descriptions, reads the `docs/decisions/` ADR
-      filesystem listing, and packages the plan payload for the prompt.
+      plans + their stage descriptions, and reads the `docs/decisions/`
+      ADR filesystem listing. The plan payload itself is **not** built
+      here: `Platform.Responsibilities.ContextProviders`'s
+      `:plan_payload` slot owns it (task 019f9b28-6ca7 stage 3), so the
+      Router's batch path and this handler see the identical payload.
+      That slot REFUSES an unresolvable plan, and the refusal propagates
+      out of `gather_context/2` — ADR-0046 runs this pass strictly after
+      plan submission, so "no plan" means a broken trigger, not an empty
+      review.
     * `render_instruction/1` renders `architecture.review_plan.v1` from
       the DB (falls back to the hardcoded template body when the DB
       row is missing so early-boot dispatch doesn't crash).
