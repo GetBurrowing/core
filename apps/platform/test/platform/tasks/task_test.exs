@@ -1547,10 +1547,19 @@ defmodule Platform.Tasks.TaskTest do
       assert length(Task.statuses()) == 9
     end
 
-    test "create_task/1 defaults planning_step to \"planning\" and outcomes to %{}", %{
+    test "a freshly inserted task defaults planning_step to \"planning\" and outcomes to %{}", %{
       project: project
     } do
-      assert {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Fresh task"})
+      # `Repo.insert!` rather than `Tasks.create_task/1` on purpose. Every
+      # context-level task write broadcasts to the singleton
+      # `TaskRouterWatcher`, which then evaluates the row from a process
+      # that does not own this async test's sandbox connection — the race
+      # the watcher itself documents at `task_router_watcher.ex:509`.
+      # Adding avoidable instances of it to an `async: true` module
+      # destabilises the (sync, globally-stateful) router tests; measured,
+      # see the stage evidence. Nothing about the column default needs the
+      # context, so don't pay for it.
+      task = Repo.insert!(%Task{project_id: project.id, title: "Fresh task"})
       assert task.planning_step == "planning"
       assert task.planning_step_outcomes == %{}
 
@@ -1585,9 +1594,11 @@ defmodule Platform.Tasks.TaskTest do
       assert get_change(wide, :planning_step) == nil
     end
 
+    # The one context-level write this stage keeps: `update_task/3` IS the
+    # unguarded status writer the narrow changeset exists to stay off, so
+    # the guard has to exercise it for real.
     test "update_task/3 does not change planning_step", %{project: project} do
-      assert {:ok, task} =
-               Tasks.create_task(%{project_id: project.id, title: "Unguarded surface"})
+      task = Repo.insert!(%Task{project_id: project.id, title: "Unguarded surface"})
 
       assert {:ok, updated} = Tasks.update_task(task, %{planning_step: "architecting"})
       assert updated.planning_step == "planning"
@@ -1680,7 +1691,7 @@ defmodule Platform.Tasks.TaskTest do
     end
 
     test "a full outcome entry round-trips through the database", %{project: project} do
-      assert {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Round trip"})
+      task = Repo.insert!(%Task{project_id: project.id, title: "Round trip"})
 
       entry = %{
         "outcome" => "failed",
