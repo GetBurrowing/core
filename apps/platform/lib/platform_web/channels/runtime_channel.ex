@@ -9,6 +9,7 @@ defmodule PlatformWeb.RuntimeChannel do
 
   require Logger
 
+  alias Platform.Analytics.UsageEvent
   alias Platform.Chat
   alias Platform.Federation
   alias Platform.Federation.RuntimePresence
@@ -433,13 +434,13 @@ defmodule PlatformWeb.RuntimeChannel do
 
   @impl true
   def handle_in("usage_event", params, socket) when is_map(params) do
-    require Logger
     Logger.info("[RuntimeChannel] usage_event received: #{inspect(Map.keys(params))}")
 
     # Enrich with agent_id from the socket if not provided
     attrs =
       params
       |> Map.put_new("agent_id", socket.assigns[:agent_id])
+      |> sanitize_uuid_fields(socket.assigns.runtime_id)
 
     case Platform.Analytics.record_usage_event(attrs) do
       {:ok, event} ->
@@ -473,6 +474,43 @@ defmodule PlatformWeb.RuntimeChannel do
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────
+
+  # `usage_event` payloads come from external runtimes we do not control, and
+  # every `:binary_id` field on `UsageEvent` is OPTIONAL — only `model`,
+  # `provider` and `session_key` are required. Cost/usage accounting is the
+  # entire point of that table, so one malformed identifier must not destroy
+  # an otherwise-valid record: null the offending field, keep the event.
+  #
+  # Observed live: `space_id: "higgins"` (a slug) from runtime
+  # `rowan-home-openclaw`. Before this, that payload raised inside
+  # `Repo.insert` and killed the channel process.
+  #
+  # The Logger.warning is load-bearing. Nulling a value the client supplied
+  # IS data loss, and silent coercion is exactly how a client-side bug
+  # survives indefinitely. Warn level, naming the runtime, the field and the
+  # offending value, so whoever owns that runtime can fix the sender.
+  defp sanitize_uuid_fields(attrs, runtime_id) do
+    Enum.reduce(UsageEvent.uuid_fields(), attrs, fn field, acc ->
+      key = Atom.to_string(field)
+
+      case Map.get(acc, key) do
+        nil ->
+          acc
+
+        value ->
+          if UsageEvent.valid_uuid?(value) do
+            acc
+          else
+            Logger.warning(
+              "[RuntimeChannel] usage_event #{key}=#{inspect(value)} is not a valid UUID; " <>
+                "recording event with #{key}=nil (runtime_id=#{runtime_id})"
+            )
+
+            Map.put(acc, key, nil)
+          end
+      end
+    end)
+  end
 
   # Authorization gate for `tool_call`. Reads the grant FRESH on every call
   # rather than reusing the join-time `:runtime` assign, which is an

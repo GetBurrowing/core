@@ -1,6 +1,8 @@
 defmodule PlatformWeb.RuntimeChannelTest do
   use PlatformWeb.ChannelCase, async: false
 
+  import Ecto.Query
+
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat
@@ -390,6 +392,98 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       messages = ExecutionSpace.list_messages_with_participants(space.id)
       assert Enum.any?(messages, &String.contains?(&1.content, "started execution"))
+    end
+  end
+
+  describe "usage_event" do
+    # Regression: a runtime sent `space_id: "higgins"` (a slug). Ecto's
+    # `cast/4` waves non-UUID binaries through for `:binary_id`, so the
+    # failure surfaced as a raised Ecto.ChangeError inside `Repo.insert` —
+    # not the `{:error, changeset}` this handler expects — and the channel
+    # process died. Observed live against `rowan-home-openclaw`.
+    test "a non-UUID space_id does not crash the channel and still records the event", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      # `level: :warning` drops anything below warning, so a Logger.debug or
+      # Logger.info here would produce an empty capture — this asserts the
+      # SEVERITY, not just the text, without depending on the log format.
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          push(socket, "usage_event", %{
+            "space_id" => "higgins",
+            "model" => "anthropic/claude-sonnet-4-6",
+            "provider" => "anthropic",
+            "session_key" => "sess-slug-space-id",
+            "input_tokens" => 120,
+            "output_tokens" => 34
+          })
+
+          # A synchronous call into the channel process: it both flushes the
+          # async push above and proves the process is still answering. If
+          # the usage_event killed the channel, this exits.
+          :sys.get_state(socket.channel_pid)
+        end)
+
+      assert Process.alive?(socket.channel_pid)
+
+      # The client bug must be loud, not swallowed.
+      assert log =~ "usage_event"
+      assert log =~ "higgins"
+      assert log =~ ctx.runtime.runtime_id
+
+      # The cost record survives — that is the whole point of the table.
+      event =
+        Platform.Repo.one!(
+          from(e in Platform.Analytics.UsageEvent,
+            where: e.session_key == "sess-slug-space-id"
+          )
+        )
+
+      assert event.space_id == nil
+      assert event.model == "anthropic/claude-sonnet-4-6"
+      assert event.provider == "anthropic"
+      assert event.total_tokens == 154
+      # agent_id is enriched from the socket and is a real UUID — untouched.
+      assert event.agent_id == ctx.agent.id
+    end
+
+    test "a valid UUID space_id is preserved", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "usage_event", %{
+        "space_id" => ctx.space.id,
+        "model" => "anthropic/claude-sonnet-4-6",
+        "provider" => "anthropic",
+        "session_key" => "sess-valid-space-id",
+        "input_tokens" => 10,
+        "output_tokens" => 5
+      })
+
+      # Synchronous call into the channel: flushes the async push above.
+      :sys.get_state(socket.channel_pid)
+
+      event =
+        Platform.Repo.one!(
+          from(e in Platform.Analytics.UsageEvent,
+            where: e.session_key == "sess-valid-space-id"
+          )
+        )
+
+      assert event.space_id == ctx.space.id
     end
   end
 

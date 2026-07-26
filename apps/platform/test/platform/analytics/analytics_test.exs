@@ -79,6 +79,64 @@ defmodule Platform.AnalyticsTest do
     end
   end
 
+  describe "binary_id validation" do
+    # Ecto's `cast/4` does not check UUID shape for `:binary_id`; without an
+    # explicit validation the failure is a RAISED Ecto.ChangeError at dump
+    # time, which killed PlatformWeb.RuntimeChannel in production.
+    for field <- [:space_id, :agent_id, :participant_id, :triggered_by] do
+      test "rejects a non-UUID #{field} with a changeset error rather than raising" do
+        attrs = Map.put(@valid_attrs, unquote(field), "higgins")
+
+        assert {:error, changeset} = Analytics.record_usage_event(attrs)
+        refute changeset.valid?
+        assert "is not a valid UUID" in errors_on(changeset)[unquote(field)]
+      end
+    end
+
+    test "Repo.insert on an invalid-UUID changeset returns an error tuple, never raises" do
+      changeset =
+        Platform.Analytics.UsageEvent.changeset(
+          %Platform.Analytics.UsageEvent{},
+          Map.put(@valid_attrs, :space_id, "higgins")
+        )
+
+      refute changeset.valid?
+
+      assert {:error, %Ecto.Changeset{}} = Platform.Repo.insert(changeset)
+    end
+
+    test "rejects a 16-byte slug that Ecto.UUID.cast/1 would accept" do
+      # `Ecto.UUID.cast/1` hex-encodes any raw 16-byte binary, but
+      # `Ecto.UUID.dump/1` rejects it — so a cast-based guard would let this
+      # through and still raise inside Repo.insert.
+      sixteen = "higginshigginsxx"
+      assert byte_size(sixteen) == 16
+      assert match?({:ok, _}, Ecto.UUID.cast(sixteen))
+
+      assert {:error, changeset} =
+               Analytics.record_usage_event(Map.put(@valid_attrs, :space_id, sixteen))
+
+      assert "is not a valid UUID" in errors_on(changeset).space_id
+    end
+
+    test "a valid UUID space_id round-trips unchanged" do
+      space_id = Ecto.UUID.generate()
+
+      assert {:ok, event} =
+               Analytics.record_usage_event(Map.put(@valid_attrs, :space_id, space_id))
+
+      assert event.space_id == space_id
+      assert Platform.Repo.get(Platform.Analytics.UsageEvent, event.id).space_id == space_id
+    end
+
+    test "nil binary_id fields are left alone" do
+      assert {:ok, event} =
+               Analytics.record_usage_event(Map.put(@valid_attrs, :space_id, nil))
+
+      assert event.space_id == nil
+    end
+  end
+
   describe "usage_summary/1" do
     test "returns zeroes when no events exist" do
       summary = Analytics.usage_summary()
