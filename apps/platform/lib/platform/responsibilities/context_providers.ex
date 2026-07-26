@@ -50,6 +50,55 @@ defmodule Platform.Responsibilities.ContextProviders do
   path that requests it — it is a wiring bug, and dispatching an LLM to
   review nothing is how that bug stays invisible. Contrast
   `:recent_journal`, where zero entries is a healthy Tuesday.
+
+  `:sibling_tasks` is on the **optional** side, and deliberately so —
+  it is the counterweight that keeps stage 2's refusal proportionate.
+  An unstacked, epic-less task in a fresh project has zero siblings;
+  that is not a wiring bug, it is the single most common shape in the
+  system. Refusing on it would stop the architect dispatch for exactly
+  the standalone tasks that most need a second read, and a refusal
+  mechanism that fires on the common case gets switched off within a
+  week. It returns `{:ok, ...}` with `scope: :none` instead. Only
+  `plan_payload` is load-bearing enough to refuse a dispatch over.
+
+  ## `:sibling_tasks` — what "sibling" means, and what the bound drops
+
+  Three tiers, most-coupled first, **first match wins**:
+
+    1. `:stack` — the anchor's stack members minus itself
+       (`Platform.Tasks.Stacks.members/1`, ordered by `stack_position`).
+       Tightest coupling in the system: shared rollup branch, atomic
+       ship, declared dependency edges. No status filter — a `done`
+       stack member has already merged into the branch this plan will
+       merge into, so it is still the architect's business.
+    2. `:epic` — `Tasks.list_tasks_by_epic/1` minus self, in-flight
+       statuses only.
+    3. `:project_window` — `Tasks.list_tasks_by_project/1` minus self,
+       in-flight statuses only, further restricted to tasks whose
+       latest live plan is `pending_review`/`approved`, ordered by
+       `updated_at` desc, **capped**.
+
+  First-match, not best-match: a one-member stack yields
+  `scope: :stack, total: 0` rather than falling through to the project
+  window. Stack membership is a deliberate authoring act; if a task was
+  stacked alone, the project's other in-flight work is not what its
+  author meant by "sibling".
+
+  Every bound is disclosed in the payload, never applied silently:
+
+    * `total` / `shown` / `truncated?` / `dropped` — how many siblings
+      the tier found versus how many made the cut.
+    * `unplanned_excluded` — project-window tasks dropped for having no
+      submitted plan. A task with no plan has no stage descriptions and
+      so cannot collide with the plan under review, but "0 siblings"
+      and "0 siblings, 14 of them unplanned" are different facts and
+      the model must be able to tell them apart.
+    * per sibling, `stage_count` / `stages_shown` / `truncated?`.
+
+  `Handlers.ArchitectureReviewPlan.format_sibling_tasks/1` renders all
+  of it as a leading `[scope: …] showing N of M …` line. A block that
+  silently drops half the siblings is the same failure mode as an index
+  that silently mis-numbers an ADR: the model reads absence as evidence.
   """
 
   require Logger
@@ -62,7 +111,11 @@ defmodule Platform.Responsibilities.ContextProviders do
   alias Platform.Meetings.Transcript
   alias Platform.Org.Context, as: OrgContext
   alias Platform.Repo
+  alias Platform.Tasks
   alias Platform.Tasks.Plan
+  alias Platform.Tasks.Stacks
+  alias Platform.Tasks.Stage
+  alias Platform.Tasks.Task, as: TaskSchema
 
   @type slot ::
           :org_identity
@@ -72,6 +125,7 @@ defmodule Platform.Responsibilities.ContextProviders do
           | :current_meeting
           | :trigger_payload
           | :plan_payload
+          | :sibling_tasks
 
   # A plan in one of these statuses is no longer the task's live plan, so
   # resolving `:plan_payload` from a bare `task_id` skips them.
@@ -83,6 +137,42 @@ defmodule Platform.Responsibilities.ContextProviders do
   @task_description_limit 1200
   @stage_description_limit 600
   @e2e_expected_limit 200
+
+  # Truncation budgets for `:sibling_tasks`. The architect preamble is
+  # ~4096 tokens (~16 kB); `:plan_payload` above is sized at ~7 kB,
+  # which leaves roughly 5.5 kB here before `:adr_index` starts getting
+  # squeezed. The arithmetic, written down so the next person moving a
+  # cap sees the constraint instead of re-deriving it:
+  #
+  #   project window  10 siblings x 3 stages x 180 B ~= 5.4 kB ceiling
+  #   stack / epic     8 siblings x 6 stages x 180 B ~= 8.6 kB ceiling
+  #
+  # The stack/epic ceiling is knowingly over the nominal share. Those
+  # tiers are naturally small (stacks run 3-6 members), 180 B is a
+  # ceiling rather than a mean, and a stack member is a task merging
+  # into the SAME rollup branch as the plan under review — the exact
+  # collision this responsibility exists to catch. The project window
+  # is where the unbounded cost actually lived (it used to walk every
+  # in-flight task in the project with no limit at all), so that is the
+  # tier that gets the hard cap and the smaller per-sibling stage
+  # budget.
+  @stack_sibling_limit 8
+  @epic_sibling_limit 8
+  @project_window_limit 10
+  @coupled_stage_limit 6
+  @project_window_stage_limit 3
+  @sibling_stage_description_limit 180
+
+  # Statuses the architect flags collisions against. `done` / `deploying`
+  # / `cancelled` / `backlog` are excluded so a project's graveyard does
+  # not drown the annotation. Applied to the `:epic` and
+  # `:project_window` tiers only — see `stack_siblings/1`.
+  @in_flight_statuses ~w(planning in_progress in_review blocked stack_pending)
+
+  # A project-window sibling only earns preamble space once it has a
+  # submitted plan: with no plan it has no stage descriptions, and so
+  # nothing that can collide with the plan under review.
+  @live_sibling_plan_statuses ~w(pending_review approved)
 
   @doc """
   Materialise a single slot into the shape M1 providers consume.
@@ -113,6 +203,13 @@ defmodule Platform.Responsibilities.ContextProviders do
       `opts[:plan_id]`, else the latest non-superseded/non-rejected plan
       for `opts[:task_id]`. **Returns `{:error, :no_plan_payload}` when
       nothing resolves** — see "Required vs optional slots" below.
+    * `:sibling_tasks` — the tasks whose in-flight work could collide
+      with this one, resolved through the stack → epic → bounded
+      project-window ladder documented in the moduledoc. Anchors on
+      `opts[:task]`, else `opts[:task_id]`, else `opts[:plan].task_id`,
+      else `opts[:plan_id]`. **Never returns `{:error, _}`** — an
+      unresolvable anchor is `scope: :no_anchor` and a genuinely
+      sibling-less task is `scope: :none`, both with `{:ok, ...}`.
 
   `opts` may be a keyword list or a map; map keys may be atoms or
   strings (the router hands `trigger_meta` through verbatim and both
@@ -260,6 +357,16 @@ defmodule Platform.Responsibilities.ContextProviders do
     end
   end
 
+  def gather_context(:sibling_tasks, opts) do
+    payload =
+      opts
+      |> to_keyword()
+      |> resolve_anchor_task()
+      |> sibling_tasks()
+
+    {:ok, %{sibling_tasks: payload}}
+  end
+
   def gather_context(slot, _opts) do
     {:error, {:unknown_slot, slot}}
   end
@@ -352,6 +459,214 @@ defmodule Platform.Responsibilities.ContextProviders do
   defp expected_string(%{"expected" => expected}) when is_binary(expected), do: expected
   defp expected_string(%{expected: expected}) when is_binary(expected), do: expected
   defp expected_string(_payload), do: nil
+
+  # ── :sibling_tasks helpers ────────────────────────────────────────────────
+
+  # Anchor resolution is wider than the stage brief's task/task_id/plan
+  # ladder: `plan_id` is included because the plan-submit trigger can
+  # legitimately carry only that, and re-deriving the task from it is a
+  # single `Repo.get`. Every lookup goes through `safe/1`, so a
+  # malformed id casts to `nil` rather than raising out of an OPTIONAL
+  # slot.
+  defp resolve_anchor_task(opts) do
+    task = Keyword.get(opts, :task)
+    task_id = Keyword.get(opts, :task_id)
+    plan = Keyword.get(opts, :plan)
+    plan_id = Keyword.get(opts, :plan_id)
+
+    cond do
+      match?(%TaskSchema{}, task) -> task
+      is_binary(task_id) -> load_task(task_id)
+      match?(%Plan{}, plan) -> load_task(plan.task_id)
+      is_binary(plan_id) -> plan_id |> load_plan() |> anchor_from_plan()
+      true -> nil
+    end
+  end
+
+  defp anchor_from_plan(%Plan{task_id: task_id}) when is_binary(task_id),
+    do: load_task(task_id)
+
+  defp anchor_from_plan(_plan), do: nil
+
+  defp load_task(task_id) when is_binary(task_id) do
+    case safe(fn -> Repo.get(TaskSchema, task_id) end) do
+      {:ok, %TaskSchema{} = task} -> task
+      _other -> nil
+    end
+  end
+
+  defp load_task(_task_id), do: nil
+
+  defp sibling_tasks(nil), do: empty_siblings(:no_anchor)
+
+  defp sibling_tasks(%TaskSchema{} = task) do
+    cond do
+      is_binary(task.stack_id) -> stack_siblings(task)
+      is_binary(task.epic_id) -> epic_siblings(task)
+      is_binary(task.project_id) -> project_window(task)
+      true -> empty_siblings(:none)
+    end
+  end
+
+  # No status filter here, unlike the other two tiers. A `done` stack
+  # member has already merged into the rollup branch this plan will
+  # merge into, so it is still live context for a collision check —
+  # `deleted_at` exclusion and `stack_position` ordering come from
+  # `Stacks.members/1`.
+  defp stack_siblings(%TaskSchema{} = task) do
+    fn -> Stacks.members(task.stack_id) end
+    |> safe_list()
+    |> Enum.reject(&(&1.id == task.id))
+    |> build_sibling_payload(:stack, @stack_sibling_limit, @coupled_stage_limit)
+  end
+
+  defp epic_siblings(%TaskSchema{} = task) do
+    fn -> Tasks.list_tasks_by_epic(task.epic_id) end
+    |> safe_list()
+    |> Enum.reject(&(&1.id == task.id or &1.status not in @in_flight_statuses))
+    |> build_sibling_payload(:epic, @epic_sibling_limit, @coupled_stage_limit)
+  end
+
+  defp project_window(%TaskSchema{} = task) do
+    candidates =
+      fn -> Tasks.list_tasks_by_project(task.project_id) end
+      |> safe_list()
+      |> Enum.reject(&(&1.id == task.id or &1.status not in @in_flight_statuses))
+
+    plans = latest_live_plans(Enum.map(candidates, & &1.id))
+
+    planned =
+      candidates
+      |> Enum.filter(&planned_sibling?(Map.get(plans, &1.id)))
+      |> Enum.sort_by(& &1.updated_at, {:desc, DateTime})
+
+    payload =
+      build_sibling_payload(
+        planned,
+        :project_window,
+        @project_window_limit,
+        @project_window_stage_limit,
+        unplanned_excluded: length(candidates) - length(planned),
+        plans: plans
+      )
+
+    # An empty window is reported as `:none` rather than
+    # `:project_window` so the renderer can say "this task has no
+    # siblings" instead of "the window found nothing", which reads as a
+    # query failure. The `unplanned_excluded` count survives the
+    # relabel — that is the whole point of carrying it.
+    if payload.total == 0, do: %{payload | scope: :none}, else: payload
+  end
+
+  defp planned_sibling?(%Plan{status: status}), do: status in @live_sibling_plan_statuses
+  defp planned_sibling?(_plan), do: false
+
+  defp build_sibling_payload(tasks, scope, sibling_limit, stage_limit, opts \\ []) do
+    total = length(tasks)
+    shown = Enum.take(tasks, sibling_limit)
+
+    plans = Keyword.get(opts, :plans) || latest_live_plans(Enum.map(shown, & &1.id))
+
+    stages =
+      shown
+      |> Enum.map(&Map.get(plans, &1.id))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(& &1.id)
+      |> stages_by_plan()
+
+    %{
+      scope: scope,
+      total: total,
+      shown: length(shown),
+      truncated?: total > length(shown),
+      dropped: total - length(shown),
+      unplanned_excluded: Keyword.get(opts, :unplanned_excluded, 0),
+      tasks:
+        Enum.map(
+          shown,
+          &sibling_entry(&1, Map.get(plans, &1.id), stages, stage_limit)
+        )
+    }
+  end
+
+  defp empty_siblings(scope) do
+    %{
+      scope: scope,
+      total: 0,
+      shown: 0,
+      truncated?: false,
+      dropped: 0,
+      unplanned_excluded: 0,
+      tasks: []
+    }
+  end
+
+  # One query for every candidate rather than the N+1 the old private
+  # summariser ran (list_plans/1 per task, then a stage preload per
+  # plan). Ordered ascending by version so the reduce leaves the highest
+  # live version per task in the map.
+  defp latest_live_plans([]), do: %{}
+
+  defp latest_live_plans(task_ids) do
+    from(p in Plan,
+      where: p.task_id in ^task_ids and p.status not in @dead_plan_statuses,
+      order_by: [asc: p.task_id, asc: p.version]
+    )
+    |> safe_all()
+    |> Map.new(&{&1.task_id, &1})
+  end
+
+  defp stages_by_plan([]), do: %{}
+
+  defp stages_by_plan(plan_ids) do
+    from(s in Stage,
+      where: s.plan_id in ^plan_ids,
+      order_by: [asc: s.plan_id, asc: s.position]
+    )
+    |> safe_all()
+    |> Enum.group_by(& &1.plan_id)
+  end
+
+  defp sibling_entry(%TaskSchema{} = task, plan, stages_by_plan_id, stage_limit) do
+    all_stages = (plan && Map.get(stages_by_plan_id, plan.id)) || []
+    shown_stages = Enum.take(all_stages, stage_limit)
+
+    %{
+      task_id: task.id,
+      title: task.title,
+      status: task.status,
+      stack_position: task.stack_position,
+      latest_plan_status: plan && plan.status,
+      stage_count: length(all_stages),
+      stages_shown: length(shown_stages),
+      truncated?: length(all_stages) > length(shown_stages),
+      stages: Enum.map(shown_stages, &sibling_stage_entry/1)
+    }
+  end
+
+  defp sibling_stage_entry(stage) do
+    %{
+      position: stage.position,
+      name: stage.name,
+      description: truncate(stage.description, @sibling_stage_description_limit)
+    }
+  end
+
+  defp safe_list(fun) when is_function(fun, 0) do
+    case safe(fun) do
+      {:ok, list} when is_list(list) -> list
+      _other -> []
+    end
+  end
+
+  defp safe_all(query) do
+    case safe(fn -> Repo.all(query) end) do
+      {:ok, list} when is_list(list) -> list
+      _other -> []
+    end
+  end
+
+  # ── shared truncation ─────────────────────────────────────────────────────
 
   defp truncate(str, max_len) when is_binary(str) and byte_size(str) > max_len do
     String.slice(str, 0, max_len) <> "…"

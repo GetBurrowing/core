@@ -19,6 +19,7 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
   alias Platform.Repo
   alias Platform.Responsibilities.ContextProviders
   alias Platform.Tasks
+  alias Platform.Tasks.Task, as: TaskSchema
 
   import Ecto.Query
 
@@ -566,6 +567,351 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
       serialised = inspect(payload, limit: :infinity, printable_limit: :infinity)
       refute serialised =~ "seed a plan with three stages"
       refute serialised =~ "call gather_context/2 with an empty map"
+    end
+  end
+
+  # ── :sibling_tasks ─────────────────────────────────────────────────────────
+  #
+  # Tasks in these blocks are built with `Repo.insert!` rather than
+  # `Tasks.create_task/1` on purpose. Every context-level task write
+  # broadcasts to the singleton `TaskRouterWatcher`, which evaluates
+  # from a process that does not own this test's sandbox connection —
+  # producing failures indistinguishable from the known `TaskRouter`
+  # flake cluster (filed as 019fa003-091a). The context function is not
+  # what's under test here; the slot is.
+
+  defp insert_task!(project_id, attrs) do
+    now = DateTime.utc_now()
+
+    %TaskSchema{}
+    |> Ecto.Changeset.change(
+      Map.merge(
+        %{
+          project_id: project_id,
+          title: "Sibling #{System.unique_integer([:positive])}",
+          status: "in_progress",
+          inserted_at: now,
+          updated_at: now
+        },
+        attrs
+      )
+    )
+    |> Repo.insert!()
+  end
+
+  defp insert_stack!(project_id) do
+    slug = "ctx-siblings-#{System.unique_integer([:positive])}"
+
+    {:ok, stack} =
+      Tasks.Stacks.create_stack(%{
+        project_id: project_id,
+        slug: slug,
+        name: "Ctx Siblings #{slug}",
+        rollup_branch: "stack/#{slug}"
+      })
+
+    stack
+  end
+
+  defp insert_epic!(project_id) do
+    {:ok, epic} =
+      Tasks.create_epic(%{
+        project_id: project_id,
+        name: "Ctx Siblings Epic #{System.unique_integer([:positive])}"
+      })
+
+    epic
+  end
+
+  # An in-flight project task carrying a live plan — i.e. one that the
+  # project-window tier is supposed to surface.
+  defp planned_task!(project_id, attrs) do
+    task = insert_task!(project_id, attrs)
+    _plan = bare_plan(task.id, "pending_review")
+    task
+  end
+
+  defp siblings_for(task_id) do
+    assert {:ok, %{sibling_tasks: payload}} =
+             ContextProviders.gather_context(:sibling_tasks, %{task_id: task_id})
+
+    payload
+  end
+
+  describe "gather_context/2 — :sibling_tasks is optional, never a refusal" do
+    # The required/optional split is the whole point of this slot's
+    # contract: `:plan_payload` refuses so the Router stops a dispatch,
+    # `:sibling_tasks` must not, because "no siblings" is a correct and
+    # extremely common state. If this ever flips, every standalone task
+    # in a fresh project loses its architecture pass.
+    test "an unresolvable anchor is an empty {:ok, _} payload, not an error" do
+      for opts <- [
+            %{},
+            %{task_id: Ecto.UUID.generate()},
+            %{task_id: "not-a-uuid"},
+            %{plan_id: Ecto.UUID.generate()}
+          ] do
+        assert {:ok, %{sibling_tasks: %{scope: :no_anchor, total: 0, tasks: []}}} =
+                 ContextProviders.gather_context(:sibling_tasks, opts),
+               "opts #{inspect(opts)} must resolve to an empty payload, never {:error, _}"
+      end
+    end
+
+    test "the same trigger shapes that REFUSE for :plan_payload still succeed here" do
+      # Paired contrast, same input, two slots — this is the assertion
+      # that documents the split rather than merely relying on it.
+      assert {:error, :no_plan_payload} = ContextProviders.gather_context(:plan_payload, %{})
+      assert {:ok, %{sibling_tasks: _}} = ContextProviders.gather_context(:sibling_tasks, %{})
+    end
+
+    test "a solo task in a fresh project is :none, not an error" do
+      task = insert_task!(plan_project().id, %{status: "planning"})
+
+      assert %{scope: :none, total: 0, shown: 0, truncated?: false, tasks: []} =
+               siblings_for(task.id)
+    end
+  end
+
+  describe "gather_context/2 — :sibling_tasks tier ladder" do
+    setup do
+      project = plan_project()
+      stack = insert_stack!(project.id)
+
+      anchor =
+        insert_task!(project.id, %{
+          title: "Stacked Anchor",
+          status: "planning",
+          stack_id: stack.id,
+          stack_position: 1
+        })
+
+      # Stack members deliberately carry NO plans, so they can't also
+      # show up via the project-window tier and blur the two results.
+      members =
+        for position <- [2, 3, 4] do
+          insert_task!(project.id, %{
+            title: "Stack Member #{position}",
+            stack_id: stack.id,
+            stack_position: position
+          })
+        end
+
+      # 5 unrelated in-flight project tasks, each with a live plan — the
+      # exact set the project-window tier would return.
+      noise = for n <- 1..5, do: planned_task!(project.id, %{title: "Project Noise #{n}"})
+
+      %{project: project, stack: stack, anchor: anchor, members: members, noise: noise}
+    end
+
+    test "a stacked anchor returns its stack members in stack_position order", ctx do
+      payload = siblings_for(ctx.anchor.id)
+
+      assert payload.scope == :stack
+      assert payload.total == 3
+      assert payload.shown == 3
+      refute payload.truncated?
+
+      assert Enum.map(payload.tasks, & &1.task_id) == Enum.map(ctx.members, & &1.id)
+      assert Enum.map(payload.tasks, & &1.stack_position) == [2, 3, 4]
+
+      sibling_ids = MapSet.new(payload.tasks, & &1.task_id)
+      refute MapSet.member?(sibling_ids, ctx.anchor.id), "the anchor must not be its own sibling"
+
+      for noisy <- ctx.noise do
+        refute MapSet.member?(sibling_ids, noisy.id),
+               "stack tier must not leak the project window"
+      end
+    end
+
+    test "POSITIVE CONTROL: those same project tasks DO appear once the anchor is unstacked",
+         ctx do
+      # Same mechanism, same fixtures, one field changed. Without this
+      # the exclusion assertion above would also pass for a resolver
+      # that simply returned nothing.
+      {:ok, unstacked} =
+        ctx.anchor
+        |> Ecto.Changeset.change(stack_id: nil, stack_position: nil)
+        |> Repo.update()
+
+      payload = siblings_for(unstacked.id)
+
+      assert payload.scope == :project_window
+      sibling_ids = MapSet.new(payload.tasks, & &1.task_id)
+
+      for noisy <- ctx.noise do
+        assert MapSet.member?(sibling_ids, noisy.id),
+               "project window must surface #{noisy.title}"
+      end
+    end
+
+    test "an epic anchor with no stack resolves to the epic tier", ctx do
+      epic = insert_epic!(ctx.project.id)
+
+      anchor =
+        insert_task!(ctx.project.id, %{
+          title: "Epic Anchor",
+          status: "planning",
+          epic_id: epic.id
+        })
+
+      in_flight = insert_task!(ctx.project.id, %{title: "Epic Peer", epic_id: epic.id})
+
+      retired =
+        insert_task!(ctx.project.id, %{title: "Epic Done", epic_id: epic.id, status: "done"})
+
+      payload = siblings_for(anchor.id)
+
+      assert payload.scope == :epic
+      sibling_ids = MapSet.new(payload.tasks, & &1.task_id)
+
+      assert MapSet.member?(sibling_ids, in_flight.id)
+      refute MapSet.member?(sibling_ids, retired.id), "epic tier keeps in-flight statuses only"
+      refute MapSet.member?(sibling_ids, anchor.id)
+
+      for noisy <- ctx.noise do
+        refute MapSet.member?(sibling_ids, noisy.id),
+               "epic tier must not fall through to the project window"
+      end
+    end
+  end
+
+  describe "gather_context/2 — :sibling_tasks project window" do
+    test "DETECTOR: the window caps at 10 and reports what it dropped" do
+      # Remove the `@project_window_limit` cap (or raise it) and
+      # `shown == 10` / `truncated? == true` / `dropped == 10` all fail.
+      project = plan_project()
+      anchor = insert_task!(project.id, %{title: "Window Anchor", status: "planning"})
+
+      for n <- 1..20, do: planned_task!(project.id, %{title: "Windowed #{n}"})
+
+      payload = siblings_for(anchor.id)
+
+      assert payload.scope == :project_window
+      assert payload.total == 20
+      assert payload.shown == 10
+      assert payload.truncated? == true
+      assert payload.dropped == 10
+      assert length(payload.tasks) == 10
+    end
+
+    test "an unplanned in-flight task is excluded — and its exclusion is counted" do
+      project = plan_project()
+      anchor = insert_task!(project.id, %{title: "Filter Anchor", status: "planning"})
+      unplanned = insert_task!(project.id, %{title: "No Plan Yet"})
+
+      excluded = siblings_for(anchor.id)
+
+      refute Enum.any?(excluded.tasks, &(&1.task_id == unplanned.id))
+
+      assert excluded.unplanned_excluded == 1,
+             "a dropped sibling must be counted, not silently vanish"
+
+      # POSITIVE CONTROL on the same mechanism: give it a plan and the
+      # very same task appears.
+      _plan = bare_plan(unplanned.id, "pending_review")
+
+      included = siblings_for(anchor.id)
+
+      assert Enum.any?(included.tasks, &(&1.task_id == unplanned.id))
+      assert included.unplanned_excluded == 0
+      assert included.total == 1
+    end
+
+    test "a superseded-only plan does not qualify a sibling for the window" do
+      project = plan_project()
+      anchor = insert_task!(project.id, %{title: "Dead Plan Anchor", status: "planning"})
+      dead = insert_task!(project.id, %{title: "Dead Plan Sibling"})
+      _superseded = bare_plan(dead.id, "superseded")
+
+      payload = siblings_for(anchor.id)
+
+      refute Enum.any?(payload.tasks, &(&1.task_id == dead.id))
+      assert payload.unplanned_excluded == 1
+    end
+
+    test "orders the window by updated_at desc" do
+      project = plan_project()
+      anchor = insert_task!(project.id, %{title: "Order Anchor", status: "planning"})
+      now = DateTime.utc_now()
+
+      oldest =
+        planned_task!(project.id, %{
+          title: "Oldest",
+          updated_at: DateTime.add(now, -3600, :second)
+        })
+
+      newest = planned_task!(project.id, %{title: "Newest", updated_at: now})
+
+      middle =
+        planned_task!(project.id, %{
+          title: "Middle",
+          updated_at: DateTime.add(now, -60, :second)
+        })
+
+      assert Enum.map(siblings_for(anchor.id).tasks, & &1.task_id) ==
+               [newest.id, middle.id, oldest.id]
+    end
+  end
+
+  describe "gather_context/2 — :sibling_tasks stage budgets" do
+    test "the project window shows 3 stages per sibling and says how many it hid" do
+      project = plan_project()
+      anchor = insert_task!(project.id, %{title: "Stage Budget Anchor", status: "planning"})
+      sibling = insert_task!(project.id, %{title: "Eight Stage Sibling"})
+      plan = bare_plan(sibling.id, "approved")
+
+      for position <- 1..8, do: add_stage(plan.id, position)
+
+      [entry] = siblings_for(anchor.id).tasks
+
+      assert entry.stage_count == 8
+      assert entry.stages_shown == 3
+      assert entry.truncated? == true
+      assert Enum.map(entry.stages, & &1.position) == [1, 2, 3]
+    end
+
+    test "the stack tier gets the wider 6-stage budget" do
+      project = plan_project()
+      stack = insert_stack!(project.id)
+
+      anchor =
+        insert_task!(project.id, %{
+          title: "Stack Stage Anchor",
+          status: "planning",
+          stack_id: stack.id,
+          stack_position: 1
+        })
+
+      member =
+        insert_task!(project.id, %{
+          title: "Stack Stage Member",
+          stack_id: stack.id,
+          stack_position: 2
+        })
+
+      plan = bare_plan(member.id, "approved")
+      for position <- 1..8, do: add_stage(plan.id, position)
+
+      [entry] = siblings_for(anchor.id).tasks
+
+      assert entry.stage_count == 8
+      assert entry.stages_shown == 6
+      assert entry.truncated? == true
+      assert entry.latest_plan_status == "approved"
+    end
+
+    test "sibling stage descriptions are truncated at 180 chars" do
+      project = plan_project()
+      anchor = insert_task!(project.id, %{title: "Truncate Anchor", status: "planning"})
+      sibling = insert_task!(project.id, %{title: "Long Description Sibling"})
+      plan = bare_plan(sibling.id, "approved")
+      add_stage(plan.id, 1, %{description: String.duplicate("d", 5_000)})
+
+      [entry] = siblings_for(anchor.id).tasks
+      [stage] = entry.stages
+
+      assert String.length(stage.description) == 181
+      assert String.ends_with?(stage.description, "…")
     end
   end
 

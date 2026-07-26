@@ -67,6 +67,30 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
     plan
   end
 
+  # `Repo.insert!` rather than `Tasks.create_task/1`: a 20-sibling
+  # fixture would fan 20 broadcasts at the singleton `TaskRouterWatcher`,
+  # which evaluates off this test's sandbox connection (019fa003-091a).
+  # The context function is not what these tests are about.
+  defp insert_bare_task!(project_id, title) do
+    now = DateTime.utc_now()
+
+    %Platform.Tasks.Task{}
+    |> Ecto.Changeset.change(%{
+      project_id: project_id,
+      title: title,
+      status: "in_progress",
+      inserted_at: now,
+      updated_at: now
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_sibling!(project_id, title) do
+    task = insert_bare_task!(project_id, title)
+    _plan = make_plan(task.id, status: "pending_review")
+    task
+  end
+
   # ── register/0 shape guard ────────────────────────────────────────────────
 
   describe "register/0" do
@@ -156,9 +180,13 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
         })
 
       siblings = Map.get(gathered, :sibling_tasks)
-      assert is_list(siblings)
 
-      sibling_ids = Enum.map(siblings, & &1.task_id) |> MapSet.new()
+      # Stage 4 wrapped the bare list in a scope + truncation envelope;
+      # the tasks themselves keep the same per-sibling shape.
+      assert siblings.scope == :project_window
+      assert is_list(siblings.tasks)
+
+      sibling_ids = Enum.map(siblings.tasks, & &1.task_id) |> MapSet.new()
 
       assert MapSet.member?(sibling_ids, ctx.sibling_planning.id)
       assert MapSet.member?(sibling_ids, ctx.sibling_in_progress.id)
@@ -171,7 +199,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
           plan: ctx.plan_under_review
         })
 
-      sibling_ids = Enum.map(gathered.sibling_tasks, & &1.task_id) |> MapSet.new()
+      sibling_ids = Enum.map(gathered.sibling_tasks.tasks, & &1.task_id) |> MapSet.new()
 
       refute MapSet.member?(sibling_ids, ctx.task_under_review.id),
              "the task being reviewed must not appear in its own sibling list"
@@ -183,7 +211,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
           plan: ctx.plan_under_review
         })
 
-      statuses = Enum.map(gathered.sibling_tasks, & &1.status)
+      statuses = Enum.map(gathered.sibling_tasks.tasks, & &1.status)
 
       refute "done" in statuses
       refute "cancelled" in statuses
@@ -195,7 +223,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
           plan: ctx.plan_under_review
         })
 
-      titles = Enum.map(gathered.sibling_tasks, & &1.title)
+      titles = Enum.map(gathered.sibling_tasks.tasks, & &1.title)
       refute "Foreign Task" in titles
     end
 
@@ -251,7 +279,31 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
                })
 
       assert gathered.plan_payload.plan_id == ctx.plan_under_review.id
-      assert Enum.any?(gathered.sibling_tasks, &(&1.task_id == ctx.sibling_planning.id))
+      assert Enum.any?(gathered.sibling_tasks.tasks, &(&1.task_id == ctx.sibling_planning.id))
+    end
+
+    test "the sibling block is never a refusal, unlike the plan payload", ctx do
+      # Stage 3 made an unresolvable plan stop the dispatch. Stage 4
+      # deliberately did NOT do the same for siblings: this project has
+      # three, but a project with none must still get its review.
+      solo_project = make_project("Solo Project")
+      solo_task = make_task(solo_project.id, title: "Solo Task", status: "planning")
+      solo_plan = make_plan(solo_task.id)
+
+      assert {:ok, solo} =
+               ArchitectureReviewPlan.gather_context(responsibility(), %{plan: solo_plan})
+
+      assert solo.sibling_tasks.scope == :none
+      assert solo.sibling_tasks.tasks == []
+
+      # Positive control: the populated project still resolves siblings
+      # through the identical code path.
+      assert {:ok, populated} =
+               ArchitectureReviewPlan.gather_context(responsibility(), %{
+                 plan: ctx.plan_under_review
+               })
+
+      assert populated.sibling_tasks.total == 3
     end
   end
 
@@ -377,7 +429,8 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
 
       assert refused.plan_payload.missing? == true
       assert refused.plan_payload.error == :no_plan_payload
-      assert refused.sibling_tasks == []
+      assert refused.sibling_tasks.scope == :no_anchor
+      assert refused.sibling_tasks.tasks == []
 
       assert ArchitectureReviewPlan.render_instruction(refused) =~ "no plan summary available"
     end
@@ -438,6 +491,84 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
       assert is_binary(rendered)
       assert rendered != ""
       assert rendered =~ "Architect"
+    end
+  end
+
+  # ── sibling-block rendering ───────────────────────────────────────────────
+
+  describe "render_instruction/1 — sibling truncation disclosure" do
+    setup do
+      :ok = PromptTemplates.seed_defaults()
+      :ok
+    end
+
+    test "DETECTOR: names the scope and states how many siblings were dropped" do
+      # This is the stage's detector. Remove the project-window cap and
+      # the "showing 10 of 20" line disappears — the block silently
+      # renders all 20 and the model has no way to know a cap exists.
+      project = make_project("Truncation Disclosure Project")
+      anchor = make_task(project.id, title: "Truncation Anchor", status: "planning")
+      plan = make_plan(anchor.id)
+
+      for n <- 1..20, do: insert_sibling!(project.id, "Windowed Sibling #{n}")
+
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      assert rendered =~ "[scope: project_window]"
+      assert rendered =~ "showing 10 of 20 in-flight tasks in this project"
+      assert rendered =~ "most recently updated first"
+    end
+
+    test "an untruncated window states the plain count instead of a 'showing N of M'" do
+      # Positive control for the detector above: same renderer, same
+      # code path, under the cap — the disclosure must not cry wolf.
+      project = make_project("Untruncated Window Project")
+      anchor = make_task(project.id, title: "Untruncated Anchor", status: "planning")
+      plan = make_plan(anchor.id)
+
+      for n <- 1..3, do: insert_sibling!(project.id, "Small Window Sibling #{n}")
+
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      assert rendered =~ "[scope: project_window] 3 in-flight tasks in this project"
+      refute rendered =~ "showing 3 of 3"
+    end
+
+    test "discloses in-flight siblings dropped for having no submitted plan" do
+      project = make_project("Unplanned Disclosure Project")
+      anchor = make_task(project.id, title: "Unplanned Anchor", status: "planning")
+      plan = make_plan(anchor.id)
+
+      _planned = insert_sibling!(project.id, "Has A Plan")
+
+      for n <- 1..2, do: insert_bare_task!(project.id, "No Plan #{n}")
+
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      assert rendered =~ "a further 2 in-flight task(s) in this project have no submitted plan"
+      refute rendered =~ "No Plan 1"
+    end
+
+    test "a sibling-less project renders an explicit empty scope, not a blank block" do
+      project = make_project("No Siblings Project")
+      anchor = make_task(project.id, title: "Lonely Anchor", status: "planning")
+      plan = make_plan(anchor.id)
+
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      assert rendered =~ "[scope: none] no sibling tasks"
     end
   end
 

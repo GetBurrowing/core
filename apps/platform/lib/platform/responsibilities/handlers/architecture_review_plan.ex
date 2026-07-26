@@ -9,17 +9,25 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   `try/rescue/catch :exit` guard mandated by the progressive-enhancement
   contract. This stage 3 revision fills in the real content:
 
-    * `gather_context/2` walks the sibling task tree in the plan's
-      project (excluding self + excluding done/cancelled), fetches active
-      plans + their stage descriptions, and reads the `docs/decisions/`
-      ADR filesystem listing. The plan payload itself is **not** built
-      here: `Platform.Responsibilities.ContextProviders`'s
-      `:plan_payload` slot owns it (task 019f9b28-6ca7 stage 3), so the
-      Router's batch path and this handler see the identical payload.
-      That slot REFUSES an unresolvable plan, and the refusal propagates
-      out of `gather_context/2` — ADR-0046 runs this pass strictly after
-      plan submission, so "no plan" means a broken trigger, not an empty
+    * `gather_context/2` composes two `ContextProviders` slots and reads
+      the `docs/decisions/` ADR filesystem listing. Neither payload is
+      built here any more — `Platform.Responsibilities.ContextProviders`
+      is the single per-slot resolver, so the Router's batch path and
+      this handler see identical payloads.
+
+      `:plan_payload` (task 019f9b28-6ca7 stage 3) REFUSES an
+      unresolvable plan and the refusal propagates out of
+      `gather_context/2`: ADR-0046 runs this pass strictly after plan
+      submission, so "no plan" means a broken trigger, not an empty
       review.
+
+      `:sibling_tasks` (stage 4) NEVER refuses, and the asymmetry is the
+      design. It resolves siblings through a stack → epic → bounded
+      project-window ladder, and "no siblings" is an ordinary correct
+      state for a standalone task, not a wiring bug. Its old private
+      implementation here walked every in-flight task in the project
+      with no limit at all; the slot caps the project window at 10 and
+      discloses every drop in the rendered block.
     * `render_instruction/1` renders `architecture.review_plan.v1` from
       the DB (falls back to the hardcoded template body when the DB
       row is missing so early-boot dispatch doesn't crash).
@@ -72,16 +80,25 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   alias Platform.Responsibilities.Responsibility
   alias Platform.Tasks
   alias Platform.Tasks.Plan
-  alias Platform.Tasks.Task, as: TaskSchema
 
   @key "architecture.review_plan"
   @feature "architecture"
   @template_slug "architecture.review_plan.v1"
 
-  # Task statuses considered "in flight" — the architect flags collisions
-  # against these. `done` / `cancelled` are excluded so a project's
-  # graveyard doesn't drown the annotation in stale references.
-  @in_flight_statuses ~w(planning in_progress in_review blocked stack_pending)
+  # Shape of the `:sibling_tasks` slot when the anchor task can't be
+  # resolved. The slot itself never errors (it is optional context), so
+  # this only covers the defensive arm and the refusal-rendering path in
+  # `empty_context/1`. Kept in sync with
+  # `ContextProviders.empty_siblings/1`.
+  @empty_siblings %{
+    scope: :no_anchor,
+    total: 0,
+    shown: 0,
+    truncated?: false,
+    dropped: 0,
+    unplanned_excluded: 0,
+    tasks: []
+  }
 
   # ADR index lives at `docs/decisions/` relative to the repo root. In
   # test / sandboxed builds the path may not resolve (test cwd differs);
@@ -286,7 +303,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
         {:ok,
          %{
            plan_payload: payload,
-           sibling_tasks: sibling_task_summaries(payload),
+           sibling_tasks: sibling_tasks(payload),
            adr_index: adr_index(),
            similar_tasks: similar_tasks_hint(payload)
          }}
@@ -311,74 +328,39 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
         error: reason,
         note: "no plan payload supplied (#{inspect(reason)})"
       },
-      sibling_tasks: [],
+      sibling_tasks: @empty_siblings,
       adr_index: [],
       similar_tasks: []
     }
   end
 
-  # Driven by the resolved payload rather than the `%Plan{}` struct, so
-  # the sibling walk works identically whether the trigger carried a
-  # plan, a plan_id, or only a task_id.
-  defp sibling_task_summaries(%{project_id: project_id, task_id: task_id})
-       when is_binary(project_id) do
-    project_id
-    |> Tasks.list_tasks_by_project()
-    |> Enum.reject(fn %TaskSchema{} = t ->
-      t.id == task_id or t.status not in @in_flight_statuses
-    end)
-    |> Enum.map(&sibling_task_summary/1)
-  rescue
-    error ->
-      Logger.warning(
-        "[architecture.review_plan] sibling walk raised: #{Exception.message(error)}"
-      )
+  # The sibling walk is no longer materialised here either — it is the
+  # `:sibling_tasks` slot on `ContextProviders`, which owns the
+  # stack → epic → bounded-project-window ladder and every truncation
+  # disclosure that goes with it.
+  #
+  # Unlike `:plan_payload` this slot NEVER refuses, and the difference
+  # is deliberate. "This task has no siblings" is an ordinary, correct
+  # state — a standalone task in a fresh project genuinely has none —
+  # so refusing on it would stop the architect dispatch for the most
+  # common shape in the system. Only `:plan_payload` is load-bearing
+  # enough to refuse a dispatch over; the `case` below exists purely so
+  # a future contract change can't silently crash the gather.
+  defp sibling_tasks(payload) do
+    anchor = %{task_id: is_map(payload) && Map.get(payload, :task_id)}
 
-      []
-  end
+    case ContextProviders.gather_context(:sibling_tasks, anchor) do
+      {:ok, %{sibling_tasks: siblings}} ->
+        siblings
 
-  defp sibling_task_summaries(_payload), do: []
+      other ->
+        Logger.warning(
+          "[architecture.review_plan] sibling_tasks slot returned an unexpected shape: " <>
+            "#{inspect(other)} — rendering an empty sibling block"
+        )
 
-  defp sibling_task_summary(%TaskSchema{} = task) do
-    plans =
-      task.id
-      |> safe_list_plans()
-      |> Enum.reject(&(&1.status in ~w(superseded rejected)))
-      |> Enum.take(-1)
-
-    latest_plan = List.last(plans)
-
-    stage_summaries =
-      case latest_plan do
-        nil ->
-          []
-
-        %Plan{} = plan ->
-          plan
-          |> Repo.preload(:stages)
-          |> Map.get(:stages, [])
-          |> Enum.map(fn stage ->
-            %{
-              name: Map.get(stage, :name),
-              position: Map.get(stage, :position),
-              description: Map.get(stage, :description)
-            }
-          end)
-      end
-
-    %{
-      task_id: task.id,
-      title: task.title,
-      status: task.status,
-      latest_plan_status: latest_plan && latest_plan.status,
-      stages: stage_summaries
-    }
-  end
-
-  defp safe_list_plans(task_id) do
-    Tasks.list_plans(task_id)
-  rescue
-    _ -> []
+        @empty_siblings
+    end
   end
 
   # Probe for the (still-unlanded) `Tasks.similar_tasks/2`. It takes a
@@ -453,7 +435,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   defp context_to_assigns(context) do
     %{
       plan_summary: format_plan_summary(Map.get(context, :plan_payload)),
-      sibling_tasks: format_sibling_tasks(Map.get(context, :sibling_tasks, [])),
+      sibling_tasks: format_sibling_tasks(Map.get(context, :sibling_tasks, @empty_siblings)),
       open_prs: format_open_prs(Map.get(context, :open_prs, [])),
       adr_index: format_adr_index(Map.get(context, :adr_index, []))
     }
@@ -527,27 +509,94 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
     Enum.map(expectations, &"    e2e expects: #{&1}")
   end
 
-  defp format_sibling_tasks([]), do: "(no in-flight sibling tasks in this project)"
+  # The leading line is the point of the whole wrapper: it names which
+  # of the three sibling tiers produced this list and, when a cap or a
+  # filter dropped anything, says exactly how much. Absence must never
+  # be silent — a model reads a short list as "there is nothing else",
+  # not as "you were shown ten of sixty-three".
+  defp format_sibling_tasks(%{tasks: []} = payload), do: sibling_scope_line(payload)
 
-  defp format_sibling_tasks(siblings) when is_list(siblings) do
-    Enum.map_join(siblings, "\n\n", fn sibling ->
-      stage_lines =
-        sibling
-        |> Map.get(:stages, [])
-        |> Enum.map(fn stage ->
-          "    - #{Map.get(stage, :name) || "(unnamed)"}: #{truncate(Map.get(stage, :description) || "", 180)}"
-        end)
-        |> Enum.join("\n")
-
-      stage_block = if stage_lines == "", do: "    (no stages yet)", else: stage_lines
-
-      "- #{Map.get(sibling, :title) || "(untitled)"} " <>
-        "(task_id: #{Map.get(sibling, :task_id)}, " <>
-        "status: #{Map.get(sibling, :status)}, " <>
-        "latest_plan: #{Map.get(sibling, :latest_plan_status) || "n/a"})\n" <>
-        stage_block
-    end)
+  defp format_sibling_tasks(%{tasks: tasks} = payload) when is_list(tasks) do
+    Enum.join([sibling_scope_line(payload) | Enum.map(tasks, &format_sibling/1)], "\n\n")
   end
+
+  defp format_sibling_tasks(_payload),
+    do: "(sibling task list unavailable — the slot returned an unrecognised shape)"
+
+  defp sibling_scope_line(%{scope: :no_anchor}),
+    do: "[scope: no_anchor] sibling tasks unavailable — the trigger carried no resolvable task"
+
+  defp sibling_scope_line(%{scope: :none} = payload) do
+    "[scope: none] no sibling tasks — this task is in no stack and no epic, and its " <>
+      "project has no other in-flight task with a submitted plan" <> unplanned_note(payload)
+  end
+
+  defp sibling_scope_line(%{scope: scope, total: 0}),
+    do: "[scope: #{scope}] no sibling tasks — 0 other #{scope_noun(scope)}"
+
+  defp sibling_scope_line(%{scope: scope} = payload) do
+    counts =
+      if payload.truncated? do
+        "showing #{payload.shown} of #{payload.total} #{scope_noun(scope)}"
+      else
+        "#{payload.total} #{scope_noun(scope)}"
+      end
+
+    "[scope: #{scope}] " <> counts <> ", " <> scope_order(scope) <> unplanned_note(payload)
+  end
+
+  defp scope_noun(:stack), do: "stack members"
+  defp scope_noun(:epic), do: "in-flight tasks in this epic"
+  defp scope_noun(_scope), do: "in-flight tasks in this project"
+
+  defp scope_order(:stack), do: "in stack position order"
+  defp scope_order(:epic), do: "most recently created first"
+  defp scope_order(_scope), do: "most recently updated first"
+
+  defp unplanned_note(%{unplanned_excluded: count}) when is_integer(count) and count > 0 do
+    " (a further #{count} in-flight task(s) in this project have no submitted plan and are " <>
+      "omitted — no stage descriptions to collide with)"
+  end
+
+  defp unplanned_note(_payload), do: ""
+
+  # Stage descriptions arrive pre-truncated from the `:sibling_tasks`
+  # slot, same contract as the plan stages above — re-truncating here
+  # would silently shrink the budget the slot sized.
+  defp format_sibling(sibling) do
+    stages = Map.get(sibling, :stages) || []
+
+    stage_lines =
+      Enum.map_join(stages, "\n", fn stage ->
+        "    - #{Map.get(stage, :name) || "(unnamed)"}: #{Map.get(stage, :description) || ""}"
+      end)
+
+    stage_block =
+      cond do
+        stages != [] and Map.get(sibling, :truncated?) ->
+          stage_lines <>
+            "\n    (showing #{Map.get(sibling, :stages_shown)} of " <>
+            "#{Map.get(sibling, :stage_count)} stages)"
+
+        stages != [] ->
+          stage_lines
+
+        true ->
+          "    (no stages yet)"
+      end
+
+    "- #{Map.get(sibling, :title) || "(untitled)"} " <>
+      "(task_id: #{Map.get(sibling, :task_id)}, " <>
+      "status: #{Map.get(sibling, :status)}, " <>
+      stack_position_fragment(Map.get(sibling, :stack_position)) <>
+      "latest_plan: #{Map.get(sibling, :latest_plan_status) || "n/a"})\n" <>
+      stage_block
+  end
+
+  defp stack_position_fragment(position) when is_integer(position),
+    do: "stack_position: #{position}, "
+
+  defp stack_position_fragment(_position), do: ""
 
   defp format_open_prs([]),
     do: "(open PR list not gathered — this hook runs at plan submission, not at merge)"
@@ -565,13 +614,6 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
       "- #{Map.get(entry, :file, "(unknown)")}"
     end)
   end
-
-  defp truncate(str, max_len) when is_binary(str) and byte_size(str) > max_len do
-    String.slice(str, 0, max_len) <> "…"
-  end
-
-  defp truncate(str, _max_len) when is_binary(str), do: str
-  defp truncate(_, _), do: ""
 
   # Fallback interpolation when the DB row is missing — the hardcoded
   # default body carries the same `{{variable}}` placeholders, so we
