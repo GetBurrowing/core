@@ -146,6 +146,10 @@ config :platform, :start_meeting_intent_dispatcher, false
 # flips this per-test with `Application.put_env` + `on_exit` restore.
 config :platform, :livekit_webhook_signature_required, false
 
+# GitHub webhook secret (task 019f9b11): the app-level fallback candidate the
+# test suite signs with.
+config :platform, :github_webhook_secret, "test-github-webhook-secret"
+
 # SummarizerSweeper (task 019f2566 stage 2): tests start their own
 # per-case instance with shortened intervals so the sweep runs inside
 # an ExUnit case's DataCase sandbox and doesn't share state across

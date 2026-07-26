@@ -8,8 +8,12 @@ defmodule PlatformWeb.GithubWebhookController do
   - `check_suite.completed` → auto-evaluate `ci_passed` validations via PlanEngine
   - `workflow_run.completed` → auto-evaluate `ci_passed` validations via PlanEngine
 
-  HMAC signature verification is performed when a project-level webhook secret
-  is configured in `project.deploy_config["webhook_secret"]`.
+  HMAC signature verification does NOT live here. It is fail-closed at the
+  router: `pipeline :github_webhook` runs
+  `PlatformWeb.Plugs.VerifyGithubSignature`, which rejects an unsigned or
+  mis-signed delivery with a 401 before any controller code runs. This
+  controller only handles events. See
+  `docs/runbooks/github_webhook_secret.md` for the secret cutover.
   """
 
   use PlatformWeb, :controller
@@ -33,10 +37,6 @@ defmodule PlatformWeb.GithubWebhookController do
   }
 
   require Logger
-
-  # ── Plugs ────────────────────────────────────────────────────────────────
-
-  plug(:verify_signature when action in [:handle])
 
   # ── Handlers ─────────────────────────────────────────────────────────────
 
@@ -590,88 +590,6 @@ defmodule PlatformWeb.GithubWebhookController do
     case DateTime.from_iso8601(str) do
       {:ok, dt, _} -> dt
       _ -> DateTime.utc_now()
-    end
-  end
-
-  # ── HMAC signature verification ─────────────────────────────────────────
-
-  @doc false
-  defp verify_signature(conn, _opts) do
-    # We need the raw body for HMAC verification.
-    # If no signature header is present, skip verification (backward compat).
-    signature = get_req_header(conn, "x-hub-signature-256") |> List.first()
-
-    if signature do
-      raw_body = conn.assigns[:raw_body] || read_raw_body(conn)
-
-      # Try to find the webhook secret from the request context.
-      # The repo URL in the payload maps to a project's webhook_secret.
-      repo_url = extract_repo_url(conn.params)
-      secret = lookup_webhook_secret(repo_url)
-
-      cond do
-        is_nil(secret) ->
-          # No secret configured for this project — skip verification
-          conn
-
-        verify_hmac(raw_body, signature, secret) ->
-          conn
-
-        true ->
-          Logger.warning("[Webhook] HMAC signature mismatch for repo: #{repo_url}")
-
-          conn
-          |> put_status(:unauthorized)
-          |> json(%{status: "error", reason: "signature mismatch"})
-          |> halt()
-      end
-    else
-      # No signature header — backward compat, allow through
-      conn
-    end
-  end
-
-  defp read_raw_body(conn) do
-    case Plug.Conn.read_body(conn) do
-      {:ok, body, _conn} -> body
-      _ -> ""
-    end
-  end
-
-  defp extract_repo_url(params) do
-    get_in(params, ["repository", "html_url"])
-  end
-
-  defp lookup_webhook_secret(nil), do: nil
-
-  defp lookup_webhook_secret(repo_url) do
-    alias Platform.Tasks.Project
-
-    project =
-      Project
-      |> where([p], p.repo_url == ^repo_url)
-      |> limit(1)
-      |> Repo.one()
-
-    case project do
-      %{deploy_config: %{"webhook_secret" => secret}} when is_binary(secret) and secret != "" ->
-        secret
-
-      _ ->
-        nil
-    end
-  end
-
-  @doc false
-  def verify_hmac(body, signature, secret) do
-    # signature format: "sha256=<hex>"
-    case String.split(signature, "=", parts: 2) do
-      ["sha256", hex_digest] ->
-        computed = :crypto.mac(:hmac, :sha256, secret, body) |> Base.encode16(case: :lower)
-        Plug.Crypto.secure_compare(computed, String.downcase(hex_digest))
-
-      _ ->
-        false
     end
   end
 end

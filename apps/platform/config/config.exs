@@ -211,6 +211,17 @@ config :platform, Platform.Vault, allow_unscoped_workspace_access: false
 # keep exercising handlers without minting a JWT per payload.
 config :platform, :livekit_webhook_signature_required, true
 
+# GitHub webhook HMAC signature enforcement (task 019f9b11). When `true`
+# (the default everywhere, including tests), every request to
+# `/api/webhooks/github` MUST carry an `X-Hub-Signature-256: sha256=<hex>`
+# header that verifies under the project's `deploy_config["webhook_secret"]`
+# OR the app-level `GITHUB_WEBHOOK_SECRET`; failures return 401.
+# When `false`, verification failures are logged as warnings but the request
+# passes through — the rollback safety valve, flippable at runtime without a
+# redeploy. See `docs/runbooks/github_webhook_secret.md` for the cutover and
+# rollback procedure.
+config :platform, :github_webhook_signature_required, true
+
 # Configure the endpoint
 config :platform, PlatformWeb.Endpoint,
   url: [host: "localhost"],

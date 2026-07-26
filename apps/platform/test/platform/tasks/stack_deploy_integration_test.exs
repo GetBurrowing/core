@@ -214,7 +214,7 @@ defmodule Platform.Tasks.StackDeployIntegrationTest do
 
       # ── Simulate the GitHub `pull_request.closed` webhook ───────────
       payload = rollup_merged_payload(rollup_branch)
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       # ── Stack now at done + members at done + branch cleanup ────────
@@ -348,7 +348,7 @@ defmodule Platform.Tasks.StackDeployIntegrationTest do
       # ── Terminal: the rollup PR merges (GitHub webhook) → stack done +
       # every member done + rollup branch cleaned up. Zero hand-recon.
       payload = rollup_merged_payload(rollup_branch)
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       assert Stacks.get_stack(stack.id).status == "done"

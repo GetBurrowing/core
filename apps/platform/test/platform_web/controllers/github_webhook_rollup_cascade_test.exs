@@ -116,7 +116,7 @@ defmodule PlatformWeb.GithubWebhookRollupCascadeTest do
           "merge_commit_sha" => "rollup-happy-sha"
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       # 1. Stack advanced to done.
@@ -194,7 +194,7 @@ defmodule PlatformWeb.GithubWebhookRollupCascadeTest do
         })
 
       # 1st delivery — full fan-out.
-      conn1 = post(conn, @github_webhook_path, first_payload)
+      conn1 = signed_github_post(conn, @github_webhook_path, first_payload)
       assert %{"status" => "created"} = json_response(conn1, 201)
 
       # Snapshot post-first-delivery: stack done, merged_at stamped,
@@ -239,7 +239,7 @@ defmodule PlatformWeb.GithubWebhookRollupCascadeTest do
           "merged_at" => "2027-01-01T00:00:00Z"
         })
 
-      conn2 = post(conn, @github_webhook_path, replay_payload)
+      conn2 = signed_github_post(conn, @github_webhook_path, replay_payload)
       assert %{"status" => "created"} = json_response(conn2, 201)
 
       # Stack still at done, rollup_pr.merged_at UNCHANGED — replay
@@ -305,7 +305,7 @@ defmodule PlatformWeb.GithubWebhookRollupCascadeTest do
 
       log =
         ExUnit.CaptureLog.capture_log([level: :info], fn ->
-          conn = post(conn, @github_webhook_path, payload)
+          conn = signed_github_post(conn, @github_webhook_path, payload)
           assert %{"status" => "created"} = json_response(conn, 201)
         end)
 
@@ -342,7 +342,7 @@ defmodule PlatformWeb.GithubWebhookRollupCascadeTest do
 
       log =
         ExUnit.CaptureLog.capture_log([level: :info], fn ->
-          conn = post(conn, @github_webhook_path, payload)
+          conn = signed_github_post(conn, @github_webhook_path, payload)
           assert %{"status" => "created"} = json_response(conn, 201)
         end)
 
@@ -377,7 +377,7 @@ defmodule PlatformWeb.GithubWebhookRollupCascadeTest do
 
       log =
         ExUnit.CaptureLog.capture_log([level: :info], fn ->
-          conn = post(conn, @github_webhook_path, payload)
+          conn = signed_github_post(conn, @github_webhook_path, payload)
           assert %{"status" => "created"} = json_response(conn, 201)
         end)
 
@@ -417,7 +417,7 @@ defmodule PlatformWeb.GithubWebhookRollupCascadeTest do
           "merge_commit_sha" => "solo-sha"
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       # Per-task path fired: pr_merged validation flipped to passed.

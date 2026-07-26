@@ -151,7 +151,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
     test "creates a changelog entry for a merged PR", %{conn: conn} do
       payload = merged_pr_payload()
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
 
       assert %{"status" => "created", "id" => id} = json_response(conn, 201)
       assert is_binary(id)
@@ -172,12 +172,14 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           }
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "ignored"} = json_response(conn, 200)
     end
 
     test "ignores non-pull_request events", %{conn: conn} do
-      conn = post(conn, @github_webhook_path, %{"action" => "opened", "issue" => %{}})
+      conn =
+        signed_github_post(conn, @github_webhook_path, %{"action" => "opened", "issue" => %{}})
+
       assert %{"status" => "ignored"} = json_response(conn, 200)
     end
 
@@ -199,7 +201,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           }
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
 
       assert %{"status" => "created", "id" => id} = json_response(conn, 201)
       entry = Changelog.get_entry(id)
@@ -225,10 +227,10 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           }
         })
 
-      conn1 = post(conn, @github_webhook_path, payload)
+      conn1 = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn1, 201)
 
-      conn2 = post(conn, @github_webhook_path, payload)
+      conn2 = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "error"} = json_response(conn2, 422)
     end
   end
@@ -242,7 +244,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       branch = "task/#{task.id}"
       payload = check_suite_payload(branch, "success")
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
 
       assert %{
                "status" => "evaluated",
@@ -265,7 +267,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       branch = "task/#{task.id}"
       payload = check_suite_payload(branch, "failure")
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
 
       assert %{
                "status" => "evaluated",
@@ -280,7 +282,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
     test "ignores branches that don't match task pattern", %{conn: conn} do
       payload = check_suite_payload("main", "success")
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
 
       assert %{"status" => "ignored", "reason" => "branch does not match task pattern"} =
                json_response(conn, 200)
@@ -291,7 +293,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       branch = "task/#{task.id}"
       payload = check_suite_payload(branch, "success")
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
 
       assert %{"status" => "ignored", "reason" => "no pending ci_passed validation"} =
                json_response(conn, 200)
@@ -305,7 +307,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       branch = "task/#{task.id}"
       payload = workflow_run_payload(branch, "success")
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
 
       assert %{
                "status" => "evaluated",
@@ -326,7 +328,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       branch = "task/#{task.id}"
       payload = workflow_run_payload(branch, "failure")
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
 
       assert %{
                "status" => "evaluated",
@@ -360,7 +362,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           }
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       updated = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
@@ -390,7 +392,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           }
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       updated = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
@@ -417,7 +419,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
         })
 
       # Webhook still succeeds (changelog entry is created); no validation exists to update.
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
     end
 
@@ -441,7 +443,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           }
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       a_after = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation_a.id)
@@ -473,7 +475,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           }
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       updated = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
@@ -509,7 +511,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           }
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       assert Platform.Repo.get!(Platform.Tasks.Validation, pr_validation_a.id).status == "passed"
@@ -542,7 +544,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       # just the message text.
       log =
         ExUnit.CaptureLog.capture_log([level: :warning], fn ->
-          conn = post(conn, @github_webhook_path, payload)
+          conn = signed_github_post(conn, @github_webhook_path, payload)
           assert %{"status" => "created"} = json_response(conn, 201)
         end)
 
@@ -566,7 +568,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
 
       signature = "sha256=#{hex_digest}"
 
-      assert PlatformWeb.GithubWebhookController.verify_hmac(body, signature, secret)
+      assert Platform.Webhooks.GithubSignature.verify_hmac(body, signature, secret)
     end
 
     test "verify_hmac/3 returns false for invalid signature" do
@@ -574,17 +576,80 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       secret = "test-secret-key"
       signature = "sha256=0000000000000000000000000000000000000000000000000000000000000000"
 
-      refute PlatformWeb.GithubWebhookController.verify_hmac(body, signature, secret)
+      refute Platform.Webhooks.GithubSignature.verify_hmac(body, signature, secret)
     end
 
     test "verify_hmac/3 returns false for malformed signature" do
-      refute PlatformWeb.GithubWebhookController.verify_hmac("body", "not-sha256", "secret")
+      refute Platform.Webhooks.GithubSignature.verify_hmac("body", "not-sha256", "secret")
     end
 
-    test "requests without signature header are allowed through (backward compat)", %{conn: conn} do
-      # No x-hub-signature-256 header — should be allowed
-      conn = post(conn, @github_webhook_path, %{"action" => "opened", "issue" => %{}})
-      assert %{"status" => "ignored"} = json_response(conn, 200)
+    # Fail-closed regression pair (task 019f9b11 stage 3). These replace the
+    # old "requests without signature header are allowed through (backward
+    # compat)" test, which codified the very bypass this task removes: an
+    # unsigned POST used to reach the controller and drive PlanEngine,
+    # AutoMerger, stack rollups and the changelog.
+    #
+    # `PlatformWeb.Plugs.VerifyGithubSignature` now halts in
+    # `pipeline :github_webhook`, BEFORE any controller code runs, so each
+    # case asserts both the 401 and the absence of the side effect the
+    # payload would otherwise have caused.
+
+    test "unsigned POST is rejected 401 and has no side effect on the ci_passed validation",
+         %{conn: conn} do
+      %{task: task, ci_validation: ci_validation} = create_task_with_ci_validation!()
+
+      # A payload that WOULD flip ci_passed → passed if it were let through.
+      payload = check_suite_payload("task/#{task.id}", "success")
+
+      conn = unsigned_github_post(conn, @github_webhook_path, payload)
+
+      assert %{"reason" => "missing_signature"} = json_response(conn, 401)
+
+      # The controller never ran: the validation is untouched.
+      reloaded = Platform.Repo.get!(Platform.Tasks.Validation, ci_validation.id)
+      assert reloaded.status == "pending"
+      assert reloaded.evaluated_by == nil
+    end
+
+    test "body tamper: signature computed over payload A, bytes of payload B → 401, no side effect",
+         %{conn: conn} do
+      %{task: task, ci_validation: ci_validation} = create_task_with_ci_validation!()
+
+      # Payload A is what we sign. Payload B is what we actually send — same
+      # shape, different head_sha. If the plug re-encoded `conn.body_params`
+      # instead of hashing the real request bytes, or if `raw_body` were the
+      # `Plug.Test` multipart stub, this would wrongly pass.
+      payload_a = check_suite_payload("task/#{task.id}", "success")
+
+      payload_b =
+        put_in(
+          payload_a,
+          ["check_suite", "head_sha"],
+          "tampered-#{System.unique_integer([:positive])}"
+        )
+
+      refute payload_a == payload_b
+
+      conn =
+        signed_github_post(conn, @github_webhook_path, payload_a, body: Jason.encode!(payload_b))
+
+      assert %{"reason" => "signature_mismatch"} = json_response(conn, 401)
+
+      reloaded = Platform.Repo.get!(Platform.Tasks.Validation, ci_validation.id)
+      assert reloaded.status == "pending"
+      assert reloaded.evaluated_by == nil
+    end
+
+    test "correctly signed POST over the same payload IS accepted (positive control)",
+         %{conn: conn} do
+      %{task: task, ci_validation: ci_validation} = create_task_with_ci_validation!()
+
+      payload = check_suite_payload("task/#{task.id}", "success")
+
+      conn = signed_github_post(conn, @github_webhook_path, payload)
+
+      assert %{"status" => "evaluated", "result" => "passed"} = json_response(conn, 201)
+      assert Platform.Repo.get!(Platform.Tasks.Validation, ci_validation.id).status == "passed"
     end
   end
 
@@ -628,7 +693,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           }
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       # Validation must remain pending — T6 owns this fan-out.
@@ -655,7 +720,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           }
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       reloaded = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
@@ -880,7 +945,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           "merged_at" => "2026-05-12T13:00:00Z"
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       for %{pr_validation: pr_validation, task: task} <- members do
@@ -931,7 +996,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           }
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       reloaded = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
@@ -970,7 +1035,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       |> Platform.Repo.update!()
 
       payload = rollup_merged_payload(rollup_branch)
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       # M1: passed with fan-out evidence.
@@ -1038,7 +1103,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           }
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
     end
 
@@ -1054,7 +1119,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       {:ok, _} = Stacks.update_stack(stack, %{status: "abandoned"})
 
       payload = rollup_merged_payload(rollup_branch)
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       # Validation stays pending.
@@ -1085,7 +1150,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
 
       log =
         capture_log(fn ->
-          conn = post(conn, @github_webhook_path, payload)
+          conn = signed_github_post(conn, @github_webhook_path, payload)
           assert %{"status" => "created"} = json_response(conn, 201)
         end)
 
@@ -1141,7 +1206,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
         log =
           capture_log(fn ->
             # Webhook STILL returns 2xx despite the rescued exception.
-            conn = post(conn, @github_webhook_path, payload)
+            conn = signed_github_post(conn, @github_webhook_path, payload)
             assert %{"status" => "created"} = json_response(conn, 201)
           end)
 
@@ -1173,7 +1238,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
         })
 
       # First delivery: full fan-out + stack→done.
-      conn1 = post(conn, @github_webhook_path, payload)
+      conn1 = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn1, 201)
 
       first_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
@@ -1198,7 +1263,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           "number" => System.unique_integer([:positive])
         })
 
-      conn2 = post(conn, @github_webhook_path, replay_payload)
+      conn2 = signed_github_post(conn, @github_webhook_path, replay_payload)
       assert %{"status" => "created"} = json_response(conn2, 201)
 
       # Stack stays at done; rollup_merge metadata is the ORIGINAL —
@@ -1239,7 +1304,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          conn = post(conn, @github_webhook_path, payload)
+          conn = signed_github_post(conn, @github_webhook_path, payload)
           assert json_response(conn, 201)
         end)
 
@@ -1273,7 +1338,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       payload =
         rollup_merged_payload(rollup_branch, %{"merged" => false})
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "ignored"} = json_response(conn, 200)
 
       # Stack untouched, no fan-out.
@@ -1308,7 +1373,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       end
 
       payload = rollup_merged_payload(rollup_branch)
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       for %{task: task} <- members do
@@ -1332,7 +1397,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       %{stack: stack, rollup_branch: rollup_branch} = build_stack_with_members!(2)
 
       payload = rollup_merged_payload(rollup_branch)
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       reloaded_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
@@ -1343,7 +1408,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       %{rollup_branch: rollup_branch, members: members} = build_stack_with_members!(2)
 
       payload = rollup_merged_payload(rollup_branch)
-      conn1 = post(conn, @github_webhook_path, payload)
+      conn1 = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn1, 201)
 
       first_member_states =
@@ -1365,7 +1430,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           "merge_commit_sha" => "replay-promote-sha"
         })
 
-      conn2 = post(conn, @github_webhook_path, replay_payload)
+      conn2 = signed_github_post(conn, @github_webhook_path, replay_payload)
       assert %{"status" => "created"} = json_response(conn2, 201)
 
       for {id, first_status, first_updated_at} <- first_member_states do
@@ -1386,7 +1451,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       {:ok, _} = Tasks.update_task(m2.task, %{status: "deploying"})
 
       payload = rollup_merged_payload(rollup_branch)
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       assert Platform.Repo.get!(Platform.Tasks.Task, m1.task.id).status == "done"
@@ -1414,7 +1479,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       |> Platform.Repo.update!()
 
       payload = rollup_merged_payload(rollup_branch)
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       assert Platform.Repo.get!(Platform.Tasks.Task, happy.task.id).status == "done"
@@ -1463,7 +1528,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
           }
         })
 
-      conn = post(conn, @github_webhook_path, payload)
+      conn = signed_github_post(conn, @github_webhook_path, payload)
       assert %{"status" => "created"} = json_response(conn, 201)
 
       reloaded_validation = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
@@ -1689,7 +1754,13 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
 
       pr_number = System.unique_integer([:positive])
 
-      conn = post(conn, @github_webhook_path, e2e_rollup_webhook_body(rollup_branch, pr_number))
+      conn =
+        signed_github_post(
+          conn,
+          @github_webhook_path,
+          e2e_rollup_webhook_body(rollup_branch, pr_number)
+        )
+
       assert %{"status" => "created"} = json_response(conn, 201)
 
       # Stack advanced through both transitions: fan-out flipped it to
@@ -1755,7 +1826,11 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       first_pr_number = System.unique_integer([:positive])
 
       conn1 =
-        post(conn, @github_webhook_path, e2e_rollup_webhook_body(rollup_branch, first_pr_number))
+        signed_github_post(
+          conn,
+          @github_webhook_path,
+          e2e_rollup_webhook_body(rollup_branch, first_pr_number)
+        )
 
       assert %{"status" => "created"} = json_response(conn1, 201)
 
@@ -1800,7 +1875,11 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       replay_pr_number = System.unique_integer([:positive])
 
       conn2 =
-        post(conn, @github_webhook_path, e2e_rollup_webhook_body(rollup_branch, replay_pr_number))
+        signed_github_post(
+          conn,
+          @github_webhook_path,
+          e2e_rollup_webhook_body(rollup_branch, replay_pr_number)
+        )
 
       assert %{"status" => "created"} = json_response(conn2, 201)
 
@@ -1853,7 +1932,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       pr_number = System.unique_integer([:positive])
 
       conn =
-        post(
+        signed_github_post(
           conn,
           @github_webhook_path,
           e2e_plain_task_webhook_body("task/#{task.id}", pr_number)
@@ -2065,7 +2144,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
 
       log =
         ExUnit.CaptureLog.capture_log([level: :info], fn ->
-          conn = post(conn, @github_webhook_path, payload)
+          conn = signed_github_post(conn, @github_webhook_path, payload)
           assert %{"status" => "created"} = json_response(conn, 201)
         end)
 
@@ -2097,7 +2176,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
 
       log =
         ExUnit.CaptureLog.capture_log([level: :info], fn ->
-          conn = post(conn, @github_webhook_path, payload)
+          conn = signed_github_post(conn, @github_webhook_path, payload)
           assert %{"status" => "created"} = json_response(conn, 201)
         end)
 
@@ -2139,7 +2218,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          conn = post(conn, @github_webhook_path, payload)
+          conn = signed_github_post(conn, @github_webhook_path, payload)
           assert %{"status" => "created"} = json_response(conn, 201)
         end)
 
@@ -2199,7 +2278,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          conn = post(conn, @github_webhook_path, payload)
+          conn = signed_github_post(conn, @github_webhook_path, payload)
           assert %{"status" => "created"} = json_response(conn, 201)
         end)
 

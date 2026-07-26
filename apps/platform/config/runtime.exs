@@ -302,6 +302,20 @@ if livekit_api_key && livekit_api_secret do
     url: livekit_url || "wss://localhost:7880"
 end
 
+# ── GitHub webhooks ───────────────────────────────────────────────────────────
+# App-level fallback secret for `/api/webhooks/github` HMAC verification. A
+# project may carry its own value at `deploy_config["webhook_secret"]`; either
+# candidate is accepted, which is what makes secret rotation possible without
+# rejected deliveries. See `docs/runbooks/github_webhook_secret.md`.
+#
+# Guarded on presence (same shape as the LiveKit block above) rather than set
+# unconditionally: runtime.exs is evaluated after `config/test.exs` in every
+# env, so an unconditional `System.get_env/1` would write `nil` over the test
+# fixture secret and leave the whole suite with no app-level candidate.
+if github_webhook_secret = System.get_env("GITHUB_WEBHOOK_SECRET") do
+  config :platform, :github_webhook_secret, github_webhook_secret
+end
+
 # ── Memory service ────────────────────────────────────────────────────────────
 # Wires Platform.Memory to an external vector-search service (the Startup Suite
 # memory-service by default). When MEMORY_SERVICE_URL is not set, the Noop

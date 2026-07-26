@@ -42,6 +42,21 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.VerifyLivekitSignature)
   end
 
+  # GitHub webhook pipeline — task 019f9b11 stage 2. Same shape as
+  # `:livekit_webhook`: the endpoint's `Plug.Parsers`/`CacheBodyReader` has
+  # already populated `conn.assigns[:raw_body]` by the time this fires, and
+  # the plug verifies `X-Hub-Signature-256` against the per-project secret or
+  # the app-level `GITHUB_WEBHOOK_SECRET`, halting with 401 on failure.
+  # Enforcement lives here rather than in the controller so a future action on
+  # `GithubWebhookController` cannot ship unauthenticated, and so the 401
+  # happens before any controller code runs. Rollback valve:
+  # `:github_webhook_signature_required` — see
+  # `docs/runbooks/github_webhook_secret.md`.
+  pipeline :github_webhook do
+    plug(:accepts, ["json"])
+    plug(PlatformWeb.Plugs.VerifyGithubSignature)
+  end
+
   pipeline :mcp do
     plug(:accepts, ["json"])
     plug(PlatformWeb.Plugs.RuntimeBearerAuth)
@@ -313,7 +328,7 @@ defmodule PlatformWeb.Router do
   end
 
   scope "/api/webhooks", PlatformWeb do
-    pipe_through(:api)
+    pipe_through(:github_webhook)
     post("/github", GithubWebhookController, :handle)
   end
 
