@@ -141,6 +141,25 @@ defmodule Platform.Security.Sweeper do
   @spec tick_telemetry_event() :: [atom()]
   def tick_telemetry_event, do: @sweep_tick_event
 
+  @doc """
+  The default `responsibility_key → scanner module` dispatch table.
+
+  Public because this table *is* the reason `security.*` has no
+  `Platform.Responsibilities.Providers` entry: the Sweeper owns those
+  keys, so the Router deliberately never resolves a provider for them
+  (see `Platform.Responsibilities.Providers.retired/0`).
+
+  `test/platform/responsibilities/provider_coverage_test.exs` asserts the
+  exemption against this map rather than against a hardcoded skip list,
+  so retiring a key from *here* turns the coverage test red instead of
+  silently re-creating the black hole that task 019f9b28 exists to kill.
+
+  Note this is the *default* — a Sweeper started with `:scanner_modules`
+  overrides it for that instance only.
+  """
+  @spec default_scanner_modules() :: %{optional(String.t()) => module()}
+  def default_scanner_modules, do: @default_scanner_modules
+
   # ── GenServer callbacks ───────────────────────────────────────────────
 
   @impl GenServer

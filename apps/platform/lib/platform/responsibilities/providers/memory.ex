@@ -47,12 +47,36 @@ defmodule Platform.Responsibilities.Providers.Memory do
     DailySummary.register() ++ Dreaming.register() ++ ProposeLongTerm.register()
   end
 
+  @doc """
+  Return the concrete handler module for a given responsibility (or key).
+
+  Public as of task 019f9b28 stage 4. This was a private
+  `dispatch_module/1` returning `{:ok, mod} | :error`, which made
+  `memory` the 1 in a 3-to-1 convention split — `Providers.Design`,
+  `Providers.Meetings` and `Providers.Tasks` all expose a public
+  `handler_for/1` returning `module() | nil`. The split mattered because
+  `test/platform/responsibilities/provider_coverage_test.exs` walks every
+  provider uniformly, and a guard with a special case is how the failure
+  class comes back.
+
+  Returns `nil` for any key not owned by this feature so callers can
+  branch on the missing case explicitly.
+  """
+  @spec handler_for(Responsibility.t() | %{key: String.t()} | String.t() | any()) ::
+          module() | nil
+  def handler_for(%Responsibility{key: key}), do: handler_for(key)
+  def handler_for(%{key: key}), do: handler_for(key)
+  def handler_for("memory.daily_summary"), do: DailySummary
+  def handler_for("memory.dreaming"), do: Dreaming
+  def handler_for("memory.propose_long_term"), do: ProposeLongTerm
+  def handler_for(_), do: nil
+
   @impl true
   def gather_context(%Responsibility{key: key} = responsibility, ctx)
       when is_map(ctx) and is_binary(key) do
-    case dispatch_module(key) do
-      {:ok, mod} -> mod.gather_context(responsibility, ctx)
-      :error -> {:ok, %{}}
+    case handler_for(key) do
+      nil -> {:ok, %{}}
+      mod -> mod.gather_context(responsibility, ctx)
     end
   end
 
@@ -61,16 +85,16 @@ defmodule Platform.Responsibilities.Providers.Memory do
   @impl true
   def handle_output(%Responsibility{key: key} = responsibility, parsed)
       when is_binary(key) do
-    case dispatch_module(key) do
-      {:ok, mod} ->
-        mod.handle_output(responsibility, parsed)
-
-      :error ->
+    case handler_for(key) do
+      nil ->
         Logger.warning(
           "[Providers.Memory] no per-key handler for key=#{inspect(key)} — skipping handle_output/2"
         )
 
         :ok
+
+      mod ->
+        mod.handle_output(responsibility, parsed)
     end
   end
 
@@ -79,25 +103,18 @@ defmodule Platform.Responsibilities.Providers.Memory do
   @impl true
   def handle_output(%Responsibility{key: key} = responsibility, parsed, trigger_meta)
       when is_binary(key) and is_map(trigger_meta) do
-    case dispatch_module(key) do
-      {:ok, mod} ->
-        mod.handle_output(responsibility, parsed, trigger_meta)
-
-      :error ->
+    case handler_for(key) do
+      nil ->
         Logger.warning(
           "[Providers.Memory] no per-key handler for key=#{inspect(key)} — skipping handle_output/3"
         )
 
         :ok
+
+      mod ->
+        mod.handle_output(responsibility, parsed, trigger_meta)
     end
   end
 
   def handle_output(_responsibility, _parsed, _trigger_meta), do: :ok
-
-  # ── internals ─────────────────────────────────────────────────────────────
-
-  defp dispatch_module("memory.daily_summary"), do: {:ok, DailySummary}
-  defp dispatch_module("memory.dreaming"), do: {:ok, Dreaming}
-  defp dispatch_module("memory.propose_long_term"), do: {:ok, ProposeLongTerm}
-  defp dispatch_module(_), do: :error
 end
