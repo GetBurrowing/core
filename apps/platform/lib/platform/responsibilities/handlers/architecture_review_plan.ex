@@ -74,8 +74,11 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   AgentResponder signal and run their own attention prompt loop — the
   `context_provided` slots this handler declares are surfaced via the
   usual context bundler on the receiver side. Stage 3 tests exercise
-  the handler functions directly; live dispatch is covered by stage 5's
-  e2e_behavior cases.
+  the handler functions directly; that all three slots actually reach
+  the model on a live external dispatch is asserted on the outbound
+  request bytes in
+  `test/platform/responsibilities/architecture_context_bridge_test.exs`
+  (task 019f9b28-6ca7 stage 6).
   """
   @behaviour Platform.Responsibilities.Provider
 
@@ -326,8 +329,8 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
         {:ok,
          %{
            plan_payload: payload,
-           sibling_tasks: sibling_tasks(payload),
-           adr_index: adr_index(),
+           sibling_tasks: fetch_sibling_tasks_slot(payload),
+           adr_index: fetch_adr_index_slot(),
            similar_tasks: similar_tasks_hint(payload)
          }}
 
@@ -369,7 +372,16 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   # common shape in the system. Only `:plan_payload` is load-bearing
   # enough to refuse a dispatch over; the `case` below exists purely so
   # a future contract change can't silently crash the gather.
-  defp sibling_tasks(payload) do
+  #
+  # Named `fetch_*_slot` rather than after the slot itself: this
+  # function FETCHES a slot, it does not materialise one, and the two
+  # used to be indistinguishable by name here. No private function in
+  # this module is named after a context slot any more — the check that
+  # ADR-0046 stack member 3 removed a resolver rather than adding a
+  # fourth. The behavioural form of that check (each gathered slot is
+  # byte-identical to `ContextProviders`' own output, which a rename
+  # cannot satisfy) is in `architecture_context_bridge_test.exs`.
+  defp fetch_sibling_tasks_slot(payload) do
     anchor = %{task_id: is_map(payload) && Map.get(payload, :task_id)}
 
     case ContextProviders.gather_context(:sibling_tasks, anchor) do
@@ -423,7 +435,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   # dispatching in production. It comes back `available?: false` with a
   # reason instead, and the renderer turns that into an explicit
   # instruction not to cite ADRs rather than into silence.
-  defp adr_index do
+  defp fetch_adr_index_slot do
     case ContextProviders.gather_context(:adr_index, %{}) do
       {:ok, %{adr_index: index}} ->
         index
@@ -627,7 +639,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   end
 
   defp format_adr_index(%{entries: entries} = payload) when is_list(entries) do
-    Enum.join([adr_index_header(payload) | Enum.map(entries, &format_adr_entry/1)], "\n")
+    Enum.join([format_adr_index_header(payload) | Enum.map(entries, &format_adr_entry/1)], "\n")
   end
 
   defp format_adr_index(_payload),
@@ -646,7 +658,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   # cite by filename. `docs/decisions/` holds four numbers that name two
   # different ADRs each, so "ADR-0044" is not a reference — it is a
   # coin flip the model has no way of knowing it is making.
-  defp adr_index_header(payload) do
+  defp format_adr_index_header(payload) do
     collisions = map_size(Map.get(payload, :number_collisions) || %{})
     total = Map.get(payload, :total, 0)
     shown = Map.get(payload, :shown, total)
