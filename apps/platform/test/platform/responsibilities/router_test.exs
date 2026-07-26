@@ -2253,7 +2253,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok =
+          assert {:ok, :dispatched} =
                    Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 
@@ -2292,7 +2292,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :debug], fn ->
-          assert :ok =
+          assert {:ok, :dispatched} =
                    Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 
@@ -2354,7 +2354,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok =
+          assert {:ok, :dispatched} =
                    Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 
@@ -2455,7 +2455,15 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok =
+          # `{:ok, :dispatched}`, NOT `{:error, {:build_prompt_refused, _}}`.
+          # The refusal short-circuit member 1 added lives in
+          # `dispatch_external/5` only; this row has a NATIVE assignee, and
+          # `dispatch_native/5` deliberately proceeds with a bare signal —
+          # that asymmetry is exactly what the log line below records. If a
+          # later stage makes native abort too, this is the assertion that
+          # should change, and the "native dispatch proceeds" log assertion
+          # will change with it.
+          assert {:ok, :dispatched} =
                    Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 
@@ -2486,7 +2494,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok =
+          assert {:ok, :dispatched} =
                    Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 

@@ -261,7 +261,7 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
       :ok = stub_architect_reply!("#{@sentinel} boundary objection")
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(
                    ctx.row,
                    %{plan_id: ctx.plan.id, task_id: ctx.task.id, plan: ctx.plan},
@@ -301,7 +301,7 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
       :ok = stub_architect_reply!("#{@sentinel} boundary objection")
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(
                    ctx.row,
                    %{plan_id: ctx.plan.id, task_id: ctx.task.id, plan: ctx.plan},
@@ -324,7 +324,7 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok =
+          assert {:ok, :dispatched} =
                    Router.fire_trigger(
                      ctx.row,
                      %{plan_id: ctx.plan.id, task_id: ctx.task.id, plan: ctx.plan},
@@ -375,7 +375,7 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
       :ok = stub_architect_reply!("#{@sentinel} drift: touched an unplanned subsystem")
 
       capture_log([level: :info], fn ->
-        assert :ok = Router.fire_trigger(ctx.row, audit_trigger_meta(ctx), %{})
+        assert {:ok, :dispatched} = Router.fire_trigger(ctx.row, audit_trigger_meta(ctx), %{})
       end)
 
       assert_receive {:outbound, "/chat/completions", body}
@@ -403,7 +403,7 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok = Router.fire_trigger(ctx.row, audit_trigger_meta(ctx), %{})
+          assert {:ok, :dispatched} = Router.fire_trigger(ctx.row, audit_trigger_meta(ctx), %{})
         end)
 
       assert_receive {:outbound, "/chat/completions", _body}
