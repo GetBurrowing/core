@@ -407,10 +407,16 @@ defmodule Platform.ResponsibilitiesTest do
     test "known key with a native assignee dispatches and emits :fired telemetry" do
       key = "architecture.review_plan_fire_native_#{System.unique_integer([:positive])}"
 
+      # `feature` is deliberately NOT "architecture" — see the note on
+      # `seed_external_responsibility!/1` below. The unique-suffixed key
+      # is not one `Providers.Architecture.handler_for/1` maps, so under
+      # task 019f9b28-6ca7 stage 2 the architecture provider would refuse
+      # to supply context and the Router would correctly decline to
+      # dispatch. This test is about the native handoff, not about that.
       {:ok, _row} =
         Responsibilities.create_responsibility(%{
           key: key,
-          feature: "architecture",
+          feature: "resp_fire_unprovided_#{System.unique_integer([:positive])}",
           trigger_kind: "event_topic",
           trigger_config: %{"topic" => "plan:submitted"},
           scope: "per_project",
@@ -660,11 +666,26 @@ defmodule Platform.ResponsibilitiesTest do
       agent
     end
 
+    # NB the `feature`. This fixture used to say `"architecture"` for
+    # flavour, while `key` carried a `System.unique_integer` suffix that
+    # `Providers.Architecture.handler_for/1` has never mapped. That made
+    # the row an "architecture" responsibility the architecture provider
+    # disowns — `gather_context/2` returned
+    # `{:error, :unknown_architecture_responsibility}` and the Router
+    # silently substituted generic ContextGatherer context.
+    #
+    # Task 019f9b28-6ca7 stage 2 made the Router honour that refusal, so
+    # `feature` is now load-bearing where it used to be decorative. These
+    # tests are about `fire/2`'s RETURN PLUMBING, not about the
+    # architecture provider, so the honest fixture is a feature with no
+    # provider at all — the "nothing to say" case, which still falls back
+    # and dispatches. The real `feature: "architecture"` path is covered
+    # end-to-end by `architecture_dispatch_test.exs`.
     defp seed_external_responsibility!(key) do
       {:ok, row} =
         Responsibilities.create_responsibility(%{
           key: key,
-          feature: "architecture",
+          feature: "resp_fire_unprovided_#{System.unique_integer([:positive])}",
           trigger_kind: "event_topic",
           trigger_config: %{"topic" => "plan:submitted"},
           scope: "per_project",

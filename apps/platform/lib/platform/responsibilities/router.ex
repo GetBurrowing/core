@@ -1016,17 +1016,50 @@ defmodule Platform.Responsibilities.Router do
   defp dispatch_assignee(%Responsibility{} = responsibility, agent, trigger_meta, kind) do
     provider_module = provider_module_for(responsibility.feature)
 
-    context =
-      provider_module
-      |> gather_context_via_provider(responsibility, trigger_meta)
-      |> Map.put(:__responsibility__, responsibility)
+    case gather_context_via_provider(provider_module, responsibility, trigger_meta) do
+      # A provider that exists and refused to produce context. Stop here,
+      # BEFORE `build_prompt_via_provider/2` — rendering a prompt over
+      # substituted generic context is precisely the wrong-context
+      # dispatch this arm exists to prevent. Mirrors the
+      # `{:build_prompt_refused, _}` arm in `dispatch_external/3`.
+      #
+      # Placement note (task 019f9b28-6ca7 stage 2): the stage was written
+      # against a tree where gathering lived inside `dispatch_external/3`,
+      # so it specified the arm there. `fix/render-prompt-for-federated-dispatch`
+      # has since hoisted gathering into this shared preamble, and a native
+      # assignee now receives the provider's rendered prompt too. Honouring
+      # the refusal here — above the external/native branch — is the only
+      # placement that is still "before build_prompt" for both paths.
+      {:refused, reason} ->
+        refuse_dispatch(responsibility, agent, kind, reason)
 
-    rendered = build_prompt_via_provider(provider_module, context)
+      {:ok, ctx} ->
+        context = Map.put(ctx, :__responsibility__, responsibility)
+        rendered = build_prompt_via_provider(provider_module, context)
 
-    case kind do
-      "external" -> dispatch_external(responsibility, agent, trigger_meta, context, rendered)
-      _ -> dispatch_native(responsibility, agent, trigger_meta, kind, rendered)
+        case kind do
+          "external" -> dispatch_external(responsibility, agent, trigger_meta, context, rendered)
+          _ -> dispatch_native(responsibility, agent, trigger_meta, kind, rendered)
+        end
     end
+  end
+
+  defp refuse_dispatch(%Responsibility{} = responsibility, agent, kind, reason) do
+    dispatch_kind = if kind == "external", do: :external, else: :native
+
+    Logger.warning(
+      "[ResponsibilityRouter] provider gather_context refused dispatch " <>
+        "key=#{responsibility.key} agent=#{agent_slug(agent)} reason=#{inspect(reason)}"
+    )
+
+    emit_failed_telemetry(
+      responsibility,
+      agent,
+      dispatch_kind,
+      {:context_gather_refused, reason}
+    )
+
+    {:error, {:context_gather_refused, reason}}
   end
 
   # ── External dispatch ─────────────────────────────────────────────────────
@@ -1103,18 +1136,45 @@ defmodule Platform.Responsibilities.Router do
   # `Handlers.MeetingSummarize`) need the provider's own resolvers
   # because `ContextGatherer.resolve(:meeting_transcript, ...)` reads a
   # flat `meta[:transcript_id]` but the router publishes it nested
-  # under `meta[:payload][:transcript_id]`. Falls back to the
-  # cross-cutting `ContextGatherer` path when the provider is absent
-  # or returns an error.
+  # under `meta[:payload][:transcript_id]`.
+  #
+  # ONE RULE: **if a provider exists and did not return `{:ok, map}`, do
+  # not dispatch.**
+  #
+  # This used to be a single `else -> gather_context(...)` arm collapsing
+  # four distinct situations into one. Two of them mean "nothing to say"
+  # and the cross-cutting fallback is right; two of them mean "this
+  # dispatch is wrong" and the fallback silently converts a refusal into a
+  # generic success — the LLM is then called, and billed, with context
+  # that answers a different question. Same defect family as
+  # `Code.ensure_loaded?` making "module never written" and "feature
+  # deliberately has no provider" the same value (see
+  # `Platform.Responsibilities.Providers`).
+  #
+  #   * `{:ok, ctx}`      — the provider returned `{:ok, map}`.
+  #   * `{:ok, fallback}` — there is no provider module, or it does not
+  #                         export `gather_context/2`. Nothing to say;
+  #                         `ContextGatherer` is the correct answer and
+  #                         this path is unchanged.
+  #   * `{:refused, r}`   — a provider that DOES exist returned anything
+  #                         other than `{:ok, map}`, including a raise.
+  #
+  # A raise is deliberately folded into `:refused` rather than into the
+  # fallback: a broken gatherer producing generic context is the same
+  # wrong-context failure as a deliberate refusal. The two are
+  # distinguished only by log level — `Logger.error` for the raise in
+  # `safe_provider_gather/3`, `Logger.warning` for the refusal in
+  # `refuse_dispatch/4`.
   defp gather_context_via_provider(provider_module, %Responsibility{} = responsibility, meta) do
-    with true <- is_atom(provider_module),
-         true <- Code.ensure_loaded?(provider_module),
-         true <- function_exported?(provider_module, :gather_context, 2),
-         {:ok, ctx} when is_map(ctx) <-
-           safe_provider_gather(provider_module, responsibility, meta) do
-      ctx
+    if is_atom(provider_module) and Code.ensure_loaded?(provider_module) and
+         function_exported?(provider_module, :gather_context, 2) do
+      case safe_provider_gather(provider_module, responsibility, meta) do
+        {:ok, ctx} when is_map(ctx) -> {:ok, ctx}
+        {:error, reason} -> {:refused, reason}
+        other -> {:refused, {:unexpected_gather_shape, other}}
+      end
     else
-      _ -> gather_context(responsibility, meta)
+      {:ok, gather_context(responsibility, meta)}
     end
   end
 
@@ -1122,7 +1182,10 @@ defmodule Platform.Responsibilities.Router do
     provider_module.gather_context(responsibility, meta)
   rescue
     error ->
-      Logger.warning(
+      # `:error`, not `:warning` — this is the log-level half of the
+      # raise-vs-refusal distinction documented above. A provider that
+      # blew up is a defect; a provider that said no is a decision.
+      Logger.error(
         "[ResponsibilityRouter] provider gather_context raised " <>
           "module=#{inspect(provider_module)} error=#{Exception.message(error)}"
       )

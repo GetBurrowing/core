@@ -1735,6 +1735,351 @@ defmodule Platform.Responsibilities.RouterTest do
                %{"role" => "user", "content" => "USER Ada"}
              ]
     end
+
+    # ── task 019f9b28-6ca7 stage 2 — a provider refusal is honoured ────────
+    #
+    # `gather_context_via_provider/3` used to have ONE `else` arm collapsing
+    # four situations: no provider module, provider without
+    # `gather_context/2`, provider that deliberately returned
+    # `{:error, :no_transcript}`, and provider that raised. The first two
+    # mean "nothing to say" and the ContextGatherer fallback is correct.
+    # The last two mean the dispatch is wrong, and substituting generic
+    # context sent the LLM — and the bill — after a different question.
+    #
+    # DETECTOR: revert `gather_context_via_provider/3` to the `with`/`else`
+    # fallback and the two `refute_receive :dispatched_anyway` assertions
+    # below fail, because the refusal becomes a generic dispatch.
+
+    test "a provider that refuses context short-circuits — no LLM call, :failed telemetry" do
+      feature_str = "router_gc_refuse_#{System.unique_integer([:positive])}"
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: {:error, :deliberate}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          # A renderable legacy template — so the ONLY thing stopping the
+          # dispatch is the refusal, not a missing prompt.
+          default_prompt_template: "do the thing"
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        send(test_pid, :dispatched_anyway)
+        Req.Test.json(conn, %{"choices" => []})
+      end)
+
+      handler_id = "router-test-gc-refused-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :failed],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:failed_telemetry, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert {:error, {:context_gather_refused, :deliberate}} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      assert log =~ "provider gather_context refused dispatch"
+      assert log =~ "key=#{key}"
+      assert log =~ ":deliberate"
+
+      refute_receive :dispatched_anyway, 100
+
+      assert_receive {:failed_telemetry, _meas,
+                      %{key: ^key, dispatch_kind: :external, reason: reason}}
+
+      assert reason =~ "context_gather_refused"
+      assert reason =~ "deliberate"
+    end
+
+    # POSITIVE CONTROL for the test above, on the same harness and the same
+    # mechanism: the ONLY difference is the provider's return value. If this
+    # dispatches and the marker lands in the body, then the `refute_receive`
+    # above is a real observation about the refusal rather than a stub that
+    # was never reachable.
+    test "the same provider returning {:ok, ctx} DOES dispatch and its context reaches the body" do
+      feature_str = "router_gc_allow_#{System.unique_integer([:positive])}"
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: {:ok, %{marker: "GATHER_MARKER"}}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          default_prompt_template: "do the thing: {marker}"
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:dispatched_anyway, body})
+
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      capture_log([level: :info], fn ->
+        assert {:ok, :dispatched} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      end)
+
+      assert_receive {:dispatched_anyway, raw_body}
+      assert raw_body =~ "GATHER_MARKER"
+    end
+
+    test "a provider whose gather_context/2 raises refuses too, and logs at :error" do
+      feature_str = "router_gc_raise_#{System.unique_integer([:positive])}"
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: raise(RuntimeError, "gatherer exploded")
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          default_prompt_template: "do the thing"
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        send(test_pid, :dispatched_anyway)
+        Req.Test.json(conn, %{"choices" => []})
+      end)
+
+      handler_id = "router-test-gc-raise-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :failed],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:failed_telemetry, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      # Captured at :error, so a :warning is invisible here. That is the
+      # point: it pins the log-LEVEL half of the raise-vs-refusal split.
+      # A broken gatherer is a defect (:error); a provider that said no is
+      # a decision (:warning), and the refusal line must NOT show up.
+      error_log =
+        capture_log([level: :error], fn ->
+          assert {:error, {:context_gather_refused, {:provider_gather_raised, message}}} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+
+          assert message =~ "gatherer exploded"
+        end)
+
+      assert error_log =~ "provider gather_context raised"
+      refute error_log =~ "provider gather_context refused dispatch"
+
+      refute_receive :dispatched_anyway, 100
+
+      assert_receive {:failed_telemetry, _meas,
+                      %{key: ^key, dispatch_kind: :external, reason: reason}}
+
+      assert reason =~ "context_gather_refused"
+      assert reason =~ "provider_gather_raised"
+    end
+
+    # GUARD for the OTHER two situations the old `else` arm covered. These
+    # are "nothing to say", not a refusal, and must still fall back to
+    # `ContextGatherer` and dispatch. Narrowing the fallback is the whole
+    # risk of this stage; these are what say we narrowed it correctly.
+    test "a provider that does NOT export gather_context/2 still falls back and dispatches" do
+      feature_str = "router_gc_nogather_#{System.unique_integer([:positive])}"
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          # NB: no `gather_context/2` at all — the "nothing to say" case.
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          context_provided: ["org_identity"],
+          default_prompt_template: "fallback still renders"
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        send(test_pid, :fallback_dispatched)
+
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      capture_log([level: :info], fn ->
+        assert {:ok, :dispatched} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      end)
+
+      assert_receive :fallback_dispatched
+    end
+
+    test "a feature with no provider module at all still falls back and dispatches" do
+      key = "routertest.gc_noprovider_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          # Never registered in @feature_providers and never overridden.
+          feature: "router_gc_unregistered_#{System.unique_integer([:positive])}",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          context_provided: ["org_identity"],
+          default_prompt_template: "fallback still renders"
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        send(test_pid, :fallback_dispatched)
+
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      capture_log([level: :warning], fn ->
+        assert {:ok, :dispatched} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      end)
+
+      assert_receive :fallback_dispatched
+    end
+
+    # BLAST RADIUS, asserted rather than assumed. Every shipped provider
+    # returns `{:error, :unknown_*_responsibility}` for a key its
+    # `handler_for/1` does not map. Before this stage that error was
+    # swallowed into the generic fallback; now it stops the dispatch. So a
+    # built-in whose key is missing from its feature provider's dispatch
+    # table would go from "fires with the wrong context" to "never fires" —
+    # a real regression, and this is the test that would catch it.
+    test "every built-in responsibility key maps to a handler in its feature provider" do
+      for module <- Platform.Responsibilities.BuiltIns.providers(),
+          spec <- module.register() do
+        case Platform.Responsibilities.Providers.feature_provider(spec.feature) do
+          {:ok, provider} ->
+            assert provider.handler_for(spec.key) != nil,
+                   "#{inspect(module)} declares key #{inspect(spec.key)} under feature " <>
+                     "#{inspect(spec.feature)}, but #{inspect(provider)}.handler_for/1 returns " <>
+                     "nil for it. Its gather_context/2 will return " <>
+                     "{:error, :unknown_*_responsibility}, which the Router now honours as a " <>
+                     "refusal — this responsibility would never dispatch."
+
+          # Retired features resolve to no provider module, so they take
+          # the ContextGatherer fallback and are unaffected by the refusal.
+          {:retired, _reason} ->
+            :ok
+
+          :error ->
+            flunk("feature #{inspect(spec.feature)} has no provider registration at all")
+        end
+      end
+    end
   end
 
   # ── M6 stage 6: federated/native regression ─────────────────────────────
@@ -2204,6 +2549,85 @@ defmodule Platform.Responsibilities.RouterTest do
       refute :frozen_history in keys
       refute :plan in keys
       refute "history line 1" in terms
+    end
+
+    # ── task 019f9b28-6ca7 stage 2 — the refusal covers the native path too ──
+    #
+    # The stage was written when `dispatch_native/4` carried no context at
+    # all, and recorded that as out of scope. `fix/render-prompt-for-federated-dispatch`
+    # has since hoisted `gather_context_via_provider/3` into the shared
+    # `dispatch_assignee/4` preamble, so a native assignee now receives the
+    # provider's rendered prompt — built from exactly the context that
+    # would have been silently substituted. Honouring the refusal above the
+    # external/native branch is what makes this hold, and this is the test
+    # that says so.
+    test "a provider context refusal stops the native handoff as well" do
+      feature_str = "router_fed_gc_refuse_#{System.unique_integer([:positive])}"
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: {:error, :no_plan_payload}
+
+          @impl true
+          def build_prompt(_ctx), do: {:ok, %{system: "sys", user: "usr"}}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      agent = wire_native_assignee(key)
+      test_pid = self()
+
+      handler_id = "router-test-fed-gc-refused-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :failed],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:failed_telemetry, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert {:error, {:context_gather_refused, :no_plan_payload}} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      assert log =~ "provider gather_context refused dispatch"
+
+      # The CaptureDispatcher from this describe's setup would have
+      # received a signal carrying a prompt built over generic context.
+      refute_receive {:captured_signal, _signal}, 100
+
+      assert_receive {:failed_telemetry, _meas, %{key: ^key, dispatch_kind: :native}}
+
+      # Nothing was stamped — a refused dispatch is not a successful fire.
+      assert Repo.get!(Agent, agent.id).last_successful_fire_at == nil
     end
   end
 
