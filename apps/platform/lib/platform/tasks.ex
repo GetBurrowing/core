@@ -2080,6 +2080,249 @@ defmodule Platform.Tasks do
     end
   end
 
+  # ── ADR-0046 member 5: the architecture gate ────────────────────────
+  #
+  # STATE ONLY at this stage. Nothing here is called from the plan
+  # lifecycle yet; `submit_plan_for_review/1` opens the gate in stage 2,
+  # the MCP verdict tool closes it in stage 4, and the deadline timer
+  # lands in stage 5. These functions are the whole vocabulary those
+  # stages speak — no other module reads `plans.architecture_verdict`
+  # directly.
+
+  # 15 minutes. Long enough for an architect agent to actually read a
+  # multi-stage plan and the ADRs it cites (member 3's context resolvers
+  # push a real reading load onto that dispatch); short enough that one
+  # silent architect does not hold an org's entire planning queue for a
+  # working day. Overridable per-environment because the test suite
+  # needs it to be ~0 and a human-in-the-loop override wants it longer.
+  @architecture_gate_default_timeout_ms 15 * 60 * 1_000
+
+  @doc """
+  How long an open architecture gate has before it is considered expired.
+
+  Configure with `config :platform, architecture_gate_timeout_ms: <ms>`.
+  """
+  @spec architecture_gate_timeout_ms() :: pos_integer()
+  def architecture_gate_timeout_ms do
+    Application.get_env(
+      :platform,
+      :architecture_gate_timeout_ms,
+      @architecture_gate_default_timeout_ms
+    )
+  end
+
+  @doc """
+  Open the architecture gate on a plan version.
+
+  Writes `state: "pending"`, `opened_at`, `deadline_at` (now +
+  `architecture_gate_timeout_ms/0`) and `architect_agent_id`. The
+  remaining keys are written as `nil` / `[]` so every reader sees the
+  full shape and never has to distinguish "key absent" from "key nil".
+
+  Goes through `Plan.architecture_verdict_changeset/2`, so this cannot
+  move the plan's `status` even by accident.
+  """
+  @spec open_architecture_gate(Plan.t(), String.t() | nil) :: {:ok, Plan.t()} | {:error, term()}
+  def open_architecture_gate(%Plan{} = plan, architect_agent_id \\ nil) do
+    now = DateTime.utc_now()
+    deadline = DateTime.add(now, architecture_gate_timeout_ms(), :millisecond)
+
+    verdict = %{
+      "state" => "pending",
+      "opened_at" => DateTime.to_iso8601(now),
+      "deadline_at" => DateTime.to_iso8601(deadline),
+      "resolved_at" => nil,
+      "resolved_by" => nil,
+      "architect_agent_id" => architect_agent_id,
+      "source" => nil,
+      "summary" => nil,
+      "findings" => []
+    }
+
+    plan
+    |> Plan.architecture_verdict_changeset(%{architecture_verdict: verdict})
+    |> Repo.update()
+  end
+
+  @doc """
+  Read the gate's state. **Level-triggered, and it never writes.**
+
+  Returns `:none` when the gate never opened for this plan version,
+  `{:open, verdict}` while it is genuinely pending, and
+  `{:resolved, verdict}` once it carries a terminal state.
+
+  A `"pending"` verdict whose `deadline_at` has passed is reported as
+  `{:resolved, %{"state" => "expired", "source" => "deadline"}}`
+  WITHOUT persisting anything. That projection is the correctness
+  guarantee that a gate can never block forever; stage 5's timer is only
+  the eager path that also writes the row and resumes the deferred work.
+
+  The rationale is a live production incident recorded in the
+  2026-07-26 journal: `deploying -> done` lived solely in an
+  edge-triggered PubSub handler with no level re-check, and a container
+  restart between the broadcast and the handler stranded a completed
+  task at `deploying` indefinitely while re-dispatching it every 90
+  minutes. Same shape here. Build the level check first and treat the
+  edge as an optimisation.
+
+  A `"pending"` verdict with a missing or unparseable `deadline_at` is
+  ALSO reported as expired. Deliberate, and it is the same argument: the
+  alternative is a gate with no falsifiable end, which is the exact
+  failure this function exists to rule out. Failing toward "not blocked"
+  restores today's behaviour (a plan approves without architect review);
+  failing toward "blocked" strands the task and needs a human.
+
+  Accepts a `%Plan{}` or a plan id; **either way the row is re-read from
+  the database.** A caller holding a struct loaded before the gate moved
+  would otherwise get a stale answer, and this is the function every
+  other module asks the question through. (Member 4's reviewer found the
+  mirror-image bug in `AutoMerger.execute_merge/4`, which reads
+  `planning_step_outcomes` off a struct loaded in a different process.)
+  """
+  @spec architecture_gate(Plan.t() | binary()) :: :none | {:open, map()} | {:resolved, map()}
+  def architecture_gate(plan_or_id) do
+    case resolve_plan_for_gate(plan_or_id) do
+      nil -> :none
+      %Plan{architecture_verdict: nil} -> :none
+      %Plan{architecture_verdict: verdict} -> classify_architecture_verdict(verdict)
+    end
+  end
+
+  @doc """
+  True while the architecture gate is genuinely holding this plan.
+
+  The single question every other module asks. Defined in terms of
+  `architecture_gate/1` so the expiry projection can never be skipped by
+  a caller that pattern-matches the raw column itself.
+  """
+  @spec architecture_gate_open?(Plan.t() | binary()) :: boolean()
+  def architecture_gate_open?(plan_or_id), do: match?({:open, _}, architecture_gate(plan_or_id))
+
+  @doc """
+  Close the gate with a terminal verdict. One-shot.
+
+  `verdict` is merged over the open verdict, so `opened_at`,
+  `deadline_at` and `architect_agent_id` survive; `resolved_at` is
+  stamped, and `:resolved_by` / `:source` may be supplied in `opts` (a
+  non-nil value already present in `verdict` wins).
+
+  Errors:
+
+    * `{:error, :plan_not_found}`
+    * `{:error, :gate_not_open}` — the gate never opened for this version
+    * `{:error, :gate_already_resolved}` — somebody already closed it
+    * `{:error, :verdict_state_not_terminal}` — `"state" => "pending"`;
+      re-opening is `open_architecture_gate/2`'s job
+    * `{:error, %Ecto.Changeset{}}` — the verdict failed validation
+
+  ## Why one-shot, and how "first writer wins" is decided
+
+  A duplicate MCP call must be harmless, and a late verdict racing an
+  expired deadline must be deterministic. Both fall out of arbitrating
+  on the PERSISTED state rather than on `architecture_gate/1`'s
+  projection: an overdue-but-unwritten gate still reads `"pending"` in
+  the row, so an architect whose answer beats stage 5's timer to the
+  write genuinely wins, and once the timer has written `"expired"` the
+  late answer is refused. Note this is the one place the level
+  projection is deliberately NOT consulted — readers deciding whether to
+  block want the projection; the writer arbitrating a race wants the row.
+
+  The check and the write are one statement: the `UPDATE` carries its
+  own `state = 'pending'` predicate, so two concurrent writers cannot
+  both observe an open gate and both write. Zero rows affected IS the
+  already-resolved answer.
+  """
+  @spec record_architecture_verdict(Plan.t() | binary(), map(), keyword()) ::
+          {:ok, Plan.t()} | {:error, term()}
+  def record_architecture_verdict(plan_or_id, verdict, opts \\ []) when is_map(verdict) do
+    case resolve_plan_for_gate(plan_or_id) do
+      nil ->
+        {:error, :plan_not_found}
+
+      %Plan{architecture_verdict: nil} ->
+        {:error, :gate_not_open}
+
+      %Plan{architecture_verdict: %{"state" => "pending"} = current} = plan ->
+        if Map.get(verdict, "state") == "pending" do
+          {:error, :verdict_state_not_terminal}
+        else
+          write_architecture_verdict(plan, current, verdict, opts)
+        end
+
+      %Plan{} ->
+        {:error, :gate_already_resolved}
+    end
+  end
+
+  defp write_architecture_verdict(%Plan{} = plan, current, attrs, opts) do
+    now = DateTime.utc_now()
+
+    merged =
+      current
+      |> Map.merge(attrs)
+      |> put_verdict_default("resolved_at", DateTime.to_iso8601(now))
+      |> put_verdict_default("resolved_by", Keyword.get(opts, :resolved_by))
+      |> put_verdict_default("source", Keyword.get(opts, :source))
+
+    changeset = Plan.architecture_verdict_changeset(plan, %{architecture_verdict: merged})
+
+    case Ecto.Changeset.apply_action(changeset, :update) do
+      {:error, %Ecto.Changeset{} = invalid} ->
+        {:error, invalid}
+
+      {:ok, _applied} ->
+        {count, _} =
+          Plan
+          |> where([p], p.id == ^plan.id)
+          |> where([p], fragment("?->>'state' = 'pending'", p.architecture_verdict))
+          |> Repo.update_all(set: [architecture_verdict: merged, updated_at: now])
+
+        case count do
+          1 -> {:ok, Repo.get(Plan, plan.id)}
+          0 -> {:error, :gate_already_resolved}
+        end
+    end
+  end
+
+  # Only fills a key that is absent or nil — an explicit value in the
+  # caller's verdict always wins over the `opts` fallback.
+  defp put_verdict_default(map, key, fallback) do
+    case Map.get(map, key) do
+      nil -> Map.put(map, key, fallback)
+      _present -> map
+    end
+  end
+
+  defp classify_architecture_verdict(%{"state" => "pending"} = verdict) do
+    if architecture_gate_overdue?(verdict) do
+      {:resolved, Map.merge(verdict, %{"state" => "expired", "source" => "deadline"})}
+    else
+      {:open, verdict}
+    end
+  end
+
+  defp classify_architecture_verdict(%{"state" => state} = verdict) when is_binary(state) do
+    {:resolved, verdict}
+  end
+
+  defp classify_architecture_verdict(_other), do: :none
+
+  defp architecture_gate_overdue?(%{"deadline_at" => deadline}) when is_binary(deadline) do
+    case DateTime.from_iso8601(deadline) do
+      {:ok, at, _offset} -> DateTime.compare(DateTime.utc_now(), at) != :lt
+      {:error, _reason} -> true
+    end
+  end
+
+  defp architecture_gate_overdue?(_verdict), do: true
+
+  # Always re-read: see the `architecture_gate/1` @doc. A gate answer
+  # derived from a struct somebody loaded earlier is the class of bug
+  # this whole stack is undoing.
+  defp resolve_plan_for_gate(%Plan{id: id}), do: Repo.get(Plan, id)
+  defp resolve_plan_for_gate(id) when is_binary(id), do: Repo.get(Plan, id)
+  defp resolve_plan_for_gate(_other), do: nil
+
   # Preconditions for auto-approve. Because plans don't carry per-stage
   # assignees (only the task carries per-phase assignees via
   # `phase_assignees`), the "agent assigned for all stages" check reduces to:

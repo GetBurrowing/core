@@ -817,6 +817,8 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # rewritten body needs its own overwrite. Update-only; no schema
       # change.
       "20260726051347_force_update_dispatch_planning_design_preplan.exs",
+      # ADR-0046 member 5 — plans.architecture_verdict.
+      "20260726051454_add_architecture_verdict_to_plans.exs",
       # Task 019f9b28-6ca7 stage 5: the `architecture.review_plan.v1`
       # body told the architect to "prefer citing the ADR by number",
       # which `docs/decisions/` cannot honour — four numbers each name
