@@ -22,6 +22,18 @@ defmodule Platform.Responsibilities.Registry do
   watching `status/0`. Successful providers log a single `Logger.info/1`
   with the row count.
 
+  ## Provider-coverage drift (task 019f9b28 stage 3)
+
+  After registration the Registry checks every declared `feature` against
+  `Platform.Responsibilities.Providers.feature_provider/1` and emits one
+  `Logger.error/1` plus a `[:platform, :responsibility, :provider_missing]`
+  telemetry event per feature that resolves to `:error`. Those
+  responsibilities register and fire normally — the Router just has nowhere
+  to send their output, so it is silently dropped. Retired features
+  (`{:retired, _}`) emit nothing, and a feature bound through the
+  `:responsibility_provider_overrides` seam counts as covered. The check is
+  observability only: it cannot change `status/0` and cannot raise.
+
   ## Configuration
 
       config :platform, Platform.Responsibilities,
@@ -53,6 +65,7 @@ defmodule Platform.Responsibilities.Registry do
   alias Platform.Agents.Agent
   alias Platform.Repo
   alias Platform.Responsibilities
+  alias Platform.Responsibilities.Providers
 
   @typedoc "Aggregated result of the last `register_all/1` invocation."
   @type results :: %{
@@ -166,6 +179,7 @@ defmodule Platform.Responsibilities.Registry do
 
     log_successes(providers, oks, errors)
     log_failures(errors)
+    log_provider_coverage(providers)
 
     results
   end
@@ -213,5 +227,91 @@ defmodule Platform.Responsibilities.Registry do
     Enum.each(errors, fn {mod, reason} ->
       Logger.error("register failed for #{inspect(mod)}: #{inspect(reason)}")
     end)
+  end
+
+  # ── provider-coverage drift (task 019f9b28 stage 3) ───────────────────────
+
+  # A responsibility whose feature has no provider still registers, still
+  # fires, and still dispatches — the Router simply has nowhere to send the
+  # answer, so it drops it. `architecture.*` sat in that state for months.
+  # The CI coverage test catches this for anything in `BuiltIns.providers/0`,
+  # but the Registry's provider list is *configurable*
+  # (`config :platform, Platform.Responsibilities, providers: [...]`), so an
+  # out-of-tree provider never passes under CI's nose. This check closes that
+  # gap where the real list is known: at boot.
+  #
+  # Resolution goes through `Providers.feature_provider/1`, NOT
+  # `Providers.all/0`. That matters: `feature_provider/1` consults the
+  # `:responsibility_provider_overrides` seam first, so an operator who ships
+  # a provider through the config extension point *and binds it* is silent
+  # here — which is correct, because that binding is exactly what makes the
+  # Router able to resolve them. An extension provider with no override
+  # registered is flagged on every boot, also correct: without the binding
+  # its output really is discarded. Nagging every boot about a legitimate
+  # override would be the alarm-fatigue rot this check exists to prevent.
+  #
+  # Walking each provider's own `register/0` output rather than a `Repo.all`
+  # over the table keeps boot free of a DB round-trip, avoids a sandbox
+  # ownership problem when a per-case Registry starts inside a test, and
+  # reasons about the same list that drives dispatch resolution.
+  #
+  # This is observability only: it never touches the results map and must
+  # never raise, hence the `count_rows_for/2`-shaped try/rescue/catch around
+  # every provider callback and a rescue around the telemetry emit.
+  @spec log_provider_coverage([module()]) :: :ok
+  defp log_provider_coverage(providers) do
+    providers
+    |> Enum.flat_map(&declared_feature_keys/1)
+    |> Enum.reduce(%{}, fn {feature, key}, acc ->
+      Map.update(acc, feature, [key], &[key | &1])
+    end)
+    |> Enum.each(fn {feature, keys} ->
+      case Providers.feature_provider(feature) do
+        # {:ok, _} — resolvable, compiled or overridden. {:retired, _} — a
+        # stated decision with a named owner; saying anything would train
+        # operators to skim past this line.
+        :error -> report_missing_provider(feature, Enum.sort(keys))
+        _ -> :ok
+      end
+    end)
+  end
+
+  # Non-binary / empty features are skipped rather than reported: they cannot
+  # resolve to a provider under any registry, and `register_all/1` has already
+  # rejected them into `:errors` where `log_failures/1` names the module.
+  defp declared_feature_keys(mod) do
+    try do
+      mod.register()
+      |> Enum.map(fn spec -> {spec[:feature] || spec["feature"], spec[:key] || spec["key"]} end)
+      |> Enum.filter(fn {feature, _key} -> is_binary(feature) and feature != "" end)
+    rescue
+      _ -> []
+    catch
+      _, _ -> []
+    end
+  end
+
+  defp report_missing_provider(feature, keys) do
+    Logger.error(
+      "[ResponsibilityRegistry] provider_missing feature=#{feature} " <>
+        "keys=#{Enum.join(keys, ",")} — these responsibilities register and fire, but the " <>
+        "Router cannot resolve a provider, so every answer they produce is discarded. Fix: add " <>
+        ~s("#{feature}" => YourProvider) <>
+        " to @feature_providers in Platform.Responsibilities.Providers (platform built-in), or " <>
+        "bind it at runtime with config :platform, responsibility_provider_overrides: " <>
+        ~s(%{"#{feature}" => YourProvider}) <> " (out-of-tree provider)."
+    )
+
+    emit_provider_missing_telemetry(feature, keys)
+  end
+
+  defp emit_provider_missing_telemetry(feature, keys) do
+    :telemetry.execute(
+      [:platform, :responsibility, :provider_missing],
+      %{count: length(keys)},
+      %{feature: feature, keys: keys}
+    )
+  rescue
+    _ -> :ok
   end
 end
