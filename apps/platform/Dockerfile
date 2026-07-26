@@ -32,11 +32,32 @@ FROM elixir:1.19.5-otp-28-slim AS app
 
 RUN apt-get update -y \
  && apt-get install -y --no-install-recommends \
-      git libstdc++6 openssl libncurses6 locales ca-certificates wget \
+      git libstdc++6 openssl libncurses6 locales ca-certificates wget curl \
  && rm -rf /var/lib/apt/lists/* \
  && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
  && locale-gen \
  && git config --system safe.directory '*'
+
+# GitHub CLI. NOT optional: the running platform shells out to `gh` to open
+# the stack rollup PR (Platform.Tasks.StackDeployer.GitShellRunner), to
+# auto-merge task PRs (Platform.Tasks.AutoMerger) and to resolve a PR number
+# from a branch (PlatformWeb.GithubWebhookController). The image shipped
+# without it, so every one of those paths died with an opaque
+# `ErlangError: :enoent` that looked like a git failure — see the
+# `System.find_executable("gh")` guards those modules now carry.
+#
+# Installed from the official apt repo rather than a pinned tarball so the
+# arch is derived from the build platform (`dpkg --print-architecture`).
+RUN mkdir -p -m 755 /etc/apt/keyrings \
+ && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update -y \
+ && apt-get install -y --no-install-recommends gh \
+ && rm -rf /var/lib/apt/lists/* \
+ && gh --version
 
 ENV LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
 

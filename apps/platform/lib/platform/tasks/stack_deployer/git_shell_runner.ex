@@ -36,13 +36,29 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
 
   Push auth is read from `GITHUB_TOKEN` via the same git credential
   helper used by `Platform.Execution.LocalWorkspace.prepare_git_push_auth/2`.
-  Setting that up is deferred to a follow-up — for now the runner relies
-  on whatever credential helper the system git already has configured
-  (the dev/prod environment is expected to provide `GITHUB_TOKEN` or a
-  configured ssh key).
+  The helper string is defined once, in `LocalWorkspace`, and installed on
+  the shared clone by `ensure_clone/2` — on the fresh-clone path via
+  `git -c` (which also authenticates the clone itself) plus a
+  `git config --local` write, and on the already-exists path via
+  `git config --local`, so a clone made before the helper existed still
+  picks it up.
+
+  The token is never written to disk and never embedded in `repo_url`; the
+  helper reads `$GITHUB_TOKEN` from the process environment at push time.
+  If `GITHUB_TOKEN` is unset the helper exits non-zero rather than pushing
+  with an empty password.
+
+  ## `gh` availability
+
+  The PR-facing callbacks (`open_stack_pr/1`, `close_stack_pr/1`) shell out
+  to the GitHub CLI. When `gh` is not on `PATH` they return
+  `{:error, {:gh_unavailable, message}}` rather than raising an `:enoent`
+  `ErlangError` that is indistinguishable from a git failure.
   """
 
   @behaviour Platform.Tasks.StackDeployer.GitRunner
+
+  alias Platform.Execution.LocalWorkspace
 
   require Logger
 
@@ -168,21 +184,23 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
         "--base #{base_branch} --head #{rollup_branch}"
     )
 
-    case System.cmd("gh", args,
-           stderr_to_stdout: true,
-           env: [{"GIT_TERMINAL_PROMPT", "0"}]
-         ) do
-      {output, 0} ->
-        case parse_pr_url(output) do
-          {:ok, url, number} ->
-            {:ok, %{number: number, url: url}}
+    with {:ok, gh} <- gh_executable(["pr", "create"]) do
+      case System.cmd(gh, args,
+             stderr_to_stdout: true,
+             env: [{"GIT_TERMINAL_PROMPT", "0"}]
+           ) do
+        {output, 0} ->
+          case parse_pr_url(output) do
+            {:ok, url, number} ->
+              {:ok, %{number: number, url: url}}
 
-          :error ->
-            {:error, {:pr_create_no_url, String.trim(output)}}
-        end
+            :error ->
+              {:error, {:pr_create_no_url, String.trim(output)}}
+          end
 
-      {output, code} ->
-        {:error, {:gh_failed, ["pr", "create"], code, String.trim(output)}}
+        {output, code} ->
+          {:error, {:gh_failed, ["pr", "create"], code, String.trim(output)}}
+      end
     end
   end
 
@@ -310,15 +328,17 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
       "[StackDeployer] closing stack PR ##{pr_number} on #{repo_url} (post-CI-failure bounce)"
     )
 
-    case System.cmd("gh", args_list,
-           stderr_to_stdout: true,
-           env: [{"GIT_TERMINAL_PROMPT", "0"}]
-         ) do
-      {_out, 0} ->
-        {:ok, :closed}
+    with {:ok, gh} <- gh_executable(["pr", "close"]) do
+      case System.cmd(gh, args_list,
+             stderr_to_stdout: true,
+             env: [{"GIT_TERMINAL_PROMPT", "0"}]
+           ) do
+        {_out, 0} ->
+          {:ok, :closed}
 
-      {output, code} ->
-        {:error, {:gh_failed, ["pr", "close"], code, String.trim(output)}}
+        {output, code} ->
+          {:error, {:gh_failed, ["pr", "close"], code, String.trim(output)}}
+      end
     end
   end
 
@@ -584,19 +604,86 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
     end
   end
 
+  # Ensure the shared per-project clone exists AND carries the
+  # `GITHUB_TOKEN` credential helper.
+  #
+  # The credential helper is the piece this runner's moduledoc deferred to
+  # "a follow-up" that never happened: the prod container has no gitconfig,
+  # no `.git-credentials` and no helper, so `GITHUB_TOKEN` in the
+  # environment had nothing to consume it and every rollup push failed with
+  # a generic non-zero git exit.
+  #
+  # Configured on BOTH paths deliberately, because this function
+  # short-circuits on an existing clone and every clone made before this
+  # change is in exactly that state — it would otherwise never acquire the
+  # helper and the deploy would stay broken until someone deleted the clone
+  # by hand.
+  #
+  # On the fresh-clone path the `-c` flags precede the subcommand so they
+  # apply to the clone ITSELF (a private remote needs auth to clone at
+  # all). Git-level `-c` does NOT persist into the new repository, so the
+  # same settings are written to the clone's local config immediately
+  # after — verified, not assumed: an earlier revision of this fix relied
+  # on `-c` persistence and the regression test caught the empty config.
+  #
+  # The helper string lives in `LocalWorkspace` and is referenced, never
+  # copied. The token itself is never written to disk and never embedded in
+  # `repo_url` — the helper reads `$GITHUB_TOKEN` from the environment at
+  # push time.
   defp ensure_clone(clone_path, repo_url) do
     if File.dir?(Path.join(clone_path, ".git")) do
-      {:ok, :exists}
+      with :ok <- configure_push_auth(clone_path), do: {:ok, :exists}
     else
       :ok = File.mkdir_p!(Path.dirname(clone_path))
 
-      case System.cmd("git", ["clone", "--quiet", repo_url, clone_path],
+      args = LocalWorkspace.git_push_auth_cli_args() ++ ["clone", "--quiet", repo_url, clone_path]
+
+      case System.cmd("git", args,
              stderr_to_stdout: true,
              env: [{"GIT_TERMINAL_PROMPT", "0"}]
            ) do
-        {_out, 0} -> {:ok, :cloned}
-        {output, code} -> {:error, {:git_clone_failed, code, String.trim(output)}}
+        {_out, 0} ->
+          with :ok <- configure_push_auth(clone_path), do: {:ok, :cloned}
+
+        {output, code} ->
+          {:error, {:git_clone_failed, code, String.trim(output)}}
       end
+    end
+  end
+
+  defp configure_push_auth(clone_path) do
+    case LocalWorkspace.configure_git_push_auth(clone_path) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:git_credential_helper_failed, reason}}
+    end
+  end
+
+  # Resolve the `gh` binary before shelling out.
+  #
+  # `System.cmd("gh", …)` on a host without the GitHub CLI raises
+  # `ErlangError: :enoent`, which surfaces through the deployer's
+  # try/rescue as a generic "rollup merge raised" blocker — visually
+  # indistinguishable from a git failure, and the reason the missing binary
+  # in `ghcr.io/startup-suite/core` took a separate investigation to find.
+  #
+  # Returning a distinct, greppable `:gh_unavailable` that names the binary
+  # turns the next occurrence into a one-line diagnosis. Mirrors the
+  # `System.find_executable("gh")` guard in
+  # `Platform.Responsibilities.Handlers.ArchitectureCronSweep`.
+  defp gh_executable(subcommand) do
+    case System.find_executable("gh") do
+      path when is_binary(path) ->
+        {:ok, path}
+
+      nil ->
+        Logger.error(
+          "[StackDeployer] `gh` (GitHub CLI) is not installed or not on PATH — " <>
+            "cannot run `gh #{Enum.join(subcommand, " ")}`"
+        )
+
+        {:error,
+         {:gh_unavailable,
+          "`gh` (GitHub CLI) not found on PATH; cannot run `gh #{Enum.join(subcommand, " ")}`"}}
     end
   end
 

@@ -109,6 +109,7 @@ defmodule Platform.Tasks.StackDeployer do
   shells out to `git`. Tests substitute an in-memory runner.
   """
 
+  alias Platform.Orchestration.HeartbeatScheduler
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{Stack, Stacks}
@@ -973,19 +974,41 @@ defmodule Platform.Tasks.StackDeployer do
     :ok
   end
 
-  # Member branch convention: `task/<short_id>` where `<short_id>` is
-  # the first hyphen-segment of the task uuid. Mirrors
-  # `Platform.Orchestration.HeartbeatScheduler.short_task_id/1`. The
-  # convention is documented in ADR 0041 §"Branch model" and in the
-  # planner template.
-  defp member_branch_for(%TaskRecord{id: id}) when is_binary(id) do
-    "task/" <> short_id(id)
+  @doc false
+  # Member branch convention: `task/<slug>`, where `<slug>` comes from
+  # `HeartbeatScheduler.member_slug/1` — the single chokepoint every
+  # worktree/branch slug in the system routes through. For a stack member
+  # that is the FULL task uuid; for a non-stack task it is the legacy
+  # 8-char first hyphen-segment.
+  #
+  # This used to compute its own `short_id/1` (first hyphen-segment,
+  # unconditionally) and a comment claimed it mirrored
+  # `HeartbeatScheduler.short_task_id/1`. It mirrored the wrong
+  # counterpart: dispatch creates member branches via `member_slug/1`, so
+  # executors pushed `task/<full-uuid>` while the deployer fetched
+  # `task/<8-char>` and got
+  # `fatal: couldn't find remote ref task/019f9b27`. Worse, siblings minted
+  # in one batch share a first hyphen-segment (four members of the live
+  # ADR-0046 stack all collapsed to `task/019f9b28`), so the truncated form
+  # is not merely wrong — it is ambiguous.
+  #
+  # `member_slug/1` decides membership off the `tasks.stack_id` COLUMN
+  # (`HeartbeatScheduler.stack_membership/1`), not off the `:stack`
+  # association — the assoc only supplies the rollup branch name, which the
+  # slug never reads. So no preload is required here, and both call sites
+  # sit under a `%TaskRecord{stack_id: stack_id} when is_binary(stack_id)`
+  # guard, which means the full-uuid form is guaranteed for real members.
+  #
+  # The convention is documented in ADR 0041 §"Branch model" and in the
+  # planner template. Public (`@doc false`) so the regression test can pin
+  # the sibling-collision case directly.
+  def member_branch_for(%TaskRecord{id: id} = task) when is_binary(id) do
+    "task/" <> member_slug_for(task)
   end
 
-  defp member_slug_for(%TaskRecord{id: id}) when is_binary(id), do: short_id(id)
-
-  defp short_id(id) when is_binary(id) do
-    id |> String.split("-") |> List.first()
+  @doc false
+  def member_slug_for(%TaskRecord{id: id} = task) when is_binary(id) do
+    HeartbeatScheduler.member_slug(task)
   end
 
   defp stamp_merged(%TaskRecord{metadata: metadata} = task, merge_sha) do

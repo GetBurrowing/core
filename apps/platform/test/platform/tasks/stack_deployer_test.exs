@@ -697,6 +697,104 @@ defmodule Platform.Tasks.StackDeployerTest do
     end
   end
 
+  # ── Member branch naming (hotfix: truncated member branches) ─────────────
+  #
+  # `member_branch_for/1` used to compute its own 8-char short id while
+  # dispatch minted branches through
+  # `HeartbeatScheduler.member_slug/1` (full uuid for a stack member). The
+  # deployer therefore fetched a ref no executor had ever pushed:
+  #
+  #   {:git_failed, ["fetch","origin","task/019f9b27","stack/adr-0046-…"],
+  #    128, "fatal: couldn't find remote ref task/019f9b27"}
+  #
+  # These tests assert on what the RUNNER is handed — observable behaviour,
+  # not an internal helper — so they detonate against the real defect.
+
+  describe "member branch naming (regression: truncated + colliding member branches)" do
+    test "two stack members sharing a first hyphen-segment get DIFFERENT branch names" do
+      # Taken from the live ADR-0046 stack, where four members shared the
+      # segment `019f9b28` and every one of them collapsed to the single
+      # branch name `task/019f9b28`. A test that checks only ONE member
+      # resolves correctly passes under the buggy code — the collision is
+      # the part that has to be pinned.
+      id_a = "019f9b28-20d9-7c11-9d0a-000000000001"
+      id_b = "019f9b28-6ca7-7c11-9d0a-000000000002"
+
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "collision-#{uniq()}")
+
+      member_a = review_ready_member!(project, stack, id: id_a)
+      member_b = review_ready_member!(project, stack, id: id_b)
+
+      assert {:ok, _} = StackDeployer.merge_member_into_rollup(member_a)
+      assert {:ok, _} = StackDeployer.merge_member_into_rollup(member_b)
+
+      assert [call_a, call_b] = FakeRunner.merge_calls()
+
+      # The collision itself.
+      refute call_a.member_branch == call_b.member_branch,
+             "two stack members collapsed to the same branch name " <>
+               "#{call_a.member_branch} — the 8-char short id is ambiguous " <>
+               "across siblings minted in one batch"
+
+      # ...and the exact form dispatch pushes.
+      assert call_a.member_branch == "task/#{id_a}"
+      assert call_b.member_branch == "task/#{id_b}"
+      assert call_a.member_slug == id_a
+      assert call_b.member_slug == id_b
+    end
+
+    test "the member branch matches HeartbeatScheduler.member_slug/1 exactly" do
+      # The chokepoint every worktree/branch slug routes through. If this
+      # ever drifts again, the deployer fetches a ref no executor pushed.
+      id = "019f9b27-1111-7c11-9d0a-000000000003"
+
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "chokepoint-#{uniq()}")
+      member = review_ready_member!(project, stack, id: id)
+
+      assert {:ok, _} = StackDeployer.merge_member_into_rollup(member)
+      assert [call] = FakeRunner.merge_calls()
+
+      expected_slug = Platform.Orchestration.HeartbeatScheduler.member_slug(member)
+
+      assert call.member_slug == expected_slug
+      assert call.member_branch == "task/" <> expected_slug
+      # Guard against the chokepoint itself being redefined to the short
+      # form: for a stack member it is the FULL uuid.
+      assert expected_slug == id
+    end
+
+    test "a NON-stack task still gets the legacy 8-char short form" do
+      # Deliberate, not incidental: non-stack dispatch output must stay
+      # byte-for-byte unchanged. `member_slug/1` decides off the
+      # `tasks.stack_id` column, so a task with `stack_id: nil` keeps the
+      # first hyphen-segment.
+      id = "019f9b28-ab82-7c11-9d0a-000000000004"
+
+      project = project_with_repo!()
+
+      task =
+        %Platform.Tasks.Task{}
+        |> Platform.Tasks.Task.changeset(%{
+          project_id: project.id,
+          title: "Lone task #{uniq()}",
+          status: "in_review"
+        })
+        |> Ecto.Changeset.put_change(:id, id)
+        |> Platform.Repo.insert!()
+
+      assert is_nil(task.stack_id)
+      assert Platform.Orchestration.HeartbeatScheduler.member_slug(task) == "019f9b28"
+      assert StackDeployer.member_branch_for(task) == "task/019f9b28"
+      assert StackDeployer.member_slug_for(task) == "019f9b28"
+    end
+  end
+
   # ── merge_member_into_rollup/1 (stage 2) ─────────────────────────────────
 
   describe "merge_member_into_rollup/1" do
@@ -1452,9 +1550,31 @@ defmodule Platform.Tasks.StackDeployerTest do
 
   # ── Stage 2 helpers ───────────────────────────────────────────────────────
 
-  defp review_ready_member!(project, stack) do
+  # `Tasks.create_task/1` autogenerates the UUID, and `:id` is not castable
+  # by `Task.changeset/2`. The branch-name collision regression needs two
+  # members whose ids share a first hyphen-segment, so those tests hand in
+  # an explicit id and we `put_change/3` it past the changeset. Everything
+  # else (validations, FK constraints) still runs.
+  defp create_member_task!(project, nil) do
     {:ok, task} =
       Tasks.create_task(%{project_id: project.id, title: "Member #{uniq()}", status: "in_review"})
+
+    task
+  end
+
+  defp create_member_task!(project, id) when is_binary(id) do
+    %Platform.Tasks.Task{}
+    |> Platform.Tasks.Task.changeset(%{
+      project_id: project.id,
+      title: "Member #{uniq()}",
+      status: "in_review"
+    })
+    |> Ecto.Changeset.put_change(:id, id)
+    |> Platform.Repo.insert!()
+  end
+
+  defp review_ready_member!(project, stack, opts \\ []) do
+    task = create_member_task!(project, Keyword.get(opts, :id))
 
     {:ok, task} =
       Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})

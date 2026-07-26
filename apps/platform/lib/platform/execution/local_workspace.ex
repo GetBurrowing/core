@@ -147,6 +147,73 @@ defmodule Platform.Execution.LocalWorkspace do
     end
   end
 
+  # THE credential helper. Defined exactly once, here, because two copies
+  # would drift and the failure mode of a drifted copy is an opaque
+  # non-zero git exit at push time. Anything that needs authenticated HTTPS
+  # push against a local repo goes through `git_push_auth_config/0`,
+  # `git_push_auth_cli_args/0` or `configure_git_push_auth/1` below.
+  #
+  # It is a shell helper (`!f() { … }; f`) rather than a stored credential
+  # so the token is read from `$GITHUB_TOKEN` in the process environment
+  # AT PUSH TIME and never lands on disk. `exit 1` when the variable is
+  # unset makes git fall through to the next helper / fail loudly instead
+  # of pushing with an empty password.
+  @github_token_credential_helper "!f() { test -n \"$GITHUB_TOKEN\" || exit 1; echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f"
+
+  @doc """
+  The git config key/value pairs that enable authenticated HTTPS push.
+
+  Single source of truth for the credential-helper string. Returns a list of
+  `{key, value}` pairs suitable for `git config --local` or, via
+  `git_push_auth_cli_args/0`, for `git -c`.
+
+  Contains no secret: the helper reads `GITHUB_TOKEN` from the environment
+  at push time.
+  """
+  @spec git_push_auth_config() :: [{String.t(), String.t()}]
+  def git_push_auth_config do
+    [
+      {"credential.helper", @github_token_credential_helper},
+      {"credential.useHttpPath", "true"}
+    ]
+  end
+
+  @doc """
+  `git_push_auth_config/0` rendered as `-c key=value` CLI arguments.
+
+  Use when the config has to apply to a command that runs BEFORE a local
+  config exists to write into — notably `git clone`, which needs auth to
+  clone a private remote at all.
+
+  Note these are git-level `-c` flags and do NOT persist into a repository
+  created by the command; follow up with `configure_git_push_auth/1` when
+  the setting has to outlive the invocation.
+  """
+  @spec git_push_auth_cli_args() :: [String.t()]
+  def git_push_auth_cli_args do
+    Enum.flat_map(git_push_auth_config(), fn {key, value} -> ["-c", "#{key}=#{value}"] end)
+  end
+
+  @doc """
+  Installs the `GITHUB_TOKEN` credential helper into a repo's local config.
+
+  Lease-free counterpart of `prepare_git_push_auth/2`, for callers that
+  maintain their own clone rather than a leased worktree (e.g.
+  `Platform.Tasks.StackDeployer.GitShellRunner`). Idempotent — `git config
+  --local` overwrites the key.
+
+  `repo_path` may be a clone root or a worktree.
+  """
+  @spec configure_git_push_auth(String.t()) :: :ok | {:error, term()}
+  def configure_git_push_auth(repo_path) when is_binary(repo_path) do
+    Enum.reduce_while(git_push_auth_config(), :ok, fn {key, value}, :ok ->
+      case git_config_local(repo_path, key, value) do
+        :ok -> {:cont, :ok}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
   @doc """
   Configures local git credential helper state for authenticated HTTPS push.
 
@@ -159,13 +226,7 @@ defmodule Platform.Execution.LocalWorkspace do
 
   def prepare_git_push_auth(worktree_path, %CredentialLease{} = lease) do
     if CredentialLease.valid?(lease) do
-      helper =
-        "!f() { test -n \"$GITHUB_TOKEN\" || exit 1; echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f"
-
-      with :ok <- git_config_local(worktree_path, "credential.helper", helper),
-           :ok <- git_config_local(worktree_path, "credential.useHttpPath", "true") do
-        :ok
-      end
+      configure_git_push_auth(worktree_path)
     else
       :ok
     end
