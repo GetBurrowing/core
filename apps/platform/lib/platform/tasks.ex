@@ -532,6 +532,195 @@ defmodule Platform.Tasks do
     end
   end
 
+  # ── ADR-0046 planning sub-phase writers (member 4, stage 2) ─────────────
+  #
+  # These are the ONLY writers for `planning_step` / `planning_step_outcomes`.
+  # Both go through `Task.planning_step_changeset/2`, which casts exactly
+  # those two fields — deliberately NOT through `Task.changeset/2`, which
+  # casts `:status` and therefore makes `update_task/3` an unguarded status
+  # writer (see the comment above `Task.changeset/2`).
+  #
+  # HARD RULE (ADR-0046 member 1): the fire-result → outcome mapping lives in
+  # `Platform.Responsibilities.outcome/1` and nowhere else. Do not add a
+  # `case` over `{:ok, :dispatched}` / `{:ok, :unfilled}` /
+  # `{:ok, :unknown_responsibility}` here — if every consumer derives the
+  # mapping, one of them eventually collapses `not_applicable` into `failed`
+  # and re-opens the bug ADR-0046:83 closes.
+
+  @doc """
+  Record the outcome of a planning sub-step against a task.
+
+  `fire_result` is a raw `Platform.Responsibilities.fire/2` result. It is
+  translated by `Platform.Responsibilities.outcome/1` — the single shared
+  mapping — and merged into `planning_step_outcomes` under
+  `to_string(step)` as:
+
+      %{"outcome" => "complete" | "not_applicable" | "failed",
+        "recorded_at" => <ISO8601 UTC>,
+        "detail" => <inspect(reason), truncated to 500 chars> | nil}
+
+  `detail` is populated only for the `{:error, reason}` shape; for the
+  three `{:ok, _}` shapes it is `nil`. Recording a second step MERGES —
+  an earlier step's entry is preserved.
+
+  Accepts a `%Task{}` or a task id. Either way the row is re-read from the
+  database before merging, so a caller holding a stale struct cannot clobber
+  a step another writer recorded in between. Unknown id → `{:error, :task_not_found}`.
+
+  ## Transaction semantics
+
+  The write participates in any ambient `Repo.transaction/1`: if the
+  surrounding work rolls back, the step genuinely did not happen. That is
+  the correct Ecto semantic, and it is proved by a test
+  (`planning_step_test.exs`, "transaction semantics") rather than asserted
+  here in prose. This function never calls `Repo.rollback/1` itself and
+  returns `{:error, changeset}` instead of raising on a validation failure,
+  so it cannot abort a parent transaction it did not open.
+
+  The one thing that CAN raise is `Responsibilities.outcome/1`, which has no
+  catch-all clause on purpose (an unrecognised fire-result shape is a loud
+  `FunctionClauseError`, not a silent mis-map). It is called BEFORE any
+  write is attempted, and callers inside a transaction must keep the same
+  `try/rescue` envelope the responsibility hooks already use for `fire/2` —
+  see the "Consequence for transaction call sites" note on `outcome/1`.
+
+  ## Callers
+
+  `:architecture` is written by `submit_plan_for_review/1` (stage 3).
+  `:design` has NO production caller yet — that is deliberate, not an
+  oversight: the design step belongs to ADR-0046 member 7, which lands the
+  dispatch. The API and its tests exist now so member 7 adds a call site and
+  nothing else.
+  """
+  @spec record_planning_step(Task.t() | binary(), :design | :architecture, term()) ::
+          {:ok, Task.t()} | {:error, term()}
+  def record_planning_step(task_or_id, step, fire_result)
+      when step in [:design, :architecture] do
+    case resolve_task_for_planning_step(task_or_id) do
+      nil ->
+        {:error, :task_not_found}
+
+      %Task{} = task ->
+        outcome = Platform.Responsibilities.outcome(fire_result)
+
+        entry = %{
+          "outcome" => to_string(outcome),
+          "recorded_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+          "detail" => planning_step_detail(fire_result)
+        }
+
+        merged = Map.put(task.planning_step_outcomes || %{}, to_string(step), entry)
+
+        write_planning_step(task, %{planning_step_outcomes: merged})
+    end
+  end
+
+  @doc """
+  Move a task's planning sub-phase cursor.
+
+  Cursor-only write: the same narrow changeset, the same board broadcast,
+  and no other field can ride along. A value outside `Task.planning_steps/0`
+  is REJECTED as `{:error, changeset}` rather than raised, so a caller inside
+  a transaction cannot be aborted by a bad cursor.
+
+  Note this is a sub-phase of `status == "planning"`, not a status: the task
+  stays in whatever status it was in. `Task.statuses/0` is untouched by
+  ADR-0046.
+  """
+  @spec set_planning_step(Task.t() | binary(), :designing | :planning | :architecting) ::
+          {:ok, Task.t()} | {:error, term()}
+  def set_planning_step(task_or_id, step) do
+    case resolve_task_for_planning_step(task_or_id) do
+      nil -> {:error, :task_not_found}
+      %Task{} = task -> write_planning_step(task, %{planning_step: planning_step_value(step)})
+    end
+  end
+
+  @doc """
+  The planning steps whose recorded outcome is `"failed"`.
+
+  Returns `[%{step: String.t(), detail: String.t() | nil, recorded_at: String.t() | nil}]`,
+  ordered by `Task.planning_step_keys/0` so the output is deterministic
+  regardless of JSONB key order (Postgres does not preserve insertion order
+  for `jsonb`).
+
+  Only `"failed"` is reported. `"not_applicable"` is the progressive-
+  enhancement path — nobody holds the responsibility — and must never be
+  surfaced as a failure (ADR-0046:83).
+  """
+  @spec failed_planning_steps(Task.t()) :: [
+          %{step: String.t(), detail: String.t() | nil, recorded_at: String.t() | nil}
+        ]
+  def failed_planning_steps(%Task{} = task) do
+    outcomes = task.planning_step_outcomes || %{}
+
+    Task.planning_step_keys()
+    |> Enum.flat_map(fn key ->
+      case Map.get(outcomes, key) do
+        %{"outcome" => "failed"} = entry ->
+          [
+            %{
+              step: key,
+              detail: Map.get(entry, "detail"),
+              recorded_at: Map.get(entry, "recorded_at")
+            }
+          ]
+
+        _other ->
+          []
+      end
+    end)
+  end
+
+  @doc """
+  True when any planning gate was expected to run and did not.
+
+  The single definition of "a gate did not run" — stage 4's two merge-time
+  writers (`StackDeployer.build_pr_body/3` and `AutoMerger.execute_merge/4`)
+  both call this rather than re-reading the JSONB, so there is exactly one
+  place the predicate can drift.
+  """
+  @spec planning_gate_failed?(Task.t()) :: boolean()
+  def planning_gate_failed?(%Task{} = task), do: failed_planning_steps(task) != []
+
+  # Always re-read from the DB: `record_planning_step/3` merges into the
+  # stored map, so a stale in-memory struct would silently drop a sibling
+  # step's entry.
+  defp resolve_task_for_planning_step(%Task{id: id}), do: Repo.get(Task, id)
+  defp resolve_task_for_planning_step(id) when is_binary(id), do: Repo.get(Task, id)
+  defp resolve_task_for_planning_step(_other), do: nil
+
+  # `detail` carries the failure reason so the merge-time surface can say
+  # WHY, not just THAT. Truncated because `reason` can be an arbitrary term
+  # (an exception struct, a full HTTP response) and this lands in a JSONB
+  # column read by a PR body.
+  defp planning_step_detail({:error, reason}), do: reason |> inspect() |> String.slice(0, 500)
+  defp planning_step_detail(_other), do: nil
+
+  # Not `to_string/1`: a caller passing a term with no String.Chars impl
+  # would raise, and these writers must return errors rather than raise.
+  # An unstringifiable value becomes a string that fails validate_inclusion.
+  defp planning_step_value(step) when is_atom(step) or is_binary(step), do: to_string(step)
+  defp planning_step_value(step), do: inspect(step)
+
+  defp write_planning_step(%Task{} = task, attrs) do
+    task
+    |> Task.planning_step_changeset(attrs)
+    |> Repo.update()
+    |> case do
+      {:ok, updated} ->
+        # Member 8 renders the cursor and the per-step outcomes on the
+        # kanban card; the broadcast is what makes that live-refresh
+        # without polling. Same topic and payload shape as `update_task/3`.
+        preloaded = Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])
+        broadcast_board({:task_updated, preloaded})
+        {:ok, updated}
+
+      error ->
+        error
+    end
+  end
+
   # Stage 2 (019f3dbb) reference-scan refresh. Only re-run the scanner
   # when `description` actually changed — statuses/priorities/assignees
   # don't affect the derived `task_references` set. Advisory failure:
