@@ -94,6 +94,13 @@ defmodule Platform.Responsibilities.Router do
   died". ADR-0046 requires a per-step `not_applicable | complete | failed`
   and those two states used to be the same `:ok`.
 
+  `fire/2` (key lookup) adds a fourth value on top of that union:
+  `{:ok, :unknown_responsibility}` when no row is seeded for the key. It
+  sits in the ok channel for the same reason `:unfilled` does — an
+  unseeded key is a progressive-enhancement state, not a failure.
+  `Platform.Responsibilities.outcome/1` maps the full four-value union
+  onto the ADR's `complete | not_applicable | failed`.
+
   **Honesty limit, native path.** `Platform.Chat.AgentResponder.maybe_dispatch/1`
   returns `:ok` unconditionally because outside sync mode it wraps the work
   in `Task.start/1`. So `{:ok, :dispatched}` from a native/federated
@@ -280,15 +287,32 @@ defmodule Platform.Responsibilities.Router do
   atom shorthand (`:memory_daily_summary`) — the atom form is
   underscored and re-canonicalised to dotted-string by replacing the
   first underscore (`memory_daily_summary` → `memory.daily_summary`).
-  Unknown keys log + return `{:error, :unknown_responsibility}` rather
-  than crashing; the dual-write shim treats this as "router path
-  no-op" so legacy dispatch isn't blocked.
+
+  ## Return contract
+
+  A matched row returns `t:fire_outcome/0` verbatim from
+  `fire_trigger/2`. A key with no seeded row logs and returns
+  `{:ok, :unknown_responsibility}` rather than crashing; the dual-write
+  shim treats this as "router path no-op" so legacy dispatch isn't
+  blocked.
+
+  WHY `{:ok, :unknown_responsibility}` AND NOT AN ERROR (ADR-0046
+  member 1, stage 2): an unseeded key is a progressive-enhancement
+  state, identical in kind to an unfilled assignee — a code site hooked
+  the key before its seed migration landed. Reporting it through the
+  error channel would make `Platform.Responsibilities.outcome/1` map it
+  to `:failed`, i.e. ADR-0046 would report a failed step for a
+  responsibility nobody ever configured. That is exactly the
+  `not_applicable` / `failed` conflation
+  `docs/decisions/0046-design-and-architecture-phases-in-planning.md:79-83`
+  forbids. It was `{:error, :unknown_responsibility}` until stage 2 of
+  that task.
 
   The supplied `trigger_meta` is passed through to `fire_trigger/2`
   verbatim; callers should set `:kind` (e.g. `:cron`, `:webhook`) and
   any feature-specific keys (`:workspace_id`, `:date`, etc.).
   """
-  @spec fire(atom() | binary(), map()) :: :ok | {:error, term()}
+  @spec fire(atom() | binary(), map()) :: fire_outcome() | {:ok, :unknown_responsibility}
   def fire(key, trigger_meta \\ %{}) when is_map(trigger_meta) do
     canonical = canonical_key(key)
 
@@ -301,7 +325,7 @@ defmodule Platform.Responsibilities.Router do
           "[ResponsibilityRouter] fire/2 no row for key=#{inspect(canonical)} — skipping"
         )
 
-        {:error, :unknown_responsibility}
+        {:ok, :unknown_responsibility}
     end
   end
 

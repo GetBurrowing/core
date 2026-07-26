@@ -2212,10 +2212,18 @@ defmodule Platform.Responsibilities.RouterTest do
   # "memory.daily_summary"), looks the row up, and funnels through
   # the same `fire_trigger` pipeline as the cron tick.
   describe "fire/2 lookup-and-fire" do
-    test "returns {:error, :unknown_responsibility} when no row matches" do
+    test "returns {:ok, :unknown_responsibility} when no row matches" do
+      # ADR-0046 member 1 stage 2: this used to be
+      # `{:error, :unknown_responsibility}`. An unseeded key is a
+      # progressive-enhancement state — a code site hooked the key
+      # before its seed migration landed — so it belongs in the ok
+      # channel. Leaving it in the error channel would make
+      # `Responsibilities.outcome/1` report `:failed` for a
+      # responsibility nobody ever configured, the exact
+      # not_applicable/failed conflation the ADR forbids at line 83.
       log =
         capture_log([level: :info], fn ->
-          assert {:error, :unknown_responsibility} =
+          assert {:ok, :unknown_responsibility} =
                    Router.fire("does.not.exist", %{kind: :cron})
         end)
 
