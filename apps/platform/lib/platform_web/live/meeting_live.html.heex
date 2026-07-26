@@ -974,6 +974,23 @@
             </button>
           </header>
 
+          <%!-- Intents-collapse bar (task 019f70b8 stage 7). A SIBLING
+             above the chat body, not a replacement for it: the producer
+             watches the intent queue and the discussion in the same
+             rail. Absent from the DOM — not hidden — when the
+             `meeting_producer` role is unassigned (AC13); an unfilled
+             capability is not a denial, and there is nothing to reserve
+             layout space for. --%>
+          <.intents_collapse
+            :if={@intents_visible?}
+            intents={@intents}
+            open={@intents_open}
+            expanded={@intents_expanded}
+            pending_cancels={@intent_pending_cancels}
+            reason_picker_id={@intent_reason_picker_id}
+            error={@intent_error}
+          />
+
           <%!-- Body wrapper: flex-1/min-h-0 lets the embedded LV consume
              the remaining vertical space *below* the header, while its
              own internal scroll region (overflow-y-auto on the messages
@@ -1182,6 +1199,20 @@
        Mirrors the start-meeting sheet's mobile-first geometry: slides
        up from the bottom on narrow viewports (`items-end`), centered
        card on `>=sm`. Backdrop click closes the sheet. --%>
+    <%!-- Intents-collapse overlays (task 019f70b8 stage 7). Deliberately
+       rendered HERE, at the LV root, and not inside the strip: the chat
+       rail carries `transition-transform` so it can slide in as a mobile
+       drawer, and a transformed ancestor becomes the containing block
+       for `position: fixed`. An overlay rendered inside the strip is
+       centred on a 320px rail instead of on the viewport. --%>
+    <.intents_overlays
+      :if={@intents_visible?}
+      intents={@intents}
+      expanded={@intents_expanded}
+      edit_row={@intent_edit_row}
+      agent_options={@intent_agent_options}
+    />
+
     <div
       :if={@shell? and @show_guest_invite_sheet}
       class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"

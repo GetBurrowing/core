@@ -116,14 +116,25 @@ config :platform, :intent_classifier_context_window_size, 3
 # for DataCase sandbox ownership.
 config :platform, :start_meeting_intent_dispatcher, true
 
-# IntentDispatcher runtime config: read at `init/1` and by the
-# zero-arity `sweep_stalled/0` StallRegistry callback. `tick_interval_ms`
-# is the belt-and-braces periodic poll (the hot path is PubSub-notify);
-# `stall_window_ms` sets the threshold past which a `:dispatching` row
-# is considered wedged and gets re-driven through `mark_retry/3`.
-config :platform, Platform.Meetings.IntentDispatcher,
-  tick_interval_ms: :timer.seconds(30),
-  stall_window_ms: :timer.minutes(2)
+# IntentDispatcher runtime config: read at `init/1`. `tick_interval_ms`
+# is the belt-and-braces periodic re-drive; the hot path is the
+# `meeting:intent_enqueued` PubSub notify.
+#
+# `stall_window_ms` was removed in task 019f70b8 stage 3 — stall
+# detection is no longer a periodic scan for wedged rows. Each
+# per-meeting queue arms its own ack timer when a row is dispatched
+# (`queue_ack_timeout_ms` below), so a row that goes out and never
+# comes back is resolved by its own owner.
+config :platform, Platform.Meetings.IntentDispatcher, tick_interval_ms: :timer.seconds(30)
+
+# Per-meeting intent queue (task 019f70b8 stage 3). `queue_ack_timeout_ms`
+# is the ack window: how long a dispatched intent may sit with a runtime
+# before the queue gives up on it, marks it `:timed_out` (or
+# `:no_ack_spawn_failed` if the runtime tried to ack and was rejected)
+# and lets the meeting's next intent through. Overridable per meeting
+# via the queue server's `:ack_timeout_ms` opt, which is how tests drive
+# it down to hundreds of ms.
+config :platform, Platform.Meetings.IntentQueue, queue_ack_timeout_ms: :timer.seconds(90)
 
 # Security Sweeper (task 019f3e8e-4406 stage 2, ADR-0043): default
 # tick cadence for the periodic scan sweep. One hour is a bounding

@@ -614,7 +614,10 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # retrieval and backlink-deletion reasoning
     # (+org_memory_recently_edited, +org_memory_recently_deleted,
     # +org_memory_feedback_at_path → 87)
-    @t6_baseline_tool_count 87
+    # bumped by intent-queue live-tuning stage 3 (task 019f70b8) — the
+    # runtime-facing ack for meeting intent dispatch, added to the
+    # existing `task` bundle rather than a new one (+intent_ack → 88)
+    @t6_baseline_tool_count 88
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

@@ -13,6 +13,13 @@ defmodule Platform.Application do
     Platform.Vault.TelemetryHandler.attach()
     Platform.Chat.TelemetryHandler.attach()
     Platform.Meetings.TelemetryHandler.attach()
+    # Task 019f70b8 stage 6: the two SYSTEM-originated writers of the
+    # `meeting_intent_corrections` few-shot corpus. Separate from the
+    # Meetings handler above, which mirrors telemetry into the audit
+    # store — these events produce a durable tuning row, not an audit
+    # event, and conflating them would put the corpus behind audit's
+    # retention rules.
+    Platform.Meetings.IntentCorrections.TelemetryHandler.attach()
     Platform.Memory.TelemetryHandler.attach()
     # rbac-external-users M3 stage 3 (task 019f8837): fan out an admin
     # notification + live-append broadcast on every ungranted (holding)
@@ -31,6 +38,14 @@ defmodule Platform.Application do
            {Registry, keys: :unique, name: Platform.Execution.Registry},
            {Registry, keys: :unique, name: Platform.Orchestration.Registry},
            {Registry, keys: :unique, name: Platform.Chat.Registry},
+           # Per-meeting process registry (task 019f70b8 stage 2).
+           # Holds TWO key shapes, both owned by
+           # Platform.Meetings.IntentQueue.Server: the meeting_id
+           # binary the server is registered under, and a
+           # `{:intent, intent_id}` reverse index (stage 3) so the
+           # `intent_ack` MCP tool can resolve an intent id — the only
+           # handle a remote runtime has — back to its meeting.
+           {Registry, keys: :unique, name: Platform.Meetings.Registry},
            Platform.Agents.RuntimeSupervisor,
            Platform.Chat.CanvasSupervisor,
            # ContextBroker — must start after the agent registry/runtime tree
@@ -74,12 +89,15 @@ defmodule Platform.Application do
            # (task 019ee06b). Owns :meeting_user_state table; must start
            # after PubSub so broadcast_* helpers always have a bus.
            Platform.Meetings.State,
-           # Per-room intent queue — ETS-backed staging area for
-           # classified transcript intents (task 019f2452). Owns
-           # :meeting_intent_queue table; subscribes to meeting:finished
-           # so must start after PubSub. Meeting-lifetime state, not
-           # durable — deliberately ETS not Ecto.
-           Platform.Meetings.IntentQueue,
+           # Per-MEETING intent queues (task 019f70b8 stage 2) — one
+           # on-demand GenServer per meeting, each owning an unnamed
+           # ETS table that dies with it. No sweeper: cleanup is
+           # structural. Needs the Meetings Registry (above) and PubSub.
+           #
+           # Replaced the single global `Platform.Meetings.IntentQueue`
+           # (task 019f2452) and its named `:meeting_intent_queue`
+           # table + 30-minute sweep, deleted in task 019f70b8 stage 3.
+           Platform.Meetings.IntentQueue.Supervisor,
            # Vault OAuth token refresh worker — must start after Repo and Vault.Encryption
            Platform.Vault.RefreshWorker,
            # Reap expired pending attachments (ADR 0039) — needs Repo
@@ -321,9 +339,9 @@ defmodule Platform.Application do
   # IntentClassifier (task 019f2452 stage 3): GenServer that subscribes
   # to `meeting:transcript_chunk` and (in later stages) fires the
   # `meetings.intent_classify` responsibility per chunk. Boots after
-  # IntentQueue so the enqueue path (stage 4) has a live table to
-  # write into. Disabled in test env; tests start their own instance
-  # per case for DataCase sandbox ownership.
+  # the per-meeting IntentQueue supervisor so the enqueue path has
+  # somewhere to start a queue. Disabled in test env; tests start
+  # their own instance per case for DataCase sandbox ownership.
   defp maybe_add_meeting_intent_classifier(children) do
     if Application.get_env(:platform, :start_meeting_intent_classifier, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)

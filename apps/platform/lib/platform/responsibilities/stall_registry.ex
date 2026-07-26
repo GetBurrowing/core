@@ -8,11 +8,15 @@ defmodule Platform.Responsibilities.StallRegistry do
   Stage 2 shipped `SummarizerSweeper` as the single owner of the
   meetings.summarize stall-guard sweep. The follow-up ticket for the
   IntentClassify runtime (task `019f2452`) needs the same shape — a
-  periodic walk over its own queue, firing a fallback path when a
-  dispatch has been sitting past its stall window — but its queue lives
-  in a different table (`meeting_intent_queue`), the fallback path is
-  different (drop or re-classify vs. legacy summary), and it has its
-  own stall window.
+  periodic walk over its own queue — but its queue is separate, its
+  fallback path is different, and it has its own window.
+
+  (Task 019f70b8 stage 3 narrowed what the intent runtime's callback
+  does: its queue became per-meeting, and each queue arms its own ack
+  timer, so stall DETECTION no longer lives in a periodic scan.
+  `IntentDispatcher.sweep_stalled/0` is now a liveness re-drive for
+  meetings whose enqueue notify was dropped. It still plugs in here,
+  because "give me a tick" is exactly what the registry provides.)
 
   Rather than re-implement a second GenServer with the same periodic
   scaffolding, or wedge intent-classify-specific code into the

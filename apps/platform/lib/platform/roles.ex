@@ -156,6 +156,7 @@ defmodule Platform.Roles do
     %RoleAssignment{}
     |> RoleAssignment.changeset(%{role_key: role_key, agent_id: agent_id})
     |> Repo.insert()
+    |> broadcast_assignment_change(role_key)
   end
 
   @doc """
@@ -175,7 +176,60 @@ defmodule Platform.Roles do
       |> where([ra], ra.role_key == ^role_key)
       |> Repo.delete_all()
 
+    broadcast_assignment_change(role_key)
+
     :ok
+  end
+
+  # ── Assignment change notifications (task 019f70b8 stage 7) ───────────
+
+  @assignments_topic "roles:assignments"
+
+  @doc """
+  PubSub topic carrying `{:role_assignment_changed, %{role_key: key,
+  agent_id: id | nil}}` whenever a role is pinned or released.
+
+  Exists because the meeting-producer intents strip is DOM-absent when
+  `meeting_producer` is unassigned (AC13): without a notification, a
+  producer appointed mid-meeting would not see the panel until they
+  reloaded, which for a live meeting surface is the same as never.
+  """
+  @spec assignments_topic() :: String.t()
+  def assignments_topic, do: @assignments_topic
+
+  @doc "Subscribe the calling process to role-assignment changes."
+  @spec subscribe_assignments() :: :ok | {:error, term()}
+  def subscribe_assignments do
+    Phoenix.PubSub.subscribe(Platform.PubSub, @assignments_topic)
+  end
+
+  @doc "Unsubscribe the calling process from role-assignment changes."
+  @spec unsubscribe_assignments() :: :ok
+  def unsubscribe_assignments do
+    Phoenix.PubSub.unsubscribe(Platform.PubSub, @assignments_topic)
+  end
+
+  # Broadcast the post-state, not the delta: a subscriber that missed an
+  # earlier event still ends up with the right answer. Reads the current
+  # assignment rather than trusting the caller's intent so an insert that
+  # lost a unique-constraint race publishes what is actually pinned.
+  #
+  # Best-effort by design — a PubSub failure must not fail a role write.
+  defp broadcast_assignment_change({:ok, _} = result, role_key) do
+    broadcast_assignment_change(role_key)
+    result
+  end
+
+  defp broadcast_assignment_change({:error, _} = result, _role_key), do: result
+
+  defp broadcast_assignment_change(role_key) when is_binary(role_key) do
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      @assignments_topic,
+      {:role_assignment_changed, %{role_key: role_key, agent_id: agent_id_for_role(role_key)}}
+    )
+  catch
+    _kind, _reason -> :ok
   end
 
   @doc """

@@ -28,17 +28,6 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
   @responsibility_key "meetings.intent_classify"
   @prompt_slug "meetings.intent_classify.v1"
 
-  # Room IDs pulled verbatim from the plan payloads.
-  @rooms [
-    "e2e-happy-1",
-    "e2e-dedupe-1",
-    "e2e-noassignee-1",
-    "e2e-fallback-1",
-    "e2e-modelfail-1",
-    "e2e-cleanup-1",
-    "e2e-untouched"
-  ]
-
   # ── Stub provider (same seam the unit + integration tests use) ────────────
 
   defmodule StubProvider do
@@ -58,16 +47,33 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
     Logger.put_module_level(Platform.Meetings.IntentClassifier, :info)
     on_exit(fn -> Logger.delete_module_level(Platform.Meetings.IntentClassifier) end)
 
-    Enum.each(@rooms, &IntentQueue.drop_for_room/1)
-
-    on_exit(fn ->
-      Enum.each(@rooms, &IntentQueue.drop_for_room/1)
-    end)
-
     :ok
   end
 
   # ── Helpers ───────────────────────────────────────────────────────────────
+
+  # Task 019f70b8 stage 3 made the intent queue meeting-keyed, so every
+  # case now needs a real project → meeting → chat space chain: the
+  # chunk's meeting_id is resolved from the transcript's space_id, and
+  # a chunk with no meeting behind it has nowhere to be enqueued.
+  defp create_meeting!(name) do
+    {:ok, project} =
+      Platform.Tasks.create_project(%{
+        name: "#{name} project #{System.unique_integer([:positive])}",
+        repo_url: "https://github.com/test/meeting-intent-review"
+      })
+
+    {:ok, meeting} = Platform.Meetings.create_meeting(%{project_id: project.id, name: name})
+    on_exit(fn -> IntentQueue.stop(meeting.id) end)
+    meeting
+  end
+
+  defp transcript_for!(meeting, room_id) do
+    {:ok, transcript} =
+      Meetings.ensure_transcript(%{room_id: room_id, space_id: meeting.chat_space_id})
+
+    transcript
+  end
 
   defp create_agent!(overrides \\ %{}) do
     attrs =
@@ -157,7 +163,8 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
          }}
       end)
 
-      {:ok, transcript} = Meetings.ensure_transcript(%{room_id: "e2e-happy-1"})
+      meeting = create_meeting!("Review Happy")
+      transcript = transcript_for!(meeting, "e2e-happy-1")
 
       {:ok, _} =
         Meetings.append_segment(transcript.id, %{
@@ -179,16 +186,20 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
                       }},
                      2_000
 
-      entries = IntentQueue.list_for_room("e2e-happy-1")
+      entries = IntentQueue.list(meeting.id)
       assert length(entries) == 1
       [entry] = entries
-      assert entry.intent == "schedule_followup"
+      assert entry.classified_intent == "schedule_followup"
       assert entry.target_role == "scheduler"
       assert entry.confidence == 0.87
+      assert entry.status == :queued
+      assert entry.room_id == "e2e-happy-1"
 
-      # Dedupe key visible on the ETS table.
-      raw = :ets.tab2list(:meeting_intent_queue)
-      assert Enum.any?(raw, fn {{rid, dk}, _} -> rid == "e2e-happy-1" and is_binary(dk) end)
+      # Dedupe key is carried on the row itself now — the pre-019f70b8
+      # queue encoded it in a composite ETS key, which a remote runtime
+      # could not address.
+      assert is_binary(entry.dedupe_key)
+      assert is_binary(entry.id)
 
       # Classifier mailbox drained.
       assert Process.info(pid, :message_queue_len) == {:message_queue_len, 0}
@@ -220,7 +231,8 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
          }}
       end)
 
-      {:ok, transcript} = Meetings.ensure_transcript(%{room_id: "e2e-dedupe-1"})
+      meeting = create_meeting!("Review Dedupe")
+      transcript = transcript_for!(meeting, "e2e-dedupe-1")
 
       segment = %{
         participant_identity: "alice",
@@ -250,7 +262,7 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
                      2_000
 
       # Exactly one row in the queue for this room.
-      assert length(IntentQueue.list_for_room("e2e-dedupe-1")) == 1
+      assert length(IntentQueue.list(meeting.id)) == 1
     end
   end
 
@@ -267,7 +279,8 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
 
       {pid, _name} = start_classifier!()
 
-      {:ok, transcript} = Meetings.ensure_transcript(%{room_id: "e2e-noassignee-1"})
+      meeting = create_meeting!("Review No Assignee")
+      transcript = transcript_for!(meeting, "e2e-noassignee-1")
 
       log =
         capture_log([level: :info], fn ->
@@ -290,7 +303,7 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
 
       # Classifier still alive; queue still empty for this room.
       assert Process.alive?(pid)
-      assert IntentQueue.list_for_room("e2e-noassignee-1") == []
+      assert IntentQueue.list(meeting.id) == []
 
       # Second chunk for same room: telemetry still fires but no NEW log line.
       log2 =
@@ -341,7 +354,8 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
          }}
       end)
 
-      {:ok, transcript} = Meetings.ensure_transcript(%{room_id: "e2e-fallback-1"})
+      meeting = create_meeting!("Review Fallback")
+      transcript = transcript_for!(meeting, "e2e-fallback-1")
 
       log =
         capture_log([level: :warning], fn ->
@@ -362,7 +376,7 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
         end)
 
       assert log =~ "fallback"
-      assert length(IntentQueue.list_for_room("e2e-fallback-1")) == 1
+      assert length(IntentQueue.list(meeting.id)) == 1
 
       # Subsequent chunk in same VM should NOT re-log the warning (per-boot gate).
       # Broadcast a fresh chunk with different text so we don't collide dedupe_key.
@@ -406,7 +420,8 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
         {:error, %{status: 500, body: "upstream failure"}}
       end)
 
-      {:ok, transcript} = Meetings.ensure_transcript(%{room_id: "e2e-modelfail-1"})
+      meeting = create_meeting!("Review Model Fail")
+      transcript = transcript_for!(meeting, "e2e-modelfail-1")
 
       log =
         capture_log([level: :warning], fn ->
@@ -423,7 +438,7 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
         end)
 
       assert log =~ "LLM call failed"
-      assert IntentQueue.list_for_room("e2e-modelfail-1") == []
+      assert IntentQueue.list(meeting.id) == []
       assert Process.alive?(pid)
 
       # Second stub: healthy.
@@ -451,43 +466,42 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
       assert_receive {:classified, _, %{room_id: "e2e-modelfail-1", intent: "schedule_followup"}},
                      2_000
 
-      assert length(IntentQueue.list_for_room("e2e-modelfail-1")) == 1
+      assert length(IntentQueue.list(meeting.id)) == 1
     end
   end
 
-  # ── Case 6: meeting:finished cleanup + cross-room isolation ──────────────
+  # ── Case 6: meeting:finished cleanup + cross-meeting isolation ───────────
 
   describe "case 6 — cleanup on meeting:finished" do
-    test "broadcast drops all rows for cleanup room, leaves untouched room alone" do
-      attach_telemetry!([:platform, :meetings, :intent_queue, :drop], :queue_drop)
+    test "the finished meeting's queue dies with its rows, another meeting's survives" do
+      cleanup = create_meeting!("Review Cleanup")
+      untouched = create_meeting!("Review Untouched")
 
-      # Pre-populate three entries under e2e-cleanup-1.
+      {:ok, _} = IntentQueue.ensure_started(cleanup.id, room_id: "e2e-cleanup-1")
+      {:ok, _} = IntentQueue.ensure_started(untouched.id, room_id: "e2e-untouched")
+
       Enum.each(1..3, fn n ->
-        {:ok, :inserted} =
-          IntentQueue.enqueue("e2e-cleanup-1", "key#{n}", %{
-            intent: "x",
+        {:ok, _row} =
+          IntentQueue.enqueue(cleanup.id, %{
+            room_id: "e2e-cleanup-1",
+            dedupe_key: "key#{n}",
+            classified_intent: "x",
             target_role: "y",
-            confidence: 0.5,
-            chunk_id: nil,
-            meeting_id: nil,
-            inserted_at_monotonic: System.monotonic_time()
+            confidence: 0.5
           })
       end)
 
-      {:ok, :inserted} =
-        IntentQueue.enqueue("e2e-untouched", "keyU", %{
-          intent: "z",
+      {:ok, _row} =
+        IntentQueue.enqueue(untouched.id, %{
+          room_id: "e2e-untouched",
+          dedupe_key: "keyU",
+          classified_intent: "z",
           target_role: "y",
-          confidence: 0.5,
-          chunk_id: nil,
-          meeting_id: nil,
-          inserted_at_monotonic: System.monotonic_time()
+          confidence: 0.5
         })
 
-      assert length(IntentQueue.list_for_room("e2e-cleanup-1")) == 3
-      assert length(IntentQueue.list_for_room("e2e-untouched")) == 1
-
-      size_before = :ets.info(:meeting_intent_queue, :size)
+      assert length(IntentQueue.list(cleanup.id)) == 3
+      assert length(IntentQueue.list(untouched.id)) == 1
 
       # Broadcast meeting_finished for the cleanup room.
       :ok =
@@ -497,22 +511,19 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
           space_id: "s"
         })
 
-      # Wait for the drop to land.
-      wait_for(fn -> IntentQueue.list_for_room("e2e-cleanup-1") == [] end, 1_000)
+      # The plan's case-6 clause was "rows for the finished room are
+      # dropped, other rooms untouched". Task 019f70b8 satisfies it
+      # more strongly: there is no shared table to selectively drop
+      # from. The finished meeting's queue OWNER stops, and its
+      # unnamed ETS table is reclaimed with it — cleanup is
+      # structural, so a sweep can no longer get the scoping wrong.
+      wait_for(fn -> not IntentQueue.running?(cleanup.id) end, 1_000)
 
-      assert IntentQueue.list_for_room("e2e-cleanup-1") == []
-      assert length(IntentQueue.list_for_room("e2e-untouched")) == 1
+      assert IntentQueue.list(cleanup.id) == []
 
-      size_after = :ets.info(:meeting_intent_queue, :size)
-      assert size_before - size_after == 3
-
-      # IntentQueue GenServer still alive.
-      assert Process.alive?(Process.whereis(IntentQueue))
-
-      # Plan case 6 clause: drop telemetry fires with the cleanup room and
-      # removed_count == 3.
-      assert_receive {:queue_drop, %{count: 3}, %{room_id: "e2e-cleanup-1", removed_count: 3}},
-                     2_000
+      # Cross-meeting isolation invariant.
+      assert IntentQueue.running?(untouched.id)
+      assert length(IntentQueue.list(untouched.id)) == 1
     end
   end
 

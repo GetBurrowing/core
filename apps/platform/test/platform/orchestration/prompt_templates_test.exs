@@ -7,6 +7,23 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
   alias Platform.Orchestration.PromptTemplates
 
+  # Migrations are not on the compiled path, so the stage-6 template
+  # migration has to be loaded before its `up/0` can be driven directly.
+  # Mirrors `test/platform/data_migrations/*_test.exs`.
+  @intent_classify_corrections_migration Path.join([
+                                           __ENV__.file
+                                           |> Path.dirname()
+                                           |> Path.dirname()
+                                           |> Path.dirname()
+                                           |> Path.dirname(),
+                                           "priv/repo/migrations/20260726000100_update_intent_classify_prompt_with_corrections.exs"
+                                         ])
+
+  setup_all do
+    Code.require_file(@intent_classify_corrections_migration)
+    :ok
+  end
+
   describe "default_content_for_slug/1 — dispatch.planning" do
     test "instructs the planner to emit 2-5 adversarial e2e_behavior validations per task" do
       # v2: validations are pluralised (the planner-authored adversarial test
@@ -560,6 +577,255 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     end
   end
 
+  describe "default_content_for_slug/1 — dispatch.intent_attention" do
+    # Task 019f70b8 stage 5. The prompt a per-meeting intent queue's target
+    # runtime receives. Two things in this body are load-bearing beyond
+    # prose quality:
+    #
+    #   * AC15's ack preamble is asserted CHARACTER-FOR-CHARACTER. It is the
+    #     mechanism that makes "acked but never spawned" structurally
+    #     impossible for intents the way it already is for tasks, and a
+    #     helpful paraphrase would quietly relax it.
+    #   * The `## Cancellation` wire shape. Stage 4 shipped the cancel as
+    #     `Endpoint.broadcast(topic, "intent_cancelled", %{...})` — a named
+    #     channel event with a MAP payload — because `runtime:<runtime_id>`
+    #     is a Phoenix Channel topic whose subscribers serialise to a
+    #     websocket and a bare Elixir tuple cannot cross it. The task
+    #     description still writes the tuple form. A runtime told to expect
+    #     `{:intent_cancelled, ...}` waits for a message that never arrives
+    #     and every cancel silently becomes a timeout, so the tuple form is
+    #     asserted ABSENT here, not merely unmentioned.
+
+    # AC15, verbatim. The trailing newline is part of the match: in the
+    # template body the second line is followed by a blank line, so the
+    # heredoc's own "\n" is present in the content too.
+    @intent_ack_preamble """
+    **Your first tool call after spawning the subagent must be `intent_ack(intent_id="<...>", subagent_id="<the id returned when you spawned the subagent>", status: :working)`.**
+    Spawn the subagent FIRST, then include its returned agent id in the ack. Empty or missing subagent_id will fail validation.
+    """
+
+    test "exists as a registered default template slug" do
+      content = PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+
+      assert is_binary(content),
+             "dispatch.intent_attention must be registered in default_templates/0"
+    end
+
+    test "carries AC15's spawn-before-ack preamble character-for-character" do
+      content = PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+
+      assert String.contains?(content, @intent_ack_preamble),
+             """
+             dispatch.intent_attention must carry AC15's ack preamble VERBATIM.
+
+             Expected to find:
+             #{@intent_ack_preamble}
+             """
+    end
+
+    test "expresses the subagent_id provenance split once, in prose" do
+      content = PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+
+      # `IntentRuntimeAdapter` deliberately does NOT branch on runtime type
+      # — one payload shape for every runtime. The Claude-Code-vs-openclaw
+      # difference is expressed HERE and nowhere else, so if this prose
+      # disappears the distinction has no home in the codebase at all.
+      assert content =~ "agentId",
+             "intent_attention must name the Claude Code Agent-tool agentId as one subagent_id source"
+
+      assert content =~ "afd767f1e0cc81633",
+             "intent_attention must show a concrete Claude Code agentId example"
+
+      assert content =~ "higgins.moon",
+             "intent_attention must show a concrete openclaw runtime-slug example"
+    end
+
+    test "documents all four intent_ack statuses and the queue-advance split" do
+      content = PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+
+      for status <- ~w(working completed rejected cancel_honored) do
+        assert content =~ status,
+               "intent_attention must name the `#{status}` ack status"
+      end
+
+      # `working` is the ONLY status that does not advance the serial
+      # cursor. A runtime that thinks `working` advances will sit on the
+      # intent and starve the rest of the meeting's queue.
+      assert content =~ "Does NOT advance the queue",
+             "intent_attention must say that `working` does not advance the queue"
+
+      # The stage-1 status semantics: `timed_out` (amber, we heard nothing)
+      # stays distinct from `no_ack_spawn_failed` (red, the runtime tried
+      # and could not spawn). The template is where the runtime learns not
+      # to fabricate an id and collapse the two.
+      assert content =~ "no_ack_spawn_failed",
+             "intent_attention must name the no_ack_spawn_failed outcome"
+
+      assert content =~ "timed_out",
+             "intent_attention must name the timed_out outcome distinctly"
+    end
+
+    test "cancellation documents the shipped map payload, not the plan's tuple" do
+      content = PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+
+      assert content =~ "## Cancellation"
+
+      # Assertions below are scoped to the `## Cancellation` SLICE, not to
+      # the whole body. Every one of these tokens also occurs in the ack
+      # contract, so a whole-body `=~` would stay green while the
+      # cancellation section itself lost the key that names which subagent
+      # to stop — which is the single most load-bearing field on the wire.
+      section = intent_attention_section(content, "## Cancellation", "## Failure surfacing")
+
+      # The event NAME as broadcast by
+      # `IntentRuntimeAdapter.cancel_event/0`.
+      assert section =~ "intent_cancelled",
+             "the cancellation section must name the intent_cancelled channel event"
+
+      # Every key `IntentRuntimeAdapter.cancel_payload/4` actually puts on
+      # the wire.
+      for key <-
+            ~w(intent_id meeting_id subagent_id reason corrected_intent corrected_target_agent_id status) do
+        assert section =~ key,
+               "the cancellation section must document the `#{key}` payload key"
+      end
+
+      # Regression guard against re-adopting the task description's tuple
+      # notation. See this describe block's header comment.
+      refute content =~ "{:intent_cancelled",
+             "intent_attention must NOT describe the cancel as an Elixir tuple — " <>
+               "stage 4 ships it as a channel event with a map payload"
+
+      # The termination contract, which is the difference between a clean
+      # stop and a half-written file.
+      assert section =~ "next tool-call boundary",
+             "the cancellation section must require termination at the next tool-call boundary"
+
+      assert section =~ "force-abort",
+             "the cancellation section must forbid force-aborting mid-tool-call"
+
+      assert section =~ "cancelled_late",
+             "the cancellation section must say an already-completed cancel lands cancelled_late"
+
+      # The reply that actually releases the row. Without a `subagent_id`
+      # in this call the queue cannot honour the cancel at all.
+      assert section =~ ~s(subagent_id="<the same id>"),
+             "the cancellation section must show the cancel_honored ack carrying the same subagent_id"
+    end
+
+    # Slice the body between two section markers so a section-scoped
+    # assertion can't be satisfied by a token that lives in a different
+    # section.
+    defp intent_attention_section(content, from_marker, to_marker) do
+      {from, _} = :binary.match(content, from_marker)
+      {to, _} = :binary.match(content, to_marker)
+
+      assert to > from,
+             "expected #{inspect(from_marker)} to precede #{inspect(to_marker)}"
+
+      binary_part(content, from, to - from)
+    end
+
+    test "lays the sections out in the planned order" do
+      content = PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+
+      markers = [
+        "{{federation_preamble}}",
+        "## Signal context",
+        "## Ack contract",
+        "## Deliverable steps",
+        "## Cancellation",
+        "## Failure surfacing",
+        "{{skills_reference}}"
+      ]
+
+      positions =
+        Enum.map(markers, fn marker ->
+          index = :binary.match(content, marker)
+
+          assert index != :nomatch,
+                 "dispatch.intent_attention must contain the `#{marker}` section marker"
+
+          {marker, elem(index, 0)}
+        end)
+
+      sorted = positions |> Enum.sort_by(&elem(&1, 1)) |> Enum.map(&elem(&1, 0))
+
+      assert sorted == markers,
+             "dispatch.intent_attention sections are out of order: got #{inspect(sorted)}"
+    end
+
+    test "declares exactly the eight planned variables" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "dispatch.intent_attention"))
+
+      assert descriptor,
+             "dispatch.intent_attention descriptor must be registered in default_templates/0"
+
+      expected_vars =
+        Enum.sort([
+          "federation_preamble",
+          "intent_id",
+          "meeting_id",
+          "transcript_chunk_excerpt",
+          "classified_intent",
+          "target_rationale",
+          "execution_space_id",
+          "skills_reference"
+        ])
+
+      assert Enum.sort(descriptor.variables) == expected_vars,
+             "dispatch.intent_attention must declare exactly the eight planned variables"
+    end
+
+    test "every declared variable is actually interpolated into the body" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "dispatch.intent_attention"))
+
+      # A declared-but-unused variable is a lie the render path can't
+      # catch: `interpolate/2` silently ignores assigns with no
+      # placeholder, so the operator sees a variable in the editor that
+      # changes nothing.
+      for var <- descriptor.variables do
+        assert descriptor.content =~ "{{#{var}}}",
+               "dispatch.intent_attention declares `#{var}` but never interpolates it"
+      end
+    end
+
+    test "render_template substitutes every declared variable and leaves no placeholder" do
+      :ok = PromptTemplates.seed_defaults()
+
+      assigns = %{
+        federation_preamble: "FEDERATION-PREAMBLE-FIXTURE",
+        intent_id: "019f9b01-0000-7000-8000-00000000dead",
+        meeting_id: "019f9b01-0000-7000-8000-00000000beef",
+        transcript_chunk_excerpt: "make that button teal",
+        classified_intent: "visual_adjust",
+        target_rationale: "visual_adjust routes to the designer role",
+        execution_space_id: "019f9afa-a6bd-7795-aa79-5372ef9585a1",
+        skills_reference: "SKILLS-REFERENCE-FIXTURE"
+      }
+
+      assert {:ok, rendered} =
+               PromptTemplates.render_template("dispatch.intent_attention", assigns)
+
+      for {_key, value} <- assigns do
+        assert rendered =~ value,
+               "rendered intent_attention prompt is missing the interpolated value #{inspect(value)}"
+      end
+
+      refute rendered =~ "{{",
+             "rendered intent_attention prompt still carries an un-substituted placeholder"
+
+      # The ack preamble survives interpolation intact — it contains a
+      # literal `"<...>"` that must NOT be mistaken for a placeholder.
+      assert String.contains?(rendered, @intent_ack_preamble),
+             "AC15's ack preamble must survive render_template unchanged"
+    end
+  end
+
   describe "default_content_for_slug/1 — stacks.dep_inference.v1" do
     test "registers the slug with the planner-spec'd variables list" do
       descriptor =
@@ -697,10 +963,26 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                                              "priv/repo/migrations/20260719120100_add_migration_slot_section_to_dispatch_in_progress.exs"
                                            ])
 
+    # Task 019f70b8 stage 5. This one is a BOTH-HALVES migration — insert
+    # when the slug is absent, force-update when it is present — because
+    # the slug is new AND prod has already run the earlier seed
+    # migrations. Insert-only would leave prod without the row;
+    # force-update-only would no-op there. Both branches are exercised
+    # below.
+    @intent_attention_migration_path Path.join([
+                                       __ENV__.file
+                                       |> Path.dirname()
+                                       |> Path.dirname()
+                                       |> Path.dirname()
+                                       |> Path.dirname(),
+                                       "priv/repo/migrations/20260725120000_seed_and_force_update_intent_attention_template.exs"
+                                     ])
+
     Code.compile_file(@alarm_silence_migration_path)
     Code.compile_file(@subagent_id_ack_migration_path)
     Code.compile_file(@federation_preamble_migration_path)
     Code.compile_file(@migration_slot_section_migration_path)
+    Code.compile_file(@intent_attention_migration_path)
 
     test "seed_defaults seeds dispatch.planning with current default content" do
       :ok = PromptTemplates.seed_defaults()
@@ -710,6 +992,118 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       expected = PromptTemplates.default_content_for_slug("dispatch.planning")
       assert template.content == expected
+    end
+
+    # This stage's migration runs on the TEST database like any other, so
+    # by the time ExUnit boots the `dispatch.intent_attention` row already
+    # exists — committed outside the sandbox. Both branch tests below need
+    # to establish their own precondition rather than assume a blank slate.
+    # The delete is rolled back with the test's transaction.
+    defp drop_intent_attention_row do
+      case PromptTemplates.get_template_by_slug("dispatch.intent_attention") do
+        nil -> :ok
+        template -> {:ok, _} = PromptTemplates.delete_template(template)
+      end
+
+      :ok
+    end
+
+    test "seed_defaults seeds dispatch.intent_attention with current default content" do
+      :ok = drop_intent_attention_row()
+      :ok = PromptTemplates.seed_defaults()
+
+      template = PromptTemplates.get_template_by_slug("dispatch.intent_attention")
+
+      assert template,
+             "seed_defaults/0 must insert the dispatch.intent_attention row on a fresh boot"
+
+      assert template.content ==
+               PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "dispatch.intent_attention"))
+
+      assert Enum.sort(template.variables) == Enum.sort(descriptor.variables)
+    end
+
+    test "20260725120000 intent_attention migration INSERTS when the slug is absent" do
+      # The prod case. `suite.example.com` has already run the
+      # earlier seed migrations, so `seed_defaults/0` never re-runs there
+      # and a force-update-only migration would leave the new slug missing
+      # forever. Assert the insert branch actually inserts.
+      migration = Platform.Repo.Migrations.SeedAndForceUpdateIntentAttentionTemplate
+
+      :ok = drop_intent_attention_row()
+
+      refute PromptTemplates.get_template_by_slug("dispatch.intent_attention"),
+             "precondition: no dispatch.intent_attention row before the migration runs"
+
+      :ok = migration.up()
+
+      template = PromptTemplates.get_template_by_slug("dispatch.intent_attention")
+      assert template, "the migration must INSERT dispatch.intent_attention when absent"
+
+      assert template.content ==
+               PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+
+      assert String.contains?(template.content, @intent_ack_preamble),
+             "the inserted row must carry AC15's ack preamble"
+    end
+
+    test "20260725120000 intent_attention migration FORCE-UPDATES a stale existing row" do
+      # The upgrade case, and the reason this migration is not
+      # insert-if-missing like 20260707120000: a deployment that picked the
+      # row up from `seed_defaults/0` at an earlier body revision must be
+      # dragged forward to the current one.
+      migration = Platform.Repo.Migrations.SeedAndForceUpdateIntentAttentionTemplate
+
+      :ok = PromptTemplates.seed_defaults()
+      seeded = PromptTemplates.get_template_by_slug("dispatch.intent_attention")
+      assert seeded
+
+      stale_content =
+        seeded.content
+        |> String.replace("intent_ack", "REDACTED_STALE_TOKEN")
+        |> Kernel.<>("\n\n<!-- stale marker -->")
+
+      {:ok, _} =
+        PromptTemplates.update_template(seeded, %{
+          content: stale_content,
+          variables: ["federation_preamble"]
+        })
+
+      :ok = migration.up()
+
+      refreshed = PromptTemplates.get_template_by_slug("dispatch.intent_attention")
+
+      assert refreshed.content ==
+               PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+
+      refute refreshed.content =~ "REDACTED_STALE_TOKEN"
+      refute refreshed.content =~ "<!-- stale marker -->"
+
+      # The variables list is refreshed too — a stale list means the
+      # template editor shows the wrong knobs even when the body is right.
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "dispatch.intent_attention"))
+
+      assert Enum.sort(refreshed.variables) == Enum.sort(descriptor.variables)
+
+      # Idempotent: running it again leaves the same final state and does
+      # not duplicate the row.
+      :ok = migration.up()
+
+      assert PromptTemplates.get_template_by_slug("dispatch.intent_attention").content ==
+               refreshed.content
+
+      assert Platform.Repo.aggregate(
+               Ecto.Query.from(t in Platform.Orchestration.PromptTemplate,
+                 where: t.slug == "dispatch.intent_attention"
+               ),
+               :count
+             ) == 1
     end
 
     test "20260715220000 alarm_silence-fallback migration refreshes all four dispatch templates idempotently" do
@@ -2540,6 +2934,138 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         assert descriptor.content =~ "{{federation_preamble}}",
                "#{descriptor.slug} declares federation_preamble in .variables but does not embed {{federation_preamble}} in .content"
       end
+    end
+  end
+
+  describe "meetings.intent_classify.v1 — correction exemplars (task 019f70b8 stage 6)" do
+    # Unlike `dispatch.intent_attention`, this slug is NOT in
+    # `default_templates/0` — its body has only ever lived in migrations
+    # (20260707 seeded it, 20260709 added the context window, 20260726
+    # adds the exemplar block). The DB ROW is therefore the production
+    # artifact, and it is what these tests read: migrations have already
+    # run by the time ExUnit boots.
+
+    @intent_classify_slug "meetings.intent_classify.v1"
+    @corrections_marker "# Prior producer corrections"
+    @context_marker "# Prior conversation context"
+
+    defp intent_classify_content do
+      case PromptTemplates.get_template_by_slug(@intent_classify_slug) do
+        nil -> flunk("#{@intent_classify_slug} must be seeded by migration before this test runs")
+        template -> template.content
+      end
+    end
+
+    # Slice the body between two section markers. Every assertion below
+    # is scoped to the corrections SLICE rather than the whole body:
+    # `correction`, `intent` and `producer` all occur elsewhere in this
+    # prompt, so a whole-body `=~` would stay green even if the
+    # exemplars section lost the `{{correction_exemplars}}` marker
+    # entirely — which is the ONE thing in it that is load-bearing.
+    defp intent_classify_section(content, from_marker, to_marker) do
+      {from, _} = :binary.match(content, from_marker)
+      {to, _} = :binary.match(content, to_marker)
+
+      assert to > from,
+             "expected #{inspect(from_marker)} to precede #{inspect(to_marker)}"
+
+      binary_part(content, from, to - from)
+    end
+
+    test "the corrections section carries the {{correction_exemplars}} marker" do
+      content = intent_classify_content()
+
+      assert content =~ @corrections_marker,
+             "the intent_classify prompt must carry a producer-corrections section"
+
+      section = intent_classify_section(content, @corrections_marker, @context_marker)
+
+      assert section =~ "{{correction_exemplars}}",
+             "the corrections section must interpolate the exemplars variable"
+    end
+
+    test "the corrections section tells the model these outrank the generic guidance" do
+      section =
+        intent_classify_content()
+        |> intent_classify_section(@corrections_marker, @context_marker)
+
+      # Without this, exemplars are just more text competing with the
+      # closed-enum guidance below them, and the tuning loop cannot move
+      # the classifier off its defaults.
+      assert section =~ "ground truth",
+             "the corrections section must frame the exemplars as ground truth"
+
+      assert section =~ "org",
+             "the corrections section must say the corrections are org-scoped"
+    end
+
+    test "the corrections block precedes the prior-conversation window" do
+      content = intent_classify_content()
+
+      {corrections_at, _} = :binary.match(content, "{{correction_exemplars}}")
+      {context_at, _} = :binary.match(content, "{{context_lines}}")
+      {utterance_at, _} = :binary.match(content, "{{meeting_transcript_chunk}}")
+
+      # Standing guidance first, then this conversation, then the thing
+      # to classify. Reordering these silently changes what the model
+      # weights most.
+      assert corrections_at < context_at
+      assert context_at < utterance_at
+    end
+
+    test "the prior-conversation window kept its do-not-classify framing" do
+      # Regression guard: the stage-6 migration rewrites the WHOLE body,
+      # so it is the obvious place to lose the 20260709 migration's work.
+      content = intent_classify_content()
+
+      assert content =~ "DO NOT classify these lines"
+      assert content =~ "{{context_lines}}"
+    end
+
+    test "correction_exemplars is declared in the row's variables" do
+      template = PromptTemplates.get_template_by_slug(@intent_classify_slug)
+
+      assert "correction_exemplars" in template.variables
+
+      # The pre-existing set must survive the rewrite too.
+      for variable <- ~w(meeting_transcript_chunk context_lines context_present speaker room_id) do
+        assert variable in template.variables,
+               "the intent_classify template must keep declaring #{variable}"
+      end
+    end
+
+    test "the migration is update-only — an absent row is skipped, not inserted" do
+      # The seed migrations have already run by the time ExUnit boots, so
+      # the row exists. Delete it inside this test's transaction (rolled
+      # back on exit) to reach the branch that would otherwise never be
+      # exercised.
+      #
+      # This migration deliberately does NOT insert: the 20260707 seed
+      # created the row on every migrated environment, and a second
+      # insert path would be a third copy of the body with no
+      # environment that needs it.
+      template = PromptTemplates.get_template_by_slug(@intent_classify_slug)
+      {:ok, _} = PromptTemplates.delete_template(template)
+
+      assert :ok = run_corrections_migration!()
+
+      assert is_nil(PromptTemplates.get_template_by_slug(@intent_classify_slug)),
+             "the migration must skip a missing row, not conjure one"
+    end
+
+    test "the migration is idempotent — re-running leaves the body byte-identical" do
+      before_content = intent_classify_content()
+
+      assert :ok = run_corrections_migration!()
+
+      assert intent_classify_content() == before_content
+    end
+
+    # `apply/3` rather than a direct call: the migration module is loaded
+    # at runtime by `setup_all`, so a compile-time reference produces an
+    # "is undefined" warning on every build.
+    defp run_corrections_migration! do
+      apply(Platform.Repo.Migrations.UpdateIntentClassifyPromptWithCorrections, :up, [])
     end
   end
 end

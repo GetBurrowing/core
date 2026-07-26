@@ -4,62 +4,71 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
   pipeline (task 019f2452 stage 5). Extends the classifier's e2e
   coverage (`Platform.Integration.MeetingIntentRuntimeTest`, stage 5's
   sibling for stage 1) past the queue-insert assertion — this one
-  walks the last two hops end-to-end:
+  walks the last hops end-to-end:
 
       Meetings.append_segment/2
-        → PubSub.broadcast_transcript_chunk/2
+        → PubSub.broadcast_transcript_chunk/2  (meeting_id resolved)
         → IntentClassifier.handle_info/2       (stubbed provider)
-        → IntentQueue.enqueue/3
+        → IntentQueue.enqueue/2                (per MEETING)
         → PubSub.broadcast_intent_enqueued/1
         → IntentDispatcher.handle_info/2       (per-case instance)
-        → dispatch seam (native OR external — stubbed)
-        → IntentQueue.mark_dispatched/2        (row disappears)
+        → IntentQueue.claim_next/1             (serial cursor)
+        → IntentRuntimeAdapter.resolve_target/1 (role → agent → runtime)
+        → "attention" on runtime:<runtime_id>  (REAL broadcast)
+        → row transitions to :dispatched and STAYS there, awaiting ack
         → :telemetry.execute([:platform, :meetings, :intent_dispatched], …)
+        → intent_ack(:completed) → row :completed, cursor advances
 
   Everything runs on a real BEAM node under a shared-mode DataCase
-  sandbox — no mocks between classifier and dispatcher, just the two
-  boundaries where an LLM call and an outbound dispatch would otherwise
-  cross the wire. Those two ARE stubbed via the seams the unit tests
-  already exercise:
+  sandbox. Exactly ONE boundary is stubbed — the classifier's LLM call —
+  via the `provider_module:` seam the unit tests already use. The
+  dispatch hop is NOT stubbed any more: since task 019f70b8 stage 4 the
+  hand-off is a Phoenix broadcast on the target runtime's own topic, so
+  the test subscribes to that topic and asserts the real thing. The
+  `:meetings_intent_dispatcher_native_dispatcher` /
+  `_external_dispatcher` MFA seams are gone with the surfaces they
+  stood in for.
 
-    * classifier provider — `provider_module:` opt on `start_link/1`
-      (mirrors `Platform.Integration.MeetingIntentRuntimeTest`)
-    * dispatcher native / external — Application env-based MFA
-      swap (mirrors `Platform.Meetings.IntentDispatcherTest`)
+  ## Nothing here supplies a target
+
+  Each case seeds a role assignment and a runtime link, then lets the
+  chain derive the topic: `target_role` (from the stubbed LLM) →
+  `Roles.agent_id_for_role/1` → `%Agent{}` →
+  `Federation.get_runtime_for_agent/1` → `runtime:<runtime_id>`. The
+  meeting id is likewise derived from the transcript's space, not
+  passed in — the hole stage 3 found in `append_segment/2` was exactly
+  a harness feeding a value production had to compute.
 
   ## Cases
 
-    1. **Happy path, external agent** — classifier LLM emits
-       `target_role: "designer"`, an external agent is assigned to
-       that role, dispatcher routes to the external seam. Asserts the
-       dispatch received a synthetic Responsibility + the queue row
-       disappeared + `[:platform, :meetings, :intent_dispatched]` fired
-       with `dispatch_kind: :external`.
+    1. **Agent kind no longer selects a surface** — an `external`-kind
+       agent and a `native`-kind agent both receive the identical
+       runtime-attention signal. Before stage 4 these took two
+       different code paths (`ExternalAgents.Dispatcher.dispatch/3` vs
+       `Chat.AgentResponder.maybe_dispatch/1`); now `kind` is not
+       consulted at all and only the runtime link matters.
 
-    2. **Happy path, native agent** — same shape but with a native
-       agent on `target_role: "historian"`. Asserts the native
-       dispatch seam received an AgentResponder-shaped signal and the
-       terminal telemetry carried `dispatch_kind: :native`.
+    2. **Ack round-trip** — the signal carries an addressable
+       `intent_id`, and `intent_ack` walks the row
+       `:dispatched → :acked → :completed`, releasing the cursor.
 
-    3. **Cross-room isolation** — two parallel classifier→dispatcher
-       flows on distinct rooms both dispatch cleanly, with
-       `mark_dispatched` scoped to the emitting room (the "braces"
-       invariant for the dispatcher: sibling rooms' queue rows are
-       untouched).
+    3. **Cross-meeting isolation** — two parallel classifier→dispatcher
+       flows on distinct meetings both dispatch cleanly. Head-of-line
+       blocking is per-meeting by design; one meeting's in-flight
+       intent must never gate another's.
 
   ## Sandbox note
 
   DataCase runs `Sandbox.mode(Repo, {:shared, self()})` for `async: false`
   tests, so per-case `start_supervised!` children see the test's Repo
-  connection transparently. That's why we don't need to hand-thread
-  `Sandbox.allow/3` for every child — the `{:shared, self()}` mode
-  already grants ambient access on this node. `Task.Supervisor.async_nolink`
-  workers spawned by the dispatcher inherit through the same mode.
+  connection transparently.
   """
 
   use Platform.DataCase, async: false
 
+  alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.Federation
   alias Platform.Meetings
   alias Platform.Meetings.IntentClassifier
   alias Platform.Meetings.IntentDispatcher
@@ -74,16 +83,6 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
   # inside the dispatcher).
   @responsibility_key "meetings.intent_classify"
   @prompt_slug "meetings.intent_classify.v1"
-
-  # Rooms swept across all cases so a stray ETS row from a prior run
-  # (IntentQueue is a `:public :named_table` that outlives the sandbox
-  # transaction) can't leak between tests.
-  @rooms [
-    "e2e-dispatch-external",
-    "e2e-dispatch-native",
-    "e2e-dispatch-room-a",
-    "e2e-dispatch-room-b"
-  ]
 
   # ── Provider stub — same shape as the classifier's e2e ─────────────────────
 
@@ -108,16 +107,7 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
   # ── Setup ──────────────────────────────────────────────────────────────────
 
   setup do
-    # Bump this module's log level to :info so the dispatcher's
-    # `unknown target_role` log doesn't get swallowed on a debug-off
-    # CI (belt-and-braces; none of these cases exercise it, but sibling
-    # tests running under the same setup can rely on it).
     Logger.put_module_level(Platform.Meetings.IntentDispatcher, :info)
-
-    # Nuke any stray ETS rows before the case runs. The IntentQueue
-    # table is `:public :named_table` and started under the app tree,
-    # so it survives the DB transaction rollback that DataCase runs.
-    Enum.each(@rooms, &IntentQueue.drop_for_room/1)
 
     # Boot a per-case classifier + dispatcher. Unique names keep them
     # from clashing with any app-tree singletons (both are gated OFF
@@ -152,12 +142,7 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
       template -> PromptTemplates.delete_template(template)
     end
 
-    on_exit(fn ->
-      Logger.delete_module_level(Platform.Meetings.IntentDispatcher)
-      Application.delete_env(:platform, :meetings_intent_dispatcher_native_dispatcher)
-      Application.delete_env(:platform, :meetings_intent_dispatcher_external_dispatcher)
-      Enum.each(@rooms, &IntentQueue.drop_for_room/1)
-    end)
+    on_exit(fn -> Logger.delete_module_level(Platform.Meetings.IntentDispatcher) end)
 
     {:ok,
      classifier_pid: classifier_pid,
@@ -185,17 +170,37 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
     |> Repo.insert!()
   end
 
-  defp assign_role!(role_key, %Agent{id: id}) do
-    # Idempotent — role_assignments.role_key has a unique index, so
-    # if a sibling case left a row we clear it first.
+  defp create_user! do
+    Repo.insert!(%User{
+      email: "e2e_dispatch_#{System.unique_integer([:positive])}@example.com",
+      name: "E2E Dispatch User",
+      oidc_sub: "oidc-e2e-dispatch-#{System.unique_integer([:positive])}"
+    })
+  end
+
+  # Role assignment + runtime link + topic subscription, in the order a
+  # real deployment does them. Returns the agent and the topic the
+  # dispatcher's own resolution should independently arrive at.
+  defp seed_target!(role_key, agent_overrides) do
+    agent = create_agent!(agent_overrides)
+
+    {:ok, runtime} =
+      Federation.register_runtime(create_user!().id, %{
+        runtime_id: "e2e-dispatch-rt-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, linked} = Federation.link_agent(runtime, agent)
+
     :ok = Roles.unassign_role(role_key)
-    {:ok, _} = Roles.assign_role(role_key, id)
-    :ok
+    {:ok, _} = Roles.assign_role(role_key, linked.id)
+
+    :ok = PlatformWeb.Endpoint.subscribe("runtime:#{runtime.runtime_id}")
+
+    {linked, runtime}
   end
 
   # Plant the provider stub fun in the classifier's process dictionary
-  # via its test-only handshake message. Matches the shape used in
-  # `Platform.Meetings.IntentClassifierTest` and the classifier's e2e.
+  # via its test-only handshake message.
   defp plant_stub_fun(classifier_pid, fun) do
     ref = make_ref()
     send(classifier_pid, {:__test_plant_stub, self(), ref, fun})
@@ -205,32 +210,6 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
     after
       500 -> flunk("classifier did not ack stub fun plant")
     end
-  end
-
-  # Install a stub for the dispatcher's native / external dispatch
-  # surfaces. The stub forwards its call to the parent test process
-  # and returns whatever `fun` yields. Mirrors
-  # `Platform.Meetings.IntentDispatcherTest.install_native_stub/1`.
-  defp install_native_stub(fun) when is_function(fun, 1) do
-    Application.put_env(
-      :platform,
-      :meetings_intent_dispatcher_native_dispatcher,
-      {__MODULE__.Stub, :native_dispatch}
-    )
-
-    :persistent_term.put({__MODULE__, :native_stub}, {self(), fun})
-    :ok
-  end
-
-  defp install_external_stub(fun) when is_function(fun, 3) do
-    Application.put_env(
-      :platform,
-      :meetings_intent_dispatcher_external_dispatcher,
-      {__MODULE__.Stub, :external_dispatch}
-    )
-
-    :persistent_term.put({__MODULE__, :external_stub}, {self(), fun})
-    :ok
   end
 
   defp attach_telemetry!(events) when is_list(events) do
@@ -264,8 +243,29 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
      }}
   end
 
-  defp append_transcript_segment!(room_id, participant, text) do
-    {:ok, transcript} = Meetings.ensure_transcript(%{room_id: room_id})
+  # A real project → meeting → chat space chain. The chunk's meeting_id
+  # is resolved from the transcript's space, so a stubbed id would
+  # bypass the link this pipeline depends on.
+  defp create_meeting!(name) do
+    {:ok, project} =
+      Platform.Tasks.create_project(%{
+        name: "#{name} project #{System.unique_integer([:positive])}",
+        repo_url: "https://github.com/test/meeting-intent-dispatch-e2e"
+      })
+
+    {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: name})
+
+    # Generous ack window: these cases assert on dispatch, not on the
+    # timeout path, and a short window would race them.
+    {:ok, _} = IntentQueue.ensure_started(meeting.id, ack_timeout_ms: 60_000)
+    on_exit(fn -> IntentQueue.stop(meeting.id) end)
+
+    meeting
+  end
+
+  defp append_transcript_segment!(meeting, room_id, participant, text) do
+    {:ok, transcript} =
+      Meetings.ensure_transcript(%{room_id: room_id, space_id: meeting.chat_space_id})
 
     {:ok, updated} =
       Meetings.append_segment(transcript.id, %{
@@ -278,65 +278,40 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
     updated
   end
 
-  # ── Stub module — addressable via Application env MFA. Reads the
-  # `{pid, fun}` out of `:persistent_term`, forwards the payload to
-  # the parent, then invokes fun for the return value.
-  # ───────────────────────────────────────────────────────────────────────────
+  # Poll until the meeting's queue holds exactly one row in `status`.
+  defp await_single_row(meeting_id, status, timeout \\ 2_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_await_single_row(meeting_id, status, deadline)
+  end
 
-  defmodule Stub do
-    @moduledoc false
+  defp do_await_single_row(meeting_id, status, deadline) do
+    case IntentQueue.list(meeting_id) do
+      [%{status: ^status} = row] ->
+        row
 
-    def native_dispatch(signal) do
-      case :persistent_term.get(
-             {Platform.Integration.MeetingIntentDispatcherE2ETest, :native_stub},
-             nil
-           ) do
-        {pid, fun} ->
-          send(pid, {:native_dispatch_called, signal})
-          fun.(signal)
-
-        nil ->
-          :ok
-      end
-    end
-
-    def external_dispatch(responsibility, agent, context) do
-      case :persistent_term.get(
-             {Platform.Integration.MeetingIntentDispatcherE2ETest, :external_stub},
-             nil
-           ) do
-        {pid, fun} ->
-          send(pid, {:external_dispatch_called, responsibility, agent, context})
-          fun.(responsibility, agent, context)
-
-        nil ->
-          {:ok, %{content: %{}}}
-      end
+      other ->
+        if System.monotonic_time(:millisecond) > deadline do
+          flunk("expected one #{inspect(status)} row for #{meeting_id}, got #{inspect(other)}")
+        else
+          Process.sleep(10)
+          do_await_single_row(meeting_id, status, deadline)
+        end
     end
   end
 
-  # ── Test 1: happy path (external agent kind) ──────────────────────────────
+  # ── Test 1: agent kind no longer selects a dispatch surface ───────────────
 
-  describe "happy path — external agent" do
-    test "classifier → queue → dispatcher → external seam → mark_dispatched",
+  describe "runtime attention is the only dispatch surface" do
+    test "an external-kind agent with a runtime gets the same signal a native one does",
          %{classifier_pid: classifier_pid} do
       attach_telemetry!([[:platform, :meetings, :intent_dispatched]])
 
-      # Stub the classifier's LLM to emit target_role=designer.
       plant_stub_fun(classifier_pid, fn _c, _m, _o ->
         classifier_response("design_task", "designer", 0.92)
       end)
 
-      # Stub the dispatcher's external dispatch surface — capture the
-      # full (responsibility, agent, context) payload.
-      install_external_stub(fn _resp, _agent, _ctx ->
-        {:ok, %{content: %{"ack" => true}}}
-      end)
-
-      # Seed the target agent + role assignment. Kind: external so the
-      # dispatcher routes via the external seam.
-      target_agent =
-        create_agent!(%{
+      {target_agent, runtime} =
+        seed_target!("designer", %{
           slug: "e2e-dispatch-designer-external-#{System.unique_integer([:positive])}",
           kind: "external",
           endpoint_kind: "openai_compat",
@@ -344,41 +319,43 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
           model: "gpt-fake"
         })
 
-      :ok = assign_role!("designer", target_agent)
+      meeting = create_meeting!("E2E Dispatch External")
 
-      # Kick off the pipeline. A single transcript segment triggers
-      # the whole chain.
+      # A single transcript segment triggers the whole chain.
       _ =
         append_transcript_segment!(
+          meeting,
           "e2e-dispatch-external",
           "user-1",
           "we should redesign the onboarding funnel"
         )
 
-      # External seam received the dispatch.
-      assert_receive {:external_dispatch_called, responsibility, agent, context}, 1_500
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: topic,
+                       event: "attention",
+                       payload: %{
+                         signal: %{
+                           reason: "meeting_intent_dispatch",
+                           classified_intent: "design_task",
+                           target_role: "designer",
+                           confidence: 0.92,
+                           room_id: "e2e-dispatch-external",
+                           intent_id: intent_id,
+                           meeting_id: signal_meeting_id,
+                           target_agent_id: signal_agent_id
+                         }
+                       }
+                     },
+                     3_000
 
-      assert %Platform.Responsibilities.Responsibility{
-               key: "meetings.produce.designer",
-               feature: "meetings",
-               metadata: %{role_key: "designer", intent: "design_task"}
-             } = responsibility
+      # The whole chain derived this, not the test.
+      assert topic == "runtime:#{runtime.runtime_id}"
+      assert signal_meeting_id == meeting.id
+      assert signal_agent_id == target_agent.id
 
-      assert %Agent{id: agent_id, kind: "external"} = agent
-      assert agent_id == target_agent.id
-
-      assert %{
-               role_key: "designer",
-               room_id: "e2e-dispatch-external",
-               intent: "design_task",
-               target_role: "designer",
-               confidence: 0.92
-             } = context
-
-      # Terminal telemetry with dispatch_kind: :external.
       assert_receive {:telemetry, [:platform, :meetings, :intent_dispatched], measurements,
                       metadata},
-                     1_500
+                     3_000
 
       assert %{count: 1, dispatch_ms: dispatch_ms} = measurements
       assert is_integer(dispatch_ms) and dispatch_ms >= 0
@@ -387,21 +364,30 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
                room_id: "e2e-dispatch-external",
                target_role: "designer",
                intent: "design_task",
-               dispatch_kind: :external,
-               agent_slug: agent_slug
+               dispatch_kind: :runtime_attention,
+               agent_slug: agent_slug,
+               runtime_id: telemetry_runtime_id
              } = metadata
 
       assert agent_slug == target_agent.slug
+      assert telemetry_runtime_id == runtime.runtime_id
 
-      # Queue row disappeared (mark_dispatched deletes).
-      assert IntentQueue.list_for_room("e2e-dispatch-external") == []
+      # The row is RETAINED as `:dispatched`, waiting on an ack. Before
+      # task 019f70b8 `mark_dispatched/2` deleted it, which left the
+      # live-tuning UI nothing to render and the queue no way to know
+      # whether the target ever picked the work up.
+      row = await_single_row(meeting.id, :dispatched)
+      assert row.id == intent_id
+      assert row.dispatched_at
+      assert row.subagent_id == nil
+      assert IntentQueue.cursor(meeting.id) == row.id
     end
   end
 
-  # ── Test 2: happy path (native agent kind) ────────────────────────────────
+  # ── Test 2: ack round-trip off the signal's own intent_id ─────────────────
 
-  describe "happy path — native agent" do
-    test "classifier → queue → dispatcher → native seam → mark_dispatched",
+  describe "ack round-trip" do
+    test "the dispatched signal is addressable and walks :dispatched → :acked → :completed",
          %{classifier_pid: classifier_pid} do
       attach_telemetry!([[:platform, :meetings, :intent_dispatched]])
 
@@ -409,133 +395,153 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
         classifier_response("record_decision", "historian", 0.85)
       end)
 
-      install_native_stub(fn _signal -> :ok end)
-
-      target_agent =
-        create_agent!(%{
+      {target_agent, _runtime} =
+        seed_target!("historian", %{
           slug: "e2e-dispatch-historian-native-#{System.unique_integer([:positive])}",
           kind: "native"
         })
 
-      :ok = assign_role!("historian", target_agent)
+      meeting = create_meeting!("E2E Dispatch Native")
 
       _ =
         append_transcript_segment!(
+          meeting,
           "e2e-dispatch-native",
           "user-2",
           "let's record that we're going to ship weekly"
         )
 
-      # Native seam receives an AgentResponder-shaped signal.
-      assert_receive {:native_dispatch_called, signal}, 1_500
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{
+                         signal: %{
+                           reason: "meeting_intent_dispatch",
+                           intent_id: intent_id,
+                           target_agent_id: signal_agent_id,
+                           transcript_chunk_excerpt: excerpt
+                         }
+                       }
+                     },
+                     3_000
 
-      assert %{
-               reason: :system_event,
-               metadata: %{
-                 source: :meetings_intent_dispatcher,
-                 role_key: "historian",
-                 intent: "record_decision",
-                 room_id: "e2e-dispatch-native",
-                 agent_id: agent_id,
-                 agent_slug: agent_slug
-               }
-             } = signal
+      assert signal_agent_id == target_agent.id
+      # The excerpt is what makes the signal self-describing — the
+      # target shouldn't have to read the transcript back to know what
+      # it was asked about.
+      assert excerpt =~ "ship weekly"
 
-      assert agent_id == target_agent.id
-      assert agent_slug == target_agent.slug
-
-      # Terminal telemetry with dispatch_kind: :native.
       assert_receive {:telemetry, [:platform, :meetings, :intent_dispatched], %{count: 1},
                       %{
                         room_id: "e2e-dispatch-native",
                         target_role: "historian",
                         intent: "record_decision",
-                        dispatch_kind: :native
+                        dispatch_kind: :runtime_attention
                       }},
-                     1_500
+                     3_000
 
-      assert IntentQueue.list_for_room("e2e-dispatch-native") == []
+      row = await_single_row(meeting.id, :dispatched)
+      assert row.id == intent_id
+
+      # The whole ack contract is reachable from what the target
+      # actually received — the point of keying rows by a generated id
+      # rather than a room/dedupe pair.
+      {:ok, acked} =
+        Platform.Federation.ToolSurface.execute(
+          "intent_ack",
+          %{
+            "intent_id" => intent_id,
+            "subagent_id" => "historian.moon",
+            "status" => "working"
+          },
+          %{}
+        )
+
+      assert acked.status == :acked
+      assert acked.meeting_id == meeting.id
+
+      {:ok, completed} =
+        Platform.Federation.ToolSurface.execute(
+          "intent_ack",
+          %{
+            "intent_id" => intent_id,
+            "subagent_id" => "historian.moon",
+            "status" => "completed"
+          },
+          %{}
+        )
+
+      assert completed.status == :completed
+      assert IntentQueue.cursor(meeting.id) == nil
     end
   end
 
-  # ── Test 3: cross-room isolation ──────────────────────────────────────────
+  # ── Test 3: cross-meeting isolation ───────────────────────────────────────
 
-  describe "cross-room isolation" do
-    test "two rooms dispatch in parallel — mark_dispatched scoped per room",
+  describe "cross-meeting isolation" do
+    test "two meetings dispatch in parallel — one's cursor never gates the other",
          %{classifier_pid: classifier_pid} do
-      attach_telemetry!([[:platform, :meetings, :intent_dispatched]])
-
-      # Both rooms drive the same target_role, so we only need one
-      # role assignment. The dispatcher is a global singleton, so
-      # concurrent enqueues on distinct rooms hit `claim_one/2`
-      # under distinct `(room_id, dedupe_key)` keys — no cross-talk.
+      # Both meetings drive the same target_role, so we only need one
+      # role assignment — and that is precisely the case where a
+      # GLOBAL serial cursor would have wedged. Head-of-line blocking
+      # is per-meeting by design; across meetings it would be a bug.
       plant_stub_fun(classifier_pid, fn _c, _m, _o ->
         classifier_response("schedule_followup", "meeting_scribe", 0.8)
       end)
 
-      # Native stub so both dispatches share the same seam; the parent
-      # test process differentiates by the signal's `room_id`.
-      install_native_stub(fn _signal -> :ok end)
-
-      target_agent =
-        create_agent!(%{
+      {_target_agent, _runtime} =
+        seed_target!("meeting_scribe", %{
           slug: "e2e-dispatch-scribe-shared-#{System.unique_integer([:positive])}",
           kind: "native"
         })
 
-      :ok = assign_role!("meeting_scribe", target_agent)
+      meeting_a = create_meeting!("E2E Dispatch Meeting A")
+      meeting_b = create_meeting!("E2E Dispatch Meeting B")
 
-      # Room A.
+      room_a = "e2e-dispatch-room-a"
+      room_b = "e2e-dispatch-room-b"
+
       _ =
         append_transcript_segment!(
-          "e2e-dispatch-room-a",
+          meeting_a,
+          room_a,
           "user-a",
           "let's follow up on the roadmap next Friday"
         )
 
-      # Room B (kicked off before room A's dispatch completes, so the
-      # two flow through the queue + dispatcher concurrently).
+      # Meeting B kicked off before meeting A's intent is acked, so
+      # both are in flight simultaneously.
       _ =
         append_transcript_segment!(
-          "e2e-dispatch-room-b",
+          meeting_b,
+          room_b,
           "user-b",
           "we should schedule a follow-up on that item"
         )
 
-      # Collect BOTH native dispatch invocations. Order isn't
-      # guaranteed — they race through the classifier's serial
-      # handle_info loop, then hit the dispatcher's async_nolink
-      # workers in parallel. Assert on set-equality of the observed
-      # room_ids.
-      room_a = "e2e-dispatch-room-a"
-      room_b = "e2e-dispatch-room-b"
-
-      rooms_seen =
+      # Both dispatches land on the SAME runtime topic (one agent holds
+      # the role), so the two meetings are told apart by the signal's
+      # meeting_id. Order isn't guaranteed — assert set-equality.
+      meetings_seen =
         for _ <- 1..2 do
-          assert_receive {:native_dispatch_called, %{metadata: %{room_id: r}}}, 2_000
-          r
+          assert_receive %Phoenix.Socket.Broadcast{
+                           event: "attention",
+                           payload: %{signal: %{meeting_id: m}}
+                         },
+                         5_000
+
+          m
         end
 
-      assert Enum.sort(rooms_seen) == Enum.sort([room_a, room_b])
+      assert Enum.sort(meetings_seen) == Enum.sort([meeting_a.id, meeting_b.id])
 
-      # Both terminal telemetry events fire — same set-equality
-      # invariant.
-      dispatched_rooms =
-        for _ <- 1..2 do
-          assert_receive {:telemetry, [:platform, :meetings, :intent_dispatched], %{count: 1},
-                          %{room_id: r, dispatch_kind: :native}},
-                         2_000
+      # Both meetings hold their own cursor, simultaneously. Neither
+      # waited on the other.
+      row_a = await_single_row(meeting_a.id, :dispatched)
+      row_b = await_single_row(meeting_b.id, :dispatched)
 
-          r
-        end
-
-      assert Enum.sort(dispatched_rooms) == Enum.sort([room_a, room_b])
-
-      # And both rooms' queues are cleared — mark_dispatched scoped
-      # per-room ("braces" invariant: neither dispatch touched the
-      # sibling room's rows).
-      assert IntentQueue.list_for_room(room_a) == []
-      assert IntentQueue.list_for_room(room_b) == []
+      assert IntentQueue.cursor(meeting_a.id) == row_a.id
+      assert IntentQueue.cursor(meeting_b.id) == row_b.id
+      refute row_a.id == row_b.id
     end
   end
 end

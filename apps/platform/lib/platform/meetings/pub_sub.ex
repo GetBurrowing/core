@@ -25,12 +25,18 @@ defmodule Platform.Meetings.PubSub do
       as `meeting:finished`: publish on BOTH the canonical topic AND
       `"meeting:transcript_chunk:{room_id}"` so the classifier can
       subscribe once while per-room consumers stay narrow.
-    * `"meeting:intent_enqueued"` — canonical broadcast surface for
-      newly-enqueued classifier intents. The Meeting Producer's
-      dispatcher (task 019f2452 stage 2) subscribes to this so it
-      doesn't have to poll — enqueue → notify → claim in one PubSub
-      hop. Only fires on the `:inserted` path (dedupe hits don't
-      re-notify — that would spam the dispatcher for no-op writes).
+    * `"meeting:intent_enqueued"` — the dispatcher's drain wake-up.
+      Fires when a meeting has work to send: a new row was inserted,
+      or the serial cursor was released (task 019f70b8 stage 3).
+      Dedupe hits don't re-notify — that would spam the dispatcher for
+      no-op writes.
+    * `"meeting:{meeting_id}:intents"` — per-meeting intent-queue event
+      stream (task 019f70b8 stage 2). Every state transition on a
+      `Platform.Meetings.IntentQueue.Server` row publishes here so the
+      live-tuning UI can render the queue without polling. Eight event
+      kinds cover the nine row statuses (`:cancelled` and
+      `:cancelled_late` share `:intent_cancelled` — the payload's
+      `:status` field disambiguates).
 
   ## Events
 
@@ -46,7 +52,15 @@ defmodule Platform.Meetings.PubSub do
   | `meeting:finished:{room_id}`              | `{:meeting_finished, payload}`           | `%{transcript_id: id, room_id: id, space_id: id}`                           |
   | `meeting:transcript_chunk`                | `{:transcript_chunk, payload}`           | `%{room_id: id, transcript_id: id, segment: map(), meeting_id: id \\| nil}` |
   | `meeting:transcript_chunk:{room_id}`      | `{:transcript_chunk, payload}`           | `%{room_id: id, transcript_id: id, segment: map(), meeting_id: id \\| nil}` |
-  | `meeting:intent_enqueued`                 | `{:intent_enqueued, payload}`            | `%{room_id: id, dedupe_key: binary()}`                                      |
+  | `meeting:intent_enqueued`                 | `{:intent_enqueued, payload}`            | `%{meeting_id: id, room_id: id \\| nil}`                                    |
+  | `meeting:{meeting_id}:intents`            | `{:intent_classified, row}`              | intent-queue row map (see `IntentQueue.Server`)                             |
+  | `meeting:{meeting_id}:intents`            | `{:intent_dispatched, row}`              | intent-queue row map                                                        |
+  | `meeting:{meeting_id}:intents`            | `{:intent_acked, row}`                   | intent-queue row map                                                        |
+  | `meeting:{meeting_id}:intents`            | `{:intent_completed, row}`               | intent-queue row map                                                        |
+  | `meeting:{meeting_id}:intents`            | `{:intent_cancelled, row}`               | intent-queue row map (`:cancelled` OR `:cancelled_late`)                    |
+  | `meeting:{meeting_id}:intents`            | `{:intent_timed_out, row}`               | intent-queue row map                                                        |
+  | `meeting:{meeting_id}:intents`            | `{:intent_dispatch_failed, row}`         | intent-queue row map                                                        |
+  | `meeting:{meeting_id}:intents`            | `{:intent_no_ack_spawn_failed, row}`     | intent-queue row map                                                        |
   """
 
   @pubsub Platform.PubSub
@@ -107,16 +121,31 @@ defmodule Platform.Meetings.PubSub do
     do: "meeting:transcript_chunk:#{room_id}"
 
   @doc """
-  Returns the canonical "any intent enqueued" topic. Subscribed to by
-  the Meeting Producer's IntentDispatcher (task 019f2452 stage 2) so a
-  single subscription catches every newly-inserted classifier intent
-  across every active room. Phoenix.PubSub has no wildcard match, so
-  we publish once on this global topic — there is deliberately NO
-  per-room mirror because the dispatcher is a global singleton with
-  no per-room subscribers.
+  Returns the canonical "some meeting has work to send" topic.
+  Subscribed to by the Meeting Producer's IntentDispatcher so a single
+  subscription catches every drain wake-up across every active
+  meeting. Phoenix.PubSub has no wildcard match, so we publish once on
+  this global topic — there is deliberately NO per-meeting mirror
+  because the dispatcher is a global singleton with no per-meeting
+  subscribers.
   """
   @spec intent_enqueued_topic() :: String.t()
   def intent_enqueued_topic, do: "meeting:intent_enqueued"
+
+  @doc """
+  Returns the per-meeting intent-queue event topic (task 019f70b8
+  stage 2).
+
+  Deliberately per-MEETING, not per-room: the queue owner
+  (`Platform.Meetings.IntentQueue.Server`) is Registry-keyed by
+  meeting_id, and the live-tuning UI is mounted inside a meeting. A
+  room can outlive / precede the `Meeting` row, so keying the topic on
+  room_id would leave the UI subscribed to a topic the queue never
+  publishes on.
+  """
+  @spec intents_topic(binary()) :: String.t()
+  def intents_topic(meeting_id) when is_binary(meeting_id),
+    do: "meeting:#{meeting_id}:intents"
 
   # ── Subscribe ────────────────────────────────────────────────────────────────
 
@@ -178,12 +207,28 @@ defmodule Platform.Meetings.PubSub do
 
   @doc """
   Subscribe to the canonical `meeting:intent_enqueued` topic. The
-  Meeting Producer's IntentDispatcher uses this to react to every
-  newly-inserted classifier intent without polling.
+  Meeting Producer's IntentDispatcher uses this to drain a meeting's
+  queue the moment it has something to send, without polling.
   """
   @spec subscribe_intent_enqueued() :: :ok | {:error, term()}
   def subscribe_intent_enqueued do
     Phoenix.PubSub.subscribe(@pubsub, intent_enqueued_topic())
+  end
+
+  @doc """
+  Subscribe to a single meeting's intent-queue event stream. Used by
+  the MeetingLive intents panel (stage 7) and by tests that need a
+  transition collector.
+  """
+  @spec subscribe_intents(binary()) :: :ok | {:error, term()}
+  def subscribe_intents(meeting_id) when is_binary(meeting_id) do
+    Phoenix.PubSub.subscribe(@pubsub, intents_topic(meeting_id))
+  end
+
+  @doc "Unsubscribe from a meeting's intent-queue event stream."
+  @spec unsubscribe_intents(binary()) :: :ok
+  def unsubscribe_intents(meeting_id) when is_binary(meeting_id) do
+    Phoenix.PubSub.unsubscribe(@pubsub, intents_topic(meeting_id))
   end
 
   @doc "Unsubscribe from a user's meeting events."
@@ -328,19 +373,89 @@ defmodule Platform.Meetings.PubSub do
 
   @doc """
   Broadcast an `:intent_enqueued` event on the canonical
-  `meeting:intent_enqueued` topic.
+  `meeting:intent_enqueued` topic. This is the dispatcher's **drain
+  wake-up**, not a queue-content event — the per-meeting
+  `meeting:<id>:intents` topic is where row transitions live.
 
-  `payload` should carry at least `:room_id` and `:dedupe_key` so the
-  dispatcher can claim the exact new row via `IntentQueue.claim_one/2`
-  (added stage 2) without re-scanning the whole table.
+  `payload` carries `:meeting_id` (required — it is the key the
+  dispatcher drains by) and `:room_id` when known.
 
-  Only fires on the `:inserted` result path from
-  `Platform.Meetings.IntentQueue.enqueue/3` — dedupe hits do NOT
-  re-broadcast, because re-notifying for a no-op write would spam the
-  dispatcher.
+  Fired by `Platform.Meetings.IntentQueue.Server` on two occasions:
+
+    * a new row was inserted (dedupe hits do NOT re-broadcast —
+      re-notifying for a no-op write would spam the dispatcher), and
+    * the serial cursor was released, meaning the meeting may now send
+      its next intent.
+
+  Before task 019f70b8 this carried `%{room_id, dedupe_key}` so the
+  dispatcher could claim one row out of a global table. The table is
+  gone; the meeting is the unit.
   """
   @spec broadcast_intent_enqueued(map()) :: :ok
   def broadcast_intent_enqueued(payload) when is_map(payload) do
     Phoenix.PubSub.broadcast(@pubsub, intent_enqueued_topic(), {:intent_enqueued, payload})
+  end
+
+  # ── Per-meeting intent-queue transitions (task 019f70b8 stage 2) ─────────────
+  #
+  # Eight helpers for nine statuses. `:cancelled` and `:cancelled_late`
+  # deliberately share `broadcast_intent_cancelled/2` — both mean "the
+  # producer pulled this row"; the payload's `:status` distinguishes
+  # "we stopped it in time" from "it had already completed". Every
+  # other status gets its own event because the UI renders them
+  # differently: notably `:timed_out` (amber — "we waited and got
+  # nothing") must stay visually distinct from `:dispatch_failed` /
+  # `:no_ack_spawn_failed` (red — "something is broken"), which is why
+  # they are three separate events rather than one `:intent_failed`.
+  #
+  # Payload is always the FULL intent row map, so a subscriber can
+  # render without a follow-up read into the queue server.
+
+  @doc "Broadcast a newly-classified (`:queued`) intent row."
+  @spec broadcast_intent_classified(binary(), map()) :: :ok
+  def broadcast_intent_classified(meeting_id, intent),
+    do: broadcast_intent_event(meeting_id, :intent_classified, intent)
+
+  @doc "Broadcast an intent row that just moved to `:dispatched`."
+  @spec broadcast_intent_dispatched(binary(), map()) :: :ok
+  def broadcast_intent_dispatched(meeting_id, intent),
+    do: broadcast_intent_event(meeting_id, :intent_dispatched, intent)
+
+  @doc "Broadcast an intent row that just moved to `:acked`."
+  @spec broadcast_intent_acked(binary(), map()) :: :ok
+  def broadcast_intent_acked(meeting_id, intent),
+    do: broadcast_intent_event(meeting_id, :intent_acked, intent)
+
+  @doc "Broadcast an intent row that just moved to `:completed`."
+  @spec broadcast_intent_completed(binary(), map()) :: :ok
+  def broadcast_intent_completed(meeting_id, intent),
+    do: broadcast_intent_event(meeting_id, :intent_completed, intent)
+
+  @doc """
+  Broadcast an intent row that just moved to `:cancelled` OR
+  `:cancelled_late`. Read `intent.status` to tell them apart.
+  """
+  @spec broadcast_intent_cancelled(binary(), map()) :: :ok
+  def broadcast_intent_cancelled(meeting_id, intent),
+    do: broadcast_intent_event(meeting_id, :intent_cancelled, intent)
+
+  @doc "Broadcast an intent row that just moved to `:timed_out`."
+  @spec broadcast_intent_timed_out(binary(), map()) :: :ok
+  def broadcast_intent_timed_out(meeting_id, intent),
+    do: broadcast_intent_event(meeting_id, :intent_timed_out, intent)
+
+  @doc "Broadcast an intent row that just moved to `:dispatch_failed`."
+  @spec broadcast_intent_dispatch_failed(binary(), map()) :: :ok
+  def broadcast_intent_dispatch_failed(meeting_id, intent),
+    do: broadcast_intent_event(meeting_id, :intent_dispatch_failed, intent)
+
+  @doc "Broadcast an intent row that just moved to `:no_ack_spawn_failed`."
+  @spec broadcast_intent_no_ack_spawn_failed(binary(), map()) :: :ok
+  def broadcast_intent_no_ack_spawn_failed(meeting_id, intent),
+    do: broadcast_intent_event(meeting_id, :intent_no_ack_spawn_failed, intent)
+
+  defp broadcast_intent_event(meeting_id, event, intent)
+       when is_binary(meeting_id) and is_atom(event) and is_map(intent) do
+    Phoenix.PubSub.broadcast(@pubsub, intents_topic(meeting_id), {event, intent})
   end
 end

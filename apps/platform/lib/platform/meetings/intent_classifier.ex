@@ -44,17 +44,18 @@ defmodule Platform.Meetings.IntentClassifier do
        and drop the chunk.
     4. Compute a `sha256(intent <> target_role <> chunk_text)`
        dedupe key. That IS the idempotence semantic: two classifier
-       passes over the same chunk collapse via `:ets.insert_new/2`
-       returning `false` inside `IntentQueue.enqueue/3`.
-    5. Enqueue via `Platform.Meetings.IntentQueue.enqueue/3` and emit
-       the terminal
+       passes over the same chunk collapse against the owning queue's
+       `dedupe_key -> intent_id` index.
+    5. Enqueue via `Platform.Meetings.IntentQueue.enqueue/2` — keyed by
+       MEETING, not room (task 019f70b8) — and emit the terminal
        `[:platform, :meetings, :intent_classified]` telemetry event
-       with `:inserted | :duplicate` derived from the enqueue return.
+       with `:inserted | :duplicate | :no_meeting | :queue_unavailable`
+       derived from the enqueue return.
 
   Design choices baked in:
 
-    * Classifier does NOT track dispatched state — the dispatcher
-      (out of scope for this task) pops-and-forgets from ETS.
+    * Classifier does NOT track dispatched state — the queue owns the
+      status enum and the dispatcher drives it.
     * Confidence threshold is NOT enforced here — the dispatcher
       filters. Everything the model emits lands in the queue so
       downstream analytics can compare accepted-vs-dropped rates.
@@ -73,6 +74,7 @@ defmodule Platform.Meetings.IntentClassifier do
 
   require Logger
 
+  alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Orchestration.PromptTemplates
@@ -81,6 +83,13 @@ defmodule Platform.Meetings.IntentClassifier do
   @responsibility_key "meetings.intent_classify"
   @prompt_slug "meetings.intent_classify.v1"
   @default_context_window_size 3
+
+  # Few-shot exemplar window (task 019f70b8 stage 6, AC16). Bounded so
+  # the prompt cannot grow without limit as an org accumulates
+  # corrections; overridable per-instance via the
+  # `:correction_exemplar_limit` opt or globally via
+  # `:intent_classifier_correction_exemplar_limit`.
+  @default_correction_exemplar_limit 10
 
   # Fallback prompt used when the DB row for @prompt_slug hasn't been
   # seeded yet (upstream task 019f2451-b627 owns seeding). Keeps the
@@ -93,12 +102,22 @@ defmodule Platform.Meetings.IntentClassifier do
   # against the immediately-preceding chunks. Both `transcript_chunk`
   # (legacy) and `meeting_transcript_chunk` (DB template variable) are
   # rendered from the same value so the fallback matches the DB shape.
+  #
+  # Task 019f70b8 stage 6 adds `{{correction_exemplars}}` — the org's
+  # accumulated few-shot corrections (AC16). It is carried here as well
+  # as in the DB template so the fallback and the real prompt keep the
+  # same variable set; a marker present in one and absent from the other
+  # is how a rollout gap turns into a silently untuned classifier.
   @fallback_intent_prompt """
   You are a meeting intent classifier. Given a transcript chunk, classify the intent and identify the target role.
   Respond ONLY with a JSON object matching this schema:
   {"intent": "<string>", "target_role": "<string>", "confidence": <float 0-1>}
 
   Room: {{room_id}}
+
+  Prior producer corrections from this org — the meeting producer previously overrode the classifier on these utterances. Treat them as ground truth for this org's vocabulary.
+
+  {{correction_exemplars}}
 
   Prior conversation context — DO NOT classify these lines; use only to resolve pronouns, subjects, and topical intent for the CURRENT utterance.
 
@@ -141,12 +160,24 @@ defmodule Platform.Meetings.IntentClassifier do
         )
       )
 
+    correction_exemplar_limit =
+      Keyword.get(
+        opts,
+        :correction_exemplar_limit,
+        Application.get_env(
+          :platform,
+          :intent_classifier_correction_exemplar_limit,
+          @default_correction_exemplar_limit
+        )
+      )
+
     {:ok,
      %{
        seen_rooms: MapSet.new(),
        provider_module: provider_module,
        recent_chunks: %{},
-       context_window_size: context_window_size
+       context_window_size: context_window_size,
+       correction_exemplar_limit: correction_exemplar_limit
      }}
   end
 
@@ -295,27 +326,35 @@ defmodule Platform.Meetings.IntentClassifier do
     segment = Map.get(payload, :segment) || %{}
     chunk_text = segment_text(segment)
 
-    prompt = resolve_prompt(payload, segment, chunk_text, room_id, prior_chunks)
+    prompt =
+      resolve_prompt(
+        payload,
+        segment,
+        chunk_text,
+        room_id,
+        prior_chunks,
+        correction_exemplars(payload, state)
+      )
 
     case call_provider(state.provider_module, agent, prompt, chunk_text, room_id) do
       {:ok, content} ->
         case parse_content(content, room_id) do
           {:ok, %{intent: intent, target_role: target_role, confidence: confidence}} ->
             dedupe_key = build_dedupe_key(intent, target_role, chunk_text)
+            chunk_id = Map.get(segment, :id) || Map.get(payload, :transcript_id)
+            meeting_id = Map.get(payload, :meeting_id)
 
-            {:ok, enqueue_result} =
-              IntentQueue.enqueue(
-                room_id,
-                dedupe_key,
-                %{
-                  intent: intent,
-                  target_role: target_role,
-                  confidence: confidence,
-                  chunk_id: Map.get(segment, :id) || Map.get(payload, :transcript_id),
-                  meeting_id: Map.get(payload, :meeting_id),
-                  inserted_at_monotonic: System.monotonic_time()
-                }
-              )
+            enqueue_result =
+              enqueue_meeting_intent(%{
+                meeting_id: meeting_id,
+                room_id: room_id,
+                dedupe_key: dedupe_key,
+                intent: intent,
+                target_role: target_role,
+                confidence: confidence,
+                chunk_id: chunk_id,
+                chunk_text: chunk_text
+              })
 
             :telemetry.execute(
               [:platform, :meetings, :intent_classified],
@@ -342,9 +381,130 @@ defmodule Platform.Meetings.IntentClassifier do
     end
   end
 
+  # ── Per-meeting queue write (task 019f70b8 stage 2) ───────────────────────
+
+  # Excerpt cap for `chunk_excerpt`. 280 chars is enough for the
+  # collapse-bar row and the expanded table to show what was actually
+  # said without carrying a whole transcript segment into a
+  # meeting-lifetime ETS row (and, in stage 6, into a durable
+  # correction row).
+  @chunk_excerpt_limit 280
+
+  # Write the intent into the per-meeting queue the dispatcher drains
+  # and the live-tuning UI renders (`Platform.Meetings.IntentQueue`).
+  #
+  # As of task 019f70b8 stage 3 this is the ONLY enqueue path — the
+  # legacy room-keyed global queue and this function's dual-write
+  # partner are both deleted.
+  #
+  # Returns the classification outcome used as the
+  # `dedupe_key_hit_or_new` telemetry tag:
+  #
+  #   * `:inserted`   — new row
+  #   * `:duplicate`  — dedupe_key already had one; nothing written
+  #   * `:no_meeting` — the room has no linked `Meeting` row, so there
+  #     is no per-meeting queue to write into. Logged, not silently
+  #     swallowed: this is a real gap in room↔meeting linkage and it
+  #     should be visible in the classifier's telemetry stream.
+  #   * `:queue_unavailable` — the queue owner died or could not start.
+  defp enqueue_meeting_intent(%{meeting_id: meeting_id} = args) when is_binary(meeting_id) do
+    {agent_id, agent_slug} = resolve_target_agent(args.target_role)
+
+    result =
+      IntentQueue.enqueue(meeting_id, %{
+        room_id: args.room_id,
+        dedupe_key: args.dedupe_key,
+        classified_intent: args.intent,
+        target_role: args.target_role,
+        target_agent_id: agent_id,
+        target_agent_slug: agent_slug,
+        confidence: args.confidence,
+        transcript_chunk_id: args.chunk_id,
+        chunk_excerpt: excerpt(args.chunk_text)
+      })
+
+    case result do
+      {:ok, _row} -> :inserted
+      {:duplicate, _row} -> :duplicate
+      {:error, _reason} -> :queue_unavailable
+    end
+  rescue
+    # A crash here must never take down the classifier's transcript
+    # subscription — supervisor not booted in a bare test, server dying
+    # mid-call — so every failure degrades to "no row in the strip".
+    error ->
+      Logger.warning(
+        "[IntentClassifier] per-meeting enqueue failed meeting_id=#{meeting_id} " <>
+          "error=#{Exception.message(error)}"
+      )
+
+      :queue_unavailable
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[IntentClassifier] per-meeting enqueue exited meeting_id=#{meeting_id} " <>
+          "reason=#{inspect(reason)}"
+      )
+
+      :queue_unavailable
+  end
+
+  defp enqueue_meeting_intent(args) do
+    Logger.info(
+      "[IntentClassifier] classified intent has no meeting_id — no per-meeting queue to " <>
+        "write into room=#{inspect(Map.get(args, :room_id))} " <>
+        "intent=#{inspect(Map.get(args, :intent))}"
+    )
+
+    :no_meeting
+  end
+
+  # Resolve `target_role` to the agent currently assigned to it.
+  #
+  # `Platform.Roles.agent_id_for_role/1` is guarded `when is_binary(role_key)`
+  # — an atom role raises FunctionClauseError — so stringify first.
+  #
+  # Resolution is NON-FATAL by design: an unassigned role still enqueues
+  # as `:queued` with a nil target and fails visibly at dispatch as
+  # `:dispatch_failed`. Silently dropping the intent would hide exactly
+  # the tuning signal this queue exists to surface.
+  defp resolve_target_agent(nil), do: {nil, nil}
+
+  defp resolve_target_agent(target_role) do
+    case Roles.agent_id_for_role(to_string(target_role)) do
+      nil -> {nil, nil}
+      agent_id -> {agent_id, agent_slug(agent_id)}
+    end
+  rescue
+    # Off-sandbox lookups (dispatch tasks in DataCase tests) and role
+    # rows racing an agent delete both surface here.
+    _ -> {nil, nil}
+  end
+
+  defp agent_slug(agent_id) do
+    case Platform.Repo.get(Platform.Agents.Agent, agent_id) do
+      %{slug: slug} -> slug
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp excerpt(nil), do: nil
+
+  defp excerpt(text) when is_binary(text) do
+    if String.length(text) > @chunk_excerpt_limit do
+      String.slice(text, 0, @chunk_excerpt_limit)
+    else
+      text
+    end
+  end
+
+  defp excerpt(other), do: excerpt(to_string(other))
+
   # ── Prompt resolution ─────────────────────────────────────────────────────
 
-  defp resolve_prompt(payload, segment, chunk_text, room_id, prior_chunks) do
+  defp resolve_prompt(payload, segment, chunk_text, room_id, prior_chunks, correction_exemplars) do
     assigns = %{
       # Stage 2: DB template uses `{{meeting_transcript_chunk}}`; keep
       # the legacy `{{transcript_chunk}}` marker rendering the same
@@ -355,7 +515,8 @@ defmodule Platform.Meetings.IntentClassifier do
       speaker: segment_speaker(segment, payload),
       room_id: room_id,
       context_lines: format_context_lines(prior_chunks),
-      context_present: prior_chunks != []
+      context_present: prior_chunks != [],
+      correction_exemplars: correction_exemplars
     }
 
     case PromptTemplates.render_template(@prompt_slug, assigns) do
@@ -395,6 +556,61 @@ defmodule Platform.Meetings.IntentClassifier do
   # Buffer entries arrive newest-first (push_chunk_into_buffer/3
   # prepends); reverse before formatting so the LLM sees the
   # conversation in the direction it happened.
+  # ── Few-shot correction exemplars (task 019f70b8 stage 6, AC16) ───────────
+
+  # Fetch this org's most-recent corrections once per chunk and render
+  # them for the prompt.
+  #
+  # Failure is NEVER fatal and never changes the prompt's SHAPE: any
+  # error — no meeting_id on the payload, an unresolvable meeting, the
+  # corpus query blowing up — degrades to the same
+  # `(no prior corrections)` sentinel the empty case produces. A
+  # classification must not be dropped because the tuning corpus was
+  # briefly unreadable, and a prompt whose variable list changes when
+  # the DB hiccups is a prompt nobody can reason about.
+  defp correction_exemplars(payload, state) do
+    limit = Map.get(state, :correction_exemplar_limit, @default_correction_exemplar_limit)
+
+    payload
+    |> Map.get(:meeting_id)
+    |> IntentCorrections.exemplars_for_meeting(limit)
+    |> format_correction_exemplars()
+  rescue
+    error ->
+      Logger.warning(
+        "[IntentClassifier] correction exemplar lookup failed — classifying without them " <>
+          "error=#{Exception.message(error)}"
+      )
+
+      format_correction_exemplars([])
+  end
+
+  # Rendered oldest-first, mirroring `format_context_lines/1`, so the
+  # MOST RECENT correction sits closest to the utterance being
+  # classified — the strongest position in the prompt, and the one an
+  # org's freshest vocabulary shift should occupy.
+  defp format_correction_exemplars([]), do: "(no prior corrections)"
+
+  defp format_correction_exemplars(exemplars) when is_list(exemplars) do
+    exemplars
+    |> Enum.reverse()
+    |> Enum.map_join("\n", &format_correction_exemplar/1)
+  end
+
+  defp format_correction_exemplar(exemplar) do
+    [~s(- utterance: "#{exemplar.transcript_chunk_excerpt || ""}")]
+    |> append_line("  classified as: #{exemplar.classified_intent}")
+    |> append_line("  producer verdict: #{exemplar.correction} (#{exemplar.reason})")
+    |> maybe_append_line(exemplar.corrected_intent, &"  should have been: #{&1}")
+    |> maybe_append_line(exemplar.dispatch_outcome, &"  outcome when corrected: #{&1}")
+    |> Enum.join("\n")
+  end
+
+  defp append_line(lines, line), do: lines ++ [line]
+
+  defp maybe_append_line(lines, nil, _formatter), do: lines
+  defp maybe_append_line(lines, value, formatter), do: lines ++ [formatter.(value)]
+
   defp format_context_lines([]), do: "(no prior context)"
 
   defp format_context_lines(prior_chunks) when is_list(prior_chunks) do

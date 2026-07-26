@@ -1075,6 +1075,114 @@ defmodule Platform.Orchestration.PromptTemplates do
         """
       },
       %{
+        slug: "dispatch.intent_attention",
+        name: "Intent Attention Prompt (meeting intent queue → target runtime)",
+        description:
+          "Sent to a classified target's runtime when a per-meeting intent queue " <>
+            "dispatches one live transcript intent (task 019f70b8). Makes the " <>
+            "spawn-before-ack ordering non-optional: the runtime spawns a subagent, " <>
+            "acks with its id via `intent_ack`, and honours an `intent_cancelled` " <>
+            "event addressed to that same subagent.",
+        variables: [
+          "federation_preamble",
+          "intent_id",
+          "meeting_id",
+          "transcript_chunk_excerpt",
+          "classified_intent",
+          "target_rationale",
+          "execution_space_id",
+          "skills_reference"
+        ],
+        content: """
+        {{federation_preamble}}
+
+        ## Signal context
+
+        You are the runtime a Meeting Producer routed one live transcript chunk to. The signal arrived as a `meeting_intent_dispatch` attention broadcast on your own `runtime:<runtime_id>` topic — the same topic you already receive task dispatches on. There is nothing new to subscribe to.
+
+        The meeting's intent queue is **serial and ack-gated**: it holds at most ONE intent per meeting in flight, and the next classified intent does not reach anybody until this one lands a terminal status. Everything behind you is waiting on your ack.
+
+        The signal names the identifiers you need:
+
+        - `intent_id`: `{{intent_id}}` — the handle for every `intent_ack` call below. It resolves the owning meeting for you, so there is no separate meeting argument on the ack.
+        - `meeting_id`: `{{meeting_id}}` — the live meeting this chunk came from. The queue is meeting-lifetime: when the meeting ends the queue and this intent are gone, and a late ack returns `{:error, :not_found}`.
+        - `transcript_chunk_excerpt`: `{{transcript_chunk_excerpt}}` — the verbatim words that produced this intent. This is the only ground truth about what was actually said.
+        - `classified_intent`: `{{classified_intent}}` — the classifier's label for those words. It is a small fast model's guess, not an instruction.
+        - `target_rationale`: `{{target_rationale}}` — why the classifier routed this to you rather than to somebody else.
+        - `execution_space_id`: `{{execution_space_id}}` — where progress commentary and any error surfacing goes.
+
+        ## Ack contract
+
+        **Your first tool call after spawning the subagent must be `intent_ack(intent_id="<...>", subagent_id="<the id returned when you spawned the subagent>", status: :working)`.**
+        Spawn the subagent FIRST, then include its returned agent id in the ack. Empty or missing subagent_id will fail validation.
+
+        For this dispatch `intent_id` is `{{intent_id}}`.
+
+        **Where `subagent_id` comes from depends on your runtime — this is the only place runtime types differ.** Claude Code runtimes pass the Agent-tool `agentId` returned by the spawn call (e.g. `afd767f1e0cc81633`); openclaw runtimes pass the runtime slug of the spawned worker (e.g. `higgins.moon`). Same field, same requirement, different provenance. Every other clause in this template is identical for every runtime.
+
+        The id must identify the ACTUAL subagent doing the work. A cancellation is addressed to it BY NAME (see the Cancellation section below), so a placeholder, a stale handle, or your own runtime id sends the stop signal to the wrong process.
+
+        Four ack statuses, and exactly one of them does NOT advance the queue:
+
+        - `working` — subagent spawned, work underway. **Does NOT advance the queue.** Send it immediately after the spawn.
+        - `completed` — the work finished. Advances.
+        - `rejected` — this intent is not yours, or is not actionable. Advances, and records a `wrong_target` correction that tunes future classification. An honest early `rejected` is a GOOD outcome: it unblocks the meeting and improves targeting. Guessing at work that is not yours is the bad outcome.
+        - `cancel_honored` — you received an `intent_cancelled` event and stopped the subagent. Advances.
+
+        An `intent_ack` whose `subagent_id` is missing, empty, or over 128 bytes is rejected by the schema and leaves the queue row COMPLETELY untouched — a schema-rejected ack is never a partial ack. Those rejected attempts ARE counted: if the intent then times out it is reported as `no_ack_spawn_failed` (you tried and could not spawn) rather than `timed_out` (nothing came back at all). Do not paper over a failed spawn with a fabricated id — `no_ack_spawn_failed` is precisely the signal that tells the producer your runtime's spawn path is broken.
+
+        If no ack of any kind arrives inside the meeting's ack window (default 90s) the intent is timed out and the queue moves on without you. The window is short because a live meeting is short.
+
+        ## Deliverable steps
+
+        1. **Read the excerpt before the label.** `{{transcript_chunk_excerpt}}` is what was said; `{{classified_intent}}` is a guess about it. Where the two disagree, the excerpt wins — and the right answer is usually `rejected`.
+
+        2. **Decide whether this is yours BEFORE spawning.** If it is not, ack `rejected` with a one-line `note` saying why, and stop. You do not need a subagent to decline.
+
+        3. **Spawn the subagent.** Fresh context, briefed with the excerpt, the classified intent, `{{target_rationale}}`, and `{{meeting_id}}`. Capture the id the spawn call returns.
+
+        4. **Ack `working` immediately** — `intent_ack(intent_id="{{intent_id}}", subagent_id="<the id from step 3>", status: "working")`. This is the first tool call after the spawn, not after the work.
+
+        5. **Do the work in the subagent, not in the parent.** For the rest of this intent the parent's only jobs are relaying a cancel and acking the outcome.
+
+        6. **Ack the outcome and say so.** `intent_ack(..., status: "completed")` when the deliverable lands, and post a one-line summary into `execution_space_id` `{{execution_space_id}}` naming what changed.
+
+        Meeting-speed work is small by construction: one chunk of speech, one adjustment. If what you are being asked for is genuinely multi-stage, file it as a task instead of doing it here and say so in the ack `note`.
+
+        ## Cancellation
+
+        A producer can pull an intent after it has already gone out — that is the entire point of the live queue. When that happens you receive an `intent_cancelled` event on the SAME `runtime:<runtime_id>` topic this dispatch arrived on.
+
+        **Wire shape.** It is a channel event named `intent_cancelled` carrying a MAP payload — not an Elixir tuple. A runtime topic serialises to a websocket, so the payload is always a map. Keys:
+
+        - `intent_id` — which intent is being pulled.
+        - `meeting_id` — the meeting it belongs to.
+        - `subagent_id` — the id YOU supplied at ack time. This names which subagent to stop. It is `null` only when the cancel beat your first ack, in which case you have nothing running to stop.
+        - `reason` — one of `wrong_intent`, `wrong_target`, `not_actionable`, `other`.
+        - `corrected_intent` — a replacement intent string when the producer edited rather than deleted; `null` for a plain removal.
+        - `corrected_target_agent_id` — a replacement target agent when the producer re-routed; `null` for a plain removal.
+        - `status` — the queue status the row held at the moment the cancel was signalled.
+
+        The contract:
+
+        1. **Forward the cancel to THAT subagent** — the one named by `subagent_id`, not to every subagent you happen to be running.
+        2. **Terminate at the next tool-call boundary. Do NOT force-abort mid-tool-call.** A half-written file or a half-posted canvas is worse than three more seconds of work.
+        3. **Then reply `intent_ack(intent_id="{{intent_id}}", subagent_id="<the same id>", status: "cancel_honored")`.** The row stays in flight until you do: the queue deliberately does not assume you stopped, because an unstopped subagent marked cancelled is exactly the invisibility this queue exists to remove.
+        4. If the work had ALREADY finished when the cancel reached you, ack `cancel_honored` anyway. The queue lands that as `cancelled_late` — a recorded outcome, not a failure. Do not attempt to undo completed work.
+        5. `corrected_intent` / `corrected_target_agent_id` are informational. The producer's correction is recorded on their side; do NOT start the corrected work off the cancel event. If the corrected intent is for you, a fresh dispatch will arrive for it.
+
+        ## Failure surfacing
+
+        If the spawn itself fails, do NOT invent a `subagent_id` to satisfy the ack. Let the schema reject the attempt, post a line naming the failure into `execution_space_id` `{{execution_space_id}}`, and let the window close — `no_ack_spawn_failed` is the honest status and it is what tells the producer this target is unreliable.
+
+        If something raises after the subagent is running, ack `completed` ONLY if the deliverable actually landed. Otherwise post the failing step into `{{execution_space_id}}` and ack `rejected` with the reason in the `note`. A false `completed` is invisible, and invisible failure is what this queue exists to remove.
+
+        Never leave an intent unacked to "see if it resolves". The whole meeting's queue is behind it.
+
+        {{skills_reference}}
+        """
+      },
+      %{
         slug: "dispatch.fallback",
         name: "Fallback Dispatch Prompt",
         description:

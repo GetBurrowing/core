@@ -415,6 +415,106 @@ defmodule Platform.Federation do
     )
   end
 
+  @doc """
+  Dispatch a meeting-intent attention signal to the given agent's linked runtime.
+
+  The third parallel of `dispatch_scribe_attention/2` and
+  `dispatch_triage_attention/2` — same `Repo.get(Agent, agent_id) ->
+  get_runtime_for_agent/1 -> broadcast on `runtime:<runtime_id>`` chain,
+  same always-`:ok` contract, its own telemetry event name so a
+  meeting-producer dispatch failure is greppable on its own. Called from
+  `Platform.Meetings.IntentRuntimeAdapter.send_attention/2` once a
+  classified intent has been claimed by the per-meeting queue's serial
+  cursor and marked `:dispatched`.
+
+  Note the topic is keyed by the AgentRuntime's external `runtime_id`
+  STRING, not by `agent_id` — that is the topic
+  `PlatformWeb.RuntimeChannel.join/3` matches, and the one every live
+  runtime is already subscribed to.
+
+  Progressive-enhancement contract: this function always returns `:ok`.
+  Every failure path (agent not found, runtime not linked, broadcast
+  error, endpoint not ready) is swallowed and reported through
+  `[:platform, :meetings, :intent_dispatch, :assignee_unresolvable]`
+  telemetry.
+
+  That is why the caller resolves the runtime FIRST, through
+  `IntentRuntimeAdapter.resolve_target/1`: the intent queue must
+  distinguish "handed to a runtime" from "there is no runtime to hand it
+  to" in order to choose between `:dispatched` and
+  `:dispatch_failed{:no_runtime}`, and this function deliberately cannot
+  tell it. A failure observed HERE — after resolution succeeded — is a
+  race or a dead endpoint, and the row's ack window resolves it as
+  `:timed_out` rather than as a red failure we cannot prove.
+  """
+  @spec dispatch_intent_attention(binary(), map()) :: :ok
+  def dispatch_intent_attention(agent_id, payload)
+      when is_binary(agent_id) and is_map(payload) do
+    case Repo.get(Agent, agent_id) do
+      nil ->
+        emit_intent_dispatch_fallback(agent_id, :agent_not_found)
+        :ok
+
+      %Agent{} = agent ->
+        case get_runtime_for_agent(agent) do
+          nil ->
+            emit_intent_dispatch_fallback(agent_id, :runtime_unresolvable)
+            :ok
+
+          %AgentRuntime{runtime_id: runtime_id} ->
+            broadcast_intent_attention(agent_id, runtime_id, payload)
+        end
+    end
+  end
+
+  defp broadcast_intent_attention(agent_id, runtime_id, payload) do
+    topic = "runtime:#{runtime_id}"
+
+    case PlatformWeb.Endpoint.broadcast(topic, "attention", %{signal: payload}) do
+      :ok ->
+        Logger.info(
+          "[Federation] dispatched meeting_intent_dispatch to #{topic} for agent #{agent_id}"
+        )
+
+        :ok
+
+      {:error, err} ->
+        emit_intent_dispatch_fallback(agent_id, :broadcast_failed, %{
+          broadcast_error: inspect(err)
+        })
+
+        :ok
+    end
+  rescue
+    error in ArgumentError ->
+      Logger.warning(
+        "[Federation] endpoint not ready while dispatching intent attention for agent #{agent_id}: #{Exception.message(error)}"
+      )
+
+      emit_intent_dispatch_fallback(agent_id, :endpoint_not_ready)
+      :ok
+  end
+
+  defp emit_intent_dispatch_fallback(agent_id, reason, extra \\ %{}) do
+    metadata =
+      Map.merge(
+        %{
+          agent_id: agent_id,
+          reason: reason,
+          actor_type: "system",
+          resource_type: "agent",
+          resource_id: agent_id
+        },
+        extra
+      )
+
+    :telemetry.execute(
+      [:platform, :meetings, :intent_dispatch, :assignee_unresolvable],
+      %{count: 1},
+      metadata
+    )
+  end
+
   @doc "List spaces an agent participates in, with the participant's attention_mode."
   def agent_spaces(%Agent{id: agent_id}) do
     from(p in Participant,

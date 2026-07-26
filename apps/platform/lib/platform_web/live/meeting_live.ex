@@ -156,21 +156,85 @@ defmodule PlatformWeb.MeetingLive do
       events. INTEGRATION POINT: sibling task 019e2474-11c1 owns the
       authoritative meeting PubSub helper; until it lands, the topic
       string is defined locally here (`meeting_topic/1`).
+    * `meeting:{id}:intents` — the per-meeting intent-queue event stream
+      (task 019f70b8 stage 7) feeding the `.intents-collapse` bar.
+    * `roles:assignments` — so a `meeting_producer` appointed mid-meeting
+      gets the (DOM-absent) intents bar without a page reload.
+
+  ## The intents-collapse bar (task 019f70b8 stage 7)
+
+  Rendered as a sibling ABOVE the embedded chat LV inside the right
+  rail, so the producer sees the queue and the discussion at once. The
+  whole strip — and the expanded table — is `:if`-gated on
+  `@intents_visible?`, which is `Platform.Roles.agent_id_for_role("meeting_producer")`
+  resolved ONCE at mount into an assign. Unassigned means **absent from
+  the DOM**, not hidden with CSS: an unfilled capability is not a denial,
+  and there is nothing to reserve layout space for.
+
+  The gate is re-checked in every mutating handler, not only in the
+  template. A `phx-click` is a client-supplied message; a template-only
+  gate would be a suggestion.
   """
   use PlatformWeb, :live_view
 
+  require Logger
+
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
   import PlatformWeb.Components.Meeting.VideoTile, only: [video_tile: 1]
+
+  import PlatformWeb.Components.Meetings.IntentsCollapse,
+    only: [intents_collapse: 1, intents_overlays: 1]
+
   import PlatformWeb.Components.Meetings.ParticipantRail, only: [participant_rail: 1]
 
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Meetings
+  alias Platform.Meetings.IntentCorrection
+  alias Platform.Meetings.IntentCorrections
+  alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
+  alias Platform.Roles
   alias Platform.Tasks
   alias PlatformWeb.ChatLive.MeetingHooks
+  alias PlatformWeb.Components.Meetings.IntentsCollapse
+
+  # The role that may see and drive the intents-collapse bar. Passed to
+  # `Platform.Roles.agent_id_for_role/1` as a STRING — that function is
+  # guarded `when is_binary(role_key)` and an atom raises
+  # FunctionClauseError.
+  @intent_producer_role "meeting_producer"
+
+  # The eight per-meeting intent-queue events. Every one carries the FULL
+  # row map, so a subscriber can render without a second lookup.
+  @intent_events [
+    :intent_classified,
+    :intent_dispatched,
+    :intent_acked,
+    :intent_completed,
+    :intent_cancelled,
+    :intent_timed_out,
+    :intent_dispatch_failed,
+    :intent_no_ack_spawn_failed
+  ]
+
+  # Events that resolve a pending cancel: the row reached a terminal
+  # state, so the "Cancelling" affordance has an answer and comes off.
+  @cancel_resolving_events [
+    :intent_completed,
+    :intent_cancelled,
+    :intent_timed_out,
+    :intent_dispatch_failed,
+    :intent_no_ack_spawn_failed
+  ]
+
+  @doc "The role key gating the intents-collapse bar."
+  def intent_producer_role, do: @intent_producer_role
+
+  @doc "The eight per-meeting intent-queue event names the LV handles."
+  def intent_events, do: @intent_events
 
   # Stage modes per ADR 0042's "Stage modes" table. Canvas is the default
   # (meetings are often artifact-driven).
@@ -213,6 +277,7 @@ defmodule PlatformWeb.MeetingLive do
       |> assign(:participant_rail_collapsed, false)
       |> assign(:chat_panel_collapsed, false)
       |> assign(:captions_visible, false)
+      |> seed_intent_assigns()
       |> assign(:meeting_slug, slug)
       |> assign(:token, token)
 
@@ -355,7 +420,28 @@ defmodule PlatformWeb.MeetingLive do
      # in tests + the MeetingCaptions JS hook. Default OFF per the task
      # spec; a viewer preference is mirrored to localStorage by the
      # MeetingCaptions JS hook and restored via `meeting_captions_hydrate`.
-     |> assign(:captions_visible, false)}
+     |> assign(:captions_visible, false)
+     # Intents-collapse bar defaults (task 019f70b8 stage 7). Seeded in
+     # BOTH mount clauses so the `:index` action and the guest surface
+     # render without a KeyError even though neither shows the bar.
+     # `handle_params/3` resolves the real values for the `:show` action.
+     |> seed_intent_assigns()}
+  end
+
+  # Defaults for the intents-collapse bar. `:intents_visible?` is false
+  # here on purpose: absent-until-proven-assigned is the safe direction
+  # for a role gate, and `handle_params/3` resolves the real answer.
+  defp seed_intent_assigns(socket) do
+    socket
+    |> assign(:intents, [])
+    |> assign(:intents_visible?, false)
+    |> assign(:intents_open, true)
+    |> assign(:intents_expanded, false)
+    |> assign(:intent_reason_picker_id, nil)
+    |> assign(:intent_edit_row, nil)
+    |> assign(:intent_pending_cancels, MapSet.new())
+    |> assign(:intent_agent_options, [])
+    |> assign(:intent_error, nil)
   end
 
   @impl true
@@ -446,6 +532,14 @@ defmodule PlatformWeb.MeetingLive do
           end
 
           Phoenix.PubSub.subscribe(Platform.PubSub, meeting_topic(meeting.id))
+
+          # Intents-collapse bar (task 019f70b8 stage 7). Subscribed
+          # unconditionally rather than behind the role gate: the gate can
+          # flip mid-meeting, and a subscription taken only at gate-open
+          # would miss every transition between the appointment and the
+          # next event. The handlers no-op when the bar is hidden.
+          MeetingsPubSub.subscribe_intents(meeting.id)
+          Roles.subscribe_assignments()
         end
 
         participants =
@@ -491,6 +585,14 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:show_guest_invite_sheet, false)
           |> assign(:guest_invite_form, blank_guest_invite_form())
           |> assign(:guest_invite_url, nil)
+          # ── Intents-collapse bar (task 019f70b8 stage 7) ──────────────
+          # Seeded from the LIVE queue keyed by this meeting's id — the
+          # same id the classifier enqueues under. `IntentQueue.list/1`
+          # returns `[]` when no owner is running, which is the correct
+          # rendering for a meeting that has produced no intents yet.
+          |> seed_intent_assigns()
+          |> assign_intents_gate()
+          |> assign(:intents, IntentQueue.list(meeting.id))
           |> MeetingHooks.attach(List.wrap(meeting.chat_space_id))
 
         # Auto-join on connected mount unless ?no_autojoin=true is set
@@ -998,6 +1100,141 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
+  # ── Intents-collapse bar events (task 019f70b8 stage 7) ──────────────────
+  #
+  # EVERY clause here re-checks `@intents_visible?` through
+  # `with_intents_gate/2`. The template gate keeps the bar out of an
+  # unassigned viewer's DOM; this keeps it out of their reach. A
+  # `phx-click` is a message from a client, and a client that no longer
+  # holds the producer role (or never did) must not be able to cancel a
+  # meeting's work by replaying one.
+
+  def handle_event("toggle_intents_collapse", _params, socket) do
+    with_intents_gate(socket, fn socket ->
+      socket
+      |> assign(:intents_open, !socket.assigns.intents_open)
+      |> assign(:intent_reason_picker_id, nil)
+    end)
+  end
+
+  def handle_event("toggle_intents_expanded", _params, socket) do
+    with_intents_gate(socket, fn socket ->
+      assign(socket, :intents_expanded, !socket.assigns.intents_expanded)
+    end)
+  end
+
+  # The X opens a reason picker rather than removing immediately. A
+  # cancel carries no reason until a human states one, and stage 6's
+  # corpus requires a reason on every row — so the reason has to be
+  # collected before the mutation, not invented after it.
+  def handle_event("intent_reason_picker_toggle", %{"intent_id" => intent_id}, socket) do
+    with_intents_gate(socket, fn socket ->
+      next = if socket.assigns.intent_reason_picker_id == intent_id, do: nil, else: intent_id
+      assign(socket, :intent_reason_picker_id, next)
+    end)
+  end
+
+  def handle_event("intent_remove", %{"intent_id" => intent_id, "reason" => reason}, socket) do
+    with_intents_gate(socket, fn socket ->
+      case {find_intent(socket, intent_id), parse_correction_reason(reason)} do
+        {nil, _} ->
+          assign(socket, :intent_reason_picker_id, nil)
+
+        {_row, :error} ->
+          socket
+          |> assign(:intent_reason_picker_id, nil)
+          |> assign(:intent_error, "Unrecognised removal reason.")
+
+        {row, {:ok, reason}} ->
+          # `dispatch_outcome` is captured from the row's status AT CLICK
+          # TIME (AC11) — the cancel below may move the row, and a
+          # correction stamped with the post-cancel status would record
+          # the producer's own action rather than where the intent had
+          # got to when they judged it wrong.
+          outcome = IntentsCollapse.dispatch_outcome(row.status)
+
+          {result, socket} = apply_intent_cancel(socket, row, reason: reason)
+
+          write_intent_correction(socket, row, %{
+            dispatch_outcome: outcome,
+            correction: :removed_no_action,
+            reason: reason
+          })
+
+          socket
+          |> assign(:intent_reason_picker_id, nil)
+          |> apply_cancel_result(row, result)
+      end
+    end)
+  end
+
+  def handle_event("intent_edit_open", %{"intent_id" => intent_id}, socket) do
+    with_intents_gate(socket, fn socket ->
+      socket
+      |> assign(:intent_edit_row, find_intent(socket, intent_id))
+      |> assign(:intent_reason_picker_id, nil)
+      |> assign(:intent_error, nil)
+    end)
+  end
+
+  def handle_event("intent_edit_close", _params, socket) do
+    with_intents_gate(socket, fn socket ->
+      socket
+      |> assign(:intent_edit_row, nil)
+      |> assign(:intent_error, nil)
+    end)
+  end
+
+  def handle_event("intent_edit_save", %{"intent_edit" => attrs}, socket) do
+    with_intents_gate(socket, fn socket ->
+      intent_id = Map.get(attrs, "intent_id")
+      corrected_intent = blank_to_nil(Map.get(attrs, "corrected_intent"))
+      corrected_target = blank_to_nil(Map.get(attrs, "corrected_target_agent_id"))
+
+      case {find_intent(socket, intent_id), parse_correction_reason(Map.get(attrs, "reason"))} do
+        {nil, _} ->
+          assign(socket, :intent_edit_row, nil)
+
+        {_row, :error} ->
+          assign(socket, :intent_error, "Unrecognised correction reason.")
+
+        {row, {:ok, reason}} ->
+          # Mirrors `IntentCorrection.changeset/2`'s one cross-field rule.
+          # Checked here too so the producer gets a message in the modal
+          # instead of a silently-dropped insert.
+          if is_nil(corrected_intent) and is_nil(corrected_target) do
+            assign(
+              socket,
+              :intent_error,
+              "Name a corrected intent or a corrected target agent."
+            )
+          else
+            outcome = IntentsCollapse.dispatch_outcome(row.status)
+
+            {result, socket} =
+              apply_intent_cancel(socket, row,
+                reason: reason,
+                corrected_intent: corrected_intent,
+                corrected_target_agent_id: corrected_target
+              )
+
+            write_intent_correction(socket, row, %{
+              dispatch_outcome: outcome,
+              correction: :corrected,
+              reason: reason,
+              corrected_intent: corrected_intent,
+              corrected_target_agent_id: corrected_target
+            })
+
+            socket
+            |> assign(:intent_edit_row, nil)
+            |> assign(:intent_error, nil)
+            |> apply_cancel_result(row, result)
+          end
+      end
+    end)
+  end
+
   # ── PubSub ───────────────────────────────────────────────────────────────
 
   # Auto-join trigger from handle_params/3. Delegates straight into
@@ -1120,6 +1357,58 @@ defmodule PlatformWeb.MeetingLive do
        |> assign(:grouped_meetings, group_meetings_by_status(meetings))}
     else
       {:noreply, socket}
+    end
+  end
+
+  # ── Intents-collapse live updates (task 019f70b8 stage 7) ────────────────
+  #
+  # MUST stay ABOVE the catch-all below — the catch-all swallows anything
+  # declared after it, silently, and a silently-swallowed queue event is
+  # exactly the invisibility this task exists to remove.
+  #
+  # All eight events carry the full row map, so the strip updates from
+  # the broadcast without a second trip to the queue server. The row is
+  # upserted by id and the list re-sorted on the server's monotonic
+  # `seq`, so an out-of-order delivery cannot reorder the bar.
+  def handle_info({event, %{id: _id, meeting_id: _meeting_id} = row}, socket)
+      when event in @intent_events do
+    if intents_for_this_meeting?(socket, row) do
+      {:noreply,
+       socket
+       |> assign(:intents, upsert_intent(socket.assigns.intents, row))
+       |> resolve_pending_cancel(event, row)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Mid-meeting role change. Re-resolves the gate and, when the bar has
+  # just become visible, seeds it from the live queue — a producer
+  # appointed at minute 20 needs the intents from minutes 0-20, not only
+  # the ones broadcast after their appointment.
+  def handle_info({:role_assignment_changed, %{role_key: @intent_producer_role}}, socket) do
+    case socket.assigns[:meeting] do
+      %{id: meeting_id} ->
+        socket = assign_intents_gate(socket)
+
+        socket =
+          if socket.assigns.intents_visible? do
+            assign(socket, :intents, IntentQueue.list(meeting_id))
+          else
+            # Gate closed under them: drop the queue contents along with
+            # the DOM so a stale render can't leak rows the viewer may no
+            # longer see.
+            socket
+            |> assign(:intents, [])
+            |> assign(:intent_edit_row, nil)
+            |> assign(:intent_reason_picker_id, nil)
+            |> assign(:intents_expanded, false)
+          end
+
+        {:noreply, socket}
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
@@ -1442,6 +1731,175 @@ defmodule PlatformWeb.MeetingLive do
   shared helper. Kept local here so this branch is independently runnable.
   """
   def meeting_topic(meeting_id), do: "meeting:#{meeting_id}"
+
+  # ── Intents-collapse helpers (task 019f70b8 stage 7) ─────────────────────
+
+  @doc """
+  Resolve the `meeting_producer` role gate into `:intents_visible?`.
+
+  Computed ONCE per mount (and again on a role-change broadcast) into an
+  assign, never called from the template: a template call would run this
+  query on every diff of every meeting render.
+
+  The role key is passed as a STRING — `Platform.Roles.agent_id_for_role/1`
+  is guarded `when is_binary(role_key)` and an atom raises
+  FunctionClauseError, which in a LiveView mount is a blank meeting.
+  """
+  def assign_intents_gate(socket) do
+    visible? = not is_nil(Roles.agent_id_for_role(@intent_producer_role))
+
+    socket
+    |> assign(:intents_visible?, visible?)
+    |> assign(:intent_agent_options, if(visible?, do: intent_agent_options(), else: []))
+  end
+
+  # Agents offered as a re-target in the correction modal. Every active
+  # agent, not only the ones already in this meeting: "you sent it to the
+  # wrong agent" is usually about an agent who ISN'T here.
+  defp intent_agent_options do
+    Chat.list_agents_for_picker()
+    |> Enum.map(&{&1.name || &1.slug, &1.id})
+  end
+
+  # Run `fun` only when the viewer holds the producer role. A hidden bar
+  # is a rendering decision; this is the authorization.
+  defp with_intents_gate(%{assigns: %{intents_visible?: true}} = socket, fun) do
+    {:noreply, fun.(socket)}
+  end
+
+  defp with_intents_gate(socket, _fun), do: {:noreply, socket}
+
+  defp find_intent(socket, intent_id) when is_binary(intent_id) do
+    Enum.find(socket.assigns.intents, &(&1.id == intent_id))
+  end
+
+  defp find_intent(_socket, _intent_id), do: nil
+
+  # Only accept a reason the corpus schema already knows. Parsing a
+  # client string with `String.to_atom/1` would let a crafted click leak
+  # arbitrary atoms into the VM, and `Ecto.Enum` would reject it one
+  # layer later anyway — with a changeset error nobody sees.
+  defp parse_correction_reason(reason) when is_binary(reason) do
+    case Enum.find(IntentCorrection.reasons(), &(Atom.to_string(&1) == reason)) do
+      nil -> :error
+      found -> {:ok, found}
+    end
+  end
+
+  defp parse_correction_reason(_), do: :error
+
+  defp blank_to_nil(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp blank_to_nil(_), do: nil
+
+  defp apply_intent_cancel(socket, row, opts) do
+    {IntentQueue.cancel(socket.assigns.meeting.id, row.id, opts), socket}
+  end
+
+  # Reconcile the strip with what `IntentQueue.cancel/3` actually did.
+  #
+  # `:cancel_requested` is the one that matters and the one the design
+  # mock predates: the row is STILL `:dispatched`/`:acked` — it moves
+  # only when the target answers `intent_ack(:cancel_honored)`. So the
+  # row stays put and joins the pending-cancel set, which renders a
+  # "Cancelling" chip and disables its controls. Optimistically showing
+  # `:cancelled` while a subagent kept working would be the exact
+  # invisibility this task removes.
+  defp apply_cancel_result(socket, row, {:ok, :deleted, _row}) do
+    assign(socket, :intents, Enum.reject(socket.assigns.intents, &(&1.id == row.id)))
+  end
+
+  defp apply_cancel_result(socket, row, {:ok, :cancel_requested, _row}) do
+    assign(
+      socket,
+      :intent_pending_cancels,
+      MapSet.put(socket.assigns.intent_pending_cancels, row.id)
+    )
+  end
+
+  defp apply_cancel_result(socket, _row, {:ok, outcome, updated})
+       when outcome in [:cancelled, :cancelled_late] do
+    assign(socket, :intents, upsert_intent(socket.assigns.intents, updated))
+  end
+
+  # A row already terminal when the click landed — the correction is
+  # still written (the classifier was still wrong), but there is nothing
+  # to cancel, so the row is simply dropped from the strip.
+  defp apply_cancel_result(socket, row, {:error, {:not_cancellable, _status}}) do
+    assign(socket, :intents, Enum.reject(socket.assigns.intents, &(&1.id == row.id)))
+  end
+
+  defp apply_cancel_result(socket, row, {:error, :not_found}) do
+    assign(socket, :intents, Enum.reject(socket.assigns.intents, &(&1.id == row.id)))
+  end
+
+  defp apply_cancel_result(socket, _row, _other), do: socket
+
+  # Stage 6 decided the X/pencil is the corrections writer:
+  # `IntentQueue.cancel/3` deliberately writes NO corpus row, so that the
+  # queue can be exercised without a table. This is the other half of
+  # that decision.
+  #
+  # `transcript_chunk_excerpt` is denormalized in because by the time
+  # anyone reads the corpus the ETS row carrying the utterance is gone
+  # with its meeting.
+  defp write_intent_correction(socket, row, attrs) do
+    base = %{
+      meeting_id: socket.assigns.meeting.id,
+      transcript_chunk_excerpt: row.chunk_excerpt,
+      classified_intent: to_string(row.classified_intent || ""),
+      classified_target_agent_id: row.target_agent_id,
+      actor_participant_id: participant_id(socket.assigns[:current_participant])
+    }
+
+    case IntentCorrections.create_correction(Map.merge(base, attrs)) do
+      {:ok, correction} ->
+        {:ok, correction}
+
+      {:error, changeset} ->
+        Logger.warning(
+          "[MeetingLive] intent correction rejected meeting_id=#{socket.assigns.meeting.id} " <>
+            "intent_id=#{row.id} errors=#{inspect(changeset.errors)}"
+        )
+
+        {:error, changeset}
+    end
+  end
+
+  defp participant_id(%{id: id}), do: id
+  defp participant_id(_), do: nil
+
+  # Replace-or-append by id, then re-sort on the queue server's
+  # monotonic `seq`. Sorting on `seq` rather than on arrival order means
+  # an out-of-order PubSub delivery cannot reorder the bar under a
+  # producer who is mid-click.
+  defp upsert_intent(intents, row) do
+    intents
+    |> Enum.reject(&(&1.id == row.id))
+    |> Kernel.++([row])
+    |> Enum.sort_by(&intent_sort_key/1)
+  end
+
+  defp intent_sort_key(%{seq: seq}) when is_integer(seq), do: seq
+  defp intent_sort_key(_), do: 0
+
+  defp intents_for_this_meeting?(%{assigns: %{meeting: %{id: id}}}, %{meeting_id: id}), do: true
+  defp intents_for_this_meeting?(_socket, _row), do: false
+
+  defp resolve_pending_cancel(socket, event, row) when event in @cancel_resolving_events do
+    assign(
+      socket,
+      :intent_pending_cancels,
+      MapSet.delete(socket.assigns.intent_pending_cancels, row.id)
+    )
+  end
+
+  defp resolve_pending_cancel(socket, _event, _row), do: socket
 
   # ── Stage-mode presentation helpers (used by the heex shell) ─────────────
 

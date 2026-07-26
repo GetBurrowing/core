@@ -771,13 +771,34 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # rows) backing `Platform.Inbox.emit/1`. M1 is the only stack member
       # that adds a migration.
       "20260723185711_create_inbox_items.exs",
+      # Task 019f70b8 (intent-queue live-tuning UI) stage 5: seeds AND
+      # force-updates the new `dispatch.intent_attention` prompt template.
+      # Both halves in one migration — the slug is new (so prod, which no
+      # longer re-runs `seed_defaults/0`, needs the insert) and the body
+      # will be iterated (so environments that already have the row need
+      # the overwrite). The queue itself stays ETS-only per
+      # `feedback_ets_for_ephemeral_state`; the only other migration this
+      # task adds is stage 6's corrections table.
+      "20260725120000_seed_and_force_update_intent_attention_template.exs",
       # Task 019f9b13 stage 4 (vault authorization audit): supersedes
       # 20260314070000's ON DELETE CASCADE on
       # `vault_access_log.credential_id` with ON DELETE SET NULL plus
       # denormalised `credential_slug` / `credential_scope_type`, so
       # revoking a credential no longer destroys the audit trail that
       # records the revocation. The only schema stage in the task.
-      "20260725220000_retain_vault_access_log_on_credential_delete.exs"
+      "20260725220000_retain_vault_access_log_on_credential_delete.exs",
+      # Task 019f70b8 stage 6: the ONE durable table this task adds —
+      # `meeting_intent_corrections`, the few-shot corpus behind the
+      # classifier tuning loop. The exception to the ETS-only rule above
+      # is deliberate: an exemplar that died with its meeting would teach
+      # nothing, so outliving the meeting IS the point.
+      "20260726000000_create_meeting_intent_corrections.exs",
+      # Task 019f70b8 stage 6: third revision of the
+      # `meetings.intent_classify.v1` body, adding the
+      # `{{correction_exemplars}}` few-shot block above the
+      # prior-conversation window (AC16). Update-only — the 20260707 seed
+      # already created the row on every migrated environment.
+      "20260726000100_update_intent_classify_prompt_with_corrections.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

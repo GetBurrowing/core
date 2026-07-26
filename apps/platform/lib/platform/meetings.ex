@@ -1905,6 +1905,37 @@ defmodule Platform.Meetings do
   # ── Segment Accumulation ───────────────────────────────────────────────────
 
   @doc """
+  The meeting a chat space is currently holding, as an id, or nil.
+
+  A space accumulates meetings over its lifetime, so "the" meeting is
+  ambiguous in general. It is not ambiguous for the caller that needs
+  it — a transcript chunk arriving now belongs to whatever meeting is
+  live now — so a `live` row wins, and we fall back to the most
+  recently started (then most recently created) row for a space whose
+  meeting has already been marked ended but whose transcript is still
+  draining.
+
+  Non-fatal by construction: a space with no meeting answers nil, and
+  the caller decides what that means.
+  """
+  @spec meeting_id_for_space(binary() | nil) :: binary() | nil
+  def meeting_id_for_space(nil), do: nil
+
+  def meeting_id_for_space(space_id) when is_binary(space_id) do
+    from(m in Meeting,
+      where: m.chat_space_id == ^space_id,
+      order_by: [
+        asc: fragment("case when ? = 'live' then 0 else 1 end", m.status),
+        desc_nulls_last: m.started_at,
+        desc: m.inserted_at
+      ],
+      limit: 1,
+      select: m.id
+    )
+    |> Repo.one()
+  end
+
+  @doc """
   Append a segment map to the transcript's JSONB segments array.
 
   Each segment should contain at minimum:
@@ -1933,17 +1964,24 @@ defmodule Platform.Meetings do
           {:ok, updated} ->
             # Fire-and-forget: publish the chunk on the canonical
             # `meeting:transcript_chunk` topic (+ per-room mirror) so
-            # the Meeting Producer's classifier can react. `meeting_id`
-            # is nil here — a `Meeting` row may not exist yet at first
-            # chunk (segments key on LiveKit `room_id` string; Meeting
-            # rows are created out-of-band). The classifier enriches.
+            # the Meeting Producer's classifier can react.
+            #
+            # `meeting_id` is resolved HERE, from the transcript's
+            # `space_id`, and is nil only when the space genuinely has
+            # no meeting. Until task 019f70b8 stage 3 this field was
+            # hardcoded nil with a comment saying the classifier would
+            # enrich it — nothing ever did, which was harmless while a
+            # room-keyed fallback queue existed. Stage 3 retired that
+            # queue and made the intent queue meeting-keyed, so a nil
+            # here now means the intent has nowhere to go.
             Platform.Meetings.PubSub.broadcast_transcript_chunk(
               updated.room_id,
               %{
                 room_id: updated.room_id,
                 transcript_id: updated.id,
+                space_id: updated.space_id,
                 segment: segment,
-                meeting_id: nil
+                meeting_id: meeting_id_for_space(updated.space_id)
               }
             )
 

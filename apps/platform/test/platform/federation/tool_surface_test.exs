@@ -49,9 +49,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   describe "tool_definitions/0" do
-    test "returns all 87 tools with required components" do
+    test "returns all 88 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 87
+      # 88 as of task 019f70b8 stage 3, which added `intent_ack` to the
+      # `task` bundle.
+      assert length(tools) == 88
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names

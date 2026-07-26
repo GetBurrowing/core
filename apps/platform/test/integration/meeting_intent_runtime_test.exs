@@ -10,13 +10,21 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
         → resolve_prompt (fallback branch — no seeded template row)
         → provider_module.chat/3  (stubbed)
         → parse_content/2
-        → IntentQueue.enqueue/3
+        → IntentQueue.enqueue/2      (per MEETING, task 019f70b8)
         → :telemetry.execute([:platform, :meetings, :intent_classified], …)
 
-  Also exercises cleanup on `:meeting_finished` broadcast — the
-  primary "belt" path where the classifier's PubSub subscriber walks
-  the ETS table and drops all rows for the finished room. Rows for
-  other rooms must survive untouched (the "braces" invariant).
+  Task 019f70b8 stage 3 made this path meeting-keyed, which put a new
+  link under test: `append_segment/2` resolves the chunk's
+  `meeting_id` from the transcript's `space_id`. Before stage 3 that
+  field was hardcoded nil and a room-keyed fallback queue absorbed the
+  consequence; now a broken space→meeting link means the intent has
+  nowhere to land, so this file drives the real chain — project →
+  meeting → chat space → transcript → segment.
+
+  Also exercises cleanup on `:meeting_finished` — the queue owner is
+  per-meeting and subscribes to the broadcast, so the finished
+  meeting's queue process (and its ETS table with it) goes away while
+  another meeting's queue survives untouched.
 
   The provider is stubbed via the `provider_module` opt on
   `start_link/1` — same seam the unit test uses
@@ -33,7 +41,7 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
         participant_identity: "you", text: "we should follow up",
         start_time: 0, end_time: 1000
       })
-      Platform.Meetings.IntentQueue.list_for_room("room-x")
+      Platform.Meetings.IntentQueue.list(meeting_id)
   """
 
   use Platform.DataCase, async: false
@@ -71,26 +79,7 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
 
   # ── Helpers ────────────────────────────────────────────────────────────────
 
-  # Test rooms used across cases — collected here so `setup` can wipe
-  # any cross-test contamination from the shared ETS table. IntentQueue
-  # is meeting-lifetime state that outlives each test's Ecto sandbox,
-  # so we sweep by room_id both before and after.
-  @rooms [
-    "room-e2e-happy",
-    "room-cleanup-target",
-    "room-untouched"
-  ]
-
   setup do
-    # Sweep ETS on both edges. IntentQueue is a `:public` `:named_table`
-    # started in `Platform.Application`'s child list, so tests share
-    # the same table — hence the belt-and-braces cleanup.
-    Enum.each(@rooms, &IntentQueue.drop_for_room/1)
-
-    on_exit(fn ->
-      Enum.each(@rooms, &IntentQueue.drop_for_room/1)
-    end)
-
     # Boot a per-test classifier so the sandbox owns the process +
     # can be shut down cleanly by `start_supervised!`. The suite-wide
     # classifier is gated off in `config/test.exs` via
@@ -121,6 +110,23 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
     end
 
     {:ok, classifier_pid: classifier_pid, classifier_name: classifier_name, agent: agent}
+  end
+
+  # A real project → meeting → chat space chain. The meeting's
+  # `chat_space_id` is what `append_segment/2` resolves the chunk's
+  # meeting_id through, so a stubbed id here would test nothing.
+  defp create_meeting!(name) do
+    {:ok, project} =
+      Platform.Tasks.create_project(%{
+        name: "#{name} project #{System.unique_integer([:positive])}",
+        repo_url: "https://github.com/test/meeting-intent-e2e"
+      })
+
+    {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: name})
+
+    on_exit(fn -> IntentQueue.stop(meeting.id) end)
+
+    meeting
   end
 
   defp create_agent!(overrides) do
@@ -175,7 +181,7 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
   # ── Test 1: chunk arrival → queue entry ───────────────────────────────────
 
   describe "chunk arrival → classifier → queue" do
-    test "append_segment/2 flows all the way to a queued IntentQueue row",
+    test "append_segment/2 flows all the way to a queued intent row",
          %{classifier_pid: classifier_pid} do
       attach_intent_classified_recorder!(:classified)
 
@@ -191,9 +197,16 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
          }}
       end)
 
-      # Real transcript row so append_segment/2 has something to
-      # update — this is what a real LiveKit-driven meeting hits.
-      {:ok, transcript} = Meetings.ensure_transcript(%{room_id: "room-e2e-happy"})
+      meeting = create_meeting!("E2E Happy Meeting")
+
+      # Real transcript row bound to the meeting's chat space — this is
+      # what a real LiveKit-driven meeting hits, and the space is the
+      # only path from a transcript back to its meeting.
+      {:ok, transcript} =
+        Meetings.ensure_transcript(%{
+          room_id: "room-e2e-happy",
+          space_id: meeting.chat_space_id
+        })
 
       {:ok, _updated} =
         Meetings.append_segment(transcript.id, %{
@@ -204,91 +217,120 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
         })
 
       # Terminal telemetry fires once the classifier finishes the
-      # prompt-render + provider-call + parse + enqueue chain.
+      # prompt-render + provider-call + parse + enqueue chain. The
+      # meeting_id in the metadata proves the space→meeting resolution
+      # happened in `append_segment/2`, not in the test.
       assert_receive {:classified, %{count: 1},
                       %{
                         room_id: "room-e2e-happy",
                         intent: "schedule_followup",
                         target_role: "scheduler",
                         confidence: 0.87,
-                        dedupe_key_hit_or_new: :inserted
+                        dedupe_key_hit_or_new: :inserted,
+                        meeting_id: meeting_id
                       }},
                      500
 
-      # And the row is observable in the queue.
-      entries = IntentQueue.list_for_room("room-e2e-happy")
+      assert meeting_id == meeting.id
+
+      # And the row is observable in the MEETING's queue.
+      entries = IntentQueue.list(meeting.id)
       assert length(entries) == 1
       [entry] = entries
-      assert entry.intent == "schedule_followup"
+      assert entry.classified_intent == "schedule_followup"
       assert entry.target_role == "scheduler"
       assert entry.confidence == 0.87
-      # `chunk_id` falls back to transcript_id when the segment lacks
-      # its own id — `append_segment/2` doesn't stamp one.
-      assert entry.chunk_id == transcript.id
+      assert entry.status == :queued
+      # `transcript_chunk_id` falls back to transcript_id when the
+      # segment lacks its own id — `append_segment/2` doesn't stamp one.
+      assert entry.transcript_chunk_id == transcript.id
+    end
+
+    test "a transcript with no meeting behind it classifies but enqueues nowhere",
+         %{classifier_pid: classifier_pid} do
+      attach_intent_classified_recorder!(:orphan)
+
+      plant_stub_fun(classifier_pid, fn _creds, _messages, _opts ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "schedule_followup",
+               "target_role" => "scheduler",
+               "confidence" => 0.5
+             })
+         }}
+      end)
+
+      # No space_id, so no meeting. This is the honest failure mode of
+      # a meeting-keyed queue, and it is reported rather than hidden.
+      {:ok, transcript} = Meetings.ensure_transcript(%{room_id: "room-e2e-orphan"})
+
+      {:ok, _} =
+        Meetings.append_segment(transcript.id, %{
+          participant_identity: "user-1",
+          text: "somebody should follow up on this",
+          start_time: 0,
+          end_time: 1000
+        })
+
+      assert_receive {:orphan, %{count: 1},
+                      %{meeting_id: nil, dedupe_key_hit_or_new: :no_meeting}},
+                     500
     end
   end
 
   # ── Test 2: cleanup on meeting:finished ───────────────────────────────────
 
   describe "meeting:finished broadcast cleanup" do
-    test "drops all rows for the finished room, leaves other rooms alone" do
-      now = System.monotonic_time()
+    test "the finished meeting's queue dies, another meeting's survives" do
+      target = create_meeting!("E2E Cleanup Target")
+      untouched = create_meeting!("E2E Untouched")
 
-      # Pre-populate three entries under the target room with distinct
-      # dedupe_keys so `:ets.insert_new/2` accepts all three.
+      {:ok, _} = IntentQueue.ensure_started(target.id, room_id: "room-cleanup-target")
+      {:ok, _} = IntentQueue.ensure_started(untouched.id, room_id: "room-untouched")
+
       Enum.each(1..3, fn n ->
-        {:ok, :inserted} =
-          IntentQueue.enqueue(
-            "room-cleanup-target",
-            "dedupe-#{n}",
-            %{
-              intent: "schedule_followup",
-              target_role: "scheduler",
-              confidence: 0.5,
-              chunk_id: "chunk-#{n}",
-              meeting_id: nil,
-              inserted_at_monotonic: now
-            }
-          )
+        {:ok, _row} =
+          IntentQueue.enqueue(target.id, %{
+            room_id: "room-cleanup-target",
+            dedupe_key: "dedupe-#{n}",
+            classified_intent: "schedule_followup",
+            target_role: "scheduler",
+            confidence: 0.5,
+            transcript_chunk_id: "chunk-#{n}"
+          })
       end)
 
-      # One survivor row in an unrelated room — the invariant we care
-      # about is that finish-cleanup is scoped to the finished room_id.
-      {:ok, :inserted} =
-        IntentQueue.enqueue(
-          "room-untouched",
-          "dedupe-untouched",
-          %{
-            intent: "assign_owner",
-            target_role: "scribe",
-            confidence: 0.9,
-            chunk_id: "chunk-untouched",
-            meeting_id: nil,
-            inserted_at_monotonic: now
-          }
-        )
+      {:ok, _row} =
+        IntentQueue.enqueue(untouched.id, %{
+          room_id: "room-untouched",
+          dedupe_key: "dedupe-untouched",
+          classified_intent: "assign_owner",
+          target_role: "scribe",
+          confidence: 0.9,
+          transcript_chunk_id: "chunk-untouched"
+        })
 
-      # Sanity: pre-state.
-      assert length(IntentQueue.list_for_room("room-cleanup-target")) == 3
-      assert length(IntentQueue.list_for_room("room-untouched")) == 1
+      assert length(IntentQueue.list(target.id)) == 3
+      assert length(IntentQueue.list(untouched.id)) == 1
 
-      # Broadcast the finished event. The IntentQueue GenServer is
-      # subscribed to `meeting:finished` and reacts by dropping every
-      # row keyed on `room-cleanup-target`.
+      # Each queue owner subscribes to `meeting:finished` and stops
+      # itself when the payload names its room. Cleanup is structural:
+      # the ETS table is owned by that process and dies with it, so
+      # there is no sweeper to get wrong.
       MeetingsPubSub.broadcast_meeting_finished("room-cleanup-target", %{
         transcript_id: "t1",
         room_id: "room-cleanup-target",
         space_id: "s1"
       })
 
-      # PubSub delivery is async; sync on the state change we care
-      # about (the drop). A short wait_for is more honest than
-      # `Process.sleep/1` because it exits early on success.
-      wait_for(fn -> IntentQueue.list_for_room("room-cleanup-target") == [] end, 500)
+      wait_for(fn -> not IntentQueue.running?(target.id) end, 500)
 
-      assert IntentQueue.list_for_room("room-cleanup-target") == []
-      # Braces invariant: the other room is untouched.
-      assert length(IntentQueue.list_for_room("room-untouched")) == 1
+      assert IntentQueue.list(target.id) == []
+      # Braces invariant: the other meeting is untouched.
+      assert IntentQueue.running?(untouched.id)
+      assert length(IntentQueue.list(untouched.id)) == 1
     end
   end
 

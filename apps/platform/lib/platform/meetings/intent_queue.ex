@@ -1,668 +1,326 @@
 defmodule Platform.Meetings.IntentQueue do
   @moduledoc """
-  Meeting-lifetime intent queue — ETS-backed staging area for
-  classified transcript intents awaiting downstream promotion (task
-  creation, digest inclusion, etc.).
+  Public entry point for the meeting intent queue.
 
-  Sits between the classifier (stage 3+) and the dispatcher (task
-  019f2452 stage 2 and later): the classifier pushes intents in, the
-  dispatcher claims and delegates them out. Living in ETS (not Ecto)
-  matches Rowan's standing rule for meeting-lifetime ephemeral state:
-  nothing here needs to survive a node restart — if a meeting is still
-  in progress after a bounce the transcript will re-flow and
-  re-classify.
+  A thin facade over `Platform.Meetings.IntentQueue.Server`: one
+  Registry-keyed GenServer per meeting, owning an unnamed ETS table
+  that dies with the process, rows keyed by a generated UUIDv7 so a
+  remote runtime can address one intent, a nine-value status enum whose
+  terminal rows are RETAINED so a live UI has something to render, and
+  an ack-gated serial cursor that keeps at most one intent in front of
+  a meeting's agents at a time.
 
-  ## Data shape
+  ## What this replaced
 
-  Table: `:meeting_intent_queue`, `set`, `named_table`, `public`,
-  `read_concurrency: true` — mirrors `Platform.Meetings.State` so the
-  ownership + concurrency story is identical.
+  Before task 019f70b8 the queue was ONE global GenServer owning one
+  named public ETS table `:meeting_intent_queue`, keyed
+  `{room_id, dedupe_key}`, with a two-value status (`:pending |
+  :dispatching`), an attempts/retry cap, a 30-minute sweep, and a
+  `mark_dispatched/2` that DELETED the row. Stage 2 introduced the
+  per-meeting server alongside it; **stage 3 deleted the legacy queue
+  outright**, along with its sweep, its retry cap, and the classifier's
+  dual-write. Nothing delegates to it any more — the module is gone.
 
-  Row: `{{room_id, dedupe_key}, item_map}` where `item_map` is:
+  The retry cap went with it deliberately: under the ack contract the
+  outcome of a dispatch is reported by the target (`intent_ack`) or
+  decided by the ack timeout, so "try it N more times and then give up"
+  no longer describes anything. A dispatch that fails to reach a
+  runtime is a visible `:dispatch_failed` row the producer can act on,
+  not a silent retry budget.
 
-      %{
-        intent: atom(),
-        target_role: atom() | binary() | nil,
-        confidence: float(),
-        chunk_id: binary() | nil,
-        inserted_at_monotonic: integer(),  # milliseconds
-        meeting_id: binary() | nil,
-        # Retry-aware fields added task 019f2452 stage 1:
-        status: :pending | :dispatching,
-        attempts: non_neg_integer(),
-        claimed_at_monotonic: integer() | nil,
-        last_error: binary() | nil
-      }
+  ## Meeting id is required
 
-  The composite `{room_id, dedupe_key}` key gives us natural
-  per-`(room, dedupe_key)` idempotence via `:ets.insert_new/2`: two
-  classifier passes over the same chunk that produce the same
-  dedupe_key collapse to one entry without any coordinating lock.
-
-  Legacy rows (written before the retry fields shipped) MAY be missing
-  `:status` / `:attempts`. All state-transition helpers treat a missing
-  `:status` as `:pending` and a missing `:attempts` as `0` — purely
-  additive semantics so a hot upgrade doesn't strand rows.
-
-  ## Cleanup
-
-    * Subscribes to `Platform.Meetings.PubSub.subscribe_meeting_finished/0`
-      — on `{:meeting_finished, %{room_id: id}}`, drops all rows for
-      that room. This is the primary path.
-    * Periodic sweep every 30 min as belt-and-braces: any row older
-      than 30 min (by `inserted_at_monotonic`) is deleted. Catches
-      rooms whose finished event was missed (crash between
-      `broadcast_meeting_finished` and this handler running).
-
-  ## Retry semantics
-
-  `mark_retry/3` bumps `:attempts` by one; once it reaches
-  `@max_attempts` the helper returns `{:exhausted, attempts}` and the
-  caller (typically the dispatcher) is expected to promote to
-  `mark_dropped/3` with reason `:max_attempts_exceeded`. Retry counts
-  are meeting-lifetime — a corrupt payload that fails three times in
-  seconds gets dropped, matching Rowan's ETS-ephemeral rule ("meetings
-  are short; the queue should not accumulate").
+  Every entry point is keyed by `meeting_id`. A transcript chunk from a
+  room with no linked `Meeting` row has no queue and is not enqueued —
+  the per-meeting owner is Registry-keyed by meeting_id and there is
+  nowhere for such a row to live. The classifier logs and drops it
+  rather than pretending.
   """
 
-  use GenServer
+  require Logger
 
-  alias Platform.Meetings.PubSub, as: MeetingsPubSub
+  alias Platform.Meetings.IntentQueue.Server
+  alias Platform.Meetings.IntentQueue.Supervisor, as: QueueSupervisor
+  alias Platform.Meetings.IntentRuntimeAdapter
 
-  @table :meeting_intent_queue
+  @type status :: Server.status()
+  @type row :: Server.row()
 
-  # 30 minutes, expressed in milliseconds for direct comparison with
-  # `System.monotonic_time(:millisecond)`.
-  @sweep_interval_ms :timer.minutes(30)
-  @max_age_ms :timer.minutes(30)
-
-  # Retry cap for `mark_retry/3`. Three attempts matches Rowan's
-  # "meetings are short; corrupt payloads shouldn't linger" rule.
-  @max_attempts 3
-
-  # Position of the item_map inside the ETS tuple `{key, item_map}`.
-  # `:ets.update_element/3` positions are 1-based, and the key is
-  # position 1, so the item lives at position 2.
-  @item_pos 2
-
-  # ── Lifecycle ──────────────────────────────────────────────────────────────
+  # ── Per-meeting queue (task 019f70b8) ──────────────────────────────────────
 
   @doc """
-  Start the queue owner. Creates the named public ETS table on init
-  so writes/reads from any process are lock-free. Booted from
-  `Platform.Application`'s child list.
+  Enqueue a classified intent into `meeting_id`'s queue, starting the
+  queue owner if this is the meeting's first intent.
+
+  Returns `{:ok, row}` or `{:duplicate, existing_row}` — the latter
+  when `attrs[:dedupe_key]` already has a row, preserving the
+  idempotence the old composite ETS key gave for free.
   """
-  @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-  end
+  @spec enqueue(binary(), map()) :: {:ok, row()} | {:duplicate, row()} | {:error, term()}
+  def enqueue(meeting_id, attrs) when is_binary(meeting_id) and is_map(attrs) do
+    case QueueSupervisor.ensure_started(meeting_id, room_id: Map.get(attrs, :room_id)) do
+      {:ok, _pid} ->
+        with_queue(meeting_id, {:error, :queue_unavailable}, fn ->
+          Server.enqueue(meeting_id, attrs)
+        end)
 
-  @impl true
-  def init(_opts) do
-    # `:public` lets any process insert / delete (enqueue and
-    # pop_batch run in the caller's process); `:named_table` lets
-    # readers reference `@table` directly without locating the owning
-    # pid. `:set` matches idempotence semantics — one row per
-    # `{room_id, dedupe_key}`.
-    case :ets.info(@table) do
-      :undefined ->
-        :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
-
-      _ ->
-        # A previous incarnation (crash + supervisor restart) may have
-        # left the table around; `:public` tables die with their owner
-        # so this branch is defensive against tests that pre-create
-        # the table.
-        :ok
-    end
-
-    MeetingsPubSub.subscribe_meeting_finished()
-    schedule_sweep()
-
-    {:ok, %{}}
-  end
-
-  @doc """
-  Retry cap exposed for tests and consumers that need to size their
-  own back-off windows (dispatcher, StallRegistry). Purely reflective —
-  don't override without shipping a new deploy.
-  """
-  @spec max_attempts() :: pos_integer()
-  def max_attempts, do: @max_attempts
-
-  # ── Public API ─────────────────────────────────────────────────────────────
-
-  @doc """
-  Enqueue a classified intent for `room_id`. Returns `{:ok, :inserted}`
-  on first write, `{:ok, :duplicate}` when a row with the same
-  `{room_id, dedupe_key}` already exists.
-
-  Idempotence is atomic (`:ets.insert_new/2` — a single ETS op) so
-  concurrent classifier passes can't both win.
-
-  Emits `[:platform, :meetings, :intent_queue, :enqueue]` telemetry on
-  BOTH the insert and duplicate paths so downstream observers can
-  distinguish first-writes from dedupe hits.
-
-  On the `:inserted` path (only) also broadcasts
-  `{:intent_enqueued, %{room_id: room_id, dedupe_key: dedupe_key}}` on
-  the `Platform.Meetings.PubSub.intent_enqueued_topic/0` topic so the
-  dispatcher wakes up without polling. Dedupe hits deliberately do NOT
-  re-broadcast — the dispatcher already has (or has already dispatched)
-  the target row.
-  """
-  @spec enqueue(binary(), binary(), map()) :: {:ok, :inserted} | {:ok, :duplicate}
-  def enqueue(room_id, dedupe_key, item_map)
-      when is_binary(room_id) and is_binary(dedupe_key) and is_map(item_map) do
-    # Stamp default retry-aware fields. `Map.put_new/3` means the
-    # classifier can override any of these if it wants (tests do this
-    # for the sweep + retry cases) while normal writes get sensible
-    # defaults automatically.
-    stamped =
-      item_map
-      |> Map.put_new(:inserted_at_monotonic, System.monotonic_time(:millisecond))
-      |> Map.put_new(:status, :pending)
-      |> Map.put_new(:attempts, 0)
-
-    result =
-      if ensure_table() do
-        case :ets.insert_new(@table, {{room_id, dedupe_key}, stamped}) do
-          true -> :inserted
-          false -> :duplicate
-        end
-      else
-        # Defensive: table hasn't been created yet (early boot / test
-        # harness). Treat as no-op insert so callers don't crash.
-        :inserted
-      end
-
-    :telemetry.execute(
-      [:platform, :meetings, :intent_queue, :enqueue],
-      %{count: 1},
-      %{result: result, room_id: room_id, dedupe_key: dedupe_key}
-    )
-
-    if result == :inserted do
-      # Fire-and-forget — the broadcast helper wraps
-      # `Phoenix.PubSub.broadcast/3` which is safe from any process.
-      # Dedupe hits do NOT re-broadcast (would spam the dispatcher for
-      # no-op writes).
-      MeetingsPubSub.broadcast_intent_enqueued(%{room_id: room_id, dedupe_key: dedupe_key})
-    end
-
-    {:ok, result}
-  end
-
-  @doc """
-  Return up to `limit` items for `room_id` and remove them from the
-  queue. Uses a match-spec that captures the composite key so we
-  delete the exact rows we return (no race with a concurrent
-  `enqueue/3`).
-  """
-  @spec pop_batch(binary(), pos_integer()) :: [map()]
-  def pop_batch(room_id, limit) when is_binary(room_id) and is_integer(limit) and limit > 0 do
-    if ensure_table() do
-      # Capture (dedupe_key, item) tuples for this room. `:"$1"` binds
-      # dedupe_key, `:"$2"` binds the value map; we return them as a
-      # 2-tuple via `{{:"$1", :"$2"}}` (match-spec quoting).
-      match_spec = [
-        {{{room_id, :"$1"}, :"$2"}, [], [{{:"$1", :"$2"}}]}
-      ]
-
-      case :ets.select(@table, match_spec, limit) do
-        :"$end_of_table" ->
-          []
-
-        {pairs, _continuation} ->
-          # Delete the exact rows we captured, then hand the items
-          # back to the caller.
-          Enum.map(pairs, fn {dedupe_key, item} ->
-            :ets.delete(@table, {room_id, dedupe_key})
-            item
-          end)
-      end
-    else
-      []
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   @doc """
-  Drop every entry for `room_id`. Called on `:meeting_finished`
-  broadcasts and available for tests / operational overrides.
-
-  Serialised through the queue owner so the count-then-delete pair is
-  atomic within the queue's view — otherwise a concurrent enqueue
-  between the count and delete would skew the telemetry
-  `removed_count`.
-
-  Emits `[:platform, :meetings, :intent_queue, :drop]` with
-  `%{count: removed_count}` measurements and
-  `%{room_id, removed_count}` metadata.
+  Every intent row for `meeting_id`, oldest first, including terminal
+  rows. Returns `[]` when no queue owner is running — a meeting that
+  has never produced an intent is indistinguishable from one whose
+  queue has ended, and both render as an empty strip.
   """
-  @spec drop_for_room(binary()) :: :ok
-  def drop_for_room(room_id) when is_binary(room_id) do
-    GenServer.call(__MODULE__, {:drop_for_room, room_id})
+  @spec list(binary()) :: [row()]
+  def list(meeting_id) when is_binary(meeting_id) do
+    with_queue(meeting_id, [], fn -> Server.list(meeting_id) end)
+  end
+
+  @doc "Fetch one intent row by id."
+  @spec get(binary(), binary()) :: {:ok, row()} | {:error, :not_found}
+  def get(meeting_id, intent_id) when is_binary(meeting_id) and is_binary(intent_id) do
+    with_queue(meeting_id, {:error, :not_found}, fn -> Server.get(meeting_id, intent_id) end)
   end
 
   @doc """
-  Non-destructive read — return every item currently queued for
-  `room_id`. Intended for tests + operational inspection; the
-  dispatcher should use `claim_pending/1` instead.
+  Move an intent row to `status`, merging `attrs` and broadcasting the
+  matching event on `meeting:<meeting_id>:intents`.
   """
-  @spec list_for_room(binary()) :: [map()]
-  def list_for_room(room_id) when is_binary(room_id) do
-    if ensure_table() do
-      @table
-      |> :ets.match_object({{room_id, :_}, :_})
-      |> Enum.map(fn {_, item} -> item end)
-    else
-      []
-    end
+  @spec transition(binary(), binary(), status(), map()) ::
+          {:ok, row()} | {:error, :not_found} | {:error, {:invalid_status, term()}}
+  def transition(meeting_id, intent_id, status, attrs \\ %{})
+      when is_binary(meeting_id) and is_binary(intent_id) do
+    with_queue(meeting_id, {:error, :not_found}, fn ->
+      Server.transition(meeting_id, intent_id, status, attrs)
+    end)
   end
 
-  # ── Dispatcher-facing API (task 019f2452 stage 1) ──────────────────────────
-
-  @doc """
-  Claim up to `limit` pending items across all rooms. Rows STAY in the
-  table (peek-and-stamp) so a crashed dispatcher can retry after the
-  sweep — the row's `:status` transitions from `:pending` to
-  `:dispatching` and `:claimed_at_monotonic` is stamped with `now`.
-
-  Serialised through the queue owner (`GenServer.call/2`) so that
-  `select` → `update_element` is atomic with respect to other claim
-  callers. Concurrent `enqueue/3` writes from any process still land
-  atomically in ETS; the serialisation only guards claim-vs-claim
-  races (two dispatcher processes competing for the same row).
-
-  Returns `[{room_id, dedupe_key, item_map}]` where `item_map` reflects
-  the post-transition state (status: `:dispatching`, claimed_at
-  populated). Terminates the batch when either `limit` rows have been
-  claimed OR no more pending rows exist.
-
-  Missing `:status` on a row is treated as `:pending` (backward
-  compatibility with legacy rows written before this stage).
-  """
-  @spec claim_pending(pos_integer()) :: [{binary(), binary(), map()}]
-  def claim_pending(limit) when is_integer(limit) and limit > 0 do
-    GenServer.call(__MODULE__, {:claim_pending, limit})
+  @doc "Remove an intent row. Idempotent, and silent by design (see `Server`)."
+  @spec delete(binary(), binary()) :: :ok
+  def delete(meeting_id, intent_id) when is_binary(meeting_id) and is_binary(intent_id) do
+    with_queue(meeting_id, :ok, fn -> Server.delete(meeting_id, intent_id) end)
   end
 
   @doc """
-  Narrow-scope hot-path claim: transition exactly one row identified by
-  `{room_id, dedupe_key}` from `:pending` to `:dispatching`. Cheaper
-  than `claim_pending/1`, which walks every row — used by the
-  dispatcher's `{:intent_enqueued, ...}` PubSub handler where the exact
-  key was just published.
+  Cancel an intent on the producer's behalf, reaching the target's
+  runtime when the intent has already left the building (task 019f70b8
+  stage 4).
 
-  Returns:
+  This is the function the stage-7 X and pencil buttons call. It is
+  status-aware, because "cancel" means four different things depending
+  on where the row is:
 
-    * `{:ok, {room_id, dedupe_key, item_map}}` — row transitioned;
-      `item_map` reflects the post-transition state.
-    * `{:already_claimed, item_map}` — the row exists but is not
-      `:pending` (someone else beat us to it). Caller should silently
-      no-op; the owner will `mark_dispatched` / `mark_retry` when done.
-    * `{:error, :not_found}` — the row is gone (meeting finished,
-      dropped externally). Caller no-ops.
+  | row status              | what happens                                          | returns                      |
+  |-------------------------|-------------------------------------------------------|------------------------------|
+  | `:queued`               | removed from ETS; nobody ever saw it                  | `{:ok, :deleted, row}`       |
+  | `:dispatched` / `:acked`| `intent_cancelled` broadcast to the target's runtime, carrying the `subagent_id` captured at ack; the row waits for `intent_ack(status: :cancel_honored)` | `{:ok, :cancel_requested, row}` |
+  | `:dispatched` / `:acked`, runtime gone | nothing to signal — landed `:cancelled` locally         | `{:ok, :cancelled, row}`     |
+  | `:completed`            | the work finished before the X landed                 | `{:ok, :cancelled_late, row}`|
+  | other terminal          | nothing to cancel                                     | `{:error, {:not_cancellable, status}}` |
 
-  Serialised through the queue owner so the lookup + transition pair is
-  atomic against sibling claim callers (mirrors `claim_pending/1`).
+  Opts are forwarded to
+  `Platform.Meetings.IntentRuntimeAdapter.cancel/2`: `:reason`
+  (`:wrong_intent | :wrong_target | :not_actionable | :other`),
+  `:corrected_intent`, `:corrected_target_agent_id`.
+
+  The durable record of a correction is a `meeting_intent_corrections`
+  row, which stage 6 owns and this function deliberately does not
+  write: a cancel that reaches a runtime and a cancel that is logged
+  for LLM tuning are two different concerns, and coupling them here
+  would mean the queue could not be exercised without a table.
+
+  Note the asymmetry in the in-flight row: it is NOT marked cancelled
+  when the signal goes out. Until the target answers, the honest state
+  is still "with a runtime" — a row we optimistically marked
+  `:cancelled` while a subagent kept working would be exactly the
+  invisibility this task exists to remove. If the target never answers,
+  the ack window resolves the row as `:timed_out`.
   """
-  @spec claim_one(binary(), binary()) ::
-          {:ok, {binary(), binary(), map()}}
-          | {:already_claimed, map()}
+  @spec cancel(binary(), binary(), keyword()) ::
+          {:ok, :deleted | :cancel_requested | :cancelled | :cancelled_late, row()}
           | {:error, :not_found}
-  def claim_one(room_id, dedupe_key)
-      when is_binary(room_id) and is_binary(dedupe_key) do
-    GenServer.call(__MODULE__, {:claim_one, room_id, dedupe_key})
-  end
-
-  @doc """
-  Mark a claimed row as successfully dispatched — delete it from the
-  queue. Idempotent: `:ok` on both "row deleted" and "row already
-  gone" paths so a doubled call from a crashed-and-restarted
-  dispatcher doesn't error.
-  """
-  @spec mark_dispatched(binary(), binary()) :: :ok
-  def mark_dispatched(room_id, dedupe_key)
-      when is_binary(room_id) and is_binary(dedupe_key) do
-    GenServer.call(__MODULE__, {:mark_dispatched, room_id, dedupe_key})
-  end
-
-  @doc """
-  Mark a claimed row as retryable — increment `:attempts`, reset
-  `:status` back to `:pending`, and record `last_error: inspect(reason)`.
-
-  Returns `{:ok, attempts}` while attempts is under `@max_attempts` so
-  the dispatcher can log / instrument, or `{:exhausted, attempts}` when
-  attempts has hit the cap. The caller (dispatcher stage 2) is expected
-  to promote `:exhausted` to `mark_dropped(:max_attempts_exceeded)`.
-
-  If the row has vanished between claim and retry (rare — meeting
-  finished, drop_for_room called externally), returns `{:error, :not_found}`.
-  """
-  @spec mark_retry(binary(), binary(), term()) ::
-          {:ok, pos_integer()} | {:exhausted, pos_integer()} | {:error, :not_found}
-  def mark_retry(room_id, dedupe_key, reason)
-      when is_binary(room_id) and is_binary(dedupe_key) do
-    GenServer.call(__MODULE__, {:mark_retry, room_id, dedupe_key, reason})
-  end
-
-  @doc """
-  Terminal drop for a claimed row. Deletes the row and emits
-  `[:platform, :meetings, :intent_queue, :drop]` telemetry with the
-  supplied `reason` for observability. Reasons in practice:
-  `:no_assignee`, `:unknown_role`, `:max_attempts_exceeded`,
-  `:target_role_nil`.
-
-  Idempotent — a doubled call is `:ok` even if the row was already
-  gone. Fires telemetry ONLY when the row was actually removed (so a
-  no-op call doesn't skew the drop count).
-  """
-  @spec mark_dropped(binary(), binary(), atom()) :: :ok
-  def mark_dropped(room_id, dedupe_key, reason)
-      when is_binary(room_id) and is_binary(dedupe_key) and is_atom(reason) do
-    GenServer.call(__MODULE__, {:mark_dropped, room_id, dedupe_key, reason})
-  end
-
-  @doc """
-  Return every claimed-but-stuck row: `:status == :dispatching` AND
-  `:claimed_at_monotonic` older than `stall_window_ms` before now.
-
-  Used by the StallRegistry callback (wired stage 4) to re-drive
-  items whose dispatcher crashed between claim and mark_dispatched.
-
-  Returns `[{room_id, dedupe_key}]` — the caller doesn't need the
-  full item_map because `mark_retry/3` operates by key.
-  """
-  @spec list_stalled(pos_integer()) :: [{binary(), binary()}]
-  def list_stalled(stall_window_ms)
-      when is_integer(stall_window_ms) and stall_window_ms > 0 do
-    if ensure_table() do
-      cutoff = System.monotonic_time(:millisecond) - stall_window_ms
-
-      # Match specs can't reach inside a map value, so pull every row
-      # and filter in Elixir. The queue is meeting-lifetime and
-      # small — a full scan for the stall check is a rounding-error
-      # cost compared to the dispatch itself.
-      @table
-      |> :ets.tab2list()
-      |> Enum.flat_map(fn {{room_id, dedupe_key}, item} ->
-        with :dispatching <- Map.get(item, :status),
-             ts when is_integer(ts) and ts < cutoff <-
-               Map.get(item, :claimed_at_monotonic) do
-          [{room_id, dedupe_key}]
-        else
-          _ -> []
-        end
-      end)
-    else
-      []
-    end
-  end
-
-  # ── Handlers ───────────────────────────────────────────────────────────────
-
-  @impl true
-  def handle_call({:drop_for_room, room_id}, _from, state) when is_binary(room_id) do
-    do_drop_for_room(room_id)
-    {:reply, :ok, state}
-  end
-
-  def handle_call({:claim_pending, limit}, _from, state) do
-    {:reply, do_claim_pending(limit), state}
-  end
-
-  def handle_call({:claim_one, room_id, dedupe_key}, _from, state) do
-    {:reply, do_claim_one(room_id, dedupe_key), state}
-  end
-
-  def handle_call({:mark_dispatched, room_id, dedupe_key}, _from, state) do
-    if ensure_table() do
-      :ets.delete(@table, {room_id, dedupe_key})
-    end
-
-    {:reply, :ok, state}
-  end
-
-  def handle_call({:mark_retry, room_id, dedupe_key, reason}, _from, state) do
-    {:reply, do_mark_retry(room_id, dedupe_key, reason), state}
-  end
-
-  def handle_call({:mark_dropped, room_id, dedupe_key, reason}, _from, state) do
-    {:reply, do_mark_dropped(room_id, dedupe_key, reason), state}
-  end
-
-  @impl true
-  def handle_info({:meeting_finished, %{room_id: room_id}}, state) when is_binary(room_id) do
-    # Call the inline helper — NOT `drop_for_room/1` — because a
-    # GenServer synchronously calling itself deadlocks. The helper
-    # runs in the queue owner's own process, which is already the
-    # serialisation point we want.
-    do_drop_for_room(room_id)
-    {:noreply, state}
-  end
-
-  # Tolerate mis-shaped events without crashing the queue owner —
-  # the classifier's PubSub bus is shared with unrelated payloads
-  # in some test setups.
-  def handle_info({:meeting_finished, _payload}, state), do: {:noreply, state}
-
-  def handle_info(:sweep, state) do
-    sweep_expired()
-    schedule_sweep()
-    {:noreply, state}
-  end
-
-  def handle_info(_msg, state), do: {:noreply, state}
-
-  # ── Internal ───────────────────────────────────────────────────────────────
-
-  # Serialised drop path. Runs in the queue owner's process so
-  # `:ets.select_count/2` and `:ets.match_delete/2` see the same
-  # snapshot — concurrent enqueues from other processes still write
-  # atomically to ETS, but the count returned here matches what we
-  # actually removed.
-  defp do_drop_for_room(room_id) do
-    removed_count =
-      if ensure_table() do
-        pattern = {{room_id, :_}, :_}
-        # `:ets.select_count/2` matches the same pattern used for
-        # `match_delete/2`; the match spec `{pattern, [], [true]}`
-        # tells ETS to count each row that matches without pulling
-        # the row bodies into userspace.
-        count = :ets.select_count(@table, [{pattern, [], [true]}])
-        :ets.match_delete(@table, pattern)
-        count
-      else
-        0
-      end
-
-    :telemetry.execute(
-      [:platform, :meetings, :intent_queue, :drop],
-      %{count: removed_count},
-      %{room_id: room_id, removed_count: removed_count}
-    )
-
-    :ok
-  end
-
-  # Runs inside the queue owner so the select-then-transition pair is
-  # atomic against sibling claim callers. Concurrent enqueue writers
-  # can still land new rows during the transition (their inserts are
-  # single-op atomic in ETS); we simply won't see them in this batch,
-  # which is fine — they'll be caught by the next claim or by the
-  # PubSub notify.
-  defp do_claim_pending(limit) do
-    if ensure_table() do
-      now = System.monotonic_time(:millisecond)
-
-      # Match spec: bind key, dedupe_key, item to variables; no guard
-      # (we filter by :status in Elixir because match-specs can't
-      # reach inside map values); return the full triple so we can
-      # transition + report in one pass.
-      match_spec = [
-        {{{:"$1", :"$2"}, :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}
-      ]
-
-      # Bounded scan — walk rows in ETS order, transition the first
-      # `limit` pending ones we find. This is O(table_size) worst
-      # case, but the queue is meeting-lifetime and small; the
-      # dispatcher's belt-and-braces tick is 30s so any pending row
-      # gets picked up quickly regardless.
-      @table
-      |> :ets.select(match_spec)
-      |> Enum.reduce_while([], fn {room_id, dedupe_key, item}, acc ->
-        cond do
-          length(acc) >= limit ->
-            {:halt, acc}
-
-          pending?(item) ->
-            transitioned =
-              item
-              |> Map.put(:status, :dispatching)
-              |> Map.put(:claimed_at_monotonic, now)
-
-            # `update_element` is a single ETS op — atomic w.r.t.
-            # concurrent readers.
-            :ets.update_element(@table, {room_id, dedupe_key}, {@item_pos, transitioned})
-            {:cont, [{room_id, dedupe_key, transitioned} | acc]}
-
-          true ->
-            {:cont, acc}
-        end
-      end)
-      |> Enum.reverse()
-    else
-      []
-    end
-  end
-
-  # Hot-path single-row claim. Kept parallel to `do_claim_pending/1`
-  # so the atomicity story is identical: run inside the queue owner,
-  # look up + transition + update in one call.
-  defp do_claim_one(room_id, dedupe_key) do
-    if ensure_table() do
-      case :ets.lookup(@table, {room_id, dedupe_key}) do
-        [{_key, item}] ->
-          if pending?(item) do
-            now = System.monotonic_time(:millisecond)
-
-            transitioned =
-              item
-              |> Map.put(:status, :dispatching)
-              |> Map.put(:claimed_at_monotonic, now)
-
-            :ets.update_element(@table, {room_id, dedupe_key}, {@item_pos, transitioned})
-            {:ok, {room_id, dedupe_key, transitioned}}
-          else
-            {:already_claimed, item}
-          end
-
-        [] ->
-          {:error, :not_found}
-      end
-    else
-      {:error, :not_found}
-    end
-  end
-
-  # A row is claimable when it's explicitly `:pending` OR when
-  # `:status` is missing (legacy rows written before stage 1). Any
-  # other value (`:dispatching`, future statuses) means someone else
-  # already owns it — leave alone.
-  defp pending?(item) do
-    case Map.get(item, :status) do
-      :pending -> true
-      nil -> true
-      _ -> false
-    end
-  end
-
-  defp do_mark_retry(room_id, dedupe_key, reason) do
-    if ensure_table() do
-      case :ets.lookup(@table, {room_id, dedupe_key}) do
-        [{_key, item}] ->
-          new_attempts = (Map.get(item, :attempts) || 0) + 1
-
-          updated =
-            item
-            |> Map.put(:attempts, new_attempts)
-            |> Map.put(:status, :pending)
-            |> Map.put(:last_error, inspect(reason))
-            # Clear the claim stamp so `list_stalled/1` doesn't
-            # falsely flag this row while it's back in the pending
-            # bucket.
-            |> Map.put(:claimed_at_monotonic, nil)
-
-          :ets.update_element(@table, {room_id, dedupe_key}, {@item_pos, updated})
-
-          if new_attempts >= @max_attempts do
-            {:exhausted, new_attempts}
-          else
-            {:ok, new_attempts}
-          end
-
-        [] ->
-          {:error, :not_found}
-      end
-    else
-      {:error, :not_found}
-    end
-  end
-
-  defp do_mark_dropped(room_id, dedupe_key, reason) do
-    removed? =
-      if ensure_table() do
-        # `:ets.take/2` returns the removed row(s) — empty list if the
-        # row was already gone, so we can distinguish a real drop
-        # (fire telemetry) from a no-op call (silent).
-        case :ets.take(@table, {room_id, dedupe_key}) do
-          [_] -> true
-          [] -> false
-        end
-      else
-        false
-      end
-
-    if removed? do
-      :telemetry.execute(
-        [:platform, :meetings, :intent_queue, :drop],
-        %{count: 1},
-        %{room_id: room_id, dedupe_key: dedupe_key, reason: reason, removed_count: 1}
-      )
-    end
-
-    :ok
-  end
-
-  defp ensure_table do
-    case :ets.info(@table) do
-      :undefined -> false
-      _ -> true
-    end
-  end
-
-  defp schedule_sweep do
-    Process.send_after(self(), :sweep, @sweep_interval_ms)
-  end
-
-  # Delete every row whose age (by `:inserted_at_monotonic`) exceeds
-  # `@max_age_ms`. We compute the cutoff once so all rows are checked
-  # against a single instant.
-  defp sweep_expired do
-    cutoff = System.monotonic_time(:millisecond) - @max_age_ms
-
-    # Match specs can't reach inside a map value, so we take the
-    # two-step: pull every row, filter in Elixir, delete by key.
-    # The queue is meeting-lifetime and small, so a full scan every
-    # 30 min is a rounding-error cost.
-    @table
-    |> :ets.tab2list()
-    |> Enum.each(fn {key, item} ->
-      case Map.get(item, :inserted_at_monotonic) do
-        ts when is_integer(ts) and ts < cutoff -> :ets.delete(@table, key)
-        _ -> :ok
+          | {:error, {:not_cancellable, status()}}
+  def cancel(meeting_id, intent_id, opts \\ [])
+      when is_binary(meeting_id) and is_binary(intent_id) and is_list(opts) do
+    with_queue(meeting_id, {:error, :not_found}, fn ->
+      case Server.begin_cancel(meeting_id, intent_id) do
+        {:ok, :signal, row} -> signal_cancel(meeting_id, row, opts)
+        {:ok, outcome, row} -> {:ok, outcome, row}
+        {:error, reason} -> {:error, reason}
       end
     end)
+  end
+
+  # The row is with a runtime. Ask that runtime to stop, and only fall
+  # back to a local landing when there is demonstrably nobody to ask —
+  # the agent was deleted, or its runtime link was removed, since the
+  # dispatch went out. Marking it `:cancelled` then is the honest
+  # answer: the producer pulled it and no subagent can be told, so
+  # leaving the row in flight until the ack window expires would show
+  # `:timed_out` for something that was actually cancelled.
+  defp signal_cancel(meeting_id, row, opts) do
+    case IntentRuntimeAdapter.cancel(row, opts) do
+      :ok ->
+        {:ok, :cancel_requested, row}
+
+      {:error, reason} ->
+        Logger.info(
+          "[IntentQueue] cancel could not reach a runtime — landing locally " <>
+            "meeting_id=#{meeting_id} intent_id=#{row.id} reason=#{inspect(reason)}"
+        )
+
+        case transition(meeting_id, row.id, :cancelled) do
+          {:ok, cancelled} -> {:ok, :cancelled, cancelled}
+          {:error, _} = error -> error
+        end
+    end
+  end
+
+  @doc """
+  True when a queue owner is currently running for `meeting_id`.
+
+  Checks `Process.alive?/1` rather than trusting the Registry lookup
+  alone: Registry cleanup is driven by a monitor, so for a short window
+  after the owner exits the lookup still returns its (dead) pid.
+  """
+  @spec running?(binary()) :: boolean()
+  def running?(meeting_id) when is_binary(meeting_id) do
+    case Server.whereis(meeting_id) do
+      pid when is_pid(pid) -> Process.alive?(pid)
+      nil -> false
+    end
+  end
+
+  @doc """
+  Stop `meeting_id`'s queue owner, dropping its ETS table. Normally
+  driven by the `:meeting_finished` broadcast the server subscribes to;
+  exposed for tests and operational overrides.
+  """
+  @spec stop(binary()) :: :ok
+  def stop(meeting_id) when is_binary(meeting_id), do: QueueSupervisor.stop(meeting_id)
+
+  @doc "The nine valid row statuses."
+  @spec statuses() :: [status()]
+  defdelegate statuses(), to: Server
+
+  @doc "Statuses meaning the intent is with a runtime right now."
+  @spec in_flight_statuses() :: [status()]
+  defdelegate in_flight_statuses(), to: Server
+
+  @doc "Statuses no further transition is expected from."
+  @spec terminal_statuses() :: [status()]
+  defdelegate terminal_statuses(), to: Server
+
+  @doc "Statuses that release the serial dispatch cursor."
+  @spec advancing_statuses() :: [status()]
+  defdelegate advancing_statuses(), to: Server
+
+  @doc "The four `intent_ack` statuses a runtime may report."
+  @spec ack_statuses() :: [atom()]
+  defdelegate ack_statuses(), to: Server
+
+  @doc """
+  Resolve an `intent_id` to its owning meeting.
+
+  Registry-backed and cheap; safe to call from the MCP tool surface,
+  which only ever receives an intent id.
+  """
+  @spec locate(binary()) :: {:ok, binary()} | {:error, :not_found}
+  defdelegate locate(intent_id), to: Server
+
+  # ── Serial cursor + ack (task 019f70b8 stage 3) ────────────────────────────
+
+  @doc """
+  Reserve this meeting's next `:queued` intent for dispatch.
+
+  `{:ok, row}` hands over a row that is still `:queued` — the caller
+  commits it with `transition/4` to `:dispatched` or `:dispatch_failed`.
+  `{:busy, intent_id}` means an intent is already with a runtime, and
+  `:empty` means there is nothing to send.
+  """
+  @spec claim_next(binary()) :: {:ok, row()} | {:busy, binary()} | :empty
+  def claim_next(meeting_id) when is_binary(meeting_id) do
+    with_queue(meeting_id, :empty, fn -> Server.claim_next(meeting_id) end)
+  end
+
+  @doc """
+  Land an `intent_ack` from a target runtime. See
+  `Platform.Meetings.IntentQueue.Server.ack/5` for the status table.
+  """
+  @spec ack(binary(), binary(), binary(), atom(), binary() | nil) ::
+          {:ok, row()} | {:error, term()}
+  def ack(meeting_id, intent_id, subagent_id, ack_status, note \\ nil)
+      when is_binary(meeting_id) and is_binary(intent_id) and is_binary(subagent_id) do
+    with_queue(meeting_id, {:error, :not_found}, fn ->
+      Server.ack(meeting_id, intent_id, subagent_id, ack_status, note)
+    end)
+  end
+
+  @doc """
+  Record a schema-rejected `intent_ack` attempt. Never mutates the ETS
+  row — it only decides whether an eventual timeout is reported as
+  `:no_ack_spawn_failed` rather than `:timed_out`.
+  """
+  @spec record_rejected_ack(binary(), binary()) :: :ok
+  def record_rejected_ack(meeting_id, intent_id)
+      when is_binary(meeting_id) and is_binary(intent_id) do
+    with_queue(meeting_id, :ok, fn -> Server.record_rejected_ack(meeting_id, intent_id) end)
+  end
+
+  @doc "The intent id currently holding this meeting's cursor, or nil."
+  @spec cursor(binary()) :: binary() | nil
+  def cursor(meeting_id) when is_binary(meeting_id) do
+    with_queue(meeting_id, nil, fn -> Server.cursor(meeting_id) end)
+  end
+
+  @doc "Schema-rejected ack attempts observed for `intent_id`."
+  @spec rejected_ack_count(binary(), binary()) :: non_neg_integer()
+  def rejected_ack_count(meeting_id, intent_id)
+      when is_binary(meeting_id) and is_binary(intent_id) do
+    with_queue(meeting_id, 0, fn -> Server.rejected_ack_count(meeting_id, intent_id) end)
+  end
+
+  @doc "Meeting ids with a live queue owner. Operational/test reflection."
+  @spec live_meeting_ids() :: [binary()]
+  defdelegate live_meeting_ids(), to: QueueSupervisor
+
+  @doc """
+  Start `meeting_id`'s queue owner if it isn't running, with opts.
+
+  `enqueue/2` calls this for you. Reach for it directly when a caller
+  needs to set server options before the first intent lands — chiefly
+  `:ack_timeout_ms`, which tests drive down from the 90s default.
+  """
+  @spec ensure_started(binary(), keyword()) :: {:ok, pid()} | {:error, term()}
+  defdelegate ensure_started(meeting_id, opts \\ []), to: QueueSupervisor
+
+  # A meeting's queue can end at any instant — `:meeting_finished`
+  # lands, the owner stops, and its ETS table goes with it. Every entry
+  # point therefore has to tolerate "the queue was there a microsecond
+  # ago and isn't now", because there is no lock that would make the
+  # liveness check and the call atomic.
+  #
+  # Without this a MeetingLive mounting as its meeting ends would take
+  # a `GenServer.call` exit straight through the LiveView — the caller
+  # asked "what is in the queue", the honest answer is "nothing", and
+  # a crash is not that answer. Timeouts and genuine crashes inside the
+  # server are NOT swallowed: those are bugs and must surface.
+  defp with_queue(meeting_id, absent, fun) do
+    if running?(meeting_id) do
+      try do
+        fun.()
+      catch
+        :exit, {:noproc, _} -> absent
+        :exit, {:normal, _} -> absent
+        :exit, {:shutdown, _} -> absent
+        :exit, {{:shutdown, _}, _} -> absent
+      end
+    else
+      absent
+    end
   end
 end

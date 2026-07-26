@@ -1,63 +1,66 @@
 defmodule Platform.Meetings.IntentDispatcherTest do
   @moduledoc """
   Tests for `Platform.Meetings.IntentDispatcher` — the global GenServer
-  that drains `Platform.Meetings.IntentQueue` and hands each classified
-  intent to the agent currently assigned to `target_role` (task
-  019f2452 stage 2).
+  that drives every meeting's ack-gated intent queue and hands each
+  claimed intent to the runtime linked to the agent assigned to its
+  `target_role`.
 
-  Covers the six branches called out in the plan:
+  Rewritten twice for task 019f70b8: stage 3 replaced the batch drain
+  with a per-meeting serial cursor, and stage 4 replaced the two
+  chat-shaped dispatch surfaces with a single runtime-attention
+  broadcast. The behaviours under test now are:
 
-    * happy path — pending item with resolvable `target_role` calls the
-      injected native dispatcher with an AgentResponder-shaped signal
-      then transitions the queue row to `mark_dispatched`
-    * unknown `target_role` — dropped as `:unknown_role`; the first
-      occurrence per role_key logs at `:info`, subsequent hits stay
-      silent (dispatcher-lifetime MapSet)
-    * `target_role: nil` — dropped as `:no_assignee` immediately
-    * role resolves but has no `role_assignments` row — dropped as
-      `:no_assignee`
-    * external agent kind — selects the external dispatch fn via the
-      `:meetings_intent_dispatcher_external_dispatcher` app-env seam
-    * dispatch task raises — the dispatcher survives (subscription +
-      tick both still fire) and the row promotes through mark_retry
-    * DataCase sandbox race — a `DBConnection.OwnershipError` from the
-      spawned dispatch task is caught as `:sandbox_gone` and the row
-      is silently cleared (no crash, no phantom retry)
+    * **runtime targeting (AC2)** — a claimed intent lands on
+      `runtime:<runtime_id>` as an `"attention"` signal within 500ms,
+      carrying the addressable `intent_id`
+    * **`:no_runtime` is retained (not dropped)** — a target agent with
+      no linked AgentRuntime produces a visible `:dispatch_failed` row,
+      not silence
+    * **cancellation reaches the subagent (AC7)** — cancelling an
+      in-flight intent broadcasts `"intent_cancelled"` carrying the
+      `subagent_id` the target stamped at ack time
+    * **`:cancelled_late` (AC8)** — a completion that beat the cancel is
+      a distinct, explainable status, not a crash
+    * **serial cursor (AC3)** — three intents for the same target go out
+      one at a time; a `:working` ack does NOT advance, `:completed` does
+    * **ack timeout (AC4)** and **`:no_ack_spawn_failed` vs `:timed_out`
+      (AC6)**
 
-  Async-false because the module owns a named GenServer + subscribes
-  to the shared `meeting:intent_enqueued` topic. Test-scoped instances
-  are booted via `start_supervised/1` under unique per-test names so
-  the singleton contract isn't violated when running in a suite.
+  ## Nothing here hands the dispatcher a target
+
+  Every case seeds a role assignment and a runtime link and then lets
+  the production chain derive the rest: `target_role` → `Roles.agent_id_for_role/1`
+  → `%Agent{}` → `Federation.get_runtime_for_agent/1` → `runtime:<runtime_id>`.
+  The tests subscribe to the topic they expect that chain to produce and
+  assert the row's `target_agent_id` was stamped by the dispatcher —
+  they never enqueue one. A harness that passed the target in would go
+  green against a dispatcher that ignored roles entirely, which is
+  exactly the class of hole stage 3 found in `append_segment/2`.
+
+  Async-false: the dispatcher subscribes to the shared
+  `meeting:intent_enqueued` topic and the per-meeting queue supervisor
+  is application-global. Test-scoped dispatcher instances boot under
+  unique names via `start_supervised/1`.
   """
 
   use Platform.DataCase, async: false
 
   import ExUnit.CaptureLog
 
+  alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.Federation
+  alias Platform.Meetings.IntentCorrection
+  alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentDispatcher
   alias Platform.Meetings.IntentQueue
   alias Platform.Repo
   alias Platform.Roles
 
-  # ── Test-scoped rooms (auto-cleaned) ───────────────────────────────────────
-
-  @rooms ~w(
-    intentdisp-happy
-    intentdisp-unknown-1
-    intentdisp-unknown-2
-    intentdisp-nil-role
-    intentdisp-no-assignee
-    intentdisp-external
-    intentdisp-crash
-    intentdisp-sandbox
-    intentdisp-tick
-    intentdisp-agent-missing
-  )
-
   setup do
-    # Shared sandbox so async Task.Supervisor children can see the
-    # test's schema. Mirrors `TaskRouterWatcherTest`'s setup.
+    # Shared sandbox so the queue supervisor's children (started outside
+    # this test's ownership chain) can see the test's schema. Mirrors
+    # `TaskRouterWatcherTest`'s setup.
     Ecto.Adapters.SQL.Sandbox.mode(Platform.Repo, {:shared, self()})
 
     # Bump this module's log level to :info so `capture_log` can
@@ -67,11 +70,7 @@ defmodule Platform.Meetings.IntentDispatcherTest do
 
     on_exit(fn ->
       Logger.delete_module_level(Platform.Meetings.IntentDispatcher)
-      for room <- @rooms, do: IntentQueue.drop_for_room(room)
-      # Clear any test-seam overrides so a failure in one test doesn't
-      # bleed the stub into siblings.
-      Application.delete_env(:platform, :meetings_intent_dispatcher_native_dispatcher)
-      Application.delete_env(:platform, :meetings_intent_dispatcher_external_dispatcher)
+      Application.delete_env(:platform, Platform.Meetings.IntentQueue)
     end)
 
     :ok
@@ -79,10 +78,113 @@ defmodule Platform.Meetings.IntentDispatcherTest do
 
   # ── Helpers ────────────────────────────────────────────────────────────────
 
-  # Attach one or more telemetry events to a shared handler that
-  # forwards `{event_name, measurements, metadata}` to the test process.
-  # Auto-detached via `on_exit`. Mirrors the pattern used in
-  # `intent_queue_test.exs`.
+  # A fresh meeting id per test, with its queue torn down on exit. Queue
+  # owners are per-meeting so tests never share one; a unique id IS the
+  # isolation.
+  defp new_meeting!(opts \\ []) do
+    meeting_id = Platform.Types.UUIDv7.generate()
+    {:ok, _pid} = IntentQueue.ensure_started(meeting_id, opts)
+    on_exit(fn -> IntentQueue.stop(meeting_id) end)
+    meeting_id
+  end
+
+  # A meeting id backed by a REAL `org -> project -> meeting` chain,
+  # for the stage-6 cases that assert on a correction row's derived
+  # `org_id`. Everything else in this file uses `new_meeting!/1`'s bare
+  # UUID, which is correct for the queue (Registry-keyed, no DB) and
+  # useless the moment a durable row has to resolve a tenant.
+  defp new_real_meeting! do
+    org_id = Platform.TenancyFixtures.fabrikam_org_id()
+
+    {:ok, project} =
+      Platform.Tasks.create_project(%{
+        name: "Intent Dispatcher #{System.unique_integer([:positive])}",
+        org_id: org_id
+      })
+
+    {:ok, space} =
+      Platform.Chat.create_space(%{
+        name: "Intent Dispatcher Space #{System.unique_integer([:positive])}",
+        slug: "intent-dispatcher-#{System.unique_integer([:positive])}",
+        kind: "meeting"
+      })
+
+    meeting =
+      %Platform.Meetings.Meeting{}
+      |> Platform.Meetings.Meeting.changeset(%{
+        project_id: project.id,
+        chat_space_id: space.id,
+        slug: "dispatch-#{System.unique_integer([:positive])}",
+        name: "Intent Dispatcher Meeting",
+        livekit_room_name: "meeting-#{Ecto.UUID.generate()}"
+      })
+      |> Repo.insert!()
+
+    {:ok, _pid} = IntentQueue.ensure_started(meeting.id)
+    on_exit(fn -> IntentQueue.stop(meeting.id) end)
+
+    {meeting, org_id}
+  end
+
+  # Deliberately never sets `target_agent_id` — that field is the
+  # dispatcher's output, and seeding it would hide a broken role→agent
+  # →runtime chain behind a value the test supplied.
+  defp enqueue!(meeting_id, attrs) do
+    {:ok, row} =
+      IntentQueue.enqueue(
+        meeting_id,
+        Map.merge(
+          %{
+            room_id: "room-#{System.unique_integer([:positive])}",
+            dedupe_key: "dk-#{System.unique_integer([:positive])}",
+            classified_intent: "book_followup",
+            chunk_excerpt: "we should book a follow-up on the onboarding funnel",
+            target_role: "designer",
+            confidence: 0.9,
+            transcript_chunk_id: "chunk-#{System.unique_integer([:positive])}"
+          },
+          attrs
+        )
+      )
+
+    row
+  end
+
+  defp status_of(meeting_id, intent_id) do
+    case IntentQueue.get(meeting_id, intent_id) do
+      {:ok, row} -> row.status
+      other -> other
+    end
+  end
+
+  # Poll until `intent_id` reaches `expected`, or blow up with the
+  # status it actually settled on. Dispatch is async (PubSub notify →
+  # dispatcher mailbox → queue call), so every status assertion that
+  # follows an enqueue has to be a wait rather than a read.
+  defp await_status(meeting_id, intent_id, expected, timeout \\ 2_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_await_status(meeting_id, intent_id, expected, deadline)
+  end
+
+  defp do_await_status(meeting_id, intent_id, expected, deadline) do
+    actual = status_of(meeting_id, intent_id)
+
+    cond do
+      actual == expected ->
+        {:ok, row} = IntentQueue.get(meeting_id, intent_id)
+        row
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk(
+          "expected intent #{intent_id} to reach #{inspect(expected)}, got #{inspect(actual)}"
+        )
+
+      true ->
+        Process.sleep(10)
+        do_await_status(meeting_id, intent_id, expected, deadline)
+    end
+  end
+
   defp attach_telemetry!(events) when is_list(events) do
     handler_id = "intent-dispatcher-test-#{System.unique_integer([:positive])}"
     parent = self()
@@ -111,10 +213,15 @@ defmodule Platform.Meetings.IntentDispatcherTest do
       |> Keyword.put_new(:tick_interval_ms, 60_000)
 
     {:ok, pid} = start_supervised({IntentDispatcher, child_opts})
+
+    # Let `init/1` finish subscribing before the test enqueues, or the
+    # very first notify lands in nobody's mailbox.
+    Process.sleep(20)
+
     {pid, name}
   end
 
-  defp create_agent!(overrides) do
+  defp create_agent!(overrides \\ %{}) do
     attrs =
       Map.merge(
         %{
@@ -131,6 +238,36 @@ defmodule Platform.Meetings.IntentDispatcherTest do
     |> Repo.insert!()
   end
 
+  defp create_user! do
+    Repo.insert!(%User{
+      email: "intentdisp_#{System.unique_integer([:positive])}@example.com",
+      name: "Intent Dispatcher Test User",
+      oidc_sub: "oidc-intentdisp-#{System.unique_integer([:positive])}"
+    })
+  end
+
+  # The only agent shape that can receive an intent since stage 4: one
+  # with a linked AgentRuntime. Agent `kind` is irrelevant to dispatch
+  # now, which is why the default here is a plain native agent.
+  defp create_runtime_agent!(overrides \\ %{}) do
+    agent = create_agent!(overrides)
+    user = create_user!()
+
+    {:ok, runtime} =
+      Federation.register_runtime(user.id, %{
+        runtime_id: "intentdisp-rt-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, linked} = Federation.link_agent(runtime, agent)
+
+    {linked, runtime}
+  end
+
+  defp subscribe_runtime!(%{runtime_id: runtime_id}) do
+    :ok = PlatformWeb.Endpoint.subscribe("runtime:#{runtime_id}")
+    runtime_id
+  end
+
   defp assign_role!(role_key, %Agent{id: id}) do
     # Roles are DB-seeded; `role_assignments.role_key` has a unique
     # index, so if a sibling test left a row we clear it first.
@@ -139,767 +276,1009 @@ defmodule Platform.Meetings.IntentDispatcherTest do
     :ok
   end
 
-  # Install a stub for one of the two dispatch surfaces. The stub is a
-  # closure that captures `self()`, so we can `assert_receive` on the
-  # payload the dispatcher hands it.
-  defp install_native_stub(fun) when is_function(fun, 1) do
-    parent = self()
+  # Seed the whole production chain for `role_key` in one call and
+  # subscribe to the topic it should resolve to.
+  defp seed_target!(role_key \\ "designer") do
+    {agent, runtime} = create_runtime_agent!()
+    :ok = assign_role!(role_key, agent)
+    subscribe_runtime!(runtime)
+    {agent, runtime}
+  end
 
-    Application.put_env(
-      :platform,
-      :meetings_intent_dispatcher_native_dispatcher,
-      {__MODULE__.Stub, :native_dispatch}
+  defp in_flight_count(meeting_id) do
+    meeting_id
+    |> IntentQueue.list()
+    |> Enum.count(&(&1.status in IntentQueue.in_flight_statuses()))
+  end
+
+  defp ack!(intent_id, subagent_id, status) do
+    Platform.Federation.ToolSurface.execute(
+      "intent_ack",
+      %{"intent_id" => intent_id, "subagent_id" => subagent_id, "status" => status},
+      %{}
     )
-
-    :persistent_term.put({__MODULE__, :native_stub}, {parent, fun})
-    :ok
   end
 
-  defp install_external_stub(fun) when is_function(fun, 3) do
-    parent = self()
+  # ── Runtime targeting (AC2) ────────────────────────────────────────────────
 
-    Application.put_env(
-      :platform,
-      :meetings_intent_dispatcher_external_dispatcher,
-      {__MODULE__.Stub, :external_dispatch}
-    )
+  describe "runtime targeting" do
+    test "a claimed intent reaches the target's runtime topic as an attention signal" do
+      {agent, runtime} = seed_target!()
 
-    :persistent_term.put({__MODULE__, :external_stub}, {parent, fun})
-    :ok
-  end
+      meeting_id = new_meeting!()
+      start_dispatcher!()
 
-  defp await_dispatch(room_id, _dedupe_key, timeout \\ 1_000) do
-    # `mark_dispatched` deletes the row entirely, so successful
-    # dispatch shows up as an empty list for the room. Poll for a
-    # bounded interval so we don't wedge the test if the async task
-    # takes a beat.
-    deadline = System.monotonic_time(:millisecond) + timeout
+      row = enqueue!(meeting_id, %{classified_intent: "book_followup", confidence: 0.87})
 
-    Stream.repeatedly(fn -> IntentQueue.list_for_room(room_id) end)
-    |> Enum.reduce_while(nil, fn items, _ ->
-      cond do
-        items == [] ->
-          {:halt, :cleared}
+      # AC2's 500ms budget, measured from enqueue through classify →
+      # notify → claim → resolve → broadcast.
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: topic,
+                       event: "attention",
+                       payload: %{
+                         signal: %{
+                           reason: "meeting_intent_dispatch",
+                           intent_id: signal_intent_id,
+                           meeting_id: signal_meeting_id,
+                           classified_intent: "book_followup",
+                           confidence: 0.87,
+                           target_agent_id: signal_agent_id,
+                           transcript_chunk_excerpt: excerpt
+                         }
+                       }
+                     },
+                     500
 
-        System.monotonic_time(:millisecond) > deadline ->
-          {:halt, {:still_present, items}}
+      assert topic == "runtime:#{runtime.runtime_id}"
+      assert signal_intent_id == row.id
+      assert signal_meeting_id == meeting_id
+      # Derived by the dispatcher from the role, never supplied here.
+      assert signal_agent_id == agent.id
+      assert excerpt == "we should book a follow-up on the onboarding funnel"
 
-        true ->
-          Process.sleep(20)
-          {:cont, nil}
-      end
-    end)
-    |> case do
-      :cleared -> :ok
-      other -> other
-    end
-  end
-
-  # ── Stubs live in a nested module so they're addressable by an MFA
-  # via `Application.put_env/3`. The functions read the stashed
-  # `{pid, fun}` out of `:persistent_term`, forward the payload to the
-  # parent test process, and run the caller's fun for the return
-  # value.
-  # ───────────────────────────────────────────────────────────────────────────
-
-  defmodule Stub do
-    @moduledoc false
-
-    def native_dispatch(signal) do
-      case :persistent_term.get({Platform.Meetings.IntentDispatcherTest, :native_stub}, nil) do
-        {pid, fun} ->
-          send(pid, {:native_dispatch_called, signal})
-          fun.(signal)
-
-        nil ->
-          :ok
-      end
+      dispatched = await_status(meeting_id, row.id, :dispatched)
+      assert dispatched.dispatched_at
+      assert dispatched.target_agent_id == agent.id
+      assert dispatched.target_agent_slug == agent.slug
+      assert IntentQueue.cursor(meeting_id) == row.id
     end
 
-    def external_dispatch(responsibility, agent, context) do
-      case :persistent_term.get({Platform.Meetings.IntentDispatcherTest, :external_stub}, nil) do
-        {pid, fun} ->
-          send(pid, {:external_dispatch_called, responsibility, agent, context})
-          fun.(responsibility, agent, context)
-
-        nil ->
-          {:ok, %{content: %{}}}
-      end
-    end
-  end
-
-  # ── Tests ──────────────────────────────────────────────────────────────────
-
-  describe "PubSub-notify hot path" do
-    test "resolvable role dispatches to native agent then marks the row dispatched" do
-      install_native_stub(fn _signal -> :ok end)
-
-      agent = create_agent!(%{kind: "native"})
+    test "the signal goes to runtime:<runtime_id>, never runtime:<agent_id>" do
+      {agent, _runtime} = create_runtime_agent!()
       :ok = assign_role!("designer", agent)
 
-      {_pid, _name} = start_dispatcher!()
+      # Subscribe to the WRONG topic — the one the task description
+      # originally specified. A dispatcher keyed by the agent uuid would
+      # publish where no RuntimeChannel ever joins, so this refute is
+      # the only thing standing between us and a silent zero-delivery
+      # dispatch with a fully green suite.
+      :ok = PlatformWeb.Endpoint.subscribe("runtime:#{agent.id}")
 
-      # Give the dispatcher a beat to finish `init/1` (subscribe).
-      Process.sleep(20)
+      meeting_id = new_meeting!()
+      start_dispatcher!()
 
-      # Enqueue — the queue broadcasts `{:intent_enqueued, ...}` on
-      # the `:inserted` path, waking the dispatcher.
-      assert {:ok, :inserted} =
-               IntentQueue.enqueue("intentdisp-happy", "dk-happy", %{
-                 intent: "book_followup",
-                 target_role: "designer",
-                 confidence: 0.9,
-                 chunk_id: "chunk-happy",
-                 meeting_id: "mtg-happy"
-               })
+      row = enqueue!(meeting_id, %{classified_intent: "wrong-topic-probe"})
 
-      assert_receive {:native_dispatch_called, signal}, 1_000
-
-      assert %{
-               reason: :system_event,
-               metadata: %{
-                 source: :meetings_intent_dispatcher,
-                 role_key: "designer",
-                 intent: "book_followup",
-                 room_id: "intentdisp-happy",
-                 dedupe_key: "dk-happy",
-                 agent_id: agent_id
-               }
-             } = signal
-
-      assert agent_id == agent.id
-      assert :ok = await_dispatch("intentdisp-happy", "dk-happy")
+      # It definitely went out...
+      await_status(meeting_id, row.id, :dispatched)
+      # ...and not here.
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 200
     end
 
-    test "target_role atom form (from legacy classifier output) is normalised" do
-      install_native_stub(fn _ -> :ok end)
+    test "the row is :dispatched before the broadcast leaves, so an instant ack lands" do
+      {_agent, _runtime} = seed_target!()
 
-      agent = create_agent!(%{kind: "native"})
-      :ok = assign_role!("historian", agent)
+      meeting_id = new_meeting!()
+      start_dispatcher!()
 
-      {_pid, _name} = start_dispatcher!()
-      Process.sleep(20)
+      row = enqueue!(meeting_id, %{classified_intent: "instant-ack"})
 
-      IntentQueue.enqueue("intentdisp-happy", "dk-atom", %{
-        intent: "record_decision",
-        target_role: :historian,
-        confidence: 0.75,
-        chunk_id: "chunk-atom"
-      })
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{intent_id: intent_id}}
+                     },
+                     1_000
 
-      assert_receive {:native_dispatch_called, %{metadata: %{role_key: "historian"}}}, 1_000
+      # An ack racing the dispatcher's own bookkeeping must succeed —
+      # if the row were still `:queued` at broadcast time this would
+      # come back `{:invalid_ack_state, :queued}`.
+      assert {:ok, acked} = ack!(intent_id, "instant-probe", "working")
+      assert acked.status == :acked
+      assert intent_id == row.id
     end
   end
 
-  describe "drop reasons" do
-    test "unknown role_key drops with :unknown_role and logs once per boot" do
-      install_native_stub(fn _ -> :ok end)
+  # ── Serial cursor ──────────────────────────────────────────────────────────
 
+  describe "ack-gated serial cursor" do
+    test "three intents for the same target go out one at a time (AC3)" do
+      seed_target!()
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      first = enqueue!(meeting_id, %{classified_intent: "one"})
+      second = enqueue!(meeting_id, %{classified_intent: "two"})
+      third = enqueue!(meeting_id, %{classified_intent: "three"})
+
+      await_status(meeting_id, first.id, :dispatched)
+
+      # The cursor did NOT fan out — this is the whole point of the
+      # redesign, and it is what the old batch drain could not promise.
+      assert status_of(meeting_id, second.id) == :queued
+      assert status_of(meeting_id, third.id) == :queued
+      assert IntentQueue.cursor(meeting_id) == first.id
+
+      # A `:working` ack says "I spawned a subagent", not "I'm done".
+      # It must NOT release the queue.
+      assert {:ok, _} = IntentQueue.ack(meeting_id, first.id, "probe-1", :working)
+      assert status_of(meeting_id, first.id) == :acked
+      assert status_of(meeting_id, second.id) == :queued
+      assert status_of(meeting_id, third.id) == :queued
+      assert IntentQueue.cursor(meeting_id) == first.id
+
+      # `:completed` advances.
+      assert {:ok, _} = IntentQueue.ack(meeting_id, first.id, "probe-1", :completed)
+      assert status_of(meeting_id, first.id) == :completed
+
+      await_status(meeting_id, second.id, :dispatched)
+      assert status_of(meeting_id, third.id) == :queued
+      assert IntentQueue.cursor(meeting_id) == second.id
+    end
+
+    test "at no point are two intents in flight for the same meeting" do
+      seed_target!()
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      rows = for n <- 1..5, do: enqueue!(meeting_id, %{classified_intent: "intent-#{n}"})
+
+      # Walk the whole queue, sampling the in-flight count at every
+      # step. A single sample after each ack would miss a transient
+      # double-dispatch; sampling on a tight loop while acking is what
+      # actually exercises the invariant.
+      Enum.each(rows, fn row ->
+        await_status(meeting_id, row.id, :dispatched)
+        assert in_flight_count(meeting_id) == 1
+
+        {:ok, _} = IntentQueue.ack(meeting_id, row.id, "probe-#{row.id}", :working)
+        assert in_flight_count(meeting_id) == 1
+
+        {:ok, _} = IntentQueue.ack(meeting_id, row.id, "probe-#{row.id}", :completed)
+      end)
+
+      assert in_flight_count(meeting_id) == 0
+      assert IntentQueue.cursor(meeting_id) == nil
+      assert Enum.all?(IntentQueue.list(meeting_id), &(&1.status == :completed))
+    end
+
+    test "meetings do not block each other" do
+      seed_target!()
+
+      meeting_a = new_meeting!()
+      meeting_b = new_meeting!()
+      start_dispatcher!()
+
+      a1 = enqueue!(meeting_a, %{classified_intent: "a1"})
+      _a2 = enqueue!(meeting_a, %{classified_intent: "a2"})
+      b1 = enqueue!(meeting_b, %{classified_intent: "b1"})
+
+      # Head-of-line blocking is per-meeting and deliberate. Across
+      # meetings it would be a bug.
+      await_status(meeting_a, a1.id, :dispatched)
+      await_status(meeting_b, b1.id, :dispatched)
+    end
+
+    test "a rejected ack advances the cursor and emits the stage-6 correction hook" do
+      attach_telemetry!([[:platform, :meetings, :intent_rejected]])
+      seed_target!()
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      first = enqueue!(meeting_id, %{classified_intent: "not-mine"})
+      second = enqueue!(meeting_id, %{classified_intent: "next"})
+
+      await_status(meeting_id, first.id, :dispatched)
+
+      assert {:ok, row} =
+               IntentQueue.ack(meeting_id, first.id, "probe-r", :rejected, "wrong person")
+
+      assert row.status == :completed
+
+      assert_receive {:telemetry, [:platform, :meetings, :intent_rejected], %{count: 1}, meta},
+                     1_000
+
+      assert meta.intent_id == first.id
+      assert meta.meeting_id == meeting_id
+      assert meta.classified_intent == "not-mine"
+      assert meta.note == "wrong person"
+      # `dispatch_outcome` is the status the row held when the reject
+      # landed — stage 6 writes it onto the correction row, so it has
+      # to be the PRE-transition value, not `:completed`.
+      assert meta.dispatch_outcome == :dispatched
+
+      await_status(meeting_id, second.id, :dispatched)
+    end
+  end
+
+  # ── Cancellation (AC7 / AC8) ───────────────────────────────────────────────
+
+  describe "cancelling an in-flight intent" do
+    test "the runtime is told, carrying the subagent_id it acked with (AC7)" do
+      seed_target!()
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      first = enqueue!(meeting_id, %{classified_intent: "cancel-me"})
+      second = enqueue!(meeting_id, %{classified_intent: "behind-it"})
+
+      await_status(meeting_id, first.id, :dispatched)
+      assert {:ok, _} = ack!(first.id, "cancel-probe-9x", "working")
+
+      assert {:ok, :cancel_requested, _row} =
+               IntentQueue.cancel(meeting_id, first.id, reason: :wrong_target)
+
+      # The subagent_id is the one the TARGET supplied, read back off
+      # the row — not regenerated, not nil. Without it the runtime has
+      # no idea which of its subagents to stop.
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "intent_cancelled",
+                       payload: %{
+                         intent_id: cancelled_id,
+                         subagent_id: "cancel-probe-9x",
+                         reason: :wrong_target,
+                         corrected_intent: nil,
+                         corrected_target_agent_id: nil
+                       }
+                     },
+                     500
+
+      assert cancelled_id == first.id
+
+      # Still in flight until the target answers. Marking it cancelled
+      # here would claim a subagent stopped that may still be running.
+      assert status_of(meeting_id, first.id) == :acked
+      assert status_of(meeting_id, second.id) == :queued
+
+      assert {:ok, honored} = ack!(first.id, "cancel-probe-9x", "cancel_honored")
+      assert honored.status == :cancelled
+
+      {:ok, cancelled_row} = IntentQueue.get(meeting_id, first.id)
+      assert cancelled_row.cancelled_at
+
+      # Cursor advanced.
+      await_status(meeting_id, second.id, :dispatched)
+    end
+
+    test "a pencil edit forwards the corrected intent and target" do
+      seed_target!()
+      other = create_agent!()
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "misclassified"})
+      await_status(meeting_id, row.id, :dispatched)
+      assert {:ok, _} = ack!(row.id, "pencil-probe", "working")
+
+      assert {:ok, :cancel_requested, _} =
+               IntentQueue.cancel(meeting_id, row.id,
+                 reason: :wrong_intent,
+                 corrected_intent: "draft_brief",
+                 corrected_target_agent_id: other.id
+               )
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "intent_cancelled",
+                       payload: %{
+                         reason: :wrong_intent,
+                         corrected_intent: "draft_brief",
+                         corrected_target_agent_id: corrected_target
+                       }
+                     },
+                     500
+
+      assert corrected_target == other.id
+    end
+
+    test "cancelling a :dispatched intent that never acked carries a nil subagent_id" do
+      seed_target!()
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "never-acked"})
+      await_status(meeting_id, row.id, :dispatched)
+
+      assert {:ok, :cancel_requested, _} =
+               IntentQueue.cancel(meeting_id, row.id, reason: :not_actionable)
+
+      # Honest nil: the runtime never told us a subagent existed, so we
+      # cannot invent a handle for one.
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "intent_cancelled",
+                       payload: %{subagent_id: nil, status: :dispatched}
+                     },
+                     500
+    end
+
+    test "a queued intent is deleted outright and no runtime is bothered" do
+      seed_target!()
+
+      meeting_id = new_meeting!()
+      # No dispatcher — the row stays `:queued`, which is the state the
+      # producer X's before anything has gone out.
+      first = enqueue!(meeting_id, %{classified_intent: "never-sent"})
+
+      assert {:ok, :deleted, deleted} = IntentQueue.cancel(meeting_id, first.id)
+      assert deleted.id == first.id
+      assert IntentQueue.get(meeting_id, first.id) == {:error, :not_found}
+      assert IntentQueue.list(meeting_id) == []
+
+      refute_received %Phoenix.Socket.Broadcast{event: "intent_cancelled"}
+    end
+
+    test "a completion that beat the cancel lands :cancelled_late, not a failure (AC8)" do
+      seed_target!()
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "already-done"})
+      await_status(meeting_id, row.id, :dispatched)
+
+      # The target finished before the producer's X reached the queue.
+      assert {:ok, %{status: :completed}} = ack!(row.id, "fast-probe", "completed")
+
+      assert {:ok, :cancelled_late, late} = IntentQueue.cancel(meeting_id, row.id)
+      assert late.status == :cancelled_late
+      assert late.cancelled_at
+      # The completion is not erased — `completed_at` survives, which is
+      # what keeps the tuning corpus honest about what actually ran.
+      assert late.completed_at
+
+      # Nothing to signal: the work is done.
+      refute_received %Phoenix.Socket.Broadcast{event: "intent_cancelled"}
+    end
+
+    test "a cancel_honored arriving after the work completed also lands :cancelled_late" do
+      seed_target!()
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "raced"})
+      await_status(meeting_id, row.id, :dispatched)
+      assert {:ok, _} = ack!(row.id, "race-probe", "working")
+
+      assert {:ok, :cancel_requested, _} = IntentQueue.cancel(meeting_id, row.id)
+      assert_receive %Phoenix.Socket.Broadcast{event: "intent_cancelled"}, 500
+
+      # The completion was already in flight when the cancel went out.
+      assert {:ok, %{status: :completed}} = ack!(row.id, "race-probe", "completed")
+
+      # The target then honours the cancel it had already been sent.
+      # No crash, no "cannot ack a completed intent" — a distinct
+      # status the producer can be shown.
+      assert {:ok, honored} = ack!(row.id, "race-probe", "cancel_honored")
+      assert honored.status == :cancelled_late
+    end
+
+    test "an unreachable runtime lands the row :cancelled locally rather than leaving it in flight" do
+      {agent, _runtime} = seed_target!()
+
+      meeting_id = new_meeting!(ack_timeout_ms: 60_000)
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "orphaned-runtime"})
+      await_status(meeting_id, row.id, :dispatched)
+      assert {:ok, _} = ack!(row.id, "orphan-probe", "working")
+
+      # The runtime link disappears between dispatch and cancel — an
+      # operator revoked it, or the agent was re-provisioned.
+      Repo.update_all(from(a in Agent, where: a.id == ^agent.id),
+        set: [runtime_id: nil, runtime_type: "built_in"]
+      )
+
+      assert {:ok, :cancelled, cancelled} = IntentQueue.cancel(meeting_id, row.id)
+      assert cancelled.status == :cancelled
+      assert cancelled.cancelled_at
+      assert IntentQueue.cursor(meeting_id) == nil
+    end
+
+    test "an already-terminal row is not cancellable" do
+      seed_target!()
+
+      meeting_id = new_meeting!(ack_timeout_ms: 400)
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "will-time-out"})
+      await_status(meeting_id, row.id, :dispatched)
+      await_status(meeting_id, row.id, :timed_out, 3_000)
+
+      assert {:error, {:not_cancellable, :timed_out}} = IntentQueue.cancel(meeting_id, row.id)
+    end
+
+    test "cancelling an unknown intent answers :not_found" do
+      meeting_id = new_meeting!()
+
+      assert {:error, :not_found} =
+               IntentQueue.cancel(meeting_id, Platform.Types.UUIDv7.generate())
+    end
+  end
+
+  # ── Ack timeout ────────────────────────────────────────────────────────────
+
+  describe "ack timeout" do
+    test "an unanswered dispatch times out and the cursor advances (AC4)" do
+      seed_target!()
+
+      meeting_id = new_meeting!(ack_timeout_ms: 500)
+      start_dispatcher!()
+
+      first = enqueue!(meeting_id, %{classified_intent: "unanswered"})
+      second = enqueue!(meeting_id, %{classified_intent: "behind-it"})
+
+      await_status(meeting_id, first.id, :dispatched)
+
+      timed_out = await_status(meeting_id, first.id, :timed_out, 3_000)
+      assert timed_out.timed_out_at
+      # Amber, not red: nothing is provably broken, we just heard
+      # nothing back.
+      assert timed_out.dispatch_failure_reason == nil
+
+      await_status(meeting_id, second.id, :dispatched)
+    end
+
+    test "a :working ack re-arms the window rather than letting it expire" do
+      seed_target!()
+
+      meeting_id = new_meeting!(ack_timeout_ms: 400)
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "long-running"})
+      await_status(meeting_id, row.id, :dispatched)
+
+      # Three heartbeats across 900ms — more than two full windows.
+      # A target that keeps saying "still working" must not be timed
+      # out underneath itself.
+      Enum.each(1..3, fn _ ->
+        Process.sleep(300)
+        assert {:ok, _} = IntentQueue.ack(meeting_id, row.id, "probe-hb", :working)
+      end)
+
+      assert status_of(meeting_id, row.id) == :acked
+    end
+
+    test "the ack window is configurable through application env" do
+      seed_target!()
+
+      Application.put_env(:platform, Platform.Meetings.IntentQueue, queue_ack_timeout_ms: 400)
+
+      # Started AFTER the put_env, since the server reads config once
+      # at init and then holds it.
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "config-driven"})
+      await_status(meeting_id, row.id, :dispatched)
+      await_status(meeting_id, row.id, :timed_out, 3_000)
+    end
+  end
+
+  # ── :no_ack_spawn_failed vs :timed_out ─────────────────────────────────────
+
+  describe "no_ack_spawn_failed disambiguation (AC6)" do
+    test "rejected ack attempts turn an eventual timeout red" do
+      seed_target!()
+
+      meeting_id = new_meeting!(ack_timeout_ms: 600)
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "runtime-cant-spawn"})
+      await_status(meeting_id, row.id, :dispatched)
+
+      # The runtime TRIED — it called intent_ack and the schema
+      # rejected its subagent_id, twice. That is evidence of a broken
+      # target, not of silence.
+      :ok = IntentQueue.record_rejected_ack(meeting_id, row.id)
+      :ok = IntentQueue.record_rejected_ack(meeting_id, row.id)
+      assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 2
+
+      failed = await_status(meeting_id, row.id, :no_ack_spawn_failed, 3_000)
+      assert failed.dispatch_failure_reason == :subagent_spawn_rejected
+      assert failed.timed_out_at
+    end
+
+    test "no rejected attempts leaves the same timeout amber" do
+      seed_target!()
+
+      meeting_id = new_meeting!(ack_timeout_ms: 600)
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "runtime-silent"})
+      await_status(meeting_id, row.id, :dispatched)
+
+      assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 0
+      await_status(meeting_id, row.id, :timed_out, 3_000)
+    end
+
+    test "a rejected attempt against a successfully-acked row does not turn it red" do
+      seed_target!()
+
+      meeting_id = new_meeting!(ack_timeout_ms: 600)
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "acked-then-silent"})
+      await_status(meeting_id, row.id, :dispatched)
+
+      :ok = IntentQueue.record_rejected_ack(meeting_id, row.id)
+      assert {:ok, _} = IntentQueue.ack(meeting_id, row.id, "probe-late", :working)
+
+      # It got there in the end. `:no_ack_spawn_failed` means "never
+      # produced a subagent id"; this runtime did.
+      await_status(meeting_id, row.id, :timed_out, 3_000)
+    end
+  end
+
+  # ── Durable corrections (AC14 / AC17) ──────────────────────────────────────
+
+  describe "system-originated correction rows (AC14)" do
+    # Task 019f70b8 stage 6. These are the only two paths that write a
+    # `meeting_intent_corrections` row without a human clicking
+    # anything. Both go queue transition site → telemetry →
+    # `IntentCorrections.TelemetryHandler` → Postgres, so a test that
+    # inserted a row directly would prove nothing about the wiring.
+    #
+    # `new_real_meeting!/0` builds an actual org → project → meeting
+    # chain rather than the bare UUID the rest of this file uses,
+    # because the correction row's `org_id` is DERIVED from that chain
+    # at write time. A harness that passed the org in would go green
+    # against a handler that never resolved one, and the whole
+    # org-scoped exemplar query (AC16) reads that column.
+
+    test "a rejected ack writes a removed_no_action / wrong_target correction" do
+      {agent, _runtime} = seed_target!()
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row =
+        enqueue!(meeting_id, %{
+          classified_intent: "not-mine",
+          chunk_excerpt: "someone should redo the onboarding illustrations"
+        })
+
+      await_status(meeting_id, row.id, :dispatched)
+
+      assert {:ok, _} = IntentQueue.ack(meeting_id, row.id, "probe-reject", :rejected)
+
+      assert [correction] = IntentCorrections.list_for_meeting(meeting_id)
+
+      # Asserted explicitly rather than inferred from `list_for_meeting/2`
+      # returning it: inside a test transaction this is the only row in
+      # the table, so an unscoped query would hand it back regardless of
+      # what meeting it was attributed to.
+      assert correction.meeting_id == meeting_id
+      assert correction.correction == :removed_no_action
+      assert correction.reason == :wrong_target
+      assert correction.classified_intent == "not-mine"
+      assert correction.transcript_chunk_excerpt =~ "onboarding illustrations"
+      # Derived by the dispatcher from the role — never seeded by the test.
+      assert correction.classified_target_agent_id == agent.id
+      # No human clicked anything.
+      assert is_nil(correction.actor_participant_id)
+    end
+
+    test "the rejected correction records where the intent HAD GOT TO, not where it landed" do
+      seed_target!()
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "acked-then-rejected"})
+      await_status(meeting_id, row.id, :dispatched)
+
+      # Ack `:working` first so the row is `:acked`, not `:dispatched`,
+      # when the reject lands. "The target acked, looked, and pushed it
+      # back" is a different tuning signal from "the target rejected it
+      # before acking" — and both land the ROW on `:completed`, so a
+      # handler reading the post-transition status would collapse them.
+      assert {:ok, %{status: :acked}} =
+               IntentQueue.ack(meeting_id, row.id, "probe-working", :working)
+
+      assert {:ok, %{status: :completed}} =
+               IntentQueue.ack(meeting_id, row.id, "probe-working", :rejected)
+
+      assert [correction] = IntentCorrections.list_for_meeting(meeting_id)
+      assert correction.dispatch_outcome == :acked
+    end
+
+    test "a rejected ack straight from :dispatched records :dispatched" do
+      seed_target!()
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "rejected-cold"})
+      await_status(meeting_id, row.id, :dispatched)
+
+      assert {:ok, _} = IntentQueue.ack(meeting_id, row.id, "probe-cold", :rejected)
+
+      assert [correction] = IntentCorrections.list_for_meeting(meeting_id)
+      assert correction.dispatch_outcome == :dispatched
+    end
+
+    test "the correction's org_id is derived from the meeting's project, not passed in" do
+      seed_target!()
+
+      {meeting, org_id} = new_real_meeting!()
+      start_dispatcher!()
+
+      row = enqueue!(meeting.id, %{classified_intent: "org-derivation-probe"})
+      await_status(meeting.id, row.id, :dispatched)
+
+      assert {:ok, _} = IntentQueue.ack(meeting.id, row.id, "probe-org", :rejected)
+
+      assert [correction] = IntentCorrections.list_for_meeting(meeting.id)
+      assert correction.org_id == org_id
+
+      # And it is therefore visible to the classifier's org-scoped
+      # exemplar read, which is the entire point of writing the column.
+      exemplar_intents =
+        meeting.id
+        |> IntentCorrections.exemplars_for_meeting(10)
+        |> Enum.map(& &1.classified_intent)
+
+      assert "org-derivation-probe" in exemplar_intents
+    end
+
+    test "a :no_ack_spawn_failed timeout writes a reason: :other correction" do
+      seed_target!()
+
+      meeting_id = new_meeting!(ack_timeout_ms: 600)
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "runtime-cant-spawn"})
+      await_status(meeting_id, row.id, :dispatched)
+
+      :ok = IntentQueue.record_rejected_ack(meeting_id, row.id)
+
+      await_status(meeting_id, row.id, :no_ack_spawn_failed, 3_000)
+
+      assert [correction] = IntentCorrections.list_for_meeting(meeting_id)
+
+      assert correction.dispatch_outcome == :no_ack_spawn_failed
+      assert correction.correction == :removed_no_action
+      # NOT `:wrong_target` — a runtime that cannot spawn a subagent is
+      # an unreliable target, which is a different thing from the wrong
+      # one, and the corpus has to keep them apart.
+      assert correction.reason == :other
+    end
+
+    test "an amber :timed_out writes NO correction row" do
+      seed_target!()
+
+      meeting_id = new_meeting!(ack_timeout_ms: 600)
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "runtime-silent"})
+      await_status(meeting_id, row.id, :dispatched)
+
+      await_status(meeting_id, row.id, :timed_out, 3_000)
+
+      # Saru's status semantics: `:timed_out` is amber — we waited and
+      # heard nothing, which is not evidence the classification was
+      # wrong. Recording it as a correction would train the model to
+      # stop producing intents for slow targets.
+      assert IntentCorrections.list_for_meeting(meeting_id) == []
+    end
+
+    test "a visible :dispatch_failed writes NO correction row" do
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{target_role: nil})
+      await_status(meeting_id, row.id, :dispatch_failed)
+
+      # The producer can see this row and correct it by hand. Until they
+      # do, "we could not route it" is a routing gap, not a statement
+      # that the classifier was wrong.
+      assert IntentCorrections.list_for_meeting(meeting_id) == []
+    end
+  end
+
+  describe "AC17 — a meeting with nothing corrected leaves zero durable rows" do
+    test "20 intents dispatched, acked and completed cleanly write nothing" do
+      seed_target!()
+
+      before_count = Repo.aggregate(IntentCorrection, :count)
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      rows =
+        for n <- 1..20 do
+          enqueue!(meeting_id, %{classified_intent: "clean-#{n}"})
+        end
+
+      for row <- rows do
+        await_status(meeting_id, row.id, :dispatched, 5_000)
+        assert {:ok, _} = IntentQueue.ack(meeting_id, row.id, "probe-#{row.id}", :working)
+        assert {:ok, _} = IntentQueue.ack(meeting_id, row.id, "probe-#{row.id}", :completed)
+      end
+
+      assert Enum.all?(IntentQueue.list(meeting_id), &(&1.status == :completed))
+
+      # Scoped by meeting AND checked corpus-wide: the meeting scope
+      # catches a row attributed here, the global count catches one
+      # written with a mangled meeting_id.
+      assert IntentCorrections.list_for_meeting(meeting_id) == []
+      assert Repo.aggregate(IntentCorrection, :count) == before_count
+    end
+
+    test "a cancel_honored cancellation writes nothing on its own" do
+      seed_target!()
+
+      before_count = Repo.aggregate(IntentCorrection, :count)
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "cancel-me"})
+      await_status(meeting_id, row.id, :dispatched)
+
+      assert {:ok, _} = IntentQueue.ack(meeting_id, row.id, "probe-cancel", :working)
+      assert {:ok, :cancel_requested, _} = IntentQueue.cancel(meeting_id, row.id)
+      assert {:ok, _} = IntentQueue.ack(meeting_id, row.id, "probe-cancel", :cancel_honored)
+
+      await_status(meeting_id, row.id, :cancelled)
+
+      # `IntentQueue.cancel/3` deliberately does not write a correction:
+      # the durable record of a producer's X is written by the surface
+      # that knows WHY (stage 7's reason/pencil), and a cancel with no
+      # stated reason is not an exemplar.
+      assert IntentCorrections.list_for_meeting(meeting_id) == []
+      assert Repo.aggregate(IntentCorrection, :count) == before_count
+    end
+  end
+
+  # ── Resolution failures are retained ───────────────────────────────────────
+
+  describe "dispatch failures" do
+    test "nil target_role fails visibly and retains the row" do
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{target_role: nil})
+
+      failed = await_status(meeting_id, row.id, :dispatch_failed)
+      assert failed.dispatch_failure_reason == :no_target_role
+
+      # Retained, not deleted — the producer has to be able to see it,
+      # X it, and correct it. The pre-019f70b8 queue deleted this row.
+      assert [^failed] = IntentQueue.list(meeting_id)
+      assert IntentQueue.cursor(meeting_id) == nil
+    end
+
+    test "unknown role fails as :unknown_role and logs once per key" do
+      meeting_id = new_meeting!()
       {_pid, _name} = start_dispatcher!()
-      Process.sleep(20)
 
       log =
-        capture_log([level: :info], fn ->
-          IntentQueue.enqueue("intentdisp-unknown-1", "dk-unknown-1", %{
-            intent: "do_stuff",
-            target_role: "bogus_role",
-            confidence: 0.5,
-            chunk_id: "chunk-u1"
-          })
+        capture_log(fn ->
+          row = enqueue!(meeting_id, %{target_role: "not-a-real-role"})
+          failed = await_status(meeting_id, row.id, :dispatch_failed)
+          assert failed.dispatch_failure_reason == :unknown_role
 
-          # Wait for the queue row to be gone (dispatcher dropped it).
-          assert :ok = await_dispatch("intentdisp-unknown-1", "dk-unknown-1")
+          second = enqueue!(meeting_id, %{target_role: "not-a-real-role"})
+          await_status(meeting_id, second.id, :dispatch_failed)
         end)
 
-      assert log =~ "unknown target_role"
-      assert log =~ "bogus_role"
-
-      # Second hit with the same bogus role must NOT log again.
-      log2 =
-        capture_log([level: :info], fn ->
-          IntentQueue.enqueue("intentdisp-unknown-2", "dk-unknown-2", %{
-            intent: "do_stuff",
-            target_role: "bogus_role",
-            confidence: 0.5,
-            chunk_id: "chunk-u2"
-          })
-
-          assert :ok = await_dispatch("intentdisp-unknown-2", "dk-unknown-2")
-        end)
-
-      refute log2 =~ "unknown target_role"
-
-      # But a DIFFERENT unknown role still logs on its first hit.
-      log3 =
-        capture_log([level: :info], fn ->
-          IntentQueue.enqueue("intentdisp-unknown-2", "dk-unknown-3", %{
-            intent: "do_stuff",
-            target_role: "other_bogus",
-            confidence: 0.5,
-            chunk_id: "chunk-u3"
-          })
-
-          assert :ok = await_dispatch("intentdisp-unknown-2", "dk-unknown-3")
-        end)
-
-      assert log3 =~ "other_bogus"
+      # Spam suppression: one line per unknown key for the dispatcher's
+      # lifetime, however many intents carry it.
+      occurrences = log |> String.split("unknown target_role") |> length() |> Kernel.-(1)
+      assert occurrences == 1
     end
 
-    test "target_role nil drops with :no_assignee immediately" do
-      install_native_stub(fn _ -> flunk("must not be called for nil target_role") end)
+    test "valid but unassigned role fails as :no_assignee" do
+      :ok = Roles.unassign_role("designer")
 
-      {_pid, _name} = start_dispatcher!()
-      Process.sleep(20)
+      meeting_id = new_meeting!()
+      start_dispatcher!()
 
-      IntentQueue.enqueue("intentdisp-nil-role", "dk-nil", %{
-        intent: "do_stuff",
-        target_role: nil,
-        confidence: 0.5,
-        chunk_id: "chunk-nil"
-      })
+      row = enqueue!(meeting_id, %{target_role: "designer"})
 
-      assert :ok = await_dispatch("intentdisp-nil-role", "dk-nil")
+      failed = await_status(meeting_id, row.id, :dispatch_failed)
+      assert failed.dispatch_failure_reason == :no_assignee
     end
 
-    test "role has no assignment → dropped as :no_assignee" do
-      install_native_stub(fn _ -> flunk("must not be called for unassigned role") end)
+    test "a role whose agent was deleted fails visibly rather than dispatching" do
+      agent = create_agent!()
+      :ok = assign_role!("designer", agent)
+      Repo.delete_all(from(a in Agent, where: a.id == ^agent.id))
 
-      :ok = Roles.unassign_role("triage_officer")
+      meeting_id = new_meeting!()
+      start_dispatcher!()
 
-      {_pid, _name} = start_dispatcher!()
-      Process.sleep(20)
+      row = enqueue!(meeting_id, %{target_role: "designer"})
 
-      IntentQueue.enqueue("intentdisp-no-assignee", "dk-noa", %{
-        intent: "escalate",
-        target_role: "triage_officer",
-        confidence: 0.8,
-        chunk_id: "chunk-noa"
-      })
+      failed = await_status(meeting_id, row.id, :dispatch_failed)
 
-      assert :ok = await_dispatch("intentdisp-no-assignee", "dk-noa")
+      # `:no_assignee`, not `:agent_not_found`: `role_assignments` has a
+      # cascading FK, so deleting the agent takes the assignment with
+      # it and `agent_id_for_role/1` returns nil. The dispatcher's
+      # `:agent_not_found` branch covers the narrower inter-query race
+      # (id resolved, agent gone before `Repo.get/2`), which cannot be
+      # provoked through the public path — asserting it here would mean
+      # asserting a lie about which branch ran.
+      assert failed.dispatch_failure_reason == :no_assignee
     end
-  end
 
-  describe "external agent kind" do
-    test "external agent selects the external dispatch fn" do
-      install_external_stub(fn responsibility, agent, context ->
-        # Sanity-check the shape of everything the dispatcher hands the
-        # external surface — the stub asserts here since the parent
-        # `assert_receive` only sees the message.
-        assert String.starts_with?(responsibility.key, "meetings.produce.")
-        assert responsibility.feature == "meetings"
-        assert %Agent{kind: "external"} = agent
-        assert context.role_key == "meeting_scribe"
-        assert context.intent == "log_action_item"
-
-        {:ok, %{content: %{"ok" => true}}}
-      end)
-
-      agent =
-        create_agent!(%{
-          kind: "external",
-          endpoint_kind: "openai_compat",
-          base_url: "https://example.test/v1",
-          model: "gpt-fake"
-        })
-
-      :ok = assign_role!("meeting_scribe", agent)
-
-      {_pid, _name} = start_dispatcher!()
-      Process.sleep(20)
-
-      IntentQueue.enqueue("intentdisp-external", "dk-ext", %{
-        intent: "log_action_item",
-        target_role: "meeting_scribe",
-        confidence: 0.7,
-        chunk_id: "chunk-ext"
-      })
-
-      assert_receive {:external_dispatch_called, _responsibility, _agent, _context}, 1_000
-      assert :ok = await_dispatch("intentdisp-external", "dk-ext")
-    end
-  end
-
-  describe "fault tolerance" do
-    test "dispatch task raises → dispatcher still alive and PubSub subscription intact" do
-      # The stub raises — Task.Supervisor.async_nolink shields the
-      # dispatcher process so `handle_info({:DOWN, ...}, _)` records
-      # a retry and life continues.
-      install_native_stub(fn _signal ->
-        raise "boom from stub"
-      end)
-
-      agent = create_agent!(%{kind: "native"})
+    test "a target agent with no linked runtime fails as :no_runtime and retains the row" do
+      # The flagged stage-4 behaviour change. This agent used to get an
+      # AgentResponder chat signal; under the ack contract there is no
+      # runtime to spawn a subagent, so the producer sees a red row
+      # instead of silence.
+      agent = create_agent!()
       :ok = assign_role!("designer", agent)
 
-      {pid, _name} = start_dispatcher!()
-      Process.sleep(20)
+      meeting_id = new_meeting!()
+      start_dispatcher!()
 
-      IntentQueue.enqueue("intentdisp-crash", "dk-crash", %{
-        intent: "crash",
-        target_role: "designer",
-        confidence: 0.5,
-        chunk_id: "chunk-crash"
-      })
+      first = enqueue!(meeting_id, %{classified_intent: "nowhere-to-go"})
+      second = enqueue!(meeting_id, %{classified_intent: "should-still-be-tried"})
 
-      # Give the async task time to raise + the :DOWN handler time
-      # to run.
-      Process.sleep(200)
+      failed = await_status(meeting_id, first.id, :dispatch_failed)
+      assert failed.dispatch_failure_reason == :no_runtime
+      # Never stamped — the row never got as far as a target.
+      assert failed.target_agent_id == nil
 
-      # Dispatcher still alive.
-      assert Process.alive?(pid)
+      # Retained AND the cursor advanced. A wedged cursor would leave
+      # everything behind it queued forever, which is the invisibility
+      # this whole task exists to remove.
+      second_failed = await_status(meeting_id, second.id, :dispatch_failed)
+      assert second_failed.dispatch_failure_reason == :no_runtime
 
-      # Row is still queued (as :pending, attempts bumped by
-      # mark_retry). The dispatcher accepts new events after the
-      # crash — enqueue another and verify it lands too.
-      install_native_stub(fn _ -> :ok end)
-
-      assert {:ok, :inserted} =
-               IntentQueue.enqueue("intentdisp-crash", "dk-crash-2", %{
-                 intent: "second_try",
-                 target_role: "designer",
-                 confidence: 0.5,
-                 chunk_id: "chunk-crash-2"
-               })
-
-      assert_receive {:native_dispatch_called, _signal}, 1_000
-    end
-
-    test "sandbox_gone from dispatch task is silently cleared" do
-      # The stub raises DBConnection.OwnershipError — mimics the case
-      # where a DataCase-owned test exits between the classifier's
-      # enqueue and the dispatcher's async Task hitting the wire.
-      install_native_stub(fn _signal ->
-        raise DBConnection.OwnershipError, "no owner"
-      end)
-
-      agent = create_agent!(%{kind: "native"})
-      :ok = assign_role!("designer", agent)
-
-      {pid, _name} = start_dispatcher!()
-      Process.sleep(20)
-
-      IntentQueue.enqueue("intentdisp-sandbox", "dk-sbox", %{
-        intent: "sandbox_race",
-        target_role: "designer",
-        confidence: 0.5,
-        chunk_id: "chunk-sbox"
-      })
-
-      # Row should be cleared (mark_dispatched used to silently retire
-      # the claim) and the dispatcher process is still alive.
-      assert :ok = await_dispatch("intentdisp-sandbox", "dk-sbox")
-      assert Process.alive?(pid)
+      assert length(IntentQueue.list(meeting_id)) == 2
+      assert IntentQueue.cursor(meeting_id) == nil
     end
   end
 
-  describe "periodic tick" do
-    test "tick drains rows that were enqueued before the dispatcher subscribed" do
-      # Simulate the classic "dispatcher restarted; broadcast was
-      # missed" case by writing to the queue BEFORE the dispatcher
-      # starts, then giving it a short tick interval so `handle_info(:tick, _)`
-      # picks the row up.
-      install_native_stub(fn _ -> :ok end)
+  # ── Re-drive paths ─────────────────────────────────────────────────────────
 
-      agent = create_agent!(%{kind: "native"})
-      :ok = assign_role!("designer", agent)
+  describe "belt-and-braces re-drive" do
+    test "the periodic tick drains a meeting whose notify was missed" do
+      seed_target!()
 
-      # Rows land while nothing is listening.
-      IntentQueue.enqueue("intentdisp-tick", "dk-tick-1", %{
-        intent: "picked_up_by_tick",
-        target_role: "designer",
-        confidence: 0.9,
-        chunk_id: "chunk-tick-1"
-      })
+      # Enqueue BEFORE any dispatcher exists, so the notify broadcast
+      # lands in nobody's mailbox — exactly the case the tick recovers.
+      meeting_id = new_meeting!()
+      row = enqueue!(meeting_id, %{classified_intent: "missed-notify"})
+      assert status_of(meeting_id, row.id) == :queued
 
-      # Boot the dispatcher with a fast tick — 50ms is plenty; the
-      # `assert_receive` timeout below guards against a slow CI.
-      {_pid, _name} = start_dispatcher!(tick_interval_ms: 50)
+      start_dispatcher!(tick_interval_ms: 50)
 
-      assert_receive {:native_dispatch_called, %{metadata: %{role_key: "designer"}}}, 1_500
-      assert :ok = await_dispatch("intentdisp-tick", "dk-tick-1")
+      await_status(meeting_id, row.id, :dispatched)
+    end
+
+    test "sweep_stalled/0 re-broadcasts and needs no running dispatcher" do
+      seed_target!()
+
+      meeting_id = new_meeting!()
+      row = enqueue!(meeting_id, %{classified_intent: "swept"})
+
+      # Safe with nothing listening — the StallRegistry fires this from
+      # its own process and must not care whether a dispatcher is up.
+      assert :ok = IntentDispatcher.sweep_stalled()
+      assert status_of(meeting_id, row.id) == :queued
+
+      start_dispatcher!()
+      assert :ok = IntentDispatcher.sweep_stalled()
+
+      await_status(meeting_id, row.id, :dispatched)
+    end
+
+    test "drain/2 is a no-op when the cursor is held" do
+      seed_target!()
+
+      meeting_id = new_meeting!()
+      {_pid, name} = start_dispatcher!()
+
+      first = enqueue!(meeting_id, %{classified_intent: "holding"})
+      _second = enqueue!(meeting_id, %{classified_intent: "waiting"})
+
+      await_status(meeting_id, first.id, :dispatched)
+
+      assert IntentDispatcher.drain(meeting_id, name) == :busy
+      assert in_flight_count(meeting_id) == 1
+    end
+
+    test "drain/2 on a meeting with no queue answers :empty" do
+      {_pid, name} = start_dispatcher!()
+      assert IntentDispatcher.drain(Platform.Types.UUIDv7.generate(), name) == :empty
     end
   end
 
-  describe "agent race" do
-    test "role resolves to an agent that was deleted → retry then drop after cap" do
-      install_native_stub(fn _ -> :ok end)
-
-      # Create + assign, then delete the agent to leave a dangling
-      # role_assignments row. The dispatcher's `Repo.get` returns nil,
-      # so it should promote to retry.
-      agent = create_agent!(%{kind: "native"})
-      :ok = assign_role!("designer", agent)
-      Repo.delete!(agent)
-
-      {_pid, _name} = start_dispatcher!()
-      Process.sleep(20)
-
-      IntentQueue.enqueue("intentdisp-agent-missing", "dk-am", %{
-        intent: "orphan",
-        target_role: "designer",
-        confidence: 0.5,
-        chunk_id: "chunk-am"
-      })
-
-      # First hit → mark_retry; row stays present with :status
-      # :pending and attempts bumped.
-      Process.sleep(150)
-
-      case IntentQueue.list_for_room("intentdisp-agent-missing") do
-        [item] ->
-          assert item.attempts >= 1
-          assert item.status == :pending
-
-        [] ->
-          # If the tick fires fast enough all three retries could
-          # already have exhausted; that's also a correct outcome.
-          :ok
-      end
-    end
-  end
+  # ── Telemetry ──────────────────────────────────────────────────────────────
 
   describe "telemetry" do
-    test "intent_dispatched fires on happy path with the full metadata contract" do
+    test "a successful dispatch emits :intent_dispatched with the intent id and runtime" do
       attach_telemetry!([[:platform, :meetings, :intent_dispatched]])
-      install_native_stub(fn _ -> :ok end)
+      {agent, runtime} = seed_target!()
 
-      agent = create_agent!(%{kind: "native"})
-      :ok = assign_role!("designer", agent)
+      meeting_id = new_meeting!()
+      start_dispatcher!()
 
-      {_pid, _name} = start_dispatcher!()
-      Process.sleep(20)
+      row = enqueue!(meeting_id, %{classified_intent: "measured"})
 
-      IntentQueue.enqueue("intentdisp-happy", "dk-telemetry-happy", %{
-        intent: "book_followup",
-        target_role: "designer",
-        confidence: 0.9,
-        chunk_id: "chunk-telemetry-happy",
-        meeting_id: "mtg-telemetry-happy"
-      })
-
-      assert_receive {:telemetry, [:platform, :meetings, :intent_dispatched], measurements,
-                      metadata},
-                     1_500
-
-      assert %{count: 1, dispatch_ms: dispatch_ms} = measurements
-      assert is_integer(dispatch_ms)
-      assert dispatch_ms >= 0
-
-      assert %{
-               meeting_id: "mtg-telemetry-happy",
-               room_id: "intentdisp-happy",
-               target_role: "designer",
-               intent: "book_followup",
-               agent_id: agent_id,
-               agent_slug: agent_slug,
-               dispatch_kind: :native
-             } = metadata
-
-      assert agent_id == agent.id
-      assert agent_slug == agent.slug
-    end
-
-    test "intent_dispatched carries :external dispatch_kind for external agents" do
-      attach_telemetry!([[:platform, :meetings, :intent_dispatched]])
-
-      install_external_stub(fn _resp, _agent, _ctx ->
-        {:ok, %{content: %{"ok" => true}}}
-      end)
-
-      agent =
-        create_agent!(%{
-          kind: "external",
-          endpoint_kind: "openai_compat",
-          base_url: "https://example.test/v1",
-          model: "gpt-fake"
-        })
-
-      :ok = assign_role!("meeting_scribe", agent)
-
-      {_pid, _name} = start_dispatcher!()
-      Process.sleep(20)
-
-      IntentQueue.enqueue("intentdisp-external", "dk-telemetry-ext", %{
-        intent: "log_action_item",
-        target_role: "meeting_scribe",
-        confidence: 0.7,
-        chunk_id: "chunk-telemetry-ext",
-        meeting_id: "mtg-telemetry-ext"
-      })
-
-      assert_receive {:telemetry, [:platform, :meetings, :intent_dispatched], _measurements,
-                      %{dispatch_kind: :external, target_role: "meeting_scribe"}},
-                     1_500
-    end
-
-    test "intent_dropped fires with reason=:no_assignee when target_role is nil" do
-      attach_telemetry!([[:platform, :meetings, :intent_dropped]])
-      install_native_stub(fn _ -> :ok end)
-
-      {_pid, _name} = start_dispatcher!()
-      Process.sleep(20)
-
-      IntentQueue.enqueue("intentdisp-nil-role", "dk-telemetry-nil", %{
-        intent: "do_stuff",
-        target_role: nil,
-        confidence: 0.5,
-        chunk_id: "chunk-telemetry-nil",
-        meeting_id: "mtg-telemetry-nil"
-      })
-
-      assert_receive {:telemetry, [:platform, :meetings, :intent_dropped], measurements,
-                      metadata},
-                     1_500
-
-      assert %{count: 1} = measurements
-
-      assert %{
-               meeting_id: "mtg-telemetry-nil",
-               room_id: "intentdisp-nil-role",
-               target_role: nil,
-               intent: "do_stuff",
-               reason: :no_assignee,
-               attempts: 0
-             } = metadata
-    end
-
-    test "intent_dropped fires with reason=:no_assignee when the role has no assignment" do
-      attach_telemetry!([[:platform, :meetings, :intent_dropped]])
-      install_native_stub(fn _ -> :ok end)
-
-      :ok = Roles.unassign_role("triage_officer")
-
-      {_pid, _name} = start_dispatcher!()
-      Process.sleep(20)
-
-      IntentQueue.enqueue("intentdisp-no-assignee", "dk-telemetry-noa", %{
-        intent: "escalate",
-        target_role: "triage_officer",
-        confidence: 0.8,
-        chunk_id: "chunk-telemetry-noa",
-        meeting_id: "mtg-telemetry-noa"
-      })
-
-      assert_receive {:telemetry, [:platform, :meetings, :intent_dropped], measurements,
-                      %{
-                        reason: :no_assignee,
-                        attempts: 0,
-                        target_role: "triage_officer",
-                        meeting_id: "mtg-telemetry-noa"
-                      }},
-                     1_500
+      assert_receive {:telemetry, [:platform, :meetings, :intent_dispatched], measurements, meta},
+                     2_000
 
       assert measurements.count == 1
+      assert is_integer(measurements.dispatch_ms)
+      assert meta.meeting_id == meeting_id
+      assert meta.intent_id == row.id
+      assert meta.target_role == "designer"
+      assert meta.agent_id == agent.id
+      # Agent kind no longer selects a surface — there is one surface.
+      assert meta.dispatch_kind == :runtime_attention
+      assert meta.runtime_id == runtime.runtime_id
     end
 
-    test "intent_dropped fires with reason=:unknown_role for a bogus target_role" do
-      attach_telemetry!([[:platform, :meetings, :intent_dropped]])
-      install_native_stub(fn _ -> :ok end)
-
-      {_pid, _name} = start_dispatcher!()
-      Process.sleep(20)
-
-      IntentQueue.enqueue("intentdisp-unknown-1", "dk-telemetry-unknown", %{
-        intent: "do_stuff",
-        target_role: "bogus_role",
-        confidence: 0.5,
-        chunk_id: "chunk-telemetry-unknown",
-        meeting_id: "mtg-telemetry-unknown"
-      })
-
-      assert_receive {:telemetry, [:platform, :meetings, :intent_dropped], _measurements,
-                      %{
-                        reason: :unknown_role,
-                        attempts: 0,
-                        target_role: "bogus_role",
-                        meeting_id: "mtg-telemetry-unknown"
-                      }},
-                     1_500
-    end
-
-    test "intent_dropped fires with reason=:max_attempts_exceeded after @max_attempts retries" do
-      # Stub raises so every dispatch attempt fails → mark_retry until
-      # exhaustion. Roll through the retries with fast tick.
+    test "a resolution failure emits :intent_dropped carrying the reason" do
       attach_telemetry!([[:platform, :meetings, :intent_dropped]])
 
-      install_native_stub(fn _ ->
-        raise "always fails"
-      end)
+      meeting_id = new_meeting!()
+      start_dispatcher!()
 
-      agent = create_agent!(%{kind: "native"})
-      :ok = assign_role!("designer", agent)
+      row = enqueue!(meeting_id, %{target_role: nil})
 
-      {_pid, _name} = start_dispatcher!(tick_interval_ms: 30)
+      assert_receive {:telemetry, [:platform, :meetings, :intent_dropped], %{count: 1}, meta},
+                     2_000
 
-      IntentQueue.enqueue("intentdisp-crash", "dk-telemetry-exhaust", %{
-        intent: "always_fails",
-        target_role: "designer",
-        confidence: 0.5,
-        chunk_id: "chunk-telemetry-exhaust",
-        meeting_id: "mtg-telemetry-exhaust"
-      })
-
-      max_attempts = IntentQueue.max_attempts()
-
-      assert_receive {:telemetry, [:platform, :meetings, :intent_dropped], measurements,
-                      %{
-                        reason: :max_attempts_exceeded,
-                        attempts: attempts,
-                        target_role: "designer",
-                        meeting_id: "mtg-telemetry-exhaust"
-                      }},
-                     3_000
-
-      assert measurements.count == 1
-      assert attempts == max_attempts
+      assert meta.meeting_id == meeting_id
+      assert meta.intent_id == row.id
+      assert meta.reason == :no_target_role
     end
 
-    test "intent_dispatcher.tick fires on every tick regardless of claim outcome" do
-      attach_telemetry!([[:platform, :meetings, :intent_dispatcher, :tick]])
-
-      # Nothing enqueued; the tick still fires with claimed: 0.
-      {_pid, _name} = start_dispatcher!(tick_interval_ms: 40)
-
-      assert_receive {:telemetry, [:platform, :meetings, :intent_dispatcher, :tick], measurements,
-                      metadata},
-                     1_500
-
-      assert %{claimed: claimed} = measurements
-      assert is_integer(claimed)
-      assert claimed >= 0
-
-      assert %{queue_depth_after: depth, in_flight: in_flight} = metadata
-      assert is_integer(depth)
-      assert depth >= 0
-      assert is_integer(in_flight)
-      assert in_flight >= 0
-    end
-
-    test "intent_dispatcher.queue_depth fires alongside :tick and reflects ETS size" do
+    test "the tick emits :tick and :queue_depth counting queued and in-flight separately" do
       attach_telemetry!([
         [:platform, :meetings, :intent_dispatcher, :tick],
         [:platform, :meetings, :intent_dispatcher, :queue_depth]
       ])
 
-      # Enqueue a row that WON'T dispatch — no stub is installed and
-      # no role is assigned — so it lives on the ETS table long
-      # enough for the tick's queue_depth read.
-      install_native_stub(fn _ -> flunk("must not be called") end)
-      :ok = Roles.unassign_role("triage_officer")
+      seed_target!()
 
-      # Boot with a moderately-fast tick so we can catch :queue_depth
-      # before the dispatcher processes the row via claim_pending.
-      # Use a distinct room + do NOT rely on ordering — assert on the
-      # tick-and-queue_depth pair independently.
-      IntentQueue.enqueue("intentdisp-tick", "dk-telemetry-depth", %{
-        intent: "just_sitting_here",
-        target_role: "triage_officer",
-        confidence: 0.5,
-        chunk_id: "chunk-telemetry-depth",
-        meeting_id: "mtg-telemetry-depth"
-      })
+      meeting_id = new_meeting!()
+      first = enqueue!(meeting_id, %{classified_intent: "d1"})
+      _second = enqueue!(meeting_id, %{classified_intent: "d2"})
+      _third = enqueue!(meeting_id, %{classified_intent: "d3"})
 
-      # The row above will be claimed + dropped :no_assignee on the
-      # first tick, so we may catch queue_depth as 0 or 1 depending on
-      # timing. Either is contract-valid — what matters is BOTH events
-      # fire together on the same tick.
-      {_pid, _name} = start_dispatcher!(tick_interval_ms: 30)
+      start_dispatcher!(tick_interval_ms: 50)
+      await_status(meeting_id, first.id, :dispatched)
 
-      assert_receive {:telemetry, [:platform, :meetings, :intent_dispatcher, :tick], _tm, _tmeta},
-                     1_500
-
+      # Depth is rows still WAITING. The in-flight row is not waiting,
+      # and counting it would make the number mean two things at once —
+      # which is what the old global-table `:ets.info/2` size did.
       assert_receive {:telemetry, [:platform, :meetings, :intent_dispatcher, :queue_depth],
-                      %{count: count}, _qmeta},
-                     1_500
+                      %{count: depth}, _},
+                     2_000
 
-      assert is_integer(count)
-      assert count >= 0
-    end
-  end
+      assert depth >= 2
 
-  describe "sweep_stalled/0 (StallRegistry callback)" do
-    setup do
-      # Point the sweep at a tight stall window so the tests don't
-      # have to wait 2 minutes. Restored on exit.
-      prev = Application.get_env(:platform, Platform.Meetings.IntentDispatcher)
+      assert_receive {:telemetry, [:platform, :meetings, :intent_dispatcher, :tick], measurements,
+                      meta},
+                     2_000
 
-      Application.put_env(
-        :platform,
-        Platform.Meetings.IntentDispatcher,
-        Keyword.put(prev || [], :stall_window_ms, 50)
-      )
-
-      on_exit(fn ->
-        if is_nil(prev) do
-          Application.delete_env(:platform, Platform.Meetings.IntentDispatcher)
-        else
-          Application.put_env(:platform, Platform.Meetings.IntentDispatcher, prev)
-        end
-      end)
-
-      :ok
-    end
-
-    test "re-queues stalled rows and broadcasts intent_enqueued so the hot path wakes" do
-      room_id = "intentdisp-sweep-stall"
-      dedupe_key = "dk-sweep-stall"
-
-      # Subscribe to the enqueue topic so we can assert the sweep's
-      # broadcast landed. Mirrors the dispatcher's own subscription
-      # (production wake-up path).
-      :ok = Platform.Meetings.PubSub.subscribe_intent_enqueued()
-
-      on_exit(fn ->
-        Platform.Meetings.PubSub.unsubscribe_intent_enqueued()
-        IntentQueue.drop_for_room(room_id)
-      end)
-
-      # Stamp a claimed-but-stuck row directly into ETS with a
-      # `claimed_at_monotonic` far enough in the past to trip the
-      # 50 ms stall window from the setup block.
-      now = System.monotonic_time(:millisecond)
-
-      stalled_item = %{
-        intent: "book_followup",
-        target_role: "designer",
-        confidence: 0.9,
-        chunk_id: "chunk-sweep-stall",
-        meeting_id: "mtg-sweep-stall",
-        inserted_at_monotonic: now - 10_000,
-        status: :dispatching,
-        attempts: 0,
-        claimed_at_monotonic: now - 10_000,
-        last_error: nil
-      }
-
-      true =
-        :ets.insert(:meeting_intent_queue, {{room_id, dedupe_key}, stalled_item})
-
-      assert :ok = IntentDispatcher.sweep_stalled()
-
-      # Row should be back in :pending with attempts bumped and
-      # last_error recorded.
-      [rescued] = IntentQueue.list_for_room(room_id)
-      assert rescued.status == :pending
-      assert rescued.attempts == 1
-      assert rescued.last_error =~ "sweep_stalled"
-
-      # And the sweep must have broadcast the wake-up so the hot path
-      # can pick the row up on the next `claim_one/2`.
-      assert_receive {:intent_enqueued, %{room_id: ^room_id, dedupe_key: ^dedupe_key}},
-                     500
-    end
-
-    test "no stalled rows is a silent no-op" do
-      # Clean state — sweep must return :ok without raising or
-      # broadcasting anything.
-      :ok = Platform.Meetings.PubSub.subscribe_intent_enqueued()
-      on_exit(fn -> Platform.Meetings.PubSub.unsubscribe_intent_enqueued() end)
-
-      assert :ok = IntentDispatcher.sweep_stalled()
-
-      refute_receive {:intent_enqueued, _}, 50
+      assert is_integer(measurements.claimed)
+      assert is_integer(meta.queue_depth_after)
+      # Since stage 4 this counts rows a meeting cursor is holding, not
+      # this process's outstanding dispatch tasks (there are none).
+      assert is_integer(meta.in_flight)
     end
   end
 end

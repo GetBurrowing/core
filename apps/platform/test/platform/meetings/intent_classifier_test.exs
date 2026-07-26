@@ -8,7 +8,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
   assignee-lookup gate, spam-suppressor MapSet.
 
   Stage 4 shipped the full pipeline in `classify_and_enqueue/3`:
-  prompt render + LLM call + JSON parse + dedupe + `IntentQueue.enqueue/3`
+  prompt render + LLM call + JSON parse + dedupe + `IntentQueue.enqueue/2`
   + terminal telemetry. Coverage below extends the stage-3 guard
   assertions with the pipeline's happy-path, idempotent-replay,
   template-fallback, model-error, and parse-error branches. The
@@ -19,6 +19,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
   use Platform.DataCase, async: false
 
   import ExUnit.CaptureLog
+  import Platform.TenancyFixtures
 
   alias Platform.Agents.Agent
   alias Platform.Meetings.IntentClassifier
@@ -168,7 +169,11 @@ defmodule Platform.Meetings.IntentClassifierTest do
             text: "we need to schedule a follow-up on the billing bug",
             speaker_name: "alice"
           },
-          meeting_id: nil
+          # Every chunk carries a meeting by default. Since task
+          # 019f70b8 stage 3 the queue is keyed by MEETING — a chunk
+          # with no meeting_id has nowhere to be enqueued, which is
+          # its own test below rather than the ambient case.
+          meeting_id: meeting_id_for(room_id)
         },
         overrides_map
       )
@@ -176,6 +181,19 @@ defmodule Platform.Meetings.IntentClassifierTest do
     :ok = MeetingsPubSub.broadcast_transcript_chunk(room_id, payload)
     payload
   end
+
+  # Deterministic room -> meeting mapping so a test can enqueue by room
+  # and read back by meeting without threading an id through every
+  # helper.
+  defp meeting_id_for(room_id), do: "meeting-" <> room_id
+
+  # Rows for the meeting this room's chunks land in.
+  defp queued_for_room(room_id), do: IntentQueue.list(meeting_id_for(room_id))
+
+  # Tear down a room's meeting queue. Replaces the old
+  # `IntentQueue.drop_for_room/1` — there is no shared table to scrub
+  # any more, just a process to stop.
+  defp drop_queue_for_room(room_id), do: IntentQueue.stop(meeting_id_for(room_id))
 
   # ── Tests ──────────────────────────────────────────────────────────────────
 
@@ -250,7 +268,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     setup do
       agent = create_agent!(%{slug: "intent-agent-happy"})
       assign_intent_role!(agent)
-      IntentQueue.drop_for_room("room-happy")
+      drop_queue_for_room("room-happy")
       %{agent: agent}
     end
 
@@ -284,17 +302,183 @@ defmodule Platform.Meetings.IntentClassifierTest do
                       }},
                      500
 
-      # And the row landed in the queue.
-      entries = IntentQueue.list_for_room("room-happy")
+      # And the row landed in the MEETING's queue — the chunk named
+      # `meeting-happy` explicitly, so that is where it lives.
+      entries = IntentQueue.list("meeting-happy")
+      on_exit(fn -> IntentQueue.stop("meeting-happy") end)
       assert length(entries) == 1
       [entry] = entries
-      assert entry.intent == "schedule_follow_up"
+      assert entry.classified_intent == "schedule_follow_up"
       assert entry.target_role == "scribe"
       assert entry.confidence == 0.87
       assert entry.meeting_id == "meeting-happy"
+      assert entry.status == :queued
 
       # Silence the "unused" compiler warning for the injected agent.
       assert agent.slug == "intent-agent-happy"
+    end
+  end
+
+  # Task 019f70b8: the classifier writes into the per-meeting queue the
+  # dispatcher drains and the live-tuning UI renders, with the extra
+  # fields that surface makes use of. Stage 3 retired the legacy
+  # room-keyed write, so this is now the only enqueue path.
+  describe "classify_and_enqueue — per-meeting queue write" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-permeeting"})
+      assign_intent_role!(agent)
+
+      target = create_agent!(%{slug: "intent-target-designer"})
+      :ok = Roles.unassign_role("designer")
+      {:ok, _} = Roles.assign_role("designer", target.id)
+      # No on_exit unassign — the DataCase sandbox rolls the row back,
+      # and an on_exit DB call runs after the sandbox owner has exited.
+
+      meeting_id = "meeting-permeeting-#{System.unique_integer([:positive])}"
+      on_exit(fn -> IntentQueue.stop(meeting_id) end)
+
+      %{agent: agent, target: target, meeting_id: meeting_id}
+    end
+
+    test "stamps the excerpt, the chunk id, and the resolved target agent", %{
+      target: target,
+      meeting_id: meeting_id
+    } do
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _creds, _messages, _opts ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "visual_adjust",
+               "target_role" => "designer",
+               "confidence" => 0.91
+             })
+         }}
+      end)
+
+      :ok = MeetingsPubSub.subscribe_intents(meeting_id)
+
+      payload =
+        broadcast_chunk("room-permeeting",
+          meeting_id: meeting_id,
+          segment: %{
+            id: "seg-permeeting",
+            text: "the nav bar contrast is too low on mobile",
+            speaker_name: "alice"
+          }
+        )
+
+      assert_receive {:intent_classified, row}, 1_000
+
+      assert row.meeting_id == meeting_id
+      assert row.room_id == "room-permeeting"
+      assert row.status == :queued
+      assert row.classified_intent == "visual_adjust"
+      assert row.target_role == "designer"
+      assert row.confidence == 0.91
+      assert row.transcript_chunk_id == "seg-permeeting"
+      assert row.chunk_excerpt == "the nav bar contrast is too low on mobile"
+
+      # `Roles.agent_id_for_role/1` is guarded `when is_binary(role_key)`;
+      # the classifier stringifies before calling it, so a role that
+      # arrives as an atom resolves rather than raising.
+      assert row.target_agent_id == target.id
+      assert row.target_agent_slug == "intent-target-designer"
+
+      assert [^row] = IntentQueue.list(meeting_id)
+      assert payload.meeting_id == meeting_id
+    end
+
+    test "an unassigned role still enqueues, with a nil target", %{meeting_id: meeting_id} do
+      :ok = Roles.unassign_role("designer")
+
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _creds, _messages, _opts ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "visual_adjust",
+               "target_role" => "designer",
+               "confidence" => 0.5
+             })
+         }}
+      end)
+
+      :ok = MeetingsPubSub.subscribe_intents(meeting_id)
+      _ = broadcast_chunk("room-permeeting-noassignee", meeting_id: meeting_id)
+
+      assert_receive {:intent_classified, row}, 1_000
+
+      # Do NOT silently drop: the row lands as :queued with no target
+      # and fails visibly at dispatch. That IS the tuning signal.
+      assert row.status == :queued
+      assert row.target_role == "designer"
+      assert row.target_agent_id == nil
+      assert row.target_agent_slug == nil
+    end
+
+    test "a chunk with no meeting_id is classified but has no queue to land in" do
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _creds, _messages, _opts ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "visual_adjust",
+               "target_role" => "designer",
+               "confidence" => 0.5
+             })
+         }}
+      end)
+
+      drop_queue_for_room("room-permeeting-nomeeting")
+      on_exit(fn -> drop_queue_for_room("room-permeeting-nomeeting") end)
+
+      _ = attach_terminal_recorder!(:nomeeting)
+      _ = broadcast_chunk("room-permeeting-nomeeting", meeting_id: nil)
+
+      # The classification still happened and is still reported — what
+      # changed in stage 3 is that there is no room-keyed fallback
+      # queue to write it to. The telemetry says so out loud rather
+      # than the row vanishing silently.
+      assert_receive {:nomeeting, %{count: 1},
+                      %{meeting_id: nil, dedupe_key_hit_or_new: :no_meeting}},
+                     1_000
+
+      assert queued_for_room("room-permeeting-nomeeting") == []
+    end
+
+    test "the excerpt is capped at 280 characters", %{meeting_id: meeting_id} do
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _creds, _messages, _opts ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "visual_adjust",
+               "target_role" => "designer",
+               "confidence" => 0.5
+             })
+         }}
+      end)
+
+      long_text = String.duplicate("a", 400)
+      :ok = MeetingsPubSub.subscribe_intents(meeting_id)
+
+      _ =
+        broadcast_chunk("room-permeeting-long",
+          meeting_id: meeting_id,
+          segment: %{id: "seg-long", text: long_text, speaker_name: "alice"}
+        )
+
+      assert_receive {:intent_classified, row}, 1_000
+      assert String.length(row.chunk_excerpt) == 280
     end
   end
 
@@ -302,7 +486,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     setup do
       agent = create_agent!(%{slug: "intent-agent-idempotent"})
       assign_intent_role!(agent)
-      IntentQueue.drop_for_room("room-idempotent")
+      drop_queue_for_room("room-idempotent")
       %{agent: agent}
     end
 
@@ -329,7 +513,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
         room_id: "room-idempotent",
         transcript_id: "transcript-idem",
         segment: %{id: "seg-idem", text: "please own this bug", speaker_name: "bob"},
-        meeting_id: nil
+        meeting_id: meeting_id_for("room-idempotent")
       }
 
       :ok = MeetingsPubSub.broadcast_transcript_chunk("room-idempotent", payload)
@@ -338,7 +522,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
       :ok = MeetingsPubSub.broadcast_transcript_chunk("room-idempotent", payload)
       assert_receive {:classified, _m, %{dedupe_key_hit_or_new: :duplicate}}, 500
 
-      assert IntentQueue.list_for_room("room-idempotent") |> length() == 1
+      assert queued_for_room("room-idempotent") |> length() == 1
     end
   end
 
@@ -346,7 +530,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     setup do
       agent = create_agent!(%{slug: "intent-agent-fallback"})
       assign_intent_role!(agent)
-      IntentQueue.drop_for_room("room-fallback")
+      drop_queue_for_room("room-fallback")
 
       # Nuke any pre-seeded row for the slug so `render_template/2`
       # definitely returns {:error, :not_found}.
@@ -387,7 +571,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
         end)
 
       assert log =~ "prompt template #{@prompt_slug} missing"
-      assert IntentQueue.list_for_room("room-fallback") |> length() == 1
+      assert queued_for_room("room-fallback") |> length() == 1
     end
   end
 
@@ -395,7 +579,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     setup do
       agent = create_agent!(%{slug: "intent-agent-model-error"})
       assign_intent_role!(agent)
-      IntentQueue.drop_for_room("room-model-error")
+      drop_queue_for_room("room-model-error")
       %{agent: agent}
     end
 
@@ -419,7 +603,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
       assert log =~ "LLM call failed"
       assert log =~ "room-model-error"
-      assert IntentQueue.list_for_room("room-model-error") == []
+      assert queued_for_room("room-model-error") == []
       assert Process.alive?(pid), "classifier crashed on model error"
 
       # Second stub: now the provider returns cleanly. The classifier
@@ -442,7 +626,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
       assert_receive {:classified, _m, %{room_id: "room-model-error", intent: "recovered"}},
                      500
 
-      assert IntentQueue.list_for_room("room-model-error") |> length() == 1
+      assert queued_for_room("room-model-error") |> length() == 1
     end
 
     test "provider raising is trapped and reported as model_error" do
@@ -463,7 +647,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     setup do
       agent = create_agent!(%{slug: "intent-agent-parse-error"})
       assign_intent_role!(agent)
-      IntentQueue.drop_for_room("room-parse-error")
+      drop_queue_for_room("room-parse-error")
       %{agent: agent}
     end
 
@@ -480,7 +664,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
         assert_receive {:parse_error, %{count: 1}, %{room_id: "room-parse-error"}}, 500
       end)
 
-      assert IntentQueue.list_for_room("room-parse-error") == []
+      assert queued_for_room("room-parse-error") == []
       assert Process.alive?(pid)
     end
 
@@ -497,7 +681,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
         assert_receive {:parse_error, %{count: 1}, %{room_id: "room-parse-missing-keys"}}, 500
       end)
 
-      assert IntentQueue.list_for_room("room-parse-missing-keys") == []
+      assert queued_for_room("room-parse-missing-keys") == []
     end
   end
 
@@ -683,7 +867,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     setup do
       agent = create_agent!(%{slug: "intent-agent-context"})
       assign_intent_role!(agent)
-      IntentQueue.drop_for_room("room-context")
+      drop_queue_for_room("room-context")
       force_fallback_prompt!()
       %{agent: agent}
     end
@@ -763,7 +947,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     setup do
       agent = create_agent!(%{slug: "intent-agent-window"})
       assign_intent_role!(agent)
-      IntentQueue.drop_for_room("room-window")
+      drop_queue_for_room("room-window")
       force_fallback_prompt!()
       %{agent: agent}
     end
@@ -816,7 +1000,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     setup do
       agent = create_agent!(%{slug: "intent-agent-dedupe"})
       assign_intent_role!(agent)
-      IntentQueue.drop_for_room("room-dedupe")
+      drop_queue_for_room("room-dedupe")
       %{agent: agent}
     end
 
@@ -847,6 +1031,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
         MeetingsPubSub.broadcast_transcript_chunk("room-dedupe", %{
           room_id: "room-dedupe",
           transcript_id: "t-dedupe-a1",
+          meeting_id: meeting_id_for("room-dedupe"),
           segment: %{id: "seg-a1", text: utter_a, speaker_name: "alice"}
         })
 
@@ -859,6 +1044,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
         MeetingsPubSub.broadcast_transcript_chunk("room-dedupe", %{
           room_id: "room-dedupe",
           transcript_id: "t-dedupe-b",
+          meeting_id: meeting_id_for("room-dedupe"),
           segment: %{id: "seg-b", text: utter_b, speaker_name: "bob"}
         })
 
@@ -869,6 +1055,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
         MeetingsPubSub.broadcast_transcript_chunk("room-dedupe", %{
           room_id: "room-dedupe",
           transcript_id: "t-dedupe-c",
+          meeting_id: meeting_id_for("room-dedupe"),
           segment: %{id: "seg-c", text: utter_c, speaker_name: "carol"}
         })
 
@@ -880,6 +1067,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
         MeetingsPubSub.broadcast_transcript_chunk("room-dedupe", %{
           room_id: "room-dedupe",
           transcript_id: "t-dedupe-a2",
+          meeting_id: meeting_id_for("room-dedupe"),
           segment: %{id: "seg-a2", text: utter_a, speaker_name: "alice"}
         })
 
@@ -898,7 +1086,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     setup do
       agent = create_agent!(%{slug: "intent-agent-cleanup-context"})
       assign_intent_role!(agent)
-      IntentQueue.drop_for_room("room-cleanup-context")
+      drop_queue_for_room("room-cleanup-context")
       force_fallback_prompt!()
       %{agent: agent}
     end
@@ -967,6 +1155,225 @@ defmodule Platform.Meetings.IntentClassifierTest do
         assert prompt =~ "(no prior context)"
         refute prompt =~ "warmup 1"
         refute prompt =~ "warmup 2"
+      end)
+    end
+  end
+
+  # ── Few-shot correction exemplars (task 019f70b8 stage 6, AC16) ───────────
+
+  describe "classify_and_enqueue — correction exemplars in the prompt" do
+    # These cases build a REAL org → project → meeting chain and let the
+    # classifier resolve the org itself from the `meeting_id` on the
+    # transcript payload. The rest of this file uses the synthetic
+    # `"meeting-" <> room_id` id, which is correct for the ETS queue and
+    # cannot resolve a tenant — so an exemplar test written on top of it
+    # would assert against an empty corpus forever and stay green
+    # against a classifier that never queried one.
+
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-exemplars"})
+      assign_intent_role!(agent)
+      force_fallback_prompt!()
+      %{agent: agent}
+    end
+
+    defp create_meeting_in_org!(org_id) do
+      {:ok, project} =
+        Platform.Tasks.create_project(%{
+          name: "Intent Classifier #{System.unique_integer([:positive])}",
+          org_id: org_id
+        })
+
+      {:ok, space} =
+        Platform.Chat.create_space(%{
+          name: "Intent Classifier Space #{System.unique_integer([:positive])}",
+          slug: "intent-classifier-#{System.unique_integer([:positive])}",
+          kind: "meeting"
+        })
+
+      meeting =
+        %Platform.Meetings.Meeting{}
+        |> Platform.Meetings.Meeting.changeset(%{
+          project_id: project.id,
+          chat_space_id: space.id,
+          slug: "classify-#{System.unique_integer([:positive])}",
+          name: "Classifier Meeting",
+          livekit_room_name: "meeting-#{Ecto.UUID.generate()}"
+        })
+        |> Repo.insert!()
+
+      on_exit(fn -> IntentQueue.stop(meeting.id) end)
+
+      meeting
+    end
+
+    defp record_correction!(meeting_id, attrs) do
+      {:ok, correction} =
+        Platform.Meetings.IntentCorrections.create_correction(
+          Map.merge(
+            %{
+              meeting_id: meeting_id,
+              correction: :corrected,
+              reason: :wrong_intent
+            },
+            attrs
+          )
+        )
+
+      correction
+    end
+
+    # Render one chunk into `meeting`'s queue and hand back the system
+    # prompt the classifier built for it.
+    defp capture_prompt_for!(meeting, room_id) do
+      {pid, _name} = start_classifier!()
+      plant_stub_fun(pid, capture_prompt_stub(self()))
+
+      # `capture_log/1` returns the LOG, not the block's value — the
+      # fallback-prompt branch this suite forces logs a warning, so the
+      # noise has to be captured while the prompt itself comes back.
+      {prompt, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          _ =
+            broadcast_chunk(room_id,
+              meeting_id: meeting.id,
+              segment: %{
+                id: "seg-exemplar-#{System.unique_integer([:positive])}",
+                text: "make the sidebar narrower",
+                speaker_name: "alice",
+                timestamp_ms: 1_000
+              }
+            )
+
+          assert_receive {:captured_prompt, messages}, 1_000
+
+          messages
+          |> Enum.find(fn %{role: role} -> role == "system" end)
+          |> Map.fetch!(:content)
+        end)
+
+      prompt
+    end
+
+    test "the org's prior corrections are rendered into the prompt" do
+      meeting = create_meeting_in_org!(fabrikam_org_id())
+
+      record_correction!(meeting.id, %{
+        transcript_chunk_excerpt: "bump the header type up a notch",
+        classified_intent: "off_topic",
+        corrected_intent: "visual_adjust"
+      })
+
+      prompt = capture_prompt_for!(meeting, "room-exemplars")
+
+      assert prompt =~ ~s(- utterance: "bump the header type up a notch")
+      assert prompt =~ "classified as: off_topic"
+      assert prompt =~ "producer verdict: corrected (wrong_intent)"
+      assert prompt =~ "should have been: visual_adjust"
+
+      refute prompt =~ "(no prior corrections)",
+             "the sentinel must be replaced once the corpus is non-empty"
+    end
+
+    test "an empty corpus renders the stable sentinel, not an empty block" do
+      meeting = create_meeting_in_org!(tenant_org_id("paragon"))
+
+      prompt = capture_prompt_for!(meeting, "room-exemplars-empty")
+
+      # The prompt's SHAPE must not vary with the corpus. A block that
+      # silently disappears when there is nothing to show is a prompt
+      # nobody can reason about — and it is how a broken exemplar query
+      # would look identical to a genuinely empty corpus.
+      assert prompt =~ "(no prior corrections)"
+    end
+
+    test "another org's corrections never reach this meeting's prompt" do
+      other_meeting = create_meeting_in_org!(tenant_org_id("sxi"))
+
+      record_correction!(other_meeting.id, %{
+        transcript_chunk_excerpt: "sxi-only utterance nobody else may see",
+        classified_intent: "off_topic",
+        corrected_intent: "brief_worthy"
+      })
+
+      meeting = create_meeting_in_org!(tenant_org_id("soylent"))
+      prompt = capture_prompt_for!(meeting, "room-exemplars-cross-org")
+
+      refute prompt =~ "sxi-only utterance nobody else may see",
+             "exemplars must be scoped to the meeting's own org (AC16)"
+
+      assert prompt =~ "(no prior corrections)"
+    end
+
+    test "the exemplar block is bounded by the configured limit" do
+      meeting = create_meeting_in_org!(tenant_org_id("wayne_tech"))
+
+      for n <- 1..6 do
+        record_correction!(meeting.id, %{
+          transcript_chunk_excerpt: "bounded utterance #{n}",
+          classified_intent: "off_topic",
+          corrected_intent: "visual_adjust"
+        })
+      end
+
+      {pid, _name} = start_classifier!(correction_exemplar_limit: 2)
+      plant_stub_fun(pid, capture_prompt_stub(self()))
+
+      capture_log(fn ->
+        _ =
+          broadcast_chunk("room-exemplars-bounded",
+            meeting_id: meeting.id,
+            segment: %{id: "seg-bounded", text: "make it narrower", speaker_name: "alice"}
+          )
+
+        assert_receive {:captured_prompt, messages}, 1_000
+
+        prompt =
+          messages
+          |> Enum.find(fn %{role: role} -> role == "system" end)
+          |> Map.fetch!(:content)
+
+        # Newest two only, rendered oldest-first so the freshest sits
+        # closest to the utterance being classified.
+        assert prompt =~ "bounded utterance 6"
+        assert prompt =~ "bounded utterance 5"
+        refute prompt =~ "bounded utterance 4"
+        refute prompt =~ "bounded utterance 1"
+
+        idx_5 = :binary.match(prompt, "bounded utterance 5") |> elem(0)
+        idx_6 = :binary.match(prompt, "bounded utterance 6") |> elem(0)
+
+        assert idx_5 < idx_6,
+               "exemplars must render oldest-first so the newest correction is closest to the utterance"
+      end)
+    end
+
+    test "an unresolvable meeting degrades to the sentinel and still classifies" do
+      # The default `broadcast_chunk/2` meeting id is `"meeting-" <> room`
+      # — not a uuid, so the org lookup raises inside Ecto's cast. A
+      # dropped classification here would mean an unreadable tuning
+      # corpus could stop the classifier working at all.
+      _ = attach_terminal_recorder!(:classified)
+      {pid, _name} = start_classifier!()
+      plant_stub_fun(pid, capture_prompt_stub(self()))
+
+      capture_log(fn ->
+        _ =
+          broadcast_chunk("room-exemplars-unresolvable",
+            segment: %{id: "seg-unresolvable", text: "still classify me", speaker_name: "alice"}
+          )
+
+        assert_receive {:captured_prompt, messages}, 1_000
+
+        prompt =
+          messages
+          |> Enum.find(fn %{role: role} -> role == "system" end)
+          |> Map.fetch!(:content)
+
+        assert prompt =~ "(no prior corrections)"
+
+        # And the chunk still made it all the way to the terminal event.
+        assert_receive {:classified, _measurements, _metadata}, 1_000
       end)
     end
   end

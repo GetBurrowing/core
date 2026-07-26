@@ -22,10 +22,13 @@ defmodule PlatformWeb.MeetingLiveTest do
   alias Platform.Accounts.User
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Meetings.GuestInvite
+  alias Platform.Meetings.IntentCorrections
+  alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Tasks.Project
   alias Platform.Tenancy.OrgMembership
+  alias PlatformWeb.Components.Meetings.IntentsCollapse
 
   # Org plumbing (task 019f9b14 stage 2): `/meetings/:slug` now resolves
   # through `Meetings.fetch_meeting_for_user/2`, which requires the viewer to
@@ -4332,5 +4335,1199 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert back_map == baseline
     end
+  end
+
+  # ── Intents-collapse bar (task 019f70b8 stage 7) ───────────────────────────
+  #
+  # Every case here mounts the REAL route and seeds the REAL per-meeting
+  # queue keyed by the meeting's own id, then asserts on rendered DOM.
+  # None of them construct assigns directly: this subsystem has already
+  # shipped a green suite over a dead path (`meeting_id: nil`), and a
+  # test that hands the LV a list of rows proves the template renders a
+  # list — not that the mount ever finds one.
+  describe "intents-collapse bar — role gate (AC13)" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "intents-gate", name: "Intent Gate"})
+      {conn, user} = authenticated_conn(conn)
+      on_exit(fn -> IntentQueue.stop(meeting.id) end)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "unassigned meeting_producer leaves NOTHING in the DOM", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # AC13 is "absent", not "hidden": an unfilled capability is not a
+      # denial, and a CSS-hidden panel would still reserve layout space
+      # and still ship the queue's contents to a viewer who may not see
+      # them. Assert on the data-role hook, which is what the contract
+      # names.
+      refute Platform.Roles.agent_id_for_role("meeting_producer")
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      refute html =~ ~s(data-role="intents-collapse")
+      refute html =~ "intents-collapse"
+      # ...and no CSS-hidden twin either.
+      refute html =~ "Listening for intents"
+    end
+
+    test "assigned meeting_producer renders the strip", %{conn: conn, meeting: meeting} do
+      assign_producer!()
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-role="intents-collapse")
+      assert html =~ "intents-collapse"
+    end
+
+    test "the strip is a sibling of the chat body, not a replacement for it", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # The stage brief is explicit: keep hosting the embedded ChatLive.
+      # The bar shares the right rail with it; it does not displace it.
+      assign_producer!()
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-role="intents-collapse")
+      assert html =~ ~s(data-intent-panel-host="true")
+      assert html =~ ~s(data-pane="meeting-chat-panel")
+
+      # Ordering: the strip renders above the chat body inside the same aside.
+      strip_at = :binary.match(html, ~s(data-role="intents-collapse")) |> elem(0)
+      host_at = :binary.match(html, ~s(data-intent-panel-host="true")) |> elem(0)
+      assert strip_at < host_at
+    end
+
+    test "a role assigned mid-meeting fades the panel in without a reload", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      refute html =~ ~s(data-role="intents-collapse")
+
+      # Seed a row while the panel is invisible — the appointed producer
+      # must inherit the meeting's history, not only what happens next.
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "book_followup"})
+
+      assign_producer!()
+
+      html = render(view)
+      assert html =~ ~s(data-role="intents-collapse")
+      assert html =~ ~s(data-intent-id="#{row.id}")
+      assert html =~ "book_followup"
+    end
+
+    test "unassigning mid-meeting removes the panel and its contents", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      assign_producer!()
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "book_followup"})
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert html =~ ~s(data-intent-id="#{row.id}")
+
+      :ok = Platform.Roles.unassign_role("meeting_producer")
+
+      html = render(view)
+      refute html =~ ~s(data-role="intents-collapse")
+      refute html =~ ~s(data-intent-id="#{row.id}")
+    end
+
+    test "a non-producer cannot drive a removal by replaying the event", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # The template gate keeps the bar out of the DOM. This keeps it out
+      # of reach: a phx-click is a client-supplied message.
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "book_followup"})
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      render_click(view, "intent_remove", %{
+        "intent_id" => row.id,
+        "reason" => "wrong_intent"
+      })
+
+      assert IntentCorrections.list_for_meeting(meeting.id) == []
+      assert [%{status: :queued}] = IntentQueue.list(meeting.id)
+    end
+  end
+
+  describe "intents-collapse bar — mount seeding + status chips" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "intents-chips", name: "Intent Chips"})
+      {conn, user} = authenticated_conn(conn)
+      assign_producer!()
+      on_exit(fn -> IntentQueue.stop(meeting.id) end)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "an empty queue renders the listening state, not an error", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # `IntentQueue.list/1` returns [] when no owner is running — a
+      # meeting that never produced an intent and one whose queue ended
+      # are indistinguishable, and both are an empty strip.
+      refute IntentQueue.running?(meeting.id)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-role="intents-empty")
+      assert html =~ "Listening for intents"
+      assert html =~ ~s(data-intent-count="0")
+    end
+
+    test "mount seeds from the live queue keyed by THIS meeting's id", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # The derivation under test: the LV must find the queue the
+      # classifier enqueues into, keyed by `meeting.id`. A queue seeded
+      # under any other id renders nothing.
+      {:ok, first} = enqueue_intent(meeting, %{classified_intent: "create_task"})
+      {:ok, second} = enqueue_intent(meeting, %{classified_intent: "book_followup"})
+
+      other_meeting_id = Platform.Types.UUIDv7.generate()
+      {:ok, _} = IntentQueue.ensure_started(other_meeting_id)
+      on_exit(fn -> IntentQueue.stop(other_meeting_id) end)
+
+      {:ok, stranger} =
+        IntentQueue.enqueue(other_meeting_id, %{
+          classified_intent: "not_this_meeting",
+          target_role: "designer",
+          dedupe_key: "stranger-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-intent-id="#{first.id}")
+      assert html =~ ~s(data-intent-id="#{second.id}")
+      assert html =~ ~s(data-intent-count="2")
+      refute html =~ ~s(data-intent-id="#{stranger.id}")
+      refute html =~ "not_this_meeting"
+    end
+
+    test "rows render oldest-first on the queue's monotonic seq", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, first} = enqueue_intent(meeting, %{classified_intent: "alpha_intent"})
+      {:ok, second} = enqueue_intent(meeting, %{classified_intent: "beta_intent"})
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert :binary.match(html, ~s(data-intent-id="#{first.id}")) |> elem(0) <
+               :binary.match(html, ~s(data-intent-id="#{second.id}")) |> elem(0)
+    end
+
+    test "all nine statuses render a distinct glyph + mono label", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # Colourblind-safety is the point: the glyph and the label carry
+      # the meaning, colour only reinforces it. Nine rows, nine glyphs,
+      # nine labels, no duplicates.
+      rows =
+        for status <- IntentQueue.statuses(), into: %{} do
+          {:ok, row} = enqueue_intent(meeting, %{classified_intent: "intent_#{status}"})
+          {:ok, row} = force_status(meeting, row, status)
+          {status, row}
+        end
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      for {status, row} <- rows do
+        assert html =~ ~s(data-intent-id="#{row.id}")
+        assert html =~ ~s(data-intent-status="#{status}")
+        assert html =~ IntentsCollapse.status_icon(status)
+        assert html =~ IntentsCollapse.status_label(status)
+      end
+
+      glyphs = Enum.map(IntentQueue.statuses(), &IntentsCollapse.status_icon/1)
+      assert length(Enum.uniq(glyphs)) == length(IntentQueue.statuses())
+
+      labels = Enum.map(IntentQueue.statuses(), &IntentsCollapse.status_label/1)
+      assert length(Enum.uniq(labels)) == length(IntentQueue.statuses())
+    end
+
+    test "the error split is amber for :timed_out and red for the two hard failures", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # :timed_out means "we waited and got nothing"; the other two mean
+      # "something is broken". Three different operator actions, so they
+      # must not collapse into one chip. Stage 6 carried the same split
+      # into the corrections corpus.
+      {:ok, timed_out} = enqueue_intent(meeting, %{classified_intent: "waited_intent"})
+      {:ok, timed_out} = force_status(meeting, timed_out, :timed_out)
+
+      {:ok, no_runtime} = enqueue_intent(meeting, %{classified_intent: "no_runtime_intent"})
+      {:ok, no_runtime} = force_status(meeting, no_runtime, :dispatch_failed)
+
+      {:ok, spawn_failed} = enqueue_intent(meeting, %{classified_intent: "spawn_failed_intent"})
+      {:ok, spawn_failed} = force_status(meeting, spawn_failed, :no_ack_spawn_failed)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert IntentsCollapse.status_tone(:timed_out) == "warning"
+      assert IntentsCollapse.status_tone(:dispatch_failed) == "error"
+      assert IntentsCollapse.status_tone(:no_ack_spawn_failed) == "error"
+
+      assert chip_tone_for(html, timed_out.id) == "chip-warning"
+      assert chip_tone_for(html, no_runtime.id) == "chip-error"
+      assert chip_tone_for(html, spawn_failed.id) == "chip-error"
+    end
+
+    test "rows are grouped for reading: in-flight, success, cancelled, error", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      for {status, group} <- [
+            {:queued, "in_flight"},
+            {:dispatched, "in_flight"},
+            {:acked, "in_flight"},
+            {:completed, "success"},
+            {:cancelled, "cancelled"},
+            {:cancelled_late, "cancelled"},
+            {:timed_out, "error"},
+            {:dispatch_failed, "error"},
+            {:no_ack_spawn_failed, "error"}
+          ] do
+        assert to_string(IntentsCollapse.status_group(status)) == group
+      end
+
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "grouped_intent"})
+      {:ok, row} = force_status(meeting, row, :timed_out)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-intent-group="error")
+      assert html =~ ~s(data-intent-id="#{row.id}")
+    end
+  end
+
+  describe "intents-collapse bar — live updates (all eight events)" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "intents-live", name: "Intent Live"})
+      {conn, user} = authenticated_conn(conn)
+      assign_producer!()
+      on_exit(fn -> IntentQueue.stop(meeting.id) end)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test ":intent_classified inserts a row that wasn't there at mount", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert html =~ ~s(data-intent-count="0")
+
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "late_arrival"})
+
+      html = render(view)
+      assert html =~ ~s(data-intent-id="#{row.id}")
+      assert html =~ ~s(data-intent-count="1")
+      assert html =~ "late_arrival"
+    end
+
+    test "each of the seven transition events mutates the rendered status", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # Driven through the real queue so every assertion exercises the
+      # real broadcast, not a hand-rolled `send/2` of a shape the LV
+      # happens to match.
+      for status <- [
+            :dispatched,
+            :acked,
+            :completed,
+            :cancelled,
+            :timed_out,
+            :dispatch_failed,
+            :no_ack_spawn_failed
+          ] do
+        {:ok, row} = enqueue_intent(meeting, %{classified_intent: "evented_#{status}"})
+
+        {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+        assert html =~ ~s(data-intent-status="queued")
+
+        {:ok, _} = force_status(meeting, row, status)
+
+        html = render(view)
+
+        assert html =~ ~s(data-intent-status="#{status}"),
+               "expected the #{status} broadcast to move the rendered row"
+
+        assert html =~ IntentsCollapse.status_label(status)
+
+        IntentQueue.delete(meeting.id, row.id)
+      end
+    end
+
+    test ":cancelled_late is distinguishable from :cancelled in the DOM", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # Both share the `:intent_cancelled` broadcast — the payload's
+      # status is the only thing telling them apart, so the LV must read
+      # it rather than assume.
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "raced_intent"})
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      {:ok, _} = force_status(meeting, row, :cancelled_late)
+
+      html = render(view)
+      assert html =~ ~s(data-intent-status="cancelled_late")
+      assert html =~ "Cancelled late"
+    end
+
+    test "an event for a different meeting is ignored", %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Same topic shape, different meeting — the LV is only subscribed
+      # to its own, but the guard is the thing that makes that safe when
+      # a shared topic is ever introduced.
+      stranger = %{
+        id: Platform.Types.UUIDv7.generate(),
+        meeting_id: Platform.Types.UUIDv7.generate(),
+        classified_intent: "stranger_intent",
+        status: :queued,
+        seq: 1
+      }
+
+      send(view.pid, {:intent_classified, stranger})
+
+      html = render(view)
+      refute html =~ "stranger_intent"
+      assert html =~ ~s(data-intent-count="0")
+    end
+
+    test "the expanded table exposes subagent_id and dispatch_failure_reason", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "expanded_intent"})
+
+      {:ok, _} =
+        IntentQueue.transition(meeting.id, row.id, :dispatch_failed, %{
+          dispatch_failure_reason: :no_runtime,
+          subagent_id: "higgins.moon"
+        })
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      refute html =~ ~s(data-role="intents-expanded")
+
+      html = render_click(view, "toggle_intents_expanded", %{})
+
+      assert html =~ ~s(data-role="intents-expanded")
+      assert html =~ "higgins.moon"
+      assert html =~ "no_runtime"
+    end
+
+    test "both overlays render OUTSIDE the transformed chat rail", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # The chat rail carries `transition-transform` + `translate-x-0` so
+      # it can slide in as a mobile drawer, and a transformed ancestor
+      # becomes the containing block for `position: fixed`. An overlay
+      # rendered inside the strip is therefore centred on a 320px rail
+      # instead of on the viewport — a "centered modal" that is nothing
+      # of the sort. Assert on document ORDER: both overlays must land
+      # after the rail's closing markup, not nested inside it.
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "overlay_intent"})
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html = render_click(view, "toggle_intents_expanded", %{})
+      assert overlay_outside_rail?(html, "intents-expanded")
+
+      render_click(view, "toggle_intents_expanded", %{})
+      html = render_click(view, "intent_edit_open", %{"intent_id" => row.id})
+      assert overlay_outside_rail?(html, "intent-edit-modal")
+    end
+
+    test "the collapse header toggles the body without dropping the rows", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "toggled_intent"})
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert html =~ ~s(data-role="intents-collapse-body")
+
+      html = render_click(view, "toggle_intents_collapse", %{})
+      refute html =~ ~s(data-role="intents-collapse-body")
+      assert html =~ ~s(data-intent-count="1")
+
+      html = render_click(view, "toggle_intents_collapse", %{})
+      assert html =~ ~s(data-intent-id="#{row.id}")
+    end
+  end
+
+  describe "intents-collapse bar — status-aware controls + 44px targets" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "intents-controls", name: "Intent Controls"})
+      {conn, user} = authenticated_conn(conn)
+      assign_producer!()
+      on_exit(fn -> IntentQueue.stop(meeting.id) end)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "controls are drawn per status, not on every row", %{conn: conn, meeting: meeting} do
+      expectations = [
+        {:queued, true, true},
+        {:dispatched, true, true},
+        {:acked, true, true},
+        {:completed, false, false},
+        {:cancelled, false, false},
+        {:cancelled_late, false, false},
+        {:timed_out, true, false},
+        {:dispatch_failed, true, true},
+        {:no_ack_spawn_failed, true, true}
+      ]
+
+      for {status, removable, correctable} <- expectations do
+        assert IntentsCollapse.removable?(status) == removable
+        assert IntentsCollapse.correctable?(status) == correctable
+      end
+
+      for {status, removable, correctable} <- expectations do
+        {:ok, row} = enqueue_intent(meeting, %{classified_intent: "control_#{status}"})
+        {:ok, _} = force_status(meeting, row, status)
+
+        {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+        assert html =~ ~s(data-role="intent-remove" data-intent-id="#{row.id}") == removable,
+               "#{status}: expected remove control presence #{removable}"
+
+        assert html =~ ~s(data-role="intent-edit" data-intent-id="#{row.id}") == correctable,
+               "#{status}: expected edit control presence #{correctable}"
+
+        IntentQueue.delete(meeting.id, row.id)
+      end
+    end
+
+    test "every control in the strip clears the 44px tap floor", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # The mock's row icons read as btn-xs (~24px), under the floor.
+      # Tailwind `11` = 44px.
+      {:ok, _row} = enqueue_intent(meeting, %{classified_intent: "tappable_intent"})
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      for role <- ~w(intents-collapse-toggle intents-expand-toggle intent-remove intent-edit) do
+        assert html =~ ~s(data-role="#{role}")
+      end
+
+      for tag <- strip_button_tags(html) do
+        assert tag =~ "min-h-11", "control below the 44px floor: #{tag}"
+      end
+
+      # The reason picker's options are touch targets too.
+      html = render_click(view, "intent_reason_picker_toggle", %{"intent_id" => first_id(html)})
+      assert html =~ ~s(data-role="intent-reason-picker")
+
+      for tag <- strip_button_tags(html) do
+        assert tag =~ "min-h-11", "control below the 44px floor: #{tag}"
+      end
+    end
+
+    test "rows are two-line at EVERY viewport, not only below sm", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # The design direction says "two-line below `sm`". A viewport
+      # breakpoint is the wrong instrument: this rail is `lg:w-80` on
+      # desktop and `w-80 max-w-[85vw]` as a mobile drawer — ~320px in
+      # both cases. An `sm:flex-row` would flip a 320px container to one
+      # line on the WIDEST viewport, truncating `visual_adjust` to "v.".
+      {:ok, _row} = enqueue_intent(meeting, %{classified_intent: "narrow_intent"})
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      [row_tag] = Regex.run(~r/<li[^>]*data-role="intent-row"[^>]*>/, html)
+      assert row_tag =~ "flex-col"
+      assert row_tag =~ "min-h-11"
+
+      refute row_tag =~ "sm:flex-row",
+             "a viewport breakpoint cannot describe a fixed-width rail"
+    end
+
+    test "controls are persistent, never hover-revealed", %{conn: conn, meeting: meeting} do
+      # Mobile has no hover. A control that only appears on :hover is a
+      # control a phone user does not have.
+      {:ok, _row} = enqueue_intent(meeting, %{classified_intent: "persistent_intent"})
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      for tag <- strip_button_tags(html) do
+        refute tag =~ "group-hover:", "hover-revealed control: #{tag}"
+        refute tag =~ "opacity-0", "hover-revealed control: #{tag}"
+      end
+    end
+  end
+
+  describe "intents-collapse bar — the collapsed summary protects the severity fragment" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "intents-summary", name: "Intent Summary"})
+      {conn, user} = authenticated_conn(conn)
+      assign_producer!()
+      on_exit(fn -> IntentQueue.stop(meeting.id) end)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "severity is rendered first and refuses to shrink; the count yields", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # The resting state exists to answer "is anything wrong?" without
+      # expanding. It previously clipped to `3 need…` in the ~320px
+      # rail — failing that purpose in exactly the case it singles out.
+      for n <- 1..10 do
+        {:ok, row} = enqueue_intent(meeting, %{classified_intent: "summary_intent_#{n}"})
+        if n <= 3, do: {:ok, _} = force_status(meeting, row, :dispatch_failed)
+      end
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      [severity_tag] =
+        Regex.run(~r/<span[^>]*data-role="intents-summary-severity"[^>]*>/, html)
+
+      [tail_tag] = Regex.run(~r/<span[^>]*data-role="intents-summary-tail"[^>]*>/, html)
+
+      # Structural: the severity span keeps its width, the tail gives
+      # its up. Not a copy convention someone can reword away.
+      assert severity_tag =~ "shrink-0"
+      assert severity_tag =~ "whitespace-nowrap"
+      refute severity_tag =~ "truncate"
+      assert tail_tag =~ "truncate"
+      assert tail_tag =~ "min-w-0"
+
+      # Ordered: severity first, so a clip eats the benign tail.
+      severity_at = :binary.match(html, ~s(data-role="intents-summary-severity")) |> elem(0)
+      tail_at = :binary.match(html, ~s(data-role="intents-summary-tail")) |> elem(0)
+      assert severity_at < tail_at
+
+      assert html =~ "3 need attention"
+      assert html =~ "· 10 intents"
+    end
+
+    test "the Producer chip yields its width before the summary does", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # Saru's alternative to compacting the copy: everything else in the
+      # header gives up room first. The chip labels a permission that
+      # never changes — the cheapest thing on the row to squeeze.
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "chip_yield_intent"})
+      {:ok, _} = force_status(meeting, row, :timed_out)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      [chip_tag] = Regex.run(~r/<span[^>]*class="[^"]*chip-primary[^"]*"[^>]*>/, html)
+
+      assert chip_tag =~ "truncate"
+
+      refute chip_tag =~ "flex-shrink-0",
+             "the Producer chip must be able to yield so the summary does not have to"
+    end
+
+    test "the zero-attention case has no severity span and may truncate freely", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, _row} = enqueue_intent(meeting, %{classified_intent: "benign_intent"})
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      refute html =~ ~s(data-role="intents-summary-severity")
+      assert html =~ ~s(data-role="intents-summary-tail")
+      assert html =~ "1 intent"
+      refute html =~ "need attention"
+    end
+  end
+
+  describe "intents-collapse bar — low confidence is emphasised, never by colour alone" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "intents-conf", name: "Intent Confidence"})
+      {conn, user} = authenticated_conn(conn)
+      assign_producer!()
+      on_exit(fn -> IntentQueue.stop(meeting.id) end)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "a 0.55 row and a 0.96 row do not render identically", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # A producer deciding whether to trust a dispatch is exactly the
+      # person who needs those two to look different.
+      {:ok, low} = enqueue_intent(meeting, %{classified_intent: "shaky_intent", confidence: 0.55})
+
+      {:ok, high} =
+        enqueue_intent(meeting, %{classified_intent: "certain_intent", confidence: 0.96})
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      low_readout = confidence_span(html, low.id)
+      high_readout = confidence_span(html, high.id)
+
+      # 1. warning tone
+      assert low_readout =~ "text-warning"
+      refute high_readout =~ "text-warning"
+
+      # 2. `~` prefix on the mono value — the non-colour half, so the
+      #    signal survives a colourblind reader and a greyscale print.
+      assert low_readout =~ "~0.55"
+      assert high_readout =~ "0.96"
+      refute high_readout =~ "~"
+
+      # 3. spoken as words, not just painted
+      assert low_readout =~ ~s(aria-label="Confidence 0.55, low confidence")
+      assert high_readout =~ ~s(aria-label="Confidence 0.96")
+      refute high_readout =~ "low confidence"
+
+      # And a machine-readable hook so the treatment is assertable
+      # without parsing Tailwind.
+      assert low_readout =~ ~s(data-low-confidence="true")
+      assert high_readout =~ ~s(data-low-confidence="false")
+    end
+
+    test "the threshold is exclusive — 0.70 is not low", %{conn: conn, meeting: meeting} do
+      {:ok, at} = enqueue_intent(meeting, %{classified_intent: "at_threshold", confidence: 0.70})
+
+      {:ok, under} =
+        enqueue_intent(meeting, %{classified_intent: "under_threshold", confidence: 0.69})
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert confidence_span(html, at.id) =~ ~s(data-low-confidence="false")
+      assert confidence_span(html, under.id) =~ ~s(data-low-confidence="true")
+    end
+
+    test "a confidence the classifier never reported is not painted as bad", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, none} =
+        enqueue_intent(meeting, %{classified_intent: "silent_intent", confidence: nil})
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      readout = confidence_span(html, none.id)
+
+      assert readout =~ ~s(data-low-confidence="false")
+      refute readout =~ "text-warning"
+      refute readout =~ "low confidence"
+    end
+
+    test "the expanded table paints the same number the same way", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # A producer opens the table BECAUSE a row looked wrong. Showing
+      # `0.55` plain there, two clicks after `~0.55` in warning tone,
+      # would read as two different numbers.
+      {:ok, low} = enqueue_intent(meeting, %{classified_intent: "shaky_row", confidence: 0.55})
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = render_click(view, "toggle_intents_expanded", %{})
+
+      assert html =~ ~s(data-role="intents-expanded-table")
+
+      [cell] =
+        Regex.run(
+          ~r/<td[^>]*data-role="intents-expanded-confidence"[^>]*>.*?<\/td>/s,
+          html
+        )
+
+      assert cell =~ ~s(data-low-confidence="true")
+      assert cell =~ "text-warning"
+      assert cell =~ "~0.55"
+      assert cell =~ "low confidence"
+
+      IntentQueue.delete(meeting.id, low.id)
+    end
+  end
+
+  describe "intents-collapse bar — X writes a correction (AC11)" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "intents-remove", name: "Intent Remove"})
+      {conn, user} = authenticated_conn(conn)
+      assign_producer!()
+      on_exit(fn -> IntentQueue.stop(meeting.id) end)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "the X opens a reason picker before it removes anything", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # A cancel carries no reason until a human states one, and stage
+      # 6's corpus requires a reason on every row — so it is collected
+      # BEFORE the mutation, not invented after it.
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "picked_intent"})
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      refute html =~ ~s(data-role="intent-reason-picker")
+
+      html = render_click(view, "intent_reason_picker_toggle", %{"intent_id" => row.id})
+
+      assert html =~ ~s(data-role="intent-reason-picker")
+
+      for reason <- Platform.Meetings.IntentCorrection.reasons() do
+        assert html =~ ~s(data-reason="#{reason}")
+      end
+
+      # In flow, not absolutely positioned. The strip's body is
+      # `overflow-y-auto`, which clips an absolute child — the menu
+      # rendered with two of its four options cut off at the scroll edge,
+      # which is a picker you cannot pick with.
+      [picker_tag] = Regex.run(~r/<ul[^>]*data-role="intent-reason-picker"[^>]*>/, html)
+      refute picker_tag =~ "absolute"
+
+      # Still queued — opening the picker mutates nothing.
+      assert [%{status: :queued}] = IntentQueue.list(meeting.id)
+      assert IntentCorrections.list_for_meeting(meeting.id) == []
+    end
+
+    test "removing a :queued row deletes it and writes :removed_no_action with NO outcome", %{
+      conn: conn,
+      meeting: meeting,
+      space: space,
+      user: user
+    } do
+      # A row the producer pulled before it ever left the queue has no
+      # dispatch outcome. Inventing one would poison the corpus with a
+      # dispatch that never happened.
+      participant = join_space!(space, user)
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "pulled_intent"})
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        render_click(view, "intent_remove", %{
+          "intent_id" => row.id,
+          "reason" => "not_actionable"
+        })
+
+      refute html =~ ~s(data-intent-id="#{row.id}")
+      assert IntentQueue.list(meeting.id) == []
+
+      assert [correction] = IntentCorrections.list_for_meeting(meeting.id)
+      assert correction.correction == :removed_no_action
+      assert correction.reason == :not_actionable
+      assert correction.dispatch_outcome == nil
+      assert correction.classified_intent == "pulled_intent"
+      assert correction.transcript_chunk_excerpt == row.chunk_excerpt
+      assert correction.actor_participant_id == participant.id
+      assert correction.meeting_id == meeting.id
+    end
+
+    test "the dispatch_outcome is captured from the status at CLICK time", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # The cancel below moves the row. A correction stamped with the
+      # post-cancel status would record the producer's own action rather
+      # than where the intent had got to when they judged it wrong.
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "inflight_intent"})
+      {:ok, _} = force_status(meeting, row, :dispatched)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      render_click(view, "intent_remove", %{
+        "intent_id" => row.id,
+        "reason" => "wrong_target"
+      })
+
+      assert [correction] = IntentCorrections.list_for_meeting(meeting.id)
+      assert correction.dispatch_outcome == :dispatched
+      refute correction.dispatch_outcome == :cancelled
+    end
+
+    test "removing an in-flight row with a reachable runtime shows a PENDING cancel", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # `IntentQueue.cancel/3` does NOT flip an in-flight row at signal
+      # time — the row moves on `intent_ack(:cancel_honored)`. Showing
+      # `:cancelled` while a subagent kept working would be exactly the
+      # invisibility this task exists to remove.
+      {agent, _runtime} = create_linked_agent!()
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "running_intent"})
+      {:ok, _} = force_status(meeting, row, :dispatched, %{target_agent_id: agent.id})
+      {:ok, _} = IntentQueue.ack(meeting.id, row.id, "higgins.moon", :working)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        render_click(view, "intent_remove", %{
+          "intent_id" => row.id,
+          "reason" => "wrong_intent"
+        })
+
+      # Still visible, still `:acked`, plus a pending-cancel affordance.
+      assert html =~ ~s(data-intent-id="#{row.id}")
+      assert html =~ ~s(data-intent-status="acked")
+      assert html =~ ~s(data-pending-cancel="true")
+      assert html =~ ~s(data-role="intent-pending-cancel-chip")
+      assert html =~ "Cancelling"
+
+      # And the controls are disabled so a double-tap can't double-fire.
+      assert html =~ "btn-disabled"
+
+      assert {:ok, %{status: :acked}} = IntentQueue.get(meeting.id, row.id)
+
+      # The ack resolves it.
+      {:ok, _} = IntentQueue.ack(meeting.id, row.id, "higgins.moon", :cancel_honored)
+
+      html = render(view)
+      assert html =~ ~s(data-intent-status="cancelled")
+      assert html =~ ~s(data-pending-cancel="false")
+    end
+
+    test "an in-flight row with no reachable runtime lands cancelled locally", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # Nobody to ask. Leaving it in flight until the ack window expired
+      # would show `:timed_out` for something that was actually cancelled.
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "orphan_intent"})
+      {:ok, _} = force_status(meeting, row, :dispatched)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        render_click(view, "intent_remove", %{"intent_id" => row.id, "reason" => "other"})
+
+      assert html =~ ~s(data-intent-status="cancelled")
+      assert html =~ ~s(data-pending-cancel="false")
+      assert [%{dispatch_outcome: :dispatched}] = IntentCorrections.list_for_meeting(meeting.id)
+    end
+
+    test "an unrecognised reason writes nothing and says so", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # Parsed against the corpus enum rather than `String.to_atom/1`,
+      # which would let a crafted click leak atoms into the VM.
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "safe_intent"})
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        render_click(view, "intent_remove", %{
+          "intent_id" => row.id,
+          "reason" => "definitely_not_a_reason"
+        })
+
+      assert html =~ ~s(data-role="intents-error")
+      assert IntentCorrections.list_for_meeting(meeting.id) == []
+      assert [%{status: :queued}] = IntentQueue.list(meeting.id)
+    end
+  end
+
+  describe "intents-collapse bar — pencil writes a correction (AC12)" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "intents-edit", name: "Intent Edit"})
+      {conn, user} = authenticated_conn(conn)
+      assign_producer!()
+      on_exit(fn -> IntentQueue.stop(meeting.id) end)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "the pencil opens a centered modal seeded from the row", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "mislabelled_intent"})
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      refute html =~ ~s(data-role="intent-edit-modal")
+
+      html = render_click(view, "intent_edit_open", %{"intent_id" => row.id})
+
+      assert html =~ ~s(data-role="intent-edit-modal")
+      assert html =~ ~s(data-role="intent-edit-intent")
+      assert html =~ ~s(data-role="intent-edit-target")
+      assert html =~ ~s(data-role="intent-edit-reason")
+      assert html =~ "mislabelled_intent"
+      # Nothing mutated by opening it.
+      assert IntentCorrections.list_for_meeting(meeting.id) == []
+    end
+
+    test "saving writes :corrected with the corrected fields and clears the row", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      target = create_agent!()
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "wrong_label"})
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      render_click(view, "intent_edit_open", %{"intent_id" => row.id})
+
+      html =
+        render_submit(view, "intent_edit_save", %{
+          "intent_edit" => %{
+            "intent_id" => row.id,
+            "corrected_intent" => "book_followup",
+            "corrected_target_agent_id" => target.id,
+            "reason" => "wrong_target"
+          }
+        })
+
+      refute html =~ ~s(data-role="intent-edit-modal")
+      refute html =~ ~s(data-intent-id="#{row.id}")
+
+      assert [correction] = IntentCorrections.list_for_meeting(meeting.id)
+      assert correction.correction == :corrected
+      assert correction.corrected_intent == "book_followup"
+      assert correction.corrected_target_agent_id == target.id
+      assert correction.reason == :wrong_target
+      assert correction.classified_intent == "wrong_label"
+      assert correction.dispatch_outcome == nil
+    end
+
+    test "correcting a live row fires the cancel AND writes the corrected fields", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {agent, runtime} = create_linked_agent!()
+      PlatformWeb.Endpoint.subscribe("runtime:#{runtime.runtime_id}")
+
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "live_wrong_label"})
+      {:ok, _} = force_status(meeting, row, :dispatched, %{target_agent_id: agent.id})
+      {:ok, _} = IntentQueue.ack(meeting.id, row.id, "higgins.moon", :working)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      render_click(view, "intent_edit_open", %{"intent_id" => row.id})
+
+      html =
+        render_submit(view, "intent_edit_save", %{
+          "intent_edit" => %{
+            "intent_id" => row.id,
+            "corrected_intent" => "schedule_review",
+            "corrected_target_agent_id" => "",
+            "reason" => "wrong_intent"
+          }
+        })
+
+      # The cancel reaches the runtime as a MAP payload, not a tuple.
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "intent_cancelled",
+                       payload: %{
+                         intent_id: cancelled_id,
+                         subagent_id: "higgins.moon",
+                         reason: :wrong_intent,
+                         corrected_intent: "schedule_review",
+                         corrected_target_agent_id: nil
+                       }
+                     },
+                     1_000
+
+      assert cancelled_id == row.id
+
+      # Still in flight, still pending — the row moves on the ack.
+      assert html =~ ~s(data-pending-cancel="true")
+
+      assert [correction] = IntentCorrections.list_for_meeting(meeting.id)
+      assert correction.correction == :corrected
+      assert correction.corrected_intent == "schedule_review"
+      assert correction.dispatch_outcome == :acked
+    end
+
+    test "a correction naming neither field is rejected in the modal, not silently", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # Mirrors `IntentCorrection.changeset/2`'s one cross-field rule: a
+      # :corrected row that names no target is an exemplar with nothing
+      # to learn from.
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "vague_intent"})
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      render_click(view, "intent_edit_open", %{"intent_id" => row.id})
+
+      html =
+        render_submit(view, "intent_edit_save", %{
+          "intent_edit" => %{
+            "intent_id" => row.id,
+            "corrected_intent" => "   ",
+            "corrected_target_agent_id" => "",
+            "reason" => "other"
+          }
+        })
+
+      assert html =~ ~s(data-role="intent-edit-modal")
+      assert html =~ ~s(data-role="intents-error")
+      assert IntentCorrections.list_for_meeting(meeting.id) == []
+      assert [%{status: :queued}] = IntentQueue.list(meeting.id)
+    end
+
+    test "closing the modal mutates nothing", %{conn: conn, meeting: meeting} do
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "abandoned_intent"})
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      render_click(view, "intent_edit_open", %{"intent_id" => row.id})
+      html = render_click(view, "intent_edit_close", %{})
+
+      refute html =~ ~s(data-role="intent-edit-modal")
+      assert IntentCorrections.list_for_meeting(meeting.id) == []
+      assert [%{status: :queued}] = IntentQueue.list(meeting.id)
+    end
+  end
+
+  # ── Intents-collapse test helpers ──────────────────────────────────────────
+
+  defp assign_producer! do
+    agent =
+      Repo.insert!(%Platform.Agents.Agent{
+        slug: "producer-#{System.unique_integer([:positive])}",
+        name: "Meeting Producer",
+        status: "active"
+      })
+
+    {:ok, _} = Platform.Roles.assign_role("meeting_producer", agent.id)
+    agent
+  end
+
+  defp create_agent! do
+    Repo.insert!(%Platform.Agents.Agent{
+      slug: "intent-target-#{System.unique_integer([:positive])}",
+      name: "Intent Target",
+      status: "active",
+      kind: "native"
+    })
+  end
+
+  defp create_linked_agent! do
+    agent = create_agent!()
+
+    user =
+      Repo.insert!(%User{
+        email: "runtime_#{System.unique_integer([:positive])}@example.com",
+        name: "Runtime Owner",
+        oidc_sub: "oidc-runtime-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, runtime} =
+      Platform.Federation.register_runtime(user.id, %{
+        runtime_id: "intent-rt-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, linked} = Platform.Federation.link_agent(runtime, agent)
+    {linked, runtime}
+  end
+
+  defp join_space!(space, user) do
+    {:ok, participant} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        display_name: user.name,
+        joined_at: DateTime.utc_now()
+      })
+
+    participant
+  end
+
+  # Enqueue through the REAL facade, keyed by the meeting's own id. The
+  # ack window is pushed out so a slow CI box can't time a row out
+  # mid-assertion.
+  defp enqueue_intent(meeting, attrs) do
+    {:ok, _pid} = IntentQueue.ensure_started(meeting.id, ack_timeout_ms: 600_000)
+
+    IntentQueue.enqueue(
+      meeting.id,
+      Map.merge(
+        %{
+          target_role: "designer",
+          confidence: 0.87,
+          chunk_excerpt: "we should get someone on this",
+          model_used: "test-model",
+          elapsed_ms: 12,
+          dedupe_key: "dk-#{System.unique_integer([:positive])}"
+        },
+        attrs
+      )
+    )
+  end
+
+  defp force_status(meeting, row, status, attrs \\ %{})
+  defp force_status(_meeting, row, :queued, _attrs), do: {:ok, row}
+
+  defp force_status(meeting, row, status, attrs),
+    do: IntentQueue.transition(meeting.id, row.id, status, attrs)
+
+  # The `chip-*` tone class on one row's status chip. Keyed off the row's
+  # data-intent-id so the amber/red split is asserted per row, not
+  # per document.
+  defp chip_tone_for(html, intent_id) do
+    with [row_html] <-
+           Regex.run(
+             ~r/<li[^>]*data-intent-id="#{intent_id}"[^>]*>.*?<\/li>/s,
+             html
+           ),
+         [_, tone] <- Regex.run(~r/class="[^"]*chip-soft (chip-\w+)/, row_html) do
+      tone
+    else
+      _ -> nil
+    end
+  end
+
+  # Every `<button>` tag belonging to the intents strip. Selected by
+  # `data-role="intent*"` rather than by slicing the document from the
+  # `<section>` onward: the strip's sibling is an embedded ChatLive, and
+  # a positional slice happily swallows the chat composer's buttons and
+  # then blames THIS component for their tap targets.
+  defp strip_button_tags(html) do
+    ~r/<button[^>]*data-role="intent[^"]*"[^>]*>/
+    |> Regex.scan(html)
+    |> Enum.map(&hd/1)
+  end
+
+  # True when `role`'s element appears AFTER the intents strip's own
+  # `<section>` has closed — i.e. it is not nested inside the rail whose
+  # transform would trap a `position: fixed` child.
+  defp overlay_outside_rail?(html, role) do
+    strip_at = :binary.match(html, ~s(data-role="intents-collapse")) |> elem(0)
+    overlay_at = :binary.match(html, ~s(data-role="#{role}")) |> elem(0)
+
+    # The FIRST `</aside>` after the strip — the document also carries the
+    # participant rail's aside, which closes earlier and would make any
+    # placement look correct.
+    {rail_close, _} =
+      :binary.match(html, "</aside>", scope: {strip_at, byte_size(html) - strip_at})
+
+    overlay_at > rail_close
+  end
+
+  defp first_id(html) do
+    [_, id] = Regex.run(~r/data-role="intent-row"[^>]*data-intent-id="([^"]+)"/, html)
+    id
+  end
+
+  # The confidence readout belonging to ONE row: slice the row's <li>
+  # first, then pull the readout out of it. Matching `intent-confidence`
+  # against the whole document would happily return a sibling row's.
+  defp confidence_span(html, intent_id) do
+    [row] =
+      Regex.run(
+        ~r/<li[^>]*data-intent-id="#{Regex.escape(intent_id)}".*?<\/li>/s,
+        html
+      )
+
+    [readout] = Regex.run(~r/<span[^>]*data-role="intent-confidence"[^>]*>.*?<\/span>/s, row)
+    readout
   end
 end
