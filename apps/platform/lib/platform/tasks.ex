@@ -1558,12 +1558,51 @@ defmodule Platform.Tasks do
   # ADR-0044 stage 2 helper. Kept private so `submit_plan_for_review/1`
   # reads as a linear transition and the hook is the only public
   # surface the plan-approval flow depends on.
+  #
+  # ADR-0046 member 1 stage 4: the fire result is now INSPECTED rather
+  # than discarded. Before stages 1-2 gave `Responsibilities.fire/2` a
+  # real return contract, an architect endpoint that was down looked
+  # exactly like "no architect assigned" here — the plan silently went
+  # to review unreviewed, with nothing in the log to say so.
+  #
+  # LOAD-BEARING (verified, do not weaken): this helper MUST NOT raise.
+  # It runs inside the `draft → pending_review` transition documented at
+  # `submit_plan_for_review/1`, and a raise would abort that transition.
+  # The branches below only log and return — no `raise`, no `!`-suffixed
+  # call, and `plan` is a `%Plan{}` by the function head so `plan.id` /
+  # `plan.task_id` cannot blow up on nil. Errors are RETURNED, never
+  # raised. The value is returned on every branch so a future ADR-0046
+  # consumer can lift it (the call site at `submit_plan_for_review/1`
+  # still discards it via `_ =`).
   defp fire_architecture_review_plan(%Plan{} = plan) do
-    Platform.Responsibilities.fire("architecture.review_plan", %{
-      plan_id: plan.id,
-      task_id: plan.task_id,
-      plan: plan
-    })
+    case Platform.Responsibilities.fire("architecture.review_plan", %{
+           plan_id: plan.id,
+           task_id: plan.task_id,
+           plan: plan
+         }) do
+      {:error, reason} = result ->
+        Logger.warning(
+          "[Responsibilities] architecture.review_plan dispatch failed " <>
+            "plan=#{plan.id} task=#{plan.task_id} reason=#{inspect(reason)}"
+        )
+
+        result
+
+      {:ok, state} = result when state in [:unfilled, :unknown_responsibility] ->
+        # Progressive enhancement, not a problem: no architect holds the
+        # responsibility (or the key was never seeded). Info, not warning
+        # — this is the steady state on a suite with no architect.
+        Logger.info(
+          "[Responsibilities] architecture.review_plan #{state} " <>
+            "plan=#{plan.id} task=#{plan.task_id}"
+        )
+
+        result
+
+      # {:ok, :dispatched} — the Router already logged the dispatch.
+      result ->
+        result
+    end
   rescue
     e ->
       Logger.warning(

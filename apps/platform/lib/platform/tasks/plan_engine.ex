@@ -568,31 +568,67 @@ defmodule Platform.Tasks.PlanEngine do
   # `evaluate_validation/2`'s Ecto transaction (via `advance_stage/1`),
   # and a raise here would roll back the validation update itself — the
   # opposite of the additive-annotation contract. Every error mode logs
-  # + returns `:ok`.
+  # + RETURNS an error tuple; nothing here raises or re-raises.
+  #
+  # ADR-0046 member 1 stage 4: the fire result is inspected rather than
+  # discarded. Before stages 1-2 gave `Responsibilities.fire/2` a real
+  # return contract, a drift-audit endpoint that was down was
+  # indistinguishable from "no architect assigned" — the stage passed
+  # unaudited with nothing in the log.
+  #
+  # NIL-PLAN HAZARD (verified, do not regress): `plan` is a plain
+  # `Repo.get/2` and CAN be nil — hence `plan && Repo.get(...)` on the
+  # next line. The log lines below therefore key off `stage.id` /
+  # `stage.plan_id`, never `plan.task_id`, so a stage whose plan row
+  # vanished logs instead of raising a `KeyError` inside the
+  # transaction. The rescue/catch clauses are the backstop, not the
+  # plan.
   defp after_stage_completed(%Stage{} = stage) do
     plan = Repo.get(Plan, stage.plan_id)
     task = plan && Repo.get(Task, plan.task_id)
 
-    Platform.Responsibilities.fire("architecture.audit_diff", %{
-      stage_id: stage.id,
-      plan_id: stage.plan_id,
-      task_id: plan && plan.task_id,
-      stage: stage,
-      plan: plan,
-      task: task
-    })
+    case Platform.Responsibilities.fire("architecture.audit_diff", %{
+           stage_id: stage.id,
+           plan_id: stage.plan_id,
+           task_id: plan && plan.task_id,
+           stage: stage,
+           plan: plan,
+           task: task
+         }) do
+      {:error, reason} = result ->
+        Logger.warning(
+          "[Responsibilities] architecture.audit_diff dispatch failed " <>
+            "stage=#{stage.id} plan=#{stage.plan_id} reason=#{inspect(reason)}"
+        )
+
+        result
+
+      {:ok, state} = result when state in [:unfilled, :unknown_responsibility] ->
+        # Progressive enhancement, not a problem: no architect holds the
+        # responsibility (or the key was never seeded).
+        Logger.info(
+          "[Responsibilities] architecture.audit_diff #{state} " <>
+            "stage=#{stage.id} plan=#{stage.plan_id}"
+        )
+
+        result
+
+      # {:ok, :dispatched} — the Router already logged the dispatch.
+      result ->
+        result
+    end
   rescue
     e ->
       Logger.warning(
         "[Responsibilities] architecture.audit_diff crashed: #{Exception.message(e)}"
       )
 
-      :ok
+      {:error, {:hook_raised, Exception.message(e)}}
   catch
     :exit, reason ->
       Logger.warning("[Responsibilities] architecture.audit_diff exited: #{inspect(reason)}")
 
-      :ok
+      {:error, {:hook_exited, reason}}
   end
 
   defp ordered_stages(plan_id) do

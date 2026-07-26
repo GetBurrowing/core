@@ -284,6 +284,146 @@ defmodule Platform.Tasks.SubmitPlanForReviewArchitectHookTest do
     def maybe_dispatch(_signal), do: raise("simulated architect crash")
   end
 
+  # ── ADR-0046 member 1 stage 4: the hook OBSERVES the fire result ──────
+  #
+  # `fire_architecture_review_plan/1` used to throw the fire result away.
+  # Combined with the pre-task Router, which laundered every outcome into
+  # a flat `:ok`, an architect endpoint that was DOWN was indistinguishable
+  # from "no architect assigned": the plan went to review unreviewed and
+  # nothing in the log said so.
+  #
+  # The two halves below are deliberately separated:
+  #   * GUARD  — the lifecycle transition still succeeds. Passes either
+  #     way; it exists so the detector cannot be satisfied by breaking
+  #     fire-and-forget.
+  #   * DETECTOR — `:failed` telemetry AND the new warning. Cannot pass
+  #     against pre-task code, where the hook only ever saw `:ok`.
+  describe "submit_plan_for_review/1 — architect assigned but endpoint down (external)" do
+    alias Platform.ExternalAgents.EphemeralCredentials
+
+    setup do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, :architect_plan_hook_dispatch_test})
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+      end)
+
+      :ok
+    end
+
+    # External sibling of `wire_architect_assignee/0`. Mirrors
+    # `wire_external_assignee/1` at
+    # test/platform/responsibilities/router_test.exs:1088-1128 — an HTTP
+    # endpoint is the only assignee kind whose failure the Router can
+    # actually observe (the native path returns `{:ok, :dispatched}` on
+    # handoff; see the Router moduledoc's honesty limit).
+    defp wire_external_architect! do
+      role_key = "historian"
+
+      Repo.insert!(
+        %Role{key: role_key, name: "Historian", description: "test", icon: "hero-star"},
+        on_conflict: :nothing,
+        conflict_target: :key
+      )
+
+      %RoleResponsibility{}
+      |> RoleResponsibility.changeset(%{
+        role_key: role_key,
+        responsibility_key: @architect_key
+      })
+      |> Repo.insert!()
+
+      agent =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "architect-plan-ext-#{System.unique_integer([:positive])}",
+          name: "Fixture Architect External",
+          status: "active",
+          kind: "external",
+          endpoint_kind: "openai_compat",
+          base_url: "https://api.example.test",
+          model: "test-model",
+          workspace_id: nil
+        })
+        |> Repo.insert!()
+
+      :ok = EphemeralCredentials.put(agent.id, "sk-architect-plan-hook")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      {:ok, _} = Roles.assign_role(role_key, agent.id)
+
+      agent
+    end
+
+    test "GUARD: the plan still reaches pending_review; DETECTOR: the failure is logged",
+         %{plan: plan} do
+      _handler_id = attach_telemetry([[:platform, :responsibility, :failed]])
+      _agent = wire_external_architect!()
+
+      test_pid = self()
+
+      Req.Test.stub(:architect_plan_hook_dispatch_test, fn conn ->
+        send(test_pid, {:external_dispatch, conn.request_path})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(503, ~s({"error":"down"}))
+      end)
+
+      log =
+        capture_log([level: :info], fn ->
+          send(test_pid, {:result, Tasks.submit_plan_for_review(plan)})
+        end)
+
+      # ── GUARD half (passes either way — fire-and-forget must hold) ────
+      assert_received {:result, {:ok, %Plan{status: "pending_review"}}}
+      assert %Plan{status: "pending_review"} = Repo.get!(Plan, plan.id)
+
+      # Mechanism proof: the Router really did resolve an assignee and
+      # really did call the endpoint, so the detector below is not
+      # passing because the hook short-circuited somewhere earlier.
+      assert_receive {:external_dispatch, "/chat/completions"}
+
+      # ── DETECTOR half (impossible before this stage) ──────────────────
+      assert_receive {:telemetry, [:platform, :responsibility, :failed], _measurements,
+                      %{key: @architect_key, dispatch_kind: :external}}
+
+      assert log =~
+               "[Responsibilities] architecture.review_plan dispatch failed " <>
+                 "plan=#{plan.id} task=#{plan.task_id}"
+
+      assert log =~ "dispatch_failed"
+    end
+  end
+
+  test "unfilled architecture.review_plan logs at info, not warning (progressive enhancement)",
+       %{plan: plan} do
+    # The second new branch: `{:ok, :unfilled}` is a steady state, so it
+    # must not be reported as a dispatch failure. The module level has to
+    # come down for the same reason the setup lowers the Router's: the
+    # test env's global Logger level filters :info before `capture_log`
+    # ever sees it.
+    Logger.put_module_level(Platform.Tasks, :info)
+    on_exit(fn -> Logger.delete_module_level(Platform.Tasks) end)
+
+    log =
+      capture_log([level: :info], fn ->
+        assert {:ok, _} = Tasks.submit_plan_for_review(plan)
+      end)
+
+    assert log =~
+             "[Responsibilities] architecture.review_plan unfilled " <>
+               "plan=#{plan.id} task=#{plan.task_id}"
+
+    refute log =~ "architecture.review_plan dispatch failed"
+  end
+
   # ── invariant guard ────────────────────────────────────────────────────
 
   test "sanity: no-architect and with-architect paths return identically shaped {:ok, plan}",
