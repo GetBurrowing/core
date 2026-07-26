@@ -6,6 +6,8 @@ defmodule Platform.Meetings.SummarizerTest do
   # across processes.
   use Platform.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Platform.Meetings
   alias Platform.Meetings.Summarizer
   alias Platform.Meetings.SummaryPrompt
@@ -346,11 +348,15 @@ defmodule Platform.Meetings.SummarizerTest do
                      "expected responsibility telemetry from router.fire — got nothing, " <>
                        "which means the bridge fell through to the legacy LLM body"
 
-      # `:fired` is the happy path (native dispatch + noop dispatcher);
-      # `:failed` is acceptable if the native dispatch raises for any
-      # reason; `:unfilled` would be a bug (we just asserted the gate
-      # is filled).
-      assert ev in [:fired, :failed]
+      # ADR-0046 member 1 stage 3 tightened this from
+      # `ev in [:fired, :failed]`. It has to be `:fired` now: a `:failed`
+      # fire returns `{:error, _}` and a `:unfilled` one returns
+      # `{:ok, :unfilled}`, and BOTH of those run `run_summary_legacy/3`,
+      # which with no LLM provider configured returns
+      # `{:error, {:llm_failed, _}}` — so the `assert :ok` above would
+      # already have blown up. Asserting the weaker membership would now
+      # be describing a state this test cannot be in.
+      assert ev == :fired
 
       # Legacy body MUST NOT have touched the transcript — it should
       # still be in its starting `"recording"` status. The router-fired
@@ -381,6 +387,224 @@ defmodule Platform.Meetings.SummarizerTest do
 
       # The legacy body marked the transcript failed.
       assert Meetings.get_transcript(transcript.id).status == "failed"
+    end
+  end
+
+  # ── ADR-0046 member 1 stage 3 — the fire result decides the branch ──────
+  #
+  # The bridge's `{:error, reason}` clause in `run_summary/1` has existed
+  # since M8 stage 4 and was UNREACHABLE for the failure it names: the
+  # Router laundered every outcome into a flat `:ok`, so an assigned
+  # external agent whose endpoint was down looked exactly like a
+  # successful dispatch and the meeting summary was silently dropped.
+  # Stages 1 and 2 of this task gave the Router a real return contract;
+  # these two tests are the proof that the contract reaches this caller.
+  #
+  # They are a matched pair on ONE mechanism (external agent + stubbed
+  # HTTP endpoint) differing only in the stubbed status code. That
+  # pairing is what makes the control's absence assertion meaningful:
+  # if the bridge gate were simply returning false and the Router were
+  # never reached at all, the 503 case's "legacy ran" would still pass
+  # while the 200 case's `assert_receive {:external_dispatch, _}` would
+  # not.
+  describe "ADR-0046 fire-result branching (external assignee)" do
+    alias Platform.Agents.Agent
+    alias Platform.Repo
+    alias Platform.Roles
+
+    @legacy_api_key_env "SUMMARIZER_STAGE3_ANTHROPIC_KEY"
+
+    setup do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      # Seam 1 — the Router's external dispatcher.
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, :summarizer_external_dispatch_test})
+      )
+
+      # Seam 2 — the LEGACY body's LLM call. Wiring a real (stubbed)
+      # provider instead of leaving `provider: :none` is what turns
+      # "did the legacy body run?" into a message the test process can
+      # receive, rather than an inference from transcript state. Both
+      # tests below wire it identically; only one of them expects it to
+      # be called.
+      System.put_env(@legacy_api_key_env, "sk-summarizer-stage3")
+
+      previous_summary_cfg = Application.get_env(:platform, :meetings_summary)
+
+      Application.put_env(:platform, :meetings_summary, %{
+        provider: :anthropic,
+        model: "claude-stage3-test",
+        api_key_env: @legacy_api_key_env,
+        max_tokens: 2048,
+        temperature: 0.3
+      })
+
+      Application.put_env(
+        :platform,
+        :anthropic_req_client,
+        Req.new(plug: {Req.Test, :summarizer_legacy_llm_test})
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+        Application.delete_env(:platform, :anthropic_req_client)
+        System.delete_env(@legacy_api_key_env)
+
+        if previous_summary_cfg do
+          Application.put_env(:platform, :meetings_summary, previous_summary_cfg)
+        else
+          Application.delete_env(:platform, :meetings_summary)
+        end
+      end)
+
+      :ok
+    end
+
+    # Mirrors wire_external_assignee/1 at
+    # test/platform/responsibilities/router_test.exs:1088-1128, but pinned
+    # to the meeting_scribe role so `responsibility_filled?/1` — the
+    # bridge gate — flips for "meetings.summarize" specifically.
+    defp wire_external_scribe! do
+      ensure_role_responsibility!("meeting_scribe", "meetings.summarize")
+
+      agent =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "summarizer-stage3-ext-#{System.unique_integer([:positive])}",
+          name: "Summarizer Stage 3 External",
+          status: "active",
+          kind: "external",
+          endpoint_kind: "openai_compat",
+          base_url: "https://api.example.test",
+          model: "test-model",
+          workspace_id: nil
+        })
+        |> Repo.insert!()
+
+      :ok = Platform.ExternalAgents.EphemeralCredentials.put(agent.id, "sk-summarizer-stage3")
+      on_exit(fn -> Platform.ExternalAgents.EphemeralCredentials.delete(agent.id) end)
+
+      {:ok, _} = Roles.assign_role("meeting_scribe", agent.id)
+
+      agent
+    end
+
+    # The legacy body's only outbound side effect. Sends a message on
+    # every call and answers 400 — deliberately NOT 5xx, which Req
+    # retries, and deliberately an error so the legacy body terminates in
+    # `{:error, {:llm_failed, _}}` + `fail_transcript/1`, the same
+    # proof-of-legacy the router-unfilled test above uses.
+    defp stub_legacy_llm!(test_pid) do
+      Req.Test.stub(:summarizer_legacy_llm_test, fn conn ->
+        send(test_pid, :legacy_llm_called)
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(400, ~s({"error":{"message":"legacy stub"}}))
+      end)
+    end
+
+    test "FIX DETECTOR — a failed external dispatch falls back to the legacy body" do
+      _name = start_registry!()
+      _agent = wire_external_scribe!()
+
+      # The gate must be filled, otherwise this test proves nothing about
+      # the fire result — it would just be the `else` branch again.
+      assert Platform.Responsibilities.Router.responsibility_filled?("meetings.summarize")
+
+      test_pid = self()
+      stub_legacy_llm!(test_pid)
+
+      Req.Test.stub(:summarizer_external_dispatch_test, fn conn ->
+        send(test_pid, {:external_dispatch, conn.request_path})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(503, ~s({"error":"down"}))
+      end)
+
+      transcript = create_transcript!(%{segments: sample_segments()})
+
+      # `capture_log/2` runs the function in this process, so stashing the
+      # return value through the mailbox is the cheapest way to get it
+      # back out without shadowing.
+      log =
+        capture_log([level: :warning], fn ->
+          send(self(), {:run_summary_result, Summarizer.run_summary(transcript)})
+        end)
+
+      assert_receive {:run_summary_result, result}
+
+      # 1. The Router really was reached and really did try the endpoint.
+      assert_receive {:external_dispatch, "/chat/completions"}
+
+      # 2. The previously-unreachable clause fired.
+      assert log =~ "[Summarizer] Router fire failed for transcript #{transcript.id}"
+      assert log =~ "dispatch_failed"
+
+      # 3. The legacy body ran — observed directly at its LLM seam, not
+      #    inferred. THIS is the assertion that fails against the
+      #    pre-task code, where the fire returned `:ok` and `run_summary/1`
+      #    returned `:ok` having produced nothing.
+      assert_receive :legacy_llm_called
+
+      # 4. …and ran to completion, terminating the transcript rather than
+      #    leaving it stuck in "recording" forever.
+      assert {:error, {:llm_failed, _reason}} = result
+      assert Meetings.get_transcript(transcript.id).status == "failed"
+    end
+
+    test "POSITIVE CONTROL — a successful external dispatch does NOT run the legacy body" do
+      # Identical wiring to the detector; the stubbed status is the only
+      # difference. Without this, the detector's "legacy ran" could be
+      # satisfied by a bridge that never consulted the Router at all.
+      _name = start_registry!()
+      _agent = wire_external_scribe!()
+
+      assert Platform.Responsibilities.Router.responsibility_filled?("meetings.summarize")
+
+      test_pid = self()
+      stub_legacy_llm!(test_pid)
+
+      Req.Test.stub(:summarizer_external_dispatch_test, fn conn ->
+        send(test_pid, {:external_dispatch, conn.request_path})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "choices" => [
+              %{
+                "message" => %{
+                  "role" => "assistant",
+                  "content" =>
+                    Jason.encode!(%{"summary" => "Router summary.", "action_items" => []})
+                }
+              }
+            ]
+          })
+        )
+      end)
+
+      transcript = create_transcript!(%{segments: sample_segments()})
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert :ok = Summarizer.run_summary(transcript)
+        end)
+
+      # Same mechanism as the detector, exercised for real.
+      assert_receive {:external_dispatch, "/chat/completions"}
+
+      # The legacy seam is wired and reachable in this test — it simply
+      # was not used. That is the whole content of the control.
+      refute_receive :legacy_llm_called, 200
+      refute log =~ "Router fire failed for transcript"
+      refute Meetings.get_transcript(transcript.id).status == "failed"
     end
   end
 

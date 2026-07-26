@@ -90,6 +90,18 @@ defmodule Platform.Meetings.Summarizer do
   ONLY seam needed for the M8 cutover. Per the M8 task description we
   keep the legacy body in place for one stable release window before
   deletion.
+
+  ## Fire-result contract (ADR-0046 member 1)
+
+  `Platform.Responsibilities.Router.fire/2` returns
+  `{:ok, :dispatched} | {:ok, :unfilled} | {:ok, :unknown_responsibility}
+  | {:error, reason}`. Only `{:ok, :dispatched}` hands the summary off;
+  every other shape runs `run_summary_legacy/3`, because every other
+  shape means no agent is going to produce a summary. Until that task
+  landed, the Router returned a flat `:ok` for all four, so a failed
+  dispatch — an assigned external agent whose endpoint is down, say —
+  was indistinguishable from a successful one and the meeting summary
+  was silently lost.
   """
   def run_summary(%{id: id, space_id: space_id, segments: segments} = _transcript) do
     if router_meetings_summarize_filled?() do
@@ -106,17 +118,36 @@ defmodule Platform.Meetings.Summarizer do
                space_id: space_id
              }
            }) do
-        # ADR-0046 member 1 stage 1: the Router now returns
-        # `{:ok, :dispatched} | {:ok, :unfilled} | {:error, reason}`. Both ok
-        # shapes are collapsed here for now so this stage changes no
-        # behaviour on the success side; stage 3 of that task splits
-        # `{:ok, :unfilled}` off to `run_summary_legacy/3` (the bridge gate
-        # at `router_meetings_summarize_filled?/0` can race an unassign).
-        # What DOES change now: the `{:error, _}` branch below is finally
-        # reachable — a failed dispatch used to arrive here as `:ok` and the
-        # summary was silently lost.
-        {:ok, _} ->
+        # ADR-0046 member 1: the Router returns
+        # `{:ok, :dispatched} | {:ok, :unfilled} | {:ok, :unknown_responsibility}
+        # | {:error, reason}` and this bridge branches on all four.
+        #
+        # `{:ok, :dispatched}` is the only shape that means the summary is
+        # somebody else's job now.
+        {:ok, :dispatched} ->
           :ok
+
+        # The bridge gate (`router_meetings_summarize_filled?/0`) and the
+        # fire are two separate reads of role state, so an unassign — or a
+        # delete of the responsibility row itself — between them lands here.
+        # Both shapes mean "the router did not and will not produce a
+        # summary", which is exactly the question the `else` branch below
+        # answers with `run_summary_legacy/3`. Returning `:ok` here (what
+        # this clause did until stage 3 of ADR-0046 member 1) silently drops
+        # the meeting summary.
+        #
+        # `{:ok, :unknown_responsibility}` became reachable through this
+        # clause in stage 2, when `Router.fire/2`'s no-row branch moved from
+        # the error channel into the ok channel. It is close to unreachable
+        # in practice — the gate already required the row to exist WITH an
+        # assignee — but it is a real state and it gets the real answer.
+        {:ok, gate_race} when gate_race in [:unfilled, :unknown_responsibility] ->
+          Logger.info(
+            "[Summarizer] Router reported #{gate_race} for transcript #{id} after the " <>
+              "bridge gate said filled — role state raced, falling back to legacy body"
+          )
+
+          run_summary_legacy(id, space_id, segments)
 
         {:error, reason} ->
           Logger.warning(
