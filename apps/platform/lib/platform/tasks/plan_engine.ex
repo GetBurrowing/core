@@ -25,6 +25,8 @@ defmodule Platform.Tasks.PlanEngine do
   require Logger
 
   alias Platform.Tasks
+  alias Platform.Tasks.PlanCompletion
+
   alias Platform.Tasks.{DeployStageBuilder, Plan, Stacks, Stage, StackDeployer, Task, Validation}
 
   @valid_stage_transitions %{
@@ -258,7 +260,7 @@ defmodule Platform.Tasks.PlanEngine do
             stages == [] ->
               # Degenerate plan with no stages at all — nothing to deploy,
               # preserve the historical completion behavior.
-              {:ok, completed} = complete_plan(plan)
+              {:ok, completed} = complete_plan(plan, :degenerate_plan)
               Repo.preload(completed, stages_query())
 
             Enum.all?(stages, &(&1.status in ~w(passed skipped))) ->
@@ -780,7 +782,7 @@ defmodule Platform.Tasks.PlanEngine do
 
     if has_deploy_stage? do
       # Deploy stage already ran and passed — complete the plan
-      {:ok, completed} = complete_plan(plan)
+      {:ok, completed} = complete_plan(plan, :deploy_stage_passed)
       Repo.preload(completed, stages_query())
     else
       # No deploy stage yet — check strategy and maybe inject one
@@ -833,7 +835,7 @@ defmodule Platform.Tasks.PlanEngine do
           # the `:dispatched` event; the downstream merge trigger then
           # opens the PR via `deploy_validations_ready?/1`'s
           # `%Stack{status: "deploying"}` pass-through.
-          {:ok, completed} = complete_plan(plan)
+          {:ok, completed} = complete_plan(plan, :stack_member)
           _ = Stacks.dispatch_stack_deploy(task.stack_id)
           _ = StackDeployer.handle_member_transition(task, :plan_completed, :in_review)
           Repo.preload(completed, stages_query())
@@ -843,8 +845,10 @@ defmodule Platform.Tasks.PlanEngine do
 
           case DeployStageBuilder.build_stage(strategy, max_position(stages) + 1) do
             :skip ->
-              # Strategy is "none" — complete normally
-              {:ok, completed} = complete_plan(plan)
+              # No deploy stage to inject — complete normally. The reason is
+              # split by strategy type because `:skip` collapses two strategies
+              # with OPPOSITE terminal meanings; see `skip_reason/1`.
+              {:ok, completed} = complete_plan(plan, skip_reason(strategy))
               Repo.preload(completed, stages_query())
 
             stage_def ->
@@ -857,13 +861,40 @@ defmodule Platform.Tasks.PlanEngine do
                     "(status: #{task.status}, not deployable)"
                 )
 
-                {:ok, completed} = complete_plan(plan)
+                {:ok, completed} = complete_plan(plan, :not_deployable)
                 Repo.preload(completed, stages_query())
               end
           end
       end
     end
   end
+
+  # `DeployStageBuilder.build_stage/2` returns a bare `:skip` for TWO strategy
+  # types — `"none"` and `"no_op_wait_for_rollup"` — and they mean opposite
+  # things for the task's terminal status:
+  #
+  #   * `"none"`                 → no deploy step will ever run. The plan is
+  #                                fully passed, so the task is finished.
+  #   * `"no_op_wait_for_rollup"` → the deploy has NOT happened; it ships via a
+  #                                stack rollup PR that may not even be open
+  #                                yet. Sweeping the task to `done` here would
+  #                                mark an undeployed task deployed — the exact
+  #                                bug family task 019fa2fc exists to fix.
+  #
+  # Genuine stack members never reach this arm: `dispatch_deploy_for_task/1`
+  # rejects on any non-nil `stack_id` and the earlier `cond` arm catches them.
+  # The residual hole this split closes is a task with `stack_id == nil`
+  # carrying an explicit `no_op_wait_for_rollup` override (task-level
+  # `deploy_strategy`, or a project `default_strategy`), which resolves to
+  # `:skip` without ever touching the stack path.
+  #
+  # The discrimination lives HERE rather than inside `PlanCompletion` because
+  # this is the only place that still holds the already-resolved `strategy`;
+  # re-deriving it downstream would be a second, independently-drifting
+  # derivation of the same fact, which is precisely the shape
+  # `PlanCompletion`'s moduledoc argues against. Task 019fa2fc stage 2.
+  defp skip_reason(%{"type" => "no_op_wait_for_rollup"}), do: :awaiting_rollup
+  defp skip_reason(_strategy), do: :no_deploy_strategy
 
   defp inject_deploy_stage(plan, task, stage_def, strategy) do
     # Invariant repair (task 019f9b34): a plan that hosts a running deploy stage
@@ -979,11 +1010,23 @@ defmodule Platform.Tasks.PlanEngine do
 
   defp uncomplete_plan_for_deploy(%Plan{} = plan), do: plan
 
-  defp complete_plan(%Plan{} = plan) do
+  # The ONLY writer of `plan.status = "completed"` in the codebase, which is
+  # what makes it a true single seam for the follow-on task advance.
+  #
+  # `reason` is threaded from the call site (task 019fa2fc) because each branch
+  # already knows WHY it is completing the plan — see
+  # `Platform.Tasks.PlanCompletion` for why that beats re-deriving the target
+  # from the task's status after the fact.
+  #
+  # Ordering is load-bearing: advance the task BEFORE broadcasting, so any live
+  # router observing `{:plan_updated, completed}` sees an already-advanced task
+  # rather than racing it.
+  defp complete_plan(%Plan{} = plan, reason) do
     case plan
          |> Plan.changeset(%{status: "completed"})
          |> Repo.update() do
       {:ok, completed} ->
+        _ = PlanCompletion.advance_task(completed, reason)
         Tasks.broadcast_board({:plan_updated, completed})
         {:ok, completed}
 

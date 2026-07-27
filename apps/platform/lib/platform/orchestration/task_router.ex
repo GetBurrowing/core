@@ -64,7 +64,7 @@ defmodule Platform.Orchestration.TaskRouter do
 
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{DeployResolver, ReviewRequests, Stage}
+  alias Platform.Tasks.{DeployResolver, Plan, ReviewRequests, Stage}
 
   # ── State ──────────────────────────────────────────────────────────────
 
@@ -424,6 +424,48 @@ defmodule Platform.Orchestration.TaskRouter do
 
         {:noreply, state}
 
+      completed_plan_no_work?(state.task_id) ->
+        # Re-dispatch storm guard (task 019fa2fc stage 4). Production on
+        # 2026-07-27 logged four `dispatched task_assigned` lines for the same
+        # two tasks inside a 100 ms window at 09:47:12 — each a full prompt
+        # payload to a runtime that correctly found nothing to do, and it only
+        # stopped when the tasks were marked done by hand. Stages 1-3 removed
+        # the cause (the task now advances synchronously off the plan-completion
+        # path). This clause is the backstop: if that path ever regresses, the
+        # task degrades into a STUCK task — visible on the board, and visible on
+        # the `dispatch_suppressed` telemetry — instead of a token-burning loop.
+        #
+        # Ordered ahead of `settled_stack_member_no_work?/2` because it is the
+        # stronger condition: a `completed` plan is terminal for every task,
+        # stack member or not, so there is no reason to fall through to the
+        # narrower stack-only clause first.
+        #
+        # WHY THE PREDICATE STAYS NARROW — this is the part that matters. The
+        # `completed` PLAN STATUS is what makes suppression safe, because a
+        # `completed` plan cannot have work left in it by construction (the
+        # engine only writes that status once every stage is settled). Drop it
+        # and lean on the shape `settled_stack_member_no_work?/2` uses — "no
+        # running stage AND no open validation" — and this clause would also
+        # match a task whose next stage is `pending` with zero validations. That
+        # is an agent that has never been prompted and is the only thing that
+        # can start the stage: suppressing it parks the task forever with no
+        # log the operator would think to look for. The failure mode of a
+        # dispatch guard is silent strangulation, so the guard is deliberately
+        # the smallest one that covers the incident.
+        Logger.info(
+          "[TaskRouter] suppressed stale dispatch for task=#{state.task_id}: " <>
+            "current plan is completed with no running stage"
+        )
+
+        emit_dispatch_suppressed_telemetry(state.task_id, :completed_plan_no_work)
+
+        state =
+          state
+          |> Map.put(:task_status, task.status)
+          |> clear_liveness()
+
+        {:noreply, state}
+
       settled_stack_member_no_work?(task, state.task_id) ->
         # TAIL-stall fix (2026-07-22), direction (3): suppress dispatch for a
         # SETTLED stack member — one whose current plan has NO pending/running
@@ -444,7 +486,7 @@ defmodule Platform.Orchestration.TaskRouter do
             "task=#{state.task_id} (no pending validation, no running stage)"
         )
 
-        emit_dispatch_suppressed_telemetry(state.task_id)
+        emit_dispatch_suppressed_telemetry(state.task_id, :settled_stack_member)
 
         state =
           state
@@ -760,65 +802,35 @@ defmodule Platform.Orchestration.TaskRouter do
     end
   end
 
-  # Board PubSub: plan completed for our task
-  # in_progress → in_review (execution plan done, hand off to review)
-  # in_review   → deploying (review plan done, deploy stage injected by PlanEngine)
-  # deploying   → done      (deploy stage passed)
+  # Board PubSub: plan completed for our task. LIVENESS ONLY — this clause
+  # performs no task-status transition.
+  #
+  # The phase advance is owned by `Platform.Tasks.PlanCompletion`, called from
+  # `PlanEngine.complete_plan/2` on the synchronous plan-completion path (task
+  # 019fa2fc). That path runs in the same process and the same
+  # `Repo.transaction/1` as the plan write, so it cannot be dropped the way a
+  # broadcast to a router that is not alive can be — which is exactly how
+  # tasks 019fa06a / 019fa209 / 019fa298 sat in `deploying` forever.
+  #
+  # The status-mapping arm that used to live here is deliberately NOT kept as
+  # a redundant second path. It re-derived its target from the task's CURRENT
+  # status, so once the advance is synchronous it reads post-advance state and
+  # maps it forward again one broadcast later — a second state machine, not a
+  # retry of the same decision. Concretely it re-advanced tasks that
+  # `PlanCompletion` had deliberately declined to move (`:awaiting_rollup`,
+  # `:stack_member`), undoing that protection, and it duplicated the 019f9b34
+  # unsettled-deploy warning. Both are covered by
+  # `task_router_plan_completed_test.exs`.
   def handle_info(
-        {:plan_updated, %{task_id: task_id, status: "completed"} = plan},
+        {:plan_updated, %{task_id: task_id, status: "completed"}},
         %State{task_id: task_id} = state
       ) do
-    task = Tasks.get_task_detail(task_id)
-
-    if task do
-      {target_status, log_label} =
-        case task.status do
-          "in_progress" ->
-            {"in_review", "execution plan completed"}
-
-          "in_review" ->
-            {"deploying", "review plan completed"}
-
-          "deploying" ->
-            # A `completed` plan is NOT sufficient evidence that the deploy
-            # landed — see task 019f9b34 / incident 019f9ae5, where a stale
-            # `completed` broadcast emitted by `inject_deploy_stage/4` flipped
-            # the task to `done` eight minutes before its PR merged, with the
-            # deploy stage still `running`. Require the deploy stage itself to
-            # be terminal before promoting deploying -> done.
-            if deploy_stage_settled?(Map.get(plan, :id)) do
-              {"done", "deploy completed"}
-            else
-              Logger.warning(
-                "[TaskRouter] held task #{task_id} at deploying — plan #{inspect(Map.get(plan, :id))} " <>
-                  "broadcast `completed` but its deploy stage is #{inspect(unsettled_deploy_statuses(Map.get(plan, :id)))}. " <>
-                  "Something upstream completed the plan early (see task 019f9b34)."
-              )
-
-              {nil, "deploy stage still running — holding at deploying"}
-            end
-
-          other ->
-            {nil, other}
-        end
-
-      if target_status do
-        case Tasks.transition_task(task, target_status) do
-          {:ok, _updated} ->
-            Logger.info(
-              "[TaskRouter] #{log_label} — transitioned task #{task_id} to #{target_status}"
-            )
-
-          {:error, reason} ->
-            Logger.warning(
-              "[TaskRouter] failed to transition task #{task_id} to #{target_status}: #{inspect(reason)}"
-            )
-        end
-      end
-    end
-
     # Phase boundary — clear the prior stage's liveness. Next dispatch will
-    # arm fresh timers keyed off the new phase's first stage.
+    # arm fresh timers keyed off the new phase's first stage. Stays here (and
+    # not on the plan-completion path) because the lease guards
+    # `Process.send_after/3` timers living in THIS process: when no router is
+    # alive there are no timers to invalidate, and when one is alive it is the
+    # only process that can meaningfully cancel them.
     LeaseManager.clear(task_id)
 
     # Re-dispatch so the agent picks up the updated status prompt
@@ -1889,11 +1901,37 @@ defmodule Platform.Orchestration.TaskRouter do
     |> Enum.any?(&(&1.status in ["pending", "running"]))
   end
 
-  defp emit_dispatch_suppressed_telemetry(task_id) do
+  # Re-dispatch storm guard (task 019fa2fc stage 4). The current plan is
+  # `completed` and holds no running stage — terminal by construction, so a
+  # prompt here can only be the stale re-dispatch the 2026-07-27 incident
+  # logged. See the clause in `handle_info(:dispatch, ...)` for why the
+  # `completed` plan status (rather than the weaker "nothing open" shape) is
+  # the load-bearing half of this predicate.
+  #
+  # Best-effort, mirroring `settled_stack_member_no_work?/2`: any lookup error
+  # yields `false`. A predicate that raises must never take down dispatch —
+  # failing open costs one redundant prompt, failing closed costs a stalled
+  # task.
+  defp completed_plan_no_work?(task_id) do
+    case Tasks.current_plan(task_id) do
+      %Plan{status: "completed"} = plan -> current_running_stage(plan) == nil
+      _ -> false
+    end
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  # Reason is supplied by the call site rather than re-derived here, so the
+  # metadata says WHICH guard fired. Event name and the `%{task_id:, reason:}`
+  # metadata shape are unchanged from the single-reason version — existing
+  # dashboards keep working, they just see a second `reason` value.
+  defp emit_dispatch_suppressed_telemetry(task_id, reason) do
     :telemetry.execute(
       [:platform, :orchestration, :dispatch_suppressed],
       %{count: 1},
-      %{task_id: task_id, reason: :settled_stack_member}
+      %{task_id: task_id, reason: reason}
     )
 
     :ok
@@ -2137,33 +2175,11 @@ defmodule Platform.Orchestration.TaskRouter do
     String.starts_with?(name, "deploy:")
   end
 
-  # True when every deploy stage on the plan has reached a terminal state.
-  # `Enum.all?/2` over an empty list is `true`, which is the right default: a
-  # plan with no deploy stage at all is unaffected by this guard.
-  defp deploy_stage_settled?(nil), do: true
-
-  defp deploy_stage_settled?(plan_id) do
-    plan_id
-    |> deploy_stages()
-    |> Enum.all?(&(&1.status in ~w(passed skipped)))
-  end
-
-  # Diagnostic companion to `deploy_stage_settled?/1` — the statuses of the
-  # deploy stages that are holding the task back, for the warning log.
-  defp unsettled_deploy_statuses(plan_id) do
-    plan_id
-    |> deploy_stages()
-    |> Enum.reject(&(&1.status in ~w(passed skipped)))
-    |> Enum.map(&"#{&1.name}=#{&1.status}")
-  end
-
-  defp deploy_stages(nil), do: []
-
-  defp deploy_stages(plan_id) do
-    plan_id
-    |> Tasks.list_stages()
-    |> Enum.filter(&deploy_stage?/1)
-  end
+  # `deploy_stage_settled?/1`, `unsettled_deploy_statuses/1` and
+  # `deploy_stages/1` used to live here. They moved to
+  # `Platform.Tasks.PlanCompletion` (task 019fa2fc stage 1) with the deploy
+  # guard they exist to serve. The router-private `deploy_stage?/1` above stays
+  # — `maybe_lease_deploy_credentials/3` still uses it.
 
   # ── Deploy failure handling ────────────────────────────────────────────
 

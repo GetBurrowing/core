@@ -386,52 +386,15 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert status.current_stage_id == stage.id
     end
 
-    test "completed plan transitions in_progress task to in_review", %{
-      task: task,
-      assignee: assignee,
-      plan: plan
-    } do
-      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
-
-      {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, task} = Tasks.transition_task(task, "in_progress")
-
-      completed_plan =
-        plan
-        |> Ecto.Changeset.change(%{status: "completed"})
-        |> Platform.Repo.update!()
-
-      Tasks.broadcast_board({:plan_updated, completed_plan})
-      Process.sleep(100)
-
-      updated_task = Tasks.get_task_detail(task.id)
-      assert updated_task.status == "in_review"
-    end
-
-    test "completed plan transitions in_review task to deploying", %{
-      task: task,
-      assignee: assignee,
-      plan: plan
-    } do
-      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
-
-      {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, task} = Tasks.transition_task(task, "in_progress")
-      {:ok, _task} = Tasks.transition_task(task, "in_review")
-
-      completed_plan =
-        plan
-        |> Ecto.Changeset.change(%{status: "completed"})
-        |> Platform.Repo.update!()
-
-      Tasks.broadcast_board({:plan_updated, completed_plan})
-      Process.sleep(100)
-
-      updated_task = Tasks.get_task_detail(task.id)
-      assert updated_task.status == "deploying"
-    end
+    # REMOVED by task 019fa2fc stage 3: "completed plan transitions in_progress
+    # task to in_review" and "completed plan transitions in_review task to
+    # deploying". The router's status-mapping arm those two tests covered is
+    # gone — the phase advance is owned by `Platform.Tasks.PlanCompletion` on
+    # the synchronous plan-completion path, and the `{:plan_updated,
+    # completed}` clause is now liveness-only. Replacement coverage lives in
+    # `task_router_plan_completed_test.exs` and `plan_completion_test.exs`.
+    # Merge note for task 019fa121: resolve any conflict here by taking the
+    # deletion.
 
     test "running manual approval stage without a pending review request stays actively routed",
          %{
@@ -2397,57 +2360,18 @@ defmodule Platform.Orchestration.TaskRouterTest do
                "not evidence the deploy landed (task 019f9b34 / incident 019f9ae5)"
     end
 
-    test "a settled (passed) deploy stage still promotes the task to done", %{
-      task: task,
-      assignee: assignee,
-      plan: plan
-    } do
-      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
-
-      {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, task} = Tasks.transition_task(task, "in_progress")
-      {:ok, _task} = Tasks.transition_task(task, "deploying")
-
-      _deploy_stage = seed_running_deploy_stage!(plan, "passed")
-      completed_plan = drift_plan_to_completed!(plan)
-
-      Tasks.broadcast_board({:plan_updated, completed_plan})
-      Process.sleep(150)
-
-      updated_task = Tasks.get_task_detail(task.id)
-
-      assert updated_task.status == "done",
-             "the guard must not be inert-and-passing: a passed deploy stage still completes the task"
-    end
-
-    test "a plan with no deploy stage at all still promotes the task to done", %{
-      task: task,
-      assignee: assignee,
-      plan: plan,
-      stage: stage
-    } do
-      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
-
-      {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, task} = Tasks.transition_task(task, "in_progress")
-      {:ok, _task} = Tasks.transition_task(task, "deploying")
-
-      stage
-      |> Ecto.Changeset.change(%{status: "passed", completed_at: DateTime.utc_now()})
-      |> Platform.Repo.update!()
-
-      completed_plan = drift_plan_to_completed!(plan)
-
-      Tasks.broadcast_board({:plan_updated, completed_plan})
-      Process.sleep(150)
-
-      updated_task = Tasks.get_task_detail(task.id)
-
-      assert updated_task.status == "done",
-             "the empty-deploy-stage filter must default to settled, not lock the task out of done"
-    end
+    # REMOVED by task 019fa2fc stage 3: the two "still promotes the task to
+    # done" tests (settled deploy stage / no deploy stage at all). Both drove
+    # the router's `deploying -> done` arm, which no longer exists. Their
+    # anti-inertness intent moved with the guard to
+    # `Platform.Tasks.PlanCompletion` — see the `:deploy_stage_passed` tests in
+    # `plan_completion_test.exs`, including the zero-deploy-stage case.
+    #
+    # The surviving test above still passes, now for a stronger reason: the
+    # router performs no transition at all on a `completed` broadcast.
+    #
+    # Merge note for task 019fa121: resolve any conflict here by taking the
+    # deletion.
   end
 
   # ────────────────────────────────────────────────────────────────────
