@@ -868,7 +868,17 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # environment that has ever booted, so editing `do_default_templates/0`
       # alone would leave prod serving the old body. Update-only; no schema
       # change.
-      "20260727183000_force_update_planning_template_drop_ack.exs"
+      "20260727183000_force_update_planning_template_drop_ack.exs",
+      # Task 019fa504 stage 3: the `design.task_direction.v1` row's
+      # `## Delivery` section named exactly one exit — attach a canvas —
+      # because until stages 1 and 2 of this task that was the only exit
+      # there was. The `task_design_decline` tool is now in the designer's
+      # `task` bundle, and a tool she is never told about is not reachable
+      # in practice. `seed_defaults/0` is INSERT-only and 20260726051346
+      # claimed this slug on every migrated environment, so the prompt edit
+      # reaches a deployed designer only through this overwrite.
+      # Update-only; no schema change.
+      "20260727210000_force_update_design_task_direction_decline.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

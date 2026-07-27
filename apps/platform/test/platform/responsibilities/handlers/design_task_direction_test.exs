@@ -61,6 +61,7 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
 
   alias Platform.Chat
   alias Platform.Chat.Canvas
+  alias Platform.Federation.ToolSurface
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
   alias Platform.Responsibilities.BuiltIns
@@ -608,6 +609,128 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
                asks for the direction twice.
                """
       end
+    end
+  end
+
+  # ── the decline exit (task 019fa504 stage 3) ──────────────────────────────
+
+  describe "the Delivery section names BOTH exits" do
+    # Stage 1 built `PreplanStep.decline/3`; stage 2 exposed it as the
+    # `task_design_decline` MCP tool in the same `task` bundle
+    # `task_attach_canvas` lives in. Neither makes it USED. Until this stage
+    # the `## Delivery` section named exactly one thing to do, so a designer
+    # holding the tool and reading the prompt still had only one instruction:
+    # attach a canvas. She attaches one she does not believe in, or goes
+    # silent and burns the 30-minute deadline into a `failed` step.
+    @decline_tool "task_design_decline"
+    @delivery_tool "task_attach_canvas"
+
+    defp delivery_section(body) do
+      case String.split(body, "## Delivery", parts: 2) do
+        [_, section] -> section
+        _ -> flunk("the design.task_direction.v1 body has no `## Delivery` section")
+      end
+    end
+
+    # The load-bearing test, and the pairing is mandatory. A lone presence
+    # assertion on `task_design_decline` passes against a body that lost its
+    # delivery instruction entirely — which is strictly worse than the bug
+    # being fixed, because a designer would then have no way to DELIVER.
+    test "the rendered instruction names the decline exit AND still carries the delivery instruction and the five bullets" do
+      project = project!()
+
+      task =
+        task!(project.id, %{
+          title: "Add an epic-create FAB above the board",
+          description: "The board has no way to create an epic without leaving the page."
+        })
+
+      context = DesignTaskDirection.gather_context(%{task_id: task.id})
+      rendered = DesignTaskDirection.render_instruction(context)
+
+      # Rendered through the DB ROW (`render_instruction/1` reads
+      # `render_template/2` first and only falls back to the in-code body), so
+      # this assertion is also the proof that the force-update migration
+      # reached the row on this database.
+      assert rendered =~ @decline_tool,
+             """
+             The rendered design-direction instruction never names #{@decline_tool}.
+
+             The tool exists and is in the designer's bundle, but a tool nobody
+             is told about is not reachable in practice — she will attach a
+             canvas she does not believe in, or time out.
+             """
+
+      assert rendered =~ "no design direction"
+      assert rendered =~ "do NOT go silent"
+
+      # PAIRED — the decline is added ALONGSIDE the delivery instruction.
+      assert rendered =~ @delivery_tool
+      assert rendered =~ "completion signal"
+
+      for bullet <- @deliverable_bullets do
+        assert String.contains?(rendered, bullet),
+               """
+               The rendered instruction is missing the deliverable bullet:
+
+               #{bullet}
+
+               The decline exit is an ADDITION to the Delivery section. A body
+               that gained the exit and lost the shape it asks for would pass a
+               lone presence assertion and be worse than the bug.
+               """
+      end
+    end
+
+    # A prompt may only name tools that exist. The literal above is pinned
+    # against the shipped catalogue rather than restated on faith: rename or
+    # drop either tool in `tool_surface.ex` and this goes red naming it,
+    # instead of the template quietly instructing a designer to call something
+    # her runtime will answer `Unknown tool` for.
+    test "both exits the Delivery section names are really registered tools" do
+      body = PromptTemplates.default_content_for_slug("design.task_direction.v1")
+      delivery = delivery_section(body)
+
+      registered = MapSet.new(ToolSurface.tool_definitions(), & &1.name)
+
+      for tool <- [@delivery_tool, @decline_tool] do
+        assert String.contains?(delivery, tool),
+               "the `## Delivery` section must name #{tool}"
+
+        assert MapSet.member?(registered, tool),
+               """
+               The Delivery section instructs the designer to call #{tool}, but
+               no such tool is in `ToolSurface.tool_definitions/0`.
+
+               An instruction naming a tool that does not exist is the same
+               defect as a tool nobody is told about, one layer down.
+               """
+      end
+
+      # NEGATIVE CONTROL for the membership assertion above: a name that is
+      # not a tool must not be reported as one, or `MapSet.member?/2` proves
+      # nothing about the two that are.
+      refute MapSet.member?(registered, "task_design_decline_v2")
+    end
+
+    test "the live DB row carries the decline exit — the force-update migration ran" do
+      template = PromptTemplates.get_template_by_slug("design.task_direction.v1")
+
+      assert template,
+             "design.task_direction.v1 has no row — `mix ecto.migrate` did not run"
+
+      assert template.content =~ @decline_tool,
+             """
+             The design.task_direction.v1 ROW does not name #{@decline_tool}.
+
+             `seed_defaults/0` is INSERT-only and this slug was claimed by
+             20260726051346, so editing `do_default_templates/0` alone changes
+             the fallback and leaves every deployed designer reading the
+             one-exit body. The deliverable is
+             20260727210000_force_update_design_task_direction_decline.exs.
+             """
+
+      assert template.content =~ @delivery_tool
     end
   end
 end

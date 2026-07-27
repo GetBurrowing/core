@@ -11,6 +11,7 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Chat
   alias Platform.Chat.{ActiveAgentStore, ContextPlane, Participant}
   alias Platform.Design.Brand
+  alias Platform.Design.PreplanStep
   alias Platform.Meetings
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Journal, Routing, Search}
@@ -1701,6 +1702,72 @@ defmodule Platform.Federation.ToolSurface do
           "Soft-reference contract: the canvas is checked at attach time but not FK-enforced. If the canvas is soft-deleted later, `task_list_canvases` will surface it with `canvas_present: false` so callers can detach. Idempotent re-attach updates the note + attribution but never produces a duplicate row.",
         when_to_use:
           "When you (or an upstream planner) want a canvas to ride along in the next dispatch payload for a task, without copy-pasting it into a chat message."
+      },
+      # ADR-0046 member 7, task `019fa504` stage 2. Deliberately IN THE `task`
+      # BUNDLE, directly beside `task_attach_canvas`, and that placement is the
+      # point of the ticket rather than an incidental filing decision.
+      #
+      # `task_attach_canvas` is the designer's PROVEN delivery path — it is the
+      # one instruction `design.task_direction.v1` gives her. Putting the exit
+      # in the same bundle makes its reachability CO-EXTENSIVE with a path
+      # already known to work on every designer runtime that exists, with zero
+      # new `allowed_bundles` grant on any row. A new bundle (or `plan`, which
+      # a designer has no reason to hold) would ship an affordance that stays
+      # unreachable until somebody hand-edits every designer runtime — which is
+      # precisely the failure mode this task exists to fix, re-committed one
+      # layer down. `tool_surface_design_decline_test.exs` asserts the
+      # co-extensiveness directly, paired with a `["canvas"]` control.
+      %{
+        name: "task_design_decline",
+        description:
+          "Decline a design dispatch: close an OPEN pre-plan design step because you, the " <>
+            "dispatched designer, judge that this task needs no design direction (ADR-0046). " <>
+            "Records the step as `not_applicable` with reason `designer_declined` and returns " <>
+            "the planner to work IMMEDIATELY. This is the only exit from a design dispatch " <>
+            "other than delivering a canvas with `task_attach_canvas` — going silent instead " <>
+            "burns the full design deadline and records the step as `failed`.",
+        parameters: %{
+          task_id: %{
+            type: "string",
+            required: true,
+            description:
+              "The task whose design step you are declining. Printed as `task_id:` in the design dispatch prompt."
+          },
+          reason: %{
+            type: "string",
+            required: true,
+            description:
+              "Required, non-blank, at least 8 characters. One sentence saying WHY no direction is needed — the change is not visual, or the surface already has direction that still holds. Persisted verbatim as `decline_note`. This is the only signal that will ever let an analyst separate a genuine UI-classifier misfire from a UI task that legitimately needed no direction, so a placeholder like \"n/a\" is worse than no decline at all."
+          }
+        },
+        returns:
+          "%{task_id, outcome, reason, declined_after_timeout} — `outcome` is the PERSISTED planning-step outcome (\"not_applicable\"), `reason` is the persisted `\"designer_declined\"`, and `declined_after_timeout` is true when the decline arrived after the deadline had already recorded a `failed` step and upgraded it. The calling agent (or user) is recorded on the step as `declined_by`, in the same shape `task_attach_canvas` records an attachment's author.",
+        # This prose is TESTED, not asserted by hand:
+        # `tool_surface_design_decline_test.exs` drives every refusal below
+        # through `execute/3` and asserts the observed `code` set is exactly
+        # the set named here, via `design_decline_error_codes/0`. The
+        # 2026-07-26 e2e journal records `intent_ack` / `task_ack` shipping
+        # `limitations` describing an error taxonomy the code never emits,
+        # with no test guarding it — remote runtimes branch on these strings.
+        limitations:
+          "Refusals carry a `code`: `missing_task_id` (task_id absent, blank, or not a string), " <>
+            "`missing_reason` (reason absent, blank, or shorter than 8 characters — a decline " <>
+            "with no stated reason is unusable as classifier evidence, which is the whole " <>
+            "reason this exit records anything), " <>
+            "`task_not_found` (no task with that id), " <>
+            "`step_not_open` (the design step already settled, was skipped, or never fired; " <>
+            "the call changed NOTHING — a decline never overwrites a delivered canvas), " <>
+            "`decline_failed` (the write itself failed). " <>
+            "The one state that is NOT a refusal is a step the deadline already failed: that " <>
+            "succeeds as a late-arrival upgrade and carries `declined_after_timeout: true`, so " <>
+            "the timeout stays visible in the record rather than being erased by the upgrade. " <>
+            "A runtime WITHOUT the `task` capability bundle simply never declines: the design " <>
+            "deadline expires, the step records `failed`, and the planner proceeds exactly as " <>
+            "it does today. That degradation is deliberate (ADR-0046 decision 7 — silence " <>
+            "falls open) and is why a designer who cannot reach this tool is a missing " <>
+            "judgement, not a stuck task.",
+        when_to_use:
+          "As the dispatched designer, when you have read the task and judge that it needs no design direction — instead of attaching a canvas you do not believe in, and instead of going silent. Not for delivering direction: that is task_attach_canvas."
       },
       %{
         name: "task_detach_canvas",
@@ -3997,6 +4064,19 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # ADR-0046 member 7, task `019fa504` stage 2 — the designer's decline.
+  #
+  # Argument shape is checked BEFORE the lookup, so a caller that sends a
+  # blank reason against a real task hears about the reason rather than
+  # about whichever check happened to run first.
+  def execute("task_design_decline", args, context) do
+    with {:ok, task_id} <- design_decline_task_id_arg(Map.get(args, "task_id")),
+         {:ok, note} <- design_decline_reason_arg(Map.get(args, "reason")),
+         {:ok, task} <- design_decline_task(task_id) do
+      record_design_decline(task, note, context)
+    end
+  end
+
   def execute("task_detach_canvas", args, _context) do
     task_id = Map.get(args, "task_id")
     canvas_id = Map.get(args, "canvas_id")
@@ -4083,6 +4163,169 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   defp resolve_attached_by(_), do: %{}
+
+  # ── ADR-0046 member 7 stage 2: task_design_decline internals ─────────────
+
+  # The closed set of refusal codes the `task_design_decline` clause can
+  # emit. The tool's `limitations` prose names exactly these, and a test
+  # compares the two sets rather than restating either — documentation that
+  # drifts from the code is worse than none, because remote runtimes branch
+  # on it.
+  @design_decline_error_codes [
+    :missing_task_id,
+    :missing_reason,
+    :task_not_found,
+    :step_not_open,
+    :decline_failed
+  ]
+
+  # A reason short enough to be a placeholder ("n/a", "none", "no") is worse
+  # than no decline at all: the step closes and the classifier observation
+  # that justified recording anything is lost. Eight graphemes is the
+  # cheapest bar that rejects every placeholder anyone actually types.
+  @design_decline_min_reason 8
+
+  @doc """
+  The closed set of `code` values `task_design_decline` refuses with.
+
+  Public so the guard that keeps the tool's `limitations` prose honest can
+  compare the documented taxonomy against the emitted one instead of
+  restating it.
+  """
+  @spec design_decline_error_codes() :: [atom()]
+  def design_decline_error_codes, do: @design_decline_error_codes
+
+  defp design_decline_task_id_arg(task_id) when is_binary(task_id) do
+    case String.trim(task_id) do
+      "" -> design_decline_error(:missing_task_id, task_id)
+      trimmed -> {:ok, trimmed}
+    end
+  end
+
+  defp design_decline_task_id_arg(task_id), do: design_decline_error(:missing_task_id, task_id)
+
+  defp design_decline_reason_arg(reason) when is_binary(reason) do
+    case String.trim(reason) do
+      trimmed when byte_size(trimmed) == 0 ->
+        design_decline_error(:missing_reason, reason)
+
+      trimmed ->
+        if String.length(trimmed) < @design_decline_min_reason do
+          design_decline_error(:missing_reason, reason)
+        else
+          {:ok, trimmed}
+        end
+    end
+  end
+
+  defp design_decline_reason_arg(reason), do: design_decline_error(:missing_reason, reason)
+
+  # `Platform.UUID.cast/1`, not a bare `Repo.get/2`: `task_id` arrives
+  # straight off an agent's tool payload, and `repo_lookup_boundary_test.exs`
+  # ratchets against bare casts on agent-facing paths. Resolving HERE rather
+  # than letting `decline/3` do it is what separates `task_not_found` from
+  # `step_not_open` — `decline/3` collapses both to `{:ok, :noop}`, and a
+  # designer who mistyped a task id must not be told her step already settled.
+  defp design_decline_task(task_id) do
+    with {:ok, uuid} <- Platform.UUID.cast(task_id),
+         %Task{} = task <- Repo.get(Task, uuid) do
+      {:ok, task}
+    else
+      _ -> design_decline_error(:task_not_found, task_id)
+    end
+  end
+
+  defp record_design_decline(%Task{} = task, note, context) do
+    case PreplanStep.decline(task, note, declined_by: resolve_attached_by(context)) do
+      {:ok, :noop} ->
+        design_decline_error(:step_not_open, task.id)
+
+      {:ok, outcome} ->
+        {:ok, design_decline_result(task, outcome)}
+
+      # UNREACHABLE from here — `design_decline_reason_arg/1` already refused
+      # every non-binary note. Mapped anyway, and mapped to `missing_reason`
+      # rather than `decline_failed`: `:invalid_note` is the caller's own bad
+      # argument, and reporting it as "the step already settled" or "the write
+      # failed" would misattribute a client error to task state.
+      {:error, :invalid_note} ->
+        design_decline_error(:missing_reason, note)
+
+      {:error, reason} ->
+        design_decline_error(:decline_failed, reason)
+    end
+  end
+
+  # `declined_after_timeout` is read back off the PERSISTED entry rather than
+  # inferred: `decline/3` returns only the outcome, and the upgrade marker is
+  # the anti-collapse property this tool's caller most needs reported.
+  defp design_decline_result(%Task{} = task, outcome) do
+    entry =
+      case Tasks.get_task_record(task.id) do
+        %Task{planning_step_outcomes: %{"design" => %{} = entry}} -> entry
+        _ -> %{}
+      end
+
+    %{
+      task_id: task.id,
+      outcome: to_string(outcome),
+      reason: PreplanStep.reasons().declined,
+      declined_after_timeout: Map.get(entry, "declined_after_timeout") == true
+    }
+  end
+
+  defp design_decline_error(:missing_task_id, task_id) do
+    design_decline_refusal(
+      :missing_task_id,
+      "task_design_decline requires task_id (non-blank string), got #{inspect(task_id)}.",
+      true,
+      "Pass the UUID printed as `task_id:` in the design dispatch prompt."
+    )
+  end
+
+  defp design_decline_error(:missing_reason, _reason) do
+    design_decline_refusal(
+      :missing_reason,
+      "reason is required and must be a non-blank string of at least #{@design_decline_min_reason} characters.",
+      true,
+      "One sentence: why this task needs no design direction. A decline with no stated reason closes the step but tells nobody whether the UI classifier misfired, which is the only thing this record is for."
+    )
+  end
+
+  defp design_decline_error(:task_not_found, task_id) do
+    design_decline_refusal(
+      :task_not_found,
+      "Task not found: #{inspect(task_id)}",
+      false,
+      "Use the `task_id` printed in the design dispatch prompt, or task_list to look it up."
+    )
+  end
+
+  # Named against the ACTUAL state, not "the step is not open": a designer who
+  # calls twice, or who declines a task the deadline already closed and reopened
+  # by some other path, has to read an explanation rather than a mystery.
+  defp design_decline_error(:step_not_open, task_id) do
+    design_decline_refusal(
+      :step_not_open,
+      "The design step for task #{task_id} is not open: it already settled, was skipped, or never fired.",
+      false,
+      "Nothing changed — a decline never overwrites a delivered canvas or a completed step. If you already attached a canvas for this task, that delivery stands. Use task_get to see the recorded planning-step outcome."
+    )
+  end
+
+  defp design_decline_error(:decline_failed, reason) do
+    design_decline_refusal(
+      :decline_failed,
+      "Failed to record the decline: #{inspect_errors_safe(reason)}",
+      true,
+      "The step was left as it was. Retry once; if it refuses again, report a blocker rather than attaching a canvas you do not believe in."
+    )
+  end
+
+  defp design_decline_refusal(code, error, recoverable, suggestion)
+       when code in @design_decline_error_codes do
+    {:error, %{code: code, error: error, recoverable: recoverable, suggestion: suggestion}}
+  end
 
   def execute("task_start", args, _context) do
     task_id = Map.get(args, "task_id")

@@ -49,12 +49,14 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   describe "tool_definitions/0" do
-    test "returns all 89 tools with required components" do
+    test "returns all 90 tools with required components" do
       tools = ToolSurface.tool_definitions()
       # 88 as of task 019f70b8 stage 3, which added `intent_ack` to the
       # `task` bundle. 89 as of ADR-0046 member 5 stage 4, which added
-      # `plan_architecture_verdict` to the `plan` bundle.
-      assert length(tools) == 89
+      # `plan_architecture_verdict` to the `plan` bundle. 90 as of ADR-0046
+      # member 7 / task 019fa504 stage 2, which added `task_design_decline`
+      # to the `task` bundle.
+      assert length(tools) == 90
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -86,6 +88,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "task_complete" in tool_names
       assert "task_dependencies" in tool_names
       assert "task_attach_canvas" in tool_names
+      # ADR-0046 member 7 / task 019fa504 stage 2 — the designer's decline
+      # exit. The six-component rubric below is what this assertion buys; the
+      # bundle placement and the refusal taxonomy are pinned in
+      # `tool_surface_design_decline_test.exs`.
+      assert "task_design_decline" in tool_names
       assert "task_detach_canvas" in tool_names
       assert "task_list_canvases" in tool_names
       assert "stack_create" in tool_names

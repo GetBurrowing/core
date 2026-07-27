@@ -622,7 +622,12 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # rather than a new one. It is the only way an agent can release the
     # architecture gate that now holds a submitted plan
     # (+plan_architecture_verdict → 89)
-    @t6_baseline_tool_count 89
+    # bumped by ADR-0046 member 7 stage 2 (task 019fa504) — the dispatched
+    # designer's decline exit, added to the existing `task` bundle rather
+    # than a new one, deliberately beside `task_attach_canvas` so it is
+    # reachable by exactly the grant that already carries her delivery path
+    # (+task_design_decline → 90)
+    @t6_baseline_tool_count 90
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

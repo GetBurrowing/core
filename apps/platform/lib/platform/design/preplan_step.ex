@@ -68,6 +68,61 @@ defmodule Platform.Design.PreplanStep do
   `Platform.Tasks.failed_planning_steps/1`, which only ever reports `"failed"`
   and is what gates the merge.
 
+  ## The designer's decline (task `019fa504` stage 1)
+
+  Before this exit existed the step had four terminal closes and a designer
+  could only reach ONE of them — attaching a canvas. A designer who read the
+  task and correctly judged that no design direction was needed had a choice
+  between attaching a canvas she did not believe in and going silent for thirty
+  minutes, which records `failed`. `decline/3` is the missing exit.
+
+  Stage 2 exposed it to designers as the `task_design_decline` MCP tool — a
+  plain Elixir function is not an exit for a runtime that reaches Suite only
+  through `Platform.Federation.ToolSurface` — and threaded the caller identity
+  in as `:declined_by` so the two designer exits attribute their author
+  identically.
+
+  It records `not_applicable`, because "this did not need doing" is exactly
+  what that word means, and it does so by handing `@declined_fire` — an ALIAS
+  of `@no_designer_fire`, not a new tuple — to the same single writer. There is
+  deliberately no `{:ok, :declined}` fire result: `Platform.Responsibilities`'s
+  `@type fire_result` is a closed union and `outcome/1` has no catch-all, so a
+  shape the Router can never emit would make the declared union a lie. The
+  DISCRIMINATOR is `reason` — `"designer_declined"` — exactly as
+  `"no_ui_surface"` and `"no_designer"` already share one outcome and differ by
+  reason.
+
+  A decline that arrives AFTER the deadline upgrades `failed` to
+  `not_applicable`, mirroring `settle/2`'s late-arrival upgrade for the same
+  reason: a designer who engaged late still engaged. But
+  `record_planning_step/3` replaces the entry wholesale, so the upgrade would
+  erase the timeout it overwrites — which is the very conflation this exit
+  exists to prevent, running backwards. `"declined_after_timeout" => true`
+  keeps the two facts separable in the row.
+
+  The TIMEOUT still records `failed`, unchanged. A non-response is not a
+  judgement. `Platform.Tasks.failed_planning_steps/1` is what reports the step
+  into the merge gate, and the two timeouts that motivated this task were
+  caused by a designer runtime dropping the prompt body — had they recorded
+  `not_applicable` the planning history would have looked clean and the client
+  bug would likely still be undiagnosed. The failure marker is what made it
+  findable.
+
+  ## The false-positive counterpart
+
+  `audit_ui_prediction/2` below observes the classifier's FALSE NEGATIVES. It
+  has never had a counterpart, so `Platform.Design.UiSurface`'s deliberate 25%
+  false-positive budget has never been measurable against real data — nothing
+  else in the lifecycle can see that side. A designer decline is the only
+  observation the system will ever get, so `decline/3` emits
+  `[:platform, :design, :ui_heuristic, :false_positive]`.
+
+  A decline is NOT automatically a misfire: a designer may decline a genuinely
+  UI-touching task that simply needs no direction. `note` is what lets an
+  analyst discount those. That is the same posture as the false-negative event,
+  which fires on a contradiction rather than a proof. This module observes the
+  budget; it does not adjust it, and `ui_surface.ex` is untouched.
+
   ## The false-negative audit
 
   Stage 1's classifier is budgeted for zero false negatives, but a budget is not
@@ -118,6 +173,19 @@ defmodule Platform.Design.PreplanStep do
   @reason_canvas_attached "canvas_attached"
   @reason_contradicted "no_ui_surface_contradicted"
   @reason_timeout "design_timeout"
+  @reason_declined "designer_declined"
+
+  # Set ONLY on a decline that upgrades an already-recorded timeout. Member 4's
+  # writer replaces the entry, so without this the upgrade would erase the fact
+  # that a deadline elapsed — collapsing `failed` into `not_applicable` in the
+  # one direction the late-arrival rule makes possible.
+  @declined_after_timeout "declined_after_timeout"
+
+  # WHO declined, in the `%{"kind" => "agent" | "user", "id" => uuid}` shape
+  # `task_attach_canvas` persists as `attached_by_kind` / `attached_by_id`.
+  # The two designer exits have to name their author the same way or the
+  # audit trail forks by which exit was taken.
+  @declined_by "declined_by"
 
   # CONSTRUCTED fire results, handed to `Tasks.record_planning_step/3` so member
   # 1's mapping is the only thing that turns them into an outcome. Never matched
@@ -125,7 +193,15 @@ defmodule Platform.Design.PreplanStep do
   @no_designer_fire {:ok, :unfilled}
   @design_delivered_fire {:ok, :dispatched}
 
+  # An ALIAS, not a fourth tuple. `{:ok, :declined}` is not a member of
+  # `Platform.Responsibilities`' closed `@type fire_result` and the Router can
+  # never emit it, so teaching `outcome/1` about it would widen a documented
+  # union to cover a value that only this module invents. Named separately so
+  # the decline's intent is legible at its call site.
+  @declined_fire @no_designer_fire
+
   @false_negative_event [:platform, :design, :ui_heuristic, :false_negative]
+  @false_positive_event [:platform, :design, :ui_heuristic, :false_positive]
 
   @typedoc "Everything `start/1` can return."
   @type start_result ::
@@ -141,6 +217,14 @@ defmodule Platform.Design.PreplanStep do
   def false_negative_event, do: @false_negative_event
 
   @doc """
+  The telemetry event emitted when a designer declines a task the classifier
+  sent her — the only observation the system can make on the classifier's
+  false-positive side.
+  """
+  @spec false_positive_event() :: [atom()]
+  def false_positive_event, do: @false_positive_event
+
+  @doc """
   The annotation reasons this module writes, keyed by the situation.
 
   Exposed so tests and member 8's renderer assert against the shipped strings
@@ -153,7 +237,8 @@ defmodule Platform.Design.PreplanStep do
       no_designer: @reason_no_designer,
       canvas_attached: @reason_canvas_attached,
       contradicted: @reason_contradicted,
-      timeout: @reason_timeout
+      timeout: @reason_timeout,
+      declined: @reason_declined
     }
   end
 
@@ -311,6 +396,140 @@ defmodule Platform.Design.PreplanStep do
       |> put_canvas_id(canvas_id_of(attachment))
 
     finish(task, @design_delivered_fire, annotations)
+  end
+
+  # ── decline ───────────────────────────────────────────────────────────────
+
+  @doc """
+  Close an open design step because the DESIGNER judged that no design
+  direction was needed.
+
+  The designer-facing counterpart to `settle/2`. Reached from the
+  `task_design_decline` MCP tool; `note` is her one-sentence reason and is
+  recorded verbatim under `"decline_note"`.
+
+  Records `not_applicable` with `reason` `"designer_declined"`. The outcome is
+  not named here: `@declined_fire` goes to the single writer and whatever
+  member 1 maps it to is read back, exactly as every other close in this module
+  works.
+
+  A no-op unless the cursor is `"designing"` OR the recorded design outcome is
+  `:failed`. The second condition is the late-arrival upgrade, copied from
+  `settle/2` for the same stated reason — work that lands after the deadline
+  should clear the merge-time warning, not leave a permanent scar — and a
+  designer who declines late engaged just as much as one who attaches late. The
+  upgrade additionally sets `"declined_after_timeout" => true` so the timeout it
+  overwrites stays visible in the row.
+
+  A step closed some other way (settled, skipped, never fired) is left byte-
+  identical: a decline must never overwrite a delivered canvas.
+
+  ## Options
+
+    * `:declined_by` — `%{kind: "agent" | "user", id: <uuid>}`, the caller
+      identity resolved from the MCP tool context by task `019fa504` stage 2.
+      Recorded under `"declined_by"` in the SAME shape `task_attach_canvas`
+      writes for an attachment (`CanvasAttachments.attached_by/0`), so a
+      decline and a delivered canvas name their author identically. Omitted
+      from the annotation entirely — not written as nil — when the caller is
+      unidentifiable: a decline is a step CLOSE first, and refusing one over
+      a missing audit field would park the planner for the full deadline
+      over metadata.
+
+  Never raises.
+  """
+  @spec decline(binary() | Task.t(), binary(), keyword()) ::
+          {:ok, :not_applicable | :noop} | {:error, term()}
+  def decline(task_or_id, note, opts \\ [])
+
+  def decline(task_or_id, note, opts) when is_binary(note) and is_list(opts) do
+    case resolve_task(task_or_id) do
+      nil ->
+        {:ok, :noop}
+
+      %Task{} = task ->
+        cond do
+          open?(task) -> do_decline(task, note, false, opts)
+          persisted_outcome(task) == :failed -> do_decline(task, note, true, opts)
+          true -> {:ok, :noop}
+        end
+    end
+  rescue
+    e ->
+      Logger.warning("[design.preplan] decline raised: #{Exception.message(e)}")
+      {:error, :decline_raised}
+  catch
+    :exit, reason ->
+      Logger.warning("[design.preplan] decline exited: #{inspect(reason)}")
+      {:error, :decline_exited}
+  end
+
+  # Not `{:ok, :noop}`: a caller that sent no reason has not declined anything,
+  # and reporting that as "the step was not open" would misattribute its own
+  # bad argument to the task's state.
+  def decline(_task_or_id, _note, _opts), do: {:error, :invalid_note}
+
+  defp do_decline(%Task{} = task, note, after_timeout?, opts) do
+    verdict = UiSurface.ui_task?(task)
+
+    annotations =
+      verdict
+      |> evidence_annotations()
+      |> Map.put("reason", @reason_declined)
+      |> Map.put("decline_note", note)
+      |> put_declined_after_timeout(after_timeout?)
+      |> put_declined_by(Keyword.get(opts, :declined_by))
+
+    case finish(task, @declined_fire, annotations) do
+      {:ok, _outcome} = ok ->
+        emit_false_positive(task, verdict, note, after_timeout?)
+        ok
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp put_declined_after_timeout(annotations, false), do: annotations
+
+  defp put_declined_after_timeout(annotations, true),
+    do: Map.put(annotations, @declined_after_timeout, true)
+
+  # String keys on the nested value, not atoms: `annotate/3`'s
+  # `stringify_keys/1` is deliberately shallow (it stringifies the OUTER keys
+  # only), and a jsonb round-trip would hand the next reader `%{"kind" => ...}`
+  # regardless — so an atom-keyed write here would read back differently than
+  # it was written, which is exactly the kind of shape mismatch stage 1's
+  # `evidence_annotations/1` fix already had to undo once.
+  defp put_declined_by(annotations, %{kind: kind, id: id})
+       when is_binary(kind) and is_binary(id),
+       do: Map.put(annotations, @declined_by, %{"kind" => kind, "id" => id})
+
+  defp put_declined_by(annotations, _unidentifiable), do: annotations
+
+  # Emitted only once the close is COMMITTED, so the event count is the number
+  # of recorded declines rather than the number of attempts. `:telemetry`
+  # isolates handler failures itself, so this cannot turn a written record into
+  # an error return.
+  defp emit_false_positive(%Task{} = task, verdict, note, after_timeout?) do
+    evidence = evidence_annotations(verdict)
+
+    :telemetry.execute(
+      @false_positive_event,
+      %{system_time: System.system_time()},
+      %{
+        task_id: task.id,
+        layer: Map.get(evidence, "layer"),
+        matched: Map.get(evidence, "matched", []),
+        note: note,
+        declined_after_timeout: after_timeout?
+      }
+    )
+
+    Logger.info(
+      "[design.preplan] designer declined task=#{task.id} " <>
+        "after_timeout=#{after_timeout?} note=#{inspect(note)}"
+    )
   end
 
   # ── expire ────────────────────────────────────────────────────────────────

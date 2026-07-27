@@ -1125,12 +1125,28 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                                      "priv/repo/migrations/20260726051347_force_update_dispatch_planning_design_preplan.exs"
                                    ])
 
+    # Task 019fa504 stage 3 (ADR-0046 member 7). Force-update only, for the
+    # same reason as the one above: `20260726051346_seed_design_task_direction`
+    # claimed `design.task_direction.v1` on every migrated environment, so the
+    # insert branch is dead for it and the row it has to move is a deployed
+    # one. The two tests below are the pair that makes it load-bearing rather
+    # than ceremony — the seed-only control, and the missing-row skip.
+    @design_decline_migration_path Path.join([
+                                     __ENV__.file
+                                     |> Path.dirname()
+                                     |> Path.dirname()
+                                     |> Path.dirname()
+                                     |> Path.dirname(),
+                                     "priv/repo/migrations/20260727210000_force_update_design_task_direction_decline.exs"
+                                   ])
+
     Code.compile_file(@alarm_silence_migration_path)
     Code.compile_file(@subagent_id_ack_migration_path)
     Code.compile_file(@federation_preamble_migration_path)
     Code.compile_file(@migration_slot_section_migration_path)
     Code.compile_file(@intent_attention_migration_path)
     Code.compile_file(@design_preplan_migration_path)
+    Code.compile_file(@design_decline_migration_path)
 
     test "seed_defaults seeds dispatch.planning with current default content" do
       :ok = PromptTemplates.seed_defaults()
@@ -1240,6 +1256,116 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert :ok = Platform.Repo.Migrations.ForceUpdateDispatchPlanningDesignPreplan.up()
 
       refute PromptTemplates.get_template_by_slug("dispatch.planning"),
+             "the migration must skip a missing row, not insert one"
+    end
+
+    # ── task 019fa504 stage 3: the design decline exit ──────────────────────
+    #
+    # `design.task_direction.v1`'s `## Delivery` section named exactly one
+    # exit — attach a canvas — because until this task that was the only exit
+    # there was. Stages 1 and 2 built the second one (`PreplanStep.decline/3`,
+    # exposed as the `task_design_decline` tool in the `task` bundle). A tool a
+    # designer is never told about is not reachable in practice, so the prompt
+    # has to name it. The row is what the designer actually reads, and the row
+    # is only reachable by a force-update.
+    @design_decline_marker "task_design_decline"
+    @design_delivery_marker "task_attach_canvas"
+
+    defp stale_design_task_direction_row do
+      template = PromptTemplates.get_template_by_slug("design.task_direction.v1")
+      assert template, "precondition: the design.task_direction.v1 row exists"
+
+      stale = String.replace(template.content, @design_decline_marker, "REDACTED_STALE_TOKEN")
+
+      refute stale =~ @design_decline_marker
+
+      assert stale =~ @design_delivery_marker,
+             "the stale body must still carry the delivery instruction — otherwise " <>
+               "the force-update assertion below cannot tell 'the decline was added' " <>
+               "from 'the whole Delivery section was replaced'"
+
+      {:ok, updated} = PromptTemplates.update_template(template, %{content: stale})
+      updated
+    end
+
+    test "20260727210000 design-decline migration FORCE-UPDATES a row that names only the canvas exit" do
+      migration = Platform.Repo.Migrations.ForceUpdateDesignTaskDirectionDecline
+
+      stale = stale_design_task_direction_row()
+      refute stale.content =~ @design_decline_marker
+
+      :ok = migration.up()
+
+      refreshed = PromptTemplates.get_template_by_slug("design.task_direction.v1")
+
+      assert refreshed.content ==
+               PromptTemplates.default_content_for_slug("design.task_direction.v1")
+
+      assert refreshed.content =~ @design_decline_marker
+      refute refreshed.content =~ "REDACTED_STALE_TOKEN"
+
+      # PAIRED, and the whole point of the pairing: the decline is added
+      # ALONGSIDE the delivery instruction, never in place of it. A body that
+      # lost `task_attach_canvas` would pass the assertion above and be
+      # strictly worse than the bug being fixed.
+      assert refreshed.content =~ @design_delivery_marker
+      assert refreshed.content =~ "completion signal"
+
+      # `variables` are deliberately not rewritten — this stage adds no slot.
+      assert Enum.sort(refreshed.variables) ==
+               ["attached_canvases", "brand_context", "task_summary"]
+
+      # Idempotent, and it does not duplicate the row.
+      :ok = migration.up()
+
+      assert PromptTemplates.get_template_by_slug("design.task_direction.v1").content ==
+               refreshed.content
+
+      assert Platform.Repo.aggregate(
+               Ecto.Query.from(t in Platform.Orchestration.PromptTemplate,
+                 where: t.slug == "design.task_direction.v1"
+               ),
+               :count
+             ) == 1
+    end
+
+    test "seed_defaults/0 does NOT undo a stale design.task_direction.v1 row — the migration is load-bearing" do
+      # The control for the test above, and the reason the code edit to
+      # `do_default_templates/0` is not the deliverable on its own.
+      # `seed_defaults/0` is INSERT-only, so every environment that has ever
+      # booted keeps serving the one-exit body forever and only the
+      # force-update reaches it. Task 019fa469 proved this in production on
+      # 2026-07-27: a green CI run and a published image left the defective
+      # row untouched.
+      stale = stale_design_task_direction_row()
+
+      :ok = PromptTemplates.seed_defaults()
+
+      after_seed = PromptTemplates.get_template_by_slug("design.task_direction.v1")
+
+      assert after_seed.content == stale.content,
+             "seed_defaults/0 must leave an existing row untouched (insert-only)"
+
+      refute after_seed.content =~ @design_decline_marker
+
+      # And the migration does what seeding cannot.
+      :ok = Platform.Repo.Migrations.ForceUpdateDesignTaskDirectionDecline.up()
+
+      assert PromptTemplates.get_template_by_slug("design.task_direction.v1").content =~
+               @design_decline_marker
+    end
+
+    test "20260727210000 design-decline migration SKIPS a database with no design.task_direction.v1 row" do
+      # Fresh boots pick the slug up from `seed_defaults/0`; the migration
+      # must not insert it a second time or crash on the nil.
+      template = PromptTemplates.get_template_by_slug("design.task_direction.v1")
+      {:ok, _} = PromptTemplates.delete_template(template)
+
+      refute PromptTemplates.get_template_by_slug("design.task_direction.v1")
+
+      assert :ok = Platform.Repo.Migrations.ForceUpdateDesignTaskDirectionDecline.up()
+
+      refute PromptTemplates.get_template_by_slug("design.task_direction.v1"),
              "the migration must skip a missing row, not insert one"
     end
 

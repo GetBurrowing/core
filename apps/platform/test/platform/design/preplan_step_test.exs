@@ -751,6 +751,148 @@ defmodule Platform.Design.PreplanStepTest do
     end
   end
 
+  # ── decline (task 019fa504 stage 1) ───────────────────────────────────────
+
+  describe "GUARD — decline/2" do
+    test "closes an open step as not_applicable with the designer's reason, while a timeout on the same shape still records failed",
+         %{project: project} do
+      declined = task!(project, @ui_title, %{planning_step: "designing"})
+
+      quietly(fn ->
+        assert {:ok, :not_applicable} =
+                 PreplanStep.decline(declined.id, "The change is not visual.")
+      end)
+
+      entry = design_entry(declined)
+
+      # PIN THE POSITIVE FIRST. Every refutation below passes trivially on a
+      # task whose design step never ran, so the entry has to be asserted to
+      # EXIST with the decline's own reason before any absence is claimed.
+      assert entry["outcome"] == "not_applicable"
+      assert entry["reason"] == PreplanStep.reasons().declined
+      assert entry["decline_note"] == "The change is not visual."
+      assert cursor(declined) == "planning"
+
+      # The classifier's evidence rides along, exactly as it does on the other
+      # terminal records, so an analyst reading the decline can see what the
+      # designer was declining.
+      assert entry["layer"] == "strong_prose"
+      assert entry["matched"] == ["fab"]
+
+      # Not a timeout: the record must not carry the timeout's marker, and the
+      # step must not reach the merge gate.
+      refute entry["outcome"] == "failed"
+      refute Map.has_key?(entry, "declined_after_timeout")
+      refute Tasks.planning_gate_failed?(reload(declined))
+      assert Tasks.failed_planning_steps(reload(declined)) == []
+
+      # PAIRED DISTINGUISHABILITY CONTROL — same fixture shape, same title,
+      # same open cursor; only the closing call differs. Without it the block
+      # above cannot tell "a decline records not_applicable" from "the design
+      # step stopped recording failures at all".
+      expired = task!(project, @ui_title, %{planning_step: "designing"})
+      quietly(fn -> assert {:ok, :failed} = PreplanStep.expire(expired, 1_800_000) end)
+
+      control = design_entry(expired)
+      assert control["outcome"] == "failed"
+      assert control["reason"] == PreplanStep.reasons().timeout
+      assert Tasks.planning_gate_failed?(reload(expired))
+
+      # The inequality this exit exists for, written directly.
+      assert entry["outcome"] != control["outcome"]
+      assert entry["reason"] != control["reason"]
+    end
+
+    test "a step that is neither open nor failed is untouched, byte for byte", %{project: project} do
+      settled = task!(project, @non_ui_title)
+      quietly(fn -> assert {:ok, :not_applicable} = PreplanStep.start(settled) end)
+      before = design_entry(settled)
+
+      quietly(fn ->
+        assert {:ok, :noop} = PreplanStep.decline(settled.id, "changed my mind")
+      end)
+
+      assert design_entry(settled) == before
+      assert design_entry(settled)["reason"] == PreplanStep.reasons().no_ui_surface
+
+      # A never-fired task has no entry to overwrite either.
+      untouched = task!(project, @ui_title)
+      quietly(fn -> assert {:ok, :noop} = PreplanStep.decline(untouched.id, "nothing here") end)
+      assert design_entry(untouched) == nil
+
+      # PAIRED POSITIVE CONTROL, same call, same note: `decline/2` is capable
+      # of writing at all, so the two no-ops above are a property of the step's
+      # state and not of a function stubbed to `{:ok, :noop}`.
+      open = task!(project, @ui_title, %{planning_step: "designing"})
+
+      quietly(fn ->
+        assert {:ok, :not_applicable} = PreplanStep.decline(open.id, "not visual")
+      end)
+
+      assert design_entry(open)["reason"] == PreplanStep.reasons().declined
+    end
+
+    test "a late decline upgrades a timed-out step, and the timeout stays visible in the record",
+         %{project: project} do
+      task = task!(project, @ui_title, %{planning_step: "designing"})
+      quietly(fn -> assert {:ok, :failed} = PreplanStep.expire(task, 1_800_000) end)
+
+      # Both sides of the upgrade are asserted: it IS listed before.
+      assert design_entry(task)["outcome"] == "failed"
+      assert [%{step: "design"}] = Tasks.failed_planning_steps(reload(task))
+
+      quietly(fn ->
+        assert {:ok, :not_applicable} = PreplanStep.decline(task.id, "no direction needed")
+      end)
+
+      entry = design_entry(task)
+      assert entry["outcome"] == "not_applicable"
+      assert entry["reason"] == PreplanStep.reasons().declined
+      assert entry["decline_note"] == "no direction needed"
+
+      # THE ANTI-COLLAPSE GUARANTEE UNDER AN UPGRADE. `record_planning_step/3`
+      # replaces the entry wholesale, so the timeout's own `reason` and
+      # `detail` are gone; without this marker the upgrade would erase the very
+      # distinction it exists to preserve, and a reader could not tell a clean
+      # decline from one that arrived after 30 minutes of silence.
+      assert entry["declined_after_timeout"] == true
+
+      # …and the merge-time warning clears, which is what the upgrade is for.
+      refute Tasks.planning_gate_failed?(reload(task))
+      assert Tasks.failed_planning_steps(reload(task)) == []
+    end
+
+    test "a decline emits the false-positive counterpart; a timeout does not", %{project: project} do
+      attach_telemetry(PreplanStep.false_positive_event())
+
+      task = task!(project, @ui_title, %{planning_step: "designing"})
+
+      quietly(fn ->
+        assert {:ok, :not_applicable} = PreplanStep.decline(task.id, "not visual")
+      end)
+
+      assert_receive {:telemetry, [:platform, :design, :ui_heuristic, :false_positive], _,
+                      %{task_id: task_id, matched: matched, note: note}}
+
+      assert task_id == task.id
+      assert matched != []
+      assert note == "not visual"
+
+      # PAIRED CONTROL — the same fixture closed by the deadline instead. A
+      # non-response is not an observation about the classifier, and an event
+      # that fired on every close would tell an analyst nothing.
+      expired = task!(project, @ui_title, %{planning_step: "designing"})
+      quietly(fn -> assert {:ok, :failed} = PreplanStep.expire(expired, 1_800_000) end)
+
+      refute_receive {:telemetry, [:platform, :design, :ui_heuristic, :false_positive], _, _}, 200
+    end
+
+    test "an unknown task id and a non-binary note degrade rather than raising" do
+      assert {:ok, :noop} = PreplanStep.decline(Ecto.UUID.generate(), "gone")
+      assert {:error, :invalid_note} = PreplanStep.decline(Ecto.UUID.generate(), nil)
+    end
+  end
+
   # ── annotate ──────────────────────────────────────────────────────────────
 
   describe "GUARD — annotate/3 cannot set an outcome" do
@@ -1020,6 +1162,29 @@ defmodule Platform.Design.PreplanStepTest do
       assert Regex.match?(function_heads, "defp thing({:ok, :dispatched}, x) do\n")
     end
 
+    # Task 019fa504 stage 1: the decline is the fourth terminal exit, and it is
+    # the one most likely to be written as a second mapping — it is the only
+    # one whose caller (an MCP tool) knows the outcome word it wants.
+    test "the decline path names no outcome of its own", %{source: source} do
+      literal = ~s("not_applicable")
+
+      refute source =~ literal,
+             "the decline branch restates member 1's mapping as a literal instead of " <>
+               "handing a fire result to the writer and reading the outcome back"
+
+      # Control: the probe is proven capable of firing.
+      assert ~s|Map.put(entry, "outcome", "not_applicable")| =~ literal
+
+      # The decline hands over an existing fire-result constant rather than
+      # inventing a fourth tuple `Responsibilities.outcome/1` has no clause for.
+      assert source =~ "@declined_fire @no_designer_fire"
+      assert Responsibilities.outcome({:ok, :unfilled}) == :not_applicable
+
+      # And the discriminator is the reason, not a new outcome word.
+      assert PreplanStep.reasons().declined != PreplanStep.reasons().no_designer
+      assert PreplanStep.reasons().declined != PreplanStep.reasons().timeout
+    end
+
     test "both fire-result constants exist and are what member 1 maps", %{source: source} do
       # The two that DO appear, appear exactly as named constructor constants.
       assert source =~ "@no_designer_fire {:ok, :unfilled}"
@@ -1117,7 +1282,8 @@ defmodule Platform.Design.PreplanStepTest do
                no_designer: "no_designer",
                canvas_attached: "canvas_attached",
                contradicted: "no_ui_surface_contradicted",
-               timeout: "design_timeout"
+               timeout: "design_timeout",
+               declined: "designer_declined"
              }
     end
   end

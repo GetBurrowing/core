@@ -1678,6 +1678,14 @@ defmodule Platform.Orchestration.PromptTemplates do
         # was the point: ADR-0046 moves WHO produces the direction and
         # WHEN, not WHAT it looks like, and a reworded copy would silently
         # change the output shape downstream consumers already read.
+        #
+        # Task `019fa504` stage 3 adds the SECOND exit to `## Delivery`
+        # (`task_design_decline`) and touches nothing else in this body — the
+        # bullets above are still the verbatim copy. Editing this function is
+        # NOT the deliverable on its own: `seed_defaults/0` is INSERT-only and
+        # `20260726051346_seed_design_task_direction.exs` claimed this slug on
+        # every migrated environment, so the row is reached only by
+        # `20260727210000_force_update_design_task_direction_decline.exs`.
         content: """
         You are the Designer. A task is about to be planned and it touches a user-facing surface. Produce DESIGN DIRECTION for that surface now, before the plan is written.
 
@@ -1708,6 +1716,8 @@ defmodule Platform.Orchestration.PromptTemplates do
         ## Delivery
 
         Write the direction to a canvas and attach that canvas to the task with the `task_attach_canvas` MCP tool, using the task_id above. The attachment IS the completion signal the planner waits on — direction posted only as a chat message is not delivered.
+
+        If, having read the task, you judge that this surface needs no design direction — the change is not visual, or the surface already has direction that still holds — do NOT attach a canvas you do not believe in and do NOT go silent. Call `task_design_decline` with the task_id above and a one-sentence reason. That records the step as not-applicable and releases the planner immediately. Going silent instead costs 30 minutes and records a failure.
         """
       }
     ]

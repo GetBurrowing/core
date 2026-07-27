@@ -4004,6 +4004,25 @@ defmodule Platform.Orchestration.TaskRouterTest do
   @design_ui_title "Add an epic-create FAB above the board"
   @design_non_ui_title "Add Providers.Architecture shim"
 
+  # Task 019fa504. TEN MINUTES, and the size is the whole point: the claim under
+  # test is that the DECLINE released the planner, so the deadline has to be
+  # ruled out as the alternative explanation. At the shipped 1_800_000 a pass
+  # would prove nothing about timing (the test never gets near either number),
+  # and at a small value the deadline becomes a live competing cause for every
+  # assertion in the test. Ten minutes is far enough out that the armed timer
+  # provably cannot fire inside the test — and the test READS the armed timer's
+  # remaining milliseconds rather than taking that on trust.
+  @long_design_window 600_000
+
+  # The window injected for the paired timeout control, so its recorded
+  # `detail` carries a short window and cannot be confused with the decline
+  # half's ten minutes.
+  @short_design_window 200
+
+  # >= 8 graphemes, or `task_design_decline` refuses with `missing_reason`
+  # before it ever reaches `PreplanStep`.
+  @decline_reason "This task deletes a deprecated component; the surface it leaves behind already has direction that still holds."
+
   defp design_task!(project, title) do
     now = DateTime.utc_now()
 
@@ -4328,6 +4347,196 @@ defmodule Platform.Orchestration.TaskRouterTest do
       refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 700
 
       assert reload_task(settled).planning_step_outcomes["design"]["outcome"] == "complete"
+    end
+
+    # ── The designer's exit (task 019fa504) ────────────────────────────────
+    #
+    # ADR-0046 gave the designer exactly one way out of an open design step —
+    # attach a canvas — so a designer who reads the task and judges it needs no
+    # direction had only two moves, both bad: attach a canvas she does not
+    # believe in, or go silent and let the 30-minute deadline record `failed`.
+    # `task_design_decline` is the third move. This test pins what it does to
+    # the ROUTER, which is the half `preplan_step_test.exs` cannot see.
+    #
+    # WHY THE DEADLINE KEEPS RECORDING `failed`, and why the control below is
+    # not optional. A timeout and a decline are different facts and the row has
+    # to keep them apart: `Tasks.failed_planning_steps/1` is what surfaces a
+    # designer who never engaged, and on this very ticket that is what caught a
+    # designer runtime dropping the prompt body — two timeouts that would have
+    # looked like a clean planning history had they recorded `not_applicable`.
+    # So the decline half of this test asserts `not_applicable`, and the
+    # timeout half asserts `failed` OVER THE SAME FIXTURE, in the same run.
+    # Without the second half the first cannot distinguish "a decline records
+    # not_applicable" from "the design step stopped recording failures at all".
+    #
+    # WHY THE TRACE IS NOT DECORATION. `:design_deadline` is a message the
+    # router sends to ITSELF; it never passes through this process, so no
+    # ordinary `refute_receive` can see it and its absence would otherwise have
+    # to be inferred from the outcome it would have written. `:erlang.trace/3`
+    # with `[:receive]` asserts the negative directly. The mechanism gets its
+    # own control twice over in the same test: a deliberately delivered stale
+    # `:design_deadline` IS observed through the same trace, and the timeout
+    # half observes a real one. A trace that was never attached, or a flag that
+    # silently stopped working, fails at those sites rather than passing here.
+    #
+    # WHY THE TIMEOUT CONTROL IS DELIVERED BY `send/2` RATHER THAN BY WAITING
+    # OUT A SHORT WINDOW. Deviation from the stage brief, taken deliberately.
+    # A window short enough to elapse inside a test is also short enough to
+    # elapse between `start_link/1` returning and the first `current_status/1`
+    # reply on a loaded box — at which point the LEVEL check in
+    # `handle_design_hold/2` expires the step before the hold can be pinned,
+    # and the control fails for a reason that has nothing to do with the
+    # behaviour. That is a manufactured flake in the one file in this suite
+    # whose flakiness already tracks load. The short window is still INJECTED
+    # (so the recorded `detail` carries it and cannot be confused with the
+    # decline half's ten minutes); only the delivery is made deterministic,
+    # exactly as the sibling deadline tests above already do it.
+    test "a declined design step releases the planner immediately and records not_applicable, not failed",
+         %{project: project, assignee: assignee} do
+      stub_designer_dispatcher()
+      designer = wire_designer!()
+      put_design_timeout(@long_design_window)
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      held = design_task!(project, @design_ui_title)
+      {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
+
+      # PIN THE POSITIVE FIRST. Everything below is a claim about what a
+      # decline does to an OPEN step; without this they would all hold just as
+      # well on a task that never reached the design step at all, which is the
+      # exact shape of vacuity this stage exists to avoid.
+      assert TaskRouter.current_status(held.id).status == :waiting_design
+      assert reload_task(held).planning_step == "designing"
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
+
+      :erlang.trace(pid, true, [:receive, {:tracer, self()}])
+
+      # The deadline is genuinely ARMED and genuinely ten minutes out. Both
+      # halves matter: an unarmed deadline would make the refutation below
+      # vacuous, and a near one would leave it as a plausible releaser.
+      %{design_deadline_ref: deadline_ref} = :sys.get_state(pid)
+
+      assert is_reference(deadline_ref),
+             "expected the hold to arm a :design_deadline timer — with none armed, " <>
+               "'no deadline was delivered' is true of a tree that never schedules one"
+
+      remaining = Process.read_timer(deadline_ref)
+
+      assert is_integer(remaining) and remaining > div(@long_design_window * 9, 10),
+             "expected the armed design deadline to still have ~#{@long_design_window}ms " <>
+               "to run, got #{inspect(remaining)}"
+
+      started_at = System.monotonic_time(:millisecond)
+
+      # THROUGH THE TOOL, not `PreplanStep.decline/3`. The path a real designer
+      # takes is an MCP `tools/call`, and only that path resolves the caller
+      # identity — which is why `declined_by` is asserted below.
+      assert {:ok, result} =
+               Platform.Federation.ToolSurface.execute(
+                 "task_design_decline",
+                 %{"task_id" => held.id, "reason" => @decline_reason},
+                 %{agent_id: designer.id}
+               )
+
+      assert result.outcome == "not_applicable"
+      assert result.reason == Platform.Design.PreplanStep.reasons().declined
+      refute result.declined_after_timeout
+
+      # The decline's `{:task_updated, _}` broadcast reaches the router, which
+      # leaves `:waiting_design` through `release_design_hold_if_closed/1` and
+      # dispatches the planner.
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
+      elapsed = System.monotonic_time(:millisecond) - started_at
+
+      assert elapsed < div(@long_design_window, 10),
+             "the planner was released #{elapsed}ms after the decline against an " <>
+               "injected #{@long_design_window}ms window — that margin is what rules " <>
+               "the deadline out as the releaser"
+
+      # THE NEGATIVE THE STAGE IS FOR. Not "the outcome is not failed" (which
+      # the entry assertions below cover) but "the deadline never ran at all".
+      refute_receive {:trace, ^pid, :receive, :design_deadline}, 200
+
+      assert TaskRouter.current_status(held.id).status != :waiting_design
+
+      # The hold's timer is cancelled on release rather than left to fire into
+      # a closed step later.
+      assert %{design_deadline_ref: nil} = :sys.get_state(pid)
+
+      task = reload_task(held)
+      entry = task.planning_step_outcomes["design"]
+
+      assert entry["outcome"] == "not_applicable"
+      assert entry["reason"] == Platform.Design.PreplanStep.reasons().declined
+      assert entry["decline_note"] == @decline_reason
+      refute Map.has_key?(entry, "declined_after_timeout")
+
+      # Only the tool path can write this — a `decline/3` call made directly by
+      # the router or a test would leave it absent.
+      assert entry["declined_by"] == %{"kind" => "agent", "id" => designer.id}
+
+      refute entry["outcome"] == "failed"
+      assert task.planning_step == "planning"
+
+      refute "design" in Enum.map(Tasks.failed_planning_steps(task), & &1.step)
+      refute Tasks.planning_gate_failed?(task)
+
+      # A STALE `:design_deadline` — one that outran a `Process.cancel_timer/1`
+      # race, or that a replacement router armed before the decline landed — is
+      # inert. `handle_info(:design_deadline, _)` level-checks `open?/1`, so a
+      # closed step is left exactly as it was.
+      before_stale = reload_task(held).planning_step_outcomes
+      send(pid, :design_deadline)
+
+      # CONTROL FOR THE REFUTATION ABOVE. The same trace, the same pattern, the
+      # same process — delivered on purpose this time, and observed. If this
+      # does not fire, the `refute_receive` above was never capable of failing.
+      assert_receive {:trace, ^pid, :receive, :design_deadline}, 1_000
+
+      :ok = sync_router(held.id)
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 700
+      assert reload_task(held).planning_step_outcomes == before_stale
+
+      # ── PAIRED TIMEOUT CONTROL ──────────────────────────────────────────
+      # Same project, same UI title, same designer wiring, same router — the
+      # only difference is which exit is taken. The timeout still records
+      # `failed`, still names `design_timeout`, and still reaches merge time
+      # through `failed_planning_steps/1`. That is the ruling this stage pins.
+      put_design_timeout(@short_design_window)
+
+      control = design_task!(project, @design_ui_title)
+      control_assignee = %{type: :federated, id: "runtime-design-decline-ctl-#{unique()}"}
+      control_topic = "runtime:#{control_assignee.id}"
+      Phoenix.PubSub.subscribe(Platform.PubSub, control_topic)
+
+      {:ok, control_pid} =
+        TaskRouter.start_link(task_id: control.id, assignee: control_assignee)
+
+      :erlang.trace(control_pid, true, [:receive, {:tracer, self()}])
+
+      # `init/1` queues its own `send(self(), :dispatch)` before `start_link/1`
+      # returns, so this lands strictly behind the boot dispatch that opens the
+      # step — the ordering the deadline needs to find something to expire.
+      send(control_pid, :design_deadline)
+      assert_receive {:trace, ^control_pid, :receive, :design_deadline}, 1_000
+
+      # Bound to the control's own topic: the declined router above shares this
+      # mailbox, and an untopic'd match could be satisfied by one of its ticks.
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention", topic: ^control_topic}, 2_000
+
+      control_task = reload_task(control)
+      control_entry = control_task.planning_step_outcomes["design"]
+
+      assert control_entry["outcome"] == "failed"
+      assert control_entry["reason"] == Platform.Design.PreplanStep.reasons().timeout
+      assert control_entry["detail"] =~ "design_timeout"
+      assert control_entry["detail"] =~ to_string(@short_design_window)
+      refute Map.has_key?(control_entry, "decline_note")
+
+      assert "design" in Enum.map(Tasks.failed_planning_steps(control_task), & &1.step)
+      assert Tasks.planning_gate_failed?(control_task)
+      assert control_task.planning_step == "planning"
     end
 
     test "an overdue hold is released by the level check on a tick the armed timer cannot serve",
