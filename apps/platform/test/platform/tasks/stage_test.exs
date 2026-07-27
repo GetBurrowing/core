@@ -28,36 +28,56 @@ defmodule Platform.Tasks.StageTest do
       assert errors[:name]
     end
 
-    test "persists a responsibility role slug when supplied", %{plan: plan} do
+    # ADR-0046 member 9 stage 4 replaces the three 019f5d47 round-trip tests
+    # that lived here with the two guards below. Stage-level responsibility is
+    # retired: designer involvement comes from the pre-plan design step.
+    test "the responsibility field is gone from the schema", %{plan: _plan} do
+      fields = Platform.Tasks.Stage.__schema__(:fields)
+
+      refute :responsibility in fields
+
+      # POSITIVE CONTROL. Without this the refute above passes just as well
+      # against a typo'd module name or an empty field list — it proves the
+      # `__schema__(:fields)` call is really reaching this schema and that a
+      # field which IS present is reported.
+      assert :expected_artifacts in fields
+    end
+
+    test "the responsibility COLUMN is gone from the stages table" do
+      # The schema refute above is satisfiable by editing `stage.ex` alone and
+      # skipping the migration entirely — the column would still be on the
+      # table. This is the persist-side half of the same claim: one assertion
+      # per side of the schema/persist boundary.
+      %{rows: rows} =
+        Ecto.Adapters.SQL.query!(
+          Platform.Repo,
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'stages'",
+          []
+        )
+
+      columns = List.flatten(rows)
+
+      refute "responsibility" in columns
+
+      # POSITIVE CONTROL for the query itself: a typo'd table name returns an
+      # empty result set and the refute passes vacuously.
+      assert "expected_artifacts" in columns
+    end
+
+    test "tolerates an un-updated caller still passing responsibility", %{plan: plan} do
+      # `cast/3` drops unknown keys, so an internal caller that has not caught
+      # up does not crash — it just loses the value. Mirrors the MCP-surface
+      # tolerance decided in stage 3.
       assert {:ok, stage} =
                Tasks.create_stage(%{
                  plan_id: plan.id,
                  position: 1,
-                 name: "Design direction",
+                 name: "Build",
                  responsibility: "designer"
                })
 
-      assert stage.responsibility == "designer"
-    end
-
-    test "accepts arbitrary role slugs — resolver handles unknown values", %{plan: plan} do
-      assert {:ok, stage} =
-               Tasks.create_stage(%{
-                 plan_id: plan.id,
-                 position: 1,
-                 name: "Security review",
-                 responsibility: "security_reviewer"
-               })
-
-      assert stage.responsibility == "security_reviewer"
-    end
-
-    test "defaults responsibility to nil when the key is omitted (backward compat)",
-         %{plan: plan} do
-      assert {:ok, stage} =
-               Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
-
-      assert stage.responsibility == nil
+      assert stage.name == "Build"
+      refute Map.has_key?(stage, :responsibility)
     end
   end
 
