@@ -900,6 +900,15 @@ defmodule Platform.Audit.TelemetryHandlerTest do
     end
 
     test "ensure_boot_handler!/1 re-attaches a handler that is currently detached" do
+      # Register the unconditional restore BEFORE detaching. This module's
+      # `setup` only covers Platform.Audit.TelemetryHandler, so without
+      # this line a failure on the assertion below would leave the VAULT
+      # bridge detached for the rest of the BEAM — the precise leak this
+      # test is about. Caught by
+      # test/platform/regression/boot_telemetry_handler_detach_audit_test.exs,
+      # which requires a restore registered ahead of every detach.
+      assert :ok = Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Vault.TelemetryHandler)
+
       # The state a leaked test leaves behind: handler gone, no error
       # anywhere, later audit assertions quietly reading [].
       Platform.Vault.TelemetryHandler.detach()

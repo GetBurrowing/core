@@ -370,11 +370,22 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     """
     The following module(s) spawn work under Platform.TaskSupervisor
     but do NOT contain `rescue DBConnection.OwnershipError` and are not
-    listed in @known_safe. In test env the spawned Task-Supervised
-    child is not in the DataCase sandbox owner chain (see data_case.ex),
-    so any Repo call inside the spawn body will raise
-    DBConnection.OwnershipError — the exact shape that caused the
+    listed in @known_safe. In an `async: true` test the sandbox is in
+    MANUAL mode (`data_case.ex` calls `Sandbox.start_owner!(Repo, shared:
+    not tags[:async])`), the spawned Task-Supervised child is not in the
+    DataCase sandbox owner chain, and any Repo call inside the spawn body
+    raises DBConnection.OwnershipError — the exact shape that caused the
     2026-07-03 CI cascade.
+
+    Under `async: false` the sandbox is SHARED and the child INHERITS the
+    owner's connection, so no OwnershipError arises; the failure there is
+    the owner exiting mid-write, which arrives as a process exit and which
+    `Platform.SandboxHelpers.await_supervised_writes/1` handles instead.
+    The earlier version of this message stated the manual-mode claim
+    unconditionally, which is false for every `async: false` file — see
+    the moduledoc's "Necessary, not sufficient" note (task 019f9d80
+    stage 3) and the prose guard in
+    boot_telemetry_handler_detach_audit_test.exs (stage 4).
 
     Fix ONE of:
 

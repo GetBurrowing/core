@@ -86,6 +86,54 @@ jobs:
         run: |
           mix test || (echo "::warning::initial mix test failed; retrying failed tests serially" && mix test --failed --max-cases 1)
 
+      # Task 019f9d80. `Platform.Audit.HistorianLatencyTest` used to detach the
+      # VM-global `Platform.Audit.TelemetryHandler` and never put it back, which
+      # silenced the audit bridge for every later test in the same BEAM. The
+      # visible casualty was
+      # `Platform.Accounts.ExternalAdmissionNotifierTest`'s durable-queue
+      # assertion, which read `[]` and failed 10/10 at ten fixed seeds while
+      # being written off as a flake across roughly eight briefs.
+      #
+      # The invariant this step pins is "these two files run in the SAME BEAM",
+      # NOT "in this order". Measured on the control tree: reversing the two
+      # paths on the command line does not reverse execution —
+      # `--trace` shows `HistorianLatencyTest` scheduled first either way, since
+      # both modules are `async: false` and ExUnit's sync-module ordering is not
+      # the CLI argument order. Do not rewrite this step's rationale as an
+      # ordering guarantee; a guard that looks like it pins ordering and does
+      # not is the defect class this task exists to close.
+      #
+      # It is a separate step rather than an in-suite test for two reasons: the
+      # full suite is NOT a detector here (it ran green at seed 0 on a tree
+      # where this two-file run was 100% reproducible, because whether the two
+      # files land in the same partition is seed-dependent), and ExUnit cannot
+      # express a cross-file same-BEAM requirement from inside a run without a
+      # `System.cmd("mix", ["test", ...])` subprocess, for which there is no
+      # precedent anywhere in apps/platform/test.
+      #
+      # The authoring-time half of the guarantee — no new test may detach a
+      # boot-attached handler without restoring it first — is
+      # test/platform/regression/boot_telemetry_handler_detach_audit_test.exs,
+      # which runs in the default `mix test` set above.
+      #
+      # The retry below is the WHOLE command again, deliberately — NOT
+      # `mix test --failed`. `--failed` reruns only the failed tests, serially,
+      # which re-partitions them, so a genuine cross-file failure turns green on
+      # the retry (that is what the step above does, and it is a structural
+      # reason this bug survived CI for months — flagged, not removed here; see
+      # apps/platform/notes/2026-07-26-boot-telemetry-detach.md §5).
+      # Re-running the identical two-file command preserves the same-BEAM
+      # invariant, so mechanism A — measured deterministic at 10/10 across ten
+      # fixed seeds — still fails both attempts. What the retry absorbs is
+      # `historian_latency_test.exs`'s @p99_budget_us wall-clock assertion,
+      # independently measured at 2/10 on a clean control and unrelated to this
+      # invariant; two independent draws put it at ~4%. If this step ever fails
+      # twice, read the failing test NAME before assuming the flake.
+      - name: Boot-telemetry-handler cross-file regression (same BEAM)
+        run: |
+          pair="test/platform/audit/historian_latency_test.exs test/platform/accounts/external_admission_notifier_test.exs"
+          mix test $pair --seed 0 || (echo "::warning::boot-telemetry pair failed; re-running the SAME two-file command" && mix test $pair --seed 0)
+
   build-and-push:
     name: Build and push image
     if: github.event_name == 'push'

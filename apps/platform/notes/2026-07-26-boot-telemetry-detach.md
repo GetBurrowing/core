@@ -1107,3 +1107,253 @@ Appeared on the **control** and not on the fix branch. Named here so the next
 reader does not treat its future appearance as a regression from this stage.
 `PlatformWeb.RuntimeChannelTest` behaved the same way in the targeted
 comparison at §17 — a different member on each side, control strictly worse.
+
+---
+---
+
+# Stage 4 — the guard, and the two premises in the stage plan that are false
+
+Task `019f9d80-e1ac-737c-bfd3-7846e2de6469`, stage 4
+("Add a source-scan guard and an ordered-pair CI step").
+Branch `task/019f9d80`, parent `080d59bc` (stage 3).
+All measurements: worktree `~/sources/worktrees/019f9d80`,
+`PLATFORM_TEST_DATABASE=platform_test_019f9d80`.
+
+## 20. What shipped
+
+- **`test/platform/regression/boot_telemetry_handler_detach_audit_test.exs`**
+  (new) — `use ExUnit.Case, async: true`, no DB, no PubSub, default `mix test`
+  set. Seven cases across four assertions (§21).
+- **`.github/workflows/ci.yml`** — a second test step running the two-file pair
+  in one BEAM (§23).
+- **`test/platform/audit/telemetry_handler_test.exs`** — one real offender the
+  new guard found on the committed tree, fixed (§22).
+- **`lib/platform/orchestration/task_router_watcher.ex`** and
+  **`test/platform/regression/supervised_task_repo_audit_test.exs`** — two
+  surviving unqualified sandbox-ownership claims, corrected (§24).
+
+### What was deliberately NOT built: a "DB work inside `on_exit`" scan
+
+The stage brief raised it and asked for a judgement. **Left out.** §13 is right
+that `on_exit` runs in a separate process after the test process is dead, and
+that this made every connection-dependent `on_exit` in `DataCase` a no-op —
+but stage 3 fixed that at the source (`start_owner!` keeps the connection alive
+until `stop_owner/1` runs last), so DB work in `on_exit` is now *legitimate*
+under shared mode and the property to guard evaporated.
+
+More importantly the scan would not work. Measured across all 473 files in
+`test/**`: **zero** `on_exit` bodies contain a `Repo.*` call. A guard for the
+`Repo.` shape would therefore pass unconditionally today while being
+structurally unable to see the case that actually matters — DB work reached
+indirectly through a context function (`Platform.Tasks.delete_task/1` and its
+hundreds of siblings). That is a guard that certifies a property it cannot
+check, which is the same defect class as an audit assertion passing because
+nothing is listening. A noisy guard becomes an ignored guard; a vacuous one
+becomes a false credential. Both were declined.
+
+## 21. The four assertions, and why the stage plan's premise for the guard was wrong
+
+The stage plan asked for a source scan **and** an ordered-pair CI step whose
+combination proves the invariant. Two of its premises do not survive
+measurement, and both were already recorded upstream in this file:
+
+1. **The ordered pair cannot detect a missing restore.** §9 probe M0: deleting
+   the restoring `on_exit` leaves the pair GREEN, because what repairs today's
+   offenders is that their setup no longer detaches at all. The `on_exit`
+   defends a *future* or *mid-body* detach. So the runtime half of the guard is
+   a regression pin for mechanism A, not a detector for the rule — and the rule
+   has to be enforced statically or not at all.
+2. **CLI argument order does not control ExUnit execution order** (§2). The CI
+   step's invariant is "same BEAM", not "this order", and it says so in-file.
+   Writing an order-based claim into `ci.yml` would ship a guard that looks
+   like it pins ordering and does not, which is this task's own defect class
+   reproduced inside its fix.
+
+The four assertions:
+
+| # | Assertion | Why it is not a formality |
+|---|---|---|
+| 1 | The boot-attached module set is **parsed from `Platform.Application.start/2`**, plus a companion check that the parser understood *every* `.attach()` in the file | Two of the seven handlers were boot-attached *after* the offending tests were written; a frozen list would have missed two of the five offenders. The companion check is the anti-rot half — see M-G |
+| 2 | Every `detach()` of a derived module in `test/**` is either an adjacent `detach(); attach()` pair, or is preceded by a **registered** restore for that same module | Ordering is the whole point: a restore registered *after* the detach does not run if the assertion between them fails |
+| 3 | No `async: true` file detaches a boot handler | VM-global state; no `on_exit` ordering can close a window that is open while other files run |
+| 4 | No comment or doc anywhere in `lib/` or `test/` claims something is outside the sandbox owner chain **without naming the sandbox mode** | §24 |
+
+Implementation note: assertions 1–3 walk the AST (`Code.string_to_quoted!`)
+rather than matching regexes. `supervised_task_repo_audit_test.exs` is the
+pattern this file mirrors and it is regex-based, but its two 2026-07-25
+widenings are a written record of regex going blind on the exact file it was
+meant to catch. Assertion 2 has to know whether a restore was registered
+*before* a given line, whether two calls are *adjacent statements*, and what a
+bare `TelemetryHandler` alias resolves to in each file — regex cannot answer
+any of those without guessing. Four of the five original offenders used the
+bare-alias call shape, so alias resolution is not optional. Assertion 4 is
+prose and stays regex, over joined comment/doc blocks rather than single lines
+(the `responsibilities/router.ex` claim is split across two source lines).
+
+Whole file: **7 tests, 0 failures, 6.5–10 s** wall clock under a box load of
+~25–30.
+
+## 22. The guard found a real offender on the committed tree
+
+Not a synthetic mutation — the first run against stage 3's tree:
+
+```
+test/platform/audit/telemetry_handler_test.exs:905 — Platform.Vault.TelemetryHandler
+```
+
+`"ensure_boot_handler!/1 re-attaches a handler that is currently detached"`
+detaches the **Vault** handler, asserts `handler_ids_for(...) == []`, and only
+then calls `ensure_boot_handler!/1`. That file's `setup` registers a restore for
+`Platform.Audit.TelemetryHandler` only. If the assertion between the detach and
+the restore ever fails, the Vault bridge stays detached for the remainder of the
+BEAM — the exact leak, in the test written to prove the leak is fixed, created
+by stage 2. Fixed by registering the restore before the detach; the case still
+tests what it tested.
+
+This is the anti-vacuity evidence that matters most: the guard was red on
+arrival for a reason nobody had noticed.
+
+## 23. The CI step
+
+```yaml
+- name: Boot-telemetry-handler cross-file regression (same BEAM)
+  run: |
+    pair="test/platform/audit/historian_latency_test.exs test/platform/accounts/external_admission_notifier_test.exs"
+    mix test $pair --seed 0 || (echo "::warning::..." && mix test $pair --seed 0)
+```
+
+The retry is the **whole command again**, not `mix test --failed`. That
+distinction is the entire point of §5: `--failed` reruns only the failed tests
+serially, re-partitioning them, so a cross-file failure turns green. Re-running
+the identical two-file command preserves the same-BEAM invariant, so mechanism A
+— deterministic at 10/10 across ten fixed seeds (§2) — fails both attempts. What
+the retry absorbs is `historian_latency_test.exs`'s `@p99_budget_us` wall-clock
+assertion, measured at 2/10 on a clean control (§3), on a stage-2 tree (§8) and
+on a stage-3 tree (§19): two independent draws put a double failure at ~4%.
+
+`.github/workflows/ci.yml:87`'s `mix test --failed --max-cases 1` retry is
+**still flagged, still not fixed**, per §5 and the stage fence.
+
+## 24. Assertion 4 — the self-certifying comment, and the two that survived stage 3
+
+Stage 3 corrected three comments asserting that a `Task.Supervisor` child "is
+not in the DataCase sandbox owner chain". `data_case.ex` does
+`Sandbox.start_owner!(Repo, shared: not tags[:async])`, so under `async: false`
+the child **inherits** the connection and the claim is false. A scan for the
+claim shape found **seven** blocks in `lib/` + `test/`; four name their sandbox
+mode, three did not:
+
+| site | disposition |
+|---|---|
+| `lib/platform/orchestration/task_router_watcher.ex:276` | **corrected.** Claim is true under `async: true` (manual mode) only; the `catch` clause directly below already describes the shared-mode case, so the file contradicted itself |
+| `test/platform/regression/supervised_task_repo_audit_test.exs:370` | **corrected.** This is the fourth of the four the stage brief named — it lives in a *failure message*, not a comment, which is why the prose scan reads heredocs as well |
+| `lib/platform/responsibilities/router.ex:1323` | **recorded, not fixed.** Inside this task's ADR-0046 scope fence. Listed in `@known_unqualified_claims` with the fence cited; the rot guard fails the moment it is corrected, which is how the entry gets removed rather than outliving its reason |
+
+The rule enforced is not "this claim is forbidden" — it is often true — but
+**"name the mode you mean"**. That is checkable; "is not in the owner chain" is
+not.
+
+**Stated limitation** (probe M-D): the scan is block-scoped, so a block that
+names a mode *anywhere* passes even if one sentence inside it is unconditional.
+De-qualifying one line of `audit/telemetry_handler.ex`'s rescue comment left the
+guard GREEN because the same comment run discusses `async: false` further down.
+Tightening this to sentence scope was tried and rejected: comment prose wraps
+mid-sentence constantly, and a sentence splitter over `#`-run text produces
+false positives on every abbreviation and code fragment. Block scope catches the
+failure that actually occurred — a comment with no mode discussion at all — and
+declines to guess about the rest.
+
+## 25. Deliberate-violation checks — every assertion fails when violated
+
+Each probe patches the tree in place, runs
+`mix test test/platform/regression/boot_telemetry_handler_detach_audit_test.exs
+--seed 0`, and restores the exact original bytes. `git status --porcelain` shows
+only the intended stage-4 changes afterwards. No `git stash` (shared ref across
+worktrees).
+
+| probe | mutation | result |
+|---|---|---|
+| **M-A** | plan's (a): `vault/telemetry_handler_test.exs` setup reverted to `detach(); attach(); on_exit(fn -> detach() end)` | **RED** — `test/platform/vault/telemetry_handler_test.exs:13 — Platform.Vault.TelemetryHandler` |
+| **M-B1** | `meetings/telemetry_handler_test.exs` loses its `ensure_boot_handler!` | **RED** — `test/platform/meetings/telemetry_handler_test.exs:47 — Platform.Meetings.TelemetryHandler` |
+| **M-B2** | M-B1 **plus** `Platform.Meetings.TelemetryHandler.attach()` deleted from `application.ex:15` | **GREEN** — plan's (b), and the proof the set is parsed: the identical test defect is reported or not purely as a function of `application.ex`'s contents. A hardcoded list keeps M-B2 red |
+| **M-C** | plan's (c): `tenancy/lifecycle_test.exs` flipped to `async: true` | **RED** — names the file and all four detach lines with the module at each |
+| **M-D** | one `async: true` mention removed from `audit/telemetry_handler.ex`'s rescue comment | **GREEN — surviving mutation**, block scope, §24 |
+| **M-D2** | `task_router_watcher.ex` comment reverted to its unqualified pre-stage-4 form | **RED** — `lib/platform/orchestration/task_router_watcher.ex:276 — "NOT part of the sandbox owner chain"` |
+| **M-E** | a `@known_safe` entry with nothing behind it | **RED** — names the stale entry |
+| **M-F** | `@known_unqualified_claims` emptied | **RED** — `lib/platform/responsibilities/router.ex:1323`, confirming the exemption is load-bearing rather than decorative |
+| **M-G** | `Platform.Memory.TelemetryHandler.attach()` rewritten as `Enum.each([...], & &1.attach())` | **RED** — "application.ex contains 7 `.attach()` call(s) but this audit only understood 6", and lists the six |
+
+**Every failure message names the offending file, the line, and the specific
+handler module or claim.** Stage 3 noted that the existing migration-timestamp
+guard in `ci.yml` fails on a bare count mismatch with no hint which file is new;
+M-G is the analogous check here and it prints the set it understood so the
+missing member is visible by subtraction.
+
+## 26. Formatting and suite
+
+`mix format --check-formatted` → clean (`FORMAT_OK`).
+
+Full suite on the stage-4 tree, DB `platform_test_019f9d80`,
+`/tmp/git-repo-*` + `/tmp/wt-root-*` cleared, seed 0, box load ~25-30:
+
+```
+16 doctests, 8231 tests, 0 failures, 3 skipped (2 excluded)    exit 0
+```
+
+Stage 3's baseline was 8224; this stage adds **7**, all in the new audit file.
+Ordered pair on this tree, seeds 0/1/2: **3/3 GREEN**, `6 tests, 0 failures`.
+
+## 27. Cross-task query: is `Platform.Accounts.ExternalAdmissionNotifier` a second instance?
+
+Raised mid-stage from task `019fa129` stage 2: the notifier is a globally
+attached handler with a no-arg global `detach/0`
+(`external_admission_notifier.ex:66`), and
+`ExternalAdmissionNotifierTest` — "a holding event persists an Audit.Event
+(durable queue source)" — fails intermittently in full-suite runs while passing
+in isolation. Asked whether the stage-4 guard covers it.
+
+**Two separate answers, and the distinction matters.**
+
+**(a) Coverage: yes, and measured, not asserted.** The guard is not scoped to
+the audit path. `boot_attached_modules/0` parses `Application.start/2` and the
+notifier is one of the seven it returns — M-G's failure output lists
+`Platform.Accounts.ExternalAdmissionNotifier` by name. Probe **M-H** injected an
+unrestored `ExternalAdmissionNotifier.detach()` into
+`test/platform_web/live/external_recovery_live_test.exs` (which already aliases
+the module, so the bare-alias resolution path is exercised, and which is a
+`PlatformWeb.ConnCase` rather than a `DataCase`):
+
+```
+RED — test/platform_web/live/external_recovery_live_test.exs:23
+      — Platform.Accounts.ExternalAdmissionNotifier
+```
+
+For the record on the current tree: **no test detaches the notifier.**
+`grep -rn ExternalAdmissionNotifier test/` returns two `alias` lines and no
+`detach` call anywhere. So there is no live second offender to fix; the guard
+covers the shape prospectively.
+
+**(b) Attribution: it is the same instance, not a second one — and it is
+already fixed on this branch.** The notifier does not write the audit row the
+failing assertion reads. `Platform.Audit.TelemetryHandler` does: it subscribes
+to `[:platform, :auth, :external_admission]` (`telemetry_handler.ex:42`) and
+persists through the default synchronous clause. The failure is
+`ExternalAdmissionNotifierTest:138` reading `[]`, and §4 pinned its cause by
+instrumentation rather than resemblance — in the failing run
+`platform-audit-telemetry` is not attached to the event at all, because
+`historian_latency_test.exs` detached it and never put it back. The notifier's
+own handler stays attached throughout (`PROBE
+external_admission_handlers=["external-admission-notifier"]` in the RED run).
+
+That is mechanism A, this task's subject. §2 measured it deterministic — 10/10
+RED at ten fixed seeds on the control — and §2 explains the isolation-passes
+half: the single-file run is green because nothing has detached the bridge yet.
+"Intermittent in full-suite runs, green in isolation" is the exact signature and
+is what got it written off as a flake in roughly eight briefs (§6).
+
+On this branch it is fixed: ordered pair 10/10 GREEN at stage 2 (§8), 10/10 at
+stage 3 (§19) with `ExternalAdmissionNotifierTest` absent from every run, 3/3 at
+stage 4, and the full suite above is 0 failures. **The standing known-bad list
+must lose the `ExternalAdmissionNotifierTest:138` entry** (§6, stage 5's job) —
+a failure there is now real, and re-filing it as "a sibling detaching a global
+handler" would re-open the write-off this task closed.
