@@ -2551,9 +2551,11 @@ defmodule Platform.Tasks do
       {:error, reason})`. Falling open without recording is the exact
       conflation ADR-0046:83 forbids, so the two live in one code path and
       are asserted in one test.
-    * `:reject` — write the verdict, return the cursor, and STOP. No
-      auto-approval, no sponsor row, and deliberately no `reject_plan/3`
-      call.
+    * `:reject` — write the verdict, return the cursor, and hand off to
+      `Platform.Tasks.ArchitectureRejection.handle/1` (ADR-0046 member 6).
+      No auto-approval and no sponsor row: what happens after a rejection
+      is bounded iteration, and it is owned by that module rather than by
+      this one.
     * `:human_override` — write the verdict, return the cursor, and STOP.
       Used by `approve_plan/3` when a human approves past an open gate; the
       caller IS the settlement, so this resolution must not settle again.
@@ -2564,16 +2566,21 @@ defmodule Platform.Tasks do
   its own cursor would be a fifth exit from the gate, which is the thing
   this function exists to prevent.
 
-  ## Honest interim consequence
+  ## What a `:reject` now does, and where it stops
 
-  Until member 6 (`019f9b29-251e`) lands, a `:reject` leaves the plan parked
-  in `pending_review` carrying a `"rejected"` verdict, with the router
-  suppressed. That is a STALL, not a hang — the plan is visible in the UI
-  and a human can still approve or reject it by hand (an approval takes the
-  `:human_override` path, and the gate reads `{:resolved, _}` so nothing
-  blocks). Member 6 owns everything downstream of a rejection: the
-  per-task iteration counter, the `reject_plan` / feedback call, the v2
-  supersession and the human escalation. This function must not grow them.
+  Member 6 (`019f9b29-251e`) closed the interim stall this section used to
+  describe. A `:reject` below the bound persists `status: "rejected"` with
+  the architect's findings as the `rejection_reason` and posts the same
+  body to the execution space, which is what wakes the planner to author a
+  v2. At the bound it escalates instead, leaving the plan parked in
+  `pending_review` for a human.
+
+  This function must not grow either behaviour: it hands the resolved plan
+  to `ArchitectureRejection.handle/1` and swallows its errors, because the
+  verdict is already written and the gate must still report that it
+  resolved. Note also that THIS path never authors a v2 — the planner does,
+  in response to the chat message — which is asserted in
+  `ArchitectureGateApprovalTest`.
 
   `opts` accepts `:resolved_by`, `:source`, `:summary` and `:findings`,
   which are merged into the verdict. `:source` must be one of
@@ -2639,13 +2646,26 @@ defmodule Platform.Tasks do
   defp put_verdict_present(verdict, _key, nil), do: verdict
   defp put_verdict_present(verdict, key, value), do: Map.put(verdict, key, value)
 
-  # `:reject` and `:human_override` STOP. The first because member 6 owns
-  # what happens next; the second because `approve_plan/3` is mid-flight
-  # and settling here would approve the plan twice.
-  defp settle_resolved_architecture_gate(%Plan{} = resolved, resolution)
-       when resolution in [:reject, :human_override] do
+  # `:human_override` STOPS, because `approve_plan/3` is mid-flight and
+  # settling here would approve the plan twice.
+  defp settle_resolved_architecture_gate(%Plan{} = resolved, :human_override) do
     broadcast_board({:plan_updated, resolved})
     {:ok, resolved}
+  end
+
+  # ADR-0046 member 6 (`019f9b29-251e`) stage 3: the seam member 5 left
+  # open. Everything downstream of a rejection — the iteration counter,
+  # the feedback body, the bound and the escalation — lives in
+  # `ArchitectureRejection`, not here. A failure there is swallowed: the
+  # verdict is already written and the gate must still report that it
+  # resolved.
+  defp settle_resolved_architecture_gate(%Plan{} = resolved, :reject) do
+    broadcast_board({:plan_updated, resolved})
+
+    case Platform.Tasks.ArchitectureRejection.handle(resolved) do
+      {:ok, _outcome, final_plan} -> {:ok, final_plan}
+      {:error, _reason} -> {:ok, resolved}
+    end
   end
 
   defp settle_resolved_architecture_gate(%Plan{} = resolved, :pass) do

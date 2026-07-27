@@ -63,15 +63,24 @@ defmodule Platform.Tasks.ArchitectureRejection do
 
   import Ecto.Query, only: [from: 2]
 
+  require Logger
+
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.Plan
+  alias Platform.Tasks.PlanRejection
   alias Platform.Tasks.Stage
+  alias Platform.Tasks.Task
 
   # The bound on consecutive architecture rejections before a human is
   # pulled in. See `reject_limit/0` for why this is a module attribute and
   # NOT `Application.get_env/3`.
   @architecture_reject_limit 2
+
+  # A task whose execution has begun. Rejecting a plan whose executor
+  # already has commits on a branch strands that branch, and this codebase
+  # has no recovery path for it.
+  @in_flight_task_statuses ~w(in_progress in_review deploying done)
 
   @doc """
   How many consecutive most-recent plan versions the architect has
@@ -215,4 +224,241 @@ defmodule Platform.Tasks.ArchitectureRejection do
       resolved_at: Map.get(verdict, "resolved_at")
     }
   end
+
+  # ── stage 3: the loop ─────────────────────────────────────────────────
+
+  @doc """
+  Everything that happens after the architect rejects `plan`.
+
+  Called from `Tasks.resolve_architecture_gate/3`'s `:reject` branch, which
+  is the only exit from the gate. Order of operations:
+
+    1. Refuse outright if the plan is IN FLIGHT (see below).
+    2. Otherwise consult `streak/1`, which ALREADY INCLUDES this version —
+       `record_architecture_verdict/3` wrote `"rejected"` before this
+       function was called, so the first rejection reads 1, not 0. That
+       ordering is asserted in the tests rather than commented, because an
+       off-by-one here escalates a version late, which is the unbounded
+       loop in miniature.
+    3. At or over `reject_limit/0`, escalate: the plan is left UNTOUCHED in
+       `pending_review` and no new version is asked for.
+    4. Below it, send the architect's findings back to the planner.
+
+  ## Why there is no dedup key, no escalation flag and no `has_escalated` column
+
+  `record_architecture_verdict/3` is ONE-SHOT: it arbitrates on the
+  persisted row with an `UPDATE ... WHERE state = 'pending'`, so a second
+  `:reject` against a resolved gate returns `{:error, :gate_already_resolved}`
+  and NEVER reaches this function. Idempotence is therefore a property of
+  the caller, not of this module — the gate can only resolve once per plan
+  VERSION, and each version gets its own verdict row. A guard added here
+  would do nothing. (The tests assert this from the outside, as a count
+  delta on the second call.)
+
+  ## Two delivery channels, both free, both carrying the IDENTICAL string
+
+    * `Tasks.reject_plan/3` persists `status: "rejected"` +
+      `rejection_reason` and broadcasts `{:plan_updated, _}`, which puts
+      `TaskRouter` into `:waiting_human` so the router stops nagging. The
+      persisted reason is also what
+      `ContextAssembler.find_latest_rejected_reason/1` lifts into
+      `previous_rejection_reason` on every dispatch context, so the
+      findings survive a restart that eats the chat wake-up.
+    * `PlanRejection.post_feedback/3` posts the same body as a NON-log-only
+      engagement message, which is what actually wakes the planner via
+      `AttentionRouter` and causes a v2 to be authored.
+
+  Do not compose two bodies. The persisted reason is the durable truth and
+  the post is best-effort on top of it — a failed post leaves the plan
+  rejected with its reason intact and still returns `{:ok, :feedback_sent, _}`.
+
+  ## Must not raise, ever
+
+  This runs on the gate-resolution path, reached from the
+  `plan_architecture_verdict` MCP tool and from `handle_output/3` inside
+  `run_external_dispatch/5`. Mirrors `fire_architecture_review_plan/1`:
+  errors are RETURNED, never raised.
+  """
+  @spec handle(Plan.t()) :: {:ok, :feedback_sent | :escalated, Plan.t()} | {:error, term()}
+  def handle(%Plan{} = plan) do
+    plan = Repo.preload(plan, :stages)
+    task = Repo.get(Task, plan.task_id)
+
+    cond do
+      in_flight?(plan, task) -> refuse_in_flight(plan, task)
+      escalation_due?(plan.task_id) -> escalate(plan)
+      true -> send_feedback(plan)
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[ArchitectureRejection] handle/1 crashed plan=#{inspect(Map.get(plan, :id))}: " <>
+          Exception.message(e)
+      )
+
+      {:error, :architecture_rejection_crashed}
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[ArchitectureRejection] handle/1 exited plan=#{inspect(Map.get(plan, :id))}: " <>
+          inspect(reason)
+      )
+
+      {:error, :architecture_rejection_crashed}
+  end
+
+  @doc """
+  The structured feedback body the planner reads, and the same string
+  persisted as the plan's `rejection_reason`.
+
+  Generated from the verdict's `"findings"` and never from free text: prose
+  alone produces a differently-worded v2 rather than a better one.
+
+  The `iteration <k> of <limit>` line is not decoration — it is the
+  planner's only signal that it is on its last attempt before a human is
+  pulled in.
+
+  `constraint` is rendered VERBATIM from the verdict and is never mapped to
+  prettier prose: the planner and the validator must speak one vocabulary,
+  and `Plan.architecture_constraints/0` is that closed contract. This module
+  contains no copy of those literals — a test asserts the source text does
+  not contain one.
+
+  A finding's stage name comes from the verdict's own `"stage_name"` when
+  present, else from `plan.stages`, else renders `(plan-wide)`: member 5's
+  shape allows a nil `stage_id`.
+
+  Empty `findings` still renders, with the summary and the instruction and
+  no findings block. Member 5's tool refuses an empty-findings reject at the
+  boundary, so this branch is unreachable through the sanctioned surface; it
+  exists only so a hand-written verdict cannot produce an empty message.
+  """
+  @spec compose_feedback(Plan.t()) :: String.t()
+  def compose_feedback(%Plan{} = plan) do
+    verdict = plan.architecture_verdict || %{}
+    findings = Map.get(verdict, "findings") || []
+    iteration = streak(plan.task_id)
+
+    header =
+      "Architecture gate: plan v#{plan.version} rejected " <>
+        "(iteration #{iteration} of #{reject_limit()})."
+
+    [header, Map.get(verdict, "summary"), findings_block(findings, plan), instruction()]
+    |> Enum.reject(&(is_nil(&1) or &1 == ""))
+    |> Enum.join("\n\n")
+  end
+
+  defp findings_block([], _plan), do: nil
+
+  defp findings_block(findings, plan) do
+    body =
+      findings
+      |> Enum.with_index(1)
+      |> Enum.map_join("\n", fn {finding, index} ->
+        "#{index}. Stage: #{stage_label(finding, plan)}\n" <>
+          "   Constraint: #{Map.get(finding, "constraint")}\n" <>
+          "   Change: #{Map.get(finding, "detail")}"
+      end)
+
+    "Findings:\n" <> body
+  end
+
+  defp stage_label(finding, plan) do
+    stage_id = Map.get(finding, "stage_id")
+
+    case finding_stage_name(finding, plan, stage_id) do
+      nil -> "(plan-wide)"
+      name -> ~s("#{name}") <> " (#{stage_id})"
+    end
+  end
+
+  defp finding_stage_name(_finding, _plan, nil), do: nil
+
+  defp finding_stage_name(finding, plan, stage_id) do
+    case Map.get(finding, "stage_name") do
+      name when is_binary(name) and name != "" ->
+        name
+
+      _ ->
+        case Enum.find(plan_stages(plan), &(&1.id == stage_id)) do
+          %Stage{name: name} -> name
+          _ -> nil
+        end
+    end
+  end
+
+  defp plan_stages(%Plan{stages: stages}) when is_list(stages), do: stages
+  defp plan_stages(_plan), do: []
+
+  # The count is read from `Plan.architecture_constraints/0` rather than
+  # written as a word, so the sentence cannot go stale if member 5 widens
+  # the vocabulary — and so this file contains no copy of the literals.
+  defp instruction do
+    """
+    Every finding names a stage and one of the #{length(Plan.architecture_constraints())} architecture constraints. Produce a v2
+    plan that resolves all of them. A finding is resolved by changing the plan's structure,
+    not by rewording the stage description.
+    """
+    |> String.trim_trailing()
+  end
+
+  # THE FEEDBACK PATH. Persist first (the durable truth), post second (the
+  # wake-up). A failed post is swallowed by `post_feedback/3` itself.
+  defp send_feedback(%Plan{} = plan) do
+    body = compose_feedback(plan)
+    actor = architect_actor(plan)
+
+    case Tasks.reject_plan(plan, actor, body) do
+      {:ok, rejected} ->
+        _ = PlanRejection.post_feedback(rejected, actor, body)
+        {:ok, :feedback_sent, rejected}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Stage 4 lands the digest, the recipient chain and the escalation
+  # telemetry here. The BOUND is already whole without them: the plan is
+  # left untouched in `pending_review`, so nothing asks for another version
+  # and the loop has stopped. What stage 4 adds is the human's
+  # notification, not the stop.
+  defp escalate(%Plan{} = plan), do: {:ok, :escalated, plan}
+
+  # THE IN-FLIGHT GUARD, asserted rather than assumed. Two tests bracket
+  # it: one calls `handle/1` directly on an in-flight plan and sees the
+  # refusal, the other proves the sanctioned path cannot reach that state
+  # (an approved plan's gate is already resolved, so
+  # `record_architecture_verdict/3` refuses before this function runs).
+  defp in_flight?(%Plan{} = plan, task) do
+    Enum.any?(plan_stages(plan), &(&1.status != "pending")) or
+      match?(%Task{status: status} when status in @in_flight_task_statuses, task)
+  end
+
+  defp refuse_in_flight(%Plan{} = plan, task) do
+    :telemetry.execute(
+      [:platform, :plan, :architecture_reject_refused_in_flight],
+      %{count: 1},
+      %{
+        task_id: plan.task_id,
+        plan_id: plan.id,
+        task_status: task && task.status,
+        resource_type: "plan",
+        resource_id: plan.id,
+        action: "architecture_reject_refused_in_flight",
+        actor_type: "system"
+      }
+    )
+
+    {:error, :plan_in_flight}
+  end
+
+  # Who the rejection is attributed to. The verdict's own `"resolved_by"`
+  # is the architect that answered; `PlanRejection.actor_display_name/1`
+  # resolves it through the user tier and then the AGENT tier, which is the
+  # widening stage 2 landed for exactly this caller.
+  defp architect_actor(%Plan{architecture_verdict: %{"resolved_by" => id}}) when is_binary(id),
+    do: id
+
+  defp architect_actor(%Plan{}), do: nil
 end

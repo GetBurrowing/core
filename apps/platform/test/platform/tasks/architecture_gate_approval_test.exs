@@ -337,12 +337,22 @@ defmodule Platform.Tasks.ArchitectureGateApprovalTest do
     end
   end
 
-  # ── GUARD: `:reject` STOPS — and the member-6 seam is asserted ────────
+  # ── GUARD: `:reject` approves nothing — and the member-6 seam is asserted
+  #
+  # RETARGETED by ADR-0046 member 6 (`019f9b29-251e`) stage 3, which is the
+  # change this test was written to name. Member 5's `:reject` branch wrote
+  # the verdict and STOPPED, leaving the plan parked in `pending_review`
+  # with a nil `rejection_reason`; that was a documented interim stall, and
+  # member 6's seam ends it by handing the resolved plan to
+  # `ArchitectureRejection.handle/1`. The two halves that were the point of
+  # this test are unchanged: the plan still approves NOTHING, and this path
+  # still authors NO v2.
 
   describe "resolve_architecture_gate/3 — :reject" do
-    test "parks the plan, emits nothing, approves nothing, and creates no v2", %{
-      project: project
-    } do
+    test "rejects the plan with the findings, emits nothing, approves nothing, and creates no v2",
+         %{
+           project: project
+         } do
       sponsor = user_fixture()
 
       {task, plan} =
@@ -351,14 +361,16 @@ defmodule Platform.Tasks.ArchitectureGateApprovalTest do
       gated = open_gate!(task, plan)
       before_rows = plan_review_row_count(sponsor.id)
 
-      assert {:ok, %Plan{status: "pending_review"}} =
+      assert {:ok, %Plan{status: "rejected"}} =
                Tasks.resolve_architecture_gate(gated, :reject,
                  summary: "Crosses a context boundary",
                  findings: [%{"constraint" => "module_boundary", "detail" => "Two contexts"}]
                )
 
       reloaded = reload(gated)
-      assert reloaded.status == "pending_review"
+      assert reloaded.status == "rejected"
+      assert reloaded.rejection_reason =~ "module_boundary"
+      assert reloaded.rejection_reason =~ "Two contexts"
       assert reloaded.approved_by == nil
       assert reloaded.auto_approved_at == nil
 
