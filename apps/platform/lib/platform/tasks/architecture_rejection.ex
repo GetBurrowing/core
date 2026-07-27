@@ -1,10 +1,11 @@
 defmodule Platform.Tasks.ArchitectureRejection do
   @moduledoc """
   ADR-0046 member 6 — everything downstream of a `"rejected"` architecture
-  verdict. This stage is STATE AND ARITHMETIC ONLY: how many times in a row
-  the architect has objected, what the bound on that is, and what the
-  accumulated disagreement looks like. The writer, the lifecycle seam and
-  the escalation land in later stages.
+  verdict: how many times in a row the architect has objected (`streak/1`),
+  what the bound on that is (`reject_limit/0`), what the accumulated
+  disagreement looks like (`objection_history/1`), and what happens on each
+  side of the bound (`handle/1` — feedback to the planner below it, an
+  escalation to a human at it).
 
   Member 5 owns the verdict payload shape and the gate state machine
   (`Plan.architecture_verdict_changeset/2`, `Tasks.resolve_architecture_gate/3`).
@@ -65,10 +66,13 @@ defmodule Platform.Tasks.ArchitectureRejection do
 
   require Logger
 
+  alias Platform.Inbox
+  alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.Plan
   alias Platform.Tasks.PlanRejection
+  alias Platform.Tasks.Stack
   alias Platform.Tasks.Stage
   alias Platform.Tasks.Task
 
@@ -182,6 +186,14 @@ defmodule Platform.Tasks.ArchitectureRejection do
       This module does not re-validate it and does not contain a copy of
       it.
     * `:stage_names` — that version's stage names in position order
+    * `:stages` — the same stages as `%{id:, name:}` maps, in the same
+      order. `:stage_names` is derived from it, so the two cannot
+      disagree. The digest needs the ids as well as the names: a finding
+      may carry a `"stage_id"` and no `"stage_name"` (member 5's shape
+      allows it, and the MCP tool does not backfill), and rendering
+      `(plan-wide)` for a finding that names a real stage would tell the
+      human the architect objected to the plan as a whole when it did
+      not.
 
   `:stage_names` is what makes this the DISAGREEMENT rather than the
   verdict. The human sees what the architect asked for AND what the planner
@@ -214,13 +226,15 @@ defmodule Platform.Tasks.ArchitectureRejection do
 
   defp objection(%Plan{} = plan) do
     verdict = plan.architecture_verdict || %{}
+    stages = Enum.map(plan.stages, &%{id: &1.id, name: &1.name})
 
     %{
       version: plan.version,
       plan_id: plan.id,
       summary: Map.get(verdict, "summary"),
       findings: Map.get(verdict, "findings", []),
-      stage_names: Enum.map(plan.stages, & &1.name),
+      stages: stages,
+      stage_names: Enum.map(stages, & &1.name),
       resolved_at: Map.get(verdict, "resolved_at")
     }
   end
@@ -286,7 +300,7 @@ defmodule Platform.Tasks.ArchitectureRejection do
 
     cond do
       in_flight?(plan, task) -> refuse_in_flight(plan, task)
-      escalation_due?(plan.task_id) -> escalate(plan)
+      escalation_due?(plan.task_id) -> escalate(plan, task)
       true -> send_feedback(plan)
     end
   rescue
@@ -355,7 +369,7 @@ defmodule Platform.Tasks.ArchitectureRejection do
       findings
       |> Enum.with_index(1)
       |> Enum.map_join("\n", fn {finding, index} ->
-        "#{index}. Stage: #{stage_label(finding, plan)}\n" <>
+        "#{index}. Stage: #{stage_label(finding, plan_stages(plan))}\n" <>
           "   Constraint: #{Map.get(finding, "constraint")}\n" <>
           "   Change: #{Map.get(finding, "detail")}"
       end)
@@ -363,25 +377,32 @@ defmodule Platform.Tasks.ArchitectureRejection do
     "Findings:\n" <> body
   end
 
-  defp stage_label(finding, plan) do
+  defp stage_label(finding, stages) do
     stage_id = Map.get(finding, "stage_id")
 
-    case finding_stage_name(finding, plan, stage_id) do
+    case finding_stage_name(finding, stages, stage_id) do
       nil -> "(plan-wide)"
       name -> ~s("#{name}") <> " (#{stage_id})"
     end
   end
 
-  defp finding_stage_name(_finding, _plan, nil), do: nil
+  # ONE fallback order — the verdict's own `"stage_name"`, else a lookup by
+  # id, else nil — shared by the feedback body and the escalation digest.
+  # `stages` is a list of anything carrying `:id` and `:name`, which is both
+  # `%Stage{}` (the feedback path, holding `plan.stages`) and the
+  # `objection_history/1` entry's `:stages` maps (the digest path). Two
+  # copies of this order is how the two messages would come to name the
+  # same finding differently.
+  defp finding_stage_name(_finding, _stages, nil), do: nil
 
-  defp finding_stage_name(finding, plan, stage_id) do
+  defp finding_stage_name(finding, stages, stage_id) do
     case Map.get(finding, "stage_name") do
       name when is_binary(name) and name != "" ->
         name
 
       _ ->
-        case Enum.find(plan_stages(plan), &(&1.id == stage_id)) do
-          %Stage{name: name} -> name
+        case Enum.find(stages, &(&1.id == stage_id)) do
+          %{name: name} when is_binary(name) -> name
           _ -> nil
         end
     end
@@ -418,12 +439,251 @@ defmodule Platform.Tasks.ArchitectureRejection do
     end
   end
 
-  # Stage 4 lands the digest, the recipient chain and the escalation
-  # telemetry here. The BOUND is already whole without them: the plan is
-  # left untouched in `pending_review`, so nothing asks for another version
-  # and the loop has stopped. What stage 4 adds is the human's
-  # notification, not the stop.
-  defp escalate(%Plan{} = plan), do: {:ok, :escalated, plan}
+  # THE ESCALATION PATH. The BOUND was already whole before this stage: the
+  # plan is left untouched in `pending_review`, so nothing asks for another
+  # version and the loop has stopped. What this adds is the human's
+  # notification, not the stop — which is why every step of it is
+  # best-effort and none of it can change the outcome returned to the gate.
+  #
+  # Order: digest first (the evidence), inbox second (the summons), then
+  # telemetry naming which tier was actually reached. `plan` is returned
+  # UNTOUCHED — no reject, no new lifecycle state, no new gate state.
+  defp escalate(%Plan{} = plan, task) do
+    history = objection_history(plan.task_id)
+
+    _ = post_digest(plan, history)
+    recipient = emit_escalation_inbox(plan, task, history)
+
+    :telemetry.execute(
+      [:platform, :plan, :architecture_reject_loop_escalated],
+      %{count: 1},
+      %{
+        task_id: plan.task_id,
+        plan_id: plan.id,
+        iterations: length(history),
+        recipient: recipient,
+        resource_type: "plan",
+        resource_id: plan.id,
+        action: "architecture_escalated",
+        actor_type: "system"
+      }
+    )
+
+    {:ok, :escalated, plan}
+  end
+
+  @doc """
+  Whether `task_id` is parked on a human because the architect and the
+  planner did not converge.
+
+  DERIVED, like the streak itself: `escalation_due?/1` (the bound was hit)
+  AND the newest plan is still `pending_review` (nobody has decided yet).
+  There is no `escalated` column, no `escalated_at`, and deliberately no new
+  value in `Plan.architecture_gate_states/0` — member 5 owns that enum, and
+  `"rejected"` is what the architect said. "We escalated" is a task-level
+  fact about the CONVERSATION, not a sixth thing the architect could have
+  answered.
+
+  The `pending_review` half is what makes this go false again. A human who
+  approves v2 over the objection, or rejects it with their own direction,
+  moves the plan out of `pending_review` — while the streak stays at 2,
+  because approving does NOT rewrite v2's verdict (a resolved gate refuses a
+  second write). Reading `escalation_due?/1` alone would leave the task
+  flagged as awaiting a human forever after that human answered.
+
+  Exposed for member 8, which renders the card. This stage renders nothing.
+  """
+  @spec escalated?(binary()) :: boolean()
+  def escalated?(task_id) when is_binary(task_id) do
+    escalation_due?(task_id) and
+      match?(%Plan{status: "pending_review"}, Tasks.latest_plan(task_id))
+  end
+
+  @doc """
+  The digest a human reads: what the architect asked for and what the
+  planner produced, for EVERY version in the streak, newest first.
+
+  Not the latest verdict. The question the human has to answer is "have
+  these two converged", and the latest verdict cannot answer it — it looks
+  identical whether the planner ignored the objection or addressed it and
+  drew a new one. Each round therefore carries BOTH sides: the planner's
+  stage names and the architect's findings against them.
+
+  The footer names the decision, because the plan is not in a new state and
+  the board card is the ordinary `pending_review` one: approve v2 over the
+  objection, or reject it with your own direction. Both buttons already
+  work — member 5's gate is RESOLVED, so `approve_plan/3`'s guard is inert.
+  """
+  @spec compose_digest(Plan.t(), [map()]) :: String.t()
+  def compose_digest(%Plan{} = plan, history) do
+    count = length(history)
+
+    header =
+      "Architecture gate: #{count} consecutive rejections. Escalating to a human.\n\n" <>
+        "The architect and the planner have not converged. All #{count} rounds below."
+
+    footer =
+      "Plan v#{plan.version} is still awaiting review at /tasks/#{plan.task_id}. Approve it to " <>
+        "proceed over the\narchitect's objection, or reject it with your own direction."
+
+    ([header] ++ Enum.map(history, &round_block/1) ++ [footer])
+    |> Enum.join("\n\n")
+  end
+
+  defp round_block(round) do
+    [
+      "--- Plan v#{round.version} (rejected #{round.resolved_at || "at an unrecorded time"}) ---",
+      "Stages: #{stage_list(round.stage_names)}",
+      summary_line(round.summary) | finding_lines(round)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+  end
+
+  defp stage_list([]), do: "(none)"
+  defp stage_list(names), do: Enum.join(names, " | ")
+
+  defp summary_line(nil), do: nil
+  defp summary_line(""), do: nil
+  defp summary_line(summary), do: "Architect: #{summary}"
+
+  # `constraint` verbatim, for the same reason the feedback body renders it
+  # verbatim: the vocabulary is closed by `Plan.architecture_constraints/0`
+  # and this module holds no copy of it.
+  defp finding_lines(%{findings: []}), do: ["  (no findings recorded)"]
+
+  defp finding_lines(round) do
+    Enum.map(round.findings, fn finding ->
+      "  * #{Map.get(finding, "constraint")} @ #{digest_stage_label(finding, round.stages)}" <>
+        " -> #{Map.get(finding, "detail")}"
+    end)
+  end
+
+  defp digest_stage_label(finding, stages) do
+    case finding_stage_name(finding, stages, Map.get(finding, "stage_id")) do
+      nil -> "(plan-wide)"
+      name -> ~s("#{name}")
+    end
+  end
+
+  # THE DIGEST IS `log_only: true`, AND THAT IS THE POINT.
+  #
+  # `AttentionRouter` silently skips `log_only` messages in execution spaces
+  # (`chat/attention_router.ex:8`, `:220-221`). Stage 3's feedback post is
+  # `post_engagement/3` — NOT log-only — precisely BECAUSE it must wake the
+  # planner and get a v2 written. This post must NOT wake the planner: a v3
+  # is exactly the spin the bound exists to stop, and an engagement message
+  # here would author one. The asymmetry between the two posts IS the
+  # mechanism; do not "tidy" them into one call. Both halves are asserted in
+  # `architecture_escalation_test.exs` ("the wake-up asymmetry").
+  #
+  # Best-effort, like the feedback post: the human is also reachable through
+  # the inbox row and through the board card, and a missing execution space
+  # must not turn a resolved gate into an error.
+  defp post_digest(%Plan{} = plan, history) do
+    case ExecutionSpace.find_by_task_id(plan.task_id) do
+      nil ->
+        :ok
+
+      space ->
+        case ExecutionSpace.post_log(space.id, compose_digest(plan, history)) do
+          {:ok, _msg} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "[ArchitectureRejection] failed to post escalation digest for plan " <>
+                "#{plan.id}: #{inspect(reason)}"
+            )
+
+            :ok
+        end
+    end
+  end
+
+  # WHO GETS SUMMONED, and the honest third tier.
+  #
+  #   1. `task.sponsor_user_id` — the ADR-0042 human who owns this task.
+  #   2. else `task.stack.sponsor_user_id` — a stack member inherits its
+  #      stack's sponsor.
+  #   3. else NOBODY. The digest is still posted, the telemetry still fires,
+  #      and the plan still sits in `pending_review` on the board where a
+  #      human sees it.
+  #
+  # Tier 3 is a deliberate refusal, not a gap. There is no admin or owner
+  # concept on `Platform.Accounts.User` or `Platform.Tenancy.Org` to fall
+  # back to, and `task.reported_by` is NOT a user id — it is a free-form
+  # string that one writer fills with a user and another with an agent, so
+  # resolving it would miss in both real cases while looking like coverage.
+  # Paging an arbitrary human is worse than paging none.
+  #
+  # Shape mirrors `ReviewRequests.maybe_emit_reviewer_inbox/1`: post-commit,
+  # best-effort, rescue -> log -> carry on. Returns the telemetry's
+  # `recipient` value, and returns `"none"` when the emit FAILED as well as
+  # when there was nobody to emit to — the field records who was actually
+  # notified, and a changeset error notified nobody.
+  @spec emit_escalation_inbox(Plan.t(), Task.t() | nil, [map()]) :: String.t()
+  defp emit_escalation_inbox(%Plan{} = plan, %Task{} = task, history) do
+    task = Repo.preload(task, :stack)
+
+    case escalation_recipient(task) do
+      {tier, user_id} ->
+        case Inbox.emit(%{
+               user_id: user_id,
+               # REUSED, not invented. `Inbox.Item`'s `@kinds` is a closed
+               # enum whose members each need a label, an icon and a
+               # grouping entry in the inbox UI — and this task ships no
+               # UI. `task_plan_review` is also semantically exact: a plan
+               # is awaiting this human's decision.
+               kind: "task_plan_review",
+               source_type: "task",
+               source_id: task.id,
+               title: "Architecture escalation: #{task.title}",
+               body: inbox_body(history),
+               url: "/tasks/#{task.id}"
+             }) do
+          {:ok, _item} ->
+            tier
+
+          {:error, reason} ->
+            Logger.warning(
+              "[ArchitectureRejection] escalation inbox emit failed for task " <>
+                "#{task.id}: #{inspect(reason)}"
+            )
+
+            "none"
+        end
+
+      :none ->
+        "none"
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[ArchitectureRejection] escalation inbox emit crashed for plan " <>
+          "#{plan.id}: #{Exception.message(e)}"
+      )
+
+      "none"
+  end
+
+  defp emit_escalation_inbox(%Plan{}, _task, _history), do: "none"
+
+  defp escalation_recipient(%Task{sponsor_user_id: uid}) when is_binary(uid), do: {"sponsor", uid}
+
+  defp escalation_recipient(%Task{stack: %Stack{sponsor_user_id: uid}}) when is_binary(uid),
+    do: {"stack_sponsor", uid}
+
+  defp escalation_recipient(%Task{}), do: :none
+
+  # Names the ROUNDS, not just the count: the inbox row is the only part of
+  # the escalation a human sees before deciding whether to open it.
+  defp inbox_body(history) do
+    versions = Enum.map_join(history, ", ", &"v#{&1.version}")
+
+    "#{length(history)} consecutive architecture rejections (#{versions}). " <>
+      "The architect and the planner have not converged."
+  end
 
   # THE IN-FLIGHT GUARD, asserted rather than assumed. Two tests bracket
   # it: one calls `handle/1` directly on an in-flight plan and sees the
