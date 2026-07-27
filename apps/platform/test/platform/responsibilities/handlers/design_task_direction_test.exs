@@ -528,9 +528,9 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
   describe "the design.task_direction.v1 template row" do
     # The five bullets are asserted as EXACT substrings, including the en
     # dashes in "4–6" and "2–3", because they were lifted verbatim from the
-    # `dispatch.planning` body. A paraphrase here would mean the output shape
-    # changed silently between the planner asking for it and the designer
-    # producing it.
+    # `dispatch.planning` body before task 019f9b29-5ecd stage 6 removed
+    # that section. This is now the only copy, so a paraphrase here changes
+    # the output shape downstream consumers read with nothing to catch it.
     @deliverable_bullets [
       "- Opening line pins the subject: what this surface is, who uses it, and the one job it does.",
       "- Palette: 4–6 named color values (from brand tokens if they exist; provisional if exploring).",
@@ -568,24 +568,44 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
       assert fallback == template.content
     end
 
-    # The five bullets are the SAME five the planner prompt has been asking
-    # for since task 019f4f1d. If either copy is reworded without the other,
-    # this fires.
-    test "the bullets are byte-identical to the ones dispatch.planning asks for" do
+    # RETARGETED by task 019f9b29-5ecd stage 6. This test used to assert the
+    # five bullets appeared in BOTH `dispatch.planning` and
+    # `design.task_direction.v1` — a divergence guard for the window in
+    # which two copies existed. Stage 6 closes that window by deleting the
+    # planner's copy, so the two-copy assertion is now unsatisfiable by
+    # construction. What it was really protecting survives and is asserted
+    # here instead: the bullets exist EXACTLY ONCE across the two prompts,
+    # in the one that is now responsible for producing the direction. Two
+    # copies would mean the planner asks for the deliverable the designer
+    # already produced — the double-design this stage exists to remove.
+    test "the deliverable bullets live in design.task_direction.v1 only — dispatch.planning no longer asks for them" do
+      design = PromptTemplates.default_content_for_slug("design.task_direction.v1")
       planning = PromptTemplates.default_content_for_slug("dispatch.planning")
 
       for bullet <- @deliverable_bullets do
         trimmed = String.trim_leading(bullet, "- ")
 
-        assert String.contains?(planning, trimmed),
+        # POSITIVE CONTROL, paired with the refute below: a truncated or
+        # empty design template would otherwise pass the refute alone.
+        assert String.contains?(design, trimmed),
                """
-               The deliverable bullet below no longer appears in dispatch.planning.
+               The deliverable bullet below is missing from design.task_direction.v1.
 
                #{bullet}
 
                ADR-0046 moves WHO produces design direction and WHEN, not WHAT it
-               looks like. If the two copies have diverged, one of them changed the
-               output shape without saying so.
+               looks like — the bullet text itself must survive the move.
+               """
+
+        refute String.contains?(planning, trimmed),
+               """
+               The deliverable bullet below is still in dispatch.planning.
+
+               #{bullet}
+
+               The planner no longer authors a design stage (ADR-0046 decision 1,
+               task 019f9b29-5ecd stage 6). A surviving copy means every UI task
+               asks for the direction twice.
                """
       end
     end
