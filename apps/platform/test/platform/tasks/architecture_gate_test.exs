@@ -90,11 +90,14 @@ defmodule Platform.Tasks.ArchitectureGateTest do
     # routed through the wide changeset, so the absence in the first
     # half is the narrow cast list doing work.
     #
-    # VACUITY CONTROL RUN: replaced the cast list with `cast(attrs, [])`.
-    # The first assertion still passed (no `:status` change — trivially),
-    # and this test failed on
-    # `assert {:ok, verdict} = fetch_change(narrow, :architecture_verdict)`.
-    # The control is therefore load-bearing.
+    # VACUITY CONTROL RUN — replaced the cast list with `cast(attrs, [])`
+    # (a changeset that casts nothing at all, which is what an absence
+    # assertion passes vacuously against). 20/25 in this module failed;
+    # this test failed on
+    # `assert {:ok, %{"state" => "pending"}} = fetch_change(narrow,
+    # :architecture_verdict)` (right: `:error`). The `refute :status`
+    # half still passed — trivially — which is exactly why it is not
+    # allowed to stand alone.
     test "casts :architecture_verdict and refuses to smuggle a :status change", %{plan: plan} do
       attrs = %{status: "approved", architecture_verdict: pending_verdict()}
 
@@ -119,11 +122,11 @@ defmodule Platform.Tasks.ArchitectureGateTest do
     # GUARD — closed state vocabulary, with the positive control that
     # the validator can distinguish rather than rejecting everything.
     #
-    # VACUITY CONTROL RUN: deleted the `state in @architecture_gate_states`
-    # branch (accept any binary state). This test failed on the
-    # `refute skipped.valid?` assertion. With the branch restored but
-    # `@architecture_gate_states` reduced to `~w(pending)`, it failed on
-    # `assert expired.valid?` instead — so both halves bite.
+    # VACUITY CONTROL RUN — (a) relaxed the membership test to
+    # `is_binary(state)`: 1/25 failed, this one, on
+    # `refute skipped.valid?`. (b) shrank `@architecture_gate_states` to
+    # `~w(pending)`: 10/25 failed and this one failed on
+    # `assert expired.valid?`. Both halves bite.
     test "rejects an unknown state and accepts a known one in the same position", %{plan: plan} do
       skipped =
         Plan.architecture_verdict_changeset(plan, %{
@@ -168,11 +171,11 @@ defmodule Platform.Tasks.ArchitectureGateTest do
     # value. Stage 4 asserts the same property again at the MCP tool
     # boundary.
     #
-    # VACUITY CONTROL RUN: removed the `constraint in
-    # @architecture_constraints` check. This test failed on
-    # `refute naming.valid?`. Separately, replacing
-    # `@architecture_constraints` with `~w(naming)` made it fail on
-    # `assert boundary.valid?`.
+    # VACUITY CONTROL RUN — (a) relaxed the membership test to
+    # `is_binary(constraint)`: 2/25 failed and this one failed on
+    # `refute naming.valid?`. (b) replaced `@architecture_constraints`
+    # with `~w(naming)`: 3/25 failed and this one failed on
+    # `assert boundary.valid?`. Both halves bite.
     test "a finding may not cite \"naming\"; the same finding citing \"module_boundary\" is valid",
          %{plan: plan} do
       finding = fn constraint ->
@@ -210,10 +213,10 @@ defmodule Platform.Tasks.ArchitectureGateTest do
     # rejection the planner cannot act on is indistinguishable from
     # noise, and member 6 accumulates these across versions.
     #
-    # VACUITY CONTROL RUN: removed the `String.trim(detail) == ""`
-    # branch; this test failed on `refute changeset.valid?` for the
-    # empty-string case. Note the whitespace case is the one that
-    # distinguishes `String.trim/1` from a bare `""` comparison.
+    # VACUITY CONTROL RUN — (a) disabled the emptiness branch entirely:
+    # 1/25 failed, this one. (b) weakened `String.trim(detail) == ""` to
+    # a bare `detail == ""`: 1/25 failed, this one, on the `"   "` case.
+    # The whitespace row is what makes (b) detectable at all.
     test "a finding with an empty or whitespace-only detail is invalid", %{plan: plan} do
       for detail <- ["", "   "] do
         changeset =
@@ -318,13 +321,16 @@ defmodule Platform.Tasks.ArchitectureGateTest do
     # contract: the projection says expired, and the ROW IS UNCHANGED.
     # Reads decide; writes are someone else's job (stage 5's timer).
     #
-    # VACUITY CONTROL RUN: made `classify_architecture_verdict/1` return
-    # `{:open, verdict}` unconditionally for `"pending"` — this test
-    # failed on the `{:resolved, ...}` match. Separately, made
-    # `architecture_gate/1` persist the expired projection before
-    # returning it: the return-value half still passed and this test
-    # failed on `assert stored(plan)["state"] == "pending"`. Both
-    # assertions are independently load-bearing.
+    # VACUITY CONTROL RUN — (a) made `classify_architecture_verdict/1`
+    # return `{:open, verdict}` unconditionally for `"pending"` (no
+    # level check): 3/25 failed and this one failed on the
+    # `assert {:resolved, projected} = ...` match. (b) made
+    # `architecture_gate/1` PERSIST the expired projection before
+    # returning it: 3/25 failed, and this one failed on
+    # `assert row_after.architecture_verdict == row_before` — the
+    # return-value half passed clean. The two assertions are
+    # independently load-bearing, which is the whole point of asserting
+    # the row separately from the answer.
     test "reports an overdue pending gate as expired WITHOUT writing", %{plan: plan} do
       put_verdict!(plan, pending_verdict(deadline_offset_s: -1))
 
@@ -366,10 +372,15 @@ defmodule Platform.Tasks.ArchitectureGateTest do
       refute Tasks.architecture_gate_open?(plan)
     end
 
-    # The handed-down finding from member 4's review: `AutoMerger`
-    # reads its gate state off a struct loaded in the request handler
-    # and consulted later in an async Task, so the guard falls open on
-    # anything written in between. This gate re-reads.
+    # GUARD — the handed-down finding from member 4's review:
+    # `AutoMerger.execute_merge/4` reads its gate state off a struct
+    # loaded in the request handler and consulted later inside an async
+    # `Elixir.Task.start`, so anything written in that window makes the
+    # guard fall open. This gate re-reads instead.
+    #
+    # VACUITY CONTROL RUN: changed `resolve_plan_for_gate/1` to return
+    # the passed-in `%Plan{}` unchanged. 7/25 failed and this one failed
+    # on `assert {:open, _} = Tasks.architecture_gate(stale)`.
     test "answers from the row, not from a stale in-memory struct", %{plan: plan} do
       stale = Repo.get(Plan, plan.id)
       assert stale.architecture_verdict == nil
@@ -417,12 +428,20 @@ defmodule Platform.Tasks.ArchitectureGateTest do
     # GUARD (one-shot). A duplicate MCP call must be harmless, and it is
     # only harmless if the second call is BOTH refused and inert.
     #
-    # VACUITY CONTROL RUN: dropped the `state = 'pending'` predicate
-    # from the guarded UPDATE and let the second write through — this
-    # test failed on `assert {:error, :gate_already_resolved}`. With the
-    # error returned but the write still performed (predicate dropped,
-    # error faked off the pre-read), it failed on the byte-identity
-    # assertion instead.
+    # VACUITY CONTROL RUN — removed BOTH the pre-read
+    # `%Plan{} -> {:error, :gate_already_resolved}` clause and the
+    # `state = 'pending'` predicate on the UPDATE, so a second call
+    # writes through: 1/25 failed, this one.
+    #
+    # HONEST LIMIT, recorded rather than papered over: dropping ONLY the
+    # SQL predicate and keeping the pre-read clause leaves all 25 GREEN.
+    # The predicate defends a check-then-write race between two
+    # connections, and the Ecto sandbox serialises this module onto one
+    # connection, so no single-process test in this file can detonate
+    # it. It stays because the race is real once stage 5's timer runs
+    # concurrently with stage 4's MCP call — but nothing here proves it,
+    # and a comment claiming otherwise would be the exact vacuity these
+    # controls exist to catch.
     test "a second call is refused and changes nothing", %{opened: opened} do
       assert {:ok, first} =
                Tasks.record_architecture_verdict(opened, %{"state" => "passed"}, source: "mcp")
