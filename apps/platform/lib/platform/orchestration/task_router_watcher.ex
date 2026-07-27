@@ -22,6 +22,27 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   This replaces the imperative `assign_task/2` / `unassign_task/1` model and
   the `Rehydrator` GenServer. Routers are now a consequence of task state,
   not of explicit calls.
+
+  ## The sandbox precondition (invariant)
+
+  **No handler may touch `Platform.Orchestration.Registry`,
+  `TaskRouterSupervisor`, or the `:orchestration_lease_manager` ETS table
+  before the sandbox precondition in `handle_task_event/2` has passed.**
+
+  This watcher is a globally-supervised singleton that `Platform.DataCase`
+  allow-lists into *every* test, and `Sandbox.allow/3` binds it to whichever
+  test won the race. So a broadcast raised by test A routinely arrives while
+  the watcher is sitting on test B's connection. The state it then mutates —
+  Registry entries, supervised router processes, lease rows in a
+  `:named_table, :public` ETS table — is **global and non-transactional**, so
+  the end-of-test sandbox rollback does not undo any of it.
+
+  A return-value check cannot enforce that. The stop branch of
+  `evaluate_task/1` performs **zero Repo calls**, so no Repo-derived
+  `:sandbox_unowned` signal ever reaches the code that terminates a router and
+  clears its lease. The guard therefore has to be a *precondition on handling
+  the broadcast at all*. See `Platform.Orchestration.SandboxGuard` and
+  `notes/2026-07-06-datacase-cascade-rootcause.md`.
   """
 
   use GenServer
@@ -30,7 +51,8 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
 
   import Ecto.Query
 
-  alias Platform.Orchestration.{RuntimeSupervision, TaskRouterSupervisor}
+  alias Platform.Agents.AgentRuntime
+  alias Platform.Orchestration.{RuntimeSupervision, SandboxGuard, TaskRouterSupervisor}
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{Stacks, Task}
@@ -54,6 +76,25 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  @doc """
+  Block until the watcher has drained every message enqueued before this call.
+
+  A `GenServer.call/3` is answered strictly after every message already in the
+  watcher's mailbox has been handled, so `sync/0` returning proves the
+  broadcasts a test raised before it have been fully processed — including
+  their Registry / supervisor / ETS side effects.
+
+  This exists so tests stop synchronising with a fixed `Process.sleep/1`. A
+  sleep is a guess in both directions: too short and the assertion races the
+  watcher, too long and it hides a real regression behind wall-clock padding.
+  Mirrors the `:__drain__` call `Platform.DataCase` already makes against
+  `Platform.Chat.AttentionRouter`.
+  """
+  @spec sync(timeout()) :: :ok
+  def sync(timeout \\ 5_000) do
+    GenServer.call(__MODULE__, :sync, timeout)
   end
 
   # ── GenServer callbacks ────────────────────────────────────────────────
@@ -114,12 +155,12 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
 
   @impl true
   def handle_info({event, task}, state) when event in [:task_created, :task_updated] do
-    evaluate_task(task)
+    handle_task_event(event, task)
     {:noreply, state}
   end
 
   def handle_info({:runtime_reconnected, runtime_id}, state) do
-    redispatch_for_runtime(runtime_id)
+    handle_runtime_reconnected(runtime_id)
     {:noreply, state}
   end
 
@@ -183,6 +224,104 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
 
   # Ignore other PubSub events (plan_updated, stage_transitioned, etc.)
   def handle_info(_msg, state), do: {:noreply, state}
+
+  @impl true
+  def handle_call(:sync, _from, state), do: {:reply, :ok, state}
+
+  # ── Broadcast boundary: the sandbox precondition ───────────────────────
+  #
+  # Everything below the two `handle_task_event/2` preconditions mutates
+  # global, non-transactional state: the Registry, supervised TaskRouter
+  # processes, and the `:orchestration_lease_manager` ETS table. So the guard
+  # has to sit HERE, before any of it, rather than downstream:
+  #
+  #   * `should_run?/1` is pure struct reads and `router_running?/1` is a bare
+  #     `Registry.lookup` — neither touches Repo, so neither has an error to
+  #     short-circuit on.
+  #   * `evaluate_task/1`'s STOP branch reaches `terminate_child` (and through
+  #     its terminate, `LeaseManager.clear/1`) with ZERO Repo calls. There is
+  #     no return value anywhere on that path that could carry an ownership
+  #     signal.
+  #
+  # PRECONDITION A runs in every environment. Under the production pool
+  # `Repo.checkout/1` always succeeds (`SandboxGuard.connection_owned?/0`
+  # short-circuits to `true` off the sandbox pool precisely so a transient
+  # pool timeout can never be read as "not owned"), so it is inert in
+  # production by construction rather than by convention.
+  #
+  # PRECONDITION B is gated on `SandboxGuard.sandbox_pool?/0` and therefore
+  # cannot run in production at all. That gate is deliberately cheaper than
+  # the alternative — auditing all eleven `broadcast_board/1` call sites to
+  # prove none of them can fire before its transaction commits, and re-auditing
+  # on every new one.
+  defp handle_task_event(event, task) do
+    cond do
+      not SandboxGuard.connection_owned?() ->
+        drop(:connection_unowned, %{event: event, task_id: id_of(task)})
+
+      not task_row_visible?(task) ->
+        drop(:foreign_connection, %{event: event, task_id: id_of(task)})
+
+      true ->
+        # Defence in depth for the window between the probe above and the work
+        # below: the connection can still be torn down mid-flight if the test
+        # that allowed us onto it exits right here. Everything Repo-touching
+        # downstream already carries its own rescue, so this envelope is not
+        # what makes today's paths safe — it is what makes the NEXT handler
+        # added below this line safe by default.
+        SandboxGuard.guarded(fn -> evaluate_task(task) end, :ok, caller: __MODULE__)
+    end
+  end
+
+  defp handle_runtime_reconnected(runtime_id) do
+    # `redispatch_for_runtime/1` rescues its own Repo work, but its
+    # `send(pid, :dispatch)` to a live router is global-state mutation
+    # reachable from a foreign broadcast — so the same precondition applies.
+    cond do
+      not SandboxGuard.connection_owned?() ->
+        drop(:connection_unowned, %{event: :runtime_reconnected, runtime_id: runtime_id})
+
+      not runtime_row_visible?(runtime_id) ->
+        drop(:foreign_connection, %{event: :runtime_reconnected, runtime_id: runtime_id})
+
+      true ->
+        SandboxGuard.guarded(fn -> redispatch_for_runtime(runtime_id) end, :ok,
+          caller: __MODULE__
+        )
+    end
+  end
+
+  defp task_row_visible?(task) do
+    not SandboxGuard.sandbox_pool?() or SandboxGuard.row_visible?(Task, id_of(task))
+  end
+
+  # The runtime equivalent of `row_visible?/2`. `AgentRuntime` is keyed in
+  # broadcasts by its string `runtime_id`, not its primary key, so it needs
+  # its own predicate rather than the shared id-based one.
+  defp runtime_row_visible?(runtime_id) do
+    not SandboxGuard.sandbox_pool?() or
+      SandboxGuard.guarded(
+        fn -> Repo.exists?(from(r in AgentRuntime, where: r.runtime_id == ^runtime_id)) end,
+        false,
+        caller: __MODULE__
+      )
+  end
+
+  defp id_of(task), do: Map.get(task, :id)
+
+  defp drop(reason, metadata) do
+    # `:debug`, not `:warning`. Under the sandbox this fires on a large
+    # fraction of board broadcasts by design — a foreign-connection drop is
+    # the guard working, not an anomaly — and at `:warning` it would bury the
+    # log a real problem needs. The telemetry event beside it is the channel
+    # a test or a metric should watch.
+    Logger.debug(
+      "[TaskRouterWatcher] dropped broadcast (#{reason}): #{inspect(metadata)} — " <>
+        "the sandbox precondition did not pass, so no global state was touched"
+    )
+
+    SandboxGuard.record_drop(reason, __MODULE__, metadata)
+  end
 
   # ── Invariant evaluation ───────────────────────────────────────────────
 

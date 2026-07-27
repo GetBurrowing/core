@@ -4,7 +4,7 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Federation
-  alias Platform.Orchestration.{TaskRouterSupervisor, TaskRouterWatcher}
+  alias Platform.Orchestration.{TaskRouter, TaskRouterSupervisor, TaskRouterWatcher}
   alias Platform.Repo
   alias Platform.Tasks
 
@@ -179,7 +179,7 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       assert watcher_pid != nil, "TaskRouterWatcher should be running"
 
       send(watcher_pid, {:task_created, created_task})
-      Process.sleep(100)
+      TaskRouterWatcher.sync()
 
       assert TaskRouterWatcher.router_running?(task.id) == true
 
@@ -208,8 +208,10 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
 
       send(watcher_pid, {:task_updated, fake_task})
 
-      # Allow processing
-      Process.sleep(100)
+      # Drain the watcher's mailbox past the broadcast above. This is an exact
+      # barrier, not a guess: the `sync/0` reply is issued strictly after the
+      # `{:task_updated, ...}` already queued ahead of it has been handled.
+      TaskRouterWatcher.sync()
 
       # No router should be running since the agent UUID doesn't exist
       # (resolve_runtime_for_task returns {:error, :agent_not_found})
@@ -268,9 +270,14 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       watcher_pid = Process.whereis(TaskRouterWatcher)
       assert watcher_pid != nil
 
-      # Send a reconcile message and verify watcher is still alive
+      # Send a reconcile message and verify watcher is still alive.
+      #
+      # `sync/0` is both the barrier and half the assertion here: it can only
+      # return once `:reconcile` has been handled, and it exits (failing the
+      # test) if the watcher died handling it. The `alive?` check below is the
+      # explicit statement of intent.
       send(watcher_pid, :reconcile)
-      Process.sleep(200)
+      TaskRouterWatcher.sync()
 
       assert Process.alive?(watcher_pid)
     end
@@ -407,23 +414,23 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       }
 
       {:ok, pid} = TaskRouterSupervisor.start_assignment(task.id, fake_assignee)
-      ref = Process.monitor(pid)
       assert TaskRouterWatcher.router_running?(task.id) == true
 
-      # Let the router's async :dispatch tick finish before we yank the
-      # task out from under it — otherwise its inflight Task.Supervised
-      # preload work outlives the test pid and orphans a sandbox
-      # connection, crashing the next test in the file.
-      Process.sleep(150)
+      # Let the router's :dispatch tick finish before we yank the task out
+      # from under it — otherwise its in-flight Repo work outlives the test
+      # pid and orphans a sandbox connection, crashing the next test in the
+      # file. `current_status/1` is the exact barrier for that: `init/1`
+      # enqueues `:dispatch` before `start_assignment/2` returns, and a pure
+      # `GenServer.call` is answered strictly after every message already in
+      # the mailbox is handled.
+      assert %{task_id: _} = TaskRouter.current_status(task.id)
 
       assert {:ok, _} = Tasks.soft_delete_task(task)
 
-      # Wait for the router pid to actually go DOWN before exiting.
-      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 1_000
-      Process.sleep(100)
-
-      refute TaskRouterWatcher.router_running?(task.id),
-             "soft_delete_task/1 must stop the TaskRouter inline, not wait on reconcile"
+      # `soft_delete_task/1` must stop the router INLINE, not leave it for the
+      # reconcile sweep. The sweep is on a 5-minute timer, so nothing this
+      # bounded poll can observe is attributable to it.
+      assert_router_stopped(pid, task.id)
     end
 
     test "transition to 'cancelled' stops the running router inline", %{project: project} do
@@ -444,21 +451,17 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       }
 
       {:ok, pid} = TaskRouterSupervisor.start_assignment(planning_task.id, fake_assignee)
-      ref = Process.monitor(pid)
       assert TaskRouterWatcher.router_running?(planning_task.id) == true
 
-      # See note in soft_delete test above — let the router's async
-      # :dispatch tick finish before yanking the task.
-      Process.sleep(150)
+      # See note in soft_delete test above — drain the router's :dispatch tick
+      # before yanking the task.
+      assert %{task_id: _} = TaskRouter.current_status(planning_task.id)
 
       assert {:ok, cancelled} = Tasks.transition_task_status(planning_task, "cancelled")
       assert cancelled.status == "cancelled"
 
-      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 1_000
-      Process.sleep(100)
-
-      refute TaskRouterWatcher.router_running?(planning_task.id),
-             "transition to 'cancelled' must stop the TaskRouter inline"
+      # Inline, not on the 5-minute reconcile sweep.
+      assert_router_stopped(pid, planning_task.id)
     end
 
     test "non-cancellation transitions leave the router alone", %{task: task} do
@@ -469,14 +472,20 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       }
 
       {:ok, pid} = TaskRouterSupervisor.start_assignment(task.id, fake_assignee)
-      ref = Process.monitor(pid)
       assert TaskRouterWatcher.router_running?(task.id) == true
 
-      # See note in soft_delete test above — let the router's async
-      # :dispatch tick finish before transitioning.
-      Process.sleep(150)
+      # See note in soft_delete test above — drain the router's :dispatch tick
+      # before transitioning.
+      assert %{task_id: _} = TaskRouter.current_status(task.id)
 
       assert {:ok, _} = Tasks.transition_task_status(task, "planning")
+
+      # The transition broadcasts `{:task_updated, ...}`; drain the watcher
+      # past it so "still running" is a statement about a watcher that has
+      # SEEN the transition, not one that has not got to it yet. Without this
+      # barrier the assertion below passes for the wrong reason — which is the
+      # vacuity a fixed sleep was hiding here too.
+      TaskRouterWatcher.sync()
 
       assert TaskRouterWatcher.router_running?(task.id) == true,
              "non-cancellation transitions must leave the router alone"
@@ -484,8 +493,7 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       # Cleanly stop and wait so we don't leak the sandbox connection
       # to the next test (see note in soft_delete test above).
       TaskRouterSupervisor.stop_assignment(task.id)
-      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 1_000
-      Process.sleep(100)
+      assert_router_stopped(pid, task.id)
     end
   end
 
@@ -515,7 +523,7 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
   end
 
   # Wait for a router to actually die, rather than sleeping a magic number and
-  # hoping (task 019fa06a).
+  # hoping (tasks 019fa06a + 019fa003).
   #
   # `TaskRouter` now traps exits, so a supervisor-driven stop runs `terminate/2`
   # — which does real DB work (`ExecutionSpace.post_log/2` + `archive/1`) before
@@ -523,9 +531,35 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
   # when the router was killed outright, and the fixed `Process.sleep(100)` /
   # `Process.sleep(300)` these call sites used became marginal under load
   # (measured: 5 of 10 runs failing here, vs 2 of 10 before the trap_exit
-  # change). Monitoring the pid removes the race instead of widening the sleep,
-  # and is strictly stronger: it pins actual process death rather than Registry
-  # bookkeeping, and still fails if the router never stops at all.
+  # change). Monitoring the pid removes the race instead of widening the sleep.
+  #
+  # Two halves, and both are load-bearing:
+  #
+  #   1. A monitor + `:DOWN`. This pins actual process death. It is exact —
+  #      there is no timing guess in it — and it still fails loudly if the
+  #      router never stops at all.
+  #   2. A poll on `router_running?/1`. This one CANNOT be replaced by a
+  #      barrier: `router_running?/1` is a `Registry.lookup`, and the Registry
+  #      unregisters off its OWN independent monitor of the router. Our `:DOWN`
+  #      and the Registry's are unordered messages, so the registry entry
+  #      routinely outlives the process by a scheduler hop. Asserting once
+  #      immediately after `:DOWN` is itself a race.
+  #
+  # The generalisation, worth carrying past this file: a `:DOWN` means the
+  # process died, NOT that every registry, ETS table or supervisor bookkeeping
+  # keyed on it has caught up. Anything reading derived state after a death
+  # must poll.
+  #
+  # `Process.monitor/1` on an already-dead pid delivers `:DOWN` with reason
+  # `:noproc` immediately, so this is safe to call after the router has gone.
+  #
+  # Merge note (task 019fa121): task 019fa06a (commit f1d39849) and task
+  # 019fa003 arrived at this same monitor+poll shape independently. Both sides
+  # are kept: 019fa06a's trap_exit rationale above, and 019fa003's body, which
+  # is expressed on the shared `Platform.AsyncAssertions.eventually/3` so there
+  # is one polling idiom in the tree rather than two. 019fa06a's local
+  # `wait_until_unregistered/2` (its own `Process.sleep(10)` poll loop) is
+  # dropped as the duplicate idiom; it had no other callers.
   defp assert_router_stopped(pid, task_id, timeout \\ 5_000) do
     ref = Process.monitor(pid)
 
@@ -534,30 +568,27 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
     after
       timeout ->
         Process.demonitor(ref, [:flush])
-        flunk("router for task #{task_id} was still alive after #{timeout}ms")
+
+        flunk("""
+        Router #{inspect(pid)} for task #{task_id} was still alive after #{timeout}ms.
+
+        Global state for that task right now:
+          Registry.lookup/2:  #{inspect(Registry.lookup(Platform.Orchestration.Registry, task_id))}
+          Process.info/2:     #{inspect(Process.info(pid, [:status, :message_queue_len, :current_function]))}
+        """)
     end
 
-    # `router_running?/1` is a `Registry.lookup`, and the Registry unregisters
-    # off its OWN monitor of the router. Our `:DOWN` and the Registry's are
-    # independent messages with no ordering guarantee, so the registry entry
-    # routinely outlives the process by a scheduler hop. Poll rather than
-    # assert once — this is bookkeeping catching up, not the router refusing to
-    # die (the `:DOWN` above already proved it died).
-    assert wait_until_unregistered(task_id, timeout),
-           "router process for task #{task_id} exited but its Registry entry never cleared"
-  end
+    case eventually(fn -> TaskRouterWatcher.router_running?(task_id) == false end, timeout) do
+      {:ok, _} ->
+        :ok
 
-  defp wait_until_unregistered(task_id, remaining_ms) do
-    cond do
-      TaskRouterWatcher.router_running?(task_id) == false ->
-        true
+      {:timeout, _} ->
+        flunk("""
+        Router process #{inspect(pid)} for task #{task_id} exited, but its Registry entry \
+        never cleared within #{timeout}ms.
 
-      remaining_ms <= 0 ->
-        false
-
-      true ->
-        Process.sleep(10)
-        wait_until_unregistered(task_id, remaining_ms - 10)
+        Registry.lookup/2: #{inspect(Registry.lookup(Platform.Orchestration.Registry, task_id))}
+        """)
     end
   end
 

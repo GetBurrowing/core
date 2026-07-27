@@ -1,3 +1,157 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SLEEP TAXONOMY — task 019fa121 stage 1 (baseline recorded 2026-07-27),
+# closed out at stage 5 and reconciled against main after the merge. THIS FILE
+# CONTAINS NO SYNCHRONISATION SLEEPS. It contains exactly TWO fixed-sleep call
+# sites, both in "a router restart loop cannot renew the deadline", both
+# annotated, and both there because elapsed wall clock is the SUBJECT of that
+# test's assertion rather than a way of waiting for something. The guard at the
+# bottom of the file enforces exactly that: zero unannotated sites, and no more
+# than two annotated ones. `grep -c` for the forbidden call over this file
+# returns 2 — the prose still never spells it, so a reviewer's plain grep lands
+# on the two real sites and nothing else.
+#
+# POST-MERGE RECONCILIATION (2026-07-27). Between the branch point and the
+# merge, main added 8 sleeps to this file across 791ee28e, 816f98d8, 9ca73770
+# and d5ac3d3b; git correctly took both our 116 deletions and their additions,
+# leaving 16 net-new sites the guard then failed on. Thirteen were ordinary
+# synchronisation and were converted the same way as the original 116 (11
+# deletions where the following `current_status/1` or `:sys.get_state/1` was
+# already the barrier, 2 `sync_router/2`). One — `:2185` — was an ABSENCE
+# assertion, the worst of the three shapes and the one the guard most needed to
+# catch. Two were the measurement described above.
+#
+# At the branch point this file synchronised on 116 fixed sleeps
+# totalling 11.125s of pure sleep per run (45x50ms, 27x100ms, 26x150ms,
+# 10x75ms, 5x200ms, 2x250ms, 1x25ms) across 66 tests in 19 describe blocks. A
+# fixed sleep is a guess in BOTH directions: too short races the router, too
+# long hides a regression behind wall-clock padding. Stages 2-5 removed all
+# 116: 73 straight DELETIONS (the assertion that followed was already a
+# barrier), 43 CONVERSIONS to `sync_router/2`, and — deliberately — 0 converted
+# to polling. No site in this file needed `assert_eventually/3`, because at
+# every one of them the observable is written synchronously inside the router's
+# own handler. If you cannot NAME the other process that owns the effect you
+# are waiting on, you want the barrier, not a poll.
+#
+# WHY A BARRIER IS SOUND HERE (verified against origin/main @ bf12620c)
+#
+# The actor in this file is the per-task `TaskRouter` GenServer, started
+# directly 64 times, so `TaskRouterWatcher.sync/0` is the WRONG barrier at
+# almost every site. There is now exactly ONE exception, and it arrived with
+# the merge: at `:2185` the claim under test is that the watcher does not start
+# a router at all, so the watcher IS the actor and `sync_router/2` cannot even
+# be spelled — there is no per-task router to call. (This paragraph previously
+# said the watcher is NEVER an actor here. That was true of the 116 original
+# sites and is no longer true of the file.)
+#
+# Three facts make `broadcast -> barrier -> assert` a happens-before chain:
+#
+#   1. `Phoenix.PubSub.broadcast/4` dispatches to local subscribers IN THE
+#      CALLING PROCESS — `deps/phoenix_pubsub/lib/phoenix/pubsub.ex:234`,
+#      `with :ok <- adapter.broadcast(...) do dispatch(pubsub, :none, ...) end`.
+#      So when `Tasks.broadcast_board/1` (lib/platform/tasks.ex:3611) returns,
+#      the message is ALREADY in the router's mailbox. The router subscribes at
+#      `task_router.ex:136`.
+#   2. `TaskRouter` spawns nothing. The only `spawn|Task.start|Task.async` hit
+#      in `task_router.ex` is a string literal at :1284. Every side effect of a
+#      `handle_info` therefore completes before the next message is picked up.
+#   3. `LeaseManager` mutators are synchronous `GenServer.call`s
+#      (lease_manager.ex:158/178/216/229/242/253) and `get/1` is a direct
+#      `:ets.lookup` (:263). An ETS row read after the barrier is already
+#      written.
+#
+# Therefore `TaskRouter.current_status/1` — a pure, side-effect-free
+# `GenServer.call` (task_router.ex:124 public, :267 handler, returns state and
+# nothing else) — is a COMPLETE mailbox barrier for the per-task router. This
+# file already calls it 56 times.
+#
+# THE TAXONOMY (all 116 sites classified; none unclassified)
+#
+#   (A) MAILBOX BARRIER — 88 sites, 8,175ms. The sleep waits for the per-task
+#       router to drain a message the test just enqueued. A barrier replaces it
+#       exactly; most are pure deletions.
+#         A/status-read      44 sites 4,050ms  sleep is IMMEDIATELY followed by
+#                                              `current_status/1` — the read is
+#                                              itself the barrier. DELETE.
+#         A/sequencing       19 sites 1,075ms  sleep separates two setup events.
+#         A/inter-send       12 sites 1,750ms  sleep separates two `send(pid, ..)`
+#                                              calls; edge-triggered ordering is
+#                                              under test, so barrier after EACH.
+#         A/mailbox-assert   10 sites   850ms  precedes assert_received /
+#                                              refute_received. Barrier first.
+#         A/blocking-receive  3 sites   450ms  precedes assert_receive /
+#                                              refute_receive, which ALREADY
+#                                              block with a timeout. DELETE.
+#
+#   (B) CROSS-PROCESS EFFECT — 28 sites, 2,950ms. The assertion reads state
+#       outside the router process. Per facts 2 and 3 the effect is written
+#       synchronously inside the handler, so the barrier still suffices; reach
+#       for polling only where that cannot be shown.
+#         B/repo-read        12 sites 1,300ms  Repo.get! / get_task_detail /
+#                                              RuntimeSupervision lease reads.
+#         B/lease-ets         8 sites   550ms  LeaseManager.get/1 (ETS).
+#         B/space-messages    6 sites   900ms  list_messages_with_participants,
+#                                              plan_gate_logs, stage_gate_logs.
+#         B/proc-liveness     2 sites   200ms  Process.alive?/1 — a reply to
+#                                              `current_status/1` proves this.
+#
+#   (C) GENUINELY TIMER-DEPENDENT — 0 sites. This is a real finding, not an
+#       omission. The router does schedule timers (`Process.send_after` for
+#       `:check_no_ack`, `:check_safety_net`, `:dispatch` retry at
+#       task_router.ex:470/509/1025/1157/1161), but NO test in this file waits
+#       for one to elapse: every test forces the tick with an explicit
+#       `send(pid, :check_no_ack)`. Even the silence-window tests avoid it —
+#       :893 installs a 400ms silence deliberately far enough out that it never
+#       lapses mid-test, and the "silence lapses" test at :936 rewrites the
+#       timestamp into the past instead of waiting. So all 116 sleeps are
+#       removable in principle; none encodes a real time dependency.
+#
+# PREFER THE BARRIER OVER POLLING. A poll with a generous timeout is weaker
+# evidence than a happens-before proof, and swapping sleep-shaped false
+# confidence for poll-shaped false confidence is the failure this conversion
+# exists to prevent.
+#
+# ON `assert_receive` DEADLINES (added at the task-level review, 019fa121).
+# A fixed `assert_receive` deadline is the SAME CLASS OF GUESS as a fixed
+# sleep — just a SOUND one. The difference is that it returns THE MOMENT the
+# message arrives, so it is only ever wrong in one direction (too short races
+# a slow scheduler) instead of both; it never burns the full wait on the happy
+# path, so it cannot pad a regression behind wall-clock. That is why the
+# conversion left every `assert_receive` in place rather than replacing them.
+# But the literal still has to be chosen, and this file's CONVENTION IS
+# `1_000`. At the review, 33 sites already sat at 1_000 and all held under
+# deliberate contention, while the two sites still on the pre-existing 500 —
+# `:assignee_unresolvable` telemetry and the stage-C attention broadcast in
+# `describe "stage-scoped blocker handling"` — flaked at ~14%. Both were
+# raised to 1_000; neither literal was introduced by this conversion (the
+# diff at both sites removes only the trailing fixed sleep). Use a deadline
+# where the effect you await is genuinely a LATER message that no preceding
+# barrier covers, and when you do, write `1_000`.
+#
+# COUNTING NOTE for the zero-sleep guard: a naive `grep -c` over a whole file
+# counts PROSE about the forbidden call alongside real call sites — at the
+# branch point this header alone pushed the count from 116 to 117. The guard
+# therefore strips comment lines before matching, and carries positive controls
+# proving the stripping did not reduce the buffer to nothing, since a guard
+# that greps an accidentally-empty buffer passes for the wrong reason. The
+# prose here is kept unspelled as well, so the plain `grep -c` a reviewer
+# actually types agrees with the guard: it returns 2, and both hits are the
+# annotated measurement. See `describe "zero-sleep guard"`.
+#
+# ON THE ANNOTATION, briefly, because the summary above is where a reader will
+# form their impression of it: it is a marker plus a written justification ON
+# the call line, which the guard parses and requires to be substantive, and
+# whose total count is pinned. It is deliberately NOT a list of exempt lines or
+# test names. It covers ONE category — the sleep whose elapsed time is itself
+# the subject of an assertion — and absence assertions are explicitly outside
+# it. The full argument, including why absence assertions are the opposite case
+# rather than a similar one, is in the comment above the guard's describe
+# block; do not extend the hatch without reading it.
+#
+# Measure with `scripts/measure-task-router-flake.sh`, which records the
+# failing SET rather than a count — at seed 33 the 019fa003 stage 2 measurement
+# saw five failures on BOTH the fixed and control trees with only partly
+# overlapping membership, which a count-only comparison reports as "no change".
+# ─────────────────────────────────────────────────────────────────────────────
 defmodule Platform.Orchestration.TaskRouterTest do
   use Platform.DataCase, async: false
 
@@ -8,7 +162,8 @@ defmodule Platform.Orchestration.TaskRouterTest do
     ExecutionSpace,
     LeaseManager,
     RuntimeSupervision,
-    TaskRouter
+    TaskRouter,
+    TaskRouterWatcher
   }
 
   alias Platform.Tasks
@@ -101,9 +256,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
     test "returns router status after dispatch", %{task: task, assignee: assignee} do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
 
-      # Allow dispatch to process
-      Process.sleep(50)
-
       status = TaskRouter.current_status(task.id)
 
       assert status.task_id == task.id
@@ -113,8 +265,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
     test "includes execution_space_id in status", %{task: task, assignee: assignee} do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-
-      Process.sleep(50)
 
       status = TaskRouter.current_status(task.id)
       assert is_binary(status.execution_space_id)
@@ -129,13 +279,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
   describe "PubSub event handling" do
     test "tracks task_updated last_evidence_at for our task", %{task: task, assignee: assignee} do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
 
       # Simulate a board event for our task
       updated_task = Tasks.get_task_detail(task.id)
       Tasks.broadcast_board({:task_updated, updated_task})
-
-      Process.sleep(50)
 
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
@@ -144,12 +291,9 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
     test "updates stage on stage_transitioned", %{task: task, assignee: assignee, stage: stage} do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
 
       # Simulate stage transition
       Tasks.broadcast_board({:stage_transitioned, stage})
-
-      Process.sleep(50)
 
       status = TaskRouter.current_status(task.id)
       assert status.current_stage_id == stage.id
@@ -185,13 +329,11 @@ defmodule Platform.Orchestration.TaskRouterTest do
         Tasks.create_validation(%{stage_id: stage_b.id, kind: "test_pass"})
 
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
 
       # Prime router state so `current_stage_id` matches the (still running)
       # stage A — this is the state the router is in right before the
       # engine writes the passed→running transition pair.
       Tasks.broadcast_board({:stage_transitioned, running_stage_a})
-      Process.sleep(50)
 
       assert TaskRouter.current_status(task.id).current_stage_id == stage_a.id
 
@@ -210,7 +352,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
         |> Platform.Repo.update!()
 
       Tasks.broadcast_board({:stage_transitioned, passed_stage_a})
-      Process.sleep(100)
 
       status = TaskRouter.current_status(task.id)
       assert status.current_stage_id == stage_b.id
@@ -230,10 +371,12 @@ defmodule Platform.Orchestration.TaskRouterTest do
         |> Platform.Repo.update!()
 
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
 
       Tasks.broadcast_board({:stage_transitioned, running_stage_a})
-      Process.sleep(50)
+      # Barrier, not a read: the test mutates stage A's row next, so the
+      # router must have folded the `running` broadcast before the row
+      # flips to `passed` underneath it.
+      :ok = sync_router(task.id)
 
       passed_stage_a =
         running_stage_a
@@ -241,7 +384,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
         |> Platform.Repo.update!()
 
       Tasks.broadcast_board({:stage_transitioned, passed_stage_a})
-      Process.sleep(100)
 
       status = TaskRouter.current_status(task.id)
       assert status.current_stage_id == nil
@@ -249,7 +391,9 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
     test "tracks runtime events as liveness evidence", %{task: task, assignee: assignee} do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
+      # Barrier: `record_runtime_event/1` upserts the lease row from THIS
+      # process, so the initial `:dispatch` must be fully handled first.
+      :ok = sync_router(task.id)
 
       {:ok, _event} =
         Platform.Orchestration.record_runtime_event(%{
@@ -258,8 +402,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
           "runtime_id" => assignee.id,
           "event_type" => "execution.heartbeat"
         })
-
-      Process.sleep(50)
 
       status = TaskRouter.current_status(task.id)
       assert status.lease_status == "active"
@@ -278,7 +420,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
         })
 
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(25)
 
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
@@ -328,7 +469,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
         })
 
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(100)
 
       status = TaskRouter.current_status(task.id)
       assert status.status == :waiting_human
@@ -365,7 +505,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       stage: stage
     } do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
+      :ok = sync_router(task.id)
 
       {:ok, task} = Tasks.transition_task(task, "planning")
       {:ok, _task} = Tasks.transition_task(task, "in_progress")
@@ -376,7 +516,9 @@ defmodule Platform.Orchestration.TaskRouterTest do
         |> Platform.Repo.update!()
 
       Tasks.broadcast_board({:plan_updated, approved_plan})
-      Process.sleep(100)
+      # Barrier: the stage row below is written inside the router's
+      # `{:plan_updated, ...}` handler; `Repo.get!/2` does not order against it.
+      :ok = sync_router(task.id)
 
       started_stage = Platform.Repo.get!(Platform.Tasks.Stage, stage.id)
       assert started_stage.status == "running"
@@ -403,7 +545,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
            plan: plan
          } do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
+      :ok = sync_router(task.id)
 
       {:ok, task} = Tasks.transition_task(task, "planning")
       {:ok, _task} = Tasks.transition_task(task, "in_progress")
@@ -425,7 +567,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
         |> Platform.Repo.update!()
 
       Tasks.broadcast_board({:stage_transitioned, running_review_stage})
-      Process.sleep(100)
+      :ok = sync_router(task.id)
 
       # Bug #7 (task 019f70ff-55c2) regression: TaskRouter must NOT auto-flip
       # a task to in_review just because a manual_approval-only stage went
@@ -445,7 +587,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       plan: plan
     } do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
+      :ok = sync_router(task.id)
 
       {:ok, task} = Tasks.transition_task(task, "planning")
       {:ok, task} = Tasks.transition_task(task, "in_progress")
@@ -460,7 +602,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
         |> Platform.Repo.update!()
 
       Tasks.broadcast_board({:stage_transitioned, failed_stage})
-      Process.sleep(100)
+      :ok = sync_router(task.id)
 
       updated_task = Tasks.get_task_detail(task.id)
       assert updated_task.status == "in_progress"
@@ -480,14 +622,11 @@ defmodule Platform.Orchestration.TaskRouterTest do
       project: project
     } do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
 
       # Create a different task and broadcast its update
       {:ok, other_task} = Tasks.create_task(%{project_id: project.id, title: "Other"})
       other_detail = Tasks.get_task_detail(other_task.id)
       Tasks.broadcast_board({:task_updated, other_detail})
-
-      Process.sleep(50)
 
       status = TaskRouter.current_status(task.id)
       # last_evidence_at should be nil since we only got the unrelated event
@@ -499,9 +638,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
   describe "dispatch" do
     test "transitions to :running after init dispatch", %{task: task, assignee: assignee} do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-
-      # Allow dispatch message to be processed
-      Process.sleep(100)
 
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
@@ -560,7 +696,11 @@ defmodule Platform.Orchestration.TaskRouterTest do
                      },
                      1_000
 
-      Process.sleep(50)
+      # Barrier, not a wait: the attention broadcast is emitted partway through
+      # `handle_info(:dispatch, ...)`, so receiving it proves nothing about
+      # `record_dispatch/4` having run. `sync_router/2` is answered only after
+      # that handler returns.
+      :ok = sync_router(task.id)
 
       # LeaseManager must have a row for this task after successful dispatch.
       assert %{
@@ -589,7 +729,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       }
 
       Tasks.broadcast_board({:runtime_event, acked_event})
-      Process.sleep(50)
+      :ok = sync_router(task.id)
 
       assert %{ack_at: %DateTime{}} = LeaseManager.get(task.id)
 
@@ -599,14 +739,22 @@ defmodule Platform.Orchestration.TaskRouterTest do
       before_msgs = length(ExecutionSpace.list_messages_with_participants(space.id))
 
       send(pid, :check_no_ack)
-      Process.sleep(75)
 
+      # No barrier call needed: `current_status/1` IS the barrier. It is a pure
+      # `GenServer.call`, so it cannot be answered until `:check_no_ack` has
+      # been handled — the sleep that used to sit here was already dead weight.
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
 
       lease_after = LeaseManager.get(task.id)
       refute lease_after.no_ack_fired?
 
+      # A plain read, deliberately NOT `assert_eventually/3`. The blocker post
+      # is written by the router inside the `:check_no_ack` handler and the
+      # router spawns nothing, so it is committed before the barrier above
+      # returned. There is no third process to poll for, and polling here would
+      # trade a happens-before proof for a timeout that always expires — the
+      # refute below is the assertion that would silently go vacuous.
       after_msgs = ExecutionSpace.list_messages_with_participants(space.id)
       new_msgs = Enum.drop(after_msgs, before_msgs) |> Enum.map(& &1.content)
 
@@ -628,14 +776,18 @@ defmodule Platform.Orchestration.TaskRouterTest do
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
 
       assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
-      Process.sleep(50)
+      :ok = sync_router(task.id)
 
       # No ack ever arrives — force `:check_no_ack` to fire NOW.
       space = ExecutionSpace.find_by_task_id(task.id)
       before_msgs = length(ExecutionSpace.list_messages_with_participants(space.id))
 
       send(pid, :check_no_ack)
-      Process.sleep(100)
+
+      # The barrier must land BEFORE the mailbox assertion, not after it.
+      # `assert_received/1` does not block, so without this it reads a mailbox
+      # the router has not written to yet.
+      :ok = sync_router(task.id)
 
       # PubSub must have carried ONE `execution.no_ack_timeout` on
       # `tasks:board` (in `{:runtime_event, event}` shape).
@@ -661,7 +813,12 @@ defmodule Platform.Orchestration.TaskRouterTest do
       before_msgs2 = length(ExecutionSpace.list_messages_with_participants(space.id))
 
       send(pid, :check_no_ack)
-      Process.sleep(75)
+
+      # The load-bearing barrier in this file. This `refute_received` is only
+      # evidence of idempotency if the router has *finished* handling the
+      # second `:check_no_ack` — otherwise it refutes an empty mailbox and
+      # passes for the wrong reason no matter what the router does.
+      :ok = sync_router(task.id)
 
       # Refute a second no_ack_timeout event on PubSub.
       refute_received {:runtime_event, %{event_type: "execution.no_ack_timeout"}}
@@ -678,7 +835,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       |> Platform.Repo.update!()
 
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(75)
+      :ok = sync_router(task.id)
 
       # A progress event lands mid-flight → safety_net_at moved forward.
       progress_event = %{
@@ -694,7 +851,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       }
 
       Tasks.broadcast_board({:runtime_event, progress_event})
-      Process.sleep(50)
+      :ok = sync_router(task.id)
 
       lease_after_progress = LeaseManager.get(task.id)
       assert %DateTime{} = lease_after_progress.safety_net_at
@@ -711,7 +868,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")
 
       send(pid, :check_safety_net)
-      Process.sleep(75)
+      :ok = sync_router(task.id)
 
       refute_received {:runtime_event, %{event_type: "execution.safety_net_fired"}}
 
@@ -727,7 +884,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       |> Platform.Repo.update!()
 
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(75)
+      :ok = sync_router(task.id)
 
       # Force safety_net_at into the past by re-writing the LeaseManager row.
       # (Real-world equivalent: 90 minutes elapsed with no progress.)
@@ -743,7 +900,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       before_msgs = length(ExecutionSpace.list_messages_with_participants(space.id))
 
       send(pid, :check_safety_net)
-      Process.sleep(100)
+      :ok = sync_router(task.id)
 
       assert_received {:runtime_event, %{event_type: "execution.safety_net_fired"} = event}
       assert event.task_id == task.id
@@ -758,7 +915,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       # Second call is idempotent.
       send(pid, :check_safety_net)
-      Process.sleep(75)
+      :ok = sync_router(task.id)
       refute_received {:runtime_event, %{event_type: "execution.safety_net_fired"}}
     end
 
@@ -787,7 +944,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
         Tasks.create_validation(%{stage_id: ma_stage.id, kind: "manual_approval"})
 
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(100)
+      :ok = sync_router(task.id)
 
       # The pending_review_request suppression path would fire waiting_human
       # here IF a review request existed. Since none does, this is the
@@ -853,7 +1010,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
       assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
-      Process.sleep(100)
+      :ok = sync_router(task.id)
 
       # Install a short silence — 400ms in the future — so the reschedule
       # target is reachable within test time budget.
@@ -868,7 +1025,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # Force `:check_no_ack` NOW — the silence-honoring branch must
       # reschedule via `Process.send_after` and return without firing.
       send(pid, :check_no_ack)
-      Process.sleep(75)
+      :ok = sync_router(task.id)
 
       # Silenced: no broadcast on tasks:board.
       refute_received {:runtime_event, %{event_type: "execution.no_ack_timeout"}}
@@ -896,7 +1053,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       |> Platform.Repo.update!()
 
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(100)
+      :ok = sync_router(task.id)
 
       # Install a silence and immediately rewrite it into the past so the
       # `DateTime.compare(now, until) == :lt` guard is false — this is the
@@ -912,7 +1069,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       )
 
       send(pid, :check_no_ack)
-      Process.sleep(100)
+      :ok = sync_router(task.id)
 
       # Silence lapsed → normal fire path: broadcast + mark fired + stall.
       assert_received {:runtime_event, %{event_type: "execution.no_ack_timeout"} = event}
@@ -933,7 +1090,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       |> Platform.Repo.update!()
 
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(100)
+      :ok = sync_router(task.id)
 
       # Ack lands first; then a silence is installed. `:check_no_ack` must
       # match the earlier `ack_at: %DateTime{}` clause before ever
@@ -945,7 +1102,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert %{ack_at: %DateTime{}, silenced_until: %DateTime{}} = LeaseManager.get(task.id)
 
       send(pid, :check_no_ack)
-      Process.sleep(75)
+      :ok = sync_router(task.id)
 
       refute_received {:runtime_event, %{event_type: "execution.no_ack_timeout"}}
       assert %{no_ack_fired?: false} = LeaseManager.get(task.id)
@@ -960,12 +1117,12 @@ defmodule Platform.Orchestration.TaskRouterTest do
       |> Platform.Repo.update!()
 
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(100)
+      :ok = sync_router(task.id)
 
       # First :check_no_ack fires normally (no silence, no ack) → sets
       # no_ack_fired?: true.
       send(pid, :check_no_ack)
-      Process.sleep(100)
+      :ok = sync_router(task.id)
       assert_received {:runtime_event, %{event_type: "execution.no_ack_timeout"}}
       assert %{no_ack_fired?: true} = LeaseManager.get(task.id)
 
@@ -977,7 +1134,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       :ok = LeaseManager.silence(task.id, until, "post-fire silence")
 
       send(pid, :check_no_ack)
-      Process.sleep(75)
+      :ok = sync_router(task.id)
 
       # No second broadcast; no state change.
       refute_received {:runtime_event, %{event_type: "execution.no_ack_timeout"}}
@@ -990,7 +1147,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assignee: assignee
     } do
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
+      :ok = sync_router(task.id)
 
       assert Process.alive?(pid)
 
@@ -1009,14 +1166,20 @@ defmodule Platform.Orchestration.TaskRouterTest do
       |> Platform.Repo.update!()
 
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(75)
+      # Barrier: the lease row below is written by `record_dispatch/4`
+      # inside the `:dispatch` handler, and `get/1` is a bare `:ets.lookup`.
+      :ok = sync_router(task.id)
 
       # Post-dispatch there should be a lease row for this task.
       assert %{} = LeaseManager.get(task.id)
 
       :ok = TaskRouter.stop(task.id)
-      Process.sleep(50)
 
+      # No barrier here, and none is needed: `TaskRouter.stop/1` is
+      # `GenServer.stop/2`, which returns only after `terminate/2` has run,
+      # and `terminate/2` clears the lease via `LeaseManager.clear/1` — a
+      # direct `:ets.delete` in the terminating router process, not a
+      # message. The row is already gone when `stop/1` returns.
       assert LeaseManager.get(task.id) == nil
     end
   end
@@ -1049,8 +1212,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
             "expected" => "z"
           }
         })
-
-      Process.sleep(100)
 
       # Router must NOT be in :waiting_human state — only manual_approval +
       # pending review_request flips it.
@@ -1096,23 +1257,33 @@ defmodule Platform.Orchestration.TaskRouterTest do
           items: [%{label: "Solo check"}]
         })
 
-      # Wait for the :review_request_pending broadcast to be processed
-      Process.sleep(100)
-
-      # Status should have flipped to :waiting_human via the new handler
+      # No barrier needed: `create_review_request/1` broadcasts
+      # `{:review_request_pending, ...}` from THIS process
+      # (review_requests.ex:114, after its transaction commits), so the message
+      # is already in the router's mailbox when the call below is enqueued
+      # behind it. `current_status/1` cannot be answered until the broadcast
+      # has been handled — the status read IS the barrier.
       status_before_dispatch = TaskRouter.current_status(task.id)
       assert status_before_dispatch.status == :waiting_human
 
       # Now trigger an explicit :dispatch — it must be suppressed
       send(pid, :dispatch)
 
+      # Barrier, not a wait. The stage-level suppression branch of the
+      # `:dispatch` handler (task_router.ex:351) parks and returns WITHOUT a
+      # `send(self(), :dispatch)`, so ONE barrier fully drains the injected
+      # tick. That is what makes the refutation below an assertion about a
+      # SETTLED router rather than a race — "suppressed" and "not dispatched
+      # yet" are indistinguishable to a `refute_receive` that starts before
+      # the handler has run, and the fixed sleep here could only ever make
+      # that distinction probable.
+      :ok = sync_router(task.id)
+
       refute_receive %Phoenix.Socket.Broadcast{
                        event: "attention",
                        payload: %{signal: %{reason: "task_assigned"}}
                      },
                      400
-
-      Process.sleep(50)
 
       status = TaskRouter.current_status(task.id)
       assert status.status == :waiting_human
@@ -1124,6 +1295,50 @@ defmodule Platform.Orchestration.TaskRouterTest do
         Enum.filter(new_messages, &String.contains?(&1, "awaiting human review"))
 
       assert length(awaiting_logs) >= 1
+    end
+
+    # POSITIVE CONTROL for the refutation in the test above (task 019fa121
+    # stage 4). That test proves suppression by ABSENCE: it injects a
+    # `:dispatch`, syncs, and refutes the attention broadcast. An absence is
+    # only evidence if the identical sequence — same setup, same injection,
+    # same barrier, same mailbox assertion — is known to PRODUCE the broadcast
+    # when the gate is not open. Otherwise converting the sleep to a barrier
+    # just turns a slow vacuous test into a fast one, and a router that had
+    # stopped dispatching for ANY reason (a broken assignee, a missing
+    # execution space, an exception swallowed in `do_dispatch/2`) would keep
+    # the suppression test green forever.
+    #
+    # This is byte-for-byte the setup above with the two `create_validation` /
+    # `create_review_request` lines removed, so the ONLY difference between
+    # green here and green there is the open review request.
+    test "control: the same injected :dispatch DOES broadcast when no review request is open",
+         %{task: task, assignee: assignee} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      send(pid, :dispatch)
+      :ok = sync_router(task.id)
+
+      # Non-blocking: after the barrier the router has finished handling the
+      # injected tick, and `do_dispatch/2` broadcasts from inside that handler
+      # — router -> test, the same sender/receiver pair as the call reply, so
+      # the broadcast is already ahead of the reply in this process's mailbox.
+      assert_received %Phoenix.Socket.Broadcast{
+        event: "attention",
+        payload: %{signal: %{reason: "task_assigned"}}
+      }
+
+      refute TaskRouter.current_status(task.id).status == :waiting_human
     end
 
     test "approving all items wakes the router and clears :waiting_human", %{
@@ -1153,11 +1368,15 @@ defmodule Platform.Orchestration.TaskRouterTest do
           items: [%{label: "UI"}]
         })
 
-      Process.sleep(100)
+      # Both reads below are their own barrier: the `{:review_request_pending}`
+      # and `{:review_request_resolved}` broadcasts are emitted from THIS
+      # process (review_requests.ex:114 and :317) before the corresponding
+      # `create_review_request/1` / `approve_item/2` call returns, and the
+      # `:passed` branch of the resolved handler does not `send(self(),
+      # :dispatch)` — so a single call drains each of them completely.
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
       {:ok, _} = Platform.Tasks.ReviewRequests.approve_item(hd(request.items).id, "rowan")
-      Process.sleep(150)
 
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
@@ -1190,20 +1409,26 @@ defmodule Platform.Orchestration.TaskRouterTest do
           items: [%{label: "UI"}]
         })
 
-      Process.sleep(100)
+      # The status read is the barrier for the `{:review_request_pending}`
+      # broadcast `create_review_request/1` already emitted from this process.
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
       {:ok, _} =
         Platform.Tasks.ReviewRequests.reject_item(hd(request.items).id, "rowan", "Needs work")
 
-      # Expect a fresh dispatch (task_assigned) after rejection
+      # Expect a fresh dispatch (task_assigned) after rejection. This one keeps
+      # a BLOCKING receive rather than a barrier: the `:failed` branch of the
+      # `{:review_request_resolved}` handler re-dispatches through
+      # `send(self(), :dispatch)` (task_router.ex:877), so the broadcast is
+      # produced by a SECOND message that a single barrier does not cover.
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "attention",
                        payload: %{signal: %{reason: "task_assigned"}}
                      },
                      1_500
 
-      Process.sleep(50)
+      # ...and the status read after it is the barrier for that second
+      # message: the call is answered only once `do_dispatch/2` has returned.
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
     end
@@ -1288,6 +1513,20 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert String.contains?(hd(init_logs), "plan is awaiting human review")
 
       send(pid, :dispatch)
+      # Barrier per tick, not one at the end (task 019fa121 stage 4). What is
+      # under test is the router's PER-MESSAGE behaviour — one tick must not
+      # narrate, and the second must not narrate either — so each refutation
+      # has to be taken against a router that has finished exactly the tick
+      # that preceded it. Batching the barrier would let both ticks fold
+      # together and turn a two-tick property into a one-tick one.
+      #
+      # POSITIVE CONTROL for both refutations: "approved plan still dispatches
+      # — the plan guard is not over-broad" (:1644 in this block) runs the
+      # identical `send(pid, :dispatch)` against a router whose plan is
+      # `approved` and DOES observe the attention broadcast. Without that pair
+      # these two refutations are satisfied by any router that has stopped
+      # dispatching for any reason at all.
+      :ok = sync_router(task.id)
 
       refute_receive %Phoenix.Socket.Broadcast{
                        event: "attention",
@@ -1297,14 +1536,13 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       # Second tick — the guard must hold, and must not start narrating.
       send(pid, :dispatch)
+      :ok = sync_router(task.id)
 
       refute_receive %Phoenix.Socket.Broadcast{
                        event: "attention",
                        payload: %{signal: %{reason: "task_assigned"}}
                      },
                      400
-
-      Process.sleep(50)
 
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
@@ -1344,11 +1582,21 @@ defmodule Platform.Orchestration.TaskRouterTest do
       space = ExecutionSpace.find_by_task_id(task.id)
       baseline_count = length(ExecutionSpace.list_messages_with_participants(space.id))
 
+      # One barrier per tick. This test counts LINES across two ticks, so the
+      # two ticks must be separated for the count to mean anything: with a
+      # single barrier at the end, a router that emitted zero lines and a
+      # router that emitted one on a tick the test never separated are the
+      # same observation.
+      #
+      # POSITIVE CONTROL: ":1644 approved plan still dispatches" for the
+      # refutation, and the `assert length(logs) == 1` below is itself the
+      # positive half of this test's own pair — it fails if the router falls
+      # silent, which is the failure mode a bare refutation cannot see.
       send(pid, :dispatch)
-      Process.sleep(150)
+      :ok = sync_router(task.id)
 
       send(pid, :dispatch)
-      Process.sleep(150)
+      :ok = sync_router(task.id)
 
       refute_receive %Phoenix.Socket.Broadcast{
                        event: "attention",
@@ -1390,8 +1638,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
       pending_plan = mark_plan_pending_review(plan)
 
       # The board broadcast the router would receive from `Tasks.submit_plan/2`.
+      # No barrier needed here — the `current_status/1` read on the next line
+      # is one, and the `{:plan_updated, "pending_review"}` handler
+      # (task_router.ex:800) parks without a `send(self(), :dispatch)`.
       send(pid, {:plan_updated, pending_plan})
-      Process.sleep(150)
 
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
@@ -1402,7 +1652,13 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       # A re-broadcast of the same pending plan must not double-post.
       send(pid, {:plan_updated, pending_plan})
-      Process.sleep(150)
+      # Load-bearing barrier: unlike the first send, nothing between here and
+      # the assertion is a call to the router. `plan_gate_logs/1` reads the
+      # execution space through `Repo`, and the row it is looking for is
+      # written INSIDE the handler — so without this the assertion can observe
+      # the pre-broadcast state and pass for the wrong reason. The 150ms sleep
+      # this replaces was making exactly that guess.
+      :ok = sync_router(task.id)
 
       assert plan_gate_logs(space.id) == logs
     end
@@ -1433,7 +1689,9 @@ defmodule Platform.Orchestration.TaskRouterTest do
                      },
                      1_000
 
-      Process.sleep(50)
+      # POSITIVE CONTROL cited by the refutations at :1509, :1519 and :1579 —
+      # same injection, same assertion shape, gate closed instead of open.
+      # The `current_status/1` call is the barrier for the injected tick.
       refute TaskRouter.current_status(task.id).status == :waiting_human
     end
 
@@ -1452,6 +1710,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # Prove suppression PRECEDED resumption — otherwise a green assertion
       # below could just be the un-suppressed dispatch we were trying to stop.
       send(pid, :dispatch)
+      :ok = sync_router(task.id)
 
       refute_receive %Phoenix.Socket.Broadcast{
                        event: "attention",
@@ -1482,7 +1741,8 @@ defmodule Platform.Orchestration.TaskRouterTest do
                      },
                      2_000
 
-      Process.sleep(50)
+      # The blocking receive above already ordered against the dispatch; this
+      # call is the barrier for the handler that produced it.
       assert TaskRouter.current_status(task.id).status == :running
     end
 
@@ -1518,10 +1778,16 @@ defmodule Platform.Orchestration.TaskRouterTest do
           items: [%{label: "Solo check"}]
         })
 
-      Process.sleep(100)
+      # Barrier by status read — the `{:review_request_pending}` broadcast was
+      # emitted from this process inside `create_review_request/1`.
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
       send(pid, :dispatch)
+      # POSITIVE CONTROL for the refutation below: "pending e2e_behavior
+      # validation with an approved plan still dispatches" (:1788) injects the
+      # same `send(pid, :dispatch)` behind the same barrier with no open
+      # review request and DOES observe the attention broadcast.
+      :ok = sync_router(task.id)
 
       refute_receive %Phoenix.Socket.Broadcast{
                        event: "attention",
@@ -1529,7 +1795,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
                      },
                      400
 
-      Process.sleep(50)
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
       logs = suppression_logs_since(space.id, initial_count)
@@ -1574,8 +1839,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
           }
         })
 
-      Process.sleep(100)
-
+      # `create_validation/1` is a plain `Repo.insert` in this process — it
+      # broadcasts nothing the router subscribes to, so there was never
+      # anything for a sleep to wait on here. The injected dispatch below is
+      # ordered after it by construction.
       send(pid, :dispatch)
 
       assert_receive %Phoenix.Socket.Broadcast{
@@ -1584,7 +1851,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
                      },
                      1_000
 
-      Process.sleep(50)
+      # POSITIVE CONTROL cited by the stage-gate refutation at :1770.
       refute TaskRouter.current_status(task.id).status == :waiting_human
     end
 
@@ -1639,7 +1906,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
       send(pid, :dispatch)
-      Process.sleep(150)
 
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
@@ -1697,7 +1963,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       end)
 
       send(other_pid, :dispatch)
-      Process.sleep(150)
+      :ok = sync_router(other_task.id)
 
       other_space = ExecutionSpace.find_by_task_id(other_task.id)
       human_logs = plan_gate_logs(other_space.id)
@@ -1765,7 +2031,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
                      },
                      2_000
 
-      Process.sleep(50)
       assert TaskRouter.current_status(task.id).status == :running
 
       reloaded = Platform.Repo.get!(Platform.Tasks.Plan, gated.id)
@@ -1801,7 +2066,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       gated = plan |> mark_plan_pending_review() |> open_gate_with_deadline(60_000)
       send(pid, {:plan_updated, gated})
-      Process.sleep(150)
 
       ref = :sys.get_state(pid).architecture_deadline_ref
       assert is_reference(ref), "the plan_updated handler armed no deadline"
@@ -1841,9 +2105,21 @@ defmodule Platform.Orchestration.TaskRouterTest do
         remaining
       end
 
+      # THE TWO WAITS BELOW ARE THE MEASUREMENT, NOT A BARRIER — the only two
+      # sites in this file carrying the annotated escape hatch described in
+      # `describe "zero-sleep guard"`. Nothing is running between the restarts:
+      # `armed_delay/0` stops the router before it returns, so there is no
+      # process to synchronise with and no event to wait for. What is under
+      # test is that the persisted deadline is CONSUMED by real time spent
+      # dead, which is the `d1 - d3 >= 200` assertion below. Elapsed wall clock
+      # is the subject of that assertion, so a barrier cannot replace these:
+      # removing them makes the test measure nothing and pass on a tree where
+      # `remaining_ms` renewed a fresh window on every restart.
       d1 = armed_delay.()
+      # WALL-CLOCK-ASSERTION: elapsed real time is the subject of `d1 - d3 >= 200` below
       Process.sleep(120)
       d2 = armed_delay.()
+      # WALL-CLOCK-ASSERTION: elapsed real time is the subject of `d1 - d3 >= 200` below
       Process.sleep(120)
       d3 = armed_delay.()
 
@@ -1946,9 +2222,30 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert {:ok, approved} = Tasks.approve_plan(gated, "system")
       assert approved.status == "approved"
 
-      # `approve_plan/3` broadcasts on `tasks:board`, which wakes the
-      # singleton `TaskRouterWatcher`. It still must not start one here.
-      Process.sleep(100)
+      # `approve_plan/3` broadcasts on `tasks:board`, which wakes the singleton
+      # `TaskRouterWatcher`. It still must not start one here.
+      #
+      # THIS IS THE ONE SITE IN THIS FILE WHERE THE WATCHER IS THE ACTOR, so it
+      # is the one site where `TaskRouterWatcher.sync/0` — and not
+      # `sync_router/2` — is the right barrier. `sync_router/2` cannot even be
+      # spelled here: there is no per-task router to call, which is precisely
+      # the claim.
+      #
+      # A fixed sleep is not merely weak here, it is UNSOUND. This is an
+      # ABSENCE assertion, so it is already true before the watcher does
+      # anything at all; the sleep expiring is not evidence the watcher ran.
+      # Task 019fa003 stage 4 demonstrated the failure directly: with the
+      # watcher `:sys.suspend`ed, the sleep-based form of an absence assertion
+      # passes vacuously while the barrier form correctly fails.
+      #
+      # The barrier closes it. `Phoenix.PubSub.broadcast/4` dispatches to local
+      # subscribers in the CALLING process, so `approve_plan/3` returning means
+      # the `{:task_updated, _}` message is already in the watcher's mailbox,
+      # ahead of the `:sync` call. `evaluate_task/1` — and the
+      # `resolve_and_start/1` that would register a router — runs synchronously
+      # inside that `handle_info/2` (task_router_watcher.ex:157, :650). So when
+      # `sync/0` returns, a router that was going to be started HAS been.
+      assert TaskRouterWatcher.sync() == :ok
 
       assert Registry.lookup(Platform.Orchestration.Registry, task.id) == [],
              "approval must not have started a router for a user-assigned task"
@@ -2065,19 +2362,34 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert stage_gate_logs(space.id) == []
 
       open_stage_review_request(task, running_stage, space, "Solo check")
-      Process.sleep(200)
 
+      # Barrier by status read: `create_review_request/1` broadcast
+      # `{:review_request_pending, ...}` from this process before returning.
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
       # Three explicit dispatches — the path `TaskRouterWatcher` injects on
       # every runtime reconnect, and the one that leaked.
+      #
+      # A barrier after EACH, never one at the end. The property under test is
+      # "one line per EPISODE, not one per TICK", and a tick the router has not
+      # yet handled contributes nothing to the count — so a batched barrier
+      # would let a router that emits on every tick pass whenever the last two
+      # ticks were still queued. That is the precise way this test would go
+      # vacuous, and the 3x150ms sleep it replaces was buying the separation by
+      # guess. Neither the plan-gate nor the stage-gate suppression branch of
+      # the `:dispatch` handler re-enters via `send(self(), :dispatch)`
+      # (task_router.ex:294/351), so one barrier drains one tick exactly.
       send(pid, :dispatch)
-      Process.sleep(150)
+      :ok = sync_router(task.id)
       send(pid, :dispatch)
-      Process.sleep(150)
+      :ok = sync_router(task.id)
       send(pid, :dispatch)
-      Process.sleep(150)
+      :ok = sync_router(task.id)
 
+      # POSITIVE CONTROL for this refutation: "control: three injected
+      # dispatches DO broadcast three times when the stage gate is closed"
+      # below runs this exact loop with no review request open and observes
+      # all three.
       refute_receive %Phoenix.Socket.Broadcast{
                        event: "attention",
                        payload: %{signal: %{reason: "task_assigned"}}
@@ -2096,6 +2408,62 @@ defmodule Platform.Orchestration.TaskRouterTest do
              "expected exactly one stage-gate suppression log across three ticks, got: #{inspect(logs)}"
 
       assert String.contains?(hd(logs), "awaiting human review on a manual_approval")
+    end
+
+    # POSITIVE CONTROL for the refutation in the test above (task 019fa121
+    # stage 4). Every assertion in this describe block is satisfied by a
+    # router that has simply stopped dispatching — the suppression tests
+    # refute a broadcast, and the log tests count lines the suppression path
+    # writes. Nothing in the block, before this, ever asserts that the
+    # `send(pid, :dispatch)` + `sync_router/2` sequence CAN produce an
+    # attention broadcast at all. Under conversion that gap matters more than
+    # it did under sleeps: a barrier that returns instantly makes a vacuous
+    # test fast as well as green, and nothing about the run time distinguishes
+    # it from a correct one.
+    #
+    # Same three-tick loop, same barrier placement, gate closed instead of
+    # open. It must observe three separate dispatches.
+    test "control: three injected dispatches DO broadcast three times when the stage gate is closed",
+         %{task: task, assignee: assignee, stage: stage} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      _running_stage = mark_stage_running(stage)
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      # NO `open_stage_review_request/4` — that single line is the entire
+      # difference from the test above.
+      for _tick <- 1..3 do
+        send(pid, :dispatch)
+        :ok = sync_router(task.id)
+
+        # Non-blocking. If the barrier were not a real happens-before proof
+        # this would fail here rather than silently passing somewhere else,
+        # which is what makes this a control on the BARRIER as well as on the
+        # gate.
+        assert_received %Phoenix.Socket.Broadcast{
+          event: "attention",
+          payload: %{signal: %{reason: "task_assigned"}}
+        }
+      end
+
+      refute TaskRouter.current_status(task.id).status == :waiting_human
+
+      # ...and the suppression copy the sibling test counts is genuinely
+      # absent here, so `stage_gate_logs/1` is discriminating rather than
+      # matching everything or nothing.
+      assert stage_gate_logs(space.id) == []
     end
 
     test "re-broadcasting the park signal does not re-log into an open episode", %{
@@ -2121,30 +2489,133 @@ defmodule Platform.Orchestration.TaskRouterTest do
       space = ExecutionSpace.find_by_task_id(task.id)
 
       open_stage_review_request(task, running_stage, space, "Solo check")
-      Process.sleep(200)
 
+      # Barrier by status read, then the log count is safe to take.
       assert TaskRouter.current_status(task.id).status == :waiting_human
       assert length(stage_gate_logs(space.id)) == 1
 
       # PubSub re-delivery of the same park signal (a runtime reconnect
-      # re-subscribes and the broadcast is replayed).
+      # re-subscribes and the broadcast is replayed). One barrier per
+      # re-delivery: "does not re-log into an OPEN episode" is a statement
+      # about each message individually, and three messages folded behind a
+      # single barrier would only ever test the last one.
       send(pid, {:review_request_pending, %{task_id: task.id}})
-      Process.sleep(150)
+      :ok = sync_router(task.id)
       send(pid, {:review_request_pending, %{task_id: task.id}})
-      Process.sleep(150)
+      :ok = sync_router(task.id)
 
       # ...and a repeated `{:stage_transitioned, ...}` for the SAME running
       # stage, which exercises the third (reason-less, generic-copy) site.
       send(pid, {:stage_transitioned, running_stage})
-      Process.sleep(150)
+      :ok = sync_router(task.id)
 
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
       assert length(stage_gate_logs(space.id)) == 1,
              "re-broadcasts must not re-log into an already-open episode, got: #{inspect(stage_gate_logs(space.id))}"
 
+      # POSITIVE CONTROL for this emptiness assertion: "control: the
+      # reason-less `{:stage_transitioned, ...}` site DOES emit the generic
+      # copy when it opens the episode" below. `generic_gate_logs/1` filters
+      # on a long, exact copy string; an emptiness assertion against a filter
+      # that never matches anything is vacuous no matter how the test
+      # synchronises, and the substring collision documented in TRAP 1 is
+      # precisely how such a filter drifts out of alignment with the code.
       assert generic_gate_logs(space.id) == [],
              "the reason-less `{:stage_transitioned, ...}` site must stay edge-guarded, got: #{inspect(generic_gate_logs(space.id))}"
+    end
+
+    # POSITIVE CONTROL for the two `generic_gate_logs(space.id) == []`
+    # refutations in this block (:2106 above and :2360 below).
+    #
+    # Both of those assert that the reason-less `{:stage_transitioned, ...}`
+    # site stays SILENT. Neither can distinguish "the edge guard held" from
+    # "`generic_gate_logs/1` matches nothing the router ever writes" — and the
+    # helper's own comment records that a loose filter already cost a cycle on
+    # 019f9ae5. This is the missing half: drive the router through the one
+    # shape where that site is the episode OPENER, and show the generic copy
+    # appearing exactly once.
+    test "control: the reason-less {:stage_transitioned, ...} site DOES emit the generic copy when it opens the episode",
+         %{task: task, assignee: assignee, stage: stage} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      running_stage = mark_stage_running(stage)
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      open_stage_review_request(task, running_stage, space, "Solo check")
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+      assert generic_gate_logs(space.id) == []
+
+      # Re-arm the edge WITHOUT dispositioning the gate — the same injection
+      # the `{:task_updated}` test below uses, and real for the same reason:
+      # `handle_info({:review_request_resolved, ...})` sets `:running`
+      # unconditionally without checking whether other requests on the stage
+      # are still pending.
+      send(pid, {:review_request_resolved, %{task_id: task.id, outcome: :passed}})
+      assert TaskRouter.current_status(task.id).status == :running
+
+      # Now the reason-less site is the first to observe the still-open gate.
+      #
+      # PRELOAD IS LOAD-BEARING, AND IT IS COVERING A REAL DEFECT — recorded
+      # here rather than fixed, because `task_router.ex` is out of scope for
+      # task 019fa121 stage 4. Five of the six park sites resolve their stage
+      # through `find_stage(Tasks.current_plan(task_id), ...)`, and
+      # `Tasks.current_plan/1` preloads `stages: :validations`
+      # (tasks.ex:1500). The reason-less `{:stage_transitioned, ...}` site
+      # (task_router.ex:711) is the exception: it forwards the stage struct
+      # STRAIGHT OFF THE BROADCAST. Production's broadcast carries the result
+      # of `Repo.update/1` on a stage loaded by a bare `Repo.get/2`
+      # (plan_engine.ex:520 `fetch_stage/1` -> :544 `emit_stage_telemetry/2`),
+      # so `stage.validations` is `%Ecto.Association.NotLoaded{}` — which is
+      # truthy, survives the `|| []` fallback in
+      # `HeartbeatScheduler.pending_validations_for_stage/1`
+      # (heartbeat_scheduler.ex:1017) and raises
+      # `Protocol.UndefinedError` out of the `Enum.filter/2` on the next line.
+      # Injecting the unpreloaded struct here kills the router outright; that
+      # is what this control did on its first run.
+      #
+      # Nothing caught it before because no test had ever driven this site
+      # while the router was `:running` — the sibling test at :2091 injects
+      # the same message but the router is already `:waiting_human`, so the
+      # edge guard returns before the predicate is consulted. That is exactly
+      # the class of gap a positive control exists to close: every existing
+      # assertion about this site was an assertion about a code path that
+      # cannot execute.
+      send(pid, {:stage_transitioned, Platform.Repo.preload(running_stage, :validations)})
+      # Two barriers, because the handler self-sends `:dispatch` for a
+      # `running` stage (task_router.ex:700) BEFORE it parks: the first
+      # barrier drains the stage broadcast, the second drains the tick it
+      # spawned, which a single call cannot reach (the self-send lands behind
+      # the call already in the mailbox).
+      #
+      # HONESTY NOTE (barrier-deletion control, 019fa121 stage 4): deleting
+      # both without restoring a sleep does NOT fail this test at seeds
+      # 11/22/33/44. The `current_status/1` read below is itself a barrier for
+      # the first hop, and the delegated dispatch contributes no GENERIC line
+      # (it takes the stage-gate copy path and finds the router already
+      # parked), so the count cannot move. These two are the faithful
+      # translation of the ordering the test means to assert — defensive, not
+      # demonstrated load-bearing. Said plainly rather than left to imply
+      # every barrier here bites.
+      :ok = sync_router(task.id)
+      :ok = sync_router(task.id)
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      assert length(generic_gate_logs(space.id)) == 1,
+             "the reason-less site must narrate the episode it opens, got: #{inspect(generic_gate_logs(space.id))}"
     end
 
     test "the episode re-arms after disposition — the guard is an edge, not a latch", %{
@@ -2172,27 +2643,34 @@ defmodule Platform.Orchestration.TaskRouterTest do
       {_validation, request} =
         open_stage_review_request(task, running_stage, space, "First gate")
 
-      Process.sleep(200)
+      # Barrier by status read for the `{:review_request_pending}` broadcast.
       assert TaskRouter.current_status(task.id).status == :waiting_human
       assert length(stage_gate_logs(space.id)) == 1
 
       # Disposition the ONLY item. The stage does not complete — the fixture's
       # `test_pass` is still pending — so the router returns to `:running` on
       # the same stage, which is exactly the shape that must re-arm the edge.
+      # `approve_item/2` broadcasts `{:review_request_resolved, :passed}` from
+      # this process, and that handler does not re-dispatch, so the status
+      # read below is a complete barrier for it.
       {:ok, _} = Platform.Tasks.ReviewRequests.approve_item(hd(request.items).id, "rowan")
-      Process.sleep(250)
 
       assert TaskRouter.current_status(task.id).status == :running
 
-      # A genuinely NEW episode.
+      # A genuinely NEW episode. Barrier before the ticks, because the edge is
+      # opened by the `{:review_request_pending}` broadcast and the whole point
+      # of the two ticks is that they arrive AFTER it — a tick folded ahead of
+      # the episode opener would be measuring a different sequence.
       open_stage_review_request(task, running_stage, space, "Second gate")
-      Process.sleep(200)
+      :ok = sync_router(task.id)
 
       send(pid, :dispatch)
-      Process.sleep(150)
+      :ok = sync_router(task.id)
       send(pid, :dispatch)
-      Process.sleep(150)
+      :ok = sync_router(task.id)
 
+      # Load-bearing: nothing between the last tick and this read is a call to
+      # the router, and the line it counts is written inside the handler.
       logs = stage_gate_logs(space.id)
 
       # Two episodes, two lines — and no more than one per episode despite the
@@ -2220,13 +2698,18 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       space = ExecutionSpace.find_by_task_id(task.id)
 
+      # One barrier per tick: this is a "one line across three ticks" count and
+      # an unhandled tick contributes nothing, so batching would let a
+      # per-tick emitter pass on a technicality.
       send(pid, :dispatch)
-      Process.sleep(150)
+      :ok = sync_router(task.id)
       send(pid, :dispatch)
-      Process.sleep(150)
+      :ok = sync_router(task.id)
       send(pid, :dispatch)
-      Process.sleep(150)
+      :ok = sync_router(task.id)
 
+      # POSITIVE CONTROL for this refutation: ":1644 approved plan still
+      # dispatches — the plan guard is not over-broad".
       refute_receive %Phoenix.Socket.Broadcast{
                        event: "attention",
                        payload: %{signal: %{reason: "task_assigned"}}
@@ -2242,6 +2725,12 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # handler, so while the plan is provisional the STAGE copy must never
       # appear. This is the assertion the loose `suppression_logs_since/2`
       # filter cannot make.
+      #
+      # POSITIVE CONTROL for this emptiness assertion: the five tests in this
+      # block that assert `length(stage_gate_logs(space.id)) == 1` (or `== 2`)
+      # show the same filter matching real router output, so an empty result
+      # here means the stage copy was not written — not that the filter is
+      # blind to it.
       assert stage_gate_logs(space.id) == [],
              "the stage copy must never be emitted while the plan is provisional, got: #{inspect(stage_gate_logs(space.id))}"
     end
@@ -2272,8 +2761,16 @@ defmodule Platform.Orchestration.TaskRouterTest do
         })
 
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(250)
 
+      # ONE barrier covers init AND its delegated dispatch, which is the whole
+      # thing this test measures. `start_link/1` returns only after `init/1`
+      # has run, and the `waiting_for_human_review?/1` branch delegates with a
+      # bare `send(self(), :dispatch)` (task_router.ex:230) — not
+      # `Process.send_after/3` — so that tick is already in the mailbox AHEAD
+      # of the `current_status/1` call enqueued next. Erlang's FIFO ordering
+      # then guarantees the delegated dispatch is handled before the call is
+      # answered, and neither suppression branch re-enters. The 250ms sleep
+      # was buying that ordering by guess; the read below proves it.
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
       # `init/1` is episode start by definition, so it is deliberately the ONE
@@ -2315,7 +2812,11 @@ defmodule Platform.Orchestration.TaskRouterTest do
       space = ExecutionSpace.find_by_task_id(task.id)
 
       open_stage_review_request(task, running_stage, space, "First gate")
-      Process.sleep(200)
+      # Load-bearing: the assertion on the next line is a `Repo` read of a row
+      # written inside the router's `{:review_request_pending}` handler, and
+      # unlike the sibling tests there is no `current_status/1` call in front
+      # of it to do the ordering.
+      :ok = sync_router(task.id)
       assert length(stage_gate_logs(space.id)) == 1
 
       # Return the router to `:running` while the gate is STILL open. This is
@@ -2325,15 +2826,14 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # the broadcast keeps it deterministic (a real `approve_item/2` fans out
       # several racing broadcasts) — same technique as the plan-gate test that
       # injects `{:plan_updated, pending_plan}` directly.
+      # Barrier by status read — the `:passed` branch does not re-dispatch.
       send(pid, {:review_request_resolved, %{task_id: task.id, outcome: :passed}})
-      Process.sleep(150)
       assert TaskRouter.current_status(task.id).status == :running
 
       # `{:task_updated}` is a silent park site on `main`: it flips the router
       # to `:waiting_human` without narrating. If it is the first site to
       # observe the still-open gate, the episode goes unnarrated entirely.
       send(pid, {:task_updated, Tasks.get_task_detail(task.id)})
-      Process.sleep(150)
 
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
@@ -2343,10 +2843,13 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # ...and it is edge-triggered like every other site: `{:task_updated}`
       # fires from many places in `tasks.ex`, so an unconditional log here
       # would be the pile-up this task set out to fix.
+      # One barrier per update, for the same reason as the dispatch loops: the
+      # claim is per-message ("repeated updates must not re-log"), so folding
+      # both behind one barrier would only ever exercise one of them.
       send(pid, {:task_updated, Tasks.get_task_detail(task.id)})
-      Process.sleep(150)
+      :ok = sync_router(task.id)
       send(pid, {:task_updated, Tasks.get_task_detail(task.id)})
-      Process.sleep(150)
+      :ok = sync_router(task.id)
 
       assert length(stage_gate_logs(space.id)) == 2,
              "repeated task updates must not re-log into an open episode, got: #{inspect(stage_gate_logs(space.id))}"
@@ -2404,7 +2907,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
       drop_seed_validations(stage)
       seed_linked_manual_approval(task, stage, space)
 
-      Process.sleep(100)
+      # Barrier: `create_review_request/1` above broadcasts to the router,
+      # whose handler posts into the execution space. The baseline snapshot
+      # below must not race those posts.
+      :ok = sync_router(task.id)
 
       # Snapshot messages BEFORE forcing a redundant :dispatch tick.
       baseline = ExecutionSpace.list_messages_with_participants(space.id)
@@ -2414,7 +2920,9 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # maybe_log_heartbeat_suppressed/3. With the predicate gate, that
       # call must NOT post a "Dispatch suppressed" line.
       send(pid, :dispatch)
-      Process.sleep(150)
+      # Barrier: the suppression log (or its absence) is written inside the
+      # `:dispatch` handler this `send/2` just enqueued.
+      :ok = sync_router(task.id)
 
       after_msgs = ExecutionSpace.list_messages_with_participants(space.id)
       new_msgs = Enum.drop(after_msgs, baseline_count) |> Enum.map(& &1.content)
@@ -2468,9 +2976,13 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       # Broadcast the failed stage transition
       Tasks.broadcast_board({:stage_transitioned, failed_deploy})
-      Process.sleep(150)
+      :ok = sync_router(task.id)
 
-      # Router must still be alive — before this fix it crashed on nil state
+      # Router must still be alive — before this fix it crashed on nil state.
+      # The barrier above already proves this (a dead router makes
+      # `sync_router/2` flunk), but the assertion is kept because it names the
+      # regression: a nil-state crash here is the defect under test, and a
+      # reader should not have to know the barrier's failure modes to see it.
       assert Process.alive?(pid)
 
       # Task should have bounced back to in_progress
@@ -2527,7 +3039,17 @@ defmodule Platform.Orchestration.TaskRouterTest do
     test "a stale `completed` broadcast does NOT flip the task to done while the deploy stage is running",
          %{task: task, assignee: assignee, plan: plan} do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
+      # Sequencing barrier: `init/1` puts `:dispatch` in the router's own
+      # mailbox before `start_link/1` returns, and that handler reads the task
+      # row. Draining it here pins the boot dispatch strictly BEFORE the status
+      # transitions below, so the router observes one ordering on every run.
+      #
+      # DEFENSIVE, NOT DEMONSTRATED. Deleting this barrier alone (without
+      # restoring the sleep it replaced) was measured GREEN 5/5 at seeds 0-4.
+      # It is kept because it makes the ordering explicit and costs no wall
+      # clock, not because a failure was observed without it. The barrier
+      # AFTER the broadcast below is the one that was measured load-bearing.
+      :ok = sync_router(task.id)
 
       {:ok, task} = Tasks.transition_task(task, "planning")
       {:ok, task} = Tasks.transition_task(task, "in_progress")
@@ -2537,7 +3059,14 @@ defmodule Platform.Orchestration.TaskRouterTest do
       completed_plan = drift_plan_to_completed!(plan)
 
       Tasks.broadcast_board({:plan_updated, completed_plan})
-      Process.sleep(150)
+      # DEMONSTRATED load-bearing, and NOT by deleting it — this is a
+      # refutation test, so removing the barrier leaves it green. Measured by
+      # holding a mutation fixed and varying only the barrier: with
+      # `deploy_stage_settled?/1` forced to `true` (the guard removed), this
+      # test is RED 3/3 with the barrier and GREEN 3/3 without it. Without the
+      # barrier the task row is re-read before the router has handled the
+      # broadcast, so "still deploying" is just the value nothing has touched.
+      :ok = sync_router(task.id)
 
       updated_task = Tasks.get_task_detail(task.id)
 
@@ -2629,8 +3158,8 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       # Consume the initial dispatch attention for stage B.
       assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
-      Process.sleep(50)
 
+      # No barrier needed: `current_status/1` IS the barrier.
       assert TaskRouter.current_status(task.id).current_stage_id == stage_b.id
 
       # Fire a legitimate stage-B blocker. Router should flip to
@@ -2648,7 +3177,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
       }
 
       send(pid, {:runtime_event, blocked_event})
-      Process.sleep(50)
 
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
@@ -2669,14 +3197,18 @@ defmodule Platform.Orchestration.TaskRouterTest do
       Tasks.broadcast_board({:stage_transitioned, passed_stage_b})
       Tasks.broadcast_board({:stage_transitioned, running_stage_c})
 
-      # A fresh attention broadcast for stage C must fire within 500ms.
+      # A fresh attention broadcast for stage C must fire. The preceding
+      # barrier does NOT cover it — the broadcast is produced by a SECOND
+      # message (`send(self(), :dispatch)` in task_router.ex), so a message
+      # deadline is the right primitive here. 1_000 per the header's
+      # deadline convention; this site sat at 500 pre-conversion and flaked
+      # under load at ~14%.
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "attention",
                        payload: %{signal: %{reason: "task_assigned"}}
                      },
-                     500
+                     1_000
 
-      Process.sleep(50)
       status = TaskRouter.current_status(task.id)
       assert status.current_stage_id == stage_c.id
       assert status.status == :running
@@ -2697,7 +3229,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
       assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
-      Process.sleep(50)
 
       assert TaskRouter.current_status(task.id).status == :running
       assert TaskRouter.current_status(task.id).current_stage_id == stage_b.id
@@ -2717,8 +3248,13 @@ defmodule Platform.Orchestration.TaskRouterTest do
       }
 
       send(pid, {:runtime_event, stale_event})
-      Process.sleep(50)
 
+      # This is the refutation half — "the router does NOT flip". The
+      # `current_status/1` call below is what makes it non-vacuous: it is
+      # answered strictly after the router has handled `stale_event`, so a
+      # regression that DOES flip is observed rather than raced past. The
+      # positive control follows immediately: the same handler, same message
+      # shape, only `payload["stage_id"]` changed, must flip.
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
       assert status.current_stage_id == stage_b.id
@@ -2729,7 +3265,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
       }
 
       send(pid, {:runtime_event, current_event})
-      Process.sleep(50)
       assert TaskRouter.current_status(task.id).status == :waiting_human
     end
 
@@ -2746,7 +3281,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
       assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
-      Process.sleep(50)
 
       legacy_event = %{
         id: nil,
@@ -2761,7 +3295,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
       }
 
       send(pid, {:runtime_event, legacy_event})
-      Process.sleep(50)
 
       assert TaskRouter.current_status(task.id).status == :waiting_human
     end
@@ -2793,8 +3326,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
                      },
                      1_000
 
-      Process.sleep(50)
-
       status = TaskRouter.current_status(task.id)
       assert status.current_stage_id == stage_b.id
       assert status.status == :running
@@ -2820,8 +3351,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
       seed_blocked_lease!(task.id, stage_b.id, assignee.id)
 
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(100)
 
+      # `init/1` enqueues `:dispatch` into the router's own mailbox before
+      # `start_link/1` returns, so this call is answered strictly after boot
+      # rehydration has run. No separate barrier is needed.
       status = TaskRouter.current_status(task.id)
       assert status.current_stage_id == stage_b.id
       assert status.lease_status == "blocked"
@@ -2846,7 +3379,16 @@ defmodule Platform.Orchestration.TaskRouterTest do
       seed_blocked_lease!(task.id, stage_a.id, assignee.id)
 
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
+      # This precondition asserts the seeded lease SURVIVED boot; read before
+      # the router has booted, it would pass for the wrong reason — the row is
+      # still there because nothing has run yet.
+      #
+      # DEFENSIVE, NOT DEMONSTRATED. Deleting this barrier alone was measured
+      # GREEN 3/3 at seeds 0-2: boot is fast enough that the vacuous reading
+      # was not observed. Kept because the argument above is about what the
+      # assertion MEANS, which no timing measurement can settle. The barrier
+      # after the transition broadcast below IS demonstrated (RED 3/3 without).
+      :ok = sync_router(task.id)
 
       assert %{status: "blocked"} =
                RuntimeSupervision.current_lease_for_stage(task.id, stage_a.id)
@@ -2862,7 +3404,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       passed_stage_a = Platform.Repo.get!(Platform.Tasks.Stage, stage_a.id)
       Tasks.broadcast_board({:stage_transitioned, passed_stage_a})
-      Process.sleep(100)
+      # `drop_leases_for_stage/2` runs inside the router's own
+      # `{:stage_transitioned, _}` handler and `LeaseManager` mutators are
+      # synchronous calls, so the row is already gone when the barrier returns.
+      :ok = sync_router(task.id)
 
       # Stage-A lease has been dropped by the transition handler.
       assert nil == RuntimeSupervision.current_lease_for_stage(task.id, stage_a.id)
@@ -2903,7 +3448,19 @@ defmodule Platform.Orchestration.TaskRouterTest do
       Tasks.broadcast_board({:plan_updated, plan})
 
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(150)
+      # Refutation test — "the router leaves the task alone". The barrier is
+      # what makes it bite: the boot sweep must have RUN before the task row is
+      # re-read, otherwise `in_progress` is merely the value nothing has
+      # touched yet. Placed here rather than leaning on the `current_status/1`
+      # below, because the Repo read comes first.
+      #
+      # DEMONSTRATED, by holding a mutation fixed and varying only the barrier.
+      # Reintroducing the deleted auto-flip (a `:dispatch` cond branch calling
+      # `transition_task(task, "in_review")` when `manual_approval_stage?/1`
+      # holds) makes this test RED 3/3 with the barrier and GREEN 3/3 without
+      # it. Deleting the barrier on its own leaves the test green, which is
+      # exactly why barrier-deletion cannot vet a refutation test.
+      :ok = sync_router(task.id)
 
       # Pre-fix: this assertion fails within ~80ms because the router's init
       # sweep called `maybe_mark_review_task_in_review/1` and flipped the
@@ -3063,6 +3620,317 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       # A member with genuinely pending work must never be suppressed.
       refute_receive {[:platform, :orchestration, :dispatch_suppressed], ^handler_ref, _, _}, 400
+    end
+  end
+
+  # ────────────────────────────────────────────────────────────────────
+  # Zero-sleep guard (task 019fa121 stage 5)
+  # ────────────────────────────────────────────────────────────────────
+  #
+  # Stages 2-5 removed 116 fixed sleeps from this file. Nothing stops the
+  # 117th from being added back next week, and the reason it would be added
+  # back is always the same: someone hits a race, reaches for the shortest
+  # thing that makes it go away, and ships a number. This guard is the thing
+  # that argues back at that moment.
+  #
+  # Two construction details are load-bearing, and both are here because the
+  # obvious version of this guard is wrong:
+  #
+  #   1. COMMENT LINES ARE STRIPPED BEFORE MATCHING. Prose about the forbidden
+  #      call is legitimate — this file's own taxonomy header is nothing else —
+  #      and a guard that greps the raw buffer fails on its own documentation.
+  #      The fix a hurried reader then applies is to delete the documentation.
+  #      (Today no comment in this file spells the call, so that a reviewer's
+  #      plain `grep -c` agrees with the guard. The stripping is what makes it
+  #      safe to write the prose back.)
+  #   2. THE NEEDLE IS ASSEMBLED, NOT WRITTEN. `@forbidden_call` is built from
+  #      two fragments so that no line of source in this file contains the
+  #      literal token — including this test's own matcher and its failure
+  #      message, which interpolates the needle rather than spelling it.
+  #      Written literally, the guard would report itself.
+  #
+  # The positive controls below exist because a guard whose input is empty
+  # passes for the wrong reason, and a guard whose needle is misspelled passes
+  # for the wrong reason too. Neither failure is visible from a green run.
+  #
+  # ── THE ONE EXCEPTION, AND WHY IT IS NOT AN EXCLUSION LIST ──────────────
+  #
+  # The doctrine above covers SYNCHRONISATION sleeps: a wait standing in for a
+  # barrier, or for a poll on a third process. That is what every one of the
+  # 116 sites removed by this task was, and it is the only thing the original
+  # guard anticipated.
+  #
+  # Merging main afterwards surfaced a category it had not: a sleep where the
+  # ELAPSED WALL CLOCK IS ITSELF THE SUBJECT OF THE ASSERTION. In
+  # "a router restart loop cannot renew the deadline" the test asserts that the
+  # armed delay SHRINKS across restarts by at least the time spent dead. There
+  # is no event to wait for — nothing is running between the restarts — so no
+  # barrier can replace it. Deleting the wait does not make the test faster; it
+  # makes it measure nothing and pass against the very regression it exists to
+  # catch.
+  #
+  # Those sites, and only those, may carry an ANNOTATION: the marker
+  # `@wall_clock_marker` followed by a justification of at least
+  # `@min_justification_chars` characters, ATTACHED TO THE CALL SITE — either
+  # trailing on the call line or on the line immediately above it. (Both,
+  # because `mix format` hoists a trailing comment that overruns
+  # `line_length` onto its own line, and a guard whose verdict changes when the
+  # formatter runs would just teach people to ignore it.)
+  #
+  # Two properties make this different in kind from an allowlist:
+  #
+  #   * It is not a list of line numbers or test names. Line-number and
+  #     test-name exclusions are what this file's own conventions and
+  #     `task_alias_shadowing_audit_test.exs:42-45` forbid, because they
+  #     decay silently as the file moves and because they say only "this is
+  #     exempt" — never why.
+  #   * It cannot be satisfied by accident. An author reaching for a fixed
+  #     sleep to fix a race has to type an argument that the sleep is a
+  #     MEASUREMENT, at the site, in front of a reviewer. That is a far higher
+  #     bar than appending an identifier to a list, and it is a claim the diff
+  #     makes checkable: either the test asserts on elapsed time or it does not.
+  #
+  # ABSENCE ASSERTIONS ARE EXPLICITLY NOT ELIGIBLE, and this is the boundary
+  # most likely to be argued at. A sleep before `assert Registry.lookup(..) ==
+  # []` or `refute ...` looks superficially similar — "give it a chance to
+  # misbehave" — but it is the opposite case. The observable is ALREADY in the
+  # asserted state before the other process does anything, so the sleep
+  # expiring is not evidence that anything ran, and the assertion passes
+  # whether or not the code under test works. Task 019fa003 stage 4 measured
+  # this directly: with the actor `:sys.suspend`ed, the sleep-based absence
+  # assertion passed vacuously while the barrier version correctly failed. An
+  # absence assertion synchronised by a sleep is suspect BY CONSTRUCTION — it
+  # is not a category this guard missed, it is the defect the guard exists to
+  # catch. Use a barrier that proves the actor handled the event, then assert
+  # the absence. `:2185` is the worked example.
+  #
+  # The annotated count is additionally PINNED (`@annotated_site_budget`), on
+  # the same non-accretion principle the shell guard uses: a genuine new
+  # measurement site is a deliberate, reviewable diff that has to move the
+  # number, and copying an annotated line to silence the guard trips it.
+  describe "zero-sleep guard (task 019fa121)" do
+    @source_path __ENV__.file
+
+    # Assembled deliberately — see note 2 above.
+    @forbidden_call "Process." <> "sleep"
+
+    # The annotated escape hatch — see "THE ONE EXCEPTION" above. A marker on
+    # the call line itself, not a list of exempt locations.
+    @wall_clock_marker "WALL-CLOCK-ASSERTION:"
+
+    # Long enough that a justification has to be a sentence. A one-word
+    # placeholder is the cargo-cult failure mode this length rules out.
+    @min_justification_chars 40
+
+    # Non-accretion pin. Both sites are the restart-loop deadline measurement.
+    @annotated_site_budget 2
+
+    test "no fixed-sleep call site has been reintroduced into this file" do
+      lines =
+        @source_path
+        |> File.read!()
+        |> String.split("\n")
+        |> Enum.with_index(1)
+
+      code_lines = Enum.reject(lines, fn {line, _n} -> comment_line?(line) end)
+
+      # Annotations are read from the RAW buffer, not `code_lines`: when the
+      # marker sits on its own line above the site, `comment_line?/1` has
+      # already stripped it out of `code_lines` by design.
+      raw = Map.new(lines, fn {line, n} -> {n, line} end)
+
+      # Every surviving call site, split by whether it carries a justified
+      # annotation. `annotated` is NOT "ignored" — it is budgeted below.
+      {annotated, offenders} =
+        code_lines
+        |> Enum.filter(fn {line, _n} -> String.contains?(line, @forbidden_call) end)
+        |> Enum.split_with(fn {line, n} -> justified?(line, Map.get(raw, n - 1, "")) end)
+
+      # ── POSITIVE CONTROL 1: the stripper did not eat the file ──────────
+      # If `comment_line?/1` ever over-matched — a bad regex, a change to the
+      # comment syntax, a refactor that trims the wrong thing — `code_lines`
+      # would shrink toward empty and the assertion below would pass while
+      # inspecting nothing at all. Pin both the volume and a landmark, so
+      # "the buffer is intact" is checked rather than assumed.
+      assert length(code_lines) > 2_000,
+             "comment-stripping left only #{length(code_lines)} code lines; " <>
+               "the zero-sleep assertion below would be inspecting an almost-empty buffer"
+
+      assert Enum.any?(code_lines, fn {line, _n} ->
+               String.contains?(line, "defmodule Platform.Orchestration.TaskRouterTest")
+             end),
+             "comment-stripping removed the module definition — the buffer is not this file"
+
+      assert Enum.count(code_lines, fn {line, _n} -> Regex.match?(~r/^\s*test /, line) end) > 50,
+             "comment-stripping removed the test bodies — nothing meaningful is being scanned"
+
+      # ── POSITIVE CONTROL 2: the needle is spelled correctly ────────────
+      # A typo in `@forbidden_call` produces a permanently-green guard, and a
+      # green run cannot tell you that. Anchor it OUTSIDE this file, on the
+      # one place in the codebase where the call is legitimate: the polling
+      # loop inside `Platform.AsyncAssertions`. A poll implementation has to
+      # sleep between attempts, so that occurrence is a standing invariant
+      # rather than a coincidence — and anchoring there rather than on this
+      # file's own prose is what lets the prose stay unspelled.
+      helper_source =
+        @source_path
+        |> Path.join("../../../support/async_assertions.ex")
+        |> Path.expand()
+        |> File.read!()
+
+      assert String.contains?(helper_source, @forbidden_call),
+             "`@forbidden_call` does not appear in Platform.AsyncAssertions, whose poll loop " <>
+               "certainly calls it. The needle is misspelled and this guard is inert."
+
+      # ── POSITIVE CONTROL 3: the stripper classifies in BOTH directions ──
+      # Control 1 catches a `comment_line?/1` that says "comment" to
+      # everything. This catches the opposite mutation — one that says
+      # "comment" to nothing — which control 1 cannot see while the prose in
+      # this file stays unspelled, and which would silently un-do detail 1.
+      assert comment_line?("  # #{@forbidden_call}(50) described in prose")
+      refute comment_line?("  #{@forbidden_call}(50)")
+
+      # ── POSITIVE CONTROL 4: the escape hatch classifies in BOTH directions ──
+      # `justified?/1` is the only thing standing between the annotation and an
+      # allowlist. If it ever said "justified" to everything, the guard would
+      # be inert with no visible symptom; if it said "justified" to nothing,
+      # the two real measurement sites would already be failing above and
+      # someone would delete the mechanism rather than debug it. Pin both.
+      long_enough = String.duplicate("x", @min_justification_chars)
+      site = "  #{@forbidden_call}(120)"
+
+      # BOTH accepted positions, because `mix format` picks between them.
+      assert justified?("#{site} # #{@wall_clock_marker} #{long_enough}", "")
+      assert justified?(site, "  # #{@wall_clock_marker} #{long_enough}")
+
+      # No marker anywhere — the overwhelmingly common case, and an offender.
+      refute justified?(site, "  d1 = armed_delay.()")
+
+      # Marker present but the justification is a placeholder. Typing the token
+      # must not be enough; the argument is the point of the mechanism.
+      refute justified?(site, "  # #{@wall_clock_marker} because")
+
+      # Marker present, justification empty. Same failure, spelled differently.
+      refute justified?("#{site} # #{@wall_clock_marker}", "")
+
+      # Two lines away is NOT attached. Without this the "annotation" would
+      # drift into a floating exemption anywhere above the site.
+      refute justified?(site, "")
+
+      assert offenders == [], """
+      #{length(offenders)} `#{@forbidden_call}` call site(s) were reintroduced into
+      #{Path.relative_to_cwd(@source_path)}:
+
+      #{Enum.map_join(offenders, "\n", fn {line, n} -> "  line #{n}: #{String.trim(line)}" end)}
+
+      Use a barrier, not a number.
+
+      `Platform.AsyncAssertions.sync_router/2` is the right tool for almost
+      every site in this file. It is a pure `GenServer.call` to the router
+      under test, so it returns strictly after the router has handled every
+      message already in its mailbox — a happens-before proof, not a
+      probability. `Platform.Tasks.broadcast_board/1` dispatches to local
+      subscribers in the CALLING process, so the message is in the router's
+      mailbox before it returns; the barrier queues behind it.
+
+      Where the assertion that follows is already `TaskRouter.current_status/1`,
+      you need nothing at all — that call IS the barrier. Delete the wait.
+
+      Reach for `Platform.AsyncAssertions.assert_eventually/3` only when a
+      THIRD process owns the effect you are asserting on (a `Registry` entry
+      clearing after a `:DOWN`, say) and you can name that process at the call
+      site. If you cannot name it, you wanted the barrier.
+
+      If the actor is the singleton `TaskRouterWatcher` rather than a per-task
+      router, `TaskRouterWatcher.sync/0` is the barrier. `:2185` is the one
+      site in this file where that is the case.
+
+      IF YOU ARE ABOUT TO ARGUE THAT YOUR SITE IS AN EXCEPTION, read the
+      annotation contract in the comment above this describe block first. There
+      is exactly one eligible category — the sleep whose ELAPSED TIME IS ITSELF
+      THE SUBJECT of an assertion, which no barrier can express — and it is
+      claimed with `#{@wall_clock_marker}` plus a written argument attached to
+      the call site, not by adding a line number anywhere.
+
+      A sleep in front of an ABSENCE assertion (`== []`, `refute_*`, "prove it
+      does NOT happen") is NOT that category and is never eligible. The
+      observable is already in the asserted state before anything runs, so the
+      sleep expiring proves nothing and the assertion passes on a broken tree.
+      That is the defect this guard exists to catch, not an exception to it.
+
+      Why this is a hard rule rather than a preference: a fixed sleep is a
+      guess in both directions. Too short and it races the router, which is how
+      this suite acquired failures whose membership changed run to run. Too
+      long and it hides a real regression behind wall-clock padding while
+      taxing every future run for the privilege. The 116 sleeps removed by task
+      019fa121 cost 11.125 seconds per run and bought no determinism at all.
+      """
+
+      # ── NON-ACCRETION PIN ON THE ESCAPE HATCH ──────────────────────────
+      # `offenders == []` above is satisfied by annotating everything, so the
+      # annotation needs a ceiling or it decays into the allowlist it was
+      # designed not to be. Pinning the count makes every new measurement site
+      # a deliberate diff that moves a number a reviewer can see, and makes
+      # "copy the justification off the line above" fail rather than work.
+      assert length(annotated) <= @annotated_site_budget, """
+      #{length(annotated)} annotated `#{@forbidden_call}` site(s) — the pin is #{@annotated_site_budget}:
+
+      #{Enum.map_join(annotated, "\n", fn {line, n} -> "  line #{n}: #{String.trim(line)}" end)}
+
+      Adding one is allowed, but it is not routine and it is not a formality.
+      Satisfy yourself that the new site is a MEASUREMENT — that some assertion
+      in the same test reads the elapsed time, and that deleting the wait makes
+      that assertion weaker rather than merely faster — and then raise
+      `@annotated_site_budget` in the same commit so the claim is reviewed
+      alongside the code making it.
+
+      If you got here by copying an annotated line to quiet the guard: that is
+      the case this pin exists for. The site you copied it to almost certainly
+      wants `sync_router/2`.
+      """
+    end
+
+    # A line whose first non-whitespace character starts a comment. Trailing
+    # comments on a code line are deliberately NOT stripped: a line that both
+    # executes something and mentions the forbidden call is exactly the case
+    # this guard must not be talked out of. Keep prose on its own line.
+    defp comment_line?(line), do: String.starts_with?(String.trim_leading(line), "#")
+
+    # The annotated escape hatch. A call site is justified only if the marker
+    # AND a substantive argument appear either ON the call line or on the line
+    # IMMEDIATELY above it.
+    #
+    # Both positions are accepted because `mix format` chooses between them and
+    # the choice is not the author's. A trailing `# marker: <argument>` that
+    # pushes the line past `line_length` is hoisted onto its own line by the
+    # formatter — which is exactly what happened to both sites below when this
+    # mechanism was written same-line-only, and which turned a justified site
+    # back into an offender at the next `mix format`. A guard whose verdict
+    # flips when the formatter runs is worse than no guard: it teaches people
+    # that the guard is noise. Accepting both shapes makes the mechanism
+    # formatter-agnostic, and the length floor keeps the same-line form from
+    # being the cheap one to satisfy.
+    #
+    # Attaching to the site (rather than to a line number recorded elsewhere)
+    # is what makes drift fail SAFE: separate the justification from its site
+    # by an unrelated edit and the site becomes an unannotated offender, which
+    # fails loudly, rather than a stale exemption that keeps passing.
+    #
+    # The length floor is doing real work: it is what makes the mechanism an
+    # ARGUMENT rather than a token. A one-word "needed" is not a reason, and a
+    # guard that accepted it would be an allowlist with extra steps.
+    defp justified?(site_line, preceding_line) do
+      justification?(site_line) or justification?(preceding_line)
+    end
+
+    defp justification?(line) do
+      case String.split(line, @wall_clock_marker, parts: 2) do
+        [_before, justification] ->
+          String.length(String.trim(justification)) >= @min_justification_chars
+
+        _ ->
+          false
+      end
     end
   end
 
@@ -3297,7 +4165,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       held = design_task!(project, @design_ui_title)
       {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
-      Process.sleep(200)
       assert TaskRouter.current_status(held.id).status == :waiting_design
 
       # SEED the lease. Without this the assertion below is vacuous: a planning
@@ -3314,7 +4181,15 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert %{} = LeaseManager.get(held.id)
 
       send(pid, :dispatch)
-      Process.sleep(200)
+
+      # BARRIER, not a poll — and deliberately so, though the lease looks like
+      # third-party state. `clear_liveness/1` is `LeaseManager.clear/1`
+      # (lease_manager.ex:282), a direct `:ets.delete` executed IN THE CALLING
+      # PROCESS, i.e. inside this router's own `handle_info`. The LeaseManager
+      # GenServer is never involved, so there is no third process to name and
+      # the barrier is a complete happens-before proof. A poll here would be
+      # strictly weaker evidence for the same claim.
+      :ok = sync_router(held.id)
 
       assert LeaseManager.get(held.id) == nil,
              "the design hold must clear the lease — an armed no-ack timer would " <>
@@ -3326,7 +4201,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       control_assignee = %{type: :federated, id: "runtime-design-lease-#{unique()}"}
       {:ok, control_pid} = TaskRouter.start_link(task_id: control.id, assignee: control_assignee)
-      Process.sleep(200)
+
+      # Let the control router finish booting BEFORE seeding, or its own boot
+      # dispatch could clear a lease that was never meant to be under test.
+      :ok = sync_router(control.id)
 
       :ok =
         LeaseManager.record_dispatch(
@@ -3337,7 +4215,15 @@ defmodule Platform.Orchestration.TaskRouterTest do
         )
 
       send(control_pid, :dispatch)
-      Process.sleep(200)
+
+      # A BARRIER IS MANDATORY HERE, and a poll would be unsound. The claim is
+      # that the lease SURVIVES the dispatch, so the observable is already
+      # truthy before the router has picked the message up: an
+      # `assert_eventually(fn -> LeaseManager.get(control.id) end)` would return
+      # on attempt 1 and pass on a tree where the clear had been made
+      # unconditional. Only a happens-before proof that the dispatch was
+      # HANDLED makes the survival meaningful.
+      :ok = sync_router(control.id)
 
       assert %{} = LeaseManager.get(control.id)
     end
@@ -3353,7 +4239,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       held = design_task!(project, @design_ui_title)
       {:ok, _pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
-      Process.sleep(200)
       assert TaskRouter.current_status(held.id).status == :waiting_design
       refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
 
@@ -3380,7 +4265,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       held = design_task!(project, @design_ui_title)
       {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
-      Process.sleep(200)
       assert TaskRouter.current_status(held.id).status == :waiting_design
 
       send(pid, :design_deadline)
@@ -3402,7 +4286,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
       Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{settled_assignee.id}")
 
       {:ok, settled_pid} = TaskRouter.start_link(task_id: settled.id, assignee: settled_assignee)
-      Process.sleep(200)
       assert TaskRouter.current_status(settled.id).status == :waiting_design
 
       {:ok, :complete} = Platform.Design.PreplanStep.settle(settled.id, nil)
@@ -3429,7 +4312,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
       {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
-      Process.sleep(200)
       assert TaskRouter.current_status(held.id).status == :waiting_design
       refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
 
@@ -3458,7 +4340,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       held = design_task!(project, @design_ui_title)
       {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
-      Process.sleep(200)
       assert TaskRouter.current_status(held.id).status == :waiting_design
 
       # Kill the holder. The `:design_deadline` timer dies with it, and nothing
