@@ -10,6 +10,34 @@ defmodule Platform.Design.UiSurfaceTest do
   The two bounds asserted here (zero false negatives, ≤25% false positives) and
   the corpus itself are **not** tunable. The vocabulary in
   `Platform.Design.UiSurface` is. See that module's `@moduledoc`.
+
+  ## Observed detonation (2026-07-26, commit 9dfb300a)
+
+  `ui_task?/1` was stubbed down to layer A alone — `PlanEngine.ui_touching?/1`
+  and nothing else — and this file re-run. Result: **16 of 30 red**, and the
+  headline guard "zero false negatives across the entire :ui corpus" named all
+  **11** path-token-free `:ui` entries as missed:
+
+      Build /org_memory mobile surface — segmented tabs, path chip, drawer
+      External-grant multiselect (bug #2)
+      intents-collapse bar in MeetingLive — live-tuning strip over the ...
+      Add an epic-create FAB above the board
+      Badges render as a mobile card
+      Render planning_step on the task card as an above-card extension
+      Make external chat surface mobile-responsive
+      chat mobile: mobile Pinned strip + 44px task-detail tap targets
+      Collapse the three agent header controls into one mutex eye
+      Fix: Admin gear lands on /admin (route-resume TTL + module breadcrumbs)
+      Intent-queue live-tuning UI: ETS-backed queue, click-to-correct, ...
+
+  The twelfth `:ui` entry — the one naming a file path — still passed, which is
+  the point: layer A is real, it is just blind pre-plan. Both `:not_ui`
+  assertions also stayed green under the stub, so the false-positive cap is not
+  what is carrying the zero-FN claim.
+
+  Measured on the shipped implementation: **0/12 false negatives**, **2/20 false
+  positives (10.0%)** — the two being ADR 0046's own member 4 and member 9
+  descriptions, both kept verbatim.
   """
   use ExUnit.Case, async: true
 
