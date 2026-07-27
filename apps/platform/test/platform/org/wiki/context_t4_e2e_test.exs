@@ -835,8 +835,9 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # Task 019f9b29 (ADR-0046 member 9): drops the nullable
       # `stages.responsibility` column after members 7 and 9 removed every
       # producer and consumer. Census-then-drop — `up/0` logs the row count,
-      # the non-terminal-plan subset and the distinct values before the
-      # `ALTER TABLE`; `down/0` re-adds the column but not the data.
+      # the non-terminal-plan subset, the distinct values and the row
+      # identities before the `ALTER TABLE`; `down/0` re-adds the column but
+      # not the data.
       "20260726052350_drop_responsibility_from_stages.exs",
       # Task 019f9b28-6ca7 stage 5: the `architecture.review_plan.v1`
       # body told the architect to "prefer citing the ADR by number",
