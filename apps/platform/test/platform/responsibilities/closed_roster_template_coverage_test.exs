@@ -12,15 +12,16 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
   Seeds bundle, the `BuiltIns` provider list, and the migrated prompt
   templates must all agree.
 
-  ## Known seed-key aliases
+  ## Strict identity — no alias map
 
-  `Platform.Roles.Seeds` names one bundle key that doesn't match the
-  shipped `Handler.key/0` value. We tolerate that here via a small
-  alias map so this coverage test does not fail on a naming mismatch
-  that is tracked as a separate follow-up. Do NOT rename Seeds inside
-  this test's scope — that's a distinct commit.
-
-    * `memory.dream_consolidation` (seed) → `memory.dreaming` (handler)
+  Every seed bundle key must equal a registered `Handler.key/0` value
+  exactly. This file used to carry a `@known_seed_key_aliases` map
+  tolerating `memory.dream_consolidation` (seed) → `memory.dreaming`
+  (handler); task `019fa230` stage 2 renamed the seed and deleted the
+  map. Do not reinstate it: an alias here silently permits a bundle key
+  that the Control Center panel offers and
+  `Responsibilities.Router.fire_trigger/3` never resolves, which is
+  precisely the defect that task fixed.
 
   ## Setup pattern
 
@@ -36,11 +37,6 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
   alias Platform.Responsibilities
   alias Platform.Responsibilities.BuiltIns
   alias Platform.Roles.Seeds
-
-  # SEEDS ↔ HANDLER alias map. Keyed by the seed bundle key; value is
-  # the effective handler key that the responsibility row is registered
-  # under. Only one alias today.
-  @known_seed_key_aliases %{"memory.dream_consolidation" => "memory.dreaming"}
 
   # The 21 prompt-template slugs the closed roster depends on. Kept as
   # a literal list here (rather than derived from the responsibility
@@ -128,20 +124,22 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
       assert responsibility_keys != [], "closed roster produced no responsibility keys"
 
       Enum.each(responsibility_keys, fn seed_key ->
-        effective_key = Map.get(@known_seed_key_aliases, seed_key, seed_key)
-        responsibility = Responsibilities.get_by_key(effective_key)
+        responsibility = Responsibilities.get_by_key(seed_key)
 
         assert responsibility,
-               "responsibility \"#{effective_key}\" (from seed key \"#{seed_key}\") " <>
-                 "not registered — no row in responsibilities table"
+               "seed bundle key \"#{seed_key}\" is not registered — no row in the " <>
+                 "responsibilities table under that exact key. The Control Center " <>
+                 "panel offers this key but Responsibilities.Router would never " <>
+                 "resolve it; rename the seed to match Handler.key/0 rather than " <>
+                 "reinstating an alias map."
 
         assert responsibility.default_prompt_template,
-               "responsibility \"#{effective_key}\" has no default_prompt_template slug"
+               "responsibility \"#{seed_key}\" has no default_prompt_template slug"
 
         slug = responsibility.default_prompt_template
 
         assert PromptTemplates.get_template_by_slug(slug),
-               "responsibility \"#{effective_key}\" → template slug \"#{slug}\" " <>
+               "responsibility \"#{seed_key}\" → template slug \"#{slug}\" " <>
                  "has no PromptTemplate row"
       end)
     end
@@ -149,20 +147,20 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     test "closed roster reaches every built-in provider (drift alarm)" do
       # If a new provider ships in BuiltIns without a matching Seeds
       # bundle entry, the roster stops being closed and this test
-      # catches it. Uses the alias map in reverse so seed-side
-      # renames don't false-flag the drift alarm.
+      # catches it. Strict identity match — a seed key that differs
+      # from the handler key it means to reference now fails here
+      # instead of being absorbed by an alias map.
       registered_keys =
         BuiltIns.providers()
         |> Enum.map(fn mod -> mod.key() end)
         |> MapSet.new()
 
-      roster_effective_keys =
+      roster_keys =
         Seeds.default_roles()
         |> Enum.flat_map(& &1.bundle)
-        |> Enum.map(fn seed_key -> Map.get(@known_seed_key_aliases, seed_key, seed_key) end)
         |> MapSet.new()
 
-      unreferenced = MapSet.difference(registered_keys, roster_effective_keys)
+      unreferenced = MapSet.difference(registered_keys, roster_keys)
 
       assert MapSet.size(unreferenced) == 0,
              "built-in provider keys not referenced by any role's bundle " <>

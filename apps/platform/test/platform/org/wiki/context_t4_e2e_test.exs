@@ -847,7 +847,19 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # migrated environment, so the new guidance needs its own
       # overwrite to reach a deployed prompt. Update-only; no schema
       # change.
-      "20260726210000_force_update_architect_review_plan_citation_guidance.exs"
+      "20260726210000_force_update_architect_review_plan_citation_guidance.exs",
+      # Task 019fa230 stage 2: the historian bundle's third duty was
+      # seeded as `memory.dream_consolidation` while the registered
+      # handler fires `memory.dreaming`, so the Control Center panel
+      # offered a row whose override no dispatch path ever read.
+      # `seed_defaults/0` inserts with `on_conflict: :nothing`, so the
+      # seed rename alone would ADD the live key and leave the stale
+      # pair row behind — both spellings would then render. This
+      # migration repoints `responsibility_overrides` onto the live key
+      # (resolving the unique-index collision in favour of an existing
+      # live-key pin), deletes the stale pair row, and re-seeds. No
+      # schema change.
+      "20260727000000_rename_dream_consolidation_bundle_key.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

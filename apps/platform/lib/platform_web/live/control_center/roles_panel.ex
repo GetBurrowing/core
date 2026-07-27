@@ -101,8 +101,10 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
       <%!-- Show-advanced view: flat per-responsibility list with overrides --%>
       <section :if={@show_role_advanced} id="roles-advanced-panel" class="flex flex-col gap-3">
         <p class="text-xs text-base-content/55">
-          Each responsibility routes via its role's assigned agent by default. Set a per-row
-          override to pin a different agent for just that responsibility.
+          Each responsibility routes via its role's assigned agent by default. A per-row override
+          redirects only the work fired for that responsibility — it does not change which agent
+          holds the role, so role-identity lookups (space membership, the wiki write-gate, and
+          meeting scribe / triage attention dispatch) still resolve to the role's assigned agent.
         </p>
 
         <ul class="flex flex-col gap-2">

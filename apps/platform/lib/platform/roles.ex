@@ -49,6 +49,46 @@ defmodule Platform.Roles do
   disjoint in stage 4. As a defensive guard against drift, we log a
   warning when multiple roles match and return the first.
 
+  ### Two resolvers over two disjoint key namespaces
+
+  This module exposes **two** "who does this?" resolvers, and they are
+  not competing implementations of the same lookup. They accept keys
+  from two namespaces that share no member:
+
+    * `assignee_for/1` takes a **responsibility_key** — always dotted
+      (`"design.critique"`, `"meetings.summarize"`,
+      `"architecture.audit_diff"`, …), drawn from `bundle_for/1`. It is
+      override-aware: `responsibility_overrides` is consulted first.
+    * `agent_id_for_role/1` takes a **role_key** — always undotted, from
+      the closed 7-element roster in `Platform.Roles.Role.valid_keys/0`
+      (`designer`, `historian`, `meeting_scribe`, `meeting_producer`,
+      `triage_officer`, `security_guard`, `architect`). It is
+      deliberately **not** override-aware.
+
+  `agent_id_for_role/1` is the RAW ROLE ASSIGNMENT accessor;
+  `assignee_for/1` is the EFFECTIVE ASSIGNEE accessor. The asymmetry is
+  a contract, not an oversight, and it is not a bug to be fixed by
+  unifying the two: `responsibility_overrides` is keyed on
+  responsibility_key, the two key sets are disjoint, and therefore an
+  override lookup inside `agent_id_for_role/1` could never match. It
+  would be dead code by construction.
+
+  That last claim was established by measurement rather than by
+  argument. The proposed unification was actually applied and the entire
+  roles suite — 13 doctests + 110 tests — stayed green; only a
+  force-inserted row carrying a role key in the responsibility_key
+  column (a row the Control Center panel cannot produce, because it
+  writes only keys from `bundle_for/1`) could tell the two versions
+  apart. The disjointness is asserted directly, against the seed
+  literal, in `test/platform/roles/resolver_namespace_test.exs`, so a
+  future bundle addition that collides with a role key fails there
+  loudly instead of quietly making the override path reachable.
+
+  Overrides themselves are not broken and never were.
+  `Platform.Responsibilities.Router.fire_trigger/3` resolves every
+  registered responsibility through `assignee_for/1`, so an override set
+  in the Control Center reaches the dispatch it names.
+
   No GenServer wiring — this is pure functions over the DB.
   """
 
@@ -430,6 +470,38 @@ defmodule Platform.Roles do
   Decision 1 (one-agent-per-role) means at most one row matches; the
   `role_assignments.role_key` unique index enforces this DB-side, so
   the `Repo.one/2` here is safe.
+
+  ## A per-responsibility override cannot redirect this function
+
+  And that is by construction, not by omission. `responsibility_overrides`
+  is keyed on responsibility_key; every key this function accepts is a
+  role_key; the two namespaces are disjoint (see the moduledoc, and
+  `test/platform/roles/resolver_namespace_test.exs`). Adding an override
+  lookup here would compile, pass the whole roles suite, and never once
+  match a real row. If you arrived here intending to "fix" the asymmetry
+  between this function and `assignee_for/1`, that is the fix's
+  measured outcome — please don't.
+
+  ## Two role-keyed dispatch paths shadow a bundled responsibility
+
+  Recorded deliberately, because they are the places where the raw-role
+  accessor and the effective-assignee accessor visibly diverge:
+
+    * `Platform.Meetings.maybe_dispatch_scribe_attention/1`
+      (`lib/platform/meetings.ex:2091`) dispatches scribe attention by
+      the `meeting_scribe` ROLE, while `meetings.summarize` is
+      separately overridable and separately fired by
+      `Platform.Responsibilities.Router`.
+    * `Platform.Meetings.on_scribe_canvas_created/2`
+      (`lib/platform/meetings.ex:2120`, via `safe_agent_id_for_role/1`
+      at `:2138`) dispatches triage by the `triage_officer` ROLE, while
+      `tasks.triage` is separately overridable.
+
+  So an operator who overrides `meetings.summarize` redirects the
+  Router-fired summarize work and does NOT redirect scribe attention
+  dispatch. Converting either call site to a responsibility-keyed lookup
+  is a live-routing change: it needs its own task and its own evidence,
+  and is deliberately not done here.
 
   ## Examples
 

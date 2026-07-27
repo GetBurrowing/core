@@ -68,7 +68,16 @@ defmodule Platform.Roles.Seeds do
       bundle: [
         "memory.daily_summary",
         "memory.propose_long_term",
-        "memory.dream_consolidation"
+        # Task `019fa230` stage 2 renamed this from the stale
+        # `memory.dream_consolidation`. The key MUST match
+        # `Platform.Responsibilities.Handlers.Dreaming.key/0`, because
+        # `Responsibilities.Router.fire_trigger/3` resolves
+        # `assignee_for(responsibility.key)` on the HANDLER key — a
+        # bundle key that diverges from it produces a Control Center
+        # panel row whose override is read by nothing. Existing DBs are
+        # repointed by
+        # `20260727000000_rename_dream_consolidation_bundle_key.exs`.
+        "memory.dreaming"
       ]
     },
     %{

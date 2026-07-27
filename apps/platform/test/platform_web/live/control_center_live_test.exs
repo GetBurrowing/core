@@ -1602,6 +1602,25 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "use role default"
     end
 
+    test "the advanced panel's lead copy scopes an override to the responsibility it names",
+         %{conn: conn} do
+      # Guards the honesty of the copy, not its prose style. The panel writes
+      # `responsibility_overrides` rows, which only `Roles.assignee_for/1`
+      # consults; `Roles.agent_id_for_role/1` is a separate accessor over a
+      # disjoint key namespace and is unaffected. Copy that implies otherwise
+      # is the defect this task exists to close, so assert the scoping clauses
+      # in the RENDERED output rather than trusting a reviewer's memory.
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control")
+
+      html = render_click(view, "toggle_role_advanced", %{})
+
+      assert html =~ "redirects only the work fired for that responsibility"
+      assert html =~ "it does not change which agent"
+      assert html =~ "so role-identity lookups"
+      assert html =~ "still resolve to the role&#39;s assigned agent"
+    end
+
     test "set_responsibility_override persists a ResponsibilityOverride row + assignee_for/1 resolves to it",
          %{conn: conn} do
       agent = create_agent(%{name: "Override Pal"})
