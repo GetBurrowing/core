@@ -12,6 +12,7 @@ defmodule PlatformWeb.ChannelCase do
   using do
     quote do
       import Phoenix.ChannelTest
+      import Platform.AsyncAssertions
       import PlatformWeb.ChannelCase
 
       @endpoint PlatformWeb.Endpoint

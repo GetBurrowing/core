@@ -266,3 +266,316 @@ digest path completes deterministically.
   broadcast flakes (items 1-2).
   - Already documented; recommended follow-up: "Isolate telemetry
     audit-event ordering flakes in DataCase." Backlog, priority low.
+
+---
+
+# 2026-07-27 — the guard that only covered `resolve_and_start/1`
+
+Task: `019fa003-091a-7733-9c79-777e90264493`.
+
+The "BELT" recommendation in this file's *Stage 2 priority* section
+(guard `task_router_watcher.ex`'s `resolve_runtime_for_task/1`) was
+taken, and it was not enough. This section records what it missed, why
+a return-value guard structurally cannot cover it, and what replaced it.
+
+## The gap
+
+`Platform.Orchestration.TaskRouterWatcher` is a globally-supervised
+singleton that `Platform.DataCase` allow-lists into **every** test.
+`Sandbox.allow/3` binds it to whichever test won the race, so a
+`{:task_created, _}` / `{:task_updated, _}` broadcast raised by test A
+routinely arrives while the watcher is sitting on test B's connection.
+
+Five hand-rolled `rescue DBConnection.OwnershipError` + `catch :exit, _`
+pairs had accumulated in that module — `boot_reconcile/0`,
+`resolve_runtime_for_task/1`, two inline blocks in the `:reconcile`
+handler, `redispatch_for_runtime/1`, `safe_reconcile/0`. Each was added
+reactively after a different crash. Every one of them guards a **Repo
+call's return value**.
+
+The path that was never covered has no Repo call to guard:
+
+* `should_run?/1` is pure struct reads.
+* `router_running?/1` is a bare `Registry.lookup`.
+* The **STOP branch** of `evaluate_task/1` reaches `terminate_child`
+  (and through the router's terminate, `LeaseManager.clear/1`) with
+  **zero Repo calls**.
+
+So no Repo-derived `:sandbox_unowned` signal ever reaches the code that
+terminates a router and clears its lease. A guard shaped as "run the
+query, degrade on ownership error" has nothing to degrade *on*.
+
+## Why that is worse than a crash
+
+The state this path mutates is **global and non-transactional**:
+
+| state | table / process | undone by sandbox rollback? |
+|---|---|---|
+| Registry entry | `Platform.Orchestration.Registry` | no |
+| supervised router process | `TaskRouterSupervisor` child | no |
+| lease row | `:orchestration_lease_manager` ETS, `:named_table, :public` | no |
+
+Nothing raises. The watcher acts on a row it cannot see, and the
+end-of-test rollback leaves every one of those mutations in place for
+the next test. That is the mechanism behind the failures that were
+being written off as "the known TaskRouter flake" — a label that
+described the symptom and hid the cause.
+
+**The Registry snapshot discriminates; the ETS lease row does not.** On
+this branch `TaskRouter.terminate/2` does not run on the
+`stop_assignment/1` path (there is no `trap_exit` here — that is sibling
+task `019fa06a`'s change), so an assertion written against the lease row
+can pass for the wrong reason. Assert against the Registry.
+
+## The fix: a precondition at the broadcast boundary
+
+`handle_task_event/2` and `handle_runtime_reconnected/1` now gate on
+`Platform.Orchestration.SandboxGuard` **before** any of the above is
+reachable:
+
+1. `SandboxGuard.connection_owned?/0` — can this process check a
+   connection out of the Repo at all? Issues no SQL. Short-circuits to
+   `true` off the sandbox pool, so a transient production pool timeout
+   can never be read as "not owned"; the check is inert in production
+   **by construction**, not by convention.
+2. `SandboxGuard.row_visible?/2` — is the row this broadcast is about
+   visible on the connection *this* process can see? Gated on
+   `sandbox_pool?/0`, so it cannot run in production at all. This is
+   deliberately cheaper than auditing all eleven `broadcast_board/1`
+   call sites to prove none of them can fire before its transaction
+   commits — and re-auditing on every new one.
+
+Only past both does the handler run `evaluate_task/1`, and even then
+inside `SandboxGuard.guarded/3`. That envelope is not what makes
+today's paths safe (they each carry their own rescue); it is what makes
+the **next** handler added below that line safe by default.
+
+Declined work emits
+`[:platform, :orchestration, :sandbox_guard, :dropped]` telemetry via
+`SandboxGuard.record_drop/3`. This is load-bearing, not decoration: a
+test for a guard can otherwise only assert that *nothing happened*,
+which passes vacuously when the trigger never arrived — the exact
+failure mode that let this defect survive. The drop log is `:debug`,
+not `:warning`: under the sandbox a foreign-connection drop is the
+guard working, and at `:warning` it would bury the log a real problem
+needs.
+
+## The new invariant
+
+> **No handler in `TaskRouterWatcher` may touch
+> `Platform.Orchestration.Registry`, `TaskRouterSupervisor`, or the
+> `:orchestration_lease_manager` ETS table before the sandbox
+> precondition in `handle_task_event/2` has passed.**
+
+It is restated in the module's own `@moduledoc` so the next author
+reads it in the file they are editing.
+
+## Sleeps were hiding the assertions, not just slowing them
+
+All 13 `Process.sleep/1` calls in `task_router_watcher_test.exs` are
+gone, replaced by `TaskRouterWatcher.sync/0` (a `GenServer.call`, so it
+is answered strictly after every message already in the mailbox) and by
+`Platform.AsyncAssertions.assert_eventually/3` polls.
+
+The control that makes this more than a tidy-up: with the watcher
+`:sys.suspend`ed, the **original `Process.sleep` form passes with zero
+failures** while the converted `sync/0` form fails. The sleeps were not
+merely slow — they were asserting nothing.
+
+One conversion that must not be "simplified" later:
+`router_running?/1` is a `Registry.lookup`, and the Registry
+unregisters off its **own** independent monitor of the router process.
+Our `:DOWN` and the Registry's are unordered, so the registry entry
+routinely outlives the process by a scheduler hop. Asserting once
+immediately after `:DOWN` is itself a race — the poll is required.
+
+## Retiring the "known TaskRouter flake"
+
+That guidance was never a file in this repo (`git grep` finds no such
+list on `origin/main`); it propagated through task briefs and org
+memory, which is why it survived unexamined for so long.
+
+**It is retired. After this fix, a TaskRouter-family failure in any run
+is a signal to investigate, not a line item to excuse.** The settling
+evidence for "this failure is not mine" is a control run on the
+untouched tree in the **same load window** — never a remembered flake
+list. Failing sets on this suite are reported by membership, not by
+count: two full-suite runs at an identical seed here have produced
+completely disjoint failing sets.
+
+## The run matrix (stage 5)
+
+A single green run proves nothing on this suite, so the evidence is a
+matrix, not a run. All full-suite runs used an isolated
+`PLATFORM_TEST_DATABASE` (fix: `platform_test_019fa003`, control:
+`platform_test_019fa003_c5`) because `config/test.exs:15` points every
+worktree at the shared `platform_test` and the concurrent ADR-0046
+stack produces Postgrex `40P01` failures indistinguishable from app
+flakes. Each control/fix pair ran **concurrently**, so both trees saw
+the same load window. Box load was 4–20 throughout — inside the band
+where timing assertions mean something.
+
+* **control** = `origin/main` @ `4f19c47b`, untouched. This is the
+  rebased branch point: the branch was rebased off `b19eee64` onto
+  `4f19c47b` so that 019f9d80's audit fix is in *both* trees.
+* **fix** = `task/019fa003` @ `854733ca` (five stage commits + the doc
+  qualification below).
+* **probe** = the temporary adversarial `async: true` module described
+  further down, present in *both* trees for those rows.
+* **fix-lib-only** = the fix tree with its four new test files held
+  out, so the test count matches control exactly (8231). This row
+  exists to separate "the lib change caused it" from "45 more
+  concurrent tests caused it".
+
+| run | tree | probe | tests | failing set (by membership) |
+|---|---|---|---|---|
+| ctl-s11 | control | no | 8231 | {} |
+| ctl-s22 | control | no | 8231 | {} |
+| ctl-s33 | control | no | 8231 | {TaskRouterTest — no-ack silence, silence + prior ack (`task_router_test.exs:964`)} |
+| ctl2-s11 | control | no | 8231 | {Audit.TelemetryHandlerTest — historian namespace bridging, async dispatch} |
+| ctl2-s22 | control | no | 8231 | {Tasks.TaskTest — require_approved_plan_for/2 non-execution transitions; ExternalAgents.EphemeralCredentialsTest — GenServer restart kills the table} |
+| ctlp-s11 | control | **yes** | 8243 | {**TaskRouterTest — failed review stage bounces in_review → in_progress** (`:479`); **TaskRouterTest — safety-net fire, deadline in the past** (`:758`)} |
+| ctlp-s22 | control | **yes** | 8243 | {MeetingLiveTest — caption bar absent when captions_visible=false (`:3883`)} |
+| ctlp-s33 | control | **yes** | 8243 | {**TaskRouterWatcherTest — soft_delete_task/1 stops the running router inline**} |
+| fix-s11 | fix | no | 8276 | {MeetingLiveTest — CC toggle persistence (`:3578`)} |
+| fix-s22 | fix | no | 8276 | {MeetingLiveTest — caption bar absent (`:3883`)} |
+| fix-s33 | fix | no | 8276 | {TaskRouterTest — no-ack silence, silence + prior ack (`task_router_test.exs:964`)} |
+| fixp-s11 | fix | **yes** | 8288 | {MeetingLiveTest — CC toggle persistence (`:3578`)} |
+| fixp-s22 | fix | **yes** | 8288 | {} |
+| fixp-s33 | fix | **yes** | 8288 | {MeetingsTest — list_stalled_router_dispatches/1 empty list; MeetingLiveGuestInviteTest — non-host does not see Copy guest link} |
+| fixlib-s11 | fix-lib-only | no | 8231 | {Audit.TelemetryHandlerTest — agents.historian namespace bridging, async dispatch} |
+| fixlib-s22 | fix-lib-only | no | 8231 | {} |
+
+Plus the orchestration directory alone on the fix tree, five distinct
+seeds: `545 tests, 0 failures` at seeds 41, 42, 43, 44 and 45 — 5/5.
+
+### TaskRouter-family tally
+
+| tree | runs | family failures | which |
+|---|---|---|---|
+| control | 8 | 4 | `task_router_test.exs` ×3, `task_router_watcher_test.exs` ×1 |
+| fix | 8 | 1 | `task_router_test.exs` ×1 |
+
+`TaskRouterWatcherTest` — the file this task owns — is **0/8 on the fix
+tree** and **1/8 on control**, and the one control failure
+(`ctlp-s33`, *"soft_delete_task/1 stops the running router inline"*)
+appeared only once the adversarial probe was added. The probe
+reproducing a watcher failure on untouched `main` and never on the fix
+tree is the matrix's load-bearing result.
+
+### Verdict: NOT "fixed" by this stage's own gate — one named residual
+
+The gate for this task is **zero** TaskRouter-family failures across
+every fix-branch and adversarial run. The fix tree has exactly one:
+
+> `Platform.Orchestration.TaskRouterTest` — *"no-ack silence (task
+> 019f6791-c01b stage 2) silence + prior ack → :check_no_ack silent via
+> ack clause (silence orthogonal)"*, `task_router_test.exs:964`,
+> failing at `:978` with `** (MatchError) no match of right hand side
+> value: {:error, :not_found}` on `:ok = LeaseManager.record_ack(task.id)`.
+
+It is **not this change's regression** and the evidence is direct: the
+identical test, at the identical line, with the identical MatchError,
+failed on the **untouched control tree at the same seed in the same
+load window** (`ctl-s33` and `fix-s33`). `task_router_test.exs` is
+owned by task `019fa121`, is still on fixed `Process.sleep` in tranche
+B, and this task must not edit it.
+
+The disposition is therefore: **gate clean except
+`task_router_test.exs`, which is owned by `019fa121`.** Sibling
+`019fa121` stage 3 has landed `0fe94009` on `task/019fa121` converting
+the *"failed review stage bounces task from in_review back to
+in_progress"* test (their `:562`; it appears at `:479` on this
+branch's base and failed here on **control**, `ctlp-s11`) — with
+0/9 task-tree runs failing against 3/9 on their control. That branch
+merges independently; it was deliberately NOT merged here, because
+pulling a sibling's conversions in would make the two trees differ by
+far more than this change and destroy the isolation the control run
+exists to provide.
+
+### Every non-family failure, individually named and matched
+
+* **`MeetingLiveTest` / `MeetingsTest` / `MeetingLiveGuestInviteTest`
+  cluster** (fix: 4 of 8 runs; control: 1 of 8). Every one fails the
+  same way — `** (exit) exited in: Phoenix.LiveViewTest.live("/meetings/…")`
+  → `GenServer.call(…, {:phoenix, :child_mount, …}, 5000)` → `time out`.
+  The `/meetings/…` mount performs a LiveKit `CreateRoom` call that
+  resolves `nxdomain` in this environment: **60–67 occurrences per run
+  on BOTH trees** (`ctl` 61/67/64, `fix` 60/62/62). It is a
+  load-sensitivity of that mount path, not a logic break.
+  *Matched to control:* `MeetingLiveTest :3883` failed identically on
+  the control tree (`ctlp-s22`).
+  *Attributed away from the diff by experiment:* the `fix-lib-only`
+  row holds the lib change and drops the four new test files so the
+  test count equals control's 8231 — and the meeting cluster
+  **disappears entirely** (0 of 2 runs) while control at the same
+  seeds produced 3 failures. The trigger is concurrent test *volume*,
+  not the guard.
+* **`Audit.TelemetryHandlerTest` — "handle_event returns fast … (async
+  dispatch)"** (fix-lib-only s11). Matched: the same test family failed
+  on control at the same seed (`ctl2-s11`, historian namespace variant).
+* **`Tasks.TaskTest` — require_approved_plan_for/2**, and
+  **`ExternalAgents.EphemeralCredentialsTest` — GenServer restart kills
+  the table** (`ctl2-s22`). Control-only; never seen on the fix tree.
+
+`external_admission_notifier_test.exs:138` — flagged as
+known-independent and fixed on main by `4f19c47b` — did **not** appear
+in any of the 16 runs, post-rebase. Confirmed gone.
+
+### The adversarial probe (deleted; reconstruct from here)
+
+`test/platform/orchestration/zz_adversarial_probe_019fa003_test.exs`,
+`use Platform.DataCase, async: true`, 12 tests, deleted at the end of
+stage 5 because it is a probe and not a deliverable.
+
+Six of the twelve are generated by a `for n <- 1..6` and each does:
+create an `Agent`, `Tasks.create_task/1` with `status: "planning"`,
+`assignee_type: "agent"`, `assignee_id: agent.id` (the
+`should_run?/1 == true` shape), then `Tasks.update_task/3` for a title
+touch (re-evaluate an already-running assignment), then
+`Tasks.update_task/3` to `"blocked"` — which is the STOP branch, the
+one that reaches `terminate_child` with zero Repo calls. The remaining
+six churn adjacent shapes so the broadcast stream is not uniform: a
+user-assigned `planning` task, an unassigned backlog task,
+planning → in_progress → in_review, in_progress → done, a
+`stack_pending` task, and a burst of eight `planning` creates on one
+project. It asserts nothing about the watcher; it is a load generator,
+and the measurement is whether the rest of the suite survives it.
+
+`async: true` is the load-bearing part: `DataCase` runs an async file
+in **manual** sandbox mode, which is precisely the mode in which the
+globally-allow-listed watcher can be sitting on another test's
+connection when the broadcast lands.
+
+### Sibling coordination — is stage 1's primitive enough for `019fa06a`?
+
+`019fa06a`'s failure is `CleanupGhostTasksTest` dying on a
+`DBConnection.OwnershipError` raised from
+`RuntimeSupervision.expire_stale_leases/2`
+(`runtime_supervision.ex:449`). Assessment, so that task adopts rather
+than reinvents:
+
+* **`SandboxGuard.guarded/3` is the right primitive for that call
+  site, and it is sufficient for the error shape.** It catches both
+  shapes that site can produce — the `DBConnection.OwnershipError`
+  raise and the owner-exited `:exit` that `rescue` cannot see — and
+  emits the drop telemetry that lets a test assert the degradation
+  *positively* instead of asserting that nothing happened.
+* **The precondition half is NOT what `019fa06a` needs.**
+  `connection_owned?/0` + `row_visible?/2` exist here because the
+  watcher's unguarded path mutates Registry / supervisor / ETS state
+  that the sandbox rollback does not undo. `expire_stale_leases/2`
+  mutates via `repo.update_all` — transactional, and rolled back. So
+  the return-value guard that was structurally wrong for the watcher
+  is structurally right there.
+* **One trap.** Wrapping only line 449 moves the raise two lines down:
+  every caller (`current_lease_for_task/1`, `current_lease_for_stage/2`,
+  `latest_lease_for_task/2`, …) follows `expire_stale_leases/2`
+  immediately with a `Repo.one/2` on the same unowned connection.
+  Guard the **public function body**, not the private helper, and pick
+  a fallback that means "I could not read the lease" (`nil`) rather
+  than one that means "there is no lease".
+
+This task deliberately does not edit `runtime_supervision.ex` or the
+audit telemetry handler: three tasks' diffs overlapping in one PR makes
+none of them independently reviewable.

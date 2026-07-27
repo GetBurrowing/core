@@ -31,6 +31,14 @@ defmodule PlatformWeb.ConnCase do
       import Plug.Conn
       import Phoenix.ConnTest
       import PlatformWeb.ConnCase
+
+      # Deliberately NOT `import Platform.AsyncAssertions` here, unlike
+      # `ChannelCase`. `tasks_live_planning_step_test.exs:724` defines a local
+      # `eventually/2,3` with a different shape — `(view, selector, attempts)`,
+      # a LiveView element poller rather than a predicate poller — and an
+      # import would be a hard compile error ("conflicts with local function"),
+      # not a shadowing warning. A ConnCase test that wants the shared helper
+      # should `import Platform.AsyncAssertions` itself.
     end
   end
 
