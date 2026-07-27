@@ -9,10 +9,10 @@ defmodule Platform.Audit.TelemetryHandlerTest do
 
   setup do
     # Ensure handler is attached for each test (Application.start may not
-    # run in the test env the way we expect).
-    TelemetryHandler.detach()
-    TelemetryHandler.attach()
-    on_exit(fn -> TelemetryHandler.detach() end)
+    # run in the test env the way we expect) AND restored on exit —
+    # it is VM-global, so leaving it detached silences audit writes for
+    # every later test in this BEAM (task 019f9d80).
+    Platform.TelemetryHelpers.ensure_boot_handler!(TelemetryHandler)
     :ok
   end
 
@@ -851,5 +851,78 @@ defmodule Platform.Audit.TelemetryHandlerTest do
       refute Map.has_key?(event.metadata, "resource_id")
       refute Map.has_key?(event.metadata, "actor_type")
     end
+  end
+
+  describe "attach/0 idempotency across every boot-attached handler (task 019f9d80)" do
+    # The seven handlers Platform.Application.start/2 attaches at boot
+    # (application.ex:12-27). They are VM-global, so a test that detaches
+    # one and does not restore it silences that bridge for every later
+    # test in the same BEAM — and the symptom is an audit assertion that
+    # passes because nothing is listening, not an error. Making attach/0
+    # idempotent is what removes the reason to detach first.
+    @boot_handlers [
+      Platform.Audit.TelemetryHandler,
+      Platform.Vault.TelemetryHandler,
+      Platform.Chat.TelemetryHandler,
+      Platform.Meetings.TelemetryHandler,
+      Platform.Meetings.IntentCorrections.TelemetryHandler,
+      Platform.Memory.TelemetryHandler,
+      Platform.Accounts.ExternalAdmissionNotifier
+    ]
+
+    test "attach/0 returns :ok when the handler is already attached" do
+      for module <- @boot_handlers do
+        assert :ok = module.attach(), "#{inspect(module)}.attach/0 did not return :ok"
+
+        assert :ok = module.attach(),
+               "#{inspect(module)}.attach/0 is not idempotent — a second attach must be a no-op"
+      end
+    end
+
+    test "a repeated attach/0 installs one handler, not two" do
+      for module <- @boot_handlers do
+        :ok = module.attach()
+        before = handler_ids_for(module)
+
+        assert length(before) == 1,
+               "expected exactly one handler id for #{inspect(module)}, got #{inspect(before)}"
+
+        :ok = module.attach()
+
+        assert handler_ids_for(module) == before,
+               "#{inspect(module)}.attach/0 duplicated its handler registration"
+      end
+    end
+
+    test "ensure_boot_handler!/1 re-attaches a handler that is currently detached" do
+      # The state a leaked test leaves behind: handler gone, no error
+      # anywhere, later audit assertions quietly reading [].
+      Platform.Vault.TelemetryHandler.detach()
+      assert handler_ids_for(Platform.Vault.TelemetryHandler) == []
+
+      assert :ok = Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Vault.TelemetryHandler)
+
+      assert handler_ids_for(Platform.Vault.TelemetryHandler) == ["platform-vault-telemetry"]
+    end
+
+    test "ensure_boot_handler!/1 rejects a module that is not a telemetry handler" do
+      assert_raise ArgumentError, ~r/does not export attach\/0/, fn ->
+        Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Audit.Event)
+      end
+    end
+  end
+
+  # All handler ids currently registered whose callback lives in `module`.
+  # Derived from the registry rather than hardcoding @handler_id strings,
+  # so it stays correct if an id is renamed. attach_many/4 registers one
+  # entry per event under a single id, hence the uniq.
+  defp handler_ids_for(module) do
+    []
+    |> :telemetry.list_handlers()
+    |> Enum.filter(fn handler ->
+      Function.info(handler.function, :module) == {:module, module}
+    end)
+    |> Enum.map(& &1.id)
+    |> Enum.uniq()
   end
 end

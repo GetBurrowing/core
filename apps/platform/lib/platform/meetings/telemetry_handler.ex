@@ -49,9 +49,18 @@ defmodule Platform.Meetings.TelemetryHandler do
     [:platform, :meetings, :tasks_created_from_meeting] => "meetings.tasks_created"
   }
 
-  @doc "Attach the handler to all registered meetings telemetry events."
+  @doc """
+  Attach the handler to all registered meetings telemetry events.
+
+  Idempotent — a duplicate attach is a no-op (see
+  `Platform.Audit.TelemetryHandler.attach/0` for the reasoning).
+  """
+  @spec attach() :: :ok
   def attach do
-    :telemetry.attach_many(@handler_id, @meetings_events, &__MODULE__.handle_event/4, %{})
+    case :telemetry.attach_many(@handler_id, @meetings_events, &__MODULE__.handle_event/4, %{}) do
+      :ok -> :ok
+      {:error, :already_exists} -> :ok
+    end
   end
 
   @doc "Detach the handler (useful in tests)."

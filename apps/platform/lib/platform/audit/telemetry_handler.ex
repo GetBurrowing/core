@@ -180,9 +180,21 @@ defmodule Platform.Audit.TelemetryHandler do
     # rows (see maintenance_subagent.ex:record_audit/4).
   ]
 
-  @doc "Attach the handler to all registered platform telemetry events."
+  @doc """
+  Attach the handler to all registered platform telemetry events.
+
+  Idempotent — a duplicate attach is a no-op. `:telemetry` keys handlers
+  by `@handler_id`, so the second attach cannot install a second copy; it
+  only reports `{:error, :already_exists}`. Normalising that to `:ok`
+  removes the reason a test would `detach/0` first, which is what leaked
+  a globally-detached handler into the rest of the run (task 019f9d80).
+  """
+  @spec attach() :: :ok
   def attach do
-    :telemetry.attach_many(@handler_id, @events, &__MODULE__.handle_event/4, %{})
+    case :telemetry.attach_many(@handler_id, @events, &__MODULE__.handle_event/4, %{}) do
+      :ok -> :ok
+      {:error, :already_exists} -> :ok
+    end
   end
 
   @doc "Detach the handler (useful in tests)."

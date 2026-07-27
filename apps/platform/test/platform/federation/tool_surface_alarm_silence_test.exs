@@ -339,12 +339,10 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
   describe "audit bridging" do
     test "successful silence records a platform.orchestration.alarm_silence audit row",
          %{task: task, stage: stage} do
-      # Re-attach the TelemetryHandler explicitly — in some test envs the
+      # Attach the TelemetryHandler explicitly — in some test envs the
       # Application-boot attach hasn't run and the audit bridge would be
-      # inert. detach+attach is a no-op if already attached.
-      Platform.Audit.TelemetryHandler.detach()
-      Platform.Audit.TelemetryHandler.attach()
-      on_exit(fn -> Platform.Audit.TelemetryHandler.detach() end)
+      # inert. Restored on exit, because it is VM-global (task 019f9d80).
+      Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Audit.TelemetryHandler)
 
       :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
 

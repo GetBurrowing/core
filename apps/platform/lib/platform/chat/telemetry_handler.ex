@@ -45,9 +45,18 @@ defmodule Platform.Chat.TelemetryHandler do
     [:platform, :chat, :attention_routed]
   ]
 
-  @doc "Attach the handler to all registered chat telemetry events."
+  @doc """
+  Attach the handler to all registered chat telemetry events.
+
+  Idempotent — a duplicate attach is a no-op (see
+  `Platform.Audit.TelemetryHandler.attach/0` for the reasoning).
+  """
+  @spec attach() :: :ok
   def attach do
-    :telemetry.attach_many(@handler_id, @chat_events, &__MODULE__.handle_event/4, %{})
+    case :telemetry.attach_many(@handler_id, @chat_events, &__MODULE__.handle_event/4, %{}) do
+      :ok -> :ok
+      {:error, :already_exists} -> :ok
+    end
   end
 
   @doc "Detach the handler (useful in tests)."

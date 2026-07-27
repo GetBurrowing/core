@@ -25,11 +25,7 @@ defmodule Platform.Audit.HistorianLatencyTest do
   @p99_budget_us 1_000
 
   setup do
-    # Idempotent: detach + re-attach so a leaked handler from a prior test
-    # (or the test env's Application.start) doesn't double-fire.
-    TelemetryHandler.detach()
-    TelemetryHandler.attach()
-    on_exit(fn -> TelemetryHandler.detach() end)
+    Platform.TelemetryHelpers.ensure_boot_handler!(TelemetryHandler)
 
     :ok
   end

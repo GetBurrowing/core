@@ -432,3 +432,251 @@ correctly relabelled as a wall-clock latency flake rather than cross-file
 pollution — it lives in a file this task edits and will otherwise be misread as
 a regression. Mislabelling one flake as another is what made this bug invisible;
 the precision is the point.
+
+---
+---
+
+# Stage 2 — the fix, and what the mutation check actually proved
+
+Task `019f9d80-e1ac-737c-bfd3-7846e2de6469`, stage 2
+("Make boot-handler attach idempotent and add a restoring test helper").
+Branch `task/019f9d80`, parent `331bf1d5` (stage 1).
+All measurements below: worktree `~/sources/worktrees/019f9d80`,
+`PLATFORM_TEST_DATABASE=platform_test_019f9d80`, control worktree
+`~/sources/worktrees/019f9d80-ctl` at `b19eee64` with
+`PLATFORM_TEST_DATABASE=platform_test_019f9d80_ctl`.
+
+## 7. What changed
+
+`attach/0` is now idempotent on all six boot-attached handlers that were not
+(`{:error, :already_exists} -> :ok`), mirroring
+`accounts/external_admission_notifier.ex:58-63`. `@spec attach() :: :ok` on each,
+including `IntentCorrections.TelemetryHandler` whose spec previously admitted the
+error tuple.
+
+`test/support/telemetry_helpers.ex` is new:
+`Platform.TelemetryHelpers.ensure_boot_handler!/1` attaches the module and
+registers an **unconditional** `on_exit(fn -> module.attach() end)`.
+
+The five offenders now call it instead of `detach(); attach(); on_exit(detach)`:
+`audit/historian_latency_test.exs`, `audit/telemetry_handler_test.exs`,
+`federation/tool_surface_alarm_silence_test.exs`,
+`meetings/telemetry_handler_test.exs`, `vault/telemetry_handler_test.exs`.
+The false rationale comment at `historian_latency_test.exs:28-29` is deleted with
+the code it justified: `:telemetry` keys by a fixed `@handler_id`, so the
+double-fire it claimed to prevent was never possible.
+
+### A sixth site the stage-2 plan did not name, which idempotency turns INTO a leak
+
+`meetings/intent_corrections/telemetry_handler_test.exs:89` read:
+
+```elixir
+result = TelemetryHandler.attach()
+if result == :ok, do: TelemetryHandler.detach()
+assert {:error, :already_exists} = result
+```
+
+Stage 1 correctly classified this as self-cancelling **while `attach/0` still
+returned `{:error, :already_exists}`**. Making `attach/0` idempotent inverts it:
+`result` becomes `:ok` unconditionally, so the detach fires unconditionally — in
+an `async: true` file — and the file becomes a new offender created by the fix
+itself. It is rewritten to assert the boot attach is already present *before*
+calling `attach/0` (which preserves the anti-masking property the old comment was
+protecting) and then to assert exactly one registration remains. It never
+detaches. The file's moduledoc claim "This module never calls `detach/0`" is now
+true, which it was not before.
+
+## 8. Ordered pair — the mechanism-A regression check
+
+Same command as §2, same worktree, before and after the diff.
+
+| | seeds 0-9 |
+|---|---|
+| Before (this worktree, pre-fix) | seed 0: `6 tests, 1 failure` — `ExternalAdmissionNotifierTest` "a holding event persists an Audit.Event (durable queue source)", assertion receiving `[]`. Matches §2's control 10/10 exactly. |
+| After | **10/10 GREEN**, `6 tests, 0 failures` at every seed 0-9. Plus 5 extra runs at seed 0: green. |
+
+A 100 %→0 % transition on a deterministic reproduction, per §0's table.
+
+### One post-fix seed-0 failure, named rather than waved through
+
+The **first** post-fix sweep reported `6 tests, 1 failure` at seed 0; that sweep
+only captured counts, so the failing test's name was lost. Rather than match it
+to a flake list — the habit that created this task — the class was reproduced
+directly, in this worktree, on this diff:
+
+```
+mix test test/platform/audit/historian_latency_test.exs --seed 0   (x10)
+run  1: FAIL  p99=2577µs
+runs 2-9: pass p99=294..436µs
+run 10: FAIL  p99=3056µs
+```
+
+**2/10**, the same rate §3 measured on a clean control, on the single file that
+contains a wall-clock budget assertion (`@p99_budget_us 1_000`). The 15
+subsequent seed-0 ordered-pair runs recorded above are all green, and
+`ExternalAdmissionNotifierTest:138` did not fail in any of them. This is the §3
+p99 wall-clock entry, measured here rather than assumed here.
+
+## 9. Mutation check — the plan's version does NOT go red, and why that matters
+
+The stage-2 plan specified: delete the `on_exit` re-attach inside
+`ensure_boot_handler!/1`, rerun the ordered pair, expect RED.
+
+**Run it and it stays GREEN** (`6 tests, 0 failures`, seed 0 — probe M0 below).
+That is not a defective guard; it is the plan's causal model being off by one
+step. What fixes mechanism A is that `historian_latency_test.exs`'s setup **no
+longer detaches at all** — idempotent `attach/0` removed the reason to. The
+`on_exit` is not what repairs the existing five offenders; it is what makes a
+*future* detach, or a mid-body detach, harmless. Deleting it therefore cannot
+turn the ordered pair red, because with the setup detach gone there is nothing
+left to restore.
+
+So the mutation must reintroduce the condition the `on_exit` defends. Probe:
+inject `TelemetryHandler.detach()` into `historian_latency_test.exs`'s setup —
+i.e. simulate exactly the mid-body/legacy detach the helper exists for — and vary
+only the `on_exit` line.
+
+| probe | `on_exit` restore | injected detach | ordered pair, seed 0 |
+|---|---|---|---|
+| M0 (the plan's mutation, verbatim) | deleted | no | `6 tests, 0 failures` — GREEN |
+| **M1** | **deleted** | **yes** | **`6 tests, 1 failure`** — `ExternalAdmissionNotifierTest` "a holding event persists an Audit.Event (durable queue source)", `Expected truthy, got false`, arguments `[]` — byte-for-byte the §2 failure |
+| **M2** | **restored** | **yes** | **`6 tests, 0 failures`** — GREEN |
+
+M1 vs M2 isolates the `on_exit` as the only difference and shows it is
+load-bearing: with a detach present, deleting the restore reproduces the original
+defect exactly. Both probes were reverted; the committed tree contains neither.
+
+A note for whoever writes stage 4's guard: **M0 is the more important row.** It
+says the ordered pair does not detect a missing restore once the setup detach is
+gone. A guard that watches only the ordered pair would pass a future test that
+detaches and never restores, right up until that test's file happens to precede a
+victim. The guard has to be static (no `detach` of a boot handler without a
+restoring `on_exit`, and none at all in an `async: true` file), not behavioural.
+
+## 10. Full suite
+
+`mix format --check-formatted` → clean (`FORMAT_OK`).
+
+Baseline is 8216 tests (§3). This stage adds 4, all in
+`audit/telemetry_handler_test.exs`: `attach/0` returns `:ok` when already
+attached (table over all seven boot-attached handlers); a repeated `attach/0`
+installs one registration, not two; `ensure_boot_handler!/1` re-attaches a
+detached handler; `ensure_boot_handler!/1` raises on a module without `attach/0`.
+
+| tree | seed | result | failing set |
+|---|---|---|---|
+| fix `task/019f9d80` | 0 | `16 doctests, 8220 tests, 1 failure, 3 skipped` | `Platform.Tasks.PlanTest:398` (§10.1) |
+| fix `task/019f9d80` | 0 (rerun) | `16 doctests, 8220 tests, 0 failures, 3 skipped` | ∅ |
+| control `b19eee64` | 0 | `16 doctests, 8216 tests, 1 failure, 3 skipped` | `Platform.Chat.AttentionRouterTest` "the eye falls closed on TTL expiry…" (named in §3) |
+| fix `task/019f9d80` | 1 (ran 00:35-00:41 UTC) | `16 doctests, 8220 tests, 5 failures, 3 skipped` | `TaskRouterTest:1039`, `TaskRouterTest:964`, `TaskRouterTest:412`, `TaskRouterTest:758`, `HistorianDispatcherTest:322` (§10.2) |
+| fix `task/019f9d80` | 1 (rerun 01:06-01:13 UTC) | `16 doctests, 8220 tests, 1 failure, 3 skipped` | `LocalRunnerTest:92` |
+
+Note the control at seed 0 produced a failure here where §3 recorded ∅ for the
+same commit at the same seed — the one-flake-per-run premise, again, on
+byte-identical code.
+
+**The seed-1 comparison is the informative one.** §3's control at seed 1 failed
+`{TaskRouterTest:1039, :479, :758, LocalRunnerTest:92,
+ExternalAdmissionNotifierTest:138}`. On the fix branch at seed 1,
+`ExternalAdmissionNotifierTest:138` is **gone** from both runs — mechanism A
+surfacing in a full run at the one control seed where it surfaced, and no longer
+firing. Both fix-branch seed-1 sets are subsets of the control's once §10.2 is
+subtracted; `TaskRouterTest:964` ("silence + prior ack → `:check_no_ack` silent",
+`MatchError` on `LeaseManager.record_ack/1` returning `{:error, :not_found}`) is
+a new member of the TaskRouter sandbox/liveness cluster §3 already names as
+producing a different subset each run.
+
+### 10.1 `Platform.Tasks.PlanTest:398`
+
+A new entry for the known-independent list.
+
+```
+test broadcasts {:plan_updated, supersedee} BEFORE {:plan_updated, new_plan}
+  assert id2 == v2.id
+  left:  "019fa0e3-db97-7020-b707-166608a9c75c"
+  right: "019fa0e3-dbf9-7df0-8d44-5406e3b6ca73"
+```
+
+Not in §3's enumeration, so per §0 it is a stop until explained. Explanation,
+mechanical rather than by resemblance:
+
+- `plan_test.exs:2` is `async: true` and the test subscribes to
+  `Tasks.subscribe_board()` — a **single global topic** (`tasks.ex:3611`,
+  `broadcast_board/1`, unfiltered by task).
+- `{:plan_updated, plan}` is broadcast from six call sites in `Platform.Tasks`
+  (`:1536`, `:1860`, `:1863`, `:2134`, `:2209`, `:2318`), and **13 other
+  `async: true` test files** approve plans (`tasks_context_test.exs`,
+  `plan_engine_test.exs`, `stage_test.exs`, `validation_test.exs`,
+  `task_test.exs`, `auto_merger_test.exs`, `review_requests_test.exs`,
+  `queries_test.exs`, `deploy_rollback_test.exs`,
+  `review_request_inbox_test.exs`, `deploy_credentials_test.exs`,
+  `github_webhook_controller_test.exs`, `submit_plan_for_review_architect_hook_test.exs`).
+- The test's second `assert_receive` matches on `status: "approved"` only, so any
+  concurrent file's approval binds `id2`. The observed id is a UUIDv7 whose
+  timestamp is ~98 ms *earlier* than `v2` — a plan that already existed before the
+  operation under test, which the operation under test cannot have produced.
+- `approve_v1/1` runs *before* `subscribe_board/0`, and `Phoenix.PubSub` does not
+  deliver to a process that subscribed afterwards, so it is not v1 either.
+
+That is a cross-test PubSub leak in the test's own design — the same class as the
+`MeetingsTest:416` entry in §3, at a new site. No telemetry handler broadcasts
+`{:plan_updated, _}` (`audit/telemetry_handler.ex` only writes rows), so handler
+attachment cannot cause it. Not reproduced on the fix branch rerun at the same
+seed, nor in 10 seeds of a 401-test targeted subset of the nine board-broadcasting
+async files on the control — full-suite scheduler load appears to be required.
+
+**Add `Platform.Tasks.PlanTest:398` to the known-independent list for stage 5,
+with the mechanism above written next to it.** The nearby cases at
+`plan_test.exs:479` and `:584` subscribe to the same global topic and are
+vulnerable to the same leak; they have not been observed failing.
+
+### 10.2 `Platform.Agents.HistorianDispatcherTest:322` — broken for one hour a day, and it is a clock bug, not a flake
+
+This one looked like a regression: it is historian-adjacent, it is in the blast
+radius of "the Audit handler is now reliably attached during historian emits",
+and unlike everything else in §3 it failed **deterministically** — 3/3 on the fix
+branch in a single-file run. The temptation to file it under §3's p99 entry
+(same file family, same "historian" in the name) is exactly the move that kept
+the original bug alive for eight briefs, so it was not made.
+
+```
+test (a) 120KB transcript, tight-range oversize path stamps day_bytes on today
+  expected a transcripts telemetry event on 2026-07-27 with day_bytes ≈ 120_000, got: []
+```
+
+Measured, in this order:
+
+| tree | wall clock (UTC) | seeds 1,2,3 |
+|---|---|---|
+| fix `task/019f9d80` | 00:41-00:47 | **3/3 RED** |
+| control `b19eee64`, `git status --porcelain` empty | 00:47-00:53 | **3/3 RED** |
+| fix `task/019f9d80` | 01:05 | **3/3 GREEN** |
+
+The untouched branch-point control fails it identically at the same wall clock,
+so it is not this diff. And the transition at 01:00 UTC names the mechanism:
+
+`historian_dispatcher_test.exs:328-332` builds `now = DateTime.utc_now()` and
+`one_hour_ago = now - 3600s`, then at `:398-405` filters the drained telemetry
+events by
+
+```elixir
+String.starts_with?(meta.day_span, DateTime.to_iso8601(one_hour_ago) |> String.slice(0, 10))
+```
+
+— the UTC **date of `now - 1h`** — while the seeded transcript
+(`thirty_min_ago`) and the per-day byte histogram are keyed on the UTC date of
+`now`. Between 00:00 and 01:00 UTC those two dates differ, the filter matches
+nothing, and the assertion receives `[]`. The test's own failure message betrays
+the inconsistency: it reports "on 2026-07-27" (`today_utc`, from `now`) while
+filtering for `2026-07-26`. Outside that hour the two dates coincide and the test
+passes.
+
+So: a genuine test defect, live for one hour in every 24 on any machine running
+the suite in that window, pre-dating this task. The fix is one line — filter on
+`today_utc` rather than on `one_hour_ago`'s date (or pin the cursor with
+`DateTime.new!(today_utc, ~T[00:30:00])` so the tight range cannot straddle
+midnight) — but it is outside the stage-1 scope fence and is left to a follow-up.
+
+**Add it to the known-independent list with the time window written down**, not
+as "a historian flake". A reviewer who runs the suite at 00:30 UTC will see it
+3/3 and, without this note, will read a deterministic failure as a regression.
