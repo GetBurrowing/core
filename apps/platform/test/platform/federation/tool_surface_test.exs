@@ -2314,11 +2314,18 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # plan_create that still WRITES the column and merely stops echoing it,
       # so check the persisted row too — that is the assertion that makes this
       # "no new row can acquire a non-null responsibility" rather than "the
-      # wire response got quieter". The schema field still exists at this point
-      # in the branch; stage 4 drops the column and retires this line with it.
+      # wire response got quieter".
+      #
+      # Stage 3 wrote this as `assert persisted.responsibility == nil`, which
+      # was the strongest available form while the column existed. Stage 4
+      # dropped the column, so that access is now a KeyError and the claim is
+      # restated structurally: the persisted struct has no such key to hold a
+      # value in. Restoring the schema field AND the writer detonates here;
+      # restoring the schema field alone detonates in
+      # `Platform.Tasks.StageTest`.
       persisted = Platform.Repo.get!(Platform.Tasks.Stage, stage.id)
       assert persisted.name == "Design direction"
-      assert persisted.responsibility == nil
+      refute Map.has_key?(persisted, :responsibility)
     end
 
     test "plan_create schema no longer documents responsibility but still documents the rest of the stage contract" do
