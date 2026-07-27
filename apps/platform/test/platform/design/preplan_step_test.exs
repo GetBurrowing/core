@@ -425,6 +425,80 @@ defmodule Platform.Design.PreplanStepTest do
     end
   end
 
+  # ── the fire-terminal records ─────────────────────────────────────────────
+
+  # Why these are not folded into the `settle/2` block below: the ONLY assertion
+  # on `layer`/`matched` in this file before now was in that block (the
+  # membership check further down), and `do_settle/2` is the one path that pipes
+  # the whole verdict into `evidence_annotations/1`. Every FIRE-terminal record
+  # went through `fire_designer/2`, which destructured the verdict and passed the
+  # inner map, so the tuple clause never matched and the catch-all returned `%{}`.
+  # A test added under `settle/2` passes identically before and after that fix
+  # and proves nothing; these must fail without it.
+  #
+  # Exact-value pins, not membership: `@ui_title` is `ui_surface.ex`'s own
+  # doctest subject, which fixes the verdict at
+  # `{true, %{layer: :strong_prose, matched: ["fab"]}}`. Pinning the values also
+  # proves the tuple was threaded through unmutated, which a membership check
+  # cannot.
+  describe "GUARD — the fire-terminal records carry stage 1's evidence" do
+    test "a no_designer skip records the layer and the matched tokens", %{project: project} do
+      task = task!(project, @ui_title)
+      _ = execution_space!(task)
+
+      quietly(fn -> assert {:ok, :not_applicable} = PreplanStep.start(task) end)
+
+      entry = design_entry(task)
+
+      # Proves `annotate/3` ran at all, so a missing `layer` below cannot be
+      # blamed on the annotate call having been skipped entirely.
+      assert entry["reason"] == "no_designer"
+
+      assert entry["layer"] == "strong_prose"
+      assert entry["matched"] == ["fab"]
+    end
+
+    test "a failed fire records the evidence WITHOUT resurrecting the no_designer reason", %{
+      project: project
+    } do
+      override_dispatcher(RaisingDispatcher)
+      _agent = wire_designer!()
+
+      task = task!(project, @ui_title)
+      _ = execution_space!(task)
+
+      quietly(fn -> assert {:ok, :failed} = PreplanStep.start(task) end)
+
+      entry = design_entry(task)
+      assert entry["outcome"] == "failed"
+      assert entry["layer"] == "strong_prose"
+      assert entry["matched"] == ["fab"]
+
+      # Load-bearing in the other direction. `annotations_for/2` deletes ONLY
+      # `"reason"` for a non-`not_applicable` outcome, so carrying `layer` and
+      # `matched` through must not drag `"no_designer"` along onto a fire that
+      # found somebody.
+      assert entry["reason"] == nil
+    end
+
+    # A SEPARATE defect, and it has its own mutation check. `expire/2` never
+    # called `evidence_annotations/1` at all — it passed a literal map — so the
+    # shape mismatch above was structurally unable to reach it and fixing the
+    # call site does not fix this. The task description's claim that one bug
+    # drops evidence on "every fire-terminal path — no_designer, failed, and the
+    # timeout" is wrong on the third.
+    test "a timeout records the evidence too, though for a different reason", %{project: project} do
+      task = task!(project, @ui_title, %{planning_step: "designing"})
+
+      quietly(fn -> assert {:ok, :failed} = PreplanStep.expire(task, 1_800_000) end)
+
+      entry = design_entry(task)
+      assert entry["reason"] == "design_timeout"
+      assert entry["layer"] == "strong_prose"
+      assert entry["matched"] == ["fab"]
+    end
+  end
+
   # ── settle ────────────────────────────────────────────────────────────────
 
   describe "GUARD — settle/2" do

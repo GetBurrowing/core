@@ -212,7 +212,11 @@ defmodule Platform.Design.PreplanStep do
 
     _ = move_cursor(task, @designing)
 
-    annotations = Map.merge(evidence_annotations(evidence), %{"reason" => @reason_no_designer})
+    # `classify/1` destructured the verdict to get here, so the tuple is
+    # reconstructed at the point of use. `evidence_annotations/1` matches the
+    # whole `UiSurface.verdict()` deliberately — see the note on its clause.
+    annotations =
+      Map.merge(evidence_annotations({true, evidence}), %{"reason" => @reason_no_designer})
 
     case record_terminal_only(task, fire(task)) do
       {:ok, {:complete, _updated}} ->
@@ -329,7 +333,21 @@ defmodule Platform.Design.PreplanStep do
 
       %Task{} = task ->
         if open?(task) do
-          finish(task, {:error, {:design_timeout, timeout_ms}}, %{"reason" => @reason_timeout})
+          # A SEPARATE defect from the `fire_designer/2` call site above: this
+          # path never called `evidence_annotations/1` at all, so no shape
+          # mismatch could reach it. Built the way `do_settle/2` builds it, so
+          # the failure a human most wants explained — the designer fired and
+          # never delivered — carries the same audit trail as the success.
+          # Byte-identical to the old literal for a non-UI task: `false` yields
+          # `%{}`, and `expire/2` is a no-op unless the cursor is `"designing"`,
+          # which is only reachable after a fire on a UI task.
+          annotations =
+            task
+            |> UiSurface.ui_task?()
+            |> evidence_annotations()
+            |> Map.put("reason", @reason_timeout)
+
+          finish(task, {:error, {:design_timeout, timeout_ms}}, annotations)
         else
           {:ok, :noop}
         end
@@ -653,6 +671,13 @@ defmodule Platform.Design.PreplanStep do
 
   # Stage 1's `matched` payload is the audit trail for whether a fire was
   # justified. Carried into the record rather than discarded.
+  #
+  # Matches the whole `UiSurface.verdict()` on purpose. A bare-map clause would
+  # make both shapes work, but the tuple IS the unit of currency here
+  # (`ui_surface.ex`'s `@type verdict`) and a function that silently accepts
+  # either shape cannot catch the next caller that unwraps it — which is exactly
+  # how `fire_designer/2` came to drop the evidence on every terminal record it
+  # writes.
   defp evidence_annotations({true, %{layer: layer, matched: matched}}) do
     %{"layer" => to_string(layer), "matched" => Enum.map(matched, &to_string/1)}
   end
