@@ -19,8 +19,11 @@ defmodule Platform.Agents.HistorianTest do
 
   alias Platform.Agents.Historian
   alias Platform.Agents.HistorianCursor
+  alias Platform.Agents.HistorianDispatcher
   alias Platform.Chat
   alias Platform.Chat.Message
+  alias Platform.Chat.Space
+  alias Platform.Meetings
   alias Platform.Meetings.Transcript
   alias Platform.Org.WikiJournalEntry, as: MemoryEntry
   alias Platform.Org.WikiPage
@@ -391,6 +394,449 @@ defmodule Platform.Agents.HistorianTest do
       # JSON. Empty-array `[]::text` serializes to 2 bytes. Assert
       # >= 40 as the lower bound.
       assert Map.fetch!(result, ~D[2001-09-03]) >= 40
+    end
+  end
+
+  # ── Digest-eligibility seam (task 019fa1cc stage 2) ──────────────────────
+  #
+  # The byte signal and the digest accessor must select the same rows. Before
+  # this stage they each carried their own copy of the predicate and the copies
+  # had drifted by five filters, which produced 86 oversize digest windows on
+  # prod — 56 of them spurious, 55 of those dispatching the empty stub with an
+  # eligible row count of exactly 0.
+
+  describe "byte signal composes the digest-eligibility predicate" do
+    test "messages: only rows the digest can render contribute bytes" do
+      day = ~D[2001-11-11]
+      start_at = ~U[2001-11-11 00:00:00Z]
+      end_at = ~U[2001-11-12 00:00:00Z]
+
+      live = insert_channel_space("seam-live")
+      live_p = insert_user_participant(live.id, "Voice")
+
+      # (1) 30 execution-kind messages — the exact shape that drove every
+      # spurious oversize window measured on prod: a busy hour of agent
+      # chatter that reads as a large day to the slicer and as an empty
+      # window to the renderer.
+      exec = insert_space_of_kind!("execution", "seam-exec")
+      exec_p = insert_user_participant(exec.id, "Runner")
+
+      for _ <- 1..30 do
+        insert_message_with!(exec.id, exec_p.id, %{content: String.duplicate("x", 500)}, day)
+      end
+
+      # (2) 5 log_only rows in a live channel.
+      for _ <- 1..5 do
+        insert_message_with!(
+          live.id,
+          live_p.id,
+          %{content: String.duplicate("l", 400), log_only: true},
+          day
+        )
+      end
+
+      # (3) 3 non-conversational content_type rows in a live channel.
+      for _ <- 1..3 do
+        insert_message_with!(
+          live.id,
+          live_p.id,
+          %{content: String.duplicate("s", 300), content_type: "system"},
+          day
+        )
+      end
+
+      # (4) 2 rows in an archived channel.
+      archived = insert_channel_space("seam-archived")
+      archived_p = insert_user_participant(archived.id, "Ghost")
+
+      for _ <- 1..2 do
+        insert_message_with!(
+          archived.id,
+          archived_p.id,
+          %{content: String.duplicate("v", 600)},
+          day
+        )
+      end
+
+      archive_space!(archived.id)
+
+      # (5) 1 soft-deleted row in a live channel.
+      insert_message_with!(
+        live.id,
+        live_p.id,
+        %{content: String.duplicate("d", 700), deleted_at: DateTime.utc_now()},
+        day
+      )
+
+      # (6) 2 live channel rows of known byte length — the only eligible rows.
+      a = insert_message_with!(live.id, live_p.id, %{content: String.duplicate("a", 111)}, day)
+      b = insert_message_with!(live.id, live_p.id, %{content: String.duplicate("b", 222)}, day)
+
+      eligible_bytes = byte_size(a.content) + byte_size(b.content)
+
+      # CONTROL ON THE FIXTURE, not on the code. Without this, "only 333
+      # bytes counted" would pass just as well against a fixture that seeded
+      # nothing to exclude. The pre-fix schemaless query is reproduced here
+      # so the assertion below is a measured 50x gap, not a hope.
+      raw_bytes = raw_message_bytes(start_at, end_at)
+      assert raw_bytes > eligible_bytes * 10
+
+      result = Historian.pending_bytes_per_day("messages", start_at, end_at, nil)
+
+      # POSITIVE CONTROL before the exclusion assertion: the map is non-empty
+      # and the day's value is > 0. A query returning 0 for everything would
+      # otherwise satisfy every assertion that follows.
+      assert map_size(result) == 1
+      assert Map.fetch!(result, day) > 0
+
+      assert Map.fetch!(result, day) == eligible_bytes
+
+      # The unbounded `sum_corpus_bytes` path must agree with the per-day
+      # path — both compose the same seam, so pin both.
+      {_last_at, summed} = Historian.pending_windows_input(nil).messages
+      assert summed == eligible_bytes
+
+      # The byte signal must equal what the digest accessor actually returns.
+      # This is the invariant itself, asserted against the renderer's own
+      # accessor rather than a second copy of the filter list.
+      rendered =
+        start_at
+        |> Chat.list_messages_since(window_end: end_at, scope: :internal)
+        |> Enum.map(&byte_size(&1.content))
+        |> Enum.sum()
+
+      assert rendered == eligible_bytes
+
+      # DELTA CONTROL: a third live channel row must raise the total by
+      # exactly its own byte length.
+      c = insert_message_with!(live.id, live_p.id, %{content: String.duplicate("c", 77)}, day)
+
+      after_result = Historian.pending_bytes_per_day("messages", start_at, end_at, nil)
+      assert Map.fetch!(after_result, day) == eligible_bytes + byte_size(c.content)
+    end
+
+    test "transcripts: incomplete and never-completed rows contribute no bytes" do
+      day = ~D[2001-12-12]
+      start_at = ~U[2001-12-12 00:00:00Z]
+      end_at = ~U[2001-12-13 00:00:00Z]
+      ts = ~U[2001-12-12 12:00:00Z]
+
+      # Eligible: status "complete" with a completed_at inside the span.
+      eligible = insert_transcript_at!(%{summary: String.duplicate("e", 500), segments: []}, day)
+
+      # Ineligible (1): still recording. `completed_at` stamped anyway so the
+      # only thing keeping it out is the status filter.
+      recording =
+        insert_transcript_at!(%{summary: String.duplicate("r", 900), segments: []}, day)
+
+      set_transcript_fields!(recording.id, status: "recording")
+
+      # Ineligible (2): status "complete" but `completed_at` never stamped —
+      # `updated_at` alone used to pull this into the byte signal while the
+      # accessor could never render it.
+      orphan = insert_transcript_at!(%{summary: String.duplicate("o", 900), segments: []}, day)
+      set_transcript_fields!(orphan.id, completed_at: nil)
+
+      # Ineligible (3): completed on an EARLIER day but edited inside this
+      # span — segments accumulate after completion, so `completed_at <=
+      # updated_at` always. This is the row that discriminates the corpus
+      # clock: the accessor bounds on `completed_at` and will render it in
+      # the earlier window, so a byte signal keyed on `updated_at` charges
+      # its bytes to a window that renders nothing. Without this row the
+      # fixture has `completed_at == updated_at` throughout and keying the
+      # byte signal on `updated_at` survives every assertion below.
+      late_edit =
+        insert_transcript_at!(%{summary: String.duplicate("z", 900), segments: []}, day)
+
+      set_transcript_fields!(late_edit.id, completed_at: ~U[2001-12-10 12:00:00Z])
+
+      # CONTROL ON THE FIXTURE: the ineligible rows really are in the span.
+      assert raw_transcript_summary_bytes(start_at, end_at) >= 500 + 900 + 900 + 900
+
+      # ...and the late-edited one is genuinely eligible, just in an earlier
+      # window — proving it was excluded here by the clock, not by the
+      # eligibility filters.
+      earlier =
+        Historian.pending_bytes_per_day(
+          "transcripts",
+          ~U[2001-12-10 00:00:00Z],
+          ~U[2001-12-11 00:00:00Z],
+          nil
+        )
+
+      assert Map.fetch!(earlier, ~D[2001-12-10]) >= byte_size(late_edit.summary)
+
+      result = Historian.pending_bytes_per_day("transcripts", start_at, end_at, nil)
+
+      # POSITIVE CONTROL first.
+      assert map_size(result) == 1
+      assert Map.fetch!(result, day) > 0
+
+      # Segments JSON adds a few bytes on top of the summary octets, so bound
+      # rather than equate — the discriminating claim is that the 1800 bytes
+      # of ineligible summary are absent.
+      assert Map.fetch!(result, day) >= byte_size(eligible.summary)
+      assert Map.fetch!(result, day) < byte_size(eligible.summary) + 100
+
+      # Agreement with the renderer's own accessor.
+      rendered = Meetings.list_transcripts_since(start_at, window_end: end_at, scope: :internal)
+      assert length(rendered) == 1
+      assert hd(rendered).id == eligible.id
+
+      # The unbounded `sum_corpus_bytes` path walks the cursor rather than a
+      # range, so its clock is pinned separately. Parked between the
+      # late-edited row's `completed_at` (12-10) and its `updated_at` (12-12),
+      # this cursor only excludes that row if the sum path reads
+      # `completed_at` — which is what the accessor bounds on.
+      {:ok, _} =
+        Historian.advance_cursor(nil, "transcripts", nil, ~U[2001-12-11 00:00:00Z])
+
+      {cursor_at, summed} = Historian.pending_windows_input(nil).transcripts
+      assert DateTime.compare(cursor_at, ~U[2001-12-11 00:00:00Z]) == :eq
+      assert summed > 0
+      assert summed >= byte_size(eligible.summary)
+      assert summed < byte_size(eligible.summary) + 100
+
+      # DELTA CONTROL: completing the recording transcript inside the span
+      # must raise the total by at least its summary bytes.
+      before = Map.fetch!(result, day)
+      set_transcript_fields!(recording.id, status: "complete", completed_at: ts)
+
+      after_result = Historian.pending_bytes_per_day("transcripts", start_at, end_at, nil)
+      assert Map.fetch!(after_result, day) >= before + byte_size(recording.summary)
+    end
+  end
+
+  # ── pending_bytes_in_range/3-4 — measured sub-day spans (stage 3) ──────
+
+  describe "pending_bytes_in_range/3-4 — ungrouped span sums" do
+    test "messages: each sub-range is measured on its own rows, not the day's" do
+      day = ~D[2001-10-10]
+      day_start = ~U[2001-10-10 00:00:00Z]
+      day_end = ~U[2001-10-11 00:00:00Z]
+
+      live = insert_channel_space("range-live")
+      live_p = insert_user_participant(live.id, "Voice")
+
+      # Ineligible agent chatter parked in the QUIET hours — the exact shape
+      # that drove the spurious oversize windows on prod. It is here so the
+      # "quiet hours measure zero" assertions below are about eligibility and
+      # bounds rather than about an empty table.
+      exec = insert_space_of_kind!("execution", "range-exec")
+      exec_p = insert_user_participant(exec.id, "Runner")
+
+      for hour <- [1, 8, 15, 22] do
+        insert_message_at_time!(
+          exec.id,
+          exec_p.id,
+          String.duplicate("x", 5_000),
+          DateTime.new!(day, Time.new!(hour, 0, 0), "Etc/UTC")
+        )
+      end
+
+      # All the ELIGIBLE mass inside [04:00, 05:00), unevenly split between
+      # the two halves of that hour. Uneven is load-bearing: with equal
+      # halves a smear-vs-measure mutation is invisible.
+      a =
+        insert_message_at_time!(
+          live.id,
+          live_p.id,
+          String.duplicate("a", 1_111),
+          ~U[2001-10-10 04:10:00Z]
+        )
+
+      b =
+        insert_message_at_time!(
+          live.id,
+          live_p.id,
+          String.duplicate("b", 2_222),
+          ~U[2001-10-10 04:40:00Z]
+        )
+
+      eligible = byte_size(a.content) + byte_size(b.content)
+      refute byte_size(a.content) == byte_size(b.content)
+
+      # POSITIVE CONTROL first: the whole day measures non-zero, and equals
+      # exactly the eligible bytes.
+      whole_day = Historian.pending_bytes_in_range("messages", day_start, day_end)
+      assert whole_day > 0
+      assert whole_day == eligible
+
+      # FIXTURE CONTROL: the quiet hours are NOT empty of raw rows — the
+      # pre-stage-2 byte query sees 20k+ bytes there.
+      assert raw_message_bytes(day_start, ~U[2001-10-10 04:00:00Z]) >= 5_000
+
+      # The busy hour owns all of it; the quiet hours own none of it.
+      assert Historian.pending_bytes_in_range(
+               "messages",
+               ~U[2001-10-10 04:00:00Z],
+               ~U[2001-10-10 05:00:00Z]
+             ) == eligible
+
+      assert Historian.pending_bytes_in_range("messages", day_start, ~U[2001-10-10 04:00:00Z]) ==
+               0
+
+      assert Historian.pending_bytes_in_range("messages", ~U[2001-10-10 05:00:00Z], day_end) == 0
+
+      # Each HALF of the busy hour owns its own row — this is the assertion
+      # the `div(total_bytes, 2)` smear cannot satisfy, since it would give
+      # both halves (1_111 + 2_222) / 2 = 1_666.
+      assert Historian.pending_bytes_in_range(
+               "messages",
+               ~U[2001-10-10 04:00:00Z],
+               ~U[2001-10-10 04:30:00Z]
+             ) == byte_size(a.content)
+
+      assert Historian.pending_bytes_in_range(
+               "messages",
+               ~U[2001-10-10 04:30:00Z],
+               ~U[2001-10-10 05:00:00Z]
+             ) == byte_size(b.content)
+
+      # It is the same query as the grouped twin, so it must agree with it.
+      per_day = Historian.pending_bytes_per_day("messages", day_start, day_end, nil)
+      assert Map.fetch!(per_day, day) == whole_day
+
+      # Degenerate ranges are 0, not a crash and not the whole corpus. These
+      # two go to the DB — there is deliberately no short-circuit guard in
+      # front of them, so they pin the half-open bound rather than an
+      # early-return branch that would make them trivially true.
+      assert Historian.pending_bytes_in_range("messages", day_end, day_start) == 0
+      assert Historian.pending_bytes_in_range("messages", day_start, day_start) == 0
+    end
+
+    test "transcripts: the range sum is bounded on the completed_at corpus clock" do
+      day = ~D[2001-10-20]
+      hour_start = ~U[2001-10-20 04:00:00Z]
+      hour_end = ~U[2001-10-20 05:00:00Z]
+
+      # Eligible: completed inside the hour. All three summaries are DIFFERENT
+      # lengths on purpose — with equal-size rows a clock/status mutation that
+      # merely SUBSTITUTES one row for another is invisible to a
+      # "measured is about 900 bytes" assertion.
+      eligible = insert_transcript_at!(%{summary: String.duplicate("e", 900)}, day)
+      set_transcript_fields!(eligible.id, completed_at: ~U[2001-10-20 04:10:00Z])
+
+      # Ineligible (a): still recording inside the hour.
+      recording = insert_transcript_at!(%{summary: String.duplicate("r", 700)}, day)
+
+      set_transcript_fields!(recording.id,
+        status: "recording",
+        completed_at: ~U[2001-10-20 04:20:00Z]
+      )
+
+      # Ineligible (b): completed on an EARLIER day but edited inside the
+      # hour. Bounding on `updated_at` instead of `completed_at` would pull
+      # this in — the same clock-swap mutation stage 2 pinned.
+      late_edit = insert_transcript_at!(%{summary: String.duplicate("l", 1_500)}, day)
+
+      set_transcript_fields!(late_edit.id,
+        completed_at: ~U[2001-10-19 09:00:00Z],
+        updated_at: ~U[2001-10-20 04:30:00Z]
+      )
+
+      measured = Historian.pending_bytes_in_range("transcripts", hour_start, hour_end)
+
+      # POSITIVE CONTROL before the exclusions: the eligible row is counted.
+      assert measured >= byte_size(eligible.summary)
+      # ...and ONLY it (summary + the empty-segments JSON, well under +100).
+      assert measured < byte_size(eligible.summary) + 100
+
+      # FIXTURE CONTROL (a): the still-recording row really is inside the
+      # hour — completing it raises the measured total by its summary. A
+      # "measured == eligible only" assertion would otherwise pass just as
+      # well against a fixture whose recording row was never in the span.
+      set_transcript_fields!(recording.id, status: "complete")
+
+      assert Historian.pending_bytes_in_range("transcripts", hour_start, hour_end) >=
+               measured + byte_size(recording.summary)
+
+      # FIXTURE CONTROL (b): the late-edited row exists and is owned by the
+      # day it COMPLETED on, not the day it was edited on — bounding on
+      # `updated_at` would have moved it into the hour above.
+      assert Historian.pending_bytes_in_range(
+               "transcripts",
+               ~U[2001-10-19 00:00:00Z],
+               ~U[2001-10-20 00:00:00Z]
+             ) >= byte_size(late_edit.summary)
+
+      assert raw_transcript_summary_bytes(hour_start, hour_end) >= byte_size(late_edit.summary)
+    end
+
+    test "slice_windows/2 wires the real range measurement by default" do
+      # END-TO-END: no `per_day_fn`, no `range_bytes_fn`, no `input_fn` —
+      # every byte figure in this test comes from the DB through the
+      # stage-2 seam. Proves the default closure is wired; a stubbed-only
+      # unit test cannot see a default that returns garbage.
+      day = ~D[2001-10-25]
+      day_end = ~U[2001-10-26 00:00:00Z]
+
+      live = insert_channel_space("wire-live")
+      live_p = insert_user_participant(live.id, "Voice")
+
+      exec = insert_space_of_kind!("execution", "wire-exec")
+      exec_p = insert_user_participant(exec.id, "Runner")
+
+      for hour <- [1, 8, 15, 22] do
+        insert_message_at_time!(
+          exec.id,
+          exec_p.id,
+          String.duplicate("x", 5_000),
+          DateTime.new!(day, Time.new!(hour, 0, 0), "Etc/UTC")
+        )
+      end
+
+      a =
+        insert_message_at_time!(
+          live.id,
+          live_p.id,
+          String.duplicate("a", 1_111),
+          ~U[2001-10-25 04:10:00Z]
+        )
+
+      b =
+        insert_message_at_time!(
+          live.id,
+          live_p.id,
+          String.duplicate("b", 2_222),
+          ~U[2001-10-25 04:40:00Z]
+        )
+
+      # Scoped to the messages corpus: the shared test DB carries seeded
+      # org wiki rows whose own (unbounded) pending bytes emit a `pages`
+      # window here, which this test says nothing about.
+      windows =
+        nil
+        |> HistorianDispatcher.slice_windows(now: day_end, budget_tokens: 200)
+        |> Enum.filter(&(&1.corpus == :messages))
+
+      # POSITIVE CONTROL before the absence assertions.
+      refute Enum.empty?(windows)
+
+      # Both eligible messages are covered by an emitted window.
+      for at <- [~U[2001-10-25 04:10:00Z], ~U[2001-10-25 04:40:00Z]] do
+        assert Enum.any?(windows, fn w ->
+                 DateTime.compare(at, w.window_start) != :lt and
+                   DateTime.compare(at, w.window_end) == :lt
+               end),
+               "expected an emitted window covering #{at}"
+      end
+
+      # Exactly two windows — the two 45-minute leaves that own `a` and `b`.
+      # Pre-stage-3 this day produced 32 leaves, every one of them oversize,
+      # including leaves covering the hours where only execution chatter
+      # lives.
+      assert length(windows) == 2
+      assert Enum.count(windows, & &1.oversize) == 2
+
+      refute Enum.any?(windows, fn w ->
+               DateTime.compare(w.window_start, ~U[2001-10-25 08:00:00Z]) != :gt and
+                 DateTime.compare(w.window_end, ~U[2001-10-25 08:00:00Z]) == :gt
+             end)
+
+      # Telemetry field still carries the whole day's eligible bytes.
+      day_bytes = byte_size(a.content) + byte_size(b.content)
+      assert Enum.all?(windows, &(&1.day_bytes == day_bytes))
     end
   end
 
@@ -774,6 +1220,118 @@ defmodule Platform.Agents.HistorianTest do
     message
   end
 
+  # `insert_message_at!/4` stamped at an exact instant rather than midday,
+  # so a fixture can put genuinely uneven density inside a single day —
+  # the only shape in which a uniform-density bug is observable.
+  defp insert_message_at_time!(space_id, participant_id, content, %DateTime{} = at) do
+    {:ok, message} =
+      %Message{}
+      |> Message.changeset(%{
+        space_id: space_id,
+        participant_id: participant_id,
+        content_type: "text",
+        content: content,
+        author_display_name: "Test"
+      })
+      |> Repo.insert()
+
+    {1, _} =
+      Repo.update_all(
+        from(m in Message, where: m.id == ^message.id),
+        set: [inserted_at: at]
+      )
+
+    message
+  end
+
+  defp insert_space_of_kind!(kind, name_suffix) do
+    {:ok, space} =
+      Chat.create_space(%{
+        name: "Space #{name_suffix}",
+        slug: "#{kind}-#{System.unique_integer([:positive])}",
+        kind: kind
+      })
+
+    space
+  end
+
+  defp archive_space!(space_id) do
+    {1, _} =
+      Repo.update_all(
+        from(s in Space, where: s.id == ^space_id),
+        set: [archived_at: DateTime.utc_now()]
+      )
+
+    :ok
+  end
+
+  # `insert_message_at!/4` with arbitrary message attrs merged in, so a test
+  # can seed the ineligible shapes (log_only, non-conversational
+  # content_type, soft-deleted) without four near-identical helpers.
+  defp insert_message_with!(space_id, participant_id, attrs, %Date{} = day) do
+    base = %{
+      space_id: space_id,
+      participant_id: participant_id,
+      content_type: "text",
+      author_display_name: "Test"
+    }
+
+    {:ok, message} =
+      %Message{}
+      |> Message.changeset(Map.merge(base, attrs))
+      |> Repo.insert()
+
+    ts = DateTime.new!(day, ~T[12:00:00], "Etc/UTC")
+
+    {1, _} =
+      Repo.update_all(
+        from(m in Message, where: m.id == ^message.id),
+        set: [inserted_at: ts]
+      )
+
+    message
+  end
+
+  defp set_transcript_fields!(transcript_id, fields) do
+    {1, _} =
+      Repo.update_all(
+        from(t in Transcript, where: t.id == ^transcript_id),
+        set: fields
+      )
+
+    :ok
+  end
+
+  # The pre-unification byte query, reproduced verbatim as a FIXTURE control:
+  # it counts every chat_messages row minus external spaces, which is what
+  # `sum_corpus_bytes("messages", ...)` did before this stage. Used only to
+  # prove the ineligible rows were really seeded.
+  defp raw_message_bytes(start_at, end_at) do
+    from(m in "chat_messages",
+      where: m.inserted_at >= ^start_at and m.inserted_at < ^end_at,
+      select: sum(fragment("coalesce(octet_length(?), 0)", m.content))
+    )
+    |> Repo.one()
+    |> then(&(&1 || 0))
+    |> then(fn
+      %Decimal{} = d -> Decimal.to_integer(d)
+      n -> n
+    end)
+  end
+
+  defp raw_transcript_summary_bytes(start_at, end_at) do
+    from(t in "meeting_transcripts",
+      where: t.updated_at >= ^start_at and t.updated_at < ^end_at,
+      select: sum(fragment("coalesce(octet_length(?), 0)", t.summary))
+    )
+    |> Repo.one()
+    |> then(&(&1 || 0))
+    |> then(fn
+      %Decimal{} = d -> Decimal.to_integer(d)
+      n -> n
+    end)
+  end
+
   defp insert_transcript_at!(attrs, %Date{} = day) do
     defaults = %{
       room_id: "room-#{System.unique_integer([:positive])}",
@@ -787,10 +1345,18 @@ defmodule Platform.Agents.HistorianTest do
 
     ts = DateTime.new!(day, ~T[12:00:00], "Etc/UTC")
 
+    # `completed_at` is the transcripts corpus clock on BOTH the digest
+    # accessor (`Meetings.list_transcripts_since/2`) and the Historian byte
+    # signal (task 019fa1cc stage 2 unified them onto
+    # `Meetings.digest_eligible_transcripts_query/1`). A `status: "complete"`
+    # row with `completed_at: nil` is a row the digest can never render, so
+    # stamping it here is what makes this fixture a transcript the Historian
+    # would actually see rather than a byte-count-only phantom. The
+    # ineligible shapes are asserted on directly in the seam test below.
     {1, _} =
       Repo.update_all(
         from(t in Transcript, where: t.id == ^transcript.id),
-        set: [updated_at: ts, inserted_at: ts]
+        set: [updated_at: ts, inserted_at: ts, completed_at: ts]
       )
 
     transcript

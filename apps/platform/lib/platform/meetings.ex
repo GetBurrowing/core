@@ -1842,18 +1842,45 @@ defmodule Platform.Meetings do
   @spec list_transcripts_since(DateTime.t(), keyword()) :: [Transcript.t()]
   def list_transcripts_since(%DateTime{} = window_start, opts \\ []) do
     window_end = Keyword.get(opts, :window_end, DateTime.utc_now())
+
+    opts
+    |> digest_eligible_transcripts_query()
+    |> where([t], t.completed_at >= ^window_start and t.completed_at < ^window_end)
+    |> order_by([t], asc: t.completed_at)
+    |> Repo.all()
+  end
+
+  @doc """
+  The unbounded digest-eligibility predicate for the `transcripts` corpus —
+  every filter that decides whether a `meeting_transcripts` row can ever
+  reach a Historian digest, and nothing else. No time bound, no ordering.
+
+  Mirror of `Platform.Chat.digest_eligible_messages_query/1`, and the same
+  single seam on the transcript half: `list_transcripts_since/2` is this
+  query plus `[window_start, window_end)` on `completed_at`, and the
+  Historian's transcript byte-sizing (`sum_corpus_bytes("transcripts", …)`
+  and `per_day_bytes_query("transcripts", …)`) is this query plus the same
+  range and a `sum(octet_length(summary) + octet_length(segments::text))`.
+
+  **The invariant:** any filter added here is inherited by the byte signal
+  automatically. Adding one to only one side is a bug of the exact class
+  task `019fa1cc` fixed on the `messages` corpus.
+
+  Note `completed_at` — not `updated_at` — is the corpus clock on **both**
+  sides. `completed_at <= updated_at` always (segments accumulate during a
+  recording), so keying the byte signal on `updated_at` counted bytes into
+  windows where the renderer would produce nothing: the same
+  bytes-without-content shape that made the `messages` corpus fire spurious
+  oversize windows.
+  """
+  @spec digest_eligible_transcripts_query(keyword()) :: Ecto.Query.t()
+  def digest_eligible_transcripts_query(opts \\ []) do
     scope = Keyword.get(opts, :scope, :internal)
 
     from(t in Transcript,
-      where:
-        t.status == "complete" and
-          not is_nil(t.completed_at) and
-          t.completed_at >= ^window_start and
-          t.completed_at < ^window_end,
-      order_by: [asc: t.completed_at]
+      where: t.status == "complete" and not is_nil(t.completed_at)
     )
     |> apply_digest_scope(scope)
-    |> Repo.all()
   end
 
   # External-space digest partition (stack member 12, rbac-external-users).

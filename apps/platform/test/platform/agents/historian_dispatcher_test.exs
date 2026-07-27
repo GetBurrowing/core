@@ -182,7 +182,7 @@ defmodule Platform.Agents.HistorianDispatcherTest do
   # ── Oversize truncation path ────────────────────────────────────────────
 
   describe "dispatch_windowed/4 — oversize window" do
-    test "emits a truncated body + oversize metadata for a single oversize row", %{
+    test "names the skipped row instead of cutting it, and steps past it", %{
       agent: agent
     } do
       # Budget = 500 tokens (2000 bytes). One transcript row with a
@@ -211,10 +211,26 @@ defmodule Platform.Agents.HistorianDispatcherTest do
         status: "complete",
         started_at: two_hours_ago,
         completed_at: completed_at,
-        # Long summary → summary bytes dominate byte accounting.
+        # Long summary → summary bytes dominate byte accounting. 10_000
+        # bytes against a 2_000-byte cap: this single row cannot fit the
+        # window budget no matter how the span is sliced.
         summary: String.duplicate("z ", 5_000),
         segments: []
       })
+
+      test_pid = self()
+      handler_id = "historian-item-skipped-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :historian, :item_skipped],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:item_skipped, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
 
       assert {:ok, %{dispatched: n}} =
                HistorianDispatcher.dispatch_windowed(
@@ -238,7 +254,249 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       assert oversized,
              "expected a transcripts-corpus message with oversize: true, got: #{inspect(Enum.map(messages, & &1.metadata))}"
 
-      assert oversized.content =~ "_(truncated — deep-summary rather than deep-curate)_"
+      # The row is NAMED, not cut at a byte offset mid-grapheme.
+      assert oversized.content =~ "_(skipped —"
+      refute oversized.content =~ "_No activity in this window._"
+      assert String.valid?(oversized.content)
+      assert oversized.metadata["truncated"] == true
+      assert oversized.metadata["item_count"] == 1
+      assert oversized.metadata["included_count"] == 0
+
+      # The skip is a queryable audit signal, not a silent advance.
+      assert_received {:item_skipped, %{bytes: bytes}, %{corpus: "transcripts"} = meta}
+      assert bytes >= 10_000
+      assert is_binary(meta.message_id)
+
+      # FORWARD PROGRESS: the sweep steps past the unfittable row rather
+      # than stalling on it forever. Under a "retry with a smaller span"
+      # fix this assertion is what livelocks.
+      cursor =
+        Repo.one!(
+          from(c in HistorianCursor,
+            where: is_nil(c.workspace_id) and c.corpus == "transcripts"
+          )
+        )
+
+      assert DateTime.compare(cursor.last_processed_at, completed_at) == :gt
+
+      # ...and not one instant further than it needed to. The old
+      # unconditional `advance_cursor(…, window.window_end)` would land at
+      # or after the window end, which is `now`-ish.
+      assert DateTime.compare(cursor.last_processed_at, now) == :lt
+    end
+
+    test "a window that fits reaches window_end and emits no truncation event" do
+      # The control for the two tests around it. Without it, `truncated?`
+      # could be hardwired true and the cursor could be hardwired to hold
+      # short, and every truncation assertion in this file would still pass.
+      Application.put_env(:platform, :historian_window_token_budget, 30_000)
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      space = insert_channel_space("fits")
+      participant = insert_user_participant(space.id, "Ada")
+
+      now = DateTime.utc_now()
+      at = DateTime.add(now, -1_800, :second)
+
+      Enum.each(~w(pages journal transcripts), fn corpus ->
+        {:ok, _} =
+          Historian.advance_cursor(
+            @org_workspace,
+            corpus,
+            nil,
+            DateTime.add(now, 3_600, :second)
+          )
+      end)
+
+      {:ok, _} =
+        Historian.advance_cursor(
+          @org_workspace,
+          "messages",
+          nil,
+          DateTime.add(now, -3_600, :second)
+        )
+
+      insert_message!(space.id, participant.id, %{
+        content: String.duplicate("f", 500),
+        inserted_at: at
+      })
+
+      test_pid = self()
+      handler_id = "historian-fits-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:platform, :historian, :window_dispatched],
+          [:platform, :historian, :window_truncated]
+        ],
+        fn [_, _, event], measurements, metadata, _config ->
+          send(test_pid, {event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:ok, %{dispatched: n}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "fits"},
+                 @org_workspace
+               )
+
+      assert n >= 1
+
+      # POSITIVE CONTROL FIRST: the window really was dispatched, and it
+      # really did carry the whole corpus.
+      assert_received {:window_dispatched, measurements, %{corpus: :messages} = meta}
+      assert meta.truncated == false
+      assert meta.oversize_empty == false
+      assert measurements.item_count == 1
+      assert measurements.included_count == 1
+
+      # Paired absence — meaningful only because the control above passed.
+      refute_received {:window_truncated, _, _}
+
+      cursor = messages_cursor()
+      assert DateTime.compare(cursor.last_processed_at, at) == :gt
+      assert DateTime.compare(cursor.last_processed_at, now) != :lt
+    end
+
+    test "holds the messages cursor at the digested watermark and defers the rest", %{
+      agent: agent
+    } do
+      # 200-token budget → an 800-byte cap → exactly 4 of the 200-byte rows
+      # fit per dispatched window. The rest must be WITHHELD, not dropped.
+      Application.put_env(:platform, :historian_window_token_budget, 200)
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      space = insert_channel_space("watermark")
+      participant = insert_user_participant(space.id, "Ada")
+
+      now = DateTime.utc_now()
+      span_start = DateTime.add(now, -3_600, :second)
+
+      # Park every other corpus in the future so only `messages` contributes
+      # windows and the cursor assertions below are unambiguous.
+      Enum.each(~w(pages journal transcripts), fn corpus ->
+        {:ok, _} =
+          Historian.advance_cursor(
+            @org_workspace,
+            corpus,
+            nil,
+            DateTime.add(now, 3_600, :second)
+          )
+      end)
+
+      {:ok, _} = Historian.advance_cursor(@org_workspace, "messages", nil, span_start)
+
+      # Ten rows of IDENTICAL size at DISTINCT timestamps. Distinct
+      # timestamps are the load-bearing part of this fixture: if every row
+      # shared an instant the watermark would equal the window end and a
+      # mutation swapping one for the other could not be seen.
+      seeded =
+        Enum.map(1..10, fn i ->
+          content = String.pad_leading("#{i}", 3, "0") <> String.duplicate("x", 197)
+          at = DateTime.add(span_start, i * 300, :second)
+          insert_message!(space.id, participant.id, %{content: content, inserted_at: at})
+          {content, at}
+        end)
+
+      timestamps = Enum.map(seeded, &elem(&1, 1))
+      tags = Enum.map(1..10, &String.pad_leading("#{&1}", 3, "0"))
+
+      test_pid = self()
+      handler_id = "historian-watermark-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:platform, :historian, :window_dispatched],
+          [:platform, :historian, :window_truncated]
+        ],
+        fn [_, _, event], measurements, metadata, _config ->
+          send(test_pid, {event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:ok, %{dispatched: dispatched_1}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "pass-1"},
+                 @org_workspace
+               )
+
+      system_space = Chat.get_space_by_slug("system-#{agent.slug}")
+
+      pass_1_bodies = messages_corpus_bodies(system_space)
+
+      # POSITIVE CONTROL FIRST — both would pass vacuously on `[]`.
+      assert dispatched_1 >= 1
+      refute Enum.empty?(pass_1_bodies)
+
+      pass_1_text = Enum.join(pass_1_bodies, "\n")
+      assert pass_1_text =~ "001"
+      assert pass_1_text =~ "_(partial — "
+
+      # Paired absence: meaningful only because the control above passed.
+      # Ten 200-byte rows cannot fit an 800-byte cap however the hour is
+      # sliced, so at least the last two are always withheld.
+      withheld_in_pass_1 = Enum.reject(tags, &String.contains?(pass_1_text, &1))
+      refute Enum.empty?(withheld_in_pass_1)
+
+      # The audit trail must be able to say what happened WITHOUT re-reading
+      # the corpus: `HistorianAudit.classify/1` branches on these flags.
+      assert_received {:window_dispatched, _m, %{corpus: :messages, truncated: true} = dispatched}
+      assert dispatched.oversize_empty == false
+
+      assert_received {:window_truncated, truncated_m, %{corpus: "messages"}}
+      assert truncated_m.included_count > 0
+      assert truncated_m.withheld_count > 0
+      assert truncated_m.item_count == truncated_m.included_count + truncated_m.withheld_count
+
+      cursor_1 = messages_cursor()
+
+      # THE INVARIANT. Reverting the cursor call to
+      # `advance_cursor(workspace_id, corpus_string, nil, window.window_end)`
+      # detonates both of these: `window_end` is `now`-ish, which is after
+      # every seeded row and is never one microsecond past one of them.
+      assert DateTime.compare(cursor_1.last_processed_at, List.last(timestamps)) == :lt
+
+      assert cursor_1.last_processed_at in Enum.map(
+               timestamps,
+               &DateTime.add(&1, 1, :microsecond)
+             ),
+             "expected the cursor to land one microsecond past a digested row, got " <>
+               inspect(cursor_1.last_processed_at)
+
+      # Deferred, not lost: keep sweeping until the corpus drains, then
+      # assert the UNION of every dispatched body carries all ten rows.
+      Enum.each(2..6, fn pass ->
+        HistorianDispatcher.dispatch_windowed(
+          "historian",
+          "historian.threshold",
+          %{trigger: "pass-#{pass}"},
+          @org_workspace
+        )
+      end)
+
+      all_text = system_space |> messages_corpus_bodies() |> Enum.join("\n")
+
+      missing = Enum.reject(tags, &String.contains?(all_text, &1))
+
+      assert missing == [],
+             "rows never digested across six passes: #{inspect(missing)}"
+
+      cursor_final = messages_cursor()
+
+      assert DateTime.compare(cursor_final.last_processed_at, List.last(timestamps)) == :gt,
+             "expected the cursor to reach past the newest row once everything drained"
     end
   end
 
@@ -387,7 +645,10 @@ defmodule Platform.Agents.HistorianDispatcherTest do
              "expected an oversize transcripts message, got: " <>
                inspect(Enum.map(messages, & &1.metadata))
 
-      assert oversized.content =~ "_(truncated — deep-summary rather than deep-curate)_"
+      # The 120KB summary exceeds the 2_000-byte cap on its own, so it is
+      # named and stepped past rather than cut at a byte offset.
+      assert oversized.content =~ "_(skipped —"
+      assert String.valid?(oversized.content)
 
       # Drain telemetry events and locate the transcripts-corpus event
       # for today whose day_bytes matches the seeded summary. `octet_length`
@@ -952,6 +1213,23 @@ defmodule Platform.Agents.HistorianDispatcherTest do
     )
   end
 
+  # Bodies of every instruction message dispatched for the `messages`
+  # corpus, oldest first.
+  defp messages_corpus_bodies(system_space) do
+    system_space
+    |> system_space_messages()
+    |> Enum.filter(&(get_in(&1.metadata, ["cursor", "namespace"]) == "messages"))
+    |> Enum.map(& &1.content)
+  end
+
+  defp messages_cursor do
+    Repo.one!(
+      from(c in HistorianCursor,
+        where: is_nil(c.workspace_id) and c.corpus == "messages"
+      )
+    )
+  end
+
   defp system_space_message_count(agent) do
     case Chat.get_space_by_slug("system-#{agent.slug}") do
       nil ->
@@ -1095,10 +1373,17 @@ defmodule Platform.Agents.HistorianDispatcherTest do
 
     ts = DateTime.new!(day, ~T[12:00:00], "Etc/UTC")
 
+    # `completed_at` is the transcripts corpus clock on BOTH the digest
+    # accessor (`Meetings.list_transcripts_since/2`) and the Historian byte
+    # signal (task 019fa1cc stage 2 unified them onto
+    # `Meetings.digest_eligible_transcripts_query/1`). A `status: "complete"`
+    # row with `completed_at: nil` is a row the digest can never render, so
+    # stamping it here is what makes this fixture a transcript the Historian
+    # would actually see rather than a byte-count-only phantom.
     {1, _} =
       Repo.update_all(
         from(t in Transcript, where: t.id == ^transcript.id),
-        set: [updated_at: ts, inserted_at: ts]
+        set: [updated_at: ts, inserted_at: ts, completed_at: ts]
       )
 
     transcript

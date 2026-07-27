@@ -97,6 +97,14 @@ defmodule Platform.Audit.TelemetryHandler do
     [:platform, :historian, :window_dispatched],
     [:platform, :historian, :cursor_advanced],
     [:platform, :historian, :error],
+    # Task 019fa1cc stage 4 — the cursor invariant's audit trail.
+    # `window_truncated` fires when the digest withheld rows and the cursor
+    # was held short of `window_end`; `item_skipped` fires when one row
+    # exceeds the whole window budget alone and the sweep steps past it.
+    # A skip that is not a queryable row is a silent advance, which is the
+    # defect the stage exists to remove.
+    [:platform, :historian, :window_truncated],
+    [:platform, :historian, :item_skipped],
     # Task 019f5e7d — Historian dispatch-loop diagnostics.
     # `no_op_pass` fires from Higgins's runtime when a dispatch completes
     # with zero curation writes (proxy for the pre-fix "backlog drained"

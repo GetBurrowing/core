@@ -38,6 +38,63 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
   # the injection shape callers see for `input_fn`.
   defp per_day_for(map), do: fn _corpus, _start_at, _end_at -> map end
 
+  # Stub for `opts[:range_bytes_fn]` over a UNIFORMLY DENSE day: each day's
+  # bytes are spread evenly across the slicer's clipped day-range
+  # `[span_start, span_end)`, so a sub-range gets its share by elapsed
+  # seconds. This is exactly what `halve_until_fits/7` used to ASSUME of
+  # every day; here it is a stated property of the fixture rather than of
+  # the code, which is why the pre-existing even-distribution cases below
+  # keep their assertions unchanged.
+  defp uniform_range_for(per_day_map, span_start, span_end) do
+    fn _corpus, range_start, range_end ->
+      Enum.reduce(per_day_map, 0, fn {date, bytes}, acc ->
+        day_open = DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
+        day_close = date |> Date.add(1) |> DateTime.new!(~T[00:00:00], "Etc/UTC")
+
+        d0 = later(day_open, span_start)
+        d1 = earlier(day_close, span_end)
+        day_span = DateTime.diff(d1, d0, :second)
+        overlap = overlap_seconds({d0, d1}, {range_start, range_end})
+
+        if day_span > 0, do: acc + div(bytes * overlap, day_span), else: acc
+      end)
+    end
+  end
+
+  # Stub for `opts[:range_bytes_fn]` over a distribution given as point
+  # events `[{DateTime.t(), bytes}]`. A range's bytes are the sum of the
+  # events inside `[range_start, range_end)` — genuinely uneven density,
+  # which is the only fixture shape in which a uniform-density bug is
+  # visible at all.
+  defp point_range_for(events) do
+    fn _corpus, range_start, range_end ->
+      events
+      |> Enum.filter(fn {at, _bytes} ->
+        DateTime.compare(at, range_start) != :lt and DateTime.compare(at, range_end) == :lt
+      end)
+      |> Enum.map(&elem(&1, 1))
+      |> Enum.sum()
+    end
+  end
+
+  defp later(a, b), do: if(DateTime.compare(a, b) == :lt, do: b, else: a)
+  defp earlier(a, b), do: if(DateTime.compare(a, b) == :gt, do: b, else: a)
+
+  defp overlap_seconds({a0, a1}, {b0, b1}) do
+    lo = later(a0, b0)
+    hi = earlier(a1, b1)
+    max(DateTime.diff(hi, lo, :second), 0)
+  end
+
+  defp covers?(window, %DateTime{} = at) do
+    DateTime.compare(at, window.window_start) != :lt and
+      DateTime.compare(at, window.window_end) == :lt
+  end
+
+  defp overlaps?(window, from, to) do
+    overlap_seconds({window.window_start, window.window_end}, {from, to}) > 0
+  end
+
   # ── (a) Empty input → [] ────────────────────────────────────────────────
 
   describe "slice_windows/2 — empty input" do
@@ -184,6 +241,7 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
         HistorianDispatcher.slice_windows(nil,
           input_fn: input_for(input),
           per_day_fn: per_day_for(per_day),
+          range_bytes_fn: uniform_range_for(per_day, last_at, end_at),
           now: end_at,
           budget_tokens: 30_000
         )
@@ -279,6 +337,7 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
         HistorianDispatcher.slice_windows(nil,
           input_fn: input_for(input),
           per_day_fn: per_day_for(per_day),
+          range_bytes_fn: uniform_range_for(per_day, last_at, end_at),
           now: end_at
         )
 
@@ -297,6 +356,7 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
         HistorianDispatcher.slice_windows(nil,
           input_fn: input_for(input),
           per_day_fn: per_day_for(per_day),
+          range_bytes_fn: uniform_range_for(per_day, last_at, end_at),
           now: end_at,
           budget_tokens: 5_000
         )
@@ -355,6 +415,7 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
         HistorianDispatcher.slice_windows(nil,
           input_fn: input_for(input),
           per_day_fn: per_day_for(per_day),
+          range_bytes_fn: uniform_range_for(per_day, ~U[2026-06-11 12:00:00Z], now()),
           now: now(),
           budget_tokens: 30_000
         )
@@ -433,6 +494,7 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
         HistorianDispatcher.slice_windows(nil,
           input_fn: input_for(input),
           per_day_fn: per_day_for(per_day),
+          range_bytes_fn: uniform_range_for(per_day, start_at, end_at),
           now: end_at,
           budget_tokens: 30_000
         )
@@ -445,6 +507,160 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
       # Chronological ordering preserved.
       starts = Enum.map(windows, & &1.window_start)
       assert starts == Enum.sort(starts, DateTime)
+    end
+  end
+
+  # ── (concentrated hour) Each half is measured, not smeared ─────────────
+
+  describe "slice_windows/2 — sub-window byte measurement (task 019fa1cc stage 3)" do
+    # Anchors: one whole UTC day, all of its byte mass inside [04:00, 05:00).
+    # Every assertion in this block is chosen to FAIL against the pre-stage-3
+    # `left_bytes = div(total_bytes, 2)` smear, whose behaviour on this
+    # fixture is stated in each test.
+    @day_start ~U[2026-07-11 00:00:00Z]
+    @day_end ~U[2026-07-12 00:00:00Z]
+
+    test "a day whose whole mass sits in one hour flags only the windows that own bytes" do
+      # 400_000 bytes split across two instants inside [04:00, 05:00) and
+      # ZERO bytes in the other 23 hours.
+      events = [
+        {~U[2026-07-11 04:10:00Z], 200_000},
+        {~U[2026-07-11 04:40:00Z], 200_000}
+      ]
+
+      per_day = %{~D[2026-07-11] => 400_000}
+      range_fn = point_range_for(events)
+
+      windows =
+        HistorianDispatcher.slice_windows(nil,
+          input_fn: input_for(%{messages: {@day_start, 400_000}}),
+          per_day_fn: per_day_for(per_day),
+          range_bytes_fn: range_fn,
+          now: @day_end,
+          budget_tokens: 1_000
+        )
+
+      # POSITIVE CONTROL, before any absence assertion: the slicer emitted
+      # something at all. `Enum.all?/2` and `Enum.empty?/1` are both true on
+      # [], so an unwired path would satisfy (b) and (c) trivially.
+      refute Enum.empty?(windows)
+
+      # (a) The busy hour is covered — both instants land inside an emitted
+      # window, i.e. nothing was dropped along with the quiet hours.
+      for {at, _bytes} <- events do
+        assert Enum.any?(windows, &covers?(&1, at)),
+               "expected an emitted window covering #{at}"
+      end
+
+      # (c) EXACTLY the number of oversize windows the real distribution
+      # justifies — not `> 0`. The 86_400s day halves 5 times before hitting
+      # @min_sub_window_seconds, so the smear produced 32 leaves of
+      # 400_000/32 = 12_500 bytes = 3_125 tokens each, ALL of them over the
+      # 1_000-token budget and ALL of them flagged oversize. Measured, only
+      # the two leaves that actually contain an event survive.
+      assert length(windows) == 2
+      assert Enum.count(windows, & &1.oversize) == 2
+
+      assert Enum.map(windows, & &1.window_start) == [
+               ~U[2026-07-11 03:45:00Z],
+               ~U[2026-07-11 04:30:00Z]
+             ]
+
+      # (b) No emitted window overlaps a quiet hour, and every emitted
+      # window measures non-zero — paired with the positive control above,
+      # this says the survivors are exactly the ones with content.
+      refute Enum.any?(
+               windows,
+               &overlaps?(&1, ~U[2026-07-11 08:00:00Z], ~U[2026-07-11 09:00:00Z])
+             )
+
+      assert Enum.all?(windows, fn w ->
+               range_fn.("messages", w.window_start, w.window_end) > 0
+             end)
+
+      # Oversize windows still clamp `token_estimate` to the budget.
+      assert Enum.all?(windows, &(&1.token_estimate == 1_000))
+
+      # `day_bytes` is TELEMETRY and stage 3 did not change its meaning: every
+      # sub-window of a day still stamps the whole day's figure so the day can
+      # be reconstructed downstream. Stamping the measured sub-window bytes
+      # here instead would break that contract.
+      assert Enum.all?(windows, &(&1.day_bytes == 400_000))
+    end
+
+    test "a quiet region that genuinely fits is emitted whole and non-oversize" do
+      # THE discriminating case for measurement (as opposed to merely
+      # dropping empty halves): 400_000 bytes at 04:10 and a real but small
+      # 2_000 bytes at 20:10. Under the smear the evening half was charged
+      # 201_000 bytes — 50_250 tokens — and halved down to oversize leaves.
+      # Measured, it is 500 tokens and fits in ONE non-oversize window.
+      events = [
+        {~U[2026-07-11 04:10:00Z], 400_000},
+        {~U[2026-07-11 20:10:00Z], 2_000}
+      ]
+
+      per_day = %{~D[2026-07-11] => 402_000}
+
+      windows =
+        HistorianDispatcher.slice_windows(nil,
+          input_fn: input_for(%{messages: {@day_start, 402_000}}),
+          per_day_fn: per_day_for(per_day),
+          range_bytes_fn: point_range_for(events),
+          now: @day_end,
+          budget_tokens: 1_000
+        )
+
+      refute Enum.empty?(windows)
+      assert length(windows) == 2
+      assert Enum.count(windows, & &1.oversize) == 1
+
+      quiet = Enum.find(windows, &covers?(&1, ~U[2026-07-11 20:10:00Z]))
+      assert quiet, "expected a window covering the quiet evening event"
+      assert quiet.oversize == false
+      # 2_000 bytes / 4 — its OWN mass, not a share of the day's.
+      assert quiet.token_estimate == 500
+      assert quiet.window_start == ~U[2026-07-11 12:00:00Z]
+      assert quiet.window_end == @day_end
+
+      busy = Enum.find(windows, &covers?(&1, ~U[2026-07-11 04:10:00Z]))
+      assert busy.oversize == true
+      assert busy.token_estimate == 1_000
+      assert DateTime.diff(busy.window_end, busy.window_start, :second) == 2_700
+    end
+
+    test "the halving loop asks range_bytes_fn for the real half boundaries" do
+      # Records every (start, end) the loop measures. Pins that the loop
+      # re-queries at the SPLIT POINT it actually uses — a stub consulted
+      # with the parent's bounds, or not consulted at all, would leave this
+      # empty or wrong.
+      test_pid = self()
+
+      recording_fn = fn corpus, s, e ->
+        send(test_pid, {:measured, corpus, s, e})
+        if DateTime.compare(s, ~U[2026-07-11 12:00:00Z]) == :lt, do: 400_000, else: 0
+      end
+
+      windows =
+        HistorianDispatcher.slice_windows(nil,
+          input_fn: input_for(%{messages: {@day_start, 400_000}}),
+          per_day_fn: per_day_for(%{~D[2026-07-11] => 400_000}),
+          range_bytes_fn: recording_fn,
+          now: @day_end,
+          budget_tokens: 1_000
+        )
+
+      refute Enum.empty?(windows)
+
+      # The first split of the 24h day is at 12:00, and BOTH halves are
+      # measured — the right half is what the smear would have charged
+      # 200_000 bytes and what measurement charges 0.
+      assert_received {:measured, "messages", @day_start, ~U[2026-07-11 12:00:00Z]}
+      assert_received {:measured, "messages", ~U[2026-07-11 12:00:00Z], @day_end}
+
+      # The measured-zero right half emits nothing at all.
+      refute Enum.any?(windows, &overlaps?(&1, ~U[2026-07-11 12:00:00Z], @day_end))
+      # ...and the corpus string is passed, not the atom.
+      assert Enum.all?(windows, &(&1.corpus == :messages))
     end
   end
 

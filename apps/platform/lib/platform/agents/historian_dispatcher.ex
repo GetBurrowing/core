@@ -63,8 +63,8 @@ defmodule Platform.Agents.HistorianDispatcher do
 
   # Smallest sub-window the halving loop is willing to emit. Below
   # this, if the estimated tokens still exceed budget, the window is
-  # flagged `oversize: true` and stage 2's digest-build path will apply
-  # the truncation marker downstream.
+  # flagged `oversize: true` and the digest-build path truncates it
+  # item-wise, holding the cursor at the digested watermark.
   @min_sub_window_seconds 3_600
 
   @type window :: %{
@@ -98,11 +98,6 @@ defmodule Platform.Agents.HistorianDispatcher do
   `org/journal/{date}.md`. Be selective: only promote genuinely new \
   insights and preserve existing content that is still relevant.
   """
-
-  # Truncation marker prepended to the digest body when a window's
-  # `oversize: true` flag forces byte-cap trimming. Signals to the
-  # Historian that this pass should skim rather than deep-dive.
-  @truncation_marker "_(truncated — deep-summary rather than deep-curate)_"
 
   # Post-render body oversize headroom. `budget_tokens` is a per-corpus
   # digest ceiling; the rendered message body carries additional template
@@ -166,23 +161,25 @@ defmodule Platform.Agents.HistorianDispatcher do
     3. `slice_windows(workspace_id)` and take up to
        `max_windows_per_pass/0` chronological windows.
     4. For each window in order:
-         a. `ActivityDigest.build_windowed(window)` → corpus-scoped body.
-         b. When `oversize: true`, truncate the body at
-            `budget_tokens * 4` bytes and prepend the
-            `_(truncated — deep-summary rather than deep-curate)_` marker
-            so the Historian knows to skim rather than deep-curate.
-         c. `post_instruction/5` with per-window `extra_metadata` carrying
+         a. `ActivityDigest.build_windowed_result(window)` → corpus-scoped
+            body plus the item accounting. The digest admits rows in
+            corpus-clock order until the next one would push the running
+            byte total past `budget_tokens * 4`, so the body is always a
+            whole-item prefix — never a mid-item byte cut.
+         b. `post_instruction/5` with per-window `extra_metadata` carrying
             `cursor: %{namespace, window_start, window_end}`,
-            `window_index`, `window_of`, `token_estimate`, `oversize`.
-            The pre-built digest is passed through the `:activity_digest`
-            opt so the 24h fallback path in `post_instruction/5` doesn't
-            fire.
-         d. Dispatch `AgentResponder.maybe_dispatch/1` so the agent
+            `window_index`, `window_of`, `token_estimate`, `oversize`,
+            `truncated`, `oversize_empty`. The pre-built digest is passed
+            through the `:activity_digest` opt so the 24h fallback path in
+            `post_instruction/5` doesn't fire.
+         c. Dispatch `AgentResponder.maybe_dispatch/1` so the agent
             processes each windowed message independently.
-         e. `Historian.advance_cursor(workspace_id, corpus, nil,
-            window_end)` — BEFORE returning to the loop so a crash
+         d. `Historian.advance_cursor(workspace_id, corpus, nil,
+            cursor_target/2)` — BEFORE returning to the loop so a crash
             mid-pass resumes at the next unread window rather than
-            replaying already-dispatched work.
+            replaying already-dispatched work. `cursor_target/2` reaches
+            `window_end` only when nothing was withheld; see its
+            definition for the invariant.
 
   Returns `{:ok, %{dispatched: n, remaining: total_windows - n}}` so
   `SystemEventScheduler` can log/telemeter the cap-hit for the next tick.
@@ -304,12 +301,21 @@ defmodule Platform.Agents.HistorianDispatcher do
       so the slicer can be exercised without hitting the DB.
     * `:per_day_fn` — 3-arity function taking `(corpus_string, start_at,
       end_at)` and returning `%{Date.t() => non_neg_integer()}` — the
-      per-calendar-day byte sums used by `slice_by_calendar_day/5` to
+      per-calendar-day byte sums used by `slice_by_calendar_day/6` to
       attribute density to the days that actually own it. Defaults to a
       closure over the caller's `workspace_id` that delegates to
       `Historian.pending_bytes_per_day/4` — so workspace-scoped corpora
       (pages / journal) query with the right filter. Tests inject an
       arity-3 stub that ignores `workspace_id` for DB-free coverage.
+    * `:range_bytes_fn` — 3-arity function taking `(corpus_string,
+      start_at, end_at)` and returning a single `non_neg_integer()` — the
+      REAL byte sum of that arbitrary sub-day span, used by
+      `halve_until_fits/7` to measure each half instead of assuming the
+      day's bytes are uniformly dense. Defaults to a closure over the
+      caller's `workspace_id` delegating to
+      `Historian.pending_bytes_in_range/4`. Same test-injection shape as
+      `:per_day_fn`; any test that drives the halving path must stub it or
+      it will hit the DB.
 
   ## Behaviour
 
@@ -322,11 +328,19 @@ defmodule Platform.Agents.HistorianDispatcher do
       the aggregator omits (no rows) contribute nothing; a single busy
       day carries its own real density rather than a smeared average.
     * If a single calendar day still overflows, that day is halved
-      recursively until either the sub-window fits or the span drops to
-      `@min_sub_window_seconds`. A sub-window that STILL overflows at
-      the minimum span is emitted with `oversize: true` and its
-      `token_estimate` clamped to `budget_tokens` — the truncation
-      marker is applied downstream at message-body render time.
+      recursively; **each half is re-measured with `range_bytes_fn`**
+      rather than charged half the parent's bytes, so a day whose whole
+      mass sits in one hour hands that hour all of it and hands the
+      quiet hours zero. Halving continues until either the sub-window
+      fits or the span drops to `@min_sub_window_seconds`. A sub-window
+      that STILL overflows at the minimum span is emitted with
+      `oversize: true` and its `token_estimate` clamped to
+      `budget_tokens` — the truncation marker is applied downstream at
+      message-body render time.
+    * A sub-window that measures zero bytes emits nothing, exactly as a
+      zero-byte calendar day does. Under the old halved-estimate this
+      case could not arise: every half of a non-empty day was non-empty
+      by construction.
     * Emitted windows are sorted `(window_start ASC, corpus_order ASC)`
       so multi-corpus + multi-day traffic dispatches oldest-first with
       a stable per-day corpus order (`pages`, `journal`, `messages`,
@@ -347,10 +361,17 @@ defmodule Platform.Agents.HistorianDispatcher do
         Historian.pending_bytes_per_day(corpus, start_at, end_at, workspace_id)
       end)
 
+    range_bytes_fn =
+      Keyword.get(opts, :range_bytes_fn, fn corpus, start_at, end_at ->
+        Historian.pending_bytes_in_range(corpus, start_at, end_at, workspace_id)
+      end)
+
     input = input_fn.(workspace_id)
 
     @corpus_order
-    |> Enum.flat_map(&slice_corpus_from_input(input, &1, now, budget_tokens, per_day_fn))
+    |> Enum.flat_map(
+      &slice_corpus_from_input(input, &1, now, budget_tokens, per_day_fn, range_bytes_fn)
+    )
     |> Enum.sort_by(fn w ->
       {DateTime.to_unix(w.window_start, :microsecond), Map.get(@corpus_index, w.corpus, 99)}
     end)
@@ -376,7 +397,7 @@ defmodule Platform.Agents.HistorianDispatcher do
     Application.get_env(:platform, :historian_max_windows_per_pass, 20)
   end
 
-  defp slice_corpus_from_input(input, corpus, now, budget_tokens, per_day_fn) do
+  defp slice_corpus_from_input(input, corpus, now, budget_tokens, per_day_fn, range_bytes_fn) do
     case Map.get(input, corpus) do
       nil ->
         []
@@ -390,7 +411,15 @@ defmodule Platform.Agents.HistorianDispatcher do
         if DateTime.compare(start_at, now) != :lt do
           []
         else
-          slice_corpus_range(corpus, start_at, now, bytes, budget_tokens, per_day_fn)
+          slice_corpus_range(
+            corpus,
+            start_at,
+            now,
+            bytes,
+            budget_tokens,
+            per_day_fn,
+            range_bytes_fn
+          )
         end
     end
   end
@@ -405,7 +434,15 @@ defmodule Platform.Agents.HistorianDispatcher do
     if DateTime.compare(last_at, now) == :lt, do: last_at, else: now
   end
 
-  defp slice_corpus_range(corpus, start_at, end_at, total_bytes, budget_tokens, per_day_fn) do
+  defp slice_corpus_range(
+         corpus,
+         start_at,
+         end_at,
+         total_bytes,
+         budget_tokens,
+         per_day_fn,
+         range_bytes_fn
+       ) do
     total_tokens = div(total_bytes, 4)
 
     cond do
@@ -426,7 +463,14 @@ defmodule Platform.Agents.HistorianDispatcher do
         ]
 
       true ->
-        slice_by_calendar_day(corpus, start_at, end_at, budget_tokens, per_day_fn)
+        slice_by_calendar_day(
+          corpus,
+          start_at,
+          end_at,
+          budget_tokens,
+          per_day_fn,
+          range_bytes_fn
+        )
     end
   end
 
@@ -438,7 +482,7 @@ defmodule Platform.Agents.HistorianDispatcher do
   # `DateTime.to_date(day_start)` as the map key, which lines up 1:1
   # with the aggregator's `date_trunc('day', ...)` UTC keying — no
   # boundary math needed.
-  defp slice_by_calendar_day(corpus, start_at, end_at, budget_tokens, per_day_fn) do
+  defp slice_by_calendar_day(corpus, start_at, end_at, budget_tokens, per_day_fn, range_bytes_fn) do
     day_ranges = enumerate_day_ranges(start_at, end_at)
     per_day_bytes = per_day_fn.(Atom.to_string(corpus), start_at, end_at)
 
@@ -466,8 +510,20 @@ defmodule Platform.Agents.HistorianDispatcher do
           # `day_bytes` at the top of the halving recursion is the real
           # per-day byte sum. Sub-windows emitted by `halve_until_fits`
           # stamp the SAME `day_bytes` value on every emitted map so a
-          # single day's telemetry can be reconstructed downstream.
-          halve_until_fits(corpus, day_start, day_end, day_bytes, budget_tokens, day_bytes)
+          # single day's telemetry can be reconstructed downstream —
+          # `day_bytes` is a telemetry field, NOT the oversize input, and
+          # stage 3 deliberately left its meaning alone. The oversize
+          # decision reads `total_bytes`, which from here down is
+          # re-measured per half by `range_bytes_fn`.
+          halve_until_fits(
+            corpus,
+            day_start,
+            day_end,
+            day_bytes,
+            budget_tokens,
+            day_bytes,
+            range_bytes_fn
+          )
       end
     end)
   end
@@ -492,11 +548,37 @@ defmodule Platform.Agents.HistorianDispatcher do
     DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
   end
 
-  defp halve_until_fits(corpus, start_at, end_at, total_bytes, budget_tokens, day_bytes) do
+  # Each half is MEASURED, not assumed. The previous implementation set
+  # `left_bytes = div(total_bytes, 2)` and `right_bytes = total_bytes -
+  # left_bytes` and never re-queried, so at recursion depth N the oversize
+  # decision ran against `day_bytes / 2^N`. That is a uniform-density
+  # fiction: a day with all its traffic in one hour charged every quiet
+  # hour an equal share and drove them to `@min_sub_window_seconds`, where
+  # they were stamped `oversize: true` and dispatched a stub. Two real
+  # `range_bytes_fn` calls per split cost at most ~2^5 aggregates for one
+  # pathological day (depth is bounded by
+  # `log2(86_400 / @min_sub_window_seconds)`), and only on days that
+  # already overflowed the budget.
+  defp halve_until_fits(
+         corpus,
+         start_at,
+         end_at,
+         total_bytes,
+         budget_tokens,
+         day_bytes,
+         range_bytes_fn
+       ) do
     span_seconds = DateTime.diff(end_at, start_at, :second)
     total_tokens = div(total_bytes, 4)
 
     cond do
+      # A measured-empty half emits nothing — the same rule
+      # `slice_by_calendar_day/6` applies to a zero-byte day. Unreachable
+      # before this stage: every half of a non-empty day was non-empty by
+      # construction when the halves were arithmetic rather than measured.
+      total_bytes <= 0 ->
+        []
+
       total_tokens <= budget_tokens ->
         [
           %{
@@ -527,12 +609,29 @@ defmodule Platform.Agents.HistorianDispatcher do
       true ->
         mid_seconds = div(span_seconds, 2)
         mid = DateTime.add(start_at, mid_seconds, :second)
+        corpus_string = Atom.to_string(corpus)
 
-        left_bytes = div(total_bytes, 2)
-        right_bytes = total_bytes - left_bytes
+        left_bytes = range_bytes_fn.(corpus_string, start_at, mid)
+        right_bytes = range_bytes_fn.(corpus_string, mid, end_at)
 
-        halve_until_fits(corpus, start_at, mid, left_bytes, budget_tokens, day_bytes) ++
-          halve_until_fits(corpus, mid, end_at, right_bytes, budget_tokens, day_bytes)
+        halve_until_fits(
+          corpus,
+          start_at,
+          mid,
+          left_bytes,
+          budget_tokens,
+          day_bytes,
+          range_bytes_fn
+        ) ++
+          halve_until_fits(
+            corpus,
+            mid,
+            end_at,
+            right_bytes,
+            budget_tokens,
+            day_bytes,
+            range_bytes_fn
+          )
     end
   end
 
@@ -661,8 +760,8 @@ defmodule Platform.Agents.HistorianDispatcher do
          budget_tokens,
          workspace_id
        ) do
-    digest_body = ActivityDigest.build_windowed(window)
-    body = maybe_truncate_digest(digest_body, window.oversize, budget_tokens)
+    {:ok, body, digest} =
+      ActivityDigest.build_windowed_result(Map.put(window, :budget_tokens, budget_tokens))
 
     corpus_string = Atom.to_string(window.corpus)
 
@@ -677,7 +776,16 @@ defmodule Platform.Agents.HistorianDispatcher do
         window_index: idx,
         window_of: total_taken,
         token_estimate: window.token_estimate,
-        oversize: window.oversize
+        oversize: window.oversize,
+        # The two flags a consumer acts on. `truncated` says the cursor was
+        # held short of `window_end` and a re-dispatch is coming;
+        # `oversize_empty` says this window could not be digested, as opposed
+        # to having had nothing to digest. `HistorianAudit.classify/1` reads
+        # both off the `window_dispatched` audit row.
+        truncated: digest.truncated?,
+        oversize_empty: digest.oversize_empty?,
+        item_count: digest.item_count,
+        included_count: digest.included_count
       })
 
     case post_instruction(
@@ -695,34 +803,81 @@ defmodule Platform.Agents.HistorianDispatcher do
         # convention (see `SystemEventScheduler.emit_telemetry/3`).
         # `resource_type`/`resource_id`/`action` come from `emit_telemetry`
         # — stage 2's audit bridge (task 019f5bc4) keys off them.
+        day_span =
+          DateTime.to_iso8601(window.window_start) <>
+            "/" <> DateTime.to_iso8601(window.window_end)
+
         emit_telemetry(
           :window_dispatched,
           %{
             token_count: window.token_estimate,
             window_index: idx,
-            day_bytes: Map.get(window, :day_bytes, 0)
+            day_bytes: Map.get(window, :day_bytes, 0),
+            item_count: digest.item_count,
+            included_count: digest.included_count
           },
           %{
-            day_span:
-              DateTime.to_iso8601(window.window_start) <>
-                "/" <> DateTime.to_iso8601(window.window_end),
+            day_span: day_span,
             corpus: window.corpus,
-            oversize: window.oversize
+            oversize: window.oversize,
+            truncated: digest.truncated?,
+            oversize_empty: digest.oversize_empty?
           },
           workspace_id
         )
 
+        {cursor_at, skipped} = cursor_target(window, digest)
+
+        if digest.truncated? do
+          emit_telemetry(
+            :window_truncated,
+            %{
+              item_count: digest.item_count,
+              included_count: digest.included_count,
+              withheld_count: digest.item_count - digest.included_count
+            },
+            %{
+              day_span: day_span,
+              corpus: corpus_string,
+              cursor_at: DateTime.to_iso8601(cursor_at)
+            },
+            workspace_id
+          )
+        end
+
+        # A skip must be a named, queryable audit row — never a silent
+        # advance. It fires only when one item (or one timestamp-tied group)
+        # exceeds the whole window budget on its own, which no amount of
+        # further slicing can fix: `@min_sub_window_seconds` exists precisely
+        # because unbounded halving cannot terminate.
+        if skipped do
+          emit_telemetry(
+            :item_skipped,
+            %{bytes: skipped.bytes, item_count: skipped.count},
+            %{
+              corpus: corpus_string,
+              message_id: to_string(skipped.id),
+              window_start: DateTime.to_iso8601(window.window_start),
+              skipped_at: DateTime.to_iso8601(skipped.at)
+            },
+            workspace_id
+          )
+        end
+
         # Advance cursor BEFORE agent dispatch so a crash inside
         # AgentResponder still leaves the cursor stamped — the next tick
         # picks up at the next window instead of replaying this one.
-        case Historian.advance_cursor(workspace_id, corpus_string, nil, window.window_end) do
+        case Historian.advance_cursor(workspace_id, corpus_string, nil, cursor_at) do
           {:ok, _cursor} ->
             emit_telemetry(
               :cursor_advanced,
               %{window_index: idx, total_windows: total_taken},
               %{
                 corpus: corpus_string,
-                window_end: DateTime.to_iso8601(window.window_end)
+                # The instant the cursor actually landed on — equal to the
+                # window end only when the whole window was digested.
+                window_end: DateTime.to_iso8601(cursor_at),
+                held_short: digest.truncated?
               },
               workspace_id
             )
@@ -741,7 +896,7 @@ defmodule Platform.Agents.HistorianDispatcher do
           {:error, reason} ->
             Logger.error(
               "[HistorianDispatcher] failed to advance cursor for #{corpus_string} " <>
-                "at window_end=#{inspect(window.window_end)}: #{inspect(reason)}"
+                "at cursor_at=#{inspect(cursor_at)}: #{inspect(reason)}"
             )
 
             emit_telemetry(
@@ -751,7 +906,7 @@ defmodule Platform.Agents.HistorianDispatcher do
                 stage: "cursor_advance",
                 reason: inspect(reason),
                 corpus: corpus_string,
-                window_end: DateTime.to_iso8601(window.window_end)
+                window_end: DateTime.to_iso8601(cursor_at)
               },
               workspace_id
             )
@@ -776,18 +931,47 @@ defmodule Platform.Agents.HistorianDispatcher do
     end
   end
 
-  # Byte-cap the corpus digest body and prepend the truncation marker.
-  # The slicer's `token_estimate` for an oversize window is already
-  # clamped to `budget_tokens` — the marker here signals the same
-  # ceiling at the message-body level so the Historian's prompt
-  # instructions can react.
-  defp maybe_truncate_digest(body, true, budget_tokens) do
-    cap_bytes = budget_tokens * 4
-    trimmed = binary_part(body, 0, min(byte_size(body), cap_bytes))
-    @truncation_marker <> "\n\n" <> trimmed
-  end
+  # ── The cursor invariant (task 019fa1cc stage 4) ──────────────────────────
+  #
+  # **The cursor must never advance past content that was never digested.**
+  #
+  # This used to be an unconditional `advance_cursor(…, window.window_end)`
+  # called milliseconds after `maybe_truncate_digest/3` may have chopped the
+  # body with `binary_part(body, 0, cap)` — a byte-offset cut that both threw
+  # content away silently and could split a multi-byte grapheme into invalid
+  # UTF-8 on the way into a Postgres `text` column. Stages 2 and 3 made the
+  # oversize flag rare and honest; neither made this safe.
+  #
+  # `ActivityDigest.build_windowed_result/1` now truncates item-wise before
+  # rendering and hands back the watermark. Three cases:
+  #
+  #   1. Nothing withheld → the whole window was digested → `window_end`.
+  #   2. Something withheld and something included → land one microsecond
+  #      past the last included row. Strictly forward (the digest admits
+  #      whole timestamp groups, so no withheld row shares that instant) and
+  #      provably not past anything undigested. Advancing to the watermark
+  #      itself would re-read that row forever whenever the budget admits
+  #      exactly one item — the invariant must not be bought with a livelock.
+  #   3. Nothing included because one row exceeds the budget alone → step
+  #      past exactly that row and emit `:item_skipped`. Splitting cannot
+  #      terminate here and stalling would wedge every later window in the
+  #      corpus behind it, which is a worse failure than the one being fixed
+  #      because it is total rather than partial.
+  @spec cursor_target(window(), map()) :: {DateTime.t(), map() | nil}
+  defp cursor_target(window, %{truncated?: false}), do: {window.window_end, nil}
 
-  defp maybe_truncate_digest(body, _oversize, _budget_tokens), do: body
+  defp cursor_target(_window, %{last_included_at: %DateTime{} = watermark}),
+    do: {DateTime.add(watermark, 1, :microsecond), nil}
+
+  defp cursor_target(_window, %{skipped: %{at: %DateTime{} = at} = skipped}),
+    do: {DateTime.add(at, 1, :microsecond), skipped}
+
+  # Unreachable by construction: `truncated?` is `included_count <
+  # item_count`, so `item_count > 0`, so either something was included (and
+  # `last_included_at` is set) or the first group was skipped. Kept total
+  # rather than raising — a Historian sweep is not worth crashing over — and
+  # it holds the cursor where it is rather than guessing forward.
+  defp cursor_target(window, _digest), do: {window.window_start, nil}
 
   defp dispatch_to_agent(%Agent{} = agent, event_type, template_slug, extra_metadata) do
     with :ok <- ensure_runtime_reachable(agent, event_type),

@@ -415,7 +415,7 @@ defmodule Platform.Audit.TelemetryHandlerTest do
              "historian emit p99=#{p99}µs exceeded 5000µs budget — handler may have regressed to sync dispatch"
     end
 
-    test "handler is attached to all five historian events" do
+    test "handler is attached to all seven historian events" do
       events = TelemetryHandler.events()
 
       historian_events =
@@ -424,13 +424,22 @@ defmodule Platform.Audit.TelemetryHandlerTest do
           _ -> false
         end)
 
-      assert length(historian_events) == 5
+      # 5 → 7 for task 019fa1cc stage 4. `window_truncated` and
+      # `item_skipped` are the audit trail for the cursor invariant: a
+      # window whose cursor was held short of `window_end`, and a row the
+      # sweep stepped past because it exceeds the window budget alone. An
+      # unregistered emit is a skip nobody can query, which is the silent
+      # advance the stage exists to remove — so this census is the guard
+      # that the events are actually persisted, not merely emitted.
+      assert length(historian_events) == 7
 
       assert [:platform, :historian, :pass_started] in historian_events
       assert [:platform, :historian, :pass_completed] in historian_events
       assert [:platform, :historian, :window_dispatched] in historian_events
       assert [:platform, :historian, :cursor_advanced] in historian_events
       assert [:platform, :historian, :error] in historian_events
+      assert [:platform, :historian, :window_truncated] in historian_events
+      assert [:platform, :historian, :item_skipped] in historian_events
     end
   end
 

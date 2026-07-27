@@ -1531,6 +1531,38 @@ defmodule Platform.Chat do
   @spec list_messages_since(DateTime.t(), keyword()) :: [Message.t()]
   def list_messages_since(%DateTime{} = window_start, opts \\ []) do
     window_end = Keyword.get(opts, :window_end, DateTime.utc_now())
+
+    opts
+    |> digest_eligible_messages_query()
+    |> where([m], m.inserted_at >= ^window_start and m.inserted_at < ^window_end)
+    |> order_by([m], asc: m.inserted_at)
+    |> Repo.all()
+  end
+
+  @doc """
+  The unbounded digest-eligibility predicate for the `messages` corpus —
+  every filter that decides whether a `chat_messages` row can ever reach a
+  Historian digest, and nothing else. No time bound, no ordering, no select.
+
+  This is the **single seam** between the Historian's pending-bytes signal
+  and what the digest actually renders. `list_messages_since/2` is this
+  query plus `[window_start, window_end)` and an order; the byte-sizing
+  queries in `Platform.Agents.Historian` (`sum_corpus_bytes("messages", …)`
+  and `per_day_bytes_query("messages", …)`) are this query plus a range and
+  a `sum(octet_length(content))`.
+
+  **The invariant:** any filter added here is inherited by the byte signal
+  automatically. Adding an eligibility filter to only one side is a bug of
+  a specific, measured class — task `019fa1cc` found 86 oversize digest
+  windows on prod, 56 of them spurious, because these two callers each
+  carried their own copy of the predicate and the copies drifted. Do not
+  hand-write this filter list anywhere else; compose this query.
+
+  Accepts the same `:include_kinds` / `:content_types` / `:include_archived`
+  / `:scope` options as `list_messages_since/2`, with the same defaults.
+  """
+  @spec digest_eligible_messages_query(keyword()) :: Ecto.Query.t()
+  def digest_eligible_messages_query(opts \\ []) do
     include_kinds = Keyword.get(opts, :include_kinds, ~w(channel group))
     content_types = Keyword.get(opts, :content_types, ~w(text agent_action))
     include_archived = Keyword.get(opts, :include_archived, false)
@@ -1541,27 +1573,21 @@ defmodule Platform.Chat do
         join: s in Space,
         on: s.id == m.space_id,
         where:
-          m.inserted_at >= ^window_start and
-            m.inserted_at < ^window_end and
-            is_nil(m.deleted_at) and
+          is_nil(m.deleted_at) and
             m.log_only == false and
             m.content_type in ^content_types and
-            s.kind in ^include_kinds,
-        order_by: [asc: m.inserted_at]
+            s.kind in ^include_kinds
       )
 
     query = apply_digest_scope(query, scope)
 
-    query =
-      if include_archived do
-        # Deletion-flagged spaces must vanish from search immediately even
-        # though their history would otherwise qualify as "archived".
-        where(query, [m, s], is_nil(s.deletion_scheduled_at))
-      else
-        where(query, [m, s], is_nil(s.archived_at))
-      end
-
-    Repo.all(query)
+    if include_archived do
+      # Deletion-flagged spaces must vanish from search immediately even
+      # though their history would otherwise qualify as "archived".
+      where(query, [m, s], is_nil(s.deletion_scheduled_at))
+    else
+      where(query, [m, s], is_nil(s.archived_at))
+    end
   end
 
   # ── External-space digest partition (stack member 12, rbac-external-users) ──

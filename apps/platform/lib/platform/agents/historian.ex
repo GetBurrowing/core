@@ -21,7 +21,18 @@ defmodule Platform.Agents.Historian do
   | `"pages"`       | `org_wiki_pages`           | `updated_at`     | `byte_size(content)`                 |
   | `"journal"`     | `org_wiki_journal_entries` | `inserted_at`    | `byte_size(content)`                 |
   | `"messages"`    | `chat_messages`            | `inserted_at`    | `byte_size(content)` (nil → 0)       |
-  | `"transcripts"` | `meeting_transcripts`      | `updated_at`     | `byte_size(summary) + segments JSON` |
+  | `"transcripts"` | `meeting_transcripts`      | `completed_at`   | `byte_size(summary) + segments JSON` |
+
+  ## Digest eligibility — one seam, not two predicates
+
+  The `messages` and `transcripts` byte signals are built by composing
+  `Platform.Chat.digest_eligible_messages_query/1` and
+  `Platform.Meetings.digest_eligible_transcripts_query/1` — the same queries
+  `Chat.list_messages_since/2` and `Meetings.list_transcripts_since/2`
+  compose, and therefore exactly the rows `ActivityDigest` will render.
+  Any eligibility filter added to the accessor is inherited here for free;
+  adding one to only one side is the defect task `019fa1cc` fixed. See the
+  invariant note above `sum_corpus_bytes("messages", ...)`.
 
   T6 was developed against the pre-T1 table names (`org_context_files` /
   `org_memory_entries`); the stack rollup reconciled these queries to the
@@ -32,6 +43,7 @@ defmodule Platform.Agents.Historian do
 
   alias Platform.Agents.HistorianCursor
   alias Platform.Chat
+  alias Platform.Meetings
   alias Platform.Repo
 
   @corpora ~w(pages journal messages transcripts)
@@ -116,7 +128,7 @@ defmodule Platform.Agents.Historian do
   because those tables have no such column — see `sum_corpus_bytes/3`
   for the same shape).
 
-  Consumed by `HistorianDispatcher.slice_by_calendar_day/5` (Stage 2 of
+  Consumed by `HistorianDispatcher.slice_by_calendar_day/6` (Stage 2 of
   this task) to feed real per-day density into the window planner
   instead of the uniform-distribute heuristic.
   """
@@ -139,6 +151,63 @@ defmodule Platform.Agents.Historian do
     |> Enum.reduce(%{}, fn %{day: day, bytes: bytes}, acc ->
       Map.put(acc, truncate_to_date(day), to_non_neg(bytes))
     end)
+  end
+
+  @doc """
+  Returns the total pending bytes for `corpus` inside the half-open range
+  `[start_at, end_at)` as a single `non_neg_integer()` — the ungrouped
+  twin of `pending_bytes_per_day/3-4`, for callers that need to measure an
+  arbitrary sub-day span.
+
+  Same half-open semantic, same corpus clocks, same workspace scoping.
+
+  ## Why this exists
+
+  `HistorianDispatcher.halve_until_fits/7` used to manufacture each half's
+  byte count as `div(total_bytes, 2)` and never re-query, so at recursion
+  depth N the oversize decision ran against `day_bytes / 2^N` — a
+  uniform-density fiction. A day with all its traffic in one hour charged
+  every quiet hour an equal share and drove them to the minimum sub-window
+  span, where they were stamped `oversize: true`. This function is what the
+  halving loop asks instead of guessing (task `019fa1cc` stage 3).
+
+  ## It is the SAME query, not a second one
+
+  It composes `per_day_bytes_query/4` — the stage-2 unified builder — and
+  sums its groups in the database. That is deliberate and load-bearing: the
+  defect this task exists to remove is two predicates drifting apart, and a
+  hand-rolled `from(m in ...)` here would be a third copy of the digest
+  eligibility filter, one level down. Summing over the day groups is
+  arithmetically identical to an ungrouped `SUM` over the same rows, so the
+  only structural difference from `pending_bytes_per_day/4` is where the
+  fold happens. A range inside a single calendar day — which is every range
+  the halving loop asks about — produces exactly one group.
+
+  ## Query cost
+
+  Halving depth is bounded by `log2(86_400 / @min_sub_window_seconds) ≈ 5`,
+  so one pathological day costs at most ~2^5 = 32 extra aggregate queries
+  against an indexed corpus clock, and only on days that already overflowed
+  the budget.
+  """
+  @spec pending_bytes_in_range(String.t(), DateTime.t(), DateTime.t()) :: non_neg_integer()
+  def pending_bytes_in_range(corpus, start_at, end_at) do
+    pending_bytes_in_range(corpus, start_at, end_at, nil)
+  end
+
+  @spec pending_bytes_in_range(
+          String.t(),
+          DateTime.t(),
+          DateTime.t(),
+          binary() | nil
+        ) :: non_neg_integer()
+  def pending_bytes_in_range(corpus, start_at, end_at, workspace_id) do
+    corpus
+    |> per_day_bytes_query(workspace_id, start_at, end_at)
+    |> subquery()
+    |> select([r], sum(r.bytes))
+    |> Repo.one()
+    |> to_non_neg()
   end
 
   @doc """
@@ -327,45 +396,59 @@ defmodule Platform.Agents.Historian do
     |> to_non_neg()
   end
 
-  # Messages corpus → chat_messages. Inserted_at; edits are tracked in
-  # chat_message_versions and don't affect the pending-bytes signal.
+  # ── The digest-eligibility seam (task 019fa1cc stage 2) ────────────────
+  #
+  # Messages corpus → chat_messages, keyed on inserted_at; edits are tracked
+  # in chat_message_versions and don't affect the pending-bytes signal.
   # workspace_id is unused here in V1 (chat_messages has no workspace_id
   # column; org-scope V1 fan-out sweeps the whole table).
-  # External-user spaces are excluded from the internal Historian byte-sizing
-  # so the window slicer plans against exactly the rows the internal digest
-  # (`ActivityDigest` default `:internal` scope) will build — keeping the byte
-  # signal and the digest selection on the same predicate (stack member 12,
-  # rbac-external-users). Empty (no external users) → `NOT IN ^[]` is a no-op,
-  # leaving all-internal orgs' sums byte-for-byte unchanged. Single seam so
-  # the four call sites stay uniform and tests can reason about one predicate.
-  defp internal_excluded_space_ids, do: Chat.external_space_ids()
+  #
+  # The byte signal is built by composing `Chat.digest_eligible_messages_query/1`
+  # — the SAME query `Chat.list_messages_since/2` composes, and therefore the
+  # same rows `ActivityDigest.corpus_body(:messages, …)` will actually render.
+  # It is not a re-statement of that predicate: it is that predicate, plus a
+  # time bound and an aggregate select.
+  #
+  # THE INVARIANT: any eligibility filter added to the digest accessor is
+  # inherited by this byte signal automatically. Adding a filter to only one
+  # side is a bug of a specific, measured class — the previous version of this
+  # code hand-wrote `from(m in "chat_messages", where: space_id not in …)` and
+  # carried a comment claiming it was "on the same predicate" as the digest.
+  # It was not: the accessor additionally required `s.kind in ~w(channel group)`,
+  # `m.log_only == false`, `m.content_type in ~w(text agent_action)`,
+  # `is_nil(m.deleted_at)` and `is_nil(s.archived_at)`. That five-filter gap let
+  # a busy hour of agent execution-space chatter read as a 60K-token day to the
+  # window slicer and as an empty window to the renderer. Measured on prod:
+  # 86 oversize windows, 56 spurious, 55 of which dispatched the empty stub
+  # with an eligible row count of exactly 0. Do not hand-write the filter list
+  # here; compose the seam.
+  #
+  # (External-user space exclusion — stack member 12, rbac-external-users —
+  # now rides in via the seam's default `scope: :internal`. Empty external set
+  # → `NOT IN ^[]` is a no-op, leaving all-internal orgs unchanged.)
 
   defp sum_corpus_bytes("messages", _workspace_id, last_at) do
-    exclude = internal_excluded_space_ids()
-
-    query =
-      from(m in "chat_messages", where: m.space_id not in type(^exclude, {:array, :binary_id}))
-
-    query = apply_cursor_filter(query, :inserted_at, last_at)
-
-    query
+    Chat.digest_eligible_messages_query(scope: :internal)
+    |> apply_cursor_filter(:inserted_at, last_at)
     |> select([m], sum(fragment("coalesce(octet_length(?), 0)", m.content)))
     |> Repo.one()
     |> to_non_neg()
   end
 
-  # Transcripts corpus → meeting_transcripts. Updated_at because segments
-  # accumulate during a recording. Byte size = summary + JSON-encoded
-  # segments (cheap approximation; the char/4 heuristic absorbs the slack).
+  # Transcripts corpus → meeting_transcripts, composed on
+  # `Meetings.digest_eligible_transcripts_query/1` for the same reason and
+  # under the same invariant. Byte size = summary + JSON-encoded segments
+  # (cheap approximation; the char/4 heuristic absorbs the slack).
+  #
+  # Keyed on `completed_at`, matching `Meetings.list_transcripts_since/2`.
+  # This half was never a live bug — zero of the 86 measured oversize windows
+  # were transcripts — but it carried the identical divergence (no status
+  # filter, bound on `updated_at` while the accessor bounds on `completed_at`),
+  # and leaving one half of the seam un-unified reintroduces the drift.
   defp sum_corpus_bytes("transcripts", _workspace_id, last_at) do
-    exclude = internal_excluded_space_ids()
-
     query =
-      from(t in "meeting_transcripts",
-        where: t.space_id not in type(^exclude, {:array, :binary_id})
-      )
-
-    query = apply_cursor_filter(query, :updated_at, last_at)
+      Meetings.digest_eligible_transcripts_query(scope: :internal)
+      |> apply_cursor_filter(:completed_at, last_at)
 
     query
     |> select(
@@ -453,47 +536,40 @@ defmodule Platform.Agents.Historian do
 
   # Messages corpus → chat_messages. Inserted_at; no workspace filter
   # (chat_messages has no workspace_id column — mirrors the sum
-  # variant at `sum_corpus_bytes("messages", ...)`).
+  # variant at `sum_corpus_bytes("messages", ...)`). Composed on the same
+  # `Chat.digest_eligible_messages_query/1` seam; see the invariant note
+  # above `sum_corpus_bytes("messages", ...)`.
   defp per_day_bytes_query("messages", _workspace_id, start_at, end_at) do
-    exclude = internal_excluded_space_ids()
-
-    from(m in "chat_messages",
-      where:
-        m.inserted_at >= ^start_at and m.inserted_at < ^end_at and
-          m.space_id not in type(^exclude, {:array, :binary_id}),
-      group_by: fragment("date_trunc('day', ?)", m.inserted_at),
-      select: %{
-        day: fragment("date_trunc('day', ?)", m.inserted_at),
-        bytes: sum(fragment("coalesce(octet_length(?), 0)", m.content))
-      }
-    )
+    Chat.digest_eligible_messages_query(scope: :internal)
+    |> where([m], m.inserted_at >= ^start_at and m.inserted_at < ^end_at)
+    |> group_by([m], fragment("date_trunc('day', ?)", m.inserted_at))
+    |> select([m], %{
+      day: fragment("date_trunc('day', ?)", m.inserted_at),
+      bytes: sum(fragment("coalesce(octet_length(?), 0)", m.content))
+    })
   end
 
-  # Transcripts corpus → meeting_transcripts. Updated_at because
-  # segments accumulate during a recording. Byte size = summary +
-  # JSON-encoded segments (matches `sum_corpus_bytes("transcripts",
-  # ...)`). No workspace filter — meeting_transcripts has no
-  # workspace_id column in V1.
+  # Transcripts corpus → meeting_transcripts, grouped on `completed_at`
+  # (the corpus clock `Meetings.list_transcripts_since/2` bounds on — see
+  # the note above `sum_corpus_bytes("transcripts", ...)`). Byte size =
+  # summary + JSON-encoded segments. No workspace filter —
+  # meeting_transcripts has no workspace_id column in V1. Composed on the
+  # `Meetings.digest_eligible_transcripts_query/1` seam.
   defp per_day_bytes_query("transcripts", _workspace_id, start_at, end_at) do
-    exclude = internal_excluded_space_ids()
-
-    from(t in "meeting_transcripts",
-      where:
-        t.updated_at >= ^start_at and t.updated_at < ^end_at and
-          t.space_id not in type(^exclude, {:array, :binary_id}),
-      group_by: fragment("date_trunc('day', ?)", t.updated_at),
-      select: %{
-        day: fragment("date_trunc('day', ?)", t.updated_at),
-        bytes:
-          sum(
-            fragment(
-              "coalesce(octet_length(?), 0) + coalesce(octet_length(?::text), 0)",
-              t.summary,
-              t.segments
-            )
+    Meetings.digest_eligible_transcripts_query(scope: :internal)
+    |> where([t], t.completed_at >= ^start_at and t.completed_at < ^end_at)
+    |> group_by([t], fragment("date_trunc('day', ?)", t.completed_at))
+    |> select([t], %{
+      day: fragment("date_trunc('day', ?)", t.completed_at),
+      bytes:
+        sum(
+          fragment(
+            "coalesce(octet_length(?), 0) + coalesce(octet_length(?::text), 0)",
+            t.summary,
+            t.segments
           )
-      }
-    )
+        )
+    })
   end
 
   # `date_trunc('day', timestamptz)` returns a `timestamp with time
@@ -508,6 +584,10 @@ defmodule Platform.Agents.Historian do
 
   defp apply_cursor_filter(query, :updated_at, last_at) do
     from(q in query, where: q.updated_at > ^last_at)
+  end
+
+  defp apply_cursor_filter(query, :completed_at, last_at) do
+    from(q in query, where: q.completed_at > ^last_at)
   end
 
   defp apply_cursor_filter(query, :inserted_at, last_at) do

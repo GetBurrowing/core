@@ -538,7 +538,25 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
-    "platform/agents/historian.ex" => 10,
+    # 10 → 11 for task 019fa1cc stage 3's `pending_bytes_in_range/4`.
+    # Triaged by hand: the new call is `Repo.one` over a subquery of
+    # `per_day_bytes_query/4`, whose `where:` clause pins only two
+    # `DateTime`s against a corpus timestamp column plus (for pages /
+    # journal) a `workspace_id` already cast by `type(^workspace_id,
+    # :binary_id)` — the same expression the ten pre-existing calls in this
+    # file use, and the only caller passes the workspace_id straight through
+    # from `HistorianDispatcher.slice_windows/2`. No `x.id == ^value` on the
+    # path, so no `Ecto.Query.CastError` is reachable from a boundary and no
+    # `Platform.UUID.valid?/1` guard applies.
+    "platform/agents/historian.ex" => 11,
+    # Task 019fa1cc stage 1 — `HistorianAudit.dispatched_message/3` and
+    # `count_between/4`. Triaged by hand: neither `where:` clause pins an id.
+    # `dispatched_message/3` compares JSONB text extractions against ISO-8601
+    # strings rendered from an already-parsed `DateTime` plus a corpus name;
+    # `count_between/4` compares a timestamp column against two `DateTime`s.
+    # No `x.id == ^value` on either path, so no `Ecto.Query.CastError` is
+    # reachable from a boundary and no `Platform.UUID.valid?/1` guard applies.
+    "platform/agents/historian_audit.ex" => 2,
     "platform/analytics.ex" => 1,
     "platform/chat.ex" => 14,
     "platform/chat/attachments/tool_handlers.ex" => 1,
