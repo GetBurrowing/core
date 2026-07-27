@@ -1556,6 +1556,58 @@ defmodule Platform.Orchestration.PromptTemplates do
         - `reason` is a single short sentence (under 200 chars) — enough for a human reviewer to sanity-check the edge.
         - Output the JSON object as the entire response body. No prose commentary. No markdown fences. No leading or trailing text.
         """
+      },
+      %{
+        slug: "design.task_direction.v1",
+        name: "Design Direction — Pre-plan",
+        description:
+          "Sent to the designer BEFORE a UI-touching task is planned (ADR-0046 stack " <>
+            "member 7). Produces direction for the surface the task changes — subject, " <>
+            "palette, type roles, layout intent, self-critique — delivered as a canvas " <>
+            "attached to the task. Advisory: it does not block development.",
+        variables: [
+          "task_summary",
+          "brand_context",
+          "attached_canvases"
+        ],
+        # The five deliverable bullets are lifted VERBATIM from the
+        # `dispatch.planning` body's "Add an early advisory design stage"
+        # section, which has been asking the planner for exactly this shape
+        # since task 019f4f1d. Copying rather than paraphrasing is the
+        # point: ADR-0046 moves WHO produces the direction and WHEN, not
+        # WHAT it looks like, and a reworded copy would silently change the
+        # output shape downstream consumers already read.
+        content: """
+        You are the Designer. A task is about to be planned and it touches a user-facing surface. Produce DESIGN DIRECTION for that surface now, before the plan is written.
+
+        Low-fi and directional is correct. This is advice, not a gate: it does not block development, and the direction is expected to be iterated.
+
+        ## The task
+
+        {{task_summary}}
+
+        ## Brand context
+
+        {{brand_context}}
+
+        ## Canvases already attached to this task
+
+        {{attached_canvases}}
+
+        ## Deliverable
+
+        Produce direction in exactly this shape:
+
+        - Opening line pins the subject: what this surface is, who uses it, and the one job it does.
+        - Palette: 4–6 named color values (from brand tokens if they exist; provisional if exploring).
+        - Type: 2–3 roles (display used with restraint, body, optional utility).
+        - Layout: one sentence of intent + a rough wireframe; name ONE signature element — spend boldness in one place.
+        - Self-critique before handoff: revise anything that reads like the generic default for this kind of page, and say what changed.
+
+        ## Delivery
+
+        Write the direction to a canvas and attach that canvas to the task with the `task_attach_canvas` MCP tool, using the task_id above. The attachment IS the completion signal the planner waits on — direction posted only as a chat message is not delivered.
+        """
       }
     ]
   end

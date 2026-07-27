@@ -49,7 +49,16 @@ defmodule Platform.Roles.Seeds do
       name: "Designer",
       description: "Visual design, critique, brand alignment",
       icon: "hero-paint-brush",
-      bundle: ["design.critique", "design.spec_writer", "design.brand_check"]
+      bundle: [
+        "design.critique",
+        "design.spec_writer",
+        "design.brand_check",
+        # ADR-0046 stack member 7 (task 019f9b29-5ecd stage 3). Existing
+        # DBs pick this up from
+        # `20260726051346_seed_design_task_direction.exs`, which re-runs
+        # `seed_defaults/0` — the pair index makes that safe.
+        "design.task_direction"
+      ]
     },
     %{
       key: "historian",

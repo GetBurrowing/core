@@ -135,7 +135,8 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
   # instead, so the declaration is documentation for operators reading
   # the row rather than a request to the shared resolver. ADR-0046 stack
   # member 3 fixes the three architecture.review_plan slots only; these
-  # nine are stated, not fixed.
+  # twelve are stated, not fixed — the original nine plus the three
+  # `design.task_direction` declares (ADR-0046 stack member 7 stage 3).
   @unresolved_slots %{
     "open_prs" =>
       "architecture.cron_sweep shells out to `gh pr list` in its own " <>
@@ -158,6 +159,18 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
         "placeholder handlers returning `missing?: true` — no runtime yet",
     "grounding_notes" => "design.critique / design.spec_writer placeholders — no runtime yet",
     "brand_guidelines" => "design.brand_check placeholder — no runtime yet",
+    "task_payload" =>
+      "design.task_direction materialises this itself from " <>
+        "Tasks.get_task_record/1 — the pre-plan step needs the task row, " <>
+        "not a plan, and no plan exists yet at that point",
+    "brand_context" =>
+      "design.task_direction serves this from Platform.Design.Brand.resolve/1 " <>
+        "(ADR-0046 stack member 7 stage 2), which reads the wiki page store " <>
+        "rather than a responsibilities context slot",
+    "attached_canvases" =>
+      "design.task_direction serves this from " <>
+        "Tasks.CanvasAttachments.list_task_canvases/1 so the designer does " <>
+        "not re-issue direction an attached canvas already carries",
     "meeting_transcript_chunk" =>
       "meetings.intent_classify placeholder — the chunk arrives on the " <>
         "trigger payload, not through a resolver"

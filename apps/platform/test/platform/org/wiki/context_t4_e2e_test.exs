@@ -801,6 +801,13 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       "20260726000100_update_intent_classify_prompt_with_corrections.exs",
       # ADR-0046 member 4 — planning_step + per-step outcomes.
       "20260726045711_add_planning_step_to_tasks.exs",
+      # ADR-0046 member 7 (task 019f9b29-5ecd stage 3): the `designer`
+      # role bundle gains `design.task_direction` and the
+      # `design.task_direction.v1` prompt template row is inserted. Both
+      # halves re-run an existing idempotent seed — the responsibilities
+      # row itself lands at boot via the Registry upsert, so no schema
+      # change here.
+      "20260726051346_seed_design_task_direction.exs",
       # Task 019f9b28-6ca7 stage 5: the `architecture.review_plan.v1`
       # body told the architect to "prefer citing the ADR by number",
       # which `docs/decisions/` cannot honour — four numbers each name

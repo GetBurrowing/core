@@ -53,6 +53,7 @@ defmodule Platform.Responsibilities.BuiltIns do
       Handlers.DesignCritique,
       Handlers.DesignSpecWriter,
       Handlers.DesignBrandCheck,
+      Handlers.DesignTaskDirection,
       Handlers.TaskTriage,
       Handlers.TaskUnblock,
       Handlers.TaskWeeklyReview,

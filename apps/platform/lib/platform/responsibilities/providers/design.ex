@@ -10,18 +10,39 @@ defmodule Platform.Responsibilities.Providers.Design do
   `Platform.Responsibilities.Providers.Design` — **this module** — for
   its Provider callbacks.
 
-  The `design` feature owns three responsibilities that make up the
+  The `design` feature owns four responsibilities that make up the
   Designer role bundle:
 
     * `design.critique` → handled by `Handlers.DesignCritique`
     * `design.spec_writer` → handled by `Handlers.DesignSpecWriter`
     * `design.brand_check` → handled by `Handlers.DesignBrandCheck`
+    * `design.task_direction` → handled by `Handlers.DesignTaskDirection`
+      (ADR-0046 stack member 7, task `019f9b29-5ecd` stage 3)
 
   So this shim dispatches on `responsibility.key` via `handler_for/1`
   and hands off to the concrete handler module. Any unmapped key logs a
   warning and returns `{:error, :unknown_design_responsibility}` — the
   smoke signal for a drift between the built-ins list and this
   dispatch table.
+
+  ## `build_prompt/1` is per-key, not per-feature
+
+  The Router probes `build_prompt/1` on the PROVIDER module, never on the
+  handler (`Router.build_prompt_via_provider/2`), so a handler that owns
+  its prompt end-to-end is unreachable unless this shim forwards to it.
+  Only `design.task_direction` owns its prompt today; the other three are
+  registration placeholders that still render through
+  `default_prompt_template`.
+
+  Note the narrow return contract. The Router reads
+  `{:error, :no_build_prompt}` as "use the legacy template render", but
+  reads **any other** `{:error, _}` as a refusal that short-circuits the
+  dispatch and never fires the LLM call. So an unmapped key — or a mapped
+  handler that ships no `build_prompt/1` — must return exactly
+  `{:error, :no_build_prompt}`. Mirrors
+  `Platform.Responsibilities.Providers.Architecture.build_prompt/1`, which
+  can skip the `function_exported?/3` probe because all three of its
+  handlers implement the callback.
 
   ## Why a shim instead of one big "Design" handler
 
@@ -40,13 +61,15 @@ defmodule Platform.Responsibilities.Providers.Design do
   alias Platform.Responsibilities.Handlers.DesignBrandCheck
   alias Platform.Responsibilities.Handlers.DesignCritique
   alias Platform.Responsibilities.Handlers.DesignSpecWriter
+  alias Platform.Responsibilities.Handlers.DesignTaskDirection
   alias Platform.Responsibilities.Responsibility
 
   @impl true
   def register do
     DesignCritique.register() ++
       DesignSpecWriter.register() ++
-      DesignBrandCheck.register()
+      DesignBrandCheck.register() ++
+      DesignTaskDirection.register()
   end
 
   @doc """
@@ -65,6 +88,7 @@ defmodule Platform.Responsibilities.Providers.Design do
   def handler_for("design.critique"), do: Handlers.DesignCritique
   def handler_for("design.spec_writer"), do: Handlers.DesignSpecWriter
   def handler_for("design.brand_check"), do: Handlers.DesignBrandCheck
+  def handler_for("design.task_direction"), do: Handlers.DesignTaskDirection
   def handler_for(_), do: nil
 
   @impl true
@@ -93,6 +117,33 @@ defmodule Platform.Responsibilities.Providers.Design do
       handler -> handler.handle_output(responsibility, parsed, trigger_meta)
     end
   end
+
+  @doc """
+  Provider-level `build_prompt/1` — the callback that makes a design
+  handler's own prompt reachable at all.
+
+  The Router stuffs the fired `Responsibility` into the context under
+  `:__responsibility__` before calling us, so we dispatch by key. A key
+  whose handler ships no `build_prompt/1` (the three placeholder handlers)
+  returns exactly `{:error, :no_build_prompt}` — the one error value the
+  Router reads as "fall back to the legacy template render" rather than
+  "refuse this dispatch". See the moduledoc.
+  """
+  @impl true
+  @spec build_prompt(map()) ::
+          {:ok, %{system: String.t(), user: String.t()}} | {:error, term()}
+  def build_prompt(context) when is_map(context) do
+    handler = handler_for(Map.get(context, :__responsibility__))
+
+    if is_atom(handler) and Code.ensure_loaded?(handler) and
+         function_exported?(handler, :build_prompt, 1) do
+      handler.build_prompt(context)
+    else
+      {:error, :no_build_prompt}
+    end
+  end
+
+  def build_prompt(_context), do: {:error, :no_build_prompt}
 
   # ── internals ─────────────────────────────────────────────────────────────
 
