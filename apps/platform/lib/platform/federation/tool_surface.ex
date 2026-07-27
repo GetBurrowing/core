@@ -2136,7 +2136,8 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns: "The approved plan object",
-        limitations: "Plan must be in pending_review status",
+        limitations:
+          "Plan must be in pending_review status, and the architecture gate must not be open — an agent cannot approve past an architect who is still reviewing (ADR-0046).",
         when_to_use:
           "After plan_submit, when you want to approve a plan and kick off task execution without waiting for human review"
       },
@@ -6008,6 +6009,22 @@ defmodule Platform.Federation.ToolSurface do
                error: "Cannot approve plan with status #{plan.status}. Must be pending_review.",
                recoverable: true,
                suggestion: "Use plan_submit first to move the plan to pending_review"
+             }}
+
+          # ADR-0046 member 5 stage 3. This tool is the agent-reachable
+          # approval writer: it lives in the `plan` capability bundle and
+          # defaults `approved_by` to `"system"`, so without an explicit
+          # arm here the refusal would arrive as an untyped
+          # "Failed to approve plan" with no suggestion. The guard itself
+          # is in `Tasks.approve_plan/3`, not here — this arm only names it.
+          {:error, :architecture_gate_open} ->
+            {:error,
+             %{
+               error:
+                 "Plan #{plan_id} is held by the architecture gate: the architect has not returned a verdict yet.",
+               recoverable: true,
+               suggestion:
+                 "Wait for the architect's verdict or the gate deadline. An agent cannot approve past an open gate; a human reviewer can, from the task UI."
              }}
 
           {:error, reason} ->

@@ -2520,9 +2520,244 @@ defmodule Platform.Tasks do
   defp plan_stages(%Plan{stages: stages}) when is_list(stages), do: stages
   defp plan_stages(_), do: []
 
+  # ── ADR-0046 member 5 stage 3: the single exit from the gate ──────────
+
+  @doc """
+  Close an open architecture gate and run the tail `submit_plan_for_review/1`
+  deferred. **This is the only exit from the gate.**
+
+  Every resolver goes through here and calls nothing else: stage 4's two
+  verdict surfaces, stage 5's deadline, and `approve_plan/3`'s human
+  override. One function so the four ways a gate can end cannot each grow
+  their own idea of what "the gate finished" means.
+
+  Steps, in this order:
+
+    1. `record_architecture_verdict/3` writes the terminal verdict. It is
+       one-shot and arbitrates on the persisted row, so a verdict racing a
+       deadline is deterministic and a duplicate call is `{:error,
+       :gate_already_resolved}` rather than a second settlement.
+    2. The planning cursor returns to `:planning` — the gate is what parked
+       it at `:architecting`.
+    3. The resolution decides the tail.
+
+  ## Resolutions
+
+    * `:pass` — run `settle_plan_submission/1`: `maybe_auto_approve/1` then
+      `maybe_emit_plan_review_inbox/1`, the deferred tail run late instead
+      of never.
+    * `:expired` / `:dispatch_failed` — identical to `:pass` (FALL OPEN,
+      ADR-0046 decision 7), PLUS `record_planning_step(task, :architecture,
+      {:error, reason})`. Falling open without recording is the exact
+      conflation ADR-0046:83 forbids, so the two live in one code path and
+      are asserted in one test.
+    * `:reject` — write the verdict, return the cursor, and STOP. No
+      auto-approval, no sponsor row, and deliberately no `reject_plan/3`
+      call.
+    * `:human_override` — write the verdict, return the cursor, and STOP.
+      Used by `approve_plan/3` when a human approves past an open gate; the
+      caller IS the settlement, so this resolution must not settle again.
+
+  `:human_override` widens the arity-2 signature this stage was specified
+  with. It is here rather than inline in `approve_plan/3` precisely because
+  of the paragraph above: an override that wrote its own verdict and moved
+  its own cursor would be a fifth exit from the gate, which is the thing
+  this function exists to prevent.
+
+  ## Honest interim consequence
+
+  Until member 6 (`019f9b29-251e`) lands, a `:reject` leaves the plan parked
+  in `pending_review` carrying a `"rejected"` verdict, with the router
+  suppressed. That is a STALL, not a hang — the plan is visible in the UI
+  and a human can still approve or reject it by hand (an approval takes the
+  `:human_override` path, and the gate reads `{:resolved, _}` so nothing
+  blocks). Member 6 owns everything downstream of a rejection: the
+  per-task iteration counter, the `reject_plan` / feedback call, the v2
+  supersession and the human escalation. This function must not grow them.
+
+  `opts` accepts `:resolved_by`, `:source`, `:summary` and `:findings`,
+  which are merged into the verdict. `:source` defaults per resolution.
+  """
+  @spec resolve_architecture_gate(
+          Plan.t() | binary(),
+          :pass | :reject | :expired | :dispatch_failed | :human_override,
+          keyword()
+        ) :: {:ok, Plan.t()} | {:error, term()}
+  def resolve_architecture_gate(plan_or_id, resolution, opts \\ [])
+      when resolution in [:pass, :reject, :expired, :dispatch_failed, :human_override] do
+    verdict =
+      %{"state" => architecture_verdict_state(resolution)}
+      |> put_verdict_present("summary", Keyword.get(opts, :summary))
+      |> put_verdict_present("findings", Keyword.get(opts, :findings))
+
+    record_opts = [
+      resolved_by: Keyword.get(opts, :resolved_by),
+      source: Keyword.get(opts, :source, architecture_verdict_source(resolution))
+    ]
+
+    case record_architecture_verdict(plan_or_id, verdict, record_opts) do
+      {:ok, resolved} ->
+        _ = move_planning_cursor(resolved.task_id, :planning)
+        settle_resolved_architecture_gate(resolved, resolution)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp architecture_verdict_state(:pass), do: "passed"
+  defp architecture_verdict_state(:reject), do: "rejected"
+  defp architecture_verdict_state(:expired), do: "expired"
+  defp architecture_verdict_state(:dispatch_failed), do: "dispatch_failed"
+  defp architecture_verdict_state(:human_override), do: "human_override"
+
+  defp architecture_verdict_source(:expired), do: "deadline"
+  defp architecture_verdict_source(:dispatch_failed), do: "dispatch"
+  defp architecture_verdict_source(:human_override), do: "human"
+  defp architecture_verdict_source(_architect), do: "architect"
+
+  defp put_verdict_present(verdict, _key, nil), do: verdict
+  defp put_verdict_present(verdict, key, value), do: Map.put(verdict, key, value)
+
+  # `:reject` and `:human_override` STOP. The first because member 6 owns
+  # what happens next; the second because `approve_plan/3` is mid-flight
+  # and settling here would approve the plan twice.
+  defp settle_resolved_architecture_gate(%Plan{} = resolved, resolution)
+       when resolution in [:reject, :human_override] do
+    broadcast_board({:plan_updated, resolved})
+    {:ok, resolved}
+  end
+
+  defp settle_resolved_architecture_gate(%Plan{} = resolved, :pass) do
+    broadcast_board({:plan_updated, resolved})
+    settle_plan_submission(resolved)
+  end
+
+  # FALL OPEN AND SAY SO. Recorded BEFORE the settlement so a merge-time
+  # reader (member 4's `planning_gate_failed?/1`) sees "the gate did not
+  # complete" even if the settlement itself goes wrong.
+  defp settle_resolved_architecture_gate(%Plan{} = resolved, fell_open)
+       when fell_open in [:expired, :dispatch_failed] do
+    _ = record_architecture_planning_step(resolved.task_id, {:error, fell_open})
+    broadcast_board({:plan_updated, resolved})
+    settle_plan_submission(resolved)
+  end
+
   def approve_plan(plan, approved_by, opts \\ [])
 
+  # ── ADR-0046 member 5 stage 3: the architecture gate's choke point ────
+  #
+  # ONE guard, EVERY approval writer. Stage 2's deferral only holds the
+  # auto path; there are two other production writers and one of them is
+  # agent-reachable — the MCP `plan_approve` tool, which lives in the
+  # `plan` capability bundle, defaults `approved_by` to the literal
+  # `"system"`, and calls this function directly. Guarding the submit path
+  # alone would ship a gate with a documented bypass and an agent standing
+  # next to it. Same argument commit `70fc30fe` makes for guarding the
+  # router's `:dispatch` handler rather than its ~13 injectors: per-caller
+  # guards do not cover the callers you have not met yet.
+  #
+  # WHO MAY PASS AN OPEN GATE: an approval whose `approved_by` resolves to
+  # an existing `Accounts.User`. The LiveView button already sends a user
+  # UUID, so the human path needs ZERO UI change; `"system:auto"`,
+  # `plan_approve`'s `"system"` default and any agent slug are refused.
+  #
+  # ADR-0046 decision 4 redefines `auto_approve_plan` as "no HUMAN gate" —
+  # the machine gate SUBSTITUTES for the human, it does not OUTRANK one. A
+  # human looking at the plan is the superior authority and the architect's
+  # findings are advisory to them. Blocking a human behind a model's
+  # verdict inverts the authority order, and that inversion is the concrete
+  # mechanism by which an architect that blocks a one-line fix gets
+  # switched off within a week — leaving a gate that still looks present.
+  #
+  # The bypass is NOT silent: it writes `state: "human_override"` through
+  # the one gate exit and emits
+  # `[:platform, :plan, :architecture_gate_overridden]`.
   def approve_plan(%Plan{status: "pending_review"} = plan, approved_by, opts) do
+    case architecture_gate_admission(plan, approved_by) do
+      :inert ->
+        do_approve_plan(plan, approved_by, opts)
+
+      {:override, %Accounts.User{} = user} ->
+        # Closed FIRST, approved second. If the approval then fails, the
+        # gate reads `"human_override"` and the plan is still
+        # `pending_review` — a retry works because the guard is now inert.
+        # The other order would leave an APPROVED plan behind a still-open
+        # gate, which stage 5's deadline would later try to settle again.
+        _ = record_architecture_human_override(plan, user)
+        do_approve_plan(plan, approved_by, opts)
+
+      :refuse ->
+        {:error, :architecture_gate_open}
+    end
+  end
+
+  def approve_plan(_plan, _approved_by, _opts), do: {:error, :invalid_transition}
+
+  defp architecture_gate_admission(%Plan{} = plan, approved_by) do
+    # `architecture_gate_open?/1` re-reads the row. Load-bearing: this
+    # function is reached from `AutoMerger`-style async paths and from a
+    # LiveView holding a struct assigned on mount, and a gate answer
+    # derived from a stale struct is the class of bug this stack undoes.
+    if architecture_gate_open?(plan) do
+      case human_approver(approved_by) do
+        %Accounts.User{} = user -> {:override, user}
+        nil -> :refuse
+      end
+    else
+      :inert
+    end
+  end
+
+  # `Accounts.get_user/1` is `Repo.get(User, id)`, which RAISES
+  # `Ecto.Query.CastError` on a non-UUID binary — and `"system"`,
+  # `"system:auto"` and every agent slug are non-UUID binaries, i.e. the
+  # common case here. The cast is what makes the predicate total; the
+  # lookup is still the actual admission test.
+  defp human_approver(approved_by) when is_binary(approved_by) do
+    case Ecto.UUID.cast(approved_by) do
+      {:ok, uuid} -> Accounts.get_user(uuid)
+      :error -> nil
+    end
+  end
+
+  defp human_approver(_other), do: nil
+
+  defp record_architecture_human_override(%Plan{} = plan, %Accounts.User{} = user) do
+    case resolve_architecture_gate(plan, :human_override, resolved_by: user.id) do
+      {:ok, resolved} ->
+        :telemetry.execute(
+          [:platform, :plan, :architecture_gate_overridden],
+          %{count: 1},
+          %{
+            task_id: resolved.task_id,
+            plan_id: resolved.id,
+            resolved_by: user.id,
+            resource_type: "plan",
+            resource_id: resolved.id,
+            action: "architecture_gate_overridden",
+            actor_type: "user"
+          }
+        )
+
+        {:ok, resolved}
+
+      {:error, reason} = err ->
+        # Lost a race to another resolver, or the write failed. Either way
+        # the gate is no longer this human's to close and the approval
+        # proceeds — refusing here would strand a plan on a bookkeeping
+        # fault, which is the failure mode `architecture_gate/1`'s expiry
+        # projection exists to rule out.
+        Logger.warning(
+          "[Tasks] architecture gate human override unrecorded plan=#{plan.id} " <>
+            "task=#{plan.task_id} user=#{user.id} reason=#{inspect(reason)}"
+        )
+
+        err
+    end
+  end
+
+  defp do_approve_plan(%Plan{status: "pending_review"} = plan, approved_by, opts) do
     now = DateTime.utc_now()
     auto? = Keyword.get(opts, :auto, false)
 
@@ -2657,8 +2892,6 @@ defmodule Platform.Tasks do
         {:error, reason}
     end
   end
-
-  def approve_plan(_plan, _approved_by, _opts), do: {:error, :invalid_transition}
 
   # ── Migration-slot reservation (task 019f7b7e stage 2) ────────────────────
   #
