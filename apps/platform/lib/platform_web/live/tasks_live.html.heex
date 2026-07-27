@@ -929,14 +929,34 @@
                   class="group card card-compact border-l-4 border-violet-500 border border-base-300 bg-base-100 shadow-sm transition-all hover:shadow-md"
                 >
                   <%!-- T8 stage 1: header opens the stack detail panel.
-                       Chevron is split into its own sibling button so
+                       Chevron is split into its own SIBLING button so
                        the inline-expansion toggle remains reachable
                        without bubbling through the panel opener
                        (Discord "click thread to enter" pattern, Option A
-                       in the T8 dispatch). The chevron button uses
-                       `onclick=stopPropagation` so its click does NOT
-                       bubble up into the surrounding header div's
-                       phx-click. --%>
+                       in the T8 dispatch).
+
+                       The separation is structural, not defensive: the
+                       chevron and `[data-role=stack-header]` are both
+                       direct children of the `div.relative` below, so a
+                       chevron click never traverses the header at all.
+                       No ancestor of the chevron carries a phx-click or
+                       any JS click/pointer listener (KanbanDragDrop
+                       binds drag events only; nothing in assets/js
+                       references stack-card / stack-header /
+                       stack-chevron).
+
+                       Do NOT "protect" the chevron with an inline
+                       `onclick="event.stopPropagation()"`. There is
+                       nothing to protect it from, and the two cannot
+                       coexist: LiveView binds its click handler in the
+                       BUBBLE phase on `window` (live_socket.js
+                       bindClick/2), so an inline onclick — which runs at
+                       TARGET phase — stops the event before LiveView
+                       ever sees it and silently kills this phx-click.
+                       That is exactly what shipped here and went
+                       unnoticed for two months (task 019fa298); the
+                       mobile chevron, which never had one, kept working.
+                       Guarded by test/platform_web/inline_onclick_guard_test.exs. --%>
                   <div class="relative">
                     <div
                       class="card-body cursor-pointer gap-1.5 p-3 pr-9"
@@ -995,7 +1015,6 @@
                       phx-click="toggle_stack_expand"
                       phx-value-id={item.id}
                       data-role="stack-chevron"
-                      onclick="event.stopPropagation()"
                       aria-label="Toggle stack expansion"
                       aria-expanded={
                         if(MapSet.member?(@expanded_stacks, item.id), do: "true", else: "false")
