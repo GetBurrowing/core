@@ -25,39 +25,63 @@ defmodule Platform.Tasks.PlanRejectionTest do
   needs and no existing test could have exercised — and exact-string
   pinning of the composed body, which nothing pinned before.
 
-  ## VACUITY CONTROLS, MEASURED (5/5 detected, at commit 3f5d8fce)
+  ## VACUITY CONTROLS, MEASURED (7/7 detected, at commit 9f5d8270)
 
-  Each control changes exactly one thing in
-  `Platform.Tasks.PlanRejection` and nothing in this file.
+  Each control changes exactly one thing in `Platform.Tasks.PlanRejection`
+  and nothing in either test file. The control set is this file plus the
+  two pre-existing `reject-with-feedback` describes in `tasks_live_test.exs`
+  — 15 tests, 0 failures unmodified.
 
     1. CONSTANT NAME: `actor_display_name/1` returns `"the reviewer"` for
-       every input. 4 failures here + 1 in `tasks_live_test.exs`
-       ("submit with feedback posts a planner-routable message", which
-       asserts the user's name). Detected.
-    2. AGENT TIER DROPPED: removed the `agent_name/1` clause from the
-       `cond`, restoring the pre-hoist behaviour exactly. 2 failures, both
-       in the agent half of the paired display-name test. Detected — this
-       is the control that proves the widening is actually tested and not
-       merely described.
-    3. `log_only: true`: swapped `post_engagement/3` for `post_log/2`. 3
-       failures here + 1 in `tasks_live_test.exs`. Detected. This is the
-       control that matters most: stage 4 posts `log_only: true`
-       deliberately, and if the two paths can be swapped without a test
-       noticing then the wake-up asymmetry that bounds the loop is
-       unguarded.
-    4. EMPTY SHORT-CIRCUIT REMOVED: deleted the `("", _)` clause so empty
-       feedback posts a stub. 2 failures (one here, one in
-       `tasks_live_test.exs`). Detected.
-    5. WHITESPACE DRIFT: changed the body separator from `\\n\\n` to
-       `\\n`. 3 failures, all exact-equality. Detected — `=~` would have
-       passed every one of them, which is why this file asserts `==`.
+       every input. 5 failures — 3 here, 2 in `tasks_live_test.exs`.
+       Detected.
+    2. AGENT TIER DROPPED: removed the `agent_name/1` arm of the `cond`,
+       restoring the pre-hoist behaviour exactly. 2 failures, both the
+       agent halves, and NOTHING in `tasks_live_test.exs`. Detected — and
+       the shape of the result is the point: the widening is invisible to
+       every pre-existing test, so it is guarded here or nowhere.
+    3a. `post_log/2` SUBSTITUTED for `post_engagement/3` — the realistic
+       "tidy the two posts into one". 4 failures. Detected, but NOT by the
+       `log_only` assertion: `post_log/2` drops the caller's metadata, so
+       the tests fail at the `metadata["reason"] == "plan_rejected"` filter
+       before reaching it. That is why 3b exists.
+    3b. `log_only` FLIPPED IN ISOLATION: kept `post_engagement/3` and its
+       metadata, then flipped the persisted row to `log_only: true`. 2
+       failures, both of them the `assert msg.log_only == false` line — one
+       here, one in the pre-existing LiveView test. Detected. This is the
+       control that matters most, because stage 4 posts `log_only: true`
+       DELIBERATELY; if the flag could move without a test noticing, the
+       wake-up asymmetry that bounds the whole loop would be unguarded.
+    4. EMPTY SHORT-CIRCUIT REMOVED: deleted the `(_, _, "")` clause so
+       empty feedback posts a stub. 1 failure, HERE ONLY. Detected — and
+       the absence of a second failure is a real finding: the LiveView
+       refuses empty feedback in its own `cond` before ever calling this
+       module, so the pre-existing "does NOT post a stub" test cannot see
+       this clause at all. The clause exists for stage 3's caller, and this
+       file is its only guard.
+    5. WHITESPACE DRIFT: body separator `\\n\\n` -> `\\n`. 6 failures.
+       Detected — `=~` would have passed every one of them, which is why
+       this file asserts `==`.
+    6. VERSION HARDCODED: `"Plan v\#{plan.version}"` -> `"Plan v1"`. 1
+       failure, the version test. Detected — every other assertion in the
+       control set happens to use a v1 plan, so without that one test a
+       hardcoded version ships clean.
+    7. MISSING-SPACE GUARD REMOVED: deleted the `nil -> :ok` arm so a task
+       with no execution space raises. 2 failures. Detected.
 
   ### Assertions that pass trivially, declared rather than counted
 
-    * "returns :ok" on the no-space path is a return-value assertion on a
-      function typed `:: :ok`. It cannot fail while the function returns
-      at all; its real content is that the call does not RAISE, which is
-      what the surrounding test is named for.
+    * `assert :ok == PlanRejection.post_feedback(...)` is a return-value
+      assertion on a function typed `:: :ok`. It cannot fail while the
+      function returns at all. Its real content is that the call does not
+      RAISE — which control 7 confirms is the assertion doing the work, and
+      which is what the no-execution-space test is named for.
+    * The SECOND assertion in `tasks_live_test.exs`'s new exact-string case
+      (comparing the posted content against `compose_message/3`'s own
+      output) is trivial ON ITS OWN: both sides drift together under
+      control 5. It is there to name the composer as the source of the
+      string, not to pin the string. The literal above it is the assertion
+      with teeth.
   """
 
   use Platform.DataCase, async: false
