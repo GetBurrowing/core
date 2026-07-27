@@ -121,16 +121,31 @@ defmodule PlatformWeb.Components.PlanningStepExtensionTest do
   # ── the conflation guard ──────────────────────────────────────────────────
 
   describe "not_applicable and failed never collapse (ADR-0046:83)" do
-    # Stated as a DIRECT INEQUALITY rather than two equality assertions, so a
-    # refactor that collapses the two outcomes fails this one named test rather
-    # than quietly satisfying two independently-plausible expectations.
+    # Stated as DIRECT INEQUALITIES rather than pairs of equality assertions, so
+    # a refactor that collapses two outcomes fails one named test rather than
+    # quietly satisfying two independently-plausible expectations.
+    #
+    # MEASURED, 2026-07-27: the whole-entry inequality on its own is NOT
+    # sufficient, and this is worth stating because it is the form the stage
+    # description specified. Mutating `kind_for/2` so that EVERY
+    # `not_applicable` is treated as `:failed` — the exact collapse this guard
+    # names — left `entries(not_applicable) != entries(failed)` PASSING, because
+    # each entry still carries the raw `outcome` string it was built from, and
+    # `"not_applicable" != "failed"` regardless of how identically the two are
+    # treated. The whole-entry form can only detect a collapse in which the
+    # underlying DATA is also identical, which cannot happen.
+    #
+    # So the load-bearing assertion is the one over the TREATMENT projection:
+    # kind, icon, tone and copy — everything a human actually sees. That one
+    # does fail under the mutation. The whole-entry form is kept because it is
+    # cheap and catches a different class of collapse, but it is the weaker of
+    # the two and is deliberately not the only one here.
     test "entries/1 for a not_applicable task is not equal to entries/1 for a failed task" do
-      not_applicable =
-        task(planning_step_outcomes: all_steps(%{"outcome" => "not_applicable"}))
-
+      not_applicable = task(planning_step_outcomes: all_steps(%{"outcome" => "not_applicable"}))
       failed = task(planning_step_outcomes: all_steps(%{"outcome" => "failed"}))
 
       assert entries(not_applicable) != entries(failed)
+      assert treatments(not_applicable) != treatments(failed)
     end
 
     test "complete and failed do not collapse either" do
@@ -138,7 +153,29 @@ defmodule PlatformWeb.Components.PlanningStepExtensionTest do
       failed = task(planning_step_outcomes: all_steps(%{"outcome" => "failed"}))
 
       assert entries(complete) != entries(failed)
+      assert treatments(complete) != treatments(failed)
     end
+
+    test "the contradicted warning does not collapse into failed either" do
+      contradicted =
+        task(
+          planning_step_outcomes:
+            all_steps(%{"outcome" => "not_applicable", "reason" => contradicted_reason()})
+        )
+
+      failed = task(planning_step_outcomes: all_steps(%{"outcome" => "failed"}))
+
+      assert treatments(contradicted) != treatments(failed)
+      # Control: both DO render, so the inequality above is between two visible
+      # things rather than between something and silence.
+      refute Enum.empty?(treatments(contradicted))
+      refute Enum.empty?(treatments(failed))
+    end
+  end
+
+  # Everything a human actually sees, with the raw outcome string stripped out.
+  defp treatments(task) do
+    Enum.map(entries(task), &{&1.kind, &1.icon, &1.tone, &1.chip, &1.label})
   end
 
   # ── the persistence rules, made falsifiable ───────────────────────────────
@@ -220,18 +257,27 @@ defmodule PlatformWeb.Components.PlanningStepExtensionTest do
     end
 
     test "every other not_applicable reason renders nothing" do
-      for {_situation, reason} <- PreplanStep.reasons(),
-          reason != contradicted_reason() do
-        html =
-          render_extension(
-            task(
-              planning_step_outcomes: %{
-                "design" => %{"outcome" => "not_applicable", "reason" => reason}
-              }
-            )
+      render_reason = fn outcome, reason ->
+        render_extension(
+          task(
+            planning_step_outcomes: %{
+              "design" => %{"outcome" => outcome, "reason" => reason}
+            }
           )
+        )
+      end
 
-        assert html == "", "reason #{inspect(reason)} rendered a chip on a not_applicable step"
+      others = Enum.reject(Map.values(PreplanStep.reasons()), &(&1 == contradicted_reason()))
+
+      # Control: there are other reasons to check, and the harness above CAN
+      # produce output — without this the loop below passes trivially both when
+      # `reasons/0` is empty and when the component renders nothing at all.
+      refute Enum.empty?(others)
+      assert render_reason.("failed", hd(others)) != ""
+
+      for reason <- others do
+        assert render_reason.("not_applicable", reason) == "",
+               "reason #{inspect(reason)} rendered a chip on a not_applicable step"
       end
     end
   end
