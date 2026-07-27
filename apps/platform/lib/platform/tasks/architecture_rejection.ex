@@ -332,6 +332,10 @@ defmodule Platform.Tasks.ArchitectureRejection do
   planner's only signal that it is on its last attempt before a human is
   pulled in.
 
+  The version the planner is asked to produce is DERIVED from
+  `plan.version`, never written as a literal: a second rejection must ask for
+  a v3, not re-ask for the v2 the architect has just turned down.
+
   `constraint` is rendered VERBATIM from the verdict and is never mapped to
   prettier prose: the planner and the validator must speak one vocabulary,
   and `Plan.architecture_constraints/0` is that closed contract. This module
@@ -357,7 +361,7 @@ defmodule Platform.Tasks.ArchitectureRejection do
       "Architecture gate: plan v#{plan.version} rejected " <>
         "(iteration #{iteration} of #{reject_limit()})."
 
-    [header, Map.get(verdict, "summary"), findings_block(findings, plan), instruction()]
+    [header, Map.get(verdict, "summary"), findings_block(findings, plan), instruction(plan)]
     |> Enum.reject(&(is_nil(&1) or &1 == ""))
     |> Enum.join("\n\n")
   end
@@ -414,14 +418,34 @@ defmodule Platform.Tasks.ArchitectureRejection do
   # The count is read from `Plan.architecture_constraints/0` rather than
   # written as a word, so the sentence cannot go stale if member 5 widens
   # the vocabulary — and so this file contains no copy of the literals.
-  defp instruction do
+  #
+  # The VERSION is derived for the same reason. This sentence used to name
+  # version 2 literally, which is true only of the FIRST rejection: at
+  # iteration 2 the planner is being asked for a v3, and on a task that
+  # reached the gate with a v3 already in hand, a v4. Naming a version the
+  # planner has already superseded asks for the wrong artefact at exactly the
+  # moment the header is telling it this is its last attempt. Nothing caught
+  # it because no `expected` clause reads this string — hence the source
+  # guard in `ArchitectureRejectionLoopTest`, which is why this comment does
+  # not quote the old wording verbatim.
+  defp instruction(%Plan{} = plan) do
     """
-    Every finding names a stage and one of the #{length(Plan.architecture_constraints())} architecture constraints. Produce a v2
+    Every finding names a stage and one of the #{length(Plan.architecture_constraints())} architecture constraints. Produce #{next_version_phrase(plan)}
     plan that resolves all of them. A finding is resolved by changing the plan's structure,
     not by rewording the stage description.
     """
     |> String.trim_trailing()
   end
+
+  # `plan.version` is the version the architect just rejected, so the planner
+  # is being asked for the one after it.
+  defp next_version_phrase(%Plan{version: version}) when is_integer(version),
+    do: "a v#{version + 1}"
+
+  # `plans.version` is NOT NULL, so a plan with no version only reaches here
+  # through a hand-built struct. Say "the next" rather than crash or guess a
+  # number — guessing is the defect this clause exists to avoid repeating.
+  defp next_version_phrase(%Plan{}), do: "the next"
 
   # THE FEEDBACK PATH. Persist first (the durable truth), post second (the
   # wake-up). A failed post is swallowed by `post_feedback/3` itself.

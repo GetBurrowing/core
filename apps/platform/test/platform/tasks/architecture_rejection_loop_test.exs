@@ -581,6 +581,48 @@ defmodule Platform.Tasks.ArchitectureRejectionLoopTest do
       assert reloaded.status == "rejected"
       assert reloaded.rejection_reason =~ "module_boundary"
     end
+
+    # The version asked for is DERIVED, not written. The string used to say
+    # "Produce a v2 plan" literally, which is right exactly once: the second
+    # rejection would tell the planner to produce the version the architect
+    # had just turned down. Asserted at v2 and v3 rather than at v1, because
+    # v1 is the one value the old literal got right.
+    test "the feedback asks for the version AFTER the one rejected", %{project: project} do
+      for {version, expected_next} <- [{2, "v3"}, {3, "v4"}] do
+        # A task each: `create_plan/1` refuses a second plan while the
+        # latest is `pending_review`, which is the state this test needs.
+        task = task_fixture(project)
+        {plan, [stage_one]} = plan_fixture(task, ["Only stage"])
+
+        seeded =
+          plan
+          |> Plan.changeset(%{status: "pending_review", version: version})
+          |> Repo.update!()
+          |> seed_verdict!("rejected",
+            summary: "s",
+            findings: [finding(stage_one, "module_boundary", "d")]
+          )
+
+        body = ArchitectureRejection.compose_feedback(seeded)
+
+        assert body =~ "Architecture gate: plan v#{version} rejected"
+        assert body =~ "Produce a #{expected_next}\nplan that resolves all of them."
+      end
+    end
+  end
+
+  # ── GUARD: the version is not a literal ───────────────────────────────
+
+  # Companion to the constraint-vocabulary guard below, and the same defect
+  # shape: a hardcoded "v2" renders correctly on the first rejection and
+  # silently wrong on every one after it, which is why no `expected` clause
+  # caught the original.
+  test "the module hardcodes no plan version in the instruction" do
+    source = File.read!("lib/platform/tasks/architecture_rejection.ex")
+
+    refute source =~ "Produce a v2",
+           "architecture_rejection.ex hardcodes the version to produce; " <>
+             "derive it from plan.version instead"
   end
 
   # ── GUARD: second-mechanism binding ───────────────────────────────────

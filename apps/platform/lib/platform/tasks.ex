@@ -2569,17 +2569,30 @@ defmodule Platform.Tasks do
   ## What a `:reject` now does, and where it stops
 
   Member 6 (`019f9b29-251e`) closed the interim stall this section used to
-  describe. A `:reject` below the bound persists `status: "rejected"` with
-  the architect's findings as the `rejection_reason` and posts the same
-  body to the execution space, which is what wakes the planner to author a
-  v2. At the bound it escalates instead, leaving the plan parked in
-  `pending_review` for a human.
+  describe. `Platform.Tasks.ArchitectureRejection.handle/1` has three
+  outcomes, and this function chooses none of them:
 
-  This function must not grow either behaviour: it hands the resolved plan
-  to `ArchitectureRejection.handle/1` and swallows its errors, because the
+    * BELOW the bound — `reject_plan/3` persists `status: "rejected"` with
+      the architect's findings as the `rejection_reason`, and the identical
+      body is posted to the execution space. The post is what wakes the
+      planner; the persisted reason is what survives a restart that eats the
+      wake-up. The planner is asked for the version AFTER the one just
+      rejected — derived from `plan.version`, never a literal, because a
+      second rejection must ask for a v3 rather than re-ask for the v2 the
+      architect has already turned down.
+    * AT the bound (`ArchitectureRejection.reject_limit/0`) — it escalates
+      instead. The plan is left UNTOUCHED in `pending_review`, a digest of
+      every round is posted and a sponsor inbox row is emitted, and no
+      further version is asked for. The bound is what stops the loop; the
+      notification is best-effort on top of it.
+    * IN FLIGHT — refused outright with `{:error, :plan_in_flight}`, so a
+      plan whose stages have already started is never retro-rejected.
+
+  This function must not grow any of them: it hands the resolved plan to
+  `ArchitectureRejection.handle/1` and swallows its errors, because the
   verdict is already written and the gate must still report that it
-  resolved. Note also that THIS path never authors a v2 — the planner does,
-  in response to the chat message — which is asserted in
+  resolved. Note also that THIS path never authors a new plan version — the
+  planner does, in response to the chat message — which is asserted in
   `ArchitectureGateApprovalTest`.
 
   `opts` accepts `:resolved_by`, `:source`, `:summary` and `:findings`,
