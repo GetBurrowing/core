@@ -5885,6 +5885,16 @@ defmodule Platform.Federation.ToolSurface do
       end)
       |> case do
         {:ok, plan} ->
+          # ADR-0046 member 7 stage 4 — the false-negative audit for the
+          # pre-plan design step. This is the first moment in the lifecycle
+          # when stage DESCRIPTIONS exist, which is the real subject of
+          # `PlanEngine.ui_touching?/1`; a design step that skipped as
+          # `"no_ui_surface"` gets re-checked against them here. Inert unless
+          # that exact reason is recorded, never raises, and deliberately does
+          # not flip the outcome to `failed` — an under-trigger the designer
+          # was never asked about must be visible, not merge-blocking.
+          _ = Platform.Design.PreplanStep.audit_ui_prediction(task_id, plan.stages)
+
           {:ok, serialize_plan(plan)}
 
         {:error, :project_archived} ->
