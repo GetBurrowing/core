@@ -1138,4 +1138,35 @@ defmodule Platform.TenancyTest do
       end
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  #
+  # The load-bearing input is the 16-CHARACTER one. `Ecto.UUID.cast/1`
+  # hex-encodes any 16-byte binary and returns {:ok, _} while
+  # `Ecto.UUID.dump/1` rejects it, so a suite built from "higgins" plus a
+  # valid UUID is fully green against the bug. Do not prune the 16-character
+  # cases as duplicates.
+  describe "UUID boundary: Tenancy org lookups and the slug-or-uuid resolver" do
+    @slug_16 "higginshigginsxx"
+
+    test "get_org/1 returns nil for a malformed id" do
+      assert Tenancy.get_org("higgins") == nil
+      assert Tenancy.get_org(@slug_16) == nil
+    end
+
+    test "get_org!/1 raises Ecto.NoResultsError, not Ecto.Query.CastError" do
+      assert_raise Ecto.NoResultsError, fn -> Tenancy.get_org!(@slug_16) end
+    end
+
+    test "member_of?/2 takes the SLUG branch for a 16-character org slug" do
+      # member_of?/2 resolves a slug OR a uuid, and its uuid branch pins the
+      # ORIGINAL value against Org's strict UUIDv7 key. A bare cast sent any
+      # 16-character org slug down the uuid branch, where Repo raised. The
+      # observable fix is that it now resolves as a slug (here: a miss, but a
+      # miss reached WITHOUT raising).
+      user = create_user!()
+      refute Tenancy.member_of?(user, @slug_16)
+      refute Tenancy.member_of?(user, "higgins")
+    end
+  end
 end

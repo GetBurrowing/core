@@ -162,13 +162,27 @@ defmodule Platform.Chat.FreezePolicy do
     end)
   end
 
+  # `assignee_id` comes off task attrs, which agents set — so it is routinely
+  # "system", "system:auto" or an agent slug rather than a UUID, and
+  # `participant_id` is a :binary_id column that raises on those. nil is
+  # already this function's not-found value, so malformed folds into it.
+  # Platform.UUID.valid?/1, not a bare cast: a bare cast accepts any 16-byte
+  # binary, so a 16-character slug would still raise inside Repo.
   defp resolve_actor(%Space{id: space_id}, %TaskRecord{assignee_id: assignee_id})
        when is_binary(assignee_id) do
+    if Platform.UUID.valid?(assignee_id) do
+      lookup_actor_participant(space_id, assignee_id)
+    else
+      nil
+    end
+  end
+
+  defp resolve_actor(_space, _task), do: nil
+
+  defp lookup_actor_participant(space_id, assignee_id) do
     case Repo.get_by(Participant, space_id: space_id, participant_id: assignee_id) do
       %Participant{id: pid} -> pid
       nil -> nil
     end
   end
-
-  defp resolve_actor(_space, _task), do: nil
 end

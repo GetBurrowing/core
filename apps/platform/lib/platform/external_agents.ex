@@ -125,7 +125,16 @@ defmodule Platform.ExternalAgents do
   """
   @spec get_external_agent(binary()) :: Agent.t() | nil
   def get_external_agent(id) when is_binary(id) do
-    Repo.get_by(Agent, id: id, kind: @external_kind)
+    # `Repo.get_by(Agent, id: ...)` raises exactly like `Repo.get/2` does — the
+    # `id:` keyword is pinned against the same strict UUIDv7 primary key. This
+    # spelling is invisible to `git grep "Repo.get("`, which is why the sweep
+    # missed it. Platform.UUID.valid?/1, not a bare cast: a bare cast accepts
+    # any 16-byte binary and the raise lands inside Repo anyway.
+    if Platform.UUID.valid?(id) do
+      Repo.get_by(Agent, id: id, kind: @external_kind)
+    else
+      nil
+    end
   end
 
   @doc """
@@ -134,7 +143,15 @@ defmodule Platform.ExternalAgents do
   """
   @spec get_external_agent!(binary()) :: Agent.t()
   def get_external_agent!(id) when is_binary(id) do
-    Repo.get_by!(Agent, id: id, kind: @external_kind)
+    # The bang twin of get_external_agent/1, ten lines up. Its documented
+    # contract is `Ecto.NoResultsError` on a miss, so a malformed id must raise
+    # THAT, not `Ecto.Query.CastError` — a malformed id and an absent one are
+    # the same outcome, and callers rescue/expect the documented exception.
+    if Platform.UUID.valid?(id) do
+      Repo.get_by!(Agent, id: id, kind: @external_kind)
+    else
+      raise Ecto.NoResultsError, queryable: Agent
+    end
   end
 
   @doc """

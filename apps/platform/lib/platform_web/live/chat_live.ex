@@ -1684,8 +1684,10 @@ defmodule PlatformWeb.ChatLive do
   def handle_event("edit_message_clicked", params, socket) do
     msg_id = params["message-id"] || params["message_id"]
 
-    with %Platform.Chat.Message{} = msg <-
-           Platform.Repo.get(Platform.Chat.Message, msg_id),
+    # Chat.get_message/1 rather than the fully-qualified Platform.Repo.get/2 —
+    # `msg_id` is a `phx-value-` param, and the fully-qualified spelling is
+    # invisible to `git grep "Repo.get("`, which is how it evaded the sweep.
+    with %Platform.Chat.Message{} = msg <- Platform.Chat.get_message(msg_id),
          :ok <- authorize_edit(msg, socket.assigns.current_participant) do
       {:noreply,
        socket
@@ -1745,7 +1747,7 @@ defmodule PlatformWeb.ChatLive do
   defp apply_save_edit(socket, message_id, body) do
     participant = socket.assigns.current_participant
 
-    with %Platform.Chat.Message{} = msg <- Platform.Repo.get(Platform.Chat.Message, message_id),
+    with %Platform.Chat.Message{} = msg <- Platform.Chat.get_message(message_id),
          {:ok, original} <- {:ok, msg},
          :ok <- authorize_edit(msg, participant) do
       case Platform.Chat.Messages.Edit.apply_edit(msg, participant, body) do
@@ -2418,14 +2420,13 @@ defmodule PlatformWeb.ChatLive do
   defp maybe_put_org_id(attrs, nil), do: attrs
   defp maybe_put_org_id(attrs, org_id), do: Map.put(attrs, :org_id, org_id)
 
-  defp valid_uuid?(string) when is_binary(string) do
-    case Ecto.UUID.cast(string) do
-      {:ok, _} -> true
-      :error -> false
-    end
-  end
-
-  defp valid_uuid?(_), do: false
+  # Platform.UUID.valid?/1, NOT a bare Ecto.UUID.cast/1. :522 and :589 pass the
+  # ORIGINAL `slug_or_id` — the `/chat/:slug` URL PATH SEGMENT — to
+  # `Chat.get_space/1` when this returns true. A bare cast accepts any 16-byte
+  # binary, so a 16-character channel slug cleared the guard and raised inside
+  # `Repo` on the mount path. Same live failure as external_user_scope.ex; the
+  # PR #613 family. Do not "simplify" this back to a bare cast.
+  defp valid_uuid?(string), do: Platform.UUID.valid?(string)
 
   # Pick the org_id we should scope ambiguous slug lookups to (e.g. "general").
   # Reads from the LiveAuth-installed `:current_user_org_membership` assign

@@ -61,9 +61,16 @@ defmodule Platform.Files do
   """
   @spec get_file(binary(), keyword()) :: File.t() | nil
   def get_file(id, opts \\ []) when is_binary(id) do
-    File
-    |> maybe_exclude_deleted(opts)
-    |> Repo.get(id)
+    # `file_id` is a raw MCP argument (file_get_metadata / file_get_text /
+    # file_delete). Platform.UUID.valid?/1, not a bare Ecto.UUID.cast/1 — a
+    # bare cast accepts any 16-byte binary and the raise lands inside Repo.
+    if Platform.UUID.valid?(id) do
+      File
+      |> maybe_exclude_deleted(opts)
+      |> Repo.get(id)
+    else
+      nil
+    end
   end
 
   @doc """
@@ -73,9 +80,16 @@ defmodule Platform.Files do
   """
   @spec get_file!(binary(), keyword()) :: File.t()
   def get_file!(id, opts \\ []) when is_binary(id) do
-    File
-    |> maybe_exclude_deleted(opts)
-    |> Repo.get!(id)
+    # Documented contract is `Ecto.NoResultsError` when absent, so a malformed
+    # id raises THAT rather than `Ecto.Query.CastError` — malformed and absent
+    # are the same outcome to every caller.
+    if Platform.UUID.valid?(id) do
+      File
+      |> maybe_exclude_deleted(opts)
+      |> Repo.get!(id)
+    else
+      raise Ecto.NoResultsError, queryable: File
+    end
   end
 
   @doc """
@@ -356,7 +370,15 @@ defmodule Platform.Files do
   """
   @spec fetch_extracted_text(binary()) :: Text.t() | nil
   def fetch_extracted_text(file_id) when is_binary(file_id) do
-    Repo.get(Text, file_id)
+    # NOTE the schema difference from get_file/2 above: `Platform.Files.Text`
+    # keys on a BARE :binary_id, not `Platform.Types.UUIDv7`. A raw 16-byte
+    # binary therefore returns nil SILENTLY here while "higgins" raises — two
+    # symptoms from one guard-less lookup. The guard makes both return nil.
+    if not Platform.UUID.valid?(file_id) do
+      nil
+    else
+      Repo.get(Text, file_id)
+    end
   end
 
   defp maybe_filter_content_type(query, nil), do: query

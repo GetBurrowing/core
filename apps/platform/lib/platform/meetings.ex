@@ -354,9 +354,17 @@ defmodule Platform.Meetings do
     end
   end
 
-  @doc "Get a meeting by ID. Returns `nil` if not found."
-  @spec get_meeting(binary()) :: Meeting.t() | nil
-  def get_meeting(id), do: Repo.get(Meeting, id)
+  @doc """
+  Get a meeting by ID. Returns `nil` if not found — and also `nil` for a
+  malformed id, which reaches here as `trigger_meta[:meeting_id]` off a
+  responsibility payload. Platform.UUID.valid?/1, not a bare
+  `Ecto.UUID.cast/1`: a bare cast accepts any 16-byte binary and the raise
+  lands inside `Repo` regardless.
+  """
+  @spec get_meeting(term()) :: Meeting.t() | nil
+  def get_meeting(id) do
+    if Platform.UUID.valid?(id), do: Repo.get(Meeting, id), else: nil
+  end
 
   @doc """
   Return the most-recently-started `live` meeting bound to a chat space,
@@ -664,7 +672,7 @@ defmodule Platform.Meetings do
   # Id-bearing token: the payload names its subject exactly. Still require
   # the row's slug to match the URL slug the host actually shared.
   defp resolve_invited_meeting(%{meeting_id: meeting_id}, slug) when is_binary(meeting_id) do
-    case Repo.get(Meeting, meeting_id) do
+    case get_meeting(meeting_id) do
       %Meeting{slug: ^slug} = meeting -> {:ok, Repo.preload(meeting, :chat_space)}
       _ -> {:error, :invalid}
     end
@@ -672,6 +680,10 @@ defmodule Platform.Meetings do
     # A tampered-but-resigned payload could carry a non-UUID id. Ecto
     # raises on the cast rather than returning nil; a public ingress must
     # not 500 on that.
+    #
+    # As of task 019fa129 stage 4 this rescue is belt-and-braces: the lookup
+    # above now goes through the guarded `get_meeting/1`, which returns nil.
+    # Kept because it also covers a cast error raised by `Repo.preload/2`.
     Ecto.Query.CastError -> {:error, :invalid}
   end
 
@@ -816,9 +828,11 @@ defmodule Platform.Meetings do
     end
   end
 
-  @doc "Get a room by ID."
-  @spec get_room(binary()) :: Room.t() | nil
-  def get_room(id), do: Repo.get(Room, id)
+  @doc "Get a room by ID. `nil` for an absent id and for a malformed one."
+  @spec get_room(term()) :: Room.t() | nil
+  def get_room(id) do
+    if Platform.UUID.valid?(id), do: Repo.get(Room, id), else: nil
+  end
 
   @doc "Get a room by LiveKit room name."
   @spec get_room_by_name(String.t()) :: Room.t() | nil
@@ -1070,8 +1084,15 @@ defmodule Platform.Meetings do
   def parse_identity("guest:" <> uuid), do: cast_identity(:guest, uuid)
   def parse_identity(_), do: :unknown
 
+  # Platform.UUID.cast/1, NOT Ecto.UUID.cast/1. This is a FABRICATED-VALUE
+  # bug, not a raise: `uuid` is the suffix of a LiveKit webhook `identity`
+  # string, and a bare `Ecto.UUID.cast/1` hex-encodes any 16-byte suffix into
+  # a well-formed but INVENTED uuid, which is then persisted as the
+  # `meeting_participants.user_id` / `.agent_id` FOREIGN KEY. Nothing raises,
+  # so an assert_raise-shaped test can never catch a regression here — assert
+  # that `parse_identity/1` returns `:unknown` for a 16-character suffix.
   defp cast_identity(kind, uuid) do
-    case Ecto.UUID.cast(uuid) do
+    case Platform.UUID.cast(uuid) do
       {:ok, valid} -> {kind, valid}
       :error -> :unknown
     end
@@ -1684,7 +1705,10 @@ defmodule Platform.Meetings do
   """
   @spec stop_recording(String.t()) :: {:ok, Recording.t()} | {:error, term()}
   def stop_recording(recording_id) do
-    with :ok <- guard_enabled() do
+    # `recording_id` arrives on the egress webhook body and on meeting LiveView
+    # events. Malformed folds into the existing :not_found contract.
+    with :ok <- guard_enabled(),
+         true <- Platform.UUID.valid?(recording_id) || {:error, :not_found} do
       case Repo.get(Recording, recording_id) do
         nil ->
           {:error, :not_found}
@@ -1710,7 +1734,8 @@ defmodule Platform.Meetings do
   """
   @spec recording_completed(String.t(), map()) :: {:ok, Recording.t()} | {:error, term()}
   def recording_completed(recording_id, attrs) do
-    with :ok <- guard_enabled() do
+    with :ok <- guard_enabled(),
+         true <- Platform.UUID.valid?(recording_id) || {:error, :not_found} do
       case Repo.get(Recording, recording_id) do
         nil ->
           {:error, :not_found}
@@ -1741,8 +1766,12 @@ defmodule Platform.Meetings do
   @doc """
   Get a transcript by ID.
   """
-  @spec get_transcript(String.t()) :: Transcript.t() | nil
-  def get_transcript(id), do: Repo.get(Transcript, id)
+  @spec get_transcript(term()) :: Transcript.t() | nil
+  def get_transcript(id) do
+    # Reached with `trigger_meta[:transcript_id]` off responsibility payloads
+    # AND with a URL path segment (controllers/transcript_controller.ex:23).
+    if Platform.UUID.valid?(id), do: Repo.get(Transcript, id), else: nil
+  end
 
   @doc """
   Get the active (recording-status) transcript for a room.
@@ -1762,8 +1791,10 @@ defmodule Platform.Meetings do
   Get a transcript with its segments (same as get_transcript since segments
   are stored inline as JSONB, but named explicitly for clarity in the API).
   """
-  @spec get_transcript_with_segments(String.t()) :: Transcript.t() | nil
-  def get_transcript_with_segments(id), do: Repo.get(Transcript, id)
+  @spec get_transcript_with_segments(term()) :: Transcript.t() | nil
+  def get_transcript_with_segments(id) do
+    if Platform.UUID.valid?(id), do: Repo.get(Transcript, id), else: nil
+  end
 
   @doc """
   Delete a transcript.
@@ -2352,11 +2383,30 @@ defmodule Platform.Meetings do
   end
 
   def generate_agent_token(agent_id, room_name, opts) when is_binary(agent_id) do
-    case Repo.get(Agent, agent_id) do
+    case resolve_agent(agent_id) do
       %Agent{} = agent -> generate_agent_token(agent, room_name, opts)
       nil -> {:error, :agent_not_found}
     end
   end
+
+  # Resolve an agent by UUID *or* slug. `agent_id` reaches the three call sites
+  # below from meeting-invite payloads and LiveView events, where an agent slug
+  # is at least as likely as a UUID — so an unguarded `Repo.get(Agent, id)`
+  # both raises on a slug and misses the agent the caller meant.
+  #
+  # Platform.UUID.valid?/1, NOT `Ecto.UUID.cast/1`: a bare cast hex-encodes any
+  # 16-byte binary and returns {:ok, _}, so a 16-character slug would clear it,
+  # skip the slug fallback, and raise inside Repo anyway. Branch structure
+  # mirrors Platform.Agents.Orchestration.fetch_agent/1; the predicate does not.
+  defp resolve_agent(agent_id) when is_binary(agent_id) do
+    if Platform.UUID.valid?(agent_id) do
+      Repo.get(Agent, agent_id)
+    else
+      Repo.get_by(Agent, slug: agent_id)
+    end
+  end
+
+  defp resolve_agent(_other), do: nil
 
   # ── Meeting Join Dispatch ─────────────────────────────────────────
 
@@ -2404,7 +2454,7 @@ defmodule Platform.Meetings do
   end
 
   def dispatch_meeting_join(agent_id, room_name, context) when is_binary(agent_id) do
-    case Repo.get(Agent, agent_id) do
+    case resolve_agent(agent_id) do
       %Agent{} = agent -> dispatch_meeting_join(agent, room_name, context)
       nil -> {:error, :agent_not_found}
     end
@@ -2441,7 +2491,7 @@ defmodule Platform.Meetings do
   """
   @spec dismiss_agent(Room.t(), binary()) :: {:ok, Participant.t()} | {:error, :not_found}
   def dismiss_agent(%Room{} = room, agent_id) do
-    agent = Repo.get(Agent, agent_id)
+    agent = resolve_agent(agent_id)
     name = if agent, do: agent.name, else: "Agent"
     participant_left(room, name)
   end

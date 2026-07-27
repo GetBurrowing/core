@@ -30,7 +30,12 @@ defmodule Platform.Skills do
   end
 
   @doc "Get a skill by ID."
-  def get_skill(id), do: Repo.get(Skill, id)
+  def get_skill(id) do
+    # `skill_get` accepts a slug OR an id and skills/tool_handlers.ex:49 routes
+    # any non-empty binary straight here, so a slug reaching the id branch is
+    # DESIGNED traffic, not a malformed input. nil sends it to the slug branch.
+    if Platform.UUID.valid?(id), do: Repo.get(Skill, id), else: nil
+  end
 
   @doc "Get a skill by slug."
   def get_skill_by_slug(slug), do: Repo.get_by(Skill, slug: slug)
@@ -113,7 +118,10 @@ defmodule Platform.Skills do
   """
   @spec resolve_skills(String.t()) :: [{Skill.t(), String.t()}]
   def resolve_skills(task_id) do
-    case Repo.get(Task, task_id) do
+    # `task_id` arrives on a run-dispatch payload (ContextHydrator).
+    task = if Platform.UUID.valid?(task_id), do: Repo.get(Task, task_id)
+
+    case task do
       nil ->
         []
 

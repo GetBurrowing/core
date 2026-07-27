@@ -647,7 +647,12 @@ defmodule Platform.Vault do
   defp check_explicit_grant(%Credential{id: credential_id}, grantee_type, grantee_id, permission) do
     # A grantee_id that is not a UUID can never match a grant row, and handing it
     # to the query would raise rather than deny. Fail closed instead.
-    case Ecto.UUID.cast(grantee_id) do
+    #
+    # Platform.UUID.cast/1, NOT Ecto.UUID.cast/1: a bare cast hex-encodes any
+    # 16-byte binary into a well-formed but INVENTED uuid, which is then
+    # COMPARED against real grant rows. Fail-closed only actually fails closed
+    # with the strict predicate.
+    case Platform.UUID.cast(grantee_id) do
       :error ->
         {:error, :access_denied}
 
@@ -742,8 +747,14 @@ defmodule Platform.Vault do
 
   # Ensures accessor_id is a valid UUID. Non-UUID strings (test stubs, opaque IDs)
   # fall back to the system sentinel so the NOT NULL constraint is satisfied.
+  #
+  # Platform.UUID.cast/1, NOT Ecto.UUID.cast/1. This is a FABRICATED-VALUE
+  # site, not a raise site: a bare cast turns a 16-byte accessor id into an
+  # invented uuid that is then WRITTEN to the audit event's accessor_id
+  # column — a real-looking actor belonging to nobody. Nothing raises, so an
+  # assert_raise-shaped test cannot catch a regression; assert the sentinel.
   defp normalize_uuid(id) when is_binary(id) do
-    case Ecto.UUID.cast(id) do
+    case Platform.UUID.cast(id) do
       {:ok, uuid} -> uuid
       :error -> @system_accessor_id
     end

@@ -38,7 +38,13 @@ defmodule Platform.Orchestration.PromptTemplates do
   @doc "Get a prompt template by id."
   @spec get_template(String.t()) :: PromptTemplate.t() | nil
   def get_template(id) do
-    Repo.get(PromptTemplate, id)
+    # Conservative guard: no in-repo caller pins this id's provenance, and the
+    # cost of a redundant check is nothing next to a 500 on a request path.
+    if not Platform.UUID.valid?(id) do
+      nil
+    else
+      Repo.get(PromptTemplate, id)
+    end
   end
 
   @doc "Get a prompt template by slug."

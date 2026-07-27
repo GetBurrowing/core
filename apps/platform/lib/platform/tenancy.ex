@@ -86,11 +86,24 @@ defmodule Platform.Tenancy do
 
   @doc "Fetch an org by id, raising on not found."
   @spec get_org!(binary()) :: Org.t() | no_return()
-  def get_org!(id), do: Repo.get!(Org, id)
+  def get_org!(id) do
+    # Bang twin of get_org/1: documented contract is `Ecto.NoResultsError`, so
+    # a malformed id raises THAT rather than `Ecto.Query.CastError`.
+    if Platform.UUID.valid?(id) do
+      Repo.get!(Org, id)
+    else
+      raise Ecto.NoResultsError, queryable: Org
+    end
+  end
 
   @doc "Fetch an org by id. Returns `nil` if not found."
   @spec get_org(binary()) :: Org.t() | nil
-  def get_org(id) when is_binary(id), do: Repo.get(Org, id)
+  def get_org(id) when is_binary(id) do
+    # Reached with caller-supplied org ids from lifecycle_actions.ex:165,
+    # recovery_live.ex and chat_live.ex. Malformed folds into the existing nil.
+    if Platform.UUID.valid?(id), do: Repo.get(Org, id), else: nil
+  end
+
   def get_org(_), do: nil
 
   @doc "Fetch an org by slug. Returns `nil` if not found."
@@ -565,14 +578,12 @@ defmodule Platform.Tenancy do
 
   defp member_of_by_id?(_, _), do: false
 
-  defp uuid?(s) when is_binary(s) do
-    case Ecto.UUID.cast(s) do
-      {:ok, _} -> true
-      :error -> false
-    end
-  end
-
-  defp uuid?(_), do: false
+  # Platform.UUID.valid?/1, NOT a bare Ecto.UUID.cast/1. `member_of?/2`
+  # resolves an org SLUG or a uuid, and its uuid branch pins the ORIGINAL
+  # value (`where: o.id == ^org_id`) against Org's strict UUIDv7 key. A bare
+  # cast accepts any 16-byte binary, so a 16-character org slug took the uuid
+  # branch and raised inside Repo — RAISE-exposed despite looking guarded.
+  defp uuid?(s), do: Platform.UUID.valid?(s)
 
   @doc """
   Classify an org as `:root` or `:tenant` based on `parent_org_id`.

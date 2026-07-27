@@ -260,4 +260,15 @@ defmodule Platform.Tasks.ContextHydratorTest do
       assert metadata.task_id == task.id
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  describe "UUID boundary: hydrate_for_run/2 task_id comes off a dispatch payload" do
+    test "a malformed task id reports :task_not_found rather than raising" do
+      assert {:error, :task_not_found} =
+               ContextHydrator.hydrate_for_run("higginshigginsxx", Ecto.UUID.generate())
+
+      assert {:error, :task_not_found} =
+               ContextHydrator.hydrate_for_run("higgins", Ecto.UUID.generate())
+    end
+  end
 end

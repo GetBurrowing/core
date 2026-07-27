@@ -58,6 +58,13 @@ defmodule Platform.Tasks.PlanEngine do
   @spec reopen_manual_approval(Ecto.UUID.t()) :: {:ok, Validation.t()} | {:error, term()}
   def reopen_manual_approval(validation_id) do
     Repo.transaction(fn ->
+      # `validation_id` is an agent-supplied MCP tool argument. The bang form's
+      # contract is `Ecto.NoResultsError` on a miss, so a malformed id raises
+      # THAT rather than `Ecto.Query.CastError` — otherwise this one lookup
+      # raises two different ways depending on how the agent typo'd.
+      Platform.UUID.valid?(validation_id) ||
+        raise(Ecto.NoResultsError, queryable: Validation)
+
       validation = Repo.get!(Validation, validation_id)
 
       if validation.kind != "manual_approval" do
@@ -117,6 +124,13 @@ defmodule Platform.Tasks.PlanEngine do
     end
 
     Repo.transaction(fn ->
+      # `validation_id` is an agent-supplied MCP tool argument. The bang form's
+      # contract is `Ecto.NoResultsError` on a miss, so a malformed id raises
+      # THAT rather than `Ecto.Query.CastError` — otherwise this one lookup
+      # raises two different ways depending on how the agent typo'd.
+      Platform.UUID.valid?(validation_id) ||
+        raise(Ecto.NoResultsError, queryable: Validation)
+
       validation = Repo.get!(Validation, validation_id)
 
       {:ok, updated} =
@@ -516,8 +530,12 @@ defmodule Platform.Tasks.PlanEngine do
 
   # ── Private helpers ─────────────────────────────────────────────────────
 
+  # `stage_id` reaches here from the agent-supplied `stage_start` /
+  # `stage_complete` tool arguments. Malformed folds into :not_found.
   defp fetch_stage(stage_id) do
-    case Repo.get(Stage, stage_id) do
+    stage = if Platform.UUID.valid?(stage_id), do: Repo.get(Stage, stage_id)
+
+    case stage do
       nil -> {:error, :not_found}
       stage -> {:ok, stage}
     end

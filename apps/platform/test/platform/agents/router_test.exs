@@ -222,4 +222,39 @@ defmodule Platform.Agents.RouterTest do
              ]
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  #
+  # `fetch_agent/1` exists in THREE identical copies (agents/config.ex,
+  # agents/orchestration.ex, agents/router.ex) and all three used a BARE
+  # `Ecto.UUID.cast/1` as the uuid-vs-slug discriminator. That is wrong in a
+  # way "higgins" cannot reveal: a bare cast hex-encodes ANY 16-byte binary
+  # and returns {:ok, _}, so a 16-character agent SLUG took the uuid branch,
+  # never reached `Repo.get_by(Agent, slug:)`, and raised
+  # `Ecto.Query.CastError` against Agent's strict UUIDv7 primary key.
+  #
+  # The observable fix is that a 16-character slug now RESOLVES. Assert the
+  # resolution, not merely the absence of a raise — a guard that returned nil
+  # would also "not raise" while silently breaking every slug lookup.
+  describe "UUID boundary: fetch_agent/1 with a 16-character slug" do
+    test "model_chain/2 resolves an agent whose slug is exactly 16 characters" do
+      slug = "higginshigginsxx"
+      assert byte_size(slug) == 16
+      # The precondition that makes this test non-vacuous:
+      assert {:ok, _} = Ecto.UUID.cast(slug)
+
+      create_agent(%{slug: slug})
+
+      assert {:ok, [_ | _]} = Router.model_chain(slug)
+    end
+
+    test "an unknown 16-character slug is :not_found, not a raise" do
+      assert {:error, :not_found} = Router.model_chain("nosuchagentxxxxx")
+    end
+
+    test "an agent id still resolves" do
+      agent = create_agent(%{})
+      assert {:ok, [_ | _]} = Router.model_chain(agent.id)
+    end
+  end
 end

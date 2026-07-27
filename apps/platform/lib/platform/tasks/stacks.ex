@@ -49,11 +49,24 @@ defmodule Platform.Tasks.Stacks do
 
   @doc "Fetch a stack by id. Returns the struct or nil."
   @spec get_stack(binary()) :: Stack.t() | nil
-  def get_stack(id) when is_binary(id), do: Repo.get(Stack, id)
+  def get_stack(id) when is_binary(id) do
+    # `stack_id` is a raw MCP tool argument at seven tool_surface.ex sites.
+    # Platform.UUID.valid?/1, not a bare Ecto.UUID.cast/1 — a bare cast
+    # accepts any 16-byte binary and the raise lands inside Repo regardless.
+    if Platform.UUID.valid?(id), do: Repo.get(Stack, id), else: nil
+  end
 
   @doc "Fetch a stack by id, raising `Ecto.NoResultsError` if absent."
   @spec get_stack!(binary()) :: Stack.t()
-  def get_stack!(id) when is_binary(id), do: Repo.get!(Stack, id)
+  def get_stack!(id) when is_binary(id) do
+    # Documented contract is `Ecto.NoResultsError` when absent, so a malformed
+    # id raises THAT and not `Ecto.Query.CastError`.
+    if Platform.UUID.valid?(id) do
+      Repo.get!(Stack, id)
+    else
+      raise Ecto.NoResultsError, queryable: Stack
+    end
+  end
 
   @doc """
   Look up a non-abandoned stack by its rollup-branch name.

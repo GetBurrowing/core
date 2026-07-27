@@ -212,4 +212,42 @@ defmodule Platform.Agents.ConfigImportExportTest do
       assert File.read!(Path.join(dir, "memory/2026-03-15.md")) == "day three"
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  describe "UUID boundary: Config.fetch_agent/1 with a 16-character slug" do
+    # The third copy of the broken predicate (agents/config.ex,
+    # agents/orchestration.ex, agents/router.ex all carried it). A bare
+    # `Ecto.UUID.cast/1` hex-encodes any 16-byte binary and returns {:ok, _},
+    # so a 16-character agent SLUG took the uuid branch, never reached
+    # `Repo.get_by(Agent, slug:)`, and raised `Ecto.Query.CastError` against
+    # Agent's strict UUIDv7 primary key.
+    #
+    # "higgins" cannot reveal this — a bare cast rejects it on its own. The
+    # LENGTH is the whole test. And the assertion is that the slug RESOLVES,
+    # not merely that nothing raised: a guard that returned nil would also
+    # "not raise" while silently breaking every slug lookup in the app.
+    test "export_config/1 resolves an agent whose slug is exactly 16 characters" do
+      slug = "higginshigginsxx"
+      assert byte_size(slug) == 16
+      # The precondition that makes this test non-vacuous:
+      assert {:ok, _} = Ecto.UUID.cast(slug)
+
+      {:ok, _agent} =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: slug,
+          name: "Higgins",
+          status: "active",
+          model_config: %{"primary" => "anthropic/claude-sonnet-4-6"}
+        })
+        |> Repo.insert()
+
+      assert {:ok, %{"agents" => %{"list" => list}}} = Config.export_config(slug)
+      assert Enum.any?(list, &(&1["id"] == slug))
+    end
+
+    test "an unknown 16-character slug is :not_found, not a raise" do
+      assert {:error, :not_found} = Config.export_config("nosuchagentxxxxx")
+    end
+  end
 end

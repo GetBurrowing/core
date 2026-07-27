@@ -348,4 +348,27 @@ defmodule Platform.SkillsTest do
       end)
     end)
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  # The 16-character case is the load-bearing one: `Ecto.UUID.cast/1` accepts
+  # any 16-byte binary, so a test built from "higgins" alone is green against
+  # the bug these guards fix.
+  describe "UUID boundary: get_skill/1" do
+    test "returns nil for a slug — which is DESIGNED traffic, not a malformed id" do
+      # skill_get accepts a slug OR an id and tool_handlers.ex routes any
+      # non-empty binary through both branches, so nil here is what sends a
+      # slug to `get_skill_by_slug/1` instead of raising inside Repo.
+      skill = create_skill!(%{name: "Boundary Playbook"})
+
+      assert Skills.get_skill(skill.slug) == nil
+      assert Skills.get_skill("higginshigginsxx") == nil
+      assert %Skill{id: id} = Skills.get_skill(skill.id)
+      assert id == skill.id
+    end
+
+    test "resolve_skills/1 returns [] for a malformed task id" do
+      assert Skills.resolve_skills("higginshigginsxx") == []
+      assert Skills.resolve_skills("higgins") == []
+    end
+  end
 end

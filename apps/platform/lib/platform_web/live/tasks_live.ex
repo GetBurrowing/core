@@ -456,7 +456,13 @@ defmodule PlatformWeb.TasksLive do
 
   @impl true
   def handle_params(%{"task_id" => task_id}, _url, socket) do
-    case Ecto.UUID.cast(task_id) do
+    # Platform.UUID.cast/1, NOT Ecto.UUID.cast/1, at all six guards in this
+    # module. These are FABRICATED-VALUE sites, not raise sites: the {:ok, _}
+    # output flows on, so a bare cast hex-encodes a 16-character LiveView
+    # param into a well-formed but INVENTED uuid that silently misses
+    # instead of being rejected. Nothing raises — an assert_raise-shaped
+    # test cannot see this. Assert the :error branch is taken.
+    case Platform.UUID.cast(task_id) do
       {:ok, _} ->
         task = Tasks.get_task_detail(task_id)
 
@@ -2334,7 +2340,7 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_event("approve_plan", %{"plan-id" => plan_id}, socket) do
     plan =
-      case Ecto.UUID.cast(plan_id) do
+      case Platform.UUID.cast(plan_id) do
         {:ok, uuid} -> Repo.get(Plan, uuid)
         :error -> nil
       end
@@ -2360,7 +2366,7 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_event("reject_plan", %{"plan-id" => plan_id}, socket) do
     plan =
-      case Ecto.UUID.cast(plan_id) do
+      case Platform.UUID.cast(plan_id) do
         {:ok, uuid} -> Repo.get(Plan, uuid)
         :error -> nil
       end
@@ -2421,7 +2427,7 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_event("submit_reject_with_feedback", %{"plan-id" => plan_id}, socket) do
     plan =
-      case Ecto.UUID.cast(plan_id) do
+      case Platform.UUID.cast(plan_id) do
         {:ok, uuid} -> Repo.get(Plan, uuid)
         :error -> nil
       end
@@ -2519,7 +2525,7 @@ defmodule PlatformWeb.TasksLive do
   # ── Plan revision folding events ───────────────────────────────────────
 
   def handle_event("expand_plan", %{"plan-id" => plan_id}, socket) do
-    case Ecto.UUID.cast(plan_id) do
+    case Platform.UUID.cast(plan_id) do
       {:ok, uuid} ->
         {:noreply,
          assign(socket, :expanded_plans, MapSet.put(socket.assigns.expanded_plans, uuid))}
@@ -2530,7 +2536,7 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_event("collapse_plan", %{"plan-id" => plan_id}, socket) do
-    case Ecto.UUID.cast(plan_id) do
+    case Platform.UUID.cast(plan_id) do
       {:ok, uuid} ->
         {:noreply,
          assign(socket, :expanded_plans, MapSet.delete(socket.assigns.expanded_plans, uuid))}

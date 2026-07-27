@@ -1087,4 +1087,96 @@ defmodule Platform.ChatTest do
       refute Chat.participant?(nil, nil)
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  #
+  # THE LOAD-BEARING INPUT IS THE 16-CHARACTER ONE. Do not prune these as
+  # duplicates and do not "simplify" them down to `"higgins"` plus a valid
+  # UUID — that pair is FULLY GREEN against the bug these guards fix.
+  # `Ecto.UUID.cast/1` rejects `"higgins"` on its own, so a suite built from
+  # it passes against a bare cast. Only a 16-byte binary discriminates:
+  #
+  #     Ecto.UUID.cast("higginshigginsxx") == {:ok, "68696767-...-67696e737878"}
+  #     Ecto.UUID.dump("higginshigginsxx") == :error
+  #
+  # i.e. the value clears a cast-only guard and then raises inside Repo.
+  describe "UUID boundary: Chat getters are total over their input" do
+    @slug_16 "higginshigginsxx"
+
+    test "get_space/1 returns nil for a channel slug rather than raising" do
+      # The PR #613 site. `space_id` arrives verbatim from every suite_reply /
+      # canvas_list MCP call and from the /chat/:slug URL path segment.
+      assert Chat.get_space("higgins") == nil
+      assert Chat.get_space(@slug_16) == nil
+      assert Chat.get_space("") == nil
+      assert Chat.get_space(Ecto.UUID.generate()) == nil
+    end
+
+    test "get_space/1 still resolves a real space" do
+      space = create_space()
+      assert %{id: id} = Chat.get_space(space.id)
+      assert id == space.id
+    end
+
+    test "get_message/1, get_thread/1, get_canvas/1, get_attachment/1 return nil" do
+      for id <- ["higgins", @slug_16, ""] do
+        assert Chat.get_message(id) == nil
+        assert Chat.get_thread(id) == nil
+        assert Chat.get_canvas(id) == nil
+        assert Chat.get_canvas_with_deleted(id) == nil
+        assert Chat.get_attachment(id) == nil
+      end
+    end
+
+    test "get_agent_participant/2 returns nil when either id is malformed" do
+      space = create_space()
+      # participants.space_id and .participant_id are both :binary_id, so
+      # EITHER being malformed raises. Assert both positions.
+      assert Chat.get_agent_participant(space.id, @slug_16) == nil
+      assert Chat.get_agent_participant(@slug_16, Ecto.UUID.generate()) == nil
+    end
+
+    test "unpin_message/2 reports :not_found for a malformed message id" do
+      space = create_space()
+      assert {:error, :not_found} = Chat.unpin_message(space.id, @slug_16)
+    end
+
+    test "add_agent_participant/3 resolves an agent by SLUG, not just by uuid" do
+      # The slug fallback matters as much as the guard: `add_participant`'s
+      # MCP argument is an agent slug at least as often as a uuid, so
+      # returning nil here would turn a working lookup into a silent miss.
+      space = create_space()
+      agent = create_boundary_agent(%{slug: @slug_16, name: "Higgins"})
+
+      assert {:ok, participant} = Chat.add_agent_participant(space.id, @slug_16)
+      assert participant.participant_id == agent.id
+    end
+
+    test "add_agent_participant/3 returns :not_found for an unknown slug" do
+      space = create_space()
+      assert {:error, :not_found} = Chat.add_agent_participant(space.id, "no-such-agent")
+    end
+
+    test "add_agent_participant/3 returns :not_found for a malformed space id" do
+      agent = create_boundary_agent(%{slug: "boundary-space", name: "Higgins"})
+      assert {:error, :not_found} = Chat.add_agent_participant(@slug_16, agent)
+    end
+  end
+
+  defp create_boundary_agent(attrs) do
+    defaults = %{
+      name: "Zip",
+      status: "active",
+      max_concurrent: 1,
+      sandbox_mode: "off",
+      model_config: %{"primary" => "anthropic/claude-sonnet-4-6"}
+    }
+
+    {:ok, agent} =
+      %Platform.Agents.Agent{}
+      |> Platform.Agents.Agent.changeset(Map.merge(defaults, attrs))
+      |> Platform.Repo.insert()
+
+    agent
+  end
 end

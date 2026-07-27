@@ -117,4 +117,59 @@ defmodule PlatformWeb.ChatLiveGeneralRoutingTest do
       assert html =~ "data-draft-key=\"chat-draft:#{fabrikam_general.id}\""
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ──────────────────────────────
+  describe "GET /chat/<16-character slug> does not 500" do
+    # THE SECOND LIVE REQUEST-PATH BUG, the twin of the one in
+    # `PlatformWeb.Plugs.ExternalUserScope`. `handle_params/3` (:589) and
+    # `bootstrap_embedded_space/2` (:522) both pass the ORIGINAL
+    # `slug_or_id` to `Chat.get_space/1` when `valid_uuid?/1` returns true.
+    #
+    # `valid_uuid?/1` was a BARE `Ecto.UUID.cast/1`, which hex-encodes any
+    # 16-byte binary and returns {:ok, _}. So a 16-character channel slug
+    # cleared the guard and raised `Ecto.Query.CastError` inside `Repo` on
+    # the mount path. The length is the whole test: a shorter slug like
+    # "higgins" is rejected by a bare cast and proves nothing.
+    test "a 16-character unknown slug mounts instead of raising", %{conn: conn} do
+      slug = "higginshigginsxx"
+      assert byte_size(slug) == 16
+      # Precondition that makes this non-vacuous — a bare cast ACCEPTS this.
+      assert {:ok, _} = Ecto.UUID.cast(slug)
+
+      user = create_user!("boundary-16")
+      membership!(user, Tenancy.get_org_by_slug!("fabrikam"))
+      conn = init_test_session(conn, current_user_id: user.id)
+
+      # Pre-fix this raised Ecto.Query.CastError before ever reaching
+      # `bootstrap_space/2`. Post-fix the uuid branch is skipped, the slug
+      # falls through to bootstrap, and the mount completes. "It mounts" IS
+      # the assertion — the bug was that it could not.
+      {:ok, _view, html} = live(conn, "/chat/#{slug}")
+
+      bootstrapped = Chat.get_space_by_slug(slug, org_id: Tenancy.get_org_by_slug!("fabrikam").id)
+      assert bootstrapped
+      assert html =~ "data-draft-key=\"chat-draft:#{bootstrapped.id}\""
+    end
+
+    test "a 16-character slug that EXISTS still resolves to its space", %{conn: conn} do
+      # The guard must not turn a working slug lookup into a silent miss:
+      # `get_space_by_slug/2` runs first and is unaffected by the uuid guard.
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Sixteen",
+          slug: "higginshigginsxx",
+          kind: "channel",
+          org_id: fabrikam.id
+        })
+
+      user = create_user!("boundary-16-hit")
+      membership!(user, fabrikam)
+      conn = init_test_session(conn, current_user_id: user.id)
+
+      {:ok, _view, html} = live(conn, "/chat/higginshigginsxx")
+      assert html =~ "data-draft-key=\"chat-draft:#{space.id}\""
+    end
+  end
 end

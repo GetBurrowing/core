@@ -2510,7 +2510,7 @@ defmodule Platform.Federation.ToolSurface do
     validation_id = Map.get(args, "validation_id")
     items = Map.get(args, "items", [])
 
-    with validation when not is_nil(validation) <- Repo.get(Validation, validation_id),
+    with validation when not is_nil(validation) <- get_by_uuid(Validation, validation_id),
          stage when not is_nil(stage) <- Repo.get(Stage, validation.stage_id),
          plan when not is_nil(plan) <- Repo.get(Plan, stage.plan_id) do
       # Find or create the execution space for the task
@@ -5943,7 +5943,7 @@ defmodule Platform.Federation.ToolSurface do
     plan_id = Map.get(args, "plan_id")
     approved_by = Map.get(args, "approved_by", "system")
 
-    case Repo.get(Plan, plan_id) do
+    case get_by_uuid(Plan, plan_id) do
       nil ->
         {:error,
          %{
@@ -6068,7 +6068,7 @@ defmodule Platform.Federation.ToolSurface do
     # the negative-guard pattern here: a `false` helper result short-circuits
     # to `false`, which matches `false <-` and continues the chain; a `true`
     # result yields `{:error, :plan_superseded}` for the else branch.
-    with %Stage{} = stage <- Repo.get(Stage, stage_id),
+    with %Stage{} = stage <- get_by_uuid(Stage, stage_id),
          %Plan{} = current_plan <- Repo.get(Plan, stage.plan_id),
          false <- plan_superseded?(current_plan) && {:error, :plan_superseded},
          true <- stage.status in ["running", "passed"] || {:error, :not_running},
@@ -6745,6 +6745,20 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── Memory tool helpers (ADR-0041 T5) ───────────────────────────────────
 
+  # Boundary-safe `Repo.get/2` for the MCP tool surface. Every id reaching a
+  # tool here is a raw tool ARGUMENT — literally whatever string the agent
+  # typed — so an unguarded `Repo.get/2` turns a typo into an
+  # `Ecto.Query.CastError` that kills the tool call instead of returning the
+  # tool's own not-found envelope. Returns `nil`, which every call site below
+  # already handles as "no such row".
+  #
+  # `Platform.UUID.valid?/1`, NOT `Ecto.UUID.cast/1`: a bare cast hex-encodes
+  # any 16-byte binary and returns `{:ok, _}`, so a 16-character argument
+  # clears it and still raises inside `Repo`. Do not "simplify" this.
+  defp get_by_uuid(schema, id) do
+    if Platform.UUID.valid?(id), do: Repo.get(schema, id), else: nil
+  end
+
   defp load_agent(context) when is_map(context) do
     case Map.get(context, :agent) do
       %Agent{} = a ->
@@ -6752,7 +6766,7 @@ defmodule Platform.Federation.ToolSurface do
 
       _ ->
         case Map.get(context, :agent_id) do
-          id when is_binary(id) -> Repo.get(Agent, id)
+          id when is_binary(id) -> get_by_uuid(Agent, id)
           _ -> nil
         end
     end
@@ -7002,7 +7016,7 @@ defmodule Platform.Federation.ToolSurface do
   defp agent_home_org(%Agent{metadata: metadata}) when is_map(metadata) do
     case Map.get(metadata, "org_id") || Map.get(metadata, :org_id) do
       org_id when is_binary(org_id) and org_id != "" ->
-        case Repo.get(Org, org_id) do
+        case get_by_uuid(Org, org_id) do
           %Org{parent_org_id: nil} -> :root
           %Org{} -> {:tenant, org_id}
           nil -> :root
@@ -7019,7 +7033,7 @@ defmodule Platform.Federation.ToolSurface do
   # under the root for the root's id, an empty list for a tenant, and
   # an envelope error for an unknown id.
   defp list_org_descendants(org_id) do
-    case Repo.get(Org, org_id) do
+    case get_by_uuid(Org, org_id) do
       nil ->
         {:error,
          %{
@@ -7267,8 +7281,14 @@ defmodule Platform.Federation.ToolSurface do
         %{id: id, type: "agent"}
 
       nil ->
+        # Platform.UUID.cast/1, NOT Ecto.UUID.cast/1 — this is a
+        # FABRICATED-VALUE bug, not a raise: a bare cast hex-encodes a 16-byte
+        # binary into a well-formed but INVENTED uuid, which then lands in the
+        # audit event's actor_id column as a real-looking id belonging to
+        # nobody. No exception is ever raised, so an assert_raise-shaped test
+        # will not catch a regression here — assert on the resolved actor.
         with id when is_binary(id) <- is_map(context) && Map.get(context, :agent_id),
-             {:ok, uuid} <- Ecto.UUID.cast(id) do
+             {:ok, uuid} <- Platform.UUID.cast(id) do
           %{id: uuid, type: "agent"}
         else
           _ -> nil

@@ -465,7 +465,11 @@ defmodule Platform.Tenancy.Lifecycle do
   """
   @spec cascade_preview(term()) :: %{projects: [String.t()], channels: [String.t()]}
   def cascade_preview(org_id) when is_binary(org_id) do
-    case Ecto.UUID.cast(org_id) do
+    # Platform.UUID.cast/1, NOT Ecto.UUID.cast/1. Every guard in this module
+    # discards the cast output and pins the ORIGINAL value downstream
+    # (`where: p.id == ^org_id`), so it is RAISE-exposed: a bare cast accepts
+    # any 16-byte binary, which then hits the strict UUIDv7 key inside Repo.
+    case Platform.UUID.cast(org_id) do
       {:ok, _} -> do_cascade_preview(org_id)
       :error -> %{projects: [], channels: []}
     end
@@ -518,7 +522,7 @@ defmodule Platform.Tenancy.Lifecycle do
   """
   @spec cascade_hidden(term()) :: %{projects: [String.t()], channels: [String.t()]}
   def cascade_hidden(org_id) when is_binary(org_id) do
-    case Ecto.UUID.cast(org_id) do
+    case Platform.UUID.cast(org_id) do
       {:ok, _} -> do_cascade_hidden(org_id)
       :error -> %{projects: [], channels: []}
     end
@@ -576,7 +580,7 @@ defmodule Platform.Tenancy.Lifecycle do
   """
   @spec purge_preview(term()) :: [purge_item()]
   def purge_preview(org_id) when is_binary(org_id) do
-    case Ecto.UUID.cast(org_id) do
+    case Platform.UUID.cast(org_id) do
       {:ok, _} -> do_purge_preview(org_id)
       :error -> []
     end
@@ -1116,7 +1120,7 @@ defmodule Platform.Tenancy.Lifecycle do
   """
   @spec project_writable?(term()) :: boolean()
   def project_writable?(project_id) when is_binary(project_id) do
-    case Ecto.UUID.cast(project_id) do
+    case Platform.UUID.cast(project_id) do
       {:ok, _} ->
         from(p in Project, where: p.id == ^project_id, select: p.archived_at)
         |> Repo.one()
@@ -1159,7 +1163,7 @@ defmodule Platform.Tenancy.Lifecycle do
   """
   @spec ensure_task_project_writable(term()) :: :ok | {:error, :project_archived}
   def ensure_task_project_writable(task_id) when is_binary(task_id) do
-    case Ecto.UUID.cast(task_id) do
+    case Platform.UUID.cast(task_id) do
       {:ok, _} ->
         from(t in Task, where: t.id == ^task_id, select: t.project_id)
         |> Repo.one()

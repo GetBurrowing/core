@@ -45,8 +45,17 @@ defmodule Platform.Changelog do
     end
   end
 
-  @doc "Get a single changelog entry by ID."
-  def get_entry(id), do: Repo.get(ChangelogEntry, id)
+  @doc """
+  Get a single changelog entry by ID. Returns `nil` for an absent id AND for a
+  malformed one — `Platform.UUID.valid?/1`, not a bare `Ecto.UUID.cast/1`,
+  because a bare cast accepts any 16-byte binary and the raise happens inside
+  `Repo`. Keep the guard: a public getter whose `@spec` says `| nil` must be
+  total over its input.
+  """
+  @spec get_entry(term()) :: ChangelogEntry.t() | nil
+  def get_entry(id) do
+    if Platform.UUID.valid?(id), do: Repo.get(ChangelogEntry, id), else: nil
+  end
 
   @doc """
   List changelog entries with optional filters.

@@ -175,7 +175,8 @@ defmodule Platform.Org.Context do
 
   @doc "Gets a single org context file by ID."
   def get_file_by_id(id) do
-    Repo.get(WikiPage, id)
+    # Reachable from the memory MCP tools with a caller-supplied page id.
+    if Platform.UUID.valid?(id), do: Repo.get(WikiPage, id), else: nil
   end
 
   @doc """

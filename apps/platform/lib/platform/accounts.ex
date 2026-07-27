@@ -12,16 +12,34 @@ defmodule Platform.Accounts do
   on_mount → admin nav gate) gets the user + their membership without
   follow-up DB calls downstream.
 
-  Returns `nil` when no user exists with the given id.
+  Total: returns `nil` for ANY input that is not an existing user id, and
+  never raises. That explicitly includes malformed ids — `"system"`,
+  `"system:auto"`, agent slugs, `""`, non-binaries. Those are the majority
+  of actor values at agent boundaries (a plan's `approved_by` is routinely
+  the literal string `"system:auto"`), so a caller doing the obvious thing —
+  "look the actor up; `nil` means not a human" — hits them on the common
+  path, not an edge case.
+
+  Before this guard, `Repo.get(User, "system")` raised `Ecto.Query.CastError`:
+  `User`'s `@primary_key` is `Platform.Types.UUIDv7`, whose `cast/1` rejects
+  any non-36-character binary. See `Platform.UUID` for why the check is a
+  length test and not a bare `Ecto.UUID.cast/1`.
+
+  There is deliberately no `get_user!/1`. All 28 call sites on main already
+  `case`/`with`/`&&`-match on `nil`; none wants raise-on-malformed.
 
   See `Platform.Tenancy.load_membership/1` for the pure-function reader
   that consumes the preloaded shape.
   """
-  @spec get_user(binary() | nil) :: User.t() | nil
+  @spec get_user(term()) :: User.t() | nil
   def get_user(id) when is_binary(id) do
-    case Repo.get(User, id) do
-      nil -> nil
-      user -> Repo.preload(user, org_memberships: :org)
+    if Platform.UUID.valid?(id) do
+      case Repo.get(User, id) do
+        nil -> nil
+        user -> Repo.preload(user, org_memberships: :org)
+      end
+    else
+      nil
     end
   end
 

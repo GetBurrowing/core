@@ -45,17 +45,13 @@ defmodule Platform.Analytics.UsageEvent do
   True when `value` is a canonical 36-character UUID string — the only shape
   Ecto's `:binary_id` dump accepts without raising.
 
-  Deliberately stricter than `Ecto.UUID.cast/1`. `cast/1` also accepts a raw
-  16-byte binary (it hex-encodes it), but `Ecto.UUID.dump/1` rejects that same
-  binary, so any 16-character slug would pass a `cast/1`-based guard and still
-  raise `Ecto.ChangeError` inside `Repo.insert`. Checking the length first
-  closes that gap: a value that satisfies this predicate is guaranteed to dump.
+  Delegates to `Platform.UUID.valid?/1`, which is the canonical boundary
+  predicate for the whole app. This function shipped first (PR #613) and is
+  kept as a named alias because `validate_uuid_fields/1` below reads better
+  with it; the rationale for being stricter than `Ecto.UUID.cast/1` — the raw
+  16-byte-binary gap — now lives in `Platform.UUID`.
   """
-  def valid_uuid?(value) when is_binary(value) do
-    byte_size(value) == 36 and match?({:ok, _}, Ecto.UUID.cast(value))
-  end
-
-  def valid_uuid?(_value), do: false
+  defdelegate valid_uuid?(value), to: Platform.UUID, as: :valid?
 
   def changeset(event, attrs) do
     event

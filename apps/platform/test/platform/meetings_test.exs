@@ -1355,4 +1355,67 @@ defmodule Platform.MeetingsTest do
                      500
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  describe "UUID boundary: parse_identity/1 does not FABRICATE an identity" do
+    # This is a fabricated-value site, NOT a raise site. `parse_identity/1`
+    # splits a LiveKit webhook `identity` string and the result is persisted
+    # as the meeting_participants.user_id / .agent_id FOREIGN KEY.
+    #
+    # A bare `Ecto.UUID.cast/1` hex-encodes any 16-byte suffix and returns
+    # {:ok, _}, so `"user:higginshigginsxx"` used to yield
+    # {:user, "68696767-696e-7368-6967-67696e737878"} — a well-formed,
+    # real-looking FK belonging to NOBODY. Nothing raised. An assert_raise
+    # test cannot see this; assert on the RETURNED VALUE.
+    @slug_16 "higginshigginsxx"
+
+    test "a 16-character identity suffix yields :unknown, not an invented uuid" do
+      assert Meetings.parse_identity("user:" <> @slug_16) == :unknown
+      assert Meetings.parse_identity("agent:" <> @slug_16) == :unknown
+      assert Meetings.parse_identity("guest:" <> @slug_16) == :unknown
+    end
+
+    test "a raw 16-byte binary suffix yields :unknown too" do
+      raw = :crypto.strong_rand_bytes(16)
+      assert Meetings.parse_identity("user:" <> raw) == :unknown
+    end
+
+    test "short junk yields :unknown (green even before the fix — kept as contrast)" do
+      # Deliberately retained next to the 16-character cases so the next
+      # reader can see WHY the 16-character ones exist: this assertion alone
+      # passes against the buggy bare cast.
+      assert Meetings.parse_identity("user:higgins") == :unknown
+    end
+
+    test "a canonical uuid still parses" do
+      id = Ecto.UUID.generate()
+      assert Meetings.parse_identity("user:" <> id) == {:user, id}
+      assert Meetings.parse_identity("agent:" <> id) == {:agent, id}
+    end
+  end
+
+  describe "UUID boundary: Meetings getters are total over their input" do
+    @slug_16 "higginshigginsxx"
+
+    test "get_meeting/1, get_room/1 and the transcript getters return nil" do
+      for id <- ["higgins", @slug_16, ""] do
+        assert Meetings.get_meeting(id) == nil
+        assert Meetings.get_room(id) == nil
+        assert Meetings.get_transcript(id) == nil
+        assert Meetings.get_transcript_with_segments(id) == nil
+      end
+    end
+
+    test "recording transitions never raise a cast error on a malformed id" do
+      # guard_enabled/0 runs FIRST in both with-chains, so in a suite with
+      # meetings disabled the observable outcome is :meetings_disabled. What
+      # this asserts is the absence of Ecto.Query.CastError either way — the
+      # webhook body's recording_id is not trusted at any point in the chain.
+      assert {:error, reason} = Meetings.stop_recording(@slug_16)
+      assert reason in [:not_found, :meetings_disabled]
+
+      assert {:error, reason} = Meetings.recording_completed(@slug_16, %{})
+      assert reason in [:not_found, :meetings_disabled]
+    end
+  end
 end

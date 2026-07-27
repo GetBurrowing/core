@@ -101,8 +101,12 @@ defmodule Platform.Tasks.ContextHydrator do
 
   # ── Private helpers ──────────────────────────────────────────────────────
 
+  # `task_id` arrives on the run-dispatch payload handed to
+  # hydrate_for_run/2. Malformed folds into the existing not-found error.
   defp load_task(task_id) do
-    case Repo.get(Task, task_id) do
+    task = if Platform.UUID.valid?(task_id), do: Repo.get(Task, task_id)
+
+    case task do
       nil ->
         {:error, :task_not_found}
 

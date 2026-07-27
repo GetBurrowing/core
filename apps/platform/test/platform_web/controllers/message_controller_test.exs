@@ -88,6 +88,26 @@ defmodule PlatformWeb.MessageControllerTest do
       assert %{"error" => %{"code" => "not_found"}} = json_response(conn, 404)
     end
 
+    # ── UUID boundary (task 019fa129 stage 4) ──────────────────────────
+    #
+    # The `bogus_id` case above uses a VALID uuid, so it passes against the
+    # unguarded code — it is not coverage for this. `id` here is a URL path
+    # segment, and `Ecto.UUID.cast/1` accepts any 16-byte binary, so a
+    # 16-character path segment cleared a cast-only guard and raised
+    # `Ecto.Query.CastError` inside `Repo` — a 500 where the contract says 404.
+    test "returns 404 (not 500) for a malformed id in the path", %{conn: conn} do
+      user = create_user!()
+
+      for id <- ["higginshigginsxx", "higgins"] do
+        conn =
+          build_conn()
+          |> login(user.id)
+          |> patch(~p"/api/messages/#{id}", %{content: "new"})
+
+        assert %{"error" => %{"code" => "not_found"}} = json_response(conn, 404)
+      end
+    end
+
     test "returns 404 when the message is soft-deleted", %{conn: conn} do
       %{user: user, message: msg} = authed_setup()
 
