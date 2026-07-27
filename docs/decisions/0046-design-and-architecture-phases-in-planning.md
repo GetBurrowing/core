@@ -121,7 +121,42 @@ The architect rejects only for what is **expensive to undo later** — module bo
 
 ### Removal of stage-level responsibility
 
-Once design and architecture route through the responsibility router, `Stage.responsibility` and its resolution path (`task_router.ex:832-875`, including `:role_unresolvable` telemetry) are removed. This is not a pure deletion — plans in flight carry stages with `responsibility: "designer"` — so it lands last, once nothing depends on it. It retires one of the four overloaded meanings of "responsibility."
+**Shipped** — task `019f9b29-e447`, stack member 9, landing last as planned. Read the outcome from here rather than from the plan text, which was written on a premise that turned out to be wrong (see the correction below).
+
+Four things came out, in dependency order:
+
+1. **The planning-template instruction** (member 7). `dispatch.planning` no longer tells the planner to author an advisory "Design direction (Saru)" stage tagged `responsibility: "designer"`. It now tells the planner to read the pre-plan design canvas if one is attached, to author no design stage, and to set no stage responsibility at all. Retiring the producer first meant the remaining removals were not racing new writes.
+2. **The resolution path.** `resolve_stage_dispatch_assignee/3` in `orchestration/task_router.ex`, together with the `:role_unresolvable` telemetry that reported `responsibility: stage.responsibility` while the value was a role key.
+3. **The MCP surface.** `responsibility` is gone from the `plan_create` stage schema and from `serialize_stage/1`, on both the read and the write side. A stale key sent by an older planner session is **ignored, not rejected** — `tools/list` catalogues are cached per session, so rejecting would hard-fail `plan_create` for every planner runtime spawned before the deploy.
+4. **The column and the schema field**, via `20260726052350_drop_responsibility_from_stages.exs`. The in-flight-plan hazard resolved to nothing to drain: the pre-migration census found no non-terminal stage carrying a value, and the stage *name* ("Design direction (Saru)") preserves the human-readable intent that the column did not.
+
+Four overloaded meanings of "responsibility" became three. `test/platform/tasks/stage_responsibility_retired_test.exs` is the absence guard that keeps it that way: it refutes the word in `tasks/stage.ex`, `orchestration/task_router.ex` and `federation/tool_surface.ex`, and asserts — as a positive control — that the three surviving meanings are still present. The `tool_surface.ex` half is narrowed rather than dropped: that file legitimately still names `ext_single_responsibility` in the `agent_directory` result-row description, so the guard exempts exactly that literal and forbids every other occurrence. Widening it to "the file may contain the word" would retire the guard, not the concept.
+
+#### Correction: `agent_id_for_role/1` was never dead code
+
+The paragraph this section replaces cited `task_router.ex:832` as *the* resolution site, and the task brief inherited that framing. It was one caller among nine. A plan written on the "only caller" premise would have deleted a function that eight live paths still depend on. Verified with `grep -rn "agent_id_for_role" apps/platform/lib/` at the head of member 9's branch; every one of these is untouched by this task:
+
+| Call site | Role key resolved |
+| --- | --- |
+| `platform/chat.ex` | `"historian"` |
+| `platform/agents/historian_dispatcher.ex` | `"historian"` |
+| `platform/org/wiki/routing.ex` | `@historian_role_key` — the Historian write-gate predicate |
+| `platform/meetings.ex` | `"meeting_scribe"` |
+| `platform/meetings.ex`, via `safe_agent_id_for_role/1` | `"triage_officer"` |
+| `platform/meetings/intent_classifier.ex` | the classified target role |
+| `platform/meetings/intent_dispatcher.ex`, via `safe_agent_id_for_role/1` | the dispatched intent's role |
+| `platform_web/live/meeting_live.ex` | `"meeting_producer"` — intent-panel visibility |
+| `platform/roles.ex` itself | the `{:role_assignment_changed, …}` broadcast payload |
+
+`test/platform/agents/system_event_scheduler_t6_e2e_test.exs` additionally asserts `function_exported?(Platform.Roles, :agent_id_for_role, 1)`.
+
+Line numbers are omitted deliberately. During this task alone the `meetings.ex` sites moved by roughly two hundred lines, and effectively every line citation in this member's planning documents had drifted by the time it was executed. Cite the function, not the line.
+
+#### Known inconsistency, not fixed here
+
+`Roles.assignee_for/1` takes a **responsibility key** and consults `responsibility_overrides` via `lookup_override_agent/1` before falling back to role assignment. `Roles.agent_id_for_role/1` takes a **role key** and queries `role_assignments` directly; it never consults overrides. Consequence: a per-responsibility override set in the Control Center roles panel (the `set_responsibility_override` handler) is invisible to every surviving call site in the table above — the meeting scribe, the triage officer, the Historian dispatcher and the wiki write-gate all ignore it.
+
+That is a real inconsistency in the override feature and it is tracked as its own task. It is explicitly out of scope here: this member removed one caller, it did not change either resolver's semantics, and unifying the two would have put a behaviour change inside a deletion.
 
 ---
 
