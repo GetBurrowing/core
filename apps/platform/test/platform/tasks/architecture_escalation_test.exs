@@ -28,11 +28,82 @@ defmodule Platform.Tasks.ArchitectureEscalationTest do
   on the digest's own header text so the assertion under test is the one
   that fires.
 
-  ## VACUITY CONTROLS
+  ## VACUITY CONTROLS, MEASURED (10/10 detected, at commit 56ab108e)
 
-  Measured against this file (7 tests), `architecture_rejection_loop_test.exs`
-  (11) and `architecture_rejection_streak_test.exs` (18); the results are
-  recorded in the follow-up commit.
+  Control set: this file (7 tests), `architecture_rejection_loop_test.exs`
+  (11) and `architecture_rejection_streak_test.exs` (18) — 36 tests, 0
+  failures unmodified, seed 0. Each control changes exactly one thing in the
+  SOURCE and nothing in any test file. Named by the assertion that actually
+  fires, not by the failure count.
+
+    1. THE DIGEST POSTED AS AN ENGAGEMENT (`post_log/2` -> `post_engagement/3`
+       in `post_digest/2`) — the mandatory detonation, and the realistic
+       "tidy the two posts into one" mutation. 3 failures, ALL THREE on
+       `log_only == true`. Detected, and detected on the RIGHT line: the
+       content-based selector still finds the message, so the assertion that
+       fires is the one that says the planner must not be woken.
+    1b. `log_only` FLIPPED IN ISOLATION (`ExecutionSpace.post_log/2`'s
+       `log_only: true` -> `false`, its metadata left saying `"kind" =>
+       "log"`, so the message is a log by every other measure). Stage 2's
+       instruction to this stage, and the sharper of the two: the SAME 3
+       failures on the SAME 3 lines. Detected — which is the evidence that
+       these assertions test the WAKE-UP PROPERTY itself and not merely
+       which function was called. The two controls are indistinguishable
+       from the test suite's side, which is the point: `log_only` is the
+       whole mechanism, and the API name is only how you spell it.
+    2. THE DIGEST TRUNCATED TO THE LATEST VERDICT (`compose_digest/2` over
+       `Enum.take(history, 1)`). 1 failure, on `digest.content =~ "--- Plan
+       v1"`. Detected. FINDING: the v1-SPECIFIC assertions below it (the v1
+       constraint literal, the v1 summary, the v1 stage name) are NEVER
+       REACHED — the header assertion catches it first. Control 2b exists
+       because of that.
+    2b. THE FINDINGS BLANKED ON EVERY ROUND BUT THE NEWEST, headers kept —
+       the subtler "older rounds are summarised, the newest gets detail"
+       tidy, which a `"Plan v1"` check passes. 1 failure, on
+       `digest.content =~ "cross_context_coupling"`, the v1 constraint
+       literal. Detected, and this is the control that proves the digest
+       carries the DISAGREEMENT rather than a list of version numbers.
+    3. THE STACK TIER DROPPED (`escalation_recipient/1`'s `%Stack{}` clause
+       removed). 1 failure, on `assert [row] = plan_review_rows(stack_sponsor.id)`
+       — the POSITIVE half of the paired nil-sponsor test. Detected, and
+       this is what makes the zero-row half of that test non-vacuous. The
+       `recipient == "stack_sponsor"` assertion below it is not reached.
+    4. THE INBOX ROUTED THROUGH `maybe_emit_plan_review_inbox/1`'s GATE
+       (`auto_approve_plan == false` added to the emit condition) — the
+       "reuse the existing producer" tidy, and the reason this stage emits
+       directly. 3 failures: the mandatory detector's sponsor row, the
+       paired test's stack-sponsor row, and the idempotence test's
+       `rows_after_first == 1`. Detected: every fixture here runs
+       `auto_approve_plan: true` precisely because the headless task is the
+       one the row matters most on.
+    5. `escalated?/1` REDUCED TO `escalation_due?/1` (the `pending_review`
+       half dropped). 1 failure, on `refute ArchitectureRejection.escalated?`
+       after the human approves. Detected — the streak stays at 2 forever
+       after an escalation, so without the plan-status half member 8 would
+       render "awaiting a human" for the rest of the task's life.
+    6. THE GATE'S ONE-SHOT REMOVED (member 5's `:gate_already_resolved`
+       clause AND the `WHERE state = 'pending'` fragment), so a second
+       `:reject` re-enters `handle/1`. 2 failures, both on `{:error,
+       :gate_already_resolved}`: this file's idempotence test and the loop
+       file's "cannot reach handle/1 once a stage has started". Detected —
+       and it confirms the claim the module makes instead of a dedup key.
+       FINDING: the count-delta assertions below the return match are not
+       reached, the same shape stage 3 measured on its control 1.
+    7. `escalation_due?/1` FORCED TRUE — the bound collapsed in the opposite
+       direction from stage 3's `>=` -> `>`, i.e. escalate on the FIRST
+       rejection. 16 failures across all three files, 6 in this one.
+       Detected. FINDING: none of the 6 fires on this file's BOUNDARY
+       assertions (`digest_messages(space.id) == []` after round one) —
+       they fire on return shapes and on `Tasks.create_plan/1` refusing a
+       v2 while v1 is still `pending_review`, all of which precede the
+       boundary. Control 8 exists because of that.
+    8. THE HUMAN NOTIFIED ON EVERY ROUND (`send_feedback/1` also runs
+       `escalate/2`) — the "surely the sponsor wants to know each time"
+       mutation, which leaves every return shape and the whole feedback
+       path intact. 4 failures, the first of them on
+       `assert digest_messages(space.id) == []` in the mandatory detector.
+       Detected, and this is the control that makes the below-the-limit
+       absence assertions load-bearing.
 
   ### Assertions that pass trivially, declared rather than counted
 
