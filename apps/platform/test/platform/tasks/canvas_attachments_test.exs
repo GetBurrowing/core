@@ -333,4 +333,26 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
       end)
     end)
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  # The 16-character case is the load-bearing one: `Ecto.UUID.cast/1` accepts
+  # any 16-byte binary, so a test built from "higgins" alone is green against
+  # the bug these guards fix.
+  describe "UUID boundary: attach_canvas/3 ids are raw MCP tool arguments" do
+    test "a malformed task id reports :task_not_found rather than raising", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      assert {:error, :task_not_found} =
+               CanvasAttachments.attach_canvas("higginshigginsxx", canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+    end
+
+    test "a malformed canvas id reports :canvas_not_found rather than raising", ctx do
+      assert {:error, :canvas_not_found} =
+               CanvasAttachments.attach_canvas(ctx.task.id, "higginshigginsxx",
+                 attached_by: attached_by(ctx)
+               )
+    end
+  end
 end

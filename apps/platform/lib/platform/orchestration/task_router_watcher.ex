@@ -275,10 +275,20 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
     DBConnection.OwnershipError ->
       # The watcher is a globally-supervised singleton receiving
       # `{:task_created, ...}` / `{:task_updated, ...}` PubSub broadcasts.
-      # In DataCase-based tests those broadcasts arrive on the watcher's
-      # own process, which is NOT part of the sandbox owner chain — the
+      # In an `async: true` DataCase test the sandbox is in MANUAL mode
+      # (`data_case.ex` calls `Sandbox.start_owner!(Repo, shared: not
+      # tags[:async])`), so those broadcasts arrive on the watcher's own
+      # process, which is NOT part of the sandbox owner chain — the
       # `Repo.get` above raises. Reporting a distinct error tag lets
       # `evaluate_task/1` short-circuit rather than crash the GenServer.
+      #
+      # Under `async: false` the sandbox is SHARED and the watcher can use
+      # the connection, so this clause is unreachable there — that case is
+      # the `catch` below, not this `rescue`. The mode qualifier is
+      # load-bearing and is enforced by
+      # test/platform/regression/boot_telemetry_handler_detach_audit_test.exs
+      # (task 019f9d80 stage 4): the unconditional version of this claim
+      # was measured false in stage 3.
       {:error, :sandbox_unowned}
   catch
     # Same singleton-vs-sandbox race, but the OTHER shape: when a test that

@@ -19,6 +19,23 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
        New callers that satisfy neither condition fail this test with
        an actionable message.
 
+       **Necessary, not sufficient** (task 019f9d80 stage 3). A `rescue
+       DBConnection.OwnershipError` only covers the `async: true` shape,
+       where the spawned child has no sandbox ownership and `Repo`
+       raises. It does nothing for the `async: false` shape, where the
+       child *inherits* the shared connection and the owner exits first:
+       that arrives as a process **exit** (`shutdown:
+       %DBConnection.ConnectionError{message: "owner #PID<...> exited"}`)
+       which no `rescue` can catch. Widening the clause to `catch :exit`
+       would silence a destroyed write, so the second half of the
+       guarantee is a lifecycle rule instead — **no child outlives the
+       sandbox checkin** — enforced for every shared-mode test by
+       `Platform.SandboxHelpers.await_supervised_writes/1`, called from
+       `Platform.DataCase`'s `on_exit`. The `StackDeployer` entry in
+       `@known_safe` already stated that rule for itself; nothing was
+       checking it globally, and `Platform.Audit.HistorianLatencyTest`
+       broke it by 10 011 children.
+
     2. **Start-flag audit.** Every `maybe_add_*/1` gate in
        `Platform.Application.start/2` that reads an
        `Application.get_env(:platform, :start_*_..., true)` flag must
@@ -114,6 +131,14 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # returning, so no child outlives the sandbox checkin. Any FUTURE
     # test that flips `:async` to `true` must do the same, or this
     # exemption stops holding.
+    #
+    # As of task 019f9d80 stage 3 that "must do the same" is no longer
+    # left to each author: `Platform.DataCase`'s `on_exit` drains
+    # `Platform.TaskSupervisor` for every shared-mode test
+    # (`Platform.SandboxHelpers.await_supervised_writes/1`). The
+    # per-test `:DOWN` await above is still the clearer expression of
+    # intent and stays; the drain is the backstop for the case nobody
+    # wrote one.
     "lib/platform/tasks/stack_deployer.ex",
 
     # `Platform.Meetings.SummarizerSweeper` (lines 290, 358) uses
@@ -345,11 +370,22 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     """
     The following module(s) spawn work under Platform.TaskSupervisor
     but do NOT contain `rescue DBConnection.OwnershipError` and are not
-    listed in @known_safe. In test env the spawned Task-Supervised
-    child is not in the DataCase sandbox owner chain (see data_case.ex),
-    so any Repo call inside the spawn body will raise
-    DBConnection.OwnershipError — the exact shape that caused the
+    listed in @known_safe. In an `async: true` test the sandbox is in
+    MANUAL mode (`data_case.ex` calls `Sandbox.start_owner!(Repo, shared:
+    not tags[:async])`), the spawned Task-Supervised child is not in the
+    DataCase sandbox owner chain, and any Repo call inside the spawn body
+    raises DBConnection.OwnershipError — the exact shape that caused the
     2026-07-03 CI cascade.
+
+    Under `async: false` the sandbox is SHARED and the child INHERITS the
+    owner's connection, so no OwnershipError arises; the failure there is
+    the owner exiting mid-write, which arrives as a process exit and which
+    `Platform.SandboxHelpers.await_supervised_writes/1` handles instead.
+    The earlier version of this message stated the manual-mode claim
+    unconditionally, which is false for every `async: false` file — see
+    the moduledoc's "Necessary, not sufficient" note (task 019f9d80
+    stage 3) and the prose guard in
+    boot_telemetry_handler_detach_audit_test.exs (stage 4).
 
     Fix ONE of:
 

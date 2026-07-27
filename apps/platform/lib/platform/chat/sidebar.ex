@@ -337,10 +337,16 @@ defmodule Platform.Chat.Sidebar do
     sections |> Enum.min_by(& &1.position, fn -> hd(sections) end) |> Map.get(:id)
   end
 
+  # `section_id` is a `phx-value-` param off the sidebar rename/recolor events.
+  # Malformed collapses into the existing :not_found contract.
   defp update_section(section_id, attrs) do
-    case Repo.get(Section, section_id) do
-      nil -> {:error, :not_found}
-      section -> section |> Section.changeset(attrs) |> Repo.update()
+    if Platform.UUID.valid?(section_id) do
+      case Repo.get(Section, section_id) do
+        nil -> {:error, :not_found}
+        section -> section |> Section.changeset(attrs) |> Repo.update()
+      end
+    else
+      {:error, :not_found}
     end
   end
 

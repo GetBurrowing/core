@@ -163,9 +163,18 @@ defmodule Platform.Chat do
   def get_space(id, opts \\ []) do
     scope = Keyword.get(opts, :scope)
 
-    case Repo.get(Space, id) do
-      nil -> nil
-      space -> if ExternalScope.visible_space_id?(id, scope), do: space, else: nil
+    # This is the PR #613 site. `space_id` arrives verbatim from MCP tool
+    # arguments and from the `/chat/:slug` URL segment, so it is routinely a
+    # channel slug rather than a UUID. Guard with Platform.UUID.valid?/1 —
+    # a bare Ecto.UUID.cast/1 accepts any 16-byte binary, so a 16-character
+    # slug clears it and still raises inside Repo. Do not "simplify".
+    if Platform.UUID.valid?(id) do
+      case Repo.get(Space, id) do
+        nil -> nil
+        space -> if ExternalScope.visible_space_id?(id, scope), do: space, else: nil
+      end
+    else
+      nil
     end
   end
 
@@ -660,7 +669,7 @@ defmodule Platform.Chat do
     end)
     |> Multi.run(:target, fn _repo, %{space: space} ->
       if target_type == "agent" do
-        case Repo.get(Agent, target_id) do
+        case resolve_agent(target_id) do
           %Agent{} = agent ->
             add_agent_participant(space.id, agent)
 
@@ -750,7 +759,7 @@ defmodule Platform.Chat do
 
         Multi.run(multi, {:participant, idx}, fn _repo, %{space: space} ->
           if type == "agent" do
-            case Repo.get(Agent, id) do
+            case resolve_agent(id) do
               %Agent{} = agent -> add_agent_participant(space.id, agent)
               nil -> {:error, :agent_not_found}
             end
@@ -1119,6 +1128,17 @@ defmodule Platform.Chat do
   def add_agent_participant(space_id, agent_or_id, opts \\ [])
 
   def add_agent_participant(space_id, %Agent{} = agent, opts) do
+    # `space_id` arrives from the MCP `add_participant` tool. `participants`
+    # keys `space_id` / `participant_id` as :binary_id, which raises on a
+    # malformed value exactly like a UUIDv7 primary key does.
+    if not Platform.UUID.valid?(space_id) do
+      {:error, :not_found}
+    else
+      do_add_agent_participant(space_id, agent, opts)
+    end
+  end
+
+  defp do_add_agent_participant(space_id, %Agent{} = agent, opts) do
     case Repo.get_by(Participant,
            space_id: space_id,
            participant_type: "agent",
@@ -1139,11 +1159,36 @@ defmodule Platform.Chat do
   end
 
   def add_agent_participant(space_id, agent_id, opts) when is_binary(agent_id) do
-    case Repo.get(Agent, agent_id) do
+    case resolve_agent(agent_id) do
       %Agent{} = agent -> add_agent_participant(space_id, agent, opts)
       nil -> {:error, :not_found}
     end
   end
+
+  # Resolve an agent by UUID *or* slug, returning nil for anything that is
+  # neither. Every caller below receives `agent_id` from an MCP tool argument
+  # (`dm_create`, `add_participant`) or a LiveView param, where an agent slug
+  # is at least as common as a UUID — so a bare `Repo.get(Agent, id)` both
+  # raises on slugs and misses ones the caller meant.
+  #
+  # Platform.UUID.valid?/1, NOT `Ecto.UUID.cast/1`: a bare cast hex-encodes any
+  # 16-byte binary and returns {:ok, _}, so a 16-character slug such as
+  # "higginshigginsxx" clears it, skips the slug fallback, and then raises
+  # Ecto.Query.CastError inside Repo against Agent's strict UUIDv7 primary key.
+  # Branch structure mirrors Platform.Agents.Orchestration.fetch_agent/1; the
+  # predicate deliberately does not.
+  @spec resolve_agent(Agent.t() | binary() | term()) :: Agent.t() | nil
+  defp resolve_agent(%Agent{} = agent), do: agent
+
+  defp resolve_agent(id) when is_binary(id) do
+    if Platform.UUID.valid?(id) do
+      Repo.get(Agent, id)
+    else
+      Repo.get_by(Agent, slug: id)
+    end
+  end
+
+  defp resolve_agent(_other), do: nil
 
   @doc """
   Strict participant lookup — returns the row if present or `nil`. Use
@@ -1156,11 +1201,18 @@ defmodule Platform.Chat do
     do: get_agent_participant(space_id, agent_id)
 
   def get_agent_participant(space_id, agent_id) when is_binary(agent_id) do
-    Repo.get_by(Participant,
-      space_id: space_id,
-      participant_type: "agent",
-      participant_id: agent_id
-    )
+    # Both columns are :binary_id, so either being malformed raises. Keep the
+    # existing `nil` not-found contract — a malformed id and an absent one are
+    # the same outcome to every caller.
+    if Platform.UUID.valid?(space_id) and Platform.UUID.valid?(agent_id) do
+      Repo.get_by(Participant,
+        space_id: space_id,
+        participant_type: "agent",
+        participant_id: agent_id
+      )
+    else
+      nil
+    end
   end
 
   # ── Messages ────────────────────────────────────────────────────────────────
@@ -1295,9 +1347,16 @@ defmodule Platform.Chat do
   def get_message(id, opts \\ []) do
     scope = Keyword.get(opts, :scope)
 
-    case Repo.get(Message, id) do
-      nil -> nil
-      msg -> if ExternalScope.visible_space_id?(msg.space_id, scope), do: msg, else: nil
+    # `message_id` is a raw MCP tool argument (tool_surface.ex:2430) and a
+    # `phx-value-` param. Platform.UUID.valid?/1, not a bare cast — see
+    # get_space/2 above.
+    if Platform.UUID.valid?(id) do
+      case Repo.get(Message, id) do
+        nil -> nil
+        msg -> if ExternalScope.visible_space_id?(msg.space_id, scope), do: msg, else: nil
+      end
+    else
+      nil
     end
   end
 
@@ -1989,7 +2048,10 @@ defmodule Platform.Chat do
 
   @doc "Fetch a thread by primary key. Returns `nil` if not found."
   @spec get_thread(binary()) :: Thread.t() | nil
-  def get_thread(id), do: Repo.get(Thread, id)
+  # Guarded: `thread_id` reaches reply_to_thread/3 from the thread UI.
+  def get_thread(id) do
+    if Platform.UUID.valid?(id), do: Repo.get(Thread, id), else: nil
+  end
 
   @doc """
   Find the thread anchored to a specific parent message.
@@ -2445,7 +2507,19 @@ defmodule Platform.Chat do
     end
   end
 
-  defp do_unpin_message(space_id, message_id) do
+  defp do_unpin_message(space_id, message_id) when is_binary(message_id) do
+    # `message_id` is a `phx-value-` param (live/chat/pin_hooks.ex:76) and both
+    # pin columns are :binary_id. Malformed and absent are the same outcome.
+    if Platform.UUID.valid?(message_id) do
+      do_unpin_message!(space_id, message_id)
+    else
+      {:error, :not_found}
+    end
+  end
+
+  defp do_unpin_message(_space_id, _message_id), do: {:error, :not_found}
+
+  defp do_unpin_message!(space_id, message_id) do
     case Repo.get_by(Pin, space_id: space_id, message_id: message_id) do
       nil ->
         {:error, :not_found}
@@ -2630,12 +2704,18 @@ defmodule Platform.Chat do
   def get_canvas(id, opts \\ []) do
     scope = Keyword.get(opts, :scope)
 
-    case Repo.get(Canvas, id) do
-      %Canvas{deleted_at: nil} = canvas ->
-        if ExternalScope.visible_space_id?(canvas.space_id, scope), do: canvas, else: nil
+    # `canvas_id` backs the canvas_get / canvas_describe MCP tools, so it is
+    # whatever the agent typed. Platform.UUID.valid?/1, not a bare cast.
+    if Platform.UUID.valid?(id) do
+      case Repo.get(Canvas, id) do
+        %Canvas{deleted_at: nil} = canvas ->
+          if ExternalScope.visible_space_id?(canvas.space_id, scope), do: canvas, else: nil
 
-      _ ->
-        nil
+        _ ->
+          nil
+      end
+    else
+      nil
     end
   end
 
@@ -2648,9 +2728,16 @@ defmodule Platform.Chat do
   def get_canvas_with_deleted(id, opts \\ []) do
     scope = Keyword.get(opts, :scope)
 
-    case Repo.get(Canvas, id) do
-      nil -> nil
-      canvas -> if ExternalScope.visible_space_id?(canvas.space_id, scope), do: canvas, else: nil
+    if Platform.UUID.valid?(id) do
+      case Repo.get(Canvas, id) do
+        nil ->
+          nil
+
+        canvas ->
+          if ExternalScope.visible_space_id?(canvas.space_id, scope), do: canvas, else: nil
+      end
+    else
+      nil
     end
   end
 
@@ -2894,9 +2981,14 @@ defmodule Platform.Chat do
   def get_attachment(id, opts \\ []) do
     scope = Keyword.get(opts, :scope)
 
-    case Repo.get(Attachment, id) do
-      nil -> nil
-      att -> if ExternalScope.visible_space_id?(att.space_id, scope), do: att, else: nil
+    # `attachment_id` arrives from the MCP attachment tools. Guarded.
+    if Platform.UUID.valid?(id) do
+      case Repo.get(Attachment, id) do
+        nil -> nil
+        att -> if ExternalScope.visible_space_id?(att.space_id, scope), do: att, else: nil
+      end
+    else
+      nil
     end
   end
 
@@ -3486,7 +3578,7 @@ defmodule Platform.Chat do
               |> repo.update()
 
             nil ->
-              case Repo.get(Agent, agent_id) do
+              case resolve_agent(agent_id) do
                 %Agent{} = agent ->
                   add_participant(space_id, %{
                     participant_type: "agent",
@@ -3532,7 +3624,7 @@ defmodule Platform.Chat do
         set_principal_agent(space_id, agent_id)
 
       true ->
-        case Repo.get(Agent, agent_id) do
+        case resolve_agent(agent_id) do
           nil ->
             {:error, :agent_not_found}
 
@@ -3895,7 +3987,10 @@ defmodule Platform.Chat do
   # and send-time enforcement never diverge.
   defp ensure_dm_send_allowed(space_id, author_participant_pk)
        when is_binary(space_id) and is_binary(author_participant_pk) do
-    with %Space{kind: kind} when kind in ["dm", "group"] <- Repo.get(Space, space_id),
+    # get_space/1 rather than Repo.get/2: this guard runs BEFORE the insert
+    # whose changeset would otherwise report a malformed space_id, and the
+    # `else` arm below cannot catch an Ecto.Query.CastError.
+    with %Space{kind: kind} when kind in ["dm", "group"] <- get_space(space_id),
          %Participant{participant_type: "user", participant_id: author_user_id} <-
            get_participant(author_participant_pk),
          true <- Tenancy.external_user?(%{id: author_user_id}) do

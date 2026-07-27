@@ -280,7 +280,12 @@ defmodule PlatformWeb.GithubWebhookController do
     Repo.one(query)
   end
 
-  defp find_pr_number_for_branch(repo_url, branch) do
+  # Public (`@doc false`) so the `gh`-unavailable guard below is directly
+  # testable — reaching it through the webhook endpoint would need a full
+  # task + plan + deploy-stage fixture just to observe a missing binary.
+  # Follows `find_pending_pr_merged_validation/1` above.
+  @doc false
+  def find_pr_number_for_branch(repo_url, branch) do
     args = [
       "pr",
       "list",
@@ -296,21 +301,38 @@ defmodule PlatformWeb.GithubWebhookController do
       repo_url
     ]
 
-    case System.cmd("gh", args, stderr_to_stdout: true) do
-      {output, 0} ->
-        case Jason.decode(output) do
-          {:ok, [%{"number" => number} | _]} ->
-            {:ok, number}
+    # `System.cmd("gh", …)` raises `ErlangError: :enoent` when the GitHub
+    # CLI is absent, which in a webhook handler means a failure whose
+    # stacktrace reads like anything but "the binary is missing".
+    # `{:error, :gh_unavailable}` names the binary. Mirrors the
+    # `System.find_executable("gh")` guard in
+    # `Platform.Responsibilities.Handlers.ArchitectureCronSweep`.
+    case System.find_executable("gh") do
+      nil ->
+        Logger.error(
+          "[GithubWebhook] `gh` (GitHub CLI) not found on PATH; cannot run " <>
+            "`gh pr list` to resolve the open PR for branch #{branch} on #{repo_url}"
+        )
 
-          {:ok, []} ->
-            {:error, :no_open_pr}
+        {:error, :gh_unavailable}
 
-          _ ->
-            {:error, :parse_error}
+      gh ->
+        case System.cmd(gh, args, stderr_to_stdout: true) do
+          {output, 0} ->
+            case Jason.decode(output) do
+              {:ok, [%{"number" => number} | _]} ->
+                {:ok, number}
+
+              {:ok, []} ->
+                {:error, :no_open_pr}
+
+              _ ->
+                {:error, :parse_error}
+            end
+
+          {output, _} ->
+            {:error, {:gh_error, String.trim(output)}}
         end
-
-      {output, _} ->
-        {:error, {:gh_error, String.trim(output)}}
     end
   end
 

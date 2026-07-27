@@ -49,9 +49,18 @@ defmodule Platform.Vault.TelemetryHandler do
     [:platform, :vault, :oauth_refresh_failed]
   ]
 
-  @doc "Attach the handler to all registered vault telemetry events."
+  @doc """
+  Attach the handler to all registered vault telemetry events.
+
+  Idempotent — a duplicate attach is a no-op (see
+  `Platform.Audit.TelemetryHandler.attach/0` for the reasoning).
+  """
+  @spec attach() :: :ok
   def attach do
-    :telemetry.attach_many(@handler_id, @vault_events, &__MODULE__.handle_event/4, %{})
+    case :telemetry.attach_many(@handler_id, @vault_events, &__MODULE__.handle_event/4, %{}) do
+      :ok -> :ok
+      {:error, :already_exists} -> :ok
+    end
   end
 
   @doc "Detach the handler (useful in tests)."

@@ -16,9 +16,10 @@ defmodule Platform.Meetings.TelemetryHandlerTest do
   alias Platform.Meetings.TelemetryHandler
 
   setup do
-    TelemetryHandler.detach()
-    TelemetryHandler.attach()
-    on_exit(fn -> TelemetryHandler.detach() end)
+    # Unconditional restore on exit: the lifecycle case below detaches
+    # mid-body, so a failure between that detach and its re-attach would
+    # otherwise leak a detached VM-global handler (task 019f9d80).
+    Platform.TelemetryHelpers.ensure_boot_handler!(TelemetryHandler)
     :ok
   end
 

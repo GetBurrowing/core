@@ -6,10 +6,9 @@ defmodule Platform.Vault.TelemetryHandlerTest do
   alias Platform.Vault.TelemetryHandler
 
   setup do
-    # Ensure handler is attached fresh for each test.
-    TelemetryHandler.detach()
-    TelemetryHandler.attach()
-    on_exit(fn -> TelemetryHandler.detach() end)
+    # Ensure handler is attached for each test and restored on exit — it
+    # is VM-global (task 019f9d80).
+    Platform.TelemetryHelpers.ensure_boot_handler!(TelemetryHandler)
     :ok
   end
 

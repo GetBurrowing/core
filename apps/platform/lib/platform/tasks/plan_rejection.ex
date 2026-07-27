@@ -130,6 +130,18 @@ defmodule Platform.Tasks.PlanRejection do
     end
   rescue
     # A non-UUID actor id makes Repo.get/2 raise rather than return nil.
+    #
+    # WHICH lookup raises changed at the ADR-0046 merge, though the outcome
+    # did not. `Accounts.get_user/1` used to raise here; main's 9b0d74d8 made
+    # it TOTAL (nil for any non-UUID id), so a malformed actor now falls
+    # THROUGH the user tier into `agent_name/1`. `Agent`'s primary key is also
+    # `Platform.Types.UUIDv7`, so `Repo.get(Agent, "system:auto")` raises
+    # exactly as the user lookup used to, and this rescue still lands on
+    # `@unknown_actor`. Pinned by "a nil, blank-named, or non-UUID actor
+    # renders the placeholder" in plan_rejection_test.exs.
+    #
+    # So the rescue is still load-bearing — do not delete it on the reasoning
+    # that `Accounts.get_user/1` is total now. The agent tier is unguarded.
     _ -> @unknown_actor
   end
 

@@ -1075,4 +1075,31 @@ defmodule Platform.Tenancy.LifecycleTest do
       assert {:error, :not_found} = Lifecycle.restore_org_selective(admin, scheduled, [])
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  describe "UUID boundary: preview/writability helpers take LiveView + MCP ids" do
+    # RAISE-exposed, not fabricated-value: each of these guards discards its
+    # cast output and pins the ORIGINAL value downstream
+    # (`where: p.id == ^org_id`), so the strict length check is what actually
+    # stops the raise. A bare cast let any 16-character id through to Repo.
+    @slug_16 "higginshigginsxx"
+
+    test "cascade_preview/1 and cascade_hidden/1 return the empty preview" do
+      empty = %{projects: [], channels: []}
+      assert Lifecycle.cascade_preview(@slug_16) == empty
+      assert Lifecycle.cascade_hidden(@slug_16) == empty
+      assert Lifecycle.cascade_preview("higgins") == empty
+    end
+
+    test "purge_preview/1 returns []" do
+      assert Lifecycle.purge_preview(@slug_16) == []
+    end
+
+    test "project_writable?/1 and ensure_task_project_writable/1 stay permissive" do
+      # A malformed id is a validation error for the caller to report, not a
+      # reference to freeze — and definitely not a 500.
+      assert Lifecycle.project_writable?(@slug_16)
+      assert Lifecycle.ensure_task_project_writable(@slug_16) == :ok
+    end
+  end
 end

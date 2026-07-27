@@ -175,9 +175,21 @@ defmodule Platform.Audit.TelemetryHandler do
     # rows (see maintenance_subagent.ex:record_audit/4).
   ]
 
-  @doc "Attach the handler to all registered platform telemetry events."
+  @doc """
+  Attach the handler to all registered platform telemetry events.
+
+  Idempotent — a duplicate attach is a no-op. `:telemetry` keys handlers
+  by `@handler_id`, so the second attach cannot install a second copy; it
+  only reports `{:error, :already_exists}`. Normalising that to `:ok`
+  removes the reason a test would `detach/0` first, which is what leaked
+  a globally-detached handler into the rest of the run (task 019f9d80).
+  """
+  @spec attach() :: :ok
   def attach do
-    :telemetry.attach_many(@handler_id, @events, &__MODULE__.handle_event/4, %{})
+    case :telemetry.attach_many(@handler_id, @events, &__MODULE__.handle_event/4, %{}) do
+      :ok -> :ok
+      {:error, :already_exists} -> :ok
+    end
   end
 
   @doc "Detach the handler (useful in tests)."
@@ -283,12 +295,33 @@ defmodule Platform.Audit.TelemetryHandler do
         )
     end
 
-    # Task.Supervisor.start_child callers under Platform.TaskSupervisor must
-    # rescue DBConnection.OwnershipError — the spawned Task is not in the
-    # DataCase sandbox owner chain in test env. See
+    # Task.Supervisor.start_child callers under Platform.TaskSupervisor rescue
+    # DBConnection.OwnershipError because in an `async: true` test the spawned
+    # Task is not in the DataCase sandbox owner chain, and Repo raises. See
     # apps/platform/notes/2026-07-06-datacase-cascade-rootcause.md and the
     # regression audit at
-    # apps/platform/test/platform/regression/supervised_task_repo_audit_test.exs.
+    # apps/platform/test/platform/regression/supervised_task_repo_audit_test.exs,
+    # which requires this clause of every Platform.TaskSupervisor caller.
+    #
+    # WHAT THIS CLAUSE DOES **NOT** COVER (task 019f9d80 stage 3, measured —
+    # the earlier version of this comment claimed the opposite and that claim
+    # is what kept the real route invisible):
+    #
+    #   In a shared-mode (`async: false`) test the child DOES inherit the
+    #   owner's connection, so no OwnershipError is raised — the insert simply
+    #   succeeds. The failure there is the owner EXITING first: DBConnection
+    #   disconnects the connection and delivers `shutdown:
+    #   %DBConnection.ConnectionError{message: "owner #PID<...> exited"}` to
+    #   the child as a process **exit**. No `rescue` can catch an exit, so this
+    #   clause has never fired for it (0 hits across an instrumented
+    #   ordered-pair run; 21 ConnectionErrors in the same run).
+    #
+    #   That is deliberate and must stay deliberate. Adding `catch :exit` here
+    #   would silence a destroyed audit write and a force-reconnected pool
+    #   connection. The condition is fixed where it is created instead — the
+    #   sandbox owner now waits for these children before releasing its
+    #   connection (`Platform.SandboxHelpers`, called from
+    #   `Platform.DataCase`), so the orphan does not arise.
   rescue
     DBConnection.OwnershipError ->
       Logger.debug(

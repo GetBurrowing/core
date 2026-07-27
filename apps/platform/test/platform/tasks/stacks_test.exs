@@ -6785,4 +6785,25 @@ defmodule Platform.Tasks.StacksTest do
 
     {:ok, handler_id}
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  #
+  # The load-bearing input is the 16-CHARACTER one. `Ecto.UUID.cast/1`
+  # hex-encodes any 16-byte binary and returns {:ok, _} while
+  # `Ecto.UUID.dump/1` rejects it, so a suite built from "higgins" plus a
+  # valid UUID is fully green against the bug. Do not prune the 16-character
+  # cases as duplicates.
+  describe "UUID boundary: Stacks getters" do
+    @slug_16 "higginshigginsxx"
+
+    test "get_stack/1 returns nil for a malformed id" do
+      # Reached with a raw stack_id tool argument at seven tool_surface sites.
+      assert Stacks.get_stack("higgins") == nil
+      assert Stacks.get_stack(@slug_16) == nil
+    end
+
+    test "get_stack!/1 raises Ecto.NoResultsError, not Ecto.Query.CastError" do
+      assert_raise Ecto.NoResultsError, fn -> Stacks.get_stack!(@slug_16) end
+    end
+  end
 end

@@ -5385,4 +5385,55 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert ToolSurface.scope_for_external(tools, true) == []
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  describe "UUID boundary: every id here is a raw tool argument" do
+    # Every id reaching a tool in this module is literally whatever string
+    # the agent typed. An unguarded `Repo.get/2` turns a typo into an
+    # `Ecto.Query.CastError` that kills the tool call instead of returning
+    # the tool's own not-found envelope. `get_by_uuid/2` is the seam.
+    #
+    # THE LOAD-BEARING INPUT IS THE 16-CHARACTER ONE. `Ecto.UUID.cast/1`
+    # accepts any 16-byte binary, so a suite built from "higgins" plus a
+    # valid UUID is fully green against the bug.
+    @slug_16 "higginshigginsxx"
+
+    test "stage_complete returns its not-found envelope, not a raise" do
+      for id <- [@slug_16, "higgins", ""] do
+        assert {:error, %{error: "Stage not found: " <> _}} =
+                 ToolSurface.execute("stage_complete", %{"stage_id" => id}, %{})
+      end
+    end
+
+    test "plan_approve returns its not-found envelope, not a raise" do
+      for id <- [@slug_16, "higgins"] do
+        assert {:error, %{error: "Plan not found: " <> _, recoverable: false}} =
+                 ToolSurface.execute("plan_approve", %{"plan_id" => id}, %{})
+      end
+    end
+
+    test "review_request_create does not raise on a malformed validation_id" do
+      assert {:error, _} =
+               ToolSurface.execute(
+                 "review_request_create",
+                 %{"validation_id" => @slug_16, "items" => []},
+                 %{}
+               )
+    end
+
+    test "org_list_descendants returns its :not_found envelope, not a raise" do
+      assert {:error, %{code: :not_found}} =
+               ToolSurface.execute("org_list_descendants", %{"org_id" => @slug_16}, %{})
+    end
+
+    test "a malformed context agent_id resolves to no agent rather than raising" do
+      # load_agent/1 backs the memory tools' actor resolution. A 16-character
+      # agent_id used to raise here; before THAT it would have been
+      # hex-encoded into an invented actor id by file_delete_actor/1.
+      assert {:error, _} =
+               ToolSurface.execute("memory_view", %{"path" => "org/page/x.md"}, %{
+                 agent_id: @slug_16
+               })
+    end
+  end
 end

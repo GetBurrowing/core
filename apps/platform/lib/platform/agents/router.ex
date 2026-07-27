@@ -341,7 +341,10 @@ defmodule Platform.Agents.Router do
 
   defp fetch_agent(value) when is_binary(value) do
     cond do
-      match?({:ok, _}, Ecto.UUID.cast(value)) ->
+      # Platform.UUID.valid?/1, NOT a bare Ecto.UUID.cast/1 — a 16-character
+      # agent slug is a 16-byte binary that a bare cast accepts, routing it to
+      # the UUID branch where Repo raises. See Platform.UUID's moduledoc.
+      Platform.UUID.valid?(value) ->
         case Repo.get(Agent, value) do
           %Agent{} = agent -> {:ok, agent}
           nil -> {:error, :not_found}

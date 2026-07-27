@@ -458,4 +458,15 @@ defmodule Platform.Org.ContextTest do
       assert %{kind: :user, name: "Active Author"} = Map.fetch!(resolved, author.id)
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  # The 16-character case is the load-bearing one: `Ecto.UUID.cast/1` accepts
+  # any 16-byte binary, so a test built from "higgins" alone is green against
+  # the bug these guards fix.
+  describe "UUID boundary: get_file_by_id/1" do
+    test "returns nil for a malformed page id rather than raising" do
+      assert OrgContext.get_file_by_id("higgins") == nil
+      assert OrgContext.get_file_by_id("higginshigginsxx") == nil
+    end
+  end
 end

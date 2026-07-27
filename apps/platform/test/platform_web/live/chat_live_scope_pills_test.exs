@@ -35,12 +35,23 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
     })
   end
 
+  # Post-019fa0ac the chat-header scope-pill resolves its scope from the
+  # space's `org_id` (mirroring the sidebar rail), NOT the channel slug — so a
+  # channel must actually belong to the org whose pill we expect to render.
+  # The seeded root orgs (priv/repo/migrations/20260519143620_seed_root_orgs.exs)
+  # use slugs fabrikam/soylent/wayne_tech/sxi/paragon — the same tokens these tests
+  # pass in — so resolve the matching org and stamp its id. (Sidebar *section*
+  # bucketing is still slug-based via `channel_scope/1`, so the
+  # `channel-section-label` assertions are unaffected by the added org_id.)
   defp create_channel(slug) do
+    org = Platform.Tenancy.get_org_by_slug(slug)
+
     {:ok, ch} =
       Chat.create_space(%{
         name: String.capitalize(slug),
         slug: slug,
-        kind: "channel"
+        kind: "channel",
+        org_id: org && org.id
       })
 
     ch

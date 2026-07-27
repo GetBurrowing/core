@@ -400,4 +400,80 @@ defmodule Platform.AccountsTest do
       refute is_nil(fetched.archived_at)
     end
   end
+
+  describe "get_user/1 totality" do
+    # `get_user/1` promises `User.t() | nil` and is named like a total
+    # function. Before the `Platform.UUID.valid?/1` guard it raised
+    # `Ecto.Query.CastError` on every non-UUID id, because `User`'s
+    # `@primary_key` is `Platform.Types.UUIDv7` and its `cast/1` rejects
+    # any non-36-character binary.
+    #
+    # WHICH OF THESE CASES ARE LOAD-BEARING. Reverting the guard fails
+    # EXACTLY the malformed-id assertions below while
+    # "returns nil for a valid but absent UUID" still PASSES. That
+    # asymmetry is what makes this block non-vacuous: a suite written with
+    # only the valid-but-absent UUID is fully green against the bug.
+    #
+    # `"higginshigginsxx"` is 16 characters and is the subtlest case —
+    # `Ecto.UUID.cast/1` ACCEPTS a raw 16-byte binary (it hex-encodes it),
+    # so a cast-only guard lets it through and `Repo` raises anyway. Do
+    # not prune it as a duplicate of `"higgins"`; it is the only input
+    # here that discriminates between the correct predicate and the
+    # obvious-but-wrong one. See `Platform.UUID`'s moduledoc.
+
+    test "returns nil for the actor sentinel \"system\"" do
+      assert Accounts.get_user("system") == nil
+    end
+
+    test "returns nil for the qualified actor sentinel \"system:auto\"" do
+      assert Accounts.get_user("system:auto") == nil
+    end
+
+    test "returns nil for an agent slug" do
+      assert Accounts.get_user("higgins") == nil
+    end
+
+    test "returns nil for a 16-character slug that Ecto.UUID.cast/1 would accept" do
+      # Guards the cast/dump gap: cast/1 hex-encodes this into a UUID,
+      # dump/1 rejects it, so a bare-cast guard still raises inside Repo.
+      assert {:ok, _} = Ecto.UUID.cast("higginshigginsxx")
+      assert Accounts.get_user("higginshigginsxx") == nil
+    end
+
+    test "returns nil for the empty string" do
+      assert Accounts.get_user("") == nil
+    end
+
+    test "returns nil for a valid but absent UUID" do
+      assert Accounts.get_user(Platform.Types.UUIDv7.generate()) == nil
+    end
+
+    test "returns nil for non-binary ids" do
+      assert Accounts.get_user(nil) == nil
+      assert Accounts.get_user(:system) == nil
+      assert Accounts.get_user(42) == nil
+    end
+
+    # "Total" must not degrade into "always nil" — these two lock in that
+    # the guard made the function total by CASTING, not by short-circuiting.
+    test "still returns the user for a real id" do
+      {:ok, user} =
+        Accounts.find_or_create_from_oidc(oidc_attrs(%{email: "totality@example.com"}))
+
+      assert %Platform.Accounts.User{} = fetched = Accounts.get_user(user.id)
+      assert fetched.id == user.id
+    end
+
+    test "still preloads org_memberships and the nested org for a real id" do
+      {:ok, user} =
+        Accounts.find_or_create_from_oidc(oidc_attrs(%{email: "totality-preload@example.com"}))
+
+      fetched = Accounts.get_user(user.id)
+
+      refute match?(%Ecto.Association.NotLoaded{}, fetched.org_memberships)
+      assert [membership | _] = fetched.org_memberships
+      refute match?(%Ecto.Association.NotLoaded{}, membership.org)
+      assert membership.org.slug == "fabrikam"
+    end
+  end
 end

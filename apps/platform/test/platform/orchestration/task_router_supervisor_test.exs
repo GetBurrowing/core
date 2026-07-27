@@ -1,7 +1,7 @@
 defmodule Platform.Orchestration.TaskRouterSupervisorTest do
   use Platform.DataCase, async: false
 
-  alias Platform.Orchestration.TaskRouterSupervisor
+  alias Platform.Orchestration.{ExecutionSpace, LeaseManager, TaskRouterSupervisor}
   alias Platform.Tasks
 
   setup do
@@ -35,6 +35,13 @@ defmodule Platform.Orchestration.TaskRouterSupervisorTest do
 
         [] ->
           :ok
+      end
+
+      # LeaseManager is a global singleton — purge this task's row so it
+      # doesn't leak into the next test.
+      case :ets.info(:orchestration_lease_manager) do
+        :undefined -> :ok
+        _ -> LeaseManager.clear(task.id)
       end
     end)
 
@@ -72,6 +79,94 @@ defmodule Platform.Orchestration.TaskRouterSupervisorTest do
 
     test "returns error for unknown task" do
       assert {:error, :not_found} = TaskRouterSupervisor.stop_assignment("nonexistent")
+    end
+  end
+
+  # Task 019fa06a. `stop_assignment/1` goes through
+  # `DynamicSupervisor.terminate_child/2`, which sends a raw `:shutdown` EXIT
+  # signal. Until `TaskRouter.init/1` started trapping exits, that signal killed
+  # the router instantly — wherever it happened to be — with two consequences
+  # these tests pin independently:
+  #
+  #   * `terminate/2` never ran, so `clear_liveness/1` and
+  #     `ExecutionSpace.archive/1` were skipped on EVERY supervisor-driven stop.
+  #     That is a live production leak (deploy credential leases outliving
+  #     their routers), not a test artifact.
+  #   * A router killed mid-Ecto-query destroys the DBConnection it holds,
+  #     which under the sandbox takes the ownership process with it and leaves
+  #     the TEST process raising `DBConnection.OwnershipError` on its next Repo
+  #     call — the failure `Mix.Tasks.Platform.CleanupGhostTasksTest` hit.
+  describe "stop_assignment/1 teardown safety" do
+    test "runs terminate/2 rather than killing the router outright", %{
+      task: task,
+      assignee: assignee
+    } do
+      # A plan with a running stage so `do_dispatch/2` actually dispatches and
+      # arms a LeaseManager row. Without it `clear_liveness/1` would have
+      # nothing to clear and the assertion below would be vacuous.
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved", version: 1})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 1,
+          name: "coding",
+          description: "Write code"
+        })
+
+      {:ok, _validation} = Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass"})
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, pid} = TaskRouterSupervisor.start_assignment(task.id, assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
+      _ = :sys.get_state(pid)
+
+      # Pre-state: both teardown effects are observably NOT yet applied, so a
+      # green run cannot be explained by them having never been needed.
+      assert %{stage_id: _} = LeaseManager.get(task.id)
+      assert %Platform.Chat.Space{archived_at: nil} = ExecutionSpace.find_by_task_id(task.id)
+
+      ref = Process.monitor(pid)
+      assert :ok = TaskRouterSupervisor.stop_assignment(task.id)
+
+      # Registry absence is a proxy; process death is the thing.
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2_000
+
+      # `clear_liveness/1` and `ExecutionSpace.archive/1` are reachable from
+      # `terminate/2` and nowhere else on this path, so both assertions fail if
+      # the router was killed instead of shut down.
+      assert LeaseManager.get(task.id) == nil
+
+      assert %Platform.Chat.Space{archived_at: %DateTime{}} =
+               ExecutionSpace.find_by_task_id(task.id)
+    end
+
+    test "leaves the test process's own sandbox connection usable", %{
+      task: task,
+      assignee: assignee
+    } do
+      {:ok, pid} = TaskRouterSupervisor.start_assignment(task.id, assignee)
+
+      # Deliberately do NOT drain with `:sys.get_state/1` — the point is to
+      # terminate the router while it still has DB work in flight, which is the
+      # shape that destroys the shared sandbox connection. `init/1` already
+      # queued a `:dispatch`; this second one widens the window.
+      send(pid, :dispatch)
+
+      ref = Process.monitor(pid)
+      assert :ok = TaskRouterSupervisor.stop_assignment(task.id)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2_000
+
+      # Before the fix this raised `DBConnection.OwnershipError` — "cannot find
+      # ownership process ... using mode :manual" — despite DataCase having set
+      # `{:shared, self()}`, because the connection had been torn down under us.
+      assert is_integer(Platform.Repo.aggregate(Platform.Tasks.Task, :count))
     end
   end
 

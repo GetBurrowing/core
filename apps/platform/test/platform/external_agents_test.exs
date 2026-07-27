@@ -506,4 +506,32 @@ defmodule Platform.ExternalAgentsTest do
       assert %DateTime{} = reloaded.last_probe_at
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  #
+  # The load-bearing input is the 16-CHARACTER one. `Ecto.UUID.cast/1`
+  # hex-encodes any 16-byte binary and returns {:ok, _} while
+  # `Ecto.UUID.dump/1` rejects it, so a suite built from "higgins" plus a
+  # valid UUID is fully green against the bug. Do not prune the 16-character
+  # cases as duplicates.
+  describe "UUID boundary: the id:-keyed get_by pair" do
+    @slug_16 "higginshigginsxx"
+
+    test "get_external_agent/1 returns nil for a malformed id" do
+      # `Repo.get_by(Agent, id: id, kind: _)` raises exactly like Repo.get/2 —
+      # the id: keyword is pinned against the same strict UUIDv7 key. This
+      # spelling is invisible to `git grep "Repo.get("`.
+      assert ExternalAgents.get_external_agent("higgins") == nil
+      assert ExternalAgents.get_external_agent(@slug_16) == nil
+      assert ExternalAgents.get_external_agent("") == nil
+    end
+
+    test "get_external_agent!/1 raises Ecto.NoResultsError, not Ecto.Query.CastError" do
+      # The bang twin the plan missed. Its DOCUMENTED contract is
+      # NoResultsError on a miss; a malformed id is a miss, not a new
+      # exception class for callers to learn about.
+      assert_raise Ecto.NoResultsError, fn -> ExternalAgents.get_external_agent!(@slug_16) end
+      assert_raise Ecto.NoResultsError, fn -> ExternalAgents.get_external_agent!("higgins") end
+    end
+  end
 end

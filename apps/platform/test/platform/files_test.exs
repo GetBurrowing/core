@@ -428,4 +428,34 @@ defmodule Platform.FilesTest do
       end)
     end)
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  #
+  # The load-bearing input is the 16-CHARACTER one. `Ecto.UUID.cast/1`
+  # hex-encodes any 16-byte binary and returns {:ok, _} while
+  # `Ecto.UUID.dump/1` rejects it, so a suite built from "higgins" plus a
+  # valid UUID is fully green against the bug. Do not prune the 16-character
+  # cases as duplicates.
+  describe "UUID boundary: Files getters, and the :binary_id vs UUIDv7 split" do
+    @slug_16 "higginshigginsxx"
+
+    test "get_file/2 returns nil for a malformed id" do
+      assert Files.get_file("higgins") == nil
+      assert Files.get_file(@slug_16) == nil
+    end
+
+    test "get_file!/2 raises Ecto.NoResultsError, not Ecto.Query.CastError" do
+      assert_raise Ecto.NoResultsError, fn -> Files.get_file!(@slug_16) end
+    end
+
+    test "fetch_extracted_text/1 returns nil for BOTH malformed shapes" do
+      # Platform.Files.Text keys on a bare :binary_id, not Platform.Types.UUIDv7.
+      # That difference is observable: before the guard a raw 16-byte binary
+      # returned nil SILENTLY here while "higgins" RAISED — one guard-less
+      # lookup, two symptoms. Both must now be nil.
+      assert Files.fetch_extracted_text("higgins") == nil
+      assert Files.fetch_extracted_text(@slug_16) == nil
+      assert Files.fetch_extracted_text(:crypto.strong_rand_bytes(16)) == nil
+    end
+  end
 end

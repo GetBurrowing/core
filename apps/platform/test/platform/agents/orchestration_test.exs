@@ -198,4 +198,32 @@ defmodule Platform.Agents.OrchestrationTest do
       :telemetry.detach(ref)
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  #
+  # `fetch_agent/1` exists in THREE identical copies (agents/config.ex,
+  # agents/orchestration.ex, agents/router.ex) and all three used a BARE
+  # `Ecto.UUID.cast/1` as the uuid-vs-slug discriminator. That is wrong in a
+  # way "higgins" cannot reveal: a bare cast hex-encodes ANY 16-byte binary
+  # and returns {:ok, _}, so a 16-character agent SLUG took the uuid branch,
+  # never reached `Repo.get_by(Agent, slug:)`, and raised
+  # `Ecto.Query.CastError` against Agent's strict UUIDv7 primary key.
+  #
+  # The observable fix is that a 16-character slug now RESOLVES. Assert the
+  # resolution, not merely the absence of a raise — a guard that returned nil
+  # would also "not raise" while silently breaking every slug lookup.
+  describe "UUID boundary: fetch_agent/1 with a 16-character slug" do
+    test "an unknown 16-character slug is :not_found, not a raise" do
+      # NOTE the deliberate absence of a positive twin here. spawn_child/3's
+      # NEXT step (`AgentServer.session_context/2`) also returns
+      # {:error, :not_found}, so this entry point cannot distinguish "the slug
+      # resolved" from "the slug did not" — an assertion that pretended to
+      # would be vacuous. The positive case is asserted where a discriminating
+      # observation DOES exist: Config.export_config/1 in
+      # test/platform/agents/config_import_export_test.exs and
+      # Router.model_chain/1 in test/platform/agents/router_test.exs.
+      assert {:error, :not_found} =
+               Orchestration.spawn_child("nosuchagentxxxxx", Ecto.UUID.generate(), %{})
+    end
+  end
 end

@@ -425,4 +425,131 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       refute Repo.get(Project, project.id).deletion_scheduled_at
     end
   end
+
+  describe "scope rail — org slugs outside the compiled enum (task 019fa209)" do
+    # Regression cover for the /tasks outage: `active_scope_keys/0` used to
+    # map EVERY active org's slug through `String.to_existing_atom/1`. Org
+    # slugs are externally supplied (`Org.changeset/2` accepts any
+    # `^[a-z][a-z0-9_-]*$`) and `list_active_tenants/0` filters only on
+    # `archived_at`, so a single runtime-created org 500'd the board for
+    # every user in the deployment.
+    #
+    # Two DISTINCT failure modes, which is why the fix must be
+    # allowlist-shaped rather than a rescue:
+    #
+    #   * slug never compiled as an atom -> `ArgumentError` in
+    #     `active_scope_keys/0` (a rescue would suppress this one);
+    #   * slug that IS an existing atom but is not one of the five scopes ->
+    #     `to_existing_atom/1` SUCCEEDS and the atom reaches
+    #     `<.scope_pill>`, whose `scope_label/1` and `slug/1` clauses are
+    #     non-total -> `FunctionClauseError` at render (a rescue would leave
+    #     this one live).
+
+    defp insert_tenant_org(slug, name) do
+      %Org{}
+      |> Org.changeset(%{
+        name: name,
+        slug: slug,
+        parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      })
+      |> Repo.insert!()
+    end
+
+    # Scope chips in render order. "all" is the rail's reset button, not an
+    # org chip — it is hardcoded in the template and is not driven by
+    # `active_scope_keys/0`, so it is dropped here.
+    defp rendered_scope_chips(view) do
+      ~r/data-scope-chip="([^"]+)"/
+      |> Regex.scan(render(view))
+      |> Enum.map(fn [_, slug] -> slug end)
+      |> Enum.reject(&(&1 == "all"))
+    end
+
+    test "mount /tasks succeeds with an active tenant whose slug is not an existing atom", %{
+      conn: conn
+    } do
+      {conn, _user} = fabrikam_admin_conn(conn)
+
+      # Premise, asserted rather than assumed: if this slug ever became a
+      # compiled atom the test would silently stop covering the ArgumentError
+      # path, so fail loudly instead.
+      assert_raise ArgumentError, fn -> String.to_existing_atom("e2e-target-323") end
+
+      insert_tenant_org("e2e-target-323", "E2E Target 323")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Renders at all (pre-fix: ArgumentError in mount/3 -> 500) …
+      assert has_element?(view, "[data-scope-chip='fabrikam']")
+      # … and the out-of-enum org gets no chip: the rail's colors/labels are
+      # hardcoded to the five scopes, so a chip for it could not be rendered.
+      refute has_element?(view, "[data-scope-chip='e2e-target-323']")
+    end
+
+    test "mount /tasks succeeds with an active tenant whose slug IS an existing atom but not a scope",
+         %{conn: conn} do
+      {conn, _user} = fabrikam_admin_conn(conn)
+
+      # `:name` exists because it is an Ecto field on `Org` itself, and
+      # "name" satisfies the slug format — so `to_existing_atom/1` SUCCEEDS
+      # here and the failure moves downstream into ScopePill. If this ever
+      # stops holding, the test is no longer discriminating and must say so.
+      assert String.to_existing_atom("name") == :name
+
+      insert_tenant_org("name", "Name Org")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Pre-fix this raises FunctionClauseError in
+      # PlatformWeb.Components.ScopePill.slug/1 at render — NOT ArgumentError.
+      # This is the case a rescue-only fix would leave broken.
+      assert has_element?(view, "[data-scope-chip='fabrikam']")
+      refute has_element?(view, "[data-scope-chip='name']")
+    end
+
+    test "the seeded scope rail is unchanged", %{conn: conn} do
+      {conn, _user} = fabrikam_admin_conn(conn)
+
+      expected =
+        Tenancy.list_active_tenants()
+        |> Enum.map(& &1.slug)
+        |> Enum.filter(&(&1 in Tenancy.tenant_priority()))
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Exact list AND order — guards the fix against silently dropping or
+      # reordering legitimate chips.
+      assert rendered_scope_chips(view) == expected
+      assert expected != []
+    end
+
+    test "archiving an org still drops its chip while a bad-slug org exists", %{conn: conn} do
+      {conn, _user} = fabrikam_admin_conn(conn)
+      _project = create_project("soylent")
+
+      # Deliberately mount BEFORE the bad-slug org exists. That makes this
+      # case discriminate the `refresh_containers/1` call site SPECIFICALLY:
+      # the mount path is clean either way, so the only thing under test is
+      # the re-read that the archive interaction triggers. (Mounting with the
+      # bad org already present would crash in `mount/3` and prove nothing
+      # about the second call site — cases 1 and 2 already cover mount.)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert has_element?(view, "[data-scope-chip='soylent']")
+
+      # Shared-mode sandbox (`async: false`), so the LiveView process sees
+      # this insert on its next query.
+      insert_tenant_org("e2e-target-323", "E2E Target 323")
+
+      org_menu = "[data-menu-key='org:soylent']"
+      view |> element("#{org_menu} [data-role=lifecycle-menu-trigger]") |> render_click()
+      view |> element("#{org_menu} [data-role=lifecycle-archive]") |> render_click()
+
+      # `refresh_containers/1` is a SECOND, independent call site of
+      # `active_scope_keys/0` — a mount-only fix would still crash the socket
+      # here.
+      refute has_element?(view, "[data-scope-chip='soylent']")
+      refute has_element?(view, "[data-scope-chip='e2e-target-323']")
+      assert has_element?(view, "[data-scope-chip='fabrikam']")
+    end
+  end
 end

@@ -174,6 +174,37 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
       assert out_of_scope.halted and out_of_scope.status == 403
     end
 
+    # ── UUID boundary (task 019fa129 stage 4) ──────────────────────────
+    #
+    # THE LIVE REQUEST-PATH BUG. `resolve_space/2` passes the ORIGINAL slug —
+    # a URL PATH SEGMENT — to `Chat.get_space/1` when `valid_uuid?/1` returns
+    # true. `valid_uuid?/1` was a BARE `Ecto.UUID.cast/1`, which hex-encodes
+    # any 16-byte binary and returns {:ok, _}. So a 16-character channel slug
+    # cleared the guard and then raised `Ecto.Query.CastError` inside `Repo`
+    # — a 500 on a public request path. That is the PR #613 failure, and it
+    # was still live on main until this stage.
+    #
+    # `"/chat/does-not-exist-zzz"` above does NOT cover this: 20 characters is
+    # not 16, and a bare cast rejects it. The length is the whole test.
+    test "403 (not a 500) on a 16-character channel slug", ctx do
+      slug = "higginshigginsxx"
+      assert byte_size(slug) == 16
+      # The precondition that makes this test non-vacuous:
+      assert {:ok, _} = Ecto.UUID.cast(slug)
+
+      conn = run("/chat/" <> slug, ctx.ext_user, ctx.ext_membership)
+
+      assert conn.halted
+      assert conn.status == 403
+    end
+
+    test "403 on other malformed slug lengths too", ctx do
+      for slug <- ["higgins", String.duplicate("a", 32), String.duplicate("a", 36)] do
+        conn = run("/chat/" <> slug, ctx.ext_user, ctx.ext_membership)
+        assert conn.halted and conn.status == 403, "expected 403 on slug #{inspect(slug)}"
+      end
+    end
+
     test "403 on non-chat routes", ctx do
       for path <- ["/tasks", "/admin", "/org_memory", "/files", "/meetings"] do
         conn = run(path, ctx.ext_user, ctx.ext_membership)

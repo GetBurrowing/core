@@ -68,7 +68,7 @@ defmodule Platform.Org.Wiki.Routing do
   Classify a file-key path against the design-lock §2 policy table.
 
   Returns a `t:classification/0` map. Unknown paths (or malformed
-  `<uuid>` slots that fail `Ecto.UUID.cast/1`) classify as
+  `<uuid>` slots that fail `Platform.UUID.cast/1`) classify as
   `kind: :unknown` with both roles set to `:rejected` — the terminal
   catch-all from the table.
   """
@@ -91,9 +91,15 @@ defmodule Platform.Org.Wiki.Routing do
 
   def classify(_), do: unknown()
 
+  # Platform.UUID.cast/1 throughout this module, NOT Ecto.UUID.cast/1. These
+  # are FABRICATED-VALUE sites, not raise sites: the `<uuid>` slots come from
+  # MCP memory paths, and a bare cast hex-encodes any 16-byte segment into a
+  # well-formed but INVENTED uuid. Nothing raises — a 16-character segment
+  # simply validates as a namespace and is then compared as an owner id.
+  # assert_raise-shaped tests cannot see this; assert on the classification.
   defp classify_private(%{"ns" => ns, "space" => space_id, "agent" => agent_id}) do
-    with {:ok, _} <- Ecto.UUID.cast(space_id),
-         {:ok, _} <- Ecto.UUID.cast(agent_id) do
+    with {:ok, _} <- Platform.UUID.cast(space_id),
+         {:ok, _} <- Platform.UUID.cast(agent_id) do
       %{
         kind: :private,
         write_role: :owner,
@@ -147,7 +153,9 @@ defmodule Platform.Org.Wiki.Routing do
     }
   end
 
-  # "org" is always valid. "project/<uuid>" or "space/<uuid>" must Ecto.UUID.cast.
+  # "org" is always valid. "project/<uuid>" or "space/<uuid>" must pass the
+  # STRICT Platform.UUID.cast/1 — a bare Ecto.UUID.cast/1 would accept any
+  # 16-character segment as a namespace uuid.
   defp validate_namespace_uuid("org"), do: :ok
 
   defp validate_namespace_uuid("project/" <> id), do: cast_uuid(id)
@@ -155,7 +163,7 @@ defmodule Platform.Org.Wiki.Routing do
   defp validate_namespace_uuid(_), do: :error
 
   defp cast_uuid(id) do
-    case Ecto.UUID.cast(id) do
+    case Platform.UUID.cast(id) do
       {:ok, _} -> :ok
       :error -> :error
     end
@@ -211,8 +219,8 @@ defmodule Platform.Org.Wiki.Routing do
   def owner_of?(path, %Agent{id: agent_id} = agent, opts) when is_binary(path) do
     case Regex.named_captures(@private_re, path) do
       %{"space" => space_id, "agent" => path_agent_id} ->
-        with {:ok, casted_agent} <- Ecto.UUID.cast(path_agent_id),
-             {:ok, casted_space} <- Ecto.UUID.cast(space_id),
+        with {:ok, casted_agent} <- Platform.UUID.cast(path_agent_id),
+             {:ok, casted_space} <- Platform.UUID.cast(space_id),
              true <- casted_agent == agent_id,
              true <- participant?(agent, casted_space, opts) do
           true

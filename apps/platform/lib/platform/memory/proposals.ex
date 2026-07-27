@@ -172,7 +172,13 @@ defmodule Platform.Memory.Proposals do
   existed" should compare status against `MemoryProposal.statuses/0`.
   """
   @spec get(binary()) :: MemoryProposal.t() | nil
-  def get(id) when is_binary(id), do: Repo.get(MemoryProposal, id)
+  def get(id) when is_binary(id) do
+    # `id` is a `phx-value-id` LiveView param (org_memory_live/view.ex:358,393).
+    # Platform.UUID.valid?/1, not a bare Ecto.UUID.cast/1 — a bare cast accepts
+    # any 16-byte binary and the raise lands inside Repo regardless.
+    if Platform.UUID.valid?(id), do: Repo.get(MemoryProposal, id), else: nil
+  end
+
   def get(_), do: nil
 
   @doc """

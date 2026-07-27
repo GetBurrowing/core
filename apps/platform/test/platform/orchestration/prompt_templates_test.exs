@@ -3334,4 +3334,15 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       apply(Platform.Repo.Migrations.UpdateIntentClassifyPromptWithCorrections, :up, [])
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  # The 16-character case is the load-bearing one: `Ecto.UUID.cast/1` accepts
+  # any 16-byte binary, so a test built from "higgins" alone is green against
+  # the bug these guards fix.
+  describe "UUID boundary: get_template/1" do
+    test "returns nil for a malformed id rather than raising" do
+      assert PromptTemplates.get_template("higgins") == nil
+      assert PromptTemplates.get_template("higginshigginsxx") == nil
+    end
+  end
 end

@@ -1040,4 +1040,25 @@ defmodule Platform.Tasks.PlanEngineTest do
       assert PlanEngine.check_manual_approval_heuristic(stages) == stages
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  describe "UUID boundary: agent-supplied stage_id / validation_id" do
+    @slug_16 "higginshigginsxx"
+
+    test "advance-by-stage paths report :not_found for a malformed stage id" do
+      assert {:error, :not_found} = PlanEngine.start_stage(@slug_16)
+      assert {:error, :not_found} = PlanEngine.start_stage("higgins")
+    end
+
+    test "the bang validation lookups raise NoResultsError, not CastError" do
+      # `Repo.get!/2` documents `Ecto.NoResultsError` on a miss. Before the
+      # guard, a malformed validation_id raised a DIFFERENT exception class —
+      # so one lookup raised two ways depending on how the agent typo'd it.
+      assert_raise Ecto.NoResultsError, fn -> PlanEngine.reopen_manual_approval(@slug_16) end
+
+      assert_raise Ecto.NoResultsError, fn ->
+        PlanEngine.evaluate_validation(@slug_16, %{status: "passed"})
+      end
+    end
+  end
 end

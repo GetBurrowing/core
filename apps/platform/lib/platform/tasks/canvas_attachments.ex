@@ -233,18 +233,29 @@ defmodule Platform.Tasks.CanvasAttachments do
 
   # ── internals ─────────────────────────────────────────────────────────────
 
+  # `task_id` / `canvas_id` are raw `canvas_attach` MCP tool arguments.
+  # Malformed folds into the existing not-found error. Platform.UUID.valid?/1,
+  # not a bare Ecto.UUID.cast/1 — a bare cast accepts any 16-byte binary.
   defp ensure_task_exists(task_id) do
-    case Repo.get(Task, task_id) do
-      nil -> {:error, :task_not_found}
-      %Task{} -> :ok
+    if not Platform.UUID.valid?(task_id) do
+      {:error, :task_not_found}
+    else
+      case Repo.get(Task, task_id) do
+        nil -> {:error, :task_not_found}
+        %Task{} -> :ok
+      end
     end
   end
 
   defp ensure_canvas_attachable(canvas_id) do
-    case Repo.get(Canvas, canvas_id) do
-      nil -> {:error, :canvas_not_found}
-      %Canvas{deleted_at: nil} -> :ok
-      %Canvas{} -> {:error, :canvas_not_found}
+    if not Platform.UUID.valid?(canvas_id) do
+      {:error, :canvas_not_found}
+    else
+      case Repo.get(Canvas, canvas_id) do
+        nil -> {:error, :canvas_not_found}
+        %Canvas{deleted_at: nil} -> :ok
+        %Canvas{} -> {:error, :canvas_not_found}
+      end
     end
   end
 

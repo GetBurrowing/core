@@ -195,6 +195,7 @@ defmodule Platform.Tasks.AutoMerger do
   - `:conflict` — merge conflict
   - `:branch_protection` — branch protection rules prevent merge
   - `:ci_required` — required status checks have not passed
+  - `:gh_unavailable` — the `gh` binary is not installed / not on `PATH`
   - `:unknown` — unexpected error
   """
   @spec execute_merge(String.t(), pos_integer(), String.t()) ::
@@ -214,7 +215,27 @@ defmodule Platform.Tasks.AutoMerger do
 
     Logger.info("[AutoMerger] executing merge: gh #{Enum.join(args, " ")}")
 
-    case System.cmd("gh", args, stderr_to_stdout: true) do
+    # `System.cmd("gh", …)` raises `ErlangError: :enoent` when the GitHub
+    # CLI is absent — an opaque crash indistinguishable from a git failure.
+    # The prod image shipped without `gh`, and this is one of the sites
+    # that made that hard to see. Fail with a named, greppable reason
+    # instead. Mirrors the `System.find_executable("gh")` guard in
+    # `Platform.Responsibilities.Handlers.ArchitectureCronSweep`.
+    case System.find_executable("gh") do
+      nil ->
+        message =
+          "`gh` (GitHub CLI) not found on PATH; cannot run `gh pr merge` for PR ##{pr_number}"
+
+        Logger.error("[AutoMerger] #{message}")
+        {:error, :gh_unavailable, message}
+
+      gh ->
+        do_execute_merge(gh, args, repo_url, pr_number)
+    end
+  end
+
+  defp do_execute_merge(gh, args, repo_url, pr_number) do
+    case System.cmd(gh, args, stderr_to_stdout: true) do
       {output, 0} ->
         merge_sha = extract_merge_sha(output)
 

@@ -420,4 +420,39 @@ defmodule Platform.Org.Wiki.RoutingTest do
                Routing.gate_read(plain_agent(), "random/garbage.md")
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  describe "UUID boundary: a 16-character segment is not a namespace uuid" do
+    # Fabricated-value family. Nothing here ever RAISED — a bare
+    # `Ecto.UUID.cast/1` simply accepted any 16-character `project/<id>` or
+    # `space/<id>` path segment as a valid namespace uuid, and `owner_of?/2`
+    # then compared the hex-encoded fabrication against a real agent id.
+    # Assert the classification, not an exception.
+    @slug_16 "higginshigginsxx"
+
+    test "project/<16-char> classifies as :unknown, both roles :rejected" do
+      assert %{kind: :unknown, write_role: :rejected, read_role: :rejected} =
+               Routing.classify("project/#{@slug_16}/page/notes.md")
+    end
+
+    test "space/<16-char> classifies as :unknown" do
+      assert %{kind: :unknown} = Routing.classify("space/#{@slug_16}/page/notes.md")
+    end
+
+    test "a private path with 16-character slots classifies as :unknown" do
+      assert %{kind: :unknown} =
+               Routing.classify("space/#{@slug_16}/private/#{@slug_16}/scratch.md")
+    end
+
+    test "short junk also classifies :unknown (green pre-fix — kept as contrast)" do
+      # Passes against the buggy bare cast too. Kept adjacent so nobody prunes
+      # the 16-character cases above believing this one covers them.
+      assert %{kind: :unknown} = Routing.classify("project/higgins/page/notes.md")
+    end
+
+    test "a canonical uuid segment still classifies as a real namespace" do
+      id = Ecto.UUID.generate()
+      refute Routing.classify("project/#{id}/page/notes.md").kind == :unknown
+    end
+  end
 end

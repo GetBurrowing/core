@@ -68,10 +68,18 @@ defmodule Platform.Meetings.IntentCorrections.TelemetryHandler do
 
   @events [@rejected_event, @no_ack_spawn_failed_event]
 
-  @doc "Attach the handler to both correction-hook events."
-  @spec attach() :: :ok | {:error, :already_exists}
+  @doc """
+  Attach the handler to both correction-hook events.
+
+  Idempotent — a duplicate attach is a no-op (see
+  `Platform.Audit.TelemetryHandler.attach/0` for the reasoning).
+  """
+  @spec attach() :: :ok
   def attach do
-    :telemetry.attach_many(@handler_id, @events, &__MODULE__.handle_event/4, %{})
+    case :telemetry.attach_many(@handler_id, @events, &__MODULE__.handle_event/4, %{}) do
+      :ok -> :ok
+      {:error, :already_exists} -> :ok
+    end
   end
 
   @doc "Detach the handler. Useful in tests that assert the no-write invariant."

@@ -1092,4 +1092,50 @@ defmodule Platform.VaultTest do
       assert is_nil(match.encrypted_data)
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  describe "UUID boundary: normalize_uuid does not FABRICATE an accessor id" do
+    # Fabricated-value site, not a raise site. `parse_accessor/1` feeds the
+    # AccessLog's NOT NULL `accessor_id` column. A bare `Ecto.UUID.cast/1`
+    # hex-encodes any 16-byte accessor id into a well-formed but INVENTED
+    # uuid, which is then WRITTEN to the audit row — a real-looking actor
+    # belonging to nobody, and an audit trail that silently lies.
+    #
+    # Nothing raises, so assert on the PERSISTED VALUE, not on an exception.
+    @slug_16 "higginshigginsxx"
+    @system_accessor_id "00000000-0000-0000-0000-000000000000"
+
+    test "a 16-character accessor id is logged as the system sentinel" do
+      slug = unique_slug("vault-boundary")
+      insert_credential!(slug, value: "s3cret", scope: {:platform, nil})
+      cred = Repo.get_by!(Credential, slug: slug)
+
+      {:ok, _} = Vault.get(slug, accessor: {:agent, @slug_16})
+
+      log =
+        from(l in AccessLog, where: l.credential_id == ^cred.id and l.action == "use", limit: 1)
+        |> Repo.one()
+
+      assert log.accessor_id == @system_accessor_id
+
+      # The negative form is the point: NOT the hex-encoding of the slug.
+      {:ok, fabricated} = Ecto.UUID.cast(@slug_16)
+      refute log.accessor_id == fabricated
+    end
+
+    test "a canonical accessor uuid is still logged verbatim" do
+      slug = unique_slug("vault-boundary-ok")
+      insert_credential!(slug, value: "s3cret", scope: {:platform, nil})
+      cred = Repo.get_by!(Credential, slug: slug)
+      accessor_id = Ecto.UUID.generate()
+
+      {:ok, _} = Vault.get(slug, accessor: {:agent, accessor_id})
+
+      log =
+        from(l in AccessLog, where: l.credential_id == ^cred.id and l.action == "use", limit: 1)
+        |> Repo.one()
+
+      assert log.accessor_id == accessor_id
+    end
+  end
 end

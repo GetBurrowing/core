@@ -135,6 +135,14 @@ defmodule Platform.Accounts.ExternalAdmissionNotifierTest do
     refute_receive {:notif, _, _, _}, 200
   end
 
+  # Quarantined `:deterministic` in `Platform.TestQuarantine` (ticket 019f9d80).
+  # RED 5/5 whenever `audit/historian_latency_test.exs` shares the BEAM (that
+  # file detaches a boot-attached telemetry handler and never restores it);
+  # GREEN 3/3 when this file runs alone. The tag is a locator only —
+  # `mix test --only leaked_telemetry_detach` — and can never exclude this test,
+  # because `excluded_tags/1` filters on class before it ever reads a tag.
+  # Delete the tag AND the registry entry when 019f9d80's fix reaches main.
+  @tag :leaked_telemetry_detach
   test "a holding event persists an Audit.Event (durable queue source)" do
     user = create_user!()
 

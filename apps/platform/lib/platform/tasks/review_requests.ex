@@ -136,9 +136,14 @@ defmodule Platform.Tasks.ReviewRequests do
   @doc "Fetch a review request by ID with items preloaded."
   @spec get_review_request(binary()) :: ReviewRequest.t() | nil
   def get_review_request(id) do
-    ReviewRequest
-    |> Repo.get(id)
-    |> Repo.preload(:items)
+    # `id` is a `phx-value-` param off the review UI. Platform.UUID.valid?/1,
+    # not a bare Ecto.UUID.cast/1 — a bare cast accepts any 16-byte binary and
+    # the raise lands inside Repo regardless.
+    if Platform.UUID.valid?(id) do
+      ReviewRequest
+      |> Repo.get(id)
+      |> Repo.preload(:items)
+    end
   end
 
   @doc "List all pending review requests for a task, newest first."
@@ -208,8 +213,11 @@ defmodule Platform.Tasks.ReviewRequests do
 
   # ── Private ─────────────────────────────────────────────────────────────
 
+  # `item_id` is a `phx-value-` param off the review-approval event.
   defp fetch_item(item_id) do
-    case Repo.get(ReviewItem, item_id) do
+    item = if Platform.UUID.valid?(item_id), do: Repo.get(ReviewItem, item_id)
+
+    case item do
       nil -> {:error, :not_found}
       item -> {:ok, item}
     end
@@ -218,7 +226,10 @@ defmodule Platform.Tasks.ReviewRequests do
   defp maybe_reopen_manual_approval(nil), do: :ok
 
   defp maybe_reopen_manual_approval(validation_id) do
-    case Repo.get(Validation, validation_id) do
+    validation =
+      if Platform.UUID.valid?(validation_id), do: Repo.get(Validation, validation_id)
+
+    case validation do
       %Validation{kind: "manual_approval", status: "failed"} ->
         case PlanEngine.reopen_manual_approval(validation_id) do
           {:ok, _validation} -> :ok
@@ -460,6 +471,16 @@ defmodule Platform.Tasks.ReviewRequests do
 
   # Best-effort human-readable name for whoever submitted the request: a user's
   # name/email, else an agent's name/slug, else the raw id. Handles nil.
+  #
+  # Both arms are now TOTAL, so this carries no `rescue`. It used to end in a
+  # bare `rescue _ -> submitted_by`, and that clause was not merely defensive:
+  # `submitted_by` at an agent boundary is an agent slug or "system" /
+  # "system:auto" far more often than a user UUID, so `Repo.get(Agent, "higgins")`
+  # raised `Ecto.Query.CastError` on the COMMON path and the rescue returned the
+  # raw slug. A review filed by agent `higgins` rendered as "Requested by
+  # higgins" rather than the agent's display name — a behaviour bug the rescue
+  # hid, not just a crash it absorbed. Guarding the arm is what makes the slug
+  # branch reachable at all. (Task 019fa129 stage 5.)
   defp requester_display_name(nil), do: "Unknown"
 
   defp requester_display_name(submitted_by) when is_binary(submitted_by) do
@@ -467,17 +488,33 @@ defmodule Platform.Tasks.ReviewRequests do
       user = Accounts.get_user(submitted_by) ->
         user.name || user.email || submitted_by
 
-      agent = Repo.get(Agent, submitted_by) ->
+      agent = fetch_agent_for_display(submitted_by) ->
         agent.name || agent.slug || submitted_by
 
       true ->
         submitted_by
     end
-  rescue
-    _ -> submitted_by
   end
 
   defp requester_display_name(submitted_by), do: to_string(submitted_by)
+
+  # Mirrors the SHAPE of `Platform.Agents.Orchestration.fetch_agent/1` — UUID
+  # branch, then a `slug:` fallback — but the predicate is `Platform.UUID.valid?/1`,
+  # NOT the bare `Ecto.UUID.cast/1` all three `fetch_agent/1` copies carried
+  # before stage 4 of this task. A bare cast hex-encodes any 16-byte binary and
+  # returns `{:ok, _}`, so a 16-character slug clears it, takes the UUID branch,
+  # and `Repo` raises against `Agent`'s strict `Platform.Types.UUIDv7` PK anyway.
+  # See `Platform.UUID`'s moduledoc.
+  #
+  # `slug` is a plain string column, so the fallback cannot raise whatever it is
+  # handed: `"system:auto"` simply misses and falls through to the raw-id arm.
+  defp fetch_agent_for_display(value) do
+    if Platform.UUID.valid?(value) do
+      Repo.get(Agent, value)
+    else
+      Repo.get_by(Agent, slug: value)
+    end
+  end
 
   defp normalize_string_keys(map) when is_map(map) do
     Map.new(map, fn

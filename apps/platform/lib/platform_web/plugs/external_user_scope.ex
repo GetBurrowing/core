@@ -166,12 +166,11 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
   defp format_ip(ip) when is_tuple(ip), do: ip |> :inet.ntoa() |> to_string()
   defp format_ip(ip), do: to_string(ip)
 
-  defp valid_uuid?(string) when is_binary(string) do
-    case Ecto.UUID.cast(string) do
-      {:ok, _} -> true
-      :error -> false
-    end
-  end
-
-  defp valid_uuid?(_), do: false
+  # Platform.UUID.valid?/1, NOT a bare Ecto.UUID.cast/1. resolve_space/2 above
+  # passes the ORIGINAL `slug` — a URL PATH SEGMENT — to `Chat.get_space/1`
+  # when this returns true. A bare cast hex-encodes any 16-byte binary and
+  # returns {:ok, _}, so a 16-character channel slug cleared this guard and
+  # then raised `Ecto.Query.CastError` inside `Repo` on a LIVE REQUEST PATH.
+  # That is the PR #613 failure. Do not "simplify" this back to a bare cast.
+  defp valid_uuid?(string), do: Platform.UUID.valid?(string)
 end

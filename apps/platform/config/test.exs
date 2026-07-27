@@ -229,7 +229,18 @@ config :platform,
        # dreaming loop persist as `memory_proposals` rows. Sweep hook runs
        # outside the write transaction; journal remains source of truth.
        # T5 still retires this module — the hook moves with it.
-       "3be90a9a48080f4836169d2b903d508e12359bfb437eb46ebffd9cfde9775b58"
+       #
+       # Bumped again by task 019fa129 stage 4 (Repo-lookup boundary sweep):
+       # `Platform.Org.Context.get_file_by_id/1` was a bare
+       # `Repo.get(WikiPage, id)` reachable from the memory MCP tools with a
+       # caller-supplied page id, so a non-UUID id raised
+       # `Ecto.Query.CastError` instead of returning nil. It is now guarded by
+       # `Platform.UUID.valid?/1`. One line, no behaviour change on the happy
+       # path, and it is exactly the class the three sha256 guards above were
+       # NOT written to catch. Bumping the constant is the protocol those
+       # guards document ("update this constant in the same commit"); T5 still
+       # retires the module.
+       "a14939dd869d01e432ce6546d84ceee445820124203b1a10ac0aaf84bcc42b41"
 
 # Stack v2 (task 019f487d, ADR 0045) — Platform.Tasks.Stacks.DepInference
 # resolves its LLM adapter from application env at call time. Tests

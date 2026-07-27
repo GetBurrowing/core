@@ -915,7 +915,11 @@ defmodule PlatformWeb.OrgMemoryLive do
         insert_page_segment("org", rest)
 
       [kind, id | [_ | _] = rest] when kind in ["project", "space"] ->
-        case Ecto.UUID.cast(id) do
+        # Platform.UUID.cast/1, NOT Ecto.UUID.cast/1. FABRICATED-VALUE site:
+        # nothing raises here — a bare cast simply accepts any 16-character
+        # LiveView param as a namespace uuid and rewrites the page key around
+        # it. Assert on the returned key, not on an exception.
+        case Platform.UUID.cast(id) do
           {:ok, _} -> insert_page_segment("#{kind}/#{id}", rest)
           :error -> file_key
         end

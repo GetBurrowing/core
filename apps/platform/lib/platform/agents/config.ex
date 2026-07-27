@@ -630,7 +630,12 @@ defmodule Platform.Agents.Config do
 
   defp fetch_agent(value) when is_binary(value) do
     cond do
-      match?({:ok, _}, Ecto.UUID.cast(value)) ->
+      # Platform.UUID.valid?/1, NOT a bare Ecto.UUID.cast/1. A 16-character
+      # agent slug is a 16-byte binary, which Ecto.UUID.cast/1 hex-encodes and
+      # accepts — so a bare cast sends `"higginshigginsxx"` down the UUID
+      # branch, where the strict UUIDv7 PK raises Ecto.Query.CastError. The
+      # length check keeps 16-char slugs on the slug branch where they belong.
+      Platform.UUID.valid?(value) ->
         case Repo.get(Agent, value) do
           %Agent{} = agent -> {:ok, agent}
           nil -> {:error, :not_found}

@@ -645,4 +645,15 @@ defmodule Platform.Memory.ProposalsTest do
     |> DateTime.add(-n * 60, :second)
     |> DateTime.truncate(:microsecond)
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  # The 16-character case is the load-bearing one: `Ecto.UUID.cast/1` accepts
+  # any 16-byte binary, so a test built from "higgins" alone is green against
+  # the bug these guards fix.
+  describe "UUID boundary: Proposals.get/1" do
+    test "returns nil for a malformed phx-value-id rather than raising" do
+      assert Proposals.get("higgins") == nil
+      assert Proposals.get("higginshigginsxx") == nil
+    end
+  end
 end

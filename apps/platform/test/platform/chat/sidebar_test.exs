@@ -346,4 +346,19 @@ defmodule Platform.Chat.SidebarTest do
       assert cco["some-section"] == ["other"]
     end
   end
+
+  # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
+  # The 16-character case is the load-bearing one: `Ecto.UUID.cast/1` accepts
+  # any 16-byte binary, so a test built from "higgins" alone is green against
+  # the bug these guards fix.
+  describe "UUID boundary: section updates" do
+    test "renaming a nonexistent 16-character section id reports :not_found" do
+      # `section_id` is a phx-value- param off the sidebar rename event.
+      admin = admin_user!()
+
+      assert {:error, :not_found} = Sidebar.rename_section(admin, "higginshigginsxx", "New name")
+      assert {:error, :not_found} = Sidebar.rename_section(admin, "higgins", "New name")
+      assert {:error, :not_found} = Sidebar.recolor_section(admin, "higginshigginsxx", "#fff")
+    end
+  end
 end

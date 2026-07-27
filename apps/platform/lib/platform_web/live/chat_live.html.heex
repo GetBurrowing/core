@@ -1818,14 +1818,13 @@
                  mobile Stage 2, Decision #6). Mirrors the desktop header pill
                  (the `hidden lg:flex` block just below) but uses the foundation
                  task's `:compact` size variant for the tight mobile bar. Only
-                 rendered for channels — `space_scope_atom/1` returns nil for
+                 rendered for channels — `@active_space_scope` is nil for
                  DMs/groups (no org-scope), so the pill is suppressed there. The
                  `.chat-header-scope-pill-mobile` wrapper enlarges the compact
                  pill's tap target to >=44x44px (app.css): the shared
                  `.scope-pill-hit-expand` overlay only clears the 24px WCAG floor
                  and would be clipped by this row's overflow-hidden. --%>
-            <% mobile_header_scope =
-              !@external? && PlatformWeb.ChatLive.space_scope_atom(@active_space) %>
+            <% mobile_header_scope = !@external? && @active_space_scope %>
             <span
               :if={mobile_header_scope}
               class="chat-header-scope-pill-mobile flex-shrink-0"
@@ -1856,8 +1855,7 @@
                  event with the channel's scope. Active state is implied
                  from `@scope_filter` so a clicked-again pill reads as the
                  currently-selected filter. --%>
-            <% header_scope =
-              !@external? && PlatformWeb.ChatLive.space_scope_atom(@active_space) %>
+            <% header_scope = !@external? && @active_space_scope %>
             <span :if={header_scope} class="chat-header-scope-pill">
               <.scope_pill
                 scope={header_scope}

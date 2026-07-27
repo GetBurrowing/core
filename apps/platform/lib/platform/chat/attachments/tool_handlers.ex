@@ -144,6 +144,17 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
   @spec finalize_pending(binary(), %{byte_size: non_neg_integer(), content_hash: String.t()}) ::
           {:ok, map()} | {:error, term()}
   def finalize_pending(attachment_id, %{byte_size: size, content_hash: hash}) do
+    if Platform.UUID.valid?(attachment_id) do
+      do_finalize_pending(attachment_id, size, hash)
+    else
+      # `attachment_id` is an MCP payload / upload-controller path value.
+      # Same not-found shape as an absent row; Platform.UUID.valid?/1 rather
+      # than a bare cast, which accepts any 16-byte binary.
+      {:error, :not_found}
+    end
+  end
+
+  defp do_finalize_pending(attachment_id, size, hash) do
     case Repo.get(Attachment, attachment_id) do
       nil ->
         {:error, :not_found}

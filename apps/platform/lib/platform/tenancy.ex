@@ -86,11 +86,24 @@ defmodule Platform.Tenancy do
 
   @doc "Fetch an org by id, raising on not found."
   @spec get_org!(binary()) :: Org.t() | no_return()
-  def get_org!(id), do: Repo.get!(Org, id)
+  def get_org!(id) do
+    # Bang twin of get_org/1: documented contract is `Ecto.NoResultsError`, so
+    # a malformed id raises THAT rather than `Ecto.Query.CastError`.
+    if Platform.UUID.valid?(id) do
+      Repo.get!(Org, id)
+    else
+      raise Ecto.NoResultsError, queryable: Org
+    end
+  end
 
   @doc "Fetch an org by id. Returns `nil` if not found."
   @spec get_org(binary()) :: Org.t() | nil
-  def get_org(id) when is_binary(id), do: Repo.get(Org, id)
+  def get_org(id) when is_binary(id) do
+    # Reached with caller-supplied org ids from lifecycle_actions.ex:165,
+    # recovery_live.ex and chat_live.ex. Malformed folds into the existing nil.
+    if Platform.UUID.valid?(id), do: Repo.get(Org, id), else: nil
+  end
+
   def get_org(_), do: nil
 
   @doc "Fetch an org by slug. Returns `nil` if not found."
@@ -127,10 +140,24 @@ defmodule Platform.Tenancy do
   the pending-deletion states.
 
   The root org can never be archived — `Lifecycle` refuses it with
-  `{:error, :not_deletable}` — so Fabrikam is always present. Because archived
-  tenants are always a subset of the seeded five, every slug returned here
-  has a static label/color entry in `@scope_labels`/`@scope_classes`, so the
-  scope rail's unknown-slug guard never fires.
+  `{:error, :not_deletable}` — so Fabrikam is always present.
+
+  > #### Returned slugs are NOT limited to the seeded five {: .warning}
+  >
+  > This returns EVERY non-archived org, including tenants created at
+  > runtime. `Org.changeset/2` accepts any slug matching
+  > `^[a-z][a-z0-9_-]*$` and the query above filters only on `archived_at`,
+  > so a returned slug may be arbitrary user input.
+  >
+  > Callers must therefore NOT assume a returned slug has a static entry in
+  > `@scope_labels`/`@scope_classes` (or in `ScopePill`'s `scope_label/1` /
+  > `slug/1`, which are non-total), and must NOT feed these slugs to
+  > `String.to_existing_atom/1` — it raises `ArgumentError` for any slug
+  > never compiled as an atom. Filter against the canonical allowlist
+  > (`Platform.Tasks.scope_keys/0`) comparing as strings instead; see
+  > `TasksLive.active_scope_keys/0`. An earlier version of this docstring
+  > asserted the opposite invariant and that false claim took `/tasks` down
+  > for every user in the deployment (task 019fa209).
 
   Contrast with `list_tenants/0`, which returns tenants only (no root) and
   every row regardless of archive state — background callers that must see
@@ -565,14 +592,12 @@ defmodule Platform.Tenancy do
 
   defp member_of_by_id?(_, _), do: false
 
-  defp uuid?(s) when is_binary(s) do
-    case Ecto.UUID.cast(s) do
-      {:ok, _} -> true
-      :error -> false
-    end
-  end
-
-  defp uuid?(_), do: false
+  # Platform.UUID.valid?/1, NOT a bare Ecto.UUID.cast/1. `member_of?/2`
+  # resolves an org SLUG or a uuid, and its uuid branch pins the ORIGINAL
+  # value (`where: o.id == ^org_id`) against Org's strict UUIDv7 key. A bare
+  # cast accepts any 16-byte binary, so a 16-character org slug took the uuid
+  # branch and raised inside Repo — RAISE-exposed despite looking guarded.
+  defp uuid?(s), do: Platform.UUID.valid?(s)
 
   @doc """
   Classify an org as `:root` or `:tenant` based on `parent_org_id`.

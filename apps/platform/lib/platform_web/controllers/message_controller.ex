@@ -112,7 +112,10 @@ defmodule PlatformWeb.MessageController do
     do: {:error, :unprocessable_entity, "validation_failed", %{errors: errors}}
 
   defp fetch_message(id) when is_binary(id) do
-    case Repo.get(Message, id) do
+    # `id` is a URL path segment. Malformed folds into the existing 404.
+    message = if Platform.UUID.valid?(id), do: Repo.get(Message, id)
+
+    case message do
       nil -> {:error, :not_found, "not_found", %{}}
       %Message{deleted_at: %DateTime{}} -> {:error, :not_found, "not_found", %{}}
       message -> {:ok, message}

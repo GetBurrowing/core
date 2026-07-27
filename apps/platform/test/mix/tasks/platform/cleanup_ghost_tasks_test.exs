@@ -9,7 +9,15 @@ defmodule Mix.Tasks.Platform.CleanupGhostTasksTest do
   import ExUnit.CaptureIO
 
   alias Mix.Tasks.Platform.CleanupGhostTasks
-  alias Platform.Orchestration.{RuntimeSupervision, TaskRouterSupervisor, TaskRouterWatcher}
+
+  alias Platform.Orchestration.{
+    ExecutionLease,
+    ExecutionSpace,
+    RuntimeSupervision,
+    TaskRouterSupervisor,
+    TaskRouterWatcher
+  }
+
   alias Platform.Tasks
 
   setup do
@@ -64,6 +72,12 @@ defmodule Mix.Tasks.Platform.CleanupGhostTasksTest do
   # to use this test's sandbox connection so its `init/1` and
   # `terminate/2` Repo calls don't crash the pool when we tear it down
   # mid-test via `stop_assignment`.
+  #
+  # Returns the router pid so callers can `Process.monitor/1` it and pin
+  # actual process death rather than Registry bookkeeping — the Registry
+  # unregisters off its own independent monitor, so a Registry lookup can
+  # go empty for a process that is merely *being* killed, and can still
+  # hold an entry for one that already died.
   defp start_router(started_routers, task_id, runtime_id) do
     {:ok, pid} =
       TaskRouterSupervisor.start_assignment(task_id, %{type: :federated, id: runtime_id})
@@ -73,7 +87,7 @@ defmodule Mix.Tasks.Platform.CleanupGhostTasksTest do
 
     # Give init time to hydrate from the DB before any teardown call.
     Process.sleep(50)
-    :ok
+    pid
   end
 
   describe "cleanup_one/1" do
@@ -120,10 +134,10 @@ defmodule Mix.Tasks.Platform.CleanupGhostTasksTest do
 
       runtime_id = "runtime-cleanup-#{System.unique_integer([:positive])}"
 
-      start_router(started_routers, task.id, runtime_id)
+      router_pid = start_router(started_routers, task.id, runtime_id)
       assert TaskRouterWatcher.router_running?(task.id) == true
 
-      {:ok, _event} =
+      {:ok, event} =
         RuntimeSupervision.record_event(%{
           "task_id" => task.id,
           "phase" => "execution",
@@ -133,7 +147,28 @@ defmodule Mix.Tasks.Platform.CleanupGhostTasksTest do
 
       assert RuntimeSupervision.current_lease_for_task_runtime(task.id, runtime_id) != nil
 
-      capture_io(fn -> assert CleanupGhostTasks.cleanup_one(task.id) == :cleaned end)
+      # --- pre-state, captured so every post-assertion below is a *delta* ---
+      #
+      # Every assertion this test used to make is also satisfied by the
+      # cleanup not running at all: `router_running?/1` is a bare
+      # `Registry.lookup` that returns false for a router that never
+      # existed, and `current_lease_for_task_runtime/2` returns nil both
+      # for a lease that was abandoned and for one that was never created
+      # (or that merely aged out via `expire_stale_leases/2`). The controls
+      # below are the ones that can only pass if the work actually happened.
+      lease_id = event.lease_id
+      refute is_nil(lease_id)
+
+      lease_before = Repo.get!(ExecutionLease, lease_id)
+      assert lease_before.status == "active"
+      assert DateTime.compare(lease_before.expires_at, DateTime.utc_now()) == :gt
+
+      router_ref = Process.monitor(router_pid)
+      before_cleanup = DateTime.utc_now()
+
+      output = capture_io(fn -> assert CleanupGhostTasks.cleanup_one(task.id) == :cleaned end)
+
+      after_cleanup = DateTime.utc_now()
 
       assert TaskRouterWatcher.router_running?(task.id) == false
       assert RuntimeSupervision.current_lease_for_task_runtime(task.id, runtime_id) == nil
@@ -141,6 +176,52 @@ defmodule Mix.Tasks.Platform.CleanupGhostTasksTest do
       reloaded = Tasks.get_task_record(task.id)
       assert reloaded.status == "cancelled"
       refute is_nil(reloaded.deleted_at)
+
+      # --- control 1: the lease ROW was abandoned, not merely made invisible ---
+      #
+      # `abandon_current_lease_for_task/2` (runtime_supervision.ex) sets
+      # exactly this triple: status "abandoned", block_reason nil, and
+      # expires_at stamped to the `utc_now()` of the abandoning call. A
+      # lease that expired on its own would read status "expired" and would
+      # still carry its original far-future TTL as expires_at, so pinning
+      # the status string AND the expiry window discriminates "cleanup
+      # abandoned it" from "nothing happened".
+      lease_after = Repo.get!(ExecutionLease, lease_id)
+      assert lease_after.status == "abandoned"
+      assert is_nil(lease_after.block_reason)
+      assert DateTime.compare(lease_after.expires_at, lease_before.expires_at) == :lt
+      assert DateTime.compare(lease_after.expires_at, before_cleanup) != :lt
+      assert DateTime.compare(lease_after.expires_at, after_cleanup) != :gt
+
+      # --- control 2: the router process actually DIED ---
+      #
+      # Registry absence is a proxy; process death is the thing.
+      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, _reason}, 2_000
+
+      # --- control 3: `terminate/2` ran on the way out ---
+      #
+      # `ExecutionSpace.archive/1` is reachable only from `TaskRouter.terminate/2`.
+      # Before task 019fa06a stage 1 the router was killed by an untrapped
+      # `:shutdown` signal and `terminate/2` never ran at all, so this is the
+      # assertion that keeps the teardown path honest (it also covers
+      # `clear_liveness/1` and the deploy-lease revoke, which share the callback).
+      assert %{archived_at: archived_at} = ExecutionSpace.find_by_task_id(task.id)
+      refute is_nil(archived_at)
+
+      # --- control 4: cleanup_one/1 narrated the work it did ---
+      #
+      # The sibling tests all assert on `capture_io` output; this test alone
+      # discarded it, leaving `sweep_registry/2`'s log branch unobserved.
+      # Note which branch we pin: `transition_task_status/2` runs the
+      # teardown synchronously (tasks.ex `maybe_dispatch_teardown/2` stops the
+      # router and abandons the lease), so by the time `sweep_registry/2` runs
+      # there is legitimately nothing left — "nothing to clean" here means
+      # "both effects had already landed". If the cancel ever silently
+      # degrades to a no-op, the sweep finds live state and this flips to
+      # "router stopped, 1 lease(s) abandoned", failing loudly.
+      assert output =~ "→ cancelling"
+      assert output =~ "stamped deleted_at="
+      assert output =~ "swept: nothing to clean"
     end
 
     test "already cancelled + soft-deleted: returns :already_cleaned without re-mutating",
