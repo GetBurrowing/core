@@ -515,11 +515,34 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # the reason in the commit message. That makes growth a deliberate, reviewed
   # act rather than a silent one. Do NOT delete the guard to make a diff pass.
   #
-  # KNOWN PENDING EDIT: `active_scope_keys/0` at `tasks_live.ex:5431` uses
-  # `String.to_existing_atom` and is filed to Dalton as task `019fa209-12b0`.
-  # Fixing it will move this number — that is expected, and the fix carries the
-  # new pin.
-  @shell_line_count 5_847
+  # RE-PINNED 5,847 -> 5,883 at the merge of main `791ee28e` into the rollup.
+  # The KNOWN PENDING EDIT recorded below has now landed: Dalton's `ef499c03`
+  # ("Bound active_scope_keys/0 to the canonical scope allowlist", task
+  # `019fa209`) added 36 lines to the shell on main. The pin moved exactly as
+  # that note predicted it would.
+  #
+  # ARITHMETIC, so the number is checkable rather than merely asserted:
+  #
+  #     merge base `bbf4c0c2`  = 5,887
+  #     main       `791ee28e`  = 5,923   (+36, ef499c03)
+  #     rollup     `492017e7`  = 5,847   (-40, member 5's hoist — see above)
+  #     merged                 = 5,883   = 5,887 - 40 + 36
+  #
+  # The two edits are in different regions of the file and the merge applied
+  # both, which is what the identity above demonstrates: if either side's
+  # change had been dropped the total would be 5,847 or 5,923, not 5,883.
+  #
+  # The guard's promise is STILL untouched, and the check is unchanged from
+  # the previous re-pin: task `019f9b29-9c47` (ADR-0046 stack member 8) added
+  # ZERO lines to `tasks_live.ex`. Member 8's six commits touch only
+  # `tasks_live.html.heex`, `platform_web.ex`, and test files — verified with
+  # `git show --stat` over each. Both line-count moves this file has seen came
+  # from OUTSIDE this task: a sibling member shrank it, then main grew it.
+  #
+  # Strictness is deliberately still `==`. Softening to `<=` would let the
+  # shell absorb the very accretion this guard exists to make visible; a
+  # re-pin that has to be justified in a commit message is the whole point.
+  @shell_line_count 5_883
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 
