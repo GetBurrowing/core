@@ -545,7 +545,8 @@ defmodule Platform.Tasks do
   # `case` over `{:ok, :dispatched}` / `{:ok, :unfilled}` /
   # `{:ok, :unknown_responsibility}` here — if every consumer derives the
   # mapping, one of them eventually collapses `not_applicable` into `failed`
-  # and re-opens the bug ADR-0046:83 closes.
+  # and re-opens the bug closed by
+  # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`.
 
   @doc """
   Record the outcome of a planning sub-step against a task.
@@ -646,7 +647,8 @@ defmodule Platform.Tasks do
 
   Only `"failed"` is reported. `"not_applicable"` is the progressive-
   enhancement path — nobody holds the responsibility — and must never be
-  surfaced as a failure (ADR-0046:83).
+  surfaced as a failure
+  (`0046-design-and-architecture-phases-in-planning.md § Per-step outcome`).
   """
   @spec failed_planning_steps(Task.t()) :: [
           %{step: String.t(), detail: String.t() | nil, recorded_at: String.t() | nil}
@@ -1768,7 +1770,8 @@ defmodule Platform.Tasks do
             # a nicety: these two branches execute the BYTE-IDENTICAL tail
             # that ran before the gate existed, in the same order. A repo
             # with no architect assigned behaves exactly as it does today
-            # (ADR-0044:27-28, ADR-0046 decision 3). `:failed` FALLS OPEN
+            # (`0044-architect-responsibility.md § Decision`, ADR-0046
+            # decision 3). `:failed` FALLS OPEN
             # (ADR-0046 decision 7) — the gate never opens and nothing is
             # blocked. Its visibility is already solved and must not be
             # re-solved here: `record_architecture_planning_step/2` above
@@ -1906,7 +1909,8 @@ defmodule Platform.Tasks do
   #
   # `:unmapped` is deliberately NOT `:failed`: the caller falls open on
   # both, but only `:failed` is an architect that was asked and did not
-  # answer. Collapsing them is the conflation ADR-0046:83 forbids, and
+  # answer. Collapsing them is the conflation forbidden by
+  # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`, and
   # `record_architecture_planning_step/2` already refuses to make it.
   defp architecture_fire_outcome(fire_result) do
     Platform.Responsibilities.outcome(fire_result)
@@ -2026,7 +2030,8 @@ defmodule Platform.Tasks do
   # which is distinguishable from all three of complete / not_applicable /
   # failed. It is specifically NOT recorded as `"failed"` — that silent
   # mis-map is the exact thing member 1's missing catch-all exists to
-  # prevent (ADR-0046:83).
+  # prevent
+  # (`0046-design-and-architecture-phases-in-planning.md § Per-step outcome`).
   defp record_architecture_planning_step(task_id, fire_result) do
     record_planning_step(task_id, :architecture, fire_result)
   rescue
@@ -2549,7 +2554,9 @@ defmodule Platform.Tasks do
     * `:expired` / `:dispatch_failed` — identical to `:pass` (FALL OPEN,
       ADR-0046 decision 7), PLUS `record_planning_step(task, :architecture,
       {:error, reason})`. Falling open without recording is the exact
-      conflation ADR-0046:83 forbids, so the two live in one code path and
+      conflation forbidden by
+      `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`,
+      so the two live in one code path and
       are asserted in one test.
     * `:reject` — write the verdict, return the cursor, and hand off to
       `Platform.Tasks.ArchitectureRejection.handle/1` (ADR-0046 member 6).

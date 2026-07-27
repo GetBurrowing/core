@@ -343,7 +343,8 @@ defmodule Platform.Tasks.AutoMergerTest do
                AutoMerger.execute_merge(task, "https://github.com/test/gate-stack", 42, "squash")
     end
 
-    test "not_applicable is NOT a failed gate — delegates to the shell-out (ADR-0046:83)" do
+    # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`
+    test "not_applicable is NOT a failed gate — delegates to the shell-out" do
       task =
         task_with_planning_outcomes!("Nobody holds it", %{
           "architecture" => %{

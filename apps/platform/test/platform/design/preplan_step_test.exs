@@ -503,7 +503,8 @@ defmodule Platform.Design.PreplanStepTest do
       refute Map.has_key?(reload(succeeding).planning_step_outcomes || %{}, "design")
       assert cursor(succeeding) == "designing"
 
-      # ADR-0046:80 — an open step must not be reportable as a gate failure,
+      # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`
+      # — an open step must not be reportable as a gate failure,
       # and must not be reportable as a success either.
       refute Tasks.planning_gate_failed?(reload(succeeding))
       assert PreplanStep.persisted_outcome(reload(succeeding)) == nil

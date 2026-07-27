@@ -241,7 +241,8 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
     end
 
     # `not_applicable` is the progressive-enhancement path: nobody holds the
-    # responsibility. ADR-0046:83 is that it must never collapse into
+    # responsibility. The rule in
+    # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome` is that it must never collapse into
     # `failed`, and the presentation half of that promise is that it renders
     # NOTHING. Paired with the `failed` test above, this is the guard that a
     # constant "render a chip for any recorded outcome" implementation fails.
@@ -593,7 +594,8 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
              )
 
       # Warning, not error: the two must not collapse into one treatment any
-      # more than `not_applicable` and `failed` may (ADR-0046:83).
+      # more than `not_applicable` and `failed` may
+      # (`0046-design-and-architecture-phases-in-planning.md § Per-step outcome`).
       assert has_element?(
                view,
                "#stack-member-#{contradicted.id} [data-role='#{@desktop_member_role}'] .text-warning"

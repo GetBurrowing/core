@@ -18,8 +18,8 @@ defmodule Platform.Repo.Migrations.AddPlanningStepToTasks do
   #         "detail" => <string> | nil
   #       }}
   #
-  # The three outcomes must never collapse into two: ADR-0046:83 is the
-  # bug where a dispatch failure and a genuinely-unfilled responsibility
+  # The three outcomes must never collapse into two. `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`
+  # names the bug: a dispatch failure and a genuinely-unfilled responsibility
   # both normalised to `:ok`, so a gate that never ran looked identical
   # to a gate that ran and passed. `not_applicable` is the
   # progressive-enhancement path (nobody holds the role — fine);

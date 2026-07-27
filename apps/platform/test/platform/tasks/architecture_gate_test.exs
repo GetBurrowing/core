@@ -83,6 +83,23 @@ defmodule Platform.Tasks.ArchitectureGateTest do
     end)
   end
 
+  # Repo root from this file: test/platform/tasks -> test/platform -> test
+  # -> apps/platform -> apps -> <root>.
+  defp repo_root, do: Path.expand("../../../../..", __DIR__)
+
+  # The lines under `heading`, up to the next heading of any level.
+  defp adr_section(body, heading) do
+    heading_line? = &Regex.match?(~r/^#+\s+/, &1)
+    heading_text = &(Regex.replace(~r/^#+\s+/, &1, "") |> String.trim())
+
+    body
+    |> String.split("\n")
+    |> Enum.drop_while(&(not (heading_line?.(&1) and heading_text.(&1) == heading)))
+    |> Enum.drop(1)
+    |> Enum.take_while(&(not heading_line?.(&1)))
+    |> Enum.join("\n")
+  end
+
   describe "Plan.architecture_verdict_changeset/2 — the narrow write surface" do
     # GUARD, WITH ITS PAIRED POSITIVE CONTROL. The first assertion alone
     # would pass vacuously against a changeset that casts nothing at
@@ -165,7 +182,9 @@ defmodule Platform.Tasks.ArchitectureGateTest do
       assert Enum.any?(msgs, &(&1 =~ "must use string keys"))
     end
 
-    # GUARD — ADR-0046:95's closed rejection vocabulary asserted at the
+    # GUARD — the closed rejection vocabulary of
+    # `0046-design-and-architecture-phases-in-planning.md § Architect prompt contract`,
+    # asserted at the
     # schema layer. "Naming" is the canonical thing the ADR says an
     # architect must NOT reject for, and here it has no representable
     # value. Stage 4 asserts the same property again at the MCP tool
@@ -199,7 +218,9 @@ defmodule Platform.Tasks.ArchitectureGateTest do
       refute naming.valid?
       assert %{architecture_verdict: [msg]} = errors_on(naming)
       assert msg =~ ~s(invalid constraint "naming")
-      assert msg =~ "ADR-0046:95"
+
+      assert msg =~
+               "0046-design-and-architecture-phases-in-planning.md § Architect prompt contract"
 
       boundary =
         Plan.architecture_verdict_changeset(plan, %{
@@ -207,6 +228,100 @@ defmodule Platform.Tasks.ArchitectureGateTest do
         })
 
       assert boundary.valid?
+    end
+
+    # GUARD — THE CITATION RESOLVES. The assertion above only proves the
+    # error message contains a literal; on its own that is circular,
+    # because the string in the test and the string in `Plan` can agree
+    # with each other while both point nowhere. This test parses the
+    # citation OUT of the message the validator actually produced and
+    # resolves it against the ADR on disk: the file must exist, the
+    # cited heading must exist in it, and the section under that heading
+    # must still state the rule the message claims it states.
+    #
+    # That is what makes it non-circular — it fails when the ADR moves,
+    # not when the two copies of the string disagree. This is the whole
+    # reason the citation form is `<file>.md § <heading>` and not
+    # `ADR-NNNN:LINE`: a line number records no expectation, so no test
+    # can tell whether it still resolves. Line 95 of ADR-0046 — cited by
+    # nine sites — pointed at a closing code fence for weeks and nothing
+    # could see it.
+    #
+    # VACUITY CONTROL RUN — recorded in the commit for `019fa2aa stage
+    # 1`: (a) reverting ONLY the citation in `Plan`'s error message
+    # fails this test on the "no `§` citation" assertion; (b) renaming
+    # `### Architect prompt contract` in the ADR fails it on the
+    # heading-exists assertion while every other test in this file still
+    # passes; (c) deleting the rule sentence from that section fails it
+    # on the rule assertion. All three halves bite.
+    test "the citation in the invalid-constraint error resolves to a real ADR section",
+         %{plan: plan} do
+      invalid = %{
+        pending_verdict()
+        | "state" => "rejected",
+          "findings" => [
+            %{
+              "stage_id" => nil,
+              "stage_name" => "Add the gate",
+              "constraint" => "naming",
+              "detail" => "Puts a Tasks concern inside Platform.Design."
+            }
+          ]
+      }
+
+      changeset = Plan.architecture_verdict_changeset(plan, %{architecture_verdict: invalid})
+      assert %{architecture_verdict: [msg]} = errors_on(changeset)
+
+      # The citation is read from the message under test, never restated.
+      # Bound first and asserted separately so the custom message below
+      # actually renders — `assert [a, b, c] = expr` raises MatchError and
+      # discards it.
+      citation = Regex.run(~r/([0-9]{4}-[a-z0-9-]+\.md) § ([^—\n"]+?)\s*(?:—|$)/, msg)
+
+      assert citation,
+             """
+             The invalid-constraint error carries no `<file>.md § <heading>` \
+             citation. An agent reading this message out of the MCP tool \
+             catalogue has no way to reach the rule it is being held to.
+
+             Message was: #{inspect(msg)}
+             """
+
+      [_full, adr_file, heading] = citation
+
+      adr_path = Path.join([repo_root(), "docs", "decisions", adr_file])
+
+      assert File.exists?(adr_path),
+             "cited ADR #{adr_file} does not exist at docs/decisions/#{adr_file} — " <>
+               "update the citation or restore the file; do not add an exclusion."
+
+      body = File.read!(adr_path)
+
+      headings =
+        Regex.scan(~r/^#+\s+(.+?)\s*$/m, body, capture: :all_but_first)
+        |> List.flatten()
+
+      assert heading in headings,
+             """
+             #{adr_file} has no heading "#{heading}".
+
+             Headings that DO exist: #{Enum.join(headings, ", ")}
+
+             Update the citation or restore the heading; do not add an exclusion.
+             """
+
+      # …and the section under it still says what the message claims.
+      section = adr_section(body, heading)
+
+      assert section =~ ~r/not for taste, naming/i,
+             """
+             #{adr_file} § #{heading} no longer states the rule the \
+             invalid-constraint error attributes to it (that the architect \
+             rejects for architecture, not for taste, naming or style).
+
+             Section body was:
+             #{section}
+             """
     end
 
     # GUARD — an objection with no substance is not an objection. A

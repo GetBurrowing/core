@@ -160,7 +160,9 @@ defmodule Platform.Tasks.Task do
     #     dispatch failed.
     #
     # `not_applicable` and `failed` MUST NEVER COLLAPSE INTO ONE VALUE.
-    # That collapse is ADR-0046:83: a gate that never ran became
+    # That collapse is what is forbidden by
+    # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`:
+    # a gate that never ran became
     # indistinguishable from a gate that ran and passed. Anything that
     # maps a fire result onto this table must go through
     # `Platform.Responsibilities.outcome/1` rather than re-deriving it.

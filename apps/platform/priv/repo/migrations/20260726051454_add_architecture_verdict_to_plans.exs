@@ -12,8 +12,9 @@ defmodule Platform.Repo.Migrations.AddArchitectureVerdictToPlans do
   # that ever existed). `architecture_verdict` is a per-plan-version
   # record whose ABSENCE is meaningful ("the gate never opened for this
   # version"). A `%{}` default would make "never opened" and "opened and
-  # empty" the same value — the ADR-0046:83 conflation in miniature,
-  # where a gate that never ran became indistinguishable from a gate
+  # empty" the same value — the conflation forbidden by
+  # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`, in
+  # miniature: a gate that never ran becomes indistinguishable from a gate
   # that ran and passed.
   #
   # NO INDEX — every read is by plan primary key or via

@@ -50,7 +50,8 @@ defmodule Platform.Tasks.AutoMerger do
 
   `"not_applicable"` never trips this guard. Nobody holding the
   responsibility is progressive enhancement, not a missing gate
-  (ADR-0046:83); the predicate is `Tasks.failed_planning_steps/1`, which
+  (`0046-design-and-architecture-phases-in-planning.md § Per-step outcome`);
+  the predicate is `Tasks.failed_planning_steps/1`, which
   reports `"failed"` only.
   """
 

@@ -8,7 +8,9 @@ defmodule Platform.Federation.PlanArchitectureVerdictToolTest do
   Stages 1 and 3 built the state machine. This stage builds the two ways
   a verdict gets INTO it. The load-bearing claim here is not "the tool
   works" — it is that **the contract is enforced at the boundary rather
-  than requested in the prompt.** ADR-0046:95 says the architect rejects
+  than requested in the prompt.**
+  `0046-design-and-architecture-phases-in-planning.md § Architect prompt contract`
+  says the architect rejects
   for architecture and explicitly not for taste, naming or style. As
   prose that is unenforceable: a model told not to reject on style
   produces a differently-worded style rejection. A CLOSED `constraint`

@@ -19,7 +19,8 @@ defmodule Platform.Tasks.Plan do
       `Platform.Responsibilities.outcome/1`'s range).
       `plans.architecture_verdict["state"]` answers *what did the
       architect say*. One slot for both puts a failed dispatch and a
-      reject verdict in the same value, which is exactly the ADR-0046:83
+      reject verdict in the same value, which is exactly the
+      `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`
       conflation this stack exists to undo.
 
   REJECTED ALTERNATIVE — a separate `plan_reviews` table. It would be
@@ -50,7 +51,8 @@ defmodule Platform.Tasks.Plan do
 
   ## The closed constraint vocabulary is the prompt contract made enforceable
 
-  ADR-0046:95 says the architect rejects only for module boundaries,
+  `0046-design-and-architecture-phases-in-planning.md § Architect prompt contract`
+  says the architect rejects only for module boundaries,
   data model, cross-context coupling and duplicated logic, and
   explicitly NOT for taste, naming or style. "Do not reject for style"
   is unenforceable as prose. A closed four-value enum means a style
@@ -76,7 +78,8 @@ defmodule Platform.Tasks.Plan do
   A value that restates the state — an early draft of this field emitted
   `"architect"` for pass/reject and `"dispatch"` for `dispatch_failed` —
   is REFUSED here, because two fields answering one question is exactly
-  the ADR-0046:83 conflation this column was split to undo. The
+  the `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`
+  conflation this column was split to undo. The
   vocabulary is validated (see `architecture_verdict_changeset/2`) and
   `architecture_verdict_source_vocabulary_test.exs` asserts that the set
   named above equals the set the writers can actually emit, in both
@@ -98,7 +101,9 @@ defmodule Platform.Tasks.Plan do
   # one-shot against them.
   @architecture_gate_states ~w(pending passed rejected expired dispatch_failed human_override)
 
-  # ADR-0046:95's closed rejection vocabulary. Public accessor because a
+  # The closed rejection vocabulary of
+  # `0046-design-and-architecture-phases-in-planning.md § Architect prompt contract`.
+  # Public accessor because a
   # guard that hardcodes its own copy of a list is how the class comes
   # back (member 4's rule); stage 4's tool boundary reads this.
   @architecture_constraints ~w(module_boundary data_model cross_context_coupling duplicated_logic)
@@ -154,7 +159,8 @@ defmodule Platform.Tasks.Plan do
 
   @doc """
   The closed set of grounds an architect may reject a plan on
-  (ADR-0046:95). Style, naming and taste are absent BY CONSTRUCTION.
+  (`0046-design-and-architecture-phases-in-planning.md § Architect prompt contract`).
+  Style, naming and taste are absent BY CONSTRUCTION.
   """
   def architecture_constraints, do: @architecture_constraints
 
@@ -339,8 +345,9 @@ defmodule Platform.Tasks.Plan do
           acc,
           :architecture_verdict,
           "finding has invalid constraint #{inspect(constraint)} " <>
-            "(allowed: #{inspect(@architecture_constraints)}). ADR-0046:95 — the architect " <>
-            "rejects for architecture, not for style, naming or taste."
+            "(allowed: #{inspect(@architecture_constraints)}). " <>
+            "0046-design-and-architecture-phases-in-planning.md § Architect prompt contract" <>
+            " — the architect rejects for architecture, not for style, naming or taste."
         )
       end
     end)

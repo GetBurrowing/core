@@ -2406,7 +2406,8 @@ defmodule Platform.Tasks.StackDeployer do
   # ONLY `"failed"` renders. `"not_applicable"` is the progressive-
   # enhancement path (nobody holds the responsibility) and must never be
   # conflated with a gate that was expected to run and didn't
-  # (ADR-0046:83). The distinction is not re-derived from
+  # (`0046-design-and-architecture-phases-in-planning.md § Per-step outcome`).
+  # The distinction is not re-derived from
   # `planning_step_outcomes` here — `Tasks.failed_planning_steps/1` is
   # the single definition, so this renderer cannot drift from the
   # auto-merge guard in `AutoMerger.execute_merge/4`.

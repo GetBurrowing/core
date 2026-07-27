@@ -93,6 +93,73 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
     task
   end
 
+  # ── ADR fixture directory ─────────────────────────────────────────────────
+
+  # A seven-file ADR corpus this test owns outright, so the index's
+  # totals are constants of the TEST rather than a snapshot of
+  # `docs/decisions/`. Seven and five never move when ADR-0047 lands.
+  @adr_fixture_files [
+    {"0001-fixture-repository-shape.md", "Fixture Repository Shape"},
+    {"0002-fixture-context-boundaries.md", "Fixture Context Boundaries"},
+    {"0003-fixture-attention-routing.md", "Fixture Attention Routing"},
+    {"0004-fixture-canvas-surfaces.md", "Fixture Canvas Surfaces"},
+    {"0005-fixture-org-memory.md", "Fixture Org Memory"},
+    {"0006-fixture-planning-phases.md", "Fixture Planning Phases"},
+    {"0007-fixture-stack-rollups.md", "Fixture Stack Rollups"}
+  ]
+
+  # `ContextProviders.adr_dir/0` consults `:adr_dir` BEFORE the
+  # `__ENV__.file` repo-root walk and takes no fallback when the
+  # override is set, so the index below is built from these files and
+  # nothing else.
+  #
+  # The suffix is unique per call because two worktrees of this repo
+  # share `System.tmp_dir!/0` and sibling agents run this suite
+  # concurrently — a fixed path is the collision PR #576 spent a round
+  # on. The files carry real `# ADR NNNN — Title` and `**Status:**`
+  # front matter so `format_adr_entry/1` renders parsed values instead
+  # of "(title not recorded)"; a fixture of empty files would let the
+  # entry assertions pass against unparsed placeholders.
+  defp write_adr_fixture!(files) do
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "adr-index-fixture-#{:os.getpid()}-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(dir)
+
+    Enum.each(files, fn {file, title} ->
+      number = String.slice(file, 0, 4)
+
+      File.write!(Path.join(dir, file), """
+      # ADR #{number} — #{title}
+
+      **Status:** Accepted
+
+      ## Context
+
+      Fixture body for #{file}.
+      """)
+    end)
+
+    dir
+  end
+
+  defp put_adr_fixture!(files, limit) do
+    dir = write_adr_fixture!(files)
+    Application.put_env(:platform, :adr_dir, dir)
+    Application.put_env(:platform, :adr_index_limit, limit)
+
+    on_exit(fn ->
+      Application.delete_env(:platform, :adr_dir)
+      Application.delete_env(:platform, :adr_index_limit)
+      File.rm_rf!(dir)
+    end)
+
+    dir
+  end
+
   # ── register/0 shape guard ────────────────────────────────────────────────
 
   describe "register/0" do
@@ -587,30 +654,61 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
 
     test "a truncated index says so and names what it dropped", %{plan: plan} do
       # Stage 4's rule, applied here: a bound is only honest if the
-      # rendered block admits to it. "All 50 ADRs" and "showing 5 of 50"
+      # rendered block admits to it. "All 7 ADRs" and "showing 5 of 7"
       # are different claims and the model cannot tell them apart from
       # the list alone.
       #
-      # THE TOTAL TRACKS THE DIRECTORY. `total` in
-      # `architecture_review_plan.ex:971` is `length(Path.wildcard(...))` over
-      # `docs/decisions/*.md`, so EVERY new ADR moves this number and fails this
-      # assertion. Bumped 49 -> 50 when ADR-0046 itself landed in the rollup
-      # (branch `docs/adr-0046-design-arch-phases`), which is the file the whole
-      # stack's citations point at. The bound and the admission are what this
-      # test is for; the total is incidental to it and needs re-pinning on each
-      # new ADR.
-      Application.put_env(:platform, :adr_index_limit, 5)
-      on_exit(fn -> Application.delete_env(:platform, :adr_index_limit) end)
+      # THE TOTAL IS TEST-OWNED. This assertion used to read "of 50
+      # ADRs" — `length(Path.wildcard("docs/decisions/*.md"))` copied
+      # into the test — so every new ADR broke it and the only repair
+      # was to re-pin the number. Recomputing it here from that same
+      # wildcard would be strictly worse: the expectation would be
+      # derived from the expression under test and would agree with any
+      # total the code produced, including a wrong one. The directory
+      # below is written by this test, so 7 and 5 move only when this
+      # test moves.
+      put_adr_fixture!(@adr_fixture_files, 5)
 
       rendered =
         %{plan: plan}
         |> ArchitectureReviewPlan.gather_context()
         |> ArchitectureReviewPlan.render_instruction()
 
-      assert rendered =~ "Showing the 5 highest-numbered of 50 ADRs"
-      assert rendered =~ "older ADR(s) omitted"
-      assert rendered =~ "0001-repository-shape-and-boundary.md"
-      refute rendered =~ "0001-repository-shape-and-boundary.md — Repository Shape"
+      assert rendered =~ "Showing the 5 highest-numbered of 7 ADRs"
+      assert rendered =~ "2 older ADR(s) omitted"
+
+      # The two lowest-numbered files are named in the omission list...
+      assert rendered =~ "0001-fixture-repository-shape.md"
+      assert rendered =~ "0002-fixture-context-boundaries.md"
+
+      # ...as filenames only. A dropped ADR contributes no entry line, so
+      # its title never renders — which is what stops the model reading
+      # the omission list as part of the index.
+      refute rendered =~ "Fixture Repository Shape"
+      refute rendered =~ "Fixture Context Boundaries"
+
+      # The kept files DO render as parsed entries. Without this, an
+      # index that dropped everything and reported the same header
+      # would satisfy every assertion above.
+      assert rendered =~ "0007-fixture-stack-rollups.md — Fixture Stack Rollups [Accepted]"
+
+      assert rendered =~
+               "0003-fixture-attention-routing.md — Fixture Attention Routing [Accepted]"
+    end
+
+    test "the untruncated header counts the real `docs/decisions/`", %{plan: plan} do
+      # No env overrides — this is the production walk against the real
+      # repo, and it is the only assertion left that exercises it. The
+      # count is deliberately unpinned: pinning it is the defect this
+      # stage removed. What can still fail is the walk itself. Point
+      # `:adr_dir` at an empty directory and the rendered block becomes
+      # "(ADR index unavailable — ...)", which this regex does not match.
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      assert rendered =~ ~r/All \d+ ADRs in `docs\/decisions\/`\./
     end
 
     test "an unavailable index renders an instruction, not silence", %{plan: plan} do
@@ -930,7 +1028,9 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
     end
 
     test "falling open records the architecture planning step as failed", ctx do
-      # ADR-0046:83's conflation in miniature: "the plan proceeded" and
+      # The conflation forbidden by
+      # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`,
+      # in miniature: "the plan proceeded" and
       # "the architect answered" must stay distinguishable. The recording
       # lives inside `resolve_architecture_gate/3`, so this asserts the
       # external path actually routes through it rather than writing its

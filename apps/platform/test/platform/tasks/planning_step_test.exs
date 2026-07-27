@@ -47,7 +47,8 @@ defmodule Platform.Tasks.PlanningStepTest do
   end
 
   describe "record_planning_step/3 — the ADR-0046 outcome table" do
-    # GUARD. The three-value table from ADR-0046:77-83, exercised end to
+    # GUARD. The three-value table from
+    # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`, exercised end to
     # end through the JSONB column rather than against the mapping
     # function in isolation: a writer that dropped the value on the floor
     # between `outcome/1` and the changeset would still satisfy a unit
@@ -105,7 +106,8 @@ defmodule Platform.Tasks.PlanningStepTest do
     end
 
     # GUARD (conflation) — written as a DIRECT INEQUALITY, not as two
-    # separate equality assertions. ADR-0046:83 is precisely that
+    # separate equality assertions. The rule in
+    # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome` is precisely that
     # `not_applicable` (nobody holds the responsibility) and `failed` (the
     # dispatch broke) must never collapse into one value. A future
     # refactor that collapses them fails THIS named test, instead of

@@ -6101,7 +6101,8 @@ defmodule Platform.Federation.ToolSurface do
   # on `gate_already_resolved` and changes nothing.
   #
   # THE CONTRACT IS ENFORCED HERE, NOT REQUESTED IN THE PROMPT.
-  # ADR-0046:95 says the architect rejects for architecture and explicitly
+  # `0046-design-and-architecture-phases-in-planning.md § Architect prompt contract`
+  # says the architect rejects for architecture and explicitly
   # not for taste, naming or style. "Don't reject for style" is
   # unenforceable as prose — it produces a differently-worded rejection,
   # not a better one. A closed `constraint` vocabulary means a style
@@ -8369,7 +8370,7 @@ defmodule Platform.Federation.ToolSurface do
       :invalid_constraint,
       "#{inspect(constraint)} is not an architectural constraint. Allowed: #{Enum.join(Plan.architecture_constraints(), ", ")}.",
       true,
-      "ADR-0046:95 — the architect rejects for architecture, not for taste, naming or style. There is deliberately no `constraint` value for a style objection: put it in `summary` and pass."
+      "0046-design-and-architecture-phases-in-planning.md § Architect prompt contract — the architect rejects for architecture, not for taste, naming or style. There is deliberately no `constraint` value for a style objection: put it in `summary` and pass."
     )
   end
 
