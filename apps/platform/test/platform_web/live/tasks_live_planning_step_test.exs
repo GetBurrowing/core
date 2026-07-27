@@ -366,6 +366,76 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
     end
   end
 
+  # ── stage 4: the behavioural half of the drag guard ───────────────────────
+
+  describe "the drag path survives the wrapper" do
+    # `tasks_live_board_invariance_test.exs` holds the STRUCTURAL half — the
+    # wrapper carries no `data-task-id`, every draggable card is still inside a
+    # `[data-column]`, and `closest("[data-task-id]")` from the extension
+    # reaches nothing. That guard fails in seconds in CI. THIS is the
+    # behavioural half, and it is the only one that proves the resolved values
+    # actually drive a move: a structurally perfect board whose drop handler
+    # rejects the payload passes every selector assertion.
+    #
+    # Not a real HTML5 drag — there is no browser here. What it does is resolve
+    # the two values `kanban_drag_drop.js` computes (`card.dataset.taskId` and
+    # `card.closest("[data-column]").dataset.column`) OFF THE RENDERED DOM
+    # rather than from a literal, then push the same `kanban_drop` event the
+    # hook pushes with exactly those values. A wrapper that captured the drag
+    # source would change what those queries return, and the drop would carry
+    # the wrong id.
+    test "a drop resolved off the DOM moves the card, and the strip follows it",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      task =
+        project
+        |> create_task()
+        |> set_outcomes(failed_architecture())
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # The strip is on the board, so this is not a drag across an unchanged
+      # DOM — the element the guard is about is present.
+      assert has_element?(view, "[data-role='#{@desktop_role}']")
+
+      # RESOLVE, don't assume. `[data-column='X'] [data-task-id][draggable]` is
+      # `closest` inverted: the same ancestor relation the hook walks.
+      resolved_ids =
+        view
+        |> query("[data-column='#{@dual_branch_status}'] [data-task-id][draggable='true']")
+        |> LazyHTML.attribute("data-task-id")
+
+      assert resolved_ids == [task.id]
+
+      # `in_progress -> backlog` is a legal drop (`@valid_drop_transitions`) and
+      # `backlog` is not an execution-phase status, so it needs no approved
+      # plan — the move is about the drag path, not the plan gate.
+      render_hook(view, "kanban_drop", %{"task_id" => task.id, "column" => "backlog"})
+
+      assert Repo.get!(Platform.Tasks.Task, task.id).status == "backlog"
+
+      # The card really moved columns in the rendered board...
+      assert has_element?(
+               view,
+               "[data-column='backlog'] [data-task-id='#{task.id}'][draggable='true']"
+             )
+
+      refute has_element?(
+               view,
+               "[data-column='#{@dual_branch_status}'] [data-task-id='#{task.id}']"
+             )
+
+      # ...and the strip travelled with it rather than being stranded in the
+      # old column or dropped entirely. `failed` renders at every status, so
+      # this also exercises the persistence rule at a status change.
+      assert has_element?(view, "[data-column='backlog'] [data-role='#{@desktop_role}']")
+      assert count_elements(view, "[data-role='#{@desktop_role}']") == 1
+      assert has_element?(view, "#task-card-#{task.id}.rounded-t-none")
+    end
+  end
+
   describe "fusion: rounded-t-none tracks visible?/1" do
     test "the card gains rounded-t-none exactly when the strip renders", %{conn: conn} do
       conn = authenticated_conn(conn)
