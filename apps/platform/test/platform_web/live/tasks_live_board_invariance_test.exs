@@ -496,12 +496,20 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   @template_path Path.join(@app_root, "lib/platform_web/live/tasks_live.html.heex")
 
   # MEASURED on this branch, `wc -l` semantics (newline count), 2026-07-27.
-  # The plan pinned 5,887 without measuring; measured here it is also 5,887, so
-  # no sibling has grown the file since the plan was written.
   #
-  # Task `019f9b29-9c47` (ADR-0046 stack member 8) added ZERO lines to this
-  # file: the extension is a component with three lines of call site in the
-  # TEMPLATE, and nothing at all in the LiveView module.
+  # RE-PINNED 5,887 -> 5,847 at the rebase onto rollup `65f768e4`. The pin was
+  # measured against this branch's ORIGINAL base `41bc5573`, where the file was
+  # 5,887 lines. Sibling member 5 (`019f9b29-251e` stage 2, commit `05ae0d7e`,
+  # "Hoist the plan-rejection feedback post into Platform.Tasks.PlanRejection")
+  # moved `post_rejection_feedback_to_execution_space/3` and
+  # `compose_rejection_message/3` OUT of the shell, so the file SHRANK by 40
+  # lines. Measured: 41bc5573 = 5,887; 65f768e4 = 5,847; this branch = 5,847.
+  #
+  # The guard's promise is untouched by the re-pin. Task `019f9b29-9c47`
+  # (ADR-0046 stack member 8) added ZERO lines to this file: the extension is a
+  # component with three lines of call site in the TEMPLATE, and nothing at all
+  # in the LiveView module — this branch's diff against `65f768e4` does not name
+  # `tasks_live.ex` at all. The shell did not grow; a sibling shrank it.
   #
   # HOW TO CHANGE THIS NUMBER: update it in the SAME commit as the edit, with
   # the reason in the commit message. That makes growth a deliberate, reviewed
@@ -511,7 +519,7 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # `String.to_existing_atom` and is filed to Dalton as task `019fa209-12b0`.
   # Fixing it will move this number — that is expected, and the fix carries the
   # new pin.
-  @shell_line_count 5_887
+  @shell_line_count 5_847
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 
