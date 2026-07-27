@@ -232,6 +232,13 @@ Every run: `16 doctests, 8216 tests, 3 skipped (2 excluded)`.
 
 ### Known-independent failures, enumerated by name for stage 5 to subtract
 
+> **SUPERSEDED — see §31 for the corrected list.** This enumeration is retained
+> as the stage-1 historical record and as the reference set the stage-5 subset
+> test is taken against. Two of its entries are now wrong to use as a
+> known-bad list: `ExternalAdmissionNotifierTest:138` is **fixed** on this
+> branch and a failure there is real, and the p99 budget entry below names the
+> wrong module (it is `HistorianLatencyTest`, not `TelemetryHandlerTest`).
+
 Stage 5's bar is that the fix-branch failing set at each seed is a **subset** of
 the control set at that seed. Anything outside this enumeration appearing on the
 fix branch is a **stop**, not a flake:
@@ -1357,3 +1364,406 @@ stage 4, and the full suite above is 0 failures. **The standing known-bad list
 must lose the `ExternalAdmissionNotifierTest:138` entry** (§6, stage 5's job) —
 a failure there is now real, and re-filing it as "a sibling detaching a global
 handler" would re-open the write-off this task closed.
+
+---
+---
+
+# Stage 5 — the re-measurement, and the entry that must be retired
+
+Task `019f9d80-e1ac-737c-bfd3-7846e2de6469`, stage 5
+("Re-measure against the baseline and retire the known-bad entry").
+Branch `task/019f9d80`, parent `6fbe31b0` (stage 4).
+
+**No product code changes in this stage.** Its deliverable is the comparison
+table, not a green checkmark.
+
+All measurements below: worktree `~/sources/worktrees/019f9d80`,
+`PLATFORM_TEST_DATABASE=platform_test_019f9d80`, `git status --porcelain` empty
+for every measured run. 41 stale `git-repo-*` / `wt-root-*` / `wt-idempotent-*`
+dirs were cleared from `System.tmp_dir!()` before the first run and again before
+each full-suite run. Box load is recorded next to every table, because one of
+the results below is load-sensitive and one is provably not.
+
+## 28. Ordered pair — control and fix, side by side at the same ten seeds
+
+```
+mix test test/platform/audit/historian_latency_test.exs \
+         test/platform/accounts/external_admission_notifier_test.exs --seed $S
+```
+
+| seed | control `b19eee64` (§2) | fix `6fbe31b0`, sweep 1 | fix `6fbe31b0`, sweep 2 |
+|---|---|---|---|
+| 0 | exit 2 — `6 tests, 1 failure` | exit 0 — `6 tests, 0 failures` | exit 0 |
+| 1 | exit 2 — `6 tests, 1 failure` | exit 0 — `6 tests, 0 failures` | exit 0 |
+| 2 | exit 2 — `6 tests, 1 failure` | exit 0 — `6 tests, 0 failures` | exit 0 |
+| 3 | exit 2 — `6 tests, 1 failure` | exit 0 — `6 tests, 0 failures` | exit 0 |
+| 4 | exit 2 — `6 tests, 1 failure` | exit 0 — `6 tests, 0 failures` | exit 0 |
+| 5 | exit 2 — `6 tests, 1 failure` | exit 0 — `6 tests, 0 failures` | exit 0 |
+| 6 | exit 2 — `6 tests, 1 failure` | exit 0 — `6 tests, 0 failures` | exit 0 |
+| 7 | exit 2 — `6 tests, 1 failure` | exit 0 — `6 tests, 0 failures` | exit 0 |
+| 8 | exit 2 — `6 tests, 1 failure` | exit 0 — `6 tests, 0 failures` | exit 0 |
+| 9 | exit 2 — `6 tests, 1 failure` | exit 0 — `6 tests, 0 failures` | exit 0 |
+| | **10/10 RED**, always `ExternalAdmissionNotifierTest` "a holding event persists an Audit.Event (durable queue source)" | **10/10 GREEN** | **10/10 GREEN** |
+
+Sweep 1 was taken before the mutation check, sweep 2 after the tree was restored
+byte-for-byte (`sha256` of `test/support/telemetry_helpers.ex` identical either
+side, `git status --porcelain` empty). **20/20 green in total.** Box load ranged
+8.75–13.19 across both sweeps.
+
+**100 % → 0 % on a deterministic reproduction**, which is what §0's table asks
+for. The green half alone would not distinguish a fix from an accidental
+reordering; the red half at the same ten seeds on the untouched control is what
+makes the pair evidence rather than a checkmark.
+
+Two things this table deliberately does NOT claim:
+
+- It is not an *ordering* result. Per §2, CLI argument order does not control
+  ExUnit execution order — `--trace` shows `HistorianLatencyTest` running first
+  whichever way the paths are passed, because both files are `async: false`. The
+  invariant is **"these two files in one BEAM"**.
+- It is not a *load* result. See §28.1.
+
+### 28.1 Load-independence, and independent corroboration from a second agent
+
+A correction circulating across tonight's tasks says seed-matched controls do
+not discriminate, because two full-suite runs at an identical seed, worktree and
+database produced disjoint failure sets. **That applies to the `TaskRouter` /
+`MeetingLive` / `CleanupGhostTasks` / `AttentionRouter` cluster. It does not
+apply to this pair**, and the distinction is the reason the pair is usable as
+evidence at all:
+
+- The pair was 10/10 RED on the control and is 20/20 GREEN on the fix, at box
+  loads spanning 8.7–13.2 here and whatever the control saw earlier.
+- The M1 probe below is 10/10 RED at load ~10, and the M2 probe 10/10 GREEN at
+  the same load, differing only by one `on_exit` line.
+
+A rate that is 100 % or 0 % and never in between, across load, is not a race.
+
+**Corroborated independently.** Task `019fa06a` stage 3 (commit `1ff036a9` on
+`task/019fa06a`, `apps/platform/test/support/test_quarantine.ex`) measured this
+same pair in a different worktree, on a different database, over a different
+seed range, without reference to these tables: **5/5 RED at seeds 0–4** for the
+pair in one BEAM, **3/3 GREEN at seeds 0–2** for
+`external_admission_notifier_test.exs` alone, and classified it
+`class: :deterministic, ticket: "019f9d80"` — the only `:deterministic` member
+of that registry, explicitly noted as *load-independent unlike the
+`:intermittent` entries*. Two agents, two environments, two seed ranges, same
+conclusion. That is stronger than either measurement alone.
+
+The same stage cuts the other way for a neighbour on our subtract-by-name list,
+and it is worth recording that determinism judgements made under phantom box
+load are unreliable: `TaskRouterTest` "safety-net fire: deadline in the past"
+was 3/3 RED under load but only **4/10 RED at seeds 0–9** once four orphaned
+busy-loop processes (~250 % of a core) were reaped from this box, and was
+reclassified `:deterministic` → `:intermittent` (ticket `019fa121`). Its briefed
+mechanism was also structurally impossible: `:orchestration_lease_manager` is
+keyed by `task_id` and `setup` mints a fresh task per test, so the claimed
+cross-test lease leak cannot occur. Actual cause: `Process.sleep(75)` failing to
+cover the router's first lease write on a cold BEAM.
+
+## 29. Full suite — three fixed seeds, compared as failing SETS
+
+Same three seeds stage 1 used. `16 doctests, 8231 tests, 3 skipped (2 excluded)`
+every run (stage 1's control was 8216; stages 2–4 added 15, stage 5 adds none).
+
+| seed | control `b19eee64` (§3) | fix `6fbe31b0` | subset? |
+|---|---|---|---|
+| 0 | ∅ | ∅ | ✅ |
+| 1 | `TaskRouterTest:1039` · `TaskRouterTest:479` · `TaskRouterTest:758` · `LocalRunnerTest:92` · **`ExternalAdmissionNotifierTest:138`** | ∅ | ✅ |
+| 2 | `LocalRunnerTest:92` · `TaskRouterTest:1039` | `TaskRouterStageIsolationTest:307` | ❌ — see §29.1 |
+
+Box load at each run's start: seed 0 → 8.75, seed 1 → 9.88, seed 2 → **30.27**.
+
+**Requirement 4 of the evidence bar is met unconditionally:** across all three
+full-suite logs and all twenty ordered-pair runs, the string
+`ExternalAdmissionNotifierTest` appears **zero** times, and no detach-class
+`Platform.Audit.TelemetryHandlerTest` failure appears at all. At seed 1 the
+control's set contains `ExternalAdmissionNotifierTest:138` and the fix's set is
+empty — the one seed of the three where the full suite happened to schedule the
+offender ahead of the victim, and exactly the transition this task exists to
+produce.
+
+**The full suite remains a weak detector for this bug** (§3): it was green at
+seed 0 on a tree where the pair was 100 % reproducible. These three runs are
+here to show nothing else regressed, not to show mechanism A is fixed. §28 shows
+that.
+
+### 29.1 STOP CONDITION FIRED — `TaskRouterStageIsolationTest:307` at seed 2
+
+Reported rather than absorbed, because the rule is that anything outside stage
+1's §3 enumeration is a stop.
+
+```
+1) test no_ack alarm fires per stage, independent of prior stage state
+   (Platform.Orchestration.TaskRouterStageIsolationTest)
+   test/platform/orchestration/task_router_stage_isolation_test.exs:307
+   match (=) failed
+   code:  assert %{stage_id: recorded_stage_id, ack_at: nil, no_ack_fired?: false} =
+                   LeaseManager.get(task.id)
+   left:  %{stage_id: recorded_stage_id, ack_at: nil, no_ack_fired?: false}
+   right: nil
+```
+
+It is **not** in §3. It **is** in this task's cumulative list — stage 3 added it
+at §19 with a mechanism. Resolved here by repeat-count on the final tree rather
+than by matching the name to a list:
+
+| tree | scope | seed | rate |
+|---|---|---|---|
+| fix `6fbe31b0` (this stage) | file alone, ×10 | 2 | **1/10** — run 3, identical assertion and stacktrace |
+| stage-3 control `3e888704` (§19) | file alone, ×10 | 3 | **5/10** |
+| stage-3 fix (§19) | file alone, ×10 | 3 | **8/10** |
+
+Verdict: **explained, independent, not a regression.** It fails standalone on an
+untouched control at a higher rate than it fails here, and the mechanism rules
+this diff out on its own — `LeaseManager.get/1` reads **ETS**
+(`lease_manager.ex:263-272`, `:ets.lookup(@table, task_id)`), not `Repo`. ETS is
+not sandboxed, so no telemetry-handler restore, connection-ownership change or
+supervised-writer drain can reach it. The race is the test's own fixed
+`Process.sleep(100)` against the router's asynchronous `record_dispatch`, which
+is why the rate tracks machine load: it fired in the seed-2 full-suite run that
+started at load **30.27** (seeds 0 and 1 ran at ~9 and were clean) and
+reproduced 1/10 standalone at load 17–38.
+
+**This is the correct handling of a stop condition, and the contrast with
+`ExternalAdmissionNotifierTest:138` is the whole lesson of this task:** the same
+sentence — "it also fails on the control, so it is not mine" — is a valid
+dismissal here and was an invalid dismissal there. What separates them is not
+the wording, it is that one was measured (5/10 and 8/10 across load, mechanism
+traced to a sleep against an ETS write) and the other was assumed. A name on a
+known-bad list carries no evidence; only the measurement behind it does.
+
+## 30. Mutation check — the plan's mutation survives again, and the one that discriminates
+
+The stage-5 plan prescribed, verbatim: delete the `on_exit` re-attach inside
+`Platform.TelemetryHelpers.ensure_boot_handler!/1`, re-run the ordered pair at
+all ten seeds, expect RED at seed 0.
+
+**It does not go red. It is 10/10 GREEN.** This reproduces stage 2's §9 finding
+exactly — the stage-5 plan re-prescribed a mutation stage 2 had already shown to
+be non-discriminating. Recorded rather than quietly substituted, because a
+surviving mutation is a fact about the causal model and not a defect in the
+guard.
+
+The mechanism, restated: what repairs the five existing offenders is that their
+setups **no longer detach at all** — idempotent `attach/0` removed the reason
+to. The `on_exit` does not repair them; it makes a *future* detach, or a
+mid-body detach, harmless. With no detach left in the pair, there is nothing for
+the restore to restore, so deleting it cannot change the outcome. The mutation
+has to reintroduce the condition the `on_exit` defends.
+
+All three probes run at **all ten seeds** on the final tree, load ~10:
+
+| probe | `on_exit` restore | injected `TelemetryHandler.detach()` in `historian_latency_test.exs` setup | ordered pair, seeds 0–9 |
+|---|---|---|---|
+| **M0** (the plan's mutation, verbatim) | deleted | no | **10/10 GREEN** — `6 tests, 0 failures` at every seed. *Mutation survives.* |
+| **M1** | deleted | yes | **10/10 RED** — `6 tests, 1 failure` at every seed, `ExternalAdmissionNotifierTest` "a holding event persists an Audit.Event (durable queue source)", `Expected truthy, got false`, arguments `[]`. Byte-for-byte the §2 control failure. |
+| **M2** | restored | yes | **10/10 GREEN** — `6 tests, 0 failures` at every seed. |
+
+M1 vs M2 differ by exactly one line and by 10 seeds' worth of outcome: the
+`on_exit` is load-bearing, and its removal reproduces the original defect
+identically. Stage 2 established this at seed 0; it is confirmed here across the
+full seed range on the final tree. Both probes were reverted; the committed tree
+contains neither, and `git status --porcelain` is empty.
+
+### 30.1 The guard does not detect M0 or M1 — and cannot, for a stated reason
+
+Worth writing down because it bounds what stage 4 shipped.
+`test/platform/regression/boot_telemetry_handler_detach_audit_test.exs` was run
+against the M1/M2 tree — a tree carrying a real, injected
+`TelemetryHandler.detach()` — and passed, `7 tests, 0 failures`.
+
+That is correct behaviour, not a hole in the guard. The guard accepts
+`ensure_boot_handler!/1` as a registered restore (`collect_restores/2`), and on
+the M2 tree the detach genuinely *is* restored. The guard scans **test files**;
+M0 and M1 mutate **the helper those files delegate to**, which no static scan of
+`test/**` can see.
+
+So the two layers are complementary and neither subsumes the other:
+
+- The **static guard** catches a new test that detaches with no registered
+  restore, before it ever runs (stage 4's M-G / M-H probes, §25).
+- The **behavioural ordered pair** catches the helper itself being broken — but
+  only while some detach still exists in the tree to expose it. That is M1.
+- **Nothing detects M0**, and nothing can. On a tree with no detach anywhere,
+  a helper with and a helper without the `on_exit` produce identical observable
+  behaviour by construction. A test asserting otherwise would be asserting a
+  difference that does not exist. It is named here rather than papered over with
+  a test written to satisfy the prediction.
+
+## 31. The corrected known-bad list
+
+This is half the finding, not bookkeeping. `ExternalAdmissionNotifierTest:138`
+was written off as a "known unrelated flake — cross-file pollution" in roughly
+eight execution and review briefs across 2026-07-25/26. From this branch
+onward, a failure there is **real**, and a stale list is what will keep the next
+agent dismissing it.
+
+### REMOVED
+
+1. **`Platform.Accounts.ExternalAdmissionNotifierTest:138`** — "a holding event
+   persists an Audit.Event (durable queue source)". Previously listed as a
+   flake / cross-file pollution. It was never a flake: 10/10 RED at ten fixed
+   seeds on the control (§2), corroborated 5/5 RED independently by `019fa06a`
+   (§28.1), and 20/20 GREEN here. **Fixed on this branch. Treat any future
+   failure as a real regression, not a known-bad.**
+2. **The detach-class `Platform.Audit.TelemetryHandlerTest` entries** — any
+   entry attributing a failure in that file to a leaked or missing global
+   handler. The leak is fixed at source (§7, §12) and enforced at authoring
+   time (§20). Same instruction: a detach-class failure there is now real.
+
+### RETAINED, RELABELLED — and the module name corrected
+
+3. **`Platform.Audit.HistorianLatencyTest`'s `@p99_budget_us 1_000` assertion**
+   (`historian_latency_test.exs:46,100`) — a **WALL-CLOCK LATENCY FLAKE**, not
+   cross-file pollution. Reproduced at 2/10 single-file runs on a clean
+   `bbf4c0c2` control (§3), 2/10 on the stage-2 tree (§8), 2/10 on the stage-3
+   tree (§19), and **0/10 on the final tree tonight** at box load 22–26 with
+   p99 = 265–491 µs. Rate unchanged by anything this task did; it lives in a
+   file this task edits and will otherwise be misread as a regression. **It must
+   not be "fixed" here.**
+
+   **Correction to the entry as it has been briefed.** Every prior brief,
+   including §3 of this file, calls this "`Platform.Audit.TelemetryHandlerTest`'s
+   historian emit p99 budget assertion". There are **two different p99 budget
+   assertions in two different files**, and the briefed name points at the wrong
+   one:
+   - `historian_latency_test.exs:100` — `p99 < 1_000` µs over 10 000 samples.
+     **This is the one that has been failing at 2/10.**
+   - `telemetry_handler_test.exs:414` and `:564` — `p99 < 5_000` µs over 100
+     samples. Not observed failing in any run recorded in this file.
+
+   Since the entire subject of this task is that mislabelling one flake as
+   another made a real bug invisible for a day, getting the module right on the
+   flake we are *keeping* is not pedantry. Subtract
+   `HistorianLatencyTest`'s 1 ms budget by name; do not subtract
+   `TelemetryHandlerTest` wholesale, or requirement 4 above becomes
+   unfalsifiable.
+
+   The failure shape also argues it is a stall, not a regression: passing runs
+   sit at p99 ≈ 265–491 µs against a 1 000 µs budget, while failing runs
+   recorded 1 540, 2 577, 3 056, 4 848, 6 961 and 12 134 µs — 5–15× excursions,
+   not a distribution creeping over the line.
+
+### RETAINED UNCHANGED — subtract these by name
+
+4. **`Platform.Orchestration.TaskRouterTest` lease/liveness cluster** — `:412`,
+   `:479`, `:758`, `:1039`. Emits a different subset each run. The "safety-net
+   fire" member (`:758`) is now a registered `:intermittent` entry with ticket
+   `019fa121` in `Platform.TestQuarantine`, measured 4/10 at seeds 0–9 once the
+   box was quiet; its briefed cross-test-lease mechanism is structurally
+   impossible (§28.1). **Reference the registry, not a loose list, where the
+   registry has an entry.**
+5. **`Platform.Execution.LocalRunnerTest:92`** — "injects credential lease env
+   into the child process". Registered `:unexplained`; nobody has bisected it,
+   which is itself part of the entry. Shape:
+   `assert String.trim(File.read!(output_file)) == "test-token-…"` with
+   `left: ""`. Not the stale-tmp-dir class it is usually filed under — it failed
+   with `/tmp/git-repo-*` and `/tmp/wt-root-*` cleared before every run.
+6. **`Platform.Orchestration.TaskRouterStageIsolationTest:307`** — sleep-based
+   race on an **ETS** read, not a sandbox failure. 1/10 here, 5/10 on an
+   untouched control (§29.1, §19).
+7. **`Platform.Tasks.PlanTest:398`** (§10.1),
+   **`Platform.Agents.HistorianDispatcherTest:322`** (§10.2 — a clock bug, broken
+   for one hour a day, not a flake),
+   **`Platform.Security.RuntimeChannelCapabilityTest`** (§19, control-only),
+   **`Platform.MeetingsTest:416`**, **`AttentionRouterTest:753`**,
+   **`Org.Wiki.IndexerT3E2ETest`**, **`CleanupGhostTasksTest`**
+   (`DBConnection.OwnershipError` from `RuntimeSupervision.expire_stale_leases/2`,
+   filed as `019fa06a-a413`).
+
+## 32. The generalised finding, and the family it belongs to
+
+> **An audit assertion that passes because nothing is listening is
+> indistinguishable from one that passes because the system behaved correctly.**
+
+That is the whole defect class. The failure mode is not an error, and it is not
+a false negative in the usual sense — it is an assertion that has quietly
+changed what it measures. Nothing in the run reports it.
+
+Three instances were found on this box the same night, by three different tasks,
+in three unrelated subsystems:
+
+- **This task.** Five test files `:telemetry.detach/1` a boot-attached handler
+  and never restore it. Every audit path that emits via `:telemetry.execute`
+  afterwards silently drops its row for the rest of the BEAM (§1, §2).
+- **`Platform.Orchestration.TaskRouterTest`'s "safety-net fire" case.** Order
+  dependent; deterministic when focused. Passing on leaked global state
+  (`019fa121`).
+- **`Platform.Execution.LocalRunnerTest`.** Leftover `/tmp/wt-idempotent-N`
+  directories from prior runs. Passing on leaked global filesystem state — 41
+  such directories were present in `System.tmp_dir!()` when this stage started,
+  and 21 when stage 1 did.
+
+**This stage's guard covers telemetry handlers only. The family is larger.** A
+guard keyed to `:telemetry.detach/1` says nothing about a leaked ETS table, a
+leaked `/tmp` directory, a leaked `Application.put_env`, a leaked process-group
+subscription, or a leaked `Mox` global expectation. Each is the same shape:
+global state, mutated by one test, observed by another, with the second test's
+assertion silently changing meaning.
+
+### 32.1 A hypothesis that was checked and rejected — record the refutation
+
+It was proposed cross-task (from `019fa129` stage 2) that
+`Platform.Accounts.ExternalAdmissionNotifier` is a **second instance** of this
+defect class, on the grounds that it is globally attached and its `detach/0`
+(`external_admission_notifier.ex:59-67`) is no-arg and global — structurally the
+same shape as the audit handler.
+
+**That hypothesis is false, and stage 4 refuted it by reading the actual write
+path rather than the resemblance** (§27):
+
+- The notifier **does not write** the audit row that
+  `ExternalAdmissionNotifierTest:138` asserts on. `Platform.Audit.TelemetryHandler`
+  writes it — it subscribes to `[:platform, :auth, :external_admission]`
+  (`telemetry_handler.ex:42`) and persists through the default synchronous
+  clause. In the RED run the notifier's own handler is still attached throughout
+  (`external_admission_handlers=["external-admission-notifier"]`); it is
+  `platform-audit-telemetry` that is missing.
+- **No test in the tree detaches the notifier.** `grep -rn
+  ExternalAdmissionNotifier test/` returns two `alias` lines and no `detach`
+  call.
+
+So there is **one root cause, not two**, and it is the one this task fixes. That
+makes retiring `ExternalAdmissionNotifierTest:138` from the known-bad list
+better founded, not worse: the test fails for a reason this branch removes.
+
+The coverage claim that *is* true, and worth keeping: stage 4's probe **M-H**
+injected an unrestored `ExternalAdmissionNotifier.detach()` into
+`platform_web/live/external_recovery_live_test.exs` and the guard went RED,
+naming the module. The guard therefore covers this shape **prophylactically** —
+`boot_attached_modules/0` returns all seven boot-attached handlers, not just the
+audit one — but no instance of it exists in the tree today.
+
+Recorded as a rejected hypothesis on purpose. An unrefuted-looking guess about a
+plausible second mechanism is exactly the kind of thing that gets rediscovered
+and re-believed a week later.
+
+## 33. Cross-branch handoff — the registry entry dies with the merge
+
+`Platform.TestQuarantine` (`apps/platform/test/support/test_quarantine.ex`, on
+`task/019fa06a` at `1ff036a9`, **not** on `main` and not on this branch) carries
+a `:deterministic` entry for
+`external_admission_notifier_test.exs: a holding event persists an Audit.Event
+(durable queue source)`, tagged `:leaked_telemetry_detach`, ticket `019f9d80`.
+That commit also adds `@tag :leaked_telemetry_detach` to the test itself.
+
+The entry is correct today and self-documents its own expiry: *"Fix landed on
+`task/019f9d80` … Delete this entry and its tag when that merges — leaving it
+here afterwards guarantees the next agent dismisses a real failure."*
+
+**Whoever merges `task/019f9d80` after `task/019fa06a` owns deleting both** — the
+registry entry and the `@tag` on the test. The tag never excluded the test
+(`excluded_tags/0` returns tags for `:intermittent` and `:environment` only), so
+nothing is being skipped in the meantime; the risk is purely that the entry
+keeps telling readers a now-real failure is known-bad. Whichever of the two
+branches lands second, that is the merge that has to do it.
+
+## 34. Formatting and suite
+
+`mix format --check-formatted` → clean (`FORMAT_OK`).
+
+Full suite, final tree, `16 doctests, 8231 tests, 3 skipped (2 excluded)`:
+seed 0 → **0 failures**, seed 1 → **0 failures**, seed 2 → 1 failure
+(`TaskRouterStageIsolationTest:307`, §29.1). Stage 5 adds no tests; 8231 is
+stage 4's count unchanged.
