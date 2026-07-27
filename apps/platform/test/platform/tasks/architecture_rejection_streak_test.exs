@@ -20,10 +20,58 @@ defmodule Platform.Tasks.ArchitectureRejectionStreakTest do
   returns a constant, and this stage's whole surface is small enough that
   such a function would be easy to write by accident.
 
-  ## Vacuity controls, and the two that pass trivially
+  ## VACUITY CONTROLS, MEASURED (8/8 detected, at commit 18417aa0)
 
-  Recorded per stage-note discipline, so a reader does not assume more
-  coverage than exists — see the stage report for the measured results.
+  Each control changes exactly one thing in
+  `Platform.Tasks.ArchitectureRejection` and nothing in this file.
+
+    1. WALK BY `inserted_at`: replaced `Enum.reverse/1` with
+       `Enum.sort_by(& &1.inserted_at, {:desc, DateTime})`. 2 failures —
+       both ordering guards, in both directions. Detected.
+    2. CONSTANT STREAK: `streak/1` returns the literal `1`. 10 failures.
+       Detected — and it is the control that found the vacuity fixed
+       below.
+    3. READ `plans.status`: `architecture_rejected?/1` matched on
+       `%Plan{status: "rejected"}` instead of the verdict. 11 failures,
+       including the supersession guard. Detected — this is the one that
+       proves the walk reads `architecture_verdict` and not the status
+       column that supersession actually rewrites.
+    4. NO RUN BOUNDARY: `Enum.take_while/2` -> `Enum.filter/2`, counting
+       every rejection in the task's history rather than the consecutive
+       run. 4 failures. Detected.
+    5. UNORDERED STAGES: `objection_history/1`'s preload ordered
+       `desc: position`. 1 failure. Detected.
+    6. CONSTANT `escalation_due?/1`: always `false`. 3 failures.
+       Detected — this is the half the paired positive control exists
+       for.
+    7. TWO WALKS: `objection_history/1` walked `Tasks.list_plans/1`
+       itself with no truncation, leaving `streak/1` correct. 2 failures.
+       Detected — the one-walk property is load-bearing.
+    8. FINDINGS NOT VERBATIM: dropped `"stage_id"` from each finding on
+       the way out. 1 failure. Detected.
+
+  ### The vacuity control 2 found, and the fix
+
+  Control 2 left "truncates at the same boundary as streak/1" PASSING:
+  that test's fixture has a streak of 1, so `length(history) == streak(t)`
+  is also satisfied by a `streak/1` that ignores its argument and returns
+  the constant 1. The one-walk assertion was therefore vacuous in the only
+  place it was made. It is now additionally asserted at a streak of 2 in
+  the test above it, where a constant cannot satisfy both.
+
+  ### Two assertions that pass trivially, declared rather than counted
+
+    * `assert "passed" in breaking_states` and its three siblings restate
+      member 5's `Plan.architecture_gate_states/0`. NO change to this
+      module can make them fail — they are a tripwire against a state
+      being REMOVED upstream, and nothing more. The derived `for`
+      comprehension underneath them is the part that carries weight.
+    * "the limit is a positive integer exposed through an accessor" is a
+      type assertion. It passes for any positive integer and cannot
+      detect a wrong bound. The bound's actual value is exercised only
+      relatively, through `reject_limit/0`, which is deliberate — a test
+      asserting `== 2` would be the hardcoded second copy the accessor
+      exists to prevent.
 
   Not `async: true`: the supersession guard drives the real
   `Tasks.approve_plan/3`, which broadcasts on `tasks:board` and wakes the
@@ -347,6 +395,16 @@ defmodule Platform.Tasks.ArchitectureRejectionStreakTest do
       assert newest.summary == "summary for v2"
       assert is_binary(newest.resolved_at)
       assert is_binary(newest.plan_id)
+
+      # THE ONE-WALK PROPERTY at a streak of 2. Asserted here as well as in
+      # the truncation test below because that one's fixture has a streak
+      # of 1, where `length(history) == streak(t)` is also satisfied by a
+      # `streak/1` that ignores its argument and returns the constant 1 —
+      # measured, not assumed (vacuity control 2).
+      assert length(ArchitectureRejection.objection_history(task.id)) ==
+               ArchitectureRejection.streak(task.id)
+
+      assert ArchitectureRejection.streak(task.id) == 2
     end
 
     test "truncates at the same boundary as streak/1 and never disagrees with it", %{task: task} do
