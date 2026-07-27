@@ -133,6 +133,36 @@ defmodule Platform.Orchestration.TaskRouter do
 
   @impl true
   def init(%{task_id: task_id, assignee: assignee}) do
+    # Trap exits so `TaskRouterSupervisor.stop_assignment/1` cannot kill this
+    # process mid-query (task 019fa06a).
+    #
+    # `stop_assignment/1` goes through `DynamicSupervisor.terminate_child/2`,
+    # which sends a raw `:shutdown` EXIT signal. Without trapping, that signal
+    # kills the router INSTANTLY — wherever it happens to be. Two consequences,
+    # one production and one test:
+    #
+    #   * `terminate/2` never ran on supervisor-driven stops, so
+    #     `clear_liveness/1`, `revoke_deploy_lease/1` (`CredentialLease.revoke`)
+    #     and `ExecutionSpace.archive/1` were silently skipped on EVERY router
+    #     stop. Deploy credential leases outliving their routers is a real
+    #     production leak, not a test artifact.
+    #
+    #   * The router is reliably mid-Ecto-query when the signal lands (`init/1`
+    #     schedules `send(self(), :dispatch)` and the dispatch path re-arms via
+    #     `Process.send_after(self(), :dispatch, 1_000)`). A DBConnection client
+    #     dying while holding a checked-out connection destroys that connection;
+    #     under the Ecto sandbox the ownership process dies with it, the repo
+    #     reverts from `{:shared, test_pid}` to `:manual`, and the TEST process
+    #     raises `DBConnection.OwnershipError` on its very next Repo call.
+    #
+    # Trapping converts the signal into a mailbox message, so the in-flight
+    # query finishes, `:gen_server` handles the parent EXIT, and `terminate/2`
+    # runs before the process exits cleanly. The catch-all `handle_info/2`
+    # already absorbs any other `{:EXIT, ...}`, and the router links to nothing
+    # but its supervisor (`Tasks.subscribe_board/0` and the `:via` Registry
+    # registration create no links), so the blast radius is this one flag.
+    Process.flag(:trap_exit, true)
+
     Tasks.subscribe_board()
     ReviewRequests.subscribe_for_task(task_id)
 

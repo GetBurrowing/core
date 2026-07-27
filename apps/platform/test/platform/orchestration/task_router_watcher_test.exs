@@ -224,7 +224,7 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       }
 
       # Start a router manually
-      {:ok, _pid} = TaskRouterSupervisor.start_assignment(task.id, fake_assignee)
+      {:ok, router_pid} = TaskRouterSupervisor.start_assignment(task.id, fake_assignee)
       assert TaskRouterWatcher.router_running?(task.id) == true
 
       # Simulate task moved to done
@@ -238,10 +238,8 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       watcher_pid = Process.whereis(TaskRouterWatcher)
       send(watcher_pid, {:task_updated, done_task})
 
-      Process.sleep(100)
-
       # Router should be stopped
-      assert TaskRouterWatcher.router_running?(task.id) == false
+      assert_router_stopped(router_pid, task.id)
     end
 
     test "watcher handles already_started gracefully", %{task: task} do
@@ -287,16 +285,15 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
 
       # Start a router for a task that is in backlog (not active status)
       # The task is in "backlog" by default after creation, so it's an orphan
-      {:ok, _pid} = TaskRouterSupervisor.start_assignment(task.id, fake_assignee)
+      {:ok, router_pid} = TaskRouterSupervisor.start_assignment(task.id, fake_assignee)
       assert TaskRouterWatcher.router_running?(task.id) == true
 
       # Trigger reconciliation
       watcher_pid = Process.whereis(TaskRouterWatcher)
       send(watcher_pid, :reconcile)
-      Process.sleep(300)
 
       # Orphaned router should be stopped since task is in backlog
-      assert TaskRouterWatcher.router_running?(task.id) == false
+      assert_router_stopped(router_pid, task.id)
     end
 
     # Stage 4: this is the regression test for the "ghost router"
@@ -322,7 +319,7 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
           assignee_id: Ecto.UUID.generate()
         })
 
-      {:ok, _pid} = TaskRouterSupervisor.start_assignment(active.id, fake_assignee)
+      {:ok, router_pid} = TaskRouterSupervisor.start_assignment(active.id, fake_assignee)
       assert TaskRouterWatcher.router_running?(active.id) == true
 
       # Soft-delete the task directly via Repo so we exercise the
@@ -339,9 +336,8 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
 
       watcher_pid = Process.whereis(TaskRouterWatcher)
       send(watcher_pid, :reconcile)
-      Process.sleep(300)
 
-      assert TaskRouterWatcher.router_running?(active.id) == false
+      assert_router_stopped(router_pid, active.id)
     end
 
     # Stage 6: parallel of the soft-deleted reconcile sweep above, but for
@@ -371,7 +367,7 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
           assignee_id: Ecto.UUID.generate()
         })
 
-      {:ok, _pid} = TaskRouterSupervisor.start_assignment(active.id, fake_assignee)
+      {:ok, router_pid} = TaskRouterSupervisor.start_assignment(active.id, fake_assignee)
       assert TaskRouterWatcher.router_running?(active.id) == true
 
       # Flip the row to `cancelled` directly via Repo so we bypass the
@@ -388,9 +384,8 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
 
       watcher_pid = Process.whereis(TaskRouterWatcher)
       send(watcher_pid, :reconcile)
-      Process.sleep(300)
 
-      assert TaskRouterWatcher.router_running?(active.id) == false
+      assert_router_stopped(router_pid, active.id)
     end
   end
 
@@ -517,6 +512,53 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       |> Repo.insert()
 
     agent
+  end
+
+  # Wait for a router to actually die, rather than sleeping a magic number and
+  # hoping (task 019fa06a).
+  #
+  # `TaskRouter` now traps exits, so a supervisor-driven stop runs `terminate/2`
+  # — which does real DB work (`ExecutionSpace.post_log/2` + `archive/1`) before
+  # the process exits. Teardown is therefore legitimately slower than it was
+  # when the router was killed outright, and the fixed `Process.sleep(100)` /
+  # `Process.sleep(300)` these call sites used became marginal under load
+  # (measured: 5 of 10 runs failing here, vs 2 of 10 before the trap_exit
+  # change). Monitoring the pid removes the race instead of widening the sleep,
+  # and is strictly stronger: it pins actual process death rather than Registry
+  # bookkeeping, and still fails if the router never stops at all.
+  defp assert_router_stopped(pid, task_id, timeout \\ 5_000) do
+    ref = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    after
+      timeout ->
+        Process.demonitor(ref, [:flush])
+        flunk("router for task #{task_id} was still alive after #{timeout}ms")
+    end
+
+    # `router_running?/1` is a `Registry.lookup`, and the Registry unregisters
+    # off its OWN monitor of the router. Our `:DOWN` and the Registry's are
+    # independent messages with no ordering guarantee, so the registry entry
+    # routinely outlives the process by a scheduler hop. Poll rather than
+    # assert once — this is bookkeeping catching up, not the router refusing to
+    # die (the `:DOWN` above already proved it died).
+    assert wait_until_unregistered(task_id, timeout),
+           "router process for task #{task_id} exited but its Registry entry never cleared"
+  end
+
+  defp wait_until_unregistered(task_id, remaining_ms) do
+    cond do
+      TaskRouterWatcher.router_running?(task_id) == false ->
+        true
+
+      remaining_ms <= 0 ->
+        false
+
+      true ->
+        Process.sleep(10)
+        wait_until_unregistered(task_id, remaining_ms - 10)
+    end
   end
 
   defp stop_router_if_running(task_id) do
