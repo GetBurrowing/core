@@ -587,9 +587,18 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
 
     test "a truncated index says so and names what it dropped", %{plan: plan} do
       # Stage 4's rule, applied here: a bound is only honest if the
-      # rendered block admits to it. "All 49 ADRs" and "showing 5 of 49"
+      # rendered block admits to it. "All 50 ADRs" and "showing 5 of 50"
       # are different claims and the model cannot tell them apart from
       # the list alone.
+      #
+      # THE TOTAL TRACKS THE DIRECTORY. `total` in
+      # `architecture_review_plan.ex:971` is `length(Path.wildcard(...))` over
+      # `docs/decisions/*.md`, so EVERY new ADR moves this number and fails this
+      # assertion. Bumped 49 -> 50 when ADR-0046 itself landed in the rollup
+      # (branch `docs/adr-0046-design-arch-phases`), which is the file the whole
+      # stack's citations point at. The bound and the admission are what this
+      # test is for; the total is incidental to it and needs re-pinning on each
+      # new ADR.
       Application.put_env(:platform, :adr_index_limit, 5)
       on_exit(fn -> Application.delete_env(:platform, :adr_index_limit) end)
 
@@ -598,7 +607,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
         |> ArchitectureReviewPlan.gather_context()
         |> ArchitectureReviewPlan.render_instruction()
 
-      assert rendered =~ "Showing the 5 highest-numbered of 49 ADRs"
+      assert rendered =~ "Showing the 5 highest-numbered of 50 ADRs"
       assert rendered =~ "older ADR(s) omitted"
       assert rendered =~ "0001-repository-shape-and-boundary.md"
       refute rendered =~ "0001-repository-shape-and-boundary.md — Repository Shape"
