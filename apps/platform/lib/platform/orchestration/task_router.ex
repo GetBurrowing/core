@@ -97,6 +97,7 @@ defmodule Platform.Orchestration.TaskRouter do
             lease_status: String.t() | nil,
             deploy_lease: CredentialLease.t() | nil,
             design_deadline_ref: reference() | nil,
+            architecture_deadline_ref: reference() | nil,
             status:
               :dispatching | :running | :stalled | :complete | :waiting_human | :waiting_design
           }
@@ -118,6 +119,11 @@ defmodule Platform.Orchestration.TaskRouter do
       # guarantee, and it deliberately holds no information the DB does not
       # already carry — see `design_hold_expired?/2`.
       :design_deadline_ref,
+      # ADR-0046 member 5 stage 5. Held only so a re-arm can cancel the
+      # previous one-shot instead of stacking duplicates; the timer is an
+      # optimisation, never the correctness guarantee (see
+      # `handle_info({:architecture_gate_deadline, _}, _)`).
+      :architecture_deadline_ref,
       status: :dispatching
     ]
   end
@@ -225,13 +231,20 @@ defmodule Platform.Orchestration.TaskRouter do
             # was the Logger line above, invisible to the human being asked to
             # approve the plan. Mirrors the `waiting_for_human_review?/1`
             # branch below, which already emits before delegating.
+            #
+            # ADR-0046 member 5 stage 5: WHO holds the slot decides the copy.
+            # While the occupant is the ARCHITECT no human action is pending,
+            # and the plan-review line sends the reader to a button they
+            # should not press yet. Same episode discipline, third string.
+            gate = architecture_gate_occupancy(task_id)
+
             maybe_log_heartbeat_suppressed(
               state,
               find_stage(Tasks.current_plan(task_id), state.current_stage_id),
-              reason: "awaiting_plan_review"
+              plan_gate_log_opts(gate)
             )
 
-            {:ok, %{state | status: :waiting_human}}
+            {:ok, arm_architecture_gate_deadline(%{state | status: :waiting_human}, gate)}
 
           waiting_for_human_review?(state) ->
             # Deliberately NOT guarded on `state.status != :waiting_human`
@@ -286,14 +299,17 @@ defmodule Platform.Orchestration.TaskRouter do
 
           # Same episode-start emission as the lease-active branch above; see
           # the comment there for why the handler's edge trigger cannot cover
-          # this shape.
+          # this shape, and for why the architect's occupancy gets its own
+          # copy.
+          gate = architecture_gate_occupancy(task_id)
+
           maybe_log_heartbeat_suppressed(
             state,
             find_stage(Tasks.current_plan(task_id), state.current_stage_id),
-            reason: "awaiting_plan_review"
+            plan_gate_log_opts(gate)
           )
 
-          {:ok, %{state | status: :waiting_human}}
+          {:ok, arm_architecture_gate_deadline(%{state | status: :waiting_human}, gate)}
         else
           # Schedule initial dispatch on next tick
           send(self(), :dispatch)
@@ -382,19 +398,29 @@ defmodule Platform.Orchestration.TaskRouter do
         # request; in the plan-pending case there are no review requests, so
         # an unconditional call would post on every injected dispatch — the
         # exact execution-space pile-up task 019e00cb fixed.
+        gate = architecture_gate_occupancy(state.task_id)
+
         if state.status != :waiting_human do
           maybe_log_heartbeat_suppressed(
             state,
             find_stage(Tasks.current_plan(state.task_id), state.current_stage_id),
-            reason: "awaiting_plan_review"
+            plan_gate_log_opts(gate)
           )
         end
 
+        # Armed OUTSIDE the edge guard, deliberately. The edge guard exists to
+        # keep NARRATION to one line per episode; the timer is not narration.
+        # A router already parked at `:waiting_human` by a stage-level gate
+        # when the architecture gate opens would otherwise never arm one, and
+        # re-arming is free — `arm_architecture_gate_deadline/2` cancels the
+        # previous ref and recomputes the delay from the PERSISTED deadline,
+        # so an extra arm can only ever shorten it.
         state =
           state
           |> Map.put(:task_status, task.status)
           |> clear_liveness()
           |> Map.put(:status, :waiting_human)
+          |> arm_architecture_gate_deadline(gate)
 
         {:noreply, state}
 
@@ -916,15 +942,22 @@ defmodule Platform.Orchestration.TaskRouter do
           # `:waiting_human` the episode has been narrated (or a stage-level
           # gate is already parked here), so stay silent rather than
           # double-posting on a re-broadcast.
+          gate = architecture_gate_occupancy(task_id)
+
           if state.status != :waiting_human do
             maybe_log_heartbeat_suppressed(
               state,
               find_stage(Tasks.current_plan(task_id), state.current_stage_id),
-              reason: "awaiting_plan_review"
+              plan_gate_log_opts(gate)
             )
           end
 
-          state |> clear_liveness() |> Map.put(:status, :waiting_human)
+          # Arm outside the edge guard — see the `:dispatch` handler's plan
+          # branch for why.
+          state
+          |> clear_liveness()
+          |> Map.put(:status, :waiting_human)
+          |> arm_architecture_gate_deadline(gate)
 
         "approved" ->
           state
@@ -937,6 +970,63 @@ defmodule Platform.Orchestration.TaskRouter do
         _other ->
           state
       end
+
+    {:noreply, state}
+  end
+
+  # ── ADR-0046 member 5 stage 5: the architecture gate's deadline ────────
+  #
+  # THE EDGE, NOT THE GUARANTEE. `Tasks.architecture_gate/1` already reports a
+  # past-deadline `pending` gate as `{:resolved, %{"state" => "expired"}}`
+  # WITHOUT writing, so `approve_plan/3` stops blocking whether or not this
+  # message is ever delivered. That level check is the correctness guarantee;
+  # this timer is only the eager path, which additionally persists the verdict
+  # and runs the deferred `settle_plan_submission/1` tail.
+  #
+  # Losing this message degrades to "resolved late", never to "stuck", and it
+  # is genuinely lossy: `TaskRouterWatcher.should_run?/1` requires
+  # `assignee_type == "agent"`, so a task assigned to a USER for planning has
+  # NO router and never arms one, and a router that dies between the gate
+  # opening and the deadline takes its timer with it. Two independent
+  # fallbacks catch that, and they are not the same mechanism:
+  #
+  #   * NOTHING BLOCKS — `architecture_gate/1`'s projection reports the overdue
+  #     gate as expired without writing, so `approve_plan/3` admits a human
+  #     immediately, router or no router. This is the correctness guarantee.
+  #   * IT STILL SETTLES — `architecture_gate_occupancy/1`'s `:overdue` answer
+  #     re-fires this message at 0 ms the next time any router observes the
+  #     task, so the verdict gets written and the deferred tail runs. Where no
+  #     router will ever exist, that fallback does NOT apply and the plan waits
+  #     for the human the projection has already unblocked. Saying which
+  #     fallback covers which case matters: only the first one is universal.
+  #
+  # Built this way round on purpose. The 2026-07-26 journal records a live
+  # incident where `deploying -> done` lived solely in an edge-triggered PubSub
+  # handler with no level re-check, and a container restart between the
+  # broadcast and the handler stranded a completed task at `deploying`
+  # indefinitely while re-dispatching every ~90 minutes.
+  #
+  # Safe to fire late, twice, or against an already-resolved gate:
+  # `record_architecture_verdict/3` arbitrates on the PERSISTED row inside a
+  # guarded `UPDATE ... WHERE ->>'state' = 'pending'`, so a duplicate is
+  # `{:error, :gate_already_resolved}` and an architect verdict that beat the
+  # timer to the write genuinely wins.
+  def handle_info({:architecture_gate_deadline, plan_id}, %State{} = state) do
+    state = %{state | architecture_deadline_ref: nil}
+
+    case Tasks.resolve_architecture_gate(plan_id, :expired) do
+      {:ok, _resolved} ->
+        Logger.info(
+          "[TaskRouter] architecture gate expired for plan=#{plan_id} task=#{state.task_id}"
+        )
+
+      {:error, reason} ->
+        # Expected on a duplicate fire, a gate an architect already closed, or
+        # a plan superseded before the deadline landed. Not an error path.
+        Logger.debug(
+          "[TaskRouter] architecture gate deadline no-op for plan=#{plan_id}: #{inspect(reason)}"
+        )
+    end
 
     {:noreply, state}
   end
@@ -1683,6 +1773,20 @@ defmodule Platform.Orchestration.TaskRouter do
           "awaiting_plan_review" ->
             "Dispatch suppressed: plan is awaiting human review — approve or reject the plan to resume"
 
+          # ADR-0046 member 5 stage 5. A THIRD string, not an edit to the two
+          # above: `70fc30fe` deliberately made "awaiting_plan_review"
+          # separately greppable from "awaiting_human_review" and shipped six
+          # tests against the resulting copy. Both survive byte-identical.
+          #
+          # It must NOT tell the reader to approve or reject — no human action
+          # is pending while the architect holds the slot — and it must name
+          # the deadline, because "wait" without an end is indistinguishable
+          # from "hung".
+          "awaiting_architecture_review" ->
+            "Dispatch suppressed: plan is with the architect for review — no human action needed yet; the architecture gate falls open on its own at " <>
+              (Keyword.get(opts, :gate_deadline_at) || "its deadline") <>
+              " and the plan proceeds from there"
+
           "awaiting_human_review" ->
             "Dispatch suppressed: awaiting human review on a manual_approval validation"
 
@@ -2266,6 +2370,100 @@ defmodule Platform.Orchestration.TaskRouter do
   defp pending_review_request?(task_id) do
     ReviewRequests.list_pending_for_task(task_id) != []
   end
+
+  # ── ADR-0046 member 5 stage 5: who is holding the plan slot ───────────
+  #
+  # NO SECOND HOLD MECHANISM. A gated plan simply stays `pending_review`,
+  # which is exactly the condition `plan_awaiting_review?/1` above already
+  # suppresses across all ~13 dispatch injectors. This pair of helpers only
+  # answers "who is the occupant" — for the copy and for the deadline — and
+  # never decides whether to suppress.
+  #
+  # Three answers, and the third one is the whole reason this is a `case` and
+  # not a boolean:
+  #
+  #   * `{:open, plan_id, verdict}` — the architect genuinely holds the slot.
+  #   * `{:overdue, plan_id}` — the PERSISTED row still says `"pending"` but
+  #     the deadline has passed. `architecture_gate/1` has already stopped
+  #     blocking on it, but nobody wrote the verdict or ran the deferred
+  #     `settle_plan_submission/1` tail.
+  #   * `nil` — no gate, or one already resolved in the row.
+  #
+  # THE `:overdue` CASE IS THE LEVEL RE-CHECK ON REHYDRATE, and it is not
+  # theoretical. Without it a router that reboots AFTER the deadline (the
+  # `TaskRouterWatcher` restarts routers on every runtime reconnect and every
+  # 5-minute reconcile, so reboots are the norm) would arm no timer at all and
+  # park — leaving a plan whose gate fell open sitting at `pending_review`
+  # forever, waiting on a human, with a `"pending"` verdict nobody will ever
+  # close. That is precisely the `deploying -> done` incident shape the
+  # 2026-07-26 journal records, and "add a level-triggered re-check on
+  # init/rehydrate" is the fix it recommends. It is applied here at the one
+  # point where the same shape could recur.
+  #
+  # `Tasks.latest_plan/1` is a fresh query, so the `"pending"` match is on the
+  # persisted row and not on a struct somebody loaded earlier; the
+  # `architecture_gate/1` call re-reads again and owns the expiry rule, so
+  # "when is it overdue" is defined in exactly one place.
+  defp architecture_gate_occupancy(task_id) do
+    case Tasks.latest_plan(task_id) do
+      %{architecture_verdict: %{"state" => "pending"}} = plan ->
+        case Tasks.architecture_gate(plan) do
+          {:open, verdict} -> {:open, plan.id, verdict}
+          _past_deadline -> {:overdue, plan.id}
+        end
+
+      _no_open_gate ->
+        nil
+    end
+  end
+
+  # An overdue gate takes the HUMAN copy, not the architect's: its window has
+  # closed, `approve_plan/3` no longer refuses, and telling a reader to keep
+  # waiting on an architect who is out of time would be false.
+  defp plan_gate_log_opts({:open, _plan_id, verdict}) do
+    [reason: "awaiting_architecture_review", gate_deadline_at: verdict["deadline_at"]]
+  end
+
+  defp plan_gate_log_opts(_not_open), do: [reason: "awaiting_plan_review"]
+
+  defp arm_architecture_gate_deadline(%State{} = state, nil), do: state
+
+  defp arm_architecture_gate_deadline(%State{} = state, occupancy) do
+    _ = cancel_architecture_gate_deadline(state.architecture_deadline_ref)
+
+    {plan_id, delay_ms} =
+      case occupancy do
+        {:open, plan_id, verdict} -> {plan_id, architecture_gate_remaining_ms(verdict)}
+        # Already past due — settle it now, through the SAME one message, so
+        # there is a single path from "the deadline is up" to "the gate is
+        # closed and the deferred tail has run".
+        {:overdue, plan_id} -> {plan_id, 0}
+      end
+
+    ref = Process.send_after(self(), {:architecture_gate_deadline, plan_id}, delay_ms)
+
+    %{state | architecture_deadline_ref: ref}
+  end
+
+  defp cancel_architecture_gate_deadline(nil), do: :ok
+
+  defp cancel_architecture_gate_deadline(ref) when is_reference(ref),
+    do: Process.cancel_timer(ref)
+
+  # From the PERSISTED `deadline_at` minus now, clamped at 0 — NEVER a fresh
+  # window. `TaskRouterWatcher` restarts routers on every runtime reconnect
+  # and every 5-minute reconcile, so a full window here would let a restart
+  # loop renew the deadline indefinitely: the same defect shape as a lease
+  # that re-arms on every touch. Because the delay is a pure function of a row
+  # nobody rewrites, re-arming N times can only ever shorten it.
+  defp architecture_gate_remaining_ms(%{"deadline_at" => deadline}) when is_binary(deadline) do
+    case DateTime.from_iso8601(deadline) do
+      {:ok, at, _offset} -> at |> DateTime.diff(DateTime.utc_now(), :millisecond) |> max(0)
+      {:error, _reason} -> 0
+    end
+  end
+
+  defp architecture_gate_remaining_ms(_verdict), do: 0
 
   defp heartbeat_suppressible_for_task?(_task_id, nil), do: false
 
