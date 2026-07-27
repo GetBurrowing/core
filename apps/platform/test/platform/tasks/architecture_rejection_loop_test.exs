@@ -10,6 +10,86 @@ defmodule Platform.Tasks.ArchitectureRejectionLoopTest do
   Not `async: true`: `resolve_architecture_gate/3` broadcasts
   `{:plan_updated, _}` on `tasks:board`, which wakes the singleton
   `TaskRouterWatcher`, and `reject_plan/3` broadcasts again.
+
+  ## VACUITY CONTROLS, MEASURED (8/8 detected, at commit 56d22f8e)
+
+  Control set: this file (11 tests), `architecture_gate_approval_test.exs`
+  (12) and `architecture_rejection_streak_test.exs` (18) — 0 failures
+  unmodified. Each control changes exactly one thing in the SOURCE and
+  nothing in any test file. Named by the assertion that actually fires,
+  not by the failure count.
+
+    1. THE SEAM REVERTED to member 5's bare stop (`:reject` clause in
+       `Tasks.settle_resolved_architecture_gate/2` returns `{:ok,
+       resolved}`). 6 failures — 5 here, 1 in the retargeted approval test.
+       Detected. FINDING: for the mandatory detector the assertion that
+       fires is the RETURN-SHAPE match `{:ok, %Plan{status: "rejected"}}`
+       at the top of the test, NOT the `rejection_reason` or message
+       assertions below it — the return match catches the stall first and
+       the discriminating assertions are never reached. Control 1b exists
+       because of that.
+    1b. THE WAKE-UP DROPPED IN ISOLATION: kept the seam and the
+       `reject_plan/3` write, deleted only the
+       `PlanRejection.post_feedback/3` call — the realistic "the durable
+       reason is enough" tidy. 3 failures, ALL of them on
+       `rejection_messages(space.id)`. Detected, and this is the control
+       that proves the wake-up half does real work: without it the whole
+       change would pass its own detector while the planner never woke up
+       and the loop never turned.
+    2. `escalation_due?/1` FORCED FALSE — the unbounded loop, the defect
+       this task exists to prevent. 5 failures: 3 in the streak file and 2
+       here, firing on `{:ok, %Plan{status: "pending_review"}}` for the
+       round-two gate call and on `{:ok, :escalated, _}` for the direct
+       `handle/1` call. Detected.
+    2b. THE INEQUALITY COLLAPSED: `streak >= reject_limit()` -> `>`, the
+       off-by-one that lets a third round through. 3 failures, the same
+       two here plus "escalation is due exactly at the limit". Detected —
+       run because a guard specified as a direct inequality is exactly the
+       shape that passes under its own collapse.
+    2c. ESCALATION STILL POSTS: kept the `:escalated` outcome and the
+       untouched plan, but had `escalate/1` post the feedback anyway — the
+       spin wearing the bound's clothes. 1 failure, on `assert
+       length(rejection_messages(space.id)) == 1` (left 2, right 1).
+       Detected, and this is what makes the absence-of-a-second-message
+       assertion non-decorative: controls 2 and 2b never reach it.
+    3. IN-FLIGHT GUARD REMOVED (`in_flight?/2` -> `false`). 2 failures,
+       both on `{:error, :plan_in_flight}` — the started-stage half and the
+       task-status half separately, so neither leg can regress alone.
+       Detected.
+    4. ITERATION OFF-BY-ONE (`streak(task_id) - 1`). 1 failure, on
+       `reason =~ "iteration 1 of 2"` against a body reading `iteration 0
+       of 2`. Detected — this is the assertion that pins the ORDER of
+       `record_architecture_verdict/3` and `handle/1`, which is otherwise
+       invisible.
+    5. STAGE NAME NEVER RESOLVED (`finding_stage_name/3` -> `nil`, so every
+       finding renders `(plan-wide)`). 2 failures: the detector's `=~ "Wire
+       the dispatch"` and the explicit-`stage_name` case. Detected — and
+       the pairing matters, since the detector's verdict carries only a
+       `stage_id`, so the name in the body can ONLY have come from a
+       lookup against `plan.stages`.
+    6. CONSTRAINT LITERAL HARDCODED (a bare `"module_boundary"` added to
+       the composer). 1 failure, the source-text guard, with its own
+       message. Detected.
+
+  ### Assertions that pass trivially, declared rather than counted
+
+    * `assert reloaded.architecture_verdict["state"] == "rejected"` in the
+      bound test is member 5's write, not this stage's — it is there to
+      show the escalated plan still CARRIES the objection, and it cannot
+      fail for any mutation of this module.
+    * `assert Repo.get!(Task, task.id).auto_approve_plan == true` is a
+      fixture assertion. Its content is that the "no auto-approval"
+      assertions beside it are a real refusal rather than a task that could
+      never have approved; on its own it asserts nothing about this stage.
+    * In "a failed execution-space post still leaves the plan rejected",
+      the no-RAISE half is trivial as written: `PlanRejection.post_feedback/3`
+      already swallows a missing space (stage 2's control 7 is its guard),
+      so `handle/1`'s `rescue` is not what makes this pass. The
+      non-trivial half is the one the test is named for — the persisted
+      reason survives a delivery that did not happen.
+    * The vocabulary guard (control 6) is a source-text grep, so it
+      "detects" by construction. It is here for the refactor that retypes a
+      literal, not as evidence that the composer works.
   """
 
   use Platform.DataCase, async: false
