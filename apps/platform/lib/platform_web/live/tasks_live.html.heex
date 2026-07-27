@@ -670,68 +670,90 @@
                   <% {mobile_action_label, mobile_action_reason_attr} =
                     mobile_stack_member_action_label(mobile_action_reason) %>
                   <% {mobile_status_label, mobile_status_class} = task_display_status(task) %>
-                  <button
-                    type="button"
-                    phx-click="select_task"
-                    phx-value-id={task.id}
-                    class="flex flex-col gap-1.5 rounded-box border border-base-300 bg-base-100 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring"
-                    data-task-id={task.id}
-                  >
-                    <div class="flex items-start gap-2">
-                      <span
-                        class={["mt-1.5 size-2 shrink-0 rounded-full", status_dot_class(col_key)]}
-                        aria-hidden="true"
-                      >
-                      </span>
-                      <span class="text-sm font-medium leading-snug flex-1">{task.title}</span>
-                      <span
-                        :if={has_active_run?(task)}
-                        class="mt-1.5 inline-block size-2 shrink-0 rounded-full bg-success animate-pulse"
-                        title="Active run"
-                      >
-                      </span>
-                    </div>
-                    <div class="flex flex-wrap items-center gap-1.5 pl-4 text-xs text-base-content/60">
-                      <%= if assignee do %>
-                        <%= if assignee.type == :user do %>
-                          <.human_avatar
-                            name={assignee.name}
-                            avatar_url={assignee.avatar_url}
-                            seed={assignee.seed}
-                            size="xs"
-                            class="size-4 shrink-0"
-                          />
-                        <% else %>
-                          <span class="flex size-4 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[9px] font-bold text-accent">
-                            {agent_initials(assignee.name)}
-                          </span>
+                  <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 2, mobile half.
+                       Same wrapper shape as the desktop card. The `data-role`
+                       values MUST differ from the desktop ones: `frontend/ui-ux.md`
+                       records that the two boards share ONE DOM (`lg:hidden` /
+                       `hidden lg:grid` — CSS visibility, not presence), so a shared
+                       value double-matches every selector. The component emits no
+                       `id` at all, so only `data-role` needs splitting.
+                       The extension is a SIBLING of the card here too, which is what
+                       keeps it out of the mobile card's own `<button>` — a `<button>`
+                       inside a `<button>` is invalid HTML and browsers reparent it. --%>
+                  <div class="flex flex-col" data-role="mobile-task-card-group">
+                    <.planning_step_extension
+                      task={task}
+                      data_role="mobile-planning-step-extension"
+                      class="min-h-[44px]"
+                    />
+                    <button
+                      type="button"
+                      phx-click="select_task"
+                      phx-value-id={task.id}
+                      class={[
+                        "flex flex-col gap-1.5 rounded-box border border-base-300 bg-base-100 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring",
+                        PlanningStepExtension.visible?(task) && "rounded-t-none"
+                      ]}
+                      data-task-id={task.id}
+                    >
+                      <div class="flex items-start gap-2">
+                        <span
+                          class={[
+                            "mt-1.5 size-2 shrink-0 rounded-full",
+                            status_dot_class(col_key)
+                          ]}
+                          aria-hidden="true"
+                        >
+                        </span>
+                        <span class="text-sm font-medium leading-snug flex-1">{task.title}</span>
+                        <span
+                          :if={has_active_run?(task)}
+                          class="mt-1.5 inline-block size-2 shrink-0 rounded-full bg-success animate-pulse"
+                          title="Active run"
+                        >
+                        </span>
+                      </div>
+                      <div class="flex flex-wrap items-center gap-1.5 pl-4 text-xs text-base-content/60">
+                        <%= if assignee do %>
+                          <%= if assignee.type == :user do %>
+                            <.human_avatar
+                              name={assignee.name}
+                              avatar_url={assignee.avatar_url}
+                              seed={assignee.seed}
+                              size="xs"
+                              class="size-4 shrink-0"
+                            />
+                          <% else %>
+                            <span class="flex size-4 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[9px] font-bold text-accent">
+                              {agent_initials(assignee.name)}
+                            </span>
+                          <% end %>
+                          <span class="truncate">{assignee.name}</span>
+                          <span aria-hidden="true">·</span>
                         <% end %>
-                        <span class="truncate">{assignee.name}</span>
-                        <span aria-hidden="true">·</span>
-                      <% end %>
-                      <%!-- Sponsor chip (ADR 0042 stage 1). Only renders when
+                        <%!-- Sponsor chip (ADR 0042 stage 1). Only renders when
                            `sponsor_user_id` is set — an absent sponsor is
                            silent, not a noisy "Unsponsored" pill. No own-
                            sponsorship ring affordance — Rowan rejected it as
                            always wrong (stage 4 rework). --%>
-                      <% sponsor = sponsor_identity(task, @users_by_id) %>
-                      <%= if sponsor do %>
-                        <.human_avatar
-                          name={sponsor.name}
-                          avatar_url={sponsor.avatar_url}
-                          seed={sponsor.seed}
-                          size="xs"
-                          class="size-4 shrink-0"
-                          title={"Sponsored by " <> sponsor.name}
-                          data-role="sponsor-avatar"
-                        />
-                        <span class="truncate">{sponsor.name}</span>
-                        <span aria-hidden="true">·</span>
-                      <% end %>
-                      <span :if={task.inserted_at} class="whitespace-nowrap">
-                        {relative_time(task.inserted_at)}
-                      </span>
-                      <%!-- Badges-for-tasks-that-need-feedback (task
+                        <% sponsor = sponsor_identity(task, @users_by_id) %>
+                        <%= if sponsor do %>
+                          <.human_avatar
+                            name={sponsor.name}
+                            avatar_url={sponsor.avatar_url}
+                            seed={sponsor.seed}
+                            size="xs"
+                            class="size-4 shrink-0"
+                            title={"Sponsored by " <> sponsor.name}
+                            data-role="sponsor-avatar"
+                          />
+                          <span class="truncate">{sponsor.name}</span>
+                          <span aria-hidden="true">·</span>
+                        <% end %>
+                        <span :if={task.inserted_at} class="whitespace-nowrap">
+                          {relative_time(task.inserted_at)}
+                        </span>
+                        <%!-- Badges-for-tasks-that-need-feedback (task
                            019e2c25 stage 3): mobile solo task cards now
                            render the same warning chip the stack-detail
                            rows + desktop kanban surface. The status badge
@@ -741,23 +763,24 @@
                            why a pending-review plan was invisible on the
                            mobile board). Mirrors the desktop kanban
                            gating in tasks_live.html.heex line ~717-723. --%>
-                      <span
-                        :if={task.status in ~w(blocked planning in_review deploying)}
-                        class={"#{mobile_status_class} badge-xs"}
-                      >
-                        {mobile_status_label}
-                      </span>
-                      <span
-                        :if={mobile_action_label}
-                        class="badge badge-warning badge-xs gap-1"
-                        data-role="mobile-task-action"
-                        data-action-reason={mobile_action_reason_attr}
-                      >
-                        <span class="hero-eye size-3"></span>
-                        {mobile_action_label}
-                      </span>
-                    </div>
-                  </button>
+                        <span
+                          :if={task.status in ~w(blocked planning in_review deploying)}
+                          class={"#{mobile_status_class} badge-xs"}
+                        >
+                          {mobile_status_label}
+                        </span>
+                        <span
+                          :if={mobile_action_label}
+                          class="badge badge-warning badge-xs gap-1"
+                          data-role="mobile-task-action"
+                          data-action-reason={mobile_action_reason_attr}
+                        >
+                          <span class="hero-eye size-3"></span>
+                          {mobile_action_label}
+                        </span>
+                      </div>
+                    </button>
+                  </div>
               <% end %>
             <% end %>
           </div>
@@ -1065,164 +1088,190 @@
                 </div>
               <% _ -> %>
                 <% task = item %>
-                <div
-                  id={"task-card-#{task.id}"}
-                  data-task-id={task.id}
-                  draggable="true"
-                  class="group card card-compact cursor-grab border border-base-300 bg-base-100 shadow-sm transition-all hover:shadow-md active:cursor-grabbing"
-                  phx-click="select_task"
-                  phx-value-id={task.id}
-                >
-                  <div class="card-body gap-1 p-3">
-                    <%!-- Project name --%>
-                    <p
-                      :if={task.project}
-                      class="text-[10px] font-medium uppercase tracking-wider text-base-content/40"
-                    >
-                      {task.project.name}
-                    </p>
+                <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 2: the planning-step
+                     extension is a SIBLING of the card inside a zero-gap
+                     `flex flex-col` wrapper, not a child of it. Two reasons, both
+                     load-bearing:
+                     1. The column container is `flex flex-1 flex-col gap-2`, so an
+                        unwrapped sibling would sit 0.5rem above the card and read as
+                        a separate object. The wrapper makes that gap structurally
+                        zero without a `-mb-2` magic number coupled to the column's
+                        spacing token.
+                     2. The wrapper carries NO `data-task-id`. `kanban_drag_drop.js`
+                        resolves the drag source with `e.target.closest("[data-task-id]")`;
+                        the card keeps the attribute and stays the drag source, and a
+                        drag begun on the extension resolves to `null` so the hook
+                        no-ops. Putting `data-task-id` here would fade the wrong
+                        element on drag.
+                     `rounded-t-none` is conditional on `visible?/1` so a task with
+                     nothing to show renders a byte-identical card to before. --%>
+                <div class="flex flex-col" data-role="task-card-group">
+                  <.planning_step_extension task={task} data_role="planning-step-extension" />
+                  <div
+                    id={"task-card-#{task.id}"}
+                    data-task-id={task.id}
+                    draggable="true"
+                    class={[
+                      "group card card-compact cursor-grab border border-base-300 bg-base-100 shadow-sm transition-all hover:shadow-md active:cursor-grabbing",
+                      PlanningStepExtension.visible?(task) && "rounded-t-none"
+                    ]}
+                    phx-click="select_task"
+                    phx-value-id={task.id}
+                  >
+                    <div class="card-body gap-1 p-3">
+                      <%!-- Project name --%>
+                      <p
+                        :if={task.project}
+                        class="text-[10px] font-medium uppercase tracking-wider text-base-content/40"
+                      >
+                        {task.project.name}
+                      </p>
 
-                    <%!-- Title row --%>
-                    <%!--
+                      <%!-- Title row --%>
+                      <%!--
                 v2 stage 3: kanban-card title is plain text. Clicking it
                 bubbles to the card's outer `phx-click="select_task"` and
                 opens the detail panel, where the title can be edited via
                 the explicit edit-mode toggle.
               --%>
-                    <div class="flex items-start justify-between gap-2">
-                      <h3
-                        id={"card-title-#{task.id}"}
-                        class="text-sm font-medium leading-snug flex-1"
-                        data-role="card-title"
-                      >
-                        {task.title}
-                      </h3>
-                      <div class="flex items-center gap-1 flex-shrink-0">
-                        <%!-- Active run indicator --%>
-                        <span
-                          :if={has_active_run?(task)}
-                          class="inline-block size-2 rounded-full bg-success animate-pulse"
-                          title="Active run"
-                        />
-                        <%!-- Assignee --%>
-                        <% assignee = assignee_identity(task, @users_by_id, @agents_by_id) %>
-                        <%= if assignee do %>
-                          <%= if assignee.type == :user do %>
-                            <.human_avatar
-                              name={assignee.name}
-                              avatar_url={assignee.avatar_url}
-                              seed={assignee.seed}
-                              size="xs"
-                              class="shrink-0"
-                              title={assignee.name}
-                            />
-                          <% else %>
-                            <span
-                              class="flex size-5 items-center justify-center rounded-full bg-accent/15 text-[10px] font-bold text-accent ring-1 ring-accent/20"
-                              title={assignee.name}
-                              data-avatar-kind="agent"
-                            >
-                              {agent_initials(assignee.name)}
-                            </span>
+                      <div class="flex items-start justify-between gap-2">
+                        <h3
+                          id={"card-title-#{task.id}"}
+                          class="text-sm font-medium leading-snug flex-1"
+                          data-role="card-title"
+                        >
+                          {task.title}
+                        </h3>
+                        <div class="flex items-center gap-1 flex-shrink-0">
+                          <%!-- Active run indicator --%>
+                          <span
+                            :if={has_active_run?(task)}
+                            class="inline-block size-2 rounded-full bg-success animate-pulse"
+                            title="Active run"
+                          />
+                          <%!-- Assignee --%>
+                          <% assignee = assignee_identity(task, @users_by_id, @agents_by_id) %>
+                          <%= if assignee do %>
+                            <%= if assignee.type == :user do %>
+                              <.human_avatar
+                                name={assignee.name}
+                                avatar_url={assignee.avatar_url}
+                                seed={assignee.seed}
+                                size="xs"
+                                class="shrink-0"
+                                title={assignee.name}
+                              />
+                            <% else %>
+                              <span
+                                class="flex size-5 items-center justify-center rounded-full bg-accent/15 text-[10px] font-bold text-accent ring-1 ring-accent/20"
+                                title={assignee.name}
+                                data-avatar-kind="agent"
+                              >
+                                {agent_initials(assignee.name)}
+                              </span>
+                            <% end %>
                           <% end %>
-                        <% end %>
-                        <%!-- Sponsor chip (ADR 0042 stage 1). Absent sponsor
+                          <%!-- Sponsor chip (ADR 0042 stage 1). Absent sponsor
                              renders nothing. No own-sponsorship ring
                              affordance — Rowan rejected it as always wrong
                              (stage 4 rework). Mirrors the mobile chip shape. --%>
-                        <% sponsor = sponsor_identity(task, @users_by_id) %>
-                        <.human_avatar
-                          :if={sponsor}
-                          name={sponsor.name}
-                          avatar_url={sponsor.avatar_url}
-                          seed={sponsor.seed}
-                          size="xs"
-                          class="shrink-0"
-                          title={"Sponsored by " <> sponsor.name}
-                          data-role="sponsor-avatar"
-                        />
-                        <%!-- Three-dot menu — opens a bottom sheet on mobile + a centered
+                          <% sponsor = sponsor_identity(task, @users_by_id) %>
+                          <.human_avatar
+                            :if={sponsor}
+                            name={sponsor.name}
+                            avatar_url={sponsor.avatar_url}
+                            seed={sponsor.seed}
+                            size="xs"
+                            class="shrink-0"
+                            title={"Sponsored by " <> sponsor.name}
+                            data-role="sponsor-avatar"
+                          />
+                          <%!-- Three-dot menu — opens a bottom sheet on mobile + a centered
                        sheet on desktop. Replaced the inert DaisyUI dropdown
                        (task 019e0d4b stage 2). The icon stays opacity-0 / hover-
                        reveal on desktop; on mobile it's always visible since
                        there's no hover signal.  --%>
-                        <button
-                          :if={deletable_task?(task)}
-                          type="button"
-                          phx-click="open_task_actions"
-                          phx-value-id={task.id}
-                          aria-label="Task actions"
-                          title="Task actions"
-                          class="btn btn-ghost btn-xs btn-square opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity"
-                        >
-                          <span class="hero-ellipsis-vertical size-4"></span>
-                        </button>
+                          <button
+                            :if={deletable_task?(task)}
+                            type="button"
+                            phx-click="open_task_actions"
+                            phx-value-id={task.id}
+                            aria-label="Task actions"
+                            title="Task actions"
+                            class="btn btn-ghost btn-xs btn-square opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity"
+                          >
+                            <span class="hero-ellipsis-vertical size-4"></span>
+                          </button>
+                        </div>
                       </div>
-                    </div>
 
-                    <%!-- Author + assignee + date --%>
-                    <div
-                      :if={
-                        task.reported_by || assignee_name(task, @agent_names) || task.inserted_at
-                      }
-                      class="mt-1 flex items-center gap-1.5 text-[10px] text-base-content/40"
-                    >
-                      <span
-                        :if={task.reported_by}
-                        class="truncate max-w-[100px]"
-                        title={"Reported by " <> (task.reported_by || "")}
+                      <%!-- Author + assignee + date --%>
+                      <div
+                        :if={
+                          task.reported_by || assignee_name(task, @agent_names) ||
+                            task.inserted_at
+                        }
+                        class="mt-1 flex items-center gap-1.5 text-[10px] text-base-content/40"
                       >
-                        {task.reported_by}
-                      </span>
-                      <span :if={
-                        task.reported_by &&
-                          (assignee_name(task, @agent_names) || task.inserted_at)
-                      }>
-                        ·
-                      </span>
-                      <span :if={assignee_name(task, @agent_names)} class="truncate max-w-[100px]">
-                        → {assignee_name(task, @agent_names)}
-                      </span>
-                      <span :if={assignee_name(task, @agent_names) && task.inserted_at}>·</span>
-                      <span :if={task.inserted_at} class="whitespace-nowrap">
-                        {relative_time(task.inserted_at)}
-                      </span>
-                    </div>
+                        <span
+                          :if={task.reported_by}
+                          class="truncate max-w-[100px]"
+                          title={"Reported by " <> (task.reported_by || "")}
+                        >
+                          {task.reported_by}
+                        </span>
+                        <span :if={
+                          task.reported_by &&
+                            (assignee_name(task, @agent_names) || task.inserted_at)
+                        }>
+                          ·
+                        </span>
+                        <span
+                          :if={assignee_name(task, @agent_names)}
+                          class="truncate max-w-[100px]"
+                        >
+                          → {assignee_name(task, @agent_names)}
+                        </span>
+                        <span :if={assignee_name(task, @agent_names) && task.inserted_at}>·</span>
+                        <span :if={task.inserted_at} class="whitespace-nowrap">
+                          {relative_time(task.inserted_at)}
+                        </span>
+                      </div>
 
-                    <%!-- Bottom row: priority + progress --%>
-                    <div class="mt-1 flex items-center gap-2">
-                      <span :if={task.priority} class={priority_badge_class(task.priority)}>
-                        {task.priority}
-                      </span>
-                      <% {status_badge_label, status_badge_class} = task_display_status(task) %>
-                      <span
-                        :if={task.status in ~w(blocked planning in_review deploying)}
-                        class={"#{status_badge_class} badge-xs"}
-                      >
-                        {status_badge_label}
-                      </span>
+                      <%!-- Bottom row: priority + progress --%>
+                      <div class="mt-1 flex items-center gap-2">
+                        <span :if={task.priority} class={priority_badge_class(task.priority)}>
+                          {task.priority}
+                        </span>
+                        <% {status_badge_label, status_badge_class} = task_display_status(task) %>
+                        <span
+                          :if={task.status in ~w(blocked planning in_review deploying)}
+                          class={"#{status_badge_class} badge-xs"}
+                        >
+                          {status_badge_label}
+                        </span>
 
-                      <%!-- Blocked-by-deps badge: only when status="blocked" AND
+                        <%!-- Blocked-by-deps badge: only when status="blocked" AND
                      metadata["unmet_dependencies"] is non-empty. Count is
                      read straight from metadata (no per-card DB hit). --%>
-                      <span
-                        :if={task.status == "blocked" and unmet_dependency_count(task) > 0}
-                        class="badge badge-error badge-xs"
-                        title="Waiting on dependencies"
-                      >
-                        Blocked · {unmet_dependency_count(task)}
-                      </span>
+                        <span
+                          :if={task.status == "blocked" and unmet_dependency_count(task) > 0}
+                          class="badge badge-error badge-xs"
+                          title="Waiting on dependencies"
+                        >
+                          Blocked · {unmet_dependency_count(task)}
+                        </span>
 
-                      <%!-- Review badge --%>
-                      <span
-                        :if={Map.get(@review_counts, task.id, 0) > 0}
-                        class="badge badge-warning badge-xs gap-1"
-                      >
-                        <span class="hero-eye size-3"></span>
-                        {Map.get(@review_counts, task.id)} review
-                      </span>
+                        <%!-- Review badge --%>
+                        <span
+                          :if={Map.get(@review_counts, task.id, 0) > 0}
+                          class="badge badge-warning badge-xs gap-1"
+                        >
+                          <span class="hero-eye size-3"></span>
+                          {Map.get(@review_counts, task.id)} review
+                        </span>
 
-                      <%!-- Meeting-triage `needs_promotion` badge (task
+                        <%!-- Meeting-triage `needs_promotion` badge (task
                      019f5e2b-8d29 stage 2, tooltip + icon polished in
                      task 019f6e2c stage 3). Rendered only for backlog
                      tasks flagged by the triage filer; clicking dispatches
@@ -1233,36 +1282,37 @@
                      makes sense before the task leaves the entry column.
                      Browser-native `title=` tooltip — a Tippy hook per
                      kanban card is overkill for a single-line message. --%>
-                      <button
-                        :if={task.status == "backlog" and task.needs_promotion}
-                        type="button"
-                        class="badge badge-warning badge-xs gap-1 cursor-pointer"
-                        phx-click="promote_task"
-                        phx-value-id={task.id}
-                        data-role="needs-promotion-badge"
-                        title="Filed from a meeting canvas. Click to promote."
-                      >
-                        <span class="hero-arrow-up-circle size-3"></span> Needs promotion
-                      </button>
+                        <button
+                          :if={task.status == "backlog" and task.needs_promotion}
+                          type="button"
+                          class="badge badge-warning badge-xs gap-1 cursor-pointer"
+                          phx-click="promote_task"
+                          phx-value-id={task.id}
+                          data-role="needs-promotion-badge"
+                          title="Filed from a meeting canvas. Click to promote."
+                        >
+                          <span class="hero-arrow-up-circle size-3"></span> Needs promotion
+                        </button>
 
-                      <%!-- Plan stage progress --%>
-                      <% progress = plan_progress(task) %>
-                      <div :if={progress} class="flex flex-1 items-center gap-1">
-                        <progress
-                          class="progress progress-primary h-1 flex-1"
-                          value={elem(progress, 0)}
-                          max={elem(progress, 1)}
-                        />
-                        <span class="text-[10px] text-base-content/40">
-                          {elem(progress, 0)}/{elem(progress, 1)}
-                        </span>
+                        <%!-- Plan stage progress --%>
+                        <% progress = plan_progress(task) %>
+                        <div :if={progress} class="flex flex-1 items-center gap-1">
+                          <progress
+                            class="progress progress-primary h-1 flex-1"
+                            value={elem(progress, 0)}
+                            max={elem(progress, 1)}
+                          />
+                          <span class="text-[10px] text-base-content/40">
+                            {elem(progress, 0)}/{elem(progress, 1)}
+                          </span>
+                        </div>
                       </div>
-                    </div>
 
-                    <%!-- Per ADR 0029, plan approval is the only start signal.
+                      <%!-- Per ADR 0029, plan approval is the only start signal.
                    No separate manual "Start" button on the card. The user
                    approves a plan from the detail panel, and the task
                    transitions automatically. --%>
+                    </div>
                   </div>
                 </div>
             <% end %>
