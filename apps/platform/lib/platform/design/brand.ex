@@ -439,8 +439,14 @@ defmodule Platform.Design.Brand do
 
   defp page_body(_), do: nil
 
+  # `Platform.UUID.cast/1`, not `Ecto.UUID.cast/1`: the bare cast accepts any
+  # raw 16-byte binary by hex-encoding it, so a 16-character slug clears it.
+  # The `rescue` below already made this site total, and the lookup receives
+  # the cast's OUTPUT rather than the caller's string, so nothing here could
+  # raise either way — this keeps the module on the one canonical predicate
+  # (see `Platform.UUID`'s moduledoc) rather than a second, weaker copy.
   defp fetch_project(project_id) when is_binary(project_id) and project_id != "" do
-    case Ecto.UUID.cast(project_id) do
+    case Platform.UUID.cast(project_id) do
       {:ok, uuid} -> Tasks.get_project(uuid)
       :error -> nil
     end

@@ -2762,16 +2762,26 @@ defmodule Platform.Tasks do
     end
   end
 
-  # `Accounts.get_user/1` is `Repo.get(User, id)`, which RAISES
-  # `Ecto.Query.CastError` on a non-UUID binary — and `"system"`,
-  # `"system:auto"` and every agent slug are non-UUID binaries, i.e. the
-  # common case here. The cast is what makes the predicate total; the
-  # lookup is still the actual admission test.
+  # `Accounts.get_user/1` is now TOTAL — it returns nil for `"system"`,
+  # `"system:auto"` and every agent slug, which are the common case here — so
+  # the lookup is both the admission test and the totality mechanism.
+  #
+  # This used to carry an `Ecto.UUID.cast/1` pre-filter, written on this
+  # branch when `Accounts.get_user/1` still raised `Ecto.Query.CastError` on a
+  # non-UUID binary. Main's 9b0d74d8 pushed that guard down into
+  # `Accounts.get_user/1` itself (via `Platform.UUID.valid?/1`), making the
+  # pre-filter redundant. `repo_lookup_boundary_test.exs`'s moduledoc names
+  # this exact function as the one collapse it deliberately left to whoever
+  # merged this stack.
+  #
+  # Behaviour is unchanged in every case. A canonical UUID resolved then and
+  # resolves now. A malformed id returned nil then — the cast rejected it —
+  # and returns nil now. A raw 16-byte binary is the only input whose PATH
+  # differs: the bare cast used to hex-encode it into a well-formed UUID that
+  # then missed, where `Platform.UUID.valid?/1` rejects it on the length check
+  # first. Both roads end at nil.
   defp human_approver(approved_by) when is_binary(approved_by) do
-    case Ecto.UUID.cast(approved_by) do
-      {:ok, uuid} -> Accounts.get_user(uuid)
-      :error -> nil
-    end
+    Accounts.get_user(approved_by)
   end
 
   defp human_approver(_other), do: nil

@@ -8152,8 +8152,16 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── ADR-0046 member 5 stage 4: plan_architecture_verdict internals ───
 
+  # `Platform.UUID.cast/1`, not `Ecto.UUID.cast/1` — the same spelling the
+  # rest of this module already uses. `plan_id` arrives straight off an
+  # agent's tool payload, and a bare cast hex-encodes any raw 16-byte binary
+  # into a well-formed UUID instead of rejecting it. The outcome is the same
+  # here either way (`:plan_not_found`, because the encoded id misses), so
+  # this is a convention fix rather than a behaviour fix — but the ratchet in
+  # `repo_lookup_boundary_test.exs` exists precisely so bare casts do not
+  # accumulate on agent-facing paths where the next one might not be benign.
   defp verdict_plan(plan_id) when is_binary(plan_id) do
-    case Ecto.UUID.cast(plan_id) do
+    case Platform.UUID.cast(plan_id) do
       {:ok, uuid} ->
         case Repo.get(Plan, uuid) do
           %Plan{} = plan -> {:ok, plan}
