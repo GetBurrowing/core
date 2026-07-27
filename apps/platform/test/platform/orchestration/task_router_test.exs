@@ -2981,18 +2981,33 @@ defmodule Platform.Orchestration.TaskRouterTest do
   #     must be OBSERVED, proving the read goes through `Application.get_env/3`
   #     rather than the literal.
   #
-  # **Pins that pass trivially, declared as such.** None. Every assertion in
-  # this section has a paired firing case.
+  # **Declared vacuity.** Two, and both are worth stating rather than hiding:
+  #
+  #   * "a task already carrying a plan is never held" PASSES against a tree
+  #     with no design hold at all — it is an absence assertion and absence is
+  #     the pre-change state. It is not vacuous against the shipped code: the
+  #     thing it pins is the `Tasks.latest_plan/1 == nil` conjunct in
+  #     `design_step_open?/1`, and removing only that conjunct fires it. That is
+  #     the peel that locates what carries this claim.
+  #   * "killing the holder does not strand the task" is protected REDUNDANTLY
+  #     by the level check and by the DB-derived deadline in
+  #     `arm_design_deadline/3`. Removing either one alone leaves the other to
+  #     release the replacement router, so no single peel fires it. Only the
+  #     conjunction does. The redundancy is deliberate — this is the property
+  #     the whole stage exists for — but a test that no single peel can break is
+  #     a weak test, and the test below is the one that carries the claim on its
+  #     own.
   #
   # ## How the hold cannot outlive its holder
   #
-  # "the level check releases a hold with no timer at all" is the test that
-  # carries that claim. It kills the holding router — destroying the
-  # `:design_deadline` timer with it — and starts a fresh one against a
-  # backdated row. The replacement releases the planner from the level check
-  # alone. That is the journalled `deploying -> done` incident inverted: there,
-  # the transition lived only in an edge-triggered handler and a restart between
-  # broadcast and handler stranded the task forever.
+  # "an overdue hold is released by the level check on a tick the armed timer
+  # cannot serve" is the discriminating test. It sets the window to an hour, so
+  # the timer the hold armed cannot possibly fire inside the test, then backdates
+  # the row past the window and delivers one ordinary `:dispatch`. The release
+  # can only have come from `design_hold_expired?/2`. That is the journalled
+  # `deploying -> done` incident inverted: there, the transition lived only in an
+  # edge-triggered handler with no level re-check, and a restart between the
+  # broadcast and the handler stranded the task forever.
   defmodule NoopDispatcher do
     @moduledoc false
     def maybe_dispatch(_signal), do: :ok
@@ -3289,27 +3304,61 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert reload_task(settled).planning_step_outcomes["design"]["outcome"] == "complete"
     end
 
-    test "the level check releases a hold with no timer at all", %{
-      project: project,
-      assignee: assignee
-    } do
+    test "an overdue hold is released by the level check on a tick the armed timer cannot serve",
+         %{project: project, assignee: assignee} do
       stub_designer_dispatcher()
       wire_designer!()
+
+      # An hour. Whatever timer the hold arms CANNOT fire inside this test, so
+      # nothing but the level check can release the planner below. That is what
+      # makes this the discriminating case: with `design_hold_expired?/2`
+      # stubbed out, the only remaining releaser is a timer an hour away.
+      put_design_timeout(3_600_000)
+
+      held = design_task!(project, @design_ui_title)
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+      {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
+      Process.sleep(200)
+      assert TaskRouter.current_status(held.id).status == :waiting_design
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
+
+      # The row is now two hours old — overdue against the one-hour window — but
+      # the armed timer still believes it has an hour to go.
+      backdate!(held, 7_200_000)
+
+      # Any dispatch tick at all. In production these arrive from
+      # `TaskRouterWatcher.redispatch_for_runtime/1` on every runtime reconnect,
+      # from `force_dispatch/1`, and from `init/1` on boot — which is why the
+      # timer is only ever an optimisation.
+      send(pid, :dispatch)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
+
+      task = reload_task(held)
+      assert task.planning_step == "planning"
+      assert task.planning_step_outcomes["design"]["outcome"] == "failed"
+    end
+
+    test "killing the holder does not strand the task", %{project: project, assignee: assignee} do
+      stub_designer_dispatcher()
+      wire_designer!()
+
+      put_design_timeout(3_600_000)
 
       held = design_task!(project, @design_ui_title)
       {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
       Process.sleep(200)
       assert TaskRouter.current_status(held.id).status == :waiting_design
 
-      # Kill the holder. The `:design_deadline` timer dies with it — this is the
-      # container restart from the journalled incident.
+      # Kill the holder. The `:design_deadline` timer dies with it, and nothing
+      # persisted the hold — this is the container restart from the journalled
+      # `deploying -> done` incident, where the transition lived solely in an
+      # edge-triggered PubSub handler and the restart stranded the task forever.
       GenServer.stop(pid, :normal, 1_000)
       refute Process.alive?(pid)
 
-      # The row is now older than the window. Nothing in the system holds a
-      # timer for it.
-      put_design_timeout(50)
-      backdate!(held, 5_000)
+      backdate!(held, 7_200_000)
 
       replacement_assignee = %{type: :federated, id: "runtime-design-restart-#{unique()}"}
       Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{replacement_assignee.id}")
@@ -3317,7 +3366,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       {:ok, _replacement} =
         TaskRouter.start_link(task_id: held.id, assignee: replacement_assignee)
 
-      # The replacement re-derives the verdict from the row and releases.
+      # The replacement re-derives the verdict from the row alone.
       assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
 
       task = reload_task(held)
