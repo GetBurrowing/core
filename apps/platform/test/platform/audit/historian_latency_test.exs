@@ -6,15 +6,36 @@ defmodule Platform.Audit.HistorianLatencyTest do
   Guards against a future accidental regression to synchronous
   `Platform.Audit.record/1` on the caller thread.
 
-  ## Sandbox note
+  ## Sandbox note (corrected 2026-07-26, task 019f9d80 stage 3)
 
-  Each spawned Task under `Platform.TaskSupervisor` is NOT in this test's
-  DataCase sandbox owner chain, so their `Repo.insert` will raise
-  `DBConnection.OwnershipError`. That is expected and swallowed by the
-  handler's `rescue DBConnection.OwnershipError` clause
-  (`telemetry_handler.ex:130`). The point of this test is caller-visible
-  emit latency, not durable persistence — persistence is exercised by
-  `Platform.Audit.HistorianAuditTest` (stage 3) and the stage-5 e2e cases.
+  This note previously read: "Each spawned Task under
+  `Platform.TaskSupervisor` is NOT in this test's DataCase sandbox owner
+  chain, so their `Repo.insert` will raise `DBConnection.OwnershipError`.
+  That is expected and swallowed by the handler's rescue clause."
+
+  **Every clause of that was wrong**, and believing it is what hid the
+  real behaviour. This module is `async: false`, so `Platform.DataCase`
+  puts the sandbox in `{:shared, self()}` mode and the spawned children
+  *do* inherit this test's connection. Their `Repo.insert` succeeds. No
+  `OwnershipError` is raised and the rescue never fires.
+
+  What actually happens is the opposite problem. `Task.Supervisor.start_child`
+  gives the children no lifecycle tie to this process, and 10 000 of them
+  cannot drain against one shared connection as fast as this loop emits:
+  measured, **10 011 children are still alive at the moment the emit loop
+  returns**. Left alone, this test's owner then exits and DBConnection
+  kills the connection under all of them mid-`INSERT`.
+
+  `Platform.DataCase`'s `on_exit` now waits for them
+  (`Platform.SandboxHelpers.await_supervised_writes/1`) before the
+  connection is released, which costs this module a couple of seconds of
+  teardown and costs quiescent modules nothing. The wait is deliberately
+  NOT inside the measured region below — it must not, and does not,
+  affect the p99 this test asserts.
+
+  The point of this test remains caller-visible emit latency, not durable
+  persistence; persistence is exercised by `Platform.Audit.HistorianAuditTest`
+  and by the drain cases in `telemetry_handler_test.exs`.
   """
 
   use Platform.DataCase, async: false

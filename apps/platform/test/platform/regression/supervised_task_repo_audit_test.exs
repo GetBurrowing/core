@@ -19,6 +19,23 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
        New callers that satisfy neither condition fail this test with
        an actionable message.
 
+       **Necessary, not sufficient** (task 019f9d80 stage 3). A `rescue
+       DBConnection.OwnershipError` only covers the `async: true` shape,
+       where the spawned child has no sandbox ownership and `Repo`
+       raises. It does nothing for the `async: false` shape, where the
+       child *inherits* the shared connection and the owner exits first:
+       that arrives as a process **exit** (`shutdown:
+       %DBConnection.ConnectionError{message: "owner #PID<...> exited"}`)
+       which no `rescue` can catch. Widening the clause to `catch :exit`
+       would silence a destroyed write, so the second half of the
+       guarantee is a lifecycle rule instead — **no child outlives the
+       sandbox checkin** — enforced for every shared-mode test by
+       `Platform.SandboxHelpers.await_supervised_writes/1`, called from
+       `Platform.DataCase`'s `on_exit`. The `StackDeployer` entry in
+       `@known_safe` already stated that rule for itself; nothing was
+       checking it globally, and `Platform.Audit.HistorianLatencyTest`
+       broke it by 10 011 children.
+
     2. **Start-flag audit.** Every `maybe_add_*/1` gate in
        `Platform.Application.start/2` that reads an
        `Application.get_env(:platform, :start_*_..., true)` flag must
@@ -114,6 +131,14 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # returning, so no child outlives the sandbox checkin. Any FUTURE
     # test that flips `:async` to `true` must do the same, or this
     # exemption stops holding.
+    #
+    # As of task 019f9d80 stage 3 that "must do the same" is no longer
+    # left to each author: `Platform.DataCase`'s `on_exit` drains
+    # `Platform.TaskSupervisor` for every shared-mode test
+    # (`Platform.SandboxHelpers.await_supervised_writes/1`). The
+    # per-test `:DOWN` await above is still the clearer expression of
+    # intent and stays; the drain is the backstop for the case nobody
+    # wrote one.
     "lib/platform/tasks/stack_deployer.ex",
 
     # `Platform.Meetings.SummarizerSweeper` (lines 290, 358) uses

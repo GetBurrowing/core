@@ -680,3 +680,430 @@ midnight) — but it is outside the stage-1 scope fence and is left to a follow-
 **Add it to the known-independent list with the time window written down**, not
 as "a historian flake". A reviewer who runs the suite at 00:30 UTC will see it
 3/3 and, without this note, will read a deterministic failure as a regression.
+
+---
+---
+
+# Stage 3 — the prescribed fix was wrong; what the counters showed instead
+
+Task `019f9d80-e1ac-737c-bfd3-7846e2de6469`, stage 3
+("Close the sandbox-ownership route on the audit persist path").
+Branch `task/019f9d80`, parent `3e888704` (stage 2).
+All measurements: worktree `~/sources/worktrees/019f9d80`,
+`PLATFORM_TEST_DATABASE=platform_test_019f9d80`.
+
+## 11. Work item — the plan's B1 remedy does not do either thing it claims
+
+Stage 1 concluded **B1 (misattribution)**, which routed this stage to a
+specific remedy: add `config :platform, :audit_persist_sync, true` to
+`config/test.exs`, gate `telemetry_handler.ex`'s two async historian clauses
+on it, override it back to `false` in the three tests that exercise the async
+branch, and add a coverage case asserting a `[:platform, :historian,
+:window_dispatched]` emit persists a retrievable `Audit.Event` — an assertion
+the plan states is "impossible today — the row is thrown away by the
+OwnershipError rescue."
+
+**Measured, before writing any code: the row lands today, with no flag.**
+
+```
+PROBE rows_from_test_process=1          # Audit.list/1 after an async historian emit
+PROBE child_repo_result={:ok, 0}        # Repo call from a Platform.TaskSupervisor child
+```
+
+The reason is one line of `data_case.ex`: `unless tags[:async], do:
+Sandbox.mode(Repo, {:shared, self()})`. Both files in question
+(`telemetry_handler_test.exs`, `historian_latency_test.exs`) are
+`async: false`, so the sandbox is in **shared** mode and a spawned
+`Task.Supervisor` child *inherits* the owner's connection. There is no
+missing owner, so no `DBConnection.OwnershipError` is raised, so the rescue
+the plan blames never runs. The insert simply succeeds.
+
+Two consequences, and they kill the remedy:
+
+1. **The coverage case cannot be a regression detector.** It passes on the
+   untouched tree. Written as specified it is a tautology.
+2. **The mutation check specified for it cannot go red.** Flipping
+   `:audit_persist_sync` to `false` restores the async branch, whose write
+   also lands. This is the identical off-by-one causal model stage 2 hit at
+   probe M0 (§9) — the plan predicts red from removing a mechanism that was
+   not what made the case pass.
+
+And the flag cannot quiet the noise either, for a reason the plan itself
+states without following through: `HistorianLatencyTest` exists to prove the
+branch is asynchronous, so the plan has to override the flag back to `false`
+there — reinstating the exact condition, in the exact test, that produces
+100 % of the sandbox noise.
+
+So the prescribed change buys nothing and costs a global config knob, three
+test-side `Application.put_env` overrides, and an edit to a `@known_safe`
+exemption. **Not implemented.** Recorded here rather than silently dropped,
+per the stage's own "the one thing that is NOT permitted is quietly dropping
+mechanism B".
+
+The dispatch also asked me to check whether sibling `019fa003`'s
+`Platform.Orchestration.SandboxGuard` had landed and covered this. It has
+not: `git ls-tree origin/main apps/platform/lib/platform/orchestration/`
+at `bf12620c` contains no `sandbox_guard.ex`. Nothing to adopt.
+
+## 12. What is actually there — 10 011 live writers at the end of the loop
+
+```
+PROBE active_children_end_of_body=2000     # after a 2 000-event burst
+PROBE stragglers_at_end_of_burst=10011     # after a 10 500-event burst
+```
+
+`Task.Supervisor.start_child` gives the spawned child **no lifecycle
+relationship to the emitting process**. `HistorianLatencyTest` emits 10 500
+events far faster than one shared sandbox connection can absorb 10 500
+inserts, so its test body returns with ~10 000 writers still queued. The
+body returns, the owner exits, and DBConnection tears the connection down
+under everything mid-write:
+
+```
+[error] Postgrex.Protocol (#PID<0.429.0> ("db_conn_2")) disconnected:
+  ** (DBConnection.ConnectionError) owner #PID<0.535.0> exited
+** (stop) exited in: DBConnection.Holder.checkout(...)
+   ** (EXIT) shutdown: %DBConnection.ConnectionError{message: "owner ... exited
+      Client #PID<0.931.0> (Task.Supervised) is still using a connection ...
+        (platform) lib/platform/audit/telemetry_handler.ex:286:
+          Platform.Audit.TelemetryHandler.persist_or_skip/4
+        (elixir) lib/task/supervised.ex:105: Task.Supervised.invoke_mfa/2
+```
+
+Note it arrives as a process **exit**, not a raise. Stage 1 §4 called this
+correctly and it is confirmed here.
+
+### Why this is not wrapped
+
+Every one of those children is a **victim**: it is performing a real, wanted
+`INSERT` and the connection dies out from under it. Widening the rescue to
+`catch :exit` would convert "an audit write was destroyed and a pooled
+connection was force-reconnected" into silence — the defect class this whole
+task exists to end, and the same trap sibling `019fa06a` fell into before it
+turned out to need `Process.flag(:trap_exit, true)` rather than a guard.
+
+The condition is removed where it is created: **the owner waits for its
+writers before releasing the connection.** No error is caught, no branch is
+gated, no production code changes.
+
+This is also an invariant the repo already *states* and was not *checking*.
+`supervised_task_repo_audit_test.exs`'s `@known_safe` entry for
+`StackDeployer` spells it out — "each test monitors the spawned child and
+awaits its `:DOWN` before returning, so **no child outlives the sandbox
+checkin**. Any FUTURE test that flips `:async` to `true` must do the same."
+`HistorianLatencyTest` breaks that rule by 10 011 children, and nothing was
+looking.
+
+## 13. The prerequisite: `DataCase`'s `on_exit` drain has never worked
+
+The obvious home for the wait was `Platform.DataCase`'s existing `on_exit`,
+which already drains `AttentionRouter` and `ContextPlane` and whose comment
+states it runs "before the sandbox owner exits and the connection is freed".
+Putting it there **did not work**, and the probe says why:
+
+```
+PROBE on_exit_pid=#PID<0.2544.0>  test_pid=#PID<0.541.0>
+PROBE test_process_alive=false
+PROBE active_children_at_on_exit=2000
+PROBE repo_from_on_exit={:rescued, DBConnection.OwnershipError}
+```
+
+ExUnit runs `on_exit` callbacks **in a separate process, after the test
+process has already terminated**. With the old `Sandbox.checkout(Repo)` form
+the *test process* is the connection owner, so by the time any `on_exit`
+runs the connection is already gone. A `Repo` call from inside `on_exit`
+raises `OwnershipError`.
+
+**That makes every connection-dependent `on_exit` in `DataCase` a no-op, and
+has since it was written.** The AttentionRouter drain does not do what its
+comment says it does. This is a second instance of the pattern this task is
+about — a mechanism that appears to work because its failure is silent.
+
+Fixed by moving to Ecto's documented `start_owner!`/`stop_owner` shape
+(`sandbox.ex:448`), where an agent owns the connection, the test process is
+either covered by shared mode or explicitly `allow`ed, and the connection
+survives until `stop_owner/1` runs **last** in the `on_exit` chain. The
+`Sandbox.allow(Repo, ...)` calls for supervised GenServers now pass the
+owner agent rather than `self()`, because in `async: true` the test process
+is itself only an allowed process and would not name an owner.
+
+## 14. Result on the route this stage owns
+
+`mix test test/platform/audit/telemetry_handler_test.exs --seed 0`:
+
+| | `owner … exited` | `disconnected` | result |
+|---|---|---|---|
+| before | present | present | `42 tests, 1 failure` |
+| after | **0** | **0** | **`42 tests, 0 failures`** |
+
+`mix test test/platform/audit/historian_latency_test.exs --seed 0`, ×10:
+
+| | failures |
+|---|---|
+| stage 2 (§8, same file, same seed) | **2/10** — `p99=2577µs`, `p99=3056µs` |
+| stage 3 | **0/10** — p99 range 394–687µs |
+
+The p99 budget assertion is the wall-clock flake §3 names and §6 says must
+NOT be "fixed" here; it was not touched. It did still fire once, in an
+ordered-pair run at seed 0 (`p99=3070µs`), so it is improved rather than
+gone. Do not read its absence from a single run as a fix.
+
+## 15. The finding that matters more than the fix: ~90 % of these writes were already being destroyed
+
+`persist_or_skip/4` was temporarily instrumented with `:counters` (reverted;
+`git status --porcelain` clean for `lib/`). One `HistorianLatencyTest` run:
+
+```
+entered=10000  record_ok=1045  record_err=0  skip=0
+rescue_ownership=0  rescue_generic=8955  spawn_try=10000  spawn_fail=0
+```
+
+All 10 000 children run. **~9 000 of them lose their write**, caught by the
+**generic** `rescue error ->` clause — a `DBConnection.ConnectionError`
+("connection not available and request was dropped from queue after N ms")
+from DBConnection shedding checkouts off a 10 000-deep queue. Not one is an
+`OwnershipError`; the specific rescue fires **zero** times, matching stage 1.
+
+**This is a capacity condition, not an ownership one, and this stage's fix
+does not move it:**
+
+| tree | rows landed, of 10 000 |
+|---|---|
+| before | 747, 902, 931 |
+| after | 1142, 824, 789, 1045, 453 |
+
+The difference is run-to-run noise. Stage 1's "21 ConnectionErrors" was the
+visible tip of a ~9 000-per-run loss.
+
+### It is invisible for a second reason: the log undercounts by ~10×
+
+`Logger.error` is called ~9 000 times per run and **0–850 lines survive** to
+the output. I nearly filed a `crashed=0` → `crashed=807` before/after as a
+regression I had introduced; the counters show the underlying rate is flat
+and that comparison was measuring Logger's shedding, not the failure rate.
+**Do not use `grep -c "Audit handler crashed"` as a count of these failures.**
+
+### Named, not fixed, and why
+
+The root cause is that `HistorianLatencyTest` generates 10 500 audit writes
+it explicitly does not want — its own moduledoc says "the point of this test
+is caller-visible emit latency, not durable persistence". The fixes live in
+that test's design (sample size, or emitting on a path whose spawned body is
+cheap) or in the test-env pool's `queue_target`/`queue_interval`, and both
+touch the p99 assertion stage 1 §3/§6 explicitly fenced off from this task.
+Reaching for a rescue or a `catch` instead would be the wrapper this stage
+is forbidden to ship.
+
+**Follow-up, named so it is not rediscovered a third time:** the async audit
+path has no backpressure. In test it manifests as a ~90 % drop rate under
+burst; in production the same shape (unbounded `start_child` per event, no
+pool admission control) is what would shed audit rows under a historian
+storm. That is a real product question, not a test-only artifact.
+
+## 16. Test coverage and the mutation check
+
+Four cases added in `telemetry_handler_test.exs`, describe block
+"supervised audit writes (task 019f9d80 stage 3)".
+
+The plan's requested case ("a historian emit's async write is retrievable")
+is included, **labelled in-source as a characterization test rather than a
+detector**, because §11 shows it passes without any of this stage's changes.
+
+The actual detector is "await_supervised_writes/1 returns only after every
+spawned writer has finished": emit a 200-event burst, assert
+`active_children() > 0` (the condition the fix exists for — emitting outruns
+draining), drain, then assert `active_children() == 0` **and** that all 200
+rows are retrievable.
+
+All probes run on `mix test test/platform/audit/telemetry_handler_test.exs
+--seed 0`, `PLATFORM_TEST_DATABASE=platform_test_019f9d80_b`.
+
+| probe | change | result |
+|---|---|---|
+| baseline (committed tree) | — | `42 tests, 0 failures`; `owner … exited` **0**, `disconnected` **0** |
+| M0 (the plan's, adapted) | the coverage case the plan specified, on the async branch it specified | **GREEN — not a detector.** See §11. |
+| **M1** | `await_supervised_writes/1` returns `:ok` immediately (wait loop deleted) | **RED, 2 failures** — `assert active_children() == 0` → `left: 190, right: 0`; and `assert {:timeout, active} = …` → `right: :ok` |
+| **M2** | `DataCase` reverted to `Sandbox.checkout(Repo)` | **RED** — `owner … exited` **0 → 208**, `disconnected` **0 → 2**, `42 tests, 1 failure` |
+
+M1 isolates the wait; M2 isolates the ownership model. Both probes reverted;
+the committed tree contains neither.
+
+Note M2's magnitude: **208** `owner … exited` lines, not the 21 stage 1 saw.
+Stage 1 measured the ordered pair, where most children were already dead;
+this is the same route measured on the file that emits from more cases.
+
+**Surviving mutation, stated rather than omitted:** deleting the
+`if shared_mode?` guard in `DataCase` (i.e. draining in `async: true` too)
+does **not** go red on the ordered pair or on the audit files. It is still
+wrong — `async: true` modules run concurrently, so `Platform.TaskSupervisor`'s
+child set there belongs to other modules as much as to this one, and waiting
+on it is waiting on an unrelated test — but that is an argument from
+concurrency semantics, not something the suite detects. Recorded so the next
+reader does not "simplify" it away on the grounds that nothing breaks.
+
+## 17. The `start_owner!` migration's blast radius, and how it was found
+
+The first full-suite run on this change was **36 failures at seed 0**
+against stage 2's baseline of 1. Enumerated by module:
+
+```
+23  Platform.Responsibilities.RouterTest
+ 7  Platform.Orchestration.TaskRouterTest
+ 2  Platform.Agents.SystemEventSchedulerTenantsSummaryTest.IntegrationTest
+ 1  PlatformWeb.RuntimeChannelTest
+ 1  Platform.Review.MeetingSummarizeE2EReviewTest
+ 1  Platform.Meetings.IntentDispatcherTest
+ 1  Platform.Chat.PresenceTest
+```
+
+**Cause — a real defect in the migration, not a flake.** 24 test files call
+`Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), pid)` and match the result on
+`:ok`. `start_owner!/2` allows the calling process only on its `shared: false`
+branch (`sandbox.ex:459`); the `shared: true` branch just sets
+`{:shared, owner}`, which lets the test process *use* the connection but
+leaves it neither owner nor allowed. `DBConnection.Ownership.allow/4` takes an
+`owner_or_allowed` parent, so `self()` stopped being a valid parent and every
+such call returned `:not_found`:
+
+```
+** (MatchError) no match of right hand side value: :not_found
+   code: {_pid, name} = start_router()
+   test/platform/responsibilities/router_test.exs:71
+```
+
+Fixed inside `DataCase` with one line — `Sandbox.allow(Repo, owner, self())`
+on the shared branch — which restores `self()` as a valid parent in both
+modes and leaves all 24 call sites untouched. Targeted rerun of the affected
+files: `111 tests, 1 failure` → `0 failures`.
+
+### The residual `TaskRouterTest` / `RuntimeChannelTest` failures are not mine
+
+Per §0 and the dispatch's "do not clear a surprising failure by matching it to
+a flake list, including mine", these were run against an **untouched control
+at the same seed, in the same load window**, by swapping only `data_case.ex`:
+
+```
+mix test test/platform/orchestration/task_router_test.exs \
+         test/platform_web/channels/runtime_channel_test.exs \
+         test/platform/review/meeting_summarize_e2e_review_test.exs --seed 0
+```
+
+| tree | failures | members |
+|---|---|---|
+| fix | 5 | `RuntimeChannelTest` "execution_event records…"; `TaskRouterTest` ×4 |
+| control (`HEAD` `data_case.ex`) | **6** | `RuntimeChannelTest` "tool_call executes tool…"; `TaskRouterTest` ×5 |
+
+Different members, overlapping cluster, control strictly worse. This is the
+`Platform.Orchestration.TaskRouterTest` sandbox/liveness cluster §3 already
+names as "known to produce a different subset each run"; `RuntimeChannelTest`
+joins it here with the same signature. Not caused by this diff.
+
+## 18. What this stage changed
+
+Product code: **one comment**, in `audit/telemetry_handler.ex`. The rescue's
+old rationale asserted the opposite of measured behaviour and is the reason
+the real route stayed invisible; the clause itself is unchanged, and is kept
+(a) because it genuinely covers the `async: true` shape and (b) because
+`supervised_task_repo_audit_test.exs` assertion 1 requires it of every
+`Platform.TaskSupervisor` caller.
+
+Test infrastructure:
+- `test/support/sandbox_helpers.ex` (new) — `await_supervised_writes/1`,
+  `active_children/1`, `drain_or_warn/1`.
+- `test/support/data_case.ex` — `start_owner!`/`stop_owner` ownership,
+  `allow(Repo, owner, self())` on the shared branch, `allow` parent switched
+  from `self()` to `owner`, supervised-writer drain before `stop_owner`.
+- `historian_latency_test.exs`, `telemetry_handler_test.exs` — three comments
+  corrected from claims that measurement contradicts.
+- `supervised_task_repo_audit_test.exs` — moduledoc + `StackDeployer`
+  `@known_safe` entry updated so the exemptions' stated reasons stay true.
+- `telemetry_handler_test.exs` — 4 new cases (§16).
+
+## 19. Full suite, against a stage-2 control at the same seed
+
+`mix format --check-formatted` → clean (`FORMAT_OK`).
+
+Baseline is 8220 (§10). This stage adds 4, all in
+`audit/telemetry_handler_test.exs` (§16) → **8224**.
+
+Control for this stage is **stage 2's own tree**, not stage 1's: a fresh
+worktree `~/sources/worktrees/019f9d80-s2` detached at `3e888704`, its own
+`mix deps.get` (no symlinked deps), DB `platform_test_019f9d80_s2ctl`,
+`/tmp/git-repo-*` + `/tmp/wt-root-*` cleared, seed 0, adjacent load windows.
+
+| tree | window (UTC) | result | failing set |
+|---|---|---|---|
+| fix `task/019f9d80` | 02:09–02:23 | `16 doctests, 8224 tests, 5 failures, 3 skipped` | `HistorianLatencyTest` p99 · `TaskRouterStageIsolationTest:307` · `TaskRouterTest` ×3 (`:479` failed-review bounce, `:758` safety-net fire, `:1039` terminate/2 clears LeaseManager) |
+| control `3e888704` | 02:35–02:48 | `16 doctests, 8220 tests, 3 failures, 3 skipped` | `TaskRouterTest` ×2 (in_review→deploying, no-ack silence lapses) · `Platform.Security.RuntimeChannelCapabilityTest` "canvas.create executes" |
+
+**The fix set is not a strict subset, and the control set is not a subset of
+§3's enumeration either** — the control produced `RuntimeChannelCapabilityTest`,
+which §3 does not name. Both observations are the same fact §3 records: the
+`TaskRouter` lease/liveness cluster (and now the runtime-channel tests that
+share its fixtures) emits a different subset every run. Counts are the wrong
+unit; each new member has to be explained individually, which is what follows.
+
+### `Platform.Audit.HistorianLatencyTest` p99 — the named §3 flake, rate unchanged
+
+Ordered pair on the fix branch, seeds 0–9:
+
+| seed | result | p99 (µs) |
+|---|---|---|
+| 0 | 0 failures | 581 |
+| 1 | 0 failures | 693 |
+| 2 | 0 failures | 415 |
+| **3** | **1 failure** | **4848** |
+| 4 | 0 failures | 787 |
+| 5 | 0 failures | 346 |
+| **6** | **1 failure** | **1540** |
+| 7 | 0 failures | 513 |
+| 8 | 0 failures | 553 |
+| 9 | 0 failures | 549 |
+
+**2/10, exactly the rate stage 2 measured at §8 and §3 measured on a clean
+control.** Both failures are the `@p99_budget_us` wall-clock assertion. §3 and
+§6 say it must not be "fixed" here; it was not touched.
+
+**`ExternalAdmissionNotifierTest` appears zero times across all ten runs.**
+Mechanism A remains fixed — 10/10 on the assertion that actually pins it,
+which is the comparison §0's table asks for.
+
+### `Platform.Orchestration.TaskRouterStageIsolationTest:307` — new to the list, and independent
+
+Not in §3's enumeration, so per §0 a stop until explained. Explained
+mechanically, and measured against the control rather than matched to a list:
+
+```
+assert %{stage_id: recorded_stage_id, ack_at: nil, no_ack_fired?: false} =
+         LeaseManager.get(task.id)
+left:  %{stage_id: recorded_stage_id, ack_at: nil, no_ack_fired?: false}
+right: nil
+```
+
+Standalone, seed 3, ×10 each:
+
+| tree | failures |
+|---|---|
+| fix | 8/10 |
+| control `3e888704` | **5/10** |
+
+It fails on the untouched control, so it is not introduced here. The mechanism
+rules this diff out on its own: **`LeaseManager.get/1` reads ETS**
+(`lease_manager.ex:263-272`, `:ets.lookup(@table, task_id)`), not `Repo`. ETS
+is not sandboxed, so nothing about connection ownership or a supervised-writer
+drain can reach it. The race is the test's own fixed `Process.sleep(100)` after
+`await_attention!()` against the router's asynchronous `record_dispatch`; any
+change in machine load moves the rate, which is why 5/10 and 8/10 are the same
+finding rather than two.
+
+**Add `TaskRouterStageIsolationTest:307` to the known-independent list with
+that mechanism written next to it** — sleep-based race on an ETS read, not a
+sandbox failure. Same handling as `PlanTest:398` (§10.1) and
+`HistorianDispatcherTest:322` (§10.2): explained, not resembled.
+
+### `Platform.Security.RuntimeChannelCapabilityTest` — control-only, named for completeness
+
+Appeared on the **control** and not on the fix branch. Named here so the next
+reader does not treat its future appearance as a regression from this stage.
+`PlatformWeb.RuntimeChannelTest` behaved the same way in the targeted
+comparison at §17 — a different member on each side, control strictly worse.
