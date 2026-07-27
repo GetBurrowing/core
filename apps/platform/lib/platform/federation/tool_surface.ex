@@ -10,6 +10,7 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.{ActiveAgentStore, ContextPlane, Participant}
+  alias Platform.Design.Brand
   alias Platform.Meetings
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Journal, Routing, Search}
@@ -1278,13 +1279,22 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "Project-wide deploy config. Set deploy_config.default_strategy to a strategy map (e.g. %{\"type\" => \"pr_merge\"}) to provide a fallback for tasks whose deploy_target is unset. Valid strategy types: none, pr_merge, docker_deploy, fly, skill_driven, manual, project_files."
+          },
+          brand_decision: %{
+            type: "string",
+            required: false,
+            description:
+              "Answer the once-per-project brand escalation (ADR 0046). One of: " <>
+                Enum.join(Brand.recordable_modes(), " | ") <>
+                ". Recorded at config.brand_decision. Brand sets how strictly design is enforced, never whether work proceeds — a project with no brand is advisory, not blocked."
           }
         },
-        returns: "The updated project object",
+        returns:
+          "The updated project object, including brand_decision when one is recorded on the project",
         limitations:
-          "deploy_config.default_strategy is validated; unknown strategy types are rejected",
+          "deploy_config.default_strategy is validated; unknown strategy types are rejected. `config` is NOT writable through this tool — only the named brand_decision enum reaches it, because Project.changeset/2 does not validate config's shape and a malformed brand_decision is read as no decision at all.",
         when_to_use:
-          "When you need to set a project-level default deploy strategy or update other project fields"
+          "When you need to set a project-level default deploy strategy, answer the brand-direction question posted to a task's execution space, or update other project fields"
       },
       %{
         name: "epic_list",
@@ -3078,7 +3088,7 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  def execute("project_update", args, _context) do
+  def execute("project_update", args, context) do
     project_id = Map.get(args, "project_id")
 
     case Tasks.get_project(project_id) do
@@ -3091,22 +3101,41 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       project ->
+        # `config` is deliberately absent from this list. See the tool's
+        # `limitations` and `Platform.Design.Brand`'s moduledoc: an
+        # agent-writable `config` blob would let a malformed
+        # `brand_decision` land, which resolve/1 reads as NO decision —
+        # silently re-opening the once-per-project re-ask loop. A named
+        # enum param cannot do that.
         update_attrs =
           args
           |> Map.take(["name", "repo_url", "default_branch", "deploy_config"])
           |> Map.reject(fn {_k, v} -> is_nil(v) end)
           |> Enum.into(%{}, fn {k, v} -> {String.to_existing_atom(k), v} end)
 
-        case Tasks.update_project(project, update_attrs) do
-          {:ok, updated} ->
-            {:ok,
+        with {:ok, updated} <- Tasks.update_project(project, update_attrs),
+             {:ok, updated} <-
+               apply_brand_decision(updated, Map.get(args, "brand_decision"), context) do
+          {:ok,
+           %{
+             id: updated.id,
+             name: updated.name,
+             slug: updated.slug,
+             repo_url: updated.repo_url,
+             default_branch: updated.default_branch,
+             deploy_config: updated.deploy_config,
+             brand_decision: brand_decision_of(updated)
+           }}
+        else
+          {:error, :invalid_brand_decision} ->
+            {:error,
              %{
-               id: updated.id,
-               name: updated.name,
-               slug: updated.slug,
-               repo_url: updated.repo_url,
-               default_branch: updated.default_branch,
-               deploy_config: updated.deploy_config
+               error:
+                 "project_update: `brand_decision` must be one of " <>
+                   Enum.join(Brand.recordable_modes(), ", "),
+               recoverable: true,
+               suggestion:
+                 "Pass one of #{Enum.join(Brand.recordable_modes(), ", ")}, or omit brand_decision to leave the project's brand decision unchanged."
              }}
 
           {:error, changeset} ->
@@ -8289,6 +8318,33 @@ defmodule Platform.Federation.ToolSurface do
 
   defp format_datetime(nil), do: nil
   defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+
+  # ── Brand decision (ADR 0046) ─────────────────────────────────────────
+  #
+  # The accepted set is `Brand.recordable_modes/0` and nothing else — the
+  # parameter description above is built from the same call, so there is no
+  # second copy to drift. Note `"asked"` is a valid *stored* mode that this
+  # gate deliberately rejects: it is written by `Brand.escalate_once/2` and
+  # is not something a caller selects.
+  defp apply_brand_decision(project, nil, _context), do: {:ok, project}
+
+  defp apply_brand_decision(project, mode, context) when is_binary(mode) do
+    if mode in Brand.recordable_modes() do
+      Brand.record_decision(project, mode, recorded_by: recorded_by(context))
+    else
+      {:error, :invalid_brand_decision}
+    end
+  end
+
+  defp apply_brand_decision(_project, _mode, _context), do: {:error, :invalid_brand_decision}
+
+  defp recorded_by(context) when is_map(context), do: Map.get(context, :agent_id)
+  defp recorded_by(_), do: nil
+
+  defp brand_decision_of(%{config: config}) when is_map(config),
+    do: Map.get(config, "brand_decision")
+
+  defp brand_decision_of(_), do: nil
 
   defp inspect_errors_safe(%Ecto.Changeset{} = changeset), do: inspect_errors(changeset)
   defp inspect_errors_safe(reason), do: inspect(reason)
