@@ -661,6 +661,102 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert is_binary(payload.message.content)
       assert payload.message.author == "TaskRouter"
     end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # CHARACTERIZATION — attention-envelope site 1 of 3 (019fa56b stage 1).
+    #
+    # The contrast case for `agent_responder_system_event_payload_test.exs`.
+    # `dispatch_attention/5` (task_router.ex:1381-1389) puts the composed
+    # dispatch prompt at `payload.message.content`; `broadcast_system_event/3`
+    # puts its body at `payload.signal.prompt` and emits NO `:message` key.
+    # A bridge reading `payload.message?.content ?? ""` renders THIS path
+    # perfectly while dropping the other one entirely — which is why "a full
+    # task dispatch reached that runtime" is not evidence that the runtime
+    # handles `system_event` wakes.
+    #
+    # The assertion above this one (`is_binary(payload.message.content)`) is
+    # true of any non-empty string and so cannot tell a composed prompt from a
+    # placeholder. This one pins the actual bytes.
+    # ─────────────────────────────────────────────────────────────────────────
+    test "message.content is the composed dispatch prompt, byte for byte", %{
+      task: task,
+      stage: stage,
+      assignee: assignee
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      # The seeded stage is `pending`, and `dispatch_resolved/4` only resolves a
+      # RUNNING stage — leave it pending and the router composes a stage-less
+      # `dispatch.fallback` body, which is a real shape but not the one this
+      # pin is about. Mark it running so the dispatch is stage-scoped and the
+      # recompute below has the same three inputs the router had.
+      stage =
+        stage
+        |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+        |> Platform.Repo.update!()
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention", payload: payload}, 1_000
+
+      # Recomputed through the same entry point `dispatch_resolved/4` calls
+      # (task_router.ex:1269). Equality — not `=~`, not `is_binary` — so a
+      # change that swapped the body for a truncated or templated stand-in
+      # fails here instead of passing on "still a string".
+      # Reload through `Tasks.current_plan/1` — the same accessor
+      # `dispatch_resolved/4` uses (task_router.ex:1096). This is NOT
+      # incidental: `DispatchPhase.phase_for/2` classifies off
+      # `stage.validations`, so the un-preloaded `stage` struct from `setup`
+      # resolves to `dispatch.fallback` while the router's preloaded one
+      # resolves to `dispatch.in_progress`. Recomputing from anything but the
+      # loaded plan compares two different templates.
+      detail = Tasks.get_task_detail(task.id)
+      loaded_plan = Tasks.current_plan(task.id)
+      loaded_stage = Enum.find(loaded_plan.stages, &(&1.status == "running"))
+      assert loaded_stage.id == stage.id
+
+      {agent, runtime} = Platform.Federation.lookup_assignment(assignee.id)
+
+      expected =
+        Platform.Orchestration.HeartbeatScheduler.dispatch_prompt(
+          detail,
+          loaded_plan,
+          loaded_stage,
+          agent: agent,
+          runtime: runtime,
+          previous_rejection_reason: nil,
+          parent_plans: [],
+          execution_space_id: nil
+        )
+
+      assert payload.message.content == expected
+
+      # The seeded task's own strings are IN the body, so the equality above
+      # cannot be satisfied by two independently-empty renders.
+      assert payload.message.content =~ task.title
+      assert payload.message.content =~ task.id
+
+      # SITE 1 IS THE `message`-CARRYING SHAPE. The pre-fix bridge read
+      # (`payload.message?.content ?? ""`, src/index.ts:256) recovers the whole
+      # body here — asserted positively, next to the system_event test's
+      # `bridge_content(payload) == ""`, so the pair documents the asymmetry
+      # rather than either half documenting a dead socket.
+      assert bridge_content(payload) == expected
+
+      # …and this shape does NOT carry `signal.prompt`. Pinned so stage 4's
+      # client change lands as a FALLBACK and not a swap: a client that reads
+      # only `signal.prompt` would break exactly this path.
+      refute Map.has_key?(payload.signal, :prompt)
+    end
+  end
+
+  # Transcription of `src/index.ts:256` in claude-code-suite-channel@4691bdb:
+  #   const text = payload.message?.content ?? "";
+  defp bridge_content(payload) do
+    case payload do
+      %{message: %{content: content}} when is_binary(content) -> content
+      _ -> ""
+    end
   end
 
   describe "event-driven liveness (task 019f640d stage 3)" do

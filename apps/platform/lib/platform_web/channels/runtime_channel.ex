@@ -18,6 +18,22 @@ defmodule PlatformWeb.RuntimeChannel do
 
   @valid_client_products ~w(openclaw claude_channel)
 
+  # Bounds on the declared capability set in `client_info.features`.
+  #
+  # `features` arrives from a client-supplied join payload and lands in a
+  # jsonb column, so an unbounded list is a free row-bloat vector for any
+  # party that can complete a handshake. Entries over the byte cap are
+  # dropped individually (a hostile entry must not take a legitimate one
+  # with it) and the list is truncated after sorting, so which entries
+  # survive is deterministic.
+  #
+  # Deliberately NOT an allowlist of known feature names: capabilities are
+  # an open set that grows every time a client ships something, and an
+  # allowlist would mean every new client capability needs a server deploy
+  # before it could be reported. These bounds are the abuse surface cap.
+  @max_client_features 32
+  @max_client_feature_bytes 64
+
   # How often to re-affirm this runtime's presence from the live channel
   # process. Belt-and-suspenders against RuntimePresence Agent crashes /
   # hot-reloads that would otherwise leave the map permanently empty.
@@ -650,18 +666,59 @@ defmodule PlatformWeb.RuntimeChannel do
             _ -> nil
           end
 
-        {%{product: product, version: version}, true}
+        {%{
+           product: product,
+           version: version,
+           features: normalize_features(Map.get(ci, "features"))
+         }, true}
 
       _ ->
-        {%{product: "unknown", version: nil}, false}
+        {%{product: "unknown", version: nil, features: []}, false}
     end
   end
 
-  defp persist_client_info(runtime, %{product: product, version: version}) do
+  # Normalize a client-declared capability list into a bounded, sorted,
+  # deduplicated list of binaries. Anything that is not a list — a map,
+  # nil, a bare string, a list of integers — degrades to `[]` rather than
+  # raising: a hostile capability payload must not be a denial of service
+  # on the handshake.
+  defp normalize_features(features) when is_list(features) do
+    features
+    |> Enum.filter(fn
+      feature when is_binary(feature) ->
+        feature != "" and byte_size(feature) <= @max_client_feature_bytes
+
+      _ ->
+        false
+    end)
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.take(@max_client_features)
+  end
+
+  defp normalize_features(_), do: []
+
+  defp persist_client_info(runtime, %{product: product, version: version, features: features}) do
     payload = %{
       "client_info" => %{
         "product" => product,
         "version" => version,
+        # `features` is ALWAYS written, including as `[]`.
+        #
+        # `Federation.update_metadata/2` is shallow at the top level, so
+        # setting "client_info" REPLACES the whole nested map. A runtime
+        # that downgrades to a build without the capability and rejoins
+        # therefore loses its recorded claim. That is CORRECT, not a bug:
+        # it genuinely no longer has the capability.
+        #
+        # Do NOT "fix" this by deep-merging to preserve `features` — that
+        # would let a stale claim outlive the build that earned it, which
+        # destroys the only property this record exists to provide. The
+        # separate case of a legacy client that sends no `client_info` at
+        # all is handled by the `declared?` gate in join/3, which skips
+        # this write entirely so "never told us" stays distinguishable
+        # from "told us it lacks the feature".
+        "features" => features,
         "last_seen_at" => DateTime.utc_now() |> DateTime.to_iso8601()
       }
     }

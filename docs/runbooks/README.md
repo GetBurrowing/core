@@ -18,3 +18,7 @@ rollback, verification.
 - [`external_users.md`](external_users.md)
   — Onboard, recover, and offboard scoped external (SXI) chat users
   (Pocket-ID OIDC + pre-staged grants, admin recovery queue, archival).
+- [`claude-channel-bridge-rollout.md`](claude-channel-bridge-rollout.md)
+  — Roll the `system_event` envelope fix onto a `claude_channel` bridge, and
+  read `mix platform.runtime_wake_report` (`proven` / `unproven` / `revoked`)
+  without mistaking `unproven` for a defect count.

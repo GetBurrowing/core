@@ -81,6 +81,175 @@ defmodule Platform.Agents.AgentRuntimeTest do
     end
   end
 
+  describe "client_features/1 (pure)" do
+    test "returns the declared feature list when client_info.features is present" do
+      runtime = %AgentRuntime{
+        metadata: %{
+          "client_info" => %{
+            "product" => "claude_channel",
+            "version" => "0.3.0",
+            "features" => ["system_event_prompt"]
+          }
+        }
+      }
+
+      assert AgentRuntime.client_features(runtime) == ["system_event_prompt"]
+      # The new accessor must not disturb the existing product read.
+      assert AgentRuntime.client_product(runtime) == "claude_channel"
+    end
+
+    test "returns every declared binary feature, not just the one this task cares about" do
+      runtime = %AgentRuntime{
+        metadata: %{
+          "client_info" => %{"features" => ["alpha", "system_event_prompt", "zeta"]}
+        }
+      }
+
+      assert AgentRuntime.client_features(runtime) == ["alpha", "system_event_prompt", "zeta"]
+    end
+
+    test "returns [] when client_info is present but the features key is missing" do
+      runtime = %AgentRuntime{
+        metadata: %{"client_info" => %{"product" => "claude_channel", "version" => "0.2.0"}}
+      }
+
+      assert AgentRuntime.client_features(runtime) == []
+    end
+
+    test "returns [] when metadata is empty (no client_info ever set)" do
+      assert AgentRuntime.client_features(%AgentRuntime{metadata: %{}}) == []
+    end
+
+    test "returns [] when metadata is nil (legacy row)" do
+      assert AgentRuntime.client_features(%AgentRuntime{metadata: nil}) == []
+    end
+
+    test "returns [] when client_info is present but not a map" do
+      assert AgentRuntime.client_features(%AgentRuntime{metadata: %{"client_info" => "garbage"}}) ==
+               []
+    end
+
+    test "returns [] for non-list features values (map, string, integer, nil)" do
+      for bad <- [%{"a" => 1}, "system_event_prompt", 7, nil] do
+        runtime = %AgentRuntime{metadata: %{"client_info" => %{"features" => bad}}}
+        assert AgentRuntime.client_features(runtime) == [], "expected [] for #{inspect(bad)}"
+      end
+    end
+
+    test "filters non-binary entries out of a mixed list, keeping the binaries" do
+      runtime = %AgentRuntime{
+        metadata: %{
+          "client_info" => %{
+            "features" => ["system_event_prompt", 1, nil, %{"a" => 1}, ["nested"], :atom, "other"]
+          }
+        }
+      }
+
+      assert AgentRuntime.client_features(runtime) == ["system_event_prompt", "other"]
+    end
+
+    test "never returns nil for any of the degenerate shapes" do
+      for runtime <- [
+            %AgentRuntime{metadata: %{}},
+            %AgentRuntime{metadata: nil},
+            %AgentRuntime{metadata: %{"client_info" => %{}}},
+            %AgentRuntime{metadata: %{"client_info" => %{"features" => nil}}}
+          ] do
+        assert is_list(AgentRuntime.client_features(runtime))
+      end
+    end
+  end
+
+  describe "client_supports?/2 (pure)" do
+    test "true for a declared feature and false for an undeclared one, in the same run" do
+      runtime = %AgentRuntime{
+        metadata: %{"client_info" => %{"features" => ["system_event_prompt"]}}
+      }
+
+      assert AgentRuntime.client_supports?(runtime, "system_event_prompt") == true
+      assert AgentRuntime.client_supports?(runtime, "some_other_capability") == false
+    end
+
+    test "a claude_channel runtime at version \"0.2.0\" with no features returns false — version is not the discriminator" do
+      # Exact production shape of every runtime on the ticket's list.
+      unproven = %AgentRuntime{
+        metadata: %{"client_info" => %{"product" => "claude_channel", "version" => "0.2.0"}}
+      }
+
+      # Same version string, but the capability is declared.
+      proven = %AgentRuntime{
+        metadata: %{
+          "client_info" => %{
+            "product" => "claude_channel",
+            "version" => "0.2.0",
+            "features" => ["system_event_prompt"]
+          }
+        }
+      }
+
+      assert AgentRuntime.client_supports?(unproven, "system_event_prompt") == false
+      assert AgentRuntime.client_supports?(proven, "system_event_prompt") == true
+
+      # The two differ only in `features`; the version field is identical.
+      assert unproven.metadata["client_info"]["version"] ==
+               proven.metadata["client_info"]["version"]
+    end
+
+    test "fails closed for a runtime we have heard nothing from" do
+      assert AgentRuntime.client_supports?(%AgentRuntime{metadata: %{}}, "system_event_prompt") ==
+               false
+
+      assert AgentRuntime.client_supports?(%AgentRuntime{metadata: nil}, "system_event_prompt") ==
+               false
+
+      assert AgentRuntime.client_supports?(
+               %AgentRuntime{metadata: %{"client_info" => "garbage"}},
+               "system_event_prompt"
+             ) == false
+    end
+
+    test "requires an exact match — near-miss feature names are not accepted" do
+      runtime = %AgentRuntime{
+        metadata: %{
+          "client_info" => %{
+            "features" => [
+              "system_event_prompt_v2",
+              "SYSTEM_EVENT_PROMPT",
+              " system_event_prompt ",
+              "system_event"
+            ]
+          }
+        }
+      }
+
+      assert AgentRuntime.client_supports?(runtime, "system_event_prompt") == false
+      # ...but an exactly-matching entry in the same list shape does count.
+      exact = %AgentRuntime{
+        metadata: %{
+          "client_info" => %{"features" => ["system_event_prompt_v2", "system_event_prompt"]}
+        }
+      }
+
+      assert AgentRuntime.client_supports?(exact, "system_event_prompt") == true
+    end
+  end
+
+  describe "system_event_prompt_feature/0 (pure)" do
+    test "is the literal string the fixed bridge declares" do
+      assert AgentRuntime.system_event_prompt_feature() == "system_event_prompt"
+    end
+
+    test "drives client_supports?/2 both ways so callers need no bare literal" do
+      feature = AgentRuntime.system_event_prompt_feature()
+
+      proven = %AgentRuntime{metadata: %{"client_info" => %{"features" => [feature]}}}
+      unproven = %AgentRuntime{metadata: %{"client_info" => %{"product" => "claude_channel"}}}
+
+      assert AgentRuntime.client_supports?(proven, feature) == true
+      assert AgentRuntime.client_supports?(unproven, feature) == false
+    end
+  end
+
   describe "Federation.update_metadata/2 (DB round-trip)" do
     test "merges new keys into metadata without dropping existing ones" do
       user = create_user()

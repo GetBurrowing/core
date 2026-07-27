@@ -162,6 +162,24 @@ defmodule PlatformWeb.RuntimeChannelTest do
     payload
   end
 
+  # Join `runtime` with an explicit `client_info` map and return the joined
+  # socket. Each call opens a fresh transport, so successive calls model a
+  # runtime disconnecting and re-joining (used by the downgrade test).
+  defp join_with_client_info(runtime, raw_token, client_info) do
+    {:ok, socket} =
+      connect(PlatformWeb.RuntimeSocket, %{
+        "runtime_id" => runtime.runtime_id,
+        "token" => raw_token
+      })
+
+    {:ok, _reply, joined} =
+      subscribe_and_join(socket, "runtime:#{runtime.runtime_id}", %{
+        "client_info" => client_info
+      })
+
+    joined
+  end
+
   # Regression guard for the bug this task fixes: the push used to be
   # `ToolSurface.tool_definitions()` — the whole catalogue — regardless
   # of the runtime's `allowed_bundles`. It must now be exactly the set
@@ -266,7 +284,11 @@ defmodule PlatformWeb.RuntimeChannelTest do
           "client_info" => %{"product" => "openclaw", "version" => "1.2.3"}
         })
 
-      assert joined_socket.assigns.client_info == %{product: "openclaw", version: "1.2.3"}
+      assert joined_socket.assigns.client_info == %{
+               product: "openclaw",
+               version: "1.2.3",
+               features: []
+             }
 
       reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
       assert reloaded.metadata["client_info"]["product"] == "openclaw"
@@ -286,7 +308,11 @@ defmodule PlatformWeb.RuntimeChannelTest do
       {:ok, _reply, joined_socket} =
         subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
 
-      assert joined_socket.assigns.client_info == %{product: "unknown", version: nil}
+      assert joined_socket.assigns.client_info == %{
+               product: "unknown",
+               version: nil,
+               features: []
+             }
 
       reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
       # Metadata should be unchanged — no client_info ever written.
@@ -306,7 +332,11 @@ defmodule PlatformWeb.RuntimeChannelTest do
           "client_info" => %{"product" => "definitely_not_a_real_product"}
         })
 
-      assert joined_socket.assigns.client_info == %{product: "unknown", version: nil}
+      assert joined_socket.assigns.client_info == %{
+               product: "unknown",
+               version: nil,
+               features: []
+             }
 
       reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
       # Client DID declare something, just garbage — we persist the
@@ -330,6 +360,170 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
       assert Platform.Agents.AgentRuntime.client_product(reloaded) == "claude_channel"
+    end
+  end
+
+  describe "client_info features handshake" do
+    test "declared features persist alongside product and version", ctx do
+      joined =
+        join_with_client_info(ctx.runtime, ctx.raw_token, %{
+          "product" => "claude_channel",
+          "version" => "0.3.0",
+          "features" => ["system_event_prompt"]
+        })
+
+      assert joined.assigns.client_info == %{
+               product: "claude_channel",
+               version: "0.3.0",
+               features: ["system_event_prompt"]
+             }
+
+      reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+      ci = reloaded.metadata["client_info"]
+
+      assert ci["features"] == ["system_event_prompt"]
+      # The new key must be ADDITIVE. Asserting only `features` would pass
+      # on a handshake that silently dropped product/version.
+      assert ci["product"] == "claude_channel"
+      assert ci["version"] == "0.3.0"
+      assert is_binary(ci["last_seen_at"])
+    end
+
+    test "client_info without a features key persists an empty list", ctx do
+      join_with_client_info(ctx.runtime, ctx.raw_token, %{
+        "product" => "claude_channel",
+        "version" => "0.2.0"
+      })
+
+      reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+      ci = reloaded.metadata["client_info"]
+
+      assert Map.has_key?(ci, "features")
+      assert ci["features"] == []
+      assert ci["product"] == "claude_channel"
+      assert ci["version"] == "0.2.0"
+    end
+
+    test "re-joining on a build without the capability revokes the recorded claim", ctx do
+      join_with_client_info(ctx.runtime, ctx.raw_token, %{
+        "product" => "claude_channel",
+        "version" => "0.3.0",
+        "features" => ["system_event_prompt"]
+      })
+
+      after_fixed = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+      assert after_fixed.metadata["client_info"]["features"] == ["system_event_prompt"]
+
+      # Same runtime id, downgraded to a pre-fix build: declares client_info
+      # but no features. `Federation.update_metadata/2` is shallow at the top
+      # level, so the whole nested client_info map is replaced and the claim
+      # is dropped. That is the REQUIRED semantic — a capability claim must
+      # not outlive the build that earned it.
+      join_with_client_info(ctx.runtime, ctx.raw_token, %{
+        "product" => "claude_channel",
+        "version" => "0.2.0"
+      })
+
+      after_downgrade = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+      ci = after_downgrade.metadata["client_info"]
+
+      assert ci["features"] == []
+      assert ci["product"] == "claude_channel"
+      assert ci["version"] == "0.2.0"
+    end
+
+    test "a join with no client_info at all leaves a prior declaration untouched", ctx do
+      join_with_client_info(ctx.runtime, ctx.raw_token, %{
+        "product" => "claude_channel",
+        "version" => "0.3.0",
+        "features" => ["system_event_prompt"]
+      })
+
+      declared = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, _joined} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      silent = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+
+      # "never told us" and "told us it lacks the feature" must produce
+      # DIFFERENT stored state: the silent join must not clear the claim
+      # the way the downgrade join above does.
+      assert silent.metadata["client_info"] == declared.metadata["client_info"]
+      assert silent.metadata["client_info"]["features"] == ["system_event_prompt"]
+    end
+
+    test "non-list features degrade to an empty list without crashing the join", ctx do
+      for hostile <- [%{"a" => 1}, [1, 2, 3], nil, "system_event_prompt", 42] do
+        joined =
+          join_with_client_info(ctx.runtime, ctx.raw_token, %{
+            "product" => "claude_channel",
+            "version" => "0.2.0",
+            "features" => hostile
+          })
+
+        assert joined.assigns.client_info.features == [],
+               "expected #{inspect(hostile)} to degrade to []"
+
+        reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+        assert reloaded.metadata["client_info"]["features"] == []
+        assert reloaded.metadata["client_info"]["product"] == "claude_channel"
+      end
+    end
+
+    test "oversized feature lists and entries are bounded before they reach jsonb", ctx do
+      flood = for i <- 1..5000, do: "feature_#{i}"
+
+      joined =
+        join_with_client_info(ctx.runtime, ctx.raw_token, %{
+          "product" => "claude_channel",
+          "version" => "0.2.0",
+          "features" => flood ++ ["system_event_prompt"]
+        })
+
+      persisted = joined.assigns.client_info.features
+
+      assert length(persisted) == 32
+      assert Enum.all?(persisted, &is_binary/1)
+      assert persisted == Enum.sort(persisted)
+      assert persisted == Enum.uniq(persisted)
+
+      reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+      assert reloaded.metadata["client_info"]["features"] == persisted
+
+      # Individual entries over the byte cap are dropped, and dropping them
+      # must not take the legitimate entry down with it.
+      joined2 =
+        join_with_client_info(ctx.runtime, ctx.raw_token, %{
+          "product" => "claude_channel",
+          "version" => "0.2.0",
+          "features" => [
+            String.duplicate("x", 10_000),
+            String.duplicate("y", 65),
+            String.duplicate("z", 64),
+            "",
+            "system_event_prompt",
+            "system_event_prompt"
+          ]
+        })
+
+      assert joined2.assigns.client_info.features == [
+               "system_event_prompt",
+               String.duplicate("z", 64)
+             ]
+
+      reloaded2 = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+
+      assert reloaded2.metadata["client_info"]["features"] == [
+               "system_event_prompt",
+               String.duplicate("z", 64)
+             ]
     end
   end
 

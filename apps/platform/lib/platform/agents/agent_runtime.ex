@@ -106,4 +106,78 @@ defmodule Platform.Agents.AgentRuntime do
 
   defp classify_product(product) when product in @valid_client_products, do: product
   defp classify_product(_), do: "unknown"
+
+  @system_event_prompt_feature "system_event_prompt"
+
+  @doc """
+  The capability a `claude_channel` bridge declares when its build renders
+  `signal.prompt` on `system_event` attentions (the envelope that carries no
+  `message` key).
+
+  Exposed as an accessor so callers reference the constant rather than a bare
+  string literal — the declaration in the client and the check on the server
+  have to stay the same word or the verdict is meaningless.
+  """
+  @spec system_event_prompt_feature() :: String.t()
+  def system_event_prompt_feature, do: @system_event_prompt_feature
+
+  @doc """
+  Reads `metadata["client_info"]["features"]` from a runtime (or any map with
+  a `:metadata` key) and returns the declared capability list.
+
+  Returns `[]` — never `nil`, never raises — for:
+
+    * no metadata at all (or `nil` metadata on a legacy row),
+    * no `client_info`, or a `client_info` that is not a map,
+    * no `features` key,
+    * a `features` value that is not a list (map, string, integer, `nil`).
+
+  Entries that are not binaries are filtered out of an otherwise valid list,
+  so a partially-garbage payload degrades to its usable subset instead of
+  poisoning the whole read.
+
+  There is deliberately NO allowlist of valid feature names (contrast
+  `@valid_client_products` above). Products are a closed set the server
+  switches behavior on; capabilities are an open set that grows every time a
+  client ships something, and an allowlist would mean every new client
+  capability needed a server deploy before it could be reported. The bound
+  enforced at the handshake (`PlatformWeb.RuntimeChannel.resolve_client_info/1`
+  caps the list at 32 entries of 64 bytes) already caps the abuse surface.
+
+  Pure function, no DB access. Works on freshly-loaded structs whose
+  `metadata` map has string keys (jsonb round-trip).
+  """
+  @spec client_features(%__MODULE__{} | %{metadata: map()}) :: [String.t()]
+  def client_features(%{metadata: metadata}) when is_map(metadata) do
+    metadata
+    |> Map.get("client_info", %{})
+    |> case do
+      m when is_map(m) -> Map.get(m, "features")
+      _ -> nil
+    end
+    |> case do
+      features when is_list(features) -> Enum.filter(features, &is_binary/1)
+      _ -> []
+    end
+  end
+
+  def client_features(_), do: []
+
+  @doc """
+  Whether a runtime has declared `feature` on its most recent join.
+
+  FAILS CLOSED: a runtime we have heard nothing from — no metadata, no
+  `client_info`, no `features` — is `false`, never `true`. Absence of a
+  declaration means "not proven", which is the honest state for both an old
+  build and a new build that has not reconnected yet; it is never read as a
+  positive.
+
+  Matching is exact. A near-miss (`"SYSTEM_EVENT_PROMPT"`, a `_v2` suffix, a
+  space-padded variant) is not the capability — a fuzzy match would hand out
+  the one verdict this predicate exists to make trustworthy.
+  """
+  @spec client_supports?(%__MODULE__{} | %{metadata: map()}, String.t()) :: boolean()
+  def client_supports?(runtime, feature) when is_binary(feature) do
+    feature in client_features(runtime)
+  end
 end
