@@ -140,10 +140,24 @@ defmodule Platform.Tenancy do
   the pending-deletion states.
 
   The root org can never be archived — `Lifecycle` refuses it with
-  `{:error, :not_deletable}` — so Fabrikam is always present. Because archived
-  tenants are always a subset of the seeded five, every slug returned here
-  has a static label/color entry in `@scope_labels`/`@scope_classes`, so the
-  scope rail's unknown-slug guard never fires.
+  `{:error, :not_deletable}` — so Fabrikam is always present.
+
+  > #### Returned slugs are NOT limited to the seeded five {: .warning}
+  >
+  > This returns EVERY non-archived org, including tenants created at
+  > runtime. `Org.changeset/2` accepts any slug matching
+  > `^[a-z][a-z0-9_-]*$` and the query above filters only on `archived_at`,
+  > so a returned slug may be arbitrary user input.
+  >
+  > Callers must therefore NOT assume a returned slug has a static entry in
+  > `@scope_labels`/`@scope_classes` (or in `ScopePill`'s `scope_label/1` /
+  > `slug/1`, which are non-total), and must NOT feed these slugs to
+  > `String.to_existing_atom/1` — it raises `ArgumentError` for any slug
+  > never compiled as an atom. Filter against the canonical allowlist
+  > (`Platform.Tasks.scope_keys/0`) comparing as strings instead; see
+  > `TasksLive.active_scope_keys/0`. An earlier version of this docstring
+  > asserted the opposite invariant and that false claim took `/tasks` down
+  > for every user in the deployment (task 019fa209).
 
   Contrast with `list_tenants/0`, which returns tenants only (no root) and
   every row regardless of archive state — background callers that must see

@@ -5429,14 +5429,44 @@ defmodule PlatformWeb.TasksLive do
     |> assign(:active_scope_keys, active_scope_keys())
   end
 
-  # Scope-rail source (task 019f4eaa stage 6): the seeded slugs of every
-  # non-archived tenant (Fabrikam always present — the root can't be archived),
-  # as atoms, in canonical tenant-priority order. `list_active_tenants/0`
-  # only ever yields the seeded five, so `String.to_existing_atom/1` is safe
-  # and every atom is a valid `<.scope_pill>` value.
+  # Scope-rail source (task 019f4eaa stage 6; hardened by task 019fa209): the
+  # scope atoms whose org is currently non-archived, in canonical
+  # tenant-priority order (Fabrikam always present — the root can't be archived).
+  #
+  # Org slugs are EXTERNALLY SUPPLIED — `Org.changeset/2` accepts any
+  # `^[a-z][a-z0-9_-]*$` and `list_active_tenants/0` filters only on
+  # `archived_at`, so an active tenant's slug may never have been compiled as
+  # an atom. This iterates the canonical allowlist and keeps the ones that are
+  # active, comparing as STRINGS: no atom is created (`String.to_atom/1` would
+  # grow the never-GC'd atom table from user input) and none is looked up
+  # (`String.to_existing_atom/1` raises `ArgumentError`, which 500'd /tasks for
+  # every user in the deployment — this ran in `mount/3`).
+  #
+  # Filtering rather than converting also closes a SECOND crash: a slug that
+  # happens to already exist as an atom but is not a scope (e.g. "name" ->
+  # `:name`, which exists because it is an Ecto field on `Org`) sails through
+  # `to_existing_atom/1` and reaches `<.scope_pill>`, whose `scope_label/1` and
+  # `slug/1` clauses are non-total -> `FunctionClauseError` at render. Both
+  # failures are why a `rescue ArgumentError` would be the wrong fix; starting
+  # from the allowlist makes every element a valid `<.scope_pill>` value by
+  # construction.
+  #
+  # An org outside the enum gets no chip. That is the only behavior the rest of
+  # the system supports: the enum is hardcoded in `ScopePill` (`@scopes` +
+  # `slug/1` + `scope_label/1`), `Tasks.@scope_keys`,
+  # `Tenancy.@scope_classes`/`@scope_labels`, and the `bg-<slug>` /
+  # `border-<slug>` / `text-<slug>-label` / `bg-<slug>-dot` utilities in
+  # assets/css/app.css. A truly data-driven rail needs color allocation for
+  # arbitrary orgs and is out of scope for a crash fix.
+  #
+  # Order is preserved: `Tasks.scope_keys/0` is the same five slugs in the same
+  # sequence as `Tenancy.tenant_priority/0`, so for seeded orgs the output is
+  # identical to the old `sort_by_tenant_priority/2` result. Mirrors
+  # `parse_scope/1` above — allowlist first, never convert.
   defp active_scope_keys do
-    Tenancy.list_active_tenants()
-    |> Enum.map(&String.to_existing_atom(&1.slug))
+    active = MapSet.new(Tenancy.list_active_tenants(), & &1.slug)
+
+    Enum.filter(Tasks.scope_keys(), &MapSet.member?(active, Atom.to_string(&1)))
   end
 
   defp normalize_task_assignee(params, default_agent_id, requested_plan?) do
