@@ -52,6 +52,10 @@ defmodule Platform.Meetings.IntentCorrections.TelemetryHandlerTest do
 
   defp corrections_for(meeting_id), do: IntentCorrections.list_for_meeting(meeting_id)
 
+  # One entry per (handler, event) pair, so a duplicate attach would show
+  # the same id twice for a single event.
+  defp attached_ids, do: @rejected |> :telemetry.list_handlers() |> Enum.map(& &1.id)
+
   describe "attachment" do
     test "the application attaches the handler at boot" do
       # The regression this guards is a one-line deletion in
@@ -76,19 +80,22 @@ defmodule Platform.Meetings.IntentCorrections.TelemetryHandlerTest do
       end
     end
 
-    test "re-attaching over the boot-time handler is refused, not duplicated" do
+    test "re-attaching over the boot-time handler is a no-op, not a duplicate" do
       # Two attached copies would write two rows per correction and
       # double-weight that exemplar in every subsequent prompt.
-      result = TelemetryHandler.attach()
+      #
+      # Since task 019f9d80 stage 2 `attach/0` is idempotent, so its
+      # return value no longer distinguishes "already attached" from
+      # "just installed". Assert the boot-time attach is ALREADY in place
+      # first: otherwise this case would quietly install the handler for
+      # the rest of the VM and mask the boot-attachment test above. Never
+      # detach here — a detach inside an `async: true` case is exactly the
+      # VM-global leak this task exists to remove.
+      assert "platform-meetings-intent-corrections" in attached_ids()
 
-      # If the boot-time attach were ever missing, this call would have
-      # SUCCEEDED and quietly installed the handler for the rest of the
-      # VM — masking the boot-attachment test above and every
-      # dispatcher-level auto-write case. Undo it before asserting, so a
-      # failure here stays a failure everywhere it should be one.
-      if result == :ok, do: TelemetryHandler.detach()
+      assert :ok = TelemetryHandler.attach()
 
-      assert {:error, :already_exists} = result
+      assert Enum.count(attached_ids(), &(&1 == "platform-meetings-intent-corrections")) == 1
     end
   end
 

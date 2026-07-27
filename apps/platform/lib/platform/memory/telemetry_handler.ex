@@ -15,9 +15,16 @@ defmodule Platform.Memory.TelemetryHandler do
   @handler_id "platform-memory-telemetry"
   @events [[:platform, :org, :memory_entry_written]]
 
-  @doc "Attach the memory telemetry handler. Idempotent."
+  @doc """
+  Attach the memory telemetry handler. Idempotent — a duplicate attach
+  is a no-op (see `Platform.Audit.TelemetryHandler.attach/0`).
+  """
+  @spec attach() :: :ok
   def attach do
-    :telemetry.attach_many(@handler_id, @events, &__MODULE__.handle_event/4, %{})
+    case :telemetry.attach_many(@handler_id, @events, &__MODULE__.handle_event/4, %{}) do
+      :ok -> :ok
+      {:error, :already_exists} -> :ok
+    end
   end
 
   @doc "Detach the memory telemetry handler."

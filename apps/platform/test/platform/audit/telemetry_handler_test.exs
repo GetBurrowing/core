@@ -9,18 +9,25 @@ defmodule Platform.Audit.TelemetryHandlerTest do
 
   setup do
     # Ensure handler is attached for each test (Application.start may not
-    # run in the test env the way we expect).
-    TelemetryHandler.detach()
-    TelemetryHandler.attach()
-    on_exit(fn -> TelemetryHandler.detach() end)
+    # run in the test env the way we expect) AND restored on exit —
+    # it is VM-global, so leaving it detached silences audit writes for
+    # every later test in this BEAM (task 019f9d80).
+    Platform.TelemetryHelpers.ensure_boot_handler!(TelemetryHandler)
     :ok
   end
 
   # Snapshot the current set of Platform.TaskSupervisor child pids. Used
-  # by the historian bridging tests to observe async dispatch without
-  # depending on the DB row (spawned children aren't in the DataCase
-  # sandbox owner chain, so their Repo.insert raises OwnershipError and
-  # the handler swallows it — see telemetry_handler.ex:rescue clause).
+  # by the historian bridging tests to observe the async dispatch itself
+  # — the spawn is the behaviour under test there, independently of
+  # whether the row lands.
+  #
+  # The old version of this comment said the row could NOT land ("spawned
+  # children aren't in the DataCase sandbox owner chain, so their
+  # Repo.insert raises OwnershipError and the handler swallows it").
+  # Measured false in task 019f9d80 stage 3: this module is `async: false`,
+  # the sandbox is in shared mode, the children inherit this test's
+  # connection and the insert succeeds. See the "supervised audit writes"
+  # describe block at the bottom of this file.
   defp children_pids do
     Platform.TaskSupervisor
     |> Task.Supervisor.children()
@@ -315,13 +322,11 @@ defmodule Platform.Audit.TelemetryHandlerTest do
   end
 
   describe "historian namespace bridging (async, task 019f5bc4)" do
-    # Task children spawn under Platform.TaskSupervisor, which is NOT in
-    # the DataCase sandbox owner chain. We can't observe the DB row from
-    # the test process, so these tests observe the SPAWN itself: monitor
-    # the child pid, wait for :DOWN, then assert either (a) the row was
-    # inserted (if the child inherited the sandbox — happens when we call
-    # Sandbox.allow) or (b) that Logger emitted the drop/rescue message.
-    # The plan (stage 4) covers full end-to-end persistence via IEx e2e.
+    # These tests observe the SPAWN itself — monitor the new child pid and
+    # wait for :DOWN — because "the handler dispatched asynchronously"
+    # is the property task 019f5bc4 added and the property a regression
+    # to a synchronous `Repo.insert` would break. Row persistence is a
+    # separate property, asserted in "supervised audit writes" below.
 
     test "historian window_dispatched with workspace_id spawns a Task.Supervisor child" do
       workspace_id = Ecto.UUID.generate()
@@ -851,5 +856,195 @@ defmodule Platform.Audit.TelemetryHandlerTest do
       refute Map.has_key?(event.metadata, "resource_id")
       refute Map.has_key?(event.metadata, "actor_type")
     end
+  end
+
+  describe "attach/0 idempotency across every boot-attached handler (task 019f9d80)" do
+    # The seven handlers Platform.Application.start/2 attaches at boot
+    # (application.ex:12-27). They are VM-global, so a test that detaches
+    # one and does not restore it silences that bridge for every later
+    # test in the same BEAM — and the symptom is an audit assertion that
+    # passes because nothing is listening, not an error. Making attach/0
+    # idempotent is what removes the reason to detach first.
+    @boot_handlers [
+      Platform.Audit.TelemetryHandler,
+      Platform.Vault.TelemetryHandler,
+      Platform.Chat.TelemetryHandler,
+      Platform.Meetings.TelemetryHandler,
+      Platform.Meetings.IntentCorrections.TelemetryHandler,
+      Platform.Memory.TelemetryHandler,
+      Platform.Accounts.ExternalAdmissionNotifier
+    ]
+
+    test "attach/0 returns :ok when the handler is already attached" do
+      for module <- @boot_handlers do
+        assert :ok = module.attach(), "#{inspect(module)}.attach/0 did not return :ok"
+
+        assert :ok = module.attach(),
+               "#{inspect(module)}.attach/0 is not idempotent — a second attach must be a no-op"
+      end
+    end
+
+    test "a repeated attach/0 installs one handler, not two" do
+      for module <- @boot_handlers do
+        :ok = module.attach()
+        before = handler_ids_for(module)
+
+        assert length(before) == 1,
+               "expected exactly one handler id for #{inspect(module)}, got #{inspect(before)}"
+
+        :ok = module.attach()
+
+        assert handler_ids_for(module) == before,
+               "#{inspect(module)}.attach/0 duplicated its handler registration"
+      end
+    end
+
+    test "ensure_boot_handler!/1 re-attaches a handler that is currently detached" do
+      # Register the unconditional restore BEFORE detaching. This module's
+      # `setup` only covers Platform.Audit.TelemetryHandler, so without
+      # this line a failure on the assertion below would leave the VAULT
+      # bridge detached for the rest of the BEAM — the precise leak this
+      # test is about. Caught by
+      # test/platform/regression/boot_telemetry_handler_detach_audit_test.exs,
+      # which requires a restore registered ahead of every detach.
+      assert :ok = Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Vault.TelemetryHandler)
+
+      # The state a leaked test leaves behind: handler gone, no error
+      # anywhere, later audit assertions quietly reading [].
+      Platform.Vault.TelemetryHandler.detach()
+      assert handler_ids_for(Platform.Vault.TelemetryHandler) == []
+
+      assert :ok = Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Vault.TelemetryHandler)
+
+      assert handler_ids_for(Platform.Vault.TelemetryHandler) == ["platform-vault-telemetry"]
+    end
+
+    test "ensure_boot_handler!/1 rejects a module that is not a telemetry handler" do
+      assert_raise ArgumentError, ~r/does not export attach\/0/, fn ->
+        Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Audit.Event)
+      end
+    end
+  end
+
+  describe "supervised audit writes (task 019f9d80 stage 3)" do
+    # The async historian branch spawns a Task.Supervisor child with NO
+    # lifecycle tie to the emitting process. Under the shared sandbox that
+    # child borrows this test's connection, so when this process exits the
+    # connection is torn down underneath any child still writing.
+    #
+    # The property these cases pin is that the owner can WAIT for those
+    # writers — which is the fix — rather than that some rescue clause
+    # catches their corpses, which would be the defect.
+
+    @burst 200
+
+    test "a historian emit's async write is retrievable once the writers drain" do
+      workspace_id = Ecto.UUID.generate()
+
+      :telemetry.execute(
+        [:platform, :historian, :window_dispatched],
+        %{token_count: 100, window_index: 1, day_bytes: 100},
+        %{
+          workspace_id: workspace_id,
+          resource_type: "workspace",
+          resource_id: workspace_id,
+          corpus: :pages,
+          oversize: false,
+          action: "window_dispatched",
+          actor_type: "system"
+        }
+      )
+
+      assert :ok = Platform.SandboxHelpers.await_supervised_writes(timeout: 5_000)
+
+      assert [%Event{} = row] =
+               Audit.list(
+                 event_type: "platform.historian.window_dispatched",
+                 resource_id: workspace_id
+               )
+
+      assert row.action == "window_dispatched"
+      assert row.actor_type == "system"
+      assert row.metadata["workspace_id"] == workspace_id
+
+      # HONEST NOTE (see notes/2026-07-26-boot-telemetry-detach.md §11):
+      # this assertion also passes WITHOUT the drain, because the child
+      # usually wins the race against `Audit.list/1`. It is a
+      # characterization test for the async branch's persistence, not the
+      # regression detector for this stage. The detector is the next case.
+    end
+
+    test "await_supervised_writes/1 returns only after every spawned writer has finished" do
+      workspace_id = Ecto.UUID.generate()
+
+      measurements = %{token_count: 100, window_index: 1, day_bytes: 100}
+
+      metadata = %{
+        workspace_id: workspace_id,
+        resource_type: "workspace",
+        resource_id: workspace_id,
+        corpus: :pages,
+        oversize: false,
+        action: "window_dispatched",
+        actor_type: "system"
+      }
+
+      for _ <- 1..@burst do
+        :telemetry.execute([:platform, :historian, :window_dispatched], measurements, metadata)
+      end
+
+      # The condition the fix exists for: emitting outruns draining, so
+      # the emitting process reaches its own teardown with live writers
+      # still holding its sandbox connection.
+      assert Platform.SandboxHelpers.active_children() > 0,
+             "expected the #{@burst}-event burst to outrun the single shared sandbox " <>
+               "connection and leave live writers behind"
+
+      assert :ok = Platform.SandboxHelpers.await_supervised_writes(timeout: 30_000)
+
+      assert Platform.SandboxHelpers.active_children() == 0
+
+      rows =
+        Audit.list(
+          event_type: "platform.historian.window_dispatched",
+          resource_id: workspace_id,
+          limit: @burst * 2
+        )
+
+      assert length(rows) == @burst,
+             "expected all #{@burst} supervised writes to have landed before the drain " <>
+               "returned, got #{length(rows)}"
+    end
+
+    test "active_children/1 reports 0 for a supervisor that is not running" do
+      # Several test setups boot a trimmed supervision tree; "not started"
+      # must read as "nothing in flight" rather than crashing teardown.
+      assert Platform.SandboxHelpers.active_children(:no_such_supervisor_019f9d80) == 0
+    end
+
+    test "await_supervised_writes/1 reports a timeout instead of blocking forever" do
+      {:ok, pid} =
+        Task.Supervisor.start_child(Platform.TaskSupervisor, fn -> Process.sleep(500) end)
+
+      assert {:timeout, active} = Platform.SandboxHelpers.await_supervised_writes(timeout: 50)
+      assert active > 0
+
+      ref = Process.monitor(pid)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 2_000
+    end
+  end
+
+  # All handler ids currently registered whose callback lives in `module`.
+  # Derived from the registry rather than hardcoding @handler_id strings,
+  # so it stays correct if an id is renamed. attach_many/4 registers one
+  # entry per event under a single id, hence the uniq.
+  defp handler_ids_for(module) do
+    []
+    |> :telemetry.list_handlers()
+    |> Enum.filter(fn handler ->
+      Function.info(handler.function, :module) == {:module, module}
+    end)
+    |> Enum.map(& &1.id)
+    |> Enum.uniq()
   end
 end
