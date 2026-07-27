@@ -506,6 +506,61 @@ defmodule PlatformWeb.Components.PlanningStepExtensionTest do
       assert visible?(complete, :extension)
       refute visible?(complete, :compact)
     end
+
+    # STAGE 3. The compact variant is failure-only, but "failure" is TWO
+    # states, not one — member 7's false-negative annotation is the one
+    # `not_applicable` that must survive the compact filter. Both halves in one
+    # block: a compact branch that dropped every `not_applicable` passes the
+    # silent half alone.
+    test "compact keeps the contradicted not_applicable and drops every other one" do
+      silent =
+        task(
+          planning_step_outcomes:
+            all_steps(%{
+              "outcome" => "not_applicable",
+              "reason" => PreplanStep.reasons().no_ui_surface
+            })
+        )
+
+      contradicted =
+        task(
+          planning_step_outcomes:
+            all_steps(%{"outcome" => "not_applicable", "reason" => contradicted_reason()})
+        )
+
+      assert render_extension(silent, variant: :compact) == ""
+
+      compact = render_extension(contradicted, variant: :compact)
+      assert compact =~ ~s(data-planning-reason="#{contradicted_reason()}")
+
+      # Warning-toned, never error-toned: distinguishable from a real gate
+      # failure at a glance, which is the whole reason the two kinds exist.
+      assert compact =~ "text-warning"
+      refute compact =~ "text-error"
+    end
+
+    # STAGE 3, the structural half of `frontend/ui-ux.md`'s truncation rule:
+    # `shrink-0` on the protected fragment, `min-w-0 truncate` on the
+    # expendable one. On a stack-member row the marker is protected and the
+    # TITLE is expendable, so the compact root must never carry the shrinking
+    # pair — inverted, the row's title would hold its width and the marker
+    # would be squeezed to nothing.
+    test "the compact root is shrink-0 and carries no truncation classes" do
+      failed = task(planning_step_outcomes: all_steps(%{"outcome" => "failed"}))
+      compact = render_extension(failed, variant: :compact)
+
+      assert compact =~ "shrink-0"
+      refute compact =~ "truncate"
+      refute compact =~ "min-w-0"
+
+      # POSITIVE CONTROL — the SAME struct through the extension variant, where
+      # the chips ARE the expendable fragment (the strip is full-width and its
+      # labels yield). This is what makes the two `refute`s above a measured
+      # difference rather than a class this component simply never emits.
+      extension = render_extension(failed, variant: :extension)
+      assert extension =~ "truncate"
+      assert extension =~ "min-w-0"
+    end
   end
 
   # ── purity ────────────────────────────────────────────────────────────────

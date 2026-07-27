@@ -640,6 +640,22 @@
                               <span class="hero-eye size-3"></span>
                               {member_action_label}
                             </span>
+                            <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 3, mobile half.
+                                 Same compact marker as the desktop member row; the
+                                 `data-role` MUST differ because the two boards share
+                                 ONE DOM (`lg:hidden` / `hidden lg:grid` — CSS
+                                 visibility, not presence), so a shared value
+                                 double-matches every selector. The component emits no
+                                 `id` at all, so `data-role` is the only thing to
+                                 split.
+                                 It renders as a `<span>`, never a `<button>`: this
+                                 row IS a `<button>` on mobile, and a nested button is
+                                 invalid HTML that browsers reparent. --%>
+                            <.planning_step_extension
+                              task={member}
+                              variant={:compact}
+                              data_role="mobile-stack-member-planning-step"
+                            />
                             <span class={"#{member_status_class} badge-xs whitespace-nowrap shrink-0"}>
                               {member_status_label}
                             </span>
@@ -1071,6 +1087,28 @@
                           <span class="flex-1 min-w-0 text-xs leading-snug truncate">
                             {member.title}
                           </span>
+                          <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 3, desktop half.
+                               COMPACT, not the fused strip: this row is a ~44px line
+                               already carrying a position glyph, a truncated title, a
+                               status badge and a dependency annotation, so the marker
+                               is a single icon INSIDE the badge cluster rather than a
+                               band above the row (a band would overlap the absolutely
+                               positioned glyph at `left-1 top-2`).
+                               `variant={:compact}` is failure-only — `failed` and
+                               member 7's `no_ui_surface_contradicted`. `complete` and
+                               the active cursor are suppressed here and remain on the
+                               member's own detail panel; a fifth chip on every row of
+                               every expanded stack is the noise that gets a feature
+                               turned off.
+                               The component's compact root is `shrink-0`, so under
+                               `frontend/ui-ux.md`'s truncation rule the TITLE
+                               (`flex-1 min-w-0 truncate`) is what yields, never the
+                               marker. --%>
+                          <.planning_step_extension
+                            task={member}
+                            variant={:compact}
+                            data_role="stack-member-planning-step"
+                          />
                           <span class={"#{status_class} badge-xs whitespace-nowrap shrink-0"}>
                             {status_label}
                           </span>
