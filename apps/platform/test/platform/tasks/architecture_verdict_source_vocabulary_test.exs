@@ -33,22 +33,33 @@ defmodule Platform.Tasks.ArchitectureVerdictSourceVocabularyTest do
   construction: a writer value nobody documented is an extra on the left,
   a documented value nothing emits is an extra on the right.
 
-  ## VACUITY CONTROLS, MEASURED (both directions detonated)
+  ## VACUITY CONTROLS, MEASURED (4/4 detonated, at commit e2408369)
 
     * ADD-TO-WRITER: changed
       `Tasks.architecture_verdict_source(:expired)` to `"timer"`. The
-      changeset now refuses an undocumented source, so the write fails
-      first — the guard failed on the `{:ok, resolved}` match with
-      `has invalid source "timer"`, naming both the offending value and
-      the allowed set. Detected.
+      schema refuses it first, so the collection failed on
+      `assert {:ok, _resolved} = Tasks.resolve_architecture_gate/3` with
+      `has invalid source "timer" (allowed: ["mcp", "handle_output",
+      "deadline", "human"], or nil)`. Detected.
+    * ADD-TO-WRITER, VALIDATION REMOVED: the same change with
+      `validate_verdict_source/2` dropped from the changeset, so the bad
+      value actually lands. Failed on set equality —
+      `emitted but undocumented: ["timer"]`. This is what proves the two
+      legs are independently load-bearing rather than the schema check
+      masking the comparison.
     * ADD-TO-DOCS: appended `"architect"` to
-      `Plan.architecture_verdict_sources/0` with no writer change. The
-      guard failed on set equality, reporting
-      `documented but unreachable: ["architect"]`. Detected.
-    * RE-INLINE: replaced the moduledoc's accessor citation with the old
-      literal list. The third test failed. Detected.
+      `Plan.architecture_verdict_sources/0` with no writer change. Failed
+      on set equality — `documented but unreachable: ["architect"]`.
+      Detected.
+    * RE-INLINE: restored the moduledoc's old literal union in place of
+      the accessor citation. The third test failed, quoting the offending
+      line. Detected.
 
-  Verbatim output for all three is in the stage-6 fix note.
+  The fourth test detonates on its own control too: dropping
+  `validate_verdict_source/2` makes its absence half accept
+  `source: "architect"`.
+
+  Verbatim output for all four is in the stage-6 fix note.
 
   Not `async: true`: `resolve_architecture_gate/3` settles through
   `maybe_auto_approve/1`, which broadcasts on `tasks:board` and wakes the
