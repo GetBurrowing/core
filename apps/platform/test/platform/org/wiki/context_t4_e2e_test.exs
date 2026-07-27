@@ -808,6 +808,15 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # row itself lands at boot via the Registry upsert, so no schema
       # change here.
       "20260726051346_seed_design_task_direction.exs",
+      # ADR-0046 member 7 (task 019f9b29-5ecd stage 6): retarget the
+      # `dispatch.planning` "Design involvement" section at the pre-plan
+      # design step — the planner stops resolving brand and stops
+      # authoring a `responsibility: "designer"` design stage.
+      # `seed_defaults/0` is INSERT-only and the 20260713000010 sync
+      # already claimed this row on every migrated environment, so the
+      # rewritten body needs its own overwrite. Update-only; no schema
+      # change.
+      "20260726051347_force_update_dispatch_planning_design_preplan.exs",
       # Task 019f9b28-6ca7 stage 5: the `architecture.review_plan.v1`
       # body told the architect to "prefer citing the ADR by number",
       # which `docs/decisions/` cannot honour — four numbers each name

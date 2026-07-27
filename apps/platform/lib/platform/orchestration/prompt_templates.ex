@@ -449,21 +449,9 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         If it DOES:
 
-        1. **Resolve brand context** before planning design-dependent stages, in this order:
-           a. Project-level brand settings (project-specific logos, brand voice, additional colors).
-           b. Org-level brand identity (base colors, fonts, logo).
-           Merge rule: project-level overrides and extends org-level. Project-only is valid.
-           c. If NEITHER exists, check whether the project already has a recorded brand decision (including "exploring"). If a decision is recorded, honor it — do NOT re-ask. If none: escalate to a human ONCE per project with exactly three options — (a) apply the org default identity, (b) create an identity now, (c) "exploring — no identity yet". Record the answer at project level.
-           Option (c) means: design work proceeds with neutral/low-fi direction and brand checks run advisory-only. **This escalation never blocks development** — it only determines how strictly brand is enforced.
+        1. **Brand context is already resolved — you do not resolve it and you do not escalate.** The pre-plan design step resolves brand through `Platform.Design.Brand` (project settings, then org identity, then any recorded project decision, with a once-per-project human ask when nothing exists) before this dispatch is sent. Do not re-ask for a brand identity and do not add a stage that asks.
 
-        2. **Add an early advisory design stage** — "Design direction (Saru)": a low-fi or directional mock of the surfaces this task changes. The stage description must ask for a structured deliverable:
-           - Opening line pins the subject: what this surface is, who uses it, and the one job it does.
-           - Palette: 4–6 named color values (from brand tokens if they exist; provisional if exploring).
-           - Type: 2–3 roles (display used with restraint, body, optional utility).
-           - Layout: one sentence of intent + a rough wireframe; name ONE signature element — spend boldness in one place.
-           - Self-critique before handoff: revise anything that reads like the generic default for this kind of page, and say what changed.
-           - **Route this stage to Saru automatically**: set `responsibility: "designer"` on the stage payload. The engine resolves the current designer via `Platform.Roles.agent_id_for_role/1` and dispatches this stage's prompt to that agent's runtime. If no designer is assigned or their runtime is offline, dispatch falls back to the task's phase assignee — a soft signal, not a gate. Do NOT hardcode an agent_id.
-           This stage is advise-only: it does NOT block development and the mock is expected to be iterated. Do NOT attach manual_approval to it.
+        2. **Design runs BEFORE planning as a responsibility dispatch (ADR-0046) — do not plan it.** If a design direction canvas is attached to this task, read it with `canvas_get` and let it constrain the UI stages you write. Do NOT author a "Design direction" stage and do NOT set `responsibility` on any stage. If no canvas is attached, the design step recorded `not_applicable` or `failed` — proceed and do not wait for one.
 
         3. **Reference the resolved brand identity in implementation stage descriptions** — name the semantic token slots the coder must use (primary/on-primary, accent, surface, muted, border, destructive), not raw hex and not "match the brand". If the project is in exploring mode, say so in the stage description instead.
 
@@ -1570,13 +1558,15 @@ defmodule Platform.Orchestration.PromptTemplates do
           "brand_context",
           "attached_canvases"
         ],
-        # The five deliverable bullets are lifted VERBATIM from the
+        # The five deliverable bullets were lifted VERBATIM from the
         # `dispatch.planning` body's "Add an early advisory design stage"
-        # section, which has been asking the planner for exactly this shape
-        # since task 019f4f1d. Copying rather than paraphrasing is the
-        # point: ADR-0046 moves WHO produces the direction and WHEN, not
-        # WHAT it looks like, and a reworded copy would silently change the
-        # output shape downstream consumers already read.
+        # section, which asked the planner for exactly this shape from task
+        # 019f4f1d until task 019f9b29-5ecd stage 6 deleted it (the planner
+        # no longer authors a design stage, so this template is now the
+        # only place that shape lives). Copying rather than paraphrasing
+        # was the point: ADR-0046 moves WHO produces the direction and
+        # WHEN, not WHAT it looks like, and a reworded copy would silently
+        # change the output shape downstream consumers already read.
         content: """
         You are the Designer. A task is about to be planned and it touches a user-facing surface. Produce DESIGN DIRECTION for that surface now, before the plan is written.
 
