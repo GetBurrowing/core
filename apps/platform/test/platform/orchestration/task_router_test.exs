@@ -2956,5 +2956,414 @@ defmodule Platform.Orchestration.TaskRouterTest do
     end
   end
 
+  # ── ADR-0046 member 7 stage 5: the pre-plan design hold ─────────────────
+  #
+  # ## Verification labels
+  #
+  # **Load-bearing controls.** Each absence assertion below is paired, in the
+  # SAME test, with a case proving the mechanism it asserts the absence of can
+  # actually fire:
+  #
+  #   * "no attention broadcast while held" is paired with a NON-UI task of the
+  #     same shape that broadcasts inside the same window. A `do_dispatch/2`
+  #     deleted outright would fail the control, not pass the absence.
+  #   * "no armed lease while held" SEEDS a lease via
+  #     `LeaseManager.record_dispatch/4` before the tick and asserts it is gone
+  #     after. Without the seed the assertion would be vacuous — a planning task
+  #     with no running stage never arms a lease in the first place, so
+  #     `LeaseManager.get/1 == nil` holds against a `clear_liveness/1` that was
+  #     never called. The control is the non-UI task, whose seeded lease
+  #     SURVIVES its dispatch, proving the clear is specific to the hold.
+  #   * "the deadline is a no-op after a settle" is paired with the
+  #     still-designing case in the same describe, over the same fixture, so a
+  #     `:design_deadline` handler stubbed to `{:noreply, state}` cannot pass.
+  #   * "the shipped default is 1_800_000" is paired with an injected value that
+  #     must be OBSERVED, proving the read goes through `Application.get_env/3`
+  #     rather than the literal.
+  #
+  # **Pins that pass trivially, declared as such.** None. Every assertion in
+  # this section has a paired firing case.
+  #
+  # ## How the hold cannot outlive its holder
+  #
+  # "the level check releases a hold with no timer at all" is the test that
+  # carries that claim. It kills the holding router — destroying the
+  # `:design_deadline` timer with it — and starts a fresh one against a
+  # backdated row. The replacement releases the planner from the level check
+  # alone. That is the journalled `deploying -> done` incident inverted: there,
+  # the transition lived only in an edge-triggered handler and a restart between
+  # broadcast and handler stranded the task forever.
+  defmodule NoopDispatcher do
+    @moduledoc false
+    def maybe_dispatch(_signal), do: :ok
+  end
+
+  # Stage 1's classifier is not in doubt on either of these: the UI title is
+  # stage 1's own doctest example.
+  @design_ui_title "Add an epic-create FAB above the board"
+  @design_non_ui_title "Add Providers.Architecture shim"
+
+  defp design_task!(project, title) do
+    now = DateTime.utc_now()
+
+    task =
+      %Platform.Tasks.Task{}
+      |> Ecto.Changeset.change(%{
+        project_id: project.id,
+        title: title,
+        description: title,
+        status: "planning",
+        inserted_at: now,
+        updated_at: now
+      })
+      |> Platform.Repo.insert!()
+
+    on_exit(fn ->
+      case Registry.lookup(Platform.Orchestration.Registry, task.id) do
+        [{pid, _}] ->
+          try do
+            GenServer.stop(pid, :normal, 1_000)
+          catch
+            :exit, _ -> :ok
+          end
+
+        [] ->
+          :ok
+      end
+
+      case :ets.info(:orchestration_lease_manager) do
+        :undefined -> :ok
+        _ -> LeaseManager.clear(task.id)
+      end
+    end)
+
+    task
+  end
+
+  # Reuse `historian` as the carrier role — the same substitution
+  # `Platform.Design.PreplanStepTest` uses — so this stays off the seeded
+  # `designer` bundle the closed-roster coverage suite exercises.
+  defp wire_designer! do
+    Platform.Repo.insert!(
+      %Platform.Roles.Role{
+        key: "historian",
+        name: "Historian",
+        description: "test",
+        icon: "hero-star"
+      },
+      on_conflict: :nothing,
+      conflict_target: :key
+    )
+
+    %Platform.Roles.RoleResponsibility{}
+    |> Platform.Roles.RoleResponsibility.changeset(%{
+      role_key: "historian",
+      responsibility_key: "design.task_direction"
+    })
+    |> Platform.Repo.insert!()
+
+    {:ok, agent} =
+      %Platform.Agents.Agent{}
+      |> Platform.Agents.Agent.changeset(%{
+        slug: "router-designer-#{unique()}",
+        name: "Fixture Designer",
+        status: "active",
+        kind: "native",
+        workspace_id: nil
+      })
+      |> Platform.Repo.insert()
+
+    {:ok, _} = Platform.Roles.assign_role("historian", agent.id)
+
+    agent
+  end
+
+  defp stub_designer_dispatcher do
+    previous = Application.get_env(:platform, :responsibility_router_native_dispatcher)
+
+    Application.put_env(
+      :platform,
+      :responsibility_router_native_dispatcher,
+      {NoopDispatcher, :maybe_dispatch}
+    )
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:platform, :responsibility_router_native_dispatcher, previous)
+      else
+        Application.delete_env(:platform, :responsibility_router_native_dispatcher)
+      end
+    end)
+  end
+
+  defp put_design_timeout(ms) do
+    previous = Application.get_env(:platform, :design_step_timeout_ms)
+    Application.put_env(:platform, :design_step_timeout_ms, ms)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:platform, :design_step_timeout_ms, previous)
+      else
+        Application.delete_env(:platform, :design_step_timeout_ms)
+      end
+    end)
+  end
+
+  defp backdate!(task, ms) do
+    at = DateTime.add(DateTime.utc_now(), -ms, :millisecond)
+
+    Platform.Repo.update_all(
+      from(t in Platform.Tasks.Task, where: t.id == ^task.id),
+      set: [updated_at: at]
+    )
+
+    task
+  end
+
+  defp reload_task(task), do: Platform.Repo.get!(Platform.Tasks.Task, task.id)
+
+  describe "pre-plan design hold (ADR-0046 member 7)" do
+    setup %{project: project} do
+      # The Registry's boot walk is disabled in the test env, so stage 3's row
+      # has to be installed explicitly per sandbox.
+      [spec] = Platform.Responsibilities.Handlers.DesignTaskDirection.register()
+      {:ok, _row} = Platform.Responsibilities.upsert_by_key(spec)
+
+      %{project: project}
+    end
+
+    test "a UI task with a designer holds the planner; a non-UI task dispatches immediately",
+         %{project: project, assignee: assignee} do
+      stub_designer_dispatcher()
+      wire_designer!()
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      held = design_task!(project, @design_ui_title)
+      {:ok, _pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
+
+      # ABSENCE. The planner must not be prompted while the step is open.
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 600
+
+      # The step really did fire and really is open — the cursor IS the state.
+      assert reload_task(held).planning_step == "designing"
+      assert TaskRouter.current_status(held.id).status == :waiting_design
+
+      # PAIRED POSITIVE CONTROL. Same runtime topic, same window, same task
+      # shape but not UI-classified: it must broadcast.
+      control = design_task!(project, @design_non_ui_title)
+
+      control_assignee = %{
+        type: :federated,
+        id: "runtime-design-control-#{unique()}"
+      }
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{control_assignee.id}")
+      {:ok, _} = TaskRouter.start_link(task_id: control.id, assignee: control_assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
+      refute reload_task(control).planning_step == "designing"
+    end
+
+    test "a held design step clears the liveness lease; an unheld dispatch does not",
+         %{project: project, assignee: assignee} do
+      stub_designer_dispatcher()
+      wire_designer!()
+
+      held = design_task!(project, @design_ui_title)
+      {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
+      Process.sleep(200)
+      assert TaskRouter.current_status(held.id).status == :waiting_design
+
+      # SEED the lease. Without this the assertion below is vacuous: a planning
+      # task with no running stage never arms one, so `nil` would hold against
+      # a `clear_liveness/1` that was never called.
+      :ok =
+        LeaseManager.record_dispatch(
+          held.id,
+          Ecto.UUID.generate(),
+          "coding",
+          DateTime.utc_now()
+        )
+
+      assert %{} = LeaseManager.get(held.id)
+
+      send(pid, :dispatch)
+      Process.sleep(200)
+
+      assert LeaseManager.get(held.id) == nil,
+             "the design hold must clear the lease — an armed no-ack timer would " <>
+               "fire execution.no_ack_timeout five minutes into a legitimate hold"
+
+      # PAIRED CONTROL: the same seed against a router that is NOT holding must
+      # survive its dispatch, proving the clear is specific to the hold branch.
+      control = design_task!(project, @design_non_ui_title)
+
+      control_assignee = %{type: :federated, id: "runtime-design-lease-#{unique()}"}
+      {:ok, control_pid} = TaskRouter.start_link(task_id: control.id, assignee: control_assignee)
+      Process.sleep(200)
+
+      :ok =
+        LeaseManager.record_dispatch(
+          control.id,
+          Ecto.UUID.generate(),
+          "coding",
+          DateTime.utc_now()
+        )
+
+      send(control_pid, :dispatch)
+      Process.sleep(200)
+
+      assert %{} = LeaseManager.get(control.id)
+    end
+
+    test "settling the step wakes the planner exactly once", %{
+      project: project,
+      assignee: assignee
+    } do
+      stub_designer_dispatcher()
+      wire_designer!()
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      held = design_task!(project, @design_ui_title)
+      {:ok, _pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
+      Process.sleep(200)
+      assert TaskRouter.current_status(held.id).status == :waiting_design
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
+
+      {:ok, :complete} = Platform.Design.PreplanStep.settle(held.id, nil)
+
+      # Exactly ONE dispatch. `settle/2` writes twice (the outcome, then the
+      # cursor) and each write broadcasts `{:task_updated, _}`; a wake-up keyed
+      # on the broadcast rather than on leaving `:waiting_design` would prompt
+      # the planner twice.
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 700
+
+      task = reload_task(held)
+      assert task.planning_step == "planning"
+      assert task.planning_step_outcomes["design"]["outcome"] == "complete"
+    end
+
+    test "the deadline expires an open step and releases the planner; after a settle it is a no-op",
+         %{project: project, assignee: assignee} do
+      stub_designer_dispatcher()
+      wire_designer!()
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      held = design_task!(project, @design_ui_title)
+      {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
+      Process.sleep(200)
+      assert TaskRouter.current_status(held.id).status == :waiting_design
+
+      send(pid, :design_deadline)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
+
+      task = reload_task(held)
+      assert task.planning_step == "planning"
+      assert task.planning_step_outcomes["design"]["outcome"] == "failed"
+
+      # ADR-0046 decision 7: the failure falls open, VISIBLY. It reaches merge
+      # time through member 4's predicate with no extra work in this stage.
+      assert Tasks.planning_gate_failed?(task)
+
+      # PAIRED CONTROL, second fixture: a deadline arriving after a settle must
+      # not re-open the step as a failure and must not re-dispatch.
+      settled = design_task!(project, @design_ui_title)
+      settled_assignee = %{type: :federated, id: "runtime-design-late-#{unique()}"}
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{settled_assignee.id}")
+
+      {:ok, settled_pid} = TaskRouter.start_link(task_id: settled.id, assignee: settled_assignee)
+      Process.sleep(200)
+      assert TaskRouter.current_status(settled.id).status == :waiting_design
+
+      {:ok, :complete} = Platform.Design.PreplanStep.settle(settled.id, nil)
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
+
+      send(settled_pid, :design_deadline)
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 700
+
+      assert reload_task(settled).planning_step_outcomes["design"]["outcome"] == "complete"
+    end
+
+    test "the level check releases a hold with no timer at all", %{
+      project: project,
+      assignee: assignee
+    } do
+      stub_designer_dispatcher()
+      wire_designer!()
+
+      held = design_task!(project, @design_ui_title)
+      {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
+      Process.sleep(200)
+      assert TaskRouter.current_status(held.id).status == :waiting_design
+
+      # Kill the holder. The `:design_deadline` timer dies with it — this is the
+      # container restart from the journalled incident.
+      GenServer.stop(pid, :normal, 1_000)
+      refute Process.alive?(pid)
+
+      # The row is now older than the window. Nothing in the system holds a
+      # timer for it.
+      put_design_timeout(50)
+      backdate!(held, 5_000)
+
+      replacement_assignee = %{type: :federated, id: "runtime-design-restart-#{unique()}"}
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{replacement_assignee.id}")
+
+      {:ok, _replacement} =
+        TaskRouter.start_link(task_id: held.id, assignee: replacement_assignee)
+
+      # The replacement re-derives the verdict from the row and releases.
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
+
+      task = reload_task(held)
+      assert task.planning_step == "planning"
+      assert task.planning_step_outcomes["design"]["outcome"] == "failed"
+    end
+
+    test "a task already carrying a plan is never held, even with the cursor at designing",
+         %{project: project, assignee: assignee} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      task = design_task!(project, @design_ui_title)
+
+      # Force the cursor without going through `start/1` — this is the stranded
+      # shape the guard protects against, not one the happy path produces.
+      {:ok, _} = Tasks.set_planning_step(task, :designing)
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved", version: 1})
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "coding", status: "running"})
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
+      refute TaskRouter.current_status(task.id).status == :waiting_design
+
+      # And the step was never fired: a task past planning must not acquire a
+      # design record from the router's start site.
+      assert reload_task(task).planning_step_outcomes == %{}
+    end
+
+    test "the shipped default hold window is 30 minutes and the read goes through app env" do
+      # No `config/test.exs` override exists, so the live read equals the
+      # shipped literal.
+      assert TaskRouter.default_design_step_timeout_ms() == 1_800_000
+      assert TaskRouter.design_step_timeout_ms() == 1_800_000
+
+      # PAIRED CONTROL: an injected value must be OBSERVED, which is what proves
+      # the read is `Application.get_env/3` and not the literal inlined at every
+      # call site. The default accessor must NOT move with it.
+      put_design_timeout(1_234)
+      assert TaskRouter.design_step_timeout_ms() == 1_234
+      assert TaskRouter.default_design_step_timeout_ms() == 1_800_000
+    end
+  end
+
   defp unique, do: System.unique_integer([:positive]) |> Integer.to_string()
 end
