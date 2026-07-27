@@ -2467,12 +2467,20 @@ defmodule Platform.Orchestration.TaskRouterTest do
     end
   end
 
-  describe "stage-level responsibility routing" do
-    # Task 019f5d47 — a stage carrying `responsibility: "designer"` dispatches
-    # to the designer role owner's runtime; when the role has no owner (or the
-    # owner has no runtime), dispatch falls back to `state.assignee` and emits
-    # telemetry. `state.assignee` itself never changes — only the per-dispatch
-    # broadcast target does.
+  describe "stage-level responsibility routing is retired (ADR-0046 member 9)" do
+    # GUARD. Task 019f5d47 gave a stage a `responsibility` role key and routed
+    # that single dispatch to the role owner's runtime, falling back to
+    # `state.assignee` with `[:platform, :plans, :stage_dispatch,
+    # :assignee_unresolvable]` telemetry when the role could not be resolved.
+    # ADR-0046 member 9 deleted that resolution path: designer involvement now
+    # comes from the pre-plan design step (member 7), not from a
+    # planner-authored stage.
+    #
+    # This test is the IN-FLIGHT PLAN argument, executable. The column still
+    # exists at this point in the branch, so a row that was authored before the
+    # deletion can still be constructed — and it must now dispatch to the phase
+    # assignee with no telemetry noise. Stage 4 of this plan drops the column
+    # and retires this test along with it.
 
     defp create_test_user do
       Platform.Repo.insert!(%Platform.Accounts.User{
@@ -2512,62 +2520,45 @@ defmodule Platform.Orchestration.TaskRouterTest do
       {agent, activated}
     end
 
-    test "happy path: stage responsibility routes broadcast to the role owner's runtime", %{
-      task: task,
-      assignee: assignee,
-      stage: stage
-    } do
-      # Seed the designer role owner + their runtime, then pin the role.
+    test "an in-flight stage row still carrying responsibility=\"designer\" dispatches to the phase assignee and emits no stage_dispatch telemetry",
+         %{task: task, assignee: assignee, stage: stage} do
+      # Seed the designer role owner with their OWN live runtime and pin the
+      # role. This is precisely the setup the deleted
+      # `resolve_stage_dispatch_assignee/3` used to succeed on.
       {designer_agent, designer_runtime} = create_linked_runtime("designer")
       {:ok, _assignment} = Platform.Roles.assign_role("designer", designer_agent.id)
 
-      # Attach responsibility to the stage AND mark it running so
-      # `current_running_stage/1` returns it inside do_dispatch/2.
-      stage
-      |> Ecto.Changeset.change(%{
-        responsibility: "designer",
-        status: "running",
-        started_at: DateTime.utc_now()
-      })
-      |> Platform.Repo.update!()
+      # ANTI-VACUITY PRECONDITION. The refutes below only carry weight if the
+      # designer is genuinely resolvable to a live runtime distinct from the
+      # phase assignee — otherwise "nothing arrived on the designer topic"
+      # would hold for a trivially unresolvable role and this test would pass
+      # against a restored resolver too. Replay the exact three lookups the
+      # deleted `resolve_stage_dispatch_assignee/3` chained (role -> agent row
+      # -> linked runtime) and assert each still succeeds.
+      #
+      # Note the agent must be re-read from the DB: `link_agent/2` writes
+      # `runtime_id` onto the row, so `get_runtime_for_agent/1` returns nil for
+      # the stale in-memory struct still carrying `runtime_id: nil`. The
+      # deleted resolver did this re-read via `Repo.get/2`; a precondition
+      # built on the pre-link struct would silently understate what the
+      # resolver could reach and hand back exactly the vacuous refute this
+      # block exists to prevent.
+      #
+      # These are PRECONDITIONS, not the discriminator. The discriminator is
+      # the pinned `assert_receive` on `^assignee_topic` below.
+      assert Platform.Roles.agent_id_for_role("designer") == designer_agent.id
+      designer_agent = Platform.Repo.reload!(designer_agent)
 
-      # Subscribe to BOTH topics so we can assert routing lands on the designer
-      # side and NOT on the phase-assignee side.
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{designer_runtime.runtime_id}")
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+      assert %{runtime_id: resolved_runtime_id} =
+               Platform.Federation.get_runtime_for_agent(designer_agent)
 
-      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      assert resolved_runtime_id == designer_runtime.runtime_id
+      refute resolved_runtime_id == assignee.id
 
-      designer_topic = "runtime:#{designer_runtime.runtime_id}"
-
-      assert_receive %Phoenix.Socket.Broadcast{
-                       topic: ^designer_topic,
-                       event: "attention",
-                       payload: payload
-                     },
-                     1_000
-
-      assert payload.signal.reason == "task_assigned"
-      assert payload.signal.task_id == task.id
-
-      refute_receive %Phoenix.Socket.Broadcast{
-                       topic: "runtime:" <> _,
-                       event: "attention",
-                       payload: %{signal: %{reason: "task_assigned"}}
-                     },
-                     150
-
-      # `state.assignee` is untouched — the routing lens leaves the phase
-      # identity in place for downstream bookkeeping.
-      status = TaskRouter.current_status(task.id)
-      assert status.assignee == assignee
-    end
-
-    test "fallback path: role has no assignee → telemetry fires and phase-assignee runtime still receives the broadcast",
-         %{task: task, assignee: assignee, stage: stage} do
-      # NB: no `assign_role/2` call — `agent_id_for_role("designer")` returns nil.
-      assert Platform.Roles.agent_id_for_role("designer") == nil
-
+      # Write the field a pre-ADR-0046 planner would have authored, and mark
+      # the stage running so `current_running_stage/1` returns it inside
+      # `do_dispatch/2`. The column still exists at this point in the branch;
+      # stage 4 of this plan drops it and retires this test with it.
       updated_stage =
         stage
         |> Ecto.Changeset.change(%{
@@ -2577,7 +2568,13 @@ defmodule Platform.Orchestration.TaskRouterTest do
         })
         |> Platform.Repo.update!()
 
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+      assert updated_stage.responsibility == "designer"
+
+      designer_topic = "runtime:#{designer_runtime.runtime_id}"
+      assignee_topic = "runtime:#{assignee.id}"
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, designer_topic)
+      Phoenix.PubSub.subscribe(Platform.PubSub, assignee_topic)
 
       handler_ref =
         :telemetry_test.attach_event_handlers(self(), [
@@ -2588,62 +2585,28 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
 
-      # Progressive enhancement: dispatch is not blocked; broadcast still lands
-      # on the phase-assignee runtime topic.
+      # FIX DETECTOR. Restore the resolution path and THIS is the assertion
+      # that fires: the broadcast goes to `designer_topic` instead, so nothing
+      # arrives on the phase-assignee topic within the timeout.
       assert_receive %Phoenix.Socket.Broadcast{
-                       topic: topic,
+                       topic: ^assignee_topic,
                        event: "attention",
                        payload: payload
                      },
                      1_000
 
-      assert topic == "runtime:#{assignee.id}"
       assert payload.signal.reason == "task_assigned"
+      assert payload.signal.task_id == task.id
 
-      assert_receive {[:platform, :plans, :stage_dispatch, :assignee_unresolvable], ^handler_ref,
-                      %{count: 1}, metadata},
-                     500
-
-      assert metadata.reason == :role_unresolvable
-      assert metadata.responsibility == "designer"
-      assert metadata.stage_id == updated_stage.id
-      assert metadata.task_id == task.id
-      assert metadata.fallback_runtime_id == assignee.id
-      assert metadata.actor_type == "system"
-      assert metadata.resource_type == "stage"
-      assert metadata.resource_id == updated_stage.id
-    end
-
-    test "backward compat: stage with responsibility=nil emits no telemetry and dispatches to state.assignee",
-         %{task: task, assignee: assignee, stage: stage} do
-      # The seed stage has responsibility == nil already — assert that
-      # explicitly so a future fixture drift doesn't hide behind default.
-      stage = Platform.Repo.reload!(stage)
-      assert stage.responsibility == nil
-
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
-
-      handler_ref =
-        :telemetry_test.attach_event_handlers(self(), [
-          [:platform, :plans, :stage_dispatch, :assignee_unresolvable]
-        ])
-
-      on_exit(fn -> :telemetry.detach(handler_ref) end)
-
-      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-
-      assert_receive %Phoenix.Socket.Broadcast{
-                       topic: topic,
-                       event: "attention",
-                       payload: payload
-                     },
-                     1_000
-
-      assert topic == "runtime:#{assignee.id}"
-      assert payload.signal.reason == "task_assigned"
+      refute_receive %Phoenix.Socket.Broadcast{topic: ^designer_topic, event: "attention"}, 150
 
       refute_receive {[:platform, :plans, :stage_dispatch, :assignee_unresolvable], _, _, _},
                      150
+
+      # `state.assignee` is the phase assignee and always was — the deleted
+      # mechanism only ever swapped the per-dispatch broadcast target.
+      status = TaskRouter.current_status(task.id)
+      assert status.assignee == assignee
     end
   end
 

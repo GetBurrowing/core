@@ -701,42 +701,25 @@ defmodule Platform.Audit.TelemetryHandlerTest do
     end
   end
 
-  describe "stage dispatch fallback bridging (task 019f5d47)" do
-    test "assignee_unresolvable event persists with resource pointing at the stage" do
-      stage_id = Ecto.UUID.generate()
-      task_id = Ecto.UUID.generate()
-      fallback_runtime_id = Ecto.UUID.generate()
+  describe "stage dispatch fallback bridging is retired (ADR-0046 member 9)" do
+    # GUARD. Task 019f5d47 registered
+    # `[:platform, :plans, :stage_dispatch, :assignee_unresolvable]` so the
+    # TaskRouter's stage-responsibility fallback reached the audit trail. ADR
+    # 0046 member 9 deleted the only emitter, so the registration went with it.
+    test "the plans.stage_dispatch.assignee_unresolvable event is no longer registered, while its two meetings siblings still are" do
+      events = TelemetryHandler.events()
 
-      :telemetry.execute(
-        [:platform, :plans, :stage_dispatch, :assignee_unresolvable],
-        %{count: 1},
-        %{
-          stage_id: stage_id,
-          task_id: task_id,
-          responsibility: "designer",
-          fallback_runtime_id: fallback_runtime_id,
-          reason: :role_unresolvable,
-          actor_type: "system",
-          resource_type: "stage",
-          resource_id: stage_id
-        }
-      )
+      # FIX DETECTOR: re-adding the registration (or reviving the emitter and
+      # its registration together) detonates here.
+      refute [:platform, :plans, :stage_dispatch, :assignee_unresolvable] in events
 
-      [event] = Audit.list(event_type: "platform.plans.stage_dispatch.assignee_unresolvable")
-      assert event.resource_type == "stage"
-      assert event.resource_id == stage_id
-      assert event.actor_type == "system"
-      # Correlation IDs remain in the metadata blob.
-      assert event.metadata["stage_id"] == stage_id
-      assert event.metadata["task_id"] == task_id
-      assert event.metadata["responsibility"] == "designer"
-      assert event.metadata["fallback_runtime_id"] == fallback_runtime_id
-      # Atom reason is json-safed to a string by ensure_json_safe/1.
-      assert event.metadata["reason"] == "role_unresolvable"
-      # Top-level fields are deduplicated out of metadata.
-      refute Map.has_key?(event.metadata, "resource_type")
-      refute Map.has_key?(event.metadata, "resource_id")
-      refute Map.has_key?(event.metadata, "actor_type")
+      # POSITIVE CONTROL — scope of the deletion. Both siblings share the
+      # `:assignee_unresolvable` suffix, so a removal done by grepping that
+      # suffix rather than by the `:plans` namespace would take them too. They
+      # are also the cheapest proof `events/0` is a populated list, which is
+      # what stops the refute above passing on an empty return.
+      assert [:platform, :meetings, :scribe_dispatch, :assignee_unresolvable] in events
+      assert [:platform, :meetings, :triage_dispatch, :assignee_unresolvable] in events
     end
   end
 
