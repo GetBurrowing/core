@@ -71,9 +71,13 @@ defmodule Platform.Design.PreplanStepTest do
 
   import ExUnit.CaptureLog
 
+  alias Ecto.Adapters.SQL.Sandbox
+  alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.Agents.AgentRuntime
   alias Platform.Chat
   alias Platform.Design.PreplanStep
+  alias Platform.Federation.RuntimePresence
   alias Platform.Repo
   alias Platform.Responsibilities
   alias Platform.Responsibilities.Handlers.DesignTaskDirection
@@ -212,6 +216,87 @@ defmodule Platform.Design.PreplanStepTest do
     {:ok, _} = Roles.assign_role(role_key, agent.id)
 
     agent
+  end
+
+  # Same carrier-role substitution as `wire_designer!/0`, but the role owner is
+  # a FEDERATED agent with a live runtime rather than a native one — the only
+  # shape `AgentResponder.dispatch_system_event/2` will actually broadcast for.
+  # Returns `{agent, runtime}`; the caller subscribes to `runtime:<token>`.
+  defp wire_federated_designer! do
+    role_key = "historian"
+
+    Repo.insert!(
+      %Role{key: role_key, name: "Historian", description: "test", icon: "hero-star"},
+      on_conflict: :nothing,
+      conflict_target: :key
+    )
+
+    %RoleResponsibility{}
+    |> RoleResponsibility.changeset(%{role_key: role_key, responsibility_key: @key})
+    |> Repo.insert!()
+
+    presence = Process.whereis(RuntimePresence) || start_supervised!(RuntimePresence)
+    Sandbox.allow(Repo, self(), presence)
+
+    owner =
+      Repo.insert!(%User{
+        email: "preplan-designer-#{unique()}@example.com",
+        name: "Preplan Designer Owner",
+        oidc_sub: "oidc-preplan-designer-#{unique()}"
+      })
+
+    runtime =
+      Repo.insert!(%AgentRuntime{
+        owner_user_id: owner.id,
+        status: "active",
+        runtime_id: "rt-designer-#{unique()}",
+        display_name: "designer-runtime"
+      })
+
+    RuntimePresence.track(runtime.runtime_id)
+    on_exit(fn -> RuntimePresence.untrack(runtime.runtime_id) end)
+
+    {:ok, agent} =
+      %Agent{}
+      |> Agent.changeset(%{
+        slug: "designer-federated-#{unique()}",
+        name: "Fixture Federated Designer",
+        status: "active",
+        kind: "native",
+        runtime_type: "external",
+        runtime_id: runtime.id,
+        workspace_id: nil
+      })
+      |> Repo.insert()
+
+    {:ok, _} = Roles.assign_role(role_key, agent.id)
+
+    {agent, runtime}
+  end
+
+  # The real production native dispatcher is
+  # `Platform.Chat.AgentResponder.maybe_dispatch/1` (the default when the seam
+  # is unset). Every other test in this file overrides it; the end-to-end
+  # control below must NOT, so clear any leakage explicitly rather than
+  # trusting `async: false` ordering.
+  defp use_real_dispatcher! do
+    previous_seam = Application.get_env(:platform, :responsibility_router_native_dispatcher)
+    Application.delete_env(:platform, :responsibility_router_native_dispatcher)
+
+    previous_mode = Application.get_env(:platform, :chat_agent_dispatch_mode)
+    Application.put_env(:platform, :chat_agent_dispatch_mode, :sync)
+
+    on_exit(fn ->
+      if previous_seam do
+        Application.put_env(:platform, :responsibility_router_native_dispatcher, previous_seam)
+      end
+
+      if previous_mode do
+        Application.put_env(:platform, :chat_agent_dispatch_mode, previous_mode)
+      else
+        Application.delete_env(:platform, :chat_agent_dispatch_mode)
+      end
+    end)
   end
 
   defp override_dispatcher(module) do
@@ -945,6 +1030,75 @@ defmodule Platform.Design.PreplanStepTest do
       assert Responsibilities.outcome({:ok, :unfilled}) == :not_applicable
       assert Responsibilities.outcome({:ok, :dispatched}) == :complete
       assert Responsibilities.outcome({:error, :anything}) == :failed
+    end
+  end
+
+  # ── the replacement route, end to end (task 019f9b29-e447 stage 1) ────────
+
+  describe "BEHAVIOURAL CONTROL — a UI task reaches the designer's runtime" do
+    # Member 9 deletes `Stage.responsibility`, the field that used to route a
+    # planner-authored "Design direction" stage to Saru. This is the proof that
+    # the behaviour that field provided — a UI task reaches the designer —
+    # still happens by the pre-plan step, with zero involvement from any plan
+    # stage. It is the positive half of the deletion's argument; without it
+    # member 9 removes a route and shows only that the old one is gone.
+    #
+    # WHY IT WAS ADDED RATHER THAN CITED: every other design test in the tree
+    # (this file, `TaskRouterTest`'s "pre-plan design hold",
+    # `DesignTaskDirectionTest`) overrides
+    # `:responsibility_router_native_dispatcher` with a stub, so all of them
+    # stop one layer above the wire. `AgentResponderTest` "broadcasts a bare
+    # signal envelope to the federated agent's runtime" reaches the wire but is
+    # keyed on `memory.dreaming` and starts from a hand-built signal, so it
+    # proves the transport, not that a UI TASK produces one. Nothing asserted
+    # the join. This test does, through the real dispatcher.
+
+    test "the design step broadcasts to the role owner's runtime; a non-UI task does not",
+         %{project: project} do
+      use_real_dispatcher!()
+      {agent, runtime} = wire_federated_designer!()
+
+      topic = "runtime:#{runtime.runtime_id}"
+      :ok = PlatformWeb.Endpoint.subscribe(topic)
+
+      ui = task!(project, @ui_title)
+      _space = execution_space!(ui)
+
+      quietly(fn -> PreplanStep.start(ui) end)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "attention",
+                       payload: %{signal: signal}
+                     },
+                     2_000
+
+      # It is the design responsibility, for THIS task, carrying a rendered
+      # prompt. Asserting only "a broadcast arrived" would pass on any
+      # unrelated fire that happened to reach the same runtime.
+      assert signal.responsibility_key == @key
+      assert signal.agent_id == agent.id
+      assert signal.metadata[:task_id] == ui.id
+      assert is_binary(signal.prompt) and signal.prompt != ""
+
+      # And the step is OPEN, which is what holds the planner (member 7 stage
+      # 5). A dispatch that fired without moving the cursor would leave the
+      # planner racing the designer.
+      assert cursor(ui) == "designing"
+
+      # PAIRED CONTROL — same setup, same runtime, same subscription, same
+      # window; only the classifier's verdict differs. Without it the assertion
+      # above cannot distinguish "UI tasks reach the designer" from
+      # "everything reaches the designer".
+      non_ui = task!(project, @non_ui_title)
+      _control_space = execution_space!(non_ui)
+
+      quietly(fn -> PreplanStep.start(non_ui) end)
+
+      refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "attention"}, 700
+
+      assert design_entry(non_ui)["reason"] == "no_ui_surface"
+      refute cursor(non_ui) == "designing"
     end
   end
 
