@@ -1025,25 +1025,29 @@ defmodule Platform.Tasks.StackDeployerTest do
       assert FakeRunner.merge_calls() == []
     end
 
-    test "task at in_progress (not in_review) is :not_ready" do
+    test "task at in_progress (not in_review) is {:not_ready, :member_not_in_review}" do
       {:ok, _} = FakeRunner.start_link([])
 
       project = project_with_repo!()
       stack = stack_for!(project, slug: "too-early")
       task = stack_member_at_in_progress!(project, stack)
 
-      assert {:ok, :not_ready} = StackDeployer.merge_member_into_rollup(task)
+      assert {:ok, {:not_ready, :member_not_in_review}} =
+               StackDeployer.merge_member_into_rollup(task)
+
       assert FakeRunner.merge_calls() == []
     end
 
-    test "task at in_review with a pending review validation is :not_ready" do
+    test "task at in_review with a pending review validation is {:not_ready, {:stages_pending, 0, 1}}" do
       {:ok, _} = FakeRunner.start_link([])
 
       project = project_with_repo!()
       stack = stack_for!(project, slug: "still-running")
       task = stack_member_at_in_review_with_pending_review!(project, stack)
 
-      assert {:ok, :not_ready} = StackDeployer.merge_member_into_rollup(task)
+      assert {:ok, {:not_ready, {:stages_pending, 0, 1}}} =
+               StackDeployer.merge_member_into_rollup(task)
+
       assert FakeRunner.merge_calls() == []
     end
 
@@ -1075,6 +1079,669 @@ defmodule Platform.Tasks.StackDeployerTest do
 
       assert {:error, :task_not_found} =
                StackDeployer.merge_member_into_rollup(Ecto.UUID.generate())
+    end
+  end
+
+  # ── Regression: superseded plan versions must not gate the merge ─────────
+  #
+  # Task 019fa3e0. `review_stage_ids_for_task/1` used to join every plan
+  # version a task ever had, so a rejected v1's review-stage validations —
+  # which stay `pending` forever, because nothing will ever run them —
+  # permanently withheld the `merged_into_rollup_at` stamp. Observed on the
+  # ADR-0046 stack: the single member carrying two plans was the only one of
+  # nine left unstamped, and one unstamped member blocks the whole stack's
+  # rollup PR.
+  #
+  # THE TWO-PLAN SHAPE IS THE TEST. A one-plan fixture passes both before
+  # and after the fix and proves nothing.
+  describe "merge_member_into_rollup/1 — superseded plan versions (019fa3e0)" do
+    test "member with a rejected v1 (pending validations) and a completed v2 merges" do
+      {:ok, _} =
+        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "c1ea4001"}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "two-plan")
+      %{task: task, v1: v1} = member_with_rejected_v1_and_completed_v2!(project, stack)
+
+      # Precondition: the fixture really is two-plan, and v1's validations
+      # really are pending. Without this the test could pass vacuously.
+      assert [_, _] = Tasks.list_plans(task.id)
+      assert v1.status == "rejected"
+      assert validation_statuses_for_plan(v1.id) == ["pending", "pending", "pending"]
+
+      assert {:ok, %{status: :merged, merge_sha: "c1ea4001"}} =
+               StackDeployer.merge_member_into_rollup(task)
+
+      assert length(FakeRunner.merge_calls()) == 1
+
+      # The fix SCOPED the query — it did not mutate the dead plan into a
+      # passing state.
+      assert validation_statuses_for_plan(v1.id) == ["pending", "pending", "pending"]
+    end
+
+    test "the gate still blocks when the CURRENT plan has a pending validation" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "two-plan-blocked")
+
+      %{task: task} =
+        member_with_rejected_v1_and_completed_v2!(project, stack,
+          v2_status: "approved",
+          v2_validation_statuses: ["passed", "passed", "pending"]
+        )
+
+      # The counts name ONLY plan v2's validations (2 of 3 passed). If the
+      # superseded v1's three pending validations were still in scope the
+      # reason would read {:stages_pending, 2, 6} — so this assertion is a
+      # second, independent witness that the query is current-plan-scoped.
+      assert {:ok, {:not_ready, {:stages_pending, 2, 3}}} =
+               StackDeployer.merge_member_into_rollup(task)
+
+      assert FakeRunner.merge_calls() == []
+    end
+
+    # The degenerate half of the same shape, and the case the incident could
+    # have taken instead: a member whose ONLY plan is `rejected`, never
+    # superseded. Plan rows EXIST — so this is materially different from the
+    # plan-less member tested below — but `Tasks.current_plan/1` resolves to
+    # nil, because it selects `status in ["approved", "completed"]`.
+    #
+    # Two independent regressions are pinned here, and either one alone
+    # reproduces the original symptom:
+    #   1. If the gate ever reverts to joining across ALL plan versions, this
+    #      member's three permanently-pending validations come back into
+    #      scope and it is blocked forever. The plan-less test cannot catch
+    #      that — it has no validations to drag in.
+    #   2. If `:no_current_plan` is ever reclassified as a NOT-ready reason,
+    #      this member becomes unmergeable and strands its whole stack —
+    #      exactly the failure this task exists to remove. Stage 1 chose
+    #      ready-by-default deliberately; this makes changing that choice a
+    #      red test rather than an accident.
+    test "member whose ONLY plan is rejected is ready via :no_current_plan (plan rows exist)" do
+      {:ok, _} =
+        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "d3adb33f"}}])
+
+      handler_id = "test-merge-rejected-only-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stack_deployer, :merge_ready_without_plan],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "rejected-plan-only")
+      %{task: task, v1: v1} = member_with_rejected_plan_only!(project, stack)
+
+      # Non-vacuity, and the whole point of the fixture: a plan row is
+      # present and carries pending validations, yet there is no CURRENT
+      # plan. Without these three assertions the test is indistinguishable
+      # from the plan-less case.
+      assert [%{status: "rejected"}] = Tasks.list_plans(task.id)
+      assert Tasks.current_plan(task.id) == nil
+      assert validation_statuses_for_plan(v1.id) == ["pending", "pending", "pending"]
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          assert {:ok, %{status: :merged, merge_sha: "d3adb33f"}} =
+                   StackDeployer.merge_member_into_rollup(task)
+        end)
+
+      assert length(FakeRunner.merge_calls()) == 1
+      assert log =~ "no current plan"
+      assert log =~ task.id
+
+      assert_received {:telemetry, [:platform, :stack_deployer, :merge_ready_without_plan],
+                       %{count: 1}, %{task_id: _}}
+
+      # Scoped, not mutated — same guarantee the two-plan test asserts.
+      assert validation_statuses_for_plan(v1.id) == ["pending", "pending", "pending"]
+    end
+  end
+
+  # ── Readiness reasons: make the gate's refusal legible (019fa3e0 st.2) ───
+  #
+  # `{:ok, :not_ready}` was indistinguishable from "not finished yet",
+  # which is why a PERMANENT block (the superseded-plan defect above)
+  # presented exactly like the routine eager-fire no-op and needed a manual
+  # correlation study to find. The gate now names its reason, and the log
+  # level splits on whether the reason is routine or anomalous.
+  describe "merge_member_into_rollup/1 — readiness reasons (019fa3e0)" do
+    test "routine 'not yet' stays quiet: no warning for a pending-validation member" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "reason-quiet")
+      task = stack_member_at_in_review_with_pending_review!(project, stack)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          assert {:ok, {:not_ready, {:stages_pending, 0, 1}}} =
+                   StackDeployer.merge_member_into_rollup(task)
+        end)
+
+      # The gate fires on every eager transition. Promoting this to
+      # warning would train operators to ignore the whole family, which
+      # reproduces the original bug in a new form.
+      refute log =~ "StackDeployer"
+    end
+
+    test "routine 'not yet' is still queryable via telemetry with its reason" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      handler_id = "test-merge-not-ready-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stack_deployer, :merge_not_ready],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "reason-telemetry")
+      task = stack_member_at_in_review_with_pending_review!(project, stack)
+
+      assert {:ok, {:not_ready, {:stages_pending, 0, 1}}} =
+               StackDeployer.merge_member_into_rollup(task)
+
+      assert_received {:telemetry, [:platform, :stack_deployer, :merge_not_ready], %{count: 1},
+                       %{task_id: t_id, reason: {:stages_pending, 0, 1}}}
+
+      assert t_id == task.id
+    end
+
+    test "unstamped member past in_review is :member_past_review — warned and measured" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      handler_id = "test-merge-past-review-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stack_deployer, :merge_not_ready],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "past-review")
+      task = unstamped_member_forced_to_deploying!(project, stack)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          assert {:ok, {:not_ready, :member_past_review}} =
+                   StackDeployer.merge_member_into_rollup(task)
+        end)
+
+      # No sanctioned path can produce this state: `stamp_merged/2` drives
+      # `Stacks.advance_member_to_deploying/1`, so the stamp PRECEDES the
+      # transition. Seeing it means an invariant broke — that is an alarm,
+      # not a "not yet".
+      assert log =~ "StackDeployer"
+      assert log =~ task.id
+      assert log =~ "deploying"
+
+      assert_received {:telemetry, [:platform, :stack_deployer, :merge_not_ready], %{count: 1},
+                       %{task_id: _, reason: :member_past_review}}
+
+      assert FakeRunner.merge_calls() == []
+    end
+
+    test "a STAMPED member at deploying still short-circuits as :already_merged (no warning)" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      handler_id = "test-merge-stamped-deploying-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stack_deployer, :merge_not_ready],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "stamped-deploying")
+
+      task =
+        project
+        |> unstamped_member_forced_to_deploying!(stack)
+        |> stamp_merged_into_rollup!("c1ea4001")
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          assert {:ok, :already_merged} = StackDeployer.merge_member_into_rollup(task)
+        end)
+
+      # `already_merged?/1` is consulted BEFORE readiness, so the common
+      # post-merge path never reaches the new warning clause.
+      refute log =~ "StackDeployer"
+      refute_received {:telemetry, [:platform, :stack_deployer, :merge_not_ready], _, _}
+      assert FakeRunner.merge_calls() == []
+    end
+
+    test "member with NO plan at all still merges (ready-by-default preserved) but is warned" do
+      {:ok, _} =
+        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "9a11ab1e"}}])
+
+      handler_id = "test-merge-no-plan-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stack_deployer, :merge_ready_without_plan],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "no-plan-member")
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Plan-less #{uniq()}",
+          status: "in_review"
+        })
+
+      {:ok, task} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
+      task = Tasks.get_task_record(task.id)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          assert {:ok, %{status: :merged, merge_sha: "9a11ab1e"}} =
+                   StackDeployer.merge_member_into_rollup(task)
+        end)
+
+      # Behaviour is UNCHANGED — a plan-less member merges, as it always
+      # has. Making it not-ready would strand every plan-less member and
+      # re-create the exact symptom this task exists to remove. What is
+      # new is that the anomaly is now visible instead of silent.
+      assert length(FakeRunner.merge_calls()) == 1
+      assert log =~ "no current plan"
+      assert log =~ task.id
+
+      assert_received {:telemetry, [:platform, :stack_deployer, :merge_ready_without_plan],
+                       %{count: 1}, %{task_id: _}}
+    end
+  end
+
+  # ── The gate stays NARROW (019fa3e0 stage 3) ─────────────────────────────
+  #
+  # RULING. `review_readiness/1` opens ONLY at `in_review`. It is deliberately
+  # NOT widened to accept `deploying`, even though the incident ticket read as
+  # if an unstamped `deploying` member needed to be let through.
+  # `Stacks.advance_member_to_deploying/1` gates on
+  # `member_has_merged_into_rollup_at?/1`, so the stamp is a PRECONDITION of
+  # the transition, not a consequence of it. Widening the guard would dismantle
+  # the very invariant that makes an unstamped member past `in_review`
+  # unreachable — trading a loud bug for a quiet one. The treatment is
+  # diagnostic (warn + telemetry, still refuse), never permissive.
+  #
+  # `@reason_by_status` is the classification table, and asserting that it
+  # covers `Task.statuses()` EXACTLY is the tripwire. Adding a task status
+  # without deciding which side of the gate it falls on would otherwise land
+  # it silently in the routine `:member_not_in_review` bucket at debug level —
+  # which is precisely how "too late" got mistaken for "too early" and cost a
+  # manual correlation study to find.
+  @reason_by_status %{
+    "backlog" => :member_not_in_review,
+    "planning" => :member_not_in_review,
+    "in_progress" => :member_not_in_review,
+    "stack_pending" => :member_not_in_review,
+    "blocked" => :member_not_in_review,
+    "cancelled" => :member_not_in_review,
+    "deploying" => :member_past_review,
+    "done" => :member_past_review
+  }
+
+  describe "merge_member_into_rollup/1 — guard narrowness (019fa3e0)" do
+    test "the classification table covers every task status except in_review" do
+      expected =
+        Platform.Tasks.Task.statuses()
+        |> MapSet.new()
+        |> MapSet.delete("in_review")
+
+      # A new status must be classified as routine ("hasn't got there yet")
+      # or anomalous ("past the gate, unstamped") by a human, in this table.
+      # Silence is what this whole task exists to remove.
+      assert MapSet.new(Map.keys(@reason_by_status)) == expected
+    end
+
+    test "no status other than in_review reaches the runner, and each names its reason" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_with_repo!()
+
+      for {status, expected_reason} <- @reason_by_status do
+        # Stack slugs are validated lowercase-alphanumeric-with-hyphens, and
+        # several task statuses carry underscores.
+        slug_status = String.replace(status, "_", "-")
+        stack = stack_for!(project, slug: "narrow-#{slug_status}-#{uniq()}")
+        task = unstamped_member_forced_to_status!(project, stack, status)
+
+        assert StackDeployer.merge_member_into_rollup(task) ==
+                 {:ok, {:not_ready, expected_reason}}
+      end
+
+      # THE RULING, asserted: not one of these statuses merges. The fixture
+      # members are otherwise fully review-ready, so the refusals are
+      # attributable to status alone.
+      assert FakeRunner.merge_calls() == []
+    end
+
+    test "a member at `done` with no stamp is :member_past_review too — not deploying-only" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      handler_id = "test-merge-past-review-done-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stack_deployer, :merge_not_ready],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "past-review-done")
+      task = unstamped_member_forced_to_status!(project, stack, "done")
+
+      # NON-VACUITY: every current-plan review validation has passed, so the
+      # only thing standing between this member and a merge is its status.
+      %{id: plan_id} = Tasks.current_plan(task.id)
+      assert validation_statuses_for_plan(plan_id) == ["passed", "passed"]
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          assert {:ok, {:not_ready, :member_past_review}} =
+                   StackDeployer.merge_member_into_rollup(task)
+        end)
+
+      assert log =~ "StackDeployer"
+      assert log =~ task.id
+      assert log =~ "is at done"
+
+      assert_received {:telemetry, [:platform, :stack_deployer, :merge_not_ready], %{count: 1},
+                       %{task_id: _, reason: :member_past_review}}
+
+      assert FakeRunner.merge_calls() == []
+    end
+  end
+
+  # ── The stamp-before-transition invariant, end to end (019fa3e0 st.5) ────
+  #
+  # Stages 1-4 fix and pin the merge gate as a UNIT. This block pins the
+  # CAUSAL CHAIN the defect actually rode:
+  #
+  #   current-plan scoping  →  gate opens  →  merge  →  `merged_into_rollup_at`
+  #   stamp  →  `in_review -> deploying`  →  stack-level rollup PR opens
+  #
+  # Every link was individually correct at the time of the incident; the
+  # chain was broken at its head, and the only observable was the LAST link
+  # (no rollup PR, nine members deep). A unit test on any one link would
+  # have stayed green. These tests fail if any link is refactored apart.
+  describe "stamp-before-transition invariant (019fa3e0 stage 5)" do
+    # TEST 1 — the full lifecycle, on the member shape that could not
+    # complete it. Pre-fix this member never got stamped, so it never left
+    # `in_review`, so its stack never opened a PR. Asserting the stamp alone
+    # (stages 1-4) does not catch a regression that breaks the stamp →
+    # transition edge; asserting the transition alone does not catch one
+    # that breaks the scoping. Both, in order, in one test.
+    test "two-plan member: stamp lands with the right SHAPE, then it advances in_review -> deploying" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [{:ok, %{status: :merged, merge_sha: "f0071e55"}}],
+          pr_responses: [{:ok, %{number: 4001, url: "https://github.com/test/repo/pull/4001"}}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "lifecycle-two-plan")
+
+      # THE DEPLOY TARGET IS NOT INCIDENTAL. `advance_member_to_deploying/1`
+      # routes through `Tasks.transition_task/2`, which refuses `deploying`
+      # for a task with no resolvable target
+      # (`require_deploy_target_for/2` → `{:error, :no_deploy_target_resolved}`).
+      # That refusal is logged and swallowed, so a fixture without a target
+      # produces a member that is correctly stamped and silently stuck — the
+      # exact symptom under test, arriving from an unrelated cause. Setting
+      # it here makes the assertion below attributable to the stamp.
+      %{task: task} =
+        member_with_rejected_v1_and_completed_v2!(project, stack, deploy_target: "production")
+
+      assert task.status == "in_review"
+      refute Stacks.member_has_merged_into_rollup_at?(task)
+
+      assert {:ok, %{status: :merged, merge_sha: "f0071e55"}} =
+               StackDeployer.merge_member_into_rollup(task)
+
+      reloaded = Tasks.get_task_record(task.id)
+
+      # (a) STAMP SHAPE — a map carrying a hex sha and an ISO8601 instant.
+      # Bug #3 (task 019f708f) established this shape as load-bearing:
+      # `member_sha_reachable?/2` extracts `"sha"` from it to verify the
+      # commit is actually reachable from the rollup tip, so a degraded
+      # bare-string stamp silently disables that check.
+      assert %{"sha" => sha, "at" => at} = reloaded.metadata["merged_into_rollup_at"]
+      assert sha == "f0071e55"
+      assert sha =~ ~r/\A[0-9a-f]{7,40}\z/
+      assert {:ok, %DateTime{}, _offset} = DateTime.from_iso8601(at)
+
+      # (b) THE TRANSITION, driven off that stamp by `stamp_merged/2`. This
+      # is the assertion that would have caught the ADR-0046 stall at CI
+      # time: pre-fix the member never leaves `in_review`.
+      assert reloaded.status == "deploying"
+    end
+
+    # TEST 2 — the invariant itself, stated in the negative.
+    #
+    # Stage 3 ruled that `review_readiness/1` stays narrow (it refuses an
+    # unstamped `deploying` member rather than letting it through) and
+    # justified that ruling by arguing such a member CANNOT EXIST: the stamp
+    # is a precondition of the transition, not a consequence. That argument
+    # is only sound while `member_deploy_transition_ready?/1` keeps
+    # `member_has_merged_into_rollup_at?/1` as a conjunct. Drop it and
+    # unstamped members start reaching `deploying` for real, at which point
+    # stage 3's `:member_past_review` alarm becomes a false positive and the
+    # narrow guard becomes an actual bug. This test is what makes that
+    # dependency visible.
+    test "an unstamped member at in_review does NOT advance — the stamp is a precondition" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "stamp-precondition")
+
+      task = review_ready_member!(project, stack)
+      {:ok, task} = Tasks.update_task(task, %{deploy_target: "production"})
+
+      # NON-VACUITY: every OTHER conjunct of the transition contract holds,
+      # plus the deploy-target guard downstream of it. The stamp is the only
+      # missing input, so the `:noop` is attributable to it alone.
+      assert task.status == "in_review"
+      assert Stacks.member_review_validations_all_passed?(task)
+      refute Stacks.member_pending_review_requests?(task)
+      assert Tasks.has_deploy_target?(task)
+      refute Stacks.member_has_merged_into_rollup_at?(task)
+
+      assert :noop = Stacks.advance_member_to_deploying(task)
+      assert Tasks.get_task_record(task.id).status == "in_review"
+
+      # POSITIVE CONTROL. Add the stamp; change nothing else. The same call
+      # now advances. Without this half, the `:noop` above would still pass
+      # if some unrelated gate had closed — including a future one that
+      # blocks the transition permanently.
+      stamped = stamp_merged_into_rollup!(task, "beefca7e")
+      assert {:ok, %{status: "deploying"}} = Stacks.advance_member_to_deploying(stamped)
+    end
+
+    # TEST 3 — cross-predicate agreement, SCOPED TO THE TWO-PLAN FIXTURE.
+    #
+    # `StackDeployer.review_readiness/1` and
+    # `Stacks.member_review_validations_all_passed?/1` answer nearly the
+    # same question with independent implementations, and their divergence
+    # on the two-plan shape IS this bug. So agreement is pinned exactly
+    # there — and NOWHERE ELSE. See the divergence test below for why this
+    # deliberately is not a property over stack members.
+    test "two-plan member: the merge gate and the transition gate agree it is ready" do
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "agree-two-plan")
+      %{task: task, v1: v1} = member_with_rejected_v1_and_completed_v2!(project, stack)
+
+      # Non-vacuity: the superseded plan's validations really are pending,
+      # so both predicates are being asked a question they could get wrong.
+      assert validation_statuses_for_plan(v1.id) == ["pending", "pending", "pending"]
+
+      assert {:ready, :validations_passed} = StackDeployer.review_readiness(task)
+      assert Stacks.member_review_validations_all_passed?(task)
+    end
+
+    # …AND THE DIVERGENCE, enumerated. The two predicates are NOT
+    # interchangeable, and asserting agreement as a property over stack
+    # members would encode a falsehood as a guard — a future reader would
+    # "fix" whichever side happened to be red. The divergence set is small,
+    # known, and each member of it is deliberate:
+    #
+    #   1. plan-less member — Stacks says false; the merge gate says
+    #      `{:ready, :no_current_plan}` on purpose (stage 1: making it
+    #      not-ready strands the member forever, which is the symptom this
+    #      task exists to remove).
+    #   2. current plan whose review stage carries ZERO validations —
+    #      `stacks.ex` requires `all_validations != []`, documented as "we
+    #      want evidence, not silence"; the merge gate treats an empty set
+    #      as vacuously satisfied ("no blocking validations remain").
+    #   3. member whose ONLY plan is `rejected` — plan ROWS exist, but
+    #      `Tasks.current_plan/1` selects `status in ["approved",
+    #      "completed"]`, so it resolves to nil and case 1's reasoning
+    #      applies.
+    #
+    # Cases 1 and 3 are consistent: `:no_current_plan` is a READY reason on
+    # one side and a false on the other, by design. Case 2 is a genuine
+    # seam — two functions in the same readiness contract hold OPPOSITE
+    # views on what an empty validation set means. Recorded here rather
+    # than papered over; resolving it is not this task's scope.
+    test "the two predicates diverge on three known shapes — pinned, not generalised" do
+      project = project_with_repo!()
+
+      # 1. No plan at all.
+      planless =
+        member_without_any_plan!(project, stack_for!(project, slug: "diverge-planless"))
+
+      assert {:ready, :no_current_plan} = StackDeployer.review_readiness(planless)
+      refute Stacks.member_review_validations_all_passed?(planless)
+
+      # 2. Current plan, review stage, zero validations.
+      silent =
+        member_with_zero_validation_review_stage!(
+          project,
+          stack_for!(project, slug: "diverge-silent")
+        )
+
+      assert %{} = Tasks.current_plan(silent.id)
+      assert {:ready, :validations_passed} = StackDeployer.review_readiness(silent)
+      refute Stacks.member_review_validations_all_passed?(silent)
+
+      # 3. Only plan is `rejected` — rows exist, no current plan.
+      %{task: rejected_only} =
+        member_with_rejected_plan_only!(project, stack_for!(project, slug: "diverge-rejected"))
+
+      assert [%{status: "rejected"}] = Tasks.list_plans(rejected_only.id)
+      assert {:ready, :no_current_plan} = StackDeployer.review_readiness(rejected_only)
+      refute Stacks.member_review_validations_all_passed?(rejected_only)
+    end
+
+    # TEST 4 — the loop closes on the original symptom: "one such member
+    # blocks the entire stack's PR indefinitely." The stack-level gate is
+    # three links downstream of the scoping fix, and it is the ONLY link a
+    # human noticed. Pinning it keeps the symptom itself a red test, not
+    # just its cause.
+    #
+    # Neither member carries a `deploy_target`, so both stay at `in_review`
+    # after merging (see the fixture note). That is the shape the stack-PR
+    # gate is specified against — `member_landed_on_rollup?/1` accepts
+    # `in_review`, and `Stacks.deploy_ready?/1` requires
+    # `in_review`/`deploying`, so a member advanced all the way to `done`
+    # would close the gate again for an unrelated reason.
+    test "2-member stack: the two-plan member's stamp is what clears the stack PR gate" do
+      pr_url = "https://github.com/test/repo/pull/4242"
+
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [
+            {:ok, %{status: :merged, merge_sha: "0000a11e"}},
+            {:ok, %{status: :merged, merge_sha: "0000b22f"}}
+          ],
+          pr_responses: [{:ok, %{number: 4242, url: pr_url}}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "stack-gate-two-plan")
+
+      %{task: awkward} = member_with_rejected_v1_and_completed_v2!(project, stack)
+      ordinary = review_ready_member!(project, stack, position: 2)
+
+      # Merge the ORDINARY member first. The gate stays shut, and the only
+      # thing holding it shut is the two-plan member's missing stamp — the
+      # in-test control for the assertion that follows.
+      assert {:ok, %{status: :merged, merge_sha: "0000a11e"}} =
+               StackDeployer.merge_member_into_rollup(ordinary)
+
+      refute Stacks.member_has_merged_into_rollup_at?(Tasks.get_task_record(awkward.id))
+      assert {:ok, :not_ready} = StackDeployer.maybe_open_stack_pr(Stacks.get_stack(stack.id))
+      assert FakeRunner.pr_calls() == []
+
+      # Now merge the member that pre-fix could never be stamped.
+      assert {:ok, %{status: :merged, merge_sha: "0000b22f"}} =
+               StackDeployer.merge_member_into_rollup(awkward)
+
+      assert Stacks.member_has_merged_into_rollup_at?(Tasks.get_task_record(awkward.id))
+
+      # The gate cleared, and `stamp_merged/2`'s fire-and-forget hook opened
+      # the PR on that final merge — exactly ONE shell-out for the stack.
+      assert [pr_call] = FakeRunner.pr_calls()
+      assert pr_call.rollup_branch == stack.rollup_branch
+
+      deployed = Stacks.get_stack(stack.id)
+      assert deployed.status == "deploying"
+      assert deployed.metadata["rollup_pr"]["url"] == pr_url
+
+      # Re-asking is idempotent, and — the point of the test — it is no
+      # longer `{:ok, :not_ready}`.
+      assert {:ok, :already_open} = StackDeployer.maybe_open_stack_pr(deployed)
     end
   end
 
@@ -1577,7 +2244,10 @@ defmodule Platform.Tasks.StackDeployerTest do
     task = create_member_task!(project, Keyword.get(opts, :id))
 
     {:ok, task} =
-      Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
+      Tasks.update_task(task, %{
+        stack_id: stack.id,
+        stack_position: Keyword.get(opts, :position, 1)
+      })
 
     # Plan + review stage with ALL validations passed → review_ready? == true.
     {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
@@ -1596,6 +2266,196 @@ defmodule Platform.Tasks.StackDeployerTest do
     {:ok, _} =
       Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass", status: "passed"})
 
+    Tasks.get_task_record(task.id)
+  end
+
+  # Task 019fa3e0 regression fixture. Reproduces the ADR-0046 member shape:
+  # a `rejected` v1 whose review-stage validations are left `pending`
+  # forever (nothing will ever run them), superseded by a `completed` v2
+  # whose validations all passed. This mirrors the real auto-supersession
+  # write in `Tasks.approve_plan/2` — note it stamps `status: "rejected"`,
+  # NOT `"superseded"`.
+  #
+  # Ordering matters: `Tasks.create_plan/1` refuses to create a sibling
+  # while the latest plan is `draft`/`pending_review`, so v1 is created
+  # `approved` and only demoted to `rejected` once v2 exists and can be
+  # named as its `superseded_by_plan_id`.
+  #
+  # `:deploy_target` (stage 5) defaults to nil, and that default is
+  # load-bearing for every pre-stage-5 caller: without a resolvable target
+  # `Tasks.require_deploy_target_for/2` refuses the `in_review -> deploying`
+  # transition, so `stamp_merged/2`'s `advance_member_to_deploying/1` call
+  # is a logged no-op and the member stays at `in_review`. Stages 1-4 assert
+  # on the STAMP, which lands either way. Only the stage-5 lifecycle test —
+  # which asserts the member actually reaches `deploying` — passes a target.
+  # Changing the default would silently move four existing members one
+  # lifecycle rung further than their tests describe.
+  defp member_with_rejected_v1_and_completed_v2!(project, stack, opts \\ []) do
+    v2_status = Keyword.get(opts, :v2_status, "completed")
+    v2_statuses = Keyword.get(opts, :v2_validation_statuses, ["passed", "passed", "passed"])
+    deploy_target = Keyword.get(opts, :deploy_target)
+
+    task = create_member_task!(project, nil)
+
+    {:ok, task} =
+      Tasks.update_task(task, %{
+        stack_id: stack.id,
+        stack_position: 1,
+        deploy_target: deploy_target
+      })
+
+    {:ok, v1} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+    _ = review_stage_with_e2e_validations!(v1, ["pending", "pending", "pending"], "running")
+
+    {:ok, v2} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+    _ = review_stage_with_e2e_validations!(v2, v2_statuses, "running")
+
+    v1 =
+      v1
+      |> Platform.Tasks.Plan.changeset(%{
+        status: "rejected",
+        superseded_by_plan_id: v2.id,
+        rejection_reason: "Superseded by plan v#{v2.version}"
+      })
+      |> Platform.Repo.update!()
+
+    v2 =
+      v2
+      |> Platform.Tasks.Plan.changeset(%{status: v2_status})
+      |> Platform.Repo.update!()
+
+    %{task: Tasks.get_task_record(task.id), v1: v1, v2: v2}
+  end
+
+  # Task 019fa3e0 stage 4. The DEGENERATE half of the two-plan shape: a
+  # member whose only plan is `rejected` and was never superseded, so plan
+  # ROWS exist but `Tasks.current_plan/1` resolves to nil. This is NOT the
+  # same fixture as "a task with no plan at all" — that one has an empty
+  # `list_plans`, and a regression that made `current_plan/1` fall back to
+  # the latest plan regardless of status would be invisible to it while
+  # dragging this member's three permanently-pending validations back into
+  # the merge gate's scope.
+  defp member_with_rejected_plan_only!(project, stack) do
+    task = create_member_task!(project, nil)
+    {:ok, task} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
+
+    {:ok, v1} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+    _ = review_stage_with_e2e_validations!(v1, ["pending", "pending", "pending"], "running")
+
+    v1 =
+      v1
+      |> Platform.Tasks.Plan.changeset(%{
+        status: "rejected",
+        rejection_reason: "Rejected with feedback; no v2 authored yet"
+      })
+      |> Platform.Repo.update!()
+
+    %{task: Tasks.get_task_record(task.id), v1: v1}
+  end
+
+  # Task 019fa3e0 stage 5, divergence case 1: a member with NO plan rows at
+  # all. `create_member_task!/2` writes `status: "in_review"` directly, which
+  # is the only way to reach that state — `Tasks.transition_task/2` would
+  # demand an approved plan on the way into the execution phase.
+  defp member_without_any_plan!(project, stack) do
+    task = create_member_task!(project, nil)
+    {:ok, task} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
+    Tasks.get_task_record(task.id)
+  end
+
+  # Task 019fa3e0 stage 5, divergence case 2: an approved current plan whose
+  # review stage carries ZERO validations. The one shape where the two
+  # readiness predicates hold genuinely opposite positions — `stacks.ex`
+  # reads an empty set as "no evidence" (false), the merge gate reads it as
+  # "nothing blocking" (ready).
+  defp member_with_zero_validation_review_stage!(project, stack) do
+    task = create_member_task!(project, nil)
+    {:ok, task} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
+
+    {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+    {:ok, _stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        position: 1,
+        name: "Task-level review",
+        status: "running"
+      })
+
+    Tasks.get_task_record(task.id)
+  end
+
+  defp review_stage_with_e2e_validations!(plan, statuses, stage_status) do
+    {:ok, stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        position: 1,
+        name: "Task-level review",
+        status: stage_status
+      })
+
+    Enum.each(statuses, fn status ->
+      {:ok, _} =
+        Tasks.create_validation(%{
+          stage_id: stage.id,
+          kind: "e2e_behavior",
+          status: status,
+          evaluation_payload: %{
+            "setup" => "build the member",
+            "actions" => "merge it",
+            "expected" => "it merges"
+          }
+        })
+    end)
+
+    stage
+  end
+
+  defp validation_statuses_for_plan(plan_id) do
+    import Ecto.Query
+
+    Platform.Tasks.Validation
+    |> join(:inner, [v], s in Platform.Tasks.Stage, on: s.id == v.stage_id)
+    |> where([_v, s], s.plan_id == ^plan_id)
+    |> select([v, _s], v.status)
+    |> Platform.Repo.all()
+    |> Enum.sort()
+  end
+
+  # Task 019fa3e0 stage 2. A member that is otherwise fully merge-eligible
+  # but sits at `deploying` with NO `merged_into_rollup_at` stamp. No
+  # sanctioned code path can produce this: `stamp_merged/2` drives
+  # `Stacks.advance_member_to_deploying/1` off the stamp it just wrote, and
+  # `member_deploy_transition_ready?/1` refuses an unstamped member. The
+  # status is therefore forced past the transition machinery on purpose —
+  # the point is to exercise the alarm for a state that "cannot happen".
+  defp unstamped_member_forced_to_deploying!(project, stack) do
+    unstamped_member_forced_to_status!(project, stack, "deploying")
+  end
+
+  # Generalised in stage 3. The alarm clause covers `deploying` AND `done`,
+  # and the narrowness tripwire drives EVERY status in `Task.statuses()`
+  # through the gate, so the fixture takes the status as a parameter. The
+  # member is otherwise fully merge-eligible in every case — the refusal is
+  # therefore attributable to status alone, never to a pending validation.
+  defp unstamped_member_forced_to_status!(project, stack, status) do
+    task = review_ready_member!(project, stack)
+
+    task
+    |> Ecto.Changeset.change(status: status)
+    |> Platform.Repo.update!()
+
+    Tasks.get_task_record(task.id)
+  end
+
+  defp stamp_merged_into_rollup!(task, sha) do
+    metadata =
+      Map.put(task.metadata || %{}, "merged_into_rollup_at", %{
+        "sha" => sha,
+        "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+      })
+
+    {:ok, _} = Tasks.update_task(task, %{metadata: metadata})
     Tasks.get_task_record(task.id)
   end
 

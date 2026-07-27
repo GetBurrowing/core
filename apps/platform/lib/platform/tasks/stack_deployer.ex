@@ -394,10 +394,25 @@ defmodule Platform.Tasks.StackDeployer do
       `{:error, :project_not_found}` / `{:error, :no_repo_url}`.
     * Task status must be `in_review` AND every validation in the
       task's review-stage(s) must be `passed` — otherwise
-      `{:ok, :not_ready}`. (`:not_ready` is intentionally an `:ok`
-      result: the engine fires this hook eagerly on transition; if
+      `{:ok, {:not_ready, reason}}`. (`:not_ready` is intentionally an
+      `:ok` result: the engine fires this hook eagerly on transition; if
       review validations haven't all passed yet, this is the expected
-      no-op outcome.)
+      no-op outcome.) The reason is one of:
+
+      * `{:stages_pending, passed, total}` — ROUTINE. The current plan's
+        review-stage validations aren't all `passed` yet. Logged at
+        debug; this fires on every eager transition.
+      * `:member_not_in_review` — ROUTINE. The member hasn't reached
+        `in_review` yet (the hook also runs from the retry sweep).
+      * `:member_past_review` — ANOMALY. The member is at `deploying` /
+        `done` with no stamp, which no sanctioned path can produce
+        (`stamp_merged/2` drives the transition off the stamp). Logged
+        at warning.
+
+      Task 019fa3e0: the reason exists because a bare `{:ok, :not_ready}`
+      made a PERMANENT block (a superseded plan's validations gating the
+      merge forever) indistinguishable from "not finished yet". A failure
+      mode that reports success is the expensive kind.
 
   Idempotency:
 
@@ -439,10 +454,23 @@ defmodule Platform.Tasks.StackDeployer do
       (network blips, auth misconfig, etc.) are likely retryable and
       shouldn't halt the whole stack.
   """
+  @typedoc """
+  Why the per-member rollup-merge gate declined.
+
+  `{:stages_pending, passed, total}` counts ONLY the current plan's
+  review-stage validations — superseded plan versions are out of scope
+  (task 019fa3e0), so the counts double as a witness that the lookup is
+  current-plan-scoped.
+  """
+  @type not_ready_reason ::
+          :member_not_in_review
+          | :member_past_review
+          | {:stages_pending, non_neg_integer(), non_neg_integer()}
+
   @spec merge_member_into_rollup(TaskRecord.t() | binary()) ::
           {:ok, merge_result()}
           | {:ok, :already_merged}
-          | {:ok, :not_ready}
+          | {:ok, {:not_ready, not_ready_reason()}}
           | {:error, :not_fast_forwardable, %{member_sha: String.t(), rollup_sha: String.t()}}
           | {:error, :conflict, [String.t()]}
           | {:error,
@@ -462,19 +490,26 @@ defmodule Platform.Tasks.StackDeployer do
   def merge_member_into_rollup(%TaskRecord{stack_id: nil}), do: {:error, :not_in_stack}
 
   def merge_member_into_rollup(%TaskRecord{stack_id: stack_id} = task) when is_binary(stack_id) do
-    cond do
-      already_merged?(task) ->
-        {:ok, :already_merged}
+    # `already_merged?/1` is deliberately consulted BEFORE readiness: a
+    # stamped member at `deploying` must short-circuit as `:already_merged`
+    # and never reach the `:member_past_review` alarm below.
+    if already_merged?(task) do
+      {:ok, :already_merged}
+    else
+      case review_readiness(task) do
+        {:ready, ready_reason} ->
+          report_merge_ready(task, ready_reason)
 
-      not review_ready?(task) ->
-        {:ok, :not_ready}
+          with {:ok, %Stack{} = stack} <- load_stack(stack_id),
+               {:ok, project} <- load_project(stack.project_id),
+               :ok <- ensure_repo_url(project) do
+            do_merge_member(task, stack, project.repo_url)
+          end
 
-      true ->
-        with {:ok, %Stack{} = stack} <- load_stack(stack_id),
-             {:ok, project} <- load_project(stack.project_id),
-             :ok <- ensure_repo_url(project) do
-          do_merge_member(task, stack, project.repo_url)
-        end
+        {:not_ready, reason} ->
+          report_merge_not_ready(task, reason)
+          {:ok, {:not_ready, reason}}
+      end
     end
   end
 
@@ -649,24 +684,153 @@ defmodule Platform.Tasks.StackDeployer do
   # no review-stage validations (no review stage at all, or one with
   # zero validations) is vacuously ready — the precondition is "no
   # blocking validations remain".
-  defp review_ready?(%TaskRecord{status: "in_review", id: task_id}) do
-    review_stage_ids = review_stage_ids_for_task(task_id)
+  #
+  # Task 019fa3e0: this used to be a bare `review_ready?/1` boolean, and
+  # the caller turned `false` into an unqualified `{:ok, :not_ready}`. That
+  # collapsed four distinct situations — three routine, one an invariant
+  # violation — into a single term that reads as "not finished yet". It is
+  # why a permanent block presented exactly like the ordinary eager-fire
+  # no-op. Both halves of the answer are now named: whether the gate
+  # opened, and why.
+  #
+  # `{:ready, _}` reasons are as load-bearing as the not-ready ones:
+  # `:no_current_plan` merges by default (see below) but is anomalous
+  # enough to warrant a warning at the call site.
+  #
+  # PUBLIC-BUT-UNDOCUMENTED (task 019fa3e0 stage 5). Exposed with `@doc
+  # false` — same treatment as `member_slug_for/1` — so the integration
+  # tests can assert this gate's verdict DIRECTLY against the adjacent
+  # `Stacks.member_review_validations_all_passed?/1`. Going through
+  # `merge_member_into_rollup/1` would only observe the verdict through
+  # the git-runner machinery, which is precisely the indirection that let
+  # the two predicates drift apart unnoticed. Not part of the module's
+  # supported surface; callers should use `merge_member_into_rollup/1`.
+  @doc false
+  @spec review_readiness(TaskRecord.t()) ::
+          {:ready, :validations_passed | :no_review_stages | :no_current_plan}
+          | {:not_ready, not_ready_reason()}
+  def review_readiness(%TaskRecord{status: "in_review", id: task_id}) do
+    case review_stage_ids_for_task(task_id) do
+      # No current plan at all → ready-by-default, preserving the
+      # behaviour that existed before this query was scoped. Making it
+      # not-ready would strand every plan-less member permanently, which
+      # is precisely the symptom this task exists to remove — so the
+      # anomaly is made LOUD (see `report_merge_ready/2`) rather than
+      # blocking.
+      :no_current_plan ->
+        {:ready, :no_current_plan}
 
-    case review_stage_ids do
-      [] ->
-        true
+      {:ok, []} ->
+        {:ready, :no_review_stages}
 
-      ids ->
+      {:ok, ids} ->
         validations =
           Validation
           |> where([v], v.stage_id in ^ids)
           |> Repo.all()
 
-        Enum.all?(validations, &(&1.status == "passed"))
+        total = length(validations)
+        passed = Enum.count(validations, &(&1.status == "passed"))
+
+        if passed == total do
+          {:ready, :validations_passed}
+        else
+          {:not_ready, {:stages_pending, passed, total}}
+        end
     end
   end
 
-  defp review_ready?(_task), do: false
+  # ANOMALY. A member at `deploying`/`done` with no `merged_into_rollup_at`
+  # stamp cannot be produced by any sanctioned path: `stamp_merged/2`
+  # drives `Stacks.advance_member_to_deploying/1` off the stamp it just
+  # wrote, and `member_deploy_transition_ready?/1` (stacks.ex) refuses an
+  # unstamped member. Reaching here means that invariant broke. The gate
+  # still declines — the repair stays a deliberate, human-authorised act —
+  # but it now says so out loud instead of returning a bare `:not_ready`.
+  def review_readiness(%TaskRecord{status: status}) when status in ["deploying", "done"] do
+    {:not_ready, :member_past_review}
+  end
+
+  # ROUTINE. The member simply hasn't reached `in_review` yet; the hook
+  # fires eagerly on transition and the retry sweep re-runs it.
+  def review_readiness(_task), do: {:not_ready, :member_not_in_review}
+
+  # LOG LEVEL IS THE WHOLE POINT (task 019fa3e0). The pre-existing line
+  # was `Logger.debug`, so even a perfect reason string would have been
+  # invisible at production log levels — the reason the ADR-0046 stall had
+  # to be found by hand. But promoting the WHOLE family to warning would
+  # be just as bad: `{:stages_pending, _, _}` fires on every eager
+  # transition, and an alarm that cries wolf on every no-op is one
+  # operators learn to filter, which reproduces the original blindness in
+  # a new form. So the split is by KIND, not by severity of consequence:
+  # "too early" is routine and stays at debug; "past the gate, unstamped"
+  # is an invariant violation and warns.
+  #
+  # Telemetry is emitted for EVERY reason, including the routine ones —
+  # unlike a log line, a counter tagged with `reason` is aggregated rather
+  # than read, so consumers filter by reason and the routine rate is
+  # itself useful (a sudden flat-line in `:stages_pending` means the hook
+  # stopped firing).
+  #
+  # Emitted HERE rather than in `log_merge_result/2` on purpose:
+  # `log_merge_result/2` only runs on the `handle_member_transition/3`
+  # path, so an operator calling `merge_member_into_rollup/1` directly at
+  # an iex prompt — exactly the 2026-07-27 investigation — would have seen
+  # neither the log nor the event.
+  defp report_merge_not_ready(%TaskRecord{id: id, status: status}, reason) do
+    case reason do
+      :member_past_review ->
+        Logger.warning(
+          "[StackDeployer] task #{id} is at #{status} with NO merged_into_rollup_at " <>
+            "stamp; refusing rollup merge (reason=:member_past_review). This is an " <>
+            "invariant violation — the stamp must precede the transition out of " <>
+            "in_review. Investigate before re-stamping by hand."
+        )
+
+      {:stages_pending, passed, total} ->
+        Logger.debug(
+          "[StackDeployer] task #{id} not yet review-ready " <>
+            "(#{passed}/#{total} current-plan review validations passed); " <>
+            "deferring rollup merge"
+        )
+
+      :member_not_in_review ->
+        Logger.debug(
+          "[StackDeployer] task #{id} is at #{status}, not in_review; " <>
+            "deferring rollup merge"
+        )
+    end
+
+    :telemetry.execute(
+      [:platform, :stack_deployer, :merge_not_ready],
+      %{count: 1},
+      %{task_id: id, status: status, reason: reason}
+    )
+
+    :ok
+  end
+
+  # The gate OPENED, but not always for a reassuring reason. A member with
+  # no current plan is ready-by-default (preserving pre-019fa3e0
+  # behaviour), yet "merged without any plan to gate on" is worth a
+  # warning: it is the one ready-path that skips validation entirely.
+  defp report_merge_ready(%TaskRecord{id: id}, :no_current_plan) do
+    Logger.warning(
+      "[StackDeployer] task #{id} has no current plan (Tasks.current_plan/1 " <>
+        "returned nil); proceeding with rollup merge ready-by-default — no " <>
+        "review validations were consulted"
+    )
+
+    :telemetry.execute(
+      [:platform, :stack_deployer, :merge_ready_without_plan],
+      %{count: 1},
+      %{task_id: id}
+    )
+
+    :ok
+  end
+
+  defp report_merge_ready(%TaskRecord{}, _ready_reason), do: :ok
 
   # A task's review stages are the stages whose name marks them as a
   # review/validation stage in the plan. Mirrors the heuristic used
@@ -674,14 +838,37 @@ defmodule Platform.Tasks.StackDeployer do
   # name contains "review" or "validation", and is NOT a "Deploy:"
   # stage. Stack members never reach a Deploy stage in the per-member
   # path anyway, but the filter is kept conservative.
+  #
+  # SCOPING (task 019fa3e0): the lookup is restricted to the task's
+  # CURRENT plan via `Tasks.current_plan/1`. An unscoped join across
+  # every plan version harvested review stages from superseded plans
+  # too, whose validations stay `pending` forever because nothing will
+  # ever run them — so any member that ever needed a plan v2 could
+  # never satisfy the gate, and one such member blocks its whole
+  # stack's rollup. `Stacks.member_review_validations_all_passed?/1`
+  # already resolves through `current_plan/1`; this mirrors it rather
+  # than hand-rolling a `status == "approved"` filter, which would
+  # mis-handle a task whose latest plan sits at `pending_review`.
+  #
+  # Returns `:no_current_plan` rather than a bare `[]` so the caller can
+  # distinguish "no plan to gate on" from "current plan has no review
+  # stage" — two cases an empty list conflates.
   defp review_stage_ids_for_task(task_id) when is_binary(task_id) do
-    PlanStage
-    |> join(:inner, [s], p in Platform.Tasks.Plan, on: p.id == s.plan_id)
-    |> where([s, p], p.task_id == ^task_id)
-    |> select([s, _p], %{id: s.id, name: s.name})
-    |> Repo.all()
-    |> Enum.filter(&review_stage?/1)
-    |> Enum.map(& &1.id)
+    case Tasks.current_plan(task_id) do
+      nil ->
+        :no_current_plan
+
+      %{id: plan_id} ->
+        ids =
+          PlanStage
+          |> where([s], s.plan_id == ^plan_id)
+          |> select([s], %{id: s.id, name: s.name})
+          |> Repo.all()
+          |> Enum.filter(&review_stage?/1)
+          |> Enum.map(& &1.id)
+
+        {:ok, ids}
+    end
   end
 
   defp review_stage?(%{name: nil}), do: false
@@ -1177,11 +1364,13 @@ defmodule Platform.Tasks.StackDeployer do
     :ok
   end
 
-  defp log_merge_result(%TaskRecord{id: id}, {:ok, :not_ready}) do
-    Logger.debug("[StackDeployer] task #{id} not yet review-ready; deferring rollup merge")
-
-    :ok
-  end
+  # Intentionally silent: `report_merge_not_ready/2` already logged this
+  # outcome WITH its reason, at the level that reason deserves, from
+  # inside `merge_member_into_rollup/1`. Logging again here would double
+  # every line on the transition-hook path and would still leave the
+  # direct-call path (iex, sweeps) silent. Kept as an explicit clause so
+  # the catch-all `{:error, reason}` clause below can't swallow it.
+  defp log_merge_result(%TaskRecord{}, {:ok, {:not_ready, _reason}}), do: :ok
 
   defp log_merge_result(%TaskRecord{id: id}, {:ok, %{status: :merged, merge_sha: sha}}) do
     Logger.info("[StackDeployer] task #{id} merged into rollup at #{sha}")
