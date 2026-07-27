@@ -396,7 +396,8 @@ defmodule Platform.Tasks.ArchitectureGateApprovalTest do
   # ── GUARD: `:expired` falls open AND is recorded — both, in one test ──
   #
   # Separately asserted, one could regress alone. Falling open without
-  # recording is the exact conflation ADR-0046:83 forbids.
+  # recording is the exact conflation forbidden by
+  # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`.
 
   describe "resolve_architecture_gate/3 — :expired" do
     test "the plan proceeds to approval and the architecture step reads \"failed\"", %{
@@ -423,7 +424,8 @@ defmodule Platform.Tasks.ArchitectureGateApprovalTest do
       assert reloaded.architecture_verdict["state"] == "expired"
       assert reloaded.architecture_verdict["source"] == "deadline"
 
-      # …AND SAY SO (ADR-0046:83). Member 4's merge-time surface reads this.
+      # …AND SAY SO (`0046-design-and-architecture-phases-in-planning.md § Per-step outcome`).
+      # Member 4's merge-time surface reads this.
       entry = architecture_entry(task.id)
       assert entry["outcome"] == "failed"
       assert Tasks.planning_gate_failed?(reload(task))

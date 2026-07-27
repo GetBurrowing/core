@@ -144,8 +144,9 @@ defmodule Platform.Tasks.ArchitectureRejection do
   bound is a CORRECTNESS INVARIANT: it is the only thing standing between
   an architect and a planner that will not converge. Exposing it as config
   means `architecture_reject_limit: 99` in a config file removes the bound
-  with no code review — the amend-the-safety-net lever ADR-0046:20
-  catalogues. Changing this number should require a diff to this file.
+  with no code review — the amend-the-safety-net lever catalogued by
+  `0046-design-and-architecture-phases-in-planning.md § Context`.
+  Changing this number should require a diff to this file.
 
   Callers — including tests — read this accessor and never the literal. A
   guard that hardcodes its own copy of a value is how the class comes back.

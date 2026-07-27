@@ -120,7 +120,8 @@ defmodule PlatformWeb.Components.PlanningStepExtensionTest do
 
   # ── the conflation guard ──────────────────────────────────────────────────
 
-  describe "not_applicable and failed never collapse (ADR-0046:83)" do
+  # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`
+  describe "not_applicable and failed never collapse" do
     # Stated as DIRECT INEQUALITIES rather than pairs of equality assertions, so
     # a refactor that collapses two outcomes fails one named test rather than
     # quietly satisfying two independently-plausible expectations.

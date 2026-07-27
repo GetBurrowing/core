@@ -496,7 +496,8 @@ defmodule Platform.Tasks.SubmitPlanForReviewArchitectHookTest do
     # Against pre-member-1 code these are indistinguishable: the Router
     # laundered both into a flat `:ok`, so both would record the same
     # value and the inequality below cannot pass. That conflation is the
-    # bug ADR-0046:83 forbids — `not_applicable` is the progressive-
+    # bug forbidden by
+    # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome` — `not_applicable` is the progressive-
     # enhancement path, `failed` is a gate that was supposed to run and
     # did not.
     #
@@ -869,8 +870,9 @@ defmodule Platform.Tasks.SubmitPlanForReviewArchitectHookTest do
     # ── GUARD: `:failed` falls open AND is recorded ─────────────────────
     #
     # Both halves in one test on purpose. Falling open without recording,
-    # or recording without falling open, is the conflation ADR-0046:83
-    # forbids; asserting them separately lets one regress alone.
+    # or recording without falling open, is the conflation forbidden by
+    # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`;
+    # asserting them separately lets one regress alone.
     test "GUARD: a raising architect falls open — the plan auto-approves AND \"failed\" is recorded",
          %{project: project} do
       override_native_dispatcher(__MODULE__.CrashingDispatcher, :maybe_dispatch)

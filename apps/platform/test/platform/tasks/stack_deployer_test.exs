@@ -1944,7 +1944,8 @@ defmodule Platform.Tasks.StackDeployerTest do
       refute clean_line =~ "GATE DID NOT RUN"
     end
 
-    test "not_applicable is NOT a failed gate — renders nothing (ADR-0046:83 conflation guard)" do
+    # Conflation guard for `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`.
+    test "not_applicable is NOT a failed gate — renders nothing" do
       {:ok, _} =
         FakeRunner.start_link(
           pr_responses: [{:ok, %{number: 212, url: "https://github.com/test/repo/pull/212"}}],

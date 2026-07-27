@@ -29,7 +29,8 @@ defmodule Platform.Design.PreplanStep do
 
   ## Why a successful fire records nothing
 
-  ADR-0046:80 defines `complete` as "dispatch returned AND output was
+  `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`
+  defines `complete` as "dispatch returned AND output was
   captured". At fire time only the first half has happened: the deployed
   designer is a Suite agent, reached through `dispatch_native/4`, so its output
   arrives minutes later as an attached canvas. Recording `complete` on a
@@ -53,7 +54,8 @@ defmodule Platform.Design.PreplanStep do
 
   ## Two skips, one outcome, two reasons
 
-  ADR-0046:79 defines `not_applicable` as "no agent in the role, OR no UI
+  `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`
+  defines `not_applicable` as "no agent in the role, OR no UI
   surface (design)" — the ADR already merged these, so passing
   `@no_designer_fire` for the no-UI case encodes its decision rather than
   inventing a second mapping. But collapsing them in the RECORD would recreate
@@ -199,8 +201,9 @@ defmodule Platform.Design.PreplanStep do
   end
 
   # No UI surface: no fire at all. `@no_designer_fire` is handed to the writer
-  # because ADR-0046:79 merges both skips onto `not_applicable`; `reason` is
-  # what keeps them apart downstream.
+  # because both skips are merged onto `not_applicable` by
+  # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`;
+  # `reason` is what keeps them apart downstream.
   defp skip_no_ui_surface(%Task{} = task) do
     finish(task, @no_designer_fire, %{"reason" => @reason_no_ui_surface})
   end
@@ -527,7 +530,9 @@ defmodule Platform.Design.PreplanStep do
   # transaction that ROLLS BACK when the value read back is `:complete`.
   #
   # This is the reconciliation between "hand every fire result to the one
-  # writer" and ADR-0046:80. `:complete` means the dispatch was accepted; the
+  # writer" and
+  # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`.
+  # `:complete` means the dispatch was accepted; the
   # output has not been captured, so the step is not complete. Member 4
   # documents the transaction participation as a contract — "if the surrounding
   # work rolls back, the step genuinely did not happen" — so nothing is ever

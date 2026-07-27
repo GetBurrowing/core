@@ -420,7 +420,9 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
             # `planning_step_outcomes["architecture"] = "failed"` inside
             # `resolve_architecture_gate/3`, so "the plan proceeded" and
             # "the architect did not answer" stay distinguishable —
-            # ADR-0046:83's conflation is the thing this records against.
+            # the conflation forbidden by
+            # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`
+            # is the thing this records against.
             apply_gate_resolution(plan_id, :dispatch_failed,
               summary: @unparseable_verdict_summary,
               findings: []

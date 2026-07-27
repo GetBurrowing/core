@@ -14,7 +14,9 @@ defmodule PlatformWeb.Components.PlanningStepExtension do
 
   Member 4 (`Platform.Tasks.Task`) persists a per-step record keyed by
   `Task.planning_step_keys/0`, whose `"outcome"` is drawn from
-  `Task.planning_step_outcomes/0`. ADR-0046:83 is that `not_applicable` and
+  `Task.planning_step_outcomes/0`. The rule in
+  `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`
+  is that `not_applicable` and
   `failed` **must never collapse into one value** — a gate that never ran must
   never be indistinguishable from a gate that ran and passed. This table is the
   presentation half of that promise:
@@ -64,7 +66,8 @@ defmodule PlatformWeb.Components.PlanningStepExtension do
     promise and `build_pr_body/3` emits `ARCHITECTURE GATE DID NOT RUN`, so the
     copy here is word-for-word the same sentence a human reads there. There is
     no dismiss control, no `x` button and no auto-expiry — a control that
-    removes the marker is the amended-safety-net habit ADR-0046:20 names.
+    removes the marker is the amended-safety-net habit named by
+    `0046-design-and-architecture-phases-in-planning.md § Context`.
   * `complete` renders only while the task is still pre-execution
     (`@complete_statuses`). Once work has started, the design canvas is one
     click away in the detail panel's linked-canvases strip, and a permanent
