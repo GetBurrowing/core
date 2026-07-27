@@ -626,16 +626,25 @@ defmodule Platform.Tasks.SubmitPlanForReviewArchitectHookTest do
       assert is_binary(detail)
     end
 
-    # ── GUARD: the cursor moves, and moves back ─────────────────────────
+    # ── GUARD: the cursor moves, and STAYS while the gate holds ─────────
     #
-    # `"planning"` is the column DEFAULT, so asserting the final value
-    # alone is vacuous. Two things defeat that here:
-    #   1. the cursor is parked at `"designing"` BEFORE the submit, so
-    #      ending at `"planning"` can only be a write; and
+    # AMENDED BY ADR-0046 member 5 stage 2. This test previously asserted
+    # the cursor returned to `"planning"` at the end of a submit with an
+    # architect assigned. That was the pre-gate behaviour, and member 4's
+    # own plan named the change in advance: "member 5 will simply stop
+    # returning the cursor to `:planning` until the gate resolves". The
+    # cursor now parks at `"architecting"` for exactly as long as the gate
+    # is open, which is what the task genuinely IS. It is returned to
+    # `"planning"` by stage 3's `resolve_architecture_gate/2`.
+    #
+    # `"planning"` is the column DEFAULT, so asserting a final value alone
+    # would be vacuous. Two things defeat that here:
+    #   1. the cursor is parked at `"designing"` BEFORE the submit, so any
+    #      other end value can only be a write; and
     #   2. the mid-flight `"architecting"` value is observed through the
-    #      board broadcast, which proves the first move happened rather
-    #      than inferring it from the end state.
-    test "GUARD: the cursor moves to architecting during the fire and back to planning",
+    #      board broadcast, which proves the move happened rather than
+    #      inferring it from the end state.
+    test "GUARD: the cursor moves to architecting and stays there while the gate holds",
          %{plan: plan, task: task} do
       override_native_dispatcher(NoopDispatcher, :maybe_dispatch)
       _agent = wire_architect_assignee()
@@ -650,11 +659,14 @@ defmodule Platform.Tasks.SubmitPlanForReviewArchitectHookTest do
         assert {:ok, %Plan{status: "pending_review"}} = Tasks.submit_plan_for_review(plan)
       end)
 
-      # Member 8's dependency: the card live-refreshes off these.
+      # Member 8's dependency: the card live-refreshes off this.
       assert_receive {:task_updated, %Task{id: ^task_id, planning_step: "architecting"}}
-      assert_receive {:task_updated, %Task{id: ^task_id, planning_step: "planning"}}
 
-      assert %Task{planning_step: "planning"} = Repo.get!(Task, task_id)
+      # And it is NOT walked back while the architect holds the slot.
+      refute_receive {:task_updated, %Task{id: ^task_id, planning_step: "planning"}}, 50
+
+      assert %Task{planning_step: "architecting"} = Repo.get!(Task, task_id)
+      assert Tasks.architecture_gate_open?(plan.id)
 
       # ADR-0046 does not add a status. The cursor is a sub-phase of
       # `status == "planning"`, and the transition table is untouched.
@@ -695,6 +707,269 @@ defmodule Platform.Tasks.SubmitPlanForReviewArchitectHookTest do
       assert source =~ "record_architecture_planning_step(updated.task_id, fire_result)"
       assert source =~ "Platform.Responsibilities.outcome("
       refute source =~ ~r/defp?\s+outcome\(/
+    end
+  end
+
+  # ── ADR-0046 member 5 stage 2: the hook DEFERS on the fire result ──────
+  #
+  # Member 4's stage 3 (above) made the architecture step's outcome
+  # DURABLE. This stage makes it CONSEQUENTIAL: when the architect takes
+  # the slot, the plan stops at `pending_review` instead of racing on to
+  # `approved` in the same call.
+  #
+  # The load-bearing reading, and it is easy to get wrong: `:complete`
+  # from `Responsibilities.outcome/1` means "the architect now holds the
+  # slot", NOT "the architect answered". The deployed architect is a
+  # `native` agent, so the Router hands off through `Task.start/1` and
+  # `handle_output/3` never runs — there is no synchronous verdict to
+  # read. The gate is therefore asynchronous: opened here, closed by
+  # stage 4's verdict or stage 5's deadline.
+  describe "submit_plan_for_review/1 — the architecture gate" do
+    # A task that WOULD auto-approve on submit today: flag on, both
+    # preconditions satisfied (`auto_approve_precondition/2` needs stages
+    # plus execution and review assignees), plan carrying one stage.
+    # Without all three the "it stayed pending_review" assertion below
+    # would pass for the wrong reason.
+    defp gate_fixture(project, opts \\ []) do
+      n = System.unique_integer([:positive])
+
+      attrs =
+        %{
+          project_id: project.id,
+          title: "Gate fixture #{n}",
+          status: "planning",
+          auto_approve_plan: Keyword.get(opts, :auto_approve_plan, true),
+          phase_assignees: %{
+            "execution" => %{
+              "assignee_id" => Ecto.UUID.generate(),
+              "assignee_type" => "agent"
+            },
+            "review" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        }
+        |> then(fn a ->
+          case Keyword.get(opts, :sponsor_user_id) do
+            nil -> a
+            id -> Map.put(a, :sponsor_user_id, id)
+          end
+        end)
+
+      {:ok, task} = Tasks.create_task(attrs)
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
+
+      {task, plan}
+    end
+
+    defp sponsor_fixture do
+      n = System.unique_integer([:positive])
+
+      Repo.insert!(%Platform.Accounts.User{
+        name: "Gate Sponsor #{n}",
+        email: "gate-sponsor-#{n}@example.com",
+        oidc_sub: "gate-sub-#{n}"
+      })
+    end
+
+    defp plan_review_row_count(user_id) do
+      user_id
+      |> Platform.Inbox.list_unread_for_user(kind: "task_plan_review")
+      |> length()
+    end
+
+    # Drop the architect's hold on the responsibility WITHOUT touching the
+    # agent row, so a second submit in the same test travels the
+    # no-architect path through the identical code.
+    defp unwire_architect_assignee do
+      import Ecto.Query, only: [from: 2]
+
+      {_n, _} =
+        Repo.delete_all(
+          from(rr in RoleResponsibility, where: rr.responsibility_key == ^@architect_key)
+        )
+
+      :ok
+    end
+
+    # ── DETECTOR ────────────────────────────────────────────────────────
+    #
+    # The mandatory detector for this stage, and the single assertion that
+    # distinguishes "the gate exists" from "the gate is decoration".
+    #
+    # Against `main` — and against this branch with the `case` in
+    # `submit_plan_for_review/1` reverted to the unconditional tail — this
+    # plan comes back `approved` with `approved_by: "system:auto"` BEFORE
+    # `submit_plan_for_review/1` returns. That is the verified present-day
+    # behaviour: every task filed 2026-07-25 went submit -> system:auto ->
+    # dispatch in one step, with the architect's dispatch still in flight.
+    test "DETECTOR: an architect holding the slot stops an auto-approve plan at pending_review",
+         %{project: project} do
+      override_native_dispatcher(NoopDispatcher, :maybe_dispatch)
+      agent = wire_architect_assignee()
+
+      {task, plan} = gate_fixture(project)
+
+      capture_log([level: :info], fn ->
+        assert {:ok, %Plan{status: "pending_review"}} = Tasks.submit_plan_for_review(plan)
+      end)
+
+      # Read the ROW, not the returned struct — the claim is about what is
+      # persisted, and the auto-approve it must not have taken writes there.
+      reloaded = Repo.get!(Plan, plan.id)
+
+      refute reloaded.status == "approved"
+      assert reloaded.status == "pending_review"
+      assert reloaded.approved_by == nil
+      assert reloaded.approved_at == nil
+      assert reloaded.auto_approved_at == nil
+
+      # …and the reason it stopped is the gate, not some unrelated skip.
+      assert Tasks.architecture_gate_open?(reloaded)
+      assert {:open, verdict} = Tasks.architecture_gate(reloaded)
+      assert verdict["state"] == "pending"
+      assert verdict["architect_agent_id"] == agent.id
+
+      # The cursor is the gate made visible: it stays where the fire put it.
+      assert %Task{planning_step: "architecting", status: "planning"} =
+               Repo.get!(Task, task.id)
+
+      # Mechanism proof — the fire really did dispatch, so "pending_review"
+      # is not an artefact of the hook short-circuiting earlier.
+      assert architecture_entry(task.id)["outcome"] == "complete"
+    end
+
+    # ── GUARD (paired positive control on the SAME mechanism) ───────────
+    #
+    # Byte-identical fixture, no architect. Everything the detector
+    # asserts must invert. Paired so neither half can pass vacuously: if
+    # the fixture simply could not auto-approve, this test fails.
+    test "GUARD: the identical fixture with NO architect auto-approves exactly as today",
+         %{project: project} do
+      {task, plan} = gate_fixture(project)
+
+      capture_log([level: :info], fn ->
+        assert {:ok, %Plan{status: "approved"}} = Tasks.submit_plan_for_review(plan)
+      end)
+
+      reloaded = Repo.get!(Plan, plan.id)
+
+      assert reloaded.status == "approved"
+      assert reloaded.approved_by == "system:auto"
+      assert reloaded.auto_approved_at != nil
+
+      # `:none`, not `{:resolved, _}` — the gate never opened for this
+      # plan version, which is a different fact from "it opened and closed".
+      assert Tasks.architecture_gate(reloaded) == :none
+      refute Tasks.architecture_gate_open?(reloaded)
+
+      assert %Task{planning_step: "planning"} = Repo.get!(Task, task.id)
+      assert architecture_entry(task.id)["outcome"] == "not_applicable"
+    end
+
+    # ── GUARD: `:failed` falls open AND is recorded ─────────────────────
+    #
+    # Both halves in one test on purpose. Falling open without recording,
+    # or recording without falling open, is the conflation ADR-0046:83
+    # forbids; asserting them separately lets one regress alone.
+    test "GUARD: a raising architect falls open — the plan auto-approves AND \"failed\" is recorded",
+         %{project: project} do
+      override_native_dispatcher(__MODULE__.CrashingDispatcher, :maybe_dispatch)
+      _agent = wire_architect_assignee()
+
+      {task, plan} = gate_fixture(project)
+
+      capture_log([level: :info], fn ->
+        assert {:ok, %Plan{status: "approved"}} = Tasks.submit_plan_for_review(plan)
+      end)
+
+      reloaded = Repo.get!(Plan, plan.id)
+
+      # Fall open: the implementing agent is never blocked by a gate that
+      # could not run (ADR-0046 decision 7).
+      assert reloaded.status == "approved"
+      assert reloaded.approved_by == "system:auto"
+      assert Tasks.architecture_gate(reloaded) == :none
+      assert %Task{planning_step: "planning"} = Repo.get!(Task, task.id)
+
+      # …and the failure did not evaporate. This is member 4's surface;
+      # this stage adds no second one.
+      entry = architecture_entry(task.id)
+      assert entry["outcome"] == "failed"
+      assert is_binary(entry["detail"])
+      assert Tasks.planning_gate_failed?(Repo.get!(Task, task.id))
+    end
+
+    # ── GUARD: the sponsor row is DEFERRED, not lost ────────────────────
+    #
+    # Count delta on ONE sponsor across two submits of equivalent tasks,
+    # rather than two absolute assertions: a delta cannot be satisfied by
+    # an inbox that emits nothing at all.
+    test "GUARD: an open gate defers the sponsor plan-review row; the ungated submit emits one",
+         %{project: project} do
+      sponsor = sponsor_fixture()
+
+      override_native_dispatcher(NoopDispatcher, :maybe_dispatch)
+      _agent = wire_architect_assignee()
+
+      {_task_a, plan_a} =
+        gate_fixture(project, auto_approve_plan: false, sponsor_user_id: sponsor.id)
+
+      before_gated = plan_review_row_count(sponsor.id)
+
+      capture_log([level: :info], fn ->
+        assert {:ok, %Plan{status: "pending_review"}} = Tasks.submit_plan_for_review(plan_a)
+      end)
+
+      gated_delta = plan_review_row_count(sponsor.id) - before_gated
+
+      # Same sponsor, same fixture, same code path — only the architect's
+      # hold on the responsibility is removed.
+      :ok = unwire_architect_assignee()
+
+      {_task_b, plan_b} =
+        gate_fixture(project, auto_approve_plan: false, sponsor_user_id: sponsor.id)
+
+      before_ungated = plan_review_row_count(sponsor.id)
+
+      capture_log([level: :info], fn ->
+        assert {:ok, %Plan{status: "pending_review"}} = Tasks.submit_plan_for_review(plan_b)
+      end)
+
+      ungated_delta = plan_review_row_count(sponsor.id) - before_ungated
+
+      assert gated_delta == 0
+      assert ungated_delta == 1
+    end
+
+    # ── GUARD: the mapping is still not re-derived ──────────────────────
+    #
+    # Stage 2 of member 4 bound `tasks.ex` to `Responsibilities.outcome/1`
+    # for RECORDING. This stage is the first to BRANCH on the value, which
+    # is exactly where a second local mapping is most tempting. Cheap, and
+    # it catches regression-by-refactor no behavioural test would.
+    #
+    # DEVIATION FROM THE STAGE DESCRIPTION, deliberate: the grep runs over
+    # the file with COMMENT LINES STRIPPED. `tasks.ex` documents the hard
+    # rule by naming the forbidden shapes verbatim (member 4's comment at
+    # the planning-step writers, and the `{:ok, :dispatched}` note inside
+    # `fire_architecture_review_plan/1`); a raw `File.read!` grep would
+    # therefore fail on the prose that states the rule it is enforcing.
+    # The rule is about code.
+    test "GUARD: tasks.ex contains no local mapping over fire-result shapes" do
+      code_only =
+        "lib/platform/tasks.ex"
+        |> File.read!()
+        |> String.split("\n")
+        |> Enum.reject(&String.starts_with?(String.trim_leading(&1), "#"))
+        |> Enum.join("\n")
+
+      # Positive control: the stripping did not eat the file.
+      assert code_only =~ "def submit_plan_for_review(%Plan{status: \"draft\"} = plan) do"
+      assert code_only =~ "Platform.Responsibilities.outcome("
+
+      refute code_only =~ "{:ok, :dispatched}"
+      refute code_only =~ "{:ok, :unfilled}"
+      refute code_only =~ "{:ok, :unknown_responsibility}"
     end
   end
 end

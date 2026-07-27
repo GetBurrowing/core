@@ -1710,6 +1710,13 @@ defmodule Platform.Tasks do
     |> Repo.all()
   end
 
+  # The responsibility the plan-time architect holds. Named once so the
+  # dispatch (`fire_architecture_review_plan/1`) and the assignee lookup
+  # (`architect_agent_id/0`) can never drift onto different keys — they
+  # are two reads of the same question and a typo in one would open a
+  # gate crediting nobody.
+  @architecture_responsibility_key "architecture.review_plan"
+
   def submit_plan_for_review(%Plan{status: "draft"} = plan) do
     case plan |> Plan.changeset(%{status: "pending_review"}) |> Repo.update() do
       {:ok, updated} ->
@@ -1750,21 +1757,38 @@ defmodule Platform.Tasks do
 
         _ = record_architecture_planning_step(updated.task_id, fire_result)
 
-        _ = move_planning_cursor(updated.task_id, :planning)
-
         broadcast_board({:plan_updated, updated})
 
-        case maybe_auto_approve(updated) do
-          {:ok, settled} = result ->
-            # M3 (task 019f904c): notify the task sponsor that a plan is
-            # awaiting human review. Fires against the SETTLED plan so an
-            # auto-approved plan (no human gate) skips the notification.
-            # Side-effect only — the return value is preserved verbatim.
-            _ = maybe_emit_plan_review_inbox(settled)
-            result
+        case architecture_fire_outcome(fire_result) do
+          :complete ->
+            open_architecture_gate_at_submit(updated)
+
+          outcome when outcome in [:not_applicable, :failed] ->
+            # PROGRESSIVE ENHANCEMENT, and it is load-bearing rather than
+            # a nicety: these two branches execute the BYTE-IDENTICAL tail
+            # that ran before the gate existed, in the same order. A repo
+            # with no architect assigned behaves exactly as it does today
+            # (ADR-0044:27-28, ADR-0046 decision 3). `:failed` FALLS OPEN
+            # (ADR-0046 decision 7) — the gate never opens and nothing is
+            # blocked. Its visibility is already solved and must not be
+            # re-solved here: `record_architecture_planning_step/2` above
+            # wrote `planning_step_outcomes["architecture"]["outcome"] =
+            # "failed"`, which member 4's merge-time writers surface.
+            settle_ungated_plan_submission(updated)
 
           other ->
-            other
+            # `Platform.Responsibilities.outcome/1` deliberately has no
+            # catch-all, so this arm is only reachable if a future value
+            # is ADDED to its union. Fall open and be loud: an outcome
+            # this function has never seen is not evidence the architect
+            # took the slot, and a `CaseClauseError` here would abort a
+            # transition whose row is already committed.
+            Logger.error(
+              "[Tasks] architecture.review_plan unmapped outcome #{inspect(other)} " <>
+                "plan=#{updated.id} task=#{updated.task_id} — gate not opened"
+            )
+
+            settle_ungated_plan_submission(updated)
         end
 
       error ->
@@ -1773,6 +1797,146 @@ defmodule Platform.Tasks do
   end
 
   def submit_plan_for_review(_plan), do: {:error, :invalid_transition}
+
+  # ── ADR-0046 member 5 stage 2: the gate branch ─────────────────────────
+  #
+  # `:complete` from `Platform.Responsibilities.outcome/1` means THE
+  # ARCHITECT NOW HOLDS THE SLOT. It does NOT mean "the architect
+  # answered", and a reader who assumes otherwise will write a bug.
+  #
+  # Verified against production: `Platform.Roles.assignee_for/1` resolves
+  # `architecture.review_plan` to a `kind: "native"` agent, so the Router
+  # branches into `dispatch_native/4`, which is a HANDOFF —
+  # `AgentResponder.maybe_dispatch/1` wraps the work in `Task.start/1` and
+  # returns `:ok` unconditionally. `handle_output/3` is only reachable from
+  # `run_external_dispatch/5`. THERE IS NO SYNCHRONOUS VERDICT for the
+  # configuration actually deployed.
+  #
+  # Hence the gate is ASYNCHRONOUS: it opens here, on dispatch, and closes
+  # on a later verdict (stage 4) or a deadline (stage 5). The alternative —
+  # making `fire_trigger/3` hand back the parsed output so the gate could
+  # resolve inline — was rejected because it widens member 1's return union
+  # for one caller AND puts a full LLM round-trip inside a function the MCP
+  # `plan_submit` tool calls synchronously.
+  #
+  # The cursor deliberately STAYS at `:architecting`: that is what the task
+  # genuinely IS while the gate holds, and it is the seam member 4's plan
+  # predicted ("member 5 will simply stop returning the cursor to
+  # `:planning` until the gate resolves").
+  defp open_architecture_gate_at_submit(%Plan{} = updated) do
+    case open_architecture_gate(updated, architect_agent_id()) do
+      {:ok, gated} ->
+        broadcast_board({:plan_updated, gated})
+        {:ok, gated}
+
+      {:error, reason} ->
+        # The gate could not be persisted. FALL OPEN, same rule as
+        # `:failed` — a bookkeeping fault must not be able to strand a
+        # plan, and a gate nobody can read is not a gate.
+        Logger.error(
+          "[Tasks] architecture gate failed to open plan=#{updated.id} " <>
+            "task=#{updated.task_id} reason=#{inspect(reason)} — falling open"
+        )
+
+        settle_ungated_plan_submission(updated)
+    end
+  rescue
+    e ->
+      Logger.error(
+        "[Tasks] architecture gate open crashed plan=#{updated.id} " <>
+          "task=#{updated.task_id} error=#{Exception.message(e)} — falling open"
+      )
+
+      settle_ungated_plan_submission(updated)
+  catch
+    :exit, reason ->
+      Logger.error(
+        "[Tasks] architecture gate open exited plan=#{updated.id} " <>
+          "task=#{updated.task_id} exit=#{inspect(reason)} — falling open"
+      )
+
+      settle_ungated_plan_submission(updated)
+  end
+
+  # Return the cursor to `:planning` and run the deferred tail. Every
+  # non-gated exit from `submit_plan_for_review/1` funnels through here so
+  # "the gate did not hold this plan" is one statement, not four.
+  defp settle_ungated_plan_submission(%Plan{} = updated) do
+    _ = move_planning_cursor(updated.task_id, :planning)
+    settle_plan_submission(updated)
+  end
+
+  # THE TAIL. Extracted verbatim from `submit_plan_for_review/1` because
+  # stage 3's `resolve_architecture_gate/2` calls this SAME function when
+  # the gate resolves — the gated and ungated paths must not be able to
+  # drift. Two copies of "what happens after plan review finishes" is how
+  # the gated path silently stops emitting the sponsor row a year from now.
+  defp settle_plan_submission(%Plan{} = updated) do
+    case maybe_auto_approve(updated) do
+      {:ok, settled} = result ->
+        # M3 (task 019f904c): notify the task sponsor that a plan is
+        # awaiting human review. Fires against the SETTLED plan so an
+        # auto-approved plan (no human gate) skips the notification.
+        # Side-effect only — the return value is preserved verbatim.
+        #
+        # ADR-0046 member 5: on the GATED path this does not run at submit
+        # — the human's turn has not arrived while the architect is still
+        # looking. It runs when the gate resolves, which is the correct
+        # order, not a lost notification.
+        _ = maybe_emit_plan_review_inbox(settled)
+        result
+
+      other ->
+        other
+    end
+  end
+
+  # The gate's read of the fire result.
+  #
+  # HARD RULE (ADR-0046 member 1): `Platform.Responsibilities.outcome/1` is
+  # the ONLY translation from a fire result to an outcome, so this wrapper
+  # adds an envelope and nothing else — no local mapping, no second `case`
+  # over router return shapes.
+  #
+  # The envelope exists because `outcome/1` deliberately has no catch-all
+  # clause and therefore RAISES on a shape it has never seen, while this
+  # call site sits after a committed `draft -> pending_review` update and is
+  # reached synchronously from the MCP `plan_submit` tool. An unrecognised
+  # shape must not turn into a failed plan submission.
+  #
+  # `:unmapped` is deliberately NOT `:failed`: the caller falls open on
+  # both, but only `:failed` is an architect that was asked and did not
+  # answer. Collapsing them is the conflation ADR-0046:83 forbids, and
+  # `record_architecture_planning_step/2` already refuses to make it.
+  defp architecture_fire_outcome(fire_result) do
+    Platform.Responsibilities.outcome(fire_result)
+  rescue
+    _ -> :unmapped
+  catch
+    :exit, _ -> :unmapped
+  end
+
+  # Who the gate is waiting on, recorded on the verdict so a reader can
+  # tell WHICH architect holds the slot.
+  #
+  # Yes, this resolves the assignee a second time — the Router already did
+  # it inside `fire_trigger/3`. The alternative is threading the assignee
+  # back out through member 1's `{:ok, :dispatched} | ...` return union,
+  # which three other stack members depend on, for one caller's
+  # convenience. Two cheap reads beat a contract change.
+  #
+  # `nil` on any miss: an unattributed gate is still a gate, and a lookup
+  # fault must not be able to stall the submission.
+  defp architect_agent_id do
+    case Platform.Roles.assignee_for(@architecture_responsibility_key) do
+      %Agent{id: id} -> id
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
 
   # ADR-0044 stage 2 helper. Kept private so `submit_plan_for_review/1`
   # reads as a linear transition and the hook is the only public
@@ -1794,7 +1958,7 @@ defmodule Platform.Tasks do
   # consumer can lift it (the call site at `submit_plan_for_review/1`
   # still discards it via `_ =`).
   defp fire_architecture_review_plan(%Plan{} = plan) do
-    case Platform.Responsibilities.fire("architecture.review_plan", %{
+    case Platform.Responsibilities.fire(@architecture_responsibility_key, %{
            plan_id: plan.id,
            task_id: plan.task_id,
            plan: plan
