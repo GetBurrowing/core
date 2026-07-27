@@ -282,11 +282,14 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
       assert is_binary(system),
              "no system turn on the wire — build_prompt/1 never ran (legacy fallback)"
 
-      assert system =~ "You are the Architect on the Suite plan-review path (ADR-0044)."
+      # ADR-0046 member 5 stage 4 rewrote this slot: the architect is no
+      # longer "additive", it holds a gate. The prefix moved with it.
+      assert system =~ "You are the Architect on the Suite plan-review path (ADR-0044"
+      assert system =~ "plan_architecture_verdict"
 
       # From the architecture.review_plan.v1 template body, rendered by
       # ArchitectureReviewPlan.render_instruction/1.
-      assert user =~ "A plan just entered `pending_review`"
+      assert user =~ "held at\n`pending_review` until you answer"
 
       # Data-derived: only reachable if the provider's gather_context/2
       # walked the plan. Under :legacy the user turn is the literal slug

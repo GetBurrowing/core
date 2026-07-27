@@ -2142,6 +2142,67 @@ defmodule Platform.Federation.ToolSurface do
           "After plan_submit, when you want to approve a plan and kick off task execution without waiting for human review"
       },
       %{
+        name: "plan_architecture_verdict",
+        description:
+          "Return the architect's verdict on a plan whose architecture gate is open (ADR-0046). " <>
+            "The plan is HELD at pending_review until this call lands or the gate deadline expires. " <>
+            "Reject ONLY for one of the four closed constraint values — module_boundary, data_model, " <>
+            "cross_context_coupling, duplicated_logic. There is no representable value for a taste, " <>
+            "naming or style objection: say it in `summary` and pass.",
+        parameters: %{
+          plan_id: %{
+            type: "string",
+            required: true,
+            description: "The plan under verdict. Printed as `plan_id:` in the review prompt."
+          },
+          verdict: %{
+            type: "string",
+            required: true,
+            description: "\"pass\" or \"reject\". There is no third value."
+          },
+          summary: %{
+            type: "string",
+            required: true,
+            description:
+              "Non-empty. One paragraph: what you checked and what you found, including anything worth reporting that is NOT grounds for a reject."
+          },
+          findings: %{
+            type: "array",
+            required: false,
+            description:
+              "Required and non-empty when verdict is \"reject\"; omit on a pass. One object per objection: {stage_id, constraint, detail}. `stage_id` must be a stage of THIS plan. `constraint` must be one of #{Enum.join(Plan.architecture_constraints(), " | ")}. `detail` must say WHAT TO CHANGE, not what is wrong — a detail the planner cannot act on produces a differently-worded plan, not a better one."
+          }
+        },
+        returns:
+          "%{plan_id, task_id, verdict, state, resolved_at, findings_count} — `state` is the persisted architecture_verdict[\"state\"] (\"passed\" or \"rejected\").",
+        # ADR-0046 member 5 stage 4. This prose is TESTED, not asserted by
+        # hand: `plan_architecture_verdict_tool_test.exs` drives every
+        # refusal below and asserts the observed `code` set is exactly the
+        # set named here. The 2026-07-26 e2e journal records `intent_ack` /
+        # `task_ack` shipping `limitations` describing an error taxonomy the
+        # code never emits, with no test guarding it — remote runtimes branch
+        # on these strings.
+        limitations:
+          "Refusals carry a `code`: `plan_not_found` (unknown plan_id), " <>
+            "`invalid_verdict` (verdict is not \"pass\"/\"reject\"), " <>
+            "`missing_summary` (summary absent or blank), " <>
+            "`missing_findings` (verdict \"reject\" with no findings), " <>
+            "`malformed_finding` (a finding is not an object, or its `detail` is blank), " <>
+            "`invalid_constraint` (a finding's `constraint` is outside the four allowed values — " <>
+            "this is where a style objection is refused), " <>
+            "`foreign_stage_id` (a finding names a stage that does not belong to this plan), " <>
+            "`gate_not_open` (the gate never opened for this plan version), " <>
+            "`gate_already_resolved` (somebody — an earlier call, the deadline, or a human " <>
+            "override — already closed it; a duplicate call lands here and changes nothing), " <>
+            "`verdict_rejected` (the write itself failed validation). " <>
+            "A runtime WITHOUT the `plan` capability bundle simply never resolves the gate: the " <>
+            "deadline expires, the verdict records as `expired`, and the plan proceeds unreviewed. " <>
+            "That degradation is deliberate (ADR-0046 decision 7 — silence falls open) and is why " <>
+            "an architect on a runtime that cannot reach this tool is a missing review, not a stuck task.",
+        when_to_use:
+          "As the architect, exactly once per plan review, when the architecture gate is holding a plan you have finished reading. This is the only way to release the gate from an agent."
+      },
+      %{
         name: "stage_start",
         description: "Start a pending stage (pending → running).",
         parameters: %{
@@ -6033,6 +6094,40 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # ── ADR-0046 member 5 stage 4: the architect's verdict surface ────────
+  #
+  # ONE of the two ways a verdict gets in (the other is
+  # `Handlers.ArchitectureReviewPlan.handle_output/3`, for an external
+  # architect that can only reply with text). Neither re-implements the
+  # state machine: both end in `Tasks.resolve_architecture_gate/3`, the
+  # single exit stage 3 built, which is one-shot because it arbitrates on
+  # the persisted row. A duplicate call is therefore harmless — it lands
+  # on `gate_already_resolved` and changes nothing.
+  #
+  # THE CONTRACT IS ENFORCED HERE, NOT REQUESTED IN THE PROMPT.
+  # ADR-0046:95 says the architect rejects for architecture and explicitly
+  # not for taste, naming or style. "Don't reject for style" is
+  # unenforceable as prose — it produces a differently-worded rejection,
+  # not a better one. A closed `constraint` vocabulary means a style
+  # objection has NO REPRESENTABLE VALUE. Stage 1 asserted that at the
+  # schema layer; this asserts it at the boundary an agent actually
+  # touches, because the schema is only reached by callers who already
+  # decided to write.
+  #
+  # Every refusal carries a `code` and every code is named in the tool's
+  # `limitations`, with a test that the two sets are equal.
+  def execute("plan_architecture_verdict", args, context) do
+    plan_id = Map.get(args, "plan_id")
+
+    with {:ok, plan} <- verdict_plan(plan_id),
+         {:ok, resolution} <- verdict_resolution_arg(Map.get(args, "verdict")),
+         {:ok, summary} <- verdict_summary_arg(Map.get(args, "summary")),
+         {:ok, findings} <- verdict_findings_arg(Map.get(args, "findings"), resolution, plan),
+         :ok <- verdict_gate_open(plan) do
+      resolve_architecture_verdict(plan, resolution, summary, findings, context)
+    end
+  end
+
   def execute("stage_start", args, _context) do
     stage_id = Map.get(args, "stage_id")
 
@@ -8038,6 +8133,258 @@ defmodule Platform.Federation.ToolSurface do
   defp maybe_put(%{} = map, key, value) when not is_struct(map), do: Map.put(map, key, value)
 
   defp maybe_put(opts, key, value) when is_list(opts), do: Keyword.put(opts, key, value)
+
+  # ── ADR-0046 member 5 stage 4: plan_architecture_verdict internals ───
+
+  defp verdict_plan(plan_id) when is_binary(plan_id) do
+    case Ecto.UUID.cast(plan_id) do
+      {:ok, uuid} ->
+        case Repo.get(Plan, uuid) do
+          %Plan{} = plan -> {:ok, plan}
+          nil -> verdict_error(:plan_not_found, plan_id)
+        end
+
+      :error ->
+        verdict_error(:plan_not_found, plan_id)
+    end
+  end
+
+  defp verdict_plan(plan_id), do: verdict_error(:plan_not_found, plan_id)
+
+  defp verdict_resolution_arg(verdict) when is_binary(verdict) do
+    case verdict |> String.trim() |> String.downcase() do
+      "pass" -> {:ok, :pass}
+      "reject" -> {:ok, :reject}
+      _ -> verdict_error(:invalid_verdict, verdict)
+    end
+  end
+
+  defp verdict_resolution_arg(verdict), do: verdict_error(:invalid_verdict, verdict)
+
+  defp verdict_summary_arg(summary) when is_binary(summary) do
+    case String.trim(summary) do
+      "" -> verdict_error(:missing_summary, summary)
+      trimmed -> {:ok, trimmed}
+    end
+  end
+
+  defp verdict_summary_arg(summary), do: verdict_error(:missing_summary, summary)
+
+  # A pass carries no findings, and one supplied on a pass is dropped
+  # rather than refused: the finding vocabulary exists to make a REJECT
+  # actionable, and refusing an otherwise-valid pass over decoration
+  # would turn a released gate into a held one.
+  defp verdict_findings_arg(_findings, :pass, _plan), do: {:ok, []}
+
+  defp verdict_findings_arg(findings, :reject, plan) when is_list(findings) and findings != [] do
+    stage_ids = plan.id |> Tasks.list_stages() |> MapSet.new(& &1.id)
+
+    Enum.reduce_while(findings, {:ok, []}, fn finding, {:ok, acc} ->
+      case validate_verdict_finding(finding, stage_ids) do
+        {:ok, normalized} -> {:cont, {:ok, acc ++ [normalized]}}
+        {:error, _envelope} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp verdict_findings_arg(findings, :reject, _plan),
+    do: verdict_error(:missing_findings, findings)
+
+  defp validate_verdict_finding(finding, stage_ids) when is_map(finding) do
+    stage_id = Map.get(finding, "stage_id")
+    constraint = Map.get(finding, "constraint")
+    detail = Map.get(finding, "detail")
+
+    cond do
+      not (is_binary(constraint) and constraint in Plan.architecture_constraints()) ->
+        verdict_error(:invalid_constraint, constraint)
+
+      not (is_binary(stage_id) and MapSet.member?(stage_ids, stage_id)) ->
+        verdict_error(:foreign_stage_id, stage_id)
+
+      not (is_binary(detail) and String.trim(detail) != "") ->
+        verdict_error(:malformed_finding, detail)
+
+      true ->
+        {:ok,
+         %{
+           "stage_id" => stage_id,
+           "constraint" => constraint,
+           "detail" => String.trim(detail)
+         }}
+    end
+  end
+
+  defp validate_verdict_finding(finding, _stage_ids),
+    do: verdict_error(:malformed_finding, finding)
+
+  # Named against the ACTUAL state, not "the gate is not open". A
+  # duplicate call has to read as an explanation, not a mystery.
+  defp verdict_gate_open(plan) do
+    case Tasks.architecture_gate(plan) do
+      {:open, _verdict} -> :ok
+      :none -> verdict_error(:gate_not_open, nil)
+      {:resolved, verdict} -> verdict_error(:gate_already_resolved, Map.get(verdict, "state"))
+    end
+  end
+
+  defp resolve_architecture_verdict(plan, resolution, summary, findings, context) do
+    opts = [
+      summary: summary,
+      findings: findings,
+      resolved_by: Map.get(context, :agent_id) || Map.get(context, :user_id) || "architect"
+    ]
+
+    case Tasks.resolve_architecture_gate(plan, resolution, opts) do
+      {:ok, resolved} ->
+        verdict = resolved.architecture_verdict || %{}
+
+        {:ok,
+         %{
+           plan_id: resolved.id,
+           task_id: resolved.task_id,
+           verdict: to_string(resolution),
+           state: Map.get(verdict, "state"),
+           resolved_at: Map.get(verdict, "resolved_at"),
+           findings_count: length(Map.get(verdict, "findings") || [])
+         }}
+
+      # Lost a race between the read above and the guarded UPDATE — the
+      # deadline, or a second architect, got there first. Same envelope
+      # the level check produces, so a caller cannot tell (and does not
+      # need to tell) which of the two refused it.
+      {:error, :gate_already_resolved} ->
+        verdict_error(:gate_already_resolved, nil)
+
+      {:error, :gate_not_open} ->
+        verdict_error(:gate_not_open, nil)
+
+      {:error, reason} ->
+        verdict_error(:verdict_rejected, reason)
+    end
+  end
+
+  # The closed set of refusal codes this clause can emit. The tool's
+  # `limitations` prose names exactly these, and a test asserts the two
+  # agree — documentation that drifts from the code is worse than none,
+  # because remote runtimes branch on it.
+  @architecture_verdict_error_codes [
+    :plan_not_found,
+    :invalid_verdict,
+    :missing_summary,
+    :missing_findings,
+    :malformed_finding,
+    :invalid_constraint,
+    :foreign_stage_id,
+    :gate_not_open,
+    :gate_already_resolved,
+    :verdict_rejected
+  ]
+
+  @doc """
+  The closed set of `code` values `plan_architecture_verdict` refuses with.
+
+  Public so the guard that keeps the tool's `limitations` prose honest
+  can compare the documented taxonomy against the emitted one instead of
+  restating it.
+  """
+  @spec architecture_verdict_error_codes() :: [atom()]
+  def architecture_verdict_error_codes, do: @architecture_verdict_error_codes
+
+  defp verdict_error(:plan_not_found, plan_id) do
+    verdict_refusal(
+      :plan_not_found,
+      "Plan not found: #{inspect(plan_id)}",
+      false,
+      "Use the `plan_id` printed in the architecture-review prompt, or plan_get to look it up."
+    )
+  end
+
+  defp verdict_error(:invalid_verdict, verdict) do
+    verdict_refusal(
+      :invalid_verdict,
+      "verdict must be \"pass\" or \"reject\" (got #{inspect(verdict)}).",
+      true,
+      "There is no third value. If you have a concern that is not one of the four architectural constraints, pass and put it in `summary`."
+    )
+  end
+
+  defp verdict_error(:missing_summary, _summary) do
+    verdict_refusal(
+      :missing_summary,
+      "summary is required and must be a non-empty string.",
+      true,
+      "One paragraph: what you checked and what you found. A pass with an empty summary is indistinguishable from an architect that never read the plan."
+    )
+  end
+
+  defp verdict_error(:missing_findings, _findings) do
+    verdict_refusal(
+      :missing_findings,
+      "verdict \"reject\" requires a non-empty `findings` array.",
+      true,
+      "Send one finding per objection: [{\"stage_id\": \"<a stage of this plan>\", \"constraint\": \"#{hd(Plan.architecture_constraints())}\", \"detail\": \"<what to change>\"}]. A rejection with no findings is unactionable — the planner cannot tell what to write differently. If you cannot name a stage and a change, pass and say it in `summary`."
+    )
+  end
+
+  defp verdict_error(:malformed_finding, finding) do
+    verdict_refusal(
+      :malformed_finding,
+      "each finding must be an object with `stage_id`, `constraint` and a non-empty `detail` (got #{inspect(finding)}).",
+      true,
+      "`detail` must state WHAT TO CHANGE, not what is wrong — \"This is unsound\" tells the planner nothing it can act on."
+    )
+  end
+
+  defp verdict_error(:invalid_constraint, constraint) do
+    verdict_refusal(
+      :invalid_constraint,
+      "#{inspect(constraint)} is not an architectural constraint. Allowed: #{Enum.join(Plan.architecture_constraints(), ", ")}.",
+      true,
+      "ADR-0046:95 — the architect rejects for architecture, not for taste, naming or style. There is deliberately no `constraint` value for a style objection: put it in `summary` and pass."
+    )
+  end
+
+  defp verdict_error(:foreign_stage_id, stage_id) do
+    verdict_refusal(
+      :foreign_stage_id,
+      "finding stage_id #{inspect(stage_id)} does not belong to this plan.",
+      true,
+      "Use a `stage_id` from the plan summary in your review prompt (or stage_list on this plan_id). A finding naming another plan's stage means the review ran against stale context."
+    )
+  end
+
+  defp verdict_error(:gate_not_open, _detail) do
+    verdict_refusal(
+      :gate_not_open,
+      "the architecture gate never opened for this plan version.",
+      false,
+      "Nothing is waiting on a verdict. This happens when the plan was submitted before the gate existed, or when a newer plan version superseded the one you reviewed."
+    )
+  end
+
+  defp verdict_error(:gate_already_resolved, state) do
+    verdict_refusal(
+      :gate_already_resolved,
+      "the architecture gate is already resolved#{if is_binary(state), do: " as #{state}", else: ""}.",
+      false,
+      "Nothing to do — the verdict is recorded and the plan has moved on. A duplicate call is harmless; the first writer won."
+    )
+  end
+
+  defp verdict_error(:verdict_rejected, reason) do
+    verdict_refusal(
+      :verdict_rejected,
+      "the verdict failed validation: #{inspect_errors_safe(reason)}",
+      true,
+      "Check `constraint` against #{Enum.join(Plan.architecture_constraints(), ", ")} and that every finding carries a non-empty `detail`."
+    )
+  end
+
+  defp verdict_refusal(code, error, recoverable, suggestion)
+       when code in @architecture_verdict_error_codes do
+    {:error, %{code: code, error: error, recoverable: recoverable, suggestion: suggestion}}
+  end
 
   # ── Helpers ──────────────────────────────────────────────────────────────
 

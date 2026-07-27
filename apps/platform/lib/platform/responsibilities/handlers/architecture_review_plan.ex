@@ -96,6 +96,16 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   @feature "architecture"
   @template_slug "architecture.review_plan.v1"
 
+  # ADR-0046 decision 7. Written into `architecture_verdict["summary"]`
+  # when the external reply carries no parseable verdict, so the row says
+  # WHY the gate fell open rather than only that it did. Read by tests
+  # and greppable in prod; the machine-readable half is
+  # `state: "dispatch_failed"` plus
+  # `planning_step_outcomes["architecture"]["outcome"] = "failed"`.
+  @unparseable_verdict_summary "unparseable_verdict — the architect's reply carried no " <>
+                                 "parseable verdict object; the gate fell open (ADR-0046 " <>
+                                 "decision 7) and the plan proceeded without a verdict."
+
   # Shape of the `:sibling_tasks` slot when the anchor task can't be
   # resolved. The slot itself never errors (it is optional context), so
   # this only covers the defensive arm and the refusal-rendering path in
@@ -235,21 +245,32 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   dispatcher (task 019f2570 bug 1 fix pattern — provider owns its
   prompt end-to-end).
 
-  The system slot names the architect role + the additive / non-
-  blocking contract; the user slot is the rendered instruction from
-  `render_instruction/1`. This callback lands the M6 arity-3
-  Provider protocol without churning the arity-2 fallbacks.
+  The system slot names the architect role and the GATE contract; the
+  user slot is the rendered instruction from `render_instruction/1`.
+  This callback lands the M6 arity-3 Provider protocol without churning
+  the arity-2 fallbacks.
+
+  ADR-0046 member 5 stage 4 rewrote the system slot. It used to say the
+  architect's output was "additive" and that it "does not block plan
+  approval"; both sentences became false the moment stage 3 landed the
+  guard in `Tasks.approve_plan/3`, and a system slot that contradicts
+  the user slot trains the model out of using the gate at all. The two
+  now carry one claim.
   """
   @spec build_prompt(map()) :: {:ok, %{system: String.t(), user: String.t()}}
   def build_prompt(context) when is_map(context) do
     user = render_instruction(context)
 
     system =
-      "You are the Architect on the Suite plan-review path (ADR-0044). " <>
-        "Your outputs are additive annotations posted to the plan's execution space — " <>
-        "you do not block plan approval. Cite tasks by id and ADRs by FILENAME — " <>
-        "`docs/decisions/` reuses numbers across different ADRs, so a number is not a " <>
-        "reference the human reviewer can follow."
+      "You are the Architect on the Suite plan-review path (ADR-0044, gated by " <>
+        "ADR-0046). The plan is HELD at `pending_review` until you return a verdict, " <>
+        "and you must return one: `pass` or `reject`, via `plan_architecture_verdict`. " <>
+        "Reject ONLY for `module_boundary`, `data_model`, `cross_context_coupling` or " <>
+        "`duplicated_logic` — never for taste, naming or style. Bias toward pass; a " <>
+        "wrong reject costs a full replan cycle, a wrong pass still has the human " <>
+        "reviewer, the reviewing agent and CI behind it. Cite tasks by id and ADRs by " <>
+        "FILENAME — `docs/decisions/` reuses numbers across different ADRs, so a number " <>
+        "is not a reference the human reviewer can follow."
 
     {:ok, %{system: system, user: user}}
   end
@@ -262,6 +283,25 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   @impl true
   def handle_output(%Responsibility{} = _responsibility, output, trigger_meta)
       when is_map(trigger_meta) do
+    # ADR-0046 member 5 stage 4 — THE EXTERNAL VERDICT SURFACE.
+    #
+    # Runs AHEAD of the annotation, and its result is discarded. The
+    # annotation is the human-readable trace; the gate is the
+    # machine-readable one, and the two must not be able to take each
+    # other down. A task with no execution space yet (the `nil` arm
+    # below) would otherwise silently skip the settlement and leave the
+    # plan held until stage 5's deadline collects it.
+    #
+    # There is no third state machine here: everything funnels into
+    # `Tasks.record_architecture_verdict/3` via
+    # `Tasks.resolve_architecture_gate/3`, the same single exit the MCP
+    # tool and the human override use.
+    _ = settle_architecture_gate(output, trigger_meta)
+
+    post_architect_annotation(output, trigger_meta)
+  end
+
+  defp post_architect_annotation(output, trigger_meta) do
     task_id = extract_task_id(trigger_meta)
 
     with :ok <- ensure_task_id(task_id),
@@ -299,7 +339,247 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
     end
   end
 
+  @doc """
+  Parse an architect verdict out of an external model reply.
+
+  Accepts a map already carrying `"verdict"`, or a JSON object embedded
+  in a content binary — the external dispatcher hands back raw content,
+  so a fenced ```` ```json ```` block and a JSON object with prose either
+  side of it both have to be tolerated.
+
+  Returns `{:ok, %{resolution: :pass | :reject, summary: binary() | nil,
+  findings: [map()]}}`, or `{:error, :unparseable}`.
+
+  ## `{:error, :unparseable}` means FALL OPEN, not "block"
+
+  Every rejection path in here ends in `resolve_architecture_gate(plan,
+  :dispatch_failed)`. A model that answered in prose, answered with a
+  verdict word that is not `pass` / `reject`, or rejected without a
+  single actionable finding must not be able to park a task forever —
+  ADR-0046 decision 7. The costs are asymmetric in the same direction
+  the prompt argues: falling open restores today's behaviour (the plan
+  proceeds to its human reviewer), failing closed strands the task and
+  needs a human to dig it out.
+
+  A `"reject"` with no surviving finding is deliberately `:unparseable`
+  rather than a reject. Findings are dropped here when their
+  `constraint` is outside `Plan.architecture_constraints/0` or their
+  `stage_id` does not belong to the plan under verdict — the same two
+  rules `plan_architecture_verdict` refuses on. The tool can refuse and
+  let the architect retry; this path has no caller to refuse to, so a
+  reject that reduces to nothing actionable is treated as no verdict at
+  all rather than stored as an objection the planner cannot act on.
+  """
+  @spec parse_verdict(term(), [binary()]) ::
+          {:ok, %{resolution: :pass | :reject, summary: binary() | nil, findings: [map()]}}
+          | {:error, :unparseable}
+  def parse_verdict(output, stage_ids \\ []) do
+    with {:ok, object} <- verdict_object(output),
+         {:ok, resolution} <- verdict_resolution(Map.get(object, "verdict")) do
+      findings = sanitize_findings(Map.get(object, "findings"), stage_ids)
+
+      cond do
+        resolution == :reject and findings == [] ->
+          {:error, :unparseable}
+
+        true ->
+          {:ok,
+           %{
+             resolution: resolution,
+             summary: verdict_summary(Map.get(object, "summary")),
+             findings: findings
+           }}
+      end
+    end
+  end
+
   # ── Internals ─────────────────────────────────────────────────────────────
+
+  # ── ADR-0046 member 5 stage 4: external verdict settlement ───────────
+
+  defp settle_architecture_gate(output, trigger_meta) do
+    case extract_plan_id(trigger_meta) do
+      nil ->
+        Logger.debug(
+          "[architecture.review_plan] handle_output carried no plan_id — " <>
+            "no gate to settle (keys=#{inspect(Map.keys(trigger_meta))})"
+        )
+
+        :ok
+
+      plan_id ->
+        case parse_verdict(output, plan_stage_ids(plan_id)) do
+          {:ok, %{resolution: resolution, summary: summary, findings: findings}} ->
+            apply_gate_resolution(plan_id, resolution,
+              summary: summary,
+              findings: findings
+            )
+
+          {:error, :unparseable} ->
+            # FALL OPEN AND SAY SO. `:dispatch_failed` also writes
+            # `planning_step_outcomes["architecture"] = "failed"` inside
+            # `resolve_architecture_gate/3`, so "the plan proceeded" and
+            # "the architect did not answer" stay distinguishable —
+            # ADR-0046:83's conflation is the thing this records against.
+            apply_gate_resolution(plan_id, :dispatch_failed,
+              summary: @unparseable_verdict_summary,
+              findings: []
+            )
+        end
+    end
+  end
+
+  defp apply_gate_resolution(plan_id, resolution, opts) do
+    case Tasks.resolve_architecture_gate(plan_id, resolution, opts) do
+      {:ok, _plan} ->
+        Logger.info(
+          "[architecture.review_plan] architecture gate resolved plan=#{plan_id} " <>
+            "resolution=#{resolution} source=external"
+        )
+
+        :ok
+
+      {:error, reason} ->
+        # Never fatal. `:gate_not_open` is the ordinary state on a
+        # dispatch that predates the gate, and `:gate_already_resolved`
+        # is what a deadline that beat the model looks like.
+        Logger.info(
+          "[architecture.review_plan] architecture gate not settled plan=#{plan_id} " <>
+            "resolution=#{resolution} reason=#{inspect(reason)}"
+        )
+
+        :ok
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[architecture.review_plan] architecture gate settlement raised plan=#{plan_id} " <>
+          "reason=#{Exception.message(e)}"
+      )
+
+      :ok
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[architecture.review_plan] architecture gate settlement exited plan=#{plan_id} " <>
+          "reason=#{inspect(reason)}"
+      )
+
+      :ok
+  end
+
+  defp extract_plan_id(trigger_meta) when is_map(trigger_meta) do
+    id =
+      Map.get(trigger_meta, :plan_id) || Map.get(trigger_meta, "plan_id") ||
+        case Map.get(trigger_meta, :plan) || Map.get(trigger_meta, "plan") do
+          %Plan{id: id} -> id
+          _ -> nil
+        end
+
+    if is_binary(id) and id != "", do: id, else: nil
+  end
+
+  defp plan_stage_ids(plan_id) do
+    plan_id |> Tasks.list_stages() |> Enum.map(& &1.id)
+  rescue
+    _ -> []
+  end
+
+  defp verdict_object(%Plan{}), do: {:error, :unparseable}
+
+  defp verdict_object(%{"verdict" => _} = output), do: {:ok, output}
+
+  defp verdict_object(%{verdict: _} = output) do
+    {:ok, Map.new(output, fn {k, v} -> {to_string(k), v} end)}
+  end
+
+  defp verdict_object(output) do
+    case extract_comment(output) do
+      binary when is_binary(binary) and binary != "" -> decode_embedded_json(binary)
+      _ -> {:error, :unparseable}
+    end
+  end
+
+  # Three candidates, cheapest first: the whole trimmed body, then each
+  # fenced block, then the widest brace span. The external dispatcher
+  # returns raw content — a model that wraps its JSON in a fence, or
+  # narrates either side of it, is the common case, not the exception.
+  defp decode_embedded_json(binary) do
+    candidates = [String.trim(binary)] ++ fenced_blocks(binary) ++ brace_span(binary)
+
+    Enum.find_value(candidates, {:error, :unparseable}, fn candidate ->
+      case Jason.decode(candidate) do
+        {:ok, %{"verdict" => _} = map} -> {:ok, map}
+        _ -> nil
+      end
+    end)
+  end
+
+  defp fenced_blocks(binary) do
+    ~r/```(?:[a-zA-Z0-9_-]+)?[ \t]*\r?\n?(.*?)```/s
+    |> Regex.scan(binary, capture: :all_but_first)
+    |> Enum.map(fn [body] -> String.trim(body) end)
+  end
+
+  defp brace_span(binary) do
+    with [{open, _} | _] <- :binary.matches(binary, "{"),
+         [_ | _] = closes <- :binary.matches(binary, "}"),
+         {close, _} <- List.last(closes),
+         true <- close > open do
+      [binary_part(binary, open, close - open + 1)]
+    else
+      _ -> []
+    end
+  end
+
+  defp verdict_resolution(verdict) when is_binary(verdict) do
+    case verdict |> String.trim() |> String.downcase() do
+      "pass" -> {:ok, :pass}
+      "reject" -> {:ok, :reject}
+      _ -> {:error, :unparseable}
+    end
+  end
+
+  defp verdict_resolution(_verdict), do: {:error, :unparseable}
+
+  defp verdict_summary(summary) when is_binary(summary) do
+    case String.trim(summary) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp verdict_summary(_summary), do: nil
+
+  defp sanitize_findings(findings, stage_ids) when is_list(findings) do
+    findings
+    |> Enum.map(&sanitize_finding(&1, stage_ids))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp sanitize_findings(_findings, _stage_ids), do: []
+
+  defp sanitize_finding(finding, stage_ids) when is_map(finding) do
+    stage_id = finding_field(finding, "stage_id")
+    constraint = finding_field(finding, "constraint")
+    detail = finding_field(finding, "detail")
+
+    if constraint in Plan.architecture_constraints() and stage_id in stage_ids and
+         is_binary(detail) and String.trim(detail) != "" do
+      %{"stage_id" => stage_id, "constraint" => constraint, "detail" => String.trim(detail)}
+    end
+  end
+
+  defp sanitize_finding(_finding, _stage_ids), do: nil
+
+  defp finding_field(finding, key) do
+    case Map.get(finding, key) || Map.get(finding, String.to_existing_atom(key)) do
+      value when is_binary(value) -> value
+      _ -> nil
+    end
+  rescue
+    ArgumentError -> nil
+  end
 
   defp load_plan(plan_id) when is_binary(plan_id) do
     Repo.get(Plan, plan_id)
@@ -478,6 +758,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
     Task intent:
     #{format_task_description(Map.get(payload, :task_description))}
 
+    plan_id: #{Map.get(payload, :plan_id)}
     Plan version: #{Map.get(payload, :plan_version)} (status: #{Map.get(payload, :plan_status)})
     Project: #{Map.get(payload, :project_id)}
 
@@ -508,10 +789,23 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
 
     header = "  - stage #{pos} — #{name} [#{status}]: #{desc}"
 
-    [header, format_gates(Map.get(stage, :validations) || [])]
+    # ADR-0046 member 5 stage 4: an id the model cannot see is an id it
+    # invents, and `plan_architecture_verdict` refuses a finding whose
+    # `stage_id` does not belong to the plan. Rendered defensively —
+    # a payload without the key degrades to the old line rather than
+    # printing `stage_id: `.
+    [
+      header,
+      format_stage_id(Map.get(stage, :id)),
+      format_gates(Map.get(stage, :validations) || [])
+    ]
+    |> Enum.reject(&is_nil/1)
     |> Enum.concat(format_e2e_expectations(Map.get(stage, :e2e_expected) || []))
     |> Enum.join("\n")
   end
+
+  defp format_stage_id(id) when is_binary(id) and id != "", do: "    stage_id: #{id}"
+  defp format_stage_id(_id), do: nil
 
   defp format_gates([]), do: "    gates: (none — this stage is unprotected)"
 

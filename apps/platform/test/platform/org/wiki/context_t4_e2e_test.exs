@@ -819,6 +819,19 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       "20260726051347_force_update_dispatch_planning_design_preplan.exs",
       # ADR-0046 member 5 — plans.architecture_verdict.
       "20260726051454_add_architecture_verdict_to_plans.exs",
+      # ADR-0046 member 5 stage 4: third revision of the
+      # `architecture.review_plan.v1` body. Stage 3 made the prompt's own
+      # claims false — it said the architect was "additive, not a blocker"
+      # and that the plan advanced "regardless of what you find", while
+      # `Tasks.approve_plan/3` now refuses a non-human approval behind an
+      # open gate. `seed_defaults/0` is INSERT-only and the 20260708123000
+      # / 20260726210000 force-updates already claimed this row, so the
+      # gate contract needs its own overwrite to reach a deployed prompt.
+      # Timestamp reserved by the stack coordinator, so it sorts BEFORE
+      # member 3's 20260726210000 on a fresh DB and after it on a migrated
+      # one; both write `default_content_for_slug/1`, so the orderings
+      # converge. Update-only; no schema change.
+      "20260726051455_force_update_architect_review_plan_gate_contract.exs",
       # Task 019f9b28-6ca7 stage 5: the `architecture.review_plan.v1`
       # body told the architect to "prefer citing the ADR by number",
       # which `docs/decisions/` cannot honour — four numbers each name

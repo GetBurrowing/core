@@ -15,8 +15,10 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Responsibilities.Handlers.ArchitectureReviewPlan
+  alias Platform.Repo
   alias Platform.Responsibilities.Responsibility
   alias Platform.Tasks
+  alias Platform.Tasks.Plan
 
   defp responsibility do
     %Responsibility{
@@ -717,11 +719,28 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
       assert is_binary(user) and user != ""
     end
 
-    test "system slot names the Architect role + additive contract", %{context: context} do
+    # ADR-0046 member 5 stage 4 REPLACED the assertion that used to live
+    # here (`system =~ "additive"`). Stage 3 landed the guard in
+    # `Tasks.approve_plan/3`, which made "additive, not a blocker" false;
+    # a system slot still claiming it would contradict the user slot and
+    # train the architect out of using the gate that now holds the plan.
+    # The old assertion is not deleted so much as inverted — its absence
+    # half is below.
+    test "system slot names the Architect role + the GATE contract, not the old additive one",
+         %{context: context} do
       {:ok, %{system: system}} = ArchitectureReviewPlan.build_prompt(context)
 
       assert system =~ "Architect"
-      assert system =~ "additive"
+      assert system =~ "HELD"
+      assert system =~ "plan_architecture_verdict"
+
+      for constraint <- Plan.architecture_constraints() do
+        assert system =~ constraint,
+               "system slot must enumerate the constraint vocabulary the tool enforces"
+      end
+
+      refute system =~ "additive"
+      refute system =~ "do not block plan approval"
     end
   end
 
@@ -808,6 +827,449 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
       # No task_id in trigger_meta → logs + returns :ok (contract: never
       # crash the Router).
       assert :ok = ArchitectureReviewPlan.handle_output(responsibility(), %{"comments" => []})
+    end
+  end
+
+  # ── ADR-0046 member 5 stage 4: the EXTERNAL verdict surface ───────────────
+  #
+  # The native architect (`moore`, `kind: "native"` — stage 2's verified
+  # finding) calls the MCP tool. An EXTERNAL architect gets a rendered
+  # prompt and a one-shot completion with no tools, so its verdict can
+  # only arrive as text in `handle_output/3`. Both funnel into
+  # `Tasks.resolve_architecture_gate/3`; neither re-implements the state
+  # machine.
+
+  describe "handle_output/3 — architecture gate settlement" do
+    setup do
+      project = make_project("External Verdict Project #{System.unique_integer([:positive])}")
+      task = make_task(project.id, title: "External Verdict Task", status: "planning")
+      plan = make_plan(task.id, status: "pending_review")
+      {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
+      {:ok, gated} = Tasks.open_architecture_gate(plan, "external-architect")
+      {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+      %{task: task, plan: gated, stage: stage, space: space}
+    end
+
+    defp verdict_row(plan_id), do: Repo.get!(Plan, plan_id).architecture_verdict
+
+    defp architect_messages(space_id) do
+      space_id
+      |> Platform.Chat.list_messages()
+      |> Enum.filter(&(is_binary(&1.content) and String.contains?(&1.content, "[architect]")))
+    end
+
+    # PAIRED GUARD. Both halves in one test: the fenced-JSON half alone
+    # would pass against a parser that resolved the gate on ANY output,
+    # and the prose half alone would pass against one that resolved it on
+    # NONE. The pair pins the discrimination.
+    #
+    # VACUITY CONTROL, MEASURED: replacing `parse_verdict/2`'s body with
+    # `{:error, :unparseable}` makes half 1 fail (state `dispatch_failed`,
+    # not `passed`) and half 2 pass. Replacing it with a constant
+    # `{:ok, %{resolution: :pass, ...}}` makes half 2 fail. Neither half
+    # is vacuous.
+    test "a fenced-JSON verdict resolves the gate; prose falls open — and both post the annotation",
+         ctx do
+      fenced = """
+      Reviewed the plan against the four constraints. Nothing crosses one.
+
+      ```json
+      {"verdict": "pass", "summary": "No new module, context, table or cross-context call."}
+      ```
+      """
+
+      assert :ok =
+               ArchitectureReviewPlan.handle_output(responsibility(), fenced, %{
+                 task_id: ctx.task.id,
+                 plan_id: ctx.plan.id
+               })
+
+      verdict = verdict_row(ctx.plan.id)
+      assert verdict["state"] == "passed"
+      assert verdict["summary"] =~ "No new module"
+      refute Tasks.architecture_gate_open?(ctx.plan.id)
+
+      assert [msg] = architect_messages(ctx.space.id)
+      assert msg.content =~ "Reviewed the plan"
+
+      # ── half 2: prose, on a fresh gate ──────────────────────────────
+      task2 = make_task(ctx.task.project_id, title: "Prose Verdict Task", status: "planning")
+      plan2 = make_plan(task2.id, status: "pending_review")
+      {:ok, gated2} = Tasks.open_architecture_gate(plan2, "external-architect")
+      {:ok, space2} = ExecutionSpace.find_or_create(task2.id)
+
+      assert :ok =
+               ArchitectureReviewPlan.handle_output(
+                 responsibility(),
+                 "Looks fine to me, no concerns worth raising.",
+                 %{task_id: task2.id, plan_id: gated2.id}
+               )
+
+      verdict2 = verdict_row(gated2.id)
+
+      # FALL OPEN. A model that answered in prose must not be able to
+      # park a task forever (ADR-0046 decision 7).
+      assert verdict2["state"] == "dispatch_failed"
+      assert verdict2["summary"] =~ "unparseable_verdict"
+      refute Tasks.architecture_gate_open?(gated2.id)
+
+      # …AND the human-readable trace still happened. The gate and the
+      # annotation must not be able to take each other down.
+      assert [msg2] = architect_messages(space2.id)
+      assert msg2.content =~ "Looks fine to me"
+    end
+
+    test "falling open records the architecture planning step as failed", ctx do
+      # ADR-0046:83's conflation in miniature: "the plan proceeded" and
+      # "the architect answered" must stay distinguishable. The recording
+      # lives inside `resolve_architecture_gate/3`, so this asserts the
+      # external path actually routes through it rather than writing its
+      # own verdict.
+      assert :ok =
+               ArchitectureReviewPlan.handle_output(responsibility(), "no json here", %{
+                 task_id: ctx.task.id,
+                 plan_id: ctx.plan.id
+               })
+
+      outcomes = Repo.get!(Platform.Tasks.Task, ctx.task.id).planning_step_outcomes || %{}
+      assert get_in(outcomes, ["architecture", "outcome"]) == "failed"
+    end
+
+    test "a reject with a valid finding resolves the gate as rejected", ctx do
+      output = %{
+        "comments" => [
+          %{
+            "content" =>
+              ~s({"verdict":"reject","summary":"Boundary violation.","findings":[{"stage_id":"#{ctx.stage.id}","constraint":"module_boundary","detail":"Move the query behind the context."}]})
+          }
+        ]
+      }
+
+      assert :ok =
+               ArchitectureReviewPlan.handle_output(responsibility(), output, %{
+                 task_id: ctx.task.id,
+                 plan: ctx.plan
+               })
+
+      verdict = verdict_row(ctx.plan.id)
+      assert verdict["state"] == "rejected"
+      assert [%{"constraint" => "module_boundary"}] = verdict["findings"]
+    end
+
+    # THE CLOSED VOCABULARY, ON THE SECOND SURFACE. The tool refuses a
+    # style objection outright; this path has no caller to refuse to, so
+    # it drops the unrepresentable finding — and a reject that reduces to
+    # nothing actionable becomes no verdict at all rather than an
+    # objection the planner cannot act on.
+    test "a reject whose only finding is a style objection falls open, it does not store it",
+         ctx do
+      output =
+        ~s({"verdict":"reject","summary":"Naming.","findings":[{"stage_id":"#{ctx.stage.id}","constraint":"naming","detail":"Rename it."}]})
+
+      assert :ok =
+               ArchitectureReviewPlan.handle_output(responsibility(), output, %{
+                 task_id: ctx.task.id,
+                 plan_id: ctx.plan.id
+               })
+
+      verdict = verdict_row(ctx.plan.id)
+      assert verdict["state"] == "dispatch_failed"
+      assert verdict["findings"] == []
+
+      # PAIRED CONTROL: the identical payload with an allowed constraint
+      # DOES store a rejection — see the reject test above, which uses the
+      # same stage and detail with `module_boundary`.
+    end
+
+    test "a reject naming another plan's stage falls open rather than storing a foreign id",
+         ctx do
+      other_task = make_task(ctx.task.project_id, title: "Other Plan", status: "planning")
+      other_plan = make_plan(other_task.id)
+      {:ok, foreign} = Tasks.create_stage(%{plan_id: other_plan.id, position: 1, name: "F1"})
+
+      output =
+        ~s({"verdict":"reject","summary":"x","findings":[{"stage_id":"#{foreign.id}","constraint":"data_model","detail":"Widen it."}]})
+
+      assert :ok =
+               ArchitectureReviewPlan.handle_output(responsibility(), output, %{
+                 task_id: ctx.task.id,
+                 plan_id: ctx.plan.id
+               })
+
+      assert verdict_row(ctx.plan.id)["state"] == "dispatch_failed"
+    end
+
+    test "a duplicate reply is harmless — the gate is one-shot at this surface too", ctx do
+      pass = ~s({"verdict":"pass","summary":"Clean."})
+      meta = %{task_id: ctx.task.id, plan_id: ctx.plan.id}
+
+      assert :ok = ArchitectureReviewPlan.handle_output(responsibility(), pass, meta)
+      first = verdict_row(ctx.plan.id)
+
+      # PRECONDITION, and it is load-bearing. Without it the equality
+      # below holds trivially against code that never writes a verdict at
+      # all — the row simply stays `pending` across both calls. Measured:
+      # reverting the handler leaves this test GREEN without this line.
+      assert first["state"] == "passed"
+
+      reject =
+        ~s({"verdict":"reject","summary":"Changed my mind.","findings":[{"stage_id":"#{ctx.stage.id}","constraint":"data_model","detail":"Widen it."}]})
+
+      assert :ok = ArchitectureReviewPlan.handle_output(responsibility(), reject, meta)
+
+      assert verdict_row(ctx.plan.id) == first
+    end
+
+    # NO-REGRESSION CONTROL, NOT A DETECTOR — declared as such. Against
+    # the pre-stage handler this passes, because that handler also
+    # returned `:ok` and posted the annotation. Its job is to prove the
+    # verdict path did not break the trigger shape that has no plan to
+    # settle, which is the shape `handle_output/2` and every pre-ADR-0046
+    # dispatch takes.
+    test "a trigger with no plan_id still posts the annotation and returns :ok", ctx do
+      assert :ok =
+               ArchitectureReviewPlan.handle_output(responsibility(), "bare note", %{
+                 task_id: ctx.task.id
+               })
+
+      assert verdict_row(ctx.plan.id)["state"] == "pending"
+      assert [msg] = architect_messages(ctx.space.id)
+      assert msg.content =~ "bare note"
+    end
+  end
+
+  describe "parse_verdict/2" do
+    test "tolerates a bare object, a fenced block, and prose either side of one" do
+      for body <- [
+            ~s({"verdict":"pass","summary":"ok"}),
+            "```json\n{\"verdict\":\"pass\",\"summary\":\"ok\"}\n```",
+            "Here is my verdict.\n\n{\"verdict\":\"pass\",\"summary\":\"ok\"}\n\nHope that helps.",
+            "```\n{\"verdict\":\"PASS\",\"summary\":\"ok\"}\n```"
+          ] do
+        assert {:ok, %{resolution: :pass, summary: "ok"}} =
+                 ArchitectureReviewPlan.parse_verdict(body),
+               "failed to parse: #{inspect(body)}"
+      end
+    end
+
+    test "refuses prose, a non-pass/reject verdict word, and a findings-free reject" do
+      for body <- [
+            "The plan looks reasonable.",
+            ~s({"verdict":"maybe","summary":"unsure"}),
+            ~s({"verdict":"reject","summary":"bad"}),
+            ~s({"summary":"no verdict key"}),
+            ""
+          ] do
+        assert {:error, :unparseable} = ArchitectureReviewPlan.parse_verdict(body),
+               "should not have parsed: #{inspect(body)}"
+      end
+    end
+  end
+
+  # ── ADR-0046 member 5 stage 4: the prompt, and why it has a guard ─────────
+  #
+  # THE ONE THAT MATTERS. Prompt-template content has no other guard in
+  # this repo: a stale prompt would silently disable the whole feature
+  # while every other test in the suite stayed green — the same class as
+  # the escaped prompt-template mutation recorded on 2026-07-25. The
+  # absence half and the positive half live in ONE test so a body that
+  # merely deleted the old sentences without adding the new contract
+  # cannot pass.
+
+  describe "the architecture.review_plan.v1 body carries the gate contract" do
+    setup do
+      :ok = PromptTemplates.seed_defaults()
+
+      project = make_project("Prompt Guard Project #{System.unique_integer([:positive])}")
+      task = make_task(project.id, title: "Prompt Guard Task", status: "planning")
+      plan = make_plan(task.id)
+
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      %{rendered: rendered, shipped: shipped_body(), plan: plan}
+    end
+
+    # TWO SOURCES, AND THE DETONATION IS WHY.
+    #
+    # `render_instruction/1` reads the DB ROW; `default_content_for_slug/1`
+    # is what the CODE ships (and the fallback a boot with no row uses).
+    # Reverting this stage's `prompt_templates.ex` and re-running these
+    # guards left them GREEN, because the force-update migration had
+    # already written the new body into the test database and
+    # `seed_defaults/0` is INSERT-only, so nothing put the old text back.
+    # A guard that only reads the rendered output is guarding whatever is
+    # in the database, not what the repository ships.
+    #
+    # Both halves earn their keep and neither is redundant: the shipped
+    # half detonates on a code revert, the rendered half is the only one
+    # that would catch a migration that never ran or an operator edit
+    # that reverted the row in a live environment.
+    defp shipped_body, do: PromptTemplates.default_content_for_slug("architecture.review_plan.v1")
+
+    test "names all four constraints and the verdict tool, and NO LONGER claims it is additive",
+         %{rendered: rendered, shipped: shipped} do
+      for body <- [shipped, rendered] do
+        for constraint <- Plan.architecture_constraints() do
+          assert body =~ constraint,
+                 "the prompt and the validator must speak one vocabulary — #{constraint} missing"
+        end
+
+        assert body =~ "plan_architecture_verdict"
+
+        # The two sentences stage 3 made false. Both would actively train
+        # the architect out of using the gate that now holds the plan.
+        refute body =~ "additive, not a blocker"
+        refute body =~ "regardless of what you find"
+      end
+    end
+
+    test "carries the authority, the not-for-style reason, the fast-pass default and a bad example",
+         %{rendered: rendered, shipped: shipped} do
+      # Matched against a whitespace-normalised copy: the template is
+      # hard-wrapped at ~90 columns, so a phrase assertion written
+      # verbatim breaks the moment somebody re-wraps a paragraph. The
+      # CLAIM is that the sentence is present, not where its newlines
+      # fall. Both sources, for the reason above the previous test — they
+      # are NOT compared to each other (the rendered copy has the four
+      # `{{variable}}` slots substituted), they are each checked for the
+      # same static prose.
+      for flat <- [
+            String.replace(shipped, ~r/\s+/, " "),
+            String.replace(rendered, ~r/\s+/, " ")
+          ] do
+        # 1. AUTHORITY.
+        assert flat =~ "it is held at `pending_review` until you answer"
+        assert flat =~ "You must answer"
+
+        # 3. NOT for taste/naming/style, WITH the reason — a model that
+        #    understands the reason generalises where one following a
+        #    rule does not.
+        assert flat =~ "Explicitly NOT for taste, naming, or stylistic preference"
+        assert flat =~ "gets switched off within a week"
+        assert flat =~ "worse than no gate at all"
+
+        # 4. FAST PASS, stated concretely rather than as an exhortation.
+        assert flat =~ "no new module, no new context, no new table"
+        assert flat =~ "a wrong reject costs a full replan cycle"
+
+        # 5. The bad worked example, verbatim from the stage brief.
+        assert flat =~ "This is unsound"
+        assert flat =~ "WHAT TO CHANGE"
+      end
+    end
+
+    test "states the deadline, and the number it states matches the code" do
+      # A hardcoded number in a prompt is a claim about the system. Pin
+      # the two together so a timeout change cannot silently make the
+      # architect's mental model wrong.
+      minutes = div(Tasks.architecture_gate_timeout_ms(), 60_000)
+
+      body = PromptTemplates.default_content_for_slug("architecture.review_plan.v1")
+
+      assert body =~ "**#{minutes} minutes**",
+             "the prompt's stated deadline drifted from Tasks.architecture_gate_timeout_ms/0"
+
+      assert body =~ "silence falls open"
+    end
+
+    test "the rendered prompt carries the plan_id and stage ids a finding needs", %{plan: plan} do
+      # The reject contract requires a `stage_id` that belongs to the
+      # plan, and `plan_architecture_verdict` refuses a foreign one. An
+      # external architect has no tool with which to look ids up, so an
+      # id that never reaches the prompt is an id it has to invent.
+      {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Guarded stage"})
+
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      assert rendered =~ "plan_id: #{plan.id}"
+      assert rendered =~ "stage_id: #{stage.id}"
+    end
+  end
+
+  # ── the force-update migration actually moves a live row ──────────────────
+  #
+  # `20260708123000_force_update_architect_review_plan_template.exs` and
+  # `20260726210000_..._citation_guidance.exs` have NO behavioural test —
+  # they appear only in `context_t4_e2e_test.exs`'s migration allow-list,
+  # which asserts the file exists, not that it does anything. Stated here
+  # rather than left implicit, per the stage brief. This is the coverage.
+
+  describe "20260726051455_force_update_architect_review_plan_gate_contract" do
+    @migration_path Path.join([
+                      __ENV__.file
+                      |> Path.dirname()
+                      |> Path.dirname()
+                      |> Path.dirname()
+                      |> Path.dirname()
+                      |> Path.dirname(),
+                      "priv/repo/migrations/20260726051455_force_update_architect_review_plan_gate_contract.exs"
+                    ])
+
+    @migration_module Platform.Repo.Migrations.ForceUpdateArchitectReviewPlanGateContract
+
+    setup do
+      unless Code.ensure_loaded?(@migration_module) do
+        Code.require_file(@migration_path)
+      end
+
+      :ok = PromptTemplates.seed_defaults()
+      :ok
+    end
+
+    test "overwrites an existing row still carrying the pre-gate body" do
+      slug = "architecture.review_plan.v1"
+      template = PromptTemplates.get_template_by_slug(slug)
+      assert template, "seed_defaults/0 should have created the row"
+
+      old_body = """
+      You are the Architect. A plan just entered `pending_review`. You are
+      **additive, not a blocker** — the architect annotates; it does NOT block plan
+      approval. The plan advances to `pending_review` regardless of what you find.
+      """
+
+      {:ok, _} =
+        PromptTemplates.update_template(template, %{
+          content: old_body,
+          description: "Output is additive — it does NOT block plan approval."
+        })
+
+      # Precondition — the row really is stale before the migration runs.
+      assert PromptTemplates.get_template_by_slug(slug).content =~ "additive, not a blocker"
+
+      assert :ok = apply(@migration_module, :up, [])
+
+      refreshed = PromptTemplates.get_template_by_slug(slug)
+
+      refute refreshed.content =~ "additive, not a blocker"
+      refute refreshed.content =~ "regardless of what you find"
+      assert refreshed.content =~ "plan_architecture_verdict"
+      assert refreshed.description =~ "HELD"
+
+      # `seed_defaults/0` is INSERT-only — this is the whole reason the
+      # migration exists. Re-seeding must NOT restore the new body, or the
+      # force-update would be redundant and this test would prove nothing.
+      {:ok, _} = PromptTemplates.update_template(refreshed, %{content: old_body})
+      :ok = PromptTemplates.seed_defaults()
+
+      assert PromptTemplates.get_template_by_slug(slug).content =~ "additive, not a blocker",
+             "seed_defaults/0 turned out to be an upsert — the force-update migration is unnecessary"
+    end
+
+    test "skips cleanly when the row does not exist" do
+      case PromptTemplates.get_template_by_slug("architecture.review_plan.v1") do
+        nil -> :ok
+        template -> {:ok, _} = PromptTemplates.delete_template(template)
+      end
+
+      assert :ok = apply(@migration_module, :up, [])
+      assert is_nil(PromptTemplates.get_template_by_slug("architecture.review_plan.v1"))
     end
   end
 

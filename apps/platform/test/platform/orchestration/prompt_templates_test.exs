@@ -2435,17 +2435,34 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       end
     end
 
-    test "content carries the three concern-kind anchors + additive contract" do
+    # ADR-0046 member 5 stage 4 INVERTED the second half of this test.
+    # `Tasks.approve_plan/3` now refuses a non-human approval behind an
+    # open architecture gate, so "additive, not a blocker" and "the plan
+    # advances regardless of what you find" became false claims — and a
+    # prompt that tells the architect its verdict does not matter trains
+    # it out of using the gate. The three concern kinds SURVIVE, demoted:
+    # they are reported in `summary` and only escalate to a reject when
+    # one crosses a constraint.
+    test "content carries the three concern-kind anchors + the GATE contract" do
       content = PromptTemplates.default_content_for_slug("architecture.review_plan.v1")
 
-      # The three concern kinds the architect flags.
+      # The three concern kinds the architect reports.
       assert content =~ "collision"
       assert content =~ "adr_drift"
       assert content =~ "dup_abstraction"
 
-      # The additive-not-blocking contract.
-      assert content =~ "additive" or content =~ "not a blocker"
-      assert content =~ "do not block plan approval" or content =~ "does NOT block"
+      # The gate contract, and the closed constraint vocabulary the
+      # verdict tool enforces. Prompt and validator speak one vocabulary.
+      assert content =~ "plan_architecture_verdict"
+
+      for constraint <- Platform.Tasks.Plan.architecture_constraints() do
+        assert content =~ constraint
+      end
+
+      # The two sentences that are now false.
+      refute content =~ "additive, not a blocker"
+      refute content =~ "regardless of what you find"
+      refute content =~ "does NOT block plan approval"
     end
 
     test "seed_defaults seeds architecture.review_plan.v1 into the DB" do

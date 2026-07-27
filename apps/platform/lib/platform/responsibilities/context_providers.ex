@@ -625,6 +625,14 @@ defmodule Platform.Responsibilities.ContextProviders do
     validations = stage.validations |> List.wrap() |> Enum.sort_by(& &1.kind)
 
     %{
+      # ADR-0046 member 5 stage 4. The architect's REJECT contract requires
+      # one finding per objection carrying a `stage_id` that belongs to the
+      # plan under verdict — `plan_architecture_verdict` refuses a foreign
+      # one. The external architect gets a rendered prompt and no tool with
+      # which to look ids up, so an id that never reaches the prompt is an
+      # id the model has to invent. Additive: `plan_id` was already on the
+      # parent payload; the per-stage id was the missing half.
+      id: stage.id,
       position: stage.position,
       name: stage.name,
       description: truncate(stage.description, @stage_description_limit),
