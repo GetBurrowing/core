@@ -51,6 +51,19 @@ defmodule Platform.Orchestration.TaskRouter do
 
   require Logger
 
+  # ADR-0046 member 7 stage 5 — how long a pre-plan design step may hold the
+  # planner before it is expired and planning proceeds anyway.
+  #
+  # The literal lives here and the READ goes through `Application.get_env/3` so
+  # a test can inject a small value per-case. There is deliberately NO override
+  # in `config/test.exs`: a test-only config value that silently becomes the
+  # production one is exactly the amended-safety-net failure this stack is
+  # written against. `default_design_step_timeout_ms/0` exposes the literal so a
+  # guard can assert the shipped default independently of whatever a running
+  # test has injected.
+  @design_step_timeout_ms 1_800_000
+
+  alias Platform.Design.PreplanStep
   alias Platform.Execution.CredentialLease
   alias Platform.Federation
 
@@ -62,7 +75,6 @@ defmodule Platform.Orchestration.TaskRouter do
     RuntimeSupervision
   }
 
-  alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{DeployResolver, Plan, ReviewRequests, Stage}
 
@@ -83,7 +95,10 @@ defmodule Platform.Orchestration.TaskRouter do
             task_status: String.t() | nil,
             lease_status: String.t() | nil,
             deploy_lease: CredentialLease.t() | nil,
-            status: :dispatching | :running | :stalled | :complete | :waiting_human
+            design_deadline_ref: reference() | nil,
+            architecture_deadline_ref: reference() | nil,
+            status:
+              :dispatching | :running | :stalled | :complete | :waiting_human | :waiting_design
           }
 
     defstruct [
@@ -98,6 +113,16 @@ defmodule Platform.Orchestration.TaskRouter do
       :task_status,
       :lease_status,
       :deploy_lease,
+      # ADR-0046 member 7 stage 5. Purely an OPTIMISATION: it exists so a hold
+      # that nothing else pokes still ends on time. It is NOT the correctness
+      # guarantee, and it deliberately holds no information the DB does not
+      # already carry — see `design_hold_expired?/2`.
+      :design_deadline_ref,
+      # ADR-0046 member 5 stage 5. Held only so a re-arm can cancel the
+      # previous one-shot instead of stacking duplicates; the timer is an
+      # optimisation, never the correctness guarantee (see
+      # `handle_info({:architecture_gate_deadline, _}, _)`).
+      :architecture_deadline_ref,
       status: :dispatching
     ]
   end
@@ -124,6 +149,25 @@ defmodule Platform.Orchestration.TaskRouter do
   def current_status(task_id) do
     GenServer.call(via(task_id), :current_status)
   end
+
+  @doc """
+  How long a pre-plan design step may hold the planner, in milliseconds.
+
+  Read through `Application.get_env/3` on every use so a test can inject a
+  small value for one case without a `config/test.exs` entry.
+  """
+  @spec design_step_timeout_ms() :: pos_integer()
+  def design_step_timeout_ms do
+    Application.get_env(:platform, :design_step_timeout_ms, @design_step_timeout_ms)
+  end
+
+  @doc """
+  The SHIPPED default hold window (30 minutes), independent of any injected
+  config. Exposed so a guard can prove a test-only value has not become the
+  production one.
+  """
+  @spec default_design_step_timeout_ms() :: pos_integer()
+  def default_design_step_timeout_ms, do: @design_step_timeout_ms
 
   defp via(task_id) do
     {:via, Registry, {Platform.Orchestration.Registry, task_id}}
@@ -216,13 +260,20 @@ defmodule Platform.Orchestration.TaskRouter do
             # was the Logger line above, invisible to the human being asked to
             # approve the plan. Mirrors the `waiting_for_human_review?/1`
             # branch below, which already emits before delegating.
+            #
+            # ADR-0046 member 5 stage 5: WHO holds the slot decides the copy.
+            # While the occupant is the ARCHITECT no human action is pending,
+            # and the plan-review line sends the reader to a button they
+            # should not press yet. Same episode discipline, third string.
+            gate = architecture_gate_occupancy(task_id)
+
             maybe_log_heartbeat_suppressed(
               state,
               find_stage(Tasks.current_plan(task_id), state.current_stage_id),
-              reason: "awaiting_plan_review"
+              plan_gate_log_opts(gate)
             )
 
-            {:ok, %{state | status: :waiting_human}}
+            {:ok, arm_architecture_gate_deadline(%{state | status: :waiting_human}, gate)}
 
           waiting_for_human_review?(state) ->
             # Deliberately NOT guarded on `state.status != :waiting_human`
@@ -277,14 +328,17 @@ defmodule Platform.Orchestration.TaskRouter do
 
           # Same episode-start emission as the lease-active branch above; see
           # the comment there for why the handler's edge trigger cannot cover
-          # this shape.
+          # this shape, and for why the architect's occupancy gets its own
+          # copy.
+          gate = architecture_gate_occupancy(task_id)
+
           maybe_log_heartbeat_suppressed(
             state,
             find_stage(Tasks.current_plan(task_id), state.current_stage_id),
-            reason: "awaiting_plan_review"
+            plan_gate_log_opts(gate)
           )
 
-          {:ok, %{state | status: :waiting_human}}
+          {:ok, arm_architecture_gate_deadline(%{state | status: :waiting_human}, gate)}
         else
           # Schedule initial dispatch on next tick
           send(self(), :dispatch)
@@ -314,7 +368,18 @@ defmodule Platform.Orchestration.TaskRouter do
 
   @impl true
   def handle_info(:dispatch, state) do
-    task = Tasks.get_task_detail(state.task_id)
+    # START SITE for the pre-plan design step (ADR-0046 member 7 stage 5).
+    # Deliberately here and not on the `backlog -> planning` transition: that
+    # transition has FOUR writers with four different gate sets
+    # (`Tasks.transition_task/3`, `transition_task_status/2`,
+    # `drop_task_to_column/3`, and the unguarded `update_task/3` that
+    # `Stacks.promote/1` uses), and a fifth the day someone adds one. All five
+    # funnel into a router, because `TaskRouterWatcher.should_run?/1` spawns one
+    # for any task in `planning`. One chokepoint instead of five.
+    task =
+      state.task_id
+      |> Tasks.get_task_detail()
+      |> maybe_start_design_step(state)
 
     cond do
       task == nil ->
@@ -362,19 +427,29 @@ defmodule Platform.Orchestration.TaskRouter do
         # request; in the plan-pending case there are no review requests, so
         # an unconditional call would post on every injected dispatch — the
         # exact execution-space pile-up task 019e00cb fixed.
+        gate = architecture_gate_occupancy(state.task_id)
+
         if state.status != :waiting_human do
           maybe_log_heartbeat_suppressed(
             state,
             find_stage(Tasks.current_plan(state.task_id), state.current_stage_id),
-            reason: "awaiting_plan_review"
+            plan_gate_log_opts(gate)
           )
         end
 
+        # Armed OUTSIDE the edge guard, deliberately. The edge guard exists to
+        # keep NARRATION to one line per episode; the timer is not narration.
+        # A router already parked at `:waiting_human` by a stage-level gate
+        # when the architecture gate opens would otherwise never arm one, and
+        # re-arming is free — `arm_architecture_gate_deadline/2` cancels the
+        # previous ref and recomputes the delay from the PERSISTED deadline,
+        # so an extra arm can only ever shorten it.
         state =
           state
           |> Map.put(:task_status, task.status)
           |> clear_liveness()
           |> Map.put(:status, :waiting_human)
+          |> arm_architecture_gate_deadline(gate)
 
         {:noreply, state}
 
@@ -423,6 +498,20 @@ defmodule Platform.Orchestration.TaskRouter do
           |> Map.put(:status, :waiting_human)
 
         {:noreply, state}
+
+      design_step_open?(task) ->
+        # Pre-dispatch guard, DESIGN level (ADR-0046 member 7 stage 5).
+        # "Design runs BEFORE planning" is only true if the planner actually
+        # waits. Ordered AFTER `pending_review_request?/1` on purpose: a human
+        # gate outranks a machine one.
+        #
+        # Ordered AHEAD of `completed_plan_no_work?/1` (below) at the ADR-0046
+        # merge. The two are disjoint in practice — the design step fires
+        # BEFORE a plan exists, so a task with an open design step cannot also
+        # carry a `completed` plan — but if they ever did overlap, parking at
+        # `:waiting_design` is the reading that keeps the design contract:
+        # suppression would drop the hold on the floor.
+        handle_design_hold(state, task)
 
       completed_plan_no_work?(state.task_id) ->
         # Re-dispatch storm guard (task 019fa2fc stage 4). Production on
@@ -556,6 +645,33 @@ defmodule Platform.Orchestration.TaskRouter do
     end
   end
 
+  # `:design_deadline` — armed once per design hold. This is the EAGER path,
+  # not the correctness path: `handle_design_hold/2` re-derives the same
+  # verdict from the DB on every dispatch tick, so losing this message (router
+  # restart, a `Process.cancel_timer/1` race) costs latency and nothing else.
+  #
+  # Both branches below are LEVEL checks against `PreplanStep.open?/1`, never
+  # against router state. A timer that fires after `settle/2` already closed
+  # the step must not re-open it as a failure and must not re-dispatch — the
+  # settle wake-up in `{:task_updated, _}` already did.
+  def handle_info(:design_deadline, %State{} = state) do
+    state = %{state | design_deadline_ref: nil}
+
+    case Tasks.get_task_detail(state.task_id) do
+      nil ->
+        {:noreply, state}
+
+      task ->
+        if design_step_open?(task) do
+          expire_design_step(task)
+          send(self(), :dispatch)
+          {:noreply, %{state | status: :dispatching}}
+        else
+          {:noreply, state}
+        end
+    end
+  end
+
   # `:check_safety_net` — armed on each successful dispatch at the stage-kind's
   # safety-net interval. If progress extended the deadline (`record_progress/1`
   # or `record_ack/1` moved `safety_net_at` past `now`), reschedule to the new
@@ -618,6 +734,29 @@ defmodule Platform.Orchestration.TaskRouter do
         end
 
         state |> clear_liveness() |> Map.put(:status, :waiting_human)
+      else
+        state
+      end
+
+    # DESIGN WAKE-UP (ADR-0046 member 7 stage 5). `PreplanStep.settle/2` closes
+    # the step through `Tasks.set_planning_step/2`, which broadcasts
+    # `{:task_updated, _}` — so no new subscription is needed. But this handler
+    # did NOT previously re-dispatch, so without this the planner would stay
+    # parked until some unrelated tick arrived. The stage brief asserted the
+    # re-dispatch already existed; it did not.
+    #
+    # EDGE-TRIGGERED ON PURPOSE, and this is the one place in the stage where
+    # that is the right shape. `settle/2` emits more than one `{:task_updated}`
+    # (the outcome write, then the cursor write), and `update_task/3` emits more
+    # for reasons that have nothing to do with design. Leaving `:waiting_design`
+    # in the same expression that sends the dispatch makes the status itself the
+    # de-duplication token: exactly one dispatch per hold, asserted by count.
+    # The edge is safe here only because the LEVEL check in
+    # `handle_design_hold/2` is what actually bounds the hold — if this wake-up
+    # never fires at all, the hold still ends.
+    state =
+      if state.status == :waiting_design do
+        release_design_hold_if_closed(state)
       else
         state
       end
@@ -851,15 +990,22 @@ defmodule Platform.Orchestration.TaskRouter do
           # `:waiting_human` the episode has been narrated (or a stage-level
           # gate is already parked here), so stay silent rather than
           # double-posting on a re-broadcast.
+          gate = architecture_gate_occupancy(task_id)
+
           if state.status != :waiting_human do
             maybe_log_heartbeat_suppressed(
               state,
               find_stage(Tasks.current_plan(task_id), state.current_stage_id),
-              reason: "awaiting_plan_review"
+              plan_gate_log_opts(gate)
             )
           end
 
-          state |> clear_liveness() |> Map.put(:status, :waiting_human)
+          # Arm outside the edge guard — see the `:dispatch` handler's plan
+          # branch for why.
+          state
+          |> clear_liveness()
+          |> Map.put(:status, :waiting_human)
+          |> arm_architecture_gate_deadline(gate)
 
         "approved" ->
           state
@@ -872,6 +1018,63 @@ defmodule Platform.Orchestration.TaskRouter do
         _other ->
           state
       end
+
+    {:noreply, state}
+  end
+
+  # ── ADR-0046 member 5 stage 5: the architecture gate's deadline ────────
+  #
+  # THE EDGE, NOT THE GUARANTEE. `Tasks.architecture_gate/1` already reports a
+  # past-deadline `pending` gate as `{:resolved, %{"state" => "expired"}}`
+  # WITHOUT writing, so `approve_plan/3` stops blocking whether or not this
+  # message is ever delivered. That level check is the correctness guarantee;
+  # this timer is only the eager path, which additionally persists the verdict
+  # and runs the deferred `settle_plan_submission/1` tail.
+  #
+  # Losing this message degrades to "resolved late", never to "stuck", and it
+  # is genuinely lossy: `TaskRouterWatcher.should_run?/1` requires
+  # `assignee_type == "agent"`, so a task assigned to a USER for planning has
+  # NO router and never arms one, and a router that dies between the gate
+  # opening and the deadline takes its timer with it. Two independent
+  # fallbacks catch that, and they are not the same mechanism:
+  #
+  #   * NOTHING BLOCKS — `architecture_gate/1`'s projection reports the overdue
+  #     gate as expired without writing, so `approve_plan/3` admits a human
+  #     immediately, router or no router. This is the correctness guarantee.
+  #   * IT STILL SETTLES — `architecture_gate_occupancy/1`'s `:overdue` answer
+  #     re-fires this message at 0 ms the next time any router observes the
+  #     task, so the verdict gets written and the deferred tail runs. Where no
+  #     router will ever exist, that fallback does NOT apply and the plan waits
+  #     for the human the projection has already unblocked. Saying which
+  #     fallback covers which case matters: only the first one is universal.
+  #
+  # Built this way round on purpose. The 2026-07-26 journal records a live
+  # incident where `deploying -> done` lived solely in an edge-triggered PubSub
+  # handler with no level re-check, and a container restart between the
+  # broadcast and the handler stranded a completed task at `deploying`
+  # indefinitely while re-dispatching every ~90 minutes.
+  #
+  # Safe to fire late, twice, or against an already-resolved gate:
+  # `record_architecture_verdict/3` arbitrates on the PERSISTED row inside a
+  # guarded `UPDATE ... WHERE ->>'state' = 'pending'`, so a duplicate is
+  # `{:error, :gate_already_resolved}` and an architect verdict that beat the
+  # timer to the write genuinely wins.
+  def handle_info({:architecture_gate_deadline, plan_id}, %State{} = state) do
+    state = %{state | architecture_deadline_ref: nil}
+
+    case Tasks.resolve_architecture_gate(plan_id, :expired) do
+      {:ok, _resolved} ->
+        Logger.info(
+          "[TaskRouter] architecture gate expired for plan=#{plan_id} task=#{state.task_id}"
+        )
+
+      {:error, reason} ->
+        # Expected on a duplicate fire, a gate an architect already closed, or
+        # a plan superseded before the deadline landed. Not an error path.
+        Logger.debug(
+          "[TaskRouter] architecture gate deadline no-op for plan=#{plan_id}: #{inspect(reason)}"
+        )
+    end
 
     {:noreply, state}
   end
@@ -967,19 +1170,11 @@ defmodule Platform.Orchestration.TaskRouter do
     # episode-start narration at those two sites (task 019f9b34).
     entry_status = state.status
 
-    # Stage-level responsibility routing (task 019f5d47 — progressive enhancement).
-    # `state.assignee` stays fixed on the phase assignee so bookkeeping keys off
-    # task-level identity; only the runtime broadcast target changes per-dispatch
-    # when a stage carries a `responsibility` role key. If the role is
-    # unassigned or the target runtime is offline, we fall back to
-    # `state.assignee` and emit telemetry — never blocks dispatch.
-    dispatch_assignee = resolve_stage_dispatch_assignee(stage, task, state) || state.assignee
-
     # Lease deploy credentials if this is a deploy stage
     state = maybe_lease_deploy_credentials(state, task, stage)
 
     context = ContextAssembler.build(state.task_id, state.deploy_lease)
-    {agent, runtime} = Federation.lookup_assignment(dispatch_assignee.id)
+    {agent, runtime} = Federation.lookup_assignment(state.assignee.id)
     previous_rejection_reason = context && Map.get(context, :previous_rejection_reason)
     # Only stack members receive `:parent_plans` in the assembled context; for
     # solo tasks the key is absent and this defaults to `[]` so the planning
@@ -994,7 +1189,7 @@ defmodule Platform.Orchestration.TaskRouter do
         parent_plans: parent_plans
       )
 
-    case dispatch_attention(dispatch_assignee, state.task_id, "task_assigned", context, prompt) do
+    case dispatch_attention(state.assignee, state.task_id, "task_assigned", context, prompt) do
       :ok ->
         # Post log message to execution space after successful runtime dispatch so
         # boot retries do not duplicate task-assigned chatter.
@@ -1002,12 +1197,7 @@ defmodule Platform.Orchestration.TaskRouter do
           stage_count = if plan, do: length(plan.stages || []), else: 0
           stage_pos = if stage, do: stage.position, else: 1
 
-          assignee_log =
-            if dispatch_assignee.id == state.assignee.id do
-              "Assignee: #{state.assignee.id}"
-            else
-              "Assignee: #{state.assignee.id} (stage-routed to #{dispatch_assignee.id})"
-            end
+          assignee_log = "Assignee: #{state.assignee.id}"
 
           log_content =
             "Task assigned: #{task.title} | Stage: #{stage_pos}/#{stage_count} | #{assignee_log}"
@@ -1091,61 +1281,6 @@ defmodule Platform.Orchestration.TaskRouter do
 
         {:noreply, state}
     end
-  end
-
-  # Resolve a stage-level responsibility (e.g. `"designer"`) to a `%{type: :federated, id: runtime_id}`
-  # tuple pointing at the current role owner's runtime. Returns `nil` when the
-  # stage carries no responsibility, when the role has no assignee, when the
-  # assigned agent doesn't exist, or when that agent isn't linked to a live
-  # runtime. Fallback paths emit `[:platform, :plans, :stage_dispatch,
-  # :assignee_unresolvable]` telemetry so observability captures degraded
-  # dispatches (Stage 4 bridges this into the audit trail).
-  defp resolve_stage_dispatch_assignee(nil, _task, _state), do: nil
-  defp resolve_stage_dispatch_assignee(%{responsibility: nil}, _task, _state), do: nil
-
-  defp resolve_stage_dispatch_assignee(%{responsibility: role_key} = stage, task, state)
-       when is_binary(role_key) do
-    case Platform.Roles.agent_id_for_role(role_key) do
-      nil ->
-        emit_stage_dispatch_fallback(stage, task, state, :role_unresolvable)
-        nil
-
-      agent_id ->
-        case Repo.get(Platform.Agents.Agent, agent_id) do
-          nil ->
-            emit_stage_dispatch_fallback(stage, task, state, :agent_not_found)
-            nil
-
-          agent ->
-            case Federation.get_runtime_for_agent(agent) do
-              nil ->
-                emit_stage_dispatch_fallback(stage, task, state, :runtime_unresolvable)
-                nil
-
-              runtime ->
-                %{type: :federated, id: runtime.runtime_id}
-            end
-        end
-    end
-  end
-
-  defp resolve_stage_dispatch_assignee(_stage, _task, _state), do: nil
-
-  defp emit_stage_dispatch_fallback(stage, task, state, reason) do
-    :telemetry.execute(
-      [:platform, :plans, :stage_dispatch, :assignee_unresolvable],
-      %{count: 1},
-      %{
-        stage_id: stage.id,
-        task_id: task.id,
-        responsibility: stage.responsibility,
-        fallback_runtime_id: state.assignee.id,
-        reason: reason,
-        actor_type: "system",
-        resource_type: "stage",
-        resource_id: stage.id
-      }
-    )
   end
 
   defp dispatch_attention(%{type: :federated, id: runtime_id}, task_id, reason, context, prompt) do
@@ -1618,6 +1753,20 @@ defmodule Platform.Orchestration.TaskRouter do
           "awaiting_plan_review" ->
             "Dispatch suppressed: plan is awaiting human review — approve or reject the plan to resume"
 
+          # ADR-0046 member 5 stage 5. A THIRD string, not an edit to the two
+          # above: `70fc30fe` deliberately made "awaiting_plan_review"
+          # separately greppable from "awaiting_human_review" and shipped six
+          # tests against the resulting copy. Both survive byte-identical.
+          #
+          # It must NOT tell the reader to approve or reject — no human action
+          # is pending while the architect holds the slot — and it must name
+          # the deadline, because "wait" without an end is indistinguishable
+          # from "hung".
+          "awaiting_architecture_review" ->
+            "Dispatch suppressed: plan is with the architect for review — no human action needed yet; the architecture gate falls open on its own at " <>
+              (Keyword.get(opts, :gate_deadline_at) || "its deadline") <>
+              " and the plan proceeds from there"
+
           "awaiting_human_review" ->
             "Dispatch suppressed: awaiting human review on a manual_approval validation"
 
@@ -1865,6 +2014,224 @@ defmodule Platform.Orchestration.TaskRouter do
     |> Enum.find(&(&1.status == "running"))
   end
 
+  # ── Pre-plan design hold (ADR-0046 member 7 stage 5) ───────────────────
+  #
+  # ## How the hold cannot outlive its holder
+  #
+  # The holder is this router process. The hold is NOT persisted anywhere: it
+  # is a router status plus a `Process.send_after/3` reference, both of which
+  # die with the process. Everything that decides whether to hold is re-derived
+  # from the task row on every dispatch tick. So:
+  #
+  #   * Router dies mid-hold -> the hold dies with it. The next boot runs
+  #     `init/1` -> `send(self(), :dispatch)` -> this same level check, which
+  #     either re-holds (step genuinely still open) or dispatches. This is the
+  #     precise failure mode journalled on 2026-07-26, where `deploying -> done`
+  #     lived solely in an edge-triggered PubSub handler with no level re-check
+  #     and a container restart between the broadcast and the handler stranded
+  #     the task indefinitely. There is no equivalent here because there is no
+  #     edge to miss.
+  #   * Timer lost, cancelled, or never armed -> `design_hold_expired?/2` still
+  #     reads `true` on the next tick and expires the step inline. The timer is
+  #     an optimisation for the case where nothing else pokes the router.
+  #   * Expiry write itself fails -> `handle_design_hold/2` falls through to
+  #     `do_dispatch/2` REGARDLESS of what `expire/2` returned. Stage 2's
+  #     posture for this whole member is that design fails open in every
+  #     direction; a persistence fault must not be the one thing that blocks.
+  #
+  # The deadline is derived from `task.updated_at`, not from a wall clock
+  # captured when the hold began, so a restart does not reset it: two routers
+  # reading the same row at the same instant reach the same verdict.
+
+  # The hold predicate. `task.planning_step` IS the state — `PreplanStep.open?/1`
+  # reads the same field, so there is no second source of truth to drift.
+  #
+  # The plan check is NOT redundant with the cursor. The stage brief defined
+  # this predicate as status + cursor only, and separately demanded a guard that
+  # "a task already carrying a plan is never held, even with the cursor at
+  # designing". Those contradict: with status + cursor alone, such a task IS
+  # held. Resolved in favour of the guard, which is protecting the real
+  # property — a re-planning or executing task must never be stranded behind a
+  # stale cursor. It also makes the hold a strict subset of the start-site
+  # condition, so the router only ever holds where it would also have re-run
+  # `PreplanStep.start/1`.
+  defp design_step_open?(nil), do: false
+
+  defp design_step_open?(task) do
+    Map.get(task, :status) == "planning" and
+      Map.get(task, :planning_step) == "designing" and
+      Tasks.latest_plan(task.id) == nil
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  # LEVEL CHECK. Pure function of (task row, now) — no router state, no timer.
+  defp design_hold_expired?(task, timeout_ms) do
+    case Map.get(task, :updated_at) do
+      %DateTime{} = at ->
+        DateTime.diff(DateTime.utc_now(), at, :millisecond) >= timeout_ms
+
+      %NaiveDateTime{} = at ->
+        NaiveDateTime.diff(NaiveDateTime.utc_now(), at, :millisecond) >= timeout_ms
+
+      _ ->
+        false
+    end
+  end
+
+  defp handle_design_hold(state, task) do
+    timeout_ms = design_step_timeout_ms()
+
+    if design_hold_expired?(task, timeout_ms) do
+      # Overdue reads as expired at the LEVEL check, without waiting for the
+      # timer. Falls straight into `do_dispatch/2` in the same tick rather than
+      # re-sending `:dispatch`: re-sending would loop forever if the expiry
+      # write failed and left the cursor at `"designing"`.
+      Logger.info(
+        "[TaskRouter] design step overdue for task=#{state.task_id} " <>
+          "(timeout=#{timeout_ms}ms) — expiring and releasing the planner"
+      )
+
+      expire_design_step(task)
+
+      state = cancel_design_deadline(state)
+      do_dispatch(state, Tasks.get_task_detail(state.task_id) || task)
+    else
+      hold_for_design(state, task, timeout_ms)
+    end
+  end
+
+  defp hold_for_design(state, task, timeout_ms) do
+    # Edge-triggered narration only — one line per hold episode, not one per
+    # tick. Deliberately a plain `Logger.info` rather than
+    # `maybe_log_heartbeat_suppressed/3`: that helper's reason table is the
+    # human-review vocabulary, and a design hold is a machine gate.
+    if state.status != :waiting_design do
+      Logger.info(
+        "[TaskRouter] suppressed planner dispatch for task=#{state.task_id}: " <>
+          "pre-plan design step open (planning_step=designing)"
+      )
+    end
+
+    state =
+      state
+      |> Map.put(:task_status, task.status)
+      # NOT optional. Leaving the ack timer armed would fire
+      # `execution.no_ack_timeout` five minutes into a LEGITIMATELY held design
+      # step — the same liveness-signal miscalibration journalled for
+      # screenshot-driven UI stages, where the router alerted on a stage that
+      # was working exactly as designed.
+      |> clear_liveness()
+      |> Map.put(:status, :waiting_design)
+      |> arm_design_deadline(task, timeout_ms)
+
+    {:noreply, state}
+  end
+
+  # Armed once per hold: a live ref is left alone, so repeated ticks against an
+  # open step do not stack timers.
+  defp arm_design_deadline(%State{design_deadline_ref: ref} = state, _task, _timeout_ms)
+       when is_reference(ref),
+       do: state
+
+  defp arm_design_deadline(%State{} = state, task, timeout_ms) do
+    # Fire when the DB-derived deadline lapses, not `timeout_ms` from now. A
+    # router that boots into an already-half-elapsed hold inherits the
+    # remaining window instead of restarting the clock, which is what keeps a
+    # crash-loop from extending the hold without bound.
+    remaining =
+      case Map.get(task, :updated_at) do
+        %DateTime{} = at ->
+          timeout_ms - DateTime.diff(DateTime.utc_now(), at, :millisecond)
+
+        %NaiveDateTime{} = at ->
+          timeout_ms - NaiveDateTime.diff(NaiveDateTime.utc_now(), at, :millisecond)
+
+        _ ->
+          timeout_ms
+      end
+
+    ref = Process.send_after(self(), :design_deadline, max(remaining, 0))
+    %{state | design_deadline_ref: ref}
+  end
+
+  defp cancel_design_deadline(%State{design_deadline_ref: ref} = state) when is_reference(ref) do
+    _ = Process.cancel_timer(ref)
+    %{state | design_deadline_ref: nil}
+  end
+
+  defp cancel_design_deadline(%State{} = state), do: %{state | design_deadline_ref: nil}
+
+  # Enveloped: `expire/2` already rescues internally, and this belt-and-braces
+  # layer exists so a fault in the seam itself cannot take the dispatch tick
+  # down. The return value is deliberately IGNORED by both callers — design
+  # falls open whatever happens here.
+  defp expire_design_step(task) do
+    PreplanStep.expire(task, design_step_timeout_ms())
+  rescue
+    e ->
+      Logger.warning("[TaskRouter] design expire raised: #{Exception.message(e)}")
+      {:error, :expire_raised}
+  catch
+    :exit, reason ->
+      Logger.warning("[TaskRouter] design expire exited: #{inspect(reason)}")
+      {:error, :expire_exited}
+  end
+
+  # Re-read from the DB rather than trusting the broadcast payload: the wake-up
+  # must observe the same field the hold reads, from the same place.
+  defp release_design_hold_if_closed(%State{} = state) do
+    task = Tasks.get_task_detail(state.task_id)
+
+    if design_step_open?(task) do
+      state
+    else
+      Logger.info(
+        "[TaskRouter] design step closed for task=#{state.task_id} — releasing the planner"
+      )
+
+      send(self(), :dispatch)
+
+      state
+      |> cancel_design_deadline()
+      |> Map.put(:status, :dispatching)
+    end
+  end
+
+  # Idempotent by construction on the `PreplanStep` side (`{:ok, :already_settled}`
+  # / `{:ok, :already_open}` short-circuit before any fire), which is what makes
+  # calling it on EVERY tick free. Gated on the pre-plan window: status
+  # `planning` with no plan of any status yet.
+  #
+  # The re-read is load-bearing. `start/1` can move the cursor to `"designing"`,
+  # and `design_step_open?/1` below reads the cursor — handing it the pre-start
+  # struct would dispatch the planner straight into the step this stage exists
+  # to wait for.
+  defp maybe_start_design_step(nil, _state), do: nil
+
+  defp maybe_start_design_step(task, %State{} = state) do
+    if task.status == "planning" and Tasks.latest_plan(task.id) == nil do
+      _ = safe_start_design_step(task)
+      Tasks.get_task_detail(state.task_id) || task
+    else
+      task
+    end
+  end
+
+  defp safe_start_design_step(task) do
+    PreplanStep.start(task)
+  rescue
+    e ->
+      Logger.warning("[TaskRouter] design step start raised: #{Exception.message(e)}")
+      {:error, :start_raised}
+  catch
+    :exit, reason ->
+      Logger.warning("[TaskRouter] design step start exited: #{inspect(reason)}")
+      {:error, :start_exited}
+  end
+
   # TAIL-stall fix (2026-07-22), direction (3): a settled stack member has an
   # approved plan with NO running stage and NO open (pending/running)
   # validation — nothing an executor could ack or act on. Only stack members
@@ -2009,6 +2376,100 @@ defmodule Platform.Orchestration.TaskRouter do
   defp pending_review_request?(task_id) do
     ReviewRequests.list_pending_for_task(task_id) != []
   end
+
+  # ── ADR-0046 member 5 stage 5: who is holding the plan slot ───────────
+  #
+  # NO SECOND HOLD MECHANISM. A gated plan simply stays `pending_review`,
+  # which is exactly the condition `plan_awaiting_review?/1` above already
+  # suppresses across all ~13 dispatch injectors. This pair of helpers only
+  # answers "who is the occupant" — for the copy and for the deadline — and
+  # never decides whether to suppress.
+  #
+  # Three answers, and the third one is the whole reason this is a `case` and
+  # not a boolean:
+  #
+  #   * `{:open, plan_id, verdict}` — the architect genuinely holds the slot.
+  #   * `{:overdue, plan_id}` — the PERSISTED row still says `"pending"` but
+  #     the deadline has passed. `architecture_gate/1` has already stopped
+  #     blocking on it, but nobody wrote the verdict or ran the deferred
+  #     `settle_plan_submission/1` tail.
+  #   * `nil` — no gate, or one already resolved in the row.
+  #
+  # THE `:overdue` CASE IS THE LEVEL RE-CHECK ON REHYDRATE, and it is not
+  # theoretical. Without it a router that reboots AFTER the deadline (the
+  # `TaskRouterWatcher` restarts routers on every runtime reconnect and every
+  # 5-minute reconcile, so reboots are the norm) would arm no timer at all and
+  # park — leaving a plan whose gate fell open sitting at `pending_review`
+  # forever, waiting on a human, with a `"pending"` verdict nobody will ever
+  # close. That is precisely the `deploying -> done` incident shape the
+  # 2026-07-26 journal records, and "add a level-triggered re-check on
+  # init/rehydrate" is the fix it recommends. It is applied here at the one
+  # point where the same shape could recur.
+  #
+  # `Tasks.latest_plan/1` is a fresh query, so the `"pending"` match is on the
+  # persisted row and not on a struct somebody loaded earlier; the
+  # `architecture_gate/1` call re-reads again and owns the expiry rule, so
+  # "when is it overdue" is defined in exactly one place.
+  defp architecture_gate_occupancy(task_id) do
+    case Tasks.latest_plan(task_id) do
+      %{architecture_verdict: %{"state" => "pending"}} = plan ->
+        case Tasks.architecture_gate(plan) do
+          {:open, verdict} -> {:open, plan.id, verdict}
+          _past_deadline -> {:overdue, plan.id}
+        end
+
+      _no_open_gate ->
+        nil
+    end
+  end
+
+  # An overdue gate takes the HUMAN copy, not the architect's: its window has
+  # closed, `approve_plan/3` no longer refuses, and telling a reader to keep
+  # waiting on an architect who is out of time would be false.
+  defp plan_gate_log_opts({:open, _plan_id, verdict}) do
+    [reason: "awaiting_architecture_review", gate_deadline_at: verdict["deadline_at"]]
+  end
+
+  defp plan_gate_log_opts(_not_open), do: [reason: "awaiting_plan_review"]
+
+  defp arm_architecture_gate_deadline(%State{} = state, nil), do: state
+
+  defp arm_architecture_gate_deadline(%State{} = state, occupancy) do
+    _ = cancel_architecture_gate_deadline(state.architecture_deadline_ref)
+
+    {plan_id, delay_ms} =
+      case occupancy do
+        {:open, plan_id, verdict} -> {plan_id, architecture_gate_remaining_ms(verdict)}
+        # Already past due — settle it now, through the SAME one message, so
+        # there is a single path from "the deadline is up" to "the gate is
+        # closed and the deferred tail has run".
+        {:overdue, plan_id} -> {plan_id, 0}
+      end
+
+    ref = Process.send_after(self(), {:architecture_gate_deadline, plan_id}, delay_ms)
+
+    %{state | architecture_deadline_ref: ref}
+  end
+
+  defp cancel_architecture_gate_deadline(nil), do: :ok
+
+  defp cancel_architecture_gate_deadline(ref) when is_reference(ref),
+    do: Process.cancel_timer(ref)
+
+  # From the PERSISTED `deadline_at` minus now, clamped at 0 — NEVER a fresh
+  # window. `TaskRouterWatcher` restarts routers on every runtime reconnect
+  # and every 5-minute reconcile, so a full window here would let a restart
+  # loop renew the deadline indefinitely: the same defect shape as a lease
+  # that re-arms on every touch. Because the delay is a pure function of a row
+  # nobody rewrites, re-arming N times can only ever shorten it.
+  defp architecture_gate_remaining_ms(%{"deadline_at" => deadline}) when is_binary(deadline) do
+    case DateTime.from_iso8601(deadline) do
+      {:ok, at, _offset} -> at |> DateTime.diff(DateTime.utc_now(), :millisecond) |> max(0)
+      {:error, _reason} -> 0
+    end
+  end
+
+  defp architecture_gate_remaining_ms(_verdict), do: 0
 
   defp heartbeat_suppressible_for_task?(_task_id, nil), do: false
 

@@ -6,6 +6,12 @@ defmodule Platform.Responsibilities.ContextGathererTest do
   Covers each built-in symbolic name + unknown-name handling +
   defensive degradation when upstream lookups can't resolve the
   resource (missing id, nil module, etc.).
+
+  Everything down to "defensive guards" predates the collapse of the two
+  context materialisers onto one per-slot resolver and runs UNCHANGED
+  across it — that is the guard that the collapse preserved `gather/2`'s
+  behaviour. The "single-site resolution" block at the bottom is the
+  detector for that change.
   """
   use Platform.DataCase, async: false
 
@@ -13,7 +19,9 @@ defmodule Platform.Responsibilities.ContextGathererTest do
 
   alias Platform.Chat
   alias Platform.Meetings
+  alias Platform.Org.Context, as: OrgContext
   alias Platform.Responsibilities.ContextGatherer
+  alias Platform.Responsibilities.ContextProviders
 
   describe "gather/2 — happy paths" do
     test "returns an empty map for an empty name list" do
@@ -226,6 +234,107 @@ defmodule Platform.Responsibilities.ContextGathererTest do
     test "non-list symbolic_names returns empty map without raising" do
       assert ContextGatherer.gather(nil, %{}) == %{}
       assert ContextGatherer.gather(:not_a_list, %{}) == %{}
+    end
+  end
+
+  # ── DETECTOR for the single-site collapse ────────────────────────────────
+  #
+  # Everything above this block is the GUARD: it passes both before and
+  # after ContextGatherer stopped resolving slots itself, which is exactly
+  # what makes it useful (the collapse must not change behaviour) and
+  # exactly what makes it useless as a detector.
+  #
+  # These three assert the three observable consequences of the batch path
+  # running through `ContextProviders` rather than through resolvers of its
+  # own. Restore ContextGatherer's private `resolve/2` clauses and all
+  # three fail.
+  describe "single-site resolution (stage 1 detector)" do
+    test "a slot declared only in ContextProviders is reachable from BOTH paths" do
+      slug = "ctxsingle-#{System.unique_integer([:positive])}"
+
+      {:ok, space} =
+        Chat.create_space(%{name: "Ctx Single #{slug}", slug: slug, kind: "channel"})
+
+      {:ok, participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Ctx Author",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, message} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: participant.id,
+          content_type: "text",
+          content: "single-site resolution"
+        })
+
+      # Per-slot path. Before the collapse `:current_message` lived only in
+      # ContextGatherer, so this returned {:error, {:unknown_slot, ...}}.
+      assert {:ok, %{current_message: %Platform.Chat.Message{} = direct}} =
+               ContextProviders.gather_context(:current_message, %{message_id: message.id})
+
+      # Batch path, same declaration, no second resolver.
+      assert %{current_message: %Platform.Chat.Message{} = adapted} =
+               ContextGatherer.gather([:current_message], %{message_id: message.id})
+
+      assert direct.id == message.id
+      assert adapted.id == direct.id
+    end
+
+    test ":org_identity arrives in the resolver's wrapped shape, not the raw row" do
+      {:ok, page} =
+        OrgContext.upsert_file(%{
+          file_key: "ORG_IDENTITY.md",
+          content: "# Single Site\nOne resolver.",
+          updated_by: Ecto.UUID.generate()
+        })
+
+      # Sanctioned behaviour delta 1: the batch path used to hand back
+      # whatever `Org.Context.get_file/1` returned (a %WikiPage{} or nil).
+      # It now hands back the resolver's payload, in which "absent" is a
+      # value (`missing?: true`) rather than an indistinguishable nil.
+      assert %{org_identity: payload} = ContextGatherer.gather([:org_identity], %{})
+
+      refute match?(%Platform.Org.WikiPage{}, payload)
+      assert payload.content == "# Single Site\nOne resolver."
+      assert payload.version == page.version
+      assert payload.missing? == false
+    end
+
+    test "a slot refusal is degraded to nil AND retained under :__slot_errors__" do
+      # Sanctioned behaviour delta 2. The tolerant contract is unchanged —
+      # the key is present and nil — but the reason the resolver gave is no
+      # longer thrown away, so "no transcript id" and "transcript row gone"
+      # stop being the same value.
+      gathered =
+        ContextGatherer.gather([:meeting_transcript, :trigger_payload], %{})
+
+      assert gathered[:meeting_transcript] == nil
+      assert gathered[:trigger_payload] == nil
+
+      assert gathered[:__slot_errors__] == %{
+               meeting_transcript: :missing_transcript_id,
+               trigger_payload: :missing_payload
+             }
+
+      assert %{meeting_transcript: nil, __slot_errors__: %{meeting_transcript: :not_found}} =
+               ContextGatherer.gather([:meeting_transcript], %{
+                 transcript_id: Ecto.UUID.generate()
+               })
+    end
+
+    test ":__slot_errors__ is absent when every requested slot resolved" do
+      # Positive control on the same mechanism: the key is evidence of a
+      # failure, not unconditional furniture. Without this the previous
+      # test would still pass on an adapter that stamps :__slot_errors__
+      # onto every map.
+      gathered = ContextGatherer.gather([:trigger_payload], %{payload: %{"ok" => true}})
+
+      assert gathered[:trigger_payload] == %{"ok" => true}
+      refute Map.has_key?(gathered, :__slot_errors__)
     end
   end
 end

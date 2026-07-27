@@ -60,6 +60,26 @@ defmodule Platform.Responsibilities.Providers.Meetings do
   level. The Handler's `gather_context/2` reads from `:payload`; this
   shim's `gather_context/2` runs first and lifts the top-level fields
   into a synthetic `:payload` so the downstream code path is uniform.
+
+  ### Reading the return value of that nudge
+
+  As of ADR-0046 prerequisite 1 (task 019f9b27) `Router.fire/2` no
+  longer answers a flat `:ok`. The operator-from-iex shape above returns
+  one of:
+
+      {:ok, :dispatched} | {:ok, :unfilled} | {:ok, :unknown_responsibility}
+        | {:error, reason}
+
+  and `Platform.Responsibilities.outcome/1` folds those onto the
+  ADR-0046 per-step vocabulary (`:complete | :not_applicable |
+  :failed`). Two of them are easy to misread from a console:
+
+    * `{:ok, :unfilled}` means nobody holds `meetings.summarize`. The
+      nudge did nothing and no summary is coming — it is *not* success.
+    * `{:ok, :dispatched}` on the **native** branch means the handoff
+      was accepted, not that the agent produced a summary; see the
+      honesty limit in `Platform.Responsibilities.Router`'s moduledoc.
+      On the external branch it does mean the endpoint answered.
   """
   @behaviour Platform.Responsibilities.Provider
 

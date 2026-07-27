@@ -266,6 +266,210 @@ defmodule Platform.Tasks.AutoMergerTest do
     end
   end
 
+  # ── ADR-0046 member 4 stage 4: the planning-gate guard ────────────────────
+  #
+  # `:planning_gate_failed` is deliberately NOT a value
+  # `classify_merge_error/1` can produce — that function only ever returns
+  # `:conflict`, `:branch_protection`, `:ci_required` or `:unknown` — so
+  # asserting the exact atom is itself proof the shell-out did not happen.
+  # Same seam as "stack-member task returns {:ok, :deferred} and never
+  # shells out" above: the repo URL is fake, so any real `gh` invocation
+  # would surface as one of those four atoms (or an `:enoent` raise where
+  # `gh` is absent), never as ours.
+
+  describe "execute_merge/4 planning gate" do
+    test "failed gate: returns {:error, :planning_gate_failed, detail} and never shells out" do
+      task =
+        task_with_planning_outcomes!("Gate broke", %{
+          "architecture" => %{
+            "outcome" => "failed",
+            "detail" => "econnrefused",
+            "recorded_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+          }
+        })
+
+      assert {:error, :planning_gate_failed, detail} =
+               AutoMerger.execute_merge(
+                 task,
+                 "https://github.com/test/nonexistent-#{System.unique_integer([:positive])}",
+                 999_999,
+                 "squash"
+               )
+
+      # The detail names the step and carries the recorded reason, so the
+      # failed validation's evidence says WHY, not merely THAT.
+      assert detail =~ "architecture"
+      assert detail =~ "econnrefused"
+      assert detail =~ "not a skip"
+    end
+
+    test "guard runs AHEAD of the stack-member guard: a stack member with a failed gate refuses rather than defers" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "GateStack #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/gate-stack"
+        })
+
+      {:ok, stack} =
+        Stacks.create_stack(%{
+          project_id: project.id,
+          slug: "gate-stack-#{System.unique_integer([:positive])}",
+          name: "Gate Stack",
+          rollup_branch: "stack/gate-stack"
+        })
+
+      task =
+        %Platform.Tasks.Task{}
+        |> Platform.Tasks.Task.changeset(%{
+          project_id: project.id,
+          title: "Stack member with a broken gate",
+          status: "in_review",
+          stack_id: stack.id,
+          stack_position: 1
+        })
+        |> Platform.Repo.insert!()
+        |> Platform.Tasks.Task.planning_step_changeset(%{
+          planning_step_outcomes: %{
+            "architecture" => %{"outcome" => "failed", "detail" => "timeout"}
+          }
+        })
+        |> Platform.Repo.update!()
+
+      # Without the ordering this would be `{:ok, :deferred}` — the
+      # stack-member guard would win. It does not strand the stack:
+      # rollup fan-out is `Stacks.cascade_members_to_done/2`, a status
+      # flip, not a validation evaluation.
+      assert {:error, :planning_gate_failed, _detail} =
+               AutoMerger.execute_merge(task, "https://github.com/test/gate-stack", 42, "squash")
+    end
+
+    # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`
+    test "not_applicable is NOT a failed gate — delegates to the shell-out" do
+      task =
+        task_with_planning_outcomes!("Nobody holds it", %{
+          "architecture" => %{
+            "outcome" => "not_applicable",
+            "detail" => nil,
+            "recorded_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+          }
+        })
+
+      refute_planning_gate_refusal(fn ->
+        AutoMerger.execute_merge(
+          task,
+          "https://github.com/test/nonexistent-#{System.unique_integer([:positive])}",
+          999_999,
+          "squash"
+        )
+      end)
+    end
+
+    test "complete outcome and absent key both delegate to the shell-out" do
+      complete =
+        task_with_planning_outcomes!("Ran fine", %{
+          "architecture" => %{"outcome" => "complete", "detail" => nil}
+        })
+
+      absent = task_with_planning_outcomes!("Never recorded", %{})
+
+      refute_planning_gate_refusal(fn ->
+        AutoMerger.execute_merge(
+          complete,
+          "https://github.com/test/nonexistent-#{System.unique_integer([:positive])}",
+          999_999,
+          "squash"
+        )
+      end)
+
+      refute_planning_gate_refusal(fn ->
+        AutoMerger.execute_merge(
+          absent,
+          "https://github.com/test/nonexistent-#{System.unique_integer([:positive])}",
+          999_999,
+          "squash"
+        )
+      end)
+    end
+  end
+
+  # `assert_delegates_to_shell_out/1` alone would be VACUOUS here: it
+  # accepts any `{:error, _, _}`, and the planning-gate refusal is itself
+  # an `{:error, _, _}`. So the non-failed outcomes additionally assert the
+  # error atom is not ours.
+  defp refute_planning_gate_refusal(fun) do
+    try do
+      result = fun.()
+
+      refute match?({:error, :planning_gate_failed, _}, result),
+             "planning gate must not fire for a non-failed outcome, got #{inspect(result)}"
+
+      assert match?({:error, _, _}, result),
+             "expected {:error, _, _} from gh shell-out, got #{inspect(result)}"
+    rescue
+      e in ErlangError ->
+        # `gh` missing — still proves we reached the shell-out rather
+        # than short-circuiting on the gate.
+        assert e.original == :enoent,
+               "expected :enoent from missing gh binary, got #{inspect(e)}"
+    end
+  end
+
+  describe "record_merge_result/2 with :planning_gate_failed" do
+    test "marks pr_merged failed with error_type planning_gate_failed and the detail in evidence" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "GateRecord #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/gate-record"
+        })
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Gate record"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Deploy: PR merge"})
+
+      {:ok, _} = Tasks.transition_stage(stage, "running")
+
+      {:ok, pr_validation} = Tasks.create_validation(%{stage_id: stage.id, kind: "pr_merged"})
+
+      detail = "architecture — econnrefused"
+
+      assert {:ok, _} =
+               AutoMerger.record_merge_result(
+                 pr_validation.id,
+                 {:error, :planning_gate_failed, detail}
+               )
+
+      reloaded = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
+      assert reloaded.status == "failed"
+      assert reloaded.evidence["error_type"] == "planning_gate_failed"
+      assert reloaded.evidence["details"] == detail
+    end
+  end
+
+  # `planning_step_outcomes` is not castable by `Task.changeset/2` (stage 1
+  # kept it off the unguarded `Tasks.update_task/3` surface), so seed it
+  # through the narrow changeset. `Repo.insert!` rather than
+  # `Tasks.create_task/1` keeps these rows off the context-level write path
+  # that trips the `TaskRouterWatcher` sandbox race in async modules.
+  defp task_with_planning_outcomes!(title, outcomes) do
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: "GateTask #{System.unique_integer([:positive])}",
+        repo_url: "https://github.com/test/gate-task"
+      })
+
+    %Platform.Tasks.Task{}
+    |> Platform.Tasks.Task.changeset(%{
+      project_id: project.id,
+      title: title,
+      status: "in_review"
+    })
+    |> Platform.Repo.insert!()
+    |> Platform.Tasks.Task.planning_step_changeset(%{planning_step_outcomes: outcomes})
+    |> Platform.Repo.update!()
+  end
+
   describe "record_merge_result/2 with :deferred" do
     test "passes through deferred result without touching the validation" do
       {:ok, project} =

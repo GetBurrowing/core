@@ -1954,6 +1954,155 @@ defmodule Platform.Tasks.StackDeployerTest do
     end
   end
 
+  # ── ADR-0046 member 4 stage 4: failed planning gate in the PR body ────────
+  #
+  # The absence assertions below (clean stack, not_applicable stack) are
+  # worthless on their own — they pass against a `build_pr_body/3` that
+  # was never touched. They are paired IN THIS MODULE with the positive
+  # control, which fails against that same untouched implementation. Read
+  # the three together or not at all.
+
+  describe "maybe_open_stack_pr/1 — planning gate section" do
+    test "clean members: no gate section, no warning marker (paired with the positive control below)" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          pr_responses: [{:ok, %{number: 210, url: "https://github.com/test/repo/pull/210"}}],
+          diff_stat_responses: [{:ok, " 1 file changed"}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gate-clean")
+
+      _ =
+        merged_member!(project, stack,
+          sha: "aaa1111",
+          position: 1,
+          title: "Clean complete",
+          planning_step_outcomes: %{
+            "architecture" => %{"outcome" => "complete", "detail" => nil}
+          }
+        )
+
+      _ = merged_member!(project, stack, sha: "bbb2222", position: 2, title: "Clean unrecorded")
+
+      assert {:ok, _} = StackDeployer.maybe_open_stack_pr(stack)
+      assert [pr_call] = FakeRunner.pr_calls()
+      body = pr_call.body
+
+      refute body =~ "Gates that did not run"
+      refute body =~ "⚠️"
+      refute body =~ "GATE DID NOT RUN"
+
+      # The body is otherwise composed as normal — proves the absence
+      # above is not the absence of a body.
+      assert body =~ "Clean complete"
+      assert body =~ "Clean unrecorded"
+      assert body =~ "## Members"
+    end
+
+    test "failed gate: section above ## Members names member, step and detail; clean member's line untouched" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          pr_responses: [{:ok, %{number: 211, url: "https://github.com/test/repo/pull/211"}}],
+          diff_stat_responses: [{:ok, " 2 files changed"}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gate-failed")
+
+      _ =
+        merged_member!(project, stack,
+          sha: "ccc3333",
+          position: 1,
+          title: "Gate broke here",
+          planning_step_outcomes: %{
+            "architecture" => %{
+              "outcome" => "failed",
+              "detail" => "econnrefused",
+              "recorded_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+            }
+          }
+        )
+
+      _ =
+        merged_member!(project, stack,
+          sha: "ddd4444",
+          position: 2,
+          title: "Sibling is fine",
+          planning_step_outcomes: %{
+            "architecture" => %{"outcome" => "complete", "detail" => nil}
+          }
+        )
+
+      assert {:ok, _} = StackDeployer.maybe_open_stack_pr(stack)
+      assert [pr_call] = FakeRunner.pr_calls()
+      body = pr_call.body
+
+      assert body =~ "Gates that did not run"
+      assert body =~ "Gate broke here"
+      assert body =~ "architecture"
+      assert body =~ "econnrefused"
+
+      # Section sits ABOVE `## Members` — a human scanning the top of the
+      # PR body hits it before the member list.
+      gate_at = :binary.match(body, "Gates that did not run") |> elem(0)
+      members_at = :binary.match(body, "## Members") |> elem(0)
+      assert gate_at < members_at
+
+      # The body says these are dispatch failures, not skips.
+      assert body =~ "not skips" or body =~ "NOT skips"
+
+      lines = String.split(body, "\n")
+
+      failed_line = Enum.find(lines, &String.contains?(&1, "[Gate broke here]"))
+      assert failed_line =~ "ARCHITECTURE GATE DID NOT RUN"
+      assert failed_line =~ "⚠️"
+
+      clean_line = Enum.find(lines, &String.contains?(&1, "[Sibling is fine]"))
+      assert clean_line =~ "— sha ddd4444"
+      refute clean_line =~ "⚠️"
+      refute clean_line =~ "GATE DID NOT RUN"
+    end
+
+    # Conflation guard for `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`.
+    test "not_applicable is NOT a failed gate — renders nothing" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          pr_responses: [{:ok, %{number: 212, url: "https://github.com/test/repo/pull/212"}}],
+          diff_stat_responses: [{:ok, " 1 file changed"}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "gate-na")
+
+      _ =
+        merged_member!(project, stack,
+          sha: "eee5555",
+          position: 1,
+          title: "Nobody holds it",
+          planning_step_outcomes: %{
+            "architecture" => %{
+              "outcome" => "not_applicable",
+              "detail" => nil,
+              "recorded_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+            }
+          }
+        )
+
+      assert {:ok, _} = StackDeployer.maybe_open_stack_pr(stack)
+      assert [pr_call] = FakeRunner.pr_calls()
+      body = pr_call.body
+
+      refute body =~ "Gates that did not run"
+      refute body =~ "⚠️"
+      refute body =~ "GATE DID NOT RUN"
+      refute body =~ "not_applicable"
+
+      # …and the member is still listed normally.
+      assert body =~ "Nobody holds it"
+    end
+  end
+
   describe "maybe_open_stack_pr/1 — failure handling" do
     test "gh failure rolls back placeholder + status flip; no half-deployed stack" do
       {:ok, _} =
@@ -2668,7 +2817,19 @@ defmodule Platform.Tasks.StackDeployerTest do
         }
       })
 
-    task
+    # ADR-0046 member 4 stage 4: seed a per-step planning outcome when a
+    # test asks for one. Written through `planning_step_changeset/2`
+    # because `Task.changeset/2` deliberately does not cast these fields
+    # — `Tasks.update_task/3` cannot reach them.
+    case Keyword.get(opts, :planning_step_outcomes) do
+      nil ->
+        task
+
+      outcomes ->
+        task
+        |> Platform.Tasks.Task.planning_step_changeset(%{planning_step_outcomes: outcomes})
+        |> Platform.Repo.update!()
+    end
   end
 
   # Bug #3 helper: coerce short / non-hex shas into a

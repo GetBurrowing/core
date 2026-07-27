@@ -10,12 +10,16 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
   """
   use Platform.DataCase, async: false
 
+  alias Platform.Chat
+  alias Platform.Chat.Message
   alias Platform.Meetings
   alias Platform.Meetings.SummaryPrompt
   alias Platform.Org.Context, as: OrgContext
   alias Platform.Org.WikiPage
   alias Platform.Repo
   alias Platform.Responsibilities.ContextProviders
+  alias Platform.Tasks
+  alias Platform.Tasks.Task, as: TaskSchema
 
   import Ecto.Query
 
@@ -30,6 +34,31 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
           ]
       )
     )
+  end
+
+  defp post_message do
+    slug = "ctxprov-#{System.unique_integer([:positive])}"
+
+    {:ok, space} =
+      Chat.create_space(%{name: "Ctx Prov #{slug}", slug: slug, kind: "channel"})
+
+    {:ok, participant} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: Ecto.UUID.generate(),
+        display_name: "Ctx Author",
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, message} =
+      Chat.post_message(%{
+        space_id: space.id,
+        participant_id: participant.id,
+        content_type: "text",
+        content: "context-provider test message"
+      })
+
+    message
   end
 
   defp sample_segments do
@@ -195,6 +224,989 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
       assert payload.segment_count == 0
       assert payload.duration_ms == 0
       assert payload.formatted_text == ""
+    end
+  end
+
+  # Slots ported in from ContextGatherer when the two materialisers
+  # collapsed onto this module. The batch adapter degrades every tuple
+  # below to `nil`; these assert the reason it degrades from, which is
+  # the whole point of the port.
+  describe "gather_context/2 — :current_message" do
+    test "returns {:error, :missing_message_id} when opts has no message_id" do
+      assert {:error, :missing_message_id} =
+               ContextProviders.gather_context(:current_message, [])
+    end
+
+    test "returns {:error, :invalid_message_id} for a non-binary id" do
+      assert {:error, :invalid_message_id} =
+               ContextProviders.gather_context(:current_message, message_id: 42)
+    end
+
+    test "returns {:error, :not_found} for an unknown message id" do
+      assert {:error, :not_found} =
+               ContextProviders.gather_context(:current_message,
+                 message_id: Ecto.UUID.generate()
+               )
+    end
+
+    test "loads a real message and returns it under :current_message" do
+      message = post_message()
+
+      assert {:ok, %{current_message: %Message{id: id}}} =
+               ContextProviders.gather_context(:current_message, message_id: message.id)
+
+      assert id == message.id
+    end
+
+    test "reads a string-keyed message_id out of a raw trigger_meta map" do
+      message = post_message()
+
+      assert {:ok, %{current_message: %Message{id: id}}} =
+               ContextProviders.gather_context(:current_message, %{
+                 "message_id" => message.id
+               })
+
+      assert id == message.id
+    end
+
+    test "an unconvertible sibling key does not blank the slot's real id" do
+      # The router hands `trigger_meta` through verbatim and it routinely
+      # carries string keys that were never atoms. Per-key coercion means
+      # the junk key is dropped, not the whole opts list.
+      message = post_message()
+
+      bogus = "never_an_atom_#{System.unique_integer([:positive])}"
+
+      assert {:ok, %{current_message: %Message{id: id}}} =
+               ContextProviders.gather_context(:current_message, %{
+                 "message_id" => message.id,
+                 bogus => "junk"
+               })
+
+      assert id == message.id
+    end
+  end
+
+  describe "gather_context/2 — :current_meeting" do
+    test "returns {:error, :missing_meeting_id} when opts has no meeting_id" do
+      assert {:error, :missing_meeting_id} =
+               ContextProviders.gather_context(:current_meeting, [])
+    end
+
+    test "returns {:error, :not_found} for an unknown meeting id" do
+      assert {:error, :not_found} =
+               ContextProviders.gather_context(:current_meeting,
+                 meeting_id: Ecto.UUID.generate()
+               )
+    end
+  end
+
+  describe "gather_context/2 — :trigger_payload" do
+    test "echoes the payload straight through" do
+      payload = %{"event" => "test", "value" => 42}
+
+      assert {:ok, %{trigger_payload: ^payload}} =
+               ContextProviders.gather_context(:trigger_payload, %{payload: payload})
+    end
+
+    test "tolerates a string-keyed payload" do
+      payload = %{"hello" => "world"}
+
+      assert {:ok, %{trigger_payload: ^payload}} =
+               ContextProviders.gather_context(:trigger_payload, %{"payload" => payload})
+    end
+
+    test "returns {:error, :missing_payload} when the trigger carried none" do
+      assert {:error, :missing_payload} =
+               ContextProviders.gather_context(:trigger_payload, %{})
+    end
+  end
+
+  # ── :plan_payload ─────────────────────────────────────────────────────────
+  #
+  # The architecture pass runs strictly AFTER plan submission (ADR-0046),
+  # so "no plan resolvable" is a wiring bug rather than an empty state —
+  # this slot refuses instead of returning a tolerant empty payload, and
+  # the Router's context-refusal arm turns that into a stopped dispatch.
+
+  defp plan_project do
+    {:ok, project} =
+      Tasks.create_project(%{name: "Ctx Plan Project #{System.unique_integer([:positive])}"})
+
+    project
+  end
+
+  defp plan_task(project_id, attrs \\ %{}) do
+    {:ok, task} =
+      Tasks.create_task(
+        Map.merge(
+          %{
+            project_id: project_id,
+            title: "Plan Payload Task",
+            description: "Give the architect the intent the plan was written against.",
+            status: "planning"
+          },
+          attrs
+        )
+      )
+
+    task
+  end
+
+  defp bare_plan(task_id, status \\ "pending_review") do
+    {:ok, plan} = Tasks.create_plan(%{task_id: task_id})
+
+    plan
+    |> Ecto.Changeset.change(status: status)
+    |> Repo.update!()
+  end
+
+  defp add_stage(plan_id, position, attrs \\ %{}) do
+    {:ok, stage} =
+      Tasks.create_stage(
+        Map.merge(
+          %{
+            plan_id: plan_id,
+            position: position,
+            name: "Stage #{position}",
+            description: "Stage #{position} description",
+            status: "pending"
+          },
+          attrs
+        )
+      )
+
+    stage
+  end
+
+  defp add_validation(stage_id, kind, attrs \\ %{}) do
+    {:ok, validation} =
+      Tasks.create_validation(Map.merge(%{stage_id: stage_id, kind: kind}, attrs))
+
+    validation
+  end
+
+  defp three_stage_plan do
+    project = plan_project()
+    task = plan_task(project.id)
+    plan = bare_plan(task.id)
+
+    # Inserted out of order on purpose — the slot sorts by position.
+    for position <- [3, 1, 2], do: add_stage(plan.id, position)
+
+    %{project: project, task: task, plan: plan}
+  end
+
+  describe "gather_context/2 — :plan_payload refusals" do
+    # PAIRED POSITIVE CONTROL for the three refusal assertions below. A
+    # resolver that errored unconditionally would pass all of them; this
+    # one test is what makes them observations rather than a tautology.
+    test "resolves a real plan — the control the refusals are measured against" do
+      %{plan: plan} = three_stage_plan()
+
+      assert {:ok, %{plan_payload: %{stage_count: 3}}} =
+               ContextProviders.gather_context(:plan_payload, %{plan: plan})
+    end
+
+    test "returns {:error, :no_plan_payload} for an empty context" do
+      assert {:error, :no_plan_payload} = ContextProviders.gather_context(:plan_payload, %{})
+    end
+
+    test "returns {:error, :no_plan_payload} for a plan_id that resolves to nothing" do
+      assert {:error, :no_plan_payload} =
+               ContextProviders.gather_context(:plan_payload, %{plan_id: Ecto.UUID.generate()})
+    end
+
+    test "returns {:error, :no_plan_payload} for a task that has no plans" do
+      task = plan_task(plan_project().id)
+
+      assert {:error, :no_plan_payload} =
+               ContextProviders.gather_context(:plan_payload, %{task_id: task.id})
+    end
+
+    test "returns {:error, :no_plan_payload} when every plan on the task is dead" do
+      task = plan_task(plan_project().id)
+      _superseded = bare_plan(task.id, "superseded")
+      _rejected = bare_plan(task.id, "rejected")
+
+      assert {:error, :no_plan_payload} =
+               ContextProviders.gather_context(:plan_payload, %{task_id: task.id})
+    end
+
+    test "a malformed plan_id refuses rather than raising" do
+      assert {:error, :no_plan_payload} =
+               ContextProviders.gather_context(:plan_payload, %{plan_id: "not-a-uuid"})
+    end
+  end
+
+  describe "gather_context/2 — :plan_payload resolution" do
+    test "resolves from a plan_id, including a string-keyed one" do
+      %{plan: plan} = three_stage_plan()
+
+      assert {:ok, %{plan_payload: from_atom}} =
+               ContextProviders.gather_context(:plan_payload, %{plan_id: plan.id})
+
+      assert {:ok, %{plan_payload: from_string}} =
+               ContextProviders.gather_context(:plan_payload, %{"plan_id" => plan.id})
+
+      assert from_atom.plan_id == plan.id
+      assert from_string.plan_id == plan.id
+    end
+
+    test "resolves the latest non-superseded/non-rejected plan from a bare task_id" do
+      task = plan_task(plan_project().id)
+
+      superseded = bare_plan(task.id, "superseded")
+      live = bare_plan(task.id, "approved")
+
+      assert live.version > superseded.version
+
+      assert {:ok, %{plan_payload: payload}} =
+               ContextProviders.gather_context(:plan_payload, %{task_id: task.id})
+
+      assert payload.plan_id == live.id
+      assert payload.plan_status == "approved"
+    end
+
+    test "carries the task intent the plan was written against" do
+      project = plan_project()
+      task = plan_task(project.id, %{title: "Wire the thing", description: "Because ADR-0046."})
+      plan = bare_plan(task.id)
+
+      assert {:ok, %{plan_payload: payload}} =
+               ContextProviders.gather_context(:plan_payload, %{plan: plan})
+
+      assert payload.task_id == task.id
+      assert payload.task_title == "Wire the thing"
+      assert payload.task_description == "Because ADR-0046."
+      assert payload.task_status == "planning"
+      assert payload.project_id == project.id
+      assert payload.plan_version == plan.version
+      assert Map.has_key?(payload, :epic_id)
+      assert Map.has_key?(payload, :stack_id)
+    end
+
+    test "sorts stages by position and reports stage_count" do
+      %{plan: plan} = three_stage_plan()
+
+      assert {:ok, %{plan_payload: payload}} =
+               ContextProviders.gather_context(:plan_payload, %{plan: plan})
+
+      assert payload.stage_count == 3
+      assert Enum.map(payload.stages, & &1.position) == [1, 2, 3]
+    end
+
+    test "truncates the task description at 1200 and stage descriptions at 600" do
+      project = plan_project()
+      task = plan_task(project.id, %{description: String.duplicate("t", 5_000)})
+      plan = bare_plan(task.id)
+      add_stage(plan.id, 1, %{description: String.duplicate("s", 5_000)})
+
+      assert {:ok, %{plan_payload: payload}} =
+               ContextProviders.gather_context(:plan_payload, %{plan: plan})
+
+      assert String.length(payload.task_description) == 1201
+      assert String.ends_with?(payload.task_description, "…")
+
+      [stage] = payload.stages
+      assert String.length(stage.description) == 601
+      assert String.ends_with?(stage.description, "…")
+    end
+  end
+
+  describe "gather_context/2 — :plan_payload validation gates" do
+    setup do
+      project = plan_project()
+      task = plan_task(project.id)
+      plan = bare_plan(task.id)
+      stage = add_stage(plan.id, 1, %{name: "Gated Stage", status: "running"})
+
+      add_validation(stage.id, "test_pass")
+      add_validation(stage.id, "manual_approval")
+
+      add_validation(stage.id, "e2e_behavior", %{
+        evaluation_payload: %{
+          "setup" => "seed a plan with three stages",
+          "actions" => "call gather_context/2 with an empty map",
+          "expected" => String.duplicate("e", 500)
+        }
+      })
+
+      _ungated = add_stage(plan.id, 2, %{name: "Ungated Stage"})
+
+      %{plan: plan, stage: stage}
+    end
+
+    test "surfaces every validation kind on the stage", %{plan: plan} do
+      assert {:ok, %{plan_payload: payload}} =
+               ContextProviders.gather_context(:plan_payload, %{plan: plan})
+
+      [gated, ungated] = payload.stages
+
+      kinds = Enum.map(gated.validations, & &1.kind)
+      assert "test_pass" in kinds
+      assert "manual_approval" in kinds
+      assert "e2e_behavior" in kinds
+      assert Enum.all?(gated.validations, &(&1.status == "pending"))
+
+      assert gated.status == "running"
+      assert ungated.validations == []
+      assert ungated.e2e_expected == []
+    end
+
+    test "carries the e2e `expected` truncated to 200 and never setup/actions", %{plan: plan} do
+      assert {:ok, %{plan_payload: payload}} =
+               ContextProviders.gather_context(:plan_payload, %{plan: plan})
+
+      [gated | _] = payload.stages
+
+      assert [expected] = gated.e2e_expected
+      assert String.length(expected) == 201
+      assert String.ends_with?(expected, "…")
+
+      serialised = inspect(payload, limit: :infinity, printable_limit: :infinity)
+      refute serialised =~ "seed a plan with three stages"
+      refute serialised =~ "call gather_context/2 with an empty map"
+    end
+  end
+
+  # ── :sibling_tasks ─────────────────────────────────────────────────────────
+  #
+  # Tasks in these blocks are built with `Repo.insert!` rather than
+  # `Tasks.create_task/1` on purpose. Every context-level task write
+  # broadcasts to the singleton `TaskRouterWatcher`, which evaluates
+  # from a process that does not own this test's sandbox connection —
+  # producing failures indistinguishable from the known `TaskRouter`
+  # flake cluster (filed as 019fa003-091a). The context function is not
+  # what's under test here; the slot is.
+
+  defp insert_task!(project_id, attrs) do
+    now = DateTime.utc_now()
+
+    %TaskSchema{}
+    |> Ecto.Changeset.change(
+      Map.merge(
+        %{
+          project_id: project_id,
+          title: "Sibling #{System.unique_integer([:positive])}",
+          status: "in_progress",
+          inserted_at: now,
+          updated_at: now
+        },
+        attrs
+      )
+    )
+    |> Repo.insert!()
+  end
+
+  defp insert_stack!(project_id) do
+    slug = "ctx-siblings-#{System.unique_integer([:positive])}"
+
+    {:ok, stack} =
+      Tasks.Stacks.create_stack(%{
+        project_id: project_id,
+        slug: slug,
+        name: "Ctx Siblings #{slug}",
+        rollup_branch: "stack/#{slug}"
+      })
+
+    stack
+  end
+
+  defp insert_epic!(project_id) do
+    {:ok, epic} =
+      Tasks.create_epic(%{
+        project_id: project_id,
+        name: "Ctx Siblings Epic #{System.unique_integer([:positive])}"
+      })
+
+    epic
+  end
+
+  # An in-flight project task carrying a live plan — i.e. one that the
+  # project-window tier is supposed to surface.
+  defp planned_task!(project_id, attrs) do
+    task = insert_task!(project_id, attrs)
+    _plan = bare_plan(task.id, "pending_review")
+    task
+  end
+
+  defp siblings_for(task_id) do
+    assert {:ok, %{sibling_tasks: payload}} =
+             ContextProviders.gather_context(:sibling_tasks, %{task_id: task_id})
+
+    payload
+  end
+
+  describe "gather_context/2 — :sibling_tasks is optional, never a refusal" do
+    # The required/optional split is the whole point of this slot's
+    # contract: `:plan_payload` refuses so the Router stops a dispatch,
+    # `:sibling_tasks` must not, because "no siblings" is a correct and
+    # extremely common state. If this ever flips, every standalone task
+    # in a fresh project loses its architecture pass.
+    test "an unresolvable anchor is an empty {:ok, _} payload, not an error" do
+      for opts <- [
+            %{},
+            %{task_id: Ecto.UUID.generate()},
+            %{task_id: "not-a-uuid"},
+            %{plan_id: Ecto.UUID.generate()}
+          ] do
+        assert {:ok, %{sibling_tasks: %{scope: :no_anchor, total: 0, tasks: []}}} =
+                 ContextProviders.gather_context(:sibling_tasks, opts),
+               "opts #{inspect(opts)} must resolve to an empty payload, never {:error, _}"
+      end
+    end
+
+    test "the same trigger shapes that REFUSE for :plan_payload still succeed here" do
+      # Paired contrast, same input, two slots — this is the assertion
+      # that documents the split rather than merely relying on it.
+      assert {:error, :no_plan_payload} = ContextProviders.gather_context(:plan_payload, %{})
+      assert {:ok, %{sibling_tasks: _}} = ContextProviders.gather_context(:sibling_tasks, %{})
+    end
+
+    test "a solo task in a fresh project is :none, not an error" do
+      task = insert_task!(plan_project().id, %{status: "planning"})
+
+      assert %{scope: :none, total: 0, shown: 0, truncated?: false, tasks: []} =
+               siblings_for(task.id)
+    end
+  end
+
+  describe "gather_context/2 — :sibling_tasks tier ladder" do
+    setup do
+      project = plan_project()
+      stack = insert_stack!(project.id)
+
+      anchor =
+        insert_task!(project.id, %{
+          title: "Stacked Anchor",
+          status: "planning",
+          stack_id: stack.id,
+          stack_position: 1
+        })
+
+      # Stack members deliberately carry NO plans, so they can't also
+      # show up via the project-window tier and blur the two results.
+      members =
+        for position <- [2, 3, 4] do
+          insert_task!(project.id, %{
+            title: "Stack Member #{position}",
+            stack_id: stack.id,
+            stack_position: position
+          })
+        end
+
+      # 5 unrelated in-flight project tasks, each with a live plan — the
+      # exact set the project-window tier would return.
+      noise = for n <- 1..5, do: planned_task!(project.id, %{title: "Project Noise #{n}"})
+
+      %{project: project, stack: stack, anchor: anchor, members: members, noise: noise}
+    end
+
+    test "a stacked anchor returns its stack members in stack_position order", ctx do
+      payload = siblings_for(ctx.anchor.id)
+
+      assert payload.scope == :stack
+      assert payload.total == 3
+      assert payload.shown == 3
+      refute payload.truncated?
+
+      assert Enum.map(payload.tasks, & &1.task_id) == Enum.map(ctx.members, & &1.id)
+      assert Enum.map(payload.tasks, & &1.stack_position) == [2, 3, 4]
+
+      sibling_ids = MapSet.new(payload.tasks, & &1.task_id)
+      refute MapSet.member?(sibling_ids, ctx.anchor.id), "the anchor must not be its own sibling"
+
+      for noisy <- ctx.noise do
+        refute MapSet.member?(sibling_ids, noisy.id),
+               "stack tier must not leak the project window"
+      end
+    end
+
+    test "POSITIVE CONTROL: those same project tasks DO appear once the anchor is unstacked",
+         ctx do
+      # Same mechanism, same fixtures, one field changed. Without this
+      # the exclusion assertion above would also pass for a resolver
+      # that simply returned nothing.
+      {:ok, unstacked} =
+        ctx.anchor
+        |> Ecto.Changeset.change(stack_id: nil, stack_position: nil)
+        |> Repo.update()
+
+      payload = siblings_for(unstacked.id)
+
+      assert payload.scope == :project_window
+      sibling_ids = MapSet.new(payload.tasks, & &1.task_id)
+
+      for noisy <- ctx.noise do
+        assert MapSet.member?(sibling_ids, noisy.id),
+               "project window must surface #{noisy.title}"
+      end
+    end
+
+    test "an epic anchor with no stack resolves to the epic tier", ctx do
+      epic = insert_epic!(ctx.project.id)
+
+      anchor =
+        insert_task!(ctx.project.id, %{
+          title: "Epic Anchor",
+          status: "planning",
+          epic_id: epic.id
+        })
+
+      in_flight = insert_task!(ctx.project.id, %{title: "Epic Peer", epic_id: epic.id})
+
+      retired =
+        insert_task!(ctx.project.id, %{title: "Epic Done", epic_id: epic.id, status: "done"})
+
+      payload = siblings_for(anchor.id)
+
+      assert payload.scope == :epic
+      sibling_ids = MapSet.new(payload.tasks, & &1.task_id)
+
+      assert MapSet.member?(sibling_ids, in_flight.id)
+      refute MapSet.member?(sibling_ids, retired.id), "epic tier keeps in-flight statuses only"
+      refute MapSet.member?(sibling_ids, anchor.id)
+
+      for noisy <- ctx.noise do
+        refute MapSet.member?(sibling_ids, noisy.id),
+               "epic tier must not fall through to the project window"
+      end
+    end
+  end
+
+  describe "gather_context/2 — :sibling_tasks project window" do
+    test "DETECTOR: the window caps at 10 and reports what it dropped" do
+      # Remove the `@project_window_limit` cap (or raise it) and
+      # `shown == 10` / `truncated? == true` / `dropped == 10` all fail.
+      project = plan_project()
+      anchor = insert_task!(project.id, %{title: "Window Anchor", status: "planning"})
+
+      for n <- 1..20, do: planned_task!(project.id, %{title: "Windowed #{n}"})
+
+      payload = siblings_for(anchor.id)
+
+      assert payload.scope == :project_window
+      assert payload.total == 20
+      assert payload.shown == 10
+      assert payload.truncated? == true
+      assert payload.dropped == 10
+      assert length(payload.tasks) == 10
+    end
+
+    test "an unplanned in-flight task is excluded — and its exclusion is counted" do
+      project = plan_project()
+      anchor = insert_task!(project.id, %{title: "Filter Anchor", status: "planning"})
+      unplanned = insert_task!(project.id, %{title: "No Plan Yet"})
+
+      excluded = siblings_for(anchor.id)
+
+      refute Enum.any?(excluded.tasks, &(&1.task_id == unplanned.id))
+
+      assert excluded.unplanned_excluded == 1,
+             "a dropped sibling must be counted, not silently vanish"
+
+      # POSITIVE CONTROL on the same mechanism: give it a plan and the
+      # very same task appears.
+      _plan = bare_plan(unplanned.id, "pending_review")
+
+      included = siblings_for(anchor.id)
+
+      assert Enum.any?(included.tasks, &(&1.task_id == unplanned.id))
+      assert included.unplanned_excluded == 0
+      assert included.total == 1
+    end
+
+    test "a superseded-only plan does not qualify a sibling for the window" do
+      project = plan_project()
+      anchor = insert_task!(project.id, %{title: "Dead Plan Anchor", status: "planning"})
+      dead = insert_task!(project.id, %{title: "Dead Plan Sibling"})
+      _superseded = bare_plan(dead.id, "superseded")
+
+      payload = siblings_for(anchor.id)
+
+      refute Enum.any?(payload.tasks, &(&1.task_id == dead.id))
+      assert payload.unplanned_excluded == 1
+    end
+
+    test "orders the window by updated_at desc" do
+      project = plan_project()
+      anchor = insert_task!(project.id, %{title: "Order Anchor", status: "planning"})
+      now = DateTime.utc_now()
+
+      oldest =
+        planned_task!(project.id, %{
+          title: "Oldest",
+          updated_at: DateTime.add(now, -3600, :second)
+        })
+
+      newest = planned_task!(project.id, %{title: "Newest", updated_at: now})
+
+      middle =
+        planned_task!(project.id, %{
+          title: "Middle",
+          updated_at: DateTime.add(now, -60, :second)
+        })
+
+      assert Enum.map(siblings_for(anchor.id).tasks, & &1.task_id) ==
+               [newest.id, middle.id, oldest.id]
+    end
+  end
+
+  describe "gather_context/2 — :sibling_tasks stage budgets" do
+    test "the project window shows 3 stages per sibling and says how many it hid" do
+      project = plan_project()
+      anchor = insert_task!(project.id, %{title: "Stage Budget Anchor", status: "planning"})
+      sibling = insert_task!(project.id, %{title: "Eight Stage Sibling"})
+      plan = bare_plan(sibling.id, "approved")
+
+      for position <- 1..8, do: add_stage(plan.id, position)
+
+      [entry] = siblings_for(anchor.id).tasks
+
+      assert entry.stage_count == 8
+      assert entry.stages_shown == 3
+      assert entry.truncated? == true
+      assert Enum.map(entry.stages, & &1.position) == [1, 2, 3]
+    end
+
+    test "the stack tier gets the wider 6-stage budget" do
+      project = plan_project()
+      stack = insert_stack!(project.id)
+
+      anchor =
+        insert_task!(project.id, %{
+          title: "Stack Stage Anchor",
+          status: "planning",
+          stack_id: stack.id,
+          stack_position: 1
+        })
+
+      member =
+        insert_task!(project.id, %{
+          title: "Stack Stage Member",
+          stack_id: stack.id,
+          stack_position: 2
+        })
+
+      plan = bare_plan(member.id, "approved")
+      for position <- 1..8, do: add_stage(plan.id, position)
+
+      [entry] = siblings_for(anchor.id).tasks
+
+      assert entry.stage_count == 8
+      assert entry.stages_shown == 6
+      assert entry.truncated? == true
+      assert entry.latest_plan_status == "approved"
+    end
+
+    test "sibling stage descriptions are truncated at 180 chars" do
+      project = plan_project()
+      anchor = insert_task!(project.id, %{title: "Truncate Anchor", status: "planning"})
+      sibling = insert_task!(project.id, %{title: "Long Description Sibling"})
+      plan = bare_plan(sibling.id, "approved")
+      add_stage(plan.id, 1, %{description: String.duplicate("d", 5_000)})
+
+      [entry] = siblings_for(anchor.id).tasks
+      [stage] = entry.stages
+
+      assert String.length(stage.description) == 181
+      assert String.ends_with?(stage.description, "…")
+    end
+  end
+
+  # ── :adr_index ────────────────────────────────────────────────────────────
+
+  defp adr_index(opts \\ []) do
+    if dir = Keyword.get(opts, :dir) do
+      Application.put_env(:platform, :adr_dir, dir)
+      on_exit(fn -> Application.delete_env(:platform, :adr_dir) end)
+    end
+
+    {:ok, %{adr_index: index}} = ContextProviders.gather_context(:adr_index, [])
+    index
+  end
+
+  defp fixture_adr_dir, do: Path.expand("../../support/fixtures/adr_decisions", __DIR__)
+
+  defp entry_for(index, file), do: Enum.find(index.entries, &(&1.file == file))
+
+  describe "gather_context/2 — :adr_index against a fixture directory" do
+    setup do
+      %{index: adr_index(dir: fixture_adr_dir())}
+    end
+
+    test "flags every file sharing a number, and leaves unique numbers alone", %{index: index} do
+      assert entry_for(index, "0099-first-of-two.md").number_ambiguous
+      assert entry_for(index, "0099-second-of-two.md").number_ambiguous
+
+      assert index.number_collisions["0099"] ==
+               ["0099-first-of-two.md", "0099-second-of-two.md"]
+
+      # POSITIVE CONTROL. Without this the ambiguity flag could be
+      # hardcoded true and both assertions above would still pass.
+      control = entry_for(index, "0102-unique-and-clean.md")
+      refute control.number_ambiguous
+      refute control.title_ambiguous
+      assert control.superseded_by == []
+    end
+
+    test "flags two files sharing a title, which is the 0027/0028 shape", %{index: index} do
+      assert entry_for(index, "0108-same-title-a.md").title_ambiguous
+      assert entry_for(index, "0109-same-title-b.md").title_ambiguous
+
+      # The title is the index's citation key; two files answering to it
+      # is exactly as unusable as two files answering to a number.
+      assert index.title_collisions["same title under two numbers"] ==
+               ["0108-same-title-a.md", "0109-same-title-b.md"]
+    end
+
+    test "a **Supersedes:** header stamps the OLDER entry, not the newer one", %{index: index} do
+      superseded = entry_for(index, "0098-old-decision.md")
+
+      assert [%{file: "0100-supersedes-ninety-eight.md", partial?: false, source: :header}] =
+               superseded.superseded_by
+
+      # The newer document is not marked dead by its own header.
+      assert entry_for(index, "0100-supersedes-ninety-eight.md").superseded_by == []
+    end
+
+    test "a qualified supersession header is recorded as PARTIAL", %{index: index} do
+      # `**Supersedes:** Routing sections of ADR 0104` retires part of
+      # 0104, not 0104. Reporting it as fully superseded would kill a
+      # live decision — the mirror image of the defect this slot exists
+      # to fix.
+      assert [ref] = entry_for(index, "0104-partially-superseded.md").superseded_by
+
+      assert ref.partial?
+      assert ref.file == "0103-partially-supersedes-one-oh-four.md"
+      assert ref.note == "Routing sections of ADR 0104"
+    end
+
+    test "reads all three status spellings and reports a genuinely absent one as nil", %{
+      index: index
+    } do
+      # Line-initial, list item, and section heading all occur in the
+      # real `docs/decisions/`. Matching only the first would report a
+      # dozen ADRs as unrecorded when their status is written right
+      # there.
+      assert entry_for(index, "0100-supersedes-ninety-eight.md").status == "Accepted"
+      assert entry_for(index, "0105-bulleted-status.md").status == "Accepted"
+      assert entry_for(index, "0106-heading-status.md").status == "Draft"
+
+      assert entry_for(index, "0101-no-status-recorded.md").status == nil
+      # An empty `## Status` section must not pick up the next heading.
+      assert entry_for(index, "0107-empty-status-section.md").status == nil
+    end
+
+    test "strips the ADR-number prefix from titles", %{index: index} do
+      assert entry_for(index, "0098-old-decision.md").title == "Old Decision"
+
+      assert entry_for(index, "0100-supersedes-ninety-eight.md").title ==
+               "Supersedes Ninety Eight"
+    end
+
+    test "a cap discloses what it dropped, and drops the OLDEST first" do
+      # The cap does not bite at 49 ADRs. A bound that has never run is
+      # a bound whose disclosure has never run either — and a silent cap
+      # reads to the model as "that was everything".
+      Application.put_env(:platform, :adr_index_limit, 3)
+      on_exit(fn -> Application.delete_env(:platform, :adr_index_limit) end)
+
+      index = adr_index(dir: fixture_adr_dir())
+
+      assert index.truncated?
+      assert index.shown == 3
+      assert index.total == 13
+      assert index.dropped == 10
+      assert length(index.dropped_files) == 10
+
+      # Highest-numbered kept: the newest decisions are the ones a plan
+      # under review is most likely to contradict.
+      assert Enum.map(index.entries, & &1.file) == [
+               "0107-empty-status-section.md",
+               "0108-same-title-a.md",
+               "0109-same-title-b.md"
+             ]
+
+      assert "0098-old-decision.md" in index.dropped_files
+      refute Enum.any?(index.entries, &(&1.file == "0098-old-decision.md"))
+    end
+
+    test "does not inherit the live repo's manual supersessions", %{index: index} do
+      # `@manual_supersessions` names a superseding FILE. A fixture
+      # directory that doesn't contain it must not be told one of its
+      # ADRs was retired by a document that isn't there.
+      for entry <- index.entries, ref <- entry.superseded_by do
+        assert ref.source == :header
+      end
+    end
+  end
+
+  describe "gather_context/2 — :adr_index against the real docs/decisions" do
+    setup do
+      index = adr_index()
+      assert index.available?, "docs/decisions/ must resolve in the test build"
+      %{index: index, dir: index.dir}
+    end
+
+    test "indexes every .md file in the directory", %{index: index, dir: dir} do
+      on_disk = dir |> File.ls!() |> Enum.filter(&String.ends_with?(&1, ".md")) |> Enum.sort()
+
+      assert index.total == length(on_disk)
+      assert Enum.map(index.entries, & &1.file) == on_disk
+      refute index.truncated?
+    end
+
+    test "flags every number the directory actually shares — computed, not hardcoded" do
+      # DETECTOR for this stage. The index that shipped before emitted
+      # `%{file: name}` and nothing else; revert to it and this fails
+      # because no entry carries `number_ambiguous` at all.
+      index = adr_index()
+
+      shared =
+        index.entries
+        |> Enum.group_by(& &1.number)
+        |> Enum.filter(fn {number, group} -> is_binary(number) and length(group) > 1 end)
+
+      assert shared != [],
+             "docs/decisions/ is expected to have duplicate ADR numbers; if the repair task " <>
+               "landed, delete this assertion rather than the flag"
+
+      for {number, group} <- shared, entry <- group do
+        assert entry.number_ambiguous,
+               "#{entry.file} shares number #{number} with " <>
+                 "#{inspect(Enum.map(group, & &1.file))} but is not flagged"
+      end
+
+      # POSITIVE CONTROL on real data: a uniquely-numbered ADR stays
+      # unflagged, so the assertion above cannot pass by the flag being
+      # unconditionally true.
+      unique =
+        Enum.find(index.entries, fn entry ->
+          entry.number_ambiguous == false and entry.number != nil
+        end)
+
+      assert unique, "at least one ADR must hold its number alone"
+      refute unique.number_ambiguous
+    end
+
+    test "0033 is reported as superseded by 0041, from 0041's own header", %{index: index} do
+      # The supersession is recorded ONLY on the newer document; 0033
+      # still says `**Status:** Accepted`. An index that repeats the
+      # status without the reverse edge hands the architect a retired
+      # decision labelled live.
+      assert [%{file: "0041-org-memory-v2-wiki-system.md", source: :header, partial?: false}] =
+               entry_for(index, "0033-org-level-context-management.md").superseded_by
+
+      assert entry_for(index, "0033-org-level-context-management.md").status =~ "Accepted"
+    end
+
+    test "0008 is reported as PARTIALLY superseded — it is still live", %{index: index} do
+      # 0013's header reads "Attention routing sections of ADR 0008".
+      # Chat Backend Architecture is very much alive; only its
+      # attention-routing sections moved.
+      assert [ref] = entry_for(index, "0008-chat-backend-architecture.md").superseded_by
+
+      assert ref.partial?
+      assert ref.file == "0013-attention-routing-and-channel-policy.md"
+      assert ref.note =~ "Attention routing sections"
+    end
+
+    test "0012 is reported as superseded by 0036 via the manual whitelist", %{index: index} do
+      assert [%{file: "0036-canvases-first-class-collaboration-surfaces.md", source: :manual}] =
+               entry_for(index, "0012-agent-driven-live-canvas-architecture.md").superseded_by
+    end
+
+    test "the manual supersession whitelist still matches its source line", %{dir: dir} do
+      # SELF-VERIFYING EXEMPTION. `@manual_supersessions` exists because
+      # 0036 records the supersession in prose, and regexing prose marks
+      # live decisions dead. The exemption has to be able to detect its
+      # own staleness: rewrite 0036's `**Related:**` line and this goes
+      # red instead of the index quietly asserting a supersession the
+      # repo no longer records.
+      for {number, manual} <- ContextProviders.manual_supersessions() do
+        body = File.read!(Path.join(dir, manual.by))
+
+        assert body =~ manual.evidence,
+               "#{manual.by} no longer contains the line the ADR-#{number} supersession was " <>
+                 "derived from (#{inspect(manual.evidence)}) — re-derive the whitelist entry " <>
+                 "or drop it"
+      end
+    end
+
+    test "the byte-identical 0027/0028 pair is flagged as a title collision", %{index: index} do
+      assert entry_for(index, "0027-federated-execution-leases-and-runtime-adapters.md").title_ambiguous
+
+      assert entry_for(index, "0028-federated-execution-leases-and-runtime-adapters.md").title_ambiguous
+    end
+
+    test "statuses come back for all three spellings used in the repo", %{index: index} do
+      # 0001 writes `- **Status:** Accepted`, 0005 writes a `## Status`
+      # section, 0045 writes `**Status:** Proposed`. All three are
+      # recorded statuses; only a parser that reads one spelling would
+      # call the others unrecorded.
+      assert entry_for(index, "0001-repository-shape-and-boundary.md").status == "Accepted"
+      assert entry_for(index, "0005-event-stream-architecture.md").status == "Accepted"
+      assert entry_for(index, "0045-task-stacks-v2.md").status == "Proposed"
+
+      unrecorded = Enum.filter(index.entries, &is_nil(&1.status))
+
+      assert unrecorded == [],
+             "every ADR in docs/decisions/ records a status in one of the three spellings; " <>
+               "unparsed: #{inspect(Enum.map(unrecorded, & &1.file))}"
+    end
+
+    test "every entry carries a filename, which is the only unique key here", %{index: index} do
+      for entry <- index.entries do
+        assert is_binary(entry.file)
+        assert String.ends_with?(entry.file, ".md")
+      end
+    end
+  end
+
+  describe "gather_context/2 — :adr_index when the directory can't be read" do
+    test "an unresolvable directory is {:ok, unavailable}, never a refusal" do
+      # Prod release images ship no `docs/`, so this is the production
+      # steady state. Refusing here would stop the architect dispatch
+      # in prod under stage 2's context-refusal arm — the definitive
+      # false positive.
+      Application.put_env(:platform, :adr_dir, "/nonexistent/docs/decisions")
+      on_exit(fn -> Application.delete_env(:platform, :adr_dir) end)
+
+      assert {:ok, %{adr_index: index}} = ContextProviders.gather_context(:adr_index, [])
+
+      assert index.available? == false
+      assert index.reason == :adr_dir_unreachable
+      assert index.entries == []
+      assert index.total == 0
+    end
+
+    test "a configured override never silently falls back to the live repo" do
+      Application.put_env(:platform, :adr_dir, "/nonexistent/docs/decisions")
+      on_exit(fn -> Application.delete_env(:platform, :adr_dir) end)
+
+      assert {:error, :adr_dir_unreachable} = ContextProviders.adr_dir()
+    end
+
+    test "a resolvable but empty directory reports :adr_dir_empty, not :adr_dir_unreachable" do
+      # "Nobody shipped docs/" and "somebody deleted the ADRs" are
+      # different events. Both are non-refusing; collapsing them loses
+      # the only signal that the second one happened.
+      dir = Path.join(System.tmp_dir!(), "adr-empty-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      Application.put_env(:platform, :adr_dir, dir)
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :adr_dir)
+        File.rm_rf!(dir)
+      end)
+
+      assert {:ok, %{adr_index: index}} = ContextProviders.gather_context(:adr_index, [])
+
+      assert index.available? == false
+      assert index.reason == :adr_dir_empty
+      assert index.dir == dir
     end
   end
 

@@ -47,15 +47,21 @@ defmodule Platform.Responsibilities.Router do
   When `fire_trigger/3` lands on an `:external` assignee, it dispatches
   via `Platform.ExternalAgents.Dispatcher.dispatch/3` and then calls
   `handle_output/3` on the per-feature provider module. The provider is
-  resolved by camelcasing the responsibility's `feature` field and
-  prepending `Platform.Responsibilities.Providers.` — so
-  `feature == "meetings"` resolves to
+  resolved through the explicit registry in
+  `Platform.Responsibilities.Providers` — `feature == "meetings"` maps to
   `Platform.Responsibilities.Providers.Meetings`. The handler is
-  optional: missing modules / missing `handle_output/3` log
-  `[ResponsibilityRouter] no output handler for <key>` and return `:ok`
+  optional: an unresolved provider / missing `handle_output/3` logs
+  `[ResponsibilityRouter] no output handler for <key>` and returns `:ok`
   rather than crashing. This keeps stage 6 a no-op for feature areas
   whose providers haven't grown a handler yet (e.g. M6-only deploys
   before M8 lands `meetings.summarize`).
+
+  That log line used to be a single `Logger.info` covering three very
+  different situations. Task 019f9b28 stage 2 split it by what
+  `Providers.feature_provider/1` returns: `:error` (nothing registered —
+  actionable, `:warning`), `{:retired, why}` (deliberate, `:debug`), and
+  `{:ok, module}` that nonetheless fails the `handle_output/3` probe (a
+  contract break in a module we ship — `:error` level).
 
   ## Quantum-vs-minimal decision (recorded)
 
@@ -85,6 +91,29 @@ defmodule Platform.Responsibilities.Router do
       health-check endpoint).
     * `dispatch/3` — stage 1 stub that logs and returns
       `{:error, :not_implemented_yet}`. Stage 2 fills this in.
+
+  ## Fire outcomes (ADR-0046)
+
+  `fire_trigger/2,3` returns `t:fire_outcome/0` —
+  `{:ok, :dispatched} | {:ok, :unfilled} | {:error, term()}` — so a caller
+  can tell "nobody holds this responsibility" apart from "the dispatch
+  died". ADR-0046 requires a per-step `not_applicable | complete | failed`
+  and those two states used to be the same `:ok`.
+
+  `fire/2` (key lookup) adds a fourth value on top of that union:
+  `{:ok, :unknown_responsibility}` when no row is seeded for the key. It
+  sits in the ok channel for the same reason `:unfilled` does — an
+  unseeded key is a progressive-enhancement state, not a failure.
+  `Platform.Responsibilities.outcome/1` maps the full four-value union
+  onto the ADR's `complete | not_applicable | failed`.
+
+  **Honesty limit, native path.** `Platform.Chat.AgentResponder.maybe_dispatch/1`
+  returns `:ok` unconditionally because outside sync mode it wraps the work
+  in `Task.start/1`. So `{:ok, :dispatched}` from a native/federated
+  assignee means **the handoff was accepted**, never **the agent
+  responded** — post-handoff native failure is still invisible. Do not
+  over-trust the value on that path. See `fire_trigger/3` for the full
+  contract.
   """
 
   use GenServer
@@ -95,7 +124,26 @@ defmodule Platform.Responsibilities.Router do
   alias Platform.ExternalAgents.Dispatcher, as: ExternalDispatcher
   alias Platform.Repo
   alias Platform.Responsibilities
-  alias Platform.Responsibilities.{ContextGatherer, Cron, Responsibility}
+  alias Platform.Responsibilities.{ContextGatherer, Cron, Providers, Responsibility}
+
+  @typedoc """
+  The three outcomes `fire_trigger/3` distinguishes (ADR-0046).
+
+    * `{:ok, :dispatched}` — an assignee was resolved and the dispatch was
+      handed off (external: an HTTP response was parsed; native/federated:
+      the signal was accepted). Maps to the ADR's `complete`.
+    * `{:ok, :unfilled}` — no agent holds the responsibility. A normal,
+      expected system state under the ADR-0041 progressive-enhancement
+      contract, NOT a failure. Maps to the ADR's `not_applicable`.
+    * `{:error, term()}` — an assignee existed and the dispatch died.
+      Maps to the ADR's `failed`.
+
+  `not_applicable` and `failed` must never be conflated
+  (`docs/decisions/0046-design-and-architecture-phases-in-planning.md`), which
+  is why the unfilled case lives in the ok channel with its own tag rather
+  than sharing a bare `:ok` with success.
+  """
+  @type fire_outcome :: {:ok, :dispatched} | {:ok, :unfilled} | {:error, term()}
 
   @default_check_interval_ms :timer.seconds(60)
 
@@ -245,15 +293,32 @@ defmodule Platform.Responsibilities.Router do
   atom shorthand (`:memory_daily_summary`) — the atom form is
   underscored and re-canonicalised to dotted-string by replacing the
   first underscore (`memory_daily_summary` → `memory.daily_summary`).
-  Unknown keys log + return `{:error, :unknown_responsibility}` rather
-  than crashing; the dual-write shim treats this as "router path
-  no-op" so legacy dispatch isn't blocked.
+
+  ## Return contract
+
+  A matched row returns `t:fire_outcome/0` verbatim from
+  `fire_trigger/2`. A key with no seeded row logs and returns
+  `{:ok, :unknown_responsibility}` rather than crashing; the dual-write
+  shim treats this as "router path no-op" so legacy dispatch isn't
+  blocked.
+
+  WHY `{:ok, :unknown_responsibility}` AND NOT AN ERROR (ADR-0046
+  member 1, stage 2): an unseeded key is a progressive-enhancement
+  state, identical in kind to an unfilled assignee — a code site hooked
+  the key before its seed migration landed. Reporting it through the
+  error channel would make `Platform.Responsibilities.outcome/1` map it
+  to `:failed`, i.e. ADR-0046 would report a failed step for a
+  responsibility nobody ever configured. That is exactly the
+  `not_applicable` / `failed` conflation
+  `docs/decisions/0046-design-and-architecture-phases-in-planning.md:79-83`
+  forbids. It was `{:error, :unknown_responsibility}` until stage 2 of
+  that task.
 
   The supplied `trigger_meta` is passed through to `fire_trigger/2`
   verbatim; callers should set `:kind` (e.g. `:cron`, `:webhook`) and
   any feature-specific keys (`:workspace_id`, `:date`, etc.).
   """
-  @spec fire(atom() | binary(), map()) :: :ok | {:error, term()}
+  @spec fire(atom() | binary(), map()) :: fire_outcome() | {:ok, :unknown_responsibility}
   def fire(key, trigger_meta \\ %{}) when is_map(trigger_meta) do
     canonical = canonical_key(key)
 
@@ -266,7 +331,7 @@ defmodule Platform.Responsibilities.Router do
           "[ResponsibilityRouter] fire/2 no row for key=#{inspect(canonical)} — skipping"
         )
 
-        {:error, :unknown_responsibility}
+        {:ok, :unknown_responsibility}
     end
   end
 
@@ -788,10 +853,18 @@ defmodule Platform.Responsibilities.Router do
   # ALL trigger kinds (cron now; event_topic, chat_pattern, webhook in
   # later stages) funnel through `fire_trigger/3` so the
   # role-resolution → dispatch → stamp pipeline lives in exactly one
-  # place. The function never raises: an unfilled responsibility
-  # emits telemetry + an info log and returns `:ok`. This is the
-  # "progressive enhancement" contract from ADR-0041 — an empty Roles
-  # table is a perfectly valid system state.
+  # place. The function never raises: every failure mode is caught and
+  # returned as `{:error, reason}`. An unfilled responsibility emits
+  # telemetry + an info log and returns `{:ok, :unfilled}` — that is the
+  # "progressive enhancement" contract from ADR-0041, an empty Roles
+  # table is a perfectly valid system state, and it is deliberately a
+  # DIFFERENT value from both success and failure.
+  #
+  # NON-RAISING IS LOAD-BEARING: `Platform.Tasks.fire_architecture_review_plan/1`
+  # fires inside the plan-submit transition and
+  # `Platform.Tasks.PlanEngine.after_stage_completed/1` fires inside
+  # `evaluate_validation/2`'s Ecto transaction. A raise from here rolls back a
+  # validation update. Return the error, never raise it.
 
   @doc """
   Fire a trigger through the canonical pipeline.
@@ -799,37 +872,65 @@ defmodule Platform.Responsibilities.Router do
   Looks up the assignee via `Platform.Roles.assignee_for/1`, then:
 
     * if no agent is assigned → telemetry
-      `[:platform, :responsibility, :unfilled]` + info log, returns `:ok`
-    * if the agent is `kind == "external"` → gather context via
-      `ContextGatherer.gather/2`, call
-      `Platform.ExternalAgents.Dispatcher.dispatch/3`, hand the parsed
-      response to the provider's `handle_output/3` (when present),
-      stamp `last_successful_fire_at`, emit
-      `[:platform, :responsibility, :fired]` telemetry.
+      `[:platform, :responsibility, :unfilled]` + info log, returns
+      `{:ok, :unfilled}`
+    * if the agent is `kind == "external"` → gather context via the
+      provider (falling back to `ContextGatherer.gather/2`), render the
+      prompt, call `Platform.ExternalAgents.Dispatcher.dispatch/3`, hand
+      the parsed response to the provider's `handle_output/3` (when
+      present), stamp `last_successful_fire_at`, emit
+      `[:platform, :responsibility, :fired]` telemetry, and return
+      `{:ok, :dispatched}`.
     * if the agent is `kind == "native"` (alias: `"local"` /
       `"federated"`) → build the AgentResponder signal shape (mirrors
-      `Platform.Agents.HistorianDispatcher`'s) and hand off via
-      `Platform.Chat.AgentResponder.maybe_dispatch/1`. The Router
+      `Platform.Agents.HistorianDispatcher`'s, carrying the rendered
+      prompt under `metadata.prompt`) and hand off via
+      `Platform.Chat.AgentResponder.maybe_dispatch/1`. On acceptance:
+      stamp, emit `fired`, return `{:ok, :dispatched}`. The Router
       remains a drop-in dispatch surface for the existing native path —
       `SystemEventScheduler` keeps running alongside until M8 cuts the
       historian event over to a responsibility row.
 
-  Failure modes (HTTP error, contract violation, native context
-  resolution) log + emit `[:platform, :responsibility, :failed]` and
-  return `:ok` — the Router never crashes the GenServer for a single
-  fired trigger.
+  ## Return contract
+
+  See `t:fire_outcome/0`. The three values are mutually exclusive and
+  callers are expected to branch on them:
+
+    * `{:ok, :dispatched}` — handed off
+    * `{:ok, :unfilled}` — nobody holds the responsibility
+    * `{:error, reason}` — an assignee existed and the dispatch died
+
+  Failure modes (HTTP error, contract violation, provider refusal, a
+  raising native dispatcher, an unknown assignee shape, a caught exit)
+  log, emit `[:platform, :responsibility, :failed]`, and return
+  `{:error, reason}` — the Router never crashes the GenServer, and never
+  raises, for a single fired trigger.
+
+  ## Honesty limit on the native path (do not over-trust `:dispatched`)
+
+  `Platform.Chat.AgentResponder.maybe_dispatch/1` returns `:ok`
+  unconditionally: outside sync mode it wraps the real work in
+  `Task.start/1`, so the return value is observed before the agent has
+  done anything. Therefore `{:ok, :dispatched}` on the native/federated
+  path means **the handoff was accepted**, never **the agent responded**.
+  A native agent that fails after handoff is still invisible here. Making
+  post-handoff native failure observable requires a completion signal from
+  an artifact the agent produces (a canvas attach, a validation write) and
+  is deliberately out of scope for this contract. The external path is
+  stronger: it has actually parsed an HTTP response by the time it returns
+  `{:ok, :dispatched}`.
 
   Called from `handle_info(:tick, …)` for cron triggers, and from the
   event_topic, chat_pattern, and webhook handlers. Public so tests
   can drive it directly without standing up a fully-populated cron
   schedule.
   """
-  @spec fire_trigger(Responsibility.t(), map()) :: :ok
+  @spec fire_trigger(Responsibility.t(), map()) :: fire_outcome()
   def fire_trigger(%Responsibility{} = responsibility, trigger_meta) when is_map(trigger_meta) do
     fire_trigger(responsibility, trigger_meta, %{})
   end
 
-  @spec fire_trigger(Responsibility.t(), map(), map()) :: :ok
+  @spec fire_trigger(Responsibility.t(), map(), map()) :: fire_outcome()
   def fire_trigger(%Responsibility{} = responsibility, trigger_meta, _state)
       when is_map(trigger_meta) do
     try do
@@ -848,19 +949,21 @@ defmodule Platform.Responsibilities.Router do
             %{key: responsibility.key, feature: responsibility.feature}
           )
 
-          :ok
+          {:ok, :unfilled}
 
         %{kind: kind} = agent
         when kind in ["external", "native", "local", "federated"] ->
           dispatch_assignee(responsibility, agent, trigger_meta, kind)
 
         other ->
+          # A real defect, not a progressive-enhancement path: something
+          # resolved an assignee we cannot dispatch to.
           Logger.warning(
             "[ResponsibilityRouter] unknown assignee shape key=#{responsibility.key} " <>
               "assignee=#{inspect(other)}"
           )
 
-          :ok
+          {:error, {:unknown_assignee_shape, inspect(other)}}
       end
     rescue
       DBConnection.OwnershipError ->
@@ -868,13 +971,15 @@ defmodule Platform.Responsibilities.Router do
         # ContextGatherer.gather, dispatch_native → context resolution, etc.)
         # raised from a Task.Supervised child whose $callers chain doesn't reach
         # the DataCase sandbox owner. Contract: the Router never crashes the
-        # GenServer for a single fired trigger — swallow at :debug.
+        # GenServer for a single fired trigger — swallow at :debug. The
+        # dispatch genuinely did not complete, so `failed` is the honest
+        # answer; do NOT report success here.
         Logger.debug(
           "[ResponsibilityRouter] fire_trigger swallowed sandbox-owned DB call " <>
             "key=#{responsibility.key}"
         )
 
-        :ok
+        {:error, {:sandbox_ownership, responsibility.key}}
 
       error ->
         Logger.warning(
@@ -882,7 +987,7 @@ defmodule Platform.Responsibilities.Router do
             Exception.message(error)
         )
 
-        :ok
+        {:error, {:fire_raised, Exception.message(error)}}
     catch
       :exit, reason ->
         Logger.warning(
@@ -890,7 +995,7 @@ defmodule Platform.Responsibilities.Router do
             inspect(reason)
         )
 
-        :ok
+        {:error, {:fire_exited, reason}}
     end
   end
 
@@ -911,17 +1016,50 @@ defmodule Platform.Responsibilities.Router do
   defp dispatch_assignee(%Responsibility{} = responsibility, agent, trigger_meta, kind) do
     provider_module = provider_module_for(responsibility.feature)
 
-    context =
-      provider_module
-      |> gather_context_via_provider(responsibility, trigger_meta)
-      |> Map.put(:__responsibility__, responsibility)
+    case gather_context_via_provider(provider_module, responsibility, trigger_meta) do
+      # A provider that exists and refused to produce context. Stop here,
+      # BEFORE `build_prompt_via_provider/2` — rendering a prompt over
+      # substituted generic context is precisely the wrong-context
+      # dispatch this arm exists to prevent. Mirrors the
+      # `{:build_prompt_refused, _}` arm in `dispatch_external/3`.
+      #
+      # Placement note (task 019f9b28-6ca7 stage 2): the stage was written
+      # against a tree where gathering lived inside `dispatch_external/3`,
+      # so it specified the arm there. `fix/render-prompt-for-federated-dispatch`
+      # has since hoisted gathering into this shared preamble, and a native
+      # assignee now receives the provider's rendered prompt too. Honouring
+      # the refusal here — above the external/native branch — is the only
+      # placement that is still "before build_prompt" for both paths.
+      {:refused, reason} ->
+        refuse_dispatch(responsibility, agent, kind, reason)
 
-    rendered = build_prompt_via_provider(provider_module, context)
+      {:ok, ctx} ->
+        context = Map.put(ctx, :__responsibility__, responsibility)
+        rendered = build_prompt_via_provider(provider_module, context)
 
-    case kind do
-      "external" -> dispatch_external(responsibility, agent, trigger_meta, context, rendered)
-      _ -> dispatch_native(responsibility, agent, trigger_meta, kind, rendered)
+        case kind do
+          "external" -> dispatch_external(responsibility, agent, trigger_meta, context, rendered)
+          _ -> dispatch_native(responsibility, agent, trigger_meta, kind, rendered)
+        end
     end
+  end
+
+  defp refuse_dispatch(%Responsibility{} = responsibility, agent, kind, reason) do
+    dispatch_kind = if kind == "external", do: :external, else: :native
+
+    Logger.warning(
+      "[ResponsibilityRouter] provider gather_context refused dispatch " <>
+        "key=#{responsibility.key} agent=#{agent_slug(agent)} reason=#{inspect(reason)}"
+    )
+
+    emit_failed_telemetry(
+      responsibility,
+      agent,
+      dispatch_kind,
+      {:context_gather_refused, reason}
+    )
+
+    {:error, {:context_gather_refused, reason}}
   end
 
   # ── External dispatch ─────────────────────────────────────────────────────
@@ -941,7 +1079,7 @@ defmodule Platform.Responsibilities.Router do
         )
 
         emit_failed_telemetry(responsibility, agent, :external, {:build_prompt_refused, reason})
-        :ok
+        {:error, {:build_prompt_refused, reason}}
 
       {:messages, messages} ->
         run_external_dispatch(responsibility, agent, trigger_meta, context, messages: messages)
@@ -970,7 +1108,7 @@ defmodule Platform.Responsibilities.Router do
         safe_stamp_last_fire(agent, Map.get(trigger_meta, :fired_at) || DateTime.utc_now())
 
         emit_fired_telemetry(responsibility, agent, :external)
-        :ok
+        {:ok, :dispatched}
 
       {:error, reason} ->
         Logger.warning(
@@ -979,7 +1117,7 @@ defmodule Platform.Responsibilities.Router do
         )
 
         emit_failed_telemetry(responsibility, agent, :external, reason)
-        :ok
+        {:error, {:dispatch_failed, reason}}
     end
   end
 
@@ -998,18 +1136,45 @@ defmodule Platform.Responsibilities.Router do
   # `Handlers.MeetingSummarize`) need the provider's own resolvers
   # because `ContextGatherer.resolve(:meeting_transcript, ...)` reads a
   # flat `meta[:transcript_id]` but the router publishes it nested
-  # under `meta[:payload][:transcript_id]`. Falls back to the
-  # cross-cutting `ContextGatherer` path when the provider is absent
-  # or returns an error.
+  # under `meta[:payload][:transcript_id]`.
+  #
+  # ONE RULE: **if a provider exists and did not return `{:ok, map}`, do
+  # not dispatch.**
+  #
+  # This used to be a single `else -> gather_context(...)` arm collapsing
+  # four distinct situations into one. Two of them mean "nothing to say"
+  # and the cross-cutting fallback is right; two of them mean "this
+  # dispatch is wrong" and the fallback silently converts a refusal into a
+  # generic success — the LLM is then called, and billed, with context
+  # that answers a different question. Same defect family as
+  # `Code.ensure_loaded?` making "module never written" and "feature
+  # deliberately has no provider" the same value (see
+  # `Platform.Responsibilities.Providers`).
+  #
+  #   * `{:ok, ctx}`      — the provider returned `{:ok, map}`.
+  #   * `{:ok, fallback}` — there is no provider module, or it does not
+  #                         export `gather_context/2`. Nothing to say;
+  #                         `ContextGatherer` is the correct answer and
+  #                         this path is unchanged.
+  #   * `{:refused, r}`   — a provider that DOES exist returned anything
+  #                         other than `{:ok, map}`, including a raise.
+  #
+  # A raise is deliberately folded into `:refused` rather than into the
+  # fallback: a broken gatherer producing generic context is the same
+  # wrong-context failure as a deliberate refusal. The two are
+  # distinguished only by log level — `Logger.error` for the raise in
+  # `safe_provider_gather/3`, `Logger.warning` for the refusal in
+  # `refuse_dispatch/4`.
   defp gather_context_via_provider(provider_module, %Responsibility{} = responsibility, meta) do
-    with true <- is_atom(provider_module),
-         true <- Code.ensure_loaded?(provider_module),
-         true <- function_exported?(provider_module, :gather_context, 2),
-         {:ok, ctx} when is_map(ctx) <-
-           safe_provider_gather(provider_module, responsibility, meta) do
-      ctx
+    if is_atom(provider_module) and Code.ensure_loaded?(provider_module) and
+         function_exported?(provider_module, :gather_context, 2) do
+      case safe_provider_gather(provider_module, responsibility, meta) do
+        {:ok, ctx} when is_map(ctx) -> {:ok, ctx}
+        {:error, reason} -> {:refused, reason}
+        other -> {:refused, {:unexpected_gather_shape, other}}
+      end
     else
-      _ -> gather_context(responsibility, meta)
+      {:ok, gather_context(responsibility, meta)}
     end
   end
 
@@ -1017,7 +1182,10 @@ defmodule Platform.Responsibilities.Router do
     provider_module.gather_context(responsibility, meta)
   rescue
     error ->
-      Logger.warning(
+      # `:error`, not `:warning` — this is the log-level half of the
+      # raise-vs-refusal distinction documented above. A provider that
+      # blew up is a defect; a provider that said no is a decision.
+      Logger.error(
         "[ResponsibilityRouter] provider gather_context raised " <>
           "module=#{inspect(provider_module)} error=#{Exception.message(error)}"
       )
@@ -1141,29 +1309,76 @@ defmodule Platform.Responsibilities.Router do
         end
 
       true ->
-        Logger.info("[ResponsibilityRouter] no output handler for #{responsibility.key}")
-        :ok
+        log_missing_output_handler(responsibility)
     end
   end
 
   defp invoke_handle_output(%Responsibility{} = responsibility, _parsed, _meta) do
-    Logger.info("[ResponsibilityRouter] no output handler for #{responsibility.key}")
+    log_missing_output_handler(responsibility)
+  end
+
+  # One log line, three causes — told apart. Before task 019f9b28 stage 2
+  # this was a bare `Logger.info`, so a provider module that was never
+  # written (`architecture.*`, for months) and a feature that deliberately
+  # has none (`security.*`) produced byte-identical output.
+  #
+  # Deliberately `:warning` and not `:error` for the unregistered case:
+  # `router_test.exs` seeds ad-hoc `feature: "test_feature_<n>"` rows and
+  # operators can `upsert_by_key/1` arbitrary ones. Screaming at error
+  # level for every ad-hoc feature trains people to ignore the line —
+  # exactly the rot this change exists to prevent. Loud drift detection
+  # belongs where the population is closed: Registry boot and CI.
+  defp log_missing_output_handler(%Responsibility{key: key, feature: feature}) do
+    case Providers.feature_provider(feature) do
+      {:retired, reason} ->
+        Logger.debug(
+          "[ResponsibilityRouter] no output handler for #{key} — feature=#{inspect(feature)} " <>
+            "is retired by design: #{reason}"
+        )
+
+      :error ->
+        Logger.warning(
+          "[ResponsibilityRouter] no output handler for #{key} — feature=#{inspect(feature)} " <>
+            "has no provider registered. Fix: add it to " <>
+            "Platform.Responsibilities.Providers @feature_providers, or to @retired with a reason."
+        )
+
+      {:ok, module} ->
+        Logger.error(
+          "[ResponsibilityRouter] no output handler for #{key} — provider #{inspect(module)} " <>
+            "is registered for feature=#{inspect(feature)} but failed the handle_output/3 " <>
+            "probe (loaded?=#{Code.ensure_loaded?(module)}). This is a contract break in a " <>
+            "module we ship, not a routing gap."
+        )
+    end
+
     :ok
   end
 
-  # Convention: `<feature>` → `Platform.Responsibilities.Providers.<Camelcased>`.
-  # `feature == "meetings"` resolves to
-  # `Platform.Responsibilities.Providers.Meetings`. Returns `nil` if the
-  # camelcase fails (e.g. an empty / non-binary feature).
-  defp provider_module_for(feature) when is_binary(feature) and feature != "" do
-    Module.concat([Platform.Responsibilities.Providers, Macro.camelize(feature)])
+  # Resolve the provider module through the explicit registry in
+  # `Platform.Responsibilities.Providers` (task 019f9b28 stage 2). This
+  # used to camelcase `feature` and prepend the Providers namespace,
+  # which made "module never written" and "feature deliberately has no
+  # provider" the same value at every consumption point — see that
+  # module's moduledoc for the argument.
+  #
+  # Both non-`{:ok, _}` outcomes still collapse to `nil` HERE, because
+  # each caller only needs a module-or-nothing to decide whether to
+  # invoke a callback. The distinction is made where it is actionable:
+  # `log_missing_output_handler/1` and `log_native_prompt_fidelity/3`.
+  defp provider_module_for(feature) do
+    case Providers.feature_provider(feature) do
+      {:ok, module} -> module
+      {:retired, _reason} -> nil
+      :error -> nil
+    end
   end
-
-  defp provider_module_for(_), do: nil
 
   # ── Native / federated dispatch ───────────────────────────────────────────
 
   defp dispatch_native(%Responsibility{} = responsibility, agent, trigger_meta, kind, rendered) do
+    log_native_prompt_fidelity(responsibility, agent, rendered)
+
     signal = build_native_signal(responsibility, agent, trigger_meta, rendered)
 
     Logger.info(
@@ -1171,12 +1386,26 @@ defmodule Platform.Responsibilities.Router do
         "agent=#{agent_slug(agent)} signal=#{inspect(Map.take(signal, [:reason, :space_id]))}"
     )
 
-    _ = call_agent_responder(signal)
+    # The stamp + `fired` telemetry are conditional on the handoff being
+    # accepted. They used to fire unconditionally, which reported a
+    # successful dispatch even when the native dispatcher was missing or
+    # raised.
+    case call_agent_responder(signal) do
+      {:ok, :dispatched} ->
+        safe_stamp_last_fire(agent, Map.get(trigger_meta, :fired_at) || DateTime.utc_now())
 
-    safe_stamp_last_fire(agent, Map.get(trigger_meta, :fired_at) || DateTime.utc_now())
+        emit_fired_telemetry(responsibility, agent, :native)
+        {:ok, :dispatched}
 
-    emit_fired_telemetry(responsibility, agent, :native)
-    :ok
+      {:error, reason} ->
+        Logger.warning(
+          "[ResponsibilityRouter] #{kind} dispatch failed key=#{responsibility.key} " <>
+            "agent=#{agent_slug(agent)} reason=#{inspect(reason)}"
+        )
+
+        emit_failed_telemetry(responsibility, agent, :native, reason)
+        {:error, reason}
+    end
   end
 
   # Builds an AgentResponder-shaped signal so the Router is a drop-in
@@ -1224,11 +1453,29 @@ defmodule Platform.Responsibilities.Router do
     end)
   end
 
-  # Flatten `build_prompt_via_provider/2`'s return into the prompt text the
-  # federated runtime receives. `:legacy` (no provider, or a provider with
-  # no `build_prompt/1`) and a provider refusal both yield `nil`, which
-  # `maybe_put/3` drops — so those signals stay byte-for-byte what they
-  # were before this change rather than carrying empty-prompt garbage.
+  # THE FOURTH COLLAPSE POINT (found while auditing task 019f9b28).
+  #
+  # `rendered_prompt_text/1` maps BOTH `:legacy` (no provider at all, or a
+  # provider with no `build_prompt/1`) and `{:error, reason}` (a provider
+  # that explicitly refused to build one) to `nil`, which `maybe_put/3`
+  # then drops. So a federated runtime receives a byte-identical bare
+  # signal whether the architect refused to speak or was never asked —
+  # the same indistinguishability the registry exists to kill, one layer
+  # further down.
+  #
+  # The *value* stays collapsed here on purpose: the external path aborts
+  # on `{:error, _}` (`dispatch_external/5`) but changing what native
+  # dispatch sends or returns is explicitly out of scope for this stage,
+  # and `fire_trigger/3`'s return contract is a sibling stack member's
+  # work. What this stage can and does fix is the observability: see
+  # `log_native_prompt_fidelity/3`, which emits a different, actionable
+  # line for each of the three causes before the signal goes out.
+  #
+  # The shapes are enumerated rather than caught wholesale so a new return
+  # from `build_prompt_via_provider/2` has to be considered here instead
+  # of silently becoming `nil`; the trailing catch-all remains because a
+  # `nil` prompt beats a FunctionClauseError inside a plan-submit
+  # transaction.
   defp rendered_prompt_text({:messages, messages}) when is_list(messages) do
     text =
       messages
@@ -1239,7 +1486,47 @@ defmodule Platform.Responsibilities.Router do
     if text == "", do: nil, else: text
   end
 
+  defp rendered_prompt_text(:legacy), do: nil
+  defp rendered_prompt_text({:error, _reason}), do: nil
   defp rendered_prompt_text(_), do: nil
+
+  defp log_native_prompt_fidelity(_responsibility, _agent, {:messages, _messages}), do: :ok
+
+  defp log_native_prompt_fidelity(%Responsibility{} = responsibility, agent, {:error, reason}) do
+    Logger.warning(
+      "[ResponsibilityRouter] provider build_prompt refused but native dispatch proceeds " <>
+        "with no prompt key=#{responsibility.key} agent=#{agent_slug(agent)} " <>
+        "reason=#{inspect(reason)} — the external path would have aborted here"
+    )
+
+    :ok
+  end
+
+  defp log_native_prompt_fidelity(%Responsibility{} = responsibility, _agent, :legacy) do
+    case Providers.feature_provider(responsibility.feature) do
+      {:ok, module} ->
+        Logger.debug(
+          "[ResponsibilityRouter] native signal carries no prompt key=#{responsibility.key} — " <>
+            "provider #{inspect(module)} ships no build_prompt/1"
+        )
+
+      {:retired, reason} ->
+        Logger.debug(
+          "[ResponsibilityRouter] native signal carries no prompt key=#{responsibility.key} — " <>
+            "feature=#{inspect(responsibility.feature)} is retired by design: #{reason}"
+        )
+
+      :error ->
+        Logger.warning(
+          "[ResponsibilityRouter] native signal carries no prompt key=#{responsibility.key} — " <>
+            "feature=#{inspect(responsibility.feature)} has no provider registered. Fix: add " <>
+            "it to Platform.Responsibilities.Providers @feature_providers, or to @retired " <>
+            "with a reason."
+        )
+    end
+
+    :ok
+  end
 
   defp native_reason_for(:chat_pattern), do: :mention
   defp native_reason_for(:webhook), do: :system_event
@@ -1255,6 +1542,10 @@ defmodule Platform.Responsibilities.Router do
   # {Module, :function})` so unit tests don't have to stand up a real
   # AgentResponder + chat space + sandbox-permitted Task. Production
   # always uses `Platform.Chat.AgentResponder.maybe_dispatch/1`.
+  #
+  # `{:ok, :dispatched}` here means the HANDOFF was accepted, not that the
+  # agent responded — see the honesty-limit section on `fire_trigger/3`.
+  @spec call_agent_responder(map()) :: {:ok, :dispatched} | {:error, term()}
   defp call_agent_responder(signal) do
     {mod, fun} =
       Application.get_env(
@@ -1264,14 +1555,17 @@ defmodule Platform.Responsibilities.Router do
       )
 
     if Code.ensure_loaded?(mod) and function_exported?(mod, fun, 1) do
-      apply(mod, fun, [signal])
+      case apply(mod, fun, [signal]) do
+        {:error, reason} -> {:error, {:native_dispatch_failed, reason}}
+        _ -> {:ok, :dispatched}
+      end
     else
       Logger.info(
         "[ResponsibilityRouter] native dispatcher #{inspect(mod)}.#{fun}/1 not loaded — " <>
           "skipping native dispatch"
       )
 
-      :ok
+      {:error, {:native_dispatcher_unavailable, mod, fun}}
     end
   rescue
     error ->
@@ -1280,7 +1574,7 @@ defmodule Platform.Responsibilities.Router do
           Exception.message(error)
       )
 
-      :ok
+      {:error, {:native_dispatch_raised, Exception.message(error)}}
   end
 
   # ── Telemetry helpers ─────────────────────────────────────────────────────

@@ -491,8 +491,19 @@ defmodule Platform.Tasks.PlanTest do
       assert latest.rejection_reason == "Missed the spec"
 
       # Both broadcasts fired on the board topic.
-      assert_receive {:task_updated, %{id: tid, status: "planning"}}
-      assert tid == task.id
+      #
+      # `tasks:board` is a GLOBAL topic and this module is `async: true`, so
+      # the id must be pinned INTO the pattern rather than checked after the
+      # fact: `assert_receive` scans the mailbox for a matching message, and
+      # an unpinned `%{id: tid, status: "planning"}` matches any concurrent
+      # sibling's broadcast about any task that happens to be in planning —
+      # then fails on `tid == task.id` with a foreign id. ADR-0046 member 4
+      # made that concrete: `submit_plan_for_review/1` now emits three
+      # `{:task_updated, %Task{status: "planning"}}` broadcasts (planning-step
+      # cursor + outcome), and this assertion started picking them up.
+      # Pinning is strictly stronger — it never passed on a foreign message.
+      task_id = task.id
+      assert_receive {:task_updated, %{id: ^task_id, status: "planning"}}
       assert_receive {:plan_updated, %{status: "rejected", rejection_reason: "Missed the spec"}}
     end
 
@@ -594,8 +605,10 @@ defmodule Platform.Tasks.PlanTest do
         assert latest.status == "superseded"
         assert latest.rejection_reason == "wrong scope"
 
-        assert_receive {:task_updated, %{id: tid, status: "planning"}}
-        assert tid == task.id
+        # Pinned into the pattern for the same reason as the
+        # `reopen_with_feedback/3` sibling above — see the note there.
+        task_id = task.id
+        assert_receive {:task_updated, %{id: ^task_id, status: "planning"}}
         assert_receive {:plan_updated, %{status: "superseded", rejection_reason: "wrong scope"}}
       end
     end

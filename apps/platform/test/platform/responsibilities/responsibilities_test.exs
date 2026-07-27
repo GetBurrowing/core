@@ -9,6 +9,8 @@ defmodule Platform.ResponsibilitiesTest do
 
   import ExUnit.CaptureLog
 
+  doctest Platform.Responsibilities, only: [outcome: 1]
+
   alias Platform.Agents.Agent
   alias Platform.Repo
   alias Platform.Responsibilities
@@ -323,14 +325,21 @@ defmodule Platform.ResponsibilitiesTest do
     end
   end
 
-  # ── fire/2 dispatch delegate (ADR-0044 stage 2) ────────────────────────
+  # ── fire/2 dispatch delegate (ADR-0044 stage 2, ADR-0046 stage 2) ──────
   #
   # `Platform.Responsibilities.fire/2` is a thin delegate to
-  # `Platform.Responsibilities.Router.fire/2`. Its job is (a) preserve
-  # the router's dispatch semantics for a known + filled key and (b)
-  # normalise the two "nothing further to do" cases (unknown key + no
-  # assignee) to `:ok` so lifecycle-transition callers can invoke
-  # `fire/2` without branching on the progressive-enhancement state.
+  # `Platform.Responsibilities.Router.fire/2`. It used to normalise the
+  # two "nothing further to do" cases (unknown key + no assignee) — and,
+  # as a side effect, every genuine dispatch failure — down to a flat
+  # `:ok`. ADR-0046 member 1 stage 2 deleted that normalisation: the
+  # Router result now passes through verbatim and `outcome/1` provides
+  # the shared mapping onto `complete | not_applicable | failed`.
+  #
+  # The assertions below that changed from `:ok` to a tagged tuple are
+  # GUARDS — they pass either way once updated and only prove the
+  # progressive-enhancement paths did not regress. The FIX DETECTOR is
+  # the 503 test in the sibling describe block: on the pre-stage-2 code
+  # it returns `:ok`.
   describe "fire/2 dispatch delegate" do
     setup do
       Logger.put_module_level(Platform.Responsibilities.Router, :info)
@@ -338,20 +347,24 @@ defmodule Platform.ResponsibilitiesTest do
       :ok
     end
 
-    test "unknown responsibility key returns :ok (no row seeded)" do
-      # Router.fire/2 returns {:error, :unknown_responsibility} for this
-      # case — the delegate must normalise it to :ok so a call site can
-      # hook a key before its seed migration lands without stalling the
-      # caller.
+    test "unknown responsibility key returns {:ok, :unknown_responsibility} (no row seeded)" do
+      # GUARD. An unseeded key is a progressive-enhancement state, so it
+      # stays in the ok channel — a call site can hook a key before its
+      # seed migration lands without stalling the caller. It is now
+      # tagged rather than flattened, so ADR-0046 can report
+      # `not_applicable` instead of guessing.
       log =
         capture_log([level: :info], fn ->
-          assert :ok = Responsibilities.fire("architecture.does_not_exist_yet.v0", %{})
+          assert {:ok, :unknown_responsibility} =
+                   Responsibilities.fire("architecture.does_not_exist_yet.v0", %{})
         end)
 
       assert log =~ "fire/2 no row for key="
+
+      assert Responsibilities.outcome({:ok, :unknown_responsibility}) == :not_applicable
     end
 
-    test "known key with no assignee returns :ok and emits :unfilled telemetry" do
+    test "known key with no assignee returns {:ok, :unfilled} and emits :unfilled telemetry" do
       key = "architecture.review_plan_fire_unfilled_#{System.unique_integer([:positive])}"
 
       {:ok, _row} =
@@ -382,7 +395,9 @@ defmodule Platform.ResponsibilitiesTest do
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
       capture_log([level: :info], fn ->
-        assert :ok = Responsibilities.fire(key, %{plan_id: Ecto.UUID.generate()})
+        # GUARD — unfilled is not a failure and must not leak into the
+        # error channel.
+        assert {:ok, :unfilled} = Responsibilities.fire(key, %{plan_id: Ecto.UUID.generate()})
       end)
 
       assert_receive {:unfilled_telemetry, %{system_time: _},
@@ -392,10 +407,16 @@ defmodule Platform.ResponsibilitiesTest do
     test "known key with a native assignee dispatches and emits :fired telemetry" do
       key = "architecture.review_plan_fire_native_#{System.unique_integer([:positive])}"
 
+      # `feature` is deliberately NOT "architecture" — see the note on
+      # `seed_external_responsibility!/1` below. The unique-suffixed key
+      # is not one `Providers.Architecture.handler_for/1` maps, so under
+      # task 019f9b28-6ca7 stage 2 the architecture provider would refuse
+      # to supply context and the Router would correctly decline to
+      # dispatch. This test is about the native handoff, not about that.
       {:ok, _row} =
         Responsibilities.create_responsibility(%{
           key: key,
-          feature: "architecture",
+          feature: "resp_fire_unprovided_#{System.unique_integer([:positive])}",
           trigger_kind: "event_topic",
           trigger_config: %{"topic" => "plan:submitted"},
           scope: "per_project",
@@ -473,7 +494,11 @@ defmodule Platform.ResponsibilitiesTest do
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
       capture_log([level: :info], fn ->
-        assert :ok = Responsibilities.fire(key, %{plan_id: Ecto.UUID.generate()})
+        # GUARD. Note the honesty limit: on the native path
+        # `{:ok, :dispatched}` means the handoff was accepted, not that
+        # the agent responded.
+        assert {:ok, :dispatched} =
+                 Responsibilities.fire(key, %{plan_id: Ecto.UUID.generate()})
       end)
 
       assert_receive {:fired_telemetry, %{system_time: _}, %{key: ^key, dispatch_kind: :native}}
@@ -500,7 +525,239 @@ defmodule Platform.ResponsibilitiesTest do
         })
 
       capture_log([level: :info], fn ->
-        assert :ok = Responsibilities.fire(atom_shorthand, %{})
+        # GUARD — the row exists but has no assignee, so :unfilled.
+        assert {:ok, :unfilled} = Responsibilities.fire(atom_shorthand, %{})
+      end)
+    end
+  end
+
+  # ── outcome/1: the ADR-0046 mapper (member 1 stage 2) ──────────────────
+  #
+  # This is the contract surface stack members 2-9 import. One test per
+  # clause so a future edit that collapses `:unfilled` into `:failed`
+  # (the exact bug this task closes) cannot land quietly. The absence of
+  # a catch-all is itself part of the contract and is asserted.
+  describe "outcome/1" do
+    test "{:ok, :dispatched} maps to :complete" do
+      assert Responsibilities.outcome({:ok, :dispatched}) == :complete
+    end
+
+    test "{:ok, :unfilled} maps to :not_applicable" do
+      assert Responsibilities.outcome({:ok, :unfilled}) == :not_applicable
+    end
+
+    test "{:ok, :unknown_responsibility} maps to :not_applicable" do
+      assert Responsibilities.outcome({:ok, :unknown_responsibility}) == :not_applicable
+    end
+
+    test "{:error, reason} maps to :failed for any reason" do
+      assert Responsibilities.outcome({:error, {:dispatch_failed, :econnrefused}}) == :failed
+      assert Responsibilities.outcome({:error, {:native_dispatch_raised, "boom"}}) == :failed
+      assert Responsibilities.outcome({:error, :some_future_atom}) == :failed
+    end
+
+    test "not_applicable and failed are never conflated" do
+      # ADR-0046 docs/decisions/0046-...:79-83. Stated as an explicit
+      # assertion because it is the invariant the whole task exists to
+      # protect, not an implementation detail of the clauses above.
+      refute Responsibilities.outcome({:ok, :unfilled}) ==
+               Responsibilities.outcome({:error, :anything})
+
+      refute Responsibilities.outcome({:ok, :unknown_responsibility}) ==
+               Responsibilities.outcome({:error, :anything})
+
+      refute Responsibilities.outcome({:ok, :dispatched}) ==
+               Responsibilities.outcome({:ok, :unfilled})
+    end
+
+    test "an unrecognised shape raises rather than mis-mapping" do
+      # Deliberate: no catch-all clause. A future fire/2 value this
+      # mapper has not considered must be loud at the call site, not
+      # silently reported as :failed. Documented in the @doc as the
+      # reason transaction call sites must not invoke outcome/1
+      # unguarded.
+      #
+      # Called through `apply/3` on purpose: a direct call with a
+      # deliberately-bad argument trips the Elixir set-theoretic type
+      # checker at compile time ("incompatible types given to
+      # outcome/1"), which is the checker doing its job — but it would
+      # emit a warning on every build for a test that wants the runtime
+      # behaviour.
+      assert_raise FunctionClauseError, fn -> apply(Responsibilities, :outcome, [:ok]) end
+
+      assert_raise FunctionClauseError, fn ->
+        apply(Responsibilities, :outcome, [{:ok, :something_new}])
+      end
+    end
+
+    test "is exported with the arity members 2-9 assert on" do
+      # Stack member 4's plan makes this exact check a test assertion,
+      # so the name and arity are load-bearing beyond this task.
+      Code.ensure_loaded!(Responsibilities)
+      assert function_exported?(Responsibilities, :outcome, 1)
+    end
+  end
+
+  # ── FIX DETECTOR: a failed dispatch reaches the caller ────────────────
+  #
+  # THIS BLOCK FAILS AGAINST THE PRE-STAGE-2 CODE. Before the
+  # normalisation was deleted, `Responsibilities.fire/2` matched
+  # `{:ok, _}` first and returned a flat `:ok`, so an assigned external
+  # agent whose endpoint 503s was indistinguishable from a successful
+  # dispatch at every call site. The `{:error, {:dispatch_failed, _}}`
+  # assertion below is the whole point of the task.
+  describe "fire/2 surfaces external dispatch failure end-to-end" do
+    setup do
+      Logger.put_module_level(Platform.Responsibilities.Router, :info)
+      on_exit(fn -> Logger.delete_module_level(Platform.Responsibilities.Router) end)
+
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, :responsibilities_fire_dispatch_test})
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+      end)
+
+      :ok
+    end
+
+    # Mirrors wire_external_assignee/1 at
+    # test/platform/responsibilities/router_test.exs:1088-1128.
+    defp wire_external_assignee!(responsibility_key) do
+      role_key = "historian"
+
+      Repo.insert!(
+        %Role{key: role_key, name: "Historian", description: "test", icon: "hero-star"},
+        on_conflict: :nothing,
+        conflict_target: :key
+      )
+
+      %Platform.Roles.RoleResponsibility{}
+      |> Platform.Roles.RoleResponsibility.changeset(%{
+        role_key: role_key,
+        responsibility_key: responsibility_key
+      })
+      |> Repo.insert!()
+
+      agent =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "resp-fire-ext-#{System.unique_integer([:positive])}",
+          name: "Responsibilities Fire External",
+          status: "active",
+          kind: "external",
+          endpoint_kind: "openai_compat",
+          base_url: "https://api.example.test",
+          model: "test-model",
+          workspace_id: nil
+        })
+        |> Repo.insert!()
+
+      :ok = Platform.ExternalAgents.EphemeralCredentials.put(agent.id, "sk-resp-fire-test")
+      on_exit(fn -> Platform.ExternalAgents.EphemeralCredentials.delete(agent.id) end)
+
+      {:ok, _} = Roles.assign_role(role_key, agent.id)
+
+      agent
+    end
+
+    # NB the `feature`. This fixture used to say `"architecture"` for
+    # flavour, while `key` carried a `System.unique_integer` suffix that
+    # `Providers.Architecture.handler_for/1` has never mapped. That made
+    # the row an "architecture" responsibility the architecture provider
+    # disowns — `gather_context/2` returned
+    # `{:error, :unknown_architecture_responsibility}` and the Router
+    # silently substituted generic ContextGatherer context.
+    #
+    # Task 019f9b28-6ca7 stage 2 made the Router honour that refusal, so
+    # `feature` is now load-bearing where it used to be decorative. These
+    # tests are about `fire/2`'s RETURN PLUMBING, not about the
+    # architecture provider, so the honest fixture is a feature with no
+    # provider at all — the "nothing to say" case, which still falls back
+    # and dispatches. The real `feature: "architecture"` path is covered
+    # end-to-end by `architecture_dispatch_test.exs`.
+    defp seed_external_responsibility!(key) do
+      {:ok, row} =
+        Responsibilities.create_responsibility(%{
+          key: key,
+          feature: "resp_fire_unprovided_#{System.unique_integer([:positive])}",
+          trigger_kind: "event_topic",
+          trigger_config: %{"topic" => "plan:submitted"},
+          scope: "per_project",
+          context_provided: [],
+          output_contract: %{"comments" => "list[map]"},
+          default_prompt_template: "architecture.review_plan.v1",
+          cost_profile: "low_freq_capable"
+        })
+
+      row
+    end
+
+    test "a 503 from an assigned external agent returns {:error, {:dispatch_failed, _}}" do
+      key = "architecture.review_plan_fire_503_#{System.unique_integer([:positive])}"
+      _row = seed_external_responsibility!(key)
+      _agent = wire_external_assignee!(key)
+
+      Req.Test.stub(:responsibilities_fire_dispatch_test, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(503, ~s({"error":"down"}))
+      end)
+
+      test_pid = self()
+      handler_id = "resp-fire-failed-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :failed],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:failed_telemetry, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      capture_log([level: :info], fn ->
+        fire_result = Responsibilities.fire(key, %{plan_id: Ecto.UUID.generate()})
+
+        assert {:error, {:dispatch_failed, _reason}} = fire_result
+        assert Responsibilities.outcome(fire_result) == :failed
+      end)
+
+      assert_receive {:failed_telemetry, %{system_time: _},
+                      %{key: ^key, dispatch_kind: :external}}
+    end
+
+    test "POSITIVE CONTROL — a 200 from the same wiring returns {:ok, :dispatched}" do
+      # Without this, the 503 test could pass because the agent was
+      # never reachable at all rather than because the failure now
+      # propagates. Same wiring, only the stubbed status differs.
+      key = "architecture.review_plan_fire_200_#{System.unique_integer([:positive])}"
+      _row = seed_external_responsibility!(key)
+      _agent = wire_external_assignee!(key)
+
+      Req.Test.stub(:responsibilities_fire_dispatch_test, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "choices" => [%{"message" => %{"role" => "assistant", "content" => "ack"}}]
+          })
+        )
+      end)
+
+      capture_log([level: :info], fn ->
+        fire_result = Responsibilities.fire(key, %{plan_id: Ecto.UUID.generate()})
+
+        assert {:ok, :dispatched} = fire_result
+        assert Responsibilities.outcome(fire_result) == :complete
       end)
     end
   end

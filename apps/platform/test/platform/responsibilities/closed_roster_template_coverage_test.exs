@@ -42,7 +42,7 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
   # under. Only one alias today.
   @known_seed_key_aliases %{"memory.dream_consolidation" => "memory.dreaming"}
 
-  # The 20 prompt-template slugs the closed roster depends on. Kept as
+  # The 21 prompt-template slugs the closed roster depends on. Kept as
   # a literal list here (rather than derived from the responsibility
   # rows) so a stale expected list forces an intentional edit alongside
   # the code change that introduced a new template. ADR-0044 stage 1
@@ -60,6 +60,7 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     "design.brand_check.v1",
     "design.critique.v1",
     "design.spec_writer.v1",
+    "design.task_direction.v1",
     "meetings.action_items.v1",
     "meetings.attendance_followup.v1",
     "meetings.intent_classify.v1",

@@ -166,6 +166,49 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
     end
   end
 
+  # ADR-0046 member 7 stage 4 — the success path now taps
+  # `Platform.Design.PreplanStep.settle/2`. These are the async-safe half of
+  # that guard set: DB state only, no `Application` env. The raising-settler
+  # case needs a module-level env override and so lives in the `async: false`
+  # `Platform.Design.PreplanStepTest` instead, alongside the rest of the design
+  # step's guards.
+  describe "attach_canvas/3 — the ADR-0046 design-step hook" do
+    test "settles an open design step and returns the attachment unchanged", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+      {:ok, designing} = Tasks.set_planning_step(ctx.task, :designing)
+      assert designing.planning_step == "designing"
+
+      assert {:ok, %CanvasAttachment{canvas_id: attached_canvas_id}} =
+               CanvasAttachments.attach_canvas(ctx.task.id, canvas.id,
+                 note: "design direction",
+                 attached_by: attached_by(ctx)
+               )
+
+      assert attached_canvas_id == canvas.id
+
+      reloaded = Repo.get!(Platform.Tasks.Task, ctx.task.id)
+      assert reloaded.planning_step == "planning"
+      assert reloaded.planning_step_outcomes["design"]["outcome"] == "complete"
+      assert reloaded.planning_step_outcomes["design"]["canvas_id"] == canvas.id
+    end
+
+    # Paired control for the assertion above: an attachment on a task that is
+    # NOT designing must leave the planning fields exactly as they were, so the
+    # hook cannot be a blanket writer.
+    test "is inert on a task with no open design step", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      assert {:ok, %CanvasAttachment{}} =
+               CanvasAttachments.attach_canvas(ctx.task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+
+      reloaded = Repo.get!(Platform.Tasks.Task, ctx.task.id)
+      assert reloaded.planning_step == "planning"
+      assert reloaded.planning_step_outcomes == %{}
+    end
+  end
+
   describe "detach_canvas/2" do
     test "removes the row and returns :ok", ctx do
       canvas = create_canvas(ctx.space, ctx.participant)

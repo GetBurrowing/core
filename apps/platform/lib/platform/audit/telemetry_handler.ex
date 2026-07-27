@@ -112,11 +112,6 @@ defmodule Platform.Audit.TelemetryHandler do
     # (audit rows without a scope are dropped — see scope_check/2).
     [:platform, :agents, :historian, :no_op_pass],
     [:platform, :agents, :historian, :dispatch_debounced],
-    # Task 019f5d47-8090 — stage-level responsibility routing fallback.
-    # Emitted by Platform.Orchestration.TaskRouter.resolve_stage_dispatch_assignee/3
-    # when a stage's responsibility can't be resolved to a live runtime.
-    # Metadata carries stage_id, task_id, responsibility, fallback_runtime_id, reason.
-    [:platform, :plans, :stage_dispatch, :assignee_unresolvable],
     # Task 019f5e0b — meeting-scribe dispatch fallback. Emitted by
     # Platform.Federation.dispatch_scribe_attention/2 (via
     # emit_scribe_dispatch_fallback/3) when the scribe agent can't be

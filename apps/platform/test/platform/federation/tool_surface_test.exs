@@ -49,11 +49,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   describe "tool_definitions/0" do
-    test "returns all 88 tools with required components" do
+    test "returns all 89 tools with required components" do
       tools = ToolSurface.tool_definitions()
       # 88 as of task 019f70b8 stage 3, which added `intent_ack` to the
-      # `task` bundle.
-      assert length(tools) == 88
+      # `task` bundle. 89 as of ADR-0046 member 5 stage 4, which added
+      # `plan_architecture_verdict` to the `plan` bundle.
+      assert length(tools) == 89
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -104,6 +105,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "plan_create" in tool_names
       assert "plan_get" in tool_names
       assert "plan_submit" in tool_names
+      # ADR-0046 member 5 stage 4 — the architect's verdict surface. The
+      # six-component rubric below is what this assertion buys; the
+      # bundle placement and the refusal taxonomy are pinned in
+      # `plan_architecture_verdict_tool_test.exs`.
+      assert "plan_architecture_verdict" in tool_names
       assert "stage_start" in tool_names
       assert "stage_list" in tool_names
       assert "validation_evaluate" in tool_names
@@ -2258,9 +2264,18 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.recoverable == true
     end
 
-    # Task 019f5d47 stage 2 — per-stage responsibility field round-trips through
-    # plan_create → serialize_plan and remains optional at every layer.
-    test "plan_create round-trips per-stage responsibility slug" do
+    # ADR-0046 member 9 stage 3 — `responsibility` is gone from the MCP plan
+    # surface. Task 019f5d47 stage 2 had made it round-trip through
+    # plan_create → serialize_plan; that mechanism is retired (member 7's
+    # pre-plan design step delivers designer involvement instead), so the
+    # writer and the wire-level read are both deleted.
+    #
+    # BEHAVIOUR DECISION: a stage map still carrying `"responsibility"` is
+    # SILENTLY IGNORED, not rejected. An MCP client's `tools/list` catalogue is
+    # cached per session, so a planner runtime spawned before this deploy would
+    # hard-fail every plan_create if the key were rejected. The failure mode of
+    # tolerance is "field dropped" — which is the desired end state.
+    test "plan_create ignores a stale responsibility key: the field is neither persisted nor returned" do
       project = create_project()
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Responsibility task"})
 
@@ -2282,66 +2297,54 @@ defmodule Platform.Federation.ToolSurfaceTest do
         )
 
       assert [stage] = result.stages
-      assert stage.responsibility == "designer"
+
+      # POSITIVE CONTROL — tolerance, not rejection. The call succeeded, the
+      # stage was created, and the rest of the payload survived intact. Without
+      # this the refutes below would also hold for a plan_create that rejected
+      # the unknown key outright, which is the alternative this stage declined.
+      assert stage.name == "Design direction"
+      assert stage.position == 1
+      assert [%{kind: "manual_approval"}] = stage.validations
+
+      # FIX DETECTOR (read side). Restoring `serialize_stage/1`'s
+      # `responsibility:` line detonates here.
+      refute Map.has_key?(stage, :responsibility)
+
+      # FIX DETECTOR (write side). The read-side refute alone passes against a
+      # plan_create that still WRITES the column and merely stops echoing it,
+      # so check the persisted row too — that is the assertion that makes this
+      # "no new row can acquire a non-null responsibility" rather than "the
+      # wire response got quieter".
+      #
+      # Stage 3 wrote this as `assert persisted.responsibility == nil`, which
+      # was the strongest available form while the column existed. Stage 4
+      # dropped the column, so that access is now a KeyError and the claim is
+      # restated structurally: the persisted struct has no such key to hold a
+      # value in. Restoring the schema field AND the writer detonates here;
+      # restoring the schema field alone detonates in
+      # `Platform.Tasks.StageTest`.
+      persisted = Platform.Repo.get!(Platform.Tasks.Stage, stage.id)
+      assert persisted.name == "Design direction"
+      refute Map.has_key?(persisted, :responsibility)
     end
 
-    test "plan_create defaults responsibility to nil when omitted" do
-      project = create_project()
-      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "No responsibility"})
-
-      {:ok, result} =
-        ToolSurface.execute(
-          "plan_create",
-          %{
-            "task_id" => task.id,
-            "stages" => [
-              %{
-                "name" => "Build",
-                "position" => 1,
-                "validations" => [%{"kind" => "test_pass"}]
-              }
-            ]
-          },
-          %{}
-        )
-
-      assert [stage] = result.stages
-      assert stage.responsibility == nil
-    end
-
-    test "plan_create accepts explicit nil responsibility" do
-      project = create_project()
-      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Nil responsibility"})
-
-      {:ok, result} =
-        ToolSurface.execute(
-          "plan_create",
-          %{
-            "task_id" => task.id,
-            "stages" => [
-              %{
-                "name" => "Build",
-                "position" => 1,
-                "responsibility" => nil,
-                "validations" => [%{"kind" => "test_pass"}]
-              }
-            ]
-          },
-          %{}
-        )
-
-      assert [stage] = result.stages
-      assert stage.responsibility == nil
-    end
-
-    test "plan_create tool schema declares optional responsibility field" do
+    test "plan_create schema no longer documents responsibility but still documents the rest of the stage contract" do
       tools = ToolSurface.tool_definitions()
       plan_create = Enum.find(tools, &(&1.name == "plan_create"))
       assert plan_create, "plan_create tool must be registered"
 
       description = plan_create.parameters.stages.description
-      assert description =~ "responsibility"
-      assert description =~ "designer"
+
+      # GUARD.
+      refute description =~ "responsibility"
+
+      # POSITIVE CONTROL — the surrounding contract is byte-preserved. A botched
+      # string edit (or an emptied description) would satisfy the refute alone.
+      assert description =~ "e2e_behavior"
+      assert description =~ "evaluation_payload"
+      assert description =~ "setup/actions/expected"
+      assert description =~ "Do NOT include a deploy stage"
+      assert description =~ "{name, description, position, validations:"
     end
 
     test "plan_get returns current approved plan" do

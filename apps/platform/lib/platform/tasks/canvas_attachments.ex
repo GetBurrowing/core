@@ -101,8 +101,61 @@ defmodule Platform.Tasks.CanvasAttachments do
         conflict_target: [:task_id, :canvas_id],
         returning: true
       )
+      |> tap_settle_design_step()
     end
   end
+
+  # ADR-0046 member 7 stage 4. A canvas landing on a task is the completion
+  # signal for the pre-plan design step: the canvas IS the deliverable, so the
+  # deliverable arriving is the honest signal — and unlike a dedicated "I'm
+  # done" MCP tool it also works when a human attaches the canvas by hand, and
+  # cannot be forgotten in a way that is indistinguishable from stalling.
+  #
+  # `Platform.Design.PreplanStep.settle/2` is a no-op unless the task's cursor
+  # is `"designing"` or its design step is recorded `"failed"`, so this is inert
+  # for every other attachment in the system.
+  #
+  # Side-effect only, twice over: the `{:ok, _}` tuple is returned verbatim, and
+  # the whole call is wrapped so a settler that raises cannot turn a successful
+  # attach into an error or a crash. Asserted in `canvas_attachments_test.exs`
+  # with a deliberately raising stub injected through the seam below.
+  defp tap_settle_design_step({:ok, %CanvasAttachment{} = attachment} = result) do
+    {mod, fun} =
+      Application.get_env(
+        :platform,
+        :design_preplan_settler,
+        {Platform.Design.PreplanStep, :settle}
+      )
+
+    _ =
+      try do
+        apply(mod, fun, [attachment.task_id, attachment])
+      rescue
+        e ->
+          require Logger
+
+          Logger.warning(
+            "[task_attach_canvas] design settle hook raised for task=" <>
+              "#{attachment.task_id}: #{Exception.message(e)}"
+          )
+
+          :error
+      catch
+        :exit, reason ->
+          require Logger
+
+          Logger.warning(
+            "[task_attach_canvas] design settle hook exited for task=" <>
+              "#{attachment.task_id}: #{inspect(reason)}"
+          )
+
+          :error
+      end
+
+    result
+  end
+
+  defp tap_settle_design_step(other), do: other
 
   # ── detach ────────────────────────────────────────────────────────────────
 

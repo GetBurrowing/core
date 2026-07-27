@@ -43,6 +43,46 @@ custom classes must fully style the input
 - Ensure **clean typography, spacing, and layout balance** for a refined, premium look
 - Focus on **delightful details** like hover effects, loading states, and smooth page transitions
 
+## Citing ADRs
+
+Cite an ADR by **filename and section heading**, never by line number and
+never by bare number:
+
+    0046-design-and-architecture-phases-in-planning.md § Architect prompt contract
+
+- **Never `ADR-NNNN:LINE`.** Line numbers rot silently. Commit `d31610af`
+  inserted 25 lines into ADR-0046 and turned nine citations of its line 95 —
+  including one in an MCP tool description that agents read out of the tool
+  catalogue — into pointers at a closing code fence. Headings did not move.
+  When writing prose *about* the banned form, name the line the way this
+  paragraph does ("line 95 of ADR-0046") rather than emitting the form; the
+  audit bans the form with no exclusion list, including in its own source.
+- **Never a bare ADR number.** Four numbers in `docs/decisions/` name two
+  files each: **0017, 0036, 0042, 0044**. `ADR-0044` is a coin flip, not a
+  reference. The architect's own prompt header already says so
+  (`lib/platform/responsibilities/handlers/architecture_review_plan.ex`,
+  `format_adr_index_header/1`); source comments follow the same rule.
+- **Keep the citation on one source line.** Wrap the prose around it, not
+  through it — a citation split across two comment lines is invisible to the
+  audit and only looks resolvable.
+- Cite a heading that **actually exists** in the target file. The point of
+  the form is that it is machine-checkable: a heading either is in the file
+  or is not, whereas a line number records no expectation and so can never
+  be verified.
+
+`test/platform/regression/adr_citation_audit_test.exs` enforces all of the
+above — it bans the line-pinned form outright, resolves every `§` citation
+against the named ADR, rejects a citation split across two lines, and keeps
+citations out of `test` / `describe` names. If it fails, update the citation
+or restore the heading; adding an exclusion is not a third option.
+
+Deliberately **not** enforced: bare `ADR-NNNN` references and decision
+ordinals (`ADR-0046 decision 7`, `Decision 4`). The audit's moduledoc argues
+the exclusion at length — the short version is that most of the ~120 such
+sites name no document at all, and that a decision ordinal cannot be checked
+non-circularly until the citation form carries the decision's lead phrase.
+Prefer the `§` form for anything you are writing new.
+
 
 <!-- usage-rules-start -->
 

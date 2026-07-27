@@ -5,7 +5,11 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
   """
   use Platform.DataCase, async: false
 
+  alias Platform.Chat
+  alias Platform.Orchestration.ContextAssembler
   alias Platform.Orchestration.PromptTemplates
+  alias Platform.Tasks
+  alias Platform.Tasks.CanvasAttachments
 
   # Migrations are not on the compiled path, so the stage-6 template
   # migration has to be loaded before its `up/0` can be driven directly.
@@ -138,45 +142,176 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                ~r/Do NOT include a stage like.*Deploy via PR merge.*Open PR.*Watch CI.*Merge/s
     end
 
-    test "carries the Design involvement section — detection, brand cascade, advisory Saru stage (task 019f4f1d)" do
-      # First applied live via prompt_template_update on 2026-07-11 and
-      # upstreamed here so force-update migrations preserve it. The section
-      # must (a) detect UI/UX tasks beyond file tokens, (b) resolve brand
-      # context project → org with a once-per-project three-way human ask,
-      # and (c) add an advisory (never blocking) Saru design stage.
+    test "carries the Design involvement section — detection, brand already resolved, pre-plan canvas (tasks 019f4f1d → 019f9b29-5ecd)" do
+      # RETARGETED, not loosened (task 019f9b29-5ecd stage 6, ADR-0046
+      # member 7). The detection half is unchanged and still asserted: the
+      # planner still has to recognise a UI/UX task, because that is what
+      # decides whether the canvas matters. What ADR-0046 decision 1
+      # reverses is the two items underneath it — brand resolution and the
+      # planner-authored advisory stage both moved into the pre-plan design
+      # step, so a planner still doing them does each job twice.
       content = PromptTemplates.default_content_for_slug("dispatch.planning")
 
+      # (a) Detection — kept verbatim from 019f4f1d.
       assert content =~ "Design involvement (UI/UX tasks)"
       assert content =~ "looks, feels, moves, or is interacted with"
 
-      # Brand cascade + the three-way escalation, recorded once per project.
-      assert content =~ "Resolve brand context"
-      assert content =~ ~r/project-level overrides and extends org-level/i
-      assert content =~ "ONCE per project"
-      assert content =~ "exploring — no identity yet"
-      assert content =~ "never blocks development"
+      # (b) Brand is resolved upstream, in code, and the planner is told
+      # not to redo it. `Platform.Design.Brand` is named so the reader can
+      # find where the cascade went (stage 2 of this task).
+      assert content =~ "Platform.Design.Brand"
+      assert content =~ "you do not resolve it and you do not escalate"
+      assert content =~ "do not add a stage that asks"
 
-      # Advisory design stage: explicitly advise-only, no manual_approval gate.
-      assert content =~ "Design direction (Saru)"
-      assert content =~ "advise-only"
-      assert content =~ "Do NOT attach manual_approval to it"
+      # (c) The canvas the pre-plan step produces, and what to do when
+      # there isn't one. `canvas_get` is the actionable half — see the
+      # dispatch-context guard below for the proof it has an id to fetch.
+      assert content =~ "Design runs BEFORE planning"
+      assert content =~ "canvas_get"
+      assert content =~ ~s(Do NOT author a "Design direction" stage)
+      assert content =~ "not_applicable"
+      assert content =~ "proceed and do not wait"
+
+      # The superseded instructions are GONE, not merely unmentioned. Each
+      # of these paired with a positive assertion above, so a truncated or
+      # empty template fails the positives rather than passing the refutes.
+      refute content =~ "Add an early advisory design stage",
+             "the planner must no longer author its own design stage"
+
+      refute content =~ "Route this stage to Saru automatically",
+             "designer routing is the pre-plan dispatch's job, not a planned stage's"
+
+      refute content =~ "Resolve brand context",
+             "brand resolution moved into Platform.Design.Brand (stage 2)"
     end
 
-    test "teaches planners to route the Design-direction stage via responsibility (task 019f5d47)" do
-      # Stage-level responsibility routing (stage 5): the code default
-      # for dispatch.planning must instruct planners to set
-      # responsibility: "designer" on the advisory Design-direction
-      # stage so TaskRouter.do_dispatch/2 can resolve the current
-      # designer via Platform.Roles.agent_id_for_role/1 and route that
-      # single stage's prompt to Saru's runtime — with a soft fallback
-      # to the phase assignee when the role is unassigned or the
-      # runtime is offline.
+    test "no longer teaches planners to set responsibility on any stage (tasks 019f5d47 → 019f9b29-5ecd)" do
+      # RETARGETED. 019f5d47 stage 5 taught planners to set
+      # responsibility: "designer" so TaskRouter.do_dispatch/2 could route
+      # a planned stage to Saru. ADR-0046 makes the designer dispatch
+      # happen BEFORE planning, so that field has nothing left to route and
+      # member 9 is about to delete `Stage.responsibility` outright. This
+      # stage removes only the instruction to author it — landing that
+      # first is what makes member 9's deletion safe, because no
+      # newly-submitted plan will carry the field.
       content = PromptTemplates.default_content_for_slug("dispatch.planning")
 
-      assert content =~ "responsibility: \"designer\""
-      assert content =~ "Platform.Roles.agent_id_for_role/1"
-      assert content =~ "Route this stage to Saru automatically"
-      assert content =~ "Do NOT hardcode an agent_id"
+      # POSITIVE CONTROL, paired with the refutes below: the replacement
+      # instruction is present. Without this pair, the refutes would pass
+      # against an empty or truncated template.
+      assert content =~ "canvas_get"
+      assert content =~ "do NOT set `responsibility` on any stage"
+
+      refute content =~ ~s(responsibility: "designer"),
+             "the planner must not be told to emit the responsibility field"
+
+      refute content =~ "Platform.Roles.agent_id_for_role/1",
+             "role resolution for design happens before planning, not per-stage"
+
+      refute content =~ "Do NOT hardcode an agent_id",
+             "the whole agent-routing paragraph is gone, not just its field name"
+    end
+
+    test "items 3 and 4 of the Design involvement section survive byte-identical (task 019f9b29-5ecd stage 6)" do
+      # The lifecycle move touches WHO resolves brand and WHO produces the
+      # direction. It does not touch how implementation stages reference
+      # tokens, nor the manual_approval screenshot gate. Asserting the
+      # exact substrings keeps unrelated churn out of a migration a
+      # reviewer has to diff against the live DB row.
+      content = PromptTemplates.default_content_for_slug("dispatch.planning")
+
+      assert content =~
+               "3. **Reference the resolved brand identity in implementation stage descriptions** — name the semantic token slots the coder must use (primary/on-primary, accent, surface, muted, border, destructive), not raw hex and not \"match the brand\". If the project is in exploring mode, say so in the stage description instead."
+
+      assert content =~
+               "4. Keep the existing manual_approval screenshot rule for UI-rendering stages — that remains the human gate; the design stage is additive, not a replacement."
+    end
+
+    test "the live dispatch.planning row serves the retargeted section, not just the code default (task 019f9b29-5ecd stage 6)" do
+      # `render_template/2` reads the DB row, never `do_default_templates/0`.
+      # `seed_defaults/0` is INSERT-only, so editing the code default alone
+      # changes the fallback and leaves every deployed planner reading the
+      # old instruction — which is why this stage ships a force-update
+      # migration.
+      #
+      # Both halves are load-bearing and neither is redundant:
+      #   * the equality catches a `lib/` revert (the migrated row would
+      #     then disagree with the reverted default),
+      #   * the substring catches a migration that never ran (equality
+      #     alone passes trivially when BOTH the code and the DB are stale).
+      row = PromptTemplates.get_template_by_slug("dispatch.planning")
+      assert row, "the dispatch.planning row must exist in a migrated test DB"
+
+      assert row.content =~ "canvas_get",
+             "the live row is stale — 20260726051347 has not run on this database"
+
+      refute row.content =~ ~s(responsibility: "designer")
+
+      assert row.content == PromptTemplates.default_content_for_slug("dispatch.planning"),
+             "the live row and the shipped default have diverged"
+    end
+
+    test "a task with an attached design canvas gives the canvas_get instruction an id to fetch (task 019f9b29-5ecd stage 6)" do
+      # The prompt tells the planner to read the design canvas with
+      # `canvas_get`. That is only actionable if the dispatch context the
+      # planner receives carries the canvas id — no new template variable
+      # was added, so `ContextAssembler`'s `:canvases` list is the whole
+      # supply. Assert the pair: the instruction, and the id it needs.
+      #
+      # NOTE: the `:canvases`-is-populated half alone is already covered by
+      # `ContextAssemblerTest` "surfaces an attached canvas in :canvases
+      # with flat fields" and passes independently of this stage. The
+      # joint assertion is the new claim.
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Design Preplan Project",
+          repo_url: "https://github.com/test/design-preplan",
+          tech_stack: %{"language" => "elixir"}
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Restyle the task cards",
+          description: "Make the card grid readable at 375px",
+          priority: "high"
+        })
+
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Design Preplan Space",
+          slug: "design-preplan-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      {:ok, participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "agent",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Designer",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, canvas} =
+        Chat.create_canvas(%{
+          "space_id" => space.id,
+          "created_by" => participant.id,
+          "title" => "Design direction — task cards"
+        })
+
+      {:ok, _} =
+        CanvasAttachments.attach_canvas(task.id, canvas.id,
+          note: "pre-plan design direction",
+          attached_by: %{kind: "agent", id: participant.id}
+        )
+
+      context = ContextAssembler.build(task.id)
+
+      assert Enum.any?(context.canvases, &(&1.id == canvas.id)),
+             "the planner's dispatch context must carry the attached design canvas id"
+
+      assert PromptTemplates.default_content_for_slug("dispatch.planning") =~ "canvas_get",
+             "the id is only useful if the prompt still tells the planner to fetch it"
     end
   end
 
@@ -978,11 +1113,24 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                                        "priv/repo/migrations/20260725120000_seed_and_force_update_intent_attention_template.exs"
                                      ])
 
+    # Task 019f9b29-5ecd stage 6 (ADR-0046 member 7). Force-update only —
+    # the slug has existed since the original seed, so the insert branch is
+    # unreachable for it; the row it has to move is a deployed one.
+    @design_preplan_migration_path Path.join([
+                                     __ENV__.file
+                                     |> Path.dirname()
+                                     |> Path.dirname()
+                                     |> Path.dirname()
+                                     |> Path.dirname(),
+                                     "priv/repo/migrations/20260726051347_force_update_dispatch_planning_design_preplan.exs"
+                                   ])
+
     Code.compile_file(@alarm_silence_migration_path)
     Code.compile_file(@subagent_id_ack_migration_path)
     Code.compile_file(@federation_preamble_migration_path)
     Code.compile_file(@migration_slot_section_migration_path)
     Code.compile_file(@intent_attention_migration_path)
+    Code.compile_file(@design_preplan_migration_path)
 
     test "seed_defaults seeds dispatch.planning with current default content" do
       :ok = PromptTemplates.seed_defaults()
@@ -992,6 +1140,107 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       expected = PromptTemplates.default_content_for_slug("dispatch.planning")
       assert template.content == expected
+    end
+
+    # Task 019f9b29-5ecd stage 6. Until this stage the design-involvement
+    # migrations had no behavioural coverage at all — 20260711010000 and
+    # 20260713000010 appear only in the T4 allow-list, which asserts the
+    # FILE exists, not that it moves a row. These three exercise the
+    # branches: force-update, the insert-only control that proves the
+    # migration is load-bearing, and the missing-row skip.
+    @stale_design_markers """
+
+    1. **Resolve brand context** before planning design-dependent stages, in this order:
+       a. Project-level brand settings.
+    2. **Add an early advisory design stage** — "Design direction (Saru)":
+       - **Route this stage to Saru automatically**: set `responsibility: "designer"` on the stage payload. The engine resolves the current designer via `Platform.Roles.agent_id_for_role/1`.
+    """
+
+    defp stale_dispatch_planning_row do
+      template = PromptTemplates.get_template_by_slug("dispatch.planning")
+      assert template, "precondition: the dispatch.planning row exists"
+
+      stale =
+        template.content
+        |> String.replace("canvas_get", "REDACTED_STALE_TOKEN")
+        |> Kernel.<>(@stale_design_markers)
+
+      {:ok, updated} = PromptTemplates.update_template(template, %{content: stale})
+      updated
+    end
+
+    test "20260726051347 design-preplan migration FORCE-UPDATES a row still carrying the Saru stage" do
+      # The deployed case: every environment that ran 20260713000010 has a
+      # dispatch.planning row telling planners to author a
+      # `responsibility: "designer"` design stage. ADR-0046 runs design
+      # before planning, so leaving that row alone means every UI task gets
+      # design twice.
+      migration = Platform.Repo.Migrations.ForceUpdateDispatchPlanningDesignPreplan
+
+      stale = stale_dispatch_planning_row()
+      assert stale.content =~ ~s(responsibility: "designer")
+      refute stale.content =~ "canvas_get"
+
+      :ok = migration.up()
+
+      refreshed = PromptTemplates.get_template_by_slug("dispatch.planning")
+
+      assert refreshed.content ==
+               PromptTemplates.default_content_for_slug("dispatch.planning")
+
+      assert refreshed.content =~ "canvas_get"
+      refute refreshed.content =~ ~s(responsibility: "designer")
+      refute refreshed.content =~ "Design direction (Saru)"
+      refute refreshed.content =~ "REDACTED_STALE_TOKEN"
+
+      # Idempotent, and it does not duplicate the row.
+      :ok = migration.up()
+
+      assert PromptTemplates.get_template_by_slug("dispatch.planning").content ==
+               refreshed.content
+
+      assert Platform.Repo.aggregate(
+               Ecto.Query.from(t in Platform.Orchestration.PromptTemplate,
+                 where: t.slug == "dispatch.planning"
+               ),
+               :count
+             ) == 1
+    end
+
+    test "seed_defaults/0 does NOT undo a stale dispatch.planning row — the migration is load-bearing" do
+      # The control for the test above. If `seed_defaults/0` repaired stale
+      # rows, 20260726051347 would be ceremony. It is INSERT-only, so a
+      # deployment that already has the row keeps serving the old body
+      # forever and only the force-update reaches it.
+      stale = stale_dispatch_planning_row()
+
+      :ok = PromptTemplates.seed_defaults()
+
+      after_seed = PromptTemplates.get_template_by_slug("dispatch.planning")
+
+      assert after_seed.content == stale.content,
+             "seed_defaults/0 must leave an existing row untouched (insert-only)"
+
+      refute after_seed.content =~ "canvas_get"
+
+      # And the migration does what seeding cannot.
+      :ok = Platform.Repo.Migrations.ForceUpdateDispatchPlanningDesignPreplan.up()
+
+      assert PromptTemplates.get_template_by_slug("dispatch.planning").content =~ "canvas_get"
+    end
+
+    test "20260726051347 design-preplan migration SKIPS a database with no dispatch.planning row" do
+      # Fresh boots pick the slug up from `seed_defaults/0`; the migration
+      # must not insert it a second time or crash on the nil.
+      template = PromptTemplates.get_template_by_slug("dispatch.planning")
+      {:ok, _} = PromptTemplates.delete_template(template)
+
+      refute PromptTemplates.get_template_by_slug("dispatch.planning")
+
+      assert :ok = Platform.Repo.Migrations.ForceUpdateDispatchPlanningDesignPreplan.up()
+
+      refute PromptTemplates.get_template_by_slug("dispatch.planning"),
+             "the migration must skip a missing row, not insert one"
     end
 
     # This stage's migration runs on the TEST database like any other, so
@@ -2186,17 +2435,34 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       end
     end
 
-    test "content carries the three concern-kind anchors + additive contract" do
+    # ADR-0046 member 5 stage 4 INVERTED the second half of this test.
+    # `Tasks.approve_plan/3` now refuses a non-human approval behind an
+    # open architecture gate, so "additive, not a blocker" and "the plan
+    # advances regardless of what you find" became false claims — and a
+    # prompt that tells the architect its verdict does not matter trains
+    # it out of using the gate. The three concern kinds SURVIVE, demoted:
+    # they are reported in `summary` and only escalate to a reject when
+    # one crosses a constraint.
+    test "content carries the three concern-kind anchors + the GATE contract" do
       content = PromptTemplates.default_content_for_slug("architecture.review_plan.v1")
 
-      # The three concern kinds the architect flags.
+      # The three concern kinds the architect reports.
       assert content =~ "collision"
       assert content =~ "adr_drift"
       assert content =~ "dup_abstraction"
 
-      # The additive-not-blocking contract.
-      assert content =~ "additive" or content =~ "not a blocker"
-      assert content =~ "do not block plan approval" or content =~ "does NOT block"
+      # The gate contract, and the closed constraint vocabulary the
+      # verdict tool enforces. Prompt and validator speak one vocabulary.
+      assert content =~ "plan_architecture_verdict"
+
+      for constraint <- Platform.Tasks.Plan.architecture_constraints() do
+        assert content =~ constraint
+      end
+
+      # The two sentences that are now false.
+      refute content =~ "additive, not a blocker"
+      refute content =~ "regardless of what you find"
+      refute content =~ "does NOT block plan approval"
     end
 
     test "seed_defaults seeds architecture.review_plan.v1 into the DB" do

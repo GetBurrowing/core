@@ -92,11 +92,17 @@ defmodule PlatformWeb do
       import PlatformWeb.Components.EmptyState
       import PlatformWeb.Components.FileDeleteUI
       import PlatformWeb.Components.LifecycleControls
+      # `only:` because the module also exports `entries/2` and `visible?/2`,
+      # names generic enough to collide with a local def in any of the ~40
+      # modules that `use PlatformWeb, :live_view`. Templates reach the
+      # predicate through the `PlanningStepExtension` alias below.
+      import PlatformWeb.Components.PlanningStepExtension, only: [planning_step_extension: 1]
       import PlatformWeb.Components.ScopePill
       import PlatformWeb.Components.Sheet
 
       # Common modules used in templates
       alias Phoenix.LiveView.JS
+      alias PlatformWeb.Components.PlanningStepExtension
       alias PlatformWeb.Layouts
 
       # Routes generation with the ~p sigil

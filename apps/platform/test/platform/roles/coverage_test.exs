@@ -97,11 +97,14 @@ defmodule Platform.Roles.CoverageTest do
     test "bundle_for(\"designer\") returns the v2-canvas design.* keys" do
       bundle = Roles.bundle_for("designer")
 
-      # Canvas 019e0fb8-d87d-72b2-aab4-205b84fe23aa rev 3.
+      # Canvas 019e0fb8-d87d-72b2-aab4-205b84fe23aa rev 3, plus
+      # `design.task_direction` from ADR-0046 stack member 7 (task
+      # 019f9b29-5ecd stage 3) — the pre-plan design step.
       assert bundle == [
                "design.brand_check",
                "design.critique",
-               "design.spec_writer"
+               "design.spec_writer",
+               "design.task_direction"
              ]
 
       # Sanity: every key in the bundle is namespaced under `design.`.
@@ -242,11 +245,12 @@ defmodule Platform.Roles.CoverageTest do
       {:ok, _} = Roles.set_override("design.brand_check", override_agent.id)
 
       assert Roles.responsibilities_for("designer", exclude_overridden: true) ==
-               ["design.critique", "design.spec_writer"]
+               ["design.critique", "design.spec_writer", "design.task_direction"]
 
-      # All overridden → empty.
+      # All overridden → empty. Four keys since ADR-0046 stack member 7.
       {:ok, _} = Roles.set_override("design.critique", override_agent.id)
       {:ok, _} = Roles.set_override("design.spec_writer", override_agent.id)
+      {:ok, _} = Roles.set_override("design.task_direction", override_agent.id)
 
       assert Roles.responsibilities_for("designer", exclude_overridden: true) == []
 

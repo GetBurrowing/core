@@ -92,10 +92,20 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # Files owned by in-flight sibling tasks (019f9d80, 019fa003, 019fa06a
   # and the unmerged ADR-0046 stack). Recorded, never edited by this task.
+  # The ADR-0046 stack has now MERGED, so "in-flight" no longer describes it.
+  # The prefixes stay because what they encode is still true and still useful:
+  # these files belong to nine members of reviewed work whose lookups were
+  # classified but deliberately not rewritten by the boundary-hardening task.
+  # Anything moved off this list must be re-classified on its own merits, not
+  # silently downgraded to :safe_internal.
   @sibling_owned_prefixes [
     "platform/orchestration/task_router.ex",
     "platform/tasks.ex",
     "platform/tasks/task.ex",
+    # Added at the ADR-0046 merge — same stack, same rule.
+    "platform/tasks/architecture_rejection.ex",
+    "platform/tasks/plan_rejection.ex",
+    "platform/design/",
     "platform/responsibilities.ex",
     "platform/responsibilities/"
   ]
@@ -203,6 +213,11 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`message.frozen_by_participant_id` destructured off a loaded `%Message{}`"},
     {"platform/chat/sidebar.ex", :get, "Section", 1, :safe_internal,
      "update_section/2 checks Platform.UUID.valid?/1 on the phx-value- section_id, folding a malformed id into the existing {:error, :not_found}"},
+    # ── Design (sibling-owned, ADR-0046) ───────────────────────────────
+    {"platform/design/brand.ex", :platform_uuid_guard, "-", 1, :flagged_sibling_owned,
+     "`fetch_project/1`'s predicate, collapsed from a bare Ecto.UUID.cast/1 onto Platform.UUID.cast/1 at the ADR-0046 merge. The site was already total — it passes the cast's OUTPUT to `Tasks.get_project/1` and additionally rescues — so this is the canonical-predicate fix, not a raise fix. Sibling-owned — RECORD, DO NOT EDIT"},
+    {"platform/design/preplan_step.ex", :get, "Task", 2, :flagged_sibling_owned,
+     "`resolve_task/1`: :705 takes `%Task{}.id` off a loaded struct; :706 takes a raw binary. Every public entry point that can reach :706 with a caller-supplied string — `settle/2`, `expire/2`, `audit_ui_prediction/2`, `annotate/3` — wraps its body in `rescue`/`catch`, and the only lib caller passing a binary (`tool_surface.ex:5954`, `plan_create`) reaches it only AFTER `Tasks.create_plan/1` accepted the same id in the enclosing transaction. `start/1` does not rescue, but TaskRouter calls it with a `%Task{}` struct. Sibling-owned — RECORD, DO NOT EDIT"},
     # ── External agents ────────────────────────────────────────────────
     {"platform/external_agents.ex", :get_by, "Agent", 1, :safe_internal,
      "get_external_agent/1 checks Platform.UUID.valid?/1 before the id:-keyed get_by, which raises exactly like Repo.get/2 does. This is the spelling `git grep \"Repo.get(\"` cannot see"},
@@ -217,10 +232,10 @@ defmodule Platform.RepoLookupBoundaryTest do
      "keyed `runtime_id:`, a string column carrying the runtime's self-reported slug"},
     {"platform/federation/task_attrs.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
      "`default_agent_resolver/1` is the injection seam for tests; callers pass an `assignee_id` that `TaskAttrs` has already shape-validated"},
-    {"platform/federation/tool_surface.ex", :platform_uuid_guard, "-", 2, :safe_internal,
-     "file_delete_actor/1 now uses Platform.UUID.cast/1, so a 16-byte agent_id yields nil (delete refused) rather than a fabricated actor id written to the audit column; plus the get_by_uuid/2 helper's own guard"},
-    {"platform/federation/tool_surface.ex", :get, "Plan", 2, :safe_internal,
-     "both read stage.plan_id off a %Stage{} already loaded in the same function; plan_approve's agent-supplied plan_id was moved onto the guarded get_by_uuid/2 helper"},
+    {"platform/federation/tool_surface.ex", :platform_uuid_guard, "-", 3, :safe_internal,
+     "file_delete_actor/1 now uses Platform.UUID.cast/1, so a 16-byte agent_id yields nil (delete refused) rather than a fabricated actor id written to the audit column; plus the get_by_uuid/2 helper's own guard. Count 2 -> 3 at the ADR-0046 merge: member 5 stage 4's `verdict_plan/1` was collapsed off a bare Ecto.UUID.cast/1 onto the same predicate"},
+    {"platform/federation/tool_surface.ex", :get, "Plan", 3, :safe_internal,
+     "two read stage.plan_id off a %Stage{} already loaded in the same function; plan_approve's agent-supplied plan_id was moved onto the guarded get_by_uuid/2 helper. The third (count 2 -> 3 at the ADR-0046 merge) is member 5 stage 4's `verdict_plan/1`, whose agent-supplied plan_id is gated by Platform.UUID.cast/1 — collapsed from a bare Ecto.UUID.cast/1 at the merge — so Repo.get receives a canonical uuid or is never reached"},
     {"platform/federation/tool_surface.ex", :get, "Stage", 1, :safe_internal,
      "stage.plan_id is read off a %Stage{} the tool already loaded; the boundary-facing stage_complete lookup was moved onto the guarded get_by_uuid/2 helper"},
     # ── Files ──────────────────────────────────────────────────────────
@@ -274,9 +289,15 @@ defmodule Platform.RepoLookupBoundaryTest do
      "keyed `slug:`, a `prompt_templates.slug` string column — this is the lookup path actually used, and no UUID type participates in the comparison"},
     {"platform/orchestration/runtime_supervision.ex", :get_by, "RuntimeEvent", 1, :safe_internal,
      "keyed `idempotency_key:`, a string column"},
-    {"platform/orchestration/task_router.ex", :get, "Platform.Agents.Agent", 1,
-     :flagged_sibling_owned,
-     "`resolve_stage_dispatch_assignee/1` takes a stage assignee id from task attrs; sibling-owned by the ADR-0046 stack — RECORD, DO NOT EDIT"},
+    # `task_router.ex — get(Platform.Agents.Agent)` was here, recorded as
+    # sibling-owned against `resolve_stage_dispatch_assignee/1`. The ADR-0046
+    # stack has now landed and member 9 (`66911d50`, "Strip the
+    # stage-responsibility resolution path from TaskRouter") DELETED that
+    # function along with the rest of the stage-responsibility concept, so the
+    # lookup it classified no longer exists. Entry removed per this test's own
+    # instruction for a stale site: the classification is not lost, the code it
+    # described is gone. `stage_responsibility_retired_test.exs` guards the
+    # removal.
     {"platform/orchestration/task_router_watcher.ex", :get, "Platform.Agents.Agent", 1,
      :safe_internal,
      "`resolve_runtime_for_task/1` reads `agent_id` off the task's own assignee column after `Tasks.get_task_record/1` loaded it"},
@@ -301,6 +322,11 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`Responsibilities.get/1` public getter; sibling-owned by the ADR-0046 stack — RECORD, DO NOT EDIT"},
     {"platform/responsibilities.ex", :get_by, "Responsibility", 1, :flagged_sibling_owned,
      "keyed `key:` (string column, so not exposed) but the file is sibling-owned — RECORD, DO NOT EDIT"},
+    {"platform/responsibilities/context_providers.ex", :get, "Plan", 1, :flagged_sibling_owned,
+     "`load_plan/1`, reached from `resolve_anchor_task/1` with a `plan_id` off a responsibility trigger payload. Wrapped in this module's `safe/1`, which rescues and returns `{:error, {:exception, _}}`, so a malformed id degrades an OPTIONAL context slot to nil instead of raising. Sibling-owned — RECORD, DO NOT EDIT"},
+    {"platform/responsibilities/context_providers.ex", :get, "TaskSchema", 1,
+     :flagged_sibling_owned,
+     "`load_task/1`, same `resolve_anchor_task/1` ladder and the same `safe/1` wrapper as the Plan lookup above — RECORD, DO NOT EDIT"},
     {"platform/responsibilities/handlers/architecture_audit_diff.ex", :get, "Plan", 1,
      :flagged_sibling_owned, "sibling-owned handler — RECORD, DO NOT EDIT"},
     {"platform/responsibilities/handlers/architecture_audit_diff.ex", :get, "Stage", 1,
@@ -334,18 +360,22 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`planner_display_name/1` — sibling-owned by the ADR-0046 stack — RECORD, DO NOT EDIT"},
     {"platform/tasks.ex", :get, "Epic", 1, :flagged_sibling_owned,
      "`get_epic/1` is MCP-reachable (`tool_surface.ex:3145`) but sibling-owned — RECORD, DO NOT EDIT"},
-    {"platform/tasks.ex", :get, "Plan", 1, :flagged_sibling_owned,
-     "`get_plan/1` is MCP-reachable (`tool_surface.ex:5908`) but sibling-owned — RECORD, DO NOT EDIT"},
+    {"platform/tasks.ex", :get, "Plan", 4, :flagged_sibling_owned,
+     "`get_plan/1` is MCP-reachable (`tool_surface.ex:5908`) but sibling-owned — RECORD, DO NOT EDIT. Count 1 -> 4 at the ADR-0046 merge, all three from the architecture gate: `:2445` re-reads `plan.id` after `update_all` (off a loaded struct) and `:2486` does the same, but `:2487` — `resolve_plan_for_gate(id) when is_binary(id)` — takes a RAW binary with no `Platform.UUID` guard and no rescue. That one is a genuine :must_cast, kept at :flagged_sibling_owned only because this file belongs to the stack being merged. The gate is reached from `tool_surface.ex` `plan_architecture_verdict`, whose own `verdict_plan/1` casts first and hands over a loaded `%Plan{}`, so the exposed arity is not reachable from THAT tool today — but nothing structural stops a future caller passing a string"},
     {"platform/tasks.ex", :get, "Project", 1, :flagged_sibling_owned,
      "`get_project/1` is MCP-reachable (`tool_surface.ex:3084,7053`) but sibling-owned — RECORD, DO NOT EDIT"},
-    {"platform/tasks.ex", :get, "Task", 8, :flagged_sibling_owned,
-     "covers `get_task_record/1` at :746 (MCP-reachable at eight tool_surface call sites) through `maybe_apply_phase_assignee_and_reload/2` at :1229 (id off a loaded struct); sibling-owned — RECORD, DO NOT EDIT"},
+    {"platform/tasks.ex", :get, "Task", 10, :flagged_sibling_owned,
+     "covers `get_task_record/1` (MCP-reachable at eight tool_surface call sites) through `maybe_apply_phase_assignee_and_reload/2` (id off a loaded struct); sibling-owned — RECORD, DO NOT EDIT. Count 8 -> 10 at the ADR-0046 merge: `resolve_task_for_planning_step/1` at :689 (`%Task{}.id`, safe) and :690 (raw binary, unguarded — the same :must_cast shape as `resolve_plan_for_gate/1` above, and recorded for the same reason)"},
     {"platform/tasks.ex", :get, "Validation", 1, :flagged_sibling_owned,
      "`evaluate_validation/3` — sibling-owned — RECORD, DO NOT EDIT"},
     {"platform/tasks.ex", :get!, "Task", 2, :flagged_sibling_owned,
      "`plan.task_id` / `updated_plan.task_id` off loaded structs, but sibling-owned — RECORD, DO NOT EDIT"},
     {"platform/tasks.ex", :get_by, "Project", 1, :flagged_sibling_owned,
      "keyed `slug:` (string column, so not exposed) but sibling-owned — RECORD, DO NOT EDIT"},
+    {"platform/tasks/architecture_rejection.ex", :get, "Task", 1, :flagged_sibling_owned,
+     "`Repo.get(Task, plan.task_id)` — `task_id` is a `tasks.id` FK column read off a loaded `%Plan{}`, so it is a canonical UUID by construction. Sibling-owned — RECORD, DO NOT EDIT"},
+    {"platform/tasks/plan_rejection.ex", :get, "Agent", 1, :flagged_sibling_owned,
+     "`agent_name/1` inside `actor_display_name/1`. This lookup DOES raise on a malformed actor id and is deliberately allowed to — `actor_display_name/1`'s `rescue` is what folds it to \"the reviewer\". Note this became the raising tier only at the ADR-0046 merge: main's 9b0d74d8 made the `Accounts.get_user/1` tier above it total, so malformed ids now fall through to here. Pinned by plan_rejection_test.exs. Sibling-owned — RECORD, DO NOT EDIT"},
     {"platform/tasks/task.ex", :ecto_uuid_cast, "-", 1, :flagged_sibling_owned,
      "`valid_dependency_entry?/1` bare-casts an agent-supplied `dependencies` payload, so a 16-char string validates and is persisted as a task_id. Sibling-owned — RECORD, DO NOT EDIT"},
     # ── Tasks: not sibling-owned ───────────────────────────────────────
@@ -527,6 +557,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/org/preamble_builder.ex" => 3,
     "platform/org/tenants_summary.ex" => 2,
     "platform/org/wiki.ex" => 5,
+    # ADR-0046 merge: `latest_live_plan/1`, whose `where: p.task_id == ^task_id`
+    # pins a UUID column and so raises Ecto.Query.CastError on a malformed id
+    # exactly as Repo.get/2 would — the case this map exists to make someone
+    # triage by hand. Triaged: the call sits inside this module's `safe/1`
+    # rescue, like every lookup in the file, so a bad id degrades an OPTIONAL
+    # context slot to nil rather than raising out of the provider.
+    "platform/responsibilities/context_providers.ex" => 1,
     "platform/responsibilities/handlers/architecture_cron_sweep.ex" => 1,
     "platform/roles.ex" => 2,
     "platform/tasks.ex" => 6,
@@ -820,6 +857,17 @@ defmodule Platform.RepoLookupBoundaryTest do
       assert bare == [
                # carries the `String.length(value) == 36` prefix itself
                "platform/agents/agent_server.ex",
+               # The ADR-0046 merge added three bare casts here — `brand.ex`
+               # `fetch_project/1`, `tool_surface.ex` `verdict_plan/1` and
+               # `tasks.ex` `human_approver/1` — and all three were collapsed
+               # onto `Platform.UUID.cast/1` at the merge rather than
+               # allow-listed, so this list is unchanged. `human_approver/1`
+               # is the collapse this module's moduledoc explicitly left to
+               # whoever merged the stack; the other two got the same
+               # treatment because they are the same shape. All three were
+               # behaviour-identical swaps: each already passed the cast's
+               # OUTPUT to Repo, so the 16-byte gap produced a miss, not a
+               # raise. The ratchet stays at four files.
                # sibling-owned (ADR-0046 stack) — recorded, not edited
                "platform/tasks/task.ex",
                # reached only behind a `<<_::288>>` binary pattern

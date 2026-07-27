@@ -72,6 +72,53 @@ defmodule Platform.Responsibilities.RouterTest do
     {pid, name}
   end
 
+  # ── ad-hoc provider fixture (task 019f9b28 stage 2) ──────────────────────
+  #
+  # The Router no longer derives a provider module name from `feature`
+  # (`Module.concat([Providers, Macro.camelize(feature)])`) — it resolves
+  # through the explicit registry in `Platform.Responsibilities.Providers`.
+  # Tests that need a throwaway provider therefore *register* it through
+  # the documented override seam instead of naming it into existence.
+  #
+  # This is the same test intent as before (does the Router invoke the
+  # provider's callbacks?) with the name convention taken out, which is
+  # the point: nothing here depends on how a feature string spells a
+  # module any more.
+  defp define_provider(feature_str, body) do
+    provider_name =
+      Module.concat([
+        Platform.Responsibilities.Providers,
+        "AdHoc#{System.unique_integer([:positive])}"
+      ])
+
+    Module.create(provider_name, body, Macro.Env.location(__ENV__))
+    put_provider_override(feature_str, provider_name)
+
+    provider_name
+  end
+
+  defp put_provider_override(feature, module) do
+    current = Application.get_env(:platform, :responsibility_provider_overrides, %{})
+
+    Application.put_env(
+      :platform,
+      :responsibility_provider_overrides,
+      Map.put(current, feature, module)
+    )
+
+    on_exit(fn ->
+      remaining = Application.get_env(:platform, :responsibility_provider_overrides, %{})
+
+      Application.put_env(
+        :platform,
+        :responsibility_provider_overrides,
+        Map.delete(remaining, feature)
+      )
+    end)
+
+    :ok
+  end
+
   # ── tests ────────────────────────────────────────────────────────────────
 
   describe "start_link/1 + snapshot/1" do
@@ -412,7 +459,7 @@ defmodule Platform.Responsibilities.RouterTest do
   # ── M6 stage 2: fire_trigger/3 pipeline ─────────────────────────────────
 
   describe "fire_trigger/3 — unfilled assignee" do
-    test "logs unfilled, emits telemetry, returns :ok without crashing" do
+    test "logs unfilled, emits telemetry, returns {:ok, :unfilled} without crashing" do
       row =
         insert!(%{
           key: "routertest.unfilled_#{System.unique_integer([:positive])}",
@@ -435,7 +482,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok =
+          assert {:ok, :unfilled} =
                    Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 
@@ -538,7 +585,8 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok = Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
+          assert {:ok, :dispatched} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
         end)
 
       assert log =~ "[ResponsibilityRouter] native dispatch key=#{row.key}"
@@ -1171,7 +1219,8 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok = Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
+          assert {:ok, :dispatched} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
         end)
 
       assert log =~ "[ResponsibilityRouter] external dispatch ok key=#{key}"
@@ -1220,7 +1269,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :warning], fn ->
-          assert :ok =
+          assert {:error, {:dispatch_failed, _}} =
                    Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 
@@ -1238,25 +1287,16 @@ defmodule Platform.Responsibilities.RouterTest do
 
     test "handle_output/3 is invoked on the provider module when present" do
       # Stand up an ad-hoc provider module under a unique feature so we
-      # don't collide with M8's eventual Providers.Meetings. The Router
-      # resolves the module name by camelcasing `feature` and prepending
-      # `Platform.Responsibilities.Providers.`, so we feed it
-      # `feature == "router_test_ho"` and define a module at the
-      # corresponding name.
+      # don't collide with the real Providers.*. The Router resolves the
+      # module through `Platform.Responsibilities.Providers`, so the
+      # throwaway module registers itself via the override seam.
 
-      feature_atom_suffix = "RouterTestHo#{System.unique_integer([:positive])}"
       feature_str = "router_test_ho_#{System.unique_integer([:positive])}"
-
-      provider_name =
-        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
 
       test_pid = self()
 
-      # Define a tiny provider module at the canonical name. Module
-      # creation must happen before the Router resolves it via
-      # `Code.ensure_loaded?/1`.
-      Module.create(
-        provider_name,
+      define_provider(
+        feature_str,
         quote do
           @behaviour Platform.Responsibilities.Provider
 
@@ -1274,12 +1314,8 @@ defmodule Platform.Responsibilities.RouterTest do
             send(unquote(test_pid), {:handle_output_invoked, responsibility.key, parsed, meta})
             :ok
           end
-        end,
-        Macro.Env.location(__ENV__)
+        end
       )
-
-      # Touch the suffix var so the compiler doesn't whine.
-      _ = feature_atom_suffix
 
       key = "#{feature_str}.dispatch_#{System.unique_integer([:positive])}"
 
@@ -1304,7 +1340,7 @@ defmodule Platform.Responsibilities.RouterTest do
       trigger_meta = %{kind: :cron, fired_at: DateTime.utc_now(), correlation: "abc"}
 
       capture_log([level: :info], fn ->
-        assert :ok = Router.fire_trigger(row, trigger_meta, %{})
+        assert {:ok, :dispatched} = Router.fire_trigger(row, trigger_meta, %{})
       end)
 
       assert_receive {:handle_output_invoked, ^key, "ho_invoked", meta}
@@ -1334,7 +1370,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          assert :ok =
+          assert {:ok, :dispatched} =
                    Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 
@@ -1345,18 +1381,14 @@ defmodule Platform.Responsibilities.RouterTest do
     # ── task 019f2570 stage 1 — provider gather_context + build_prompt wiring ──
 
     test "provider gather_context/2 is invoked before ContextGatherer fallback" do
-      # Ad-hoc provider under a unique feature. The `feature`
-      # camelcases into `Platform.Responsibilities.Providers.<Feature>`
-      # which the Router resolves at dispatch time.
+      # Ad-hoc provider under a unique feature, bound to that feature
+      # through the Providers override seam.
       feature_str = "router_gc_probe_#{System.unique_integer([:positive])}"
-
-      provider_name =
-        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
 
       test_pid = self()
 
-      Module.create(
-        provider_name,
+      define_provider(
+        feature_str,
         quote do
           @behaviour Platform.Responsibilities.Provider
 
@@ -1374,8 +1406,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
           @impl true
           def handle_output(_r, _o, _m), do: :ok
-        end,
-        Macro.Env.location(__ENV__)
+        end
       )
 
       key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
@@ -1405,7 +1436,7 @@ defmodule Platform.Responsibilities.RouterTest do
       }
 
       capture_log([level: :info], fn ->
-        assert :ok = Router.fire_trigger(row, trigger_meta, %{})
+        assert {:ok, :dispatched} = Router.fire_trigger(row, trigger_meta, %{})
       end)
 
       # Provider callback must be invoked with the full trigger_meta
@@ -1419,11 +1450,8 @@ defmodule Platform.Responsibilities.RouterTest do
     test "provider build_prompt/1 messages land in the LLM request body verbatim" do
       feature_str = "router_bp_verbatim_#{System.unique_integer([:positive])}"
 
-      provider_name =
-        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
-
-      Module.create(
-        provider_name,
+      define_provider(
+        feature_str,
         quote do
           @behaviour Platform.Responsibilities.Provider
 
@@ -1448,8 +1476,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
           @impl true
           def handle_output(_r, _o, _m), do: :ok
-        end,
-        Macro.Env.location(__ENV__)
+        end
       )
 
       key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
@@ -1481,7 +1508,7 @@ defmodule Platform.Responsibilities.RouterTest do
       end)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
       end)
 
@@ -1503,11 +1530,8 @@ defmodule Platform.Responsibilities.RouterTest do
     test "provider build_prompt/1 returning {:error, _} short-circuits — no LLM call, :failed telemetry" do
       feature_str = "router_bp_refuse_#{System.unique_integer([:positive])}"
 
-      provider_name =
-        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
-
-      Module.create(
-        provider_name,
+      define_provider(
+        feature_str,
         quote do
           @behaviour Platform.Responsibilities.Provider
 
@@ -1525,8 +1549,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
           @impl true
           def handle_output(_r, _o, _m), do: :ok
-        end,
-        Macro.Env.location(__ENV__)
+        end
       )
 
       key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
@@ -1563,7 +1586,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :warning], fn ->
-          assert :ok =
+          assert {:error, {:build_prompt_refused, _}} =
                    Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
         end)
 
@@ -1583,11 +1606,8 @@ defmodule Platform.Responsibilities.RouterTest do
     test "provider without build_prompt/1 continues to use the legacy template render path" do
       feature_str = "router_bp_legacy_#{System.unique_integer([:positive])}"
 
-      provider_name =
-        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
-
-      Module.create(
-        provider_name,
+      define_provider(
+        feature_str,
         quote do
           @behaviour Platform.Responsibilities.Provider
 
@@ -1604,8 +1624,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
           @impl true
           def handle_output(_r, _o, _m), do: :ok
-        end,
-        Macro.Env.location(__ENV__)
+        end
       )
 
       key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
@@ -1636,7 +1655,7 @@ defmodule Platform.Responsibilities.RouterTest do
       end)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
       end)
 
@@ -1658,11 +1677,8 @@ defmodule Platform.Responsibilities.RouterTest do
     test "external dispatch body is unchanged by the shared prompt preamble" do
       feature_str = "router_ext_guard_#{System.unique_integer([:positive])}"
 
-      provider_name =
-        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
-
-      Module.create(
-        provider_name,
+      define_provider(
+        feature_str,
         quote do
           @behaviour Platform.Responsibilities.Provider
 
@@ -1680,8 +1696,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
           @impl true
           def handle_output(_r, _o, _m), do: :ok
-        end,
-        Macro.Env.location(__ENV__)
+        end
       )
 
       key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
@@ -1708,7 +1723,7 @@ defmodule Platform.Responsibilities.RouterTest do
       end)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
       end)
 
@@ -1719,6 +1734,357 @@ defmodule Platform.Responsibilities.RouterTest do
                %{"role" => "system", "content" => "SYS"},
                %{"role" => "user", "content" => "USER Ada"}
              ]
+    end
+
+    # ── task 019f9b28-6ca7 stage 2 — a provider refusal is honoured ────────
+    #
+    # `gather_context_via_provider/3` used to have ONE `else` arm collapsing
+    # four situations: no provider module, provider without
+    # `gather_context/2`, provider that deliberately returned
+    # `{:error, :no_transcript}`, and provider that raised. The first two
+    # mean "nothing to say" and the ContextGatherer fallback is correct.
+    # The last two mean the dispatch is wrong, and substituting generic
+    # context sent the LLM — and the bill — after a different question.
+    #
+    # DETECTOR: revert `gather_context_via_provider/3` to the `with`/`else`
+    # fallback and the two `refute_receive :dispatched_anyway` assertions
+    # below fail, because the refusal becomes a generic dispatch.
+
+    test "a provider that refuses context short-circuits — no LLM call, :failed telemetry" do
+      feature_str = "router_gc_refuse_#{System.unique_integer([:positive])}"
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: {:error, :deliberate}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          # A renderable legacy template — so the ONLY thing stopping the
+          # dispatch is the refusal, not a missing prompt.
+          default_prompt_template: "do the thing"
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        send(test_pid, :dispatched_anyway)
+        Req.Test.json(conn, %{"choices" => []})
+      end)
+
+      handler_id = "router-test-gc-refused-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :failed],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:failed_telemetry, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {fire_result, log} =
+        with_log([level: :warning], fn ->
+          Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      # STRONGEST ASSERTION FIRST, deliberately. A return-tuple match would
+      # also go red on a revert, but it would go red on a SHAPE. This goes
+      # red on the observable fact the stage exists to change: bytes left
+      # the process, headed for a paid endpoint, carrying context the
+      # provider said it could not supply.
+      refute_receive :dispatched_anyway, 100
+
+      assert fire_result == {:error, {:context_gather_refused, :deliberate}}
+
+      assert log =~ "provider gather_context refused dispatch"
+      assert log =~ "key=#{key}"
+      assert log =~ ":deliberate"
+
+      assert_receive {:failed_telemetry, _meas,
+                      %{key: ^key, dispatch_kind: :external, reason: reason}}
+
+      assert reason =~ "context_gather_refused"
+      assert reason =~ "deliberate"
+    end
+
+    # POSITIVE CONTROL for the test above, on the same harness and the same
+    # mechanism: the ONLY difference is the provider's return value. If this
+    # dispatches and the marker lands in the body, then the `refute_receive`
+    # above is a real observation about the refusal rather than a stub that
+    # was never reachable.
+    test "the same provider returning {:ok, ctx} DOES dispatch and its context reaches the body" do
+      feature_str = "router_gc_allow_#{System.unique_integer([:positive])}"
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: {:ok, %{marker: "GATHER_MARKER"}}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          default_prompt_template: "do the thing: {marker}"
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:dispatched_anyway, body})
+
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      capture_log([level: :info], fn ->
+        assert {:ok, :dispatched} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      end)
+
+      assert_receive {:dispatched_anyway, raw_body}
+      assert raw_body =~ "GATHER_MARKER"
+    end
+
+    test "a provider whose gather_context/2 raises refuses too, and logs at :error" do
+      feature_str = "router_gc_raise_#{System.unique_integer([:positive])}"
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: raise(RuntimeError, "gatherer exploded")
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          default_prompt_template: "do the thing"
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        send(test_pid, :dispatched_anyway)
+        Req.Test.json(conn, %{"choices" => []})
+      end)
+
+      handler_id = "router-test-gc-raise-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :failed],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:failed_telemetry, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      # Captured at :error, so a :warning is invisible here. That is the
+      # point: it pins the log-LEVEL half of the raise-vs-refusal split.
+      # A broken gatherer is a defect (:error); a provider that said no is
+      # a decision (:warning), and the refusal line must NOT show up.
+      {fire_result, error_log} =
+        with_log([level: :error], fn ->
+          Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      refute_receive :dispatched_anyway, 100
+
+      assert {:error, {:context_gather_refused, {:provider_gather_raised, message}}} = fire_result
+      assert message =~ "gatherer exploded"
+
+      assert error_log =~ "provider gather_context raised"
+      refute error_log =~ "provider gather_context refused dispatch"
+
+      assert_receive {:failed_telemetry, _meas,
+                      %{key: ^key, dispatch_kind: :external, reason: reason}}
+
+      assert reason =~ "context_gather_refused"
+      assert reason =~ "provider_gather_raised"
+    end
+
+    # GUARD for the OTHER two situations the old `else` arm covered. These
+    # are "nothing to say", not a refusal, and must still fall back to
+    # `ContextGatherer` and dispatch. Narrowing the fallback is the whole
+    # risk of this stage; these are what say we narrowed it correctly.
+    test "a provider that does NOT export gather_context/2 still falls back and dispatches" do
+      feature_str = "router_gc_nogather_#{System.unique_integer([:positive])}"
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          # NB: no `gather_context/2` at all — the "nothing to say" case.
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          context_provided: ["org_identity"],
+          default_prompt_template: "fallback still renders"
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        send(test_pid, :fallback_dispatched)
+
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      capture_log([level: :info], fn ->
+        assert {:ok, :dispatched} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      end)
+
+      assert_receive :fallback_dispatched
+    end
+
+    test "a feature with no provider module at all still falls back and dispatches" do
+      key = "routertest.gc_noprovider_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          # Never registered in @feature_providers and never overridden.
+          feature: "router_gc_unregistered_#{System.unique_integer([:positive])}",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          context_provided: ["org_identity"],
+          default_prompt_template: "fallback still renders"
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        send(test_pid, :fallback_dispatched)
+
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      capture_log([level: :warning], fn ->
+        assert {:ok, :dispatched} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      end)
+
+      assert_receive :fallback_dispatched
+    end
+
+    # BLAST RADIUS, asserted rather than assumed. Every shipped provider
+    # returns `{:error, :unknown_*_responsibility}` for a key its
+    # `handler_for/1` does not map. Before this stage that error was
+    # swallowed into the generic fallback; now it stops the dispatch. So a
+    # built-in whose key is missing from its feature provider's dispatch
+    # table would go from "fires with the wrong context" to "never fires" —
+    # a real regression, and this is the test that would catch it.
+    test "every built-in responsibility key maps to a handler in its feature provider" do
+      for module <- Platform.Responsibilities.BuiltIns.providers(),
+          spec <- module.register() do
+        case Platform.Responsibilities.Providers.feature_provider(spec.feature) do
+          {:ok, provider} ->
+            assert provider.handler_for(spec.key) != nil,
+                   "#{inspect(module)} declares key #{inspect(spec.key)} under feature " <>
+                     "#{inspect(spec.feature)}, but #{inspect(provider)}.handler_for/1 returns " <>
+                     "nil for it. Its gather_context/2 will return " <>
+                     "{:error, :unknown_*_responsibility}, which the Router now honours as a " <>
+                     "refusal — this responsibility would never dispatch."
+
+          # Retired features resolve to no provider module, so they take
+          # the ContextGatherer fallback and are unaffected by the refusal.
+          {:retired, _reason} ->
+            :ok
+
+          :error ->
+            flunk("feature #{inspect(spec.feature)} has no provider registration at all")
+        end
+      end
     end
   end
 
@@ -1817,7 +2183,7 @@ defmodule Platform.Responsibilities.RouterTest do
       agent = wire_native_assignee(key)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(
                    row,
                    %{kind: :cron, fired_at: DateTime.utc_now()},
@@ -1857,7 +2223,7 @@ defmodule Platform.Responsibilities.RouterTest do
       space_id = Ecto.UUID.generate()
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(
                    row,
                    %{
@@ -1891,7 +2257,8 @@ defmodule Platform.Responsibilities.RouterTest do
       fired_at = ~U[2026-06-23 15:00:00.000000Z]
 
       capture_log([level: :info], fn ->
-        assert :ok = Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
+        assert {:ok, :dispatched} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
       end)
 
       assert_receive {:captured_signal, _signal}
@@ -1908,18 +2275,6 @@ defmodule Platform.Responsibilities.RouterTest do
     # with no rendered prompt. External agents are API endpoints that
     # return a response; federated agents are runtimes that receive a
     # prompt payload and act. BOTH are sent a prompt.
-
-    # Defines an ad-hoc provider module at the canonical
-    # `Platform.Responsibilities.Providers.<Camelized>` name the Router
-    # resolves from `feature`. Mirrors the external-dispatch tests above.
-    defp define_native_provider(feature_str, body) do
-      provider_name =
-        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
-
-      Module.create(provider_name, body, Macro.Env.location(__ENV__))
-
-      provider_name
-    end
 
     # Flatten every nested term reachable from `signal` so a payload guard
     # can assert on things buried under `:metadata` rather than only the
@@ -1943,7 +2298,7 @@ defmodule Platform.Responsibilities.RouterTest do
     test "native dispatch carries the provider's rendered prompt and scalar trigger ids" do
       feature_str = "router_fed_prompt_#{System.unique_integer([:positive])}"
 
-      define_native_provider(
+      define_provider(
         feature_str,
         quote do
           @behaviour Platform.Responsibilities.Provider
@@ -1988,7 +2343,7 @@ defmodule Platform.Responsibilities.RouterTest do
       task_id = Ecto.UUID.generate()
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(
                    row,
                    %{
@@ -2034,7 +2389,7 @@ defmodule Platform.Responsibilities.RouterTest do
       _agent = wire_native_assignee(key)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(
                    row,
                    %{
@@ -2060,7 +2415,7 @@ defmodule Platform.Responsibilities.RouterTest do
     test "native dispatch with no provider build_prompt/1 omits :prompt entirely (no empty garbage)" do
       feature_str = "router_fed_noprompt_#{System.unique_integer([:positive])}"
 
-      define_native_provider(
+      define_provider(
         feature_str,
         quote do
           @behaviour Platform.Responsibilities.Provider
@@ -2094,7 +2449,7 @@ defmodule Platform.Responsibilities.RouterTest do
       agent = wire_native_assignee(key)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
       end)
 
@@ -2124,7 +2479,7 @@ defmodule Platform.Responsibilities.RouterTest do
       _agent = wire_native_assignee(key)
 
       capture_log([level: :info], fn ->
-        assert :ok =
+        assert {:ok, :dispatched} =
                  Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
       end)
 
@@ -2136,7 +2491,7 @@ defmodule Platform.Responsibilities.RouterTest do
     test "native signal never carries a %Plan{} struct or :frozen_history (payload guard)" do
       feature_str = "router_fed_payload_#{System.unique_integer([:positive])}"
 
-      define_native_provider(
+      define_provider(
         feature_str,
         quote do
           @behaviour Platform.Responsibilities.Provider
@@ -2184,7 +2539,7 @@ defmodule Platform.Responsibilities.RouterTest do
       }
 
       capture_log([level: :info], fn ->
-        assert :ok = Router.fire_trigger(row, trigger_meta, %{})
+        assert {:ok, :dispatched} = Router.fire_trigger(row, trigger_meta, %{})
       end)
 
       assert_receive {:captured_signal, signal}
@@ -2201,6 +2556,387 @@ defmodule Platform.Responsibilities.RouterTest do
       refute :plan in keys
       refute "history line 1" in terms
     end
+
+    # ── task 019f9b28-6ca7 stage 2 — the refusal covers the native path too ──
+    #
+    # The stage was written when `dispatch_native/4` carried no context at
+    # all, and recorded that as out of scope. `fix/render-prompt-for-federated-dispatch`
+    # has since hoisted `gather_context_via_provider/3` into the shared
+    # `dispatch_assignee/4` preamble, so a native assignee now receives the
+    # provider's rendered prompt — built from exactly the context that
+    # would have been silently substituted. Honouring the refusal above the
+    # external/native branch is what makes this hold, and this is the test
+    # that says so.
+    test "a provider context refusal stops the native handoff as well" do
+      feature_str = "router_fed_gc_refuse_#{System.unique_integer([:positive])}"
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: {:error, :no_plan_payload}
+
+          @impl true
+          def build_prompt(_ctx), do: {:ok, %{system: "sys", user: "usr"}}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      agent = wire_native_assignee(key)
+      test_pid = self()
+
+      handler_id = "router-test-fed-gc-refused-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :failed],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:failed_telemetry, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {fire_result, log} =
+        with_log([level: :warning], fn ->
+          Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      # Ordered before the return-value match on purpose — see the note in
+      # the external refusal test. The CaptureDispatcher from this
+      # describe's setup would otherwise have received a signal carrying a
+      # prompt built over generic context.
+      refute_receive {:captured_signal, _signal}, 100
+
+      assert fire_result == {:error, {:context_gather_refused, :no_plan_payload}}
+      assert log =~ "provider gather_context refused dispatch"
+
+      assert_receive {:failed_telemetry, _meas, %{key: ^key, dispatch_kind: :native}}
+
+      # Nothing was stamped — a refused dispatch is not a successful fire.
+      assert Repo.get!(Agent, agent.id).last_successful_fire_at == nil
+    end
+  end
+
+  # ── task 019f9b28 stage 2: explicit provider registry ───────────────────
+  #
+  # VERIFICATION LABEL: these are **guards**, not the task's fix detector.
+  # They pin the log fidelity this stage introduces — that the Router can
+  # now tell "no provider was ever written" from "this feature deliberately
+  # has none" from "the provider we ship is broken". The detector that the
+  # architecture.* answer actually reaches a human is stage 5.
+  describe "provider resolution via Platform.Responsibilities.Providers" do
+    setup do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, :router_registry_test})
+      )
+
+      Req.Test.stub(:router_registry_test, fn conn ->
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "registry ok"}}]
+        })
+      end)
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+      end)
+
+      :ok
+    end
+
+    test "unregistered feature still dispatches, and the log names the feature and the fix" do
+      feature_str = "test_feature_#{System.unique_integer([:positive])}"
+      key = "#{feature_str}.probe_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      _agent = wire_external_assignee(key)
+
+      log =
+        capture_log([level: :info], fn ->
+          assert {:ok, :dispatched} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      # The dispatch itself is unaffected — an ad-hoc feature is ordinary,
+      # not an error. Only the *diagnosis* changed.
+      assert log =~ "[ResponsibilityRouter] external dispatch ok key=#{key}"
+      assert log =~ "[ResponsibilityRouter] no output handler for #{key}"
+
+      # Actionable: names the feature and says exactly what to do.
+      assert log =~ ~s(feature="#{feature_str}")
+      assert log =~ "has no provider registered"
+      assert log =~ "Platform.Responsibilities.Providers @feature_providers"
+
+      # And it is a warning, not an error — router_test seeds rows like
+      # this constantly and operators can upsert arbitrary ones. Alarm
+      # traffic for ordinary rows is how a signal gets trained away.
+      assert log =~ "[warning]"
+      refute log =~ "failed the handle_output/3 probe"
+      refute log =~ "is retired by design"
+    end
+
+    test "retired feature logs the retirement reason and never resolves a module" do
+      key = "security.registry_probe_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: "security",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      _agent = wire_external_assignee(key)
+
+      Logger.put_module_level(Platform.Responsibilities.Router, :debug)
+
+      log =
+        capture_log([level: :debug], fn ->
+          assert {:ok, :dispatched} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      assert log =~ "[ResponsibilityRouter] no output handler for #{key}"
+      assert log =~ "is retired by design"
+      assert log =~ "Platform.Security.Sweeper"
+
+      # Retirement is quiet by construction: nothing to fix, so nothing
+      # above debug.
+      refute log =~ "has no provider registered"
+
+      # The registry says retired rather than missing …
+      assert {:retired, reason} =
+               Platform.Responsibilities.Providers.feature_provider("security")
+
+      assert reason =~ "Sweeper"
+
+      # … and there is genuinely no module behind it. Built at runtime so
+      # the reference doesn't become a compile-time "undefined module"
+      # warning for a module we never intend to write.
+      refute Code.ensure_loaded?(Module.concat([Platform.Responsibilities.Providers, "Security"]))
+    end
+
+    test "a registered provider that fails the handle_output/3 probe logs at error level" do
+      # The third cause, which the old single Logger.info flattened into
+      # the other two: we DO ship a module for this feature and it does
+      # not honour the callback. That is a contract break, not a routing
+      # gap, so it is the one case that deserves :error.
+      feature_str = "router_broken_provider_#{System.unique_integer([:positive])}"
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: {:ok, %{}}
+
+          # NB: only handle_output/2 — the Router probes for /3.
+          @impl true
+          def handle_output(_r, _o), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.probe_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      _agent = wire_external_assignee(key)
+
+      log =
+        capture_log([level: :info], fn ->
+          assert {:ok, :dispatched} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      assert log =~ "[error]"
+      assert log =~ "[ResponsibilityRouter] no output handler for #{key}"
+      assert log =~ "failed the handle_output/3 probe"
+      refute log =~ "has no provider registered"
+    end
+
+    test "every feature the built-in handlers declare resolves or is explicitly retired" do
+      # A cheap standing guard against the exact drift this stage is
+      # about. Stage 4 turns this into the full coverage test; keeping a
+      # minimal version here means router_test alone catches a handler
+      # that ships without a provider entry.
+      declared =
+        Platform.Responsibilities.BuiltIns.providers()
+        |> Enum.flat_map(& &1.register())
+        |> Enum.map(& &1.feature)
+        |> Enum.uniq()
+
+      for feature <- declared do
+        assert Platform.Responsibilities.Providers.feature_provider(feature) != :error,
+               "feature #{inspect(feature)} is declared by a built-in handler but is neither " <>
+                 "in @feature_providers nor in @retired"
+      end
+    end
+  end
+
+  # ── task 019f9b28 stage 2: the fourth collapse point ────────────────────
+  #
+  # `rendered_prompt_text/1` maps both `:legacy` and `{:error, reason}` to
+  # nil, and `maybe_put/3` drops nil — so a federated runtime receives a
+  # byte-identical bare signal whether the provider refused to build a
+  # prompt or was never asked for one. This stage does not change what the
+  # signal *contains* (dispatch return values are a sibling stack member's
+  # scope); it makes the three causes tell themselves apart in the log.
+  describe "native dispatch prompt fidelity" do
+    setup do
+      previous = Application.get_env(:platform, :responsibility_router_native_dispatcher)
+
+      Application.put_env(
+        :platform,
+        :responsibility_router_native_dispatcher,
+        {Platform.Responsibilities.RouterTest.CaptureDispatcher, :maybe_dispatch}
+      )
+
+      Application.put_env(:platform, :router_test_capture_pid, self())
+
+      on_exit(fn ->
+        if previous do
+          Application.put_env(:platform, :responsibility_router_native_dispatcher, previous)
+        else
+          Application.delete_env(:platform, :responsibility_router_native_dispatcher)
+        end
+
+        Application.delete_env(:platform, :router_test_capture_pid)
+      end)
+
+      :ok
+    end
+
+    test "a refused build_prompt is logged as a refusal, and the signal is still bare" do
+      feature_str = "router_fed_refuse_#{System.unique_integer([:positive])}"
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: {:ok, %{}}
+
+          @impl true
+          def build_prompt(_ctx), do: {:error, :no_transcript_text}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      _agent = wire_native_assignee(key)
+
+      log =
+        capture_log([level: :info], fn ->
+          # `{:ok, :dispatched}`, NOT `{:error, {:build_prompt_refused, _}}`.
+          # The refusal short-circuit member 1 added lives in
+          # `dispatch_external/5` only; this row has a NATIVE assignee, and
+          # `dispatch_native/5` deliberately proceeds with a bare signal —
+          # that asymmetry is exactly what the log line below records. If a
+          # later stage makes native abort too, this is the assertion that
+          # should change, and the "native dispatch proceeds" log assertion
+          # will change with it.
+          assert {:ok, :dispatched} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      assert log =~ "provider build_prompt refused but native dispatch proceeds"
+      assert log =~ "no_transcript_text"
+      assert log =~ "the external path would have aborted here"
+
+      # Unchanged behaviour: still dispatched, still no :prompt key. This
+      # stage is log fidelity only.
+      assert_receive {:captured_signal, signal}
+      refute Map.has_key?(signal.metadata, :prompt)
+      assert signal.metadata.responsibility_key == key
+    end
+
+    test "no provider at all is logged differently from a refusal, for the identical signal" do
+      feature_str = "test_feature_#{System.unique_integer([:positive])}"
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      _agent = wire_native_assignee(key)
+
+      log =
+        capture_log([level: :info], fn ->
+          assert {:ok, :dispatched} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      assert log =~ "native signal carries no prompt key=#{key}"
+      assert log =~ "has no provider registered"
+      refute log =~ "provider build_prompt refused"
+
+      assert_receive {:captured_signal, signal}
+      refute Map.has_key?(signal.metadata, :prompt)
+    end
   end
 
   # M8 stage 2 (ADR-0041): `fire/2` is the lookup-and-fire convenience
@@ -2209,10 +2945,18 @@ defmodule Platform.Responsibilities.RouterTest do
   # "memory.daily_summary"), looks the row up, and funnels through
   # the same `fire_trigger` pipeline as the cron tick.
   describe "fire/2 lookup-and-fire" do
-    test "returns {:error, :unknown_responsibility} when no row matches" do
+    test "returns {:ok, :unknown_responsibility} when no row matches" do
+      # ADR-0046 member 1 stage 2: this used to be
+      # `{:error, :unknown_responsibility}`. An unseeded key is a
+      # progressive-enhancement state — a code site hooked the key
+      # before its seed migration landed — so it belongs in the ok
+      # channel. Leaving it in the error channel would make
+      # `Responsibilities.outcome/1` report `:failed` for a
+      # responsibility nobody ever configured, the exact
+      # not_applicable/failed conflation the ADR forbids at line 83.
       log =
         capture_log([level: :info], fn ->
-          assert {:error, :unknown_responsibility} =
+          assert {:ok, :unknown_responsibility} =
                    Router.fire("does.not.exist", %{kind: :cron})
         end)
 
@@ -2225,8 +2969,8 @@ defmodule Platform.Responsibilities.RouterTest do
 
       log =
         capture_log([level: :info], fn ->
-          # No assignee → unfilled telemetry + :ok return.
-          assert :ok = Router.fire(key, %{kind: :cron})
+          # No assignee → unfilled telemetry + {:ok, :unfilled} return.
+          assert {:ok, :unfilled} = Router.fire(key, %{kind: :cron})
         end)
 
       assert log =~ "unfilled responsibility=#{key}"
@@ -2240,8 +2984,191 @@ defmodule Platform.Responsibilities.RouterTest do
       _row = insert!(%{key: key})
 
       capture_log([level: :info], fn ->
-        assert :ok = Router.fire(atom_shorthand, %{kind: :cron})
+        assert {:ok, :unfilled} = Router.fire(atom_shorthand, %{kind: :cron})
       end)
+    end
+  end
+
+  # ── ADR-0046 return contract ──────────────────────────────────────────────
+  #
+  # These four are FIX DETECTORS, not guards: every one of them fails against
+  # the pre-ADR-0046 Router, which returned a flat `:ok` from all of these
+  # paths (and, on the native branch, emitted `:fired` telemetry even when
+  # nothing dispatched).
+  defmodule RaisingNativeDispatcher do
+    @moduledoc false
+    def maybe_dispatch(_signal), do: raise(RuntimeError, "native dispatcher exploded")
+  end
+
+  describe "fire_trigger/3 — ADR-0046 return contract" do
+    defp put_native_dispatcher(mod) do
+      previous = Application.get_env(:platform, :responsibility_router_native_dispatcher)
+
+      Application.put_env(
+        :platform,
+        :responsibility_router_native_dispatcher,
+        {mod, :maybe_dispatch}
+      )
+
+      on_exit(fn ->
+        if previous do
+          Application.put_env(:platform, :responsibility_router_native_dispatcher, previous)
+        else
+          Application.delete_env(:platform, :responsibility_router_native_dispatcher)
+        end
+      end)
+    end
+
+    defp attach_fire_telemetry do
+      test_pid = self()
+      suffix = System.unique_integer([:positive])
+
+      for {event, tag} <- [{:fired, :fired_telemetry}, {:failed, :failed_telemetry}] do
+        handler_id = "router-contract-#{event}-#{suffix}"
+
+        :telemetry.attach(
+          handler_id,
+          [:platform, :responsibility, event],
+          fn _event, measurements, metadata, pid ->
+            send(pid, {tag, measurements, metadata})
+          end,
+          test_pid
+        )
+
+        on_exit(fn -> :telemetry.detach(handler_id) end)
+      end
+
+      :ok
+    end
+
+    test "external dispatch failure returns {:error, {:dispatch_failed, _}}, not :ok" do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, :router_external_dispatch_test})
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+      end)
+
+      key = "routertest.contract_ext_fail_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      _agent = wire_external_assignee(key)
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(503, ~s({"error":"down"}))
+      end)
+
+      capture_log([level: :warning], fn ->
+        assert {:error, {:dispatch_failed, reason}} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+
+        # The underlying reason survives the wrap — a consumer can still tell
+        # an HTTP error from a contract violation.
+        assert inspect(reason) =~ "http_error"
+      end)
+    end
+
+    test "unfilled responsibility returns {:ok, :unfilled} and emits no :failed telemetry" do
+      key = "routertest.contract_unfilled_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      :ok = attach_fire_telemetry()
+
+      capture_log([level: :info], fn ->
+        assert {:ok, :unfilled} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      end)
+
+      # "nobody holds it" is NOT a failure — this is the ADR-0046
+      # not_applicable-vs-failed distinction the old flat `:ok` erased.
+      refute_receive {:failed_telemetry, _meas, _meta}, 100
+      refute_receive {:fired_telemetry, _meas, _meta}, 100
+    end
+
+    test "native handoff returns {:ok, :dispatched} and emits :fired telemetry" do
+      put_native_dispatcher(NoopNativeDispatcher)
+
+      key = "routertest.contract_native_ok_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      agent = wire_native_assignee(key)
+      :ok = attach_fire_telemetry()
+
+      fired_at = ~U[2026-07-26 09:00:00.000000Z]
+
+      capture_log([level: :info], fn ->
+        assert {:ok, :dispatched} =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
+      end)
+
+      # POSITIVE CONTROL for the raising-dispatcher case below: it proves the
+      # `:fired` telemetry mechanism works here, so that test's ABSENCE
+      # assertion is a real observation rather than a handler that never fires.
+      assert_receive {:fired_telemetry, _meas, %{key: ^key, dispatch_kind: :native}}
+      refute_receive {:failed_telemetry, _meas, _meta}, 100
+
+      assert Repo.get!(Agent, agent.id).last_successful_fire_at == fired_at
+    end
+
+    test "raising native dispatcher returns {:error, {:native_dispatch_raised, _}}, emits :failed and NOT :fired" do
+      put_native_dispatcher(RaisingNativeDispatcher)
+
+      key = "routertest.contract_native_raise_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      agent = wire_native_assignee(key)
+      :ok = attach_fire_telemetry()
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert {:error, {:native_dispatch_raised, message}} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+
+          assert message =~ "native dispatcher exploded"
+        end)
+
+      assert log =~ "[ResponsibilityRouter] native dispatcher raised"
+      assert log =~ "[ResponsibilityRouter] native dispatch failed key=#{key}"
+
+      assert_receive {:failed_telemetry, _meas, %{key: ^key, dispatch_kind: :native}}
+
+      # The old code emitted `:fired` unconditionally after the discarded
+      # `call_agent_responder/1` result, so this refute is the detector.
+      refute_receive {:fired_telemetry, _meas, _meta}, 100
+
+      # And nothing was stamped — a raised handoff is not a successful fire.
+      assert Repo.get!(Agent, agent.id).last_successful_fire_at == nil
     end
   end
 end

@@ -173,6 +173,14 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
       # %{transcript_id: id, space_id: sid})`. Without the shim's
       # normalize_meta the handler's accessors return nil for both
       # transcript_id and space_id and the dispatch errors out.
+      #
+      # NB the `:ok` asserted below is `handle_output/3`'s own contract
+      # (`:ok | {:error, term}`), not the Router's. Since ADR-0046
+      # prerequisite 1 (task 019f9b27) the enclosing `Router.fire/2` the
+      # comment above describes answers
+      # `{:ok, :dispatched} | {:ok, :unfilled} | {:ok, :unknown_responsibility}
+      # | {:error, reason}` — never a flat `:ok`. This test drives the
+      # provider callback directly, so it sees the callback shape.
       space = create_space!()
       transcript = create_transcript!(space.id)
       _ = ExecutionSpace.ensure_system_participant(space.id)

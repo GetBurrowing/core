@@ -10,6 +10,7 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.{ActiveAgentStore, ContextPlane, Participant}
+  alias Platform.Design.Brand
   alias Platform.Meetings
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Journal, Routing, Search}
@@ -1278,13 +1279,22 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "Project-wide deploy config. Set deploy_config.default_strategy to a strategy map (e.g. %{\"type\" => \"pr_merge\"}) to provide a fallback for tasks whose deploy_target is unset. Valid strategy types: none, pr_merge, docker_deploy, fly, skill_driven, manual, project_files."
+          },
+          brand_decision: %{
+            type: "string",
+            required: false,
+            description:
+              "Answer the once-per-project brand escalation (ADR 0046). One of: " <>
+                Enum.join(Brand.recordable_modes(), " | ") <>
+                ". Recorded at config.brand_decision. Brand sets how strictly design is enforced, never whether work proceeds — a project with no brand is advisory, not blocked."
           }
         },
-        returns: "The updated project object",
+        returns:
+          "The updated project object, including brand_decision when one is recorded on the project",
         limitations:
-          "deploy_config.default_strategy is validated; unknown strategy types are rejected",
+          "deploy_config.default_strategy is validated; unknown strategy types are rejected. `config` is NOT writable through this tool — only the named brand_decision enum reaches it, because Project.changeset/2 does not validate config's shape and a malformed brand_decision is read as no decision at all.",
         when_to_use:
-          "When you need to set a project-level default deploy strategy or update other project fields"
+          "When you need to set a project-level default deploy strategy, answer the brand-direction question posted to a task's execution space, or update other project fields"
       },
       %{
         name: "epic_list",
@@ -2085,7 +2095,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "array",
             required: true,
             description:
-              "Array of IMPLEMENTATION stage objects: {name, description, position, responsibility?, validations: [{kind, evaluation_payload?}]}. Valid validation kinds for planner-authored stages: lint_pass, type_check, test_pass, manual_approval, e2e_behavior. Do NOT include a deploy stage — the system auto-injects one (with ci_passed / pr_merged / etc. validations) at deploying time from the project's resolved deploy strategy. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time). Optional per-stage `responsibility` string (e.g. `\"designer\"`) routes that single stage to the role owner via Platform.Roles.agent_id_for_role/1; if the role is unassigned or the target runtime is offline, dispatch falls back to the task's phase assignee (progressive enhancement — never blocks). Omit or set to null to use the task-level phase assignee."
+              "Array of IMPLEMENTATION stage objects: {name, description, position, validations: [{kind, evaluation_payload?}]}. Valid validation kinds for planner-authored stages: lint_pass, type_check, test_pass, manual_approval, e2e_behavior. Do NOT include a deploy stage — the system auto-injects one (with ci_passed / pr_merged / etc. validations) at deploying time from the project's resolved deploy strategy. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time)."
           }
         },
         returns: "The created plan with stages and validations preloaded",
@@ -2126,9 +2136,71 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns: "The approved plan object",
-        limitations: "Plan must be in pending_review status",
+        limitations:
+          "Plan must be in pending_review status, and the architecture gate must not be open — an agent cannot approve past an architect who is still reviewing (ADR-0046).",
         when_to_use:
           "After plan_submit, when you want to approve a plan and kick off task execution without waiting for human review"
+      },
+      %{
+        name: "plan_architecture_verdict",
+        description:
+          "Return the architect's verdict on a plan whose architecture gate is open (ADR-0046). " <>
+            "The plan is HELD at pending_review until this call lands or the gate deadline expires. " <>
+            "Reject ONLY for one of the four closed constraint values — module_boundary, data_model, " <>
+            "cross_context_coupling, duplicated_logic. There is no representable value for a taste, " <>
+            "naming or style objection: say it in `summary` and pass.",
+        parameters: %{
+          plan_id: %{
+            type: "string",
+            required: true,
+            description: "The plan under verdict. Printed as `plan_id:` in the review prompt."
+          },
+          verdict: %{
+            type: "string",
+            required: true,
+            description: "\"pass\" or \"reject\". There is no third value."
+          },
+          summary: %{
+            type: "string",
+            required: true,
+            description:
+              "Non-empty. One paragraph: what you checked and what you found, including anything worth reporting that is NOT grounds for a reject."
+          },
+          findings: %{
+            type: "array",
+            required: false,
+            description:
+              "Required and non-empty when verdict is \"reject\"; omit on a pass. One object per objection: {stage_id, constraint, detail}. `stage_id` must be a stage of THIS plan. `constraint` must be one of #{Enum.join(Plan.architecture_constraints(), " | ")}. `detail` must say WHAT TO CHANGE, not what is wrong — a detail the planner cannot act on produces a differently-worded plan, not a better one."
+          }
+        },
+        returns:
+          "%{plan_id, task_id, verdict, state, resolved_at, findings_count} — `state` is the persisted architecture_verdict[\"state\"] (\"passed\" or \"rejected\").",
+        # ADR-0046 member 5 stage 4. This prose is TESTED, not asserted by
+        # hand: `plan_architecture_verdict_tool_test.exs` drives every
+        # refusal below and asserts the observed `code` set is exactly the
+        # set named here. The 2026-07-26 e2e journal records `intent_ack` /
+        # `task_ack` shipping `limitations` describing an error taxonomy the
+        # code never emits, with no test guarding it — remote runtimes branch
+        # on these strings.
+        limitations:
+          "Refusals carry a `code`: `plan_not_found` (unknown plan_id), " <>
+            "`invalid_verdict` (verdict is not \"pass\"/\"reject\"), " <>
+            "`missing_summary` (summary absent or blank), " <>
+            "`missing_findings` (verdict \"reject\" with no findings), " <>
+            "`malformed_finding` (a finding is not an object, or its `detail` is blank), " <>
+            "`invalid_constraint` (a finding's `constraint` is outside the four allowed values — " <>
+            "this is where a style objection is refused), " <>
+            "`foreign_stage_id` (a finding names a stage that does not belong to this plan), " <>
+            "`gate_not_open` (the gate never opened for this plan version), " <>
+            "`gate_already_resolved` (somebody — an earlier call, the deadline, or a human " <>
+            "override — already closed it; a duplicate call lands here and changes nothing), " <>
+            "`verdict_rejected` (the write itself failed validation). " <>
+            "A runtime WITHOUT the `plan` capability bundle simply never resolves the gate: the " <>
+            "deadline expires, the verdict records as `expired`, and the plan proceeds unreviewed. " <>
+            "That degradation is deliberate (ADR-0046 decision 7 — silence falls open) and is why " <>
+            "an architect on a runtime that cannot reach this tool is a missing review, not a stuck task.",
+        when_to_use:
+          "As the architect, exactly once per plan review, when the architecture gate is holding a plan you have finished reading. This is the only way to release the gate from an agent."
       },
       %{
         name: "stage_start",
@@ -3078,7 +3150,7 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  def execute("project_update", args, _context) do
+  def execute("project_update", args, context) do
     project_id = Map.get(args, "project_id")
 
     case Tasks.get_project(project_id) do
@@ -3091,22 +3163,41 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       project ->
+        # `config` is deliberately absent from this list. See the tool's
+        # `limitations` and `Platform.Design.Brand`'s moduledoc: an
+        # agent-writable `config` blob would let a malformed
+        # `brand_decision` land, which resolve/1 reads as NO decision —
+        # silently re-opening the once-per-project re-ask loop. A named
+        # enum param cannot do that.
         update_attrs =
           args
           |> Map.take(["name", "repo_url", "default_branch", "deploy_config"])
           |> Map.reject(fn {_k, v} -> is_nil(v) end)
           |> Enum.into(%{}, fn {k, v} -> {String.to_existing_atom(k), v} end)
 
-        case Tasks.update_project(project, update_attrs) do
-          {:ok, updated} ->
-            {:ok,
+        with {:ok, updated} <- Tasks.update_project(project, update_attrs),
+             {:ok, updated} <-
+               apply_brand_decision(updated, Map.get(args, "brand_decision"), context) do
+          {:ok,
+           %{
+             id: updated.id,
+             name: updated.name,
+             slug: updated.slug,
+             repo_url: updated.repo_url,
+             default_branch: updated.default_branch,
+             deploy_config: updated.deploy_config,
+             brand_decision: brand_decision_of(updated)
+           }}
+        else
+          {:error, :invalid_brand_decision} ->
+            {:error,
              %{
-               id: updated.id,
-               name: updated.name,
-               slug: updated.slug,
-               repo_url: updated.repo_url,
-               default_branch: updated.default_branch,
-               deploy_config: updated.deploy_config
+               error:
+                 "project_update: `brand_decision` must be one of " <>
+                   Enum.join(Brand.recordable_modes(), ", "),
+               recoverable: true,
+               suggestion:
+                 "Pass one of #{Enum.join(Brand.recordable_modes(), ", ")}, or omit brand_decision to leave the project's brand decision unchanged."
              }}
 
           {:error, changeset} ->
@@ -5815,11 +5906,7 @@ defmodule Platform.Federation.ToolSurface do
                   name: Map.get(stage_input, "name"),
                   description: Map.get(stage_input, "description"),
                   position: Map.get(stage_input, "position"),
-                  expected_artifacts: Map.get(stage_input, "expected_artifacts", []),
-                  # Task 019f5d47 stage 2 — optional per-stage role slug that routes
-                  # this stage's dispatch to Platform.Roles.agent_id_for_role/1's target.
-                  # `nil` (omitted) preserves task-level phase-assignee routing.
-                  responsibility: Map.get(stage_input, "responsibility")
+                  expected_artifacts: Map.get(stage_input, "expected_artifacts", [])
                 }
 
                 case Tasks.create_stage(stage_attrs) do
@@ -5856,6 +5943,16 @@ defmodule Platform.Federation.ToolSurface do
       end)
       |> case do
         {:ok, plan} ->
+          # ADR-0046 member 7 stage 4 — the false-negative audit for the
+          # pre-plan design step. This is the first moment in the lifecycle
+          # when stage DESCRIPTIONS exist, which is the real subject of
+          # `PlanEngine.ui_touching?/1`; a design step that skipped as
+          # `"no_ui_surface"` gets re-checked against them here. Inert unless
+          # that exact reason is recorded, never raises, and deliberately does
+          # not flip the outcome to `failed` — an under-trigger the designer
+          # was never asked about must be visible, not merge-blocking.
+          _ = Platform.Design.PreplanStep.audit_ui_prediction(task_id, plan.stages)
+
           {:ok, serialize_plan(plan)}
 
         {:error, :project_archived} ->
@@ -5971,9 +6068,60 @@ defmodule Platform.Federation.ToolSurface do
                suggestion: "Use plan_submit first to move the plan to pending_review"
              }}
 
+          # ADR-0046 member 5 stage 3. This tool is the agent-reachable
+          # approval writer: it lives in the `plan` capability bundle and
+          # defaults `approved_by` to `"system"`, so without an explicit
+          # arm here the refusal would arrive as an untyped
+          # "Failed to approve plan" with no suggestion. The guard itself
+          # is in `Tasks.approve_plan/3`, not here — this arm only names it.
+          {:error, :architecture_gate_open} ->
+            {:error,
+             %{
+               error:
+                 "Plan #{plan_id} is held by the architecture gate: the architect has not returned a verdict yet.",
+               recoverable: true,
+               suggestion:
+                 "Wait for the architect's verdict or the gate deadline. An agent cannot approve past an open gate; a human reviewer can, from the task UI."
+             }}
+
           {:error, reason} ->
             {:error, %{error: "Failed to approve plan: #{inspect(reason)}", recoverable: true}}
         end
+    end
+  end
+
+  # ── ADR-0046 member 5 stage 4: the architect's verdict surface ────────
+  #
+  # ONE of the two ways a verdict gets in (the other is
+  # `Handlers.ArchitectureReviewPlan.handle_output/3`, for an external
+  # architect that can only reply with text). Neither re-implements the
+  # state machine: both end in `Tasks.resolve_architecture_gate/3`, the
+  # single exit stage 3 built, which is one-shot because it arbitrates on
+  # the persisted row. A duplicate call is therefore harmless — it lands
+  # on `gate_already_resolved` and changes nothing.
+  #
+  # THE CONTRACT IS ENFORCED HERE, NOT REQUESTED IN THE PROMPT.
+  # `0046-design-and-architecture-phases-in-planning.md § Architect prompt contract`
+  # says the architect rejects for architecture and explicitly
+  # not for taste, naming or style. "Don't reject for style" is
+  # unenforceable as prose — it produces a differently-worded rejection,
+  # not a better one. A closed `constraint` vocabulary means a style
+  # objection has NO REPRESENTABLE VALUE. Stage 1 asserted that at the
+  # schema layer; this asserts it at the boundary an agent actually
+  # touches, because the schema is only reached by callers who already
+  # decided to write.
+  #
+  # Every refusal carries a `code` and every code is named in the tool's
+  # `limitations`, with a test that the two sets are equal.
+  def execute("plan_architecture_verdict", args, context) do
+    plan_id = Map.get(args, "plan_id")
+
+    with {:ok, plan} <- verdict_plan(plan_id),
+         {:ok, resolution} <- verdict_resolution_arg(Map.get(args, "verdict")),
+         {:ok, summary} <- verdict_summary_arg(Map.get(args, "summary")),
+         {:ok, findings} <- verdict_findings_arg(Map.get(args, "findings"), resolution, plan),
+         :ok <- verdict_gate_open(plan) do
+      resolve_architecture_verdict(plan, resolution, summary, findings, context)
     end
   end
 
@@ -8003,6 +8151,270 @@ defmodule Platform.Federation.ToolSurface do
 
   defp maybe_put(opts, key, value) when is_list(opts), do: Keyword.put(opts, key, value)
 
+  # ── ADR-0046 member 5 stage 4: plan_architecture_verdict internals ───
+
+  # `Platform.UUID.cast/1`, not `Ecto.UUID.cast/1` — the same spelling the
+  # rest of this module already uses. `plan_id` arrives straight off an
+  # agent's tool payload, and a bare cast hex-encodes any raw 16-byte binary
+  # into a well-formed UUID instead of rejecting it. The outcome is the same
+  # here either way (`:plan_not_found`, because the encoded id misses), so
+  # this is a convention fix rather than a behaviour fix — but the ratchet in
+  # `repo_lookup_boundary_test.exs` exists precisely so bare casts do not
+  # accumulate on agent-facing paths where the next one might not be benign.
+  defp verdict_plan(plan_id) when is_binary(plan_id) do
+    case Platform.UUID.cast(plan_id) do
+      {:ok, uuid} ->
+        case Repo.get(Plan, uuid) do
+          %Plan{} = plan -> {:ok, plan}
+          nil -> verdict_error(:plan_not_found, plan_id)
+        end
+
+      :error ->
+        verdict_error(:plan_not_found, plan_id)
+    end
+  end
+
+  defp verdict_plan(plan_id), do: verdict_error(:plan_not_found, plan_id)
+
+  defp verdict_resolution_arg(verdict) when is_binary(verdict) do
+    case verdict |> String.trim() |> String.downcase() do
+      "pass" -> {:ok, :pass}
+      "reject" -> {:ok, :reject}
+      _ -> verdict_error(:invalid_verdict, verdict)
+    end
+  end
+
+  defp verdict_resolution_arg(verdict), do: verdict_error(:invalid_verdict, verdict)
+
+  defp verdict_summary_arg(summary) when is_binary(summary) do
+    case String.trim(summary) do
+      "" -> verdict_error(:missing_summary, summary)
+      trimmed -> {:ok, trimmed}
+    end
+  end
+
+  defp verdict_summary_arg(summary), do: verdict_error(:missing_summary, summary)
+
+  # A pass carries no findings, and one supplied on a pass is dropped
+  # rather than refused: the finding vocabulary exists to make a REJECT
+  # actionable, and refusing an otherwise-valid pass over decoration
+  # would turn a released gate into a held one.
+  defp verdict_findings_arg(_findings, :pass, _plan), do: {:ok, []}
+
+  defp verdict_findings_arg(findings, :reject, plan) when is_list(findings) and findings != [] do
+    stage_ids = plan.id |> Tasks.list_stages() |> MapSet.new(& &1.id)
+
+    Enum.reduce_while(findings, {:ok, []}, fn finding, {:ok, acc} ->
+      case validate_verdict_finding(finding, stage_ids) do
+        {:ok, normalized} -> {:cont, {:ok, acc ++ [normalized]}}
+        {:error, _envelope} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp verdict_findings_arg(findings, :reject, _plan),
+    do: verdict_error(:missing_findings, findings)
+
+  defp validate_verdict_finding(finding, stage_ids) when is_map(finding) do
+    stage_id = Map.get(finding, "stage_id")
+    constraint = Map.get(finding, "constraint")
+    detail = Map.get(finding, "detail")
+
+    cond do
+      not (is_binary(constraint) and constraint in Plan.architecture_constraints()) ->
+        verdict_error(:invalid_constraint, constraint)
+
+      not (is_binary(stage_id) and MapSet.member?(stage_ids, stage_id)) ->
+        verdict_error(:foreign_stage_id, stage_id)
+
+      not (is_binary(detail) and String.trim(detail) != "") ->
+        verdict_error(:malformed_finding, detail)
+
+      true ->
+        {:ok,
+         %{
+           "stage_id" => stage_id,
+           "constraint" => constraint,
+           "detail" => String.trim(detail)
+         }}
+    end
+  end
+
+  defp validate_verdict_finding(finding, _stage_ids),
+    do: verdict_error(:malformed_finding, finding)
+
+  # Named against the ACTUAL state, not "the gate is not open". A
+  # duplicate call has to read as an explanation, not a mystery.
+  defp verdict_gate_open(plan) do
+    case Tasks.architecture_gate(plan) do
+      {:open, _verdict} -> :ok
+      :none -> verdict_error(:gate_not_open, nil)
+      {:resolved, verdict} -> verdict_error(:gate_already_resolved, Map.get(verdict, "state"))
+    end
+  end
+
+  defp resolve_architecture_verdict(plan, resolution, summary, findings, context) do
+    opts = [
+      summary: summary,
+      findings: findings,
+      resolved_by: Map.get(context, :agent_id) || Map.get(context, :user_id) || "architect",
+      # THIS clause is what `"mcp"` means. `Tasks` cannot infer it — the
+      # same three resolutions arrive through `handle_output` too — so
+      # the channel names itself here or the distinction does not exist.
+      source: "mcp"
+    ]
+
+    case Tasks.resolve_architecture_gate(plan, resolution, opts) do
+      {:ok, resolved} ->
+        verdict = resolved.architecture_verdict || %{}
+
+        {:ok,
+         %{
+           plan_id: resolved.id,
+           task_id: resolved.task_id,
+           verdict: to_string(resolution),
+           state: Map.get(verdict, "state"),
+           resolved_at: Map.get(verdict, "resolved_at"),
+           findings_count: length(Map.get(verdict, "findings") || [])
+         }}
+
+      # Lost a race between the read above and the guarded UPDATE — the
+      # deadline, or a second architect, got there first. Same envelope
+      # the level check produces, so a caller cannot tell (and does not
+      # need to tell) which of the two refused it.
+      {:error, :gate_already_resolved} ->
+        verdict_error(:gate_already_resolved, nil)
+
+      {:error, :gate_not_open} ->
+        verdict_error(:gate_not_open, nil)
+
+      {:error, reason} ->
+        verdict_error(:verdict_rejected, reason)
+    end
+  end
+
+  # The closed set of refusal codes this clause can emit. The tool's
+  # `limitations` prose names exactly these, and a test asserts the two
+  # agree — documentation that drifts from the code is worse than none,
+  # because remote runtimes branch on it.
+  @architecture_verdict_error_codes [
+    :plan_not_found,
+    :invalid_verdict,
+    :missing_summary,
+    :missing_findings,
+    :malformed_finding,
+    :invalid_constraint,
+    :foreign_stage_id,
+    :gate_not_open,
+    :gate_already_resolved,
+    :verdict_rejected
+  ]
+
+  @doc """
+  The closed set of `code` values `plan_architecture_verdict` refuses with.
+
+  Public so the guard that keeps the tool's `limitations` prose honest
+  can compare the documented taxonomy against the emitted one instead of
+  restating it.
+  """
+  @spec architecture_verdict_error_codes() :: [atom()]
+  def architecture_verdict_error_codes, do: @architecture_verdict_error_codes
+
+  defp verdict_error(:plan_not_found, plan_id) do
+    verdict_refusal(
+      :plan_not_found,
+      "Plan not found: #{inspect(plan_id)}",
+      false,
+      "Use the `plan_id` printed in the architecture-review prompt, or plan_get to look it up."
+    )
+  end
+
+  defp verdict_error(:invalid_verdict, verdict) do
+    verdict_refusal(
+      :invalid_verdict,
+      "verdict must be \"pass\" or \"reject\" (got #{inspect(verdict)}).",
+      true,
+      "There is no third value. If you have a concern that is not one of the four architectural constraints, pass and put it in `summary`."
+    )
+  end
+
+  defp verdict_error(:missing_summary, _summary) do
+    verdict_refusal(
+      :missing_summary,
+      "summary is required and must be a non-empty string.",
+      true,
+      "One paragraph: what you checked and what you found. A pass with an empty summary is indistinguishable from an architect that never read the plan."
+    )
+  end
+
+  defp verdict_error(:missing_findings, _findings) do
+    verdict_refusal(
+      :missing_findings,
+      "verdict \"reject\" requires a non-empty `findings` array.",
+      true,
+      "Send one finding per objection: [{\"stage_id\": \"<a stage of this plan>\", \"constraint\": \"#{hd(Plan.architecture_constraints())}\", \"detail\": \"<what to change>\"}]. A rejection with no findings is unactionable — the planner cannot tell what to write differently. If you cannot name a stage and a change, pass and say it in `summary`."
+    )
+  end
+
+  defp verdict_error(:malformed_finding, finding) do
+    verdict_refusal(
+      :malformed_finding,
+      "each finding must be an object with `stage_id`, `constraint` and a non-empty `detail` (got #{inspect(finding)}).",
+      true,
+      "`detail` must state WHAT TO CHANGE, not what is wrong — \"This is unsound\" tells the planner nothing it can act on."
+    )
+  end
+
+  defp verdict_error(:invalid_constraint, constraint) do
+    verdict_refusal(
+      :invalid_constraint,
+      "#{inspect(constraint)} is not an architectural constraint. Allowed: #{Enum.join(Plan.architecture_constraints(), ", ")}.",
+      true,
+      "0046-design-and-architecture-phases-in-planning.md § Architect prompt contract — the architect rejects for architecture, not for taste, naming or style. There is deliberately no `constraint` value for a style objection: put it in `summary` and pass."
+    )
+  end
+
+  defp verdict_error(:foreign_stage_id, stage_id) do
+    verdict_refusal(
+      :foreign_stage_id,
+      "finding stage_id #{inspect(stage_id)} does not belong to this plan.",
+      true,
+      "Use a `stage_id` from the plan summary in your review prompt (or stage_list on this plan_id). A finding naming another plan's stage means the review ran against stale context."
+    )
+  end
+
+  defp verdict_error(:gate_not_open, _detail) do
+    verdict_refusal(
+      :gate_not_open,
+      "the architecture gate never opened for this plan version.",
+      false,
+      "Nothing is waiting on a verdict. This happens when the plan was submitted before the gate existed, or when a newer plan version superseded the one you reviewed."
+    )
+  end
+
+  defp verdict_error(:gate_already_resolved, state) do
+    verdict_refusal(
+      :gate_already_resolved,
+      "the architecture gate is already resolved#{if is_binary(state), do: " as #{state}", else: ""}.",
+      false,
+      "Nothing to do — the verdict is recorded and the plan has moved on. A duplicate call is harmless; the first writer won."
+    )
+  end
+
+  defp verdict_error(:verdict_rejected, reason) do
+    verdict_refusal(
+      :verdict_rejected,
+      "the verdict failed validation: #{inspect_errors_safe(reason)}",
+      true,
+      "Check `constraint` against #{Enum.join(Plan.architecture_constraints(), ", ")} and that every finding carries a non-empty `detail`."
+    )
+  end
+
+  defp verdict_refusal(code, error, recoverable, suggestion)
+       when code in @architecture_verdict_error_codes do
+    {:error, %{code: code, error: error, recoverable: recoverable, suggestion: suggestion}}
+  end
+
   # ── Helpers ──────────────────────────────────────────────────────────────
 
   defp serialize_task(task) do
@@ -8084,9 +8496,6 @@ defmodule Platform.Federation.ToolSurface do
       position: stage.position,
       status: stage.status,
       expected_artifacts: stage.expected_artifacts,
-      # Task 019f5d47 stage 2 — round-trip the optional per-stage role slug so
-      # plan_get returns the same shape plan_create accepted.
-      responsibility: Map.get(stage, :responsibility),
       started_at: format_datetime(stage.started_at),
       completed_at: format_datetime(stage.completed_at),
       inserted_at: format_datetime(stage.inserted_at),
@@ -8309,6 +8718,33 @@ defmodule Platform.Federation.ToolSurface do
 
   defp format_datetime(nil), do: nil
   defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+
+  # ── Brand decision (ADR 0046) ─────────────────────────────────────────
+  #
+  # The accepted set is `Brand.recordable_modes/0` and nothing else — the
+  # parameter description above is built from the same call, so there is no
+  # second copy to drift. Note `"asked"` is a valid *stored* mode that this
+  # gate deliberately rejects: it is written by `Brand.escalate_once/2` and
+  # is not something a caller selects.
+  defp apply_brand_decision(project, nil, _context), do: {:ok, project}
+
+  defp apply_brand_decision(project, mode, context) when is_binary(mode) do
+    if mode in Brand.recordable_modes() do
+      Brand.record_decision(project, mode, recorded_by: recorded_by(context))
+    else
+      {:error, :invalid_brand_decision}
+    end
+  end
+
+  defp apply_brand_decision(_project, _mode, _context), do: {:error, :invalid_brand_decision}
+
+  defp recorded_by(context) when is_map(context), do: Map.get(context, :agent_id)
+  defp recorded_by(_), do: nil
+
+  defp brand_decision_of(%{config: config}) when is_map(config),
+    do: Map.get(config, "brand_decision")
+
+  defp brand_decision_of(_), do: nil
 
   defp inspect_errors_safe(%Ecto.Changeset{} = changeset), do: inspect_errors(changeset)
   defp inspect_errors_safe(reason), do: inspect(reason)

@@ -69,6 +69,39 @@ defmodule Platform.Responsibilities.RegistryTest do
     def handle_output(_resp, _output), do: :ok
   end
 
+  defmodule UncoveredFeatureProvider do
+    @moduledoc """
+    Declares a feature (`governance`) that no provider is registered for —
+    the exact drift shape `architecture.*` sat in for months. The rows are
+    otherwise valid, so they register cleanly; only the coverage check
+    notices anything is wrong.
+    """
+    @behaviour Platform.Responsibilities.Provider
+
+    @impl true
+    def register do
+      [
+        %{
+          key: "governance.audit",
+          feature: "governance",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          scope: "global",
+          context_provided: [],
+          output_contract: %{"summary" => "string"},
+          default_prompt_template: "governance.audit.v1",
+          cost_profile: "low_freq_capable"
+        }
+      ]
+    end
+
+    @impl true
+    def gather_context(_resp, _ctx), do: {:ok, %{}}
+
+    @impl true
+    def handle_output(_resp, _output), do: :ok
+  end
+
   # Start a Registry under the test supervisor with a unique name per
   # case so concurrent (and re-run) tests never collide on `__MODULE__`.
   defp start_registry(opts) do
@@ -165,6 +198,108 @@ defmodule Platform.Responsibilities.RegistryTest do
       assert log =~ "Platform.Responsibilities.RegistryTest.FakeProvider"
       assert log =~ "register failed for"
       assert log =~ "Platform.Responsibilities.RegistryTest.BadProvider"
+    end
+  end
+
+  # ── provider-coverage drift (task 019f9b28 stage 3) ───────────────────────
+
+  describe "provider coverage" do
+    test "a provider declaring an unregistered feature logs an error and fires telemetry" do
+      # DETECTOR for this stage: delete log_provider_coverage/1 from
+      # registry.ex and this test fails on both the log and the telemetry.
+      handler_id = "registry-test-provider-missing-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :provider_missing],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:provider_missing, measurements, metadata})
+        end,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      log =
+        capture_log(fn ->
+          {pid, name} = start_registry(providers: [UncoveredFeatureProvider])
+
+          # Boot is unharmed and the results map is untouched — the check is
+          # observability only.
+          assert Process.alive?(pid)
+          assert %{ok: [row], errors: []} = Registry.status(name)
+          assert row.key == "governance.audit"
+        end)
+
+      assert log =~ "provider_missing feature=governance"
+      assert log =~ "keys=governance.audit"
+      # The line has to be actionable, not just alarming.
+      assert log =~ "@feature_providers"
+      assert log =~ "responsibility_provider_overrides"
+
+      assert_receive {:provider_missing, %{count: 1},
+                      %{feature: "governance", keys: ["governance.audit"]}}
+    end
+
+    test "a feature bound through the override seam is not flagged" do
+      # The config extension point (`providers: [...]`) pairs with the
+      # override map; a provider that registers its binding is legitimate and
+      # must not nag on every boot.
+      prev = Application.get_env(:platform, :responsibility_provider_overrides)
+
+      Application.put_env(:platform, :responsibility_provider_overrides, %{
+        "governance" => UncoveredFeatureProvider
+      })
+
+      on_exit(fn ->
+        case prev do
+          nil -> Application.delete_env(:platform, :responsibility_provider_overrides)
+          map -> Application.put_env(:platform, :responsibility_provider_overrides, map)
+        end
+      end)
+
+      log =
+        capture_log(fn ->
+          {_pid, name} = start_registry(providers: [UncoveredFeatureProvider])
+          assert %{ok: [_row], errors: []} = Registry.status(name)
+        end)
+
+      refute log =~ "provider_missing"
+    end
+
+    test "the built-in provider list boots clean, with security exempted explicitly" do
+      # GUARD. This is what keeps `security` an exemption rather than an
+      # accident: the four security.* rows really do register here, so the
+      # {:retired, _} branch is exercised, and it still emits nothing.
+      handler_id = "registry-test-builtins-clean-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :provider_missing],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:provider_missing, measurements, metadata})
+        end,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      log =
+        capture_log(fn ->
+          {_pid, name} =
+            start_registry(providers: Platform.Responsibilities.BuiltIns.providers())
+
+          status = Registry.status(name)
+          assert status.errors == []
+
+          keys = MapSet.new(status.ok, & &1.key)
+          # Non-vacuous: the retired feature is present in the walked set.
+          assert MapSet.member?(keys, "security.cve_scan")
+          assert MapSet.member?(keys, "architecture.review_plan")
+        end)
+
+      refute log =~ "provider_missing"
+      refute_receive {:provider_missing, _meas, _meta}, 50
     end
   end
 end

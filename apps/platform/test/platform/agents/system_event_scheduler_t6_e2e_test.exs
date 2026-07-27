@@ -617,7 +617,12 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # bumped by intent-queue live-tuning stage 3 (task 019f70b8) — the
     # runtime-facing ack for meeting intent dispatch, added to the
     # existing `task` bundle rather than a new one (+intent_ack → 88)
-    @t6_baseline_tool_count 88
+    # bumped by ADR-0046 stack member 5 stage 4 (task 019f9b28-ef50) — the
+    # architect's verdict surface, added to the existing `plan` bundle
+    # rather than a new one. It is the only way an agent can release the
+    # architecture gate that now holds a submitted plan
+    # (+plan_architecture_verdict → 89)
+    @t6_baseline_tool_count 89
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

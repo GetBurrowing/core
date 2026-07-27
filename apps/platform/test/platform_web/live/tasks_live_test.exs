@@ -3343,6 +3343,52 @@ defmodule PlatformWeb.TasksLiveTest do
       assert msg.log_only == false
     end
 
+    test "the posted body is the EXACT string Platform.Tasks.PlanRejection composes",
+         %{view: view, plan: plan, exec_space: exec_space, user: user} do
+      # Added by 019f9b29-251e stage 2, which hoisted the composer out of
+      # this LiveView into Platform.Tasks.PlanRejection so the architecture
+      # gate can compose the identical message from below the web layer.
+      #
+      # The test above asserts the body CONTAINS the feedback and the
+      # reviewer's name. That passes against any wrapper text, so it does
+      # not pin the shape — and the shape is a contract, because a planner
+      # agent reads it. This asserts the whole string by equality, and it
+      # is the proof that the LiveView still reaches the (now external)
+      # post at all after the move.
+      view
+      |> element(~s(button[data-role="plan-reject-toggle"][data-plan-id="#{plan.id}"]))
+      |> render_click()
+
+      render_keyup(
+        element(
+          view,
+          ~s(textarea[data-role="plan-reject-feedback-text"][data-plan-id="#{plan.id}"])
+        ),
+        %{"value" => "Split stage 2 in half."}
+      )
+
+      view
+      |> element(~s(button[data-role="plan-reject-feedback-submit"][data-plan-id="#{plan.id}"]))
+      |> render_click()
+
+      messages =
+        Repo.all(
+          from(m in Chat.Message, where: m.space_id == ^exec_space.id, order_by: m.inserted_at)
+        )
+
+      [msg] =
+        Enum.filter(messages, fn m -> Map.get(m.metadata || %{}, "reason") == "plan_rejected" end)
+
+      assert msg.content == "Plan v1 rejected by #{user.name}:\n\nSplit stage 2 in half."
+
+      assert msg.content ==
+               Platform.Tasks.PlanRejection.compose_message(
+                 Tasks.get_plan(plan.id),
+                 user.id,
+                 "Split stage 2 in half."
+               )
+    end
+
     test "submit with empty feedback does NOT post a stub message into the space",
          %{view: view, plan: plan, exec_space: exec_space} do
       # Open drawer but leave the textarea empty.

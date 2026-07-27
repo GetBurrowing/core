@@ -329,6 +329,178 @@ defmodule Platform.Tasks.PlanEngineArchitectDriftHookTest do
     end
   end
 
+  # ── ADR-0046 member 1 stage 4: the hook OBSERVES the fire result ──────
+  #
+  # `after_stage_completed/1` used to throw the fire result away, and the
+  # pre-task Router laundered every outcome into a flat `:ok`. A drift-audit
+  # endpoint that was DOWN therefore looked exactly like "no architect
+  # assigned": the stage passed unaudited, silently.
+  #
+  # GUARD half   — the stage still reaches `passed` and the validation row
+  #                survives. Passes either way; it is here so the detector
+  #                cannot be satisfied by breaking fire-and-forget or by
+  #                rolling back the enclosing transaction.
+  # DETECTOR half — `:failed` telemetry AND the new warning. Impossible
+  #                against pre-task code.
+  describe "transition to passed — architect assigned but endpoint down (external)" do
+    alias Platform.ExternalAgents.EphemeralCredentials
+    alias Platform.Tasks.Validation
+
+    setup do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, :architect_drift_hook_dispatch_test})
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+      end)
+
+      :ok
+    end
+
+    # External sibling of `wire_architect_assignee/0`. An HTTP endpoint is
+    # the only assignee kind whose failure the Router can actually observe
+    # — the native path returns `{:ok, :dispatched}` on handoff (see the
+    # Router moduledoc's honesty limit).
+    defp wire_external_architect! do
+      role_key = "historian"
+
+      Repo.insert!(
+        %Role{key: role_key, name: "Historian", description: "test", icon: "hero-star"},
+        on_conflict: :nothing,
+        conflict_target: :key
+      )
+
+      %RoleResponsibility{}
+      |> RoleResponsibility.changeset(%{
+        role_key: role_key,
+        responsibility_key: @audit_diff_key
+      })
+      |> Repo.insert!()
+
+      agent =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "architect-drift-ext-#{System.unique_integer([:positive])}",
+          name: "Fixture Architect Audit External",
+          status: "active",
+          kind: "external",
+          endpoint_kind: "openai_compat",
+          base_url: "https://api.example.test",
+          model: "test-model",
+          workspace_id: nil
+        })
+        |> Repo.insert!()
+
+      :ok = EphemeralCredentials.put(agent.id, "sk-architect-drift-hook")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      {:ok, _} = Roles.assign_role(role_key, agent.id)
+
+      agent
+    end
+
+    test "GUARD: the stage still passes and the validation row survives; DETECTOR: the failure is logged",
+         %{stage: stage, plan: plan, v_test: v_test, v_lint: v_lint} do
+      _handler_id = attach_telemetry([[:platform, :responsibility, :failed]])
+      _agent = wire_external_architect!()
+
+      test_pid = self()
+
+      Req.Test.stub(:architect_drift_hook_dispatch_test, fn conn ->
+        send(test_pid, {:external_dispatch, conn.request_path})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(503, ~s({"error":"down"}))
+      end)
+
+      log =
+        capture_log([level: :info], fn ->
+          complete_stage_via_validations(v_test, v_lint)
+        end)
+
+      # ── GUARD half (passes either way — fire-and-forget must hold) ────
+      assert %Stage{status: "passed", completed_at: completed_at} = Repo.get!(Stage, stage.id)
+      assert completed_at != nil
+
+      # The hook runs INSIDE `evaluate_validation/2`'s Ecto transaction.
+      # If the new logging raised, this row would have been rolled back to
+      # `pending`.
+      assert %Validation{status: "passed"} = Repo.get!(Validation, v_lint.id)
+      assert %Validation{status: "passed"} = Repo.get!(Validation, v_test.id)
+
+      # Mechanism proof: the Router really did resolve an assignee and
+      # call the endpoint.
+      assert_receive {:external_dispatch, "/chat/completions"}
+
+      # ── DETECTOR half (impossible before this stage) ──────────────────
+      assert_receive {:telemetry, [:platform, :responsibility, :failed], _measurements,
+                      %{key: @audit_diff_key, dispatch_kind: :external}}
+
+      assert log =~
+               "[Responsibilities] architecture.audit_diff dispatch failed " <>
+                 "stage=#{stage.id} plan=#{plan.id}"
+
+      assert log =~ "dispatch_failed"
+    end
+  end
+
+  # ── nil-plan regression ───────────────────────────────────────────────
+
+  test "REGRESSION: a stage whose plan row is gone logs instead of raising inside the transaction",
+       %{stage: stage, plan: plan, v_test: v_test, v_lint: v_lint} do
+    # `after_stage_completed/1` does `plan = Repo.get(Plan, stage.plan_id)`
+    # — a plain `get`, so `plan` CAN be nil (hence `plan && Repo.get(...)`
+    # on the following line). Interpolating `plan.task_id` into the new log
+    # lines would raise a KeyError INSIDE `evaluate_validation/2`'s
+    # transaction; the hook keys off `stage.id` / `stage.plan_id` instead.
+    #
+    # `stages.plan_id` is `NOT NULL REFERENCES plans(id) ON DELETE CASCADE`,
+    # so the only way to reach the state is to drop the constraint first.
+    # DDL is transactional in Postgres and this runs inside the DataCase
+    # sandbox transaction, so it is reverted with the rest of the case.
+    # The test is `async: false` (module-level), so the ACCESS EXCLUSIVE
+    # lock cannot block a concurrent case.
+    Logger.put_module_level(Platform.Tasks.PlanEngine, :info)
+    on_exit(fn -> Logger.delete_module_level(Platform.Tasks.PlanEngine) end)
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "ALTER TABLE stages DROP CONSTRAINT stages_plan_id_fkey"
+    )
+
+    plan_id = plan.id
+    {1, _} = Repo.delete_all(from(p in Platform.Tasks.Plan, where: p.id == ^plan_id))
+    assert Repo.get(Platform.Tasks.Plan, plan_id) == nil
+    assert Repo.get!(Stage, stage.id).plan_id == plan_id
+
+    log =
+      capture_log([level: :info], fn ->
+        # PRE-EXISTING, UNRELATED: `advance_stage/1` does `Repo.get!(Plan,
+        # stage.plan_id)` immediately AFTER the hook returns, so the
+        # transaction ends in an `Ecto.NoResultsError` regardless of this
+        # stage's diff. Asserting the exact exception type is the point —
+        # a KeyError / BadMapError here would mean the new logging blew up.
+        assert_raise Ecto.NoResultsError, fn ->
+          complete_stage_via_validations(v_test, v_lint)
+        end
+      end)
+
+    # The hook ran to completion with `plan == nil` …
+    assert log =~
+             "[Responsibilities] architecture.audit_diff unfilled " <>
+               "stage=#{stage.id} plan=#{plan_id}"
+
+    # … and the rescue backstop never had to catch anything. This is the
+    # regression assertion: an unguarded `plan.task_id` would land here.
+    refute log =~ "[Responsibilities] architecture.audit_diff crashed"
+  end
+
   # ── invariant guard ─────────────────────────────────────────────────
 
   test "sanity: transition-to-passed lands the same stage status across the with/without-architect paths",

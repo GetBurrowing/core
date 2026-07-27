@@ -255,19 +255,34 @@ defmodule Platform.Responsibilities do
   # thin delegate to `Platform.Responsibilities.Router.fire/2` — the
   # canonical runtime dispatch surface stood up in ADR-0041 M6.
   #
-  # The progressive-enhancement contract (ADR-0044): unfilled
-  # responsibilities are a valid steady state. When no agent is
-  # assigned to the resolved key we return `:ok` — never an error — so
-  # call sites can invoke `fire/2` from within lifecycle transitions
-  # (plan-submit hook, stage-complete hook) without adding branch
-  # handling for the "nobody home" path.
+  # The progressive-enhancement contract (ADR-0044) is unchanged:
+  # unfilled responsibilities and unseeded keys are valid steady
+  # states, not failures, and call sites may invoke `fire/2` from
+  # within lifecycle transitions (plan-submit hook, stage-complete
+  # hook) without treating either as an error.
   #
-  # `{:error, :unknown_responsibility}` from the Router (no row seeded
-  # for the key) is normalised to `:ok` for the same reason — a code
-  # site that hooks a responsibility key before its seed migration
-  # lands should not stall the caller. The Router already logs
-  # `[ResponsibilityRouter] fire/2 no row for key=` so the miss is
-  # visible in operator logs.
+  # What changed (ADR-0046 member 1, stage 2): this function used to
+  # express that contract by *laundering* every Router outcome into a
+  # flat `:ok`. That made a genuine dispatch failure indistinguishable
+  # from "nobody home" at every call site — the bug ADR-0046 line 79-83
+  # names explicitly. The normalisation is gone. `fire/2` now returns
+  # the Router result verbatim and callers decide, with `outcome/1`
+  # below as the single shared mapping onto the ADR's
+  # `complete | not_applicable | failed` vocabulary.
+  #
+  # The progressive-enhancement guarantee is preserved by the *shape*
+  # instead: both "nothing to do" states stay in the ok channel
+  # (`{:ok, :unfilled}`, `{:ok, :unknown_responsibility}`), so a caller
+  # that only cares about "did this blow up" can still match `{:ok, _}`.
+
+  @typedoc """
+  Every value `fire/2` can return.
+
+  The `Router.fire_trigger/3` union plus `{:ok, :unknown_responsibility}`,
+  which only the key-lookup layer (`Router.fire/2`) can produce.
+  """
+  @type fire_result ::
+          Platform.Responsibilities.Router.fire_outcome() | {:ok, :unknown_responsibility}
 
   @doc """
   Fire a responsibility trigger by canonical key.
@@ -280,30 +295,80 @@ defmodule Platform.Responsibilities do
 
   ## Return contract
 
-    * `:ok` when the responsibility fires (assignee found + dispatch
-      completed) OR when the responsibility is unfilled OR when no
-      row is seeded for the key. All three of these are "nothing
-      further to do" cases the caller can treat identically.
-    * `{:error, term}` when the Router reports a non-lookup failure
-      (e.g. a downstream contract violation the Router surfaces). Call
-      sites that hook `fire/2` from a lifecycle transition should wrap
-      the call in `try/rescue/catch :exit` regardless — Router's
-      internal guards catch dispatch crashes, but the belt-and-braces
-      wrap protects against future Router-shape changes.
+  The Router result, verbatim — see `t:fire_result/0`:
+
+    * `{:ok, :dispatched}` — an assignee was resolved and the dispatch
+      was handed off. On the native path this means the handoff was
+      accepted, not that the agent responded (see
+      `Platform.Responsibilities.Router` moduledoc, "Honesty limit").
+    * `{:ok, :unfilled}` — the row exists but no agent holds it.
+    * `{:ok, :unknown_responsibility}` — no row is seeded for the key.
+    * `{:error, term}` — an assignee existed and the dispatch failed.
+
+  The two middle values are progressive-enhancement states, NOT
+  failures; `{:error, _}` is a real failure. Use `outcome/1` to collapse
+  them onto the ADR-0046 vocabulary rather than re-deriving the mapping.
+
+  Before ADR-0046 member 1 stage 2 this function returned a flat `:ok`
+  for the first three cases, so a failed dispatch was invisible to every
+  caller. Call sites that only need "did this blow up" can match
+  `{:ok, _}`.
+
+  `fire/2` still never raises — the Router's internal
+  `try/rescue/catch :exit` envelope converts dispatch crashes into
+  `{:error, _}`. Call sites hooking `fire/2` from a lifecycle transition
+  (`Platform.Tasks.submit_plan_for_review/1`,
+  `Platform.Tasks.PlanEngine.after_stage_completed/1`) should keep their
+  belt-and-braces wrap regardless: those run inside Ecto transactions
+  where a raise rolls back a validation update.
   """
-  @spec fire(atom() | binary(), map()) :: :ok | {:error, term()}
+  @spec fire(atom() | binary(), map()) :: fire_result()
   def fire(key, trigger_meta \\ %{}) when is_map(trigger_meta) do
-    case Platform.Responsibilities.Router.fire(key, trigger_meta) do
-      :ok ->
-        :ok
-
-      {:error, :unknown_responsibility} ->
-        # Progressive-enhancement: an unseeded key is functionally
-        # identical to an unfilled assignee. Both are "nothing to do".
-        :ok
-
-      other ->
-        other
-    end
+    Platform.Responsibilities.Router.fire(key, trigger_meta)
   end
+
+  @doc """
+  Map a `fire/2` result onto the ADR-0046 per-step outcome vocabulary.
+
+  `docs/decisions/0046-design-and-architecture-phases-in-planning.md:77-83`
+  defines three per-step outcomes and requires that `not_applicable` and
+  `failed` are never conflated:
+
+      iex> Platform.Responsibilities.outcome({:ok, :dispatched})
+      :complete
+      iex> Platform.Responsibilities.outcome({:ok, :unfilled})
+      :not_applicable
+      iex> Platform.Responsibilities.outcome({:ok, :unknown_responsibility})
+      :not_applicable
+      iex> Platform.Responsibilities.outcome({:error, {:dispatch_failed, :timeout}})
+      :failed
+
+  ## Why this lives here
+
+  Every member of the ADR-0046 stack needs this mapping. If each derives
+  it independently, one of them will eventually map `:unfilled` onto
+  `:failed` (or the reverse) and re-open the bug this contract closes.
+  This is the single shared surface — import it, do not re-implement it.
+
+  ## No catch-all clause, on purpose
+
+  There is deliberately no `def outcome(_), do: :failed`. An unrecognised
+  shape means the fire contract grew a value this mapping has not
+  considered, and a `FunctionClauseError` at the call site is the correct,
+  loud answer — a silent mis-map into `:failed` would report a failure for
+  a step that may have succeeded.
+
+  **Consequence for transaction call sites:** because this function CAN
+  raise, do not invoke it unguarded from inside an Ecto transaction. The
+  hooks at `Platform.Tasks.fire_architecture_review_plan/1` and
+  `Platform.Tasks.PlanEngine.after_stage_completed/1` run inside
+  `evaluate_validation/2`'s transaction, where a raise rolls back the
+  validation update. Call `outcome/1` outside the transaction, or wrap it
+  in the same `try/rescue` envelope those hooks already use for `fire/2`.
+  """
+  @spec outcome(term()) :: :complete | :not_applicable | :failed
+  def outcome({:ok, :dispatched}), do: :complete
+  def outcome({:ok, :unfilled}), do: :not_applicable
+  def outcome({:ok, :unknown_responsibility}), do: :not_applicable
+  def outcome({:error, _reason}), do: :failed
 end

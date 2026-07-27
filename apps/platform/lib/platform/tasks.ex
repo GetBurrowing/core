@@ -532,6 +532,197 @@ defmodule Platform.Tasks do
     end
   end
 
+  # ── ADR-0046 planning sub-phase writers (member 4, stage 2) ─────────────
+  #
+  # These are the ONLY writers for `planning_step` / `planning_step_outcomes`.
+  # Both go through `Task.planning_step_changeset/2`, which casts exactly
+  # those two fields — deliberately NOT through `Task.changeset/2`, which
+  # casts `:status` and therefore makes `update_task/3` an unguarded status
+  # writer (see the comment above `Task.changeset/2`).
+  #
+  # HARD RULE (ADR-0046 member 1): the fire-result → outcome mapping lives in
+  # `Platform.Responsibilities.outcome/1` and nowhere else. Do not add a
+  # `case` over `{:ok, :dispatched}` / `{:ok, :unfilled}` /
+  # `{:ok, :unknown_responsibility}` here — if every consumer derives the
+  # mapping, one of them eventually collapses `not_applicable` into `failed`
+  # and re-opens the bug closed by
+  # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`.
+
+  @doc """
+  Record the outcome of a planning sub-step against a task.
+
+  `fire_result` is a raw `Platform.Responsibilities.fire/2` result. It is
+  translated by `Platform.Responsibilities.outcome/1` — the single shared
+  mapping — and merged into `planning_step_outcomes` under
+  `to_string(step)` as:
+
+      %{"outcome" => "complete" | "not_applicable" | "failed",
+        "recorded_at" => <ISO8601 UTC>,
+        "detail" => <inspect(reason), truncated to 500 chars> | nil}
+
+  `detail` is populated only for the `{:error, reason}` shape; for the
+  three `{:ok, _}` shapes it is `nil`. Recording a second step MERGES —
+  an earlier step's entry is preserved.
+
+  Accepts a `%Task{}` or a task id. Either way the row is re-read from the
+  database before merging, so a caller holding a stale struct cannot clobber
+  a step another writer recorded in between. Unknown id → `{:error, :task_not_found}`.
+
+  ## Transaction semantics
+
+  The write participates in any ambient `Repo.transaction/1`: if the
+  surrounding work rolls back, the step genuinely did not happen. That is
+  the correct Ecto semantic, and it is proved by a test
+  (`planning_step_test.exs`, "transaction semantics") rather than asserted
+  here in prose. This function never calls `Repo.rollback/1` itself and
+  returns `{:error, changeset}` instead of raising on a validation failure,
+  so it cannot abort a parent transaction it did not open.
+
+  The one thing that CAN raise is `Responsibilities.outcome/1`, which has no
+  catch-all clause on purpose (an unrecognised fire-result shape is a loud
+  `FunctionClauseError`, not a silent mis-map). It is called BEFORE any
+  write is attempted, and callers inside a transaction must keep the same
+  `try/rescue` envelope the responsibility hooks already use for `fire/2` —
+  see the "Consequence for transaction call sites" note on `outcome/1`.
+
+  ## Callers
+
+  `:architecture` is written by `submit_plan_for_review/1` (stage 3).
+  `:design` has NO production caller yet — that is deliberate, not an
+  oversight: the design step belongs to ADR-0046 member 7, which lands the
+  dispatch. The API and its tests exist now so member 7 adds a call site and
+  nothing else.
+  """
+  @spec record_planning_step(Task.t() | binary(), :design | :architecture, term()) ::
+          {:ok, Task.t()} | {:error, term()}
+  def record_planning_step(task_or_id, step, fire_result)
+      when step in [:design, :architecture] do
+    case resolve_task_for_planning_step(task_or_id) do
+      nil ->
+        {:error, :task_not_found}
+
+      %Task{} = task ->
+        outcome = Platform.Responsibilities.outcome(fire_result)
+
+        entry = %{
+          "outcome" => to_string(outcome),
+          "recorded_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+          "detail" => planning_step_detail(fire_result)
+        }
+
+        merged = Map.put(task.planning_step_outcomes || %{}, to_string(step), entry)
+
+        write_planning_step(task, %{planning_step_outcomes: merged})
+    end
+  end
+
+  @doc """
+  Move a task's planning sub-phase cursor.
+
+  Cursor-only write: the same narrow changeset, the same board broadcast,
+  and no other field can ride along. A value outside `Task.planning_steps/0`
+  is REJECTED as `{:error, changeset}` rather than raised, so a caller inside
+  a transaction cannot be aborted by a bad cursor.
+
+  Note this is a sub-phase of `status == "planning"`, not a status: the task
+  stays in whatever status it was in. `Task.statuses/0` is untouched by
+  ADR-0046.
+  """
+  @spec set_planning_step(Task.t() | binary(), :designing | :planning | :architecting) ::
+          {:ok, Task.t()} | {:error, term()}
+  def set_planning_step(task_or_id, step) do
+    case resolve_task_for_planning_step(task_or_id) do
+      nil -> {:error, :task_not_found}
+      %Task{} = task -> write_planning_step(task, %{planning_step: planning_step_value(step)})
+    end
+  end
+
+  @doc """
+  The planning steps whose recorded outcome is `"failed"`.
+
+  Returns `[%{step: String.t(), detail: String.t() | nil, recorded_at: String.t() | nil}]`,
+  ordered by `Task.planning_step_keys/0` so the output is deterministic
+  regardless of JSONB key order (Postgres does not preserve insertion order
+  for `jsonb`).
+
+  Only `"failed"` is reported. `"not_applicable"` is the progressive-
+  enhancement path — nobody holds the responsibility — and must never be
+  surfaced as a failure
+  (`0046-design-and-architecture-phases-in-planning.md § Per-step outcome`).
+  """
+  @spec failed_planning_steps(Task.t()) :: [
+          %{step: String.t(), detail: String.t() | nil, recorded_at: String.t() | nil}
+        ]
+  def failed_planning_steps(%Task{} = task) do
+    outcomes = task.planning_step_outcomes || %{}
+
+    Task.planning_step_keys()
+    |> Enum.flat_map(fn key ->
+      case Map.get(outcomes, key) do
+        %{"outcome" => "failed"} = entry ->
+          [
+            %{
+              step: key,
+              detail: Map.get(entry, "detail"),
+              recorded_at: Map.get(entry, "recorded_at")
+            }
+          ]
+
+        _other ->
+          []
+      end
+    end)
+  end
+
+  @doc """
+  True when any planning gate was expected to run and did not.
+
+  The single definition of "a gate did not run" — stage 4's two merge-time
+  writers (`StackDeployer.build_pr_body/3` and `AutoMerger.execute_merge/4`)
+  both call this rather than re-reading the JSONB, so there is exactly one
+  place the predicate can drift.
+  """
+  @spec planning_gate_failed?(Task.t()) :: boolean()
+  def planning_gate_failed?(%Task{} = task), do: failed_planning_steps(task) != []
+
+  # Always re-read from the DB: `record_planning_step/3` merges into the
+  # stored map, so a stale in-memory struct would silently drop a sibling
+  # step's entry.
+  defp resolve_task_for_planning_step(%Task{id: id}), do: Repo.get(Task, id)
+  defp resolve_task_for_planning_step(id) when is_binary(id), do: Repo.get(Task, id)
+  defp resolve_task_for_planning_step(_other), do: nil
+
+  # `detail` carries the failure reason so the merge-time surface can say
+  # WHY, not just THAT. Truncated because `reason` can be an arbitrary term
+  # (an exception struct, a full HTTP response) and this lands in a JSONB
+  # column read by a PR body.
+  defp planning_step_detail({:error, reason}), do: reason |> inspect() |> String.slice(0, 500)
+  defp planning_step_detail(_other), do: nil
+
+  # Not `to_string/1`: a caller passing a term with no String.Chars impl
+  # would raise, and these writers must return errors rather than raise.
+  # An unstringifiable value becomes a string that fails validate_inclusion.
+  defp planning_step_value(step) when is_atom(step) or is_binary(step), do: to_string(step)
+  defp planning_step_value(step), do: inspect(step)
+
+  defp write_planning_step(%Task{} = task, attrs) do
+    task
+    |> Task.planning_step_changeset(attrs)
+    |> Repo.update()
+    |> case do
+      {:ok, updated} ->
+        # Member 8 renders the cursor and the per-step outcomes on the
+        # kanban card; the broadcast is what makes that live-refresh
+        # without polling. Same topic and payload shape as `update_task/3`.
+        preloaded = Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])
+        broadcast_board({:task_updated, preloaded})
+        {:ok, updated}
+
+      error ->
+        error
+    end
+  end
+
   # Stage 2 (019f3dbb) reference-scan refresh. Only re-run the scanner
   # when `description` actually changed — statuses/priorities/assignees
   # don't affect the derived `task_references` set. Advisory failure:
@@ -1521,6 +1712,13 @@ defmodule Platform.Tasks do
     |> Repo.all()
   end
 
+  # The responsibility the plan-time architect holds. Named once so the
+  # dispatch (`fire_architecture_review_plan/1`) and the assignee lookup
+  # (`architect_agent_id/0`) can never drift onto different keys — they
+  # are two reads of the same question and a typo in one would open a
+  # gate crediting nobody.
+  @architecture_responsibility_key "architecture.review_plan"
+
   def submit_plan_for_review(%Plan{status: "draft"} = plan) do
     case plan |> Plan.changeset(%{status: "pending_review"}) |> Repo.update() do
       {:ok, updated} ->
@@ -1532,20 +1730,68 @@ defmodule Platform.Tasks do
         # 019f3440). The Router internally swallows dispatch crashes
         # too; this belt-and-braces wrap protects against future
         # Router-shape changes.
-        _ = fire_architecture_review_plan(updated)
+        #
+        # ADR-0046 member 4 stage 3: the fire result is no longer thrown
+        # away. The cursor moves to `:architecting` for the duration of the
+        # dispatch (what the task genuinely IS while the architect is being
+        # asked), the outcome is persisted, and the cursor returns to
+        # `:planning`. Everything here is side-effect only — the
+        # `{:ok, plan}` return of this function is preserved verbatim,
+        # matching `maybe_emit_plan_review_inbox/1` below.
+        #
+        # SCOPE BOUNDARY vs the sibling ADR-0046 stack members:
+        #   * Member 5 owns the architecture GATE — blocking approval on the
+        #     recorded outcome and redefining `auto_approve_plan`. This code
+        #     only RECORDS; `maybe_auto_approve/1` below is untouched and no
+        #     approval behaviour changes. Member 5's seam is the second
+        #     cursor move: it stops returning the cursor to `:planning`
+        #     until the gate resolves.
+        #   * Member 7 owns the DESIGN step. `record_planning_step/3`
+        #     accepts `:design` and is tested, but has no production caller
+        #     yet — deliberate, not an oversight (see its `@doc`).
+        #   * Member 8 owns card rendering. Nothing here touches a `.heex`,
+        #     `assets/`, or a LiveView; the `{:task_updated, _}` broadcast
+        #     that `set_planning_step/2` and `record_planning_step/3` emit
+        #     is the whole of member 8's dependency on this stage.
+        _ = move_planning_cursor(updated.task_id, :architecting)
+
+        fire_result = fire_architecture_review_plan(updated)
+
+        _ = record_architecture_planning_step(updated.task_id, fire_result)
+
         broadcast_board({:plan_updated, updated})
 
-        case maybe_auto_approve(updated) do
-          {:ok, settled} = result ->
-            # M3 (task 019f904c): notify the task sponsor that a plan is
-            # awaiting human review. Fires against the SETTLED plan so an
-            # auto-approved plan (no human gate) skips the notification.
-            # Side-effect only — the return value is preserved verbatim.
-            _ = maybe_emit_plan_review_inbox(settled)
-            result
+        case architecture_fire_outcome(fire_result) do
+          :complete ->
+            open_architecture_gate_at_submit(updated)
+
+          outcome when outcome in [:not_applicable, :failed] ->
+            # PROGRESSIVE ENHANCEMENT, and it is load-bearing rather than
+            # a nicety: these two branches execute the BYTE-IDENTICAL tail
+            # that ran before the gate existed, in the same order. A repo
+            # with no architect assigned behaves exactly as it does today
+            # (`0044-architect-responsibility.md § Decision`, ADR-0046
+            # decision 3). `:failed` FALLS OPEN
+            # (ADR-0046 decision 7) — the gate never opens and nothing is
+            # blocked. Its visibility is already solved and must not be
+            # re-solved here: `record_architecture_planning_step/2` above
+            # wrote `planning_step_outcomes["architecture"]["outcome"] =
+            # "failed"`, which member 4's merge-time writers surface.
+            settle_ungated_plan_submission(updated)
 
           other ->
-            other
+            # `Platform.Responsibilities.outcome/1` deliberately has no
+            # catch-all, so this arm is only reachable if a future value
+            # is ADDED to its union. Fall open and be loud: an outcome
+            # this function has never seen is not evidence the architect
+            # took the slot, and a `CaseClauseError` here would abort a
+            # transition whose row is already committed.
+            Logger.error(
+              "[Tasks] architecture.review_plan unmapped outcome #{inspect(other)} " <>
+                "plan=#{updated.id} task=#{updated.task_id} — gate not opened"
+            )
+
+            settle_ungated_plan_submission(updated)
         end
 
       error ->
@@ -1555,15 +1801,195 @@ defmodule Platform.Tasks do
 
   def submit_plan_for_review(_plan), do: {:error, :invalid_transition}
 
+  # ── ADR-0046 member 5 stage 2: the gate branch ─────────────────────────
+  #
+  # `:complete` from `Platform.Responsibilities.outcome/1` means THE
+  # ARCHITECT NOW HOLDS THE SLOT. It does NOT mean "the architect
+  # answered", and a reader who assumes otherwise will write a bug.
+  #
+  # Verified against production: `Platform.Roles.assignee_for/1` resolves
+  # `architecture.review_plan` to a `kind: "native"` agent, so the Router
+  # branches into `dispatch_native/4`, which is a HANDOFF —
+  # `AgentResponder.maybe_dispatch/1` wraps the work in `Task.start/1` and
+  # returns `:ok` unconditionally. `handle_output/3` is only reachable from
+  # `run_external_dispatch/5`. THERE IS NO SYNCHRONOUS VERDICT for the
+  # configuration actually deployed.
+  #
+  # Hence the gate is ASYNCHRONOUS: it opens here, on dispatch, and closes
+  # on a later verdict (stage 4) or a deadline (stage 5). The alternative —
+  # making `fire_trigger/3` hand back the parsed output so the gate could
+  # resolve inline — was rejected because it widens member 1's return union
+  # for one caller AND puts a full LLM round-trip inside a function the MCP
+  # `plan_submit` tool calls synchronously.
+  #
+  # The cursor deliberately STAYS at `:architecting`: that is what the task
+  # genuinely IS while the gate holds, and it is the seam member 4's plan
+  # predicted ("member 5 will simply stop returning the cursor to
+  # `:planning` until the gate resolves").
+  defp open_architecture_gate_at_submit(%Plan{} = updated) do
+    case open_architecture_gate(updated, architect_agent_id()) do
+      {:ok, gated} ->
+        broadcast_board({:plan_updated, gated})
+        {:ok, gated}
+
+      {:error, reason} ->
+        # The gate could not be persisted. FALL OPEN, same rule as
+        # `:failed` — a bookkeeping fault must not be able to strand a
+        # plan, and a gate nobody can read is not a gate.
+        Logger.error(
+          "[Tasks] architecture gate failed to open plan=#{updated.id} " <>
+            "task=#{updated.task_id} reason=#{inspect(reason)} — falling open"
+        )
+
+        settle_ungated_plan_submission(updated)
+    end
+  rescue
+    e ->
+      Logger.error(
+        "[Tasks] architecture gate open crashed plan=#{updated.id} " <>
+          "task=#{updated.task_id} error=#{Exception.message(e)} — falling open"
+      )
+
+      settle_ungated_plan_submission(updated)
+  catch
+    :exit, reason ->
+      Logger.error(
+        "[Tasks] architecture gate open exited plan=#{updated.id} " <>
+          "task=#{updated.task_id} exit=#{inspect(reason)} — falling open"
+      )
+
+      settle_ungated_plan_submission(updated)
+  end
+
+  # Return the cursor to `:planning` and run the deferred tail. Every
+  # non-gated exit from `submit_plan_for_review/1` funnels through here so
+  # "the gate did not hold this plan" is one statement, not four.
+  defp settle_ungated_plan_submission(%Plan{} = updated) do
+    _ = move_planning_cursor(updated.task_id, :planning)
+    settle_plan_submission(updated)
+  end
+
+  # THE TAIL. Extracted verbatim from `submit_plan_for_review/1` because
+  # stage 3's `resolve_architecture_gate/2` calls this SAME function when
+  # the gate resolves — the gated and ungated paths must not be able to
+  # drift. Two copies of "what happens after plan review finishes" is how
+  # the gated path silently stops emitting the sponsor row a year from now.
+  defp settle_plan_submission(%Plan{} = updated) do
+    case maybe_auto_approve(updated) do
+      {:ok, settled} = result ->
+        # M3 (task 019f904c): notify the task sponsor that a plan is
+        # awaiting human review. Fires against the SETTLED plan so an
+        # auto-approved plan (no human gate) skips the notification.
+        # Side-effect only — the return value is preserved verbatim.
+        #
+        # ADR-0046 member 5: on the GATED path this does not run at submit
+        # — the human's turn has not arrived while the architect is still
+        # looking. It runs when the gate resolves, which is the correct
+        # order, not a lost notification.
+        _ = maybe_emit_plan_review_inbox(settled)
+        result
+
+      other ->
+        other
+    end
+  end
+
+  # The gate's read of the fire result.
+  #
+  # HARD RULE (ADR-0046 member 1): `Platform.Responsibilities.outcome/1` is
+  # the ONLY translation from a fire result to an outcome, so this wrapper
+  # adds an envelope and nothing else — no local mapping, no second `case`
+  # over router return shapes.
+  #
+  # The envelope exists because `outcome/1` deliberately has no catch-all
+  # clause and therefore RAISES on a shape it has never seen, while this
+  # call site sits after a committed `draft -> pending_review` update and is
+  # reached synchronously from the MCP `plan_submit` tool. An unrecognised
+  # shape must not turn into a failed plan submission.
+  #
+  # `:unmapped` is deliberately NOT `:failed`: the caller falls open on
+  # both, but only `:failed` is an architect that was asked and did not
+  # answer. Collapsing them is the conflation forbidden by
+  # `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`, and
+  # `record_architecture_planning_step/2` already refuses to make it.
+  defp architecture_fire_outcome(fire_result) do
+    Platform.Responsibilities.outcome(fire_result)
+  rescue
+    _ -> :unmapped
+  catch
+    :exit, _ -> :unmapped
+  end
+
+  # Who the gate is waiting on, recorded on the verdict so a reader can
+  # tell WHICH architect holds the slot.
+  #
+  # Yes, this resolves the assignee a second time — the Router already did
+  # it inside `fire_trigger/3`. The alternative is threading the assignee
+  # back out through member 1's `{:ok, :dispatched} | ...` return union,
+  # which three other stack members depend on, for one caller's
+  # convenience. Two cheap reads beat a contract change.
+  #
+  # `nil` on any miss: an unattributed gate is still a gate, and a lookup
+  # fault must not be able to stall the submission.
+  defp architect_agent_id do
+    case Platform.Roles.assignee_for(@architecture_responsibility_key) do
+      %Agent{id: id} -> id
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
+
   # ADR-0044 stage 2 helper. Kept private so `submit_plan_for_review/1`
   # reads as a linear transition and the hook is the only public
   # surface the plan-approval flow depends on.
+  #
+  # ADR-0046 member 1 stage 4: the fire result is now INSPECTED rather
+  # than discarded. Before stages 1-2 gave `Responsibilities.fire/2` a
+  # real return contract, an architect endpoint that was down looked
+  # exactly like "no architect assigned" here — the plan silently went
+  # to review unreviewed, with nothing in the log to say so.
+  #
+  # LOAD-BEARING (verified, do not weaken): this helper MUST NOT raise.
+  # It runs inside the `draft → pending_review` transition documented at
+  # `submit_plan_for_review/1`, and a raise would abort that transition.
+  # The branches below only log and return — no `raise`, no `!`-suffixed
+  # call, and `plan` is a `%Plan{}` by the function head so `plan.id` /
+  # `plan.task_id` cannot blow up on nil. Errors are RETURNED, never
+  # raised. The value is returned on every branch so a future ADR-0046
+  # consumer can lift it (the call site at `submit_plan_for_review/1`
+  # still discards it via `_ =`).
   defp fire_architecture_review_plan(%Plan{} = plan) do
-    Platform.Responsibilities.fire("architecture.review_plan", %{
-      plan_id: plan.id,
-      task_id: plan.task_id,
-      plan: plan
-    })
+    case Platform.Responsibilities.fire(@architecture_responsibility_key, %{
+           plan_id: plan.id,
+           task_id: plan.task_id,
+           plan: plan
+         }) do
+      {:error, reason} = result ->
+        Logger.warning(
+          "[Responsibilities] architecture.review_plan dispatch failed " <>
+            "plan=#{plan.id} task=#{plan.task_id} reason=#{inspect(reason)}"
+        )
+
+        result
+
+      {:ok, state} = result when state in [:unfilled, :unknown_responsibility] ->
+        # Progressive enhancement, not a problem: no architect holds the
+        # responsibility (or the key was never seeded). Info, not warning
+        # — this is the steady state on a suite with no architect.
+        Logger.info(
+          "[Responsibilities] architecture.review_plan #{state} " <>
+            "plan=#{plan.id} task=#{plan.task_id}"
+        )
+
+        result
+
+      # {:ok, :dispatched} — the Router already logged the dispatch.
+      result ->
+        result
+    end
   rescue
     e ->
       Logger.warning(
@@ -1576,6 +2002,83 @@ defmodule Platform.Tasks do
       Logger.warning("[Responsibilities] architecture.review_plan exited: #{inspect(reason)}")
 
       {:error, :architect_crashed}
+  end
+
+  # ADR-0046 member 4 stage 3. Persists the architecture step's outcome.
+  #
+  # Runs OUTSIDE `fire_architecture_review_plan/1`'s rescue, on purpose: the
+  # fire result is captured first and recorded second, so a crash in the
+  # RECORDER can never be logged as "the architect crashed" and can never be
+  # mapped onto `"failed"` for the architecture step. A persistence bug must
+  # not be attributed to the architect.
+  #
+  # It carries its OWN envelope for a different reason.
+  # `Platform.Responsibilities.outcome/1` deliberately has no catch-all
+  # clause, so a fire-result shape it has never seen raises
+  # `FunctionClauseError` — and its `@doc` instructs call sites that cannot
+  # afford a raise to wrap it in the same envelope the hooks already use for
+  # `fire/2`. This is such a call site twice over: `submit_plan_for_review/1`
+  # is fire-and-forget by the ADR-0044 contract, and `plan_submit` in
+  # `Platform.Federation.ToolSurface` is a live agent-facing caller, so an
+  # unrecognised Router return value must not turn into a failed plan
+  # submission. (`submit_plan_for_review/1` is not itself transaction-nested
+  # — checked: no caller wraps it in `Repo.transaction/1`. This envelope is
+  # what keeps that true for a future one.)
+  #
+  # An unmapped shape is loud but harmless: logged at :error with the shape
+  # verbatim, and NOTHING is written. The `"architecture"` key stays absent,
+  # which is distinguishable from all three of complete / not_applicable /
+  # failed. It is specifically NOT recorded as `"failed"` — that silent
+  # mis-map is the exact thing member 1's missing catch-all exists to
+  # prevent
+  # (`0046-design-and-architecture-phases-in-planning.md § Per-step outcome`).
+  defp record_architecture_planning_step(task_id, fire_result) do
+    record_planning_step(task_id, :architecture, fire_result)
+  rescue
+    e ->
+      Logger.error(
+        "[Responsibilities] architecture.review_plan outcome unrecorded " <>
+          "task=#{inspect(task_id)} fire_result=#{inspect(fire_result)} " <>
+          "error=#{Exception.message(e)}"
+      )
+
+      {:error, :planning_step_unrecorded}
+  catch
+    :exit, reason ->
+      Logger.error(
+        "[Responsibilities] architecture.review_plan outcome unrecorded " <>
+          "task=#{inspect(task_id)} fire_result=#{inspect(fire_result)} " <>
+          "exit=#{inspect(reason)}"
+      )
+
+      {:error, :planning_step_unrecorded}
+  end
+
+  # ADR-0046 member 4 stage 3. Cursor-only sibling of the above, same
+  # non-raising contract for the same reason: a cursor move is bookkeeping
+  # and must never be able to stall the `draft → pending_review` transition.
+  # `set_planning_step/2` already RETURNS `{:error, changeset}` for an
+  # out-of-domain value and `{:error, :task_not_found}` for a missing row;
+  # the envelope covers what it cannot (a PubSub or DB fault under the
+  # broadcast).
+  defp move_planning_cursor(task_id, step) do
+    set_planning_step(task_id, step)
+  rescue
+    e ->
+      Logger.warning(
+        "[Tasks] planning cursor move failed task=#{inspect(task_id)} " <>
+          "step=#{inspect(step)} error=#{Exception.message(e)}"
+      )
+
+      {:error, :planning_cursor_unmoved}
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[Tasks] planning cursor move exited task=#{inspect(task_id)} " <>
+          "step=#{inspect(step)} exit=#{inspect(reason)}"
+      )
+
+      {:error, :planning_cursor_unmoved}
   end
 
   # M3 (task 019f904c): emit a `task_plan_review` inbox row to the task
@@ -1746,6 +2249,249 @@ defmodule Platform.Tasks do
     end
   end
 
+  # ── ADR-0046 member 5: the architecture gate ────────────────────────
+  #
+  # STATE ONLY at this stage. Nothing here is called from the plan
+  # lifecycle yet; `submit_plan_for_review/1` opens the gate in stage 2,
+  # the MCP verdict tool closes it in stage 4, and the deadline timer
+  # lands in stage 5. These functions are the whole vocabulary those
+  # stages speak — no other module reads `plans.architecture_verdict`
+  # directly.
+
+  # 15 minutes. Long enough for an architect agent to actually read a
+  # multi-stage plan and the ADRs it cites (member 3's context resolvers
+  # push a real reading load onto that dispatch); short enough that one
+  # silent architect does not hold an org's entire planning queue for a
+  # working day. Overridable per-environment because the test suite
+  # needs it to be ~0 and a human-in-the-loop override wants it longer.
+  @architecture_gate_default_timeout_ms 15 * 60 * 1_000
+
+  @doc """
+  How long an open architecture gate has before it is considered expired.
+
+  Configure with `config :platform, architecture_gate_timeout_ms: <ms>`.
+  """
+  @spec architecture_gate_timeout_ms() :: pos_integer()
+  def architecture_gate_timeout_ms do
+    Application.get_env(
+      :platform,
+      :architecture_gate_timeout_ms,
+      @architecture_gate_default_timeout_ms
+    )
+  end
+
+  @doc """
+  Open the architecture gate on a plan version.
+
+  Writes `state: "pending"`, `opened_at`, `deadline_at` (now +
+  `architecture_gate_timeout_ms/0`) and `architect_agent_id`. The
+  remaining keys are written as `nil` / `[]` so every reader sees the
+  full shape and never has to distinguish "key absent" from "key nil".
+
+  Goes through `Plan.architecture_verdict_changeset/2`, so this cannot
+  move the plan's `status` even by accident.
+  """
+  @spec open_architecture_gate(Plan.t(), String.t() | nil) :: {:ok, Plan.t()} | {:error, term()}
+  def open_architecture_gate(%Plan{} = plan, architect_agent_id \\ nil) do
+    now = DateTime.utc_now()
+    deadline = DateTime.add(now, architecture_gate_timeout_ms(), :millisecond)
+
+    verdict = %{
+      "state" => "pending",
+      "opened_at" => DateTime.to_iso8601(now),
+      "deadline_at" => DateTime.to_iso8601(deadline),
+      "resolved_at" => nil,
+      "resolved_by" => nil,
+      "architect_agent_id" => architect_agent_id,
+      "source" => nil,
+      "summary" => nil,
+      "findings" => []
+    }
+
+    plan
+    |> Plan.architecture_verdict_changeset(%{architecture_verdict: verdict})
+    |> Repo.update()
+  end
+
+  @doc """
+  Read the gate's state. **Level-triggered, and it never writes.**
+
+  Returns `:none` when the gate never opened for this plan version,
+  `{:open, verdict}` while it is genuinely pending, and
+  `{:resolved, verdict}` once it carries a terminal state.
+
+  A `"pending"` verdict whose `deadline_at` has passed is reported as
+  `{:resolved, %{"state" => "expired", "source" => "deadline"}}`
+  WITHOUT persisting anything. That projection is the correctness
+  guarantee that a gate can never block forever; stage 5's timer is only
+  the eager path that also writes the row and resumes the deferred work.
+
+  The rationale is a live production incident recorded in the
+  2026-07-26 journal: `deploying -> done` lived solely in an
+  edge-triggered PubSub handler with no level re-check, and a container
+  restart between the broadcast and the handler stranded a completed
+  task at `deploying` indefinitely while re-dispatching it every 90
+  minutes. Same shape here. Build the level check first and treat the
+  edge as an optimisation.
+
+  A `"pending"` verdict with a missing or unparseable `deadline_at` is
+  ALSO reported as expired. Deliberate, and it is the same argument: the
+  alternative is a gate with no falsifiable end, which is the exact
+  failure this function exists to rule out. Failing toward "not blocked"
+  restores today's behaviour (a plan approves without architect review);
+  failing toward "blocked" strands the task and needs a human.
+
+  Accepts a `%Plan{}` or a plan id; **either way the row is re-read from
+  the database.** A caller holding a struct loaded before the gate moved
+  would otherwise get a stale answer, and this is the function every
+  other module asks the question through. (Member 4's reviewer found the
+  mirror-image bug in `AutoMerger.execute_merge/4`, which reads
+  `planning_step_outcomes` off a struct loaded in a different process.)
+  """
+  @spec architecture_gate(Plan.t() | binary()) :: :none | {:open, map()} | {:resolved, map()}
+  def architecture_gate(plan_or_id) do
+    case resolve_plan_for_gate(plan_or_id) do
+      nil -> :none
+      %Plan{architecture_verdict: nil} -> :none
+      %Plan{architecture_verdict: verdict} -> classify_architecture_verdict(verdict)
+    end
+  end
+
+  @doc """
+  True while the architecture gate is genuinely holding this plan.
+
+  The single question every other module asks. Defined in terms of
+  `architecture_gate/1` so the expiry projection can never be skipped by
+  a caller that pattern-matches the raw column itself.
+  """
+  @spec architecture_gate_open?(Plan.t() | binary()) :: boolean()
+  def architecture_gate_open?(plan_or_id), do: match?({:open, _}, architecture_gate(plan_or_id))
+
+  @doc """
+  Close the gate with a terminal verdict. One-shot.
+
+  `verdict` is merged over the open verdict, so `opened_at`,
+  `deadline_at` and `architect_agent_id` survive; `resolved_at` is
+  stamped, and `:resolved_by` / `:source` may be supplied in `opts` (a
+  non-nil value already present in `verdict` wins).
+
+  Errors:
+
+    * `{:error, :plan_not_found}`
+    * `{:error, :gate_not_open}` — the gate never opened for this version
+    * `{:error, :gate_already_resolved}` — somebody already closed it
+    * `{:error, :verdict_state_not_terminal}` — `"state" => "pending"`;
+      re-opening is `open_architecture_gate/2`'s job
+    * `{:error, %Ecto.Changeset{}}` — the verdict failed validation
+
+  ## Why one-shot, and how "first writer wins" is decided
+
+  A duplicate MCP call must be harmless, and a late verdict racing an
+  expired deadline must be deterministic. Both fall out of arbitrating
+  on the PERSISTED state rather than on `architecture_gate/1`'s
+  projection: an overdue-but-unwritten gate still reads `"pending"` in
+  the row, so an architect whose answer beats stage 5's timer to the
+  write genuinely wins, and once the timer has written `"expired"` the
+  late answer is refused. Note this is the one place the level
+  projection is deliberately NOT consulted — readers deciding whether to
+  block want the projection; the writer arbitrating a race wants the row.
+
+  The check and the write are one statement: the `UPDATE` carries its
+  own `state = 'pending'` predicate, so two concurrent writers cannot
+  both observe an open gate and both write. Zero rows affected IS the
+  already-resolved answer.
+  """
+  @spec record_architecture_verdict(Plan.t() | binary(), map(), keyword()) ::
+          {:ok, Plan.t()} | {:error, term()}
+  def record_architecture_verdict(plan_or_id, verdict, opts \\ []) when is_map(verdict) do
+    case resolve_plan_for_gate(plan_or_id) do
+      nil ->
+        {:error, :plan_not_found}
+
+      %Plan{architecture_verdict: nil} ->
+        {:error, :gate_not_open}
+
+      %Plan{architecture_verdict: %{"state" => "pending"} = current} = plan ->
+        if Map.get(verdict, "state") == "pending" do
+          {:error, :verdict_state_not_terminal}
+        else
+          write_architecture_verdict(plan, current, verdict, opts)
+        end
+
+      %Plan{} ->
+        {:error, :gate_already_resolved}
+    end
+  end
+
+  defp write_architecture_verdict(%Plan{} = plan, current, attrs, opts) do
+    now = DateTime.utc_now()
+
+    merged =
+      current
+      |> Map.merge(attrs)
+      |> put_verdict_default("resolved_at", DateTime.to_iso8601(now))
+      |> put_verdict_default("resolved_by", Keyword.get(opts, :resolved_by))
+      |> put_verdict_default("source", Keyword.get(opts, :source))
+
+    changeset = Plan.architecture_verdict_changeset(plan, %{architecture_verdict: merged})
+
+    case Ecto.Changeset.apply_action(changeset, :update) do
+      {:error, %Ecto.Changeset{} = invalid} ->
+        {:error, invalid}
+
+      {:ok, _applied} ->
+        {count, _} =
+          Plan
+          |> where([p], p.id == ^plan.id)
+          |> where([p], fragment("?->>'state' = 'pending'", p.architecture_verdict))
+          |> Repo.update_all(set: [architecture_verdict: merged, updated_at: now])
+
+        case count do
+          1 -> {:ok, Repo.get(Plan, plan.id)}
+          0 -> {:error, :gate_already_resolved}
+        end
+    end
+  end
+
+  # Only fills a key that is absent or nil — an explicit value in the
+  # caller's verdict always wins over the `opts` fallback.
+  defp put_verdict_default(map, key, fallback) do
+    case Map.get(map, key) do
+      nil -> Map.put(map, key, fallback)
+      _present -> map
+    end
+  end
+
+  defp classify_architecture_verdict(%{"state" => "pending"} = verdict) do
+    if architecture_gate_overdue?(verdict) do
+      {:resolved, Map.merge(verdict, %{"state" => "expired", "source" => "deadline"})}
+    else
+      {:open, verdict}
+    end
+  end
+
+  defp classify_architecture_verdict(%{"state" => state} = verdict) when is_binary(state) do
+    {:resolved, verdict}
+  end
+
+  defp classify_architecture_verdict(_other), do: :none
+
+  defp architecture_gate_overdue?(%{"deadline_at" => deadline}) when is_binary(deadline) do
+    case DateTime.from_iso8601(deadline) do
+      {:ok, at, _offset} -> DateTime.compare(DateTime.utc_now(), at) != :lt
+      {:error, _reason} -> true
+    end
+  end
+
+  defp architecture_gate_overdue?(_verdict), do: true
+
+  # Always re-read: see the `architecture_gate/1` @doc. A gate answer
+  # derived from a struct somebody loaded earlier is the class of bug
+  # this whole stack is undoing.
+  defp resolve_plan_for_gate(%Plan{id: id}), do: Repo.get(Plan, id)
+  defp resolve_plan_for_gate(id) when is_binary(id), do: Repo.get(Plan, id)
+  defp resolve_plan_for_gate(_other), do: nil
+
   # Preconditions for auto-approve. Because plans don't carry per-stage
   # assignees (only the task carries per-phase assignees via
   # `phase_assignees`), the "agent assigned for all stages" check reduces to:
@@ -1779,9 +2525,309 @@ defmodule Platform.Tasks do
   defp plan_stages(%Plan{stages: stages}) when is_list(stages), do: stages
   defp plan_stages(_), do: []
 
+  # ── ADR-0046 member 5 stage 3: the single exit from the gate ──────────
+
+  @doc """
+  Close an open architecture gate and run the tail `submit_plan_for_review/1`
+  deferred. **This is the only exit from the gate.**
+
+  Every resolver goes through here and calls nothing else: stage 4's two
+  verdict surfaces, stage 5's deadline, and `approve_plan/3`'s human
+  override. One function so the four ways a gate can end cannot each grow
+  their own idea of what "the gate finished" means.
+
+  Steps, in this order:
+
+    1. `record_architecture_verdict/3` writes the terminal verdict. It is
+       one-shot and arbitrates on the persisted row, so a verdict racing a
+       deadline is deterministic and a duplicate call is `{:error,
+       :gate_already_resolved}` rather than a second settlement.
+    2. The planning cursor returns to `:planning` — the gate is what parked
+       it at `:architecting`.
+    3. The resolution decides the tail.
+
+  ## Resolutions
+
+    * `:pass` — run `settle_plan_submission/1`: `maybe_auto_approve/1` then
+      `maybe_emit_plan_review_inbox/1`, the deferred tail run late instead
+      of never.
+    * `:expired` / `:dispatch_failed` — identical to `:pass` (FALL OPEN,
+      ADR-0046 decision 7), PLUS `record_planning_step(task, :architecture,
+      {:error, reason})`. Falling open without recording is the exact
+      conflation forbidden by
+      `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`,
+      so the two live in one code path and
+      are asserted in one test.
+    * `:reject` — write the verdict, return the cursor, and hand off to
+      `Platform.Tasks.ArchitectureRejection.handle/1` (ADR-0046 member 6).
+      No auto-approval and no sponsor row: what happens after a rejection
+      is bounded iteration, and it is owned by that module rather than by
+      this one.
+    * `:human_override` — write the verdict, return the cursor, and STOP.
+      Used by `approve_plan/3` when a human approves past an open gate; the
+      caller IS the settlement, so this resolution must not settle again.
+
+  `:human_override` widens the arity-2 signature this stage was specified
+  with. It is here rather than inline in `approve_plan/3` precisely because
+  of the paragraph above: an override that wrote its own verdict and moved
+  its own cursor would be a fifth exit from the gate, which is the thing
+  this function exists to prevent.
+
+  ## What a `:reject` now does, and where it stops
+
+  Member 6 (`019f9b29-251e`) closed the interim stall this section used to
+  describe. `Platform.Tasks.ArchitectureRejection.handle/1` has three
+  outcomes, and this function chooses none of them:
+
+    * BELOW the bound — `reject_plan/3` persists `status: "rejected"` with
+      the architect's findings as the `rejection_reason`, and the identical
+      body is posted to the execution space. The post is what wakes the
+      planner; the persisted reason is what survives a restart that eats the
+      wake-up. The planner is asked for the version AFTER the one just
+      rejected — derived from `plan.version`, never a literal, because a
+      second rejection must ask for a v3 rather than re-ask for the v2 the
+      architect has already turned down.
+    * AT the bound (`ArchitectureRejection.reject_limit/0`) — it escalates
+      instead. The plan is left UNTOUCHED in `pending_review`, a digest of
+      every round is posted and a sponsor inbox row is emitted, and no
+      further version is asked for. The bound is what stops the loop; the
+      notification is best-effort on top of it.
+    * IN FLIGHT — refused outright with `{:error, :plan_in_flight}`, so a
+      plan whose stages have already started is never retro-rejected.
+
+  This function must not grow any of them: it hands the resolved plan to
+  `ArchitectureRejection.handle/1` and swallows its errors, because the
+  verdict is already written and the gate must still report that it
+  resolved. Note also that THIS path never authors a new plan version — the
+  planner does, in response to the chat message — which is asserted in
+  `ArchitectureGateApprovalTest`.
+
+  `opts` accepts `:resolved_by`, `:source`, `:summary` and `:findings`,
+  which are merged into the verdict. `:source` must be one of
+  `Plan.architecture_verdict_sources/0` or `nil`; it defaults to
+  `"deadline"` for `:expired` and `"human"` for `:human_override`, and to
+  `nil` otherwise — a caller reached through a channel is expected to
+  name it (`"mcp"`, `"handle_output"`), because that distinction is the
+  whole reason the field exists.
+  """
+  @spec resolve_architecture_gate(
+          Plan.t() | binary(),
+          :pass | :reject | :expired | :dispatch_failed | :human_override,
+          keyword()
+        ) :: {:ok, Plan.t()} | {:error, term()}
+  def resolve_architecture_gate(plan_or_id, resolution, opts \\ [])
+      when resolution in [:pass, :reject, :expired, :dispatch_failed, :human_override] do
+    verdict =
+      %{"state" => architecture_verdict_state(resolution)}
+      |> put_verdict_present("summary", Keyword.get(opts, :summary))
+      |> put_verdict_present("findings", Keyword.get(opts, :findings))
+
+    record_opts = [
+      resolved_by: Keyword.get(opts, :resolved_by),
+      source: Keyword.get(opts, :source, architecture_verdict_source(resolution))
+    ]
+
+    case record_architecture_verdict(plan_or_id, verdict, record_opts) do
+      {:ok, resolved} ->
+        _ = move_planning_cursor(resolved.task_id, :planning)
+        settle_resolved_architecture_gate(resolved, resolution)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp architecture_verdict_state(:pass), do: "passed"
+  defp architecture_verdict_state(:reject), do: "rejected"
+  defp architecture_verdict_state(:expired), do: "expired"
+  defp architecture_verdict_state(:dispatch_failed), do: "dispatch_failed"
+  defp architecture_verdict_state(:human_override), do: "human_override"
+
+  # `"source"` names the CHANNEL the verdict arrived through, and this
+  # function only knows the two channels that ARE a resolution: stage 5's
+  # timer and an operator override. The other three resolutions can come
+  # in either of two ways — the MCP tool or an external text parse — and
+  # only the caller knows which, so each names itself (`source: "mcp"` in
+  # `ToolSurface.resolve_architecture_verdict/5`, `source: "handle_output"`
+  # in `Handlers.ArchitectureReviewPlan.apply_gate_resolution/3`).
+  #
+  # The default for those is `nil`, "no channel answered" — NOT
+  # `"architect"` / `"dispatch"`, which is what this function emitted
+  # before and which is what a source value looks like when it has given
+  # up and restated `"state"`. `"architect"` was true of every verdict
+  # and so distinguished nothing; `"dispatch"` said only what
+  # `state == "dispatch_failed"` already said, one field over. A verdict
+  # written by a caller that names no channel genuinely has no channel,
+  # and `nil` is the honest way to say so — see `Plan`'s moduledoc.
+  defp architecture_verdict_source(:expired), do: "deadline"
+  defp architecture_verdict_source(:human_override), do: "human"
+  defp architecture_verdict_source(_caller_names_its_own_channel), do: nil
+
+  defp put_verdict_present(verdict, _key, nil), do: verdict
+  defp put_verdict_present(verdict, key, value), do: Map.put(verdict, key, value)
+
+  # `:human_override` STOPS, because `approve_plan/3` is mid-flight and
+  # settling here would approve the plan twice.
+  defp settle_resolved_architecture_gate(%Plan{} = resolved, :human_override) do
+    broadcast_board({:plan_updated, resolved})
+    {:ok, resolved}
+  end
+
+  # ADR-0046 member 6 (`019f9b29-251e`) stage 3: the seam member 5 left
+  # open. Everything downstream of a rejection — the iteration counter,
+  # the feedback body, the bound and the escalation — lives in
+  # `ArchitectureRejection`, not here. A failure there is swallowed: the
+  # verdict is already written and the gate must still report that it
+  # resolved.
+  defp settle_resolved_architecture_gate(%Plan{} = resolved, :reject) do
+    broadcast_board({:plan_updated, resolved})
+
+    case Platform.Tasks.ArchitectureRejection.handle(resolved) do
+      {:ok, _outcome, final_plan} -> {:ok, final_plan}
+      {:error, _reason} -> {:ok, resolved}
+    end
+  end
+
+  defp settle_resolved_architecture_gate(%Plan{} = resolved, :pass) do
+    broadcast_board({:plan_updated, resolved})
+    settle_plan_submission(resolved)
+  end
+
+  # FALL OPEN AND SAY SO. Recorded BEFORE the settlement so a merge-time
+  # reader (member 4's `planning_gate_failed?/1`) sees "the gate did not
+  # complete" even if the settlement itself goes wrong.
+  defp settle_resolved_architecture_gate(%Plan{} = resolved, fell_open)
+       when fell_open in [:expired, :dispatch_failed] do
+    _ = record_architecture_planning_step(resolved.task_id, {:error, fell_open})
+    broadcast_board({:plan_updated, resolved})
+    settle_plan_submission(resolved)
+  end
+
   def approve_plan(plan, approved_by, opts \\ [])
 
+  # ── ADR-0046 member 5 stage 3: the architecture gate's choke point ────
+  #
+  # ONE guard, EVERY approval writer. Stage 2's deferral only holds the
+  # auto path; there are two other production writers and one of them is
+  # agent-reachable — the MCP `plan_approve` tool, which lives in the
+  # `plan` capability bundle, defaults `approved_by` to the literal
+  # `"system"`, and calls this function directly. Guarding the submit path
+  # alone would ship a gate with a documented bypass and an agent standing
+  # next to it. Same argument commit `70fc30fe` makes for guarding the
+  # router's `:dispatch` handler rather than its ~13 injectors: per-caller
+  # guards do not cover the callers you have not met yet.
+  #
+  # WHO MAY PASS AN OPEN GATE: an approval whose `approved_by` resolves to
+  # an existing `Accounts.User`. The LiveView button already sends a user
+  # UUID, so the human path needs ZERO UI change; `"system:auto"`,
+  # `plan_approve`'s `"system"` default and any agent slug are refused.
+  #
+  # ADR-0046 decision 4 redefines `auto_approve_plan` as "no HUMAN gate" —
+  # the machine gate SUBSTITUTES for the human, it does not OUTRANK one. A
+  # human looking at the plan is the superior authority and the architect's
+  # findings are advisory to them. Blocking a human behind a model's
+  # verdict inverts the authority order, and that inversion is the concrete
+  # mechanism by which an architect that blocks a one-line fix gets
+  # switched off within a week — leaving a gate that still looks present.
+  #
+  # The bypass is NOT silent: it writes `state: "human_override"` through
+  # the one gate exit and emits
+  # `[:platform, :plan, :architecture_gate_overridden]`.
   def approve_plan(%Plan{status: "pending_review"} = plan, approved_by, opts) do
+    case architecture_gate_admission(plan, approved_by) do
+      :inert ->
+        do_approve_plan(plan, approved_by, opts)
+
+      {:override, %Accounts.User{} = user} ->
+        # Closed FIRST, approved second. If the approval then fails, the
+        # gate reads `"human_override"` and the plan is still
+        # `pending_review` — a retry works because the guard is now inert.
+        # The other order would leave an APPROVED plan behind a still-open
+        # gate, which stage 5's deadline would later try to settle again.
+        _ = record_architecture_human_override(plan, user)
+        do_approve_plan(plan, approved_by, opts)
+
+      :refuse ->
+        {:error, :architecture_gate_open}
+    end
+  end
+
+  def approve_plan(_plan, _approved_by, _opts), do: {:error, :invalid_transition}
+
+  defp architecture_gate_admission(%Plan{} = plan, approved_by) do
+    # `architecture_gate_open?/1` re-reads the row. Load-bearing: this
+    # function is reached from `AutoMerger`-style async paths and from a
+    # LiveView holding a struct assigned on mount, and a gate answer
+    # derived from a stale struct is the class of bug this stack undoes.
+    if architecture_gate_open?(plan) do
+      case human_approver(approved_by) do
+        %Accounts.User{} = user -> {:override, user}
+        nil -> :refuse
+      end
+    else
+      :inert
+    end
+  end
+
+  # `Accounts.get_user/1` is now TOTAL — it returns nil for `"system"`,
+  # `"system:auto"` and every agent slug, which are the common case here — so
+  # the lookup is both the admission test and the totality mechanism.
+  #
+  # This used to carry an `Ecto.UUID.cast/1` pre-filter, written on this
+  # branch when `Accounts.get_user/1` still raised `Ecto.Query.CastError` on a
+  # non-UUID binary. Main's 9b0d74d8 pushed that guard down into
+  # `Accounts.get_user/1` itself (via `Platform.UUID.valid?/1`), making the
+  # pre-filter redundant. `repo_lookup_boundary_test.exs`'s moduledoc names
+  # this exact function as the one collapse it deliberately left to whoever
+  # merged this stack.
+  #
+  # Behaviour is unchanged in every case. A canonical UUID resolved then and
+  # resolves now. A malformed id returned nil then — the cast rejected it —
+  # and returns nil now. A raw 16-byte binary is the only input whose PATH
+  # differs: the bare cast used to hex-encode it into a well-formed UUID that
+  # then missed, where `Platform.UUID.valid?/1` rejects it on the length check
+  # first. Both roads end at nil.
+  defp human_approver(approved_by) when is_binary(approved_by) do
+    Accounts.get_user(approved_by)
+  end
+
+  defp human_approver(_other), do: nil
+
+  defp record_architecture_human_override(%Plan{} = plan, %Accounts.User{} = user) do
+    case resolve_architecture_gate(plan, :human_override, resolved_by: user.id) do
+      {:ok, resolved} ->
+        :telemetry.execute(
+          [:platform, :plan, :architecture_gate_overridden],
+          %{count: 1},
+          %{
+            task_id: resolved.task_id,
+            plan_id: resolved.id,
+            resolved_by: user.id,
+            resource_type: "plan",
+            resource_id: resolved.id,
+            action: "architecture_gate_overridden",
+            actor_type: "user"
+          }
+        )
+
+        {:ok, resolved}
+
+      {:error, reason} = err ->
+        # Lost a race to another resolver, or the write failed. Either way
+        # the gate is no longer this human's to close and the approval
+        # proceeds — refusing here would strand a plan on a bookkeeping
+        # fault, which is the failure mode `architecture_gate/1`'s expiry
+        # projection exists to rule out.
+        Logger.warning(
+          "[Tasks] architecture gate human override unrecorded plan=#{plan.id} " <>
+            "task=#{plan.task_id} user=#{user.id} reason=#{inspect(reason)}"
+        )
+
+        err
+    end
+  end
+
+  defp do_approve_plan(%Plan{status: "pending_review"} = plan, approved_by, opts) do
     now = DateTime.utc_now()
     auto? = Keyword.get(opts, :auto, false)
 
@@ -1916,8 +2962,6 @@ defmodule Platform.Tasks do
         {:error, reason}
     end
   end
-
-  def approve_plan(_plan, _approved_by, _opts), do: {:error, :invalid_transition}
 
   # ── Migration-slot reservation (task 019f7b7e stage 2) ────────────────────
   #

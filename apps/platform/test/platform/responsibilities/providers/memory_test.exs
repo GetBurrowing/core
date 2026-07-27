@@ -10,7 +10,7 @@ defmodule Platform.Responsibilities.Providers.MemoryTest do
   use Platform.DataCase, async: false
 
   alias Platform.Org.Context, as: OrgContext
-  alias Platform.Responsibilities.Handlers.{DailySummary, Dreaming}
+  alias Platform.Responsibilities.Handlers.{DailySummary, Dreaming, ProposeLongTerm}
   alias Platform.Responsibilities.Providers.Memory, as: MemoryProvider
   alias Platform.Responsibilities.Responsibility
 
@@ -47,6 +47,53 @@ defmodule Platform.Responsibilities.Providers.MemoryTest do
 
       assert "memory.daily_summary" in keys
       assert "memory.dreaming" in keys
+    end
+  end
+
+  describe "handler_for/1" do
+    # Task 019f9b28 stage 4: this was a private `dispatch_module/1`
+    # returning `{:ok, mod} | :error`, which made `memory` the odd one
+    # out against Design/Meetings/Tasks. The coverage test
+    # (test/platform/responsibilities/provider_coverage_test.exs) walks
+    # every provider through this accessor, and a guard with a special
+    # case is how the failure class comes back.
+
+    test "resolves each memory.* key to its handler module" do
+      assert MemoryProvider.handler_for("memory.daily_summary") == DailySummary
+      assert MemoryProvider.handler_for("memory.dreaming") == Dreaming
+      assert MemoryProvider.handler_for("memory.propose_long_term") == ProposeLongTerm
+    end
+
+    test "resolves the keys the handlers themselves declare" do
+      # Via key/0 rather than string literals, so a key rename breaks
+      # this test instead of silently re-orphaning the handler.
+      assert MemoryProvider.handler_for(DailySummary.key()) == DailySummary
+      assert MemoryProvider.handler_for(Dreaming.key()) == Dreaming
+      assert MemoryProvider.handler_for(ProposeLongTerm.key()) == ProposeLongTerm
+    end
+
+    test "accepts a %Responsibility{} struct" do
+      assert MemoryProvider.handler_for(daily_summary_responsibility()) == DailySummary
+      assert MemoryProvider.handler_for(dreaming_responsibility()) == Dreaming
+    end
+
+    test "accepts a bare map carrying :key" do
+      assert MemoryProvider.handler_for(%{key: "memory.dreaming"}) == Dreaming
+    end
+
+    test "returns nil for keys owned by another feature and for garbage" do
+      assert MemoryProvider.handler_for("design.critique") == nil
+      assert MemoryProvider.handler_for("memory.brand_new_thing") == nil
+      assert MemoryProvider.handler_for(nil) == nil
+      assert MemoryProvider.handler_for(%{}) == nil
+      assert MemoryProvider.handler_for(:not_a_key) == nil
+    end
+
+    test "covers every key register/0 declares" do
+      for spec <- MemoryProvider.register() do
+        assert MemoryProvider.handler_for(spec.key) != nil,
+               "register/0 declares #{spec.key} but handler_for/1 maps it to nil"
+      end
     end
   end
 
