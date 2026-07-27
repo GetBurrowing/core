@@ -282,7 +282,11 @@ defmodule Platform.Tasks.ArchitectureGateApprovalTest do
       assert reloaded.approved_by == "system:auto"
       assert reloaded.auto_approved_at != nil
       assert reloaded.architecture_verdict["state"] == "passed"
-      assert reloaded.architecture_verdict["source"] == "architect"
+
+      # No channel was named by this caller, so there is no channel. The
+      # two production callers name themselves (`"mcp"` /
+      # `"handle_output"`); `resolve_architecture_gate/3` invents nothing.
+      assert reloaded.architecture_verdict["source"] == nil
 
       assert %Task{planning_step: "planning"} = reload(task)
     end
@@ -452,8 +456,15 @@ defmodule Platform.Tasks.ArchitectureGateApprovalTest do
       reloaded = reload(gated)
       assert reloaded.status == "approved"
       assert reloaded.architecture_verdict["state"] == "dispatch_failed"
-      assert reloaded.architecture_verdict["source"] == "dispatch"
       assert architecture_entry(task.id)["outcome"] == "failed"
+
+      # What distinguishes this from `:expired` is `"state"`, which is
+      # asserted above. `"source"` is deliberately NOT a second copy of
+      # that: this caller named no channel, so it is nil. The production
+      # caller (`Handlers.ArchitectureReviewPlan`) names
+      # `"handle_output"`, which is how "replied unparseably" stays
+      # distinguishable from "never replied".
+      assert reloaded.architecture_verdict["source"] == nil
     end
   end
 

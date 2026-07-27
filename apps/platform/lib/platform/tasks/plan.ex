@@ -40,7 +40,7 @@ defmodule Platform.Tasks.Plan do
         "resolved_at"        => iso8601 | nil,
         "resolved_by"        => string | nil,
         "architect_agent_id" => uuid | nil,
-        "source"             => "mcp" | "handle_output" | "deadline" | "human" | nil,
+        "source"             => one of `architecture_verdict_sources/0`, or nil,
         "summary"            => string | nil,
         "findings"           => [%{"stage_id" => uuid | nil,
                                    "stage_name" => string | nil,
@@ -57,6 +57,32 @@ defmodule Platform.Tasks.Plan do
   objection has NO REPRESENTABLE VALUE — the boundary refuses it rather
   than the prompt discouraging it. Stage 4's prompt uses these four
   literals verbatim so the model and the validator speak one vocabulary.
+
+  ## `"source"` names the CHANNEL, never the outcome
+
+  `"state"` already answers *what happened*. `"source"` answers the
+  strictly different question *which way in did it come*, and the one
+  distinction it exists to carry is MCP tool vs. external text parse:
+  `"mcp"` is `plan_architecture_verdict`, `"handle_output"` is
+  `Handlers.ArchitectureReviewPlan` parsing a model's prose. `"deadline"`
+  is stage 5's timer and `"human"` is an operator override — both of
+  those are channels too, not outcomes.
+
+  `nil` means NO CHANNEL ANSWERED, and it is a real value rather than a
+  gap: `%{"state" => "dispatch_failed", "source" => "handle_output"}` is
+  *the architect replied and we could not parse it*, while the same state
+  with a `nil` source is *nothing came back at all*.
+
+  A value that restates the state — an early draft of this field emitted
+  `"architect"` for pass/reject and `"dispatch"` for `dispatch_failed` —
+  is REFUSED here, because two fields answering one question is exactly
+  the ADR-0046:83 conflation this column was split to undo. The
+  vocabulary is validated (see `architecture_verdict_changeset/2`) and
+  `architecture_verdict_source_vocabulary_test.exs` asserts that the set
+  named above equals the set the writers can actually emit, in both
+  directions. This moduledoc previously spelled the values out inline and
+  drifted from the writer within one stack; naming the accessor is what
+  stops that recurring.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -76,6 +102,13 @@ defmodule Platform.Tasks.Plan do
   # guard that hardcodes its own copy of a list is how the class comes
   # back (member 4's rule); stage 4's tool boundary reads this.
   @architecture_constraints ~w(module_boundary data_model cross_context_coupling duplicated_logic)
+
+  # The closed set of CHANNELS a verdict can arrive through. See the
+  # moduledoc section — these name the way in, never the outcome, and
+  # `nil` (no channel answered) is additionally permitted. Public
+  # accessor for the same reason as the two lists above, and because the
+  # moduledoc now cites it rather than restating it.
+  @architecture_verdict_sources ~w(mcp handle_output deadline human)
 
   schema "plans" do
     belongs_to(:task, Platform.Tasks.Task)
@@ -125,6 +158,15 @@ defmodule Platform.Tasks.Plan do
   """
   def architecture_constraints, do: @architecture_constraints
 
+  @doc """
+  The closed set of `architecture_verdict["source"]` values, `nil` aside.
+
+  `nil` is also permitted and means no channel answered; it is absent
+  from this list because the list is the *vocabulary of channels*, and
+  "no channel" is not one of them.
+  """
+  def architecture_verdict_sources, do: @architecture_verdict_sources
+
   # DELIBERATELY ABSENT from the cast list below: `:architecture_verdict`
   # (ADR-0046 member 5). Load-bearing in both directions, the same
   # reasoning member 4 applied to `Task.changeset/2`:
@@ -173,6 +215,8 @@ defmodule Platform.Tasks.Plan do
     * a string-keyed map (`nil` is not castable here; clearing a verdict
       is not an operation this schema offers);
     * `"state"` present and in `architecture_gate_states/0`;
+    * `"source"`, when non-nil, in `architecture_verdict_sources/0`
+      (absent and `nil` both mean "no channel answered");
     * `"findings"`, when present, a list of maps, each with a
       `"constraint"` in `architecture_constraints/0` and a non-empty
       binary `"detail"`.
@@ -197,6 +241,7 @@ defmodule Platform.Tasks.Plan do
         changeset
         |> validate_verdict_string_keys(verdict)
         |> validate_verdict_state(verdict)
+        |> validate_verdict_source(verdict)
         |> validate_verdict_findings(verdict)
 
       _other ->
@@ -236,6 +281,36 @@ defmodule Platform.Tasks.Plan do
           :architecture_verdict,
           "must include a string \"state\" key " <>
             "(one of: #{Enum.join(@architecture_gate_states, ", ")})"
+        )
+    end
+  end
+
+  # Same construction as the state and constraint checks, for the same
+  # reason: an unknown source is REJECTED, not coerced. Without this the
+  # column happily stored `"architect"` and `"dispatch"` — values no
+  # reader was documented to expect — for a whole stack.
+  defp validate_verdict_source(changeset, verdict) do
+    case Map.get(verdict, "source") do
+      nil ->
+        changeset
+
+      source when is_binary(source) ->
+        if source in @architecture_verdict_sources do
+          changeset
+        else
+          add_error(
+            changeset,
+            :architecture_verdict,
+            "has invalid source #{inspect(source)} " <>
+              "(allowed: #{inspect(@architecture_verdict_sources)}, or nil)"
+          )
+        end
+
+      other ->
+        add_error(
+          changeset,
+          :architecture_verdict,
+          "\"source\" must be a string or nil (got #{inspect(other)})"
         )
     end
   end

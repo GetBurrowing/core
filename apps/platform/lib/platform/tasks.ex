@@ -2576,7 +2576,12 @@ defmodule Platform.Tasks do
   supersession and the human escalation. This function must not grow them.
 
   `opts` accepts `:resolved_by`, `:source`, `:summary` and `:findings`,
-  which are merged into the verdict. `:source` defaults per resolution.
+  which are merged into the verdict. `:source` must be one of
+  `Plan.architecture_verdict_sources/0` or `nil`; it defaults to
+  `"deadline"` for `:expired` and `"human"` for `:human_override`, and to
+  `nil` otherwise — a caller reached through a channel is expected to
+  name it (`"mcp"`, `"handle_output"`), because that distinction is the
+  whole reason the field exists.
   """
   @spec resolve_architecture_gate(
           Plan.t() | binary(),
@@ -2611,10 +2616,25 @@ defmodule Platform.Tasks do
   defp architecture_verdict_state(:dispatch_failed), do: "dispatch_failed"
   defp architecture_verdict_state(:human_override), do: "human_override"
 
+  # `"source"` names the CHANNEL the verdict arrived through, and this
+  # function only knows the two channels that ARE a resolution: stage 5's
+  # timer and an operator override. The other three resolutions can come
+  # in either of two ways — the MCP tool or an external text parse — and
+  # only the caller knows which, so each names itself (`source: "mcp"` in
+  # `ToolSurface.resolve_architecture_verdict/5`, `source: "handle_output"`
+  # in `Handlers.ArchitectureReviewPlan.apply_gate_resolution/3`).
+  #
+  # The default for those is `nil`, "no channel answered" — NOT
+  # `"architect"` / `"dispatch"`, which is what this function emitted
+  # before and which is what a source value looks like when it has given
+  # up and restated `"state"`. `"architect"` was true of every verdict
+  # and so distinguished nothing; `"dispatch"` said only what
+  # `state == "dispatch_failed"` already said, one field over. A verdict
+  # written by a caller that names no channel genuinely has no channel,
+  # and `nil` is the honest way to say so — see `Plan`'s moduledoc.
   defp architecture_verdict_source(:expired), do: "deadline"
-  defp architecture_verdict_source(:dispatch_failed), do: "dispatch"
   defp architecture_verdict_source(:human_override), do: "human"
-  defp architecture_verdict_source(_architect), do: "architect"
+  defp architecture_verdict_source(_caller_names_its_own_channel), do: nil
 
   defp put_verdict_present(verdict, _key, nil), do: verdict
   defp put_verdict_present(verdict, key, value), do: Map.put(verdict, key, value)

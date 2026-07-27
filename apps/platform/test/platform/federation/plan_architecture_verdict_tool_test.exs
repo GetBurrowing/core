@@ -473,7 +473,9 @@ defmodule Platform.Federation.PlanArchitectureVerdictToolTest do
 
       assert verdict["state"] == "rejected"
       assert verdict["summary"] == "Stage 1 duplicates the sibling's helper."
-      assert verdict["source"] == "architect"
+      # The channel, not the outcome: a verdict written through this tool
+      # is distinguishable from the `handle_output` text-parse path.
+      assert verdict["source"] == "mcp"
       assert verdict["resolved_at"]
 
       assert [%{"stage_id" => sid, "constraint" => "duplicated_logic", "detail" => detail}] =

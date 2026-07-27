@@ -8232,7 +8232,11 @@ defmodule Platform.Federation.ToolSurface do
     opts = [
       summary: summary,
       findings: findings,
-      resolved_by: Map.get(context, :agent_id) || Map.get(context, :user_id) || "architect"
+      resolved_by: Map.get(context, :agent_id) || Map.get(context, :user_id) || "architect",
+      # THIS clause is what `"mcp"` means. `Tasks` cannot infer it — the
+      # same three resolutions arrive through `handle_output` too — so
+      # the channel names itself here or the distinction does not exist.
+      source: "mcp"
     ]
 
     case Tasks.resolve_architecture_gate(plan, resolution, opts) do

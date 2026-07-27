@@ -429,7 +429,16 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
     end
   end
 
+  # Both branches above route through here, so `source: "handle_output"`
+  # is stamped once. It is right for the unparseable branch too, and
+  # that is the point: `state: "dispatch_failed", source: "handle_output"`
+  # reads "the architect replied and we could not parse it", which is a
+  # different fact from a `nil` source ("nothing came back at all"). That
+  # is the one distinction `"source"` exists to carry — see `Plan`'s
+  # moduledoc.
   defp apply_gate_resolution(plan_id, resolution, opts) do
+    opts = Keyword.put_new(opts, :source, "handle_output")
+
     case Tasks.resolve_architecture_gate(plan_id, resolution, opts) do
       {:ok, _plan} ->
         Logger.info(
