@@ -342,7 +342,7 @@ defmodule PlatformWeb.ChatLive do
       # Entering either edit mode (toggle_sidebar_edit / _admin_edit) closes it
       # so the header never shows both the menu and an active edit mode at once.
       |> assign(:sidebar_menu_open, false)
-      |> assign(:active_space, nil)
+      |> assign_active_space(nil)
       |> assign(:current_participant, nil)
       # M5b (task 019f6e2c) Stage 4 — junk-batch confirmation modal state.
       # Opened by `PlatformWeb.ChatLive.CanvasHooks` when a `junk_batch:*`
@@ -538,7 +538,7 @@ defmodule PlatformWeb.ChatLive do
 
         socket
         |> assign(:page_title, page_title)
-        |> assign(:active_space, space)
+        |> assign_active_space(space)
         |> assign(:can_unarchive?, can_unarchive?(space, socket.assigns.user_id))
         |> assign(:can_cancel_deletion?, socket.assigns.fabrikam_admin?)
         |> assign(:current_participant, participant)
@@ -635,7 +635,7 @@ defmodule PlatformWeb.ChatLive do
       {:noreply,
        socket
        |> assign(:page_title, page_title)
-       |> assign(:active_space, space)
+       |> assign_active_space(space)
        |> assign(:can_unarchive?, can_unarchive?(space, socket.assigns.user_id))
        |> assign(:can_cancel_deletion?, socket.assigns.fabrikam_admin?)
        |> assign(:current_participant, participant)
@@ -2000,7 +2000,7 @@ defmodule PlatformWeb.ChatLive do
 
             {:noreply,
              socket
-             |> assign(:active_space, updated)
+             |> assign_active_space(updated)
              |> assign(:can_unarchive?, can_unarchive?(updated, socket.assigns.user_id))
              |> assign(:current_participant, participant)
              |> assign(:channels, channels)
@@ -2050,7 +2050,7 @@ defmodule PlatformWeb.ChatLive do
           {:ok, updated} ->
             {:noreply,
              socket
-             |> assign(:active_space, updated)
+             |> assign_active_space(updated)
              |> assign(:can_unarchive?, can_unarchive?(updated, socket.assigns.user_id))
              |> assign(:can_cancel_deletion?, socket.assigns.fabrikam_admin?)
              |> assign(:archived_channels, Chat.list_spaces(kind: "channel", archived: true))
@@ -2941,30 +2941,54 @@ defmodule PlatformWeb.ChatLive do
   defp sub_org_scope_atom("Wayne-Tech"), do: :wayne_tech
   defp sub_org_scope_atom("SXI"), do: :sxi
 
-  # Map a Space (or anything with a binary `:slug`) to its scope atom for
-  # the `scope_pill` component. Channels with no recognized slug fall back
-  # to `:fabrikam` (the default tenant — same precedence as `channel_scope/1`).
-  # DMs/groups (`kind in ["dm", "group"]`) return `nil` so the chat-header
-  # / active-row caller can suppress the pill on conversations that have
-  # no org-scope to label.
+  # Map a Space to the scope atom the `scope_pill` component takes.
+  #
+  # SOURCE OF TRUTH is the space's `org_id` (post-ADR-0042). We load the
+  # owning org and map its slug to a scope atom — the SAME org the sidebar
+  # rail buckets channels on (`Platform.Chat.Sidebar`), so the header pill and
+  # the rail can never disagree about which org a channel belongs to.
+  #
+  # Do NOT go back to matching the *channel's own* slug here: that made every
+  # channel whose name wasn't a literal org slug (e.g. "orion") fall through
+  # to a `:fabrikam` default and mislabel its org (task 019fa0ac).
+  #
+  # Org slugs are stored underscore-form (`wayne_tech`); `section_scope_atom/1`
+  # speaks the CSS-token form (`wayne-tech`), so normalize `_` -> `-` at the
+  # boundary. DMs/groups (`kind in ["dm", "group"]`) and any space whose org
+  # can't be resolved return `nil`, so the caller suppresses the pill rather
+  # than showing a wrong one.
+  #
+  # Resolved at assign time only (see `assign_active_space/2`) — never inline
+  # in the template — because `Platform.Tenancy.get_org/1` is a DB read and the
+  # chat header re-renders on every message.
   @doc false
   @spec space_scope_atom(map() | nil) :: atom() | nil
   def space_scope_atom(%{kind: kind}) when kind in ["dm", "group"], do: nil
 
-  def space_scope_atom(%{slug: slug}) when is_binary(slug) do
-    slug
-    |> String.downcase()
-    |> case do
-      "paragon" -> :paragon
-      "soylent" -> :soylent
-      "fabrikam" -> :fabrikam
-      "wayne-tech" -> :wayne_tech
-      "sxi" -> :sxi
-      _ -> :fabrikam
+  def space_scope_atom(%{org_id: org_id}) when is_binary(org_id) do
+    case Platform.Tenancy.get_org(org_id) do
+      %{slug: slug} when is_binary(slug) ->
+        slug |> String.downcase() |> String.replace("_", "-") |> section_scope_atom()
+
+      _ ->
+        nil
     end
   end
 
   def space_scope_atom(_), do: nil
+
+  # Assign the active space AND its resolved org scope atom together. Every
+  # write to `:active_space` MUST go through here so `@active_space_scope`
+  # (read by the header pill) can never drift from the space it labels — the
+  # drift between the slug-guessing header and the org_id-driven rail is
+  # exactly what caused task 019fa0ac. `nil` space -> `nil` scope.
+  @spec assign_active_space(Phoenix.LiveView.Socket.t(), map() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  defp assign_active_space(socket, space) do
+    socket
+    |> assign(:active_space, space)
+    |> assign(:active_space_scope, space_scope_atom(space))
+  end
 
   # Resolve the URL nav target for a space link. For org-scoped channels
   # (post-ADR-0042: any space with a non-nil `org_id`), return the space's
