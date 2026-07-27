@@ -283,6 +283,45 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
     end
   end
 
+  # Task 019fa469 stage 2: `Platform.Orchestration.DispatchPhase` uses
+  # `deploy_stage_name?/1` to recognise a system-injected deploy stage,
+  # because three of the six stage-producing strategies emit validation kinds
+  # (`manual_approval`, `test_pass`) that are indistinguishable from a review
+  # or implementation stage. If a new strategy ever mints a name outside the
+  # prefix, those deploy dispatches would silently route to the wrong template
+  # — so assert the invariant over EVERY valid strategy type rather than over
+  # a hand-listed subset.
+  describe "deploy_stage_name?/1 — the prefix invariant DispatchPhase relies on" do
+    test "every strategy that builds a stage names it with the deploy prefix" do
+      built =
+        for type <- DeployStageBuilder.valid_strategy_types(),
+            stage = DeployStageBuilder.build_stage(%{"type" => type, "config" => %{}}, 3),
+            stage != :skip do
+          assert DeployStageBuilder.deploy_stage_name?(stage.name),
+                 "strategy #{type} minted stage name #{inspect(stage.name)} which does not " <>
+                   "start with #{inspect(DeployStageBuilder.deploy_stage_name_prefix())} — " <>
+                   "DispatchPhase would misroute its deploy dispatch"
+
+          type
+        end
+
+      # Guard the guard: if `build_stage/2` ever starts returning `:skip` for
+      # everything the loop above would be vacuously true.
+      assert length(built) >= 5,
+             "expected most strategies to build a stage, got #{inspect(built)}"
+    end
+
+    test "is an exact prefix match, not a substring search" do
+      # `TaskRouter.infer_stage_type/1` downcases and calls `String.contains?`
+      # on the same field; that is the defect class this predicate replaces.
+      refute DeployStageBuilder.deploy_stage_name?("Rework the deploy strategy resolver")
+      refute DeployStageBuilder.deploy_stage_name?("deploy: pr merge")
+      refute DeployStageBuilder.deploy_stage_name?("Redeploy: PR merge")
+      refute DeployStageBuilder.deploy_stage_name?(nil)
+      assert DeployStageBuilder.deploy_stage_name?("Deploy: PR merge")
+    end
+  end
+
   describe "valid_merge_method?/1" do
     test "returns true for squash, merge, rebase" do
       assert DeployStageBuilder.valid_merge_method?("squash")

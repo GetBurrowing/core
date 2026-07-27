@@ -778,10 +778,14 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
       :ok = sync_router(task.id)
 
-      # No ack ever arrives — force `:check_no_ack` to fire NOW.
+      # No ack ever arrives, and the ack window has genuinely closed.
+      # Expiring the deadline is what `send(pid, :check_no_ack)` used to
+      # stand in for implicitly: since task 019fa469 stage 6 the handler
+      # level-checks `no_ack_at`, so a timer wake alone is not a fire.
       space = ExecutionSpace.find_by_task_id(task.id)
       before_msgs = length(ExecutionSpace.list_messages_with_participants(space.id))
 
+      expire_no_ack_deadline!(task.id)
       send(pid, :check_no_ack)
 
       # The barrier must land BEFORE the mailbox assertion, not after it.
@@ -1063,9 +1067,12 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert lease, "expected LeaseManager row after dispatch"
       past = DateTime.add(DateTime.utc_now(), -1_000, :millisecond)
 
+      # `no_ack_at` goes into the past alongside it: a lapsed silence only
+      # gets you PAST the silence clause, and the fall-through still
+      # level-checks the deadline (task 019fa469 stage 6).
       :ets.insert(
         :orchestration_lease_manager,
-        {task.id, %{lease | silenced_until: past}}
+        {task.id, %{lease | silenced_until: past, no_ack_at: past}}
       )
 
       send(pid, :check_no_ack)
@@ -1119,8 +1126,9 @@ defmodule Platform.Orchestration.TaskRouterTest do
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
       :ok = sync_router(task.id)
 
-      # First :check_no_ack fires normally (no silence, no ack) → sets
-      # no_ack_fired?: true.
+      # First :check_no_ack fires normally (no silence, no ack, deadline
+      # elapsed) → sets no_ack_fired?: true.
+      expire_no_ack_deadline!(task.id)
       send(pid, :check_no_ack)
       :ok = sync_router(task.id)
       assert_received {:runtime_event, %{event_type: "execution.no_ack_timeout"}}
@@ -4114,6 +4122,31 @@ defmodule Platform.Orchestration.TaskRouterTest do
   end
 
   defp reload_task(task), do: Platform.Repo.get!(Platform.Tasks.Task, task.id)
+
+  # Move the lease's no-ack deadline into the past so `:check_no_ack` takes
+  # its fire path (task 019fa469 stage 6). Before the handler level-checked
+  # `no_ack_at`, `send(pid, :check_no_ack)` alone was enough — which is
+  # precisely the conflation the stage fixed: a timer wake is not evidence
+  # that 5 minutes elapsed, and an orphan timer from an earlier dispatch or
+  # an earlier STAGE fires mid-window.
+  #
+  # Written straight to ETS rather than through `record_dispatch/4` with a
+  # backdated `dispatched_at`: a same-stage re-dispatch now PRESERVES the
+  # original deadline, so it could not move it, and every other lease field
+  # the calling test set up survives untouched. Same idiom the
+  # silence-lapsed test already uses for `silenced_until`.
+  defp expire_no_ack_deadline!(task_id) do
+    lease = LeaseManager.get(task_id)
+    assert lease, "expected a LeaseManager row before expiring its no-ack deadline"
+
+    assert lease.no_ack_at,
+           "expected an armed no-ack deadline — nothing to expire, and the " <>
+             "alarm this test asserts on is disabled for this lease"
+
+    past = DateTime.add(DateTime.utc_now(), -1_000, :millisecond)
+    :ets.insert(:orchestration_lease_manager, {task_id, %{lease | no_ack_at: past}})
+    :ok
+  end
 
   describe "pre-plan design hold (ADR-0046 member 7)" do
     setup %{project: project} do

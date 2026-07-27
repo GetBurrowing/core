@@ -787,7 +787,14 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
     # subagent handle. These guards ensure no fallback branch silently
     # drops the placeholder.
 
-    test "planning fallback carries subagent_id placeholder + spawn-first ordering" do
+    test "planning fallback carries NO ack call at all (task 019fa469 stage 5)" do
+      # Inverted from an assert-the-ack-is-present test. That test was green
+      # against a broken behaviour: the planning fallback rendered
+      # `task_ack(task_id="...", stage_id="", subagent_id="<unknown — spawn a
+      # subagent first>")`, which `ToolSurface.resolve_ack_stage_id/2` rejects
+      # with `:no_running_stage` because a planning dispatch has no plan and so
+      # no running stage. Nothing was armed for it to satisfy either —
+      # `TaskRouter.arm_liveness_timers/3` no-ops on a nil stage.
       task = %{
         id: "task-subagent-planning",
         title: "Ack preamble subagent_id planning",
@@ -798,14 +805,22 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
       prompt = HeartbeatScheduler.dispatch_prompt(task, nil, nil)
 
-      assert prompt =~ "subagent_id=",
-             "planning fallback must render subagent_id= in the ack call"
+      # Positive pin — without it every refute below passes on an empty or
+      # errored render.
+      assert prompt =~ "You have been assigned a task that requires a plan",
+             "the planning fallback body must actually have rendered"
 
-      assert prompt =~ "<unknown — spawn a subagent first>",
-             "planning fallback must render the readable subagent_id sentinel default"
+      assert prompt =~ "No ack is expected for this dispatch",
+             "the planning fallback must say so explicitly rather than stay silent"
 
-      assert prompt =~ "Spawn the subagent FIRST",
-             "planning fallback must instruct spawn-first ordering"
+      refute prompt =~ "task_ack(",
+             "planning fallback must not render an ack call it cannot satisfy"
+
+      refute prompt =~ "<unknown — spawn a subagent first>",
+             "the subagent_id sentinel belongs to the ack call, which is gone"
+
+      refute prompt =~ "no-ack alert in 5 minutes",
+             "no no-ack timer is armed for a stage-less dispatch"
     end
 
     test "in_progress fallback carries subagent_id placeholder + spawn-first ordering" do
@@ -2016,6 +2031,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       %{
         id: "019e2474-11c1-7000-8000-000000000001",
         title: "Stack member task",
+        description: "Ship the stack member",
         status: "in_progress",
         priority: "high",
         project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
@@ -2191,6 +2207,12 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
     end
 
     test "renders nothing when no stage is being dispatched" do
+      # Task 019fa469 stage 2: with NO running stage, `DispatchPhase` routes to
+      # `dispatch.fallback` instead of fabricating a stage-scoped in_progress
+      # body around an empty stage_id — that fabrication is defect 4, and the
+      # router stops sending this shape at all in stage 4. The refute below
+      # would therefore pass by template-absence alone, so it is paired with a
+      # positive pin on the fallback body plus a length floor.
       task =
         slot_task(
           metadata: %{
@@ -2201,6 +2223,28 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       prompt = HeartbeatScheduler.dispatch_prompt(task, %{version: 1, stages: []}, nil)
 
       refute prompt =~ "## Reserved migration timestamp"
+      assert prompt =~ "Stack member task"
+      assert prompt =~ "assigned"
+      assert String.length(prompt) > 200
+    end
+
+    test "still renders the reserved section for a stage-scoped dispatch on the same task" do
+      # Anti-vacuity companion to the test above: the reservation IS surfaced
+      # when a stage resolves, so the refute there is about the missing stage,
+      # not about the section having quietly stopped rendering everywhere.
+      {plan, stage} = slot_plan_and_stage()
+
+      task =
+        slot_task(
+          metadata: %{
+            "reserved_migration_slots" => [slot_reservation(@slot_stage_id, "20260719120100")]
+          }
+        )
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "## Reserved migration timestamp"
+      assert prompt =~ "`20260719120100`"
     end
   end
 end

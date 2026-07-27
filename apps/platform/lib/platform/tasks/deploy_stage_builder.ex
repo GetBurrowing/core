@@ -35,7 +35,36 @@ defmodule Platform.Tasks.DeployStageBuilder do
   @valid_strategy_types ~w(none pr_merge docker_deploy fly skill_driven manual project_files no_op_wait_for_rollup)
   @valid_merge_methods ~w(squash merge rebase)
 
+  # Every stage this module mints is named `"Deploy: <something>"`. That prefix
+  # is the ONLY reliable marker that a stage is a system-injected deploy stage:
+  # planners are explicitly forbidden from authoring deploy stages
+  # (`dispatch.planning` — "the system auto-injects it"), so nothing else
+  # produces a name in this shape. `PlanEngine.maybe_inject_deploy_or_complete/2`
+  # already keys off it; `Platform.Orchestration.DispatchPhase` needs the same
+  # fact and must not re-spell it.
+  @deploy_stage_name_prefix "Deploy: "
+
   # ── Public API ─────────────────────────────────────────────────────────
+
+  @doc """
+  The name prefix every stage built by `build_stage/2` carries.
+  """
+  @spec deploy_stage_name_prefix() :: String.t()
+  def deploy_stage_name_prefix, do: @deploy_stage_name_prefix
+
+  @doc """
+  Whether `name` is a stage name minted by `build_stage/2`.
+
+  Deliberately an EXACT, case-sensitive prefix match — not a substring search.
+  `TaskRouter.infer_stage_type/1` does the substring thing on the same field
+  and misclassifies any human-authored stage whose name merely mentions
+  deploying (e.g. "Rework the deploy strategy resolver"). Do not soften this.
+  """
+  @spec deploy_stage_name?(String.t() | nil) :: boolean()
+  def deploy_stage_name?(name) when is_binary(name),
+    do: String.starts_with?(name, @deploy_stage_name_prefix)
+
+  def deploy_stage_name?(_), do: false
 
   @doc """
   Build a deploy stage definition from a resolved strategy map.

@@ -814,7 +814,7 @@ defmodule Platform.Tasks.PlanEngine do
   # If no deploy stage exists and the strategy isn't "none", inject one.
   # Only injects when the task is in a status that can transition to deploying.
   defp maybe_inject_deploy_or_complete(plan, stages) do
-    has_deploy_stage? = Enum.any?(stages, &String.starts_with?(&1.name, "Deploy: "))
+    has_deploy_stage? = Enum.any?(stages, &DeployStageBuilder.deploy_stage_name?(&1.name))
 
     if has_deploy_stage? do
       # Deploy stage already ran and passed — complete the plan

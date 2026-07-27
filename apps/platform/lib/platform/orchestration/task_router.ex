@@ -69,6 +69,7 @@ defmodule Platform.Orchestration.TaskRouter do
 
   alias Platform.Orchestration.{
     ContextAssembler,
+    DispatchPhase,
     ExecutionSpace,
     HeartbeatScheduler,
     LeaseManager,
@@ -597,6 +598,14 @@ defmodule Platform.Orchestration.TaskRouter do
   # `execution.blocked needs_human=true` and transition to `:stalled`. No re-arm.
   # The idempotency guard `mark_no_ack_fired/1` prevents a spurious re-wake
   # (e.g. a stale timer sneaking through) from double-firing.
+  #
+  # Receiving this message means "a timer woke us", NOT "the deadline passed"
+  # (task 019fa469 stage 6). `arm_liveness_timers/3` arms a `Process.send_after`
+  # per dispatch and never cancels the previous one, so an orphan timer from an
+  # earlier dispatch — or an earlier STAGE — lands mid-window against whatever
+  # lease is current. Every fire path therefore goes through
+  # `fire_or_reschedule_no_ack/3`, which re-checks `lease.no_ack_at` exactly as
+  # `:check_safety_net` re-checks `safety_net_at`.
   def handle_info(:check_no_ack, %State{task_id: task_id} = state) do
     case LeaseManager.get(task_id) do
       nil ->
@@ -637,11 +646,11 @@ defmodule Platform.Orchestration.TaskRouter do
             {:noreply, state}
 
           true ->
-            maybe_fire_no_ack(state, task_id, lease)
+            fire_or_reschedule_no_ack(state, task_id, lease)
         end
 
       lease ->
-        maybe_fire_no_ack(state, task_id, lease)
+        fire_or_reschedule_no_ack(state, task_id, lease)
     end
   end
 
@@ -1162,6 +1171,82 @@ defmodule Platform.Orchestration.TaskRouter do
     plan = Tasks.current_plan(state.task_id)
     stage = current_running_stage(plan)
 
+    if unresolved_stage_dispatch?(task, plan, stage) do
+      suppress_unresolved_stage_dispatch(state, task, plan)
+    else
+      dispatch_resolved(state, task, plan, stage)
+    end
+  end
+
+  # Unresolved-stage guard (task 019fa469 stage 4). The task's own status claims
+  # a stage-scoped phase, but the plan holds no stage this dispatch could be
+  # ABOUT — not a running one, and not even a pending one. Every stage-shaped
+  # field in the prompt would then be invented, which is precisely the
+  # 2026-07-27 incident: an empty `stage_id` under a `Stage 1/7` label on tasks
+  # nowhere near stage 1.
+  #
+  # ## Why the third conjunct exists (it is not in the approved plan)
+  #
+  # The plan specified `phase.requires_stage? and is_nil(stage)`. Those two
+  # conjuncts alone also match an `in_progress` task whose next stage is
+  # `pending` — the shape `task_router_dispatch_suppression_test.exs:109` exists
+  # to protect, because that dispatch is the only thing that will ever get an
+  # agent to call `stage_start`. Running the two-conjunct version turned that
+  # sibling test red (recorded in this stage's evidence), which is the failure
+  # mode its moduledoc calls worse than the one we are fixing: silent
+  # strangulation.
+  #
+  # The principle the third conjunct encodes: DO NOT SEND A DISPATCH WHOSE
+  # SUBJECT CANNOT BE NAMED. A pending stage is a nameable subject. No stage at
+  # all is not. Deliberately NOT fixed here: a pending stage still receives a
+  # `dispatch.fallback` body (stage 2 of this task) rather than being
+  # auto-started — auto-starting from the dispatch path is a much larger blast
+  # radius and belongs to whoever owns the `stage_start` gap.
+  #
+  # Disjoint from the two suppression clauses in `handle_info(:dispatch, …)`:
+  # `completed_plan_no_work?/1` requires `plan.status == "completed"` and
+  # `settled_stack_member_no_work?/2` requires a `stack_id`; both are evaluated
+  # earlier and would have short-circuited before control ever reached here.
+  # This clause covers the residue — a non-stack task whose plan is still
+  # `approved` but exhausted, and a task with no plan row at all (which used to
+  # log the especially absurd `Stage: 1/0`).
+  #
+  # Best-effort, mirroring its siblings: a lookup that raises yields `false`.
+  # Failing open costs one redundant prompt; failing closed costs a stalled
+  # task.
+  defp unresolved_stage_dispatch?(task, plan, stage) do
+    phase = DispatchPhase.resolve(task, plan, stage)
+
+    phase.requires_stage? and is_nil(stage) and is_nil(first_pending_stage(plan))
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  defp suppress_unresolved_stage_dispatch(state, task, plan) do
+    stage_count = if plan, do: length(plan.stages || []), else: 0
+
+    Logger.info(
+      "[TaskRouter] suppressed stage-scoped dispatch for task=#{state.task_id}: " <>
+        "task status #{task.status} implies a running stage but none resolved " <>
+        "(0 running, 0 pending of #{stage_count})"
+    )
+
+    emit_dispatch_suppressed_telemetry(state.task_id, :unresolved_stage)
+
+    if state.execution_space_id do
+      ExecutionSpace.post_log(
+        state.execution_space_id,
+        "Dispatch withheld: #{task.title} | Stage: -/#{stage_count} | " <>
+          "no running or pending stage for a task at #{task.status}"
+      )
+    end
+
+    {:noreply, state}
+  end
+
+  defp dispatch_resolved(state, task, plan, stage) do
     # Capture the INCOMING status before the unconditional
     # `Map.put(:status, :running)` below overwrites it. Both tail branches of
     # this function re-check `waiting_for_human_review?/1` and can park the
@@ -1186,7 +1271,12 @@ defmodule Platform.Orchestration.TaskRouter do
         agent: agent,
         runtime: runtime,
         previous_rejection_reason: previous_rejection_reason,
-        parent_plans: parent_plans
+        parent_plans: parent_plans,
+        # The execution space lives HERE, on the router's state — there is no
+        # `execution_space_id` field on the task schema (task 019fa469 stage 3).
+        # `dispatch.review_e2e` interpolates it, and without this opt the
+        # accessor in `e2e_review_assigns/3` had nothing to read.
+        execution_space_id: state.execution_space_id
       )
 
     case dispatch_attention(state.assignee, state.task_id, "task_assigned", context, prompt) do
@@ -1195,7 +1285,12 @@ defmodule Platform.Orchestration.TaskRouter do
         # boot retries do not duplicate task-assigned chatter.
         if state.execution_space_id do
           stage_count = if plan, do: length(plan.stages || []), else: 0
-          stage_pos = if stage, do: stage.position, else: 1
+
+          # NEVER `else: 1` (task 019fa469 stage 4). That default rendered
+          # `Stage: 1/7` on tasks demonstrably past stage 1 all day on
+          # 2026-07-27 — a fabrication of the one fact the log line exists to
+          # report. When no stage resolved, say so.
+          stage_pos = if stage, do: Integer.to_string(stage.position), else: "-"
 
           assignee_log = "Assignee: #{state.assignee.id}"
 
@@ -1424,8 +1519,49 @@ defmodule Platform.Orchestration.TaskRouter do
     Tasks.broadcast_board({:runtime_event, event})
   end
 
-  # Idempotency-guarded fire path shared by `handle_info(:check_no_ack, ...)`'s
-  # default no-silence branch and the silence-lapsed fall-through above.
+  # Level check for the no-ack deadline (task 019fa469 stage 6) — the exact
+  # shape `handle_info(:check_safety_net, ...)` already applies to
+  # `safety_net_at`, and the only reason the two handlers differed.
+  #
+  # Both `:check_no_ack` fire paths (default clause, and the silence-lapsed
+  # fall-through) route through here rather than adding a clause to the
+  # handler: a clause would have to sit after the silence branch to keep that
+  # branch's ordering comments true, which would leave the silence-lapsed
+  # fall-through firing without ever checking its deadline.
+  #
+  # `no_ack_at: nil` means the alarm is disabled for this lease's stage_kind
+  # (`manual_approval`) — the router arms no timer for such stages, but an
+  # orphan timer from a previous stage can still reach one. Never fire.
+  # Mirrors `:check_safety_net`'s `%{safety_net_at: nil}` clause.
+  #
+  # Deliberately stateless: no timer refs in `%State{}`, so a router restart
+  # cannot strand them. Cancelling the stale timer in `arm_liveness_timers/3`
+  # would fix the same reproduction, but only while the router lives — the
+  # same argument `:design_deadline` makes for preferring level checks over
+  # timer bookkeeping.
+  defp fire_or_reschedule_no_ack(%State{} = state, _task_id, %{no_ack_at: nil}) do
+    {:noreply, state}
+  end
+
+  defp fire_or_reschedule_no_ack(
+         %State{} = state,
+         task_id,
+         %{no_ack_at: %DateTime{} = deadline} = lease
+       ) do
+    remaining_ms = DateTime.diff(deadline, DateTime.utc_now(), :millisecond)
+
+    if remaining_ms > 0 do
+      # Woken early by an orphan timer. Reschedule to the deadline this lease
+      # actually carries and stay quiet.
+      Process.send_after(self(), :check_no_ack, remaining_ms)
+      {:noreply, state}
+    else
+      maybe_fire_no_ack(state, task_id, lease)
+    end
+  end
+
+  # Idempotency-guarded fire path, reached only once
+  # `fire_or_reschedule_no_ack/3` has confirmed the deadline actually elapsed.
   # `mark_no_ack_fired/1` flips the LeaseManager row's `no_ack_fired?`
   # atomically — if it returns anything other than `{:ok, :fired}`
   # (already-fired race), we swallow the check with no state change.

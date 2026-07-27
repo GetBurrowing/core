@@ -859,7 +859,16 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # (resolving the unique-index collision in favour of an existing
       # live-key pin), deletes the stale pair row, and re-seeds. No
       # schema change.
-      "20260727000000_rename_dream_consolidation_bundle_key.exs"
+      "20260727000000_rename_dream_consolidation_bundle_key.exs",
+      # Task 019fa469 stage 5: the `dispatch.planning` row opened with the
+      # ack-first preamble, instructing planners to call `task_ack` with an
+      # empty stage_id — which `ToolSurface.resolve_ack_stage_id/2` rejects,
+      # because a planning dispatch has no plan and so no running stage.
+      # `seed_defaults/0` is INSERT-only and this row exists on every
+      # environment that has ever booted, so editing `do_default_templates/0`
+      # alone would leave prod serving the old body. Update-only; no schema
+      # change.
+      "20260727183000_force_update_planning_template_drop_ack.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

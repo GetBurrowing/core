@@ -47,6 +47,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   | manual_approval   | n/a                | n/a             | n/a (human gate)    |
   """
 
+  alias Platform.Orchestration.DispatchPhase
+  alias Platform.Orchestration.ExecutionSpace
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Orchestration.ProviderGuidance
   alias Platform.Tasks.ReviewRequest
@@ -236,18 +238,47 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   Tries the DB prompt template first via `PromptTemplates.render_template/2`
   and falls back to the hardcoded module-local prompt if the template isn't
-  seeded. Pattern-matched on task status and plan/stage presence:
+  seeded. The slug is chosen by `Platform.Orchestration.DispatchPhase`:
 
-  * planning (no plan) — instruct agent to create and submit a plan
+  * planning (no stage) — instruct agent to create and submit a plan
   * in_progress — execute current stage with evidence
-  * in_review — run validations, do not self-approve gates
+  * in_review / review_e2e — run validations, do not self-approve gates
   * deploying — execute the resolved deploy strategy
   * fallback — generic assignment prompt
+
+  ## Selection is keyed on the STAGE, not on `task.status` (task 019fa469)
+
+  This used to be five function heads pattern-matching `task.status`.
+  `task.status` lags a full dispatch cycle behind the plan engine: after a
+  previous stage's `manual_approval` gate is approved the task row still reads
+  `"in_review"` while the CURRENT stage is `running` with only `test_pass` /
+  `lint_pass` pending, so the executor received the reviewer template (observed
+  3x on task `019f9b29-9c47-7b66-b863-641b50d09eff`). The same staleness sent a
+  `pr_merged`-only DEPLOY stage the reviewer template on task `019fa230`.
+
+  `DispatchPhase.resolve/3` now picks the slug from the stage's own contract
+  and only consults `task.status` when a stage carries no pending validations
+  at all. Every per-slug assigns body below is unchanged from the five heads —
+  this seam changed SELECTION only, no assign values moved.
   """
   @spec dispatch_prompt(map(), map() | nil, map() | nil, keyword()) :: String.t()
-  def dispatch_prompt(task, plan, stage, opts \\ [])
+  def dispatch_prompt(task, plan, stage, opts \\ []) do
+    phase = DispatchPhase.resolve(task, plan, stage)
 
-  def dispatch_prompt(%{status: "planning"} = task, nil, nil, opts) do
+    # Exhaustive over `DispatchPhase`'s closed phase set — deliberately no
+    # catch-all, so a new phase fails loudly here instead of silently landing
+    # on a generic prompt.
+    case phase.slug do
+      "dispatch.planning" -> planning_prompt(task, opts)
+      "dispatch.in_progress" -> in_progress_prompt(task, plan, stage, opts)
+      "dispatch.in_review" -> review_prompt(phase.slug, task, plan, stage, opts)
+      "dispatch.review_e2e" -> review_prompt(phase.slug, task, plan, stage, opts)
+      "dispatch.deploying" -> deploying_prompt(task, plan, stage)
+      "dispatch.fallback" -> fallback_prompt(task, plan, stage)
+    end
+  end
+
+  defp planning_prompt(task, opts) do
     provider_guidance = resolve_provider_guidance(opts)
     previous_rejection_reason = resolve_previous_rejection_reason(opts)
     # Stack v2 stage 5: in-stack `blocks`-kind dep parents contribute their
@@ -256,12 +287,20 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     parent_plans = Keyword.get(opts, :parent_plans, [])
 
     assigns = %{
-      # task_ack preamble assigns (task 019f640d stage 5). Planning
-      # dispatches have no plan yet, so stage_id is deliberately empty —
-      # the `task_ack` MCP tool tolerates a missing stage_id and resolves
-      # via `current_running_stage/1` when it can.
+      # NO `stage_id` and NO ack instruction on this branch (task 019fa469
+      # stage 5). The comment that used to sit here said the `task_ack` MCP
+      # tool "tolerates a missing stage_id and resolves via
+      # `current_running_stage/1` when it can" — it does not.
+      # `ToolSurface.resolve_ack_stage_id/2` returns
+      # `{:error, :no_running_stage}` when the supplied stage_id is empty and
+      # no plan stage is `running`, which is exactly the planning shape, and
+      # the runtime gets `has no running stage — cannot ack without a
+      # stage_id`. Nor is anything lost by not acking:
+      # `TaskRouter.arm_liveness_timers/3`'s
+      # `arm_liveness_timers(_task_id, nil, _stage_kind), do: :ok` clause means
+      # a stage-less dispatch arms no timers and records no lease, so there is
+      # no alarm to satisfy. `task_id` stays — the body still names the task.
       task_id: contract_id(task, :id) || "",
-      stage_id: "",
       task_title: task.title,
       task_description: task.description || "No description provided.",
       task_priority: task.priority,
@@ -291,7 +330,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     end
   end
 
-  def dispatch_prompt(%{status: "in_progress"} = task, plan, stage, opts) do
+  defp in_progress_prompt(task, plan, stage, opts) do
     stage_info = format_stage_info(plan, stage)
     provider_guidance = resolve_provider_guidance(opts)
 
@@ -330,12 +369,17 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     enrich_in_progress_prompt(prompt, task, stage)
   end
 
-  def dispatch_prompt(%{status: "in_review"} = task, plan, stage, opts) do
+  # `dispatch.in_review` and `dispatch.review_e2e` share one assigns body — they
+  # always did, as one `%{status: "in_review"}` head. `template_slug` now comes
+  # from `DispatchPhase`; `select_review_template/2` is still called because it
+  # owns the `e2e_review_assigns/2` build, and its slug agrees by construction
+  # (it delegates the same classification to `DispatchPhase.phase_for_pending/1`).
+  defp review_prompt(template_slug, task, plan, stage, opts) do
     stage_info = format_stage_info(plan, stage)
     provider_guidance = resolve_provider_guidance(opts)
     pending = pending_validations_for_stage(stage)
 
-    {template_slug, extra_assigns} = select_review_template(pending, task)
+    {_delegated_slug, extra_assigns} = select_review_template(pending, task, opts)
 
     assigns =
       %{
@@ -375,7 +419,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     enrich_in_review_prompt(prompt, task, stage)
   end
 
-  def dispatch_prompt(%{status: "deploying"} = task, plan, stage, _opts) do
+  defp deploying_prompt(task, plan, stage) do
     stage_info = format_stage_info(plan, stage)
     repo_url = project_attr(task, :repo_url, "")
     default_branch = resolve_branch(task)
@@ -418,7 +462,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     enrich_deploying_prompt(prompt, task, stage)
   end
 
-  def dispatch_prompt(task, plan, stage, _opts) do
+  defp fallback_prompt(task, plan, stage) do
     stage_info = format_stage_info(plan, stage)
 
     assigns = %{
@@ -717,6 +761,13 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # that operate on an empty templates table) get the same guidance. The
   # `parent_plans` upstream-plans section is rendered here too — same
   # renderer as the template path — so both routes emit identical output.
+  #
+  # Parity includes the ABSENCE of the ack preamble (task 019fa469 stage 5).
+  # This branch used to call `render_task_ack_preamble(task_id, "")` with an
+  # empty stage_id, which produces a first-tool-call instruction that
+  # `ToolSurface.resolve_ack_stage_id/2` rejects with `:no_running_stage`.
+  # Leaving it here would just relocate the defect to the unseeded
+  # environments this fallback exists to serve.
   defp hardcoded_dispatch_planning(
          task,
          provider_guidance \\ "",
@@ -725,10 +776,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
        ) do
     previous_rejection_section = render_previous_rejection_section(previous_rejection_reason)
     upstream_plans_section = render_upstream_plans_section(parent_plans)
-    ack_preamble = render_task_ack_preamble(contract_id(task, :id), "")
+    no_ack_notice = PromptTemplates.planning_no_ack_notice()
 
     """
-    #{ack_preamble}
+    #{no_ack_notice}
     You have been assigned a task that requires a plan before any implementation begins.
 
     Task: #{task.title}
@@ -951,27 +1002,58 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   - For an empty list, default to `dispatch.in_review` so the agent still gets
     a sensible prompt during the transient window where validations have all
     been evaluated but the stage hasn't yet auto-advanced.
+
+  ## Relationship to `DispatchPhase` (task 019fa469 stage 2)
+
+  `dispatch_prompt/4` no longer takes its SLUG from here — that now comes from
+  `DispatchPhase.resolve/3`, which classifies every phase, not just the two
+  review shapes. This function survives because it owns the
+  `e2e_review_assigns/3` build, and it delegates its e2e-vs-manual decision to
+  `DispatchPhase.phase_for_pending/1` so there is exactly one classifier. A
+  second, independently-drifting classifier is how the original defect got in.
+
+  ### Documented divergence on the empty list
+
+  `select_review_template([], _)` still returns `dispatch.in_review`, because
+  the direct-call contract predates the resolver and is unit-tested. Under
+  `DispatchPhase` an empty pending list classifies to `nil` and falls through
+  to the `task.status` mapping instead — so a stage with nothing pending is
+  dispatched on its task's status, not forced into the reviewer template.
+  `dispatch_prompt/4` never observes the divergence: it ignores this
+  function's slug entirely.
+
+  ## `opts` (task 019fa469 stage 3)
+
+  The third argument carries the dispatch opts through to
+  `e2e_review_assigns/3`, whose only current consumer is
+  `:execution_space_id` — the router's `%State{}` value, which is NOT a task
+  schema field and therefore cannot be read off the `task` argument. It
+  defaults to `[]` so the long-standing `/1` and `/2` direct-call contracts are
+  untouched; with no opt the assign falls back to the task map and then to
+  `ExecutionSpace.find_by_task_id/1`.
   """
-  @spec select_review_template([map()], map() | nil) :: {String.t(), map()}
-  def select_review_template(pending_validations, task \\ nil)
+  @spec select_review_template([map()], map() | nil, keyword()) :: {String.t(), map()}
+  def select_review_template(pending_validations, task \\ nil, opts \\ [])
 
-  def select_review_template([], _task), do: {"dispatch.in_review", %{}}
+  def select_review_template([], _task, _opts), do: {"dispatch.in_review", %{}}
 
-  def select_review_template(pending_validations, task) when is_list(pending_validations) do
-    e2es =
-      Enum.filter(pending_validations, fn v ->
-        kind = Map.get(v, :kind) || Map.get(v, "kind")
-        kind == "e2e_behavior"
-      end)
+  def select_review_template(pending_validations, task, opts) when is_list(pending_validations) do
+    case DispatchPhase.phase_for_pending(pending_validations) do
+      :review_e2e ->
+        e2es =
+          Enum.filter(pending_validations, fn v ->
+            kind = Map.get(v, :kind) || Map.get(v, "kind")
+            kind == "e2e_behavior"
+          end)
 
-    if e2es != [] do
-      {"dispatch.review_e2e", e2e_review_assigns(e2es, task)}
-    else
-      {"dispatch.in_review", %{}}
+        {"dispatch.review_e2e", e2e_review_assigns(e2es, task, opts)}
+
+      _ ->
+        {"dispatch.in_review", %{}}
     end
   end
 
-  defp e2e_review_assigns(validations, task) when is_list(validations) do
+  defp e2e_review_assigns(validations, task, opts) when is_list(validations) do
     rendered =
       Enum.map(validations, fn validation ->
         %{
@@ -984,12 +1066,93 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     %{
       pending_e2e_validations_json: encode_payload_json(rendered),
-      execution_space_id: task_field(task, :execution_space_id) || "",
+      execution_space_id: resolve_execution_space_id(task, opts),
       repo_url: project_attr(task || %{}, :repo_url, ""),
       # member_slug/1 — a review agent that spins up a worktree dev server must
       # land in the stack member's full-UUID worktree, not a truncated prefix.
       task_slug: member_slug(task || %{})
     }
+  end
+
+  # `execution_space_id` is a REQUIRED assign for `dispatch.review_e2e` — it is
+  # the only template that interpolates it (`prompt_templates.ex:745`, `:794`),
+  # and on a FAILED verdict the reviewer's own observation IS the failure
+  # feedback, which the template tells it to post into that space. An empty
+  # value silently deletes the one output that matters.
+  #
+  # This used to be `task_field(task, :execution_space_id) || ""`, which was
+  # `nil` on every production call: there is NO `execution_space_id` field on
+  # the task schema. It lives on the router's `%State{}` (`task_router.ex:89`)
+  # and never entered `dispatch_prompt/4`. The `|| ""` then laundered the
+  # missing assign into an empty string, which rendered as `Execution space: `
+  # and `...the execution space ()` (task 019f9b29 stage 5).
+  #
+  # Resolution order, most-authoritative first:
+  #   1. `opts[:execution_space_id]` — the router's own state, threaded at
+  #      `task_router.ex` `do_dispatch/2`. Primary path; costs no query.
+  #   2. `task_field(task, :execution_space_id)` — retained because the existing
+  #      unit tests hand this function plain maps carrying that key. It is a
+  #      fixture shape, NOT a schema field.
+  #   3. `ExecutionSpace.find_by_task_id/1` — last resort, so a direct caller
+  #      that never went through the router still renders correctly.
+  defp resolve_execution_space_id(task, opts) do
+    from_opts = presence(Keyword.get(opts, :execution_space_id))
+    from_task = presence(task_field(task, :execution_space_id))
+
+    case from_opts || from_task || lookup_execution_space_id(task) do
+      nil ->
+        report_missing_assign("dispatch.review_e2e", :execution_space_id, task)
+        ""
+
+      space_id ->
+        space_id
+    end
+  end
+
+  defp lookup_execution_space_id(task) do
+    case presence(task_field(task, :id)) do
+      nil ->
+        nil
+
+      task_id ->
+        case ExecutionSpace.find_by_task_id(task_id) do
+          %{id: space_id} -> presence(space_id)
+          _ -> nil
+        end
+    end
+  end
+
+  defp presence(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp presence(_), do: nil
+
+  # A required assign that resolves to nothing must be LOUD. The prompt still
+  # renders — a degraded dispatch beats no dispatch — but it now leaves a trace
+  # an operator can grep instead of an empty pair of parens.
+  #
+  # Telemetry is the machine-readable signal, deliberately not `Logger`:
+  # `config/test.exs` runs the logger at `level: :warning`, so an `info`-level
+  # assertion goes silently vacuous under `CaptureLog` (documented in
+  # `task_router_dispatch_suppression_test.exs`). The `Logger.error` alongside
+  # it is for the human reading production logs.
+  defp report_missing_assign(slug, assign, task) do
+    task_id = task_field(task, :id) || "unknown"
+
+    Logger.error(
+      "[HeartbeatScheduler] required assign #{inspect(assign)} unresolved for #{slug} " <>
+        "(task_id=#{task_id}) — rendering a degraded prompt"
+    )
+
+    :telemetry.execute(
+      [:platform, :orchestration, :dispatch_assign_missing],
+      %{count: 1},
+      %{slug: slug, assign: assign, task_id: task_id}
+    )
   end
 
   defp encode_payload_json(payload) when is_map(payload) do

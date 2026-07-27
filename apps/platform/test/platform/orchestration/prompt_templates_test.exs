@@ -1556,11 +1556,28 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         refute row.content =~ "<!-- stale marker -->",
                "#{slug} must have the stale suffix overwritten (not appended)"
 
-        assert row.content =~ "subagent_id=",
-               "#{slug} must carry the subagent_id-required ack copy after migration up/0"
+        # The ack-copy assertions are STAGE-SCOPED-ONLY as of task 019fa469
+        # stage 5. This migration still rewrites `dispatch.planning` — it
+        # writes whatever `default_content_for_slug/1` currently returns — but
+        # what that returns for the planning slug no longer contains an ack
+        # instruction, because a planning dispatch has no running stage to ack
+        # and arms no timer that would miss one. The two migrations converge:
+        # on a fresh DB this one writes the ack-free planning body and
+        # 20260727183000 writes the same bytes; on a deployed DB this one ran
+        # long ago and 20260727183000 is what moves the row.
+        if slug != "dispatch.planning" do
+          assert row.content =~ "subagent_id=",
+                 "#{slug} must carry the subagent_id-required ack copy after migration up/0"
 
-        assert row.content =~ "Spawn the subagent FIRST",
-               "#{slug} must carry the spawn-first ordering instruction after migration up/0"
+          assert row.content =~ "Spawn the subagent FIRST",
+                 "#{slug} must carry the spawn-first ordering instruction after migration up/0"
+        else
+          refute row.content =~ "task_ack(",
+                 "dispatch.planning must NOT carry an ack call after migration up/0 (task 019fa469 stage 5)"
+
+          assert row.content =~ "You have been assigned a task that requires a plan",
+                 "dispatch.planning must still have rendered its actual body"
+        end
       end
 
       # Second run — same final state (idempotent).
@@ -2611,16 +2628,26 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     end
   end
 
-  describe "task_ack preamble on every dispatch template (task 019f640d stage 5)" do
+  describe "task_ack preamble on every STAGE-SCOPED dispatch template (task 019f640d stage 5)" do
     # The ack-first preamble tells the runtime that its FIRST tool call
     # must be `task_ack(task_id, stage_id)` — which the TaskRouter
     # consumes via `execution.acked` to extend the safety-net timer and
     # suppress the 5-minute no-ack alert (stage 3 wiring). Every
-    # dispatch template MUST carry the preamble; every template's
-    # variables list MUST declare `task_id` + `stage_id` so mustache
-    # actually interpolates them at render time.
+    # stage-scoped dispatch template MUST carry the preamble; each of those
+    # templates' variables lists MUST declare `task_id` + `stage_id` so
+    # mustache actually interpolates them at render time.
+    #
+    # `dispatch.planning` was in this list until task 019fa469 stage 5 and
+    # that membership is what kept the defect green: a planning dispatch has
+    # no plan, so `ToolSurface.resolve_ack_stage_id/2` answers
+    # `{:error, :no_running_stage}` and the instruction cannot be followed —
+    # while `TaskRouter.arm_liveness_timers/3` arms nothing for a stage-less
+    # dispatch, so there was no alarm to satisfy either. Its replacement
+    # coverage (the ack is ABSENT, and absent for a stated reason) lives in
+    # `dispatch_planning_ack_test.exs`, which also carries the counterfactual
+    # that these three slugs keep the ack.
 
-    @dispatch_slugs ~w(dispatch.planning dispatch.in_progress dispatch.in_review dispatch.deploying)
+    @dispatch_slugs ~w(dispatch.in_progress dispatch.in_review dispatch.deploying)
 
     test "every dispatch template body starts with the ack-first preamble" do
       for slug <- @dispatch_slugs do

@@ -338,6 +338,16 @@ defmodule Platform.Orchestration.TaskRouterStageIsolationTest do
     # Force the :check_no_ack handler to fire without waiting 5min. The
     # LeaseManager row still has ack_at=nil and no_ack_fired?=false, so
     # the handler will path through `mark_no_ack_fired` + emit the alert.
+    #
+    # The deadline has to be expired explicitly since task 019fa469 stage 6:
+    # `:check_no_ack` level-checks `no_ack_at` the way `:check_safety_net`
+    # always has, so receiving the message is no longer evidence the ack
+    # window closed. Written to ETS so every other field this test asserts
+    # on (stage_id in particular) stays exactly as the router recorded it.
+    lease = LeaseManager.get(task.id)
+    past = DateTime.add(DateTime.utc_now(), -1_000, :millisecond)
+    :ets.insert(:orchestration_lease_manager, {task.id, %{lease | no_ack_at: past}})
+
     send(pid, :check_no_ack)
 
     assert_receive {:runtime_event,

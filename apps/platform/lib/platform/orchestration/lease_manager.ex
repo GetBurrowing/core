@@ -28,7 +28,7 @@ defmodule Platform.Orchestration.LeaseManager do
       %{
         stage_id: binary(),
         stage_kind: binary(),
-        dispatched_at: DateTime.t(),
+        dispatched_at: DateTime.t(),      # FIRST dispatch of this stage-instance; a re-dispatch does not move it
         ack_at: DateTime.t() | nil,
         last_progress_at: DateTime.t() | nil,
         safety_net_at: DateTime.t() | nil,   # nil = safety-net disabled (manual_approval)
@@ -37,6 +37,32 @@ defmodule Platform.Orchestration.LeaseManager do
         safety_net_fired?: boolean(),
         silenced_until: DateTime.t() | nil   # nil = no silence; DateTime = suppress :check_no_ack until this instant
       }
+
+  ## Dispatch vs. re-dispatch (task 019fa469 stage 6)
+
+  `record_dispatch/4` is keyed on `stage_id`, not on "a dispatch
+  happened":
+
+    * **New stage** (no row, or the row's `stage_id` differs) — build a
+      fresh zero-ack row. A stage transition really has not been acked.
+    * **Same stage** (the row's `stage_id` matches) — this is a
+      RE-dispatch: the same prompt delivered twice. Preserve `ack_at`,
+      `last_progress_at`, `dispatched_at`, `no_ack_fired?`,
+      `safety_net_fired?` and `silenced_until`; extend `safety_net_at`;
+      leave `no_ack_at` alone unless an ack has landed.
+
+  Before this distinction existed, every dispatch rebuilt the row with
+  `ack_at: nil` and a fresh countdown, so a duplicate `task_assigned`
+  erased an ack that had already landed and re-armed the no-ack alarm
+  against a live agent. The module's own docs already described the
+  stage-transition semantics (see `record_ack/1` and the "Silence dies
+  with the row" note below, both of which say *subsequent stage*); only
+  the implementation applied them to every dispatch.
+
+  OUT OF SCOPE here: suppressing the redundant dispatch itself. Whatever
+  emits a duplicate `task_assigned` is a separate concern (sibling task
+  019fa2fc's suppression work). This module only stops the duplicate
+  from destroying a valid ack.
 
   ## Silence semantics
 
@@ -142,11 +168,18 @@ defmodule Platform.Orchestration.LeaseManager do
   def stage_kind_timeouts, do: @stage_kind_timeouts
 
   @doc """
-  Record a fresh dispatch for `task_id`. Overwrites any prior lease
-  for the same task (stage transitions upgrade in place) with a
-  zero-ack, zero-progress row and computed `safety_net_at` /
-  `no_ack_at` fields based on `dispatched_at` + the stage-kind
-  timeouts.
+  Record a dispatch for `task_id` on `stage_id`.
+
+  When no lease exists, or the existing lease is for a DIFFERENT
+  stage (a real stage transition), writes a zero-ack, zero-progress
+  row with `safety_net_at` / `no_ack_at` computed from
+  `dispatched_at` + the stage-kind timeouts.
+
+  When the existing lease is for the SAME stage, this is a
+  re-dispatch: ack / progress / fired / silence state is preserved,
+  `safety_net_at` is extended, and `no_ack_at` is left on its
+  original deadline (or nil'd when an ack already landed). See
+  "Dispatch vs. re-dispatch" in the moduledoc for why.
 
   For unknown `stage_kind` values (or `manual_approval`) both
   timeouts are stored as `nil` — the router uses that as its signal
@@ -298,18 +331,14 @@ defmodule Platform.Orchestration.LeaseManager do
     ensure_table!()
     timeouts = timeouts_for(stage_kind)
 
-    lease = %{
-      stage_id: stage_id,
-      stage_kind: stage_kind,
-      dispatched_at: dispatched_at,
-      ack_at: nil,
-      last_progress_at: nil,
-      safety_net_at: maybe_add(dispatched_at, timeouts.safety_net_ms),
-      no_ack_at: maybe_add(dispatched_at, timeouts.ack_ms),
-      no_ack_fired?: false,
-      safety_net_fired?: false,
-      silenced_until: nil
-    }
+    lease =
+      case direct_get(task_id) do
+        %{stage_id: ^stage_id} = existing ->
+          redispatch_lease(existing, stage_kind, dispatched_at, timeouts)
+
+        _ ->
+          fresh_lease(stage_id, stage_kind, dispatched_at, timeouts)
+      end
 
     :ets.insert(@table, {task_id, lease})
     {:reply, :ok, state}
@@ -411,6 +440,102 @@ defmodule Platform.Orchestration.LeaseManager do
   end
 
   # ── Internal ───────────────────────────────────────────────────────────────
+
+  # A dispatch for a stage this task was not already leasing — first
+  # dispatch, or a genuine stage transition. Zero-ack, zero-progress,
+  # both deadlines computed from `dispatched_at`. This is the shape
+  # `record_dispatch/4` has always written, and stage transitions must
+  # keep getting exactly it: a new stage really has not been acked, and
+  # its no-ack countdown really does start now.
+  defp fresh_lease(stage_id, stage_kind, dispatched_at, timeouts) do
+    %{
+      stage_id: stage_id,
+      stage_kind: stage_kind,
+      dispatched_at: dispatched_at,
+      ack_at: nil,
+      last_progress_at: nil,
+      safety_net_at: maybe_add(dispatched_at, timeouts.safety_net_ms),
+      no_ack_at: maybe_add(dispatched_at, timeouts.ack_ms),
+      no_ack_fired?: false,
+      safety_net_fired?: false,
+      silenced_until: nil
+    }
+  end
+
+  # A re-dispatch of the stage this task is ALREADY leasing (task
+  # 019fa469 stage 6). Rebuilding the row from scratch here erased an
+  # ack that had already landed and re-armed a fresh 5-minute countdown
+  # against an agent that was mid-flight — every `execution.no_ack_timeout`
+  # observed on 2026-07-27 (roughly a dozen across six tasks) was this,
+  # not a dropped runtime.
+  #
+  # Carried forward untouched: `ack_at`, `last_progress_at`,
+  # `no_ack_fired?`, `safety_net_fired?`, `silenced_until`. All five are
+  # facts about the stage-instance, and a duplicate delivery of the same
+  # prompt is not new information about any of them.
+  #
+  # `dispatched_at` is ALSO carried forward — it names when this
+  # stage-instance's ack expectation STARTED, not when a prompt was last
+  # delivered. Nothing reads it except the two alert payloads
+  # (`fire_no_ack_alert/2`, `fire_safety_net_alert/2`), which report
+  # `elapsed_ms_since_dispatch` to a human deciding whether a runtime
+  # really dropped. Refreshing it would make a six-minute-old unacked
+  # dispatch alarm with "no ack after 0s" the instant a duplicate landed,
+  # and would break the row's own invariant that an unacked
+  # `no_ack_at == dispatched_at + ack_ms`. An alarm that misreports its
+  # own elapsed time is the failure this stage exists to end.
+  #
+  # Refreshed: `stage_kind` (the router re-derives it per dispatch and it
+  # can legitimately change as the stage's validations complete).
+  #
+  # `safety_net_at` is deliberately extended from the CURRENT dispatch
+  # instant while `no_ack_at` is deliberately not — see
+  # `redispatch_no_ack/3`. The asymmetry is intentional: the safety net
+  # asks "has anything happened lately", and a re-dispatch genuinely
+  # re-delivers the prompt, so it is activity. The no-ack alarm asks the
+  # narrower question "did anyone ever pick this up", which a re-delivery
+  # does not answer.
+  defp redispatch_lease(existing, stage_kind, redispatched_at, timeouts) do
+    {dispatched_at, no_ack_at} = redispatch_no_ack(existing, redispatched_at, timeouts)
+
+    %{
+      existing
+      | stage_kind: stage_kind,
+        dispatched_at: dispatched_at,
+        safety_net_at: maybe_add(redispatched_at, timeouts.safety_net_ms),
+        no_ack_at: no_ack_at
+    }
+  end
+
+  # Returns `{dispatched_at, no_ack_at}` — the pair moves together so the
+  # unacked invariant `no_ack_at == dispatched_at + ack_ms` survives every
+  # branch.
+
+  # Already acked → no-ack is settled for this stage-instance; nil the
+  # deadline exactly as `record_ack/1` does and leave the clock where it is.
+  defp redispatch_no_ack(%{ack_at: %DateTime{}} = existing, _redispatched_at, _timeouts) do
+    {existing.dispatched_at, nil}
+  end
+
+  # Not acked, countdown already running → PRESERVE both. This is the
+  # sub-clause that keeps the alarm honest: recomputing the deadline from
+  # the re-dispatch instant would mean a stream of duplicate dispatches lets
+  # a genuinely dropped runtime evade the alarm indefinitely — fixing the
+  # false positives by disabling the detector.
+  defp redispatch_no_ack(%{no_ack_at: %DateTime{}} = existing, _redispatched_at, _timeouts) do
+    {existing.dispatched_at, existing.no_ack_at}
+  end
+
+  # Not acked and no countdown running — the previous dispatch for this
+  # stage resolved a `stage_kind` with a nil `ack_ms` (`manual_approval`, or
+  # an unknown kind). If this dispatch arms one, the ack expectation starts
+  # NOW and the clock starts with it; if it does not, nothing changes.
+  defp redispatch_no_ack(existing, redispatched_at, timeouts) do
+    case maybe_add(redispatched_at, timeouts.ack_ms) do
+      nil -> {existing.dispatched_at, nil}
+      armed -> {redispatched_at, armed}
+    end
+  end
 
   # Runs inside the owning GenServer so the lookup + mutation pair is
   # atomic against other mutating callers. Concurrent lock-free

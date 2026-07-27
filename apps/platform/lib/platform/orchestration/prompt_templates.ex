@@ -157,12 +157,34 @@ defmodule Platform.Orchestration.PromptTemplates do
     end)
   end
 
-  # Ack-first preamble prepended to every dispatch template body (task
-  # 019f640d stage 5). Interpolated via mustache with the runtime's
-  # current `task_id` + `stage_id` so the ack call is copy-pasteable.
-  # `stage_id` will render as an empty string on the planning dispatch
-  # (there's no plan yet) — the `task_ack` tool tolerates a missing
-  # stage_id and resolves via `current_running_stage` anyway.
+  # Ack-first preamble prepended to every STAGE-SCOPED dispatch template body
+  # (task 019f640d stage 5) — `dispatch.in_progress`, `dispatch.in_review`,
+  # `dispatch.deploying`. Interpolated via mustache with the runtime's current
+  # `task_id` + `stage_id` so the ack call is copy-pasteable.
+  #
+  # DELIBERATELY NOT ON `dispatch.planning` (task 019fa469 stage 5). The
+  # comment that used to sit here claimed "`stage_id` will render as an empty
+  # string on the planning dispatch — the `task_ack` tool tolerates a missing
+  # stage_id and resolves via `current_running_stage` anyway." That is false in
+  # both halves:
+  #
+  #   * It does not tolerate it. `ToolSurface.resolve_ack_stage_id/2` takes the
+  #     explicit stage_id only when it is a non-empty binary; otherwise it
+  #     looks for a `status == "running"` stage on the current plan and returns
+  #     `{:error, :no_running_stage}` when there is none. A planning dispatch
+  #     has no plan at all, so the runtime is answered with
+  #     `task_id=<id> has no running stage — cannot ack without a stage_id.`
+  #     `alarm_silence` fails through the same resolver.
+  #   * There is nothing to ack. `TaskRouter.arm_liveness_timers/3` opens with
+  #     `arm_liveness_timers(_task_id, nil, _stage_kind), do: :ok`, so a
+  #     stage-less dispatch arms neither `:check_no_ack` nor
+  #     `:check_safety_net` and never calls `LeaseManager.record_dispatch/4`.
+  #     The preamble's "no-ack alert in 5 minutes" threat is simply false on
+  #     that branch.
+  #
+  # So the planning body states that no ack is expected rather than demanding
+  # one. Do not "fix" this by giving `task_ack` a task-level form — that would
+  # be API surface for an alarm that does not exist.
   @task_ack_preamble """
   **Your first tool call must be `task_ack(task_id="{{task_id}}", stage_id="{{stage_id}}", subagent_id="<the id returned when you spawned the SuiteExecutor / SuiteReviewer via the Agent tool>")`.**
 
@@ -171,9 +193,30 @@ defmodule Platform.Orchestration.PromptTemplates do
   **If `task_ack` is missing from your MCP tool cache** (a known cross-version issue where a session's catalog predates a new tool), call `alarm_silence(task_id="{{task_id}}", stage_id="{{stage_id}}", until_seconds=1800, reason="task_ack absent from stale MCP catalog; subagent live")` as the operator escape hatch. Do NOT use `report_blocker(needs_human: false)` — that anti-pattern sets a task-level lease to blocked and leaks across stage boundaries.
   """
 
-  @doc "Ack-first preamble string interpolated into every dispatch template body."
+  @doc "Ack-first preamble string interpolated into every stage-scoped dispatch template body."
   @spec task_ack_preamble() :: String.t()
   def task_ack_preamble, do: @task_ack_preamble
+
+  # What `dispatch.planning` says INSTEAD of the ack preamble (task 019fa469
+  # stage 5). Kept as its own attribute so the DB template body and
+  # `HeartbeatScheduler.hardcoded_dispatch_planning/4` — which the scheduler
+  # documents as "kept in parity with the DB dispatch.planning template" —
+  # cannot drift. No mustache placeholders: there is nothing task-specific to
+  # interpolate, which is the whole point.
+  @planning_no_ack_notice """
+  **No ack is expected for this dispatch.** A planning dispatch has no running stage, so `task_ack` and `alarm_silence` both fail here with `has no running stage — cannot ack without a stage_id` — that is the tool working correctly, not you failing a step. The router arms no liveness timers for a stage-less dispatch, so no no-ack alert can fire against you. Start with the planning work. The ack instruction appears on your first stage-scoped dispatch, once a plan is approved and a stage is running.
+  """
+
+  @doc """
+  The planning dispatch's replacement for the ack-first preamble.
+
+  Shared by the `dispatch.planning` template body and the hardcoded
+  planning fallback in `HeartbeatScheduler` so the two routes stay
+  byte-identical. See `@task_ack_preamble`'s comment for why a planning
+  dispatch cannot ack and does not need to.
+  """
+  @spec planning_no_ack_notice() :: String.t()
+  def planning_no_ack_notice, do: @planning_no_ack_notice
 
   # Federation preamble — canonical block of Claude Code guidance that used
   # to be duplicated across every dispatch template (task 019f5e2a stage 1
@@ -329,6 +372,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
   defp do_default_templates do
     task_ack_preamble = @task_ack_preamble
+    planning_no_ack_notice = @planning_no_ack_notice
 
     skills_reference =
       "## Skill discovery — do this BEFORE you start executing\n\n" <>
@@ -353,9 +397,11 @@ defmodule Platform.Orchestration.PromptTemplates do
         description:
           "Sent when a task is first assigned and needs a plan created. " <>
             "Instructs the agent to create and submit a plan before starting work.",
+        # No `stage_id` (task 019fa469 stage 5) — a planning dispatch has no
+        # plan and therefore no stage, so nothing interpolates it and the
+        # body no longer asks for an ack it cannot make.
         variables: [
           "task_id",
-          "stage_id",
           "task_title",
           "task_description",
           "task_priority",
@@ -365,7 +411,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "federation_preamble"
         ],
         content: """
-        #{task_ack_preamble}
+        #{planning_no_ack_notice}
         You have been assigned a task that requires a plan before any implementation begins.
 
         Task: {{task_title}}
