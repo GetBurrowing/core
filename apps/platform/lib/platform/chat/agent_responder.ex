@@ -421,7 +421,7 @@ defmodule Platform.Chat.AgentResponder do
     responsibility_key = context[:responsibility_key]
 
     if RuntimePresence.online?(runtime.runtime_id) do
-      payload = %{signal: build_system_event_signal(agent, context)}
+      payload = agent |> build_system_event_signal(context) |> build_system_event_payload()
 
       Logger.info(
         "[AgentResponder] broadcasting system_event to #{topic} " <>
@@ -474,6 +474,61 @@ defmodule Platform.Chat.AgentResponder do
     end
   end
 
+  # The native system_event envelope is BARE: `%{signal: signal}`, in every
+  # case. No `message`, no `history`, no `context`.
+  #
+  # A `message` key WAS considered here — mirroring `message.content` from
+  # `signal.prompt` so a client reading the chat shape would find the body
+  # without changing — and was deliberately not shipped. The body already has a
+  # named interface on this path: `signal.prompt`, lifted to the signal root by
+  # `build_system_event_signal/2` precisely so a federated runtime does not have
+  # to dig into `metadata` for it. Emitting both would give the server two ways
+  # to say one thing, and the next client written against this envelope would
+  # read whichever one it happened to find first. That two independently
+  # written clients both typed `message` as REQUIRED is evidence of a shared
+  # error — each encoded the only shape it had seen — not of the contract; both
+  # are converging on root-first resolution. Superseded by the client-side fix
+  # in task `019fa618-ca92`.
+  #
+  # WHAT WOULD REOPEN THIS: the condition that justified declining the shim is
+  # that a client silently DROPS this envelope and swallows the throw, so a
+  # server-side mirror would have been papering over an invisible client
+  # defect. Once `019fa618-ca92` has landed and the client's error-swallowing
+  # is closed, that is no longer true, and "should the server also emit
+  # `message`?" becomes a legitimately reopenable question to be decided on its
+  # merits — deliberately, not as a merge side effect.
+  defp build_system_event_payload(signal), do: %{signal: signal}
+
+  # CONFIRMED 2026-07-27 (019fa510 stage 3), against live logs on both sides:
+  # the envelope this builds is DROPPED by the openclaw client, silently.
+  #
+  # `%{signal: build_system_event_signal(...)}` carries no `message` key, and
+  # the openclaw client reads `payload.message.author` with no optional
+  # chaining. That throws
+  # `TypeError: Cannot read properties of undefined (reading 'author')`, which
+  # the client's channel layer swallows into one generic `attention handler
+  # error` line. The agent never wakes. This signal also lifts neither
+  # `space_id` nor `task_id`, so even a client that survived that line would
+  # reply into `"unknown"`.
+  #
+  # Evidence: every `attention handler error` line on the client side pairs to
+  # the second with a `broadcasting system_event` line here, and no
+  # `[suite-inbound]` line follows any of them.
+  #
+  # The apparent counter-evidence is a different population. The surviving
+  # `[suite-inbound] reason=system_event` lines exist, but every one carries
+  # Higgins's system space — they come from `HistorianDispatcher`, which posts a
+  # real chat message and so travels the `dispatch_to_external/2` path at `:248`
+  # WITH a `message` key. The two are distinguishable in this module's own log:
+  # `respond called with reason=system_event signal=%{}` is the native fire that
+  # dies, `signal=%{space_id: ..., message_id: ...}` is the chat fire that lives.
+  # Zero `space=unknown` lines exist in the whole journal, which is the proof no
+  # native envelope has ever reached the client's post-line-70 logging.
+  #
+  # `memory.daily_summary` / `memory.dreaming` outcomes survived this only
+  # because they are still dual-written by the legacy scheduler path (see
+  # `Platform.Responsibilities.CutoverMonitor`). Removing that shim before the
+  # envelope is fixed would silence Higgins outright.
   defp build_system_event_signal(%Agent{} = agent, context) do
     metadata = context[:metadata] || %{}
 
@@ -491,7 +546,39 @@ defmodule Platform.Chat.AgentResponder do
     # `signal.prompt` without digging — mirrors :feature / :trigger_kind.
     # Omitted entirely when there's no rendered prompt.
     |> maybe_put(:prompt, Map.get(metadata, :prompt))
+    |> lift_correlation_ids(metadata)
     |> Map.put(:metadata, metadata)
+  end
+
+  # Scalar correlation ids, lifted from `metadata` to the top level of the
+  # signal — and left in `metadata` too, so no existing consumer is broken.
+  #
+  # Identical to `Platform.Responsibilities.Router.native_trigger_scalar_keys/0`
+  # by construction (a test pins the two lists equal), because a divergence is
+  # exactly the class of bug this fixes: the CHAT path already lifts `task_id`
+  # in `build_external_signal/3`, this path lifted nothing, and both clients
+  # encoded the chat shape. `maybe_put/3` drops nils, so a fire with no task
+  # context still sends no `task_id` key rather than a nil one.
+  #
+  # `space_id` IS DELIBERATELY ABSENT, and must stay absent.
+  # `claude-code-suite-channel`'s `src/attention.ts` pins the space a pending
+  # permission prompt gets answered in from the TOP-LEVEL `signal.space_id`
+  # ONLY, while resolving a mere reply target more permissively from metadata.
+  # Replying is safe; re-pinning is not. A background responsibility fire that
+  # lifted its own `space_id` here would silently move a live approval prompt
+  # to a space nobody is watching. Adding `space_id` to this list would defeat
+  # a client-side guard the client cannot defend itself against.
+  @correlation_id_keys [:task_id, :plan_id, :stage_id, :project_id]
+
+  @doc false
+  # Exposed so the envelope test can pin this list against the Router's
+  # whitelist rather than restating it and drifting.
+  def correlation_id_keys, do: @correlation_id_keys
+
+  defp lift_correlation_ids(signal, metadata) do
+    Enum.reduce(@correlation_id_keys, signal, fn key, acc ->
+      maybe_put(acc, key, Map.get(metadata, key))
+    end)
   end
 
   defp persist_reply(context, reply) do

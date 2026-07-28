@@ -1567,6 +1567,13 @@ defmodule Platform.Responsibilities.Router do
   # `babba0bf` for the same reasoning on the chat side.
   @native_trigger_scalar_keys [:task_id, :plan_id, :stage_id, :project_id]
 
+  @doc false
+  # Exposed so `AgentResponder`'s system_event envelope can be pinned against
+  # this whitelist by a test instead of restating it. The two lists diverging
+  # is how a correlation id ends up reaching a runtime on the chat path and not
+  # on the responsibility path — the asymmetry that made two clients wrong.
+  def native_trigger_scalar_keys, do: @native_trigger_scalar_keys
+
   defp put_trigger_scalars(metadata, trigger_meta) do
     Enum.reduce(@native_trigger_scalar_keys, metadata, fn key, acc ->
       case Map.get(trigger_meta, key) do

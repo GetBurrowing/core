@@ -588,10 +588,18 @@ defmodule Platform.Tasks do
   ## Callers
 
   `:architecture` is written by `submit_plan_for_review/1` (stage 3).
-  `:design` has NO production caller yet — that is deliberate, not an
-  oversight: the design step belongs to ADR-0046 member 7, which lands the
-  dispatch. The API and its tests exist now so member 7 adds a call site and
-  nothing else.
+
+  `:design` is written by `Platform.Design.PreplanStep` (ADR-0046 member 7),
+  which has since landed: `preplan_step.ex:509` on the settle path and
+  `:557` on the expiry path. This block used to say `:design` had NO
+  production caller and that an absent design outcome was therefore
+  expected — that is now false in both halves, and it was being cited
+  downstream as a reason to discount empty design results. Production, read
+  during task `019fa510` stage 2: four tasks carry a `"design"` outcome, all
+  four written on 2026-07-27, all four `outcome: "failed"` with
+  `reason: "design_timeout"` exactly 30 minutes after the matching
+  `design.task_direction` dispatch. An empty or failed design outcome is a
+  measurement, not a placeholder.
   """
   @spec record_planning_step(Task.t() | binary(), :design | :architecture, term()) ::
           {:ok, Task.t()} | {:error, term()}
@@ -2754,18 +2762,105 @@ defmodule Platform.Tasks do
 
   def approve_plan(_plan, _approved_by, _opts), do: {:error, :invalid_transition}
 
+  # ── Task 019fa510 stage 5: the admission is also a WRITER ─────────────
+  #
+  # This used to ask `architecture_gate_open?/1`, a boolean. It now branches
+  # on `architecture_gate/1`'s full return, because the boolean throws away
+  # the one distinction that matters here: an overdue `"pending"` gate is
+  # reported as `{:resolved, %{"state" => "expired"}}` by a projection that
+  # DOES NOT WRITE. The old code read `false`, returned `:inert`, and
+  # `do_approve_plan/3` approved while recording nothing about the gate —
+  # leaving the row at `"pending"` and the task's `"architecture"` outcome
+  # at the `"complete"` written at submit from `{:ok, :dispatched}`. An
+  # unanswered gate was then BYTE-IDENTICAL to an architect pass, and
+  # `AutoMerger.execute_merge/4` merged it.
+  #
+  # WHY THIS IS THE RIGHT PLACE, and not somewhere earlier. The projection
+  # is the correctness guarantee (nothing blocks forever) and must stay a
+  # pure read — `architecture_gate/1` is called from LiveView renders and
+  # from the router's occupancy check, neither of which may write. The
+  # deadline timer is the eager writer, but
+  # `TaskRouterWatcher.should_run?/1` requires `assignee_type == "agent"`,
+  # so a task whose PLANNING assignee is a USER never has a router, never
+  # arms the timer, and never gets the `:overdue` occupancy re-fire either.
+  # For those tasks THIS is the first and only moment the system both
+  # observes the expiry and is already committed to a write, so it is the
+  # last honest place to record it. (There is a narrower second window on
+  # the same code: an agent-assigned task whose human clicks Approve after
+  # the deadline but before any router observes it.)
   defp architecture_gate_admission(%Plan{} = plan, approved_by) do
-    # `architecture_gate_open?/1` re-reads the row. Load-bearing: this
-    # function is reached from `AutoMerger`-style async paths and from a
-    # LiveView holding a struct assigned on mount, and a gate answer
-    # derived from a stale struct is the class of bug this stack undoes.
-    if architecture_gate_open?(plan) do
-      case human_approver(approved_by) do
-        %Accounts.User{} = user -> {:override, user}
-        nil -> :refuse
-      end
-    else
-      :inert
+    # `architecture_gate/1` re-reads the row. Load-bearing: this function is
+    # reached from `AutoMerger`-style async paths and from a LiveView
+    # holding a struct assigned on mount, and a gate answer derived from a
+    # stale struct is the class of bug this stack undoes.
+    case architecture_gate(plan) do
+      {:open, _verdict} ->
+        case human_approver(approved_by) do
+          %Accounts.User{} = user -> {:override, user}
+          nil -> :refuse
+        end
+
+      {:resolved, %{"state" => "expired"}} ->
+        # Either the projection (row still `"pending"`) or a verdict a
+        # router already wrote. The settler cannot tell them apart from
+        # here and deliberately does not try — `record_architecture_verdict/3`
+        # arbitrates on the persisted row inside a guarded `UPDATE`, so the
+        # already-written case is a swallowed `{:error, :gate_already_resolved}`.
+        _ = settle_projected_architecture_expiry(plan)
+        :inert
+
+      _resolved_or_none ->
+        :inert
+    end
+  end
+
+  # Write down an expiry that only ever existed as a projection.
+  #
+  # DOES NOT CALL `resolve_architecture_gate/3`, AND THAT IS THE WHOLE
+  # DESIGN. That function's `:expired` clause ends in
+  # `settle_resolved_architecture_gate/2`, which calls
+  # `settle_plan_submission/1 -> maybe_auto_approve/1 -> approve_plan/3` —
+  # and we are being called FROM `approve_plan/3`. The plan would be
+  # approved twice with two different `approved_by` values, the human's
+  # click landing under `"system:auto"`. The precedent is three functions
+  # up: `settle_resolved_architecture_gate(plan, :human_override)` stops
+  # for exactly this reason, on exactly this call path.
+  #
+  # So this is `resolve_architecture_gate/3`'s body minus the settlement:
+  # the guarded verdict write, the cursor move back to `:planning` (the
+  # architecture step is over however it ended), the planning-step outcome
+  # that both `AutoMerger.execute_merge/4` and
+  # `StackDeployer.planning_gate_section/1` read through
+  # `planning_gate_failed?/1`, and the board broadcast.
+  #
+  # RECORDED IN THAT ORDER on purpose, mirroring the `:expired` clause of
+  # `settle_resolved_architecture_gate/2`: the outcome is written before
+  # the broadcast so a merge-time reader sees "the gate did not complete"
+  # even if the broadcast goes wrong.
+  #
+  # EVERY FAILURE IS SWALLOWED and the approval proceeds regardless — same
+  # rule as `record_architecture_human_override/2`. Refusing the human's
+  # approval over a bookkeeping fault would strand a plan, which is the
+  # failure mode the expiry projection exists to rule out in the first
+  # place.
+  defp settle_projected_architecture_expiry(%Plan{} = plan) do
+    case record_architecture_verdict(plan, %{"state" => "expired"}, source: "deadline") do
+      {:ok, resolved} ->
+        _ = move_planning_cursor(resolved.task_id, :planning)
+        _ = record_architecture_planning_step(resolved.task_id, {:error, :expired})
+        broadcast_board({:plan_updated, resolved})
+        {:ok, resolved}
+
+      {:error, reason} = err ->
+        # `:gate_already_resolved` is the COMMON case and is not an error:
+        # a router (or a late architect) beat us to the write and their
+        # verdict wins. Anything else is a genuine fault worth a line.
+        Logger.debug(
+          "[Tasks] projected architecture expiry not written plan=#{plan.id} " <>
+            "task=#{plan.task_id} reason=#{inspect(reason)}"
+        )
+
+        err
     end
   end
 

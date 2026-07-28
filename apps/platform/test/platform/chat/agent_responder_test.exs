@@ -81,6 +81,47 @@ defmodule Platform.Chat.AgentResponderTest do
     agent
   end
 
+  # Register an external runtime, mark it present, point an agent at it, and
+  # subscribe to its runtime topic. `Sandbox.allow/3` on the presence process is
+  # required or the presence lookup fails under the ownership sandbox.
+  defp federated_runtime(slug) do
+    runtime_pres = Process.whereis(RuntimePresence) || start_supervised!(RuntimePresence)
+    Sandbox.allow(Repo, self(), runtime_pres)
+
+    unique = System.unique_integer([:positive])
+
+    owner =
+      Repo.insert!(%User{
+        email: "ar-env-#{unique}@example.com",
+        name: "AR Envelope Owner",
+        oidc_sub: "oidc-ar-env-#{unique}"
+      })
+
+    runtime =
+      Repo.insert!(%AgentRuntime{
+        owner_user_id: owner.id,
+        status: "active",
+        runtime_id: "rt-env-#{unique}",
+        display_name: "#{slug}-runtime"
+      })
+
+    RuntimePresence.track(runtime.runtime_id)
+    on_exit(fn -> RuntimePresence.untrack(runtime.runtime_id) end)
+
+    agent =
+      create_agent(%{
+        slug: "#{slug}-#{unique}",
+        name: "Envelope Agent",
+        runtime_type: "external",
+        runtime_id: runtime.id
+      })
+
+    topic = "runtime:#{runtime.runtime_id}"
+    :ok = PlatformWeb.Endpoint.subscribe(topic)
+
+    {agent, topic}
+  end
+
   defp create_message(space_id, participant_id, attrs \\ %{}) do
     defaults = %{
       space_id: space_id,
@@ -432,7 +473,7 @@ defmodule Platform.Chat.AgentResponderTest do
       assert_receive %Phoenix.Socket.Broadcast{
                        topic: ^topic,
                        event: "attention",
-                       payload: %{signal: broadcast_signal}
+                       payload: %{signal: broadcast_signal} = payload
                      },
                      1500
 
@@ -443,8 +484,188 @@ defmodule Platform.Chat.AgentResponderTest do
       assert broadcast_signal.feature == "memory"
       assert broadcast_signal.trigger_kind == :cron
 
+      # This fire carries no rendered prompt, so the envelope stays bare: no
+      # `message` key at all rather than one with an empty body. The four
+      # positive assertions above are the control — they prove this really is
+      # the delivered payload and not a nil that satisfies `refute` trivially.
+      refute Map.has_key?(payload, :message)
+      refute Map.has_key?(broadcast_signal, :prompt)
+
       RuntimePresence.untrack(runtime.runtime_id)
       _ = AgentRuntime
+    end
+
+    # THE SHAPE GUARANTEED TO A CONSUMER.
+    #
+    # These assert the payload as it leaves the server on `runtime:<id>` —
+    # deliberately not what the Router builds, which was correct throughout this
+    # bug. The envelope is BARE (`%{signal: ...}`), the body has exactly one
+    # home (`signal.prompt`), and the correlation ids are lifted to the signal
+    # root so a woken runtime knows which task it was woken for. The clients'
+    # misread of this shape is fixed client-side under `019fa618-ca92`; the
+    # server does not mirror the body into a second key to compensate.
+    test "system_event envelope carries the prompt at signal.prompt and lifts the correlation ids" do
+      {agent, topic} = federated_runtime("higgins")
+
+      prompt = "Review plan 7 for task Ship the envelope. Two stages await sign-off."
+      task_id = Ecto.UUID.generate()
+      plan_id = Ecto.UUID.generate()
+      stage_id = Ecto.UUID.generate()
+      project_id = Ecto.UUID.generate()
+      space_id = Ecto.UUID.generate()
+
+      signal = %{
+        reason: :system_event,
+        metadata: %{
+          feature: "architecture",
+          agent_id: agent.id,
+          agent_slug: agent.slug,
+          responsibility_key: "architecture.review_plan",
+          trigger_kind: :event_topic,
+          prompt: prompt,
+          task_id: task_id,
+          plan_id: plan_id,
+          stage_id: stage_id,
+          project_id: project_id,
+          space_id: space_id
+        }
+      }
+
+      assert :ok = AgentResponder.respond(signal)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "attention",
+                       payload: payload
+                     },
+                     1500
+
+      broadcast_signal = payload.signal
+
+      # The body, at its one and only key.
+      assert broadcast_signal.prompt == prompt
+
+      # And the envelope around it is bare EVEN THOUGH a body rendered. This
+      # is the general contract, not a no-prompt special case: the assertion
+      # directly above is the positive control proving a real body-bearing
+      # dispatch arrived, so this refute is about the shim's absence and not
+      # about an empty fire.
+      refute Map.has_key?(payload, :message)
+      assert Map.keys(payload) == [:signal]
+
+      # Correlation ids at the TOP level (the lift), pinned to the seeded
+      # values rather than merely asserted non-nil.
+      assert broadcast_signal.task_id == task_id
+      assert broadcast_signal.plan_id == plan_id
+      assert broadcast_signal.stage_id == stage_id
+      assert broadcast_signal.project_id == project_id
+
+      # ...and STILL in metadata. Lifting is additive; a consumer reading
+      # `signal.metadata.task_id` today keeps working.
+      assert broadcast_signal.metadata.task_id == task_id
+      assert broadcast_signal.metadata.plan_id == plan_id
+      assert broadcast_signal.metadata.stage_id == stage_id
+      assert broadcast_signal.metadata.project_id == project_id
+      assert broadcast_signal.metadata.prompt == prompt
+
+      # THE PERMISSION-RELAY ASYMMETRY, and the reason this test seeds a
+      # `space_id` it then asserts is missing. `claude-code-suite-channel` pins
+      # the space a pending permission prompt is answered in from the TOP-LEVEL
+      # `signal.space_id` only, and resolves a reply target more permissively
+      # from metadata. Replying is safe; re-pinning is not. A background
+      # responsibility fire that lifted its space_id would silently move a live
+      # approval to a space nobody is watching.
+      #
+      # The four `assert`s directly above are the positive control for this
+      # `refute`: they prove the lift ran over THIS metadata map and chose not
+      # to take `space_id`, rather than the refute passing because no lift
+      # happened at all.
+      refute Map.has_key?(broadcast_signal, :space_id)
+      assert broadcast_signal.metadata.space_id == space_id
+    end
+
+    test "a system_event with no rendered prompt has no prompt key and the same bare envelope" do
+      {agent, topic} = federated_runtime("higgins-quiet")
+
+      signal = %{
+        reason: :system_event,
+        metadata: %{
+          feature: "memory",
+          agent_id: agent.id,
+          agent_slug: agent.slug,
+          responsibility_key: "memory.daily_summary",
+          trigger_kind: :cron,
+          task_id: nil
+        }
+      }
+
+      assert :ok = AgentResponder.respond(signal)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "attention",
+                       payload: payload
+                     },
+                     1500
+
+      # Positive control first: this is a real delivered envelope, so the
+      # refutes below are about absence rather than about nothing arriving.
+      assert payload.signal.responsibility_key == "memory.daily_summary"
+      assert payload.signal.agent_id == agent.id
+
+      refute Map.has_key?(payload, :message)
+      refute Map.has_key?(payload, :history)
+      refute Map.has_key?(payload, :context)
+      refute Map.has_key?(payload.signal, :prompt)
+
+      # A nil id in metadata still produces NO key rather than a nil one —
+      # `maybe_put/3`'s contract, which is what keeps "absent" meaningful.
+      refute Map.has_key?(payload.signal, :task_id)
+    end
+
+    test "an empty-string prompt does not vary the envelope shape" do
+      {agent, topic} = federated_runtime("higgins-empty")
+
+      # `maybe_put/3` only drops nil, so an empty prompt DOES reach the signal
+      # as `prompt: ""`. The envelope is unchanged by that: still bare, with
+      # the emptiness visible at `signal.prompt` where a client can see it,
+      # rather than smuggled into a second body key.
+      signal = %{
+        reason: :system_event,
+        metadata: %{
+          feature: "memory",
+          agent_id: agent.id,
+          agent_slug: agent.slug,
+          responsibility_key: "memory.dreaming",
+          trigger_kind: :cron,
+          prompt: ""
+        }
+      }
+
+      assert :ok = AgentResponder.respond(signal)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "attention",
+                       payload: payload
+                     },
+                     1500
+
+      assert payload.signal.prompt == ""
+      refute Map.has_key?(payload, :message)
+    end
+
+    test "the lifted correlation whitelist is exactly the Router's native trigger scalars" do
+      # Pin, not restate. These two lists diverging is precisely how an id ends
+      # up reaching a runtime on the chat path and not on the responsibility
+      # path — the asymmetry that made two independently written clients wrong.
+      assert AgentResponder.correlation_id_keys() ==
+               Platform.Responsibilities.Router.native_trigger_scalar_keys()
+
+      # Control against the pin passing trivially on two empty lists, and
+      # against `space_id` creeping in later.
+      assert AgentResponder.correlation_id_keys() == [:task_id, :plan_id, :stage_id, :project_id]
+      refute :space_id in AgentResponder.correlation_id_keys()
     end
 
     test "federated agent with offline runtime dead-letters instead of crashing" do
