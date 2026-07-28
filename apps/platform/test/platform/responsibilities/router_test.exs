@@ -624,93 +624,643 @@ defmodule Platform.Responsibilities.RouterTest do
     end
   end
 
-  # ── M6 stage 3: event_topic + webhook trigger wiring ────────────────────
+  # ── event_topic delivery (task 019fa56b-c81f stage 1) ───────────────────
+  #
+  # These tests previously drove the Router with `{topic_string, payload}`
+  # — an envelope NO publisher in this codebase emits. They were green
+  # against a Router that delivered nothing in production: every
+  # `event_topic` subscription was dead because Phoenix.PubSub withholds
+  # the topic, so the atom-headed messages real publishers send never
+  # matched `subscribed_topics`. They are now driven through the REAL
+  # publisher (`Platform.Meetings.PubSub.broadcast_meeting_finished/2`)
+  # so the test breaks if the publisher's envelope ever drifts, with one
+  # test retained on the topic-as-head shape to keep that clause covered.
 
-  describe "event_topic PubSub subscription" do
-    test "broadcast to subscribed topic fires the matching responsibility" do
-      topic = "routertest:event_#{System.unique_integer([:positive])}"
-      key = "routertest.event_fire_#{System.unique_integer([:positive])}"
+  describe "event_topic delivery via the production publisher" do
+    # Test seam — point the dispatcher's injected Req client at a named
+    # stub so the positive-control test can reach gather_context/2.
+    setup do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, :router_external_dispatch_test})
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+      end)
+
+      :ok
+    end
+
+    test "broadcast_meeting_finished/2 fires the responsibility WITH the published payload" do
+      # POSITIVE CONTROL: it is not enough that nothing crashed. Assert
+      # the handler ran AND received the exact payload the publisher
+      # sent, tagged as an :event_topic fire on the declared topic.
+      feature_str = "router_evt_probe_#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(responsibility, meta) do
+            send(unquote(test_pid), {:event_fire, responsibility.key, meta})
+            {:ok, %{}}
+          end
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.finished_#{System.unique_integer([:positive])}"
 
       row =
         insert!(%{
           key: key,
+          feature: feature_str,
+          trigger_kind: "event_topic",
+          trigger_config: %{
+            "topic" => "meeting:finished",
+            "event_match" => "meeting_finished"
+          }
+        })
+
+      _agent = wire_external_assignee(key)
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      {pid, _name} = start_router()
+      Req.Test.allow(:router_external_dispatch_test, self(), pid)
+
+      room_id = "room-#{System.unique_integer([:positive])}"
+      transcript_id = "transcript-#{System.unique_integer([:positive])}"
+      space_id = "space-#{System.unique_integer([:positive])}"
+
+      capture_log([level: :info], fn ->
+        # The REAL publisher — do not hand-roll the envelope.
+        :ok =
+          Platform.Meetings.PubSub.broadcast_meeting_finished(room_id, %{
+            transcript_id: transcript_id,
+            room_id: room_id,
+            space_id: space_id
+          })
+
+        assert_receive {:event_fire, ^key, meta}, 1_000
+
+        assert meta.kind == :event_topic
+        assert meta.topic == "meeting:finished"
+        assert meta.payload.transcript_id == transcript_id
+        assert meta.payload.room_id == room_id
+        assert meta.payload.space_id == space_id
+      end)
+
+      assert row.trigger_config["event_match"] == "meeting_finished"
+    end
+
+    test "every responsibility sharing a topic + event_match fires on one broadcast" do
+      row_a =
+        insert!(%{
+          key: "routertest.fanin_a_#{System.unique_integer([:positive])}",
+          trigger_kind: "event_topic",
+          trigger_config: %{
+            "topic" => "meeting:finished",
+            "event_match" => "meeting_finished"
+          }
+        })
+
+      row_b =
+        insert!(%{
+          key: "routertest.fanin_b_#{System.unique_integer([:positive])}",
+          trigger_kind: "event_topic",
+          trigger_config: %{
+            "topic" => "meeting:finished",
+            "event_match" => "meeting_finished"
+          }
+        })
+
+      {_pid, _name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          :ok =
+            Platform.Meetings.PubSub.broadcast_meeting_finished("room-fanin", %{
+              transcript_id: "t-fanin"
+            })
+
+          :timer.sleep(80)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row_a.key}"
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row_b.key}"
+    end
+
+    test "broadcast_transcript_chunk/2 fires the transcript_chunk family, not meeting_finished" do
+      # The second event_topic family, proving event_match actually
+      # DISCRIMINATES rather than firing every subscribed row on any
+      # atom-headed message.
+      chunk_row =
+        insert!(%{
+          key: "routertest.chunk_#{System.unique_integer([:positive])}",
+          trigger_kind: "event_topic",
+          trigger_config: %{
+            "topic" => "meeting:transcript_chunk",
+            "event_match" => "transcript_chunk"
+          }
+        })
+
+      finished_row =
+        insert!(%{
+          key: "routertest.finished_#{System.unique_integer([:positive])}",
+          trigger_kind: "event_topic",
+          trigger_config: %{
+            "topic" => "meeting:finished",
+            "event_match" => "meeting_finished"
+          }
+        })
+
+      {_pid, _name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          :ok =
+            Platform.Meetings.PubSub.broadcast_transcript_chunk("room-chunk", %{
+              room_id: "room-chunk",
+              transcript_id: "t-chunk",
+              segment: %{text: "hello"},
+              meeting_id: nil
+            })
+
+          :timer.sleep(80)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{chunk_row.key}"
+      refute log =~ "[ResponsibilityRouter] unfilled responsibility=#{finished_row.key}"
+    end
+
+    test "a matching event_match on an unsubscribed topic does NOT fire" do
+      # A row whose trigger_config carries no `topic` is never subscribed
+      # at boot (`subscribe_event_topics/1` rejects the nil), so the
+      # `subscribed_topics` conjunct must keep it inert even though its
+      # event name matches. The changeset forbids that shape today, so
+      # insert the struct directly — this simulates a malformed row
+      # already sitting in the table, which is exactly the case the
+      # conjunct defends against.
+      #
+      # The sibling row's presence is what makes the absence meaningful:
+      # a test asserting only the refute would also pass if the adapter
+      # were reverted and nothing fired at all.
+      orphan =
+        Repo.insert!(%Platform.Responsibilities.Responsibility{
+          key: "routertest.orphan_#{System.unique_integer([:positive])}",
+          feature: "routertest",
+          trigger_kind: "event_topic",
+          trigger_config: %{"event_match" => "meeting_finished"},
+          scope: "global",
+          context_provided: [],
+          output_contract: %{"summary" => "string"},
+          default_prompt_template: "routertest.v1",
+          cost_profile: "low_freq_capable"
+        })
+
+      wired =
+        insert!(%{
+          key: "routertest.wired_#{System.unique_integer([:positive])}",
+          trigger_kind: "event_topic",
+          trigger_config: %{
+            "topic" => "meeting:finished",
+            "event_match" => "meeting_finished"
+          }
+        })
+
+      {_pid, _name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          :ok =
+            Platform.Meetings.PubSub.broadcast_meeting_finished("room-orphan", %{
+              transcript_id: "t-orphan"
+            })
+
+          :timer.sleep(80)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{wired.key}"
+      refute log =~ "[ResponsibilityRouter] unfilled responsibility=#{orphan.key}"
+    end
+
+    test "an unrelated atom-headed message reaching the mailbox fires nothing" do
+      # Guards the other direction of the adapter change: matching on
+      # the event name must not turn the Router into something that
+      # fires on any 2-tuple that lands in its inbox.
+      wired =
+        insert!(%{
+          key: "routertest.inbox_#{System.unique_integer([:positive])}",
+          trigger_kind: "event_topic",
+          trigger_config: %{
+            "topic" => "meeting:finished",
+            "event_match" => "meeting_finished"
+          }
+        })
+
+      {pid, _name} = start_router()
+
+      quiet =
+        capture_log([level: :info], fn ->
+          send(pid, {:some_unrelated_event, %{}})
+
+          Phoenix.PubSub.broadcast(
+            Platform.PubSub,
+            "routertest:nobody_listens_#{System.unique_integer([:positive])}",
+            {:meeting_finished, %{transcript_id: "t-nope"}}
+          )
+
+          :timer.sleep(60)
+        end)
+
+      refute quiet =~ "[ResponsibilityRouter] unfilled responsibility"
+      assert Process.alive?(pid)
+
+      # …and the Router is still capable of firing, which is what makes
+      # the two silences above evidence rather than vacuity.
+      loud =
+        capture_log([level: :info], fn ->
+          :ok =
+            Platform.Meetings.PubSub.broadcast_meeting_finished("room-inbox", %{
+              transcript_id: "t-inbox"
+            })
+
+          :timer.sleep(80)
+        end)
+
+      assert loud =~ "[ResponsibilityRouter] unfilled responsibility=#{wired.key}"
+    end
+
+    test "topic-as-head envelope still fires (router.ex binary-head clause)" do
+      # Retained coverage for the `{topic_string, payload}` shape. No
+      # publisher emits it today; the clause exists for a future one.
+      topic = "routertest:event_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: "routertest.event_fire_#{System.unique_integer([:positive])}",
           trigger_kind: "event_topic",
           trigger_config: %{"topic" => topic}
         })
 
       {_pid, _name} = start_router()
 
-      # No assignee on the row — fire_trigger will hit the unfilled
-      # branch which logs "[ResponsibilityRouter] unfilled
-      # responsibility=…", giving us a deterministic dispatch marker
-      # without needing to stand up Roles + Agents.
       log =
         capture_log([level: :info], fn ->
           Phoenix.PubSub.broadcast(Platform.PubSub, topic, {topic, %{hello: "world"}})
-          # Let the GenServer drain the inbound info message.
           :timer.sleep(50)
         end)
 
       assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row.key}"
     end
 
-    test "broadcast to a topic with no matching responsibility is a no-op" do
-      # Insert an event responsibility on topic A so the router has at
-      # least one subscription wired; broadcast on topic B (unrelated).
-      configured_topic = "routertest:event_#{System.unique_integer([:positive])}"
-      _other_topic = "routertest:unrelated_#{System.unique_integer([:positive])}"
+    test "a broadcast-driven meetings.summarize dispatch CLAIMS the transcript and still persists" do
+      # Task 019fa56b-c81f stage 2, end-to-end over the real publisher:
+      # the broadcast reaches the Router (stage 1), the Router dispatches
+      # `meetings.summarize`, the claim is taken on the way in, and — the
+      # part that matters — the WINNER's own summary still lands. A claim
+      # placed after the dispatch (e.g. in `handle_output/3`) would block
+      # the winner's write here and silently lose the summary.
+      {:ok, transcript} =
+        Platform.Meetings.create_transcript(%{
+          room_id: "room-claim-#{System.unique_integer([:positive])}",
+          status: "processing",
+          segments: [
+            %{
+              "participant_identity" => "user_1",
+              "speaker_name" => "Harper",
+              "text" => "We agreed to ship the adapter fix.",
+              "start_time" => 0,
+              "end_time" => 3000,
+              "final" => true
+            }
+          ]
+        })
 
-      insert!(%{
-        key: "routertest.event_other_#{System.unique_integer([:positive])}",
-        trigger_kind: "event_topic",
-        trigger_config: %{"topic" => configured_topic}
-      })
+      assert is_nil(transcript.router_dispatched_at)
+
+      _row =
+        insert!(%{
+          key: "meetings.summarize",
+          feature: "meetings",
+          trigger_kind: "event_topic",
+          trigger_config: %{
+            "topic" => "meeting:finished",
+            "event_match" => "meeting_finished"
+          },
+          scope: "per_meeting",
+          context_provided: ["org_identity", "recent_journal", "meeting_transcript"]
+        })
+
+      _agent = wire_external_assignee("meetings.summarize")
+
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        Req.Test.json(conn, %{
+          "choices" => [
+            %{
+              "message" => %{
+                "role" => "assistant",
+                "content" => "Broadcast summary."
+              }
+            }
+          ]
+        })
+      end)
+
+      handler_id = "router-claim-fired-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :fired],
+        fn _e, _m, metadata, _c -> send(test_pid, {:responsibility_fired, metadata[:key]}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
 
       {pid, _name} = start_router()
+      Req.Test.allow(:router_external_dispatch_test, self(), pid)
+
+      :ok =
+        Platform.Meetings.PubSub.broadcast_meeting_finished(transcript.room_id, %{
+          transcript_id: transcript.id,
+          room_id: transcript.room_id,
+          space_id: nil
+        })
+
+      assert_receive {:responsibility_fired, "meetings.summarize"}, 2_000
+      refute_receive {:responsibility_fired, "meetings.summarize"}, 200
+
+      reloaded = Platform.Meetings.get_transcript(transcript.id)
+      assert %DateTime{} = reloaded.router_dispatched_at
+      assert reloaded.status == "complete"
+      assert reloaded.summary == "Broadcast summary."
+    end
+  end
+
+  # ── declared-inert rows (task 019fa56b-c81f stage 4) ─────────────────────
+  #
+  # A row carrying `metadata["status"] == "placeholder"` is registered
+  # but deliberately not dispatchable. Every test below pairs the
+  # ABSENCE of a placeholder fire with the PRESENCE of a sibling fire in
+  # the same trigger: an assertion that only refutes would pass just as
+  # happily against a Router that delivered nothing at all, which is
+  # precisely the defect stage 1 of this task fixed.
+
+  describe "placeholder responsibilities are skipped at fire time" do
+    @placeholder_log "[ResponsibilityRouter] placeholder responsibility="
+
+    test "one meeting:finished broadcast fires meetings.action_items but NOT meetings.attendance_followup" do
+      # Driven off the handlers' OWN `register/0` specs, not hand-built
+      # rows: if either module's metadata declaration changes, this test
+      # changes verdict rather than quietly testing a stale fixture.
+      [action_items_spec] = Platform.Responsibilities.Handlers.MeetingActionItems.register()
+
+      [followup_spec] =
+        Platform.Responsibilities.Handlers.MeetingAttendanceFollowup.register()
+
+      {:ok, action_items} = Responsibilities.upsert_by_key(action_items_spec)
+      {:ok, followup} = Responsibilities.upsert_by_key(followup_spec)
+
+      # Both are enabled and both subscribe the same topic with the same
+      # event_match — the ONLY thing separating them is the metadata.
+      assert action_items.enabled and followup.enabled
+      assert action_items.trigger_config == followup.trigger_config
+      refute Map.has_key?(action_items.metadata, "dispatch")
+      assert followup.metadata["dispatch"] == "inert"
+
+      {_pid, _name} = start_router()
 
       log =
         capture_log([level: :info], fn ->
-          Phoenix.PubSub.broadcast(
-            Platform.PubSub,
-            "routertest:nobody_listens_#{System.unique_integer([:positive])}",
-            {:some_unrelated_event, %{}}
-          )
+          :ok =
+            Platform.Meetings.PubSub.broadcast_meeting_finished("room-placeholder", %{
+              transcript_id: "t-placeholder",
+              room_id: "room-placeholder",
+              space_id: nil
+            })
 
-          :timer.sleep(30)
+          :timer.sleep(80)
         end)
 
-      # Nothing should have fired — no unfilled log, no crash.
-      refute log =~ "[ResponsibilityRouter] unfilled responsibility"
-      assert Process.alive?(pid)
+      # POSITIVE CONTROL — the sibling got past the gate to assignee
+      # resolution on this very broadcast.
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=meetings.action_items"
+
+      # …which is what makes this absence mean "refused", not "nothing ran".
+      refute log =~ "[ResponsibilityRouter] unfilled responsibility=meetings.attendance_followup"
+
+      # And the refusal is stated, not merely silent.
+      assert log =~ @placeholder_log <> "meetings.attendance_followup — declared inert"
     end
 
-    test "multiple responsibilities on the same topic all fire" do
-      topic = "routertest:fanout_#{System.unique_integer([:positive])}"
-
-      row_a =
+    test "the skip is driven by METADATA, not by key name" do
+      # Two throwaway keys with nothing `meetings.`-ish about them, on
+      # one topic, differing only in metadata.
+      inert =
         insert!(%{
-          key: "routertest.fanout_a_#{System.unique_integer([:positive])}",
+          key: "routertest.inert_#{System.unique_integer([:positive])}",
           trigger_kind: "event_topic",
-          trigger_config: %{"topic" => topic}
+          trigger_config: %{
+            "topic" => "meeting:finished",
+            "event_match" => "meeting_finished"
+          },
+          metadata: %{"owner" => "routertest", "dispatch" => "inert"}
         })
 
-      row_b =
+      live =
         insert!(%{
-          key: "routertest.fanout_b_#{System.unique_integer([:positive])}",
+          key: "routertest.live_#{System.unique_integer([:positive])}",
           trigger_kind: "event_topic",
-          trigger_config: %{"topic" => topic}
+          trigger_config: %{
+            "topic" => "meeting:finished",
+            "event_match" => "meeting_finished"
+          },
+          metadata: %{"owner" => "routertest", "status" => "active"}
         })
 
       {_pid, _name} = start_router()
 
       log =
         capture_log([level: :info], fn ->
-          Phoenix.PubSub.broadcast(Platform.PubSub, topic, {topic, %{}})
+          :ok =
+            Platform.Meetings.PubSub.broadcast_meeting_finished("room-meta", %{
+              transcript_id: "t-meta"
+            })
+
+          :timer.sleep(80)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{live.key}"
+      refute log =~ "[ResponsibilityRouter] unfilled responsibility=#{inert.key}"
+      assert log =~ @placeholder_log <> inert.key
+    end
+
+    test "fire_trigger/3 returns {:ok, :placeholder} — a distinct tag, above assignee resolution" do
+      unassigned =
+        insert!(%{
+          key: "routertest.placeholder_direct_#{System.unique_integer([:positive])}",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          metadata: %{"owner" => "routertest", "dispatch" => "inert"}
+        })
+
+      capture_log([level: :info], fn ->
+        assert {:ok, :placeholder} = Router.fire_trigger(unassigned, %{kind: :cron})
+
+        # Identical struct, one field changed in memory — same key, same
+        # trigger, same everything else — and the outcome flips. Nothing
+        # about the key name is doing the work.
+        active = %{unassigned | metadata: %{"owner" => "routertest"}}
+        assert {:ok, :unfilled} = Router.fire_trigger(active, %{kind: :cron})
+      end)
+
+      # …and `:placeholder` is not `:unfilled` wearing a different hat:
+      # with an assignee genuinely resolvable, the gate still refuses,
+      # which is only possible because it sits above
+      # `Roles.assignee_for/1`.
+      assigned_key = "routertest.placeholder_assigned_#{System.unique_integer([:positive])}"
+
+      assigned =
+        insert!(%{
+          key: assigned_key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          metadata: %{"owner" => "routertest", "dispatch" => "inert"}
+        })
+
+      _agent = wire_external_assignee(assigned_key)
+      assert Router.responsibility_filled?(assigned_key)
+
+      log =
+        capture_log([level: :info], fn ->
+          assert {:ok, :placeholder} = Router.fire_trigger(assigned, %{kind: :cron})
+        end)
+
+      assert log =~ @placeholder_log <> assigned_key
+      refute log =~ "[ResponsibilityRouter] unfilled responsibility=#{assigned_key}"
+
+      # ADR-0046: nothing was attempted, so this is not a failed step.
+      assert Responsibilities.outcome({:ok, :placeholder}) == :not_applicable
+    end
+
+    test "the gate is trigger-kind agnostic — a placeholder WEBHOOK row is inert too" do
+      # The skip lives in the one funnel every trigger kind passes
+      # through, so it cannot be forgotten by a second dispatch path.
+      path = "/hooks/placeholder_#{System.unique_integer([:positive])}"
+
+      inert =
+        insert!(%{
+          key: "routertest.hook_inert_#{System.unique_integer([:positive])}",
+          trigger_kind: "webhook",
+          trigger_config: %{"path" => path},
+          metadata: %{"dispatch" => "inert"}
+        })
+
+      live =
+        insert!(%{
+          key: "routertest.hook_live_#{System.unique_integer([:positive])}",
+          trigger_kind: "webhook",
+          trigger_config: %{"path" => path}
+        })
+
+      {_pid, name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok = WebhookRouter.notify(path, %{"event" => "test"}, router: name)
           :timer.sleep(50)
         end)
 
-      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row_a.key}"
-      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row_b.key}"
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{live.key}"
+      refute log =~ "[ResponsibilityRouter] unfilled responsibility=#{inert.key}"
+      assert log =~ @placeholder_log <> inert.key
+    end
+
+    test "`status: \"placeholder\"` alone does NOT stop a row firing" do
+      # THE REGRESSION THIS GATE ALMOST SHIPPED. Stage 4's brief
+      # specified vetoing on `metadata["status"] == "placeholder"`.
+      # Eleven registered rows already carry that marker with a
+      # different meaning — "registered ahead of its own runtime,
+      # grep-able by an operator" — and seven of them dispatch today.
+      # `meetings.intent_classify` is one, and its delivery is exactly
+      # what stage 1 of this task repaired, so a status-keyed veto would
+      # have re-broken it in the same PR that fixed it.
+      [intent_spec] = Platform.Responsibilities.Handlers.IntentClassify.register()
+      {:ok, intent} = Responsibilities.upsert_by_key(intent_spec)
+
+      # The premise: this row really does declare `status: "placeholder"`.
+      assert intent.metadata["status"] == "placeholder"
+      refute Map.has_key?(intent.metadata, "dispatch")
+
+      {_pid, _name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          :ok =
+            Platform.Meetings.PubSub.broadcast_transcript_chunk("room-status-marker", %{
+              room_id: "room-status-marker",
+              transcript_id: "t-status-marker",
+              segment: %{text: "hello"},
+              meeting_id: nil
+            })
+
+          :timer.sleep(80)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=meetings.intent_classify"
+      refute log =~ @placeholder_log <> "meetings.intent_classify"
+    end
+
+    test "every registered provider row that fires today still has no dispatch veto" do
+      # Guards the blast radius from the other end: exactly ONE
+      # registered responsibility may declare `dispatch: "inert"`. If a
+      # future edit sprays the marker across the `status: "placeholder"`
+      # rows — the mistake this stage's brief invited — this fails.
+      inert_keys =
+        Platform.Responsibilities.BuiltIns.providers()
+        |> Enum.flat_map(& &1.register())
+        |> Enum.filter(&(Map.get(&1[:metadata] || %{}, "dispatch") == "inert"))
+        |> Enum.map(& &1[:key])
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      assert inert_keys == ["meetings.attendance_followup"]
+
+      # …and the `status: "placeholder"` population is genuinely large,
+      # which is what makes the assertion above load-bearing rather than
+      # a restatement of a one-row table.
+      placeholder_keys =
+        Platform.Responsibilities.BuiltIns.providers()
+        |> Enum.flat_map(& &1.register())
+        |> Enum.filter(&(Map.get(&1[:metadata] || %{}, "status") == "placeholder"))
+        |> Enum.map(& &1[:key])
+
+      assert length(placeholder_keys) > 5
+      assert "meetings.intent_classify" in placeholder_keys
+      assert "meetings.attendance_followup" in placeholder_keys
     end
   end
 

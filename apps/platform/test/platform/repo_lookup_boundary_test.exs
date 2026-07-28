@@ -248,8 +248,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/files.ex", :get!, "~q:File", 1, :safe_internal,
      "Files.get_file!/2 checks Platform.UUID.valid?/1 and raises Ecto.NoResultsError — its documented miss exception — rather than Ecto.Query.CastError"},
     # ── Meetings ───────────────────────────────────────────────────────
-    {"platform/meetings.ex", :platform_uuid_guard, "-", 8, :safe_internal,
-     "cast_identity/2 now uses Platform.UUID.cast/1, so a 16-byte LiveKit webhook identity suffix yields :unknown instead of a fabricated user_id/agent_id FK; the remaining guards cover get_meeting/1, get_room/1, get_transcript/1, get_transcript_with_segments/1, the two recording lookups and resolve_agent/1"},
+    {"platform/meetings.ex", :platform_uuid_guard, "-", 9, :safe_internal,
+     "cast_identity/2 now uses Platform.UUID.cast/1, so a 16-byte LiveKit webhook identity suffix yields :unknown instead of a fabricated user_id/agent_id FK; the remaining guards cover get_meeting/1, get_room/1, get_transcript/1, get_transcript_with_segments/1, the two recording lookups, resolve_agent/1, and claim_router_dispatch/1 (019fa56b-c81f stage 2), whose transcript_id arrives inside a meeting:finished PubSub payload and must answer {:error, :no_such_transcript} rather than raise on the Router's dispatch path"},
     {"platform/meetings.ex", :get, "Agent", 1, :safe_internal,
      "the one remaining call is inside resolve_agent/1, which checks Platform.UUID.valid?/1 and falls back to Repo.get_by(Agent, slug:). generate_agent_token/3, dispatch_meeting_join/3 and dismiss_agent/2 all route through it"},
     {"platform/meetings.ex", :get, "Meeting", 1, :safe_internal,

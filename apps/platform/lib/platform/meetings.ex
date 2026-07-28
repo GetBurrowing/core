@@ -1932,6 +1932,104 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  Atomically **claim** the `meeting:finished` router dispatch for a
+  transcript. Task 019fa56b-c81f stage 2.
+
+  One conditional statement — `UPDATE meeting_transcripts SET
+  router_dispatched_at = now() WHERE id = $1 AND router_dispatched_at IS
+  NULL` — so exactly one caller can ever observe the NULL → timestamp
+  transition for a given row.
+
+  ## Why this exists
+
+  A meeting end produces TWO independent dispatch decisions for
+  `meetings.summarize`: `PlatformWeb.LivekitWebhookController`
+  `maybe_trigger_summary/1` calls `Summarizer.summarize_async/1` (whose
+  `run_summary/1` fires the responsibility directly) *and* broadcasts
+  `meeting:finished`, which — since task 019fa56b-c81f stage 1 repaired
+  the Router's event_topic adapter — also fires it. Left alone that is
+  two external dispatches, two LLM round-trips, and two
+  `complete_transcript/2` writes racing on one row.
+
+  ## Why a conditional UPDATE and not read-then-write
+
+  The two dispatch paths run in different processes (the webhook's
+  `Task.Supervisor` child vs the Router GenServer), so a
+  `get_transcript/1` + `if is_nil(...)` + `stamp_router_dispatched/1`
+  sequence would interleave and both callers would see NULL. A single
+  guarded statement is already atomic under the row lock Postgres takes
+  for the UPDATE — no advisory lock, no GenServer serialization point,
+  and no change to the semantics
+  `Platform.Meetings.SummarizerSweeper` reads off the same column.
+
+  ## Return contract
+
+    * `{:ok, :claimed}` — this caller won; it owns the dispatch.
+    * `{:error, :already_dispatched}` — the row exists and somebody
+      else already claimed it. The caller must NOT dispatch, and must
+      not substitute a fallback either: the winner is handling it.
+    * `{:error, :no_such_transcript}` — no row with that id, or the id
+      is not even a UUID.
+
+  The third value is deliberately distinct from the second even though
+  `update_all` answers `0` for both. Collapsing them would make a
+  deleted or typo'd transcript id look like a healthy dedupe and
+  silently suppress a dispatch nobody is actually handling — the same
+  "two situations, one value" defect class `Platform.Responsibilities.Providers`
+  was written to kill.
+
+  Note this is the FIRST production writer of `router_dispatched_at`:
+  `stamp_router_dispatched/1` has no `lib/` call site, so the column has
+  been NULL for every row and `SummarizerSweeper`'s stall-recovery
+  branch has never been reachable. Taking the claim finally arms it.
+
+  Unlike `stamp_router_dispatched/1`, this never re-stamps — the losing
+  racer must not reset the sweeper's stall clock.
+  """
+  @spec claim_router_dispatch(term()) ::
+          {:ok, :claimed} | {:error, :already_dispatched | :no_such_transcript}
+  def claim_router_dispatch(transcript_id) when is_binary(transcript_id) do
+    # `meeting_transcripts.id` is a UUIDv7 custom type: querying it with
+    # a free-form string raises Ecto.Query.CastError. This function sits
+    # on a dispatch path that must never raise, so a malformed id is
+    # answered, not thrown. `Platform.UUID.valid?/1` and NOT a bare
+    # `Ecto.UUID.cast/1` — the transcript_id arrives inside a PubSub
+    # trigger payload an operator or a future publisher can shape, and
+    # any 16-character binary clears a cast-only guard and still raises
+    # inside Repo (see Platform.UUID's moduledoc).
+    if Platform.UUID.valid?(transcript_id) do
+      do_claim_router_dispatch(transcript_id)
+    else
+      {:error, :no_such_transcript}
+    end
+  end
+
+  def claim_router_dispatch(_), do: {:error, :no_such_transcript}
+
+  defp do_claim_router_dispatch(transcript_id) do
+    {count, _} =
+      from(t in Transcript,
+        where: t.id == ^transcript_id and is_nil(t.router_dispatched_at)
+      )
+      |> Repo.update_all(set: [router_dispatched_at: DateTime.utc_now()])
+
+    case count do
+      1 ->
+        {:ok, :claimed}
+
+      0 ->
+        # Disambiguate the two zero-row causes. Not racy in a way that
+        # matters: an id that has no row now never will (ids are minted
+        # at insert), so this read can only turn "no row" into "no row".
+        if Repo.exists?(from(t in Transcript, where: t.id == ^transcript_id)) do
+          {:error, :already_dispatched}
+        else
+          {:error, :no_such_transcript}
+        end
+    end
+  end
+
+  @doc """
   Return every `%Transcript{}` whose status is `"processing"` and whose
   `router_dispatched_at` is older than `stall_window_ms` milliseconds
   ago. Used by `Platform.Meetings.SummarizerSweeper` to identify router
@@ -2229,6 +2327,63 @@ defmodule Platform.Meetings do
         content_type: "system",
         content: String.trim(content),
         metadata: %{"source" => "meeting_summarizer", "transcript_id" => transcript_id}
+      }
+
+      case Platform.Chat.post_message(attrs) do
+        {:ok, _message} -> :ok
+        {:error, reason} -> {:error, {:post_failed, reason}}
+      end
+    end
+  end
+
+  @doc """
+  Post a meeting's extracted action items as a system message to the space
+  (task 019fa56b-c81f stage 3).
+
+  Modelled on `post_summary_to_space/3` — same space resolution
+  (`ExecutionSpace.ensure_system_participant/1`), same message-insert path
+  (`Platform.Chat.post_message/1`), same `{:error, reason}` shape — because
+  this is the delivery surface for `meetings.action_items`, whose handler
+  previously extracted the items and threw them away.
+
+  The items render as a markdown checklist under a short header. There is
+  no `meeting_transcripts.action_items` column and this function does not
+  add one: the space post IS the delivery the seeded
+  `meetings.action_items.v1` prompt template promises the model.
+  Persistence, if ever wanted, is additive on top of this.
+
+  An empty list is a caller error rather than a no-op here — a meeting with
+  no action items is a legitimate outcome, but the decision not to post is
+  the caller's to make (see `MeetingActionItems.handle_output/3`), so this
+  function refuses rather than silently inserting an empty checklist.
+  """
+  @doc since: "task 019fa56b-c81f stage 3"
+  @spec post_action_items_to_space(String.t(), String.t(), [String.t()]) ::
+          :ok | {:error, term()}
+  def post_action_items_to_space(space_id, transcript_id, [])
+      when is_binary(space_id) and is_binary(transcript_id),
+      do: {:error, :no_items}
+
+  def post_action_items_to_space(space_id, transcript_id, items)
+      when is_binary(space_id) and is_binary(transcript_id) and is_list(items) do
+    checklist = Enum.map_join(items, "\n", fn item -> "- [ ] #{String.trim(item)}" end)
+
+    content = """
+    **Action Items**
+
+    #{checklist}
+
+    [Full transcript](/api/transcripts/#{transcript_id}/download)
+    """
+
+    with {:ok, participant} <-
+           Platform.Orchestration.ExecutionSpace.ensure_system_participant(space_id) do
+      attrs = %{
+        space_id: space_id,
+        participant_id: participant.id,
+        content_type: "system",
+        content: String.trim(content),
+        metadata: %{"source" => "meeting_action_items", "transcript_id" => transcript_id}
       }
 
       case Platform.Chat.post_message(attrs) do

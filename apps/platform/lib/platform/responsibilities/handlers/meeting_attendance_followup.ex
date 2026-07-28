@@ -19,12 +19,79 @@ defmodule Platform.Responsibilities.Handlers.MeetingAttendanceFollowup do
     * `context_provided` — `["org_identity", "meeting_transcript"]`
     * `output_contract` — `%{"followups" => "list[string]"}`
 
+  ## DECLARED INERT — `metadata["dispatch"] == "inert"`
+
+  This key is registered but deliberately **not dispatchable** (task
+  `019fa56b-c81f` stage 4). The Router refuses to fire any row whose
+  `metadata["dispatch"]` is `"inert"`
+  (`Platform.Responsibilities.Router.fire_trigger/3`), so with the
+  event_topic adapter repaired in stage 1 this key stays silent on
+  every `meeting:finished` broadcast while its siblings fire.
+
+  ### Why `dispatch` and not `status`
+
+  The stage brief specified gating on `metadata["status"] == "placeholder"`.
+  That is NOT safe: eleven rows already carry that marker
+  (`meetings.intent_classify`, `tasks.triage`, `tasks.weekly_review`,
+  `tasks.unblock`, the three `design.*` keys, the four `security.*` keys)
+  and for them it means "registered ahead of its own runtime, grep-able
+  by an operator" — NOT "never dispatch". Seven of them fire today, and
+  `meetings.intent_classify` is the transcript-chunk key this task's
+  stage 1 just repaired. A Router veto keyed on `status` would silently
+  re-break it.
+
+  `Platform.Responsibilities.Reachability` (sibling task 019fa510) reads
+  the same field and is explicit about the distinction: it names its
+  output `declared_inert?` rather than `inert?` because "it reports what
+  the row *declares*". So this row keeps `status: "placeholder"` — which
+  earns the `declared_inert_reason: :placeholder_status` classification
+  there for free — and adds a separate, single-meaning `dispatch: "inert"`
+  that the Router enforces. Both live in `metadata`, so both propagate
+  (see below).
+
+  ### Why inert rather than shipped
+
+  Its output contract is not currently satisfiable. The seeded prompt
+  (`priv/repo/migrations/20260703120200_seed_prompt_templates_meeting_scribe.exs:42`)
+  promises "short follow-ups for expected attendees who did not join",
+  which needs an EXPECTED-attendee set diffed against actual joiners.
+  Both halves exist in pieces — `Platform.Meetings.MeetingNotifier`
+  derives invitees as chat-space user participants minus the host, and
+  `Platform.Meetings.active_participants_for_space/1` gives joiners —
+  but nothing assembles them into a context slot: `gather_context/2`
+  below returns `%{}`, `context_provided` declares no attendance slot,
+  and there is no delivery surface for a per-absentee follow-up (unlike
+  action items, which post to the meeting space). Firing anyway would
+  dispatch a model with no attendance data to answer a question about
+  attendance, and bill for it once per meeting.
+
+  ### Why `metadata` and not `enabled: false`
+
+  `Platform.Responsibilities.@upsert_replace_fields` deliberately
+  EXCLUDES `enabled` — that is operator territory, preserved across
+  upserts so admin-UI toggles survive redeploys. A code-only
+  `enabled: false` here would therefore be a guaranteed no-op against
+  the row already sitting in production. `metadata` IS in the replace
+  list, so this declaration propagates on the next boot's
+  `upsert_by_key/1`.
+
+  The row also stays `enabled: true` and keeps its assignee, so role
+  resolution does not silently rot while the key waits.
+
+  ### How to re-enable
+
+  Delete `"dispatch" => "inert"` from `register/0` below — a deliberate
+  source edit in the same file as the `handle_output/3` that must first
+  be implemented, not a config toggle someone can flip without reading
+  the handler.
+
   ## Output handling
 
-  Registration-only handler for the M8 stage 3 wiring pass — mirrors
-  `MeetingActionItems`. Downstream side-effects (send DMs to absent
-  attendees, post to chat, etc.) land in a follow-up ticket;
-  `handle_output` is a benign log-and-return-`:ok`.
+  `handle_output/3` returns `{:error, :not_implemented}`. If this key
+  ever does fire — a placeholder declaration removed without the work,
+  or a direct `fire_trigger/3` call in a test — the outcome is recorded
+  as a FAILURE rather than a success, so ADR-0046's `outcome/1` maps it
+  to `:failed` instead of quietly reporting a complete step.
 
   ## Wildcard-topic note
 
@@ -64,7 +131,18 @@ defmodule Platform.Responsibilities.Handlers.MeetingAttendanceFollowup do
         output_contract: %{"followups" => "list[string]"},
         default_prompt_template: "meetings.attendance_followup.v1",
         cost_profile: "low_freq_capable",
-        metadata: %{"owner" => "platform.meetings"}
+        # `dispatch: "inert"` is read DIRECTLY by
+        # `Router.fire_trigger/3` and is the ONLY thing that stops this
+        # row firing. `status: "placeholder"` is the pre-existing
+        # operator/reporting marker eleven other rows already carry and
+        # is NOT a dispatch veto — see the moduledoc for why these are
+        # two fields, and for why both are metadata and not
+        # `enabled: false`.
+        metadata: %{
+          "owner" => "platform.meetings",
+          "status" => "placeholder",
+          "dispatch" => "inert"
+        }
       }
     ]
   end
@@ -84,12 +162,14 @@ defmodule Platform.Responsibilities.Handlers.MeetingAttendanceFollowup do
       when is_map(trigger_meta) do
     followups = extract_followups(parsed)
 
-    Logger.info(
-      "[meetings.attendance_followup] received #{length(followups)} followup(s) " <>
-        "responsibility=#{responsibility.key} trigger_kind=#{inspect(Map.get(trigger_meta, :kind))}"
+    Logger.warning(
+      "[meetings.attendance_followup] fired while DECLARED INERT — " <>
+        "received #{length(followups)} followup(s) responsibility=#{responsibility.key} " <>
+        "trigger_kind=#{inspect(Map.get(trigger_meta, :kind))}; the attendance context " <>
+        "chain is not built, so the output is discarded and the fire is recorded as failed"
     )
 
-    :ok
+    {:error, :not_implemented}
   end
 
   # ── internals ─────────────────────────────────────────────────────────────

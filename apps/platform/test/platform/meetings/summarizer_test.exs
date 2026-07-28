@@ -608,6 +608,303 @@ defmodule Platform.Meetings.SummarizerTest do
     end
   end
 
+  # ── task 019fa56b-c81f stage 2 — one dispatch per transcript ────────────
+  #
+  # Stage 1 repaired the Router's event_topic adapter, so the
+  # `meeting:finished` broadcast that `LivekitWebhookController`
+  # `maybe_trigger_summary/1` emits now reaches the Router AND fires
+  # `meetings.summarize`. The same controller call also runs
+  # `Summarizer.summarize_async/1`, whose `run_summary/1` fires
+  # `meetings.summarize` directly (summarizer.ex:101). Two dispatch
+  # decisions, two processes, one transcript. These tests pin that
+  # exactly one of them survives.
+  describe "meeting:finished dispatch is claimed once per transcript" do
+    alias Platform.Repo
+    alias Platform.Responsibilities.Router, as: RespRouter
+
+    @claim_legacy_api_key_env "SUMMARIZER_CLAIM_ANTHROPIC_KEY"
+    @fired_event [:platform, :responsibility, :fired]
+
+    setup do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      # config/test.exs pins the logger to :warning, so the dedupe's
+      # Logger.info lines would never reach capture_log otherwise.
+      Logger.put_module_level(Platform.Meetings.Summarizer, :info)
+      Logger.put_module_level(Platform.Responsibilities.Handlers.MeetingSummarize, :info)
+
+      on_exit(fn ->
+        Logger.delete_module_level(Platform.Meetings.Summarizer)
+        Logger.delete_module_level(Platform.Responsibilities.Handlers.MeetingSummarize)
+      end)
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, :summarizer_external_dispatch_test})
+      )
+
+      System.put_env(@claim_legacy_api_key_env, "sk-summarizer-claim")
+      previous_summary_cfg = Application.get_env(:platform, :meetings_summary)
+
+      Application.put_env(:platform, :meetings_summary, %{
+        provider: :anthropic,
+        model: "claude-claim-test",
+        api_key_env: @claim_legacy_api_key_env,
+        max_tokens: 2048,
+        temperature: 0.3
+      })
+
+      Application.put_env(
+        :platform,
+        :anthropic_req_client,
+        Req.new(plug: {Req.Test, :summarizer_legacy_llm_test})
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+        Application.delete_env(:platform, :anthropic_req_client)
+        System.delete_env(@claim_legacy_api_key_env)
+
+        if previous_summary_cfg do
+          Application.put_env(:platform, :meetings_summary, previous_summary_cfg)
+        else
+          Application.delete_env(:platform, :meetings_summary)
+        end
+      end)
+
+      :ok
+    end
+
+    # Count dispatches exactly. `[:platform, :responsibility, :fired]` is
+    # emitted once per successful dispatch (router.ex emit_fired_telemetry),
+    # so the collected list length IS the dispatch count.
+    defp attach_fired_telemetry!(test_pid) do
+      handler_id = "summarizer-claim-fired-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        @fired_event,
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:responsibility_fired, metadata[:key]})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+      :ok
+    end
+
+    defp collect(tag, acc \\ []) do
+      receive do
+        {^tag, value} -> collect(tag, [value | acc])
+      after
+        250 -> Enum.reverse(acc)
+      end
+    end
+
+    # A per-transcript marker that survives into the rendered prompt, so
+    # "exactly one dispatch" can be checked for IDENTITY and not just
+    # arity. `[:platform, :responsibility, :fired]` metadata carries only
+    # key/feature/dispatch_kind/agent_slug — no transcript_id — so the
+    # dispatched request body is the honest identity channel.
+    defp marked_segments(marker) do
+      [
+        %{
+          "participant_identity" => "user_1",
+          "speaker_name" => "Harper",
+          "text" => "The single agenda item is #{marker}.",
+          "start_time" => 0,
+          "end_time" => 3000,
+          "language" => "en",
+          "final" => true
+        }
+      ]
+    end
+
+    defp stub_external_summary!(test_pid) do
+      Req.Test.stub(:summarizer_external_dispatch_test, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:external_dispatch, body})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "choices" => [
+              %{
+                "message" => %{
+                  "role" => "assistant",
+                  "content" =>
+                    Jason.encode!(%{"summary" => "Router summary.", "action_items" => []})
+                }
+              }
+            ]
+          })
+        )
+      end)
+    end
+
+    # The envelope the Router's event_topic fan-out hands to
+    # `fire_trigger/3` after stage 1's adapter fix. Driving `fire/2` with
+    # it exercises the identical dispatch pipeline without a second
+    # PubSub hop — `router_test.exs` covers broadcast -> fire_trigger,
+    # and this file covers fire_trigger -> exactly-one-dispatch.
+    defp fire_as_router(transcript) do
+      RespRouter.fire("meetings.summarize", %{
+        kind: :event_topic,
+        topic: "meeting:finished",
+        payload: %{transcript_id: transcript.id, space_id: transcript.space_id}
+      })
+    end
+
+    test "POSITIVE CONTROL — both paths, one transcript, EXACTLY ONE dispatch carrying its id" do
+      _name = start_registry!()
+      _agent = wire_external_scribe!()
+      assert RespRouter.responsibility_filled?("meetings.summarize")
+
+      test_pid = self()
+      stub_legacy_llm!(test_pid)
+      stub_external_summary!(test_pid)
+      attach_fired_telemetry!(test_pid)
+
+      marker = "MARKER-#{System.unique_integer([:positive])}"
+      transcript = create_transcript!(%{segments: marked_segments(marker), space_id: nil})
+      assert is_nil(transcript.router_dispatched_at)
+
+      # Path A — the Summarizer's direct bridge fire (summarizer.ex:101).
+      assert :ok = Summarizer.run_summary(transcript)
+
+      claimed_at = Meetings.get_transcript(transcript.id).router_dispatched_at
+      assert %DateTime{} = claimed_at
+
+      # Path B — the broadcast the Router now actually delivers.
+      capture_log([level: :info], fn ->
+        assert {:error, {:context_gather_refused, :already_dispatched}} =
+                 fire_as_router(transcript)
+      end)
+
+      # 1. COUNT. Not `<= 1` — zero is the trivially-passing answer and
+      #    is precisely the pre-stage-1 regression.
+      assert collect(:responsibility_fired) == ["meetings.summarize"]
+
+      # 2. IDENTITY. The one dispatch carried THIS transcript's content.
+      assert [body] = collect(:external_dispatch)
+      assert body =~ marker
+
+      # 3. The loser never reached the LLM at all — the claim is taken
+      #    BEFORE the round-trip, not after it.
+      # 4. And it did not silently divert into the legacy body.
+      refute_receive :legacy_llm_called, 200
+
+      # 5. router_dispatched_at moved nil -> non-nil exactly once; the
+      #    losing path did not re-stamp it.
+      assert DateTime.compare(
+               Meetings.get_transcript(transcript.id).router_dispatched_at,
+               claimed_at
+             ) == :eq
+    end
+
+    test "the claim is PER ROW — a second, different transcript still dispatches" do
+      _name = start_registry!()
+      _agent = wire_external_scribe!()
+
+      test_pid = self()
+      stub_legacy_llm!(test_pid)
+      stub_external_summary!(test_pid)
+      attach_fired_telemetry!(test_pid)
+
+      marker_one = "FIRST-#{System.unique_integer([:positive])}"
+      marker_two = "SECOND-#{System.unique_integer([:positive])}"
+      one = create_transcript!(%{segments: marked_segments(marker_one), space_id: nil})
+      two = create_transcript!(%{segments: marked_segments(marker_two), space_id: nil})
+
+      capture_log([level: :info], fn ->
+        assert :ok = Summarizer.run_summary(one)
+        assert {:error, {:context_gather_refused, :already_dispatched}} = fire_as_router(one)
+
+        assert :ok = Summarizer.run_summary(two)
+        assert {:error, {:context_gather_refused, :already_dispatched}} = fire_as_router(two)
+      end)
+
+      # Two transcripts, two dispatches — the claim is a per-row latch,
+      # not a global one that suppresses everything after the first.
+      assert collect(:responsibility_fired) == ["meetings.summarize", "meetings.summarize"]
+
+      assert [body_one, body_two] = collect(:external_dispatch)
+      assert body_one =~ marker_one
+      assert body_two =~ marker_two
+
+      refute is_nil(Meetings.get_transcript(one.id).router_dispatched_at)
+      refute is_nil(Meetings.get_transcript(two.id).router_dispatched_at)
+    end
+
+    test "a lost claim returns :ok and does NOT fall through to the legacy body" do
+      # THE SUBTLE BRANCH. `{:ok, :unfilled}` / `{:ok, :unknown_responsibility}`
+      # mean nobody is producing a summary, so they MUST run the legacy
+      # body (ADR-0046 member 1). A lost claim means the OTHER dispatch
+      # path is producing it, so running legacy here would be the double
+      # summary this stage exists to prevent.
+      _name = start_registry!()
+      _agent = wire_external_scribe!()
+      assert RespRouter.responsibility_filled?("meetings.summarize")
+
+      test_pid = self()
+      stub_legacy_llm!(test_pid)
+      stub_external_summary!(test_pid)
+      attach_fired_telemetry!(test_pid)
+
+      transcript = create_transcript!(%{segments: sample_segments()})
+
+      # Simulate the Router's broadcast path having won the race first.
+      assert {:ok, :claimed} = Meetings.claim_router_dispatch(transcript.id)
+
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok = Summarizer.run_summary(transcript)
+        end)
+
+      # Both halves of the refusal are visible: the handler declined
+      # before the round-trip, and the bridge chose NOT to fall back.
+      assert log =~ "[meetings.summarize] dispatch for transcript #{transcript.id} was already"
+      assert log =~ "already claimed by the router's meeting:finished path"
+      assert log =~ "NOT falling back to the legacy body"
+
+      # The legacy seam is wired and reachable in this test — it simply
+      # was not used. Same shape as the ADR-0046 positive control.
+      refute_receive :legacy_llm_called, 200
+      assert collect(:external_dispatch) == []
+      assert collect(:responsibility_fired) == []
+
+      # Not marked failed: this is a healthy dedupe, not an error.
+      refute Meetings.get_transcript(transcript.id).status == "failed"
+    end
+
+    test "CONTRAST — an unfilled responsibility STILL runs the legacy body" do
+      # Without this, the previous test's "legacy did not run" would also
+      # be satisfied by a bridge that never runs the legacy body at all.
+      _name = start_registry!()
+      refute RespRouter.responsibility_filled?("meetings.summarize")
+
+      test_pid = self()
+      stub_legacy_llm!(test_pid)
+      attach_fired_telemetry!(test_pid)
+
+      transcript = create_transcript!(%{segments: sample_segments()})
+
+      capture_log([level: :warning], fn ->
+        assert {:error, {:llm_failed, _}} = Summarizer.run_summary(transcript)
+      end)
+
+      assert_receive :legacy_llm_called
+
+      # And an unfilled responsibility never takes the claim — the
+      # transcript stays available for a later router dispatch.
+      assert is_nil(Repo.reload!(transcript).router_dispatched_at)
+    end
+  end
+
   # ── task 019f2570 stage 2 — legacy path max_tokens regression (bug 2) ──
   describe "Config.summary/0 max_tokens (legacy fallback)" do
     test "Config.summary().max_tokens stays 2048 — external dispatch changes MUST NOT touch this" do

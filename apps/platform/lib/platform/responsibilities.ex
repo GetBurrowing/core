@@ -302,10 +302,13 @@ defmodule Platform.Responsibilities do
       accepted, not that the agent responded (see
       `Platform.Responsibilities.Router` moduledoc, "Honesty limit").
     * `{:ok, :unfilled}` — the row exists but no agent holds it.
+    * `{:ok, :placeholder}` — the row declares
+      `metadata["dispatch"] == "inert"` and is deliberately not
+      dispatchable yet; nothing was attempted.
     * `{:ok, :unknown_responsibility}` — no row is seeded for the key.
     * `{:error, term}` — an assignee existed and the dispatch failed.
 
-  The two middle values are progressive-enhancement states, NOT
+  The three middle values are progressive-enhancement states, NOT
   failures; `{:error, _}` is a real failure. Use `outcome/1` to collapse
   them onto the ADR-0046 vocabulary rather than re-deriving the mapping.
 
@@ -338,6 +341,8 @@ defmodule Platform.Responsibilities do
       :complete
       iex> Platform.Responsibilities.outcome({:ok, :unfilled})
       :not_applicable
+      iex> Platform.Responsibilities.outcome({:ok, :placeholder})
+      :not_applicable
       iex> Platform.Responsibilities.outcome({:ok, :unknown_responsibility})
       :not_applicable
       iex> Platform.Responsibilities.outcome({:error, {:dispatch_failed, :timeout}})
@@ -369,6 +374,11 @@ defmodule Platform.Responsibilities do
   @spec outcome(term()) :: :complete | :not_applicable | :failed
   def outcome({:ok, :dispatched}), do: :complete
   def outcome({:ok, :unfilled}), do: :not_applicable
+  # A declared-inert row (`metadata["dispatch"] == "inert"`) never
+  # reached a dispatch, so the step did not fail — there was nothing
+  # applicable to do. Mapping it to `:failed` would report a broken step
+  # for a key the codebase deliberately has not finished.
+  def outcome({:ok, :placeholder}), do: :not_applicable
   def outcome({:ok, :unknown_responsibility}), do: :not_applicable
   def outcome({:error, _reason}), do: :failed
 end

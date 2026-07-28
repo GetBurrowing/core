@@ -263,6 +263,70 @@ defmodule Platform.MeetingsTest do
     end
   end
 
+  describe "claim_router_dispatch/1 (task 019fa56b-c81f stage 2)" do
+    test "first claim wins — {:ok, :claimed} and nil -> non-nil transition" do
+      transcript = create_processing_transcript()
+      assert is_nil(transcript.router_dispatched_at)
+
+      before = DateTime.utc_now()
+      assert {:ok, :claimed} = Meetings.claim_router_dispatch(transcript.id)
+      later = DateTime.utc_now()
+
+      reloaded = Meetings.get_transcript(transcript.id)
+      assert %DateTime{} = reloaded.router_dispatched_at
+      assert DateTime.compare(reloaded.router_dispatched_at, before) in [:eq, :gt]
+      assert DateTime.compare(reloaded.router_dispatched_at, later) in [:eq, :lt]
+    end
+
+    test "second claim loses and does NOT move the timestamp" do
+      transcript = create_processing_transcript()
+
+      assert {:ok, :claimed} = Meetings.claim_router_dispatch(transcript.id)
+      first = Meetings.get_transcript(transcript.id).router_dispatched_at
+
+      Process.sleep(2)
+
+      assert {:error, :already_dispatched} = Meetings.claim_router_dispatch(transcript.id)
+      second = Meetings.get_transcript(transcript.id).router_dispatched_at
+
+      # This is the whole difference from `stamp_router_dispatched/1`,
+      # which re-stamps unconditionally: the claim is a one-way latch,
+      # so the sweeper's stall clock keeps measuring from the FIRST
+      # dispatch rather than being reset by a losing racer.
+      assert DateTime.compare(second, first) == :eq
+    end
+
+    test "an unknown (but well-formed) id is :no_such_transcript, NOT :already_dispatched" do
+      # `update_all` answers 0 for both "somebody already claimed it"
+      # and "there is no such row". Collapsing them would make a typo'd
+      # or deleted transcript id look like a healthy dedupe and silently
+      # suppress a dispatch that nobody is actually handling.
+      assert {:error, :no_such_transcript} =
+               Meetings.claim_router_dispatch(Ecto.UUID.generate())
+    end
+
+    test "a non-UUID id is :no_such_transcript rather than a raised cast error" do
+      # `meeting_transcripts.id` is a UUIDv7 custom type; querying it
+      # with a free-form string raises Ecto.Query.CastError. The claim
+      # sits on a dispatch path that must never raise.
+      assert {:error, :no_such_transcript} = Meetings.claim_router_dispatch("not-a-uuid")
+      assert {:error, :no_such_transcript} = Meetings.claim_router_dispatch(nil)
+    end
+
+    test "the claim is PER ROW — a claimed transcript does not latch a different one" do
+      claimed = create_processing_transcript()
+      other = create_processing_transcript()
+
+      assert {:ok, :claimed} = Meetings.claim_router_dispatch(claimed.id)
+      assert {:error, :already_dispatched} = Meetings.claim_router_dispatch(claimed.id)
+
+      # The point of the assertion: the guard is `WHERE id = $1 AND
+      # router_dispatched_at IS NULL`, not a process-wide latch.
+      assert {:ok, :claimed} = Meetings.claim_router_dispatch(other.id)
+      refute is_nil(Meetings.get_transcript(other.id).router_dispatched_at)
+    end
+  end
+
   describe "list_stalled_router_dispatches/1 (task 019f2566 stage 2)" do
     defp create_stalled_transcript(offset_ms) do
       {:ok, transcript} =

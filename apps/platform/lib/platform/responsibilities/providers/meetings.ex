@@ -135,6 +135,16 @@ defmodule Platform.Responsibilities.Providers.Meetings do
       Handlers.MeetingSummarize ->
         MeetingSummarize.gather_context(responsibility, normalize_meta(ctx))
 
+      # Task 019fa56b-c81f e2e fix — `MeetingActionItems` now gathers the
+      # transcript itself (it previously returned `{:ok, %{}}`), so it
+      # needs the same meta normalisation: an operator's flat
+      # `Router.fire(:meetings_action_items, %{transcript_id: ...})` has
+      # to reach the handler's `:payload` accessor the same way an
+      # event_topic broadcast does. `normalize_meta/1` is a no-op when
+      # `:payload` is already present, which is the router-fired case.
+      Handlers.MeetingActionItems ->
+        MeetingActionItems.gather_context(responsibility, normalize_meta(ctx))
+
       handler ->
         handler.gather_context(responsibility, ctx)
     end
@@ -176,11 +186,26 @@ defmodule Platform.Responsibilities.Providers.Meetings do
 
   The Router stuffs the fired `Responsibility` into the context under
   `:__responsibility__` before calling us so we can dispatch by key.
-  We route summariser keys to `MeetingSummarize.build_prompt/1`;
-  everything else (e.g. `meetings.intent_classify`) short-circuits to
+  We route summariser keys to `MeetingSummarize.build_prompt/1` and —
+  as of task 019fa56b-c81f's e2e fix — `meetings.action_items` to
+  `MeetingActionItems.build_prompt/1`; everything else (e.g.
+  `meetings.intent_classify`) short-circuits to
   `{:error, :no_build_prompt}` so the Router's fallback catch drops us
   back onto the legacy template render path — the pre-019f2570
   behaviour, verbatim.
+
+  ## Why `meetings.action_items` could not stay on the fallback
+
+  The legacy render path renders `default_prompt_template` against the
+  context. `meetings.action_items.v1` is not seeded, so the render
+  produced the template NAME and the dispatcher sent it as the entire
+  user turn. Captured live during the 019fa57b-4544 e2e run:
+
+      messages == [{"role":"user","content":"meetings.action_items.v1"}]
+
+  The transcript never reached the model. Routing the key to a real
+  builder is the fix; seeding the template would be a second, redundant
+  one, and the summariser precedent is the builder.
   """
   @impl true
   @spec build_prompt(map()) ::
@@ -188,6 +213,7 @@ defmodule Platform.Responsibilities.Providers.Meetings do
   def build_prompt(context) when is_map(context) do
     case handler_for(Map.get(context, :__responsibility__)) do
       Handlers.MeetingSummarize -> MeetingSummarize.build_prompt(context)
+      Handlers.MeetingActionItems -> MeetingActionItems.build_prompt(context)
       _ -> {:error, :no_build_prompt}
     end
   end

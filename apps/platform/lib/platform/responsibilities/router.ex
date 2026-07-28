@@ -95,10 +95,11 @@ defmodule Platform.Responsibilities.Router do
   ## Fire outcomes (ADR-0046)
 
   `fire_trigger/2,3` returns `t:fire_outcome/0` —
-  `{:ok, :dispatched} | {:ok, :unfilled} | {:error, term()}` — so a caller
-  can tell "nobody holds this responsibility" apart from "the dispatch
-  died". ADR-0046 requires a per-step `not_applicable | complete | failed`
-  and those two states used to be the same `:ok`.
+  `{:ok, :dispatched} | {:ok, :unfilled} | {:ok, :placeholder} | {:error, term()}`
+  — so a caller can tell "nobody holds this responsibility" apart from
+  "the dispatch died". ADR-0046 requires a per-step
+  `not_applicable | complete | failed` and those two states used to be the
+  same `:ok`.
 
   `fire/2` (key lookup) adds a fourth value on top of that union:
   `{:ok, :unknown_responsibility}` when no row is seeded for the key. It
@@ -127,7 +128,7 @@ defmodule Platform.Responsibilities.Router do
   alias Platform.Responsibilities.{ContextGatherer, Cron, Providers, Responsibility}
 
   @typedoc """
-  The three outcomes `fire_trigger/3` distinguishes (ADR-0046).
+  The outcomes `fire_trigger/3` distinguishes (ADR-0046).
 
     * `{:ok, :dispatched}` — an assignee was resolved and the dispatch was
       handed off (external: an HTTP response was parsed; native/federated:
@@ -135,6 +136,12 @@ defmodule Platform.Responsibilities.Router do
     * `{:ok, :unfilled}` — no agent holds the responsibility. A normal,
       expected system state under the ADR-0041 progressive-enhancement
       contract, NOT a failure. Maps to the ADR's `not_applicable`.
+    * `{:ok, :placeholder}` — the row declares
+      `metadata["dispatch"] == "inert"`, i.e. it is registered but
+      deliberately not dispatchable yet. Nothing was attempted, so this
+      is `not_applicable`, not `failed`; it gets its own tag rather than
+      reusing `:unfilled` because an assignee may well exist — what is
+      missing is the handler's downstream half, not a role holder.
     * `{:error, term()}` — an assignee existed and the dispatch died.
       Maps to the ADR's `failed`.
 
@@ -143,7 +150,8 @@ defmodule Platform.Responsibilities.Router do
   is why the unfilled case lives in the ok channel with its own tag rather
   than sharing a bare `:ok` with success.
   """
-  @type fire_outcome :: {:ok, :dispatched} | {:ok, :unfilled} | {:error, term()}
+  @type fire_outcome ::
+          {:ok, :dispatched} | {:ok, :unfilled} | {:ok, :placeholder} | {:error, term()}
 
   @default_check_interval_ms :timer.seconds(60)
 
@@ -421,10 +429,12 @@ defmodule Platform.Responsibilities.Router do
     {:noreply, state}
   end
 
-  # PubSub broadcasts arrive as a 2-tuple `{topic, payload}` from any
-  # publisher that uses our convention (see `Platform.Org.Wiki` etc.).
-  # Only fan out if the topic was actually subscribed at boot — otherwise
-  # the message is for someone else who happens to share our process tree.
+  # Topic-as-head envelope: `{topic_string, payload}`. No publisher in
+  # this codebase currently emits this shape — the clause is retained
+  # for any future publisher that wants to name its topic in the
+  # message — so only fan out if the topic was actually subscribed at
+  # boot, otherwise the message belongs to someone else who happens to
+  # share our process tree.
   @impl GenServer
   def handle_info({topic, payload}, state)
       when is_binary(topic) do
@@ -435,14 +445,17 @@ defmodule Platform.Responsibilities.Router do
     {:noreply, state}
   end
 
+  # Event-as-head envelope: `{:some_event, payload}`. This is what every
+  # real publisher in the app emits (`Platform.Meetings.PubSub`,
+  # `Platform.Org.Wiki`, …). Phoenix.PubSub does NOT deliver the topic
+  # alongside the message, so the atom here is the EVENT NAME, never the
+  # topic — matching it against `subscribed_topics` (as this clause used
+  # to) compares `:meeting_finished` to `"meeting:finished"` and can
+  # never succeed. Route on the responsibility's declared
+  # `trigger_config["event_match"]` instead; see `config_event_match/1`.
   @impl GenServer
-  def handle_info({topic, payload}, state) when is_atom(topic) and not is_nil(topic) do
-    topic_str = Atom.to_string(topic)
-
-    if MapSet.member?(state.subscribed_topics, topic_str) do
-      fire_event_topic(topic_str, payload, state)
-    end
-
+  def handle_info({event, payload}, state) when is_atom(event) and not is_nil(event) do
+    fire_event_match(Atom.to_string(event), payload, state)
     {:noreply, state}
   end
 
@@ -523,15 +536,37 @@ defmodule Platform.Responsibilities.Router do
   # carried as trigger_meta (the Provider's gather_context/2 reads it
   # from there).
   defp fire_event_topic(topic, payload, state) when is_binary(topic) do
-    matches =
-      Enum.filter(state.by_trigger.event_topics, fn responsibility ->
-        config_topic(responsibility) == topic
-      end)
+    state.by_trigger.event_topics
+    |> Enum.filter(&(config_topic(&1) == topic))
+    |> fire_matches(payload, state)
+  end
 
+  # Look up event-topic responsibilities whose declared `event_match`
+  # equals the inbound event name.
+  #
+  # The `subscribed_topics` conjunct is load-bearing, not belt-and-
+  # braces: it preserves the guarantee that we only ever fire for topics
+  # we actually subscribed at boot. Without it, an atom-headed message
+  # that merely happens to reach our mailbox (we share a process tree,
+  # and the chat telemetry forward already sends us one) could fire a
+  # responsibility subscribed to a completely different topic.
+  defp fire_event_match(event_name, payload, state) when is_binary(event_name) do
+    state.by_trigger.event_topics
+    |> Enum.filter(fn responsibility ->
+      config_event_match(responsibility) == event_name and
+        MapSet.member?(state.subscribed_topics, config_topic(responsibility))
+    end)
+    |> fire_matches(payload, state)
+  end
+
+  # Shared fan-out for both delivery envelopes. `topic` in trigger_meta
+  # is always the topic the responsibility DECLARED, which for the
+  # topic-as-head path is by construction the delivery topic too.
+  defp fire_matches(matches, payload, state) when is_list(matches) do
     Enum.each(matches, fn responsibility ->
       fire_trigger(
         responsibility,
-        %{kind: :event_topic, topic: topic, payload: payload},
+        %{kind: :event_topic, topic: config_topic(responsibility), payload: payload},
         state
       )
     end)
@@ -539,6 +574,24 @@ defmodule Platform.Responsibilities.Router do
 
   defp config_topic(%Responsibility{trigger_config: config}) do
     Map.get(config, "topic") || Map.get(config, :topic)
+  end
+
+  # The event-name half of the event_topic delivery contract: the atom
+  # a publisher puts at the head of its `{event, payload}` message,
+  # spelled as a string (e.g. `"meeting_finished"` for
+  # `Platform.Meetings.PubSub.broadcast_meeting_finished/2`).
+  #
+  # AMBIGUITY, deliberately accepted here and constrained elsewhere:
+  # because Phoenix.PubSub withholds the topic on delivery, we cannot
+  # tell which subscription a message arrived through. Two
+  # responsibilities on DIFFERENT topics that declare the SAME
+  # `event_match` will therefore both fire on either broadcast. Same-
+  # topic sharing is correct fan-in (three `meetings.*` rows share
+  # `meeting_finished` on `meeting:finished`); cross-topic sharing is a
+  # declaration bug, and is forbidden by an assertion in
+  # `test/platform/responsibilities/event_topic_delivery_test.exs`.
+  defp config_event_match(%Responsibility{trigger_config: config}) do
+    Map.get(config, "event_match") || Map.get(config, :event_match)
   end
 
   defp config_path(%Responsibility{trigger_config: config}) do
@@ -869,7 +922,16 @@ defmodule Platform.Responsibilities.Router do
   @doc """
   Fire a trigger through the canonical pipeline.
 
-  Looks up the assignee via `Platform.Roles.assignee_for/1`, then:
+  Short-circuits FIRST on a declared-inert row — if
+  `metadata["dispatch"] == "inert"` the fire is logged and skipped
+  before any assignee lookup, returning `{:ok, :placeholder}`. See
+  `dispatch_inert?/1` below for why the gate lives in this funnel, why
+  it reads `metadata` rather than `enabled`, and why it is NOT keyed on
+  `metadata["status"] == "placeholder"` (eleven rows carry that marker
+  and seven of them fire today).
+
+  Otherwise looks up the assignee via `Platform.Roles.assignee_for/1`,
+  then:
 
     * if no agent is assigned → telemetry
       `[:platform, :responsibility, :unfilled]` + info log, returns
@@ -898,6 +960,7 @@ defmodule Platform.Responsibilities.Router do
 
     * `{:ok, :dispatched}` — handed off
     * `{:ok, :unfilled}` — nobody holds the responsibility
+    * `{:ok, :placeholder}` — the row is declared inert; nothing attempted
     * `{:error, reason}` — an assignee existed and the dispatch died
 
   Failure modes (HTTP error, contract violation, provider refusal, a
@@ -933,6 +996,66 @@ defmodule Platform.Responsibilities.Router do
   @spec fire_trigger(Responsibility.t(), map(), map()) :: fire_outcome()
   def fire_trigger(%Responsibility{} = responsibility, trigger_meta, _state)
       when is_map(trigger_meta) do
+    if dispatch_inert?(responsibility) do
+      Logger.info(
+        "[ResponsibilityRouter] placeholder responsibility=#{responsibility.key} " <>
+          "— declared inert (metadata.dispatch=inert), not dispatching"
+      )
+
+      {:ok, :placeholder}
+    else
+      do_fire_trigger(responsibility, trigger_meta)
+    end
+  end
+
+  # A row that declares `metadata["dispatch"] == "inert"` is registered
+  # but deliberately not dispatchable: its handler's downstream half
+  # does not exist yet, so firing it would spend a model round-trip on
+  # output nothing consumes. `Handlers.MeetingAttendanceFollowup` is
+  # the first and currently only such row — see its moduledoc for the
+  # argument.
+  #
+  # WHY THIS GATE IS HERE and not in each caller: the check sits above
+  # assignee resolution in the ONE funnel every trigger kind passes
+  # through, so an inert row stays inert on cron ticks, webhooks, chat
+  # patterns, event_topic broadcasts, and direct `fire/2` calls alike —
+  # there is no second path that forgets.
+  #
+  # WHY THE METADATA FIELD IS READ DIRECTLY: `metadata` is in
+  # `Platform.Responsibilities.@upsert_replace_fields` while `enabled`
+  # is deliberately NOT (it is operator territory, preserved across
+  # upserts so admin-UI toggles survive redeploys). So a provider
+  # declaring `enabled: false` in `register/0` would be a guaranteed
+  # no-op against an existing production row, whereas a metadata
+  # declaration propagates on the next boot's `upsert_by_key/1`.
+  #
+  # WHY `"dispatch"` AND NOT `metadata["status"] == "placeholder"`,
+  # which is what task 019fa56b-c81f stage 4 originally specified:
+  # eleven rows already carry `status: "placeholder"` and for them it
+  # means "registered ahead of its own runtime, grep-able by an
+  # operator" — NOT "never fire". Seven of them dispatch today
+  # (`tasks.triage` and `tasks.weekly_review` on cron; `tasks.unblock`
+  # and the three `design.*` keys on chat_pattern;
+  # `meetings.intent_classify` on `meeting:transcript_chunk`, whose
+  # delivery stage 1 of that same task had just repaired). Vetoing on
+  # `status` would have silently re-broken all seven.
+  # `Platform.Responsibilities.Reachability` (sibling task 019fa510)
+  # reads the same field and is explicit about the distinction — it
+  # names its output `declared_inert?` rather than `inert?` because it
+  # reports what the row DECLARES. So inert rows keep
+  # `status: "placeholder"` (earning `declared_inert_reason:
+  # :placeholder_status` there for free) and additionally declare
+  # `dispatch: "inert"`, which has exactly one meaning and exactly one
+  # reader: this function. We do NOT call into Reachability — it is not
+  # on `main`, and the Router must not take a runtime dependency on a
+  # reporting surface.
+  defp dispatch_inert?(%Responsibility{metadata: metadata}) when is_map(metadata) do
+    (Map.get(metadata, "dispatch") || Map.get(metadata, :dispatch)) == "inert"
+  end
+
+  defp dispatch_inert?(%Responsibility{}), do: false
+
+  defp do_fire_trigger(%Responsibility{} = responsibility, trigger_meta) do
     try do
       assignee = safe_assignee_for(responsibility.key)
 

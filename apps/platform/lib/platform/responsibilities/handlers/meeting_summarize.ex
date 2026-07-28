@@ -138,6 +138,49 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
     ]
   end
 
+  @doc """
+  Gather the summary context — and, first, **claim the dispatch**
+  (task 019fa56b-c81f stage 2).
+
+  ## Why the claim lives here
+
+  A meeting end produces two independent decisions to dispatch
+  `meetings.summarize` for the same transcript: `Summarizer.run_summary/1`
+  fires the responsibility directly (summarizer.ex:101), and the
+  `meeting:finished` broadcast fires it through the Router's event_topic
+  fan-out (live since stage 1 repaired the adapter). The two run in
+  different processes.
+
+  Those two paths diverge above `Router.fire_trigger/3` — `fire/2` for
+  the bridge, `fire_matches/3` for the broadcast — and reconverge in
+  `dispatch_assignee/4`, whose FIRST act is
+  `gather_context_via_provider/3`. This callback is therefore the only
+  point both paths cross *before* the external dispatch, which makes it
+  the only placement where the claim kills the duplicate LLM round-trip
+  and not merely the duplicate write. The Router already treats a
+  non-`{:ok, map}` return here as "do not dispatch" (see the ONE RULE
+  comment on `Router.gather_context_via_provider/3`), so refusing is an
+  existing, documented provider power rather than a new seam.
+
+  Placing it in `handle_output/3` instead — after the model has already
+  answered — would be strictly worse in two ways: the losing path would
+  still have burned a full dispatch, and the WINNER would then lose its
+  own claim at persist time and drop the summary on the floor, which is
+  exactly the silent-summary-loss bug ADR-0046 member 1 fixed.
+
+  A refusal surfaces to `Summarizer.run_summary/1` as
+  `{:error, {:context_gather_refused, :already_dispatched}}`; that
+  function has a dedicated clause for it precisely because it must NOT
+  be treated like the other error shapes that fall back to the legacy
+  body.
+
+  A missing/absent transcript id is NOT a refusal — `nil` means the
+  trigger carried no transcript at all, and `:no_such_transcript` means
+  the row is gone. Neither is "somebody else is handling it", so both
+  proceed and are handled downstream (`gather_transcript/1` marks the
+  slot `missing?: true` and `build_prompt/1` then refuses on empty
+  text), preserving the pre-stage behaviour for those cases.
+  """
   @impl true
   def gather_context(%Responsibility{} = _responsibility, ctx) when is_map(ctx) do
     payload = Map.get(ctx, :payload) || %{}
@@ -146,7 +189,8 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
 
     base_opts = if workspace_id, do: [workspace_id: workspace_id], else: []
 
-    with {:ok, %{org_identity: identity}} <-
+    with :ok <- claim_dispatch(transcript_id),
+         {:ok, %{org_identity: identity}} <-
            ContextProviders.gather_context(:org_identity, base_opts),
          {:ok, %{recent_journal: journal}} <-
            ContextProviders.gather_context(:recent_journal, base_opts),
@@ -171,6 +215,35 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
   end
 
   def gather_context(_responsibility, _ctx), do: {:ok, %{}}
+
+  # See the `gather_context/2` doc above for the argument. Only a lost
+  # race stops the dispatch; "no transcript in the trigger" and "that
+  # transcript row is gone" are not dedupe outcomes and must not be
+  # dressed up as one.
+  defp claim_dispatch(nil), do: :ok
+
+  defp claim_dispatch(transcript_id) do
+    case Meetings.claim_router_dispatch(transcript_id) do
+      {:ok, :claimed} ->
+        :ok
+
+      {:error, :already_dispatched} ->
+        Logger.info(
+          "[meetings.summarize] dispatch for transcript #{transcript_id} was already " <>
+            "claimed — refusing this duplicate before the model round-trip"
+        )
+
+        {:error, :already_dispatched}
+
+      {:error, :no_such_transcript} ->
+        Logger.warning(
+          "[meetings.summarize] no transcript row for id=#{inspect(transcript_id)} — " <>
+            "dispatching unclaimed"
+        )
+
+        :ok
+    end
+  end
 
   defp gather_transcript(nil) do
     {:ok, %{meeting_transcript: %{transcript_id: nil, missing?: true, formatted_text: ""}}}

@@ -102,6 +102,19 @@ defmodule Platform.Meetings.Summarizer do
   dispatch — an assigned external agent whose endpoint is down, say —
   was indistinguishable from a successful one and the meeting summary
   was silently lost.
+
+  ## The one error shape that must NOT fall back (019fa56b-c81f stage 2)
+
+  `{:error, {:context_gather_refused, :already_dispatched}}` is the
+  exception to the paragraph above. It means
+  `Handlers.MeetingSummarize.gather_context/2` lost the atomic claim on
+  `meeting_transcripts.router_dispatched_at` to the OTHER dispatch path
+  for this same meeting end — the `meeting:finished` broadcast, which
+  the Router has actually delivered since stage 1 repaired its
+  event_topic adapter. Somebody IS producing the summary, so this
+  clause returns `:ok` and stops. Running the legacy body here would
+  produce the duplicate summary and the duplicate
+  `complete_transcript/2` write that the claim exists to prevent.
   """
   def run_summary(%{id: id, space_id: space_id, segments: segments} = _transcript) do
     if router_meetings_summarize_filled?() do
@@ -141,6 +154,33 @@ defmodule Platform.Meetings.Summarizer do
         # the error channel into the ok channel. It is close to unreachable
         # in practice — the gate already required the row to exist WITH an
         # assignee — but it is a real state and it gets the real answer.
+        # ── Task 019fa56b-c81f stage 2 — LOST CLAIM, NOT A FAILURE ──
+        #
+        # `Handlers.MeetingSummarize.gather_context/2` takes an atomic
+        # claim on `meeting_transcripts.router_dispatched_at` before the
+        # model round-trip. This shape means the OTHER dispatch path for
+        # this same meeting end — the `meeting:finished` broadcast the
+        # Router has delivered since stage 1 repaired its event_topic
+        # adapter — got there first and is producing the summary right
+        # now.
+        #
+        # THIS IS THE OPPOSITE OF THE TWO CLAUSES BELOW. `{:ok, :unfilled}`
+        # and `{:ok, :unknown_responsibility}` mean *nobody* is producing
+        # a summary, so the legacy body is the only thing standing
+        # between us and a silently lost meeting summary (ADR-0046
+        # member 1). A lost claim means *somebody already is*, so running
+        # the legacy body here would produce the second summary and the
+        # second `complete_transcript/2` write that the claim exists to
+        # prevent. Return `:ok`; do not fall through.
+        {:error, {:context_gather_refused, :already_dispatched}} ->
+          Logger.info(
+            "[Summarizer] transcript #{id} was already claimed by the router's " <>
+              "meeting:finished path — skipping this duplicate dispatch (NOT falling " <>
+              "back to the legacy body: the other path is producing the summary)"
+          )
+
+          :ok
+
         {:ok, gate_race} when gate_race in [:unfilled, :unknown_responsibility] ->
           Logger.info(
             "[Summarizer] Router reported #{gate_race} for transcript #{id} after the " <>
