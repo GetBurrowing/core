@@ -1021,12 +1021,17 @@ defmodule Platform.Federation.ToolSurface do
       },
       %{
         name: "canvas_list",
+        # `view_url` is here as well as on `canvas_get` because this is the
+        # DISCOVERY call: an agent that lists a space's canvases to cite one
+        # would otherwise have to issue a `canvas_get` per row purely to obtain
+        # a link that is computable from the id it already holds.
         description:
-          "List all canvases in a space with summary information (id, title, type, timestamps).",
+          "List all canvases in a space with summary information (id, title, type, view_url, timestamps).",
         parameters: %{
           space_id: %{type: "string", required: true, description: "UUID of the Suite space"}
         },
-        returns: "Array of canvas summary objects with id, title, type, inserted_at, updated_at",
+        returns:
+          "Array of canvas summary objects with id, title, type, view_url, inserted_at, updated_at",
         limitations: "Only works for spaces the agent is a participant in.",
         when_to_use:
           "When you need to discover what canvases exist in a space before reading or updating one"
@@ -1034,7 +1039,8 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "canvas_get",
         description:
-          "Get a canvas by ID. Returns summary by default, or full document state with mode=full.",
+          "Get a canvas by ID. Returns summary by default, or full document state with mode=full. The summary includes view_url, the canonical page for the canvas. " <>
+            Platform.Chat.Canvas.Tools.sharing_boundary(),
         parameters: %{
           canvas_id: %{type: "string", required: true, description: "UUID of the canvas"},
           mode: %{
@@ -1045,11 +1051,11 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "Canvas object with id, title, type, space_id, and optionally the full state document",
+          "Canvas object with id, title, type, space_id, view_url, and optionally the full state document",
         limitations:
           "Only works for canvases in spaces the agent is a participant in. Full mode may return large payloads for complex canvases.",
         when_to_use:
-          "When you need to inspect a canvas's content before updating it, or to present canvas data to a user"
+          "When you need to inspect a canvas's content before updating it, to present canvas data to a user, or to get its view_url"
       },
       %{
         name: "principal_search",
@@ -1088,8 +1094,16 @@ defmodule Platform.Federation.ToolSurface do
     [
       %{
         name: "canvas.create",
+        # The boundary lives in `description`, not in `limitations`:
+        # `PlatformWeb.MCPController.to_mcp_tool/1` forwards only `name`,
+        # `description` and `inputSchema`, so anything stated in the other
+        # fields never reaches an agent on the hosted `/mcp` transport. Stated
+        # once, here, rather than in both fields — the whole map IS shipped
+        # verbatim on the capabilities push, and a duplicate paragraph is
+        # payload in every attention broadcast.
         description:
-          "Create a live canvas with a canonical document (ADR 0036). The document is a node tree whose root type is one of the registered kinds.",
+          "Create a live canvas with a canonical document (ADR 0036). The document is a node tree whose root type is one of the registered kinds. Returns view_url, the canonical page for the canvas, which you can paste for a human to read. " <>
+            Platform.Chat.Canvas.Tools.sharing_boundary(),
         parameters: %{
           space_id: %{type: "string", required: true, description: "Target space UUID"},
           title: %{type: "string", required: false, description: "Human-readable title"},
@@ -1101,9 +1115,10 @@ defmodule Platform.Federation.ToolSurface do
             schema: Platform.Chat.Canvas.Tools.document_schema()
           }
         },
-        returns: "%{canvas_id, title, kind, revision}",
+        returns: "%{canvas_id, title, kind, revision, view_url}",
         limitations: "Canvas kinds are defined in the kind registry.",
-        when_to_use: "When you need to present structured, interactive, or visual data to users"
+        when_to_use:
+          "When you need to present structured, interactive, or visual data to users. Paste the returned view_url when you want a human to read the canvas outside this space."
       },
       %{
         name: "canvas.patch",
@@ -1140,14 +1155,24 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "canvas.describe",
         description:
-          "Read the current document, revision, presence, and recent events for a canvas. Cheap, idempotent — call before patching so base_revision is fresh.",
+          "Read the current document, revision, view_url, presence, and recent events for a canvas. Cheap, idempotent — call before patching so base_revision is fresh, or to recover the view_url of a canvas you did not create. " <>
+            Platform.Chat.Canvas.Tools.sharing_boundary(),
         parameters: %{
           canvas_id: %{type: "string", required: true}
         },
         returns:
-          "%{canvas_id, title, space_id, kind, revision, document, presence, recent_events}",
-        limitations: "Only works for canvases in spaces the agent is a participant in.",
-        when_to_use: "Before emitting canvas.patch, or to present canvas state to a user"
+          "%{canvas_id, title, space_id, kind, revision, document, view_url, presence, recent_events}",
+        # This read resolves whatever canvas id it is handed; there is no
+        # per-space gate on it today (`ToolHandlers.describe/2` ignores its
+        # context and goes through `Chat.get_canvas/1`, the deliberately
+        # unauthorized primitive). The previous string here claimed a
+        # participation gate that does not exist, which is exactly the kind of
+        # description this stage exists to stop shipping. Gating the read is a
+        # behaviour change and is flagged as follow-up work, not absorbed here.
+        limitations:
+          "Resolves any canvas id it is given; this read is not gated on space participation today. The view_url it returns still opens only for a viewer who holds a grant.",
+        when_to_use:
+          "Before emitting canvas.patch, to present canvas state to a user, or to recover the view_url of a canvas you did not create"
       },
       %{
         name: "canvas.list_kinds",
@@ -1181,7 +1206,8 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "canvas.versions",
         description:
-          "List a canvas's revision history newest-first. Each entry is the revision number, write timestamp, written_by attribution snapshot, and a 1-sentence op_summary derived from the patch ops. Pair with canvas.restore to roll back.",
+          "List a canvas's revision history newest-first. Each entry is the revision number, write timestamp, written_by attribution snapshot, and a 1-sentence op_summary derived from the patch ops. Pair with canvas.restore to roll back. " <>
+            Platform.Chat.Canvas.Tools.sharing_boundary(),
         parameters: %{
           canvas_id: %{type: "string", required: true},
           limit: %{
@@ -2876,7 +2902,17 @@ defmodule Platform.Federation.ToolSurface do
   def execute("canvas_create", args, context) do
     case Platform.Chat.Canvas.ToolHandlers.create(args, context) do
       {:ok, payload} ->
-        {:ok, %{id: payload.canvas_id, title: payload.title, kind: payload.kind}}
+        {:ok,
+         %{
+           id: payload.canvas_id,
+           title: payload.title,
+           kind: payload.kind,
+           # `Map.get/2`, not dot-access: this clause is wrapped in a `rescue`
+           # that turns any raise into "Failed to create canvas" for a canvas
+           # that WAS created, inviting a duplicate-creating retry. A missing
+           # key must not be able to produce that.
+           view_url: Map.get(payload, :view_url)
+         }}
 
       {:error, _} = err ->
         err
@@ -3024,6 +3060,7 @@ defmodule Platform.Federation.ToolSurface do
            id: c.id,
            title: c.title,
            kind: Platform.Chat.CanvasDocument.root_kind(c.document),
+           view_url: Platform.Chat.Canvas.Links.view_url(c.id),
            inserted_at: format_datetime(c.inserted_at),
            updated_at: format_datetime(c.updated_at)
          }
@@ -3051,6 +3088,7 @@ defmodule Platform.Federation.ToolSurface do
             title: canvas.title,
             kind: Platform.Chat.CanvasDocument.root_kind(canvas.document),
             space_id: canvas.space_id,
+            view_url: Platform.Chat.Canvas.Links.view_url(canvas.id),
             inserted_at: format_datetime(canvas.inserted_at),
             updated_at: format_datetime(canvas.updated_at)
           }
@@ -4022,7 +4060,13 @@ defmodule Platform.Federation.ToolSurface do
       true ->
         attached_by = resolve_attached_by(context)
 
-        case CanvasAttachments.attach_canvas(task_id, canvas_id,
+        # `attached_by` is attribution; `canvas_authorization_actor/1` is the
+        # authorization subject. Same context, deliberately read twice —
+        # conflating the two is exactly the bug this gate closes.
+        case CanvasAttachments.attach_canvas(
+               canvas_authorization_actor(context),
+               task_id,
+               canvas_id,
                note: note,
                attached_by: attached_by
              ) do
@@ -4050,6 +4094,17 @@ defmodule Platform.Federation.ToolSurface do
                recoverable: false,
                suggestion:
                  "Verify the canvas_id is correct and the canvas has not been soft-deleted upstream"
+             }}
+
+          {:error, :canvas_forbidden} ->
+            {:error,
+             %{
+               error:
+                 "Access denied: you cannot attach canvas #{canvas_id} because you cannot read it.",
+               recoverable: false,
+               canvas_id: canvas_id,
+               suggestion:
+                 "Attaching a canvas to a task grants everyone who can read that task the ability to read the canvas, so you must be able to read it yourself first. Join the canvas's space, or attach a canvas you created."
              }}
 
           {:error, %Ecto.Changeset{} = changeset} ->
@@ -4163,6 +4218,24 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   defp resolve_attached_by(_), do: %{}
+
+  # The AUTHORIZATION subject for canvas-touching task tools (task 019e2c4b
+  # stage 2). Shaped like `resolve_attached_by/1` and read from the same
+  # context, but kept separate on purpose: that one produces the attribution
+  # recorded on the row, which is caller-supplied metadata, while this one
+  # answers "who is asking".
+  #
+  # Neither key present → `nil`, which `Platform.Chat.CanvasAccess` treats as
+  # no principal and denies. It deliberately does not fall back to `:system`.
+  defp canvas_authorization_actor(context) when is_map(context) do
+    cond do
+      is_binary(Map.get(context, :agent_id)) -> {:agent, Map.get(context, :agent_id)}
+      is_binary(Map.get(context, :user_id)) -> {:user, Map.get(context, :user_id)}
+      true -> nil
+    end
+  end
+
+  defp canvas_authorization_actor(_), do: nil
 
   # ── ADR-0046 member 7 stage 2: task_design_decline internals ─────────────
 

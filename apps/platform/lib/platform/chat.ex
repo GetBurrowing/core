@@ -50,6 +50,7 @@ defmodule Platform.Chat do
     Thread
   }
 
+  alias Platform.Chat.CanvasAccess
   alias Platform.Chat.ExternalScope
   alias Platform.Chat.Canvas.Versions, as: CanvasVersions
   alias Platform.Chat.MessageVersions
@@ -2767,11 +2768,25 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "Update canvas metadata/title. Document changes go through `patch_canvas/2`."
-  @spec update_canvas(Canvas.t(), map()) ::
-          {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
-  def update_canvas(%Canvas{} = canvas, attrs) do
-    with :ok <- ensure_space_writable(canvas.space_id) do
+  @doc """
+  Update canvas metadata/title. Document changes go through `patch_canvas/3`.
+
+  Actor-first (task 019e2c4b, stage 2). `actor` is a
+  `t:Platform.Chat.CanvasAccess.actor/0` — `{:user, id}`, `{:agent, id}` or
+  `:system`. Writes require `:member` (space participation); the
+  `:task_reader` / `:org_reader` READ grants do not confer write.
+
+  There is deliberately no defaulting arity. A default `:system` would be a
+  silent authorization bypass for every caller that forgot the argument.
+  """
+  @spec update_canvas(CanvasAccess.actor(), Canvas.t(), map()) ::
+          {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
+  def update_canvas(actor, %Canvas{} = canvas, attrs) do
+    # `ensure_space_writable/1` runs FIRST so an archived space still rejects
+    # with `:space_archived` rather than `:forbidden` — a member writing to an
+    # archived space should hear about the archive, not about permissions.
+    with :ok <- ensure_space_writable(canvas.space_id),
+         {:ok, canvas} <- CanvasAccess.fetch_for_writer(canvas.id, actor) do
       do_update_canvas(canvas, attrs)
     end
   end
@@ -2834,11 +2849,24 @@ defmodule Platform.Chat do
   (ADR 0036, Phase 3). Callers that have a specific `base_revision` should use
   `Canvas.Server.apply_patches/3` directly; this helper assumes head writes
   and refetches the canvas for the return value.
+
+  Actor-first (task 019e2c4b, stage 2). `actor` is a
+  `t:Platform.Chat.CanvasAccess.actor/0` — `{:user, id}`, `{:agent, id}` or
+  `:system`. Writes require `:member` (space participation); the
+  `:task_reader` / `:org_reader` READ grants do not confer write, which is the
+  whole reason this gate lands before the standalone read route.
+
+  Callers reaching `Canvas.Server.apply_patches/3,4` directly must authorize
+  for themselves — the server is the unauthorized primitive, by design.
   """
-  @spec patch_canvas(Canvas.t(), [Platform.Chat.CanvasPatch.operation()]) ::
+  @spec patch_canvas(CanvasAccess.actor(), Canvas.t(), [
+          Platform.Chat.CanvasPatch.operation()
+        ]) ::
           {:ok, Canvas.t()} | {:conflict, map()} | {:error, term()}
-  def patch_canvas(%Canvas{} = canvas, operations) when is_list(operations) do
-    with :ok <- ensure_space_writable(canvas.space_id) do
+  def patch_canvas(actor, %Canvas{} = canvas, operations) when is_list(operations) do
+    # Archive check first — see `update_canvas/3`.
+    with :ok <- ensure_space_writable(canvas.space_id),
+         {:ok, canvas} <- CanvasAccess.fetch_for_writer(canvas.id, actor) do
       do_patch_canvas(canvas, operations)
     end
   end

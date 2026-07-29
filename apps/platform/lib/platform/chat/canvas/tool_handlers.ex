@@ -13,8 +13,10 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
 
   alias Platform.Chat
   alias Platform.Chat.Canvas.Kinds
+  alias Platform.Chat.Canvas.Links
   alias Platform.Chat.Canvas.Server, as: CanvasServer
   alias Platform.Chat.Canvas.Templates
+  alias Platform.Chat.CanvasAccess
   alias Platform.Chat.CanvasDocument
   alias Platform.Chat.PubSub, as: ChatPubSub
 
@@ -81,7 +83,8 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
                  canvas_id: canvas.id,
                  title: canvas.title,
                  kind: CanvasDocument.root_kind(canvas.document),
-                 revision: CanvasDocument.revision(canvas.document)
+                 revision: CanvasDocument.revision(canvas.document),
+                 view_url: Links.view_url(canvas.id)
                }}
 
             {:error, %Ecto.Changeset{} = cs} ->
@@ -102,13 +105,27 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
     end
   end
 
-  @doc "canvas.patch — route through Canvas.Server.apply_patches/3."
+  @doc """
+  canvas.patch — authorize the caller, then route through
+  `Canvas.Server.apply_patches/3`.
+
+  The authorization gate is task 019e2c4b stage 2. Before it, this handler
+  ignored its `context` entirely and patched any `canvas_id` in any space in
+  any org for any caller. `Canvas.VersionHandlers`' moduledoc already described
+  `canvas.restore` as using "the same gate as `canvas.patch`" — this makes that
+  true rather than aspirational.
+
+  Argument shape is validated BEFORE authorization so a malformed call hears
+  about its shape rather than about permissions, and so the denial message
+  cannot be used to probe canvas ids with junk operations.
+  """
   @spec patch(map(), map()) :: {:ok, map()} | {:error, map()}
-  def patch(args, _context) do
+  def patch(args, context) do
     with {:ok, canvas_id} <- require_string(args, "canvas_id"),
          {:ok, base_revision} <- require_integer(args, "base_revision"),
          {:ok, ops_list} <- require_list(args, "operations"),
-         {:ok, parsed_ops} <- parse_operations(ops_list) do
+         {:ok, parsed_ops} <- parse_operations(ops_list),
+         :ok <- authorize_write(canvas_id, context) do
       case CanvasServer.apply_patches(canvas_id, parsed_ops, base_revision) do
         {:ok, new_revision} ->
           maybe_subscribe(canvas_id)
@@ -151,6 +168,11 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
                  kind: CanvasDocument.root_kind(doc),
                  revision: rev,
                  document: doc,
+                 # From `canvas.id`, not from the argument: `Platform.UUID`
+                 # accepts an uppercase id and the query downcases it, so
+                 # building from the raw argument would emit two different
+                 # strings for one canvas.
+                 view_url: Links.view_url(canvas.id),
                  presence: presence_for_canvas(canvas),
                  recent_events: []
                }}
@@ -204,6 +226,59 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
         {:ok, %{templates: Templates.list()}}
     end
   end
+
+  # ── Authorization ───────────────────────────────────────────────────────
+
+  # Write gate for `canvas.patch` (task 019e2c4b, stage 2).
+  #
+  # The canvas is resolved from `canvas_id`, NOT from `context.space_id`:
+  # `canvas.patch` args carry only a `canvas_id`, so `context` never has an
+  # `agent_participant_id` for this call (the MCP controller derives that from
+  # `args["space_id"]`). The membership question can only be asked once the
+  # canvas has told us which space it lives in.
+  #
+  # An unidentifiable caller DENIES. It deliberately does not fall back to
+  # `:system` the way `VersionHandlers.assert_member/2` falls through on a nil
+  # `agent_id` — that shape fails open, and this is the tool an untrusted
+  # remote runtime calls.
+  defp authorize_write(canvas_id, context) do
+    case CanvasAccess.fetch_for_writer(canvas_id, actor_from_context(context)) do
+      {:ok, _canvas} ->
+        :ok
+
+      {:error, :not_found} ->
+        {:error,
+         %{
+           error: "canvas #{canvas_id} not found",
+           recoverable: false
+         }}
+
+      {:error, :forbidden} ->
+        {:error,
+         %{
+           error:
+             "Access denied: canvas.patch requires participation in the canvas's space. " <>
+               "Being able to read a canvas (via a task it is attached to, or via your org) " <>
+               "does not confer write access.",
+           recoverable: false,
+           canvas_id: canvas_id,
+           suggestion:
+             "Ask a human to add you to the space that owns this canvas, or create your own canvas with canvas.create."
+         }}
+    end
+  end
+
+  # MCP callers are agents by default; `:user_id` covers user-driven calls.
+  # Neither present → `nil`, which `CanvasAccess` treats as no principal.
+  defp actor_from_context(context) when is_map(context) do
+    cond do
+      is_binary(Map.get(context, :agent_id)) -> {:agent, Map.get(context, :agent_id)}
+      is_binary(Map.get(context, :user_id)) -> {:user, Map.get(context, :user_id)}
+      true -> nil
+    end
+  end
+
+  defp actor_from_context(_context), do: nil
 
   # ── Helpers ─────────────────────────────────────────────────────────────
 

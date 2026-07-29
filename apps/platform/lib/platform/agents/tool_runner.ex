@@ -396,7 +396,7 @@ defmodule Platform.Agents.ToolRunner do
   defp run_tool(
          "canvas_update",
          %{"canvas_id" => canvas_id, "operations" => operations},
-         _context
+         context
        )
        when is_list(operations) do
     case Chat.get_canvas(canvas_id) do
@@ -411,10 +411,7 @@ defmodule Platform.Agents.ToolRunner do
             "error: invalid operation: #{reason}"
 
           nil ->
-            case Chat.patch_canvas(canvas, parsed) do
-              {:ok, _updated} -> "ok: updated canvas #{canvas_id}"
-              {:error, reason} -> "error: #{inspect(reason)}"
-            end
+            patch_canvas(canvas, parsed, context)
         end
     end
   end
@@ -427,6 +424,43 @@ defmodule Platform.Agents.ToolRunner do
     Logger.warning("[ToolRunner] unknown tool=#{name} args=#{inspect(args)}")
     "error: unknown tool '#{name}'"
   end
+
+  defp patch_canvas(canvas, parsed, context) do
+    case Chat.patch_canvas(canvas_actor(context), canvas, parsed) do
+      {:ok, _updated} ->
+        "ok: updated canvas #{canvas.id}"
+
+      {:error, :forbidden} ->
+        "error: you are not a participant in the space that owns canvas " <>
+          "#{canvas.id}, so you cannot edit it"
+
+      {:error, reason} ->
+        "error: #{inspect(reason)}"
+    end
+  end
+
+  # The tool context carries the agent's `%Chat.Participant{}` row id for the
+  # space the agent is responding in (built by `Platform.Agents.QuickAgent`),
+  # not an agent id. Resolve the row to recover the acting principal — task
+  # 019e2c4b stage 2 gates canvas writes on space participation, and
+  # attribution alone is not an authorization subject.
+  #
+  # No participant resolves to `nil` — no principal, denied. It deliberately
+  # does NOT fall back to `:system`.
+  defp canvas_actor(%{participant_id: participant_id}) when is_binary(participant_id) do
+    case Chat.get_participant(participant_id) do
+      %{participant_type: "agent", participant_id: agent_id} when is_binary(agent_id) ->
+        {:agent, agent_id}
+
+      %{participant_type: "user", participant_id: user_id} when is_binary(user_id) ->
+        {:user, user_id}
+
+      _ ->
+        nil
+    end
+  end
+
+  defp canvas_actor(_context), do: nil
 
   defp parse_operation(["set_props", node_id, props]) when is_binary(node_id) and is_map(props),
     do: {:set_props, node_id, props}

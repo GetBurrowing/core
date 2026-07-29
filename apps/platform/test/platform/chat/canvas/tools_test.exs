@@ -32,6 +32,74 @@ defmodule Platform.Chat.Canvas.ToolsTest do
     end
   end
 
+  # Task 019e2c4b stage 5, acceptance criterion 4. The value of the sentence is
+  # that it is ACCURATE, so these assertions pin the two claims an agent would
+  # act on: which grants open a link, and that no token mechanism exists to
+  # widen one.
+  describe "sharing_boundary/0" do
+    test "names every grant path the code actually enforces" do
+      boundary = Tools.sharing_boundary()
+
+      assert boundary =~ "participant of its space"
+      assert boundary =~ "org that owns a LIVE task the canvas is attached to"
+      assert boundary =~ "when the canvas lives in a NON-ARCHIVED channel"
+    end
+
+    # Both qualifiers are enforced, not hedging: `:task_reader` drops
+    # soft-deleted tasks and `:org_reader` runs through `space_accessible?/1`,
+    # which excludes archived spaces. An archived channel is still
+    # `kind == "channel"`, so dropping the word would promise org members a
+    # canvas they get 403 on.
+    test "qualifies the two grants that a bare noun would overstate" do
+      boundary = Tools.sharing_boundary()
+
+      assert boundary =~ "LIVE task"
+      assert boundary =~ "NON-ARCHIVED channel"
+    end
+
+    # An external user can hold `:member` and still be halted before mount by
+    # `ExternalUserScope`, so the grant list alone would overpromise.
+    test "does not promise the page to external users, who never reach it" do
+      assert Tools.sharing_boundary() =~ "External users never reach the page"
+    end
+
+    test "states that no share-token mechanism exists rather than pointing at one" do
+      boundary = Tools.sharing_boundary()
+
+      assert boundary =~ "canonical Suite links, never share tokens"
+      assert boundary =~ "No share-token mechanism exists"
+    end
+
+    test "tells the agent how to make an execution-space canvas readable" do
+      boundary = Tools.sharing_boundary()
+
+      assert boundary =~ "execution space"
+      assert boundary =~ "task_attach_canvas"
+    end
+
+    test "every canvas tool that hands out a URL carries it verbatim" do
+      boundary = Tools.sharing_boundary()
+      defs = Tools.definitions()
+
+      for name <- ["canvas.create", "canvas.describe", "canvas.versions"] do
+        defn = Enum.find(defs, &(&1["name"] == name))
+        assert defn, "#{name} missing from definitions/0"
+
+        assert defn["description"] =~ boundary,
+               "#{name} description does not carry the sharing boundary"
+      end
+    end
+
+    test "canvas.create and canvas.describe advertise the view_url they return" do
+      defs = Tools.definitions()
+
+      for name <- ["canvas.create", "canvas.describe"] do
+        defn = Enum.find(defs, &(&1["name"] == name))
+        assert defn["description"] =~ "view_url"
+      end
+    end
+  end
+
   describe "document_schema/0" do
     test "is a JSON-schema object with version, revision, root" do
       schema = Tools.document_schema()

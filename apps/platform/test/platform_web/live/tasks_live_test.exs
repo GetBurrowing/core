@@ -10775,7 +10775,7 @@ defmodule PlatformWeb.TasksLiveTest do
         })
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(task.id, canvas.id,
+        CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
           attached_by: %{kind: "user", id: user.id}
         )
 
@@ -10805,6 +10805,49 @@ defmodule PlatformWeb.TasksLiveTest do
       assert rendered =~ "Screenshot evidence"
       # "Canvases" appears as the strip's section label.
       assert rendered =~ "Canvases"
+    end
+
+    # Task 019e2c4b stage 3 — the strip is the standalone route's first
+    # in-app consumer, so the chip's clickthrough is asserted here rather
+    # than left implicit.
+    test "a live chip's title links to /canvases/:id", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      project = create_project()
+      task = create_task(project, %{title: "Clickthrough task"})
+
+      canvas = seed_attached_canvas(task, user, "Clickable canvas")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      link =
+        view
+        |> element(
+          ~s|[data-role="linked-canvas-chip"][data-canvas-id="#{canvas.id}"] a[data-role="linked-canvas-chip-link"]|
+        )
+        |> render()
+
+      # A plain `href`, not a `data-phx-link="redirect"` anchor: the
+      # standalone page lives in its own live_session so the
+      # `:enforce_external_scope` HTTP plug re-runs on arrival.
+      assert link =~ ~s|href="/canvases/#{canvas.id}"|
+      refute link =~ "data-phx-link"
+      assert link =~ "Clickable canvas"
+    end
+
+    test "a soft-deleted chip is NOT linked", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      project = create_project()
+      task = create_task(project, %{title: "Stale clickthrough task"})
+
+      canvas =
+        seed_attached_canvas(task, user, "Gone canvas", deleted_at: DateTime.utc_now())
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      # The chip still renders (so the row can be detached) but offers no
+      # destination — it is an affordance at that point, not a link.
+      assert render(view) =~ ~s|data-canvas-id="#{canvas.id}"|
+      refute render(view) =~ ~s|href="/canvases/#{canvas.id}"|
     end
 
     test "detach button removes the chip and clears the attachment row", %{conn: conn} do

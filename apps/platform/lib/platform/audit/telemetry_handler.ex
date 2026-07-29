@@ -87,6 +87,15 @@ defmodule Platform.Audit.TelemetryHandler do
     [:platform, :chat, :space_deletion_scheduled],
     [:platform, :chat, :space_deletion_cancelled],
     [:platform, :chat, :space_purged],
+    # Task 019e2c4b stage 1 — canvas read by a NON-member. Emitted by
+    # `Platform.Chat.CanvasAccess.fetch_for_viewer/3` only when the grant is
+    # `:task_reader` or `:org_reader`; `:member` reads are in-space and are
+    # deliberately not audited (they would bury the signal). Metadata carries
+    # actor_id (viewer), actor_type "user", resource_type "canvas",
+    # resource_id (canvas id), action "read", plus grant + space_id. Sync
+    # (default handle_event clause) so tests can assert the row immediately
+    # after the call returns.
+    [:platform, :chat, :canvas_read],
     # Task 019f5bc4 — historian dispatch pipeline audit trail. Emitters at
     # HistorianDispatcher.do_dispatch_windowed/5 + dispatch_one_window/12
     # (landed stage 1). These are the ONLY events routed async (via

@@ -9,13 +9,22 @@ defmodule Platform.Chat.Canvas.Tools do
     * `canvas.patch(canvas_id, base_revision, operations)` — apply operations
       with rebase-or-reject concurrency. Returns the new revision or a
       structured rejection the agent can use to self-correct.
-    * `canvas.describe(canvas_id)` — return `{document, revision, presence,
-      recent_events}`. Idempotent, cheap; agents should call freely.
+    * `canvas.describe(canvas_id)` — return `{document, revision, view_url,
+      presence, recent_events}`. Idempotent, cheap; agents should call freely.
 
   The `document` parameter of `canvas.create` and `replace_document` patches
   is a recursive discriminated union over every registered kind. Schemas are
   compiled at runtime from `Platform.Chat.Canvas.Kinds.tool_schemas/0` — the
   next call to `definitions/0` reflects any new kind immediately.
+
+  ## Sharing boundary
+
+  `sharing_boundary/0` is the one sentence every canvas tool that hands out a
+  URL repeats verbatim, and `Platform.Federation.ToolSurface` quotes the same
+  function rather than paraphrasing it. It states what the code enforces and
+  nothing wider: an agent that reads "shareable" and pastes a link into a
+  space its reader cannot reach has been misled by the description, not by the
+  authorization model.
   """
 
   alias Platform.Chat.Canvas.Kinds
@@ -28,9 +37,56 @@ defmodule Platform.Chat.Canvas.Tools do
     "canvas.restore"
   ]
 
+  # The sharing boundary, stated as the code enforces it (task 019e2c4b).
+  #
+  # Every clause here is a grant path in `Platform.Chat.CanvasAccess`:
+  # `:member` (space participation), `:task_reader` (org membership on a task
+  # the canvas is attached to) and `:org_reader` (org membership where the
+  # parent space is a non-archived CHANNEL that carries an org). Execution
+  # spaces are excluded from `:org_reader` by `Chat.space_accessible?/1`, which
+  # is why the task-attachment nudge is here rather than in a wiki page nobody
+  # reads mid-call.
+  #
+  # The external-user clause is not redundant with the grant list: an external
+  # user CAN hold `:member`, and would still be halted before mount by
+  # `PlatformWeb.Plugs.ExternalUserScope`, which allowlists `/chat` only. Without
+  # that clause the sentence promises a page some grant-holders cannot open.
+  #
+  # LIVE and NON-ARCHIVED are load-bearing, not hedging. `:task_reader` drops
+  # soft-deleted tasks (`list_canvas_tasks/1` resolves them to `task: nil`), and
+  # `:org_reader` runs through `Chat.space_accessible?/1`, which excludes
+  # archived spaces. An archived channel is still `kind == "channel"`, so
+  # without that word the sentence promises org members a canvas they would be
+  # denied.
+  #
+  # There is deliberately no mention of a share token. None exists: a token
+  # form needs a signing key, a guest host scope and a revocation model, none
+  # of which shipped. Naming a mechanism that does not exist would be the one
+  # failure mode worse than the missing feature.
+  @sharing_boundary "Returned URLs are canonical Suite links, never share tokens. A link opens only " <>
+                      "for a viewer who already holds a grant on the canvas: a participant of its " <>
+                      "space, a member of the org that owns a LIVE task the canvas is attached to, " <>
+                      "or a member of the org that owns the space when the canvas lives in a " <>
+                      "NON-ARCHIVED channel. External users never reach the page whatever their " <>
+                      "grant. No share-token mechanism exists, so a link cannot be widened past " <>
+                      "that. A canvas created in an execution space is reachable only through the " <>
+                      "task path, so attach it to a task in your reader's org with " <>
+                      "task_attach_canvas before pasting the link or they get a 403."
+
   @doc "Tool names handled by this module."
   @spec tool_names() :: [String.t()]
   def tool_names, do: @tool_names
+
+  @doc """
+  The sharing boundary for canvas URLs, in one sentence-set, quoted verbatim by
+  every canvas tool description that returns a URL.
+
+  Exposed rather than inlined so `Platform.Federation.ToolSurface` states the
+  same boundary as this module, and so a test can assert both surfaces carry
+  it.
+  """
+  @spec sharing_boundary() :: String.t()
+  def sharing_boundary, do: @sharing_boundary
 
   @doc "Return the list of agent tool definitions."
   @spec definitions() :: [map()]
@@ -50,7 +106,7 @@ defmodule Platform.Chat.Canvas.Tools do
     %{
       "name" => "canvas.create",
       "description" =>
-        "Create a new live canvas in a space. The document must be a canonical node tree with a root node whose type is one of the registered kinds: #{Enum.join(Kinds.names(), ", ")}.",
+        "Create a new live canvas in a space. The document must be a canonical node tree with a root node whose type is one of the registered kinds: #{Enum.join(Kinds.names(), ", ")}. Returns the canvas id, title, kind, revision, and view_url — the canonical page for the canvas, which you can cite back to a human. #{@sharing_boundary}",
       "parameters" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -94,7 +150,7 @@ defmodule Platform.Chat.Canvas.Tools do
     %{
       "name" => "canvas.describe",
       "description" =>
-        "Return the current document, revision, presence, and recent events for a canvas. Cheap and idempotent; call this before emitting patches to ensure the caller's base_revision is fresh.",
+        "Return the current document, revision, view_url, presence, and recent events for a canvas. Cheap and idempotent; call this before emitting patches to ensure the caller's base_revision is fresh, or to recover the view_url of a canvas you did not create. #{@sharing_boundary}",
       "parameters" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -112,7 +168,7 @@ defmodule Platform.Chat.Canvas.Tools do
     %{
       "name" => "canvas.versions",
       "description" =>
-        "List a canvas's revision history newest-first. Each entry has revision, written_at, written_by, and a 1-sentence op_summary. Use limit + before_revision to paginate. Same auth gate as canvas.describe.",
+        "List a canvas's revision history newest-first. Each entry has revision, written_at, written_by, and a 1-sentence op_summary. Use limit + before_revision to paginate. Same auth gate as canvas.describe. #{@sharing_boundary}",
       "parameters" => %{
         "type" => "object",
         "additionalProperties" => false,

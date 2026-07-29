@@ -400,7 +400,7 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
         })
 
       {:ok, _} =
-        Platform.Tasks.CanvasAttachments.attach_canvas(task.id, canvas.id,
+        Platform.Tasks.CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
           note: "prior art",
           attached_by: %{kind: "agent", id: Ecto.UUID.generate()}
         )

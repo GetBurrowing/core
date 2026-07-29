@@ -262,6 +262,36 @@ defmodule PlatformWeb.Router do
       live("/org_memory/*file_key", OrgMemoryLive, :show)
     end
 
+    # Task 019e2c4b stage 3 — the standalone canvas page, the destination a
+    # pasted canvas URL resolves to. Same `[:browser, :require_auth,
+    # :enforce_external_scope]` pipeline as everything else in this scope.
+    #
+    # ITS OWN `live_session`, deliberately, and NOT folded into
+    # `:authenticated` above even though the `on_mount` chain and layout are
+    # identical. `:enforce_external_scope` is an HTTP PLUG, and a
+    # `live_redirect` WITHIN a single `live_session` never re-enters the plug
+    # pipeline — so a chat-to-canvas hop inside `:authenticated` would skip
+    # the external gate entirely. `ExternalUserScope.gate_external/2`
+    # (`plugs/external_user_scope.ex:49-62`) additionally falls through to
+    # `conn` when `CHAT_HOST` is unset, which is the case in dev and test, so
+    # the gap would not show up locally. Crossing a `live_session` boundary
+    # forces a full HTTP round-trip, which means the plug always runs.
+    #
+    # The cost is a full page load on chat-to-canvas navigation. That is
+    # irrelevant for a share-link destination, and
+    # `assets/js/hooks/route_resume.js` already treats `/canvases` as its own
+    # top-level module, so per-module resume behaviour is unaffected.
+    #
+    # NO NEW ROUTER SCOPE: `/canvases/:id` overlaps neither `/chat` nor
+    # `/chat/:space_slug`, so the first-matching-clause host-ordering hazard
+    # documented above the `chat.` scope does not apply here. Adding a scope
+    # would inherit that hazard for no benefit.
+    live_session :canvas_standalone,
+      on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
+      layout: {PlatformWeb.Layouts, :shell} do
+      live("/canvases/:id", CanvasLive, :show)
+    end
+
     # rbac-external-users M3 stage 2 (task 019f8837): the zero-access
     # "your workspace is being set up" holding landing. It gets its OWN
     # `live_session` — NOT the `:authenticated` one above, whose `:shell`

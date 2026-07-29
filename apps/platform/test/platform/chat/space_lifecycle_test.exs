@@ -364,7 +364,7 @@ defmodule Platform.Chat.SpaceLifecycleTest do
                })
     end
 
-    test "update_canvas/2 and patch_canvas/2 on a canvas created before archive" do
+    test "update_canvas/3 and patch_canvas/3 on a canvas created before archive" do
       space = channel!()
       participant = participant!(space.id)
 
@@ -373,8 +373,12 @@ defmodule Platform.Chat.SpaceLifecycleTest do
 
       {:ok, _} = Chat.archive_space(space)
 
-      assert {:error, :space_archived} = Chat.update_canvas(canvas, %{"title" => "nope"})
-      assert {:error, :space_archived} = Chat.patch_canvas(canvas, [])
+      # `:system` so the archive rejection is provably the check that fired —
+      # a denial here would otherwise be ambiguous with the stage-2 authz gate.
+      assert {:error, :space_archived} =
+               Chat.update_canvas(:system, canvas, %{"title" => "nope"})
+
+      assert {:error, :space_archived} = Chat.patch_canvas(:system, canvas, [])
     end
 
     test "create_attachment/1 — space-anchored and message-anchored" do

@@ -3709,3 +3709,69 @@ body, .font-fabrikam {
   :root:not([data-theme="light"]) .dropdown-content { background: var(--color-base-300); }
 }
 
+
+/* ── Read-only canvas rendering — the standalone /canvases/:id page ─────────
+   Task 019e2c4b, stage 4.
+
+   `action_row`, `form` and `checklist_item` nodes stay VISIBLE on this page
+   and render inert. Hiding them would break citation parity: an agent writes
+   "the table has five rows and two open actions", the human follows the link
+   and counts three.
+
+   Scoped here rather than threaded as a `read_only` attr through
+   `Platform.Chat.Canvas.Renderer.render_node/1`. The renderer stays identical
+   between this page and the chat pane, which is the same parity guarantee
+   stated the other way round. CSS supplies the look; the absence of write
+   `handle_event/3` clauses in `PlatformWeb.CanvasLive` supplies the behaviour.
+
+   Applied unconditionally, because the surface is read-only for every viewer
+   including a space member who could write the same canvas from chat.
+
+   Deliberately NOT applied to every control inside the document. The embed
+   kind's expand button and the code block's copy control are READ
+   affordances; flattening those would remove utility, not writability. Only
+   the three kinds above are targeted, each by markup it already emits.
+
+   Unlayered on purpose: these rules have to outrank daisyUI's `.btn-primary`
+   fill, and unlayered CSS beats any `@layer`. */
+.canvas-inert {
+  cursor: default;
+}
+
+/* action_row buttons and every control inside a canvas form: no pointer
+   interaction, no hover lift, no shadow. */
+.canvas-inert [data-role="canvas-action-button"],
+.canvas-inert form[phx-submit="canvas_form_submit"] :is(button, input, textarea, select) {
+  pointer-events: none;
+  cursor: default;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Buttons reduce to outline. daisyUI's `btn-primary`, `btn-secondary` and
+   `btn-error` fills all drop out, so an action row reads as a record of what
+   can be done elsewhere rather than an invitation to do it here. */
+.canvas-inert [data-role="canvas-action-button"],
+.canvas-inert form[phx-submit="canvas_form_submit"] button {
+  background-color: transparent;
+  background-image: none;
+  border-color: color-mix(in oklch, var(--color-neutral) 35%, transparent);
+  color: var(--color-neutral);
+}
+
+/* Fields keep their box, so the form still reads as a form, and lose the
+   editable affordance. */
+.canvas-inert form[phx-submit="canvas_form_submit"] :is(input, textarea, select) {
+  background-color: transparent;
+  color: var(--color-neutral);
+}
+
+/* checklist_item is in scope for the cursor only. It renders no checkbox and
+   no phx-click, here or in the chat pane, so there is no affordance to
+   neutralise. Its state icons keep their colour on purpose: recolouring
+   "complete" and "active" to neutral would make the same document read
+   differently here than in chat, which is the parity this page exists to
+   hold. The three states stay distinguishable by icon shape regardless. */
+.canvas-inert [data-node-id][data-state] {
+  cursor: default;
+}

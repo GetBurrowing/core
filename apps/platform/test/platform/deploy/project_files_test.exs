@@ -650,7 +650,7 @@ defmodule Platform.Deploy.ProjectFilesTest do
           "root" => sample_root("Second take.")
       }
 
-      {:ok, _} = Chat.update_canvas(canvas_v1_reloaded, %{document: updated_doc})
+      {:ok, _} = Chat.update_canvas(:system, canvas_v1_reloaded, %{document: updated_doc})
 
       stage_b = deploy_stage_for(task)
       assert {:ok, second} = ProjectFiles.execute(task, stage_b)

@@ -207,6 +207,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task_id read from the execution space's `metadata[\"task_id\"]`"},
     {"platform/chat/canvas/server.ex", :get, "Canvas", 1, :safe_internal,
      "`do_persist/1` uses the canvas_id the `CanvasServer` was started with, which `Chat.get_canvas/1` already resolved to a row"},
+    {"platform/chat/canvas_access.ex", :get, "Canvas", 1, :safe_internal,
+     "fetch_for_viewer/3 checks Platform.UUID.valid?/1 on the /canvases/:id URL path segment before the lookup, folding a malformed id into the existing {:error, :not_found}"},
     {"platform/chat/freeze_policy.ex", :get_by, "Participant", 1, :safe_internal,
      "resolve_actor/2 checks Platform.UUID.valid?/1 on assignee_id — routinely \"system\" or an agent slug — before the :binary_id-keyed lookup, keeping nil as the not-found value"},
     {"platform/chat/messages/edit.ex", :get, "Participant", 1, :safe_internal,
@@ -496,6 +498,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "guards on get_space/2 (the PR #613 site), get_message/2, get_thread/1, get_canvas/2, get_canvas_with_deleted/2, get_attachment/2, get_agent_participant/2 (both columns), add_agent_participant/3, do_unpin_message/2 and resolve_agent/1"},
     {"platform/chat/attachments/tool_handlers.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "finalize_pending/2's guard on the attachment_id supplied by the MCP attachment tool payload"},
+    {"platform/chat/canvas_access.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "fetch_for_viewer/3's guard on the canvas id taken straight off the /canvases/:id URL path segment — the share-link route's only untrusted input"},
     {"platform/chat/freeze_policy.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "resolve_actor/2's guard on a task assignee_id that is routinely \"system\" or an agent slug"},
     {"platform/chat/sidebar.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -512,8 +516,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "get_file_by_id/1's guard on a page id supplied by a caller of the memory MCP tools"},
     {"platform/skills.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "get_skill/1 and resolve_skills/1. get_skill/1's nil is what routes a slug to the get_by(Skill, slug:) branch, which is designed traffic for skill_get"},
-    {"platform/tasks/canvas_attachments.ex", :platform_uuid_guard, "-", 2, :safe_internal,
-     "ensure_task_exists/1 and ensure_canvas_attachable/1, both on canvas_attach MCP payload ids"},
+    {"platform/tasks/canvas_attachments.ex", :platform_uuid_guard, "-", 3, :safe_internal,
+     "ensure_task_exists/1 and ensure_canvas_attachable/1, both on canvas_attach MCP payload ids, plus list_canvas_tasks/1 (task 019e2c4b stage 1). The third is the same class: its canvas_id reaches the reverse lookup from the /canvases/:id URL segment via Platform.Chat.CanvasAccess, and `where: a.canvas_id == ^id` raises the SAME CastError a bare Repo.get would, so the guard folds a malformed id into an empty list"},
     {"platform/tasks/context_hydrator.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "load_task/1's guard on the task_id carried by the run-dispatch payload into hydrate_for_run/2"},
     {"platform/tasks/plan_engine.ex", :platform_uuid_guard, "-", 3, :safe_internal,
@@ -561,6 +565,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/chat.ex" => 14,
     "platform/chat/attachments/tool_handlers.ex" => 1,
     "platform/chat/canvas/versions.ex" => 1,
+    # Task 019e2c4b stage 1 — `CanvasAccess.org_readable_space?/2`. Triaged by
+    # hand: the `where:` clause pins `s.id == ^space_id`, but `space_id` is
+    # destructured off the `%Canvas{}` row `fetch_for_viewer/3` has already
+    # loaded, so it is a `chat_canvases.space_id` column value and cannot be
+    # malformed. The boundary-supplied id on that path is the CANVAS id, which
+    # is guarded by `Platform.UUID.valid?/1` one call earlier.
+    "platform/chat/canvas_access.ex" => 1,
     "platform/chat/message_versions.ex" => 2,
     "platform/deploy/project_files.ex" => 3,
     "platform/federation.ex" => 1,

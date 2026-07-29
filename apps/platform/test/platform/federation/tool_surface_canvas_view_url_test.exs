@@ -1,0 +1,248 @@
+defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
+  @moduledoc """
+  Task 019e2c4b stage 5 — the federation surface hands agents a link, and
+  describes the boundary that link respects.
+
+  Two separate failures are covered here:
+
+    * a result with an id and no URL, which forces the agent to invent one or
+      cite nothing; and
+    * a description that promises "shareable" without saying to whom, which
+      is how a canvas link ends up pasted where its reader gets a 403.
+  """
+  use PlatformWeb.ConnCase, async: false
+
+  alias Platform.Accounts.User
+  alias Platform.Agents.Agent
+  alias Platform.Agents.AgentRuntime
+  alias Platform.Chat
+  alias Platform.Chat.Canvas.Links
+  alias Platform.Chat.Canvas.Server, as: CanvasServer
+  alias Platform.Chat.Canvas.Tools
+  alias Platform.Federation.ToolSurface
+  alias Platform.Repo
+
+  defp setup_agent_space do
+    {:ok, space} =
+      Chat.create_space(%{
+        name: "Canvas view_url",
+        slug: "cvu-#{System.unique_integer([:positive])}",
+        kind: "channel"
+      })
+
+    agent_id = Ecto.UUID.generate()
+
+    {:ok, participant} =
+      Chat.add_participant(space.id, %{
+        participant_type: "agent",
+        participant_id: agent_id,
+        display_name: "View URL Tester",
+        joined_at: DateTime.utc_now()
+      })
+
+    %{
+      space: space,
+      # `agent_participant_id` is what the create handler writes attribution
+      # from; `agent_id` is what the read gate resolves participation with.
+      context: %{agent_participant_id: participant.id, agent_id: agent_id}
+    }
+  end
+
+  defp valid_document do
+    %{
+      "version" => 1,
+      "revision" => 1,
+      "root" => %{
+        "id" => "root",
+        "type" => "stack",
+        "props" => %{},
+        "children" => [
+          %{
+            "id" => "h",
+            "type" => "heading",
+            "props" => %{"value" => "Shareable", "level" => 2},
+            "children" => []
+          }
+        ]
+      },
+      "theme" => %{},
+      "bindings" => %{},
+      "meta" => %{}
+    }
+  end
+
+  describe "canvas_create" do
+    test "returns a view_url alongside the id" do
+      %{space: space, context: context} = setup_agent_space()
+
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "canvas_create",
+                 %{"space_id" => space.id, "title" => "Cite me", "document" => valid_document()},
+                 context
+               )
+
+      on_exit(fn -> CanvasServer.stop(result.id) end)
+
+      assert result.view_url == Links.view_url(result.id)
+      assert result.view_url == PlatformWeb.Endpoint.url() <> "/canvases/" <> result.id
+    end
+  end
+
+  describe "canvas_get" do
+    test "returns the same view_url for a canvas the agent did not create" do
+      %{space: space, context: context} = setup_agent_space()
+
+      {:ok, created} =
+        ToolSurface.execute(
+          "canvas_create",
+          %{"space_id" => space.id, "document" => valid_document()},
+          context
+        )
+
+      on_exit(fn -> CanvasServer.stop(created.id) end)
+
+      assert {:ok, fetched} =
+               ToolSurface.execute("canvas_get", %{"canvas_id" => created.id}, context)
+
+      assert fetched.view_url == created.view_url
+      assert fetched.view_url == Links.view_url(created.id)
+    end
+
+    test "carries the view_url in full mode too" do
+      %{space: space, context: context} = setup_agent_space()
+
+      {:ok, created} =
+        ToolSurface.execute(
+          "canvas_create",
+          %{"space_id" => space.id, "document" => valid_document()},
+          context
+        )
+
+      on_exit(fn -> CanvasServer.stop(created.id) end)
+
+      assert {:ok, fetched} =
+               ToolSurface.execute(
+                 "canvas_get",
+                 %{"canvas_id" => created.id, "mode" => "full"},
+                 context
+               )
+
+      assert fetched.view_url == Links.view_url(created.id)
+      assert fetched.document["root"]["type"] == "stack"
+    end
+  end
+
+  describe "tool_definitions/0" do
+    test "the canvas tools that hand out a URL state the sharing boundary" do
+      boundary = Tools.sharing_boundary()
+      defs = ToolSurface.tool_definitions()
+
+      for name <- ["canvas.create", "canvas.describe", "canvas.versions", "canvas_get"] do
+        defn = Enum.find(defs, &(&1.name == name))
+        assert defn, "#{name} missing from the federation tool surface"
+
+        assert defn.description =~ boundary,
+               "#{name} does not state the sharing boundary in its description"
+      end
+    end
+
+    test "the documented return shapes include view_url" do
+      defs = ToolSurface.tool_definitions()
+
+      assert Enum.find(defs, &(&1.name == "canvas.create")).returns =~ "view_url"
+      assert Enum.find(defs, &(&1.name == "canvas.describe")).returns =~ "view_url"
+      assert Enum.find(defs, &(&1.name == "canvas_get")).returns =~ "view_url"
+      assert Enum.find(defs, &(&1.name == "canvas_list")).returns =~ "view_url"
+    end
+
+    test "canvas.describe no longer claims a participation gate it does not have" do
+      describe = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "canvas.describe"))
+
+      # `ToolHandlers.describe/2` ignores its context. The old string said the
+      # opposite, in front of a paragraph sold as precise.
+      refute describe.limitations =~
+               "Only works for canvases in spaces the agent is a participant"
+
+      assert describe.limitations =~ "not gated on space participation"
+    end
+  end
+
+  # The hosted transport is where the sentence has to survive. `tools/list`
+  # projects each tool through `MCPController.to_mcp_tool/1`, which forwards
+  # ONLY name, description and inputSchema — a boundary stated in
+  # `limitations`, `returns` or `when_to_use` reads correctly in this repo and
+  # reaches no agent. This drives the real endpoint rather than the definition
+  # map, because the definition map is not what ships.
+  describe "the hosted /mcp transport" do
+    test "tools/list carries the sharing boundary to a real MCP client", %{conn: conn} do
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "MCP boundary",
+          slug: "mcpb-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      token = canvas_runtime_token!(space)
+
+      body = %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "tools/list",
+        "params" => %{}
+      }
+
+      resp =
+        conn
+        |> put_req_header("authorization", "Bearer " <> token)
+        |> put_req_header("content-type", "application/json")
+        |> post("/mcp", body)
+        |> json_response(200)
+
+      tools = resp["result"]["tools"]
+      boundary = Tools.sharing_boundary()
+
+      for name <- ["canvas.create", "canvas.describe"] do
+        tool = Enum.find(tools, &(&1["name"] == name))
+        assert tool, "#{name} missing from tools/list"
+
+        assert tool["description"] =~ boundary,
+               "#{name} loses the boundary once the transport drops limitations/returns"
+      end
+    end
+  end
+
+  defp canvas_runtime_token!(space) do
+    user =
+      Repo.insert!(%User{
+        email: "canvas_view_url_#{System.unique_integer([:positive])}@example.com",
+        name: "Canvas view_url runtime owner",
+        oidc_sub: "oidc-canvas-view-url-#{System.unique_integer([:positive])}"
+      })
+
+    agent =
+      Repo.insert!(%Agent{
+        slug: "canvas-view-url-#{System.unique_integer([:positive])}",
+        name: "Canvas view_url Agent",
+        status: "active"
+      })
+
+    {:ok, _participant} = Chat.add_agent_participant(space.id, agent)
+
+    raw_token = AgentRuntime.generate_token()
+
+    {:ok, _runtime} =
+      %AgentRuntime{}
+      |> AgentRuntime.changeset(%{
+        runtime_id: "rt-canvas-view-url-#{System.unique_integer([:positive])}",
+        owner_user_id: user.id,
+        agent_id: agent.id,
+        auth_token_hash: AgentRuntime.hash_token(raw_token),
+        status: "active",
+        allowed_bundles: ["canvas"]
+      })
+      |> Repo.insert()
+
+    raw_token
+  end
+end

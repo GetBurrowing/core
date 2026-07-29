@@ -351,7 +351,7 @@ defmodule Platform.Design.PreplanStep do
   @doc """
   Close an open design step because the designer's canvas landed.
 
-  Hooked into `Platform.Tasks.CanvasAttachments.attach_canvas/3`'s success
+  Hooked into `Platform.Tasks.CanvasAttachments.attach_canvas/4`'s success
   path. The canvas IS the deliverable, so the deliverable landing is the honest
   completion signal — and unlike a dedicated "I'm done" tool call it also works
   when a human attaches the canvas by hand.

@@ -1,0 +1,236 @@
+<%!-- The standalone canvas page (task 019e2c4b, stages 3 and 4).
+
+     The two denial states differ in SHAPE, not only in copy: blur the text
+     out and they are still telling you different things. 403 is a tinted card
+     with one action; 404 is bare text with none.
+
+     `--color-error` appears in NEITHER. Being denied a canvas is not a system
+     failure, and red would teach viewers that a normal permission boundary is
+     a bug. Error red stays reserved for `render_invalid` in
+     `canvas_renderer.ex`, for a document that fails `canonical?/1`. --%>
+<div class="flex h-full flex-col bg-base-100">
+  <%= case @load_error do %>
+    <% :forbidden -> %>
+      <%!-- 403 — "this exists, you cannot see it yet." A door, not a wall,
+           so it gets a surface of its own (`--radius-box` card, `--color-info`
+           border and tint) and exactly ONE action.
+
+           The action names the owner from the ADR-0038 creator snapshot. The
+           place is named only to a viewer who is a member of that space's org;
+           everyone else gets "a space in Fabrikam", so this page cannot be walked
+           as a directory. See `assign_denial_context/4`. --%>
+      <div
+        class="flex flex-1 items-center justify-center px-6 py-12"
+        data-role="canvas-load-error"
+        data-error="forbidden"
+      >
+        <section
+          class="w-full max-w-md rounded-box border border-info/30 bg-info/10 px-8 py-10 text-center"
+          data-role="canvas-forbidden-card"
+        >
+          <span class="hero-lock-closed mx-auto block size-8 text-info"></span>
+
+          <h1 class="mt-4 text-lg font-semibold text-base-content">
+            You do not have access to this canvas
+          </h1>
+
+          <p class="mt-2 text-sm text-neutral" data-role="canvas-forbidden-place">
+            It exists in {@denial_place}.
+          </p>
+
+          <a
+            href={~p"/chat"}
+            class="btn btn-info btn-sm mt-6"
+            data-role="canvas-denial-action"
+          >
+            Ask {@denial_owner} for access
+          </a>
+
+          <%!-- The quiet way out, matching the one the 404 already carries. A
+               ghost link is not a primary action, so "exactly one primary
+               action" still holds and the two states stay structurally
+               distinct. Without it this was the only screen on the route with
+               no exit at all. --%>
+          <a
+            href={~p"/chat"}
+            class="mt-6 block text-xs text-neutral underline underline-offset-4 hover:text-base-content"
+            data-role="canvas-forbidden-link"
+          >
+            Back to Suite
+          </a>
+        </section>
+      </div>
+    <% :not_found -> %>
+      <%!-- 404 — a clean dead end should look like one. No card, no
+           illustration, no tint: centred `--color-neutral` text on bare
+           `--color-base-100`, one ghost link back to Suite and ZERO actions.
+           Offering an action here would imply a path that does not exist. --%>
+      <div
+        class="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center"
+        data-role="canvas-load-error"
+        data-error="not_found"
+      >
+        <p class="text-sm text-neutral">This canvas does not exist.</p>
+
+        <p class="text-xs text-neutral/70">
+          The link may be wrong, or the canvas may have been deleted.
+        </p>
+
+        <a
+          href={~p"/chat"}
+          class="mt-4 text-xs text-neutral underline underline-offset-4 hover:text-base-content"
+          data-role="canvas-not-found-link"
+        >
+          Back to Suite
+        </a>
+      </div>
+    <% nil -> %>
+      <%!-- The shell layout's <main> is `overflow-hidden`, so this surface
+           supplies its own scroller. The provenance bar is `sticky top-0`
+           INSIDE that scroller, which is what lets the document scroll under
+           it. --%>
+      <div class="min-h-0 flex-1 overflow-y-auto" data-role="canvas-standalone-scroller">
+        <%!-- PROVENANCE BAR — the signature element and the only band of tint
+           on the page, so it reads as chrome and everything below it reads as
+           document. One `--color-base-300` hairline; no other dividers.
+
+           Truncation order is the structural rule: the title is `shrink-0
+           whitespace-nowrap` and truncates LAST, the crumb is `min-w-0
+           truncate` and collapses FIRST, the pill is `shrink-0` and never
+           wins space from the title.
+
+           Mobile keeps one bar and reflows rather than growing an overflow
+           menu: `basis-full` drops the crumb to its own line under the title
+           while the pill, the copy control and the close control stay on line
+           one. Hiding a one-tap copy or a one-tap exit behind a "…" costs a
+           tap and buys nothing, and persistent controls beat reveal-on-tap.
+           `order-*` restores the prescribed left-to-right reading order at
+           `sm` and up.
+
+           The title is `shrink-0` from `sm` up only. At phone width the crumb
+           has ALREADY yielded its entire line, so the priority still holds —
+           the title gives way last, after everything else has — and pinning it
+           unshrinkable there would push the pill onto a line of its own
+           instead of letting a long title ellipsise. Below `sm` it is
+           `flex-1`, i.e. a ZERO flex-basis: on a wrapping row an item wider
+           than the line is pushed onto its own line rather than shrunk, so
+           `min-w-0 truncate` alone is not enough to keep the title, pill and
+           copy control together. Zero-basis is what makes it truncate in
+           place. --%>
+        <header
+          class="sticky top-0 z-10 border-b border-base-300 bg-base-200 px-4 py-2 sm:px-6"
+          data-role="canvas-provenance-bar"
+        >
+          <div class="mx-auto flex w-full max-w-[880px] flex-wrap items-center gap-x-3">
+            <h1
+              class="order-1 min-w-0 flex-1 truncate text-lg font-semibold sm:flex-none sm:shrink-0"
+              data-role="canvas-title"
+            >
+              {@canvas.title || "Untitled canvas"}
+            </h1>
+
+            <p
+              class="order-5 min-w-0 basis-full truncate text-xs text-neutral sm:order-2 sm:grow sm:basis-0"
+              data-role="canvas-crumb"
+            >
+              {provenance_crumb(%{
+                org_name: @org_name,
+                space_name: @space_name,
+                author_name: @author_name,
+                canvas: @canvas
+              })}
+            </p>
+
+            <%!-- `--color-neutral`, deliberately not primary: read-only is a
+               fact about this page, not a feature of it. --%>
+            <span
+              class="badge badge-outline order-2 ml-auto shrink-0 border-neutral/40 text-neutral sm:order-3 sm:ml-0"
+              data-role="canvas-read-only-pill"
+            >
+              Read only
+            </span>
+
+            <%!-- `--color-primary` on hover and active only, never as text on
+               white. --%>
+            <button
+              type="button"
+              id={"canvas-copy-link-" <> @canvas.id}
+              phx-hook="CopyToClipboard"
+              data-clipboard-text={@canvas_url}
+              data-role="canvas-copy-link"
+              class="btn btn-ghost btn-xs order-3 shrink-0 text-neutral hover:text-primary active:text-primary sm:order-4"
+              aria-label="Copy link to this canvas"
+              title="Copy link"
+            >
+              <span class="hero-link size-4"></span>
+              <span class="hidden sm:inline">Copy link</span>
+            </button>
+
+            <%!-- THE WAY OUT, rightmost. Stage 3's bar had none: someone
+               opening a pasted link in a fresh tab has no back history and no
+               route anywhere. Same `hero-x-mark` as the in-chat overlay's
+               close control (`live/chat/partials.ex`, `canvas_overlay/1`), so
+               the same object carries the same control in both places.
+
+               An `<a>`, not a `navigate` link: `/chat` lives in a different
+               `live_session`, and the full HTTP round-trip is what re-runs
+               `:enforce_external_scope`.
+
+               `shrink-0` and rightmost, so at 375px it squeezes the title
+               further. That is the correct trade: an exit outranks a longer
+               title. The destination follows the viewer's grant — see
+               `assign_close_path/3`. --%>
+            <a
+              href={@close_path}
+              data-role="canvas-close"
+              class="btn btn-ghost btn-xs order-4 shrink-0 text-neutral hover:text-base-content sm:order-5"
+              aria-label="Close canvas"
+              title="Close canvas"
+            >
+              <span class="hero-x-mark size-4"></span>
+            </a>
+          </div>
+        </header>
+
+        <%!-- The document sits DIRECTLY on `--color-base-100`: no card, no grey
+           backdrop. Card-on-grey reads as an embedded preview of something
+           living elsewhere, which is the wrong message for a page whose job is
+           to make a shared canvas feel first-class.
+
+           `max-w-[880px]` because canvases carry tables and mermaid diagrams;
+           a narrower measure strangles them.
+
+           Rendering delegates to the same `CanvasRenderer.canvas_document/1`
+           the chat pane and task sheet call, so `Renderer.render_node/1` stays
+           untouched and a canvas looks identical in both places. That is
+           citation parity.
+
+           `canvas-inert` is the scoped wrapper that makes `action_row`,
+           `form` and `checklist_item` nodes render flat here: neutral text,
+           no hover lift, `cursor-default`, buttons reduced to outline. They
+           stay VISIBLE. Hiding them would break the same parity: an agent
+           writes "two open actions", the human follows the link and counts
+           none. Defined in `assets/css/app.css`; the class is unconditional
+           because this whole surface is read-only for everyone. --%>
+        <article
+          class="canvas-inert mx-auto w-full max-w-[880px] px-4 py-8 sm:px-6"
+          data-role="canvas-body"
+        >
+          <PlatformWeb.Chat.CanvasRenderer.canvas_document
+            canvas={@canvas}
+            dom_id_base="canvas-standalone"
+          />
+
+          <%!-- Mono earns its place here: it makes "a specific revision of a
+             specific document" feel addressable, which is the whole point of
+             a shareable URL. --%>
+          <p
+            class="mt-10 text-center font-mono text-xs text-neutral"
+            data-role="canvas-revision-stamp"
+          >
+            rev {@revision} · {@canvas.id}
+          </p>
+        </article>
+      </div>
+  <% end %>
+</div>

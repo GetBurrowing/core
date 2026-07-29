@@ -7,13 +7,23 @@ defmodule Platform.Chat.Canvas.VersionHandlers do
     * `canvas.versions` — same gate as `canvas_get` (read membership in the
       canvas's space, asserted via `Platform.Federation.ToolSurface`'s
       `assert_agent_in_space/2`-equivalent here).
-    * `canvas.restore` — same gate as `canvas.patch` (the restore is itself a
-      write that produces a new revision row).
+    * `canvas.restore` — same gate as `canvas.patch`, literally: both call
+      `Platform.Chat.CanvasAccess.fetch_for_writer/2` (task 019e2c4b stage 2).
+      A restore is a full-document overwrite, so it is the most destructive
+      write on the canvas surface, not the least.
+
+  Until stage 2 that second bullet was aspirational: `canvas.restore` used a
+  local `assert_member/2` that fell through to `:ok` whenever `context.agent_id`
+  was nil. `agent_id` is not required on `Platform.Agents.AgentRuntime`, so an
+  authenticated runtime with no linked agent is a reachable state — and it
+  could restore any canvas in any space. Read authorization is unchanged and
+  still uses `assert_member/2`.
   """
 
   alias Platform.Chat
   alias Platform.Chat.Canvas.Server, as: CanvasServer
   alias Platform.Chat.Canvas.Versions
+  alias Platform.Chat.CanvasAccess
 
   @doc """
   canvas.versions — paginated newest-first version metadata.
@@ -63,7 +73,7 @@ defmodule Platform.Chat.Canvas.VersionHandlers do
     with {:ok, canvas_id} <- require_string(args, "canvas_id"),
          {:ok, revision} <- require_integer(args, "revision"),
          {:ok, canvas} <- fetch_canvas(canvas_id),
-         :ok <- assert_member(canvas.space_id, context),
+         :ok <- assert_writer(canvas.id, context),
          {:ok, version} <- fetch_version(canvas.id, revision),
          {:ok, %{revision: current_revision}} <- CanvasServer.describe(canvas.id) do
       attribution = attribution_from_context(context, canvas.space_id)
@@ -138,6 +148,46 @@ defmodule Platform.Chat.Canvas.VersionHandlers do
         {:ok, version}
     end
   end
+
+  # The WRITE gate for `canvas.restore` (task 019e2c4b stage 2), replacing the
+  # fail-open `assert_member/2` below.
+  #
+  # Deliberately NOT `assert_member/2`: that returns `:ok` when `agent_id` is
+  # nil on the theory that the caller must be the in-app LiveView. Nothing
+  # enforces that theory on this handler — it is only ever reached from
+  # `Platform.Federation.ToolSurface`, i.e. from a remote runtime — and
+  # `agent_id` is not required on an `AgentRuntime`, so nil is reachable for an
+  # authenticated caller. Here an unidentified actor denies.
+  defp assert_writer(canvas_id, context) do
+    case CanvasAccess.fetch_for_writer(canvas_id, actor_from_context(context)) do
+      {:ok, _canvas} ->
+        :ok
+
+      {:error, :not_found} ->
+        {:error, %{error: "canvas #{canvas_id} not found", recoverable: false}}
+
+      {:error, :forbidden} ->
+        {:error,
+         %{
+           error:
+             "Access denied: canvas.restore overwrites the whole document, so it requires " <>
+               "participation in the canvas's space. Read access does not confer it.",
+           recoverable: false,
+           canvas_id: canvas_id,
+           suggestion: "Ask a human to add you to the space that owns this canvas."
+         }}
+    end
+  end
+
+  defp actor_from_context(context) when is_map(context) do
+    cond do
+      is_binary(Map.get(context, :agent_id)) -> {:agent, Map.get(context, :agent_id)}
+      is_binary(Map.get(context, :user_id)) -> {:user, Map.get(context, :user_id)}
+      true -> nil
+    end
+  end
+
+  defp actor_from_context(_context), do: nil
 
   # Mirrors Platform.Federation.ToolSurface.assert_agent_in_space/2 but local
   # so this module doesn't take a circular dep on the federation surface.

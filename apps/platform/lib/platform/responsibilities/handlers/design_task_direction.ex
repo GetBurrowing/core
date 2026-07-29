@@ -577,8 +577,20 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirection do
     }
   end
 
+  # `:system`, not `{:agent, agent_id}` — attribution is not authorization, and
+  # here the two genuinely differ.
+  #
+  # This handler creates the canvas itself, in the task's execution space, via
+  # `ExecutionSpace.ensure_system_participant/1`. The agent it is ATTRIBUTED to
+  # is resolved separately from the trigger payload or the
+  # `design.task_direction` role holder, and that agent is frequently NOT a
+  # participant of that execution space. Authorizing as the attributed agent
+  # would therefore deny — and ADR-0046's pre-plan design step fires once with
+  # no redelivery, so it would not fail loudly, it would silently never deliver.
+  #
+  # The platform is the actor here; it created the canvas one call ago.
   defp attach(task_id, canvas_id, agent_id) do
-    case CanvasAttachments.attach_canvas(task_id, canvas_id,
+    case CanvasAttachments.attach_canvas(:system, task_id, canvas_id,
            note: @attachment_note,
            attached_by: %{kind: "agent", id: agent_id}
          ) do

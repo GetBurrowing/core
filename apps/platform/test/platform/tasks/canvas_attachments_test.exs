@@ -80,12 +80,12 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
     %{kind: "user", id: participant.id}
   end
 
-  describe "attach_canvas/3" do
+  describe "attach_canvas/4" do
     test "inserts a row and returns {:ok, %CanvasAttachment{}}", ctx do
       canvas = create_canvas(ctx.space, ctx.participant)
 
       assert {:ok, %CanvasAttachment{} = attachment} =
-               CanvasAttachments.attach_canvas(ctx.task.id, canvas.id,
+               CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
                  note: "first take",
                  attached_by: attached_by(ctx)
                )
@@ -103,7 +103,7 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
       canvas = create_canvas(ctx.space, ctx.participant)
 
       assert {:ok, first} =
-               CanvasAttachments.attach_canvas(ctx.task.id, canvas.id,
+               CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
                  note: "first",
                  attached_by: attached_by(ctx)
                )
@@ -111,7 +111,7 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
       other_participant = create_participant(ctx.space.id, %{display_name: "Bob"})
 
       assert {:ok, second} =
-               CanvasAttachments.attach_canvas(ctx.task.id, canvas.id,
+               CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
                  note: "second",
                  attached_by: %{kind: "user", id: other_participant.id}
                )
@@ -126,7 +126,7 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
 
     test "rejects a nonexistent canvas with :canvas_not_found", ctx do
       assert {:error, :canvas_not_found} =
-               CanvasAttachments.attach_canvas(ctx.task.id, UUID.generate(),
+               CanvasAttachments.attach_canvas(:system, ctx.task.id, UUID.generate(),
                  attached_by: attached_by(ctx)
                )
 
@@ -138,7 +138,7 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
       {:ok, _} = Chat.delete_canvas(canvas)
 
       assert {:error, :canvas_not_found} =
-               CanvasAttachments.attach_canvas(ctx.task.id, canvas.id,
+               CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
                  attached_by: attached_by(ctx)
                )
     end
@@ -147,7 +147,7 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
       canvas = create_canvas(ctx.space, ctx.participant)
 
       assert {:error, :task_not_found} =
-               CanvasAttachments.attach_canvas(UUID.generate(), canvas.id,
+               CanvasAttachments.attach_canvas(:system, UUID.generate(), canvas.id,
                  attached_by: attached_by(ctx)
                )
 
@@ -158,7 +158,7 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
       canvas = create_canvas(ctx.space, ctx.participant)
 
       assert {:error, %Ecto.Changeset{valid?: false} = changeset} =
-               CanvasAttachments.attach_canvas(ctx.task.id, canvas.id)
+               CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id)
 
       errors = errors_on(changeset)
       assert errors[:attached_by_kind] == ["can't be blank"]
@@ -172,14 +172,14 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
   # case needs a module-level env override and so lives in the `async: false`
   # `Platform.Design.PreplanStepTest` instead, alongside the rest of the design
   # step's guards.
-  describe "attach_canvas/3 — the ADR-0046 design-step hook" do
+  describe "attach_canvas/4 — the ADR-0046 design-step hook" do
     test "settles an open design step and returns the attachment unchanged", ctx do
       canvas = create_canvas(ctx.space, ctx.participant)
       {:ok, designing} = Tasks.set_planning_step(ctx.task, :designing)
       assert designing.planning_step == "designing"
 
       assert {:ok, %CanvasAttachment{canvas_id: attached_canvas_id}} =
-               CanvasAttachments.attach_canvas(ctx.task.id, canvas.id,
+               CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
                  note: "design direction",
                  attached_by: attached_by(ctx)
                )
@@ -199,7 +199,7 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
       canvas = create_canvas(ctx.space, ctx.participant)
 
       assert {:ok, %CanvasAttachment{}} =
-               CanvasAttachments.attach_canvas(ctx.task.id, canvas.id,
+               CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
                  attached_by: attached_by(ctx)
                )
 
@@ -214,7 +214,9 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
       canvas = create_canvas(ctx.space, ctx.participant)
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(ctx.task.id, canvas.id, attached_by: attached_by(ctx))
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
+          attached_by: attached_by(ctx)
+        )
 
       assert :ok = CanvasAttachments.detach_canvas(ctx.task.id, canvas.id)
       assert Repo.aggregate(CanvasAttachment, :count) == 0
@@ -230,10 +232,14 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
       canvas_b = create_canvas(ctx.space, ctx.participant)
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(ctx.task.id, canvas_a.id, attached_by: attached_by(ctx))
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas_a.id,
+          attached_by: attached_by(ctx)
+        )
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(ctx.task.id, canvas_b.id, attached_by: attached_by(ctx))
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas_b.id,
+          attached_by: attached_by(ctx)
+        )
 
       assert :ok = CanvasAttachments.detach_canvas(ctx.task.id, canvas_a.id)
       assert Repo.aggregate(CanvasAttachment, :count) == 1
@@ -247,17 +253,23 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
       canvas_c = create_canvas(ctx.space, ctx.participant, %{"title" => "third"})
 
       {:ok, a} =
-        CanvasAttachments.attach_canvas(ctx.task.id, canvas_a.id, attached_by: attached_by(ctx))
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas_a.id,
+          attached_by: attached_by(ctx)
+        )
 
       # Force ordering — bump inserted_at on the first row backward in time
       # so we can prove the list is ordered by inserted_at, not by id.
       shift_inserted_at(a, -60)
 
       {:ok, _b} =
-        CanvasAttachments.attach_canvas(ctx.task.id, canvas_b.id, attached_by: attached_by(ctx))
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas_b.id,
+          attached_by: attached_by(ctx)
+        )
 
       {:ok, _c} =
-        CanvasAttachments.attach_canvas(ctx.task.id, canvas_c.id, attached_by: attached_by(ctx))
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas_c.id,
+          attached_by: attached_by(ctx)
+        )
 
       entries = CanvasAttachments.list_task_canvases(ctx.task.id)
       assert length(entries) == 3
@@ -271,12 +283,12 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
       canvas_gone = create_canvas(ctx.space, ctx.participant, %{"title" => "doomed"})
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(ctx.task.id, canvas_live.id,
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas_live.id,
           attached_by: attached_by(ctx)
         )
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(ctx.task.id, canvas_gone.id,
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas_gone.id,
           attached_by: attached_by(ctx)
         )
 
@@ -303,7 +315,9 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
       canvas = create_canvas(ctx.space, ctx.participant)
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(ctx.task.id, canvas.id, attached_by: attached_by(ctx))
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
+          attached_by: attached_by(ctx)
+        )
 
       [entry] = CanvasAttachments.list_task_canvases(ctx.task.id)
       # Default canvas document has a root `stack` node.
@@ -334,23 +348,189 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
     end)
   end
 
+  # ── Reverse lookup (task 019e2c4b stage 1) ───────────────────────────────
+  # `Platform.Chat.CanvasAccess` rides on this to resolve the `:task_reader`
+  # grant, so the `task: nil` degradation is load-bearing rather than
+  # cosmetic: a grant must not outlive the task that conferred it.
+  describe "list_canvas_tasks/1" do
+    test "returns the tasks a canvas is attached to, inserted_at ASC", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      {:ok, other_task} = Tasks.create_task(%{project_id: ctx.project.id, title: "Second task"})
+
+      {:ok, first} =
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
+          attached_by: attached_by(ctx)
+        )
+
+      {:ok, second} =
+        CanvasAttachments.attach_canvas(:system, other_task.id, canvas.id,
+          attached_by: attached_by(ctx)
+        )
+
+      :ok = shift_inserted_at(first, -60)
+
+      assert [entry_a, entry_b] = CanvasAttachments.list_canvas_tasks(canvas.id)
+      assert entry_a.attachment.id == first.id
+      assert entry_b.attachment.id == second.id
+
+      assert entry_a.task == %{
+               id: ctx.task.id,
+               title: ctx.task.title,
+               status: ctx.task.status,
+               project_id: ctx.project.id
+             }
+    end
+
+    test "surfaces a soft-deleted task as task: nil", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      {:ok, attachment} =
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
+          attached_by: attached_by(ctx)
+        )
+
+      {:ok, _deleted} = Tasks.soft_delete_task(ctx.task)
+
+      assert [%{attachment: %CanvasAttachment{id: id}, task: nil}] =
+               CanvasAttachments.list_canvas_tasks(canvas.id)
+
+      assert id == attachment.id
+    end
+
+    test "returns [] for an unattached, unknown or malformed canvas id", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      assert CanvasAttachments.list_canvas_tasks(canvas.id) == []
+      assert CanvasAttachments.list_canvas_tasks(UUID.generate()) == []
+      assert CanvasAttachments.list_canvas_tasks("higginshigginsxx") == []
+    end
+  end
+
   # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
   # The 16-character case is the load-bearing one: `Ecto.UUID.cast/1` accepts
   # any 16-byte binary, so a test built from "higgins" alone is green against
   # the bug these guards fix.
-  describe "UUID boundary: attach_canvas/3 ids are raw MCP tool arguments" do
+  describe "UUID boundary: attach_canvas/4 ids are raw MCP tool arguments" do
     test "a malformed task id reports :task_not_found rather than raising", ctx do
       canvas = create_canvas(ctx.space, ctx.participant)
 
       assert {:error, :task_not_found} =
-               CanvasAttachments.attach_canvas("higginshigginsxx", canvas.id,
+               CanvasAttachments.attach_canvas(:system, "higginshigginsxx", canvas.id,
                  attached_by: attached_by(ctx)
                )
     end
 
     test "a malformed canvas id reports :canvas_not_found rather than raising", ctx do
       assert {:error, :canvas_not_found} =
-               CanvasAttachments.attach_canvas(ctx.task.id, "higginshigginsxx",
+               CanvasAttachments.attach_canvas(:system, ctx.task.id, "higginshigginsxx",
+                 attached_by: attached_by(ctx)
+               )
+    end
+  end
+
+  # ── Attacher authorization (task 019e2c4b stage 2) ───────────────────────
+  #
+  # `Platform.Chat.CanvasAccess`'s `:task_reader` grant reads: you may read a
+  # canvas if it is attached to a task in an org you belong to. So an
+  # unauthorized attach is a self-service grant — staple a stranger's canvas
+  # onto a task in your own org and your whole org can read it. Attaching
+  # therefore requires already holding a read grant on the canvas.
+  describe "attach_canvas/4 authorizes the attacher against the canvas" do
+    test "a user who participates in the canvas's space may attach", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+      user_id = UUID.generate()
+      create_participant(ctx.space.id, %{participant_id: user_id})
+
+      assert {:ok, %CanvasAttachment{}} =
+               CanvasAttachments.attach_canvas({:user, user_id}, ctx.task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+    end
+
+    test "an agent that participates in the canvas's space may attach", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+      agent_id = UUID.generate()
+
+      create_participant(ctx.space.id, %{
+        participant_type: "agent",
+        participant_id: agent_id
+      })
+
+      assert {:ok, %CanvasAttachment{}} =
+               CanvasAttachments.attach_canvas({:agent, agent_id}, ctx.task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+    end
+
+    test "a user with no grant on the canvas is rejected and no row is written", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      assert {:error, :canvas_forbidden} =
+               CanvasAttachments.attach_canvas({:user, UUID.generate()}, ctx.task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+
+      assert CanvasAttachments.list_task_canvases(ctx.task.id) == []
+    end
+
+    test "an agent outside the canvas's space is rejected", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+      other_space = create_space()
+      agent_id = UUID.generate()
+
+      create_participant(other_space.id, %{
+        participant_type: "agent",
+        participant_id: agent_id
+      })
+
+      assert {:error, :canvas_forbidden} =
+               CanvasAttachments.attach_canvas({:agent, agent_id}, ctx.task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+    end
+
+    test "an unidentified actor is rejected, not treated as :system", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      assert {:error, :canvas_forbidden} =
+               CanvasAttachments.attach_canvas(nil, ctx.task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+    end
+
+    test "the :system actor is unaffected by the gate", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      assert {:ok, %CanvasAttachment{}} =
+               CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+    end
+
+    # Attribution is caller-supplied metadata; the actor is who is asking.
+    # They legitimately differ — `DesignTaskDirection` attaches as `:system`
+    # while attributing to the responsible designer — so attribution must
+    # never be readable as authorization.
+    test "attribution is not the authorization subject", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      # Attributing the attach to a genuine participant does NOT let a
+      # non-participant through.
+      assert {:error, :canvas_forbidden} =
+               CanvasAttachments.attach_canvas({:user, UUID.generate()}, ctx.task.id, canvas.id,
+                 attached_by: %{kind: "user", id: ctx.participant.id}
+               )
+    end
+
+    # Ordering: a canvas that does not exist reports absence, so the denial
+    # does not become a richer existence oracle than the read door already is.
+    test "a nonexistent canvas reports :canvas_not_found ahead of :canvas_forbidden", ctx do
+      assert {:error, :canvas_not_found} =
+               CanvasAttachments.attach_canvas(
+                 {:user, UUID.generate()},
+                 ctx.task.id,
+                 UUID.generate(),
                  attached_by: attached_by(ctx)
                )
     end

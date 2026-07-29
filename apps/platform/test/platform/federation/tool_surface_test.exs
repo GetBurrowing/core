@@ -4846,6 +4846,13 @@ defmodule Platform.Federation.ToolSurfaceTest do
         })
 
       agent_id = Ecto.UUID.generate()
+
+      # The calling agent is a participant of the canvas's space. Task 019e2c4b
+      # stage 2 authorizes the attacher against the canvas, so an agent that
+      # was never in that space can no longer attach it — asserted in the
+      # denial test at the end of this block.
+      create_participant(space.id, %{participant_type: "agent", participant_id: agent_id})
+
       context = %{agent_id: agent_id, space_id: space.id, agent_participant_id: participant.id}
 
       %{
@@ -4944,6 +4951,64 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert error.error =~ "Canvas not found"
       assert error.recoverable == false
+    end
+
+    # ── Attacher authorization (task 019e2c4b stage 2) ───────────────────
+    #
+    # Attaching a canvas to a task confers `:task_reader` — org-wide read — on
+    # everyone who can read that task. Without this gate, any agent could
+    # staple a stranger's canvas onto a task in its own org and read it.
+    test "task_attach_canvas denies an agent that cannot read the canvas", ctx do
+      stranger = %{
+        agent_id: Ecto.UUID.generate(),
+        space_id: ctx.space.id,
+        agent_participant_id: ctx.participant.id
+      }
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_attach_canvas",
+          %{"task_id" => ctx.task.id, "canvas_id" => ctx.canvas.id},
+          stranger
+        )
+
+      assert error.error =~ "Access denied"
+      assert error.recoverable == false
+      assert error.canvas_id == ctx.canvas.id
+
+      # And nothing was written.
+      {:ok, %{canvases: canvases}} =
+        ToolSurface.execute("task_list_canvases", %{"task_id" => ctx.task.id}, ctx.context)
+
+      assert canvases == []
+    end
+
+    test "task_attach_canvas denies a caller with no identity at all", ctx do
+      {:error, error} =
+        ToolSurface.execute(
+          "task_attach_canvas",
+          %{"task_id" => ctx.task.id, "canvas_id" => ctx.canvas.id},
+          %{}
+        )
+
+      assert error.error =~ "Access denied"
+    end
+
+    # The gate reads `:agent_id` / `:user_id` as the SUBJECT; `attached_by` is
+    # attribution and is recorded from the same context but never consulted for
+    # authorization.
+    test "task_attach_canvas authorizes a participating user via :user_id", ctx do
+      user_id = Ecto.UUID.generate()
+      create_participant(ctx.space.id, %{participant_id: user_id})
+
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "task_attach_canvas",
+                 %{"task_id" => ctx.task.id, "canvas_id" => ctx.canvas.id},
+                 %{user_id: user_id}
+               )
+
+      assert result.canvas_id == ctx.canvas.id
     end
 
     test "task_list_canvases returns hydrated rows after attach", ctx do

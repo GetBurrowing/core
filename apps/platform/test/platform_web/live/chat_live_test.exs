@@ -425,7 +425,7 @@ defmodule PlatformWeb.ChatLiveTest do
       "meta" => %{}
     }
 
-    {:ok, _updated} = Chat.update_canvas(canvas, %{"document" => patched_document})
+    {:ok, _updated} = Chat.update_canvas(:system, canvas, %{"document" => patched_document})
 
     assert render(view) =~ "INLINE_REFRESH_TOKEN"
   end
@@ -784,6 +784,70 @@ defmodule PlatformWeb.ChatLiveTest do
 
     assert html =~ "Out-of-band render test"
     assert html =~ "Canvas should render the latest stored state."
+  end
+
+  # Task 019e2c4b stage 2. `canvas-id` is an event param, so a client can push
+  # any UUID regardless of what was rendered, and `CanvasHooks.find/2` resolves
+  # it through the UNAUTHORIZED `Chat.get_canvas/1` — pinning a stranger's
+  # canvas as `active_canvas`. That read gap is a KNOWN, documented gap left to
+  # stage 3/4 (see `CanvasHooks.find/2`'s moduledoc).
+  #
+  # What stage 2 closes is the WRITE it used to enable: restore-confirm
+  # overwrote the whole document of whatever was pinned, with no membership
+  # check at all. This asserts the forged canvas survives untouched.
+  test "a forged canvas-id from another space cannot be overwritten by restore", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/chat/general", on_error: :warn)
+
+    {:ok, other_space} =
+      Chat.create_space(%{
+        name: "Someone else's space",
+        slug: "foreign-#{System.unique_integer([:positive])}",
+        kind: "channel"
+      })
+
+    {:ok, stranger} =
+      Chat.add_participant(other_space.id, %{
+        participant_type: "user",
+        participant_id: Ecto.UUID.generate(),
+        display_name: "Stranger",
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, foreign_canvas, _msg} =
+      Chat.create_canvas_with_message(other_space.id, stranger.id, %{
+        "title" => "Confidential elsewhere",
+        "document" => %{
+          "version" => 1,
+          "revision" => 1,
+          "root" => %{
+            "id" => "root",
+            "type" => "stack",
+            "props" => %{},
+            "children" => [
+              %{
+                "id" => "secret",
+                "type" => "heading",
+                "props" => %{"level" => 3, "value" => "FOREIGN_CANVAS_SECRET"},
+                "children" => []
+              }
+            ]
+          },
+          "theme" => %{},
+          "bindings" => %{},
+          "meta" => %{}
+        }
+      })
+
+    # Revision 1 always exists — it is written at canvas creation — so a
+    # restore to it is always available to an attacker.
+    render_click(view, "canvas_open", %{"canvas-id" => foreign_canvas.id})
+    html = render_click(view, "canvas_versions_restore_confirm", %{"revision" => "1"})
+
+    assert html =~ "not edit it"
+
+    reloaded = Chat.get_canvas(foreign_canvas.id)
+    assert reloaded.document == foreign_canvas.document
   end
 
   # Regression: the canvas pane subscribes to per-canvas PubSub but had no

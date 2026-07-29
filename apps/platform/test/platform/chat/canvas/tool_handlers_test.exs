@@ -2,6 +2,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
   use Platform.DataCase, async: false
 
   alias Platform.Chat
+  alias Platform.Chat.Canvas.Links
   alias Platform.Chat.Canvas.ToolHandlers
   alias Platform.Chat.Canvas.Server, as: CanvasServer
 
@@ -65,6 +66,28 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
       assert result.revision == 1
 
       on_exit(fn -> CanvasServer.stop(result.canvas_id) end)
+    end
+
+    # Task 019e2c4b stage 5: without this field the creating agent has an id
+    # and no way to hand a human anything they can open.
+    test "returns a view_url pointing at the standalone canvas page" do
+      %{space: space, participant: participant} = setup_space()
+
+      args = %{
+        "space_id" => space.id,
+        "title" => "Cite me",
+        "document" => valid_document()
+      }
+
+      assert {:ok, result} =
+               ToolHandlers.create(args, %{agent_participant_id: participant.id})
+
+      on_exit(fn -> CanvasServer.stop(result.canvas_id) end)
+
+      assert result.view_url == Links.view_url(result.canvas_id)
+
+      assert result.view_url ==
+               PlatformWeb.Endpoint.url() <> "/canvases/" <> result.canvas_id
     end
 
     test "rejects when document is missing" do
@@ -255,6 +278,26 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
       assert payload.presence == %{viewing: [], editing: []}
     end
 
+    # An agent that did not create the canvas still needs a citable URL, so
+    # describe carries it too (task 019e2c4b stage 5).
+    test "returns the same view_url as create" do
+      %{space: space, participant: participant} = setup_space()
+
+      {:ok, created} =
+        ToolHandlers.create(
+          %{"space_id" => space.id, "document" => valid_document()},
+          %{agent_participant_id: participant.id}
+        )
+
+      on_exit(fn -> CanvasServer.stop(created.canvas_id) end)
+
+      assert {:ok, payload} =
+               ToolHandlers.describe(%{"canvas_id" => created.canvas_id}, %{})
+
+      assert payload.view_url == created.view_url
+      assert payload.view_url == Links.view_url(created.canvas_id)
+    end
+
     test "returns error for missing canvas" do
       assert {:error, payload} =
                ToolHandlers.describe(%{"canvas_id" => Ecto.UUID.generate()}, %{})
@@ -338,7 +381,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
                    "base_revision" => 1,
                    "operations" => [["append_child", "root", child]]
                  },
-                 %{}
+                 %{agent_id: participant.participant_id}
                )
 
       assert payload.revision == 2
@@ -363,7 +406,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
             "base_revision" => 1,
             "operations" => [["delete_node", "h"]]
           },
-          %{}
+          %{agent_id: participant.participant_id}
         )
 
       assert {:error, payload} =
@@ -373,7 +416,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
                    "base_revision" => 1,
                    "operations" => [["set_props", "h", %{"value" => "late"}]]
                  },
-                 %{}
+                 %{agent_id: participant.participant_id}
                )
 
       assert payload.recoverable == true
@@ -405,7 +448,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
                    "base_revision" => 1,
                    "operations" => [["append_child", "root", illegal_image]]
                  },
-                 %{}
+                 %{agent_id: participant.participant_id}
                )
 
       assert payload.recoverable == true
@@ -440,7 +483,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
                    "base_revision" => 1,
                    "operations" => [["append_child", "root", stringified_child]]
                  },
-                 %{}
+                 %{agent_id: participant.participant_id}
                )
 
       assert payload.revision == 2
@@ -485,7 +528,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
                    "base_revision" => 1,
                    "operations" => [["upsert_node", "whatever"]]
                  },
-                 %{}
+                 %{agent_id: participant.participant_id}
                )
 
       assert payload.recoverable == true

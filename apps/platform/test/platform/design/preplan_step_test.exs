@@ -645,7 +645,7 @@ defmodule Platform.Design.PreplanStepTest do
       {canvas, participant} = canvas!()
 
       {:ok, attachment} =
-        CanvasAttachments.attach_canvas(task.id, canvas.id,
+        CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
           note: "direction",
           attached_by: %{kind: "user", id: participant.id}
         )
@@ -664,14 +664,14 @@ defmodule Platform.Design.PreplanStepTest do
 
   # ── the attach hook ───────────────────────────────────────────────────────
 
-  describe "GUARD — the attach_canvas/3 hook" do
+  describe "GUARD — the attach_canvas/4 hook" do
     test "attaching a canvas settles an open design step", %{project: project} do
       task = task!(project, @ui_title, %{planning_step: "designing"})
       {canvas, participant} = canvas!()
 
       quietly(fn ->
         assert {:ok, %Platform.Tasks.CanvasAttachment{}} =
-                 CanvasAttachments.attach_canvas(task.id, canvas.id,
+                 CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
                    attached_by: %{kind: "user", id: participant.id}
                  )
       end)
@@ -692,7 +692,7 @@ defmodule Platform.Design.PreplanStepTest do
       log =
         capture_log(fn ->
           assert {:ok, %Platform.Tasks.CanvasAttachment{canvas_id: attached}} =
-                   CanvasAttachments.attach_canvas(task.id, canvas.id,
+                   CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
                      note: "still returns",
                      attached_by: %{kind: "user", id: participant.id}
                    )
@@ -713,7 +713,7 @@ defmodule Platform.Design.PreplanStepTest do
 
       quietly(fn ->
         assert {:ok, _} =
-                 CanvasAttachments.attach_canvas(task.id, canvas.id,
+                 CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
                    attached_by: %{kind: "user", id: participant.id}
                  )
       end)

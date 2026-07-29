@@ -18,14 +18,14 @@ defmodule Platform.Tasks.CanvasAttachments do
   in `list_task_canvases/1` so the caller can choose to detach it rather
   than failing loud.
 
-  The flip side is that `attach_canvas/3` validates canvas existence
+  The flip side is that `attach_canvas/4` validates canvas existence
   (and `is_nil(deleted_at)`) **before** insert, so creating a dangling
   attachment from an MCP tool call surfaces loud at attach time, not
   silently later in a downstream consumer.
 
   ## Idempotent re-attach
 
-  `attach_canvas/3` is idempotent on `(task_id, canvas_id)`. A second call
+  `attach_canvas/4` is idempotent on `(task_id, canvas_id)`. A second call
   with the same pair updates `note` + `attached_by_*` + bumps `updated_at`
   on the existing row, returning the same `id`. This matches how the MCP
   tool will be invoked when an agent attaches the same evidence canvas
@@ -36,6 +36,7 @@ defmodule Platform.Tasks.CanvasAttachments do
   import Ecto.Query
 
   alias Platform.Chat.Canvas
+  alias Platform.Chat.CanvasAccess
   alias Platform.Repo
   alias Platform.Tasks.{CanvasAttachment, Task}
 
@@ -49,15 +50,48 @@ defmodule Platform.Tasks.CanvasAttachments do
             | nil
         }
 
+  @type task_entry :: %{
+          attachment: %CanvasAttachment{},
+          task:
+            %{
+              id: binary(),
+              title: String.t() | nil,
+              status: String.t() | nil,
+              project_id: binary() | nil
+            }
+            | nil
+        }
+
   # ── attach ────────────────────────────────────────────────────────────────
 
   @doc """
-  Attach a canvas to a task.
+  Attach a canvas to a task, on behalf of `actor`.
 
   Validates that both the task and the canvas exist (and that the canvas is
-  not soft-deleted) before insert. Idempotent on `(task_id, canvas_id)` via
-  upsert — a second call updates `note` + attribution + bumps `updated_at`
-  and returns the same row id.
+  not soft-deleted), and that `actor` may READ the canvas, before insert.
+  Idempotent on `(task_id, canvas_id)` via upsert — a second call updates
+  `note` + attribution + bumps `updated_at` and returns the same row id.
+
+  ## Why the attacher is authorized against the canvas
+
+  `Platform.Chat.CanvasAccess`'s `:task_reader` grant says: you may read a
+  canvas if it is attached to a task whose project org you belong to. An
+  unauthorized attach is therefore a self-service grant — staple a stranger's
+  canvas id onto a task in your own org and the whole org can read it.
+
+  So attaching requires already holding a read grant on the canvas. You cannot
+  confer a read you do not have. `actor` is a
+  `t:Platform.Chat.CanvasAccess.actor/0`; the read is resolved with
+  `audit: false`, since an authorization probe is not a read of the document.
+
+  **`:attached_by` is attribution, not authorization.** It records who to show
+  in the UI and is caller-supplied; it is never the subject of this check.
+  `attached_by` and `actor` legitimately differ — see
+  `Platform.Responsibilities.Handlers.DesignTaskDirection`, which attaches as
+  `:system` while attributing the canvas to the responsible designer.
+
+  There is deliberately no defaulting arity: a caller that forgets the actor
+  should fail to compile, not silently bypass the gate.
 
   ## Options
 
@@ -70,18 +104,21 @@ defmodule Platform.Tasks.CanvasAttachments do
     * `{:error, :task_not_found}` if the task id doesn't resolve.
     * `{:error, :canvas_not_found}` if the canvas id doesn't resolve, or the
       canvas is soft-deleted.
+    * `{:error, :canvas_forbidden}` if `actor` may not read the canvas.
     * `{:error, %Ecto.Changeset{}}` if the inputs fail changeset validation
       (missing `attached_by`, bad `kind`, etc.).
   """
-  @spec attach_canvas(binary(), binary(), attach_opts()) ::
+  @spec attach_canvas(CanvasAccess.actor(), binary(), binary(), attach_opts()) ::
           {:ok, %CanvasAttachment{}}
           | {:error, Ecto.Changeset.t()}
           | {:error, :task_not_found}
           | {:error, :canvas_not_found}
-  def attach_canvas(task_id, canvas_id, opts \\ [])
+          | {:error, :canvas_forbidden}
+  def attach_canvas(actor, task_id, canvas_id, opts \\ [])
       when is_binary(task_id) and is_binary(canvas_id) and is_list(opts) do
     with :ok <- ensure_task_exists(task_id),
-         :ok <- ensure_canvas_attachable(canvas_id) do
+         :ok <- ensure_canvas_attachable(canvas_id),
+         :ok <- ensure_canvas_readable(canvas_id, actor) do
       attached_by = Keyword.get(opts, :attached_by, %{})
       kind = attached_by[:kind] || attached_by["kind"]
       id = attached_by[:id] || attached_by["id"]
@@ -231,6 +268,45 @@ defmodule Platform.Tasks.CanvasAttachments do
     end)
   end
 
+  @doc """
+  Reverse of `list_task_canvases/1`: list the tasks a canvas is attached to.
+
+  Returns rows in `inserted_at` ASC order. Each entry is
+  `%{attachment: %CanvasAttachment{}, task: ... | nil}`, where the `task`
+  envelope is a thin map (`id`, `title`, `status`, `project_id`) for symmetry
+  with the forward lookup — callers authorize or render off the envelope
+  without dragging the full 60-field task row around.
+
+  `task_id` carries a real FK (`on_delete: :delete_all`), so an attachment
+  whose task vanished cannot exist. `deleted_at` is a different matter: tasks
+  soft-delete, and a soft-deleted task surfaces as `task: nil` — the same
+  "stale attachment, not broken attachment" degradation `list_task_canvases/1`
+  applies to a soft-deleted canvas. `Platform.Chat.CanvasAccess` depends on
+  that: a `:task_reader` grant must not survive the deletion of the only task
+  that conferred it.
+
+  Single LEFT JOIN — not N+1, and not the two-query batch its sibling needs
+  (that one joins across a soft reference with no FK, so it cannot join).
+  """
+  @spec list_canvas_tasks(binary()) :: [task_entry()]
+  def list_canvas_tasks(canvas_id) when is_binary(canvas_id) do
+    if Platform.UUID.valid?(canvas_id) do
+      from(a in CanvasAttachment,
+        left_join: t in Task,
+        on: t.id == a.task_id,
+        where: a.canvas_id == ^canvas_id,
+        order_by: [asc: a.inserted_at],
+        select: {a, t}
+      )
+      |> Repo.all()
+      |> Enum.map(fn {attachment, task} ->
+        %{attachment: attachment, task: task_envelope(task)}
+      end)
+    else
+      []
+    end
+  end
+
   # ── internals ─────────────────────────────────────────────────────────────
 
   # `task_id` / `canvas_id` are raw `canvas_attach` MCP tool arguments.
@@ -259,6 +335,24 @@ defmodule Platform.Tasks.CanvasAttachments do
     end
   end
 
+  # The attach-time authorization gate (task 019e2c4b stage 2).
+  #
+  # Runs AFTER `ensure_canvas_attachable/1` so a caller attaching a canvas that
+  # simply does not exist hears "not found" rather than "forbidden" — the
+  # denial must not become an existence oracle richer than the read door
+  # already is.
+  #
+  # `:system` is the explicit opt-out for platform-initiated attaches, which
+  # have no principal to authorize. `CanvasAccess` resolves it; there is no
+  # bypass here that `CanvasAccess` does not also know about.
+  defp ensure_canvas_readable(canvas_id, actor) do
+    case CanvasAccess.fetch_for_viewer(canvas_id, actor, audit: false) do
+      {:ok, _canvas, _level} -> :ok
+      {:error, :not_found} -> {:error, :canvas_not_found}
+      {:error, :forbidden} -> {:error, :canvas_forbidden}
+    end
+  end
+
   # Surface a soft-deleted or absent canvas as `nil` so list_task_canvases/1
   # callers can detach the stale row rather than failing loud. Live canvases
   # collapse to a minimal envelope so we don't drag the whole document graph
@@ -272,6 +366,21 @@ defmodule Platform.Tasks.CanvasAttachments do
       title: canvas.title,
       kind: extract_kind(canvas.document),
       deleted_at: canvas.deleted_at
+    }
+  end
+
+  # Symmetric with `canvas_envelope/1`: a missing (FK-impossible) or
+  # soft-deleted task collapses to `nil` so the caller sees a stale
+  # attachment rather than a phantom grant. See `list_canvas_tasks/1`.
+  defp task_envelope(nil), do: nil
+  defp task_envelope(%Task{deleted_at: %DateTime{}}), do: nil
+
+  defp task_envelope(%Task{} = task) do
+    %{
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      project_id: task.project_id
     }
   end
 

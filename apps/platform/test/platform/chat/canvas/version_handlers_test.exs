@@ -206,5 +206,60 @@ defmodule Platform.Chat.Canvas.VersionHandlersTest do
                  %{agent_id: outsider_agent_id}
                )
     end
+
+    # Task 019e2c4b stage 2. The previous `assert_member/2` gate returned `:ok`
+    # when `context.agent_id` was nil, on the theory that such a caller must be
+    # the in-app LiveView. Nothing enforced that theory here — this handler is
+    # only reached from the federation tool surface — and `agent_id` is not
+    # required on an `AgentRuntime`, so nil is reachable for an authenticated
+    # remote caller. That was a restore-anything bypass.
+    test "403 when the caller carries no identity at all", %{
+      space: space,
+      agent_participant: ap
+    } do
+      canvas = create_canvas(space.id, ap.id)
+
+      assert {:ok, 2} = CanvasServer.apply_patches(canvas.id, add_text_op("a", "A"), 1)
+
+      assert {:error, %{error: "Access denied" <> _, recoverable: false}} =
+               VersionHandlers.restore(%{"canvas_id" => canvas.id, "revision" => 1}, %{})
+
+      # And the document was not rolled back.
+      assert {:ok, %{revision: 2}} = CanvasServer.describe(canvas.id)
+    end
+
+    test "a participating USER may restore via :user_id", %{
+      space: space,
+      agent_participant: ap
+    } do
+      canvas = create_canvas(space.id, ap.id)
+      user_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user_id,
+          display_name: "Human",
+          joined_at: DateTime.utc_now()
+        })
+
+      assert {:ok, 2} = CanvasServer.apply_patches(canvas.id, add_text_op("a", "A"), 1)
+
+      assert {:ok, _payload} =
+               VersionHandlers.restore(
+                 %{"canvas_id" => canvas.id, "revision" => 1},
+                 %{user_id: user_id}
+               )
+    end
+
+    test "404 for an unknown canvas id, ahead of any access decision" do
+      assert {:error, %{error: error, recoverable: false}} =
+               VersionHandlers.restore(
+                 %{"canvas_id" => Ecto.UUID.generate(), "revision" => 1},
+                 %{agent_id: Ecto.UUID.generate()}
+               )
+
+      assert error =~ "not found"
+    end
   end
 end

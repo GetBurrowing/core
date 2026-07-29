@@ -25,6 +25,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   alias Platform.Chat
   alias Platform.Chat.Canvas.Server, as: CanvasServer
   alias Platform.Chat.Canvas.Versions, as: CanvasVersions
+  alias Platform.Chat.CanvasAccess
   alias Platform.Chat.Presence
   alias Platform.Chat.PubSub, as: ChatPubSub
 
@@ -121,10 +122,46 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   @spec reset_new_form(Phoenix.LiveView.Socket.t(), map()) :: Phoenix.LiveView.Socket.t()
   def reset_new_form(socket, attrs \\ %{}), do: assign_new_form(socket, attrs)
 
-  @doc "Find a canvas by id — DB first, then cached list."
+  @doc """
+  Find a canvas by id — DB first, then cached list.
+
+  ## KNOWN GAP: this resolves canvases the viewer has no claim on
+
+  Not fixed here. Deliberately left for the stage that owns canvas READ
+  surfaces (task 019e2c4b stage 3/4), because closing it means deciding
+  whether Fabrikam admins keep their current de-facto global canvas read — a
+  policy question, not a refactor. Recorded so the next person does not have
+  to rediscover it.
+
+  Both halves are unauthorized:
+
+    * `Chat.get_canvas/1` is the documented UNAUTHORIZED primitive — it
+      resolves any live canvas by id, in any space, in any org.
+    * `socket.assigns.canvases` is not the space-scoped list it looks like.
+      `handle_info({:canvas_created, canvas}, …)` appends to it, and this
+      socket receives that broadcast for every space topic it is subscribed
+      to — wider than the mounted space.
+
+  `canvas_id` arrives as an event param, so a client can push `canvas_open` /
+  `canvas_open_mobile` with any UUID regardless of what was rendered, and pin
+  a foreign canvas as `active_canvas`.
+
+  **Every WRITE reached from an `active_canvas` must therefore authorize for
+  itself** rather than trusting that `find/2` vetted it. See
+  `canvas_versions_restore_confirm`, which gates on
+  `Platform.Chat.CanvasAccess.fetch_for_writer/2` (task 019e2c4b stage 2) —
+  that is what stops this from being a cross-space document overwrite.
+  """
   @spec find(Phoenix.LiveView.Socket.t(), binary()) :: map() | nil
   def find(socket, canvas_id) do
     Chat.get_canvas(canvas_id) || Enum.find(socket.assigns.canvases, &(&1.id == canvas_id))
+  end
+
+  defp viewer(socket) do
+    case current_user_id(socket) do
+      id when is_binary(id) -> {:user, id}
+      _ -> nil
+    end
   end
 
   # ── Hook callbacks ────────────────────────────────────────────────────
@@ -392,8 +429,12 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp handle_event("canvas_versions_restore_confirm", %{"revision" => rev_str}, socket) do
     canvas = socket.assigns.active_canvas
 
+    # Restore is a full-document overwrite — the most destructive canvas write
+    # there is — so it gates on WRITE, not on whatever let the viewer open the
+    # panel. `find/2` admits `:task_reader` and `:org_reader`; neither may edit.
     with {rev, ""} <- Integer.parse(to_string(rev_str)),
          %{} <- canvas,
+         {:ok, _writable} <- CanvasAccess.fetch_for_writer(canvas.id, viewer(socket)),
          %{} = version <- CanvasVersions.get(canvas.id, rev) do
       attribution = caller_attribution(socket, canvas.space_id)
 
@@ -426,7 +467,16 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
           {:halt, put_flash(socket, :error, "Could not load current canvas state.")}
       end
     else
-      _ -> {:halt, put_flash(socket, :error, "Restore failed: revision not found.")}
+      {:error, :forbidden} ->
+        {:halt,
+         put_flash(
+           socket,
+           :error,
+           "You can view this canvas but not edit it. Restoring a revision needs edit access."
+         )}
+
+      _ ->
+        {:halt, put_flash(socket, :error, "Restore failed: revision not found.")}
     end
   end
 

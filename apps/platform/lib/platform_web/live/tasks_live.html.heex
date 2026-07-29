@@ -1579,10 +1579,22 @@
            MCP tool (typically agent-uploaded evidence). Soft-deleted
            canvases stay in the strip with `text-error` styling so the
            user can detach the stale row rather than the chip silently
-           disappearing. No clickthrough — canvases live inside their
-           source space (/chat/<space_slug>), not at a /canvases/:id
-           route. The × button posts `detach_canvas` which calls the
-           context + broadcasts :task_updated for sibling sessions. --%>
+           disappearing.
+
+           Clickthrough to `/canvases/:id` (task 019e2c4b stage 3) — this
+           strip is the route's first in-app consumer and the reason
+           agent-attached deliverables became clickable. A plain `href`,
+           NOT `navigate`: the standalone page lives in its own
+           `:canvas_standalone` live_session precisely so the
+           `:enforce_external_scope` HTTP plug re-runs, and an anchor makes
+           that full round-trip unconditional instead of leaning on
+           LiveView's cross-live_session redirect behaviour.
+
+           Soft-deleted rows (`canvas_present == false`) stay UNLINKED: the
+           chip is a detach affordance at that point, not a destination.
+
+           The × button posts `detach_canvas` which calls the context +
+           broadcasts :task_updated for sibling sessions. --%>
       <div
         :if={@selected_task_canvases != []}
         class="flex flex-wrap items-center gap-2"
@@ -1597,7 +1609,14 @@
           data-role="linked-canvas-chip"
           data-canvas-id={entry.canvas_id}
         >
-          <span :if={entry.canvas_present}>{entry.title || "(untitled)"}</span>
+          <.link
+            :if={entry.canvas_present}
+            href={~p"/canvases/#{entry.canvas_id}"}
+            class="hover:underline"
+            data-role="linked-canvas-chip-link"
+          >
+            {entry.title || "(untitled)"}
+          </.link>
           <span :if={not entry.canvas_present} class="text-error">
             {entry.title || "(deleted canvas)"}
           </span>
