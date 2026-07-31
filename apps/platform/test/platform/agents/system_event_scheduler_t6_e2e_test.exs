@@ -627,7 +627,13 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # than a new one, deliberately beside `task_attach_canvas` so it is
     # reachable by exactly the grant that already carries her delivery path
     # (+task_design_decline → 90)
-    @t6_baseline_tool_count 90
+    # bumped by task 019fa61c stage 3 — the architect's post-executor audit
+    # surface, added to the existing `plan` bundle beside
+    # `plan_architecture_verdict` because moore demonstrably carries that
+    # bundle. It is the only way an agent can land the audit that the
+    # `architecture.audit_diff` fire has always asked for in prose and never
+    # given her a way to perform (+stage_architecture_audit → 91)
+    @t6_baseline_tool_count 91
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

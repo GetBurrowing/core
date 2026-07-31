@@ -45,7 +45,16 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # refuses in its own handler like `skill.get` does. Moving this number DOWN
   # is the same act as moving it up: somebody read the handler and recorded a
   # ruling.
-  @surveyed_required_count 126
+  #
+  # 126 -> 128 at the task 019fa61c merge: `stage_architecture_audit` arrived
+  # on a branch that forked before this survey existed, so the two counts were
+  # never in textual conflict — the arithmetic was. Both of its `required: true`
+  # declarations are HONEST, neither aliased nor aspirational: `stage_id` and
+  # `summary` each have a catch-all handler clause that refuses on a non-binary
+  # (`stage_not_found` / `missing_summary`), so there is no absence-tolerance
+  # for the gate to break. Its third parameter, `findings`, is deliberately
+  # `required: false` — a clean audit carries none.
+  @surveyed_required_count 128
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

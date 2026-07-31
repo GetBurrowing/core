@@ -14,6 +14,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiffTest do
   """
   use Platform.DataCase, async: false
 
+  alias Platform.Architecture.StageAudit
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Responsibilities.Handlers.ArchitectureAuditDiff
@@ -390,6 +391,22 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiffTest do
 
   # ── handle_output/3 ───────────────────────────────────────────────────────
 
+  # WHAT CHANGED IN STAGE 4 OF TASK 019fa61c, and why several cases here
+  # were rewritten rather than deleted.
+  #
+  # `handle_output/3` used to find the execution space from a `task_id`
+  # and post an annotation. It now goes through
+  # `StageAudit.record_note/3` — the same writer the
+  # `stage_architecture_audit` MCP tool calls — which records the audit
+  # against a STAGE and posts the line as one indivisible act.
+  #
+  # So the meta shapes these tests exercised changed meaning. A
+  # `trigger_meta` carrying only `task_id` used to be sufficient and is
+  # now unlandable: there is no stage to record against, and posting an
+  # annotation that leaves no row is precisely the defect the task exists
+  # to close. Those cases are kept, pointed at the new contract, and
+  # PAIRED with a case that shows the difference is real rather than a
+  # blanket refusal.
   describe "handle_output/3" do
     setup do
       project = make_project("Audit Handle Output Project")
@@ -401,6 +418,20 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiffTest do
 
       %{task: task, plan: plan, stage: stage, space: space}
     end
+
+    # The full shape `PlanEngine.after_stage_completed/1` publishes.
+    defp full_meta(ctx) do
+      %{
+        task_id: ctx.task.id,
+        plan_id: ctx.plan.id,
+        stage_id: ctx.stage.id,
+        stage: ctx.stage,
+        plan: ctx.plan,
+        task: ctx.task
+      }
+    end
+
+    defp audit_row(stage), do: Platform.Repo.get!(Platform.Tasks.Stage, stage.id)
 
     test "posts the architect annotation to the task's execution space", ctx do
       output = %{
@@ -431,14 +462,34 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiffTest do
       assert architect_msg.content =~ "no drift"
     end
 
+    # Task 019fa61c stage 4: the annotation is now only half of what this
+    # call produces. Asserting the message alone is what let the row go
+    # missing for months.
+    test "records the audit row alongside the annotation, sourced handle_output", ctx do
+      output = %{"annotations" => [%{"content" => "clean — no drift"}]}
+
+      assert :ok = ArchitectureAuditDiff.handle_output(responsibility(), output, full_meta(ctx))
+
+      audit = audit_row(ctx.stage).architecture_audit
+
+      assert audit["state"] == "noted"
+      assert audit["source"] == "handle_output"
+      assert audit["summary"] == "clean — no drift"
+      assert audit["stage_id"] == ctx.stage.id
+      assert audit["task_id"] == ctx.task.id
+
+      # Freeform prose carries no `{constraint, detail}` pairs, and
+      # inventing them would put fabricated constraints in a column stage
+      # 5 counts. An honest empty list instead.
+      assert audit["findings"] == []
+    end
+
     test "accepts a note-shaped annotation payload", ctx do
       output = %{
         "annotations" => [%{"note" => "divergence: touched prompt_templates.ex too"}]
       }
 
-      trigger_meta = %{task_id: ctx.task.id, plan: ctx.plan}
-
-      assert :ok = ArchitectureAuditDiff.handle_output(responsibility(), output, trigger_meta)
+      assert :ok = ArchitectureAuditDiff.handle_output(responsibility(), output, full_meta(ctx))
 
       messages = Platform.Chat.list_messages(ctx.space.id)
 
@@ -447,17 +498,34 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiffTest do
              end)
     end
 
-    test "returns :ok without crashing when task has no execution space" do
+    # REWRITTEN in stage 4. This case used to build a task with no plan
+    # and no stage, so it returned `:ok` for want of a STAGE and never
+    # reached the no-space branch at all — an assertion passing adjacent
+    # to its claim. It now has a full stage with an OPEN audit and no
+    # execution space, which is the situation it names.
+    test "a task with no execution space records nothing, and leaves the audit open" do
       project = make_project("No Space Audit Project")
       task = make_task(project.id, title: "No Space Audit Task", status: "in_progress")
+      plan = make_plan(task.id)
+      stage = make_stage(plan.id, status: "passed")
 
-      trigger_meta = %{task_id: task.id}
+      {:ok, _} = StageAudit.open_from_fire(stage, {:ok, :dispatched})
+
+      trigger_meta = %{task_id: task.id, stage: stage, plan: plan}
       output = %{"annotations" => [%{"content" => "test"}]}
 
       assert :ok = ArchitectureAuditDiff.handle_output(responsibility(), output, trigger_meta)
+
+      # NEITHER half landed. The row and the note are one fact: a row
+      # saying "noted" with no note behind it would be a number an
+      # operator could not check, so `record_note/3` rolls the row back
+      # when the post fails. The audit stays open and expires, which is a
+      # true statement about a note that never landed.
+      assert audit_row(stage).architecture_audit["state"] == "pending"
+      assert audit_row(stage).architecture_audit["summary"] == nil
     end
 
-    test "returns :ok when trigger_meta has no task_id", ctx do
+    test "returns :ok when trigger_meta carries no stage", ctx do
       output = %{"annotations" => [%{"content" => "test"}]}
 
       assert :ok = ArchitectureAuditDiff.handle_output(responsibility(), output, %{})
@@ -469,28 +537,55 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiffTest do
              end)
     end
 
-    test "resolves task_id from a plan struct in trigger_meta", ctx do
-      output = %{"annotations" => [%{"content" => "resolved via plan"}]}
+    # REPLACES "resolves task_id from a plan struct in trigger_meta". The
+    # task id is no longer this handler's business — `record_note/3`
+    # derives it from the stage's plan. What still has to be tolerant is
+    # locating the STAGE, and `after_stage_completed/1` publishes it two
+    # ways (`plan_engine.ex:611-616`), so both are exercised.
+    test "resolves the stage from a bare stage_id when no struct is carried", ctx do
+      output = %{"annotations" => [%{"content" => "resolved via stage_id"}]}
 
-      trigger_meta = %{plan: ctx.plan}
+      assert :ok =
+               ArchitectureAuditDiff.handle_output(responsibility(), output, %{
+                 stage_id: ctx.stage.id
+               })
 
-      assert :ok = ArchitectureAuditDiff.handle_output(responsibility(), output, trigger_meta)
+      assert audit_row(ctx.stage).architecture_audit["summary"] == "resolved via stage_id"
 
       messages = Platform.Chat.list_messages(ctx.space.id)
 
       assert Enum.any?(messages, fn m ->
-               is_binary(m.content) and String.contains?(m.content, "resolved via plan")
+               is_binary(m.content) and String.contains?(m.content, "resolved via stage_id")
              end)
     end
 
-    test "accepts a bare-string output payload", ctx do
-      trigger_meta = %{task_id: ctx.task.id}
+    # PAIRED CONTROL for the two "nothing landed" cases above. Without it,
+    # a handler that refused EVERYTHING would satisfy them both.
+    test "a task-keyed meta with no stage lands nothing, while the same output with a stage lands",
+         ctx do
+      output = %{"annotations" => [%{"content" => "stage-keyed or nothing"}]}
 
+      assert :ok =
+               ArchitectureAuditDiff.handle_output(responsibility(), output, %{
+                 task_id: ctx.task.id,
+                 plan: ctx.plan
+               })
+
+      assert audit_row(ctx.stage).architecture_audit == nil
+      assert Platform.Chat.list_messages(ctx.space.id) == []
+
+      assert :ok = ArchitectureAuditDiff.handle_output(responsibility(), output, full_meta(ctx))
+
+      assert audit_row(ctx.stage).architecture_audit["state"] == "noted"
+      assert length(Platform.Chat.list_messages(ctx.space.id)) == 1
+    end
+
+    test "accepts a bare-string output payload", ctx do
       assert :ok =
                ArchitectureAuditDiff.handle_output(
                  responsibility(),
                  "bare annotation",
-                 trigger_meta
+                 full_meta(ctx)
                )
 
       messages = Platform.Chat.list_messages(ctx.space.id)
@@ -505,9 +600,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiffTest do
         "annotations" => [%{"content" => "[architect | audit_diff] already-prefixed clean"}]
       }
 
-      trigger_meta = %{task_id: ctx.task.id}
-
-      assert :ok = ArchitectureAuditDiff.handle_output(responsibility(), output, trigger_meta)
+      assert :ok = ArchitectureAuditDiff.handle_output(responsibility(), output, full_meta(ctx))
 
       messages = Platform.Chat.list_messages(ctx.space.id)
 
@@ -520,6 +613,23 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiffTest do
 
       # Prefix should appear exactly once — no `[architect | audit_diff] [architect | audit_diff]`.
       refute architect_msg.content =~ "[architect | audit_diff] [architect | audit_diff]"
+    end
+
+    # The one-shot property reaches THIS path too: two answers for one
+    # fire cannot both land, whichever surface they arrive through.
+    test "a second answer for the same fire is refused and changes nothing", ctx do
+      first = %{"annotations" => [%{"content" => "first answer"}]}
+      second = %{"annotations" => [%{"content" => "second answer"}]}
+
+      assert :ok = ArchitectureAuditDiff.handle_output(responsibility(), first, full_meta(ctx))
+      assert :ok = ArchitectureAuditDiff.handle_output(responsibility(), second, full_meta(ctx))
+
+      audit = audit_row(ctx.stage).architecture_audit
+      assert audit["summary"] == "first answer"
+
+      messages = Platform.Chat.list_messages(ctx.space.id)
+      assert length(messages) == 1
+      refute Enum.any?(messages, &String.contains?(&1.content, "second answer"))
     end
   end
 

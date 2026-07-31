@@ -48,6 +48,30 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
   would leave an earlier stage's fix in place and produce a false
   negative.
 
+  ## What this file covers, and where the OTHER path is covered
+
+  Added in task `019fa61c` stage 4, because the reasoning that left
+  production uncovered was recorded HERE and a reader who stops at this
+  moduledoc will repeat it. This file exercises the EXTERNAL assignee
+  only — that is deliberate and still correct, since the Router invokes
+  `handle_output/3` on no other path. But "external only" was allowed to
+  read as "the only path worth testing", and the federated path
+  production actually uses went unexercised for months.
+
+  The native/federated path now has its own cover, and neither file
+  substitutes for the other:
+
+    * `architecture_audit_diff_native_artefact_test.exs` — a federated
+      fire leaves a durable `stages.architecture_audit` row, and the
+      three fire outcomes are distinguishable in it (stage 2).
+    * `federation/stage_architecture_audit_tool_test.exs` — the
+      federated architect's NOTE, landed through the
+      `stage_architecture_audit` MCP tool with `source: "mcp"`
+      (stage 3).
+    * `tasks/plan_engine_architect_drift_hook_test.exs` — the external
+      round trip driven through the real plan-engine hook, where the
+      ordering that makes this convergence subtle is visible (stage 4).
+
   ## Stated exclusion: `architecture.cron_sweep`
 
   The third architecture key is deliberately NOT exercised end-to-end
@@ -65,6 +89,7 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
   import ExUnit.CaptureLog
 
   alias Platform.Agents.Agent
+  alias Platform.Architecture.StageAudit
   alias Platform.ExternalAgents.EphemeralCredentials
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
@@ -76,6 +101,8 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
   alias Platform.Roles.Role
   alias Platform.Roles.RoleResponsibility
   alias Platform.Tasks
+  alias Platform.Tasks.Plan
+  alias Platform.Tasks.Stage
 
   # The sentinel travels: stub response body → Dispatcher.parse_response
   # → ContractValidator (both architecture contracts classify as
@@ -124,9 +151,18 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
   # Mirrors `router_test.exs`'s `wire_external_assignee/1`, with
   # `role_key: "architect"` — the role the ADR-0044 seeds bundle these
   # keys under. The agent is deliberately **external**: the Router only
-  # runs `handle_output/3` inline on the external path, so a native
+  # runs `handle_output/3` inline on the external path, so this file
+  # exercises the external half of the fix and nothing else.
+  #
+  # CORRECTED, task 019fa61c stage 4. This comment used to end "a native
   # assignee would never reach `ExecutionSpace.post_log/2` and this
-  # detector would prove nothing.
+  # detector would prove nothing", and that WAS true when it was written.
+  # It is now false in the interesting direction: a federated architect
+  # reaches `post_log/2` through `StageAudit.record_note/3`, called by the
+  # `stage_architecture_audit` MCP tool. What remains true — and is the
+  # only reason to keep wiring an external agent here — is that the Router
+  # invokes `handle_output/3` on the external path alone. The native path
+  # is covered where it actually lives; see the moduledoc.
   defp wire_external_architect(responsibility_key) do
     role_key = "architect"
 
@@ -202,6 +238,17 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
     |> ExecutionSpace.list_messages_with_participants()
     |> Enum.find(fn msg ->
       is_binary(msg.content) and String.starts_with?(msg.content, prefix)
+    end)
+  end
+
+  # Every `"[architect | audit_diff] "` line, so a test can count them. A
+  # note that posted twice reads to a human as two separate audits.
+  defp audit_annotations(space_id) do
+    space_id
+    |> ExecutionSpace.list_messages_with_participants()
+    |> Enum.filter(fn msg ->
+      is_binary(msg.content) and
+        String.starts_with?(msg.content, StageAudit.annotation_prefix())
     end)
   end
 
@@ -421,6 +468,98 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
 
       refute log =~ "no output handler for architecture.audit_diff"
       assert log =~ "external dispatch ok key=architecture.audit_diff"
+    end
+
+    # ── task 019fa61c stage 4: the same round trip leaves a ROW ─────────
+
+    test "the same round trip records the audit against the stage, sourced handle_output",
+         ctx do
+      :ok = stub_architect_reply!("#{@sentinel} drift: touched an unplanned subsystem")
+
+      capture_log([level: :info], fn ->
+        assert {:ok, :dispatched} = Router.fire_trigger(ctx.row, audit_trigger_meta(ctx), %{})
+      end)
+
+      assert_receive {:outbound, "/chat/completions", _body}
+
+      audit = Repo.get!(Stage, ctx.stage.id).architecture_audit
+
+      assert is_map(audit),
+             "the external round trip left no row — handle_output/3 posted an annotation " <>
+               "nobody can count, which is the defect this task exists to close"
+
+      assert audit["state"] == "noted"
+      assert audit["source"] == "handle_output"
+      assert audit["summary"] =~ @sentinel
+      assert audit["findings"] == []
+
+      # Keyed to the right subject. A row that names another stage is not
+      # evidence about this one.
+      assert audit["stage_id"] == ctx.stage.id
+      assert audit["task_id"] == ctx.task.id
+
+      # The row and the annotation are ONE fact, and `record_note/3` lands
+      # both or neither. Asserting either alone is the half-evidence the
+      # previous version of this file shipped.
+      assert [annotation] = audit_annotations(ctx.space.id)
+      assert annotation.content =~ @sentinel
+    end
+
+    # PAIRED with the stage-3 MCP case, because `source` is only useful if
+    # the two channels actually differ in the row. Same writer, same
+    # stage-shaped fixture, same annotation prefix — one value apart.
+    #
+    # Driven through `StageAudit.record_note/3` directly rather than the
+    # tool: the tool's own end-to-end cover is
+    # `stage_architecture_audit_tool_test.exs`, and what needs pinning
+    # HERE is the discrimination, not a second copy of the tool's
+    # argument handling.
+    test "an mcp-sourced note and a handle_output-sourced note are distinguishable in the row",
+         ctx do
+      :ok = stub_architect_reply!("#{@sentinel} drift: touched an unplanned subsystem")
+
+      capture_log([level: :info], fn ->
+        assert {:ok, :dispatched} = Router.fire_trigger(ctx.row, audit_trigger_meta(ctx), %{})
+      end)
+
+      assert_receive {:outbound, "/chat/completions", _body}
+
+      {:ok, sibling} =
+        Tasks.create_stage(%{
+          plan_id: ctx.plan.id,
+          position: 2,
+          name: "Land the coverage walk (sibling)",
+          description: "Edit only apps/platform/test/platform/responsibilities/."
+        })
+
+      {:ok, _} = StageAudit.open_from_fire(sibling, {:ok, :dispatched})
+
+      {:ok, _} =
+        StageAudit.record_note(
+          sibling,
+          %{summary: "#{@sentinel} landed by the architect's own tool call", findings: []},
+          source: "mcp"
+        )
+
+      external = Repo.get!(Stage, ctx.stage.id).architecture_audit
+      mcp = Repo.get!(Stage, sibling.id).architecture_audit
+
+      assert external["source"] == "handle_output"
+      assert mcp["source"] == "mcp"
+
+      # Everything else about the two rows agrees — same state, same
+      # prefix on the wire. If `source` collapsed, a reader could not tell
+      # which surface produced an audit at all.
+      assert external["state"] == mcp["state"]
+      assert external["state"] == "noted"
+
+      # Both are in `Plan.architecture_verdict_sources/0`'s vocabulary
+      # rather than a second one invented for stages.
+      assert external["source"] in Plan.architecture_verdict_sources()
+      assert mcp["source"] in Plan.architecture_verdict_sources()
+
+      # Two notes, two annotations — one per stage, not two on one.
+      assert length(audit_annotations(ctx.space.id)) == 2
     end
   end
 end

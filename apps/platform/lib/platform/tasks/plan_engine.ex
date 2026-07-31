@@ -24,6 +24,7 @@ defmodule Platform.Tasks.PlanEngine do
   alias Platform.Repo
   require Logger
 
+  alias Platform.Architecture.StageAudit
   alias Platform.Tasks
   alias Platform.Tasks.PlanCompletion
 
@@ -607,36 +608,57 @@ defmodule Platform.Tasks.PlanEngine do
     plan = Repo.get(Plan, stage.plan_id)
     task = plan && Repo.get(Task, plan.task_id)
 
-    case Platform.Responsibilities.fire("architecture.audit_diff", %{
-           stage_id: stage.id,
-           plan_id: stage.plan_id,
-           task_id: plan && plan.task_id,
-           stage: stage,
-           plan: plan,
-           task: task
-         }) do
-      {:error, reason} = result ->
-        Logger.warning(
-          "[Responsibilities] architecture.audit_diff dispatch failed " <>
-            "stage=#{stage.id} plan=#{stage.plan_id} reason=#{inspect(reason)}"
-        )
+    result =
+      case Platform.Responsibilities.fire("architecture.audit_diff", %{
+             stage_id: stage.id,
+             plan_id: stage.plan_id,
+             task_id: plan && plan.task_id,
+             stage: stage,
+             plan: plan,
+             task: task
+           }) do
+        {:error, reason} = result ->
+          Logger.warning(
+            "[Responsibilities] architecture.audit_diff dispatch failed " <>
+              "stage=#{stage.id} plan=#{stage.plan_id} reason=#{inspect(reason)}"
+          )
 
-        result
+          result
 
-      {:ok, state} = result when state in [:unfilled, :unknown_responsibility] ->
-        # Progressive enhancement, not a problem: no architect holds the
-        # responsibility (or the key was never seeded).
-        Logger.info(
-          "[Responsibilities] architecture.audit_diff #{state} " <>
-            "stage=#{stage.id} plan=#{stage.plan_id}"
-        )
+        {:ok, state} = result when state in [:unfilled, :unknown_responsibility] ->
+          # Progressive enhancement, not a problem: no architect holds the
+          # responsibility (or the key was never seeded).
+          Logger.info(
+            "[Responsibilities] architecture.audit_diff #{state} " <>
+              "stage=#{stage.id} plan=#{stage.plan_id}"
+          )
 
-        result
+          result
 
-      # {:ok, :dispatched} — the Router already logged the dispatch.
-      result ->
-        result
-    end
+        # {:ok, :dispatched} — the Router already logged the dispatch.
+        result ->
+          result
+      end
+
+    # Task 019fa61c. Everything above LOGS the outcome; logs are not an
+    # artefact. Until this line, all three outcomes left the same durable
+    # trace — none — so 28 broadcasts in a 3.3-hour window were
+    # indistinguishable from an architect who was never assigned, and the
+    # payload defect behind them ran six days unnoticed.
+    #
+    # Called on EVERY branch, deliberately: a fire that failed and a fire
+    # that never applied are exactly the two facts a reader needs to tell
+    # apart, and skipping the write on either would rebuild the blind
+    # spot for that case.
+    #
+    # This write is inside `evaluate_validation/2`'s transaction, which is
+    # what we want — a fire recorded for a stage transition that later
+    # rolled back would be a lie. `open_from_fire/2` is total (its own
+    # rescue returns an error tuple), so it cannot reach this function's
+    # rescue backstop and turn "recorded" back into "nothing".
+    _ = StageAudit.open_from_fire(stage, result)
+
+    result
   rescue
     e ->
       Logger.warning(

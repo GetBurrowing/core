@@ -23,11 +23,15 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiff do
       `ArchitectureReviewPlan` shape so both prompts stay diffable).
     * `build_prompt/1` is the M6 Router callback returning
       `{:ok, %{system:, user:}}`.
-    * `handle_output/3` posts the architect's annotations to the task's
-      execution space via `Platform.Orchestration.ExecutionSpace.post_log/2`.
-      Additive only — the stage transitioned to `passed` before this
-      hook fired, so nothing this handler emits can block reviewer
-      dispatch.
+    * `handle_output/3` lands the architect's annotation through
+      `Platform.Architecture.StageAudit.record_note/3` with
+      `source: "handle_output"` — the SAME writer the
+      `stage_architecture_audit` MCP tool calls with `source: "mcp"`
+      (task 019fa61c stage 4). It records the row and posts the
+      execution-space line together, or does neither. Additive only —
+      the stage transitioned to `passed` before this hook fired, so
+      nothing this handler emits can block reviewer dispatch, and every
+      failure mode below logs and returns `:ok`.
 
   ## Spec (unchanged from stage 1)
 
@@ -55,7 +59,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiff do
 
   require Logger
 
-  alias Platform.Orchestration.ExecutionSpace
+  alias Platform.Architecture.StageAudit
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
   alias Platform.Responsibilities.Responsibility
@@ -229,29 +233,31 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiff do
   @impl true
   def handle_output(%Responsibility{} = _responsibility, output, trigger_meta)
       when is_map(trigger_meta) do
-    task_id = extract_task_id(trigger_meta)
-
-    with :ok <- ensure_task_id(task_id),
-         %{} = space <- ExecutionSpace.find_by_task_id(task_id),
-         annotation when is_binary(annotation) and annotation != "" <-
-           extract_annotation(output) do
-      post_annotation(space.id, annotation)
-    else
-      {:error, :missing_task_id} ->
-        Logger.warning(
-          "[architecture.audit_diff] handle_output missing task_id in trigger_meta — " <>
-            "keys=#{inspect(Map.keys(trigger_meta))}"
-        )
-
-        :ok
+    # Nested rather than a `with`: `extract_stage/1` and
+    # `extract_annotation/1` both answer `nil`, and collapsing them onto
+    # one `else` arm would give an operator problem (no stage to record
+    # against) and a routine one (the architect said nothing) the same log
+    # line. That conflation is the shape of defect this whole task is
+    # undoing one level up.
+    case extract_stage(trigger_meta) do
+      %Stage{} = stage ->
+        land_annotation(stage, output)
 
       nil ->
-        Logger.info(
-          "[architecture.audit_diff] no execution space for task_id=#{inspect(task_id)} — " <>
-            "skipping annotation post"
+        Logger.warning(
+          "[architecture.audit_diff] handle_output cannot locate the stage in trigger_meta — " <>
+            "keys=#{inspect(Map.keys(trigger_meta))}. Nothing recorded; the audit stays open " <>
+            "and expires."
         )
 
         :ok
+    end
+  end
+
+  defp land_annotation(%Stage{} = stage, output) do
+    case extract_annotation(output) do
+      annotation when is_binary(annotation) and annotation != "" ->
+        land_note(stage, annotation)
 
       "" ->
         Logger.debug(
@@ -366,21 +372,13 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiff do
     }
   end
 
-  defp extract_task_id(trigger_meta) when is_map(trigger_meta) do
-    Map.get(trigger_meta, :task_id) || Map.get(trigger_meta, "task_id") ||
-      task_id_from_plan(Map.get(trigger_meta, :plan) || Map.get(trigger_meta, "plan")) ||
-      task_id_from_task(Map.get(trigger_meta, :task) || Map.get(trigger_meta, "task"))
-  end
-
-  defp task_id_from_plan(%Plan{task_id: id}) when is_binary(id), do: id
-  defp task_id_from_plan(_), do: nil
-
-  defp task_id_from_task(%TaskSchema{id: id}) when is_binary(id), do: id
-  defp task_id_from_task(_), do: nil
-
-  defp ensure_task_id(id) when is_binary(id), do: :ok
-  defp ensure_task_id(_), do: {:error, :missing_task_id}
-
+  # `extract_task_id/1` and its `%Plan{}` / `%Task{}` fallbacks were
+  # deleted in stage 4. The task id is no longer this handler's business:
+  # `StageAudit.record_note/3` derives it from the audit row (which got it
+  # from the stage's plan) and resolves the execution space itself. Two
+  # modules deriving one id from two different inputs is how the space a
+  # note lands in and the row it is recorded on could have disagreed.
+  #
   # Turn the structured context map into a template-assigns map. Each
   # `{{variable}}` in the template gets a stringified block — the goal is
   # a readable prompt, not machine-parseable JSON.
@@ -388,9 +386,18 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiff do
     %{
       stage_diff: format_stage_diff(Map.get(context, :stage_diff)),
       planned_shape: format_planned_shape(Map.get(context, :planned_shape)),
-      org_memory_entries: format_memory_entries(Map.get(context, :org_memory_entries, []))
+      org_memory_entries: format_memory_entries(Map.get(context, :org_memory_entries, [])),
+      # Task 019fa61c stage 3. The template now names the tool that lands
+      # the audit, and that tool's only required argument is the stage id.
+      # An instruction to call a tool with an argument the prompt never
+      # printed is an instruction the agent cannot follow — the same
+      # shape of defect as naming no tool at all.
+      stage_id: format_stage_id(Map.get(context, :planned_shape))
     }
   end
+
+  defp format_stage_id(%{stage_id: id}) when is_binary(id), do: id
+  defp format_stage_id(_shape), do: "(stage id unavailable — this fire carried no stage payload)"
 
   defp format_stage_diff(%{missing?: true} = slot) do
     "(#{Map.get(slot, :note, "diff not captured at stage-complete signal")})"
@@ -464,29 +471,68 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiff do
   defp extract_annotation(str) when is_binary(str), do: str
   defp extract_annotation(_), do: nil
 
-  defp post_annotation(space_id, annotation)
-       when is_binary(space_id) and is_binary(annotation) do
-    case ExecutionSpace.post_log(space_id, format_annotation(annotation)) do
-      {:ok, _msg} ->
+  # ── landing the note ──────────────────────────────────────────────────
+  #
+  # Task 019fa61c stage 4. This function used to find the execution space
+  # and post an annotation itself. It now goes through
+  # `StageAudit.record_note/3` — the same writer the
+  # `stage_architecture_audit` MCP tool calls — so a federated architect
+  # and an external one leave the SAME row and the SAME execution-space
+  # line, differing only in `source`. The vocabulary is
+  # `Plan.architecture_verdict_sources/0`'s (`plan.ex:116`), reused rather
+  # than reinvented.
+  #
+  # ORDERING, verified by reading and pinned by
+  # `plan_engine_architect_drift_hook_test.exs`: this runs INSIDE
+  # `Responsibilities.fire/2`. `run_external_dispatch/5` calls
+  # `invoke_handle_output/3` (`router.ex:1106`) with the parsed HTTP body
+  # before `fire/2` returns, and `after_stage_completed/1` only calls
+  # `StageAudit.open_from_fire/2` after that returns. So at this point the
+  # column is still NULL and `record_note/3` alone would refuse with
+  # `:audit_not_open` — the convergence would land nothing at all.
+  #
+  # Hence the `open_from_fire/2` here. It is not a guess: this function is
+  # holding parsed output, so a dispatch demonstrably happened and
+  # `{:ok, :dispatched}` is the same value the engine will classify a
+  # moment later. `open_from_fire/2` refuses to overwrite a `"noted"`
+  # audit, which is what stops the engine's trailing write from erasing
+  # the note this one just landed.
+  defp land_note(%Stage{} = stage, annotation) do
+    _ = StageAudit.open_from_fire(stage, {:ok, :dispatched})
+
+    # `summary`, not a `findings` list: the external contract is freeform
+    # prose (`extract_annotation/1` pulls a bare string out of an
+    # unstructured body — both architecture contracts classify as
+    # `:unknown` in the ContractValidator). Splitting that prose into
+    # `{constraint, detail}` pairs would mean GUESSING which closed
+    # constraint each sentence belongs to, and a fabricated constraint in
+    # a column stage 5 counts is worse than an honest empty list.
+    #
+    # No `:resolved_by` either, for the same reason: the Router does not
+    # hand `handle_output/3` the agent it dispatched to
+    # (`invoke_handle_output(responsibility, parsed, meta)` — no agent in
+    # the arity), so any identity here would be invented. `source` already
+    # distinguishes the channel, which is the fact a reader needs.
+    case StageAudit.record_note(stage, %{summary: annotation, findings: []},
+           source: "handle_output"
+         ) do
+      {:ok, _audit} ->
         :ok
 
+      # THE SWALLOW, which stays on this path and does not move into the
+      # writer. Here the annotation is additive by contract (moduledoc
+      # lines 27-30 — the stage is already `passed`), so a failure must
+      # never propagate. The MCP path wants the opposite and gets it:
+      # `record_note/3` reports, and `tool_surface.ex` turns the report
+      # into a refusal code the architect can act on.
       {:error, reason} ->
         Logger.warning(
-          "[architecture.audit_diff] failed to post annotation space_id=#{space_id} " <>
-            "reason=#{inspect(reason)}"
+          "[architecture.audit_diff] note not recorded for stage=#{stage.id} " <>
+            "reason=#{inspect(reason)} — the annotation was NOT posted either " <>
+            "(record_note/3 lands both or neither)"
         )
 
         :ok
-    end
-  end
-
-  defp format_annotation(annotation) when is_binary(annotation) do
-    prefix = "[architect | audit_diff] "
-
-    if String.starts_with?(annotation, prefix) do
-      annotation
-    else
-      prefix <> annotation
     end
   end
 end

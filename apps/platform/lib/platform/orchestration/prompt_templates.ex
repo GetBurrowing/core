@@ -1544,7 +1544,8 @@ defmodule Platform.Orchestration.PromptTemplates do
         variables: [
           "stage_diff",
           "planned_shape",
-          "org_memory_entries"
+          "org_memory_entries",
+          "stage_id"
         ],
         content: """
         You are the Architect. A stage just transitioned to `passed`. Your job is to audit what
@@ -1580,10 +1581,10 @@ defmodule Platform.Orchestration.PromptTemplates do
            one of them retired, cite the memory key (in square brackets, exactly as shown) and
            quote the guidance the change appears to contradict.
 
-        If none of the four concerns apply, post a single short annotation confirming the
-        shipped stage looks clean — "no drift, no new deps, no memory-pattern reintroduction"
-        — so Rowan sees the architect ran and had nothing to flag. Silence is ambiguous;
-        explicit "clean" is not.
+        If none of the four concerns apply, still make the call below with a `summary`
+        confirming the shipped stage looks clean — "no drift, no new deps, no
+        memory-pattern reintroduction" — so Rowan sees the architect ran and had nothing to
+        flag. Silence is ambiguous; explicit "clean" is not.
 
         ## Planned shape (what the stage description asked for)
 
@@ -1597,23 +1598,45 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         {{org_memory_entries}}
 
-        ## Output shape
+        ## How to land your audit — this is the only way
 
-        Post one annotation per concern to the task's execution space. Format each as:
+        Call the `stage_architecture_audit` MCP tool (capability bundle: `plan`) exactly
+        once:
 
         ```
-        [architect | audit_diff | <concern-kind>] <one-line summary>
-
-        <2-4 sentences of detail with concrete file paths / ADR numbers / memory-key refs>
+        stage_architecture_audit(
+          stage_id: "{{stage_id}}",
+          summary: "<one paragraph: what you checked and what you found>",
+          findings: [
+            {"constraint": "module_boundary", "detail": "<what to change>"}
+          ]
+        )
         ```
 
-        `<concern-kind>` is one of `divergence`, `new_dep`, `migration`, `memory_violation`,
-        or `clean`.
+        `stage_id` is the id printed above — pass it verbatim. `summary` is REQUIRED and
+        must be non-blank **including when the stage is clean**: write
+        "no drift, no new deps, no memory-pattern reintroduction" so Rowan sees the
+        architect ran and had nothing to flag. Silence is ambiguous; an explicit clean
+        result is not. `findings` is OPTIONAL — omit it entirely on a clean stage. Each
+        finding's `constraint` must be one of `module_boundary`, `data_model`,
+        `cross_context_coupling`, `duplicated_logic`; there is deliberately no value for a
+        taste, naming or style objection, so say that in `summary` instead. Each `detail`
+        must state WHAT TO CHANGE, not merely what is wrong.
+
+        The tool posts your annotation to the task's execution space AND records the audit
+        against the stage, in one step. Do not post the annotation yourself — a message
+        written any other way leaves no record that the audit happened, which is the exact
+        blind spot this surface was built to close. The call is ONE-SHOT: the first note
+        wins and a second is refused with `audit_already_recorded`.
+
+        Prefix your `summary`'s first line with the concern kind you are reporting — one of
+        `divergence`, `new_dep`, `migration`, `memory_violation`, or `clean` — so the
+        execution-space reader can scan the annotations.
 
         Do NOT rewrite the stage. Do NOT call `task_update`. Do NOT create a
-        `review_request`. Your only side effect is posting annotations. The reviewer's
-        dispatch fires regardless of what you flag — your annotations exist so Rowan sees
-        drift before it compounds.\
+        `review_request`. Your only side effect is the `stage_architecture_audit` call. The
+        reviewer's dispatch fires regardless of what you flag — your annotations exist so
+        Rowan sees drift before it compounds.\
         """
       },
       %{

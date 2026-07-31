@@ -159,6 +159,11 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`agent.id` read off the `%Agent{}` `upsert_agent!/1` just returned in the same function"},
     {"platform/agents/workspace_bootstrap.ex", :get_by, "Agent", 2, :safe_internal,
      "keyed `slug:` from the parsed workspace config file, a string column"},
+    # ── Architecture (ADR-0046, task 019fa61c) ─────────────────────────
+    {"platform/architecture/stage_audit.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "`resolve_stage/1`'s binary clause. `StageAudit.read/1` is the question every other module asks about `stages.architecture_audit`, and a later stage exposes it behind an MCP tool taking a caller-supplied `stage_id` — so the guard is here from the start rather than added once the tool ships. Count 1 -> 2 with stage 5: `audit_rows/1` guards `coverage/1`'s `project_id` before it reaches `where: t.project_id == ^project_id`, returning an empty coverage rather than raising Ecto.Query.CastError. The classification is unchanged because the guard, not the caller, is what makes the lookup safe — and `coverage/1` is the read an operator reaches for while chasing a responsibility that has gone silent, so raising on a fat-fingered id would send them after a second bug"},
+    {"platform/architecture/stage_audit.ex", :get, "Stage", 2, :safe_internal,
+     "both in `resolve_stage/1`: the `%Stage{}` clause re-reads by the PK off a loaded struct (deliberate — see `read/1`'s @doc on stale structs), and the binary clause is reached only through the Platform.UUID.valid?/1 branch above, returning nil for a malformed id in line with `read/1`'s `:none`"},
     # ── Changelog ──────────────────────────────────────────────────────
     {"platform/changelog.ex", :get, "ChangelogEntry", 1, :safe_internal,
      "Changelog.get_entry/1 checks Platform.UUID.valid?/1 first and returns nil for a malformed id, matching its documented `| nil` contract"},
@@ -242,12 +247,12 @@ defmodule Platform.RepoLookupBoundaryTest do
      "reads `plan.task_id` off a %Plan{} loaded two lines earlier — a NOT NULL uuid FK column, so no id reaches it that Postgres did not just hand back"},
     {"platform/federation/task_attrs.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
      "`default_agent_resolver/1` is the injection seam for tests; callers pass an `assignee_id` that `TaskAttrs` has already shape-validated"},
-    {"platform/federation/tool_surface.ex", :platform_uuid_guard, "-", 5, :safe_internal,
-     "file_delete_actor/1 now uses Platform.UUID.cast/1, so a 16-byte agent_id yields nil (delete refused) rather than a fabricated actor id written to the audit column; plus the get_by_uuid/2 helper's own guard. Count 2 -> 3 at the ADR-0046 merge: member 5 stage 4's `verdict_plan/1` was collapsed off a bare Ecto.UUID.cast/1 onto the same predicate. Count 3 -> 4 with ADR-0046 member 7 / task 019fa504 stage 2: `design_decline_task/1` casts `task_design_decline`'s agent-supplied task_id through the same predicate. Count 4 -> 5 with task 019fa609 stage 5: `stage_list_task_plan/2` guards `stage_list`'s newly-accepted agent-supplied task_id before it reaches `Tasks.current_plan/1` or `latest_plan/1`. These are context functions rather than a Repo.get/2 on a schema, so get_by_uuid/2 cannot be reused — but the exposure is identical (a raw tool argument cast into a query) and so is the remedy, which is why the classification still holds"},
+    {"platform/federation/tool_surface.ex", :platform_uuid_guard, "-", 6, :safe_internal,
+     "file_delete_actor/1 now uses Platform.UUID.cast/1, so a 16-byte agent_id yields nil (delete refused) rather than a fabricated actor id written to the audit column; plus the get_by_uuid/2 helper's own guard. Count 2 -> 3 at the ADR-0046 merge: member 5 stage 4's `verdict_plan/1` was collapsed off a bare Ecto.UUID.cast/1 onto the same predicate. Count 3 -> 4 with ADR-0046 member 7 / task 019fa504 stage 2: `design_decline_task/1` casts `task_design_decline`'s agent-supplied task_id through the same predicate. Count 4 -> 5 with task 019fa609 stage 5: `stage_list_task_plan/2` guards `stage_list`'s newly-accepted agent-supplied task_id before it reaches `Tasks.current_plan/1` or `latest_plan/1`. These are context functions rather than a Repo.get/2 on a schema, so get_by_uuid/2 cannot be reused — but the exposure is identical (a raw tool argument cast into a query) and so is the remedy, which is why the classification still holds. Count 5 -> 6 with task 019fa61c stage 3: `stage_audit_stage/1` casts `stage_architecture_audit`'s agent-supplied stage_id through the same predicate — the classification is unchanged because the guard, not the caller, is what makes the lookup safe"},
     {"platform/federation/tool_surface.ex", :get, "Plan", 3, :safe_internal,
      "two read stage.plan_id off a %Stage{} already loaded in the same function; plan_approve's agent-supplied plan_id was moved onto the guarded get_by_uuid/2 helper. The third (count 2 -> 3 at the ADR-0046 merge) is member 5 stage 4's `verdict_plan/1`, whose agent-supplied plan_id is gated by Platform.UUID.cast/1 — collapsed from a bare Ecto.UUID.cast/1 at the merge — so Repo.get receives a canonical uuid or is never reached"},
-    {"platform/federation/tool_surface.ex", :get, "Stage", 1, :safe_internal,
-     "stage.plan_id is read off a %Stage{} the tool already loaded; the boundary-facing stage_complete lookup was moved onto the guarded get_by_uuid/2 helper"},
+    {"platform/federation/tool_surface.ex", :get, "Stage", 2, :safe_internal,
+     "stage.plan_id is read off a %Stage{} the tool already loaded; the boundary-facing stage_complete lookup was moved onto the guarded get_by_uuid/2 helper. Count 1 -> 2 with task 019fa61c stage 3: `stage_audit_stage/1` behind `stage_architecture_audit`. The agent-supplied stage_id is gated by Platform.UUID.cast/1 in the same `with`, so Repo.get receives a canonical uuid or is never reached. The lookup lives HERE rather than being delegated to `StageAudit.record_note/3` (which resolves its own id) for the same reason `design_decline_task/1` does: `record_note/3` would report a mistyped stage_id as `stage_not_found` too, but resolving first is what lets the tool keep `stage_not_found` distinct from `audit_not_open` — an architect who fat-fingered an id must not be told the audit was never opened"},
     {"platform/federation/tool_surface.ex", :get, "Task", 1, :safe_internal,
      "ADR-0046 member 7 / task 019fa504 stage 2: `design_decline_task/1` behind `task_design_decline`. The agent-supplied task_id is gated by Platform.UUID.cast/1 in the same `with`, so Repo.get receives a canonical uuid or is never reached. The lookup exists HERE rather than being delegated to `PreplanStep.decline/3` (which resolves its own id) because `decline/3` collapses an unknown task and an already-closed step into the same `{:ok, :noop}` — resolving first is what lets the tool refuse `task_not_found` distinctly from `step_not_open`"},
     # ── Files ──────────────────────────────────────────────────────────
@@ -570,6 +575,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # reachable from a boundary and no `Platform.UUID.valid?/1` guard applies.
     "platform/agents/historian_audit.ex" => 2,
     "platform/analytics.ex" => 1,
+    # Task 019fa61c: `task_id_for/1`'s `where: p.id == ^plan_id`, whose plan_id
+    # is `stage.plan_id` off a loaded `%Stage{}` — a UUID column read from a
+    # persisted row, never a boundary input. Triaged by hand as this map asks:
+    # the select is nil-tolerant on purpose, because `after_stage_completed/1`
+    # documents that a stage's plan row CAN be gone and a raise there would
+    # record nothing at all.
+    "platform/architecture/stage_audit.ex" => 1,
     "platform/chat.ex" => 14,
     "platform/chat/attachments/tool_handlers.ex" => 1,
     "platform/chat/canvas/versions.ex" => 1,

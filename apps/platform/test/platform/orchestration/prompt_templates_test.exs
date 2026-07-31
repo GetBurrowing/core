@@ -1140,6 +1140,21 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                                      "priv/repo/migrations/20260727210000_force_update_design_task_direction_decline.exs"
                                    ])
 
+    # Task 019fa61c stage 3. Force-update only, same reason as the two
+    # above: `20260708120100_seed_prompt_templates_architect` claimed
+    # `architecture.audit_diff.v1` on every migrated environment, so the
+    # insert branch is dead for it and the row it has to move is a deployed
+    # one. Unlike the 019fa504 precedent this one DOES rewrite `variables`
+    # — the stage adds a real `stage_id` interpolation slot.
+    @audit_diff_tool_migration_path Path.join([
+                                      __ENV__.file
+                                      |> Path.dirname()
+                                      |> Path.dirname()
+                                      |> Path.dirname()
+                                      |> Path.dirname(),
+                                      "priv/repo/migrations/20260728050000_force_update_architect_audit_diff_audit_tool.exs"
+                                    ])
+
     Code.compile_file(@alarm_silence_migration_path)
     Code.compile_file(@subagent_id_ack_migration_path)
     Code.compile_file(@federation_preamble_migration_path)
@@ -1147,6 +1162,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     Code.compile_file(@intent_attention_migration_path)
     Code.compile_file(@design_preplan_migration_path)
     Code.compile_file(@design_decline_migration_path)
+    Code.compile_file(@audit_diff_tool_migration_path)
 
     test "seed_defaults seeds dispatch.planning with current default content" do
       :ok = PromptTemplates.seed_defaults()
@@ -1367,6 +1383,170 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       refute PromptTemplates.get_template_by_slug("design.task_direction.v1"),
              "the migration must skip a missing row, not insert one"
+    end
+
+    # ── task 019fa61c stage 3: the audit_diff tool the prompt never named ──
+    #
+    # `architecture.audit_diff.v1` told the architect to "post one annotation
+    # per concern to the task's execution space" and named NO tool and NO
+    # stage id. `architecture.review_plan.v1` names `plan_architecture_verdict`
+    # and is observable because of it; this one asked for a side effect it
+    # never told the agent how to perform. Stage 3 builds
+    # `stage_architecture_audit` — and the ROW is what the deployed architect
+    # reads, so the tool only reaches her through a force-update.
+    @audit_tool_marker "stage_architecture_audit"
+    @audit_stage_id_marker "{{stage_id}}"
+    @audit_concern_marker "memory_violation"
+
+    defp stale_audit_diff_row do
+      template = PromptTemplates.get_template_by_slug("architecture.audit_diff.v1")
+      assert template, "precondition: the architecture.audit_diff.v1 row exists"
+
+      stale = String.replace(template.content, @audit_tool_marker, "REDACTED_STALE_TOKEN")
+
+      refute stale =~ @audit_tool_marker
+
+      assert stale =~ @audit_concern_marker,
+             "the stale body must still carry the concern taxonomy — otherwise the " <>
+               "force-update assertion below cannot tell 'the tool was named' from " <>
+               "'the whole prompt was replaced'"
+
+      {:ok, updated} =
+        PromptTemplates.update_template(template, %{
+          content: stale,
+          variables: ["stage_diff", "planned_shape", "org_memory_entries"]
+        })
+
+      updated
+    end
+
+    test "20260728050000 audit-diff migration FORCE-UPDATES a row that names no tool" do
+      migration = Platform.Repo.Migrations.ForceUpdateArchitectAuditDiffAuditTool
+
+      stale = stale_audit_diff_row()
+      refute stale.content =~ @audit_tool_marker
+
+      :ok = migration.up()
+
+      refreshed = PromptTemplates.get_template_by_slug("architecture.audit_diff.v1")
+
+      assert refreshed.content ==
+               PromptTemplates.default_content_for_slug("architecture.audit_diff.v1")
+
+      assert refreshed.content =~ @audit_tool_marker
+      refute refreshed.content =~ "REDACTED_STALE_TOKEN"
+
+      # An instruction to call a tool with an argument the prompt never
+      # printed is an instruction the agent cannot follow — that is the same
+      # defect as naming no tool, one level down. `stage_id` is the tool's
+      # only required lookup argument, so the slot has to be interpolated
+      # AND declared.
+      assert refreshed.content =~ @audit_stage_id_marker
+      assert "stage_id" in refreshed.variables
+
+      # PAIRED, and the whole point of the pairing: the tool is named
+      # ALONGSIDE the audit instructions, never in place of them. A body that
+      # lost the concern taxonomy would pass the assertion above and be
+      # strictly worse than the bug being fixed.
+      assert refreshed.content =~ @audit_concern_marker
+      assert refreshed.content =~ "divergence"
+      assert refreshed.content =~ "additive"
+
+      # Idempotent, and it does not duplicate the row.
+      :ok = migration.up()
+
+      assert PromptTemplates.get_template_by_slug("architecture.audit_diff.v1").content ==
+               refreshed.content
+
+      assert Platform.Repo.aggregate(
+               Ecto.Query.from(t in Platform.Orchestration.PromptTemplate,
+                 where: t.slug == "architecture.audit_diff.v1"
+               ),
+               :count
+             ) == 1
+    end
+
+    test "seed_defaults/0 does NOT undo a stale architecture.audit_diff.v1 row" do
+      # The control for the test above, and the reason the code edit to
+      # `do_default_templates/0` is not the deliverable on its own.
+      # `seed_defaults/0` is INSERT-only, so every environment that has ever
+      # booted keeps serving the tool-less body forever and only the
+      # force-update reaches it. Proved end-to-end in production twice this
+      # cycle (tasks 019fa469 and 019fa504): a green CI run and a published
+      # image left the defective row untouched.
+      stale = stale_audit_diff_row()
+
+      :ok = PromptTemplates.seed_defaults()
+
+      after_seed = PromptTemplates.get_template_by_slug("architecture.audit_diff.v1")
+
+      assert after_seed.content == stale.content,
+             "seed_defaults/0 must leave an existing row untouched (insert-only)"
+
+      refute after_seed.content =~ @audit_tool_marker
+
+      # And the migration does what seeding cannot.
+      :ok = Platform.Repo.Migrations.ForceUpdateArchitectAuditDiffAuditTool.up()
+
+      assert PromptTemplates.get_template_by_slug("architecture.audit_diff.v1").content =~
+               @audit_tool_marker
+    end
+
+    test "20260728050000 audit-diff migration SKIPS a database with no audit_diff row" do
+      # Fresh boots pick the slug up from `seed_defaults/0`; the migration
+      # must not insert it a second time or crash on the nil.
+      template = PromptTemplates.get_template_by_slug("architecture.audit_diff.v1")
+      {:ok, _} = PromptTemplates.delete_template(template)
+
+      refute PromptTemplates.get_template_by_slug("architecture.audit_diff.v1")
+
+      assert :ok = Platform.Repo.Migrations.ForceUpdateArchitectAuditDiffAuditTool.up()
+
+      refute PromptTemplates.get_template_by_slug("architecture.audit_diff.v1"),
+             "the migration must skip a missing row, not insert one"
+    end
+
+    test "the DEPLOYED architecture.audit_diff.v1 row names the audit tool" do
+      # Reads the row a deployed architect actually renders — not
+      # `default_content_for_slug/1`, which a code change moves for free and
+      # which therefore proves nothing about what ships.
+      #
+      # WHICH assertion below is the live detector was measured, because the
+      # obvious answer is wrong. Neutering
+      # `20260728050000_force_update_architect_audit_diff_audit_tool.exs`'s
+      # `up/0` to `:ok` and rebuilding a throwaway database detonates three
+      # tests in this file — but the `content` assertion is NOT why this one
+      # fails. On a freshly migrated database the content arrives for free:
+      # the 2026-07-08 precedent migration
+      # (`20260708124000_force_update_architect_audit_diff_template.exs`)
+      # calls `default_content_for_slug/1`, so it re-reads LIVE code. What
+      # it does NOT re-read is `variables` — it pins those to a hardcoded
+      # three-element list. So `"stage_id" in template.variables` is the
+      # assertion that actually fires here (measured: `left: "stage_id"`,
+      # `right: ["stage_diff", "planned_shape", "org_memory_entries"]`).
+      #
+      # The consequence worth carrying forward: a fresh test database is NOT
+      # a faithful model of production for prompt-template content.
+      # Production ran 20260708124000 in July against July's code and will
+      # never re-run it, so there the content is stale as well. The two
+      # tests above — `seed_defaults/0` leaves a stale row untouched, and
+      # this migration moves one — are what pin that half behaviourally.
+      template = PromptTemplates.get_template_by_slug("architecture.audit_diff.v1")
+
+      assert template, "precondition: the architecture.audit_diff.v1 row exists"
+
+      assert template.content =~ @audit_tool_marker,
+             """
+             The DB row for architecture.audit_diff.v1 does not name #{@audit_tool_marker}.
+
+             `PromptTemplates.seed_defaults/0` is INSERT-only, so editing
+             `do_default_templates/0` alone is a no-op on every environment that
+             has already booted — including this test database. The force-update
+             migration is the deliverable.
+             """
+
+      assert template.content =~ @audit_stage_id_marker
+      assert "stage_id" in template.variables
     end
 
     # This stage's migration runs on the TEST database like any other, so

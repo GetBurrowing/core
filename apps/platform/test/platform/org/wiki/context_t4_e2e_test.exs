@@ -893,7 +893,23 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # correct for a queue, both fatal to a cumulative measure. Counting off
       # the ledger would reproduce the ticket's own snapshot defect one layer
       # down. Bounded cardinality (keys x runtimes x counters), never pruned.
-      "20260728000100_create_federation_dead_letter_stats.exs"
+      "20260728000100_create_federation_dead_letter_stats.exs",
+      # Task 019fa61c stage 1: `stages.architecture_audit` — the durable
+      # artefact an `architecture.audit_diff` fire has never had.
+      # `architecture.review_plan` is observable only because it writes a
+      # row (`plans.architecture_verdict`, 20260726051454); `audit_diff`
+      # had no equivalent, so 28 broadcasts in a 3.3-hour window produced
+      # no evidence anywhere and its success rate was unobservable by
+      # construction. Nullable, no default, no index — see the migration.
+      "20260728004500_add_architecture_audit_to_stages.exs",
+      # Task 019fa61c stage 3: force-update `architecture.audit_diff.v1` so
+      # the deployed row names the `stage_architecture_audit` tool and
+      # prints the `stage_id` the tool needs. `seed_defaults/0` is
+      # INSERT-only and 20260708120100 already claimed the slug on every
+      # migrated environment, so the edit to `do_default_templates/0` is a
+      # no-op deploy on its own — proved twice this cycle (019fa469,
+      # 019fa504). Update-only; no schema change.
+      "20260728050000_force_update_architect_audit_diff_audit_tool.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

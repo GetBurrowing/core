@@ -25,6 +25,7 @@ defmodule Platform.Tasks.PlanEngineArchitectDriftHookTest do
   import ExUnit.CaptureLog
 
   alias Platform.Agents.Agent
+  alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
   alias Platform.Responsibilities
   alias Platform.Roles
@@ -33,6 +34,13 @@ defmodule Platform.Tasks.PlanEngineArchitectDriftHookTest do
   alias Platform.Tasks.{PlanEngine, Stage}
 
   @audit_diff_key "architecture.audit_diff"
+
+  # Travels the whole external round trip: stub body → Dispatcher →
+  # ContractValidator (both architecture contracts classify `:unknown`, so
+  # the raw string survives) → `extract_annotation/1` → `record_note/3`'s
+  # `summary` → the execution-space line. A mismatch means the path broke,
+  # not that a payload shape drifted.
+  @answer_sentinel "ARCHITECT_ANSWERED_SENTINEL"
 
   defmodule NoopDispatcher do
     @moduledoc false
@@ -169,6 +177,17 @@ defmodule Platform.Tasks.PlanEngineArchitectDriftHookTest do
     {:ok, _} = Roles.assign_role(role_key, agent.id)
 
     agent
+  end
+
+  # Every `"[architect | audit_diff] "` line in the space, so a test can
+  # assert there is exactly ONE. A note that landed twice reads to a human
+  # as two separate audits.
+  defp audit_annotations(space_id) do
+    space_id
+    |> ExecutionSpace.list_messages_with_participants()
+    |> Enum.filter(fn msg ->
+      is_binary(msg.content) and String.starts_with?(msg.content, "[architect | audit_diff] ")
+    end)
   end
 
   # Complete every validation on the stage. The last one flips
@@ -447,6 +466,116 @@ defmodule Platform.Tasks.PlanEngineArchitectDriftHookTest do
                  "stage=#{stage.id} plan=#{plan.id}"
 
       assert log =~ "dispatch_failed"
+    end
+
+    # ── task 019fa61c stage 4: the external path lands a real note ──────
+    #
+    # THE ORDERING THIS PINS, which is the reverse of the order the code
+    # reads in. `after_stage_completed/1` calls `Responsibilities.fire/2`
+    # first and `StageAudit.open_from_fire/2` second — but for an
+    # `kind: "external"` assignee the entire round trip happens INSIDE
+    # that fire: `run_external_dispatch/5` gets the HTTP body and calls
+    # `invoke_handle_output/3` (`router.ex:1106`) before `fire/2` returns.
+    # So the handler records its note against a column that is still NULL,
+    # and the engine's `open_from_fire/2` runs AFTERWARDS on a row that by
+    # then holds the answer.
+    #
+    # A convergence that ignored this is worse than the bug it replaces:
+    # the note would land, be visible in the execution space, and then be
+    # overwritten with `"pending"` — an audit reading UNANSWERED with its
+    # answer sitting one surface away. Two mechanisms hold it, and each is
+    # independently detonatable (verified, both against this test):
+    #
+    #   * delete the `open_from_fire/2` call in `land_note/2`
+    #     → `record_note/3` refuses `:audit_not_open`, the row stays
+    #       `"pending"` with a nil summary and NO annotation is posted.
+    #   * delete the `coalesce(?->>'state','') <> 'noted'` predicate from
+    #     `commit_open/3` → the row reads `"pending"`, source nil, summary
+    #       nil, while the annotation IS in the space.
+    #
+    # Neither is masked by the other: they fail with different signatures
+    # (the first loses the annotation too, the second keeps it), which is
+    # why both are asserted below rather than just the state.
+    test "an external architect who ANSWERS leaves a noted/handle_output row that the engine's trailing fire record does not erase",
+         %{stage: stage, task: task, plan: plan, v_test: v_test, v_lint: v_lint} do
+      _agent = wire_external_architect!()
+      {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+      test_pid = self()
+
+      Req.Test.stub(:architect_drift_hook_dispatch_test, fn conn ->
+        send(test_pid, {:external_dispatch, conn.request_path})
+
+        Req.Test.json(conn, %{
+          "choices" => [
+            %{
+              "message" => %{
+                "role" => "assistant",
+                "content" => "#{@answer_sentinel} clean — no drift, no new deps"
+              }
+            }
+          ]
+        })
+      end)
+
+      capture_log([level: :info], fn ->
+        complete_stage_via_validations(v_test, v_lint)
+      end)
+
+      # POSITIVE CONTROL: the round trip really happened. Every assertion
+      # below is about what an ANSWER leaves behind, and all of them would
+      # be vacuous against a fire that never reached the endpoint.
+      assert_receive {:external_dispatch, "/chat/completions"}
+
+      audit = Repo.get!(Stage, stage.id).architecture_audit
+
+      assert is_map(audit), "no artefact at all — the fire recorded nothing"
+      assert audit["state"] == "noted"
+      assert audit["source"] == "handle_output"
+      assert audit["summary"] =~ @answer_sentinel
+
+      # Keyed to the right subject: a row that names another stage is not
+      # evidence about this one.
+      assert audit["stage_id"] == stage.id
+      assert audit["task_id"] == task.id
+      assert audit["plan_id"] == plan.id
+
+      # The dispatch facts survive the note rather than being replaced by
+      # it — `record_note/3` MERGES onto the open row.
+      assert is_binary(audit["dispatched_at"])
+      assert is_binary(audit["deadline_at"])
+      assert is_binary(audit["resolved_at"])
+
+      # The row and the note land TOGETHER. Asserting either alone is the
+      # half-evidence this task exists to stop shipping.
+      assert [annotation] = audit_annotations(space.id)
+      assert annotation.content =~ @answer_sentinel
+      assert String.starts_with?(annotation.content, "[architect | audit_diff] ")
+    end
+
+    # PAIRED CONTROL for the test above. Same fixture, same wiring, same
+    # engine call — only the endpoint's answer differs. Without this, a
+    # writer that stamped `"noted"` unconditionally would pass everything
+    # above, and the `state` assertion would be measuring nothing.
+    test "CONTROL: the same path with no answer records the fire, not a note",
+         %{stage: stage, v_test: v_test, v_lint: v_lint} do
+      _agent = wire_external_architect!()
+
+      Req.Test.stub(:architect_drift_hook_dispatch_test, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(503, ~s({"error":"down"}))
+      end)
+
+      capture_log([level: :info], fn ->
+        complete_stage_via_validations(v_test, v_lint)
+      end)
+
+      audit = Repo.get!(Stage, stage.id).architecture_audit
+
+      assert audit["state"] == "failed"
+      assert audit["source"] == nil
+      assert audit["summary"] == nil
     end
   end
 

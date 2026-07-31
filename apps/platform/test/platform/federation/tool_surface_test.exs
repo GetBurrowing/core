@@ -50,14 +50,17 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   describe "tool_definitions/0" do
-    test "returns all 90 tools with required components" do
+    test "returns all 91 tools with required components" do
       tools = ToolSurface.tool_definitions()
       # 88 as of task 019f70b8 stage 3, which added `intent_ack` to the
       # `task` bundle. 89 as of ADR-0046 member 5 stage 4, which added
       # `plan_architecture_verdict` to the `plan` bundle. 90 as of ADR-0046
       # member 7 / task 019fa504 stage 2, which added `task_design_decline`
-      # to the `task` bundle.
-      assert length(tools) == 90
+      # to the `task` bundle. 91 as of task 019fa61c stage 3, which added
+      # `stage_architecture_audit` to the `plan` bundle — the architect's
+      # OTHER surface, which until now asked for a side effect in prose and
+      # named no tool at all.
+      assert length(tools) == 91
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -118,6 +121,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # bundle placement and the refusal taxonomy are pinned in
       # `plan_architecture_verdict_tool_test.exs`.
       assert "plan_architecture_verdict" in tool_names
+      # Task 019fa61c stage 3 — the architect's audit surface. The
+      # six-component rubric below is what this assertion buys; the bundle
+      # placement and the refusal taxonomy are pinned in
+      # `stage_architecture_audit_tool_test.exs`.
+      assert "stage_architecture_audit" in tool_names
       assert "stage_start" in tool_names
       assert "stage_list" in tool_names
       assert "validation_evaluate" in tool_names

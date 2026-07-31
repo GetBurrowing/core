@@ -8,6 +8,7 @@ defmodule Platform.Federation.ToolSurface do
   require Logger
 
   alias Platform.Agents.Agent
+  alias Platform.Architecture.StageAudit
   alias Platform.Chat
   alias Platform.Chat.{ActiveAgentStore, ContextPlane, Participant}
   alias Platform.Design.Brand
@@ -2310,6 +2311,69 @@ defmodule Platform.Federation.ToolSurface do
             "an architect on a runtime that cannot reach this tool is a missing review, not a stuck task.",
         when_to_use:
           "As the architect, exactly once per plan review, when the architecture gate is holding a plan you have finished reading. This is the only way to release the gate from an agent."
+      },
+      %{
+        name: "stage_architecture_audit",
+        description:
+          "Land the architect's post-executor drift audit on one stage (task 019fa61c). " <>
+            "`architecture.audit_diff` fires when a stage transitions to `passed` and the " <>
+            "server records that the fire went out; THIS is the only way to say what came " <>
+            "back. The call posts your note to the task's execution space AND records the " <>
+            "audit against the stage in one step — a note posted any other way leaves no " <>
+            "record that the audit happened. There is deliberately NO pass/reject axis: " <>
+            "the stage is already `passed` before you are asked, so an audit is additive " <>
+            "commentary and never a gate.",
+        parameters: %{
+          stage_id: %{
+            type: "string",
+            required: true,
+            description:
+              "The stage you audited. Printed as `stage_id:` in the drift-audit prompt."
+          },
+          summary: %{
+            type: "string",
+            required: true,
+            description:
+              "Non-empty. One paragraph: what you checked and what you found — INCLUDING a clean result. \"No drift, no new deps, no memory-pattern reintroduction\" is a valid and useful summary; an empty one is indistinguishable from an architect that never read the stage."
+          },
+          findings: %{
+            type: "array",
+            required: false,
+            description:
+              "Optional. Omit entirely on a clean stage. One object per concern: {constraint, detail}. `constraint` must be one of #{Enum.join(Plan.architecture_constraints(), " | ")}. `detail` must say WHAT TO CHANGE, not what is wrong — a detail nobody can act on produces a differently-worded stage, not a better one. There is no `constraint` value for a taste, naming or style objection: put it in `summary`."
+          }
+        },
+        returns:
+          "%{stage_id, task_id, state, source, resolved_at, summary, findings_count, noted_after_deadline} — " <>
+            "`state` is the persisted architecture_audit[\"state\"] (\"noted\"), and " <>
+            "`noted_after_deadline` is true when the audit deadline had already elapsed.",
+        # The prose below is TESTED, not asserted by hand:
+        # `stage_architecture_audit_tool_test.exs` drives every refusal and
+        # asserts the observed `code` set equals the set named here. The
+        # 2026-07-26 e2e journal records `intent_ack` / `task_ack` shipping
+        # `limitations` describing an error taxonomy the code never emits,
+        # with no test guarding it — remote runtimes branch on these strings.
+        limitations:
+          "Refusals carry a `code`: `stage_not_found` (unknown stage_id), " <>
+            "`missing_summary` (summary absent or blank), " <>
+            "`malformed_finding` (a finding is not an object, or its `detail` is blank), " <>
+            "`invalid_constraint` (a finding's `constraint` is outside the four allowed " <>
+            "values — this is where a style objection is refused), " <>
+            "`audit_not_open` (no audit fire was ever recorded for this stage — nothing " <>
+            "is waiting on you), " <>
+            "`audit_already_recorded` (somebody answered first; a duplicate call lands " <>
+            "here and changes nothing — neither the row nor the execution space), " <>
+            "`note_rejected` (the note failed validation, or the annotation could not be " <>
+            "posted — the task has no execution space — in which case NOTHING was " <>
+            "written; the row and the note land together or not at all). " <>
+            "A note arriving AFTER the audit deadline is ACCEPTED, not refused, and " <>
+            "records `noted_after_deadline: true`: an architect who engaged late still " <>
+            "engaged, and the elapsed deadline is kept in the row rather than erased. " <>
+            "A runtime WITHOUT the `plan` capability bundle simply never lands an audit: " <>
+            "the deadline elapses, the row projects as expired, and nothing is blocked — " <>
+            "that degradation is deliberate, because this surface is additive.",
+        when_to_use:
+          "As the architect, exactly once per stage, when you have finished auditing a stage the drift-audit prompt handed you. This is the only way to land an audit from an agent."
       },
       %{
         name: "stage_start",
@@ -6356,6 +6420,31 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # Task 019fa61c stage 3. The counterpart to `plan_architecture_verdict`
+  # above, for the OTHER architect surface — and the reason this task
+  # exists. `review_plan` was observable because it had a tool that wrote
+  # a row; `audit_diff` asked for a side effect in prose and named no tool
+  # at all, so 28 fires in a 3.3-hour window left no evidence anywhere.
+  #
+  # This clause validates and refuses; it does not implement the state
+  # machine. Everything past the argument checks goes through
+  # `StageAudit.record_note/3`, the single writer that persists the row
+  # and posts the annotation together. The tool RESOLVES the stage itself
+  # rather than letting `record_note/3` do it, for the same reason
+  # `task_design_decline` resolves its own task: it is what separates
+  # `stage_not_found` from `audit_not_open`, and an architect who mistyped
+  # a stage id must not be told the audit already closed.
+  #
+  # Every refusal carries a `code` and every code is named in the tool's
+  # `limitations`, with a test that the two sets are equal.
+  def execute("stage_architecture_audit", args, context) do
+    with {:ok, stage} <- stage_audit_stage(Map.get(args, "stage_id")),
+         {:ok, summary} <- stage_audit_summary_arg(Map.get(args, "summary")),
+         {:ok, findings} <- stage_audit_findings_arg(Map.get(args, "findings")) do
+      record_stage_audit_note(stage, summary, findings, context)
+    end
+  end
+
   def execute("stage_start", args, _context) do
     stage_id = Map.get(args, "stage_id")
 
@@ -8736,6 +8825,228 @@ defmodule Platform.Federation.ToolSurface do
 
   defp verdict_refusal(code, error, recoverable, suggestion)
        when code in @architecture_verdict_error_codes do
+    {:error, %{code: code, error: error, recoverable: recoverable, suggestion: suggestion}}
+  end
+
+  # ── task 019fa61c stage 3: stage_architecture_audit internals ────────
+
+  # The closed set of refusal codes this clause can emit. The tool's
+  # `limitations` prose names exactly these, and a test compares the two
+  # sets rather than restating either.
+  #
+  # `note_rejected` is the residual slot, the same one `verdict_rejected`
+  # and `decline_failed` occupy on the sibling tools. It covers the two
+  # ways `record_note/3` can refuse after the arguments are already
+  # valid: the changeset rejected the merged row, or the annotation could
+  # not be posted (the task has no execution space). Both leave NOTHING
+  # written — the row and the note land together or not at all — so
+  # collapsing them onto one recoverable code is honest.
+  @stage_audit_error_codes [
+    :stage_not_found,
+    :missing_summary,
+    :malformed_finding,
+    :invalid_constraint,
+    :audit_not_open,
+    :audit_already_recorded,
+    :note_rejected
+  ]
+
+  @doc """
+  The closed set of `code` values `stage_architecture_audit` refuses with.
+
+  Public so the guard that keeps the tool's `limitations` prose honest can
+  compare the documented taxonomy against the emitted one instead of
+  restating it.
+  """
+  @spec stage_audit_error_codes() :: [atom()]
+  def stage_audit_error_codes, do: @stage_audit_error_codes
+
+  # `Platform.UUID.cast/1`, not a bare `Repo.get/2`: `stage_id` arrives
+  # straight off an agent's tool payload, and `repo_lookup_boundary_test.exs`
+  # ratchets against bare casts on agent-facing paths.
+  defp stage_audit_stage(stage_id) when is_binary(stage_id) do
+    with {:ok, uuid} <- Platform.UUID.cast(stage_id),
+         %Stage{} = stage <- Repo.get(Stage, uuid) do
+      {:ok, stage}
+    else
+      _ -> stage_audit_error(:stage_not_found, stage_id)
+    end
+  end
+
+  defp stage_audit_stage(stage_id), do: stage_audit_error(:stage_not_found, stage_id)
+
+  defp stage_audit_summary_arg(summary) when is_binary(summary) do
+    case String.trim(summary) do
+      "" -> stage_audit_error(:missing_summary, summary)
+      trimmed -> {:ok, trimmed}
+    end
+  end
+
+  defp stage_audit_summary_arg(summary), do: stage_audit_error(:missing_summary, summary)
+
+  # A clean audit carries no findings, and that is the COMMON case — the
+  # prompt asks for an explicit "clean" summary. So an absent or empty
+  # list is accepted rather than refused; the summary is the required
+  # part, because a note with findings but no summary is a list of
+  # complaints and a note with neither is silence with extra steps.
+  defp stage_audit_findings_arg(nil), do: {:ok, []}
+  defp stage_audit_findings_arg([]), do: {:ok, []}
+
+  defp stage_audit_findings_arg(findings) when is_list(findings) do
+    Enum.reduce_while(findings, {:ok, []}, fn finding, {:ok, acc} ->
+      case validate_stage_audit_finding(finding) do
+        {:ok, normalized} -> {:cont, {:ok, acc ++ [normalized]}}
+        {:error, _envelope} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp stage_audit_findings_arg(findings), do: stage_audit_error(:malformed_finding, findings)
+
+  # No `stage_id` key on an audit finding, unlike a verdict finding: a
+  # verdict covers a whole plan and has to name WHICH stage it objects to,
+  # while an audit is already scoped to exactly one stage. Carrying the id
+  # a second time would create a value that can disagree with the row it
+  # is stored on.
+  defp validate_stage_audit_finding(finding) when is_map(finding) do
+    constraint = Map.get(finding, "constraint")
+    detail = Map.get(finding, "detail")
+
+    cond do
+      not (is_binary(constraint) and constraint in Plan.architecture_constraints()) ->
+        stage_audit_error(:invalid_constraint, constraint)
+
+      not (is_binary(detail) and String.trim(detail) != "") ->
+        stage_audit_error(:malformed_finding, detail)
+
+      true ->
+        {:ok, %{"constraint" => constraint, "detail" => String.trim(detail)}}
+    end
+  end
+
+  defp validate_stage_audit_finding(finding),
+    do: stage_audit_error(:malformed_finding, finding)
+
+  defp record_stage_audit_note(%Stage{} = stage, summary, findings, context) do
+    opts = [
+      # THIS clause is what `"mcp"` means. `StageAudit` cannot infer it —
+      # the external `handle_output` path reaches the same writer — so the
+      # channel names itself here or the distinction does not exist.
+      source: "mcp",
+      resolved_by: stage_audit_resolved_by(context)
+    ]
+
+    case StageAudit.record_note(stage, %{summary: summary, findings: findings}, opts) do
+      {:ok, audit} ->
+        {:ok,
+         %{
+           stage_id: stage.id,
+           task_id: Map.get(audit, "task_id"),
+           state: Map.get(audit, "state"),
+           source: Map.get(audit, "source"),
+           resolved_at: Map.get(audit, "resolved_at"),
+           summary: Map.get(audit, "summary"),
+           findings_count: length(Map.get(audit, "findings") || []),
+           # Read back off the PERSISTED row rather than recomputed: the
+           # late-arrival marker is the anti-collapse property this
+           # caller most needs reported, and deriving it twice is how the
+           # two copies come to disagree.
+           noted_after_deadline: Map.get(audit, "noted_after_deadline") == true
+         }}
+
+      {:error, :stage_not_found} ->
+        stage_audit_error(:stage_not_found, stage.id)
+
+      {:error, :audit_not_open} ->
+        stage_audit_error(:audit_not_open, stage.id)
+
+      # Lost a race between the read and the guarded UPDATE, or a plain
+      # duplicate call. Same envelope either way — a caller cannot tell,
+      # and does not need to.
+      {:error, :audit_already_recorded} ->
+        stage_audit_error(:audit_already_recorded, stage.id)
+
+      {:error, reason} ->
+        stage_audit_error(:note_rejected, reason)
+    end
+  end
+
+  # String keys, because the value lands in a JSONB column: an atom-keyed
+  # map would write as `{"kind": ...}` and read back string-keyed, so the
+  # write and the read would not be the same shape. `Stage`'s changeset
+  # only checks the TOP-LEVEL keys, so nothing else catches this.
+  defp stage_audit_resolved_by(context) do
+    case resolve_attached_by(context) do
+      %{kind: kind, id: id} -> %{"kind" => kind, "id" => id}
+      _ -> nil
+    end
+  end
+
+  defp stage_audit_error(:stage_not_found, stage_id) do
+    stage_audit_refusal(
+      :stage_not_found,
+      "Stage not found: #{inspect(stage_id)}",
+      false,
+      "Use the `stage_id` printed in the drift-audit prompt, or stage_list on the plan to look it up."
+    )
+  end
+
+  defp stage_audit_error(:missing_summary, _summary) do
+    stage_audit_refusal(
+      :missing_summary,
+      "summary is required and must be a non-empty string.",
+      true,
+      "One paragraph: what you checked and what you found. A clean stage still needs one — \"no drift, no new deps, no memory-pattern reintroduction\" — because an empty summary is indistinguishable from an architect that never read the stage."
+    )
+  end
+
+  defp stage_audit_error(:malformed_finding, finding) do
+    stage_audit_refusal(
+      :malformed_finding,
+      "each finding must be an object with a `constraint` and a non-empty `detail` (got #{inspect(finding)}).",
+      true,
+      "`detail` must state WHAT TO CHANGE, not what is wrong — \"this is unsound\" tells nobody what to write differently. Omit `findings` entirely if the stage is clean."
+    )
+  end
+
+  defp stage_audit_error(:invalid_constraint, constraint) do
+    stage_audit_refusal(
+      :invalid_constraint,
+      "#{inspect(constraint)} is not an architectural constraint. Allowed: #{Enum.join(Plan.architecture_constraints(), ", ")}.",
+      true,
+      "0046-design-and-architecture-phases-in-planning.md § Architect prompt contract — the architect reports architecture, not taste, naming or style. There is deliberately no `constraint` value for a style objection: put it in `summary`."
+    )
+  end
+
+  defp stage_audit_error(:audit_not_open, stage_id) do
+    stage_audit_refusal(
+      :audit_not_open,
+      "no architecture audit is open for stage #{inspect(stage_id)}: no fire was ever recorded for it.",
+      false,
+      "Nothing is waiting on an audit. This happens when the stage completed before the audit column existed, or when the drift-audit fire never reached a filled role."
+    )
+  end
+
+  defp stage_audit_error(:audit_already_recorded, _stage_id) do
+    stage_audit_refusal(
+      :audit_already_recorded,
+      "the architecture audit for this stage is already recorded.",
+      false,
+      "Nothing to do — the first note won and is unchanged, and no second annotation was posted. A duplicate call is harmless."
+    )
+  end
+
+  defp stage_audit_error(:note_rejected, reason) do
+    stage_audit_refusal(
+      :note_rejected,
+      "the audit note was not recorded: #{inspect_errors_safe(reason)}",
+      true,
+      "Nothing was written — the row and the execution-space annotation land together or not at all. Check `constraint` against #{Enum.join(Plan.architecture_constraints(), ", ")} and that every finding carries a non-empty `detail`. If the task has no execution space there is nowhere to post the note; report that to the human instead."
+    )
+  end
+
+  defp stage_audit_refusal(code, error, recoverable, suggestion)
+       when code in @stage_audit_error_codes do
     {:error, %{code: code, error: error, recoverable: recoverable, suggestion: suggestion}}
   end
 
