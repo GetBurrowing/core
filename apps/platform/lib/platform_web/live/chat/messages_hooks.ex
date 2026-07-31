@@ -58,6 +58,10 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   ## Public helpers for cross-feature coordinators
 
     * `enter_space/3` — called from parent handle_params
+    * `enter_space_anchored/4` — …with a history window centred on a
+      deep-linked message instead of the newest page
+    * `resolve_anchor/1` — classify a deep-link target as top-level vs.
+      thread reply
     * `stream_insert_message/2` — used by `canvas_create` (parent)
     * `reset_thread_panel/1` — used by `canvas_open`, `canvas_create`
     * `open_thread_context/3` — used by `search_open_result` when target
@@ -91,6 +95,12 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   alias PlatformWeb.ChatLive.SearchHooks
 
   @message_limit 50
+
+  # Messages loaded on EACH side of the anchor by
+  # `enter_space_anchored/4`. Half of `@message_limit` per side, so an
+  # anchored window is the same total size as the default one — the
+  # bounded-DOM budget below is unchanged by deep-linking.
+  @anchor_half 25
 
   # Bounded-DOM cap for the chat message stream (task 019e18fc Stage 2,
   # "virtual list" per Rowan Ellis 2026-05-15). Phoenix LiveView's
@@ -134,6 +144,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:rendered_message_ids, MapSet.new())
     |> assign(:earliest_message_id, nil)
     |> assign(:latest_message_id, nil)
+    # Deep-link arrival target (`?message=<id>`, task 019fabe8 stage 2).
+    # Owned by `ChatLive.handle_params/3`, defaulted here so every chat
+    # surface — including the embedded meeting panel, which never sees
+    # URL params — has the assign the message list renders off.
+    |> assign(:anchor_message_id, nil)
     |> assign(:has_more_older, false)
     |> assign(:loading_older, false)
     |> assign(:loading_newer, false)
@@ -155,12 +170,143 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
           Phoenix.LiveView.Socket.t()
   def enter_space(socket, space, participant) do
     messages = load_channel_messages(space.id)
-    latest_message = List.last(messages)
 
-    if participant && latest_message do
-      Chat.mark_space_read(participant.id, latest_message.id)
+    mark_read_at_channel_tip(participant, messages)
+
+    # The default window always ends at the live tail, so nothing newer
+    # has been evicted.
+    assign_message_window(socket, space, messages, false)
+  end
+
+  @doc """
+  Load a history window centred on `anchor_message_id` instead of the
+  newest `@message_limit` messages.
+
+  `enter_space/3` loads only the newest 50 top-level messages, so a
+  deep-linked message older than that is not in the DOM at all — and
+  `chat_scroll_to_message.js` returns silently when the node is absent,
+  so the reader lands nowhere with no explanation. This builds
+  `@anchor_half` messages of history on either side of the anchor so the
+  message can be read *in context*, and seeds both boundary flags so the
+  existing top and bottom sentinels can re-hydrate outward from there.
+
+  Falls back to `enter_space/3` when the anchor cannot be resolved: an
+  unknown or malformed id, a soft-deleted message (`list_messages/2`
+  filters `deleted_at` but `get_message/2` does not), a message in a
+  different space (a hand-edited `?message=` must not leak or anchor),
+  or a thread reply — the window is `top_level_only: true` and can never
+  contain one. Callers wanting the thread branch should consult
+  `resolve_anchor/1` first.
+
+  ## Unread semantics
+
+  Anchored entry marks the space read at the channel's TRUE newest
+  top-level message, not at the window's last message.
+  `Chat.mark_space_read/2` is a blind `update_all` with no monotonic
+  guard, so passing the anchored window's tail would move the read cursor
+  BACKWARD and resurrect unread counts on a channel the reader just
+  visited. Landing mid-history must behave exactly as an ordinary entry
+  does.
+  """
+  @spec enter_space_anchored(Phoenix.LiveView.Socket.t(), map(), map() | nil, binary() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  def enter_space_anchored(socket, space, participant, anchor_message_id) do
+    case resolvable_anchor(space, anchor_message_id) do
+      nil ->
+        enter_space(socket, space, participant)
+
+      anchor ->
+        messages = load_anchored_messages(space.id, anchor)
+
+        # NOT `List.last(messages)` — see the unread note above.
+        mark_read_at_channel_tip(participant, newest_channel_message(space.id))
+
+        newest_evicted? =
+          Chat.has_more_messages_after?(space.id,
+            after_id: List.last(messages).id,
+            top_level_only: true
+          )
+
+        assign_message_window(socket, space, messages, newest_evicted?)
     end
+  end
 
+  @doc """
+  Classify a deep-link target so the caller picks the right entry point.
+
+  The anchored window is `top_level_only: true`, but mentions fire for
+  thread replies too (`Chat.emit_inbox_for_mentions/1`), so a naive
+  caller would build a window that structurally cannot contain the
+  target. `{:thread, thread_id}` says "take the thread branch instead."
+  """
+  @spec resolve_anchor(Chat.Message.t() | nil) ::
+          {:top_level, binary()} | {:thread, binary()} | :none
+  def resolve_anchor(%Chat.Message{thread_id: nil, id: id}), do: {:top_level, id}
+
+  def resolve_anchor(%Chat.Message{thread_id: thread_id}) when is_binary(thread_id),
+    do: {:thread, thread_id}
+
+  def resolve_anchor(_), do: :none
+
+  # Resolve `anchor_message_id` to a message that the main window can
+  # actually hold, or nil. `get_message/2` validates the uuid itself.
+  defp resolvable_anchor(_space, nil), do: nil
+
+  defp resolvable_anchor(space, anchor_message_id) do
+    with %Chat.Message{} = msg <- Chat.get_message(anchor_message_id),
+         true <- msg.space_id == space.id,
+         true <- is_nil(msg.deleted_at),
+         {:top_level, _id} <- resolve_anchor(msg) do
+      msg
+    else
+      _ -> nil
+    end
+  end
+
+  # `older` uses the default DESC ordering (the limit lands on the
+  # messages immediately BEFORE the cursor); `newer` must ask for
+  # `order: :asc` or the limit lands on the newest messages in the space
+  # instead, leaving a hole between the anchor and the rest of the
+  # window. Both come back needing to end up ASC.
+  defp load_anchored_messages(space_id, anchor) do
+    older =
+      space_id
+      |> Chat.list_messages(limit: @anchor_half, before_id: anchor.id, top_level_only: true)
+      |> Enum.reverse()
+
+    newer =
+      Chat.list_messages(space_id,
+        limit: @anchor_half,
+        after_id: anchor.id,
+        top_level_only: true,
+        order: :asc
+      )
+
+    older ++ [anchor] ++ newer
+  end
+
+  defp newest_channel_message(space_id) do
+    Chat.list_messages(space_id, limit: 1, top_level_only: true)
+  end
+
+  defp mark_read_at_channel_tip(participant, messages) do
+    case {participant, List.last(messages)} do
+      {%{id: participant_id}, %{id: message_id}} ->
+        Chat.mark_space_read(participant_id, message_id)
+
+      _ ->
+        :ok
+    end
+  end
+
+  # Shared tail of both entry points: enrich → day-label → assign → reset
+  # the stream. Kept in one place because `load_older_messages/2` and
+  # `load_newer_messages/2` both extend the `:rendered_message_ids` /
+  # `:msg_day_labels` / boundary-day bookkeeping this establishes, and a
+  # second copy would drift out from under them.
+  #
+  # `messages` must be ASC (oldest first).
+  defp assign_message_window(socket, space, messages, newest_evicted?) do
     enriched =
       messages
       |> Enum.map(&enrich_versions_count/1)
@@ -209,7 +355,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:has_more_older, has_more_older)
     |> assign(:loading_older, false)
     |> assign(:loading_newer, false)
-    |> assign(:newest_evicted?, false)
+    |> assign(:newest_evicted?, newest_evicted?)
     |> assign(:evicted_tail_message_ids, MapSet.new())
     |> stream(:messages, labelled, reset: true)
     |> restore_draft(space.id)

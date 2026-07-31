@@ -21,7 +21,18 @@
 //    scrolled >300px up, which made every later update an unconditional
 //    yank-to-bottom for anyone who hadn't.)
 //
-// 2. Rail collapse is reflow-anchored. Toggling the sidebar animates a
+// 3. Deep-link arrival is held (task 019fabe8 stage 3). When
+//    `handle_params/3` accepts a `?message=<id>` link it renders
+//    `data-anchor-message-id` on `#message-list`, in the SAME diff as
+//    the anchored window. While that attribute names a row we have not
+//    yet honoured, `scrollToBottom()` centres that row and returns
+//    without snapping — otherwise the initial-scroll phase above would
+//    yank the reader to the bottom on every async stream batch, after
+//    `chat:scroll-to-message` has already run. Honoured once per id;
+//    an absent attribute or an unresolvable row leaves the existing
+//    behaviour exactly as it was.
+//
+// 4. Rail collapse is reflow-anchored. Toggling the sidebar animates a
 //    168px width change; chat text rewraps, scrollHeight changes, and the
 //    browser clamps/re-anchors scrollTop — observed in prod as the pane
 //    snapping to bottom. On `sidebar_collapsed_changed` this hook holds the
@@ -50,6 +61,10 @@ const ScrollToBottom = {
       this.el;
     this._initialScroll = true;
     this._holdFrame = null;
+    // Message id whose arrival position has already been honoured, so a
+    // later stream batch doesn't re-centre a reader who has since
+    // scrolled away.
+    this._anchoredFor = null;
 
     this.handleEvent("sidebar_collapsed_changed", () =>
       this.holdAnchorThroughReflow(),
@@ -86,7 +101,31 @@ const ScrollToBottom = {
       this.scrollEl.clientHeight
     );
   },
+  // Centre the deep-link target instead of snapping, at most once per
+  // id. Returns true when the arrival position was taken, i.e. when the
+  // caller must NOT snap. Every early return leaves the pre-existing
+  // scroll behaviour untouched.
+  honourAnchor() {
+    const id = this.el.dataset.anchorMessageId;
+    if (!id || this._anchoredFor === id) return false;
+
+    // The row may not be in the DOM yet — stream batches land async
+    // after mount. Falling through means today's bottom snap runs, and
+    // the next mutation gets another chance to anchor.
+    const target = this.el.querySelector(`[data-message-id="${id}"]`);
+    if (!target) return false;
+
+    target.scrollIntoView({ block: "center" });
+    this._anchoredFor = id;
+    // End the initial-snap phase explicitly. It normally ends only once
+    // the container overflows; leaving it open would re-snap on the
+    // very next stream batch and undo the arrival.
+    this._initialScroll = false;
+    return true;
+  },
   scrollToBottom() {
+    if (this.honourAnchor()) return;
+
     if (this._initialScroll) {
       this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
       // The initial phase ends once the container actually overflows —

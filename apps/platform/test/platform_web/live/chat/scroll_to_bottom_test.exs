@@ -44,6 +44,17 @@ defmodule PlatformWeb.ChatLive.ScrollToBottomTest do
         wiring — asserted by re-rendering after a second message and
         checking that the load-bearing attributes on `#message-list`
         are unchanged.
+
+  Task `019fabe8` stage 3 adds a fourth contract: `#message-list`
+  carries `data-anchor-message-id` when `handle_params/3` accepted a
+  `?message=<id>` deep link, and carries no such attribute otherwise.
+  That attribute is the ONLY channel by which the hook learns to
+  suppress its initial bottom snap, and it is attribute-driven
+  precisely so it arrives in the same diff as the streamed window. The
+  hook's own branch logic is exercised in
+  `assets/test/hooks/scroll_to_bottom.test.js` (vitest) — `render_hook/3`
+  still does not run client hook code, so the LV side pins the payload
+  and nothing more.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -261,6 +272,76 @@ defmodule PlatformWeb.ChatLive.ScrollToBottomTest do
 
       # Sanity: the second message actually rendered into the stream.
       assert html_b =~ "second message same bucket"
+    end
+  end
+
+  describe "task 019fabe8 stage 3: data-anchor-message-id on #message-list" do
+    test "renders on #message-list when ?message= anchored, and the target row is the one named",
+         %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      space = ensure_space("scroll-anchor-#{System.unique_integer([:positive])}")
+      {_participant, _first} = post_message(space, user, "context before the anchor")
+      {_participant, target} = post_message(space, user, "the anchored message")
+      {_participant, _after} = post_message(space, user, "context after the anchor")
+
+      {:ok, view, html} = live(conn, ~p"/chat/#{space.slug}?message=#{target.id}")
+
+      assert html =~ ~r/id="message-list"[^>]*data-anchor-message-id="#{target.id}"/,
+             "#message-list must carry data-anchor-message-id when an anchor was accepted — " <>
+               "it is the only signal the ScrollToBottom hook has to suppress its initial " <>
+               "bottom snap, and it must arrive in the same diff as the streamed window"
+
+      # Positive control for the attribute's meaning: the id it names is
+      # a row that actually exists in this render (chat_message.ex emits
+      # data-message-id), so the hook's querySelector can resolve it.
+      # An attribute naming a row the hook can never find would leave
+      # the bottom snap in charge and this feature dead.
+      assert html =~ ~s(data-message-id="#{target.id}")
+
+      # And the arrival ring is on that exact row (stage 2's highlight),
+      # which is what the reader sees once the hook has centred it.
+      target_row = view |> element(~s([data-message-id="#{target.id}"])) |> render()
+      assert target_row =~ "ring-primary/20"
+    end
+
+    test "absent on a plain channel entry, while the rest of the hook wiring is unchanged", %{
+      conn: conn
+    } do
+      {conn, user} = authenticated_conn(conn)
+      space = ensure_space("scroll-noanchor-#{System.unique_integer([:positive])}")
+      {_participant, _msg} = post_message(space, user, "just a message")
+
+      {:ok, _view, html} = live(conn, ~p"/chat/#{space.slug}")
+
+      refute html =~ "data-anchor-message-id",
+             "a normal entry must not emit data-anchor-message-id — a stale or blanket " <>
+               "attribute would suppress the bottom snap on every channel open"
+
+      # Paired positive control: the hook is still mounted on the same
+      # element, so the `refute` above is about the anchor attribute
+      # specifically and not about the whole surface having vanished.
+      assert html =~ ~r/id="message-list"[^>]*phx-hook="ScrollToBottom"/
+    end
+
+    test "absent when the requested anchor is refused, present for an accepted one in the same run",
+         %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      space = ensure_space("scroll-anchor-refused-#{System.unique_integer([:positive])}")
+      {_participant, real} = post_message(space, user, "a real message")
+
+      # Unknown id: stage 2 resolves this to `:miss`, which lands the
+      # reader in the channel with a plain-text notice and no anchor.
+      {:ok, _view, refused_html} =
+        live(conn, ~p"/chat/#{space.slug}?message=#{Ecto.UUID.generate()}")
+
+      refute refused_html =~ "data-anchor-message-id"
+
+      # Positive control in the same run: an accepted anchor DOES emit
+      # the attribute, so the `refute` above measures the refusal path
+      # rather than a feature that never shipped.
+      {:ok, _view2, accepted_html} = live(conn, ~p"/chat/#{space.slug}?message=#{real.id}")
+
+      assert accepted_html =~ ~r/id="message-list"[^>]*data-anchor-message-id="#{real.id}"/
     end
   end
 end

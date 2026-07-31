@@ -14,6 +14,10 @@ import ClientState from "../client_state.js";
  *     outside the allowlist are ignored. Query strings are preserved so
  *     deep-link state (e.g. `/tasks?sponsor=mine`) survives a top-nav
  *     roundtrip through a different module (task 019f487e Case 5 fix).
+ *     Transient params (`TRANSIENT_QUERY_PARAMS`, currently just chat's
+ *     `?message=` anchor) are the exception — they are stripped from the
+ *     persisted value so a one-off deep link doesn't become the module's
+ *     resume target for the next 3 hours (task 019fabe8 stage 5).
  *   - A delegated `click` listener on `document` intercepts clicks on any
  *     `<a data-module-id=…>` element. If a saved URL exists for that module,
  *     differs from the anchor's `href` (path + search compared together, not
@@ -103,6 +107,59 @@ function sameModulePrefix(moduleId, saved) {
   return pathOnly === prefix || pathOnly.startsWith(prefix + "/");
 }
 
+// Query params that are TRANSIENT view state rather than durable filter
+// state, keyed by the moduleId that owns them. Anything listed here is
+// removed from the value we PERSIST for resume; it stays in the live URL.
+//
+// `chat.message` is the deep-link anchor added by task 019fabe8 stage 2: an
+// inbox click lands on `/chat/<space>?message=<id>` and the LiveView scrolls
+// that message into view. Keeping it in the URL is deliberate (shareable,
+// survives refresh) but persisting it would make the anchor STICKY — every
+// later Chat-tile click would resume to `?message=<id>` and throw the reader
+// back to an old message for the whole 3h TTL. Durable filter state like
+// `/tasks?sponsor=mine` is NOT listed and still round-trips (task 019f487e
+// Case 5).
+//
+// Keyed by module rather than a flat name list so a `message` param that
+// means something durable in a future module isn't silently swallowed here.
+// A new transient param joins its module's array — one place, no second
+// ad-hoc regex.
+const TRANSIENT_QUERY_PARAMS = {
+  chat: ["message"],
+};
+
+// Remove `moduleId`'s transient params from a path+search string. Returns
+// the input untouched when the module owns no transient params, when there
+// is no query string, or when none of the transient names are present — so
+// the common case never round-trips through URLSearchParams re-encoding.
+// When the transient param was the only one, the trailing `?` goes too, so
+// the persisted value is byte-identical to a plain visit of the same route
+// (this is what lets the click intercept's `saved === anchorPath+search`
+// no-op fire). Callers pass `location.pathname + location.search`, which
+// never contains a fragment.
+function stripTransientParams(moduleId, pathAndSearch) {
+  if (typeof pathAndSearch !== "string") return "";
+  const transient = TRANSIENT_QUERY_PARAMS[moduleId];
+  if (!transient || transient.length === 0) return pathAndSearch;
+
+  const qIdx = pathAndSearch.indexOf("?");
+  if (qIdx < 0) return pathAndSearch;
+
+  const path = pathAndSearch.slice(0, qIdx);
+  const params = new URLSearchParams(pathAndSearch.slice(qIdx + 1));
+  let removed = false;
+  for (const name of transient) {
+    if (params.has(name)) {
+      params.delete(name);
+      removed = true;
+    }
+  }
+  if (!removed) return pathAndSearch;
+
+  const rest = params.toString();
+  return rest.length > 0 ? path + "?" + rest : path;
+}
+
 // Strip anything after the first `?` or `#`. We only need this for prefix
 // matching — the actual saved value keeps the query so we can restore it on
 // intercept. Returns the input unchanged when neither char is present.
@@ -169,7 +226,18 @@ const RouteResume = {
     // the value in a `{v, e}` envelope; a read after `e` returns the default
     // (null) and cleans the stale key, so the click intercept falls back to
     // the module root instead of resuming a dead subpage.
-    ClientState.set("route_resume", mod, path + search, { ttlMs: RESUME_TTL_MS });
+    //
+    // Transient params (see TRANSIENT_QUERY_PARAMS) are dropped at PERSIST
+    // time, not at restore time. Restore-time stripping would leave the
+    // anchor sitting in localStorage where every other reader of
+    // `route_resume:<mod>` — today the click intercept's `sameModulePrefix`
+    // guard and its saved-vs-href compare, tomorrow anyone else — would
+    // still see it and have to re-strip. Persisting the already-clean value
+    // means there is exactly one place that knows `message` is transient.
+    // Nothing is lost: the anchor stays in the live URL, which is the only
+    // place it was ever meant to be read from.
+    const resumeValue = stripTransientParams(mod, path + search);
+    ClientState.set("route_resume", mod, resumeValue, { ttlMs: RESUME_TTL_MS });
   },
 
   _maybeInterceptClick(event) {
@@ -258,7 +326,9 @@ export {
   moduleFromPath,
   sameModulePrefix,
   stripQueryAndFragment,
+  stripTransientParams,
   PATH_MODULE_MAP,
+  TRANSIENT_QUERY_PARAMS,
   RESUME_TTL_MS,
 };
 export default RouteResume;

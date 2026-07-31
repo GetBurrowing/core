@@ -17,8 +17,10 @@ defmodule PlatformWeb.InboxLiveTest do
   use PlatformWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
+  import Platform.TenancyFixtures, only: [fabrikam_org_id: 0]
 
   alias Platform.Accounts.User
+  alias Platform.Chat
   alias Platform.Inbox
   alias Platform.Inbox.Item
   alias Platform.Repo
@@ -57,6 +59,43 @@ defmodule PlatformWeb.InboxLiveTest do
   end
 
   defp row_selector(%Item{id: id}), do: ~s([data-item-id="#{id}"])
+
+  defp add_user_participant(space_id, %User{} = user, display_name) do
+    {:ok, p} =
+      Chat.add_participant(space_id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        display_name: display_name,
+        joined_at: DateTime.utc_now()
+      })
+
+    p
+  end
+
+  # Rendered space chips, in DOM order. This project has no Floki (LazyHTML is
+  # the LiveViewTest backend), and `element/2` raises on multiple matches, so
+  # read the chips straight out of the markup. `data-role` is the LAST
+  # attribute on the span (components/inbox_item.ex), hence the anchor.
+  defp mention_labels(lv) do
+    ~r{data-role="inbox-item-space"\s*>\s*([^<]*)</span>}
+    |> Regex.scan(render(lv))
+    |> Enum.map(fn [_, text] -> text |> String.trim() |> html_unescape() end)
+  end
+
+  # The chip on the first mention row, or nil when no row carries one.
+  defp mention_label(lv) do
+    case mention_labels(lv) do
+      [] -> nil
+      [first | _] -> first
+    end
+  end
+
+  defp html_unescape(text) do
+    text
+    |> String.replace("&amp;", "&")
+    |> String.replace("&#39;", "'")
+    |> String.replace("&quot;", "\"")
+  end
 
   # ── Sections + auto-hide ───────────────────────────────────────────────
 
@@ -183,6 +222,123 @@ defmodule PlatformWeb.InboxLiveTest do
 
       assert html =~ "#general"
       assert html =~ "#random"
+    end
+  end
+
+  # ── Mention space labels (task 019fabe8 stage 4) ───────────────────────
+  #
+  # `Chat.space_path_segment/1` now emits a UUID for org-scoped and slug-less
+  # spaces, so the row's raw segment is no longer human-readable. The label is
+  # resolved to the space's display name; the GROUPING key stays the raw
+  # segment so `sort_mentions/1` is untouched.
+
+  describe "mention space labels" do
+    test "a DM mention renders the peer's name, not the raw uuid", %{conn: conn} do
+      user = insert_user()
+      peer = insert_user()
+
+      {:ok, dm} = Chat.create_space(%{kind: "dm", is_direct: true, name: nil})
+      assert is_nil(dm.slug)
+
+      add_user_participant(dm.id, user, "Inbox Viewer")
+      add_user_participant(dm.id, peer, "Marta Vasquez")
+
+      url = "/chat/#{Chat.space_path_segment(dm)}?message=#{Ecto.UUID.generate()}"
+      assert url =~ dm.id
+
+      emit!(user, kind: "chat_mention", title: "@Mention from Marta", url: url)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      label = mention_label(lv)
+
+      assert label == "Marta Vasquez"
+
+      # The pre-fix rendering, asserted as an explicit negative.
+      refute label =~ dm.id
+      refute String.starts_with?(label, "#")
+    end
+
+    test "an org-scoped channel mention renders #<name>, not #<uuid>", %{conn: conn} do
+      user = insert_user()
+
+      {:ok, channel} =
+        Chat.create_space(%{
+          kind: "channel",
+          name: "Product Launch",
+          slug: "product-launch-#{System.unique_integer([:positive])}",
+          org_id: fabrikam_org_id()
+        })
+
+      url = "/chat/#{Chat.space_path_segment(channel)}?message=#{Ecto.UUID.generate()}"
+      assert url =~ channel.id
+
+      emit!(user, kind: "chat_mention", title: "@you", url: url)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      assert mention_label(lv) == "#Product Launch"
+    end
+
+    test "an unresolvable segment still falls back to the raw segment", %{conn: conn} do
+      user = insert_user()
+
+      # A stale row pointing at a deleted space, or a legacy row emitted before
+      # this shipped. It must still render SOMETHING and still group.
+      emit!(user, kind: "chat_mention", title: "@you", url: "/chat/long-gone?message=x")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      assert mention_label(lv) == "#long-gone"
+    end
+
+    test "a mention that arrives LIVE resolves its label too", %{conn: conn} do
+      user = insert_user()
+      peer = insert_user()
+
+      # Mount with an empty inbox, so the initial label map cannot possibly
+      # contain this space — the live-insert path has to resolve it.
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      assert mention_label(lv) == nil
+
+      {:ok, dm} = Chat.create_space(%{kind: "dm", is_direct: true, name: nil})
+      add_user_participant(dm.id, user, "Inbox Viewer")
+      add_user_participant(dm.id, peer, "Desmond Cole")
+
+      emit!(user,
+        kind: "chat_mention",
+        title: "@Mention from Desmond",
+        url: "/chat/#{Chat.space_path_segment(dm)}?message=#{Ecto.UUID.generate()}"
+      )
+
+      assert mention_label(lv) == "Desmond Cole"
+    end
+
+    test "the grouping key is unchanged — same space rows still sit together",
+         %{conn: conn} do
+      user = insert_user()
+      peer = insert_user()
+
+      {:ok, dm} = Chat.create_space(%{kind: "dm", is_direct: true, name: nil})
+      add_user_participant(dm.id, user, "Inbox Viewer")
+      add_user_participant(dm.id, peer, "Marta Vasquez")
+
+      segment = Chat.space_path_segment(dm)
+
+      for n <- 1..2 do
+        emit!(user,
+          kind: "chat_mention",
+          title: "dm mention #{n}",
+          url: "/chat/#{segment}?message=#{Ecto.UUID.generate()}"
+        )
+      end
+
+      emit!(user, kind: "chat_mention", title: "channel mention", url: "/chat/zzz-other")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      # Both DM rows adjacent, resolved to the peer name; the other space's row
+      # is not interleaved between them.
+      assert mention_labels(lv) == ["Marta Vasquez", "Marta Vasquez", "#zzz-other"]
     end
   end
 

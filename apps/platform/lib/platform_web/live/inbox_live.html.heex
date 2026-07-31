@@ -71,7 +71,7 @@
             :for={{dom_id, item} <- @streams.mention_items}
             id={dom_id}
             item={item}
-            space_label={mention_space_label(item)}
+            space_label={mention_space_label(item, @mention_space_labels)}
           />
         </ul>
       </section>

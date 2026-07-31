@@ -51,6 +51,13 @@ defmodule PlatformWeb.ChatLive do
   @quick_emojis ["👍", "❤️", "😂", "🎉"]
   @max_upload_entries 5
   @max_upload_size 15_000_000
+
+  # How long the `?message=` arrival ring stays on before it is cleared
+  # (task 019fabe8 stage 2). Long enough for the reader to register where
+  # they landed, short enough that the marker never becomes permanent
+  # decoration. Overridable via `:anchor_highlight_ms` so tests can drive
+  # the real timer instead of asserting on a hand-sent message.
+  @anchor_highlight_ms 6_000
   @impl true
   def mount(_params, session, socket) do
     do_mount(session, socket, embedded?: false)
@@ -554,7 +561,7 @@ defmodule PlatformWeb.ChatLive do
   end
 
   @impl true
-  def handle_params(%{"space_slug" => slug_or_id}, _url, socket) do
+  def handle_params(%{"space_slug" => slug_or_id} = params, _url, socket) do
     # Save the outgoing channel's draft AND cancel any staged uploads —
     # the upload slots are LV-process-scoped, not per-space, so without
     # an explicit cancel, a file staged in space A remains visible and
@@ -584,11 +591,21 @@ defmodule PlatformWeb.ChatLive do
     # returns nil and the lookup falls back to its legacy oldest-row behavior.
     active_org_id = resolve_active_org_id(socket)
 
+    # A `?message=` deep link is by construction a link to something that
+    # ALREADY EXISTS, so it must never reach `bootstrap_space/2` — the
+    # friendly-slug AUTO-CREATE path. Task 019fabe8 stage 3 hit this for real:
+    # an org-less space's slug URL, opened by a reader whose active org is set,
+    # misses the org-scoped `get_space_by_slug/2`, misses the uuid branch, and
+    # MINTS a second empty channel with that slug in the reader's org — into
+    # which the deep link is then refused. Stage 4's `space_path_segment/1`
+    # removes the usual way to produce such a url, but a stale row emitted
+    # before this shipped, or a hand-edited link, still carries one. Deep links
+    # resolve or they fall back; they do not create.
     space =
       Chat.get_space_by_slug(slug_or_id, org_id: active_org_id) ||
         (valid_uuid?(slug_or_id) && Chat.get_space(slug_or_id)) ||
         system_prefix_fallback(slug_or_id) ||
-        bootstrap_space(slug_or_id, active_org_id)
+        maybe_bootstrap_space(params, slug_or_id, active_org_id)
 
     if is_nil(space) do
       # The URL saved by the RouteResume hook (`route_resume:chat` in
@@ -632,6 +649,14 @@ defmodule PlatformWeb.ChatLive do
       user_convos = Chat.list_user_conversations(socket.assigns.user_id, scope: scope)
       dm_convos = Enum.filter(user_convos, fn s -> s.kind in ["dm", "group"] end)
 
+      # `?message=<id>` deep link (task 019fabe8 stage 2). `Platform.Chat`
+      # has always written this param into the inbox url and `InboxLive`
+      # push_navigates to it verbatim; until now `handle_params/3` read
+      # only `"space_slug"` and dropped the identity, so a mention click
+      # landed at the channel's default position. Resolve it BEFORE the
+      # pipeline so the message-window loader can be chosen up front.
+      anchor = resolve_deep_link_anchor(params, space, scope)
+
       {:noreply,
        socket
        |> assign(:page_title, page_title)
@@ -646,7 +671,7 @@ defmodule PlatformWeb.ChatLive do
        # on a fresh first mount — that still needs the explicit Join button.
        |> MeetingHooks.maybe_restore_on_reconnect(space)
        |> PresenceHooks.enter_space(space, participant, participants)
-       |> MessagesHooks.enter_space(space, participant)
+       |> enter_space_window(anchor, space, participant)
        |> SearchHooks.reset_for_space()
        |> MentionsHooks.reset_for_space()
        |> PinHooks.load_for_space(space.id)
@@ -669,7 +694,11 @@ defmodule PlatformWeb.ChatLive do
            socket.assigns.hidden_channel_ids
          )
        )
-       |> clear_unread(space.id)}
+       |> clear_unread(space.id)
+       # AFTER `SearchHooks.reset_for_space/1`, which clears
+       # `:highlighted_message_id` — setting the arrival highlight any
+       # earlier in this pipeline would be wiped a line later.
+       |> apply_anchor_arrival(anchor)}
     end
   end
 
@@ -681,6 +710,125 @@ defmodule PlatformWeb.ChatLive do
       [] ->
         {:noreply, socket}
     end
+  end
+
+  # ── `?message=<id>` deep link (task 019fabe8 stage 2) ──────────────────
+  #
+  # Classify the requested anchor once, so both the window loader and the
+  # arrival marker below read the same decision:
+  #
+  #   * `:none`               — no `?message=` at all. Ordinary entry,
+  #                             and crucially NO flash: silence is only
+  #                             correct when nothing was asked for.
+  #   * `{:top_level, msg}`   — anchorable in the main message list.
+  #   * `{:thread, msg}`      — a thread reply. The main window is
+  #                             `top_level_only`, so it structurally
+  #                             cannot hold this; take the thread branch.
+  #   * `:miss`               — asked for, not deliverable.
+  #
+  # `MessagesHooks.enter_space_anchored/4` re-validates the anchor itself
+  # and silently falls back, which makes it safe standalone — but it
+  # cannot distinguish "no anchor requested" from "anchor refused", and
+  # the difference is exactly what the reader needs to be told. Hence the
+  # separate pass here.
+  #
+  # Guards, all load-bearing:
+  #   * `Chat.get_message/2` validates the uuid and applies the
+  #     external-scope space gate, but does NOT filter `deleted_at` (see
+  #     chat.ex) — so check it explicitly. The template refuses to render
+  #     deleted rows, so an unchecked deleted anchor scrolls to nothing.
+  #   * `msg.space_id == space.id` — a hand-edited `?message=` pointing
+  #     into another space must neither anchor nor leak.
+  defp resolve_deep_link_anchor(%{"message" => message_id}, space, scope)
+       when is_binary(message_id) do
+    with %Chat.Message{} = msg <- Chat.get_message(message_id, scope: scope),
+         true <- msg.space_id == space.id,
+         true <- is_nil(msg.deleted_at) do
+      case MessagesHooks.resolve_anchor(msg) do
+        {:top_level, _id} -> {:top_level, msg}
+        {:thread, _thread_id} -> {:thread, msg}
+        :none -> :miss
+      end
+    else
+      _ -> :miss
+    end
+  end
+
+  defp resolve_deep_link_anchor(_params, _space, _scope), do: :none
+
+  # Only a top-level anchor changes which messages are loaded. A thread
+  # reply is reached by expanding its parent inside the ordinary window,
+  # and a miss deliberately lands at the channel's normal position.
+  defp enter_space_window(socket, {:top_level, msg}, space, participant),
+    do: MessagesHooks.enter_space_anchored(socket, space, participant, msg.id)
+
+  defp enter_space_window(socket, _anchor, space, participant),
+    do: MessagesHooks.enter_space(socket, space, participant)
+
+  # Arrival marker. Three layers, none permanent: the client-side 1.5s
+  # `.chat-message-pulse` (applied by chat_scroll_to_message.js) says
+  # "here", `:highlighted_message_id` holds the ring while the reader
+  # orients, and a server-side timer clears it.
+  defp apply_anchor_arrival(socket, {:top_level, msg}), do: mark_arrival(socket, msg.id)
+
+  defp apply_anchor_arrival(socket, {:thread, msg}) do
+    # Mirrors `handle_event("search_open_result", …)` rather than adding a
+    # second thread-jump implementation: expand the parent's inline
+    # thread and mark the PARENT, since the reply has no row of its own
+    # in the main list. Falls back to marking the reply id when the
+    # parent is outside the loaded window — same degradation search has.
+    parent_msg_id =
+      Enum.find_value(socket.assigns.thread_previews, fn {pmid, %{thread_id: tid}} ->
+        if tid == msg.thread_id, do: pmid
+      end)
+
+    thread_msgs = MessagesHooks.load_thread_messages(msg.space_id, msg.thread_id)
+
+    if parent_msg_id do
+      socket
+      |> MessagesHooks.open_thread_context(parent_msg_id, thread_msgs)
+      |> mark_arrival(parent_msg_id)
+    else
+      mark_arrival(socket, msg.id)
+    end
+  end
+
+  defp apply_anchor_arrival(socket, :miss) do
+    # Land in the channel with an explicit note rather than scrolling to
+    # nothing. Plain text — no emoji.
+    socket
+    |> assign(:anchor_message_id, nil)
+    |> put_flash(:info, "That message is no longer available.")
+  end
+
+  defp apply_anchor_arrival(socket, :none), do: assign(socket, :anchor_message_id, nil)
+
+  defp mark_arrival(socket, message_id) do
+    # The timer is scheduled unconditionally (a dead render's process is
+    # short-lived and never receives it) but the push is connected-only —
+    # there is no client to receive an event during the static render.
+    Process.send_after(self(), {:clear_anchor_highlight, message_id}, anchor_highlight_ms())
+
+    socket =
+      socket
+      |> assign(:anchor_message_id, message_id)
+      # `reinsert: false` — `enter_space_window/4` reset the messages
+      # stream earlier in THIS pipeline, so every row re-renders with the
+      # ring already applied. A reinsert in the same diff defaults to
+      # `at: -1` and would re-append the anchor row to the end of the
+      # container, so the reader would arrive at the right message
+      # surrounded by the wrong conversation (task 019fabe8 stage 3).
+      |> SearchHooks.set_highlights(message_id, reinsert: false)
+
+    if connected?(socket) do
+      push_event(socket, "chat:scroll-to-message", %{id: message_id})
+    else
+      socket
+    end
+  end
+
+  defp anchor_highlight_ms do
+    Application.get_env(:platform, :anchor_highlight_ms, @anchor_highlight_ms)
   end
 
   @impl true
@@ -2281,6 +2429,25 @@ defmodule PlatformWeb.ChatLive do
   # Only clear when the toast still points at this space_id — a later hide
   # inside the 4s window replaces the toast, and the earlier timer firing
   # here would otherwise wipe the newer toast prematurely.
+  # Expiry of the `?message=` arrival ring (task 019fabe8 stage 2).
+  # Guarded on the highlight STILL pointing at the anchor: a search jump
+  # landing inside the window would otherwise have its own highlight
+  # stolen when this timer fires. Same shape as `:clear_undo_toast`
+  # below — the guard makes the late fire a no-op, so no timer refs need
+  # tracking or cancelling.
+  #
+  # `:anchor_message_id` deliberately survives: the scroll hook (stage 3)
+  # keys its once-per-id guard off that attribute, and re-clearing it
+  # would hand the message list back to the bottom-snap behaviour the
+  # anchor exists to suppress.
+  def handle_info({:clear_anchor_highlight, message_id}, socket) do
+    if socket.assigns[:highlighted_message_id] == message_id do
+      {:noreply, SearchHooks.set_highlights(socket, nil)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info({:clear_undo_toast, space_id}, socket) do
     case socket.assigns.undo_toast do
       %{space_id: ^space_id} -> {:noreply, assign(socket, :undo_toast, nil)}
@@ -2365,6 +2532,15 @@ defmodule PlatformWeb.ChatLive do
   # and `chat_spaces_unique_slug ON (workspace_id, slug)`) because both
   # workspace_id and org_id are NULL on bootstrap inserts.
   @reserved_slug_prefixes ~w(meeting- task-exec- dm- group-)
+
+  # Gate on the deep-link param (task 019fabe8 stage 4). Present => refuse to
+  # auto-create; the caller's `is_nil(space)` branch then clears the stale
+  # route-resume entry and lands the reader on `/chat`.
+  defp maybe_bootstrap_space(%{"message" => msg} = _params, _slug, _org_id)
+       when is_binary(msg) and msg != "",
+       do: nil
+
+  defp maybe_bootstrap_space(_params, slug, org_id), do: bootstrap_space(slug, org_id)
 
   defp bootstrap_space(slug, org_id) when is_binary(slug) do
     cond do
@@ -2991,23 +3167,20 @@ defmodule PlatformWeb.ChatLive do
     |> assign(:active_space_scope, space_scope_atom(space))
   end
 
-  # Resolve the URL nav target for a space link. For org-scoped channels
-  # (post-ADR-0042: any space with a non-nil `org_id`), return the space's
-  # UUID so the URL handler's UUID-fallback branch hits `Chat.get_space/1`
-  # exactly — bypassing the slug-then-org-resolve cascade that would
-  # otherwise route ambiguous slugs (e.g. "general") to the user's PRIMARY
-  # membership org, not the org of the section they actually clicked.
-  # For org-less spaces (DMs / pre-ADR-0042 legacy channels), keep the
-  # slug-when-present behavior so shareable-DM-link semantics are preserved
-  # (`|| id` covers DMs without a slug).
+  # The URL nav target for a space link. Behaviour is unchanged; the RULE now
+  # lives in ONE place — `Platform.Chat.space_path_segment/1` — because the web
+  # layer and the context layer had already drifted: this function routed
+  # org-scoped spaces by ID while the @mention inbox producer (chat.ex) built
+  # its url from `space.slug` raw, so DM/group mentions emitted "/chat/" and
+  # resolved to the reader's first channel (task 019fabe8 stage 4).
   #
-  # Map-pattern signature so it works on both the loaded `%Space{}` struct
-  # and any plain map carrying `:org_id`, `:slug`, `:id` (e.g. test fixtures).
+  # Kept as a public web-layer alias — templates and components already call
+  # `PlatformWeb.ChatLive.space_nav_target/1` (settings_component.ex:122/:235,
+  # new_channel_component.ex:46, ~20 call sites in chat_live.html.heex) and
+  # renaming them buys nothing. Do NOT reimplement the rule here.
   @doc false
   @spec space_nav_target(map()) :: String.t()
-  def space_nav_target(%{org_id: org_id, id: id}) when not is_nil(org_id), do: id
-  def space_nav_target(%{slug: slug, id: id}), do: slug || id
-  def space_nav_target(%{id: id}), do: id
+  def space_nav_target(space), do: Chat.space_path_segment(space)
 
   # Parse the inbound `scope_filter` payload's string scope name back into
   # an atom. Returns nil for any value not in the canonical 5-scope set so

@@ -180,6 +180,72 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  The canonical `/chat/:space_slug` path segment for a space.
+
+  THE single definition of "how a space is addressed in a URL". Every producer
+  of a chat link — the sidebar rail, the mobile pinned strip, a settings
+  redirect, the @mention inbox row — must route through this function.
+  `PlatformWeb.ChatLive.space_nav_target/1` delegates here and exists only as
+  the web-layer alias the templates already import.
+
+  The rule:
+
+    * **org-scoped space** (non-nil `org_id`, post-ADR-0042) → the space UUID.
+      A uuid segment hits `handle_params/3`'s `Chat.get_space/1` fallback
+      exactly, bypassing the slug-then-org-resolve cascade that routes an
+      ambiguous slug (e.g. "general", which now exists once per tenant) to the
+      reader's PRIMARY membership org rather than the org of the space the link
+      actually points at.
+    * **org-less space** → `slug || id`. Legacy pre-ADR-0042 channels keep
+      their shareable slug URL; DM and group spaces have NO slug at all
+      (`create_dm_space/3` inserts only `kind`/`is_direct`/`created_by`, and
+      `Space.validate_channel_fields/1` requires a slug only for
+      `kind: "channel"`), so they address by id.
+
+  Task 019fabe8: the @mention inbox producer used to interpolate `space.slug`
+  raw. For a DM or group that rendered `"/chat/?message=<uuid>"`, which does
+  not match `/chat/:space_slug` at all — the reader fell through to the
+  catch-all clause and was pushed to their FIRST CHANNEL. A mention in a DM
+  did not land at the wrong position; it landed in the wrong conversation.
+
+  Map-pattern signature so it works on a loaded `%Space{}` and on any plain map
+  carrying `:org_id` / `:slug` / `:id` (e.g. test fixtures).
+
+  An EMPTY slug is treated as no slug. `space_nav_target/1` used a bare
+  `slug || id`, which is fine for a `NULL` column but returns `""` for an empty
+  string — and an empty segment is the precise failure this function exists to
+  prevent. The guarantee is: the result is always a non-empty binary.
+  """
+  @spec space_path_segment(map()) :: String.t()
+  def space_path_segment(%{org_id: org_id, id: id}) when not is_nil(org_id), do: id
+  def space_path_segment(%{slug: slug}) when is_binary(slug) and slug != "", do: slug
+  def space_path_segment(%{id: id}), do: id
+
+  @doc """
+  Resolve a `/chat/:space_slug` path segment back to its space — the inverse of
+  `space_path_segment/1`.
+
+  Read-only and deliberately UNSCOPED: the only consumer today is the inbox
+  mention row, which needs a human label for a space the viewer already holds
+  an inbox row for. It renders a NAME, never message content, so there is no
+  scope to leak through it. Anything that renders space CONTENT must keep using
+  the org-scoped `get_space_by_slug/2` + `get_space/1` cascade in
+  `ChatLive.handle_params/3`.
+
+  Returns `nil` for an unknown segment; it NEVER creates a space.
+  """
+  @spec space_for_path_segment(String.t() | nil) :: Space.t() | nil
+  def space_for_path_segment(segment) when is_binary(segment) and segment != "" do
+    if Platform.UUID.valid?(segment) do
+      Repo.get(Space, segment)
+    else
+      get_space_by_slug(segment, [])
+    end
+  end
+
+  def space_for_path_segment(_), do: nil
+
+  @doc """
   Fetch a space by slug.
 
   ## Options
@@ -1371,6 +1437,25 @@ defmodule Platform.Chat do
     * `:after_id`  — keyset cursor — only messages with `id > after_id`
     * `:thread_id` — filter to a specific thread
     * `:top_level_only` — when `true`, include only messages where `thread_id` is `NULL`
+    * `:order` — `:desc` (default, newest first) | `:asc` (oldest first)
+
+  ## `:order` and the `:after_id` cursor
+
+  `:limit` is applied AFTER the ordering, so the two interact. With the
+  default `:desc`, `after_id: cursor` returns the `limit` NEWEST messages
+  in the space that are newer than the cursor — which for a deep cursor
+  skips over everything in between. That is the right shape for "catch me
+  up to the live tail" (`MessagesHooks.load_newer_messages/2`) and the
+  wrong shape for "give me the messages immediately following this one."
+
+  Pass `order: :asc` for the latter: it returns the `limit` messages
+  directly after the cursor, contiguous with it. The anchored history
+  window (`MessagesHooks.enter_space_anchored/4`) depends on that
+  contiguity — a window with a hole in it renders as a silent lie about
+  what was said around the anchor.
+
+  `before_id` needs no such flag: under `:desc` the limit already lands on
+  the messages immediately preceding the cursor.
   """
   @spec list_messages(binary(), keyword()) :: [Message.t()]
   def list_messages(space_id, opts \\ []) do
@@ -1380,11 +1465,12 @@ defmodule Platform.Chat do
     thread_id = Keyword.get(opts, :thread_id)
     top_level_only = Keyword.get(opts, :top_level_only, false)
     scope = Keyword.get(opts, :scope)
+    order = if Keyword.get(opts, :order) == :asc, do: :asc, else: :desc
 
     base =
       from(m in Message,
         where: m.space_id == ^space_id and is_nil(m.deleted_at),
-        order_by: [desc: m.inserted_at],
+        order_by: [{^order, m.inserted_at}],
         limit: ^limit
       )
 
@@ -3346,7 +3432,7 @@ defmodule Platform.Chat do
             source_id: msg.id,
             title: mention_inbox_title(msg, space),
             body: String.slice(content, 0, 200),
-            url: "/chat/#{space.slug}?message=#{msg.id}"
+            url: "/chat/#{space_path_segment(space)}?message=#{msg.id}"
           })
         end
       end)
@@ -3383,6 +3469,16 @@ defmodule Platform.Chat do
     do: "@Mention from #{msg.author_display_name} in ##{space_label(space, msg)}"
 
   defp space_label(%Space{kind: "dm"}, %Message{author_display_name: peer}), do: peer
+
+  # A GROUP space also carries no name (`Space.validate_channel_fields/1`
+  # requires one only for `kind: "channel"`), so this clause used to render the
+  # title as a bare "in #" — the same slug-less-space assumption that produced
+  # "/chat/?message=..." in the url. Fall back to the author, exactly as the DM
+  # clause does. Found while capturing stage 4's inbox evidence.
+  defp space_label(%Space{name: name}, %Message{author_display_name: author})
+       when not is_binary(name) or name == "",
+       do: author
+
   defp space_label(%Space{name: name}, _msg), do: name
 
   # Single-tenant/default-org setups leave `workspace_id: nil` on both

@@ -11,14 +11,27 @@
  */
 const ChatScrollToMessage = {
   mounted() {
-    this.handleEvent("chat:scroll-to-message", ({ id }) => {
-      const target = document.querySelector(`[data-message-id="${id}"]`)
-      if (!target) return
+    this.handleEvent("chat:scroll-to-message", ({ id }) =>
+      this.scrollToMessage(id, true),
+    )
+  },
+  // `retry` covers the deep-link race (task 019fabe8 stage 3): the LV
+  // pushes this event in the same reply as the anchored window, so the
+  // event can be handled a frame before morphdom has patched the target
+  // row in. Previously that meant the pulse was silently dropped. One
+  // retry on the next animation frame is enough — the stream patch and
+  // the event ride the same message — and bounding it at one keeps a
+  // genuinely absent target (deleted, evicted) from looping.
+  scrollToMessage(id, retry) {
+    const target = document.querySelector(`[data-message-id="${id}"]`)
+    if (!target) {
+      if (retry) requestAnimationFrame(() => this.scrollToMessage(id, false))
+      return
+    }
 
-      target.scrollIntoView({ behavior: "smooth", block: "center" })
-      target.classList.add("chat-message-pulse")
-      setTimeout(() => target.classList.remove("chat-message-pulse"), 1500)
-    })
+    target.scrollIntoView({ behavior: "smooth", block: "center" })
+    target.classList.add("chat-message-pulse")
+    setTimeout(() => target.classList.remove("chat-message-pulse"), 1500)
   }
 }
 

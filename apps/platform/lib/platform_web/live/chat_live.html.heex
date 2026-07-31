@@ -2536,6 +2536,7 @@
           class="px-5 py-4 flex flex-col space-y-1"
           phx-update="stream"
           phx-hook="ScrollToBottom"
+          data-anchor-message-id={@anchor_message_id}
         >
           <.chat_message
             :for={{dom_id, msg} <- @streams.messages}

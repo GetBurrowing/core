@@ -70,15 +70,34 @@ defmodule PlatformWeb.ChatLive.SearchHooks do
   @doc """
   Update search-owned highlight assigns. Called from the parent's
   `search_open_result` handler while Threads is still parent-owned.
-  """
-  @spec set_highlights(Phoenix.LiveView.Socket.t(), binary() | nil) ::
-          Phoenix.LiveView.Socket.t()
-  def set_highlights(socket, message_id) do
-    old_id = socket.assigns[:highlighted_message_id]
 
-    socket
-    |> assign(:highlighted_message_id, message_id)
-    |> reinsert_for_highlight_change(old_id, message_id)
+  ## Options
+
+    * `:reinsert` (default `true`) — whether to `stream_insert` the rows
+      whose glow changed so their markup re-renders.
+
+  Pass `reinsert: false` when the caller has ALREADY reset the messages
+  stream in the same diff (`MessagesHooks.enter_space*` do, via
+  `stream(:messages, …, reset: true)`). Those rows re-render from the
+  reset anyway, and the extra insert defaults to `at: -1` — so the
+  client applies the reset and then re-appends the highlighted row to
+  the END of the container, displacing it from its chronological
+  position. Found in the browser on the `?message=` deep link (task
+  019fabe8 stage 3): the reader arrived at the right message surrounded
+  by the wrong conversation. A LATER standalone reinsert is fine — it
+  updates in place — so this is specifically about same-diff pairing.
+  """
+  @spec set_highlights(Phoenix.LiveView.Socket.t(), binary() | nil, keyword()) ::
+          Phoenix.LiveView.Socket.t()
+  def set_highlights(socket, message_id, opts \\ []) do
+    old_id = socket.assigns[:highlighted_message_id]
+    socket = assign(socket, :highlighted_message_id, message_id)
+
+    if Keyword.get(opts, :reinsert, true) do
+      reinsert_for_highlight_change(socket, old_id, message_id)
+    else
+      socket
+    end
   end
 
   # ── Hook callbacks ────────────────────────────────────────────────────

@@ -58,6 +58,28 @@ defmodule PlatformWeb.ChatLiveNavTargetTest do
       assert ChatLive.space_nav_target(%{id: "x", slug: "y"}) == "y"
       assert ChatLive.space_nav_target(%{id: "x", slug: nil}) == "x"
     end
+
+    # Task 019fabe8 stage 4: the rule moved to `Chat.space_path_segment/1` so
+    # the @mention inbox producer (a CONTEXT-layer caller that cannot reach
+    # into PlatformWeb) shares it. This asserts DELEGATION, not agreement —
+    # two independent implementations that happen to agree today are exactly
+    # how the web layer and chat.ex drifted apart in the first place.
+    test "delegates to Chat.space_path_segment/1 rather than reimplementing" do
+      for space <- [
+            %{org_id: "org-uuid", id: "space-uuid", slug: "general"},
+            %{org_id: nil, id: "space-uuid", slug: "announcements"},
+            %{org_id: nil, id: "space-uuid", slug: nil},
+            # The empty-slug shape is the one where a faithful-looking
+            # reimplementation (`slug || id`) DIVERGES: it returns "",
+            # i.e. the "/chat/?message=..." route miss all over again.
+            %{org_id: nil, id: "space-uuid", slug: ""},
+            %{id: "x", slug: "y"},
+            %{id: "x", slug: nil},
+            %{id: "bare"}
+          ] do
+        assert ChatLive.space_nav_target(space) == Chat.space_path_segment(space)
+      end
+    end
   end
 
   describe "sidebar link emission for org-scoped channels" do

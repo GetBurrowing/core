@@ -45,6 +45,7 @@ defmodule PlatformWeb.InboxLive do
   import Ecto.Query, only: [order_by: 3]
   import PlatformWeb.Components.InboxItem, only: [inbox_item: 1]
 
+  alias Platform.Chat
   alias Platform.Inbox
   alias Platform.Inbox.Item
   alias Platform.Repo
@@ -86,7 +87,8 @@ defmodule PlatformWeb.InboxLive do
        socket
        |> stream_insert(stream_name(section), decorate(item), at: 0)
        |> update_count(section, +1)
-       |> track_section(item.id, section)}
+       |> track_section(item.id, section)
+       |> merge_mention_labels(section, item)}
     else
       {:noreply, socket}
     end
@@ -160,6 +162,10 @@ defmodule PlatformWeb.InboxLive do
     |> assign(:mention_count, length(mentions))
     |> assign(:meeting_count, length(meetings))
     |> assign(:item_sections, section_map(items))
+    |> assign(
+      :mention_space_labels,
+      resolve_mention_labels(mentions, socket.assigns.current_user_id)
+    )
   end
 
   # Mentions are sorted by space then recency so same-space rows sit together
@@ -230,13 +236,91 @@ defmodule PlatformWeb.InboxLive do
 
   def mention_space_key(_), do: ""
 
-  @doc "Human-facing space label for a mention row (`#<slug>`), or nil if unknown."
-  def mention_space_label(%Item{} = item) do
+  @doc """
+  Human-facing space label for a mention row, or nil when the row carries no
+  usable url.
+
+  Reads a PRE-RESOLVED `segment => label` map (the `:mention_space_labels`
+  assign) rather than hitting the DB, so a stream re-render costs no queries
+  and the label is resolved exactly once per distinct space per load.
+
+  Falls back to `#<segment>` — today's behaviour byte-for-byte — when the
+  segment does not resolve (space deleted, or a legacy row). The fallback is
+  why the grouping key stays the raw segment: `sort_mentions/1` groups on
+  identity, not on presentation, so a space that loses its label still groups
+  with its siblings.
+
+  Task 019fabe8 stage 4: `space_path_segment/1` now emits a UUID for org-scoped
+  and slug-less spaces, and `#<uuid>` is not a label a human can read.
+  """
+  def mention_space_label(%Item{} = item, labels \\ %{}) do
     case mention_space_key(item) do
-      "" -> nil
-      key -> "#" <> key
+      "" ->
+        nil
+
+      key ->
+        case Map.get(labels, key) do
+          label when is_binary(label) and label != "" -> label
+          _ -> "#" <> key
+        end
     end
   end
+
+  # Resolve every distinct space segment in the mention rows to a display name,
+  # once. DM/group labels are viewer-relative (the PEER's name), hence the
+  # `user_id` — `Chat.display_name_for_space/3` is the same helper the chat
+  # sidebar and header already render from, so the inbox row and the
+  # destination header agree.
+  #
+  # Channels keep the `#` prefix the inbox has always shown; DM/group labels do
+  # not get one (a person's name is not a channel). Unresolvable segments are
+  # simply absent from the map and `mention_space_label/2` falls back.
+  defp resolve_mention_labels(mentions, user_id) do
+    mentions
+    |> Enum.map(&mention_space_key/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.reduce(%{}, fn segment, acc ->
+      case space_display_label(segment, user_id) do
+        nil -> acc
+        label -> Map.put(acc, segment, label)
+      end
+    end)
+  end
+
+  defp space_display_label(segment, user_id) do
+    case Chat.space_for_path_segment(segment) do
+      nil ->
+        nil
+
+      space ->
+        name = Chat.display_name_for_space(space, Chat.list_participants(space.id), user_id)
+
+        cond do
+          not is_binary(name) or name == "" -> nil
+          space.kind == "channel" -> "#" <> name
+          true -> name
+        end
+    end
+  end
+
+  # A live insert can introduce a space the initial load never saw. Merge just
+  # that one segment instead of re-resolving the whole map.
+  defp merge_mention_labels(socket, :mentions, %Item{} = item) do
+    key = mention_space_key(item)
+    labels = socket.assigns[:mention_space_labels] || %{}
+
+    if key == "" or Map.has_key?(labels, key) do
+      socket
+    else
+      case space_display_label(key, socket.assigns.current_user_id) do
+        nil -> socket
+        label -> assign(socket, :mention_space_labels, Map.put(labels, key, label))
+      end
+    end
+  end
+
+  defp merge_mention_labels(socket, _section, _item), do: socket
 
   # ── Internals ──────────────────────────────────────────────────────────
 

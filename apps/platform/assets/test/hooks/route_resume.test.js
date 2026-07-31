@@ -3,7 +3,9 @@ import RouteResume, {
   moduleFromPath,
   sameModulePrefix,
   stripQueryAndFragment,
+  stripTransientParams,
   PATH_MODULE_MAP,
+  TRANSIENT_QUERY_PARAMS,
   RESUME_TTL_MS,
 } from "../../js/hooks/route_resume.js"
 import ClientState, { __resetForTests } from "../../js/client_state.js"
@@ -747,5 +749,233 @@ describe("RouteResume resume TTL", () => {
     // ClientState.get expires-on-read and self-cleans, so the stale envelope
     // is gone after the intercept probed it.
     expect(shims.storage.__raw.has("suite:route_resume:admin")).toBe(false)
+  })
+})
+
+// ── Transient params / sticky anchor (task 019fabe8 stage 5) ──────────
+//
+// Stage 2 put the inbox deep-link anchor in the URL as `?message=<id>`, on
+// purpose: it is shareable and survives a refresh. But `_persistCurrentPath`
+// saves `pathname + search`, so without this stage the anchor would ride
+// into `route_resume:chat` and STICK — every later Chat-tile click would
+// resume to `?message=<id>` and throw the reader back to an old message for
+// the full 3h TTL.
+//
+// The fix strips transient params at PERSIST time (not at restore time), so
+// the stored value is already clean and no other reader of
+// `route_resume:<mod>` has to know that `message` is transient. Durable
+// filter state (`/tasks?sponsor=mine`, task 019f487e Case 5) is untouched.
+
+const ANCHOR_ID = "019fabe8-b05a-726e-9b3c-4ac701b73129"
+
+describe("stripTransientParams", () => {
+  it("drops chat's `message` anchor, leaving a bare path (no trailing `?`)", () => {
+    expect(stripTransientParams("chat", `/chat/general?message=${ANCHOR_ID}`)).toBe(
+      "/chat/general"
+    )
+  })
+
+  it("keeps every other param on the same visit", () => {
+    expect(
+      stripTransientParams("chat", `/chat/general?thread=42&message=${ANCHOR_ID}`)
+    ).toBe("/chat/general?thread=42")
+    expect(
+      stripTransientParams("chat", `/chat/general?message=${ANCHOR_ID}&thread=42`)
+    ).toBe("/chat/general?thread=42")
+  })
+
+  it("leaves a non-chat module's `message` param alone", () => {
+    // The strip is keyed by module. A `message` param that means something
+    // durable elsewhere must not be silently swallowed by chat's rule.
+    expect(stripTransientParams("tasks", "/tasks?message=hello")).toBe(
+      "/tasks?message=hello"
+    )
+    expect(stripTransientParams("inbox", `/inbox?message=${ANCHOR_ID}`)).toBe(
+      `/inbox?message=${ANCHOR_ID}`
+    )
+  })
+
+  it("returns the input untouched when there is nothing to strip", () => {
+    // Identity (not just equality) matters: the untouched path must never
+    // round-trip through URLSearchParams re-encoding, which would rewrite
+    // escapes and break the intercept's byte compare against an href.
+    const durable = "/chat/general?filter=a%20b&sort=desc"
+    expect(stripTransientParams("chat", durable)).toBe(durable)
+    expect(stripTransientParams("chat", "/chat/general")).toBe("/chat/general")
+    expect(stripTransientParams("tasks", "/tasks?sponsor=mine")).toBe(
+      "/tasks?sponsor=mine"
+    )
+  })
+
+  it("removes repeated occurrences of the transient param", () => {
+    expect(
+      stripTransientParams("chat", `/chat/general?message=a&message=${ANCHOR_ID}`)
+    ).toBe("/chat/general")
+  })
+
+  it("returns empty string for non-string input", () => {
+    expect(stripTransientParams("chat", null)).toBe("")
+    expect(stripTransientParams("chat", undefined)).toBe("")
+    expect(stripTransientParams("chat", 42)).toBe("")
+  })
+})
+
+describe("TRANSIENT_QUERY_PARAMS", () => {
+  it("scopes the transient list to chat's `message` anchor only", () => {
+    // Documentation guard. A new transient param joins its module's array
+    // here — one place, no second ad-hoc regex. Widening this to `tasks`
+    // would silently start eating `?sponsor=mine`.
+    expect(TRANSIENT_QUERY_PARAMS.chat).toEqual(["message"])
+    expect(TRANSIENT_QUERY_PARAMS.tasks).toBeUndefined()
+  })
+})
+
+describe("RouteResume transient anchor persistence", () => {
+  let shims
+  let historyRedirect
+
+  beforeEach(() => {
+    shims = installShims()
+    __resetForTests()
+    historyRedirect = vi.fn()
+    shims.win.liveSocket = { historyRedirect }
+  })
+
+  afterEach(() => {
+    uninstallShims()
+    __resetForTests()
+  })
+
+  it("persists a `?message=` deep-link visit without the anchor", () => {
+    shims.win.location.pathname = "/chat/general"
+    shims.win.location.search = `?message=${ANCHOR_ID}`
+    const hook = buildHook()
+    hook.mounted()
+
+    expect(ClientState.get("route_resume", "chat")).toBe("/chat/general")
+  })
+
+  it("keeps other query params on the anchored visit", () => {
+    shims.win.location.pathname = "/chat/general"
+    shims.win.location.search = `?thread=42&message=${ANCHOR_ID}`
+    const hook = buildHook()
+    hook.mounted()
+
+    expect(ClientState.get("route_resume", "chat")).toBe("/chat/general?thread=42")
+  })
+
+  it("leaves a non-chat module's `message` param in the persisted value", () => {
+    shims.win.location.pathname = "/tasks"
+    shims.win.location.search = "?sponsor=mine&message=hello"
+    const hook = buildHook()
+    hook.mounted()
+
+    expect(ClientState.get("route_resume", "tasks")).toBe(
+      "/tasks?sponsor=mine&message=hello"
+    )
+  })
+
+  it("stores the stripped value through the existing TTL envelope unchanged", () => {
+    shims.win.location.pathname = "/chat/general"
+    shims.win.location.search = `?message=${ANCHOR_ID}`
+    const before = Date.now()
+    const hook = buildHook()
+    hook.mounted()
+    const after = Date.now()
+
+    const raw = shims.storage.__raw.get("suite:route_resume:chat")
+    const parsed = JSON.parse(raw)
+    expect(parsed).toHaveProperty("v", "/chat/general")
+    expect(parsed.e).toBeGreaterThanOrEqual(before + RESUME_TTL_MS)
+    expect(parsed.e).toBeLessThanOrEqual(after + RESUME_TTL_MS)
+  })
+
+  it("does not re-anchor a later Chat-tile click (the sticky-anchor regression)", () => {
+    // Arrive from the inbox on a deep link…
+    shims.win.location.pathname = "/chat/general"
+    shims.win.location.search = `?message=${ANCHOR_ID}`
+    const hook = buildHook()
+    hook.mounted()
+
+    // …then come back to Chat from another module. We resume the space, but
+    // NOT the anchor: without the strip this redirect carries
+    // `?message=<id>` and slams the reader back to the old message.
+    const anchor = makeAnchor({ moduleId: "chat", href: "/chat" })
+    const evt = makeClickEvent(anchor)
+    shims.doc.dispatchClick(evt)
+
+    expect(evt.defaultPrevented).toBe(true)
+    expect(historyRedirect).toHaveBeenCalledWith(
+      evt,
+      "/chat/general",
+      "push",
+      null,
+      anchor,
+    )
+  })
+
+  it("still resumes normally when no anchor was involved (positive control)", () => {
+    // The other direction: stripping must not break plain resume.
+    shims.win.location.pathname = "/chat/general"
+    shims.win.location.search = ""
+    const hook = buildHook()
+    hook.mounted()
+
+    expect(ClientState.get("route_resume", "chat")).toBe("/chat/general")
+
+    const anchor = makeAnchor({ moduleId: "chat", href: "/chat" })
+    const evt = makeClickEvent(anchor)
+    shims.doc.dispatchClick(evt)
+
+    expect(evt.defaultPrevented).toBe(true)
+    expect(historyRedirect).toHaveBeenCalledWith(
+      evt,
+      "/chat/general",
+      "push",
+      null,
+      anchor,
+    )
+  })
+
+  it("keeps the persisted value clean across a same-module patch off the anchor", () => {
+    // ChatLive drops `?message=` from the URL once the anchor is consumed;
+    // that later `phx:page-loading-stop` must not resurrect anything.
+    shims.win.location.pathname = "/chat/general"
+    shims.win.location.search = `?message=${ANCHOR_ID}`
+    const hook = buildHook()
+    hook.mounted()
+
+    shims.win.location.search = ""
+    shims.win.dispatchEvent({ type: "phx:page-loading-stop" })
+
+    expect(ClientState.get("route_resume", "chat")).toBe("/chat/general")
+  })
+
+  it("compares path+search together, so an anchored saved value IS a distinct target", () => {
+    // Why persist-time stripping is required rather than relying on the
+    // intercept to no-op: the saved-vs-href compare at `_maybeInterceptClick`
+    // is path+search, not path alone (task 019f487e Case 5 needs that). So a
+    // saved `/chat/general?message=<id>` does NOT match a bare
+    // `/chat/general` anchor — it redirects and re-anchors. Seeded directly
+    // here because after this stage nothing writes such a value any more;
+    // legacy entries from before the fix age out with the 3h TTL.
+    shims.win.location.pathname = "/unlisted"
+    ClientState.set("route_resume", "chat", `/chat/general?message=${ANCHOR_ID}`)
+
+    const hook = buildHook()
+    hook.mounted()
+
+    const anchor = makeAnchor({ moduleId: "chat", href: "/chat/general" })
+    const evt = makeClickEvent(anchor)
+    shims.doc.dispatchClick(evt)
+
+    expect(evt.defaultPrevented).toBe(true)
+    expect(historyRedirect).toHaveBeenCalledWith(
+      evt,
+      `/chat/general?message=${ANCHOR_ID}`,
+      "push",
+      null,
+      anchor,
+    )
   })
 })

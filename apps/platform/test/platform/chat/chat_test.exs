@@ -159,6 +159,49 @@ defmodule Platform.ChatTest do
     end
   end
 
+  describe "list_messages/2 :order" do
+    setup do
+      space = create_space()
+      p = create_participant(space.id)
+
+      messages =
+        for i <- 1..40 do
+          create_message(space.id, p.id, %{content: "m-#{i}"})
+        end
+
+      %{space: space, messages: messages}
+    end
+
+    test "defaults to newest-first and, with :after_id, jumps to the live tail", ctx do
+      cursor = Enum.at(ctx.messages, 4)
+
+      got = Chat.list_messages(ctx.space.id, after_id: cursor.id, limit: 5)
+
+      # DESC orders BEFORE the limit, so this is the newest 5 in the whole
+      # space — deliberately NOT contiguous with the cursor. That's the
+      # right shape for "catch me up to the live tail" and the reason the
+      # anchored window needs the option below.
+      assert Enum.map(got, & &1.id) ==
+               ctx.messages |> Enum.take(-5) |> Enum.reverse() |> Enum.map(& &1.id)
+    end
+
+    test "order: :asc with :after_id returns the messages contiguous with the cursor", ctx do
+      cursor = Enum.at(ctx.messages, 4)
+
+      got = Chat.list_messages(ctx.space.id, after_id: cursor.id, limit: 5, order: :asc)
+
+      assert Enum.map(got, & &1.id) ==
+               ctx.messages |> Enum.slice(5, 5) |> Enum.map(& &1.id)
+    end
+
+    test "an unrecognised :order value falls back to :desc rather than crashing", ctx do
+      got = Chat.list_messages(ctx.space.id, limit: 3, order: :sideways)
+
+      assert Enum.map(got, & &1.id) ==
+               ctx.messages |> Enum.take(-3) |> Enum.reverse() |> Enum.map(& &1.id)
+    end
+  end
+
   # ── Space lookup (org-scoped slug) ──────────────────────────────────────────
 
   describe "get_space_by_slug/2 with :org_id" do

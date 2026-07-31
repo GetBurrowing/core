@@ -17,6 +17,8 @@ defmodule Platform.Chat.MentionInboxTest do
   """
   use Platform.DataCase, async: false
 
+  import Platform.TenancyFixtures, only: [fabrikam_org_id: 0]
+
   alias Platform.Accounts.User
   alias Platform.Chat
   alias Platform.Inbox
@@ -286,6 +288,140 @@ defmodule Platform.Chat.MentionInboxTest do
       assert row.source_id == msg.id
       assert_receive {:inbox_item_added, %Item{user_id: user_id}}
       assert user_id == dave.id
+    end
+  end
+
+  # ── Mention url is resolvable for EVERY space kind (task 019fabe8 st.4) ─────
+  #
+  # The producer used to interpolate `space.slug` raw. `create_dm_space/3`
+  # inserts no slug, so a DM/group mention emitted "/chat/?message=<uuid>",
+  # which does not match the `/chat/:space_slug` route at all — the reader fell
+  # through the catch-all `handle_params/3` clause and was pushed to their
+  # FIRST CHANNEL. These cases pin the url against
+  # `Chat.space_path_segment/1`, the single addressing rule.
+
+  describe "mention url addressing" do
+    test "a DM mention addresses the DM by id, not by an empty slug" do
+      carol = create_user!("Carol")
+      dave = create_user!("Dave")
+
+      # Exactly what `create_dm_space/3` produces: no slug, no name, no org.
+      dm = create_space("dm", %{name: nil, slug: nil})
+      assert is_nil(dm.slug), "fixture must reproduce the slug-less DM shape"
+
+      carol_p = add_user(dm.id, carol, "Carol")
+      _dave_p = add_user(dm.id, dave, "Dave")
+
+      {:ok, msg} =
+        Chat.post_message(%{
+          space_id: dm.id,
+          participant_id: carol_p.id,
+          content_type: "text",
+          content: "@[Dave] ping"
+        })
+
+      [row] = inbox_rows(dave.id)
+
+      assert row.url == "/chat/#{dm.id}?message=#{msg.id}"
+
+      # The pre-fix shape, spelled out so a regression is unmistakable.
+      refute row.url == "/chat/?message=#{msg.id}"
+      refute String.starts_with?(row.url, "/chat/?")
+    end
+
+    test "a group mention titles from the author, not a bare `in #`" do
+      carol = create_user!("Carol")
+      dave = create_user!("Dave")
+
+      # Groups carry no name (the changeset requires one only for channels),
+      # so the title used to render "@Mention from Carol in #".
+      group = create_space("group", %{name: nil, slug: nil})
+      carol_p = add_user(group.id, carol, "Carol")
+      _dave_p = add_user(group.id, dave, "Dave")
+
+      {:ok, _msg} =
+        Chat.post_message(%{
+          space_id: group.id,
+          participant_id: carol_p.id,
+          content_type: "text",
+          content: "@[Dave] ping"
+        })
+
+      [row] = inbox_rows(dave.id)
+      assert row.title == "@Mention from Carol in #Carol"
+      refute row.title == "@Mention from Carol in #"
+    end
+
+    test "a group mention addresses the group by id" do
+      carol = create_user!("Carol")
+      dave = create_user!("Dave")
+
+      group = create_space("group", %{name: nil, slug: nil})
+      carol_p = add_user(group.id, carol, "Carol")
+      _dave_p = add_user(group.id, dave, "Dave")
+
+      {:ok, msg} =
+        Chat.post_message(%{
+          space_id: group.id,
+          participant_id: carol_p.id,
+          content_type: "text",
+          content: "@[Dave] ping"
+        })
+
+      [row] = inbox_rows(dave.id)
+      assert row.url == "/chat/#{group.id}?message=#{msg.id}"
+    end
+
+    test "an ORG-SCOPED channel addresses by id, matching the sidebar rail" do
+      alice = create_user!("Alice")
+      bob = create_user!("Bob")
+
+      space = create_space("channel", %{name: "General", org_id: fabrikam_org_id()})
+      refute is_nil(space.slug), "org-scoped channels still HAVE a slug"
+
+      alice_p = add_user(space.id, alice, "Alice")
+      _bob_p = add_user(space.id, bob, "Bob")
+
+      {:ok, msg} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: alice_p.id,
+          content_type: "text",
+          content: "@[Bob] review"
+        })
+
+      [row] = inbox_rows(bob.id)
+
+      # ID, not slug: a slug url resolves through the org-scoped
+      # `get_space_by_slug/2`, so it only works while the READER's active org
+      # matches the space's — and a miss falls through to the auto-create path.
+      assert row.url == "/chat/#{space.id}?message=#{msg.id}"
+      refute row.url == "/chat/#{space.slug}?message=#{msg.id}"
+
+      # The rail and the mention now agree by construction.
+      assert row.url == "/chat/#{PlatformWeb.ChatLive.space_nav_target(space)}?message=#{msg.id}"
+    end
+
+    test "an org-less channel keeps its shareable slug url" do
+      alice = create_user!("Alice")
+      bob = create_user!("Bob")
+
+      space = create_space("channel", %{name: "Legacy"})
+      assert is_nil(space.org_id)
+
+      alice_p = add_user(space.id, alice, "Alice")
+      _bob_p = add_user(space.id, bob, "Bob")
+
+      {:ok, msg} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: alice_p.id,
+          content_type: "text",
+          content: "@[Bob] review"
+        })
+
+      [row] = inbox_rows(bob.id)
+      assert row.url == "/chat/#{space.slug}?message=#{msg.id}"
     end
   end
 
