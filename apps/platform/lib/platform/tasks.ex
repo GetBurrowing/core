@@ -1837,6 +1837,7 @@ defmodule Platform.Tasks do
   defp open_architecture_gate_at_submit(%Plan{} = updated) do
     case open_architecture_gate(updated, architect_agent_id()) do
       {:ok, gated} ->
+        emit_architecture_gate_opened(gated)
         broadcast_board({:plan_updated, gated})
         {:ok, gated}
 
@@ -1867,6 +1868,96 @@ defmodule Platform.Tasks do
       )
 
       settle_ungated_plan_submission(updated)
+  end
+
+  # ── Task 019fa605 stage 4: make the unrouted-gate class visible AT OPEN ──
+  #
+  # THE OPERATOR QUESTION THIS ANSWERS: "how do I find out that a gate just
+  # opened on a task nothing will ever settle?" Stages 1-3 heal that stall,
+  # but only after the deadline, and only as a counter on a reconcile line
+  # that names no task. This is the one place in the system that knows —
+  # synchronously, at the moment the gate is persisted — both that a gate is
+  # now holding a plan and whether anything exists that will arm its
+  # deadline. `routed` records that fact once, keyed to the plan.
+  #
+  # `TaskRouterWatcher.should_run?/1` is pure struct reads and
+  # `Platform.Orchestration.TaskRouterWatcher` is already in this module's
+  # alias block, so this adds no dependency edge and no query beyond the
+  # `Repo.get/2` it needs.
+  #
+  # THE ENVELOPE IS LOAD-BEARING AND ITS OWN, NOT THE CALLER'S. This runs
+  # inside a committed `draft -> pending_review` transition, and
+  # `open_architecture_gate_at_submit/1`'s function-level rescue FALLS OPEN
+  # by calling `settle_ungated_plan_submission/1` — which, on a gate that
+  # HAS ALREADY PERSISTED, is wrong twice over. MEASURED, not assumed: with
+  # this envelope removed and a fault injected here, an armed task's submit
+  # returns `{:error, :architecture_gate_open}` — `approve_plan/3` correctly
+  # refuses the open gate, so the plan is not auto-approved, but the MCP
+  # `plan_submit` caller is told a committed, correctly-gated submit FAILED
+  # and will retry or report a stall. The same path also moves the planning
+  # cursor back to `:planning` while the gate is genuinely holding, and runs
+  # the ungated sponsor-Inbox tail. An observer never gets to change the
+  # outcome it observes — the rule stated at `fire_architecture_review_plan/1`.
+  #
+  # (`:telemetry.execute/3` catches and detaches a failing handler itself,
+  # so a third-party observer cannot reach here. The faults this guards are
+  # the ones on OUR side of the emit — the `Repo.get/2` exiting during
+  # sandbox teardown, in the shape documented at `resolve_runtime_for_task/1`
+  # and `boot_reconcile/0`.)
+  defp emit_architecture_gate_opened(%Plan{} = gated) do
+    task = Repo.get(Task, gated.task_id)
+    routed = TaskRouterWatcher.should_run?(task)
+    deadline_at = gated.architecture_verdict["deadline_at"]
+
+    :telemetry.execute(
+      [:platform, :plan, :architecture_gate_opened],
+      %{count: 1},
+      %{
+        plan_id: gated.id,
+        task_id: gated.task_id,
+        routed: routed,
+        deadline_at: deadline_at,
+        resource_type: "plan",
+        resource_id: gated.id,
+        action: "architecture_gate_opened",
+        actor_type: "system"
+      }
+    )
+
+    unless routed do
+      # ONE line, at open time, naming the task and the settler. Not a
+      # warning: this configuration is SUPPORTED — it is merely the
+      # arrangement whose settlement comes from the sweep rather than from a
+      # router timer. Logging it at :warning would train operators to ignore
+      # a line that describes a healthy system. The ruling is recorded at
+      # `0046-design-and-architecture-phases-in-planning.md § Addendum (2026-07-28, task 019fa605): a user planning assignee under auto-approval is supported`
+      # (kept contiguous on one line so the ADR-citation audit can resolve it).
+      Logger.info(
+        "[Tasks] architecture gate opened with no router: task=#{gated.task_id} " <>
+          "plan=#{gated.id} deadline=#{deadline_at} — nothing will arm " <>
+          "{:architecture_gate_deadline, _}; the settler is " <>
+          "TaskRouterWatcher.sweep_expired_architecture_gates/0, within one " <>
+          "reconcile tick after the deadline."
+      )
+    end
+
+    :ok
+  rescue
+    e ->
+      Logger.error(
+        "[Tasks] architecture gate open telemetry crashed plan=#{gated.id} " <>
+          "task=#{gated.task_id} error=#{Exception.message(e)} — gate stands"
+      )
+
+      :ok
+  catch
+    :exit, reason ->
+      Logger.error(
+        "[Tasks] architecture gate open telemetry exited plan=#{gated.id} " <>
+          "task=#{gated.task_id} exit=#{inspect(reason)} — gate stands"
+      )
+
+      :ok
   end
 
   # Return the cursor to `:planning` and run the deferred tail. Every
@@ -2193,13 +2284,7 @@ defmodule Platform.Tasks do
   # without a mutation storm across member tasks.
   defp maybe_auto_approve(%Plan{} = plan) do
     task = plan.task_id |> then(&Repo.get!(Task, &1)) |> Repo.preload(:stack)
-
-    via =
-      cond do
-        task.auto_approve_plan -> :task
-        task.stack && task.stack.auto_accept_plan -> :stack
-        true -> nil
-      end
+    via = auto_approve_via(task)
 
     if via do
       case auto_approve_precondition(task, plan) do
@@ -2254,6 +2339,22 @@ defmodule Platform.Tasks do
       end
     else
       {:ok, plan}
+    end
+  end
+
+  # WHICH FLAG ARMS THE AUTO PATH, as ONE statement. Extracted from
+  # `maybe_auto_approve/1` in task 019fa605 stage 3 because
+  # `retry_auto_approval/1` must ask the identical question: an arm that
+  # re-derived "armed" locally could retry a task the tail itself would
+  # decline, and would log a skip on every reconcile tick forever.
+  #
+  # `task` must arrive with `:stack` preloaded — both callers do it.
+  @spec auto_approve_via(%Task{}) :: :task | :stack | nil
+  defp auto_approve_via(%Task{} = task) do
+    cond do
+      task.auto_approve_plan -> :task
+      task.stack && task.stack.auto_accept_plan -> :stack
+      true -> nil
     end
   end
 
@@ -2710,6 +2811,171 @@ defmodule Platform.Tasks do
     broadcast_board({:plan_updated, resolved})
     settle_plan_submission(resolved)
   end
+
+  # ── task 019fa605 stage 3: the lost deferred tail ─────────────────────
+
+  # THE RETRY SET, and it is deliberately two states rather than the three
+  # this stage was specified with. See `retry_auto_approval/1`'s @doc for
+  # why `"passed"` is a REFUSAL.
+  @retry_auto_approval_states ["expired", "dispatch_failed"]
+
+  @doc """
+  The verdict states `retry_auto_approval/1` will re-run the deferred tail for.
+
+  Public so `TaskRouterWatcher.sweep_unsettled_auto_approvals/0` can build its
+  candidate query from the SAME list this module refuses on. The sweep holds no
+  policy of its own; a second copy of this list is how the query and the
+  refusal drift apart and the sweep starts scanning rows it can never act on.
+  """
+  @spec retryable_auto_approval_states() :: [String.t()]
+  def retryable_auto_approval_states, do: @retry_auto_approval_states
+
+  @doc """
+  Re-run the deferred auto-approval tail for a plan whose gate already
+  resolved terminally but which never left `pending_review`.
+
+  Stage 1's `sweep_expired_architecture_gates/0` heals the shape where the
+  verdict ROW still reads `"pending"`. This heals the shape AFTER that: a
+  verdict committed terminal on a plan still sitting at `pending_review`
+  with the auto flag armed — the deferred `settle_plan_submission/1` tail
+  was lost between the verdict write and the approval.
+
+  **This function heals deferred tails only.** It calls the private
+  `maybe_auto_approve/1` and NOTHING else — specifically NOT
+  `settle_plan_submission/1`, which also calls `maybe_emit_plan_review_inbox/1`.
+  A recurring sweep re-entering that would emit a duplicate sponsor Inbox row
+  every five minutes forever.
+
+  Returns `{:ok, :approved}` | `{:ok, :noop, reason}` | `{:error, term()}`.
+
+  ## That the tail can be lost at all is a property of this repo, not a theory
+
+  `record_architecture_verdict/3`'s write is a committed `Repo.update_all`
+  (see `write_architecture_verdict/4`) that PRECEDES the tail;
+  `resolve_architecture_gate/3` then calls `settle_resolved_architecture_gate/2`
+  outside any transaction. So any raise in the tail leaves the verdict
+  written and the approval un-run. Both writers of `:expired` sit exactly
+  where such a raise is swallowed and never retried:
+
+    * `TaskRouterWatcher.settle_expired_gate/2` runs inside an `Enum.reduce`
+      under the reconcile tick's `rescue`/`catch :exit` envelope, which
+      degrades the whole sweep to zeros and moves on. The row it half-settled
+      can never be seen again, because that sweep's candidate query filters
+      `->>'state' = 'pending'` and the state is now `"expired"`.
+    * `TaskRouter`'s `{:architecture_gate_deadline, plan_id}` handler runs in
+      a GenServer `handle_info`, where a raise kills the router and the
+      timer is never re-armed.
+
+  `"dispatch_failed"` is written from `Handlers.ArchitectureReviewPlan`'s
+  fire-and-forget output path, which has the same exposure.
+
+  ## THE REFUSAL SET IS THE DELIVERABLE
+
+    * `"rejected"` — GOVERNANCE, and the reason this function has an
+      allow-list rather than "any terminal verdict".
+      `Platform.Tasks.ArchitectureRejection.handle/1` leaves a plan
+      UNTOUCHED at `pending_review` when it reaches `reject_limit/0` and
+      escalates to a human (`escalate/2` returns the plan verbatim — no
+      reject, no new lifecycle state). That row is BYTE-IDENTICAL in
+      `plans.status` to the stall this function exists to heal. An arm keyed
+      on "pending_review + terminal verdict" would auto-approve a plan an
+      architect explicitly rejected and a human was summoned to look at —
+      strictly worse than the stall.
+    * `"human_override"` — that state only exists on a plan a human already
+      approved, written by `approve_plan/3` mid-flight.
+    * `"passed"` — REFUSED, and this stage was specified to retry it. The
+      specification is wrong. Two independent grounds:
+
+      1. NO WRITER CAN LOSE THIS TAIL. `:pass` reaches
+         `resolve_architecture_gate/3` from exactly two places —
+         `Federation.ToolSurface`'s MCP verdict tool and
+         `Handlers.ArchitectureReviewPlan` — and the MCP path is a
+         synchronous request whose raise surfaces to the calling agent as an
+         error it retries. There is no timer, no capped sweep and no
+         swallow-everything reconcile envelope on the `:pass` path, so the
+         shape this function heals is not reachable through it. What a
+         `"passed"` plan at `pending_review` on an ARMED task actually means
+         is that the tail RAN and `auto_approve_precondition/2` declined.
+      2. NO CONTAINMENT IF THE RETRY IS WRONG. `:expired` and
+         `:dispatch_failed` run `record_architecture_planning_step(task,
+         {:error, fell_open})` before settling, so `planning_gate_failed?/1`
+         stays true and `AutoMerger.execute_merge/4` still refuses the
+         merge — a mistaken retry approves a plan that a human still has to
+         unblock. A `"passed"` plan has no such record, so a mistaken retry
+         runs unattended all the way to merge.
+
+      Note the argument that `:pass` "already calls `settle_plan_submission/1`"
+      is true but does NOT discriminate: `settle_resolved_architecture_gate/2`'s
+      `:expired`/`:dispatch_failed` clause calls it identically. Taken alone
+      that argument would empty the retry set. The discriminator is which
+      writers can lose the tail, above.
+    * `:none` — a principled boundary, not caution: a plan whose gate never
+      opened ran its tail INLINE at submit inside
+      `settle_ungated_plan_submission/1`. There is no deferred tail to have
+      lost.
+    * `{:open, _}` — the gate is genuinely still holding the plan. That is
+      stage 1's business, not this function's.
+    * NOT ARMED — asked through `auto_approve_via/1`, the same statement
+      `maybe_auto_approve/1` uses, so the two cannot disagree.
+    * PRECONDITION FAILURE (`auto_approve_precondition/2`: empty plan, no
+      execution assignee, no review assignee) — refused HERE, terminally,
+      rather than being discovered inside `maybe_auto_approve/1`. That
+      matters because this runs on a 5-minute tick: letting the tail
+      discover it would log a `Logger.warning` and emit
+      `[:platform, :plan, :auto_approve_skipped]` 288 times a day per plan,
+      forever, for a condition no retry can change.
+  """
+  @spec retry_auto_approval(Plan.t() | binary()) ::
+          {:ok, :approved} | {:ok, :noop, atom()} | {:error, term()}
+  def retry_auto_approval(plan_or_id) do
+    # Never trust a caller's struct — `architecture_gate/1`'s @doc argues
+    # why, and this arm is reached from a sweep holding rows read before
+    # the classification.
+    case resolve_plan_for_gate(plan_or_id) do
+      nil -> {:error, :plan_not_found}
+      %Plan{status: "pending_review"} = plan -> retry_lost_deferred_tail(plan)
+      %Plan{} -> {:ok, :noop, :not_pending_review}
+    end
+  end
+
+  defp retry_lost_deferred_tail(%Plan{} = plan) do
+    with {:gate, {:resolved, %{"state" => state}}} <- {:gate, architecture_gate(plan.id)},
+         {:retryable, true, _state} <- {:retryable, state in @retry_auto_approval_states, state},
+         task = plan.task_id |> then(&Repo.get!(Task, &1)) |> Repo.preload(:stack),
+         {:armed, via} when not is_nil(via) <- {:armed, auto_approve_via(task)},
+         {:precondition, :ok} <- {:precondition, auto_approve_precondition(task, plan)} do
+      run_lost_deferred_tail(plan)
+    else
+      {:gate, :none} -> {:ok, :noop, :no_gate}
+      {:gate, {:open, _verdict}} -> {:ok, :noop, :gate_open}
+      {:retryable, false, state} -> {:ok, :noop, retry_refusal_for_state(state)}
+      {:armed, nil} -> {:ok, :noop, :not_armed}
+      {:precondition, {:skip, reason}} -> {:ok, :noop, reason}
+    end
+  end
+
+  defp run_lost_deferred_tail(%Plan{} = plan) do
+    case maybe_auto_approve(plan) do
+      {:ok, %Plan{status: "approved"}} ->
+        {:ok, :approved}
+
+      # Defensive: the precondition and the arming were both checked above,
+      # so the tail should not decline. If it does, say so rather than
+      # reporting an approval that did not happen.
+      {:ok, %Plan{}} ->
+        {:ok, :noop, :auto_approve_declined}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Named refusals, so the sweep's telemetry says WHICH governance rule
+  # declined rather than a single opaque atom.
+  defp retry_refusal_for_state("rejected"), do: :architect_rejected
+  defp retry_refusal_for_state("human_override"), do: :human_override
+  defp retry_refusal_for_state("passed"), do: :gate_passed
+  defp retry_refusal_for_state(_unknown), do: :verdict_not_retryable
 
   def approve_plan(plan, approved_by, opts \\ [])
 

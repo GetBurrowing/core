@@ -207,3 +207,29 @@ Steps 1–3 are unglamorous and carry the feature. Without them the remainder is
 - ADR-0045 (Task Stacks v2) — stack members inherit this lifecycle per-member.
 
 **Numbering note:** `docs/decisions/` currently carries four duplicate-number collisions (0017, 0036, 0042, 0044) plus a byte-identical 0027/0028 pair, and no ADR carries a `Superseded` status. 0046 was verified free before allocation. Repairing the existing collisions is tracked separately.
+
+---
+
+### Addendum (2026-07-28, task 019fa605): a user planning assignee under auto-approval is supported
+
+**Decided.** A task carrying `auto_approve_plan: true` — or a stack member under a stack's `auto_accept_plan: true` — whose **planning** phase assignee is a **user** is a **supported** configuration. It is not refused at the write boundary, not warned about, and not migrated away from. Where ADR-0046's original text left the combination undiscussed, this is the ruling: support it.
+
+**Why.** The obvious reading is that the combination is incoherent — "auto-approve" implies an engine driving the task, and `Platform.Orchestration.TaskRouterWatcher.should_run?/1` will not start a router for a non-agent assignee, so it looks like nothing can ever drive it. That reading is wrong on the facts, in two independent places:
+
+- **The architect does not need the task's router.** `architecture.review_plan` is dispatched through `Platform.Responsibilities.fire/2` to the *architect's own* runtime. Its verdict arrives back through the MCP verdict tool calling `Tasks.resolve_architecture_gate/3`. The whole gate opens and closes without the task ever having a router of its own. Whenever the architect answers, this configuration already worked.
+- **An unheld responsibility already falls open.** With nobody holding `architecture.review_plan`, `submit_plan_for_review/1` takes the not-applicable branch into `settle_ungated_plan_submission/1` and auto-approves inline, again with no router involved.
+
+Only one corner ever stalled: the **silent-architect** case — the gate opens, the architect never answers, the deadline passes, and there is no router to fire `{:architecture_gate_deadline, plan_id}`. Refusing the combination at the write boundary would therefore have rejected two arrangements that demonstrably make progress in order to close one that does not. The correct fix is the one taken in task 019fa605: settle the stalled corner from `TaskRouterWatcher.sweep_expired_architecture_gates/0`, a level-triggered sweep on the reconcile tick that makes the identical single call the router's deadline handler makes.
+
+Two design bounds fall out of that and are part of the ruling, not implementation detail. The sweep re-asks `Tasks.architecture_gate/1` rather than re-deriving the overdue rule, so the projection stays the single authority. And it settles a gate to `expired` and never to `passed`: the plan is approved *and* the record that nobody reviewed it survives, so `Tasks.planning_gate_failed?/1` still refuses the merge downstream. An approved plan whose gate reads `passed` would be strictly worse than the stall it replaced.
+
+The resulting invariant, in one line: **THE ROUTER IS AN OPTIMISATION, THE WATCHER SWEEP IS THE GUARANTEE.** The same shape as `architecture_gate/1`'s projection being the guarantee and the deadline timer the eager edge.
+
+**Revisit this ruling if any of these stops holding.** Each is checkable, and any one of them falsifies the argument above rather than merely aging it:
+
+1. **`should_run?/1` stops keying on `assignee_type`.** If a router can be started for a user-assigned task — a router flavour with no runtime, say — the stall disappears at its source and the sweep becomes dead weight, not a guarantee.
+2. **The reconcile tick stops being reliable.** The sweep is the *only* settler for this class. If reconcile is disabled in an environment, or `@gate_expiry_sweep_cap` is hit persistently rather than transiently, then this configuration has no settler in that environment and refusing it there becomes the honest answer.
+3. **The architect gains a synchronous verdict path.** If `fire_trigger/3` ever hands the parsed verdict back inline, the gate resolves at submit and the whole asynchronous deadline apparatus — sweep included — is unnecessary for this shape.
+4. **`maybe_auto_approve/1` stops reading both flags.** The ruling covers `auto_approve_plan` and `auto_accept_plan` together only because one function resolves both. Split them and this addendum covers whichever one keeps that resolution, and says nothing about the other.
+
+**Recorded because the alternative is worse than being wrong.** A rule kept after its justification lapsed is obeyed longer than a rule that was never written down; task `019fa63a-02a0` tracks that failure mode across three repos. Cited by `Platform.Tasks.emit_architecture_gate_opened/1` and by the `architecture_verdict` migration's no-index note, both by filename and heading.

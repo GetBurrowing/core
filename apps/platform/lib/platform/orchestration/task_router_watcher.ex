@@ -55,7 +55,7 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   alias Platform.Orchestration.{RuntimeSupervision, SandboxGuard, TaskRouterSupervisor}
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{Stacks, Task}
+  alias Platform.Tasks.{Plan, Stacks, Task}
 
   @reconcile_interval_ms 5 * 60 * 1_000
 
@@ -71,6 +71,25 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   # rollup-merge stamp doesn't get auto-transitioned prematurely.
   @in_review_stall_debounce_minutes 15
   @in_review_stall_sweep_cap 50
+
+  # Task 019fa605: architecture-gate expiry sweep. See
+  # `sweep_expired_architecture_gates/0` for the argument.
+  @gate_expiry_sweep_cap 25
+
+  # A healthy router arms its own `{:architecture_gate_deadline, plan_id}`
+  # timer and settles the gate the instant it fires. The grace keeps that
+  # the PRIMARY settler and this sweep a backstop, so the two are not
+  # routinely racing over the same row. Correctness does not depend on it:
+  # `record_architecture_verdict/3`'s guarded `UPDATE ... WHERE
+  # ->>'state' = 'pending'` already makes the race deterministic — the
+  # loser gets `{:error, :gate_already_resolved}` and counts as observed.
+  @gate_expiry_sweep_grace_minutes 2
+
+  # THE DEPLOY-DAY GUARD. Without it the first production tick after this
+  # ships settles every historical overdue gate at once and can auto-approve
+  # plans abandoned weeks ago. Ancient rows get surfaced as telemetry, not
+  # acted on.
+  @gate_expiry_sweep_max_age_days 7
 
   # ── Public API ─────────────────────────────────────────────────────────
 
@@ -210,12 +229,56 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
           %{commenced: 0, pr_reopened: 0}
       end
 
+    # Task 019fa605 — the same 5-min tick is also the deadline timer for
+    # every plan whose task has no router. Identical envelope: the sweep's
+    # `Repo.all` can hit the sandbox-teardown "owner exited" `:exit` shape
+    # guarded at `resolve_runtime_for_task/1` and `boot_reconcile/0`, and a
+    # failure here must never crash the watcher.
+    gate_result =
+      try do
+        sweep_expired_architecture_gates()
+      rescue
+        e ->
+          Logger.warning(
+            "[TaskRouterWatcher] sweep_expired_architecture_gates raised: #{Exception.message(e)}"
+          )
+
+          %{scanned: 0, settled: 0, observed: 0}
+      catch
+        :exit, _reason ->
+          %{scanned: 0, settled: 0, observed: 0}
+      end
+
+    # Task 019fa605 stage 3 — one step further down the same failure: a gate
+    # already resolved terminally whose deferred approval tail was lost.
+    # Ordered AFTER the expiry sweep deliberately, so a gate settled by this
+    # very tick gets its tail run by the NEXT one rather than being raced
+    # here; the 15-minute debounce enforces that regardless of order.
+    retry_result =
+      try do
+        sweep_unsettled_auto_approvals()
+      rescue
+        e ->
+          Logger.warning(
+            "[TaskRouterWatcher] sweep_unsettled_auto_approvals raised: #{Exception.message(e)}"
+          )
+
+          %{scanned: 0, reapproved: 0, observed: 0}
+      catch
+        :exit, _reason ->
+          %{scanned: 0, reapproved: 0, observed: 0}
+      end
+
     Logger.info(
       "[TaskRouterWatcher] reconcile: started #{started}, stopped #{stopped}; " <>
         "in_review stall sweep: scanned=#{stall_result.scanned}, " <>
         "transitioned=#{stall_result.transitioned}, observed=#{stall_result.observed}; " <>
         "stack lifecycle: commenced=#{lifecycle_result.commenced}, " <>
-        "pr_reopened=#{lifecycle_result.pr_reopened}"
+        "pr_reopened=#{lifecycle_result.pr_reopened}; " <>
+        "arch gate sweep: scanned=#{gate_result.scanned}, " <>
+        "settled=#{gate_result.settled}, observed=#{gate_result.observed}; " <>
+        "auto-approval retry sweep: scanned=#{retry_result.scanned}, " <>
+        "reapproved=#{retry_result.reapproved}, observed=#{retry_result.observed}"
     )
 
     schedule_reconcile()
@@ -583,6 +646,347 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
       [:platform, :orchestration, :stall_detected],
       %{count: 1},
       Map.put(metadata, :task_id, task_id)
+    )
+  end
+
+  # ── Task 019fa605: architecture-gate expiry sweep ─────────────────────
+
+  @doc """
+  Settle architecture gates whose deadline has passed on tasks that have no
+  router. **This is the deadline timer for tasks nothing else times.**
+
+  ## The defect
+
+  `should_run?/1` requires `assignee_type == "agent"`, so a task whose
+  PLANNING assignee is a USER never gets a `TaskRouter`, never arms
+  `{:architecture_gate_deadline, plan_id}`, and therefore never has anything
+  that calls `Tasks.resolve_architecture_gate(plan, :expired)`.
+
+  `Tasks.architecture_gate/1` still PROJECTS the overdue gate as
+  `{:resolved, %{"state" => "expired", "source" => "deadline"}}` — the level
+  guarantee that a gate can never block forever — but that projection is a
+  READ. Nothing downstream of it re-enters `settle_plan_submission/1 ->
+  maybe_auto_approve/1`, so a task carrying `auto_approve_plan: true` (or a
+  stack member under `auto_accept_plan: true`, which `maybe_auto_approve/1`
+  reads through the same branch) sits at `pending_review` forever on a plan
+  configured to approve itself.
+
+  ## What this calls, and what it deliberately does not
+
+  `Tasks.resolve_architecture_gate/3` is the ONLY thing this sweep calls,
+  and that is the whole design: it is the identical single call
+  `TaskRouter.handle_info({:architecture_gate_deadline, plan_id}, _)` makes.
+  NO NEW SETTLEMENT CODE lives here. The verdict write, the cursor return to
+  `:planning`, `record_architecture_planning_step(task, {:error, :expired})`
+  and the deferred `settle_plan_submission/1 -> maybe_auto_approve/1` tail
+  all come from the existing `settle_resolved_architecture_gate(plan,
+  :expired)` clause in `Platform.Tasks`.
+
+  Consequently approving does NOT erase the record that nobody reviewed the
+  plan: the settled verdict still reads `state: "expired"` / `source:
+  "deadline"` and `Tasks.planning_gate_failed?/1` is still true. A fix that
+  bought liveness by quietly marking the gate passed would be worse than the
+  stall it replaced.
+
+  ## Which side of the projection this is on
+
+  `Tasks.architecture_gate/1` OWNS the overdue rule and this function never
+  re-derives it. The SQL predicate matches the raw column (`->>'state' =
+  'pending'`) purely to bound the candidate set — the writer arbitrating a
+  race wants the row — and then every candidate is re-asked through
+  `architecture_gate/1`, whose answer is the authority for whether to act.
+  The only thing measured locally is the MAGNITUDE of the overdue interval,
+  for the grace and max-age bands; the overdue/not-overdue decision itself is
+  never made here.
+
+  ## Why the sweep and not the three alternatives
+
+    1. **Extending `should_run?/1` to user-assigned tasks does not work as
+       stated.** `evaluate_task/1` starts a router via `resolve_and_start/1
+       -> resolve_runtime_for_task/1`, which does `Repo.get(Agents.Agent,
+       assignee_id)` and returns `{:error, :agent_not_found}` for a user id.
+       The router never starts and the watcher logs a warning every five
+       minutes. Making it work needs a second router flavour with no runtime,
+       inside a GenServer whose entire dispatch loop assumes one.
+
+    2. **A deferred continuation after the admission commits cannot fix this
+       bug at all.** `architecture_gate_admission/2` has exactly one caller —
+       `approve_plan/3` — and every branch except `:refuse` proceeds to
+       `do_approve_plan/3`. By the time any continuation fired, the plan
+       would already be approved by whoever called. The stall is precisely
+       the case where NOBODY calls `approve_plan/3`. Refuted on the facts,
+       not on blast radius.
+
+    3. **Refusing the combination at write time is refuted too.**
+       `auto_approve_plan: true` with a user planning assignee works whenever
+       the architect answers, because the architect is dispatched through
+       `Platform.Responsibilities.fire/2` to its OWN runtime and its verdict
+       arrives via the MCP tool calling `resolve_architecture_gate(:pass)`,
+       never through the task's router. It also works when nobody holds
+       `architecture.review_plan`: `submit_plan_for_review/1` takes the
+       `:not_applicable` branch into `settle_ungated_plan_submission/1` and
+       auto-approves inline. Only the silent-architect corner stalls, so
+       refusing would reject configurations that demonstrably make progress.
+
+  THE ROUTER IS AN OPTIMISATION; THIS SWEEP IS THE GUARANTEE — the same shape
+  as `architecture_gate/1`'s projection being the guarantee and the router's
+  deadline timer the edge.
+
+  Returns `%{scanned: n, settled: s, observed: o}` for the reconcile log line.
+  """
+  @spec sweep_expired_architecture_gates() :: %{
+          scanned: non_neg_integer(),
+          settled: non_neg_integer(),
+          observed: non_neg_integer()
+        }
+  def sweep_expired_architecture_gates do
+    candidates = list_expired_architecture_gate_candidates()
+
+    if length(candidates) >= @gate_expiry_sweep_cap do
+      Logger.warning(
+        "[TaskRouterWatcher] architecture gate expiry sweep hit the " <>
+          "#{@gate_expiry_sweep_cap}-row LIMIT — indicates a broader stall " <>
+          "condition; expect follow-up ticks to drain."
+      )
+    end
+
+    Enum.reduce(candidates, %{scanned: 0, settled: 0, observed: 0}, fn plan, acc ->
+      acc = %{acc | scanned: acc.scanned + 1}
+      handle_gate_expiry_candidate(plan, acc)
+    end)
+  end
+
+  # `p.status == "pending_review"` is load-bearing, not incidental. A `draft`
+  # or superseded (`rejected`) version can still carry a stale `"pending"`
+  # verdict, and settling one would drive `approve_plan/3` on a
+  # non-`pending_review` plan, get `{:error, :invalid_transition}`, and log a
+  # `maybe_auto_approve` warning on every tick forever.
+  defp list_expired_architecture_gate_candidates do
+    from(p in Plan,
+      join: t in Task,
+      on: t.id == p.task_id,
+      where:
+        p.status == "pending_review" and
+          fragment("?->>'state' = 'pending'", p.architecture_verdict) and
+          is_nil(t.deleted_at),
+      order_by: [asc: p.updated_at],
+      limit: @gate_expiry_sweep_cap
+    )
+    |> Repo.all()
+  end
+
+  defp handle_gate_expiry_candidate(%Plan{} = plan, acc) do
+    case Tasks.architecture_gate(plan.id) do
+      {:open, _verdict} ->
+        observe_gate_candidate(plan, :not_overdue, acc)
+
+      {:resolved, %{"state" => "expired"} = verdict} ->
+        classify_expired_gate_candidate(plan, verdict, acc)
+
+      {:resolved, _other_terminal} ->
+        # A real writer beat us between the candidate query and this
+        # re-read. The gate is no longer ours to close; healing a plan whose
+        # verdict is ALREADY terminal is a different shape with different
+        # refusals (an architect-rejected plan must never be auto-approved).
+        observe_gate_candidate(plan, :already_resolved, acc)
+
+      :none ->
+        # Defensive: the query filters on a `"pending"` verdict, so the gate
+        # having vanished means the row moved under us.
+        observe_gate_candidate(plan, :no_gate, acc)
+    end
+  end
+
+  defp classify_expired_gate_candidate(%Plan{} = plan, verdict, acc) do
+    grace_seconds = @gate_expiry_sweep_grace_minutes * 60
+    max_age_seconds = @gate_expiry_sweep_max_age_days * 24 * 60 * 60
+
+    case gate_overdue_seconds(verdict) do
+      nil ->
+        # `architecture_gate/1` projects a missing or unparseable
+        # `deadline_at` as expired (deliberately — a gate with no falsifiable
+        # end is the failure it rules out). But its AGE is then unknown, so
+        # the max-age guard cannot be applied and we surface rather than act.
+        observe_gate_candidate(plan, :undatable_deadline, acc)
+
+      seconds when seconds < grace_seconds ->
+        observe_gate_candidate(plan, :within_grace, acc)
+
+      seconds when seconds > max_age_seconds ->
+        observe_gate_candidate(plan, :too_old, acc)
+
+      _settleable ->
+        settle_expired_gate(plan, acc)
+    end
+  end
+
+  # Magnitude only — see the @doc. `architecture_gate/1` has already decided
+  # this gate is overdue; this just measures by how much.
+  defp gate_overdue_seconds(%{"deadline_at" => deadline}) when is_binary(deadline) do
+    case DateTime.from_iso8601(deadline) do
+      {:ok, at, _offset} -> DateTime.diff(DateTime.utc_now(), at, :second)
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp gate_overdue_seconds(_verdict), do: nil
+
+  defp settle_expired_gate(%Plan{} = plan, acc) do
+    case Tasks.resolve_architecture_gate(plan.id, :expired) do
+      {:ok, _settled} ->
+        Logger.info(
+          "[TaskRouterWatcher] architecture gate expiry swept plan=#{plan.id} " <>
+            "task=#{plan.task_id} (no router; settled :expired)"
+        )
+
+        emit_gate_sweep_telemetry(plan, %{action: :settled, reason: :expired})
+        %{acc | settled: acc.settled + 1}
+
+      {:error, :gate_already_resolved} ->
+        # Expected: a router (or a late architect verdict) beat us to the
+        # guarded UPDATE. Not a fault.
+        Logger.debug(
+          "[TaskRouterWatcher] architecture gate expiry sweep lost the race on " <>
+            "plan=#{plan.id} — already resolved"
+        )
+
+        emit_gate_sweep_telemetry(plan, %{
+          action: :observed_only,
+          reason: :gate_already_resolved
+        })
+
+        %{acc | observed: acc.observed + 1}
+
+      {:error, reason} ->
+        Logger.warning(
+          "[TaskRouterWatcher] architecture gate expiry sweep failed to settle " <>
+            "plan=#{plan.id} task=#{plan.task_id} reason=#{inspect(reason)}"
+        )
+
+        emit_gate_sweep_telemetry(plan, %{action: :observed_only, reason: :settle_failed})
+        %{acc | observed: acc.observed + 1}
+    end
+  end
+
+  # ── task 019fa605 stage 3: the lost deferred tail ─────────────────────
+
+  # A plan settled thirty seconds ago may still be mid-tail in another
+  # process. Mirrors `@in_review_stall_debounce_minutes` for the same reason:
+  # normal settlement latency must stay invisible to the sweep.
+  @unsettled_auto_approval_debounce_minutes 15
+
+  @doc """
+  Re-run the auto-approval tail for plans whose gate resolved terminally but
+  which never left `pending_review`.
+
+  The sibling of `sweep_expired_architecture_gates/0`, one step further down
+  the same failure: that sweep heals a verdict ROW still reading `"pending"`,
+  this one heals a verdict already written `"expired"` / `"dispatch_failed"`
+  whose deferred `settle_plan_submission/1` tail was lost. The 07-27
+  production audit found rows in exactly that shape.
+
+  **This arm holds no policy.** Every refusal — the architect-rejected plan
+  that must never be auto-approved, the human override, the passed gate, the
+  unarmed task, the failed precondition — lives in `Tasks.retry_auto_approval/1`,
+  and the candidate query is built from `Tasks.retryable_auto_approval_states/0`
+  so the scan and the refusal cannot name different sets. A future caller must
+  not be able to get a different answer than this one.
+
+  Returns `%{scanned: n, reapproved: r, observed: o}` for the reconcile log.
+  """
+  @spec sweep_unsettled_auto_approvals() :: %{
+          scanned: non_neg_integer(),
+          reapproved: non_neg_integer(),
+          observed: non_neg_integer()
+        }
+  def sweep_unsettled_auto_approvals do
+    candidates = list_unsettled_auto_approval_candidates()
+
+    if length(candidates) >= @gate_expiry_sweep_cap do
+      Logger.warning(
+        "[TaskRouterWatcher] unsettled auto-approval sweep hit the " <>
+          "#{@gate_expiry_sweep_cap}-row LIMIT — indicates a broader stall " <>
+          "condition; expect follow-up ticks to drain."
+      )
+    end
+
+    Enum.reduce(candidates, %{scanned: 0, reapproved: 0, observed: 0}, fn plan, acc ->
+      acc = %{acc | scanned: acc.scanned + 1}
+      handle_unsettled_auto_approval_candidate(plan, acc)
+    end)
+  end
+
+  # THE MAX-AGE GUARD IS IN SQL HERE, AND IN ELIXIR IN THE SIBLING SWEEP.
+  # That difference is deliberate. `sweep_expired_architecture_gates/0`'s
+  # candidates SELF-CLEAR — settling one flips its verdict off `"pending"`
+  # and it leaves the candidate set — so surfacing `:too_old` as telemetry
+  # costs nothing. This sweep's refused candidates NEVER change: an unarmed
+  # task's `expired` plan sits at `pending_review` forever and its
+  # `updated_at` never moves. Classifying age in Elixir would let those
+  # permanent residents accumulate at the head of an oldest-first, 25-row
+  # capped query and starve every genuinely healable row behind them.
+  # Filtering in SQL keeps the cap spent on rows inside the window.
+  defp list_unsettled_auto_approval_candidates do
+    now = DateTime.utc_now()
+    debounce_cutoff = DateTime.add(now, -@unsettled_auto_approval_debounce_minutes * 60, :second)
+    max_age_cutoff = DateTime.add(now, -@gate_expiry_sweep_max_age_days * 24 * 60 * 60, :second)
+    states = Tasks.retryable_auto_approval_states()
+
+    from(p in Plan,
+      join: t in Task,
+      on: t.id == p.task_id,
+      where:
+        p.status == "pending_review" and
+          fragment("?->>'state'", p.architecture_verdict) in ^states and
+          is_nil(t.deleted_at) and
+          p.updated_at < ^debounce_cutoff and
+          p.updated_at > ^max_age_cutoff,
+      order_by: [asc: p.updated_at],
+      limit: @gate_expiry_sweep_cap
+    )
+    |> Repo.all()
+  end
+
+  defp handle_unsettled_auto_approval_candidate(%Plan{} = plan, acc) do
+    case Tasks.retry_auto_approval(plan.id) do
+      {:ok, :approved} ->
+        Logger.info(
+          "[TaskRouterWatcher] lost auto-approval tail re-run plan=#{plan.id} " <>
+            "task=#{plan.task_id} (no router; approved)"
+        )
+
+        emit_gate_sweep_telemetry(plan, %{action: :reapproved, reason: :tail_reran})
+        %{acc | reapproved: acc.reapproved + 1}
+
+      {:ok, :noop, reason} ->
+        # Every governance refusal lands here — including the architect-
+        # rejected plan. Observed, never acted on.
+        emit_gate_sweep_telemetry(plan, %{action: :observed_only, reason: reason})
+        %{acc | observed: acc.observed + 1}
+
+      {:error, reason} ->
+        Logger.warning(
+          "[TaskRouterWatcher] unsettled auto-approval sweep failed plan=#{plan.id} " <>
+            "task=#{plan.task_id} reason=#{inspect(reason)}"
+        )
+
+        emit_gate_sweep_telemetry(plan, %{action: :observed_only, reason: :retry_failed})
+        %{acc | observed: acc.observed + 1}
+    end
+  end
+
+  defp observe_gate_candidate(%Plan{} = plan, reason, acc) do
+    emit_gate_sweep_telemetry(plan, %{action: :observed_only, reason: reason})
+    %{acc | observed: acc.observed + 1}
+  end
+
+  defp emit_gate_sweep_telemetry(%Plan{id: plan_id, task_id: task_id}, metadata) do
+    :telemetry.execute(
+      [:platform, :orchestration, :architecture_gate_swept],
+      %{count: 1},
+      metadata
+      |> Map.put(:plan_id, plan_id)
+      |> Map.put(:task_id, task_id)
     )
   end
 
