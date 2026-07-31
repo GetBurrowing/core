@@ -1010,6 +1010,192 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
   end
 
+  # Pins the refusal contract AT THE WIRE for both federation transports at
+  # once. Asserting each side in its own file cannot catch a divergence — and
+  # a divergence is exactly what shipped: `MCPController.error_content/1`
+  # flattened `%{error:, code:, recoverable:, suggestion:}` to the sentence
+  # alone while `execute_tool_call/4` here pushed the map intact, so a
+  # documented `code` taxonomy was readable over WebSocket and invisible over
+  # HTTP. The two transports front the same `ToolSurface.execute/3`; a caller
+  # must not have to know which door it came through.
+  describe "transport parity with POST /mcp" do
+    setup ctx do
+      # `task_design_decline` lives in the `task` bundle, which is not in the
+      # default grant. Same token drives both transports.
+      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["task"])
+      %{runtime: runtime}
+    end
+
+    test "the same refusal exposes the same four keys over both transports", ctx do
+      # `"short"`, not `"   "` — a whitespace-only reason is intercepted by
+      # `ToolArguments.validate/2` (blank counts as absent), which would make
+      # this a parity test of the gate rather than of the handler envelope it
+      # was written to follow. Present-but-too-short stays the handler's own
+      # refusal, and the gate's parity is pinned separately below.
+      args = %{"task_id" => Ecto.UUID.generate(), "reason" => "short"}
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-parity",
+        "tool" => "task_design_decline",
+        "args" => args
+      })
+
+      assert_push "tool_result", %{call_id: "call-parity", status: "error", error: ws_error}
+
+      http_body = %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "tools/call",
+        "params" => %{"name" => "task_design_decline", "arguments" => args}
+      }
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Conn.put_req_header("authorization", "Bearer " <> ctx.raw_token)
+        |> Plug.Conn.put_req_header("content-type", "application/json")
+        |> Phoenix.ConnTest.dispatch(@endpoint, :post, "/mcp", http_body)
+
+      %{"result" => %{"isError" => true, "content" => [%{"text" => text}]}} =
+        Phoenix.ConnTest.json_response(conn, 200)
+
+      http_error = Jason.decode!(text)
+
+      # WebSocket carries native terms (atom code); HTTP carries JSON (string
+      # code). That is the only difference the two may have, and it is a
+      # property of the encodings, not of the contract.
+      assert http_error["error"] == ws_error.error
+      assert http_error["code"] == to_string(ws_error.code)
+      assert http_error["recoverable"] == ws_error.recoverable
+      assert http_error["suggestion"] == ws_error.suggestion
+
+      assert http_error["code"] == "missing_reason"
+      assert http_error["recoverable"] == true
+      assert Map.keys(http_error) |> Enum.sort() == ~w(code error recoverable suggestion)
+    end
+  end
+
+  describe "the argument gate is mounted on both transports" do
+    setup ctx do
+      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["plan"])
+      %{runtime: runtime}
+    end
+
+    test "a missing required argument is refused identically over WebSocket and /mcp", ctx do
+      # `validation_evaluate` without a validation_id used to raise
+      # `Ecto.NoResultsError` from inside a `Repo.transaction`. Both doors
+      # must now name the argument, and name it the same way — the gate lives
+      # in one module precisely so they cannot diverge.
+      #
+      # This drove `stage_list` until stage 5 gave that tool a conditional
+      # `plan_id` XOR `task_id` rule and took it out of the gate's scope.
+      # Pointed there it would still pass, off the handler's own refusal,
+      # while no longer exercising the gate's mounting on either transport.
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-gate",
+        "tool" => "validation_evaluate",
+        "args" => %{"status" => "passed"}
+      })
+
+      assert_push "tool_result", %{call_id: "call-gate", status: "error", error: ws_error}
+
+      assert ws_error.code == :missing_validation_id
+      assert ws_error.recoverable == true
+
+      http_body = %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "validation_evaluate",
+          "arguments" => %{"status" => "passed"}
+        }
+      }
+
+      # `Phoenix.ConnTest.post/3` is a macro and cannot be called
+      # fully-qualified from a ChannelCase; `dispatch/5` is a real function.
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Conn.put_req_header("authorization", "Bearer " <> ctx.raw_token)
+        |> Plug.Conn.put_req_header("content-type", "application/json")
+        |> Phoenix.ConnTest.dispatch(@endpoint, :post, "/mcp", http_body)
+
+      %{"result" => %{"isError" => true, "content" => [%{"text" => text}]}} =
+        Phoenix.ConnTest.json_response(conn, 200)
+
+      http_error = Jason.decode!(text)
+
+      assert http_error["error"] == ws_error.error
+      assert http_error["code"] == to_string(ws_error.code)
+      assert http_error["recoverable"] == ws_error.recoverable
+      assert http_error["suggestion"] == ws_error.suggestion
+    end
+
+    test "a handler's own conditional refusal is identical over both transports too", ctx do
+      # Parity is not a property of the gate — it is a property of the two
+      # doors. `stage_list`'s `plan_id` XOR `task_id` rule lives in the
+      # handler, below both, so it needs its own pin: a refusal that never
+      # passes through `ToolArguments` must still reach an HTTP caller with
+      # its `code` intact rather than flattened to a sentence.
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-conditional",
+        "tool" => "stage_list",
+        "args" => %{}
+      })
+
+      assert_push "tool_result", %{call_id: "call-conditional", status: "error", error: ws_error}
+
+      assert ws_error.code == :missing_plan_reference
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Conn.put_req_header("authorization", "Bearer " <> ctx.raw_token)
+        |> Plug.Conn.put_req_header("content-type", "application/json")
+        |> Phoenix.ConnTest.dispatch(@endpoint, :post, "/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "tools/call",
+          "params" => %{"name" => "stage_list", "arguments" => %{}}
+        })
+
+      %{"result" => %{"isError" => true, "content" => [%{"text" => text}]}} =
+        Phoenix.ConnTest.json_response(conn, 200)
+
+      http_error = Jason.decode!(text)
+
+      assert http_error["error"] == ws_error.error
+      assert http_error["code"] == to_string(ws_error.code)
+      assert http_error["recoverable"] == ws_error.recoverable
+      assert http_error["suggestion"] == ws_error.suggestion
+    end
+  end
+
   defp create_project(attrs \\ %{}) do
     default = %{name: "Channel Test Project #{System.unique_integer([:positive])}"}
     {:ok, project} = Tasks.create_project(Map.merge(default, attrs))

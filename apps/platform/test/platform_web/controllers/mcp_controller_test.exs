@@ -166,6 +166,229 @@ defmodule PlatformWeb.MCPControllerTest do
     end
   end
 
+  # Before this block existed, the ONLY error-adjacent assertion in this file
+  # was `isError == false` above — the error branch of the controller was
+  # entirely uncovered, so nothing pinned the response shape in either
+  # direction. `error_content/1` flattened every structured refusal
+  # `ToolSurface.execute/3` returns down to its `error` sentence, discarding
+  # `code`, `recoverable` and `suggestion`, while `RuntimeChannel` pushed the
+  # same map intact. Two federation transports, two contracts.
+  describe "tools/call error envelope" do
+    # `task_design_decline` documents a CLOSED `code` taxonomy in its
+    # `limitations` prose and tells remote runtimes to branch on it
+    # (`missing_task_id` / `missing_reason` / `task_not_found` /
+    # `step_not_open` / `decline_failed`). `tool_surface_design_decline_test`
+    # guards that taxonomy at the `execute/3` layer — one level ABOVE where
+    # the transport dropped it. This asserts it AT THE WIRE.
+    test "a structured refusal reaches an HTTP caller with code, recoverable and suggestion",
+         %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+
+      conn =
+        mcp_post(
+          conn,
+          token,
+          rpc("tools/call", %{
+            "name" => "task_design_decline",
+            # `"short"`, not `"   "`. The argument gate treats a whitespace-only
+            # string as absent and would refuse this call before the handler
+            # ran, so a blank reason would silently turn this into a test of
+            # the gate. A present-but-too-short reason is refused by
+            # `task_design_decline` itself, which is the envelope this test
+            # exists to follow to the wire. Same `missing_reason` code either
+            # way — two producers, one taxonomy.
+            "arguments" => %{"task_id" => Ecto.UUID.generate(), "reason" => "short"}
+          })
+        )
+
+      %{"result" => result} = json_response(conn, 200)
+      assert result["isError"] == true
+
+      [%{"type" => "text", "text" => text}] = result["content"]
+      envelope = Jason.decode!(text)
+
+      # Atom codes serialize as JSON strings; `:missing_reason` is
+      # `"missing_reason"` on the wire, and that IS the wire form.
+      assert envelope["code"] == "missing_reason"
+      assert envelope["recoverable"] == true
+      assert is_binary(envelope["suggestion"])
+      assert String.trim(envelope["suggestion"]) != ""
+      assert envelope["error"] =~ "reason is required"
+    end
+
+    test "nil-valued keys are dropped but a false recoverable survives", %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+
+      # `task_start` on an unknown task refuses with `error`, `recoverable`
+      # and `suggestion` but NO `code` — the envelope must not invent one,
+      # and must not confuse "absent" with "false".
+      conn =
+        mcp_post(
+          conn,
+          token,
+          rpc("tools/call", %{
+            "name" => "task_start",
+            "arguments" => %{"task_id" => Ecto.UUID.generate()}
+          })
+        )
+
+      %{"result" => result} = json_response(conn, 200)
+      assert result["isError"] == true
+
+      [%{"text" => text}] = result["content"]
+      envelope = Jason.decode!(text)
+
+      refute Map.has_key?(envelope, "code")
+      assert envelope["recoverable"] == false
+      assert envelope["error"] =~ "Task not found"
+      assert is_binary(envelope["suggestion"])
+    end
+
+    test "the error payload is JSON, symmetric with the success payload", %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation", "task"]})
+
+      ok_conn =
+        mcp_post(
+          conn,
+          token,
+          rpc("tools/call", %{"name" => "federation_status", "arguments" => %{}})
+        )
+
+      %{"result" => %{"isError" => false, "content" => [%{"text" => ok_text}]}} =
+        json_response(ok_conn, 200)
+
+      err_conn =
+        build_conn()
+        |> mcp_post(
+          token,
+          rpc("tools/call", %{
+            "name" => "task_start",
+            "arguments" => %{"task_id" => Ecto.UUID.generate()}
+          })
+        )
+
+      %{"result" => %{"isError" => true, "content" => [%{"text" => err_text}]}} =
+        json_response(err_conn, 200)
+
+      # The argument for the breaking shape change: a client that can read the
+      # success payload can already read the error payload.
+      assert {:ok, %{}} = Jason.decode(ok_text)
+      assert {:ok, %{}} = Jason.decode(err_text)
+    end
+  end
+
+  describe "the argument gate is mounted on this transport" do
+    # These assert the WIRING, not the gate's logic — `ToolArgumentsDispatchTest`
+    # owns the logic. What can only be checked here is that `tools/call` routes
+    # through `ToolArguments.dispatch/3` rather than straight to
+    # `ToolSurface.execute/3`, because that is a one-line change nothing else
+    # would notice.
+    test "a missing required argument is refused instead of raising through the endpoint",
+         %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["plan"]})
+
+      # Before the gate, `validation_evaluate` without a validation_id raised
+      # `Ecto.NoResultsError` from inside a `Repo.transaction` — a 500 that
+      # named nothing. There is no application-level error to assert against
+      # an exception, which is exactly the caller's problem.
+      #
+      # This used to drive `stage_list`, which stage 5 took out of the gate's
+      # scope by giving it a conditional `plan_id` XOR `task_id` rule. Left
+      # pointed there, this test would still pass — off the handler's own
+      # refusal — while no longer testing the wiring it is named for.
+      conn =
+        mcp_post(
+          conn,
+          token,
+          rpc("tools/call", %{
+            "name" => "validation_evaluate",
+            "arguments" => %{"status" => "passed"}
+          })
+        )
+
+      %{"result" => result} = json_response(conn, 200)
+      assert result["isError"] == true
+
+      [%{"text" => text}] = result["content"]
+      envelope = Jason.decode!(text)
+
+      assert envelope["code"] == "missing_validation_id"
+      assert envelope["error"] =~ "validation_id is required"
+      assert envelope["recoverable"] == true
+      assert envelope["suggestion"] =~ "validation_id"
+    end
+
+    test "stage_list's conditional rule reaches the wire with its own code", %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["plan"]})
+
+      # The tool that motivated the ticket. It is NOT covered by the gate —
+      # `plan_id` XOR `task_id` is conditional — so this asserts the handler's
+      # refusal survives the transport intact, naming both acceptable
+      # arguments instead of raising through the endpoint.
+      conn =
+        mcp_post(conn, token, rpc("tools/call", %{"name" => "stage_list", "arguments" => %{}}))
+
+      %{"result" => %{"isError" => true, "content" => [%{"text" => text}]}} =
+        json_response(conn, 200)
+
+      envelope = Jason.decode!(text)
+
+      assert envelope["code"] == "missing_plan_reference"
+      assert envelope["error"] =~ "plan_id"
+      assert envelope["error"] =~ "task_id"
+      assert envelope["recoverable"] == true
+    end
+
+    test "the refusal replaces a misattributed 'not found', and says the call is retryable",
+         %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["context_read"]})
+
+      # `canvas_get` with no canvas_id used to answer `"Canvas not found: "`
+      # with `recoverable: false` — a caller told that a canvas it never named
+      # does not exist, and told not to try again.
+      conn =
+        mcp_post(conn, token, rpc("tools/call", %{"name" => "canvas_get", "arguments" => %{}}))
+
+      %{"result" => %{"isError" => true, "content" => [%{"text" => text}]}} =
+        json_response(conn, 200)
+
+      envelope = Jason.decode!(text)
+
+      assert envelope["code"] == "missing_canvas_id"
+      assert envelope["error"] =~ "canvas_id is required"
+      refute envelope["error"] =~ "not found"
+      assert envelope["recoverable"] == true
+    end
+
+    test "an alias-only call is not refused — live runtimes send `id` for `task_id`",
+         %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+
+      # The breaking-change guard at the wire. `task_get` declares `task_id`
+      # required and its handler reads `task_id || id`; a gate built on the
+      # declaration alone would reject this call, which works in production.
+      conn =
+        mcp_post(
+          conn,
+          token,
+          rpc("tools/call", %{
+            "name" => "task_get",
+            "arguments" => %{"id" => Ecto.UUID.generate()}
+          })
+        )
+
+      %{"result" => %{"isError" => true, "content" => [%{"text" => text}]}} =
+        json_response(conn, 200)
+
+      envelope = Jason.decode!(text)
+
+      # A real not-found, reached because the gate let the alias through —
+      # NOT a `missing_task_id` refusal.
+      refute envelope["code"] == "missing_task_id"
+      assert envelope["error"] =~ "not found"
+    end
+  end
+
   describe "external-principal tool scoping (M11)" do
     @broad_bundles ~w(messaging space context_read task canvas)
     @chat_names ~w(send_media react space_list space_get_context space_get_messages space_search_messages)

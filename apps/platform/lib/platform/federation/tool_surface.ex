@@ -1110,6 +1110,7 @@ defmodule Platform.Federation.ToolSurface do
           document: %{
             type: "object",
             required: true,
+            aliases: ["initial_state"],
             description:
               "Canonical document. See canvas.describe on an existing canvas for a valid shape. Pass as a nested object, not a JSON string.",
             schema: Platform.Chat.Canvas.Tools.document_schema()
@@ -1476,7 +1477,12 @@ defmodule Platform.Federation.ToolSurface do
         name: "task_get",
         description: "Get a single task by ID with full details.",
         parameters: %{
-          task_id: %{type: "string", required: true, description: "The task ID"}
+          task_id: %{
+            type: "string",
+            required: true,
+            aliases: ["id"],
+            description: "The task ID"
+          }
         },
         returns:
           "Task object with id, title, description, status, priority, project_id, epic_id, and sponsor (nil or %{id, name, email} per ADR 0042).",
@@ -1524,7 +1530,12 @@ defmodule Platform.Federation.ToolSurface do
         description:
           "Update a task's fields (title, description, status, priority, assignee, sponsor, etc.). Omitted fields are left untouched; sponsor_user_id explicitly accepts null to unset (clears the Sponsor per ADR 0042). Flat assignee_id + assignee_type writes are auto-routed to the task's current-phase slot in phase_assignees (survives phase transitions per ADR 0044). Pass phase_assignees directly to set multiple phase slots in one call — when both are supplied, phase_assignees wins.",
         parameters: %{
-          task_id: %{type: "string", required: true, description: "The task to update"},
+          task_id: %{
+            type: "string",
+            required: true,
+            aliases: ["id"],
+            description: "The task to update"
+          },
           title: %{type: "string", required: false, description: "New title"},
           description: %{type: "string", required: false, description: "New description"},
           status: %{
@@ -2200,7 +2211,12 @@ defmodule Platform.Federation.ToolSurface do
         name: "plan_get",
         description: "Get the current approved plan for a task with full stage/validation tree.",
         parameters: %{
-          task_id: %{type: "string", required: true, description: "The task ID"}
+          task_id: %{
+            type: "string",
+            required: true,
+            aliases: ["id"],
+            description: "The task ID"
+          }
         },
         returns: "Plan object with stages and validations preloaded",
         limitations: "Returns error if no approved plan exists for the task",
@@ -2308,13 +2324,53 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "stage_list",
         description:
-          "List all stages for a plan, ordered by position, with validations preloaded.",
+          "List all stages for a plan, ordered by position, with validations preloaded. " <>
+            "Name the plan EITHER directly with `plan_id` OR indirectly with `task_id`, which " <>
+            "resolves to that task's CURRENT plan — the highest-version plan whose status is " <>
+            "approved or completed. Resolution rule, in full: pass only `plan_id` and it is " <>
+            "used as-is; pass only `task_id` and the current plan answers; pass BOTH and they " <>
+            "must agree — `plan_id` must name a plan belonging to that task, and then `plan_id` " <>
+            "is what answers, because it is the more specific of the two and can name a plan " <>
+            "`task_id` would never resolve to. Neither argument is defaulted and no argument is " <>
+            "silently preferred over the other; every combination outside that rule is refused " <>
+            "with a code (see limitations) rather than answered. `task_id` never falls back to a " <>
+            "draft or pending_review plan: if a task's newest plan is awaiting approval, the " <>
+            "approved plan below it answers, and if there is no approved plan at all the call " <>
+            "is refused instead of returning an empty array that reads as \"this task has no " <>
+            "stages\". Every returned row carries `plan_id`, so a caller who passed only " <>
+            "`task_id` can always see which plan answered.",
         parameters: %{
-          plan_id: %{type: "string", required: true, description: "The plan ID"}
+          plan_id: %{
+            type: "string",
+            required: false,
+            description:
+              "The plan ID. Optional only in the sense that `task_id` can stand in for it — one of the two is always required."
+          },
+          task_id: %{
+            type: "string",
+            required: false,
+            description:
+              "A task ID, resolved to that task's current (approved or completed, highest version) plan. Optional only in the sense that `plan_id` can stand in for it — one of the two is always required."
+          }
         },
-        returns: "Array of stage objects with validations",
-        limitations: "None",
-        when_to_use: "When you need to see all stages and their validation status for a plan"
+        returns: "Array of stage objects with validations, each carrying its `plan_id`",
+        # This prose is TESTED, not asserted by hand: `tool_surface_test.exs`
+        # drives every refusal below through `ToolArguments.dispatch/3` and
+        # asserts the observed `code` set is exactly the set named here, via
+        # `stage_list_error_codes/0`. Same convention as
+        # `task_design_decline` — a documented taxonomy remote runtimes branch
+        # on is worse than none when it drifts from the code.
+        limitations:
+          "Exactly one of `plan_id` or `task_id` is required; supplying both is allowed only " <>
+            "when they agree. Refusals carry a `code`: `missing_plan_reference` (neither " <>
+            "argument supplied, or both blank), `plan_task_mismatch` (both supplied, but " <>
+            "`plan_id` does not name a plan belonging to `task_id` — including when it names no " <>
+            "plan at all), `no_current_plan` (`task_id` supplied but the task has no approved or " <>
+            "completed plan; the suggestion names the latest plan's id, version and status when " <>
+            "one exists). All three are recoverable. An unknown `plan_id` supplied ALONE is not " <>
+            "a refusal — it returns an empty array, unchanged from before `task_id` existed.",
+        when_to_use:
+          "When you need to see all stages and their validation status. Reach for `task_id` when a task is what you have in hand — it saves a plan_get, and it refuses rather than misleading you when the task's newest plan is still in review."
       },
       %{
         name: "validation_evaluate",
@@ -2377,7 +2433,12 @@ defmodule Platform.Federation.ToolSurface do
         description:
           "Attempt to advance a running stage once its validations are satisfied. Useful for stages with no validations or for prompt contracts that refer to stage_complete.",
         parameters: %{
-          stage_id: %{type: "string", required: true, description: "The running stage ID"}
+          stage_id: %{
+            type: "string",
+            required: true,
+            aliases: ["id"],
+            description: "The running stage ID"
+          }
         },
         returns: "Structured result describing the completed stage and updated plan state",
         limitations: "Fails if the stage is not running or still has pending/failed validations.",
@@ -2455,12 +2516,32 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── Execute ──────────────────────────────────────────────────────────────
 
-  @doc """
-  Execute a tool call.
-
-  context must include :space_id and :agent_participant_id.
-  Returns {:ok, result} | {:error, %{error: string, recoverable: boolean, suggestion: string}}
-  """
+  # Execute a tool call. NOT the entry point — call
+  # `Platform.Federation.ToolArguments.dispatch/3` instead.
+  #
+  # `@doc false` is deliberate and load-bearing. As of task 019fa609 stage 4
+  # the handlers below no longer check that their declared-required arguments
+  # were supplied: `ToolArguments.validate/2` owns that, one mechanism instead
+  # of twenty-seven hand-written variants that disagreed on wording, on `code`
+  # and on `recoverable`. A caller reaching `execute/3` directly therefore
+  # bypasses the gate, and several handlers will raise on a `nil` argument
+  # rather than refuse it (`space_list_agents` on `space_id`, `intent_ack` on
+  # `intent_id`). Both federation transports —
+  # `PlatformWeb.MCPController` and `PlatformWeb.RuntimeChannel` — already go
+  # through `dispatch/3`; there is no other live caller, and a new one should
+  # not become the first.
+  #
+  # What `execute/3` still owns is everything the gate deliberately does not:
+  # conditional requirements (`skill.get`'s "exactly one of slug or id", and
+  # `stage_list`'s "exactly one of plan_id or task_id"),
+  # value checks (`validation_evaluate`'s status set, `alarm_silence`'s range
+  # and reason length), type coercion (`require_string/3`, `require_integer/3`)
+  # and present-but-unusable refusals (`task_design_decline`'s <8-character
+  # reason). See the `ToolArguments` moduledoc for the presence-only scope.
+  #
+  # context must include :space_id and :agent_participant_id.
+  # Returns {:ok, result} | {:error, %{error: string, recoverable: boolean, suggestion: string}}
+  @doc false
 
   # ── Messaging tools ──────────────────────────────────────────────────────
 
@@ -2557,38 +2638,12 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("react", args, context) do
-    space_id = Map.get(args, "space_id")
-    message_id = Map.get(args, "message_id")
-    emoji = Map.get(args, "emoji")
-
-    cond do
-      not is_binary(space_id) or space_id == "" ->
-        {:error,
-         %{
-           error: "space_id is required",
-           recoverable: false,
-           suggestion: "Pass the UUID of the Suite space as space_id"
-         }}
-
-      not is_binary(message_id) or message_id == "" ->
-        {:error,
-         %{
-           error: "message_id is required",
-           recoverable: false,
-           suggestion: "Pass the UUID of the message to react to as message_id"
-         }}
-
-      not is_binary(emoji) or emoji == "" ->
-        {:error,
-         %{
-           error: "emoji is required",
-           recoverable: false,
-           suggestion: "Pass a single emoji grapheme as emoji (e.g. \"👍\")"
-         }}
-
-      true ->
-        react_after_validation(space_id, message_id, emoji, context)
-    end
+    react_after_validation(
+      Map.get(args, "space_id"),
+      Map.get(args, "message_id"),
+      Map.get(args, "emoji"),
+      context
+    )
   end
 
   defp react_after_validation(space_id, message_id, emoji, context) do
@@ -2733,48 +2788,38 @@ defmodule Platform.Federation.ToolSurface do
 
   def execute("space_list_agents", args, _context) do
     space_id = Map.get(args, "space_id")
+    participants = Chat.list_participants(space_id, participant_type: "agent")
+    agent_ids = Enum.map(participants, & &1.participant_id) |> Enum.uniq()
 
-    if not is_binary(space_id) or space_id == "" do
-      {:error,
-       %{
-         error: "space_id is required",
-         recoverable: false,
-         suggestion: "Provide a valid Suite space UUID"
-       }}
-    else
-      participants = Chat.list_participants(space_id, participant_type: "agent")
-      agent_ids = Enum.map(participants, & &1.participant_id) |> Enum.uniq()
+    agents_by_id =
+      if agent_ids == [] do
+        %{}
+      else
+        Repo.all(from(a in Agent, where: a.id in ^agent_ids))
+        |> Map.new(&{&1.id, &1})
+      end
 
-      agents_by_id =
-        if agent_ids == [] do
-          %{}
-        else
-          Repo.all(from(a in Agent, where: a.id in ^agent_ids))
-          |> Map.new(&{&1.id, &1})
+    rows =
+      Enum.flat_map(participants, fn p ->
+        case Map.get(agents_by_id, p.participant_id) do
+          nil ->
+            []
+
+          %Agent{} = agent ->
+            [
+              %{
+                agent_id: agent.id,
+                slug: agent.slug,
+                name: agent.name,
+                display_name: p.display_name || agent.name,
+                participant_id: p.id,
+                joined_at: p.joined_at
+              }
+            ]
         end
+      end)
 
-      rows =
-        Enum.flat_map(participants, fn p ->
-          case Map.get(agents_by_id, p.participant_id) do
-            nil ->
-              []
-
-            %Agent{} = agent ->
-              [
-                %{
-                  agent_id: agent.id,
-                  slug: agent.slug,
-                  name: agent.name,
-                  display_name: p.display_name || agent.name,
-                  participant_id: p.id,
-                  joined_at: p.joined_at
-                }
-              ]
-          end
-        end)
-
-      {:ok, rows}
-    end
+    {:ok, rows}
   end
 
   def execute("space_leave", args, context) do
@@ -2783,14 +2828,6 @@ defmodule Platform.Federation.ToolSurface do
     target_agent_id = Map.get(args, "agent_id") || calling_agent_id
 
     cond do
-      not is_binary(space_id) or space_id == "" ->
-        {:error,
-         %{
-           error: "space_id is required",
-           recoverable: false,
-           suggestion: "Provide a valid Suite space UUID"
-         }}
-
       not is_binary(target_agent_id) or target_agent_id == "" ->
         {:error,
          %{
@@ -3241,18 +3278,7 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("org_list_descendants", args, _context) do
-    case Map.get(args, "org_id") do
-      org_id when is_binary(org_id) and org_id != "" ->
-        list_org_descendants(org_id)
-
-      _ ->
-        {:error,
-         %{
-           error: "org_list_descendants: `org_id` is required",
-           recoverable: true,
-           suggestion: "Provide a non-empty `org_id` argument."
-         }}
-    end
+    list_org_descendants(Map.get(args, "org_id"))
   end
 
   def execute("project_update", args, context) do
@@ -3714,14 +3740,6 @@ defmodule Platform.Federation.ToolSurface do
       {:ok, meeting} ->
         meeting = maybe_default_host_participant(meeting, args, context)
         {:ok, serialize_meeting(meeting)}
-
-      {:error, {:missing, field}} ->
-        {:error,
-         %{
-           error: "Missing required argument: #{field}",
-           recoverable: true,
-           suggestion: "meeting_create requires project_id and name"
-         }}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:error,
@@ -4477,47 +4495,35 @@ defmodule Platform.Federation.ToolSurface do
     supplied_stage_id = Map.get(args, "stage_id")
     supplied_subagent_id = Map.get(args, "subagent_id")
 
-    cond do
-      is_nil(task_id) or task_id == "" ->
-        {:error,
-         %{
-           error: "task_id is required",
-           recoverable: true,
-           suggestion:
-             "Pass the current task_id from your dispatch payload — task_ack has no way to guess it."
-         }}
+    case validate_subagent_id(supplied_subagent_id) do
+      {:error, envelope} ->
+        {:error, envelope}
 
-      true ->
-        case validate_subagent_id(supplied_subagent_id) do
-          {:error, envelope} ->
-            {:error, envelope}
+      {:ok, subagent_id} ->
+        case Tasks.get_task_record(task_id) do
+          nil ->
+            {:error,
+             %{
+               error: "Task not found: #{task_id}",
+               recoverable: false,
+               suggestion:
+                 "Verify the task_id matches your dispatch payload; use task_list to enumerate live tasks."
+             }}
 
-          {:ok, subagent_id} ->
-            case Tasks.get_task_record(task_id) do
-              nil ->
+          _task ->
+            case resolve_ack_stage_id(task_id, supplied_stage_id) do
+              {:error, :no_running_stage} ->
                 {:error,
                  %{
-                   error: "Task not found: #{task_id}",
-                   recoverable: false,
+                   error:
+                     "task_id=#{task_id} has no running stage — cannot ack without a stage_id.",
+                   recoverable: true,
                    suggestion:
-                     "Verify the task_id matches your dispatch payload; use task_list to enumerate live tasks."
+                     "Supply the stage_id from your dispatch payload, or call task_start first if the task hasn't been transitioned into in_progress yet."
                  }}
 
-              _task ->
-                case resolve_ack_stage_id(task_id, supplied_stage_id) do
-                  {:error, :no_running_stage} ->
-                    {:error,
-                     %{
-                       error:
-                         "task_id=#{task_id} has no running stage — cannot ack without a stage_id.",
-                       recoverable: true,
-                       suggestion:
-                         "Supply the stage_id from your dispatch payload, or call task_start first if the task hasn't been transitioned into in_progress yet."
-                     }}
-
-                  {:ok, stage_id} ->
-                    emit_task_ack(task_id, stage_id, subagent_id, context)
-                end
+              {:ok, stage_id} ->
+                emit_task_ack(task_id, stage_id, subagent_id, context)
             end
         end
     end
@@ -4541,25 +4547,12 @@ defmodule Platform.Federation.ToolSurface do
     supplied_status = Map.get(args, "status")
     note = Map.get(args, "note")
 
-    with {:ok, intent_id} <- validate_intent_id(intent_id),
-         {:ok, meeting_id} <- locate_intent_meeting(intent_id),
+    with {:ok, meeting_id} <- locate_intent_meeting(intent_id),
          {:ok, ack_status} <- validate_intent_ack_status(supplied_status),
          {:ok, subagent_id} <-
            validate_intent_subagent_id(meeting_id, intent_id, supplied_subagent_id) do
       apply_intent_ack(meeting_id, intent_id, subagent_id, ack_status, note)
     end
-  end
-
-  defp validate_intent_id(id) when is_binary(id) and id != "", do: {:ok, id}
-
-  defp validate_intent_id(_) do
-    {:error,
-     %{
-       error: "intent_id is required",
-       recoverable: true,
-       suggestion:
-         "Pass the intent_id from the meeting_intent_dispatch attention signal verbatim."
-     }}
   end
 
   defp locate_intent_meeting(intent_id) do
@@ -5290,31 +5283,20 @@ defmodule Platform.Federation.ToolSurface do
     stack_id = Map.get(args, "stack_id")
     task_id = Map.get(args, "task_id")
 
-    cond do
-      is_nil(stack_id) ->
-        {:error,
-         %{error: "stack_id is required", recoverable: true, suggestion: "Provide a stack_id"}}
+    case Stacks.add_task(stack_id, task_id) do
+      {:ok, %Task{} = task} ->
+        {:ok,
+         %{
+           task_id: task.id,
+           stack_id: task.stack_id,
+           stack_position: task.stack_position
+         }}
 
-      is_nil(task_id) ->
-        {:error,
-         %{error: "task_id is required", recoverable: true, suggestion: "Provide a task_id"}}
+      {:error, _} = err ->
+        stack_add_error_envelope(err)
 
-      true ->
-        case Stacks.add_task(stack_id, task_id) do
-          {:ok, %Task{} = task} ->
-            {:ok,
-             %{
-               task_id: task.id,
-               stack_id: task.stack_id,
-               stack_position: task.stack_position
-             }}
-
-          {:error, _} = err ->
-            stack_add_error_envelope(err)
-
-          {:error, _, _} = err ->
-            stack_add_error_envelope(err)
-        end
+      {:error, _, _} = err ->
+        stack_add_error_envelope(err)
     end
   end
 
@@ -5324,44 +5306,21 @@ defmodule Platform.Federation.ToolSurface do
     to_task_id = Map.get(args, "to_task_id")
     kind = Map.get(args, "kind", "blocks")
 
-    cond do
-      is_nil(stack_id) ->
-        {:error,
-         %{error: "stack_id is required", recoverable: true, suggestion: "Provide a stack_id"}}
-
-      is_nil(from_task_id) ->
-        {:error,
+    case Stacks.add_dependency_edge(stack_id, from_task_id, to_task_id, kind: kind) do
+      {:ok, %{} = result} ->
+        {:ok,
          %{
-           error: "from_task_id is required",
-           recoverable: true,
-           suggestion: "Provide a from_task_id"
+           from_task_id: result.from_task_id,
+           to_task_id: result.to_task_id,
+           kind: result.kind,
+           executable_now: result.executable_now
          }}
 
-      is_nil(to_task_id) ->
-        {:error,
-         %{
-           error: "to_task_id is required",
-           recoverable: true,
-           suggestion: "Provide a to_task_id"
-         }}
+      {:error, _} = err ->
+        stack_dependency_error_envelope(err)
 
-      true ->
-        case Stacks.add_dependency_edge(stack_id, from_task_id, to_task_id, kind: kind) do
-          {:ok, %{} = result} ->
-            {:ok,
-             %{
-               from_task_id: result.from_task_id,
-               to_task_id: result.to_task_id,
-               kind: result.kind,
-               executable_now: result.executable_now
-             }}
-
-          {:error, _} = err ->
-            stack_dependency_error_envelope(err)
-
-          {:error, _, _} = err ->
-            stack_dependency_error_envelope(err)
-        end
+      {:error, _, _} = err ->
+        stack_dependency_error_envelope(err)
     end
   end
 
@@ -5371,43 +5330,20 @@ defmodule Platform.Federation.ToolSurface do
     to_task_id = Map.get(args, "to_task_id")
     kind = Map.get(args, "kind", "blocks")
 
-    cond do
-      is_nil(stack_id) ->
-        {:error,
-         %{error: "stack_id is required", recoverable: true, suggestion: "Provide a stack_id"}}
-
-      is_nil(from_task_id) ->
-        {:error,
+    case Stacks.remove_dependency_edge(stack_id, from_task_id, to_task_id, kind: kind) do
+      {:ok, %{} = result} ->
+        {:ok,
          %{
-           error: "from_task_id is required",
-           recoverable: true,
-           suggestion: "Provide a from_task_id"
+           from_task_id: result.from_task_id,
+           to_task_id: result.to_task_id,
+           executable_now: result.executable_now
          }}
 
-      is_nil(to_task_id) ->
-        {:error,
-         %{
-           error: "to_task_id is required",
-           recoverable: true,
-           suggestion: "Provide a to_task_id"
-         }}
+      {:error, _} = err ->
+        stack_dependency_error_envelope(err)
 
-      true ->
-        case Stacks.remove_dependency_edge(stack_id, from_task_id, to_task_id, kind: kind) do
-          {:ok, %{} = result} ->
-            {:ok,
-             %{
-               from_task_id: result.from_task_id,
-               to_task_id: result.to_task_id,
-               executable_now: result.executable_now
-             }}
-
-          {:error, _} = err ->
-            stack_dependency_error_envelope(err)
-
-          {:error, _, _} = err ->
-            stack_dependency_error_envelope(err)
-        end
+      {:error, _, _} = err ->
+        stack_dependency_error_envelope(err)
     end
   end
 
@@ -5415,63 +5351,51 @@ defmodule Platform.Federation.ToolSurface do
     stack_id = Map.get(args, "stack_id")
     task_id = Map.get(args, "task_id")
 
-    cond do
-      is_nil(stack_id) ->
+    case Stacks.eject_task(stack_id, task_id) do
+      {:ok, %Task{} = task} ->
+        {:ok, %{task_id: task.id, stack_id: stack_id}}
+
+      {:error, :not_in_stack} ->
         {:error,
-         %{error: "stack_id is required", recoverable: true, suggestion: "Provide a stack_id"}}
+         %{
+           code: "not_in_stack",
+           error: "Task #{task_id} is not a member of stack #{stack_id}",
+           recoverable: false,
+           suggestion: "Use stack_get to inspect the stack's current members"
+         }}
 
-      is_nil(task_id) ->
+      {:error, {:has_dependents, dependents}} ->
         {:error,
-         %{error: "task_id is required", recoverable: true, suggestion: "Provide a task_id"}}
+         %{
+           code: "has_dependents",
+           error: "Task #{task_id} cannot be ejected: other in-stack members depend on it",
+           recoverable: true,
+           suggestion: "Eject the dependent members first or remove the dep edge before retrying",
+           dependents: Enum.map(dependents, fn d -> %{id: d.id, title: d.title} end)
+         }}
 
-      true ->
-        case Stacks.eject_task(stack_id, task_id) do
-          {:ok, %Task{} = task} ->
-            {:ok, %{task_id: task.id, stack_id: stack_id}}
+      {:error, :stack_not_found} ->
+        {:error,
+         %{
+           error: "Stack not found: #{stack_id}",
+           recoverable: false,
+           suggestion: "Use stack_list to find available stacks"
+         }}
 
-          {:error, :not_in_stack} ->
-            {:error,
-             %{
-               code: "not_in_stack",
-               error: "Task #{task_id} is not a member of stack #{stack_id}",
-               recoverable: false,
-               suggestion: "Use stack_get to inspect the stack's current members"
-             }}
+      {:error, :task_not_found} ->
+        {:error,
+         %{
+           error: "Task not found: #{task_id}",
+           recoverable: false,
+           suggestion: "Use task_list to find available tasks"
+         }}
 
-          {:error, {:has_dependents, dependents}} ->
-            {:error,
-             %{
-               code: "has_dependents",
-               error: "Task #{task_id} cannot be ejected: other in-stack members depend on it",
-               recoverable: true,
-               suggestion:
-                 "Eject the dependent members first or remove the dep edge before retrying",
-               dependents: Enum.map(dependents, fn d -> %{id: d.id, title: d.title} end)
-             }}
-
-          {:error, :stack_not_found} ->
-            {:error,
-             %{
-               error: "Stack not found: #{stack_id}",
-               recoverable: false,
-               suggestion: "Use stack_list to find available stacks"
-             }}
-
-          {:error, :task_not_found} ->
-            {:error,
-             %{
-               error: "Task not found: #{task_id}",
-               recoverable: false,
-               suggestion: "Use task_list to find available tasks"
-             }}
-
-          {:error, reason} ->
-            {:error,
-             %{
-               error: "Failed to eject task: #{inspect(reason)}",
-               recoverable: true
-             }}
-        end
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to eject task: #{inspect(reason)}",
+           recoverable: true
+         }}
     end
   end
 
@@ -6204,96 +6128,87 @@ defmodule Platform.Federation.ToolSurface do
       |> Platform.Tasks.PlanEngine.route_e2e_behavior_validations()
       |> Platform.Tasks.PlanEngine.check_manual_approval_heuristic()
 
-    if is_nil(task_id) do
-      {:error,
-       %{
-         error: "task_id is required",
-         recoverable: true,
-         suggestion: "Provide a valid task_id"
-       }}
-    else
-      Repo.transaction(fn ->
-        case Tasks.create_plan(%{task_id: task_id}) do
-          {:ok, plan} ->
-            stages =
-              Enum.map(stages_input, fn stage_input ->
-                stage_attrs = %{
-                  plan_id: plan.id,
-                  name: Map.get(stage_input, "name"),
-                  description: Map.get(stage_input, "description"),
-                  position: Map.get(stage_input, "position"),
-                  expected_artifacts: Map.get(stage_input, "expected_artifacts", [])
-                }
-
-                case Tasks.create_stage(stage_attrs) do
-                  {:ok, stage} ->
-                    validations =
-                      stage_input
-                      |> Map.get("validations", [])
-                      |> Enum.map(fn v_input ->
-                        attrs =
-                          %{
-                            stage_id: stage.id,
-                            kind: Map.get(v_input, "kind")
-                          }
-                          |> maybe_put_evaluation_payload(v_input)
-
-                        case Tasks.create_validation(attrs) do
-                          {:ok, validation} -> validation
-                          {:error, reason} -> Repo.rollback(reason)
-                        end
-                      end)
-
-                    Map.put(stage, :validations, validations)
-
-                  {:error, reason} ->
-                    Repo.rollback(reason)
-                end
-              end)
-
-            Map.put(plan, :stages, stages)
-
-          {:error, reason} ->
-            Repo.rollback(reason)
-        end
-      end)
-      |> case do
+    Repo.transaction(fn ->
+      case Tasks.create_plan(%{task_id: task_id}) do
         {:ok, plan} ->
-          # ADR-0046 member 7 stage 4 — the false-negative audit for the
-          # pre-plan design step. This is the first moment in the lifecycle
-          # when stage DESCRIPTIONS exist, which is the real subject of
-          # `PlanEngine.ui_touching?/1`; a design step that skipped as
-          # `"no_ui_surface"` gets re-checked against them here. Inert unless
-          # that exact reason is recorded, never raises, and deliberately does
-          # not flip the outcome to `failed` — an under-trigger the designer
-          # was never asked about must be visible, not merge-blocking.
-          _ = Platform.Design.PreplanStep.audit_ui_prediction(task_id, plan.stages)
+          stages =
+            Enum.map(stages_input, fn stage_input ->
+              stage_attrs = %{
+                plan_id: plan.id,
+                name: Map.get(stage_input, "name"),
+                description: Map.get(stage_input, "description"),
+                position: Map.get(stage_input, "position"),
+                expected_artifacts: Map.get(stage_input, "expected_artifacts", [])
+              }
 
-          {:ok, serialize_plan(plan)}
+              case Tasks.create_stage(stage_attrs) do
+                {:ok, stage} ->
+                  validations =
+                    stage_input
+                    |> Map.get("validations", [])
+                    |> Enum.map(fn v_input ->
+                      attrs =
+                        %{
+                          stage_id: stage.id,
+                          kind: Map.get(v_input, "kind")
+                        }
+                        |> maybe_put_evaluation_payload(v_input)
 
-        {:error, :project_archived} ->
-          {:error, project_archived_envelope("start a plan in")}
+                      case Tasks.create_validation(attrs) do
+                        {:ok, validation} -> validation
+                        {:error, reason} -> Repo.rollback(reason)
+                      end
+                    end)
 
-        {:error, :plan_pending_review} ->
-          existing = Tasks.latest_plan(task_id)
+                  Map.put(stage, :validations, validations)
 
-          {:error,
-           %{
-             error:
-               "A plan for this task is already #{existing.status}; create a new plan only after the existing one is rejected.",
-             recoverable: false,
-             suggestion:
-               "Wait for human approval (or rejection) of plan v#{existing.version} (#{existing.id}). Use plan_get to read it; do not call plan_create again."
-           }}
+                {:error, reason} ->
+                  Repo.rollback(reason)
+              end
+            end)
+
+          Map.put(plan, :stages, stages)
 
         {:error, reason} ->
-          {:error,
-           %{
-             error: "Failed to create plan: #{inspect_errors_safe(reason)}",
-             recoverable: true,
-             suggestion: "Check that task_id is valid and stages have valid fields"
-           }}
+          Repo.rollback(reason)
       end
+    end)
+    |> case do
+      {:ok, plan} ->
+        # ADR-0046 member 7 stage 4 — the false-negative audit for the
+        # pre-plan design step. This is the first moment in the lifecycle
+        # when stage DESCRIPTIONS exist, which is the real subject of
+        # `PlanEngine.ui_touching?/1`; a design step that skipped as
+        # `"no_ui_surface"` gets re-checked against them here. Inert unless
+        # that exact reason is recorded, never raises, and deliberately does
+        # not flip the outcome to `failed` — an under-trigger the designer
+        # was never asked about must be visible, not merge-blocking.
+        _ = Platform.Design.PreplanStep.audit_ui_prediction(task_id, plan.stages)
+
+        {:ok, serialize_plan(plan)}
+
+      {:error, :project_archived} ->
+        {:error, project_archived_envelope("start a plan in")}
+
+      {:error, :plan_pending_review} ->
+        existing = Tasks.latest_plan(task_id)
+
+        {:error,
+         %{
+           error:
+             "A plan for this task is already #{existing.status}; create a new plan only after the existing one is rejected.",
+           recoverable: false,
+           suggestion:
+             "Wait for human approval (or rejection) of plan v#{existing.version} (#{existing.id}). Use plan_get to read it; do not call plan_create again."
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to create plan: #{inspect_errors_safe(reason)}",
+           recoverable: true,
+           suggestion: "Check that task_id is valid and stages have valid fields"
+         }}
     end
   end
 
@@ -6467,13 +6382,152 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("stage_list", args, _context) do
-    plan_id = Map.get(args, "plan_id")
+    with {:ok, plan_id} <- resolve_stage_list_plan(args) do
+      stages =
+        Tasks.list_stages(plan_id)
+        |> Repo.preload(:validations)
 
-    stages =
-      Tasks.list_stages(plan_id)
-      |> Repo.preload(:validations)
+      {:ok, Enum.map(stages, &serialize_stage_with_validations/1)}
+    end
+  end
 
-    {:ok, Enum.map(stages, &serialize_stage_with_validations/1)}
+  # ── stage_list plan resolution (task 019fa609 stage 5) ──────────────────
+  #
+  # `stage_list` accepts `plan_id` OR `task_id`. That is a CONDITIONAL
+  # requirement, so both parameters are declared `required: false` and the
+  # tool sits outside `Platform.Federation.ToolArguments` entirely — a
+  # per-parameter gate cannot express "exactly one of these two", and having
+  # it pretend to would be the same defect this task exists to close. The
+  # precedent is `skill.get`'s "exactly one of `slug` or `id`".
+  #
+  # The rule below is stated in the tool's own `description` and its refusal
+  # codes in `limitations`, both guarded by tests. Underdetermination is the
+  # thing being fixed here: a caller who supplies a combination this function
+  # cannot honour is told which combination it was, never handed a plausible
+  # answer derived from an argument it did not intend.
+
+  # The closed set of refusal codes the `stage_list` clause can emit. The
+  # tool's `limitations` prose names exactly these, and a test compares the
+  # two sets rather than restating either.
+  @stage_list_error_codes [
+    :missing_plan_reference,
+    :plan_task_mismatch,
+    :no_current_plan
+  ]
+
+  @doc """
+  The closed set of `code` values `stage_list` refuses with.
+
+  Exposed so the tool's `limitations` prose can be compared against the
+  clause's actual behaviour by a test instead of by hand.
+  """
+  @spec stage_list_error_codes() :: [atom()]
+  def stage_list_error_codes, do: @stage_list_error_codes
+
+  defp resolve_stage_list_plan(args) do
+    # Blank strings count as absent, matching `ToolArguments`' presence rule
+    # — `%{"plan_id" => "   "}` names nothing a query can use, and treating it
+    # as present would hand the caller the same nil-shaped failure in disguise.
+    case {named_argument(args, "plan_id"), named_argument(args, "task_id")} do
+      {nil, nil} -> {:error, stage_list_missing_reference()}
+      {plan_id, nil} -> {:ok, plan_id}
+      {nil, task_id} -> stage_list_plan_for_task(task_id)
+      {plan_id, task_id} -> stage_list_reconcile(plan_id, task_id)
+    end
+  end
+
+  defp named_argument(args, key) do
+    case Map.get(args, key) do
+      value when is_binary(value) -> if String.trim(value) == "", do: nil, else: value
+      nil -> nil
+      value -> value
+    end
+  end
+
+  defp stage_list_missing_reference do
+    %{
+      error: "stage_list: exactly one of plan_id or task_id is required",
+      code: :missing_plan_reference,
+      recoverable: true,
+      suggestion:
+        "Pass `plan_id` to list a specific plan's stages, or `task_id` to list the stages of " <>
+          "that task's current (approved) plan. Call tools/list for the full inputSchema."
+    }
+  end
+
+  defp stage_list_plan_for_task(task_id) do
+    case stage_list_task_plan(&Tasks.current_plan/1, task_id) do
+      %Plan{id: plan_id} -> {:ok, plan_id}
+      nil -> {:error, stage_list_no_current_plan(task_id)}
+    end
+  end
+
+  # `Tasks.current_plan/1` and `latest_plan/1` cast `task_id` into their
+  # queries, so a malformed argument would raise an `Ecto.Query.CastError`
+  # instead of resolving to "no such task" — the same class of failure this
+  # whole task exists to remove. Same reasoning as `get_by_uuid/2`, which
+  # cannot be reused here because these are context functions rather than a
+  # `Repo.get/2` on a schema.
+  defp stage_list_task_plan(fun, task_id) do
+    if Platform.UUID.valid?(task_id), do: fun.(task_id)
+  end
+
+  defp stage_list_no_current_plan(task_id) do
+    %{
+      error: "stage_list: task #{task_id} has no current plan",
+      code: :no_current_plan,
+      recoverable: true,
+      suggestion: stage_list_no_current_plan_suggestion(task_id)
+    }
+  end
+
+  defp stage_list_no_current_plan_suggestion(task_id) do
+    case stage_list_task_plan(&Tasks.latest_plan/1, task_id) do
+      nil ->
+        "This task has no plan at all (or the task_id names no task). Create one with " <>
+          "plan_create, or pass `plan_id` directly."
+
+      plan ->
+        # The pending-v2 case, and the reason this refuses instead of
+        # returning []: an empty array reads as "this task has no stages"
+        # when in fact a plan is sitting in review.
+        "The task's latest plan is #{plan.id} (version #{plan.version}, status #{plan.status}), " <>
+          "which is not approved — `task_id` resolves only to an approved or completed plan. " <>
+          "Pass `plan_id` #{plan.id} directly to inspect that plan's stages, or approve it first."
+    end
+  end
+
+  defp stage_list_reconcile(plan_id, task_id) do
+    # `get_by_uuid/2` rather than `Tasks.get_plan/1`: only `task_id` is needed
+    # to reconcile the pair, and the context function preloads stages.
+    case get_by_uuid(Plan, plan_id) do
+      %{task_id: ^task_id} ->
+        {:ok, plan_id}
+
+      %{task_id: other_task_id} ->
+        {:error,
+         stage_list_mismatch(
+           "stage_list: plan #{plan_id} belongs to task #{other_task_id}, not to task #{task_id}",
+           "Drop one of the two arguments. `plan_id` alone lists that plan's stages; `task_id` " <>
+             "alone resolves to task #{task_id}'s current plan."
+         )}
+
+      nil ->
+        {:error,
+         stage_list_mismatch(
+           "stage_list: plan_id #{plan_id} names no plan, so it cannot be a plan of task #{task_id}",
+           "Pass `task_id` alone to resolve task #{task_id}'s current plan, or correct `plan_id`."
+         )}
+    end
+  end
+
+  defp stage_list_mismatch(error, suggestion) do
+    %{
+      error: error,
+      code: :plan_task_mismatch,
+      recoverable: true,
+      suggestion: suggestion
+    }
   end
 
   def execute("validation_evaluate", args, _context) do
@@ -6603,68 +6657,41 @@ defmodule Platform.Federation.ToolSurface do
     description = Map.get(args, "description")
     needs_human = Map.get(args, "needs_human", false)
 
-    cond do
-      is_nil(task_id) or task_id == "" ->
-        {:error,
-         %{
-           error: "task_id is required",
-           recoverable: true,
-           suggestion: "Provide the current task_id from the execution context"
-         }}
+    attrs = %{
+      "task_id" => task_id,
+      "phase" => current_phase_for_blocker(task_id),
+      "runtime_id" => Map.get(context, :runtime_id) || "tool-surface",
+      "event_type" => "execution.blocked",
+      "execution_space_id" => execution_space_id_for_task(task_id),
+      "payload" => %{
+        "stage_id" => stage_id,
+        "description" => description,
+        "needs_human" => needs_human,
+        "reported_by" => Map.get(context, :agent_id) || "agent"
+      }
+    }
 
-      is_nil(stage_id) or stage_id == "" ->
-        {:error,
-         %{
-           error: "stage_id is required",
-           recoverable: true,
-           suggestion: "Provide the current stage_id from the execution context"
-         }}
-
-      is_nil(description) or String.trim(description) == "" ->
-        {:error,
-         %{
-           error: "description is required",
-           recoverable: true,
-           suggestion: "Describe what is blocked and what is needed to continue"
-         }}
-
-      true ->
-        attrs = %{
-          "task_id" => task_id,
-          "phase" => current_phase_for_blocker(task_id),
-          "runtime_id" => Map.get(context, :runtime_id) || "tool-surface",
-          "event_type" => "execution.blocked",
-          "execution_space_id" => execution_space_id_for_task(task_id),
-          "payload" => %{
-            "stage_id" => stage_id,
-            "description" => description,
-            "needs_human" => needs_human,
-            "reported_by" => Map.get(context, :agent_id) || "agent"
-          }
-        }
-
-        case Platform.Orchestration.record_runtime_event(attrs) do
-          {:ok, event} ->
-            if needs_human do
-              if space_id = execution_space_id_for_task(task_id) do
-                Platform.Orchestration.ExecutionSpace.post_engagement(
-                  space_id,
-                  "Blocker reported: #{description}",
-                  metadata: %{"reason" => "runtime_blocker", "stage_id" => stage_id}
-                )
-              end
-            end
-
-            {:ok, %{event_id: event.id, task_id: task_id, stage_id: stage_id, blocked: true}}
-
-          {:error, reason} ->
-            {:error,
-             %{
-               error: "Failed to record blocker: #{inspect(reason)}",
-               recoverable: true,
-               suggestion: "Retry the blocker report or post the blocker in the execution space"
-             }}
+    case Platform.Orchestration.record_runtime_event(attrs) do
+      {:ok, event} ->
+        if needs_human do
+          if space_id = execution_space_id_for_task(task_id) do
+            Platform.Orchestration.ExecutionSpace.post_engagement(
+              space_id,
+              "Blocker reported: #{description}",
+              metadata: %{"reason" => "runtime_blocker", "stage_id" => stage_id}
+            )
+          end
         end
+
+        {:ok, %{event_id: event.id, task_id: task_id, stage_id: stage_id, blocked: true}}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to record blocker: #{inspect(reason)}",
+           recoverable: true,
+           suggestion: "Retry the blocker report or post the blocker in the execution space"
+         }}
     end
   end
 
@@ -6696,57 +6723,38 @@ defmodule Platform.Federation.ToolSurface do
     slug = Map.get(args, "slug")
     content = Map.get(args, "content")
 
-    cond do
-      is_nil(slug) || slug == "" ->
+    case Platform.Orchestration.PromptTemplates.get_template_by_slug(slug) do
+      nil ->
         {:error,
          %{
-           error: "slug is required",
+           error: "Template not found: #{slug}",
            recoverable: true,
-           suggestion: "Provide a valid template slug (e.g. dispatch.planning, heartbeat)"
+           suggestion: "Use prompt_template_list to see available slugs, or check spelling"
          }}
 
-      is_nil(content) ->
-        {:error,
-         %{
-           error: "content is required",
-           recoverable: true,
-           suggestion: "Provide the new template content with {{variable_name}} placeholders"
-         }}
-
-      true ->
-        case Platform.Orchestration.PromptTemplates.get_template_by_slug(slug) do
-          nil ->
-            {:error,
+      template ->
+        case Platform.Orchestration.PromptTemplates.update_template(template, %{
+               "content" => content,
+               "updated_by" => "agent"
+             }) do
+          {:ok, updated} ->
+            {:ok,
              %{
-               error: "Template not found: #{slug}",
-               recoverable: true,
-               suggestion: "Use prompt_template_list to see available slugs, or check spelling"
+               slug: updated.slug,
+               name: updated.name,
+               description: updated.description,
+               variables: updated.variables,
+               updated_by: updated.updated_by,
+               updated_at: format_datetime(updated.updated_at)
              }}
 
-          template ->
-            case Platform.Orchestration.PromptTemplates.update_template(template, %{
-                   "content" => content,
-                   "updated_by" => "agent"
-                 }) do
-              {:ok, updated} ->
-                {:ok,
-                 %{
-                   slug: updated.slug,
-                   name: updated.name,
-                   description: updated.description,
-                   variables: updated.variables,
-                   updated_by: updated.updated_by,
-                   updated_at: format_datetime(updated.updated_at)
-                 }}
-
-              {:error, changeset} ->
-                {:error,
-                 %{
-                   error: "Failed to update template: #{inspect_errors_safe(changeset)}",
-                   recoverable: true,
-                   suggestion: "Check that content is not empty"
-                 }}
-            end
+          {:error, changeset} ->
+            {:error,
+             %{
+               error: "Failed to update template: #{inspect_errors_safe(changeset)}",
+               recoverable: true,
+               suggestion: "Check that content is not empty"
+             }}
         end
     end
   end

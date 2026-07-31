@@ -19,8 +19,8 @@ defmodule PlatformWeb.MCPController do
   use PlatformWeb, :controller
 
   alias Platform.Chat
+  alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
-  alias Platform.Federation.ToolSurface
 
   @protocol_version "2025-06-18"
   @server_name "startup-suite"
@@ -87,7 +87,12 @@ defmodule PlatformWeb.MCPController do
       :ok ->
         context = build_context(args, runtime)
 
-        case ToolSurface.execute(name, args, context) do
+        # `ToolArguments.dispatch/3`, not `ToolSurface.execute/3`: the argument
+        # gate runs first and refuses a call that names no required argument,
+        # so a malformed call gets a `missing_<param>` code instead of whatever
+        # 500 the handler happened to raise. Authorization stays above it —
+        # capability is decided before arguments are looked at.
+        case ToolArguments.dispatch(name, args, context) do
           {:ok, data} -> {:ok, success_content(data)}
           {:error, reason} -> {:ok, error_content(reason)}
           other -> {:ok, error_content(other)}
@@ -180,12 +185,64 @@ defmodule PlatformWeb.MCPController do
     %{content: [%{type: "text", text: Jason.encode!(data)}], isError: false}
   end
 
+  # Symmetric with `success_content/1` directly above, and the symmetry is the
+  # whole point. `ToolSurface.execute/3` refuses with
+  # `%{error:, code:, recoverable:, suggestion:}`; the previous first clause
+  # here — `format_error(%{error: msg}) when is_binary(msg)` — matched EVERY
+  # one of those maps and returned the sentence alone, so `code`,
+  # `recoverable` and `suggestion` never reached an HTTP caller.
+  #
+  # That is not a cosmetic loss. `task_design_decline` and
+  # `plan_architecture_verdict` each document a CLOSED `code` taxonomy in
+  # their `limitations` prose and instruct remote runtimes to branch on it.
+  # Both are guarded by tests, but those tests assert at the `execute/3`
+  # layer — one level above where this flattened. Guard green, docs accurate,
+  # `/mcp` client still handed a bare sentence.
+  #
+  # `RuntimeChannel.execute_tool_call/4` pushes the same map intact, so the
+  # two federation transports answered the same refusal differently. They now
+  # agree, and `runtime_channel_test.exs` pins that at the wire.
+  #
+  # BREAKING SHAPE, stated plainly: `content[0].text` of every `/mcp` tool
+  # error changes from a bare sentence to a JSON object. The success path was
+  # already `Jason.encode!`, so any client reading MCP output is already
+  # JSON-aware — the asymmetry IS the bug, not a compatibility guarantee.
   defp error_content(reason) do
-    %{content: [%{type: "text", text: format_error(reason)}], isError: true}
+    %{content: [%{type: "text", text: Jason.encode!(error_envelope(reason))}], isError: true}
   end
 
-  defp format_error(%{error: msg}) when is_binary(msg), do: msg
-  defp format_error(%Ecto.Changeset{} = cs), do: inspect(cs.errors)
-  defp format_error(other) when is_binary(other), do: other
-  defp format_error(other), do: inspect(other)
+  # Atom codes serialize as JSON strings: `:missing_reason` reaches the wire
+  # as `"missing_reason"`. Nil-valued keys are dropped rather than emitted as
+  # `null`, so "this refusal declares no code" reads differently from "this
+  # refusal is not recoverable" — `recoverable: false` survives.
+  defp error_envelope(%Ecto.Changeset{} = changeset),
+    do: %{error: inspect(changeset.errors)}
+
+  defp error_envelope(reason) when is_map(reason) and not is_struct(reason) do
+    %{
+      error: error_message(reason),
+      code: jsonable(Map.get(reason, :code)),
+      recoverable: jsonable(Map.get(reason, :recoverable)),
+      suggestion: jsonable(Map.get(reason, :suggestion))
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp error_envelope(reason) when is_binary(reason), do: %{error: reason}
+  defp error_envelope(reason), do: %{error: inspect(reason)}
+
+  # `error` is always a string, whatever the handler put there — a client
+  # branching on `code` still needs something human-readable to log.
+  defp error_message(%{error: message}) when is_binary(message), do: message
+  defp error_message(%{error: %Ecto.Changeset{} = changeset}), do: inspect(changeset.errors)
+  defp error_message(%{error: nil} = reason), do: inspect(reason)
+  defp error_message(%{error: other}), do: inspect(other)
+  defp error_message(reason), do: inspect(reason)
+
+  # Guarantees the envelope encodes. Every `code:` in the tool surface today
+  # is an atom or a binary, but an unencodable value here would turn a
+  # handled refusal into a 500 — strictly worse than the bug being fixed.
+  defp jsonable(value) when is_atom(value) or is_binary(value) or is_number(value), do: value
+  defp jsonable(value), do: inspect(value)
 end

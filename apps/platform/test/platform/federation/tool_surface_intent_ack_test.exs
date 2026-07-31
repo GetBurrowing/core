@@ -28,6 +28,7 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
 
   use Platform.DataCase, async: false
 
+  alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolSurface
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
@@ -257,6 +258,56 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
       assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 2
     end
 
+    # FINDING (019fa609 stage 4), pinned rather than fixed.
+    #
+    # `subagent_id` is declared `required: true` on intent_ack, so the generic
+    # argument gate added in stage 3 now answers an absent or blank one BEFORE
+    # execute/3 runs — and the gate has no way to record the attempt. The
+    # counter above therefore only advances for a subagent_id the gate lets
+    # through (whitespace-only is also treated as absent by the gate, so in
+    # practice only the >128-byte case still reaches the handler over the wire).
+    #
+    # That is why ToolSurface.validate_subagent_id/1 was NOT deleted with the
+    # other presence checks in this stage: the gate does not reproduce its side
+    # effect, and the plan's instruction is to record a behaviour change of this
+    # kind rather than quietly absorb it. This test asserts the seam in both
+    # directions so a later fix has to update it deliberately.
+    test "the gate answers an absent subagent_id before the counter can see it",
+         %{meeting_id: meeting_id} do
+      row = dispatch!(meeting_id)
+
+      # Handler path (execute/3): the attempt IS evidence.
+      {:error, handler_err} = ack(row.id, %{"status" => "working"})
+      assert handler_err.error =~ "subagent_id is required"
+      assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 1
+
+      # Wire path (dispatch/3): refused earlier, and NOT counted.
+      {:error, gate_err} =
+        ToolArguments.dispatch(
+          "intent_ack",
+          %{"intent_id" => row.id, "status" => "working"},
+          %{}
+        )
+
+      assert gate_err.code == :missing_subagent_id
+      assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 1
+
+      # The oversized id is the one rejection shape the gate still passes
+      # through, so the counter keeps working for it.
+      {:error, _} =
+        ToolArguments.dispatch(
+          "intent_ack",
+          %{
+            "intent_id" => row.id,
+            "status" => "working",
+            "subagent_id" => String.duplicate("x", 129)
+          },
+          %{}
+        )
+
+      assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 2
+    end
+
     test "a counted intent that then times out is :no_ack_spawn_failed" do
       meeting_id = Platform.Types.UUIDv7.generate()
       {:ok, _pid} = IntentQueue.ensure_started(meeting_id, ack_timeout_ms: 400)
@@ -311,10 +362,21 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
       assert err.error =~ "Intent not found"
     end
 
+    # Migrated to dispatch/3 in 019fa609 stage 4. intent_ack's own
+    # validate_intent_id/1 is gone — IntentQueue.locate/1 guards on is_binary,
+    # so a nil intent_id reaching execute/3 now raises rather than refusing.
+    # subagent_id is supplied because the gate refuses on the first missing
+    # parameter in declaration order and would otherwise name that one.
     test "missing intent_id is rejected before anything else" do
-      {:error, err} = ToolSurface.execute("intent_ack", %{"status" => "working"}, %{})
+      {:error, err} =
+        ToolArguments.dispatch(
+          "intent_ack",
+          %{"status" => "working", "subagent_id" => "higgins.moon"},
+          %{}
+        )
 
       assert err.error =~ "intent_id is required"
+      assert err.code == :missing_intent_id
       assert err.recoverable == true
     end
 

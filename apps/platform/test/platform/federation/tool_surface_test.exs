@@ -5,6 +5,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
   alias Platform.Chat
 
   alias Platform.Tasks
+  alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
 
@@ -422,11 +423,44 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert result.host_participant_id == host.id
     end
 
+    # VACUOUS-TEST FINDING (019fa609 stage 4), the second of two in this file.
+    #
+    # This asserted `error =~ "project_id"` against execute/3. When
+    # meeting_create's dedicated `{:error, {:missing, field}}` clause was
+    # deleted, the test kept passing for the wrong reason: `Meetings`
+    # still returns `{:missing, :project_id}`, the catch-all now wraps it as
+    # "Failed to create meeting: {:missing, :project_id}", and that string
+    # still contains "project_id" and is still recoverable. Green, testing a
+    # refusal nobody wrote.
+    #
+    # Re-pointed at dispatch/3 with a `code` assertion so it can fail, and the
+    # message assertion tightened to the gate's own wording rather than a
+    # substring both producers happen to share.
     test "meeting_create without project_id returns a recoverable error" do
       {:error, error} =
-        ToolSurface.execute("meeting_create", %{"name" => "No project"}, %{})
+        ToolArguments.dispatch("meeting_create", %{"name" => "No project"}, %{})
 
-      assert error.error =~ "project_id"
+      assert error.error =~ "meeting_create: project_id is required"
+      assert error.code == :missing_project_id
+      assert error.recoverable == true
+    end
+
+    # The seam the deletion left behind, pinned so it is a recorded behaviour
+    # and not an accident: the gate checks PRESENCE, not type. A present but
+    # non-binary project_id passes the gate, reaches the handler, and falls to
+    # the catch-all — where the dedicated `{:missing, field}` message used to
+    # be. Type validation is explicitly out of the gate's scope (see the
+    # ToolArguments moduledoc), so this is the answer such a caller now gets.
+    test "meeting_create with a non-binary project_id falls through the gate to the catch-all" do
+      {:error, error} =
+        ToolArguments.dispatch(
+          "meeting_create",
+          %{"project_id" => 12_345, "name" => "Bad type"},
+          %{}
+        )
+
+      refute error.error =~ "is required"
+      assert error.error =~ "Failed to create meeting"
       assert error.recoverable == true
     end
 
@@ -2264,11 +2298,20 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert length(review_stage.validations) == 1
     end
 
+    # VACUOUS-TEST FINDING (019fa609 stage 4). This asserted only
+    # `recoverable == true` against execute/3. After plan_create's own task_id
+    # check was deleted it kept passing — Tasks.create_plan(%{task_id: nil})
+    # fails its changeset and the handler wraps that as
+    # "Failed to create plan: ...", also recoverable — so the test stayed green
+    # while testing a completely different refusal. Re-pointed at dispatch/3
+    # and given a `code` assertion so it can actually fail.
     test "plan_create without task_id returns error" do
       {:error, error} =
-        ToolSurface.execute("plan_create", %{"stages" => []}, %{})
+        ToolArguments.dispatch("plan_create", %{"stages" => []}, %{})
 
       assert error.recoverable == true
+      assert error.code == :missing_task_id
+      assert error.error =~ "task_id is required"
     end
 
     # ADR-0046 member 9 stage 3 — `responsibility` is gone from the MCP plan
@@ -2834,9 +2877,17 @@ defmodule Platform.Federation.ToolSurfaceTest do
       refute human_user_id in agent_ids
     end
 
+    # Migrated from execute/3 to dispatch/3 in 019fa609 stage 4: the tool's own
+    # presence check is gone and the generic gate now produces this refusal, so
+    # asserting at execute/3 would assert nothing (the handler would call
+    # Chat.list_participants(nil) and raise). The deletion also flipped
+    # recoverable from false to true — telling an agent that misspelled an
+    # argument to give up was the bug, not the wording.
     test "space_list_agents returns an error when space_id is missing" do
-      assert {:error, err} = ToolSurface.execute("space_list_agents", %{}, %{})
+      assert {:error, err} = ToolArguments.dispatch("space_list_agents", %{}, %{})
       assert err.error =~ "space_id is required"
+      assert err.code == :missing_space_id
+      assert err.recoverable == true
     end
 
     # ── space_leave ──────────────────────────────────────────────────────
@@ -2974,13 +3025,16 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert Platform.Chat.ActiveAgentStore.get_active(space.id) == nil
     end
 
+    # Migrated to dispatch/3 in 019fa609 stage 4 — see space_list_agents above.
     test "space_leave requires space_id" do
       agent = create_agent()
 
       assert {:error, error} =
-               ToolSurface.execute("space_leave", %{}, %{agent_id: agent.id})
+               ToolArguments.dispatch("space_leave", %{}, %{agent_id: agent.id})
 
       assert error.error =~ "space_id is required"
+      assert error.code == :missing_space_id
+      assert error.recoverable == true
     end
 
     test "space_leave requires an identifiable caller when agent_id arg is omitted" do
@@ -3203,18 +3257,25 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.error =~ "not found"
     end
 
+    # Migrated to dispatch/3 in 019fa609 stage 4. The empty-string emoji is
+    # deliberately kept as the input: the gate counts a blank string as absent,
+    # which is the same call react's own check used to refuse. The other two
+    # branches it carried (space_id, message_id) are covered by the gate's own
+    # table-driven test in tool_arguments_test.exs.
     test "react rejects missing emoji" do
       space = create_space()
       participant = create_participant(space.id, %{display_name: "Agent"})
 
       {:error, error} =
-        ToolSurface.execute(
+        ToolArguments.dispatch(
           "react",
           %{"space_id" => space.id, "message_id" => Ecto.UUID.generate(), "emoji" => ""},
           %{space_id: space.id, agent_participant_id: participant.id}
         )
 
       assert error.error =~ "emoji is required"
+      assert error.code == :missing_emoji
+      assert error.recoverable == true
     end
 
     # ── Stack tools (ADR 0041) ────────────────────────────────────────
@@ -5506,6 +5567,245 @@ defmodule Platform.Federation.ToolSurfaceTest do
                ToolSurface.execute("memory_view", %{"path" => "org/page/x.md"}, %{
                  agent_id: @slug_16
                })
+    end
+  end
+
+  # ── stage_list: two entry points, one stated resolution rule ────────────
+  #
+  # Task 019fa609 stage 5. `stage_list` accepts `task_id` as well as
+  # `plan_id`, which makes it a CONDITIONAL requirement and therefore takes it
+  # out of `ToolArguments`' scope entirely — that gate is per-parameter and a
+  # per-parameter gate cannot express "exactly one of these two". The check
+  # moves into the handler, following the `skill.get` precedent.
+  #
+  # Every test here drives `ToolArguments.dispatch/3` rather than
+  # `ToolSurface.execute/3`, because `dispatch/3` is the documented entry
+  # point and is what both federation transports call. For this tool the two
+  # are now equivalent (the gate finds nothing to enforce), and asserting at
+  # the entry point is what keeps them honest if that ever stops being true.
+  defp stage_list(args), do: ToolArguments.dispatch("stage_list", args, %{})
+
+  defp plan_with_stage(task, attrs) do
+    {:ok, plan} = Tasks.create_plan(Map.merge(%{task_id: task.id}, attrs))
+
+    {:ok, _stage} =
+      Tasks.create_stage(%{plan_id: plan.id, name: "Stage v#{plan.version}", position: 1})
+
+    plan
+  end
+
+  defp planned_task(title \\ "Resolution task") do
+    project = create_project()
+    {:ok, task} = Tasks.create_task(%{project_id: project.id, title: title})
+    task
+  end
+
+  describe "stage_list resolves a plan from either plan_id or task_id" do
+    test "task_id resolves to the task's current approved plan" do
+      task = planned_task()
+      plan = plan_with_stage(task, %{status: "approved", version: 1})
+
+      assert {:ok, [stage]} = stage_list(%{"task_id" => task.id})
+      assert stage.name == "Stage v1"
+      assert stage.plan_id == plan.id
+    end
+
+    test "a pending v2 does not shadow the approved v1, and rows say which plan answered" do
+      # The disambiguation is already in the row: serialize_stage/1 emits
+      # plan_id, so a caller who passed only task_id can still see which plan
+      # the answer came from without a second call.
+      task = planned_task()
+      v1 = plan_with_stage(task, %{status: "approved", version: 1})
+      v2 = plan_with_stage(task, %{status: "pending_review", version: 2})
+
+      assert {:ok, [stage]} = stage_list(%{"task_id" => task.id})
+      assert stage.plan_id == v1.id
+      refute stage.plan_id == v2.id
+      assert stage.name == "Stage v1"
+    end
+
+    test "a task whose only plan is unapproved is refused, not answered with []" do
+      # The failure this replaces: an empty array is indistinguishable from
+      # "this task has no stages", so a caller concludes the plan is empty
+      # when in fact a v2 is sitting in review.
+      task = planned_task()
+      draft = plan_with_stage(task, %{status: "draft", version: 1})
+
+      assert {:error, envelope} = stage_list(%{"task_id" => task.id})
+      assert envelope.code == :no_current_plan
+      assert envelope.recoverable == true
+      assert envelope.suggestion =~ draft.id
+      assert envelope.suggestion =~ "version 1"
+      assert envelope.suggestion =~ "draft"
+    end
+
+    test "a task with no plan at all is refused with the same code and a different suggestion" do
+      task = planned_task()
+
+      assert {:error, envelope} = stage_list(%{"task_id" => task.id})
+      assert envelope.code == :no_current_plan
+      assert envelope.suggestion =~ "no plan"
+      assert envelope.recoverable == true
+    end
+
+    test "a malformed task_id is refused rather than raising a cast error" do
+      assert {:error, %{code: :no_current_plan}} = stage_list(%{"task_id" => @slug_16})
+    end
+
+    test "plan_id alone still answers exactly as it did before task_id existed" do
+      task = planned_task()
+      plan = plan_with_stage(task, %{status: "approved", version: 1})
+
+      assert stage_list(%{"plan_id" => plan.id}) ==
+               ToolSurface.execute("stage_list", %{"plan_id" => plan.id}, %{})
+
+      assert {:ok, [stage]} = stage_list(%{"plan_id" => plan.id})
+      assert stage.plan_id == plan.id
+    end
+
+    test "both arguments agreeing is accepted, and plan_id is what answers" do
+      # Stated rule: when both are supplied and they agree, plan_id wins. It
+      # is the more specific of the two — it can name a plan task_id would
+      # never resolve to.
+      task = planned_task()
+      v1 = plan_with_stage(task, %{status: "approved", version: 1})
+      v2 = plan_with_stage(task, %{status: "pending_review", version: 2})
+
+      assert {:ok, [stage]} = stage_list(%{"plan_id" => v2.id, "task_id" => task.id})
+      assert stage.plan_id == v2.id
+      refute stage.plan_id == v1.id
+    end
+
+    test "both arguments disagreeing is refused, never silently resolved to one" do
+      other = planned_task("Unrelated task")
+      other_plan = plan_with_stage(other, %{status: "approved", version: 1})
+      task = planned_task()
+      _mine = plan_with_stage(task, %{status: "approved", version: 1})
+
+      assert {:error, envelope} = stage_list(%{"plan_id" => other_plan.id, "task_id" => task.id})
+      assert envelope.code == :plan_task_mismatch
+      assert envelope.recoverable == true
+      assert envelope.error =~ other_plan.id
+      assert envelope.error =~ task.id
+    end
+
+    test "a plan_id naming no plan at all is the same mismatch, with its own message" do
+      task = planned_task()
+      _plan = plan_with_stage(task, %{status: "approved", version: 1})
+      absent = Ecto.UUID.generate()
+
+      assert {:error, envelope} = stage_list(%{"plan_id" => absent, "task_id" => task.id})
+      assert envelope.code == :plan_task_mismatch
+      assert envelope.error =~ "no plan"
+
+      # A malformed plan_id resolves the same way rather than raising, which
+      # is the point of checking the pair through a lookup that cannot cast.
+      assert {:error, %{code: :plan_task_mismatch}} =
+               stage_list(%{"plan_id" => @slug_16, "task_id" => task.id})
+    end
+
+    test "neither argument is refused with a code naming both acceptable arguments" do
+      assert {:error, envelope} = stage_list(%{})
+      assert envelope.code == :missing_plan_reference
+      assert envelope.error =~ "plan_id"
+      assert envelope.error =~ "task_id"
+      assert envelope.recoverable == true
+      assert envelope.suggestion =~ "tools/list"
+    end
+
+    test "a blank or whitespace-only argument counts as absent, matching the gate" do
+      for args <- [
+            %{"plan_id" => "   "},
+            %{"task_id" => ""},
+            %{"plan_id" => nil, "task_id" => nil},
+            %{"plan_id" => "  ", "task_id" => "  "}
+          ] do
+        assert {:error, %{code: :missing_plan_reference}} = stage_list(args),
+               "#{inspect(args)} names no plan and must be refused, not cast into a query"
+      end
+    end
+  end
+
+  describe "stage_list's declared contract matches what it does" do
+    test "neither parameter is declared required, so the generic gate does not cover it" do
+      # This is the consequence the stage brief insisted be stated: the tool
+      # that motivated the ticket ends up outside the mechanism the ticket
+      # asked for, because `plan_id` XOR `task_id` is not a per-parameter
+      # requirement. `ToolArguments` finding nothing to enforce is CORRECT,
+      # and the handler's own refusal is what covers the tool.
+      assert ToolArguments.required_params("stage_list") == []
+      assert ToolArguments.validate("stage_list", %{}) == :ok
+
+      tool = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "stage_list"))
+      assert tool.parameters.plan_id.required == false
+      assert tool.parameters.task_id.required == false
+    end
+
+    test "the description states both entry points and the resolution rule" do
+      tool = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "stage_list"))
+
+      # The old description — "List all stages for a plan, ordered by
+      # position, with validations preloaded." — warned nobody off, which is
+      # why the ticket's author reached for the wrong tool twice.
+      assert tool.description =~ "task_id"
+      assert tool.description =~ "plan_id"
+      assert tool.limitations =~ "Exactly one of `plan_id` or `task_id` is required"
+    end
+
+    test "the limitations prose names exactly the refusal codes the clause emits" do
+      tool = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "stage_list"))
+      codes = ToolSurface.stage_list_error_codes()
+
+      documented =
+        codes
+        |> Enum.filter(&(tool.limitations =~ "`#{&1}`"))
+        |> MapSet.new()
+
+      assert documented == MapSet.new(codes),
+             """
+             Every code the clause can emit must be named in `limitations`.
+             Missing: #{inspect(MapSet.difference(MapSet.new(codes), documented))}
+             """
+    end
+
+    test "the observed refusal code set is exactly the documented one" do
+      # The guard that makes the prose above load-bearing rather than
+      # decorative: drive every refusal and compare the sets. A code emitted
+      # but undeclared, or declared but unreachable, fails here.
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Code set task"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "draft", version: 1})
+
+      {:ok, other_task} = Tasks.create_task(%{project_id: project.id, title: "Other"})
+
+      {:ok, other_plan} =
+        Tasks.create_plan(%{task_id: other_task.id, status: "approved", version: 1})
+
+      cases = [
+        {%{}, :missing_plan_reference},
+        {%{"task_id" => task.id}, :no_current_plan},
+        {%{"plan_id" => other_plan.id, "task_id" => task.id}, :plan_task_mismatch}
+      ]
+
+      observed =
+        for {args, expected} <- cases, into: MapSet.new() do
+          assert {:error, envelope} = ToolArguments.dispatch("stage_list", args, %{}),
+                 "expected #{inspect(args)} to be refused"
+
+          assert envelope.code == expected, "for #{inspect(args)}: #{inspect(envelope)}"
+          assert envelope.recoverable == true
+          envelope.code
+        end
+
+      # Referenced so the draft plan above is unmistakably the no_current_plan
+      # fixture rather than an unused binding.
+      assert plan.status == "draft"
+
+      assert observed == MapSet.new(ToolSurface.stage_list_error_codes()),
+             """
+             Emitted-but-undeclared: #{inspect(MapSet.difference(observed, MapSet.new(ToolSurface.stage_list_error_codes())))}
+             Declared-but-unexercised: #{inspect(MapSet.difference(MapSet.new(ToolSurface.stage_list_error_codes()), observed))}
+             """
     end
   end
 end

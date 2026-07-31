@@ -21,6 +21,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
 
   use Platform.DataCase, async: false
 
+  alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolSurface
   alias Platform.Orchestration.{LeaseManager, RuntimeEvent}
   alias Platform.Repo
@@ -214,10 +215,16 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       assert err.suggestion =~ "task_list"
     end
 
+    # Migrated to dispatch/3 in 019fa609 stage 4. task_ack's own task_id check
+    # is gone; note that subagent_id must be supplied here or the gate refuses
+    # on THAT parameter first (declaration order is alphabetical), which would
+    # make the assertion pass for the wrong reason.
     test "returns error when task_id is missing entirely" do
-      {:error, err} = ToolSurface.execute("task_ack", %{}, %{})
+      {:error, err} =
+        ToolArguments.dispatch("task_ack", %{"subagent_id" => "higgins.moon"}, %{})
 
       assert err.error =~ "task_id is required"
+      assert err.code == :missing_task_id
       assert err.recoverable == true
     end
   end

@@ -22,6 +22,7 @@ defmodule Platform.Federation.ToolSurfaceOrgFiltersTest do
   import Platform.TenancyFixtures
 
   alias Platform.Agents.Agent
+  alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolSurface
   alias Platform.Org.Wiki.Journal
   alias Platform.Org.{WikiJournalEntry, WikiPage}
@@ -245,10 +246,14 @@ defmodule Platform.Federation.ToolSurfaceOrgFiltersTest do
     assert envelope.error =~ "org not found"
   end
 
+  # Migrated to dispatch/3 in 019fa609 stage 4. The tool's own check is gone;
+  # the gate's message deliberately carries no backticks (see the ToolArguments
+  # moduledoc), so the assertion drops them too.
   test "org_list_descendants without org_id returns a recoverable error" do
-    {:error, envelope} = ToolSurface.execute("org_list_descendants", %{}, %{})
+    {:error, envelope} = ToolArguments.dispatch("org_list_descendants", %{}, %{})
     assert envelope.recoverable == true
-    assert envelope.error =~ "`org_id` is required"
+    assert envelope.code == :missing_org_id
+    assert envelope.error =~ "org_id is required"
   end
 
   defp rand, do: System.unique_integer([:positive, :monotonic])

@@ -13,8 +13,8 @@ defmodule PlatformWeb.RuntimeChannel do
   alias Platform.Chat
   alias Platform.Federation
   alias Platform.Federation.RuntimePresence
+  alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
-  alias Platform.Federation.ToolSurface
 
   @valid_client_products ~w(openclaw claude_channel)
 
@@ -562,7 +562,12 @@ defmodule PlatformWeb.RuntimeChannel do
       runtime_id: runtime_id
     }
 
-    result = ToolSurface.execute(tool, args, context)
+    # `ToolArguments.dispatch/3`, not `ToolSurface.execute/3` — the same gate
+    # `MCPController` runs, from the same module, so the two federation
+    # transports cannot refuse the same malformed call differently.
+    # `authorize_tool_call/2` has already run above; argument policy never
+    # front-runs capability policy.
+    result = ToolArguments.dispatch(tool, args, context)
     elapsed = System.monotonic_time(:millisecond) - start_time
 
     case result do
