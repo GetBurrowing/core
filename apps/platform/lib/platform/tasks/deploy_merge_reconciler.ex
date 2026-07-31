@@ -58,6 +58,105 @@ defmodule Platform.Tasks.DeployMergeReconciler do
   indefinitely (recorded on the org's process-patterns page). One derivation
   of "which plan is live", used everywhere.
 
+  ## The transitional refusal branch, and how to know when it can go
+
+  `ask/5` splits on whether the gate RECORDS a deploy branch. A gate minted
+  before `DeployStageBuilder.repo_validation/2` began writing `"branch"`
+  does not, and `refuse/2` leaves it pending at `warning` rather than
+  guessing a name. That branch is transitional and its population is
+  bounded: gates with a nil payload were never this sweeper's business, and
+  scoped payloads exist only from `d63abdc0` (production 20:47Z
+  2026-07-31), so only gates minted between that deploy and the recording
+  change landing can reach it. It drains as those tasks finish.
+
+  A transitional path with no signal for "no longer needed" becomes
+  permanent. So it is COUNTABLE. `unrecorded_branch_gates/0` returns the
+  live gates that would reach `refuse/2`, and `handle_info(:tick, …)` logs
+  one `info` per sweep naming the count while it is non-zero — the
+  condition announces itself rather than waiting to be queried. When it
+  reaches zero and stays there, `refuse/2` and the `present?/1` split in
+  `ask/5` can be deleted along with the tests that pin them.
+
+  ### It counts what the sweeper REFUSES, not what lacks a key
+
+  `refuse/2` fires on `not present?/1` — an absent `"branch"` key, a key
+  written as `nil`, and a key holding `""` or whitespace are all "not
+  recorded". A counter keyed on key-PRESENCE would therefore report zero
+  while a blank-branch row was still routing through `refuse/2` every five
+  minutes, and deleting the branch on that zero would send `""` to
+  `gh pr list --head`. The count is only worth having if reaching zero
+  means the branch is unreachable, so it shares `present?/1` with the code
+  it is reporting on rather than approximating it.
+
+  It is scoped through `candidates/0`, for the same reason: the counter and
+  the sweeper cannot disagree about which rows are live if there is one
+  query that decides. One consequence is deliberate and worth naming — a
+  countable row whose repo_url will not normalize is counted here even
+  though `gate_repo/1` skips it before `refuse/2` is reached. That
+  over-counts, never under-counts, and such a row is hung on both axes
+  anyway.
+
+  ### The retirement query
+
+  Answerable without running the app. `stages` is the table name — there is
+  no `plan_stages` — confirmed against
+  `priv/repo/migrations/20260320120000_create_tasks_tables.exs`, and
+  `evaluation_payload` is `jsonb` (`20260505000000_…`), which is what makes
+  the `?` operator legal. The `LATERAL` join is `Tasks.current_plan/1`
+  written out: without it this is an upper bound that also counts gates on
+  superseded plan versions.
+
+  This exact text is extracted from this moduledoc and executed by
+  `deploy_merge_reconciler_test.exs`, which asserts it returns the same
+  count as `unrecorded_branch_gates/0` against a fixture holding one of
+  every row the count excludes. A documented query nobody runs is a guard
+  nobody watched fire.
+
+  ```sql
+  SELECT count(*)
+    FROM validations v
+    JOIN stages s ON s.id = v.stage_id
+    JOIN plans p ON p.id = s.plan_id
+    JOIN LATERAL (
+           SELECT p2.id
+             FROM plans p2
+            WHERE p2.task_id = p.task_id
+              AND p2.status IN ('approved', 'completed')
+            ORDER BY p2.version DESC
+            LIMIT 1
+         ) cur ON cur.id = p.id
+   WHERE v.kind = 'pr_merged'
+     AND v.status = 'pending'
+     AND s.status = 'running'
+     AND v.evaluation_payload IS NOT NULL
+     AND (NOT (v.evaluation_payload ? 'branch')
+          OR ((v.evaluation_payload ? 'branch')
+              AND btrim(coalesce(v.evaluation_payload ->> 'branch', '')) = ''));
+  ```
+
+  The two disjuncts are kept disjoint on purpose. Folding them into one
+  `coalesce(… ->> 'branch', '') = ''` would be shorter and would make the
+  first disjunct deletable with no change in result — a predicate that
+  cannot be shown to matter.
+
+  ## What recording does NOT close
+
+  Recording the branch on the gate fixes the reconciler. The class is
+  wider, and naming the rest is the point of writing it down here:
+
+    * `stack_deployer.ex:1193` — `member_branch_for/1`, the stack rollup
+      path, still derives.
+    * `heartbeat_scheduler.ex` lines 438, 1272 and 1811 — prompt rendering
+      still derives.
+
+  Neither is changed here: `heartbeat_scheduler.ex` belongs to task
+  019fb949 and is out of this ticket's scope, and `StackDeployer` drives
+  the rollup path rather than this one. They are the named follow-up. The
+  class is not closed until those read the recorded branch too, and a
+  chokepoint is not a fix — `member_slug/1` has moved twice, and each move
+  re-pointed every consumer at a different name for tasks that had already
+  pushed under the old one.
+
   ## Not verifiable from the box this was written on
 
   Whether the deployed `core-platform` container can reach GitHub and holds a
@@ -75,7 +174,6 @@ defmodule Platform.Tasks.DeployMergeReconciler do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Platform.Orchestration.HeartbeatScheduler
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.DeployMergeReconciler.GhMergeRunner
@@ -134,6 +232,163 @@ defmodule Platform.Tasks.DeployMergeReconciler do
     |> Keyword.get(:merge_runner, @default_runner)
   end
 
+  @doc """
+  The live gates that would reach `refuse/2` — the retirement counter for
+  the transitional no-recorded-branch path.
+
+  Returns `%{count: n, validation_ids: ids}`. Zero, sustained, means
+  `refuse/2` is unreachable and can be deleted; see the moduledoc for the
+  equivalent SQL and for why "unrecorded" means `not present?/1` rather
+  than a missing key.
+
+  Scoped through `candidates/0`, so this and the sweep cannot disagree
+  about which rows are live.
+  """
+  @spec unrecorded_branch_gates() :: %{
+          count: non_neg_integer(),
+          validation_ids: [String.t()]
+        }
+  def unrecorded_branch_gates do
+    ids =
+      candidates()
+      |> Enum.filter(&unrecorded_branch?(&1.validation))
+      |> Enum.map(& &1.validation.id)
+
+    %{count: length(ids), validation_ids: ids}
+  end
+
+  # `present?/1` and not `Map.has_key?/2`, deliberately — this must agree
+  # with what `ask/5` refuses, or the zero it reports is about a different
+  # set than the branch it licenses deleting. A nil payload is a legacy
+  # unscoped row and was never in scope.
+  defp unrecorded_branch?(%Validation{evaluation_payload: payload}) when is_map(payload),
+    do: not branch_recorded?(payload)
+
+  defp unrecorded_branch?(_), do: false
+
+  @doc """
+  Whether a gate's `evaluation_payload` RECORDS a deploy branch.
+
+  The one predicate three call sites share: `ask/5`'s split between
+  polling and `refuse/2`, `unrecorded_branch_gates/0`'s count, and
+  `mix suite.deploy.scope_gate`'s refusal to overwrite a fact that is
+  already written down.
+
+  It is `present?/1` and not `Map.has_key?/2`. An absent `"branch"` key, a
+  key written as `nil`, and a key holding `""` or whitespace are all "not
+  recorded" — the sweeper refuses all three and the counter counts all
+  three, so the repair tool has to be willing to FIX all three. Keying the
+  overwrite refusal on key presence instead would make the blank-branch
+  row — a row the counter reports and the sweeper declines to poll every
+  five minutes — unrepairable by the very command the refusal's log line
+  names.
+  """
+  @spec branch_recorded?(map() | nil) :: boolean()
+  def branch_recorded?(payload) when is_map(payload), do: present?(Map.get(payload, "branch"))
+
+  def branch_recorded?(_), do: false
+
+  @doc """
+  The live candidate row with this validation id, or a NAMED reason why
+  there is not one.
+
+  `candidates/0` DECIDES — this looks the id up in that list rather than
+  re-stating its five conditions, so an operator tool and the sweeper
+  cannot disagree about which gates are live. Two copies of "which gates
+  are live" is the defect `StackDeployer.review_readiness/1` shipped once
+  (org process-patterns page, "StackDeployer.review_ready? Scoping Bug");
+  one of them drifted and the other kept a task hung.
+
+  `why_not_live/1` only NAMES a decision `candidates/0` has already made.
+  If it ever drifts from the query the worst case is a misleading message
+  — never a wrong answer — and it falls back to `:not_a_live_candidate`
+  rather than inventing a reason it cannot evidence.
+
+  Reasons: `:malformed_id`, `:not_found`, `:not_pr_merged`, `:not_pending`,
+  `:stage_not_running`, `:superseded_plan`, `:not_a_live_candidate`.
+  """
+  @spec live_gate(term()) :: {:ok, map()} | {:error, atom()}
+  def live_gate(validation_id) do
+    # The id here arrives from a COMMAND LINE (`mix suite.deploy.scope_gate`)
+    # and `why_not_live/1`'s `where: v.id == ^id` raises
+    # `Ecto.Query.CastError` on a malformed value exactly as `Repo.get/2`
+    # does, so it needs a guard — which is also what
+    # `repo_lookup_boundary_test.exs` demands of a new counted `Repo.one`.
+    #
+    # `Platform.UUID.valid?/1` and not `Platform.Types.UUIDv7.cast/1`, on the
+    # ONE-DERIVATION argument rather than a safety one. Probed on this
+    # checkout: `UUIDv7.cast("higginshigginsxx")` is `:error`, so it does NOT
+    # carry the 16-byte-binary hole `Platform.UUID`'s moduledoc records
+    # against bare `Ecto.UUID.cast/1`. Both are safe. `Platform.UUID` is the
+    # module that names itself "the canonical UUID predicate for boundary
+    # lookups", it is what the boundary test's triage instruction cites, and
+    # a second spelling of a guard is how the two drift apart later.
+    if Platform.UUID.valid?(validation_id) do
+      # Persisted ids are lowercase; an operator pasting an uppercase uuid
+      # would otherwise miss the `Enum.find/2` and be told the row is not a
+      # live candidate when it is.
+      id = String.downcase(validation_id)
+
+      case Enum.find(candidates(), &(&1.validation.id == id)) do
+        nil -> {:error, why_not_live(id)}
+        row -> {:ok, row}
+      end
+    else
+      {:error, :malformed_id}
+    end
+  end
+
+  defp why_not_live(id) do
+    row =
+      Repo.one(
+        from(v in Validation,
+          left_join: s in Stage,
+          on: s.id == v.stage_id,
+          left_join: p in Plan,
+          on: p.id == s.plan_id,
+          where: v.id == ^id,
+          select: %{
+            kind: v.kind,
+            status: v.status,
+            stage_status: s.status,
+            plan_id: p.id,
+            task_id: p.task_id
+          }
+        )
+      )
+
+    cond do
+      is_nil(row) -> :not_found
+      row.kind != "pr_merged" -> :not_pr_merged
+      row.status != "pending" -> :not_pending
+      row.stage_status != "running" -> :stage_not_running
+      is_nil(row.task_id) -> :not_a_live_candidate
+      current_plan_id(row.task_id) != row.plan_id -> :superseded_plan
+      true -> :not_a_live_candidate
+    end
+  end
+
+  @doc false
+  @spec report_unrecorded_branch_gates(%{
+          count: non_neg_integer(),
+          validation_ids: [String.t()]
+        }) :: :ok
+  # Takes the tally rather than computing it, so the line the retirement
+  # condition announces is testable without starting the GenServer or
+  # letting `sweep/0` shell out to `gh` from a sandboxed test process.
+  def report_unrecorded_branch_gates(%{count: 0}), do: :ok
+
+  def report_unrecorded_branch_gates(%{count: count, validation_ids: ids}) do
+    Logger.info(
+      "[deploy_merge_reconciler] #{count} pending pr_merged gate(s) record no deploy " <>
+        "branch and are being refused rather than polled: #{Enum.join(ids, ", ")}. " <>
+        "Scope each with `mix suite.deploy.scope_gate <id> --repo-url <url> --branch " <>
+        "<branch>`; when this count reaches zero the refusal branch can be deleted."
+    )
+
+    :ok
+  end
+
   @impl true
   def init(_opts) do
     schedule_next_tick()
@@ -147,6 +402,10 @@ defmodule Platform.Tasks.DeployMergeReconciler do
     if count > 0 do
       Logger.info("[deploy_merge_reconciler] passed #{count} pr_merged gate(s) by polling")
     end
+
+    # ONE line per sweep, not one per gate, and only while the transitional
+    # population is non-empty.
+    report_unrecorded_branch_gates(unrecorded_branch_gates())
 
     schedule_next_tick()
     {:noreply, state}
@@ -209,19 +468,61 @@ defmodule Platform.Tasks.DeployMergeReconciler do
 
   # ── One gate ────────────────────────────────────────────────────────────
 
-  defp reconcile(%{validation: validation, task: task}, runner) do
+  defp reconcile(%{validation: validation}, runner) do
     case gate_repo(validation) do
       :skip ->
         0
 
-      {:ok, %{target: target, slug: slug}} ->
-        ask(runner, validation, task, target, slug)
+      {:ok, %{target: target, slug: slug, branch: branch}} ->
+        ask(runner, validation, branch, target, slug)
     end
   end
 
-  defp ask(runner, validation, task, target, slug) do
-    branch = branch_for(task)
+  # The branch is READ from the gate. `ask/5` no longer takes the task,
+  # because there is nothing left to compute from it.
+  defp ask(runner, validation, branch, target, slug) do
+    if present?(branch) do
+      poll(runner, validation, branch, target, slug)
+    else
+      refuse(validation, slug)
+    end
+  end
 
+  # A scoped gate minted before `DeployStageBuilder.repo_validation/2` began
+  # recording the branch. Deriving one here is the thing this module stopped
+  # doing, and the reason is not style:
+  #
+  # `gh pr list --head` answers about a BRANCH, and GitHub returns one PR per
+  # branch, so a derivation that produces the wrong name is invisible to both
+  # the runner and GitHub. Nothing downstream can fail closed on it. That
+  # makes a derived branch a source of WRONG ATTRIBUTION, and
+  # `changelog.ex:253-262` already states this codebase's rule for that case:
+  # "A wrong attribution is strictly worse than no attribution." A refusal
+  # hangs the gate visibly at `warning`; a bad derivation marks unmerged code
+  # as shipped and the task reaches `done` having deployed nothing.
+  #
+  # The population is finite and hours wide. Gates with a nil payload were
+  # already skipped above; scoped payloads only exist from `d63abdc0`
+  # (production 20:47Z 2026-07-31). So this clause can only be reached by a
+  # gate minted between that deploy and this change landing.
+  #
+  # The named remedy — `mix suite.deploy.scope_gate` — is minted by stage 4 of
+  # this same plan and ships in the same change; it writes the missing
+  # `"branch"` onto the payload without passing the gate, after which the next
+  # sweep polls it normally.
+  defp refuse(validation, slug) do
+    Logger.warning(
+      "[deploy_merge_reconciler] validation #{validation.id} on #{slug} records no deploy " <>
+        "branch; refusing to derive one and leaving the gate pending — a derived branch " <>
+        "cannot be checked by the runner or by GitHub, so a wrong one would pass this gate " <>
+        "silently. Record it with " <>
+        "`mix suite.deploy.scope_gate #{validation.id} --repo-url <url> --branch <branch>`."
+    )
+
+    0
+  end
+
+  defp poll(runner, validation, branch, target, slug) do
     case runner.merged_pr(%{repo: target, branch: branch}) do
       {:ok, nil} ->
         # `debug` deliberately. This fires every five minutes for every open
@@ -296,9 +597,15 @@ defmodule Platform.Tasks.DeployMergeReconciler do
   # human declared). `gh -R` is handed the URL, matching
   # `AutoMerger.execute_merge/3`; the slug is what lands in evidence, so the
   # polled and delivered paths agree on how a repository is named.
+  #
+  # `"branch"` is read the same way and deliberately NOT defaulted: absent
+  # and present-but-empty both have to reach `ask/5` as "not recorded", so the
+  # refusal is what decides, rather than a default quietly standing in for a
+  # fact nobody wrote down.
   defp gate_repo(%Validation{evaluation_payload: payload}) when is_map(payload) do
     repo_url = Map.get(payload, "repo_url")
     slug = Map.get(payload, "repo") || Platform.Tasks.RepoRef.slug(repo_url)
+    branch = Map.get(payload, "branch")
 
     cond do
       # A gate with no canonical slug is a DECLARED repository whose URL
@@ -310,10 +617,10 @@ defmodule Platform.Tasks.DeployMergeReconciler do
         :skip
 
       present?(repo_url) ->
-        {:ok, %{target: repo_url, slug: slug}}
+        {:ok, %{target: repo_url, slug: slug, branch: branch}}
 
       true ->
-        {:ok, %{target: slug, slug: slug}}
+        {:ok, %{target: slug, slug: slug, branch: branch}}
     end
   end
 
@@ -326,9 +633,26 @@ defmodule Platform.Tasks.DeployMergeReconciler do
 
   defp present?(value), do: is_binary(value) and String.trim(value) != ""
 
-  # The branch name is `HeartbeatScheduler.member_slug/1`'s answer, not a
-  # second derivation of it. The dispatch prompt tells the executor to push
-  # `task/<member_slug>`; if this module computed its own slug the poller
-  # would ask about a branch nobody pushed and report "not merged" forever.
-  defp branch_for(%Task{} = task), do: "task/" <> HeartbeatScheduler.member_slug(task)
+  # This module used to end in `branch_for/1`, which computed
+  # `"task/" <> HeartbeatScheduler.member_slug(task)`. Its comment argued that
+  # routing through the single slug CHOKEPOINT was the guard: if this module
+  # derived its own name, the poller would ask about a branch nobody pushed.
+  #
+  # The argument was sound and the guard still failed, because routing through
+  # a chokepoint does not help when the chokepoint MOVES. `member_slug/1` has
+  # changed shape twice — most recently in task 019fb949 / PR #647, which made
+  # it unconditionally full-uuid — and each move silently re-pointed every
+  # consumer at a different branch name for tasks that had already pushed
+  # under the old one. A chokepoint keeps N derivations agreeing with each
+  # other; it does not keep them agreeing with a branch that was pushed in the
+  # past. Only recording the name at mint time does that.
+  #
+  # So the branch is now READ from the gate — `DeployStageBuilder`
+  # `repo_validation/2` writes it when the deploy stage is built (stage 1 of
+  # this plan) and `gate_repo/1` reads it back. When it is absent the sweeper
+  # refuses rather than guessing; see `refuse/2`.
+  #
+  # The derivations this change does NOT close, and the retirement condition
+  # for the refusal branch above, are recorded in the moduledoc — see
+  # "What recording does NOT close" and "The retirement query".
 end

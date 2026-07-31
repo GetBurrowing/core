@@ -1,24 +1,48 @@
 defmodule Platform.Tasks.DeployStageBuilderTest do
-  use ExUnit.Case, async: true
+  # DB-backed since task 019fba18 stage 1: the recorded-branch tests build
+  # REAL task rows with pinned ids so the value the gate records is the value
+  # a task in the database produces, not a value a hand-built struct produces.
+  # Everything else in this file stays a pure map → map assertion.
+  use Platform.DataCase, async: true
 
+  alias Platform.Tasks
   alias Platform.Tasks.DeployStageBuilder
+  alias Platform.Tasks.StackDeployer
+  alias Platform.Tasks.Stacks
+  alias Platform.Tasks.Task
 
-  describe "build_stage/2 — none" do
+  # The branch every scoped `pr_merged` gate records. A literal here, not
+  # `StackDeployer.member_branch_for/1`: these tests assert what the builder
+  # WRITES, so the input must be a value this file controls outright.
+  @recorded_branch "task/019fba18-d074-7185-8e0e-032ee6d02fbe"
+
+  describe "build_stage/3 — none" do
     test "returns :skip" do
-      assert DeployStageBuilder.build_stage(%{"type" => "none"}, 3) == :skip
+      assert DeployStageBuilder.build_stage(%{"type" => "none"}, 3, @recorded_branch) == :skip
     end
   end
 
   # Bug #5 (task 019f708f): stack members with a live rollup branch
-  # resolve to `no_op_wait_for_rollup`. `build_stage/2` must emit NO
+  # resolve to `no_op_wait_for_rollup`. `build_stage/3` must emit NO
   # stage — the stack sweep opens ONE rollup PR for the whole stack
   # via `StackDeployer.maybe_open_stack_pr/1`, so a per-member deploy
   # stage would either shatter the rollup (pr_merge) or dispatch a
   # deploy subagent with nothing to do.
-  describe "build_stage/2 — no_op_wait_for_rollup (bug #5)" do
+  describe "build_stage/3 — no_op_wait_for_rollup (bug #5)" do
     test "returns :skip at any position" do
-      assert DeployStageBuilder.build_stage(%{"type" => "no_op_wait_for_rollup"}, 3) == :skip
-      assert DeployStageBuilder.build_stage(%{"type" => "no_op_wait_for_rollup"}, 99) == :skip
+      assert DeployStageBuilder.build_stage(
+               %{"type" => "no_op_wait_for_rollup"},
+               3,
+               @recorded_branch
+             ) ==
+               :skip
+
+      assert DeployStageBuilder.build_stage(
+               %{"type" => "no_op_wait_for_rollup"},
+               99,
+               @recorded_branch
+             ) ==
+               :skip
     end
 
     test "validate_strategy accepts no_op_wait_for_rollup" do
@@ -30,7 +54,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
     end
   end
 
-  describe "build_stage/2 — pr_merge" do
+  describe "build_stage/3 — pr_merge" do
     test "auto_merge false: emits a single pr_merged validation" do
       strategy = %{
         "type" => "pr_merge",
@@ -40,7 +64,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         }
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 4)
+      result = DeployStageBuilder.build_stage(strategy, 4, @recorded_branch)
 
       assert result.name == "Deploy: PR merge"
       assert result.position == 4
@@ -58,7 +82,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         "config" => %{"auto_merge" => true, "merge_method" => "squash"}
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 1)
+      result = DeployStageBuilder.build_stage(strategy, 1, @recorded_branch)
 
       assert result.validations == [%{kind: "pr_merged"}]
       assert result.description =~ "Auto-merge is enabled"
@@ -73,7 +97,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         "config" => %{"auto_merge" => true}
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 1)
+      result = DeployStageBuilder.build_stage(strategy, 1, @recorded_branch)
       assert result.description =~ "merge method: squash"
     end
 
@@ -83,13 +107,13 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         "config" => %{"require_review_approval" => true}
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 1)
+      result = DeployStageBuilder.build_stage(strategy, 1, @recorded_branch)
       assert result.description =~ "PR review approval is required"
     end
 
     test "works with empty config (defaults to single pr_merged validation)" do
       strategy = %{"type" => "pr_merge"}
-      result = DeployStageBuilder.build_stage(strategy, 2)
+      result = DeployStageBuilder.build_stage(strategy, 2, @recorded_branch)
 
       assert result.name == "Deploy: PR merge"
       assert result.position == 2
@@ -98,7 +122,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
     end
   end
 
-  describe "build_stage/2 — docker_deploy" do
+  describe "build_stage/3 — docker_deploy" do
     test "returns stage with ci_passed and test_pass validations" do
       strategy = %{
         "type" => "docker_deploy",
@@ -108,7 +132,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         }
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 5)
+      result = DeployStageBuilder.build_stage(strategy, 5, @recorded_branch)
 
       assert result.name == "Deploy: Docker deploy"
       assert result.position == 5
@@ -120,7 +144,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
 
     test "works without host/image in config" do
       strategy = %{"type" => "docker_deploy", "config" => %{}}
-      result = DeployStageBuilder.build_stage(strategy, 1)
+      result = DeployStageBuilder.build_stage(strategy, 1, @recorded_branch)
 
       assert result.name == "Deploy: Docker deploy"
       assert result.validations == [%{kind: "ci_passed"}, %{kind: "test_pass"}]
@@ -129,14 +153,14 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
     end
   end
 
-  describe "build_stage/2 — fly" do
+  describe "build_stage/3 — fly" do
     test "returns stage with ci_passed and test_pass validations" do
       strategy = %{
         "type" => "fly",
         "config" => %{"app" => "my-fly-app"}
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 3)
+      result = DeployStageBuilder.build_stage(strategy, 3, @recorded_branch)
 
       assert result.name == "Deploy: Fly deploy"
       assert result.position == 3
@@ -147,14 +171,14 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
 
     test "works without app in config" do
       strategy = %{"type" => "fly", "config" => %{}}
-      result = DeployStageBuilder.build_stage(strategy, 1)
+      result = DeployStageBuilder.build_stage(strategy, 1, @recorded_branch)
 
       assert result.name == "Deploy: Fly deploy"
       refute result.description =~ "Fly app:"
     end
   end
 
-  describe "build_stage/2 — skill_driven" do
+  describe "build_stage/3 — skill_driven" do
     test "returns stage with manual_approval validation" do
       strategy = %{
         "type" => "skill_driven",
@@ -162,7 +186,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         "config" => %{}
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 3)
+      result = DeployStageBuilder.build_stage(strategy, 3, @recorded_branch)
 
       assert result.name == "Deploy: Skill execution"
       assert result.position == 3
@@ -172,7 +196,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
 
     test "handles missing skill_id" do
       strategy = %{"type" => "skill_driven", "config" => %{}}
-      result = DeployStageBuilder.build_stage(strategy, 1)
+      result = DeployStageBuilder.build_stage(strategy, 1, @recorded_branch)
 
       assert result.description =~ "No skill ID specified"
     end
@@ -183,15 +207,15 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         "config" => %{"context" => "Deploy to staging first"}
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 1)
+      result = DeployStageBuilder.build_stage(strategy, 1, @recorded_branch)
       assert result.description =~ "Deploy to staging first"
     end
   end
 
-  describe "build_stage/2 — manual" do
+  describe "build_stage/3 — manual" do
     test "returns stage with manual_approval validation" do
       strategy = %{"type" => "manual"}
-      result = DeployStageBuilder.build_stage(strategy, 2)
+      result = DeployStageBuilder.build_stage(strategy, 2, @recorded_branch)
 
       assert result.name == "Deploy: Manual"
       assert result.position == 2
@@ -200,7 +224,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
     end
   end
 
-  describe "build_stage/2 — project_files" do
+  describe "build_stage/3 — project_files" do
     test "returns stage with test_pass validation and description mentions the folder" do
       strategy = %{
         "type" => "project_files",
@@ -211,7 +235,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         }
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 3)
+      result = DeployStageBuilder.build_stage(strategy, 3, @recorded_branch)
 
       assert result.name == "Deploy: Project files"
       assert result.position == 3
@@ -226,7 +250,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
 
     test "defaults folder to Deliverables when config omits it" do
       strategy = %{"type" => "project_files", "config" => %{}}
-      result = DeployStageBuilder.build_stage(strategy, 1)
+      result = DeployStageBuilder.build_stage(strategy, 1, @recorded_branch)
 
       assert result.name == "Deploy: Project files"
       assert result.validations == [%{kind: "test_pass"}]
@@ -237,7 +261,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
 
     test "works with empty strategy (no config key)" do
       strategy = %{"type" => "project_files"}
-      result = DeployStageBuilder.build_stage(strategy, 2)
+      result = DeployStageBuilder.build_stage(strategy, 2, @recorded_branch)
 
       assert result.name == "Deploy: Project files"
       assert result.position == 2
@@ -245,7 +269,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
     end
   end
 
-  describe "build_stage/2 — position" do
+  describe "build_stage/3 — position" do
     test "uses the provided position for all strategy types" do
       for {type, pos} <- [
             {"pr_merge", 1},
@@ -254,7 +278,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
             {"manual", 42},
             {"project_files", 6}
           ] do
-        result = DeployStageBuilder.build_stage(%{"type" => type}, pos)
+        result = DeployStageBuilder.build_stage(%{"type" => type}, pos, @recorded_branch)
         assert result.position == pos, "Expected position #{pos} for type #{type}"
       end
     end
@@ -475,7 +499,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
     # Stage 2 IS the boundary move: a declared repo set now changes the
     # stage. The assertion is kept, flipped, rather than deleted, so the
     # transition is visible in the file's history.
-    test "build_stage/2 IS changed by the presence of a repo set" do
+    test "build_stage/3 IS changed by the presence of a repo set" do
       with_repos =
         DeployStageBuilder.build_stage(
           %{
@@ -486,10 +510,16 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
               %{"repo_url" => "Startup-Suite/openclaw-suite-channel", "ci" => "none"}
             ]
           },
-          4
+          4,
+          @recorded_branch
         )
 
-      without = DeployStageBuilder.build_stage(%{"type" => "pr_merge", "config" => %{}}, 4)
+      without =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}},
+          4,
+          @recorded_branch
+        )
 
       refute with_repos == without
       assert length(with_repos.validations) == 2
@@ -504,7 +534,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
   # all-must-merge with no engine change — and, more importantly, makes
   # the partial state a row you can look at (one `passed`, one `pending`)
   # instead of a counter hidden inside a single gate that is neither.
-  describe "build_stage/2 — pr_merge repo-scoped gates" do
+  describe "build_stage/3 — pr_merge repo-scoped gates" do
     @core %{
       "repo_url" => "https://github.com/Startup-Suite/core",
       "slug" => "Startup-Suite/core",
@@ -528,7 +558,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         "repos" => [@core]
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 4)
+      result = DeployStageBuilder.build_stage(strategy, 4, @recorded_branch)
 
       # Everything the unscoped stage asserted still holds.
       assert result.name == "Deploy: PR merge"
@@ -550,7 +580,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       # EVERY task has. Pinned as an equality, not a substring, so nothing
       # can satisfy it by appending single-repo phrasing to enumerated text.
       assert result.description ==
-               DeployStageBuilder.build_stage(Map.delete(strategy, "repos"), 4).description,
+               DeployStageBuilder.build_stage(Map.delete(strategy, "repos"), 4, @recorded_branch).description,
              "a one-repo set must render the same description as no declared repo set"
 
       refute result.description =~ "This deploy covers"
@@ -563,6 +593,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       assert validation.evaluation_payload == %{
                "repo" => "Startup-Suite/core",
                "repo_url" => "https://github.com/Startup-Suite/core",
+               "branch" => @recorded_branch,
                "ci" => "required",
                "auto_merge" => false,
                "merge_method" => "squash"
@@ -576,7 +607,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         "repos" => [@core, @channel]
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 7)
+      result = DeployStageBuilder.build_stage(strategy, 7, @recorded_branch)
 
       assert length(result.validations) == 2
       assert Enum.all?(result.validations, &(&1.kind == "pr_merged"))
@@ -589,7 +620,11 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       # Reversing the declaration reverses the gates — the order is the
       # declared order, not an incidental sort.
       reversed =
-        DeployStageBuilder.build_stage(%{strategy | "repos" => [@channel, @core]}, 7)
+        DeployStageBuilder.build_stage(
+          %{strategy | "repos" => [@channel, @core]},
+          7,
+          @recorded_branch
+        )
 
       assert Enum.map(reversed.validations, & &1.evaluation_payload["repo"]) == [
                "Startup-Suite/claude-code-suite-channel",
@@ -601,7 +636,8 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       result =
         DeployStageBuilder.build_stage(
           %{"type" => "pr_merge", "config" => %{}, "repos" => [@core, @channel]},
-          1
+          1,
+          @recorded_branch
         )
 
       assert result.description =~ "Startup-Suite/core"
@@ -631,7 +667,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         ]
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 1)
+      result = DeployStageBuilder.build_stage(strategy, 1, @recorded_branch)
 
       [core_gate, channel_gate] = result.validations
 
@@ -648,7 +684,8 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       result =
         DeployStageBuilder.build_stage(
           %{"type" => "pr_merge", "config" => %{}, "repos" => [@core, @channel]},
-          1
+          1,
+          @recorded_branch
         )
 
       assert result.description =~
@@ -684,7 +721,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         ]
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 1)
+      result = DeployStageBuilder.build_stage(strategy, 1, @recorded_branch)
 
       assert length(result.validations) == 2,
              "an unresolvable repo must not be silently dropped from the gate set"
@@ -711,7 +748,8 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
             "config" => %{},
             "repos" => [%{"repo_url" => "git@github.com:Startup-Suite/core.git"}]
           },
-          1
+          1,
+          @recorded_branch
         )
 
       assert [gate] = result.validations
@@ -733,7 +771,8 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
               }
             ]
           },
-          1
+          1,
+          @recorded_branch
         )
 
       [core_gate, wiki_gate] = result.validations
@@ -754,7 +793,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         "config" => %{"require_review_approval" => false, "auto_merge" => false}
       }
 
-      result = DeployStageBuilder.build_stage(strategy, 4)
+      result = DeployStageBuilder.build_stage(strategy, 4, @recorded_branch)
 
       assert result.validations == [%{kind: "pr_merged"}],
              "an undeclared repo set must still emit exactly one unscoped gate, " <>
@@ -770,7 +809,12 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
     # ZERO validations is `:all_passed` per `PlanEngine.stage_verdict/1`,
     # i.e. it auto-passes. Nothing may produce one.
     test "a present-but-empty repos list never yields a validation-free stage" do
-      result = DeployStageBuilder.build_stage(%{"type" => "pr_merge", "repos" => []}, 1)
+      result =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "repos" => []},
+          1,
+          @recorded_branch
+        )
 
       refute result.validations == [],
              "a deploy stage with zero validations auto-passes (stage_verdict/1 " <>
@@ -783,11 +827,214 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       result =
         DeployStageBuilder.build_stage(
           %{"type" => "pr_merge", "config" => %{}, "repos" => [@core, @channel]},
-          1
+          1,
+          @recorded_branch
         )
 
       assert Enum.map(result.validations, & &1.kind) == ["pr_merged", "pr_merged"]
     end
+  end
+
+  # ── The recorded branch (task 019fba18 stage 1) ─────────────────────────
+  #
+  # The gate RECORDS the branch this task pushes instead of leaving the
+  # consumer to re-derive one. Every expectation below is a STRING LITERAL.
+  # It is deliberately NOT `StackDeployer.member_branch_for(task)` on both
+  # sides: `origin/task/019fb949` commit `4849cbd1` rewrote
+  # `deploy_merge_reconciler_test.exs:183` into exactly that shape — an
+  # expectation computed by the function under test — which silenced a
+  # helper that had gone red for the right reason. An assertion that moves
+  # with the code it checks cannot fail.
+  #
+  # The derivation appears only as the INPUT to `build_stage/3`, which is
+  # what production does; the output is pinned against a literal typed out by
+  # hand from the fixture's pinned id.
+  describe "build_stage/3 — the recorded branch" do
+    @core_entry %{
+      "repo_url" => "https://github.com/Startup-Suite/core",
+      "slug" => "Startup-Suite/core",
+      "ci" => "required",
+      "role" => "primary",
+      "config" => %{}
+    }
+
+    @bridge_entry %{
+      "repo_url" => "https://github.com/Startup-Suite/claude-code-suite-channel",
+      "slug" => "Startup-Suite/claude-code-suite-channel",
+      "ci" => "none",
+      "role" => "secondary",
+      "config" => %{"auto_merge" => false}
+    }
+
+    test "every scoped gate carries the branch, and all of them carry the SAME one" do
+      strategy = %{
+        "type" => "pr_merge",
+        "config" => %{"auto_merge" => false},
+        "repos" => [@core_entry, @bridge_entry]
+      }
+
+      result = DeployStageBuilder.build_stage(strategy, 7, @recorded_branch)
+
+      assert [core_gate, bridge_gate] = result.validations
+
+      assert core_gate.evaluation_payload["branch"] == @recorded_branch
+      assert bridge_gate.evaluation_payload["branch"] == @recorded_branch
+
+      # One branch, N repositories. A per-repo branch would mean the task
+      # pushed different code to each remote, which it does not.
+      assert core_gate.evaluation_payload["branch"] ==
+               bridge_gate.evaluation_payload["branch"],
+             "one task pushes ONE branch — every gate on the stage records it"
+
+      # The key is present, not merely non-nil-when-asked. `Map.get/2`
+      # answers nil for an absent key too, and the stage-2 consumer
+      # distinguishes "recorded as nil" from "never recorded".
+      assert Map.has_key?(core_gate.evaluation_payload, "branch")
+      assert Map.has_key?(bridge_gate.evaluation_payload, "branch")
+    end
+
+    test "records the full-uuid branch for a NON-stack task with a pinned id" do
+      id = "019fba18-d074-7185-8e0e-032ee6d02fbe"
+      task = task_with_pinned_id!(id)
+
+      assert is_nil(task.stack_id)
+
+      result =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@core_entry]},
+          1,
+          StackDeployer.member_branch_for(task)
+        )
+
+      assert [gate] = result.validations
+
+      # Typed out by hand from `id` above. Not a call, not an interpolation
+      # of `member_slug/1`.
+      assert gate.evaluation_payload["branch"] ==
+               "task/019fba18-d074-7185-8e0e-032ee6d02fbe"
+    end
+
+    test "records the full-uuid branch for a STACK MEMBER with a pinned id" do
+      id = "019fba18-d074-7185-8e0e-032ee6d02fbf"
+      task = task_with_pinned_id!(id, stacked?: true)
+
+      refute is_nil(task.stack_id)
+
+      result =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@core_entry]},
+          1,
+          StackDeployer.member_branch_for(task)
+        )
+
+      assert [gate] = result.validations
+
+      assert gate.evaluation_payload["branch"] ==
+               "task/019fba18-d074-7185-8e0e-032ee6d02fbf"
+    end
+
+    # THE defect this whole task exists to close, pinned at the layer that
+    # mints the value. The first eight hex characters of a UUIDv7 are the
+    # high 32 bits of its 48-bit millisecond timestamp — a ~65-second
+    # bucket, not an identifier. Live on 2026-07-31: `019fb90f-36e3-…` and
+    # `019fb90f-6226-…` both truncate to `019fb90f`, and `task/019fb90f`
+    # carries merged PR #648. If the recorded values ever collapse, one
+    # task's deploy gate can be closed by another task's merge — and the
+    # consumer cannot see the collision, because `gh pr list --head` answers
+    # about a branch and GitHub returns one PR per branch.
+    test "two tasks sharing a first hyphen-segment record DIFFERENT branches" do
+      id_a = "019fb90f-36e3-7fd6-a416-f128f4c0190f"
+      id_b = "019fb90f-6226-7fd6-a416-f128f4c0190f"
+
+      task_a = task_with_pinned_id!(id_a)
+      task_b = task_with_pinned_id!(id_b)
+
+      strategy = %{"type" => "pr_merge", "config" => %{}, "repos" => [@core_entry]}
+
+      [gate_a] =
+        DeployStageBuilder.build_stage(
+          strategy,
+          1,
+          StackDeployer.member_branch_for(task_a)
+        ).validations
+
+      [gate_b] =
+        DeployStageBuilder.build_stage(
+          strategy,
+          1,
+          StackDeployer.member_branch_for(task_b)
+        ).validations
+
+      branch_a = gate_a.evaluation_payload["branch"]
+      branch_b = gate_b.evaluation_payload["branch"]
+
+      refute branch_a == branch_b,
+             "two tasks minted in the same ~65s UUIDv7 bucket recorded the same " <>
+               "branch #{inspect(branch_a)} — one merge would close both gates"
+
+      # Literals, hand-copied from `id_a` / `id_b`.
+      assert branch_a == "task/019fb90f-36e3-7fd6-a416-f128f4c0190f"
+      assert branch_b == "task/019fb90f-6226-7fd6-a416-f128f4c0190f"
+
+      # And neither is the truncated form the code used to produce.
+      refute branch_a == "task/019fb90f"
+      refute branch_b == "task/019fb90f"
+    end
+
+    # The unscoped gate is NOT given a payload. `DeployMergeReconciler`'s
+    # nil-payload clause skips exactly these rows and
+    # `GithubWebhookController.select_unscoped_validation/3` owns them;
+    # handing one a payload would silently move it between owners.
+    test "the unscoped gate is left with NO payload at all" do
+      result =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}},
+          1,
+          @recorded_branch
+        )
+
+      assert result.validations == [%{kind: "pr_merged"}],
+             "an undeclared repo set must still emit a payload-free gate — giving " <>
+               "it a branch would move it out of gate_repo/1's nil-payload clause"
+    end
+  end
+
+  # Real rows, not hand-built structs: `member_branch_for/1` reads
+  # `tasks.stack_id`, which only a persisted row carries honestly.
+  # `Task.changeset/2` does not cast `:id`, so `put_change/3` is the route —
+  # same shape as `stack_deployer_test.exs`'s literal-pinned fixtures.
+  defp task_with_pinned_id!(id, opts \\ []) do
+    uniq = System.unique_integer([:positive])
+
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: "Recorded Branch Project #{uniq}",
+        repo_url: "https://github.com/Startup-Suite/core"
+      })
+
+    stack_id =
+      if Keyword.get(opts, :stacked?, false) do
+        {:ok, stack} =
+          Stacks.create_stack(%{
+            project_id: project.id,
+            slug: "recorded-branch-#{uniq}",
+            name: "Recorded Branch Stack #{uniq}",
+            base_branch: "main",
+            rollup_branch: "stack/recorded-branch-#{uniq}"
+          })
+
+        stack.id
+      end
+
+    %Task{}
+    |> Task.changeset(%{
+      project_id: project.id,
+      title: "Recorded branch task #{uniq}",
+      status: "in_progress",
+      stack_id: stack_id
+    })
+    |> Ecto.Changeset.put_change(:id, id)
+    |> Repo.insert!()
   end
 
   # Task 019fa469 stage 2: `Platform.Orchestration.DispatchPhase` uses
@@ -802,7 +1049,12 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
     test "every strategy that builds a stage names it with the deploy prefix" do
       built =
         for type <- DeployStageBuilder.valid_strategy_types(),
-            stage = DeployStageBuilder.build_stage(%{"type" => type, "config" => %{}}, 3),
+            stage =
+              DeployStageBuilder.build_stage(
+                %{"type" => type, "config" => %{}},
+                3,
+                @recorded_branch
+              ),
             stage != :skip do
           assert DeployStageBuilder.deploy_stage_name?(stage.name),
                  "strategy #{type} minted stage name #{inspect(stage.name)} which does not " <>
@@ -812,7 +1064,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
           type
         end
 
-      # Guard the guard: if `build_stage/2` ever starts returning `:skip` for
+      # Guard the guard: if `build_stage/3` ever starts returning `:skip` for
       # everything the loop above would be vacuously true.
       assert length(built) >= 5,
              "expected most strategies to build a stage, got #{inspect(built)}"

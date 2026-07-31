@@ -70,7 +70,7 @@ defmodule Platform.Orchestration.DispatchPhase do
   route three of the six deploy strategies to the wrong template — a
   regression the old `task.status == "deploying"` head did not have. The
   discriminator is `DeployStageBuilder.deploy_stage_name?/1`, an exact
-  `"Deploy: "` prefix on a name that only `build_stage/2` ever mints (planners
+  `"Deploy: "` prefix on a name that only `build_stage/3` ever mints (planners
   are forbidden from authoring deploy stages). It is checked BELOW the
   `e2e_behavior` arm only because deploy stages never carry one — the builder's
   moduledoc forbids it — so the ordering is defensive, not load-bearing.
@@ -261,7 +261,7 @@ defmodule Platform.Orchestration.DispatchPhase do
     end
   end
 
-  # A stage minted by `DeployStageBuilder.build_stage/2`. Needed because the
+  # A stage minted by `DeployStageBuilder.build_stage/3`. Needed because the
   # `manual` / `skill_driven` / `project_files` strategies emit validation
   # kinds (`manual_approval`, `test_pass`) that are indistinguishable from a
   # review or implementation stage. See the moduledoc.

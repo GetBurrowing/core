@@ -17,10 +17,39 @@ defmodule Platform.Tasks.DeployStageBuilder do
         evaluation_payload: %{
           "repo" => "Startup-Suite/core",   # canonical slug, or nil
           "repo_url" => "https://github.com/Startup-Suite/core",
+          "branch" => "task/019fba18-d074-7185-8e0e-032ee6d02fbe",
           "ci" => "required" | "none",
           "auto_merge" => boolean(),
           "merge_method" => "squash" | "merge" | "rebase"
         }}
+
+  ## `"branch"` — recorded, not derived
+
+  The gate records the branch this task pushes, supplied by the caller
+  (`PlanEngine`, from `StackDeployer.member_branch_for/1`) as the REQUIRED
+  third argument to `build_stage/3`. Every scoped gate on one stage carries
+  the SAME value — one branch, N repositories.
+
+  It is recorded rather than re-derived downstream because the derivation is
+  not an identifier. `HeartbeatScheduler.member_slug/1` answers the first
+  hyphen-segment of the task uuid for a non-stack task, and a UUIDv7's first
+  eight hex characters are the high 32 bits of its 48-bit millisecond
+  timestamp — a ~65-second bucket. Measured 2026-07-31: tasks
+  `019fb90f-36e3-…` and `019fb90f-6226-…` BOTH derive `task/019fb90f`, and
+  `task/019fb90f` carries merged PR #648. A consumer that derives can
+  therefore close one task's deploy gate on another task's merge, and neither
+  GitHub nor `gh pr list --head` can see the collision because the ambiguity
+  is Suite-side. `StackDeployer` already paid for this once
+  (`stack_deployer.ex:1163-1193`: `fatal: couldn't find remote ref
+  task/019f9b27`, four ADR-0046 members collapsing to `task/019f9b28`).
+
+  The third argument is REQUIRED and positional, not an optional keyword: an
+  optional one lets a future call site silently mint a gate with no recorded
+  branch, and that failure is invisible until a deploy hangs. A required one
+  makes the omission a compile error.
+
+  The unscoped fallback gate (no declared repo set) deliberately keeps its
+  ABSENT payload — see the comment on that clause.
 
   `pr_merged` therefore stops meaning "a PR merged somewhere" and starts
   meaning "the PR for THIS repository merged". Each gate is auto-evaluated
@@ -89,13 +118,13 @@ defmodule Platform.Tasks.DeployStageBuilder do
   # ── Public API ─────────────────────────────────────────────────────────
 
   @doc """
-  The name prefix every stage built by `build_stage/2` carries.
+  The name prefix every stage built by `build_stage/3` carries.
   """
   @spec deploy_stage_name_prefix() :: String.t()
   def deploy_stage_name_prefix, do: @deploy_stage_name_prefix
 
   @doc """
-  Whether `name` is a stage name minted by `build_stage/2`.
+  Whether `name` is a stage name minted by `build_stage/3`.
 
   Deliberately an EXACT, case-sensitive prefix match — not a substring search.
   `TaskRouter.infer_stage_type/1` does the substring thing on the same field
@@ -111,6 +140,12 @@ defmodule Platform.Tasks.DeployStageBuilder do
   @doc """
   Build a deploy stage definition from a resolved strategy map.
 
+  `branch` is the branch this task pushes — `StackDeployer.member_branch_for/1`
+  at both `PlanEngine` call sites. It is recorded onto every repo-scoped
+  `pr_merged` gate's `evaluation_payload` so consumers READ it instead of
+  re-deriving a name that is a UUIDv7 time bucket rather than an identifier;
+  see the moduledoc. Required, so a call site cannot omit it silently.
+
   Returns a map with `:name`, `:description`, `:position`, and `:validations`,
   or `:skip` if the strategy type is `"none"` or `"no_op_wait_for_rollup"`
   (bug #5 — stack members ship via the stack-level rollup PR, not a
@@ -118,17 +153,19 @@ defmodule Platform.Tasks.DeployStageBuilder do
 
   ## Examples
 
-      iex> DeployStageBuilder.build_stage(%{"type" => "pr_merge", "config" => %{"require_ci_pass" => true}}, 3)
+      iex> DeployStageBuilder.build_stage(%{"type" => "pr_merge", "config" => %{"require_ci_pass" => true}}, 3, "task/019fba18-d074-7185-8e0e-032ee6d02fbe")
       %{name: "Deploy: PR merge", description: "...", position: 3, validations: [...]}
 
-      iex> DeployStageBuilder.build_stage(%{"type" => "none"}, 3)
+      iex> DeployStageBuilder.build_stage(%{"type" => "none"}, 3, "task/019fba18-d074-7185-8e0e-032ee6d02fbe")
       :skip
 
-      iex> DeployStageBuilder.build_stage(%{"type" => "no_op_wait_for_rollup"}, 3)
+      iex> DeployStageBuilder.build_stage(%{"type" => "no_op_wait_for_rollup"}, 3, "task/019fba18-d074-7185-8e0e-032ee6d02fbe")
       :skip
   """
-  @spec build_stage(map(), pos_integer()) :: map() | :skip
-  def build_stage(%{"type" => "none"}, _position), do: :skip
+  @spec build_stage(map(), pos_integer(), String.t()) :: map() | :skip
+  def build_stage(strategy, position, branch)
+
+  def build_stage(%{"type" => "none"}, _position, _branch), do: :skip
 
   # Bug #5 (task 019f708f): stack members with a live rollup branch
   # get `no_op_wait_for_rollup` from `Tasks.resolve_deploy_strategy/1`.
@@ -137,9 +174,9 @@ defmodule Platform.Tasks.DeployStageBuilder do
   # would either open a shattering PR (if we materialized `pr_merge`)
   # or dispatch a deploy subagent that has nothing to do (if we
   # materialized a stage_complete-only stage). Skipping is safer.
-  def build_stage(%{"type" => "no_op_wait_for_rollup"}, _position), do: :skip
+  def build_stage(%{"type" => "no_op_wait_for_rollup"}, _position, _branch), do: :skip
 
-  def build_stage(%{"type" => "pr_merge"} = strategy, position) do
+  def build_stage(%{"type" => "pr_merge"} = strategy, position, branch) do
     config = Map.get(strategy, "config", %{})
 
     case Map.get(strategy, "repos") do
@@ -150,7 +187,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
           name: "Deploy: PR merge",
           description: pr_merge_description(config, entries),
           position: position,
-          validations: Enum.map(entries, &repo_validation/1)
+          validations: Enum.map(entries, &repo_validation(&1, branch))
         }
 
       # No declared repo set. `Tasks.resolve_deploy_strategy_with_repos/1`
@@ -166,6 +203,13 @@ defmodule Platform.Tasks.DeployStageBuilder do
       # `:all_passed` for `[]`. That stage would advance the instant it was
       # injected, reporting a deploy nobody performed. The resolver already
       # refuses to write `[]`; this refuses to build a stage from one.
+      #
+      # `branch` is deliberately NOT recorded here. This gate keeps its
+      # ABSENT payload: `DeployMergeReconciler.gate_repo/1`'s nil-payload
+      # clause skips exactly these rows, and
+      # `GithubWebhookController.select_unscoped_validation/3` owns the rules
+      # for when one may pass. Giving it a payload would move it out of that
+      # clause — a routing change dressed up as a field addition.
       _ ->
         %{
           name: "Deploy: PR merge",
@@ -176,7 +220,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
     end
   end
 
-  def build_stage(%{"type" => "docker_deploy"} = strategy, position) do
+  def build_stage(%{"type" => "docker_deploy"} = strategy, position, _branch) do
     config = Map.get(strategy, "config", %{})
 
     %{
@@ -187,7 +231,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
     }
   end
 
-  def build_stage(%{"type" => "fly"} = strategy, position) do
+  def build_stage(%{"type" => "fly"} = strategy, position, _branch) do
     config = Map.get(strategy, "config", %{})
 
     %{
@@ -198,7 +242,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
     }
   end
 
-  def build_stage(%{"type" => "skill_driven"} = strategy, position) do
+  def build_stage(%{"type" => "skill_driven"} = strategy, position, _branch) do
     config = Map.get(strategy, "config", %{})
     skill_id = Map.get(strategy, "skill_id")
 
@@ -210,7 +254,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
     }
   end
 
-  def build_stage(%{"type" => "manual"} = _strategy, position) do
+  def build_stage(%{"type" => "manual"} = _strategy, position, _branch) do
     %{
       name: "Deploy: Manual",
       description:
@@ -221,7 +265,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
     }
   end
 
-  def build_stage(%{"type" => "project_files"} = strategy, position) do
+  def build_stage(%{"type" => "project_files"} = strategy, position, _branch) do
     config = Map.get(strategy, "config", %{})
 
     # `test_pass` is the canonical success/failure signal for auto-invoked
@@ -449,12 +493,19 @@ defmodule Platform.Tasks.DeployStageBuilder do
   defp repo_gate(other, strategy_config),
     do: repo_gate(%{"repo_url" => other}, strategy_config)
 
-  defp repo_validation(gate) do
+  # `branch` is the same value for every gate on one stage — the task pushes
+  # ONE branch and opens a PR from it in each repository. Recorded per-gate
+  # rather than once per stage because the row the consumer reads is the
+  # VALIDATION: `DeployMergeReconciler.candidates/0` selects validations and
+  # `gate_repo/1` reads `evaluation_payload`. A stage-level home would need a
+  # second lookup on a table the sweeper does not otherwise touch.
+  defp repo_validation(gate, branch) do
     %{
       kind: "pr_merged",
       evaluation_payload: %{
         "repo" => gate.slug,
         "repo_url" => gate.repo_url,
+        "branch" => branch,
         "ci" => gate.ci,
         "auto_merge" => gate.auto_merge,
         "merge_method" => gate.merge_method

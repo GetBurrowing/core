@@ -36,12 +36,14 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
 
   use Platform.DataCase, async: true
 
-  alias Platform.Orchestration.HeartbeatScheduler
+  import ExUnit.CaptureLog
+
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.DeployMergeReconciler
   alias Platform.Tasks.PlanEngine
   alias Platform.Tasks.Stage
+  alias Platform.Tasks.Task, as: TaskRecord
   alias Platform.Tasks.Validation
 
   @core "Startup-Suite/core"
@@ -124,18 +126,19 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
         repo_url: "https://github.com/#{@core}"
       })
 
-    {:ok, task} =
-      Tasks.create_task(%{
-        project_id: project.id,
-        title: "Lands in more than one repository",
-        status: "in_progress",
-        deploy_target: "production",
-        deploy_strategy: %{
-          "type" => "pr_merge",
-          "config" => %{"auto_merge" => false},
-          "repos" => repos
-        }
-      })
+    attrs = %{
+      project_id: project.id,
+      title: "Lands in more than one repository",
+      status: "in_progress",
+      deploy_target: "production",
+      deploy_strategy: %{
+        "type" => "pr_merge",
+        "config" => %{"auto_merge" => false},
+        "repos" => repos
+      }
+    }
+
+    task = insert_task!(attrs, Keyword.get(opts, :id))
 
     {:ok, plan} =
       Tasks.create_plan(%{
@@ -158,6 +161,25 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
     %{project: project, task: task, plan: plan, stage: deploy_stage, gates: gates}
   end
 
+  # A pinned id is what lets a branch expectation be a hand-written STRING
+  # LITERAL rather than a second call to the derivation. `Task.changeset/2`
+  # does not cast `:id` — the schema autogenerates a UUIDv7 — so it has to go
+  # on as a `put_change` before the insert. Same route as
+  # `stack_deployer_test.exs:780-793` and `deploy_stage_builder_test.exs`.
+  # `Tasks.create_task/1`'s extra work is advisory (reference upsert, async
+  # memory ingest, sponsor notification), none of which any test here reads.
+  defp insert_task!(attrs, nil) do
+    {:ok, task} = Tasks.create_task(attrs)
+    task
+  end
+
+  defp insert_task!(attrs, id) when is_binary(id) do
+    %TaskRecord{}
+    |> TaskRecord.changeset(attrs)
+    |> Ecto.Changeset.put_change(:id, id)
+    |> Repo.insert!()
+  end
+
   defp two_repo_task!(opts \\ []) do
     deploying_task!(
       [
@@ -166,6 +188,10 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
       ],
       opts
     )
+  end
+
+  defp one_repo_task!(opts \\ []) do
+    deploying_task!([%{"repo_url" => "https://github.com/#{@bridge}", "ci" => "none"}], opts)
   end
 
   defp gates_for_stage(stage_id) do
@@ -181,23 +207,63 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
   defp reload_stage(%Stage{id: id}), do: Repo.get!(Stage, id)
   defp reload_stage(id) when is_binary(id), do: Repo.get!(Stage, id)
 
-  # Routed through `HeartbeatScheduler.member_slug/1` — the single chokepoint
-  # every worktree/branch slug in the system goes through, and the one
-  # `DeployMergeReconciler.branch_for/1` itself uses.
+  # THERE IS DELIBERATELY NO `dispatch_branch/1` HELPER IN THIS FILE, and the
+  # absence is load-bearing enough to be worth a comment.
   #
-  # This read `task.id |> String.split("-") |> List.first()` until task
-  # 019fb949 deleted the truncating slug. That was a SECOND DERIVATION of the
-  # branch name, which is precisely the failure the test below warns about: it
-  # kept passing by reproducing the reconciler's old truncation, and would have
-  # kept passing if only one of the two had been fixed. Deriving it from the
-  # chokepoint means this can only agree with the dispatch.
-  defp dispatch_branch(task), do: "task/" <> HeartbeatScheduler.member_slug(task)
+  # Two forms have stood here and both were removed for the same underlying
+  # reason. The first was `task.id |> String.split("-") |> List.first()` — a
+  # REIMPLEMENTATION of the reconciler's truncation. It had genuine detection
+  # power and went RED when `member_slug/1` changed, correctly reporting the
+  # breakage this task exists to fix. Commit `4849cbd1` on
+  # `origin/task/019fb949` (merged as PR #647) then replaced it with
+  # `"task/" <> HeartbeatScheduler.member_slug(task)` and asserted
+  # `expected = dispatch_branch(task)` — an expectation computed by the
+  # function under test. Both sides moved together from that point on, so the
+  # assertion could not fail for ANY value `member_slug/1` returned. A working
+  # detector was swapped for a no-op, on the branch that caused the breakage
+  # the detector was reporting.
+  #
+  # Every branch expectation below is therefore a STRING LITERAL, typed out by
+  # hand from the fixture's pinned task id. A reimplementation that can
+  # disagree is worth keeping; a derivation from the code under test is worth
+  # nothing.
+  defp put_payload!(%Validation{} = gate, payload) do
+    gate |> Ecto.Changeset.change(%{evaluation_payload: payload}) |> Repo.update!()
+  end
+
+  # Rewrites the branch a MINTED gate records, so a test can pin a branch shape
+  # no derivation produces. Goes through `Repo.update` deliberately:
+  # `PlanEngine.evaluate_validation/2` dispositions a gate, it does not edit
+  # the payload, and using it here would also pass the row under test.
+  defp record_branch!(%Validation{} = gate, branch) do
+    put_payload!(gate, Map.put(gate.evaluation_payload, "branch", branch))
+  end
+
+  # Reads the retirement query out of the module's OWN moduledoc, so the
+  # thing under test is the text an operator copies rather than a
+  # second copy living here. If the comment drifts, this breaks.
+  defp documented_retirement_sql do
+    {:docs_v1, _, :elixir, _, %{"en" => moduledoc}, _, _} =
+      Code.fetch_docs(DeployMergeReconciler)
+
+    [_, sql] = Regex.run(~r/```sql\n(.+?)\n\s*```/s, moduledoc)
+
+    sql
+  end
+
+  # Removes the key entirely — NOT `%{"branch" => nil}`. This reproduces a gate
+  # minted between `d63abdc0` reaching production (20:47Z 2026-07-31, scoped
+  # payloads) and stage 1 of this task landing (the `"branch"` key), which is
+  # the only population the refusal branch can ever see.
+  defp drop_recorded_branch!(%Validation{} = gate) do
+    put_payload!(gate, Map.delete(gate.evaluation_payload, "branch"))
+  end
 
   # ── The sweep fires and finds ────────────────────────────────────────────
 
   describe "sweep/1 — an observed merge" do
     test "passes the gate for the repository whose PR merged" do
-      %{task: task, gates: gates} = two_repo_task!()
+      %{gates: gates} = two_repo_task!(id: "019fb9c5-6196-7a42-8c30-1e2d3f4a5b6c")
       script(@bridge, merged(41))
 
       assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
@@ -220,9 +286,13 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
       assert reload(gates[@core]).status == "pending"
       assert reload(gates[@core]).evidence == %{}
 
-      branch = dispatch_branch(task)
-      assert_received {:merged_pr_called, %{repo: repo_a, branch: ^branch}}
-      assert_received {:merged_pr_called, %{repo: repo_b, branch: ^branch}}
+      # Typed out by hand from the id pinned on the fixture above. One task
+      # pushes ONE branch, so both repositories are polled on the same name.
+      assert_received {:merged_pr_called,
+                       %{repo: repo_a, branch: "task/019fb9c5-6196-7a42-8c30-1e2d3f4a5b6c"}}
+
+      assert_received {:merged_pr_called,
+                       %{repo: repo_b, branch: "task/019fb9c5-6196-7a42-8c30-1e2d3f4a5b6c"}}
 
       assert Enum.sort([repo_a, repo_b]) == [
                "https://github.com/#{@bridge}",
@@ -230,17 +300,18 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
              ]
     end
 
-    test "asks about the branch the dispatch tells the executor to push" do
-      %{task: task} = two_repo_task!()
+    test "polls the FULL-uuid branch the deploy stage recorded at mint time" do
+      one_repo_task!(id: "019fb9c5-6196-7a42-8c30-1e2d3f4a5b6d")
 
       DeployMergeReconciler.sweep(runner: StubRunner)
 
-      # `HeartbeatScheduler.member_slug/1`'s answer is the FULL task uuid, for
-      # a stack member and a non-stack task alike (task 019fb949). A second
-      # derivation here would poll a branch nobody pushed and report "not
-      # merged" forever — the silent-hang failure mode in a new place.
-      expected = dispatch_branch(task)
-      assert_received {:merged_pr_called, %{branch: ^expected}}
+      # The full task uuid, hand-copied from the line above. An 8-character
+      # prefix is a ~65-second UUIDv7 time bucket rather than an identifier,
+      # so if this ever shortens again the sweeper would poll a name shared
+      # with every task minted in the same minute. Pinning the literal is what
+      # makes that visible here; pinning `member_slug/1`'s current answer
+      # would not, because the expectation would shorten with it.
+      assert_received {:merged_pr_called, %{branch: "task/019fb9c5-6196-7a42-8c30-1e2d3f4a5b6d"}}
     end
 
     test "hands `gh -R` the declared repo_url, and records the canonical slug" do
@@ -259,6 +330,134 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
 
       assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
       assert reload(gates[@bridge]).evidence["merge_commit_sha"] == nil
+    end
+  end
+
+  # ── The recorded branch, and the refusal to invent one ───────────────────
+
+  describe "sweep/1 — the recorded branch" do
+    test "polls the branch RECORDED on the gate, including one no derivation produces" do
+      %{gates: gates} = one_repo_task!(id: "019fa63a-02a0-7c9e-b3d1-5f2ae4d81c37")
+
+      # The shape task 019fa63a-02a0 actually pushed to origin, carrying
+      # merged PR #644. No derivation in the tree produces this name — not
+      # `member_slug/1` before PR #647 and not after it — and
+      # `Changelog.extract_task_id_from_branch/1` cannot parse it either,
+      # because `@branch_prefix` (`changelog.ex:169`) wants 8 hex characters
+      # immediately after `task/` and `envelope-` is not hex. A sweeper that
+      # derived its branch could never reach this gate at all.
+      record_branch!(
+        gates[@bridge],
+        "task/envelope-records-019fa63a-02a0-7c9e-b3d1-5f2ae4d81c37"
+      )
+
+      script("task/envelope-records-019fa63a-02a0-7c9e-b3d1-5f2ae4d81c37", merged(644))
+
+      assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "passed"
+      assert gate.evidence["pr_number"] == 644
+      assert gate.evidence["observed_by"] == "reconciler"
+
+      assert_received {:merged_pr_called,
+                       %{branch: "task/envelope-records-019fa63a-02a0-7c9e-b3d1-5f2ae4d81c37"}}
+
+      # And never about the name it would have derived from the task id. This
+      # is the half that fails if the derivation comes back.
+      refute_received {:merged_pr_called, %{branch: "task/019fa63a-02a0-7c9e-b3d1-5f2ae4d81c37"}}
+    end
+
+    # DISCRIMINATION CONTROL. What this proves is that RECORDING prevents
+    # cross-attribution: each task is polled on the branch its own deploy
+    # stage wrote down, so one merge cannot close another task's gate.
+    #
+    # Stated carefully, because the shape of the claim has already drifted
+    # once. `task/019fb90f` is what these two tasks derived BEFORE PR #647
+    # (`f2083747`) made `member_slug/1` unconditionally full-uuid; the
+    # collision is not reachable through the derivation on main today. The
+    # value of this test is not that it reproduces a live defect — it does
+    # not — but that it fails if the branch name is ever re-truncated or
+    # re-derived from anything shorter than the full id. The first eight hex
+    # characters of a UUIDv7 are the high 32 bits of its 48-bit millisecond
+    # timestamp, so any prefix scheme collides deterministically for tasks
+    # filed in the same ~65-second window, and the pair below is a real one
+    # (`task/019fb90f` carries merged PR #648).
+    #
+    # Nothing downstream can catch that: `gh pr list --head` answers about a
+    # branch and GitHub returns one PR per branch, so the runner sees no
+    # ambiguity to fail closed on. The ambiguity is Suite-side, which is why
+    # it has to be caught here.
+    test "one merge cannot close two tasks' gates — each is polled on its OWN branch" do
+      a = one_repo_task!(id: "019fb90f-36e3-7fd6-a416-f128f4c0190f")
+      b = one_repo_task!(id: "019fb90f-6226-7fd6-a416-f128f4c0190f")
+
+      script("task/019fb90f", merged(648))
+
+      assert DeployMergeReconciler.sweep(runner: StubRunner) == 0,
+             "a merged PR on task/019fb90f closed a deploy gate for a task that never " <>
+               "pushed that branch — one merge, two tasks marked shipped"
+
+      assert reload(a.gates[@bridge]).status == "pending"
+      assert reload(a.gates[@bridge]).evidence == %{}
+      assert reload(b.gates[@bridge]).status == "pending"
+      assert reload(b.gates[@bridge]).evidence == %{}
+
+      refute_received {:merged_pr_called, %{branch: "task/019fb90f"}}
+
+      # NON-VACUITY, and mandatory. Without the two assertions below the zero
+      # above is indistinguishable from a sweep that never ran — the exact
+      # hazard this file's moduledoc is built around. Both calls DID happen,
+      # each carrying its own task's full id.
+      assert_received {:merged_pr_called, %{branch: "task/019fb90f-36e3-7fd6-a416-f128f4c0190f"}}
+
+      assert_received {:merged_pr_called, %{branch: "task/019fb90f-6226-7fd6-a416-f128f4c0190f"}}
+    end
+
+    test "a gate with NO recorded branch is refused rather than guessed at" do
+      %{gates: gates} = one_repo_task!(id: "019fb9c5-6196-7a42-8c30-1e2d3f4a5b6e")
+      drop_recorded_branch!(gates[@bridge])
+
+      # `AlwaysMergedRunner`, and this is the whole test. It reports a merge
+      # for LITERALLY ANY query, so the zero below can only come from the
+      # sweeper declining to ask. Under `StubRunner` this test would pass
+      # against a DELETED refusal branch, because an empty script answers
+      # `{:ok, nil}` to whatever branch a restored derivation invented.
+      assert DeployMergeReconciler.sweep(runner: AlwaysMergedRunner) == 0
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "pending"
+      assert gate.evidence == %{}
+      assert gate.evaluated_by == nil
+      assert gate.evaluated_at == nil
+
+      refute_received {:merged_pr_called, _}
+    end
+
+    test "the same fixture WITH a branch recorded passes under the same runner" do
+      # The other half of the pair. Without it, "0 and never asked" above is
+      # satisfied by a sweeper that cannot reach this fixture at all, and the
+      # refusal would be untested.
+      %{gates: gates} = one_repo_task!(id: "019fb9c5-6196-7a42-8c30-1e2d3f4a5b6f")
+
+      assert DeployMergeReconciler.sweep(runner: AlwaysMergedRunner) == 1
+      assert reload(gates[@bridge]).status == "passed"
+
+      assert_received {:merged_pr_called, %{branch: "task/019fb9c5-6196-7a42-8c30-1e2d3f4a5b6f"}}
+    end
+
+    test "a branch recorded as blank is refused too — `present?` is what decides" do
+      # `Map.get/2` answers nil for an absent key AND for a key written as
+      # nil, and a payload could carry `""` from a hand-repair. All three are
+      # "not recorded", so the refusal is keyed on `present?/1` rather than on
+      # key presence. Asserted because it is a line of production code that
+      # would otherwise never run.
+      %{gates: gates} = one_repo_task!()
+      record_branch!(gates[@bridge], "   ")
+
+      assert DeployMergeReconciler.sweep(runner: AlwaysMergedRunner) == 0
+      assert reload(gates[@bridge]).status == "pending"
+      refute_received {:merged_pr_called, _}
     end
   end
 
@@ -526,6 +725,197 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
     end
   end
 
+  # ── The retirement counter for the refusal branch ────────────────────────
+
+  describe "unrecorded_branch_gates/0" do
+    # THE ZERO MUST BE A REAL ZERO. Every `count: 0` below is paired with a
+    # fixture that actually CONTAINS the thing being excluded, and — where
+    # the exclusion is a state change rather than an extra row — with the
+    # non-zero count measured BEFORE that change. A refute whose fixture
+    # never creates the excluded row asserts nothing, and a zero on an empty
+    # fixture is satisfied by `def unrecorded_branch_gates, do: %{count: 0}`.
+
+    test "is 0 for a freshly-minted plan — every gate records a branch" do
+      %{gates: gates} = two_repo_task!()
+
+      # Non-vacuity for the zero: the two gates exist, are live, and DO
+      # carry the key. Without this the assertion below is also satisfied
+      # by a query that matches no row in the database at all.
+      assert map_size(gates) == 2
+      assert gates[@core].evaluation_payload["branch"]
+      assert gates[@bridge].evaluation_payload["branch"]
+
+      assert DeployMergeReconciler.unrecorded_branch_gates() == %{
+               count: 0,
+               validation_ids: []
+             }
+    end
+
+    test "is 1, naming the id, for a gate whose payload lacks the key" do
+      %{gates: gates} = two_repo_task!()
+      drop_recorded_branch!(gates[@bridge])
+
+      assert DeployMergeReconciler.unrecorded_branch_gates() == %{
+               count: 1,
+               validation_ids: [gates[@bridge].id]
+             }
+    end
+
+    # THE DELIBERATE DECISION, and it is a departure from a key-presence
+    # count. `refuse/2` fires on `not present?/1`, so a blank recorded
+    # branch is refused every five minutes — but it HAS the `"branch"` key
+    # and a `NOT (payload ? 'branch')` count would report zero for it. That
+    # zero would then license deleting the refusal branch, after which this
+    # row's `""` would be handed to `gh pr list --head`. The counter is only
+    # worth having if its zero means the branch is unreachable, so it shares
+    # `present?/1` with the code it reports on.
+    test "counts a BLANK recorded branch — key presence is not what decides" do
+      %{gates: gates} = one_repo_task!()
+      record_branch!(gates[@bridge], "   ")
+
+      assert Repo.get!(Validation, gates[@bridge].id).evaluation_payload
+             |> Map.has_key?("branch"),
+             "the fixture must keep the key, or this is the absent-key case again"
+
+      assert DeployMergeReconciler.unrecorded_branch_gates() == %{
+               count: 1,
+               validation_ids: [gates[@bridge].id]
+             }
+
+      # And it is genuinely the row `refuse/2` declines to poll, measured
+      # rather than assumed — the count and the refusal name one set.
+      assert DeployMergeReconciler.sweep(runner: AlwaysMergedRunner) == 0
+      refute_received {:merged_pr_called, _}
+    end
+
+    test "does not count a nil-payload row — the legacy unscoped gate" do
+      %{stage: stage, gates: gates} = two_repo_task!()
+      drop_recorded_branch!(gates[@bridge])
+
+      {:ok, legacy} = Tasks.create_validation(%{stage_id: stage.id, kind: "pr_merged"})
+      assert legacy.evaluation_payload == nil
+
+      # The excluded row EXISTS, is pending, and sits on the same running
+      # stage as the counted one. So the list below is a discrimination,
+      # not an empty database.
+      assert DeployMergeReconciler.unrecorded_branch_gates() == %{
+               count: 1,
+               validation_ids: [gates[@bridge].id]
+             }
+    end
+
+    test "does not count a PASSED payload-without-branch row" do
+      %{gates: gates} = two_repo_task!()
+      drop_recorded_branch!(gates[@core])
+      drop_recorded_branch!(gates[@bridge])
+
+      assert DeployMergeReconciler.unrecorded_branch_gates().count == 2
+
+      {:ok, _} =
+        PlanEngine.evaluate_validation(gates[@core].id, %{
+          status: "passed",
+          evidence: %{"pr_url" => "https://github.com/#{@core}/pull/640"},
+          evaluated_by: "github_webhook"
+        })
+
+      assert reload(gates[@core]).status == "passed"
+
+      # 2 -> 1, and the survivor is named. A settled gate cannot reach
+      # `refuse/2`, so it must not hold the retirement count above zero.
+      assert DeployMergeReconciler.unrecorded_branch_gates() == %{
+               count: 1,
+               validation_ids: [gates[@bridge].id]
+             }
+    end
+
+    test "does not count a payload-without-branch row on a NON-RUNNING stage" do
+      %{stage: stage, gates: gates} = one_repo_task!()
+      drop_recorded_branch!(gates[@bridge])
+
+      # Measured before the state change, so the zero after it is
+      # attributable to the stage status and to nothing else.
+      assert DeployMergeReconciler.unrecorded_branch_gates().count == 1
+
+      {:ok, _} = stage |> Ecto.Changeset.change(%{status: "passed"}) |> Repo.update()
+
+      assert reload(gates[@bridge]).status == "pending"
+
+      assert DeployMergeReconciler.unrecorded_branch_gates() == %{
+               count: 0,
+               validation_ids: []
+             }
+    end
+
+    test "does not count a row on a SUPERSEDED plan version" do
+      %{task: task, stage: stage, gates: gates} = one_repo_task!()
+      drop_recorded_branch!(gates[@bridge])
+
+      assert DeployMergeReconciler.unrecorded_branch_gates().count == 1
+
+      # v1's deploy stage stays running and its gate stays pending — only
+      # `current_plan/1`'s answer moves. A counter that filtered on
+      # `p.status == "approved"` instead would still match v1 here and
+      # report a gate nobody is executing, holding retirement open forever.
+      {:ok, v2} = Tasks.create_plan(%{task_id: task.id, status: "approved", version: 2})
+      assert Tasks.current_plan(task.id).id == v2.id
+      assert reload_stage(stage).status == "running"
+      assert reload(gates[@bridge]).status == "pending"
+
+      assert DeployMergeReconciler.unrecorded_branch_gates() == %{
+               count: 0,
+               validation_ids: []
+             }
+    end
+
+    # The moduledoc's SQL is EXECUTED, against a fixture holding one of
+    # every excluded shape plus both counted shapes. Extracting it from the
+    # docs chunk rather than restating it here is the whole point: a copy in
+    # this file could drift from the comment an operator actually reads, and
+    # the comment is the artifact the stage asked for. A query nobody runs
+    # is the documentation form of a guard nobody watched fire.
+    test "the SQL documented in the moduledoc returns the same count" do
+      # Counted: one absent-key, one blank.
+      %{gates: counted} = two_repo_task!()
+      drop_recorded_branch!(counted[@core])
+      record_branch!(counted[@bridge], "  ")
+
+      # Excluded: a recorded branch (this task's other rows), a nil payload,
+      # a passed row, a non-running stage, and a superseded plan.
+      %{stage: stage, gates: recorded} = two_repo_task!()
+      assert recorded[@bridge].evaluation_payload["branch"]
+      {:ok, _} = Tasks.create_validation(%{stage_id: stage.id, kind: "pr_merged"})
+
+      %{gates: settled} = one_repo_task!()
+      drop_recorded_branch!(settled[@bridge])
+
+      {:ok, _} =
+        PlanEngine.evaluate_validation(settled[@bridge].id, %{
+          status: "passed",
+          evidence: %{"pr_url" => "https://github.com/#{@bridge}/pull/1"},
+          evaluated_by: "github_webhook"
+        })
+
+      %{stage: done_stage, gates: on_done} = one_repo_task!()
+      drop_recorded_branch!(on_done[@bridge])
+      {:ok, _} = done_stage |> Ecto.Changeset.change(%{status: "passed"}) |> Repo.update()
+
+      %{task: old_task, gates: on_old} = one_repo_task!()
+      drop_recorded_branch!(on_old[@bridge])
+      {:ok, _} = Tasks.create_plan(%{task_id: old_task.id, status: "approved", version: 2})
+
+      tally = DeployMergeReconciler.unrecorded_branch_gates()
+
+      assert tally.count == 2,
+             "the fixture must contain BOTH counted shapes, or the SQL agreeing " <>
+               "with the function proves only that both answer zero"
+
+      assert %Postgrex.Result{rows: [[sql_count]]} =
+               Repo.query!(documented_retirement_sql())
+
+      assert sql_count == tally.count
+    end
+  end
+
   # ── Wiring ───────────────────────────────────────────────────────────────
 
   describe "configuration" do
@@ -556,6 +946,200 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
         |> Enum.sort()
 
       assert callbacks == [available?: 0, merged_pr: 1]
+    end
+  end
+end
+
+defmodule Platform.Tasks.DeployMergeReconcilerTickLogTest do
+  @moduledoc """
+  The announcement the tick makes about the retirement condition.
+
+  Split out of `Platform.Tasks.DeployMergeReconcilerTest` and marked
+  `async: false` for exactly one reason: `config/test.exs` sets the Logger
+  level to `:warning`, which drops `info` at the source. Observing an
+  `info` line therefore needs `Logger.configure/1`, which is global — the
+  same shape as `runtime_supervision_owner_identity_test.exs:350-360`.
+  Keeping it in its own module leaves the 37 tests above concurrent.
+
+  The level is what makes these tests mean anything, and the point is worth
+  stating because it is easy to get backwards. Under `:warning` the "silent
+  at zero" assertion below passes against a function that logs
+  UNCONDITIONALLY, because nothing is captured either way. It only
+  discriminates at `:info`.
+
+  The fixture here is hand-built rather than driven through
+  `PlanEngine.advance/1`. That is deliberate: what is under test is the
+  callback emitting a line for a row the counter returned, not the shape of
+  a minted gate — the builder's output is pinned next door and in
+  `deploy_stage_builder_test.exs`.
+  """
+
+  use Platform.DataCase, async: false
+
+  import ExUnit.CaptureLog
+
+  alias Platform.Repo
+  alias Platform.Tasks
+  alias Platform.Tasks.DeployMergeReconciler
+
+  @bridge "Startup-Suite/claude-code-suite-channel"
+
+  # Answers "not merged" to everything and never leaves the VM. The tick
+  # calls `sweep/0`, which reads the runner from application env, so driving
+  # the real callback needs a configured stub or it shells out to `gh`.
+  defmodule NeverMergedRunner do
+    @moduledoc false
+    @behaviour Platform.Tasks.DeployMergeReconciler.MergeRunner
+
+    @impl true
+    def available?, do: :ok
+
+    @impl true
+    def merged_pr(query) do
+      send(self(), {:merged_pr_called, query})
+      {:ok, nil}
+    end
+  end
+
+  setup do
+    original_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: original_level) end)
+    :ok
+  end
+
+  defp unrecorded_gate! do
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: "Tick #{System.unique_integer([:positive])}",
+        repo_url: "https://github.com/#{@bridge}"
+      })
+
+    {:ok, task} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "Minted before the branch was recorded",
+        status: "in_progress",
+        deploy_target: "production"
+      })
+
+    {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved", version: 1})
+    {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Deploy: PR merge"})
+    {:ok, stage} = stage |> Ecto.Changeset.change(%{status: "running"}) |> Repo.update()
+
+    # A SCOPED payload with no `"branch"` key — the only population the
+    # refusal branch, and therefore this counter, can ever see.
+    {:ok, gate} =
+      Tasks.create_validation(%{
+        stage_id: stage.id,
+        kind: "pr_merged",
+        evaluation_payload: %{
+          "repo" => @bridge,
+          "repo_url" => "https://github.com/#{@bridge}",
+          "ci" => "none"
+        }
+      })
+
+    refute Map.has_key?(gate.evaluation_payload, "branch")
+
+    assert DeployMergeReconciler.unrecorded_branch_gates() == %{
+             count: 1,
+             validation_ids: [gate.id]
+           }
+
+    gate
+  end
+
+  describe "report_unrecorded_branch_gates/1" do
+    test "names the count, every id, and the remedy" do
+      log =
+        capture_log([level: :info], fn ->
+          assert DeployMergeReconciler.report_unrecorded_branch_gates(%{
+                   count: 2,
+                   validation_ids: ["019f-aaa", "019f-bbb"]
+                 }) == :ok
+        end)
+
+      assert log =~ "2 pending pr_merged gate(s) record no deploy branch"
+      assert log =~ "019f-aaa, 019f-bbb"
+      assert log =~ "mix suite.deploy.scope_gate"
+
+      # ONE line, not one per gate. The tick fires every five minutes for
+      # every open gate, which is why `poll/5`'s miss sits at `debug`.
+      assert length(String.split(log, "record no deploy")) == 2
+    end
+
+    test "says nothing at all when the count is zero" do
+      log =
+        capture_log([level: :info], fn ->
+          assert DeployMergeReconciler.report_unrecorded_branch_gates(%{
+                   count: 0,
+                   validation_ids: []
+                 }) == :ok
+        end)
+
+      refute log =~ "record no deploy branch"
+    end
+  end
+
+  describe "handle_info(:tick, …)" do
+    setup do
+      previous = Application.get_env(:platform, :deploy_merge_reconciler)
+      Application.put_env(:platform, :deploy_merge_reconciler, merge_runner: NeverMergedRunner)
+
+      on_exit(fn ->
+        case previous do
+          nil -> Application.delete_env(:platform, :deploy_merge_reconciler)
+          value -> Application.put_env(:platform, :deploy_merge_reconciler, value)
+        end
+      end)
+
+      :ok
+    end
+
+    # THE WIRING. Without this, `report_unrecorded_branch_gates/1` is a
+    # function nothing calls and the stage's actual requirement — that the
+    # SWEEP announces the condition — is unexercised.
+    test "announces the retirement condition for a real unrecorded gate" do
+      gate = unrecorded_gate!()
+
+      log =
+        capture_log([level: :info], fn ->
+          assert {:noreply, %{}} = DeployMergeReconciler.handle_info(:tick, %{})
+        end)
+
+      assert log =~ "1 pending pr_merged gate(s) record no deploy branch"
+      assert log =~ gate.id
+
+      # The counter and the refusal name the SAME row: the sweep declined to
+      # poll it, so the count is reporting on the gate that is actually
+      # hung, not on a parallel set that happens to have the same size.
+      refute_received {:merged_pr_called, _}
+      assert Repo.reload!(gate).status == "pending"
+    end
+
+    test "and stays silent once every live gate records a branch" do
+      gate = unrecorded_gate!()
+
+      gate
+      |> Ecto.Changeset.change(%{
+        evaluation_payload: Map.put(gate.evaluation_payload, "branch", "task/019fba18-d074")
+      })
+      |> Repo.update!()
+
+      assert DeployMergeReconciler.unrecorded_branch_gates().count == 0
+
+      log =
+        capture_log([level: :info], fn ->
+          assert {:noreply, %{}} = DeployMergeReconciler.handle_info(:tick, %{})
+        end)
+
+      refute log =~ "record no deploy branch"
+
+      # Non-vacuity for that silence: the tick DID sweep this gate — it was
+      # polled and told no. So the quiet is "nothing to retire", not "the
+      # tick never ran".
+      assert_received {:merged_pr_called, %{branch: "task/019fba18-d074"}}
     end
   end
 end

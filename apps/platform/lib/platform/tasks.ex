@@ -1777,9 +1777,10 @@ defmodule Platform.Tasks do
   `resolve_deploy_strategy/1` with the resolved repository set attached.
 
   This is what deploy-stage construction consumes, so
-  `DeployStageBuilder.build_stage/2` keeps its arity and stays a pure
-  map → map function with no `Repo` access (its test file runs
-  `async: true` with no database).
+  `DeployStageBuilder.build_stage/3` stays a pure map → map function with no
+  `Repo` access. Its third argument, the recorded branch, is resolved by the
+  CALLER (`PlanEngine`, via `StackDeployer.member_branch_for/1`) and handed in
+  already-computed, so the builder still touches no `Repo`.
 
   The `"repos"` key is written back in the NORMALIZED shape — one
   string-keyed map per repository, carrying `"repo_url"`, `"slug"`,

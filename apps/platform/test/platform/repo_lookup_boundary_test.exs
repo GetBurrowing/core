@@ -424,6 +424,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "keyed `task_id:` + `participant_kind:` + `participant_id:`; `get_pin/3` is only reached from `pin/3`, whose ids the mention resolver already matched to rows"},
     {"platform/tasks/context_hydrator.ex", :get, "Task", 1, :safe_internal,
      "load_task/1 checks Platform.UUID.valid?/1 on the run-dispatch task_id, folding a malformed id into the existing {:error, :task_not_found}"},
+    {"platform/tasks/deploy_merge_reconciler.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 019fba18 stage 4: `live_gate/1` guards `why_not_live/1`'s `where: v.id == ^id`, whose id is a COMMAND-LINE argument to `mix suite.deploy.scope_gate` — an operator pasting a task id, a truncated uuid or a stage id is the expected failure, not an edge case. The guard is used as a BOOLEAN and the id is downcased rather than replaced by the cast's return, because persisted ids are lowercase and `valid?/1` passes an uppercase uuid. A malformed value folds into `{:error, :malformed_id}` and the mix task renders it as a named refusal with a non-zero exit, pinned by suite_deploy_scope_gate_test.exs \"refuses an id that is not a well-formed uuid, including the 16-byte case\", which first shows the unguarded query raising `Ecto.Query.CastError`"},
     {"platform/tasks/plan_engine.ex", :get, "Plan", 1, :safe_internal,
      "`stage.plan_id` off the `%Stage{}` the engine just loaded"},
     {"platform/tasks/plan_engine.ex", :get, "Stage", 1, :safe_internal,
@@ -639,6 +641,22 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/roles.ex" => 2,
     "platform/tasks.ex" => 6,
     "platform/tasks/chat_pins.ex" => 1,
+    # 0 → 1 for task 019fba18 stage 4's `why_not_live/1`, which names WHY a
+    # validation id is not a live reconciler candidate so
+    # `mix suite.deploy.scope_gate` can refuse with a reason instead of a
+    # stack trace. Triaged by hand as this map asks: its `where:` clause DOES
+    # pin an id (`v.id == ^id`) and that id DOES arrive from a boundary — a
+    # command-line argument, which is the sharpest case, since an operator
+    # pasting a task id or a truncated uuid is the expected failure. So the
+    # guard is required and is present: `live_gate/1` is the only caller and
+    # it returns `{:error, :malformed_id}` unless `Platform.UUID.valid?/1`
+    # passes first, pinned by a test that drives the mix task with a
+    # non-uuid and asserts the named refusal rather than a cast error.
+    # `Platform.Types.UUIDv7.cast/1` was not used; probed on this checkout it
+    # is equally safe (it rejects the 16-byte binary `Ecto.UUID.cast/1`
+    # accepts), so the reason is one derivation rather than two, which is
+    # what this map asks the guard to be.
+    "platform/tasks/deploy_merge_reconciler.ex" => 1,
     "platform/tasks/context_hydrator.ex" => 1,
     "platform/tasks/plan_engine.ex" => 2,
     "platform/tasks/review_requests.ex" => 1,

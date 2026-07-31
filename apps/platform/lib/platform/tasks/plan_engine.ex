@@ -486,7 +486,7 @@ defmodule Platform.Tasks.PlanEngine do
   Build deploy stages for a task based on its resolved deploy strategy.
 
   Looks up the task's project deploy strategy via `Tasks.resolve_deploy_strategy/1`,
-  then calls `DeployStageBuilder.build_stage/2` to produce stage definitions.
+  then calls `DeployStageBuilder.build_stage/3` to produce stage definitions.
 
   If the task already has an approved plan, the deploy stage position is set to
   follow the last existing stage. Otherwise, it starts at position 1.
@@ -530,7 +530,26 @@ defmodule Platform.Tasks.PlanEngine do
               max_position(stages) + 1
           end
 
-        case DeployStageBuilder.build_stage(strategy, next_position) do
+        # The branch is RECORDED onto each scoped `pr_merged` gate here, at
+        # mint time, rather than re-derived by the consumer. See
+        # `DeployStageBuilder`'s moduledoc: the derivation
+        # (`HeartbeatScheduler.member_slug/1`) answers a UUIDv7 time bucket
+        # for a non-stack task, so two sibling tasks minted within ~65s share
+        # it and one merge could close both their gates.
+        #
+        # `StackDeployer.member_branch_for/1` and not a fourth spelling of
+        # the derivation: it is the existing `Platform.Tasks.*` helper for
+        # "the branch for this task", already aliased above, and its
+        # `@doc false` comment is the in-tree record of this defect class.
+        # Reaching for `HeartbeatScheduler.member_slug/1` from `Platform.Tasks`
+        # directly would make the `Tasks -> Orchestration` reference mutual
+        # (`tasks.ex:1679-1696`); a sibling submodule calling it is already
+        # established, the top-level context calling it is not.
+        case DeployStageBuilder.build_stage(
+               strategy,
+               next_position,
+               StackDeployer.member_branch_for(task)
+             ) do
           :skip -> {:ok, :skip}
           stage_def -> {:ok, [stage_def]}
         end
@@ -911,7 +930,13 @@ defmodule Platform.Tasks.PlanEngine do
           # deploy stage at all.
           strategy = Tasks.resolve_deploy_strategy_with_repos(task)
 
-          case DeployStageBuilder.build_stage(strategy, max_position(stages) + 1) do
+          # Recorded branch — see the identical call in `build_deploy_plan/1`
+          # for why it is recorded here rather than derived by the consumer.
+          case DeployStageBuilder.build_stage(
+                 strategy,
+                 max_position(stages) + 1,
+                 StackDeployer.member_branch_for(task)
+               ) do
             :skip ->
               # No deploy stage to inject — complete normally. The reason is
               # split by strategy type because `:skip` collapses two strategies
@@ -937,7 +962,7 @@ defmodule Platform.Tasks.PlanEngine do
     end
   end
 
-  # `DeployStageBuilder.build_stage/2` returns a bare `:skip` for TWO strategy
+  # `DeployStageBuilder.build_stage/3` returns a bare `:skip` for TWO strategy
   # types — `"none"` and `"no_op_wait_for_rollup"` — and they mean opposite
   # things for the task's terminal status:
   #

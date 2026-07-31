@@ -126,7 +126,11 @@ defmodule Platform.Tasks.AutoMergerTest do
       }
 
       [core, bridge] =
-        Platform.Tasks.DeployStageBuilder.build_stage(strategy, 1).validations
+        Platform.Tasks.DeployStageBuilder.build_stage(
+          strategy,
+          1,
+          "task/019fba18-d074-7185-8e0e-032ee6d02fbe"
+        ).validations
 
       assert AutoMerger.should_auto_merge?(strategy, core.evaluation_payload) == :yes
 
@@ -698,7 +702,11 @@ defmodule Platform.Tasks.AutoMergerTest do
       # DeployStageBuilder emits a single pr_merged validation; the merge gate
       # is the GitHub pull_request.closed webhook, not a manual_approval row.
       stage_def =
-        Platform.Tasks.DeployStageBuilder.build_stage(strategy, 1)
+        Platform.Tasks.DeployStageBuilder.build_stage(
+          strategy,
+          1,
+          "task/019fba18-d074-7185-8e0e-032ee6d02fbe"
+        )
 
       assert stage_def.validations == [%{kind: "pr_merged"}]
     end
@@ -712,7 +720,11 @@ defmodule Platform.Tasks.AutoMergerTest do
       assert AutoMerger.should_auto_merge?(strategy)
 
       stage_def =
-        Platform.Tasks.DeployStageBuilder.build_stage(strategy, 1)
+        Platform.Tasks.DeployStageBuilder.build_stage(
+          strategy,
+          1,
+          "task/019fba18-d074-7185-8e0e-032ee6d02fbe"
+        )
 
       assert stage_def.validations == [%{kind: "pr_merged"}]
     end

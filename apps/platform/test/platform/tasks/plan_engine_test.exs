@@ -4,6 +4,7 @@ defmodule Platform.Tasks.PlanEngineTest do
   alias Platform.Tasks
   alias Platform.Tasks.DeployStageBuilder
   alias Platform.Tasks.PlanEngine
+  alias Platform.Tasks.StackDeployer
 
   setup do
     {:ok, project} = Tasks.create_project(%{name: "Engine Project"})
@@ -1222,7 +1223,7 @@ defmodule Platform.Tasks.PlanEngineTest do
   #
   # `PlanEngine` resolves through `Tasks.resolve_deploy_strategy_with_repos/1`,
   # which synthesizes a one-entry `"repos"` list from `project.repo_url` for
-  # every project whose URL normalizes. `DeployStageBuilder.build_stage/2`
+  # every project whose URL normalizes. `DeployStageBuilder.build_stage/3`
   # then takes its `repos when is_list(repos) and repos != []` branch for
   # ORDINARY tasks — the ones that declare nothing — and the single-repo
   # wording stopped rendering anywhere outside a repo-less project.
@@ -1281,7 +1282,8 @@ defmodule Platform.Tasks.PlanEngineTest do
       assert deploy_stage.description ==
                DeployStageBuilder.build_stage(
                  %{"type" => "pr_merge", "config" => %{}},
-                 deploy_stage.position
+                 deploy_stage.position,
+                 StackDeployer.member_branch_for(task)
                ).description,
              "the injected deploy stage must render the SAME description a task " <>
                "that declares no repo set has always rendered"
