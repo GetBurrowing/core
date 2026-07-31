@@ -119,8 +119,18 @@ defmodule Platform.Orchestration.TaskRouterWatcherSandboxIsolationTest do
   end
 
   setup tags do
-    watcher = Process.whereis(TaskRouterWatcher)
-    assert watcher, "TaskRouterWatcher must be running for these tests to mean anything"
+    # Task 019fb978 stage 2: the watcher is gated off in test
+    # (`:start_task_router_watcher`, config/test.exs) because the global
+    # singleton raised 145 sandbox-ownership violations per full-suite run by
+    # servicing broadcasts on connections belonging to already-finished tests.
+    # This file owns its watcher for the duration of one test instead.
+    #
+    # Started BEFORE the mode switch below, deliberately: the switch checks
+    # the shared connection back in and drops every allowance derived from
+    # it, which is what makes the `Sandbox.allow/3` assertion below return
+    # `:ok` rather than `{:already, :allowed}` — and what leaves the watcher
+    # genuinely unowned on the `:unowned_watcher` branch.
+    watcher = start_supervised!(TaskRouterWatcher)
 
     assert :ets.info(@lease_table) != :undefined,
            "the #{inspect(@lease_table)} ETS table must exist for the snapshot assertions"

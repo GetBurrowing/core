@@ -13,6 +13,18 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
   setup do
     Ecto.Adapters.SQL.Sandbox.mode(Platform.Repo, {:shared, self()})
 
+    # Task 019fb978 stage 2: the watcher is no longer a globally-supervised
+    # singleton in test (`:start_task_router_watcher`, config/test.exs), so
+    # this file starts its own. Started AFTER the shared-mode switch — that
+    # switch checks the connection back in and drops every allowance derived
+    # from it, so a watcher started before it would run `boot_reconcile/0`
+    # against a connection about to be revoked.
+    #
+    # ExUnit terminates supervised children before any `on_exit/2` callback
+    # runs, so this instance dies while DataCase's sandbox owner is still
+    # alive — the ordering the global singleton could never offer.
+    start_supervised!(TaskRouterWatcher)
+
     {:ok, project} =
       Tasks.create_project(%{
         name: "Watcher Test Project #{System.unique_integer([:positive])}",

@@ -2289,6 +2289,17 @@ defmodule Platform.Orchestration.TaskRouterTest do
     test "no router at all: a past-deadline gate stops blocking approval via the LEVEL check", %{
       project: project
     } do
+      # Task 019fb978 stage 2 gated the watcher off in test
+      # (`:start_task_router_watcher`, config/test.exs). This is the ONLY test
+      # in this file where the watcher is the actor, so it starts its own —
+      # and it MUST, because the barrier below is `TaskRouterWatcher.sync/0`,
+      # a `GenServer.call` that would exit `:noproc` without a live watcher.
+      #
+      # Leaving it unstarted would be worse than a crash: the assertion here
+      # is that a router is ABSENT, and "the watcher does not exist" satisfies
+      # that vacuously. Starting it is what keeps the absence meaningful.
+      start_supervised!(Platform.Orchestration.TaskRouterWatcher)
+
       # `TaskRouterWatcher.should_run?/1` requires `assignee_type == "agent"`,
       # so a task assigned to a USER for planning never gets a router and
       # therefore never arms a deadline timer. If the timer were the

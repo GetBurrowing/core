@@ -70,10 +70,38 @@ config :platform, :meetings_summary, %{
   temperature: 0.3
 }
 
+# TaskRouterWatcher — do NOT boot the global singleton in test.
+#
+# Task 019fb978 stage 1 measured a full-suite run and found 212 sandbox
+# ownership violations, 145 of them (68%) raised by this one process. The
+# violations do not fail the test that causes them: each force-disconnects a
+# pooled connection, and whichever unrelated test happens to be holding that
+# connection dies instead. That is the "1 failure per run, green on --failed"
+# signature this flake has always had.
+#
+# More guarding cannot fix it. `SandboxGuard`'s own preconditions are Repo
+# calls (`connection_owned?/0` checks a connection out; `*_row_visible?/1`
+# runs a SELECT EXISTS), so `guarded/3` rescues AFTER Postgrex has already
+# killed the connection — it appears in 289 of the violation stacks. The
+# hazard is the process existing at all during tests that are not about it.
+#
+# So it is gated off here, mirroring the other Repo-touching singletons
+# (:start_meeting_notifier, :start_attention_router, the sweepers and
+# purgers). It is removed from `supervised_with_repo` in
+# test/support/data_case.ex, and the three files that need a LIVE watcher
+# start their own per-case instance with `start_supervised!/1` and allow it
+# onto their own connection. That is strictly more correct than the global:
+# per-test lifecycle, no cross-test leakage.
+#
+# Note for task 019fb977: watcher teardown/respawn behaviour is no longer
+# observable through the global singleton in test — its tests must
+# `start_supervised!` a watcher too.
+config :platform, :start_task_router_watcher, false
+
 # TaskRouterWatcher autonomous reconcile tick.
-# The watcher boots as a global singleton in test (it's allow-listed into
-# the current DataCase sandbox, see test/support/data_case.ex) so tests can
-# drive it. Its 5-minute self-firing `:reconcile` tick does Repo work that
+# Still set for the per-case instances the watcher's own tests start: a tick
+# firing after the owning test exits would crash that instance. Its 5-minute
+# self-firing `:reconcile` tick does Repo work that
 # isn't fully rescued in `handle_info(:reconcile)`, so a tick that fires
 # after the owning test has exited crashes the watcher. That crash is only
 # catastrophic because of the restart loop in `init/1` — now guarded by

@@ -437,19 +437,71 @@ defmodule Platform.Execution.LocalRunnerTest do
     Run.new(run_id, "task-#{run_id}", [])
   end
 
-  defp temp_dir(prefix) do
-    path =
+  # Every temp path in this file hangs off ONE root that is unique to this
+  # BEAM run and is deleted when the module finishes.
+  #
+  # Task 019fb978 stage 1 measured why. The old construction was
+  # `Path.join(System.tmp_dir!(), "#{prefix}-#{System.unique_integer(...)}")`:
+  # `System.tmp_dir!()` is machine-global and `System.unique_integer/1` is
+  # unique only within ONE VM, restarting from a low value in every new
+  # `mix test`. The product is therefore NOT unique across runs — every run
+  # reissued `/tmp/git-repo-48`, `/tmp/wt-root-51`, `run-61`, and nothing ever
+  # deleted them. Census on the measuring box found 776 `workspace-root-*`,
+  # 501 `no-cmd-*` and 450 `spawn-root-*` directories left behind.
+  #
+  # Two ways that bit. `setup_temp_git_repo/0` re-entered an existing repo, so
+  # `git remote add origin` printed "error: remote origin already exists." and
+  # a stale worktree registration survived — a later run asking for the same
+  # branch got `fatal: '<branch>' is already used by worktree at ...` (exit
+  # 128). And `printenv GITHUB_TOKEN > <output_file>` opens `O_TRUNC`, so a
+  # second run regenerating the same `run_id` truncated the first run's file
+  # between its write and its read.
+  #
+  # Measured: 8 of 20 runs failing on a shared `/tmp` (40%, which reproduces
+  # the banked ~1-in-3), 1 of 12 into a private-but-REUSED dir (and that one
+  # was run 02, colliding with run 01's leavings), 0 of 12 with a fresh root
+  # per run. Residue is the mechanism; concurrency only widens the window,
+  # which is why cleanup is half the fix and not an afterthought.
+  #
+  # Randomness rather than a counter is the point: the value has to be unique
+  # across OS processes, and no per-VM counter can be.
+  setup_all do
+    root =
       Path.join(
         System.tmp_dir!(),
-        "#{prefix}-#{System.unique_integer([:positive, :monotonic])}"
+        "platform-local-runner-test-#{unique_token()}"
       )
+
+    File.mkdir_p!(root)
+    :persistent_term.put({__MODULE__, :temp_root}, root)
+
+    on_exit(fn ->
+      File.rm_rf(root)
+      :persistent_term.erase({__MODULE__, :temp_root})
+    end)
+
+    :ok
+  end
+
+  defp temp_root do
+    :persistent_term.get({__MODULE__, :temp_root})
+  end
+
+  defp temp_dir(prefix) do
+    path = Path.join(temp_root(), "#{prefix}-#{unique_token()}")
 
     File.mkdir_p!(path)
     path
   end
 
   defp unique_run_id do
-    "run-#{System.unique_integer([:positive, :monotonic])}"
+    "run-#{unique_token()}"
+  end
+
+  # Lowercase base32, no padding: safe as a path segment AND as a git branch
+  # name (the branch built in `setup_temp_git_repo/0` interpolates one).
+  defp unique_token do
+    Base.encode32(:crypto.strong_rand_bytes(10), case: :lower, padding: false)
   end
 
   defp assert_file_eventually(path, timeout \\ 1_000) do
@@ -477,7 +529,7 @@ defmodule Platform.Execution.LocalRunnerTest do
   # Set up a minimal local git repo for worktree tests
   defp setup_temp_git_repo do
     repo = temp_dir("git-repo")
-    branch = "run-wt-#{System.unique_integer([:positive, :monotonic])}"
+    branch = "run-wt-#{unique_token()}"
 
     System.cmd("git", ["init", "--initial-branch=main"], cd: repo, stderr_to_stdout: true)
     System.cmd("git", ["config", "user.email", "test@suite.local"], cd: repo)

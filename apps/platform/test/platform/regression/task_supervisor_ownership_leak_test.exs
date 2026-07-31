@@ -134,7 +134,6 @@ defmodule Platform.Regression.TaskSupervisorOwnershipLeakTest do
 
   alias Platform.Meetings
   alias Platform.Meetings.Summarizer
-  alias Platform.Orchestration.TaskRouterWatcher
   alias Platform.Repo
   alias Platform.Roles.RoleResponsibility
 
@@ -212,8 +211,6 @@ defmodule Platform.Regression.TaskSupervisorOwnershipLeakTest do
       # 216 calls `Meetings.fail_transcript/1` a SECOND time — which
       # raises again and ESCAPES the rescue (a rescue block does not
       # wrap itself). That escape is the leak.
-
-      watcher_pid = Process.whereis(TaskRouterWatcher)
 
       # ── Force the sandbox-unowned scenario ──
       #
@@ -385,18 +382,23 @@ defmodule Platform.Regression.TaskSupervisorOwnershipLeakTest do
              #{log_output}
              """
 
-      # ── Belt (C) ──
-      # TaskRouterWatcher stays alive. Not directly proven by this
-      # isolated test on `b3339a24` — the watcher only crashes when a
-      # concurrent `{:task_updated, ...}` broadcast races with the
-      # escape. But it's a cheap invariant to guard against future
-      # regressions where the fix leaks OwnershipError into the
-      # supervision tree via a different path.
-      if watcher_pid do
-        assert Process.alive?(watcher_pid),
-               "TaskRouterWatcher terminated during cascade — sandbox leak reached the singleton GenServer"
-      end
-
+      # ── Belt (C): DELETED in task 019fb978 stage 2, deliberately ──
+      #
+      # This belt asserted `Process.alive?(Process.whereis(TaskRouterWatcher))`
+      # behind an `if watcher_pid do` guard. Stage 2 gated the watcher off in
+      # test (`:start_task_router_watcher`, config/test.exs), so `whereis/1` is
+      # now always `nil` and the guard always false — the assertion would never
+      # execute again.
+      #
+      # It is removed rather than left in place because an assertion that can
+      # no longer run is worse than no assertion: it reads as coverage. This is
+      # a REAL, named coverage loss (the belt was already documented above as
+      # "not directly proven by this isolated test"), and it is recorded as one
+      # rather than papered over. It is NOT re-established by starting a
+      # per-case watcher here: this module is `async: true` precisely so the
+      # sandbox is per-owner, and adding a Repo-touching singleton to it would
+      # reintroduce the hazard stage 2 exists to remove.
+      #
       # ── Belt (D) ──
       # The test process's own sandbox connection still works — proves
       # the child's exit didn't invalidate the owner chain for us.

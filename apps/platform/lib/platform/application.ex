@@ -65,8 +65,11 @@ defmodule Platform.Application do
            Platform.Orchestration.LeaseManager,
            # Orchestration — task router supervisor (registry started above)
            Platform.Orchestration.TaskRouterSupervisor,
-           # Orchestration — declarative watcher: starts/stops routers based on task state
-           Platform.Orchestration.TaskRouterWatcher,
+           # Orchestration — declarative watcher: starts/stops routers based on
+           # task state. NOT listed inline: it is inserted here by
+           # `maybe_add_task_router_watcher/1`, which gates it on
+           # `:start_task_router_watcher` (false in test).
+           #
            # Node context — ETS-backed space tracking for node canvas commands
            Platform.Federation.NodeContext,
            # Federation runtime presence tracker — before Endpoint so channels can use it
@@ -111,6 +114,7 @@ defmodule Platform.Application do
            # Start to serve requests, typically the last entry
            PlatformWeb.Endpoint
          ])
+      |> maybe_add_task_router_watcher()
       |> maybe_add_attention_router()
       |> maybe_add_node_client()
       |> maybe_add_responsibilities_registry()
@@ -156,6 +160,30 @@ defmodule Platform.Application do
       []
     else
       [Platform.Chat.AttachmentStorage.BootCheck]
+    end
+  end
+
+  # TaskRouterWatcher (task 019fb978 stage 2) — the declarative router
+  # watcher. Subscribes to `tasks:board` at `init/1` and runs Repo queries
+  # from its own process on every `{:task_created | :task_updated, task}` and
+  # `{:runtime_reconnected, runtime_id}` broadcast.
+  #
+  # MUST run FIRST in the pipeline, before `maybe_add_attention_router/1`,
+  # which uses this child as its insertion anchor: putting the watcher back
+  # into the list here keeps that anchor resolving exactly as it did when the
+  # watcher was listed inline.
+  #
+  # Disabled in test env; the five files that need a live watcher start their
+  # own per-case instance and `Sandbox.allow/3` it themselves. See
+  # `config/test.exs` for the measurement that motivated the gate.
+  defp maybe_add_task_router_watcher(children) do
+    if Application.get_env(:platform, :start_task_router_watcher, true) do
+      idx =
+        Enum.find_index(children, &(&1 == Platform.Federation.NodeContext)) || length(children)
+
+      List.insert_at(children, idx, Platform.Orchestration.TaskRouterWatcher)
+    else
+      children
     end
   end
 

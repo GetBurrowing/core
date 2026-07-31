@@ -57,11 +57,19 @@ defmodule Platform.DataCase do
     # raise DBConnection.OwnershipError. Parent is the owner agent — in
     # `async: true` the test process is itself only an *allowed* process, so
     # passing `self()` here would no longer name an owner.
+    #
+    # `Platform.Orchestration.TaskRouterWatcher` was removed from this list in
+    # task 019fb978 stage 2. Allow-listing it here was never sufficient: the
+    # allowance binds the watcher to THIS test's connection, and the watcher
+    # is a global singleton subscribed to `tasks:board`, so the NEXT test's
+    # broadcast reaches a process still bound to the previous — now dead —
+    # connection. Measured at 145 ownership violations per full-suite run.
+    # It is now gated off in test entirely (`:start_task_router_watcher`,
+    # config/test.exs) and started per-case by the tests that need it.
     supervised_with_repo = [
       Platform.Chat.AttentionRouter,
       Platform.Agents.ContextBroker,
       Platform.Chat.ContextPlane,
-      Platform.Orchestration.TaskRouterWatcher,
       Platform.Responsibilities.Router
     ]
 

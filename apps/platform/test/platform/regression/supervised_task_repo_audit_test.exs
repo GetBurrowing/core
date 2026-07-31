@@ -200,6 +200,21 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # soft-deleted platform_files (bytes + row) once the 30-day restore
     # window elapses. Tests call `Platform.Files.Purger.sweep/1` directly.
     :start_file_purger,
+    # Task 019fb978 stage 2 — the declarative TaskRouter watcher. This entry
+    # is the audit test working exactly as designed: adding the gate to
+    # application.ex failed this assertion on the first full-suite run, which
+    # is what forced the flag to be registered here rather than left
+    # defaulting to `true` in some future environment.
+    #
+    # The measurement behind it: as an ungated singleton it raised 145 of the
+    # 212 sandbox-ownership violations in a full-suite run (68%), by
+    # servicing `tasks:board` broadcasts on connections owned by tests that
+    # had already finished. The 2026-07-03 cascade this list guards against
+    # is the same shape — see the rationale below and
+    # notes/2026-07-31-execution-flake-localization.md.
+    #
+    # Tests that need a live watcher `start_supervised!/1` their own.
+    :start_task_router_watcher,
     # Task 019fa63a stage 6 — polls `gh pr list` for merges in repositories
     # that have no webhook installed, so their per-repo `pr_merged` gate can
     # be passed on an observed merge instead of hanging forever. Tests call
