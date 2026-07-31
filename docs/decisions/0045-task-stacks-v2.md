@@ -85,6 +85,18 @@ The gate lives in the plan-engine transition function — no member task transit
 - **`stack.deploy`** — engine opens PR `stack/<name>` → `main`. CI runs against the rollup. On merge, `stack/<name>` is deleted.
 - **`stack.abandon`** — rollup branch left in place, no cleanup. Human-driven.
 
+### Branch model
+
+Amended by task `019fb949`. This section states the naming rule for **every** task, not only stack members, and is the section source comments cite.
+
+**The rule.** A task's worktree path is `../worktrees/<full task uuid>` and its branch is `task/<full task uuid>`. Both are a pure function of `tasks.id` and nothing else — no random suffix, no timestamp, no descriptive slug, no truncation. What the branch is cut *from* varies — rollup HEAD for a stack member, `epic.target_branch || project.default_branch` otherwise, per ADR 0031's epic-level target-branch section. What it is *called* does not.
+
+**Why the full 36 characters and not a prefix.** Task ids are UUIDv7: `<<timestamp_ms::big-48, 0b0111::4, rand_a::12, 0b10::2, rand_b::62>>`. The first 8 hex characters are the high 32 bits of the 48-bit millisecond timestamp, so they are **constant across a 2^16 ms ≈ 65.5-second aligned bucket**. Two tasks filed a few seconds apart do not *risk* a collision, they collide deterministically — which is how one incident put two live executors on the same `task/<8-char>` branch and the same worktree directory. Twelve characters cover the whole millisecond, narrowing the collision to same-millisecond creation, which is exactly what a batch insert from one agent produces. Sixteen add a constant version nibble plus 12 bits of `rand_a` drawn from a CSPRNG rather than a counter: a silent 1-in-4096 per same-millisecond pair, birthday-scaled across a batch. Only the full id inherits the primary key's uniqueness instead of arguing for it from bit widths.
+
+**Second-order benefit.** The full form is the only one that takes the exact-equality path in `Platform.Changelog.extract_task_id_from_branch/1`. A prefix has to be resolved by LIKE-search, which must fail closed when it is ambiguous — so under truncation the deploy round-trip returned `nil` for exactly the colliding pairs it most needed to resolve. Deploy attribution was silently broken, not merely at risk. The visible cost is downstream of the `nil`: the changelog row lands unattributed, the `pr_merged` validation never closes, and the task parks in `deploying` until someone hand-passes it — twice on 2026-07-31, against `019fa63a-86a5` and `019fa63a-02a0`.
+
+The cost is a 36-character directory name. Stack members have paid it since the v1 implementation; task `019fb949` extended it to non-stack tasks, deleting the truncating helper so no call site can reintroduce a short form.
+
 ### Cross-stack invariants (decision 6c)
 
 `stack_add(stack_id, task_id)` is rejected if the task is already a member of another stack. `stack_add_dependency(a, b)` is rejected if `a` and `b` are in different stacks. These are engine-level constraints, not UI conventions.

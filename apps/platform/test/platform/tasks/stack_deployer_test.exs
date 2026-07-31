@@ -769,11 +769,20 @@ defmodule Platform.Tasks.StackDeployerTest do
       assert expected_slug == id
     end
 
-    test "a NON-stack task still gets the legacy 8-char short form" do
-      # Deliberate, not incidental: non-stack dispatch output must stay
-      # byte-for-byte unchanged. `member_slug/1` decides off the
-      # `tasks.stack_id` column, so a task with `stack_id: nil` keeps the
-      # first hyphen-segment.
+    test "a NON-stack task gets the full uuid, same as a member" do
+      # This test previously read "a NON-stack task still gets the legacy
+      # 8-char short form", and its comment called that byte-for-byte
+      # compatibility "deliberate, not incidental". Task 019fb949 abandons the
+      # compatibility on purpose, because the truncation it preserved is
+      # ambiguous by construction rather than by bad luck: chars 1-8 of a
+      # UUIDv7 are the high 32 bits of the 48-bit millisecond timestamp, so
+      # every task filed inside the same 65.536-second aligned bucket
+      # truncates to an identical slug. Two such tasks were dispatched to one
+      # worktree on one branch. Keeping non-stack output stable was only worth
+      # something while that output was correct.
+      #
+      # `member_slug/1` no longer consults `tasks.stack_id` at all, so all
+      # three helpers below agree for a lone task and for a member alike.
       id = "019f9b28-ab82-7c11-9d0a-000000000004"
 
       project = project_with_repo!()
@@ -789,9 +798,12 @@ defmodule Platform.Tasks.StackDeployerTest do
         |> Platform.Repo.insert!()
 
       assert is_nil(task.stack_id)
-      assert Platform.Orchestration.HeartbeatScheduler.member_slug(task) == "019f9b28"
-      assert StackDeployer.member_branch_for(task) == "task/019f9b28"
-      assert StackDeployer.member_slug_for(task) == "019f9b28"
+      assert Platform.Orchestration.HeartbeatScheduler.member_slug(task) == id
+      assert StackDeployer.member_branch_for(task) == "task/#{id}"
+      assert StackDeployer.member_slug_for(task) == id
+
+      # The truncated form is gone from every one of them.
+      refute StackDeployer.member_branch_for(task) == "task/019f9b28"
     end
   end
 

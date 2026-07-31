@@ -1564,9 +1564,299 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert HeartbeatScheduler.member_slug(task) == "019e2474-11c1-7000-8000-000000000001"
     end
 
-    test "returns the short 8-char prefix for a non-stack task" do
+    test "returns the full UUID for a non-stack task too" do
+      # This assertion is inverted from what it pinned before task 019fb949,
+      # and the reversal is deliberate. It used to read "returns the short
+      # 8-char prefix for a non-stack task", recording a choice to keep
+      # non-stack dispatch output byte-for-byte unchanged when PR #615 fixed
+      # the stack path. That choice was wrong: chars 1-8 of a UUIDv7 are the
+      # high 32 bits of its millisecond timestamp, so every task filed in the
+      # same ~65-second bucket truncates to the same slug — one worktree, one
+      # branch, two executors. Membership now decides only whether the
+      # `## Task Stack Membership` block renders, never the slug.
       task = %{id: "019e2474-11c1-7000-8000-000000000001", stack_id: nil}
-      assert HeartbeatScheduler.member_slug(task) == "019e2474"
+      assert HeartbeatScheduler.member_slug(task) == "019e2474-11c1-7000-8000-000000000001"
+    end
+
+    test "membership does not change the slug — same id, member and non-member alike" do
+      id = "019e2474-11c1-7000-8000-000000000001"
+      lone = %{id: id, stack_id: nil}
+
+      member = %{
+        id: id,
+        stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        stack: %{id: "019e2782-09d6-7e2c-9502-c106290e5add", slug: "meeting-module"}
+      }
+
+      assert HeartbeatScheduler.member_slug(lone) == HeartbeatScheduler.member_slug(member)
+    end
+  end
+
+  # ── Task 019fb949 ────────────────────────────────────────────────────────
+  # RED ON PURPOSE at the time of writing. `member_slug/1` truncates to the
+  # first hyphen-segment for a NON-stack task, so both prompts below render the
+  # byte-identical `git worktree add ../worktrees/019fb90f -b task/019fb90f
+  # origin/main` and two concurrently-dispatched executors are sent into one
+  # worktree on one branch. These assertions fail until the non-stack path also
+  # routes through `full_task_id/1`.
+  #
+  # The collision is DETERMINISTIC, not a race. `Platform.Types.UUIDv7.generate/0`
+  # lays out `<<timestamp_ms::big-48, ...>>`, so chars 1-8 of the id are the HIGH
+  # 32 BITS of the 48-bit millisecond timestamp — constant across a 2^16 ms =
+  # 65.536-second aligned bucket. The two literal ids below are the real
+  # incident pair; they differ by 0x6226 - 0x36e3 = 11_075 ms, i.e. the tasks
+  # were filed eleven seconds apart. Every task filed in the same ~minute-wide
+  # bucket collides this way, which is why the fixtures are literal ids rather
+  # than generated ones.
+  describe "worktree/branch slugs for tasks sharing an 8-char id prefix" do
+    @collide_a "019fb90f-36e3-7bff-a6f1-69cd689faa59"
+    @collide_b "019fb90f-6226-7c68-9ec2-7bbc9378e8e2"
+
+    setup do
+      {plan, stage} = simple_plan_with_stage()
+
+      {:ok,
+       prompt_a: HeartbeatScheduler.dispatch_prompt(colliding_task(@collide_a), plan, stage),
+       prompt_b: HeartbeatScheduler.dispatch_prompt(colliding_task(@collide_b), plan, stage)}
+    end
+
+    # `stack_id: nil` is the whole point — the stack path was already fixed and
+    # this is the path it deliberately left behind. The real-looking `repo_url`
+    # is load-bearing: a placeholder URL makes `maybe_strip_git_workflow/2`
+    # delete the entire Git Workflow block, and every assertion below would then
+    # pass vacuously against a prompt that contains no git commands at all.
+    defp colliding_task(id) do
+      %{
+        id: id,
+        title: "Colliding task",
+        status: "in_progress",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: nil
+      }
+    end
+
+    defp line_containing(prompt, needle) do
+      prompt
+      |> String.split("\n")
+      |> Enum.find(fn line -> String.contains?(line, needle) end)
+    end
+
+    # Anti-vacuity guard. If the Git Workflow block were stripped, the three
+    # tests below would "pass" by asserting things about nothing.
+    test "both prompts actually carry a Git Workflow block", ctx do
+      assert ctx.prompt_a =~ "Git Workflow (CRITICAL)"
+      assert ctx.prompt_b =~ "Git Workflow (CRITICAL)"
+      assert line_containing(ctx.prompt_a, "git worktree add")
+      assert line_containing(ctx.prompt_b, "git worktree add")
+    end
+
+    test "the two tasks are sent to different worktree paths", ctx do
+      add_a = line_containing(ctx.prompt_a, "git worktree add")
+      add_b = line_containing(ctx.prompt_b, "git worktree add")
+
+      assert add_a =~ "../worktrees/#{@collide_a}"
+      assert add_b =~ "../worktrees/#{@collide_b}"
+      refute add_a == add_b
+    end
+
+    test "the two tasks are sent to different branches", ctx do
+      branch_of = fn prompt ->
+        case Regex.run(~r{-b (task/\S+)}, prompt) do
+          [_, branch] -> branch
+          nil -> nil
+        end
+      end
+
+      assert branch_of.(ctx.prompt_a) == "task/#{@collide_a}"
+      assert branch_of.(ctx.prompt_b) == "task/#{@collide_b}"
+      refute branch_of.(ctx.prompt_a) == branch_of.(ctx.prompt_b)
+    end
+
+    test "neither prompt mentions the truncated 8-char slug anywhere", ctx do
+      for prompt <- [ctx.prompt_a, ctx.prompt_b] do
+        refute prompt =~ "../worktrees/019fb90f "
+        refute prompt =~ "-b task/019fb90f "
+        refute prompt =~ "git push -u origin task/019fb90f\n"
+      end
+
+      # "Anywhere" literally. Enumerating known call sites left a hole: the
+      # commit-message line ("referencing task <id>") interpolated the
+      # truncated id too and none of the three refutes above could see it —
+      # verified by mutation. Delete every legitimate full-uuid occurrence and
+      # assert the residue never names the shared prefix, so a NEW truncating
+      # interpolation reddens this test without anyone remembering to add a
+      # refute for it.
+      for {prompt, id} <- [{ctx.prompt_a, @collide_a}, {ctx.prompt_b, @collide_b}] do
+        residue = String.replace(prompt, id, "<FULL_ID>")
+
+        refute residue =~ "019fb90f",
+               "prompt still names the ambiguous 8-char prefix outside a full uuid: " <>
+                 inspect(line_containing(residue, "019fb90f"))
+      end
+    end
+  end
+
+  # ── Task 019fb949 stage 3 ────────────────────────────────────────────────
+  # Unique slugs stop two CONCURRENT dispatches from colliding, but they do
+  # nothing about a worktree that already exists for another reason: a stale
+  # tree from an earlier task, a redispatch after a blocker, a hand-created
+  # directory. The platform never runs `git worktree add` for a non-stack task —
+  # the executor agent does, on its own box — so the dispatch prompt is the only
+  # lever the orchestrator holds over that shell, and rendered text is the guard.
+  # These assertions are therefore the ONLY thing holding it in place; there is
+  # no server-side behavior to fall back on.
+  describe "worktree preflight in the Git Workflow block" do
+    # Two ids differing only in the FINAL character. Any truncation, at any
+    # width short of the full uuid, renders these two prompts identical — so the
+    # cross-refutes below double as a truncation detector.
+    @preflight_solo_id "019e2474-11c1-7000-8000-00000000000a"
+    @preflight_member_id "019e2474-11c1-7000-8000-00000000000b"
+
+    setup do
+      {plan, stage} = simple_plan_with_stage()
+
+      solo = %{
+        id: @preflight_solo_id,
+        title: "Ordinary task",
+        status: "in_progress",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: nil
+      }
+
+      member = %{
+        id: @preflight_member_id,
+        title: "Stack member task",
+        status: "in_progress",
+        priority: "high",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        stack: meeting_module_stack()
+      }
+
+      {:ok,
+       solo: HeartbeatScheduler.dispatch_prompt(solo, plan, stage),
+       member: HeartbeatScheduler.dispatch_prompt(member, plan, stage)}
+    end
+
+    defp preflight_line(id) do
+      "if [ -d ../worktrees/#{id} ]; then " <>
+        "git -C ../worktrees/#{id} rev-parse --abbrev-ref HEAD; fi"
+    end
+
+    defp preflight_prompts(ctx) do
+      [{ctx.solo, @preflight_solo_id}, {ctx.member, @preflight_member_id}]
+    end
+
+    test "both renderers emit the preflight with the task's OWN slug interpolated", ctx do
+      assert ctx.solo =~ preflight_line(@preflight_solo_id)
+      assert ctx.member =~ preflight_line(@preflight_member_id)
+
+      # The slug is the task's, not a template literal shared by both renders.
+      refute ctx.solo =~ @preflight_member_id
+      refute ctx.member =~ @preflight_solo_id
+    end
+
+    test "the preflight renders as an EXECUTABLE line, not a comment", ctx do
+      # A `=~` assertion cannot tell `if [ -d … ]; then …` from
+      # `# if [ -d … ]; then …` — verified by mutation, the commented-out form
+      # survived every other assertion in this describe. So pin the whole line,
+      # trimmed, by equality: that refuses ANY prefix (a `#`, an `echo`, a
+      # `true &&`) rather than enumerating the ones anyone thought of.
+      for {prompt, id} <- preflight_prompts(ctx) do
+        lines =
+          prompt
+          |> String.split("\n")
+          |> Enum.filter(&String.contains?(&1, "rev-parse --abbrev-ref HEAD"))
+          |> Enum.map(&String.trim/1)
+
+        assert lines == [preflight_line(id)],
+               "the preflight must be exactly one runnable command line, got: #{inspect(lines)}"
+      end
+    end
+
+    test "both renderers tell the executor to refuse a mismatched worktree", ctx do
+      for {prompt, id} <- preflight_prompts(ctx) do
+        assert prompt =~ "Preflight printed ANYTHING ELSE: STOP."
+        assert prompt =~ "do NOT `git worktree add` over it"
+
+        assert prompt =~
+                 "Call `report_blocker` naming both the expected branch `task/#{id}` " <>
+                   "and the actual branch the preflight printed"
+
+        # A refusal with no permitted alternative is what left the second
+        # executor in the incident with no correct move. Both other outcomes
+        # must resolve to a named action.
+        assert prompt =~ "Preflight printed NOTHING: the worktree does not exist."
+        assert prompt =~ "this is a redispatch of THIS task"
+      end
+    end
+
+    test "the preflight renders BEFORE git worktree add, not after it", ctx do
+      for {prompt, id} <- preflight_prompts(ctx) do
+        {preflight_at, _} = :binary.match(prompt, preflight_line(id))
+        {add_at, _} = :binary.match(prompt, "git worktree add ../worktrees/#{id}")
+
+        assert preflight_at < add_at,
+               "an instruction rendered AFTER the destructive command is decoration; " <>
+                 "preflight at #{preflight_at}, `git worktree add` at #{add_at}"
+      end
+    end
+
+    test "step 4 no longer forbids reusing this task's own worktree", ctx do
+      for {prompt, id} <- preflight_prompts(ctx) do
+        # The old wording ("NEVER work on an existing branch. ALWAYS branch from
+        # latest origin/<default>") is false on every redispatch and contradicts
+        # the preflight's reuse case. It must be gone, not merely supplemented.
+        refute prompt =~ "NEVER work on an existing branch"
+        assert prompt =~ "NEVER work on ANOTHER task's branch"
+        assert prompt =~ "reuse an existing worktree ONLY when its HEAD is `task/#{id}`"
+      end
+    end
+
+    test "the two renderers emit a byte-identical guard, modulo the slug", ctx do
+      guard_of = fn prompt, id ->
+        prompt
+        |> String.split("\n")
+        |> Enum.filter(&(String.contains?(&1, "reflight") or String.contains?(&1, "rev-parse")))
+        |> Enum.map_join("\n", &String.replace(&1, id, "<SLUG>"))
+      end
+
+      solo_guard = guard_of.(ctx.solo, @preflight_solo_id)
+
+      refute solo_guard == "", "the guard did not render at all"
+      assert solo_guard == guard_of.(ctx.member, @preflight_member_id)
+    end
+
+    # The strip regex runs from `## Git Workflow (CRITICAL)` to the next
+    # `The attention signal` marker with the /s flag, so the added lines are
+    # consumed along with the rest. Proof that it still holds lives in the two
+    # placeholder-repo tests ("in_progress omits git workflow for placeholder
+    # repos …" and "placeholder-repo stack member strips the whole Git Workflow
+    # + Stack Membership block"); this asserts the non-stack half directly so a
+    # regression here is not attributed to an unrelated file.
+    test "a placeholder repo_url still strips the preflight along with the block" do
+      {plan, stage} = simple_plan_with_stage()
+
+      task = %{
+        id: @preflight_solo_id,
+        title: "Placeholder task",
+        status: "in_progress",
+        priority: "medium",
+        project: %{
+          repo_url: "https://example.invalid/local-task-lifecycle-proof",
+          default_branch: "main"
+        },
+        stack_id: nil
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      refute prompt =~ "Git Workflow (CRITICAL)"
+      refute prompt =~ "rev-parse --abbrev-ref HEAD"
+      refute prompt =~ "Preflight"
+      refute prompt =~ "git worktree add"
     end
   end
 
@@ -1718,12 +2008,17 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       refute prompt_g =~ "019e2474-11c1-7000-8000-000000000001"
     end
 
-    test "non-stack task dispatch has NO Task Stack Membership block and uses the 8-char slug", %{
-      plan: plan,
-      stage: stage
-    } do
+    test "non-stack task dispatch has NO Task Stack Membership block but DOES use the full-UUID slug",
+         %{plan: plan, stage: stage} do
+      # Task 019fb949 split what membership controls. Before, membership picked
+      # both the section shape AND the slug; the 8-char slug asserted here was
+      # a deliberate byte-compatibility pin. The slug is now unconditional, so
+      # this test pins the one thing membership still decides — the presence of
+      # the `## Task Stack Membership` block — against a full-UUID slug.
+      id = "019e2474-11c1-7000-8000-000000000003"
+
       task = %{
-        id: "019e2474-11c1-7000-8000-000000000003",
+        id: id,
         title: "Ordinary task",
         status: "in_progress",
         priority: "medium",
@@ -1734,8 +2029,10 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
 
       refute prompt =~ "Task Stack Membership"
-      assert prompt =~ "git worktree add ../worktrees/019e2474 -b task/019e2474 origin/main"
-      assert prompt =~ "git push -u origin task/019e2474"
+      assert prompt =~ "git worktree add ../worktrees/#{id} -b task/#{id} origin/main"
+      assert prompt =~ "git push -u origin task/#{id}"
+      refute prompt =~ "../worktrees/019e2474 "
+      refute prompt =~ "task/019e2474 "
     end
 
     test "placeholder-repo stack member strips the whole Git Workflow + Stack Membership block",
@@ -1849,8 +2146,12 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       stage: stage
     } do
       # Regression guard: only stack members participate in the retargeting.
+      # The slug is full-UUID for everyone since task 019fb949, so the thing
+      # under test here is the PARENT ref (origin/main, not origin/stack/…).
+      id = "019e2474-11c1-7000-8000-000000000009"
+
       task = %{
-        id: "019e2474-11c1-7000-8000-000000000009",
+        id: id,
         title: "Ordinary task",
         status: "in_progress",
         priority: "medium",
@@ -1860,8 +2161,8 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
 
-      # 8-char slug, main-branched, no stack block, no rollup ref anywhere.
-      assert prompt =~ "git worktree add ../worktrees/019e2474 -b task/019e2474 origin/main"
+      # Full-UUID slug, main-branched, no stack block, no rollup ref anywhere.
+      assert prompt =~ "git worktree add ../worktrees/#{id} -b task/#{id} origin/main"
       refute prompt =~ "Task Stack Membership"
       refute prompt =~ "origin/stack/"
       refute prompt =~ "rollup_branch_ready"
@@ -1902,9 +2203,15 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       refute prompt =~ "pushed to `task/019e2474`"
     end
 
-    test "deploying dispatch for a non-stack task references the 8-char branch unchanged" do
+    test "deploying dispatch for a non-stack task references the full-UUID branch" do
+      # Was "…references the 8-char branch unchanged". The deploy phase has to
+      # name the branch the in_progress dispatch told the executor to push; task
+      # 019fb949 made that the full UUID for every task, so an 8-char reference
+      # here would point the deployer at a ref nobody created.
+      id = "019e2474-11c1-7000-8000-000000000002"
+
       task = %{
-        id: "019e2474-11c1-7000-8000-000000000002",
+        id: id,
         title: "Ordinary deploy",
         description: "Ship it",
         status: "deploying",
@@ -1925,7 +2232,8 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
 
-      assert prompt =~ "pushed to `task/019e2474`"
+      assert prompt =~ "pushed to `task/#{id}`"
+      refute prompt =~ "pushed to `task/019e2474`"
     end
 
     test "in_progress and deploying dispatch for the same stack member name the SAME branch" do
@@ -1983,9 +2291,14 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert assigns.task_slug == "019e2474-11c1-7000-8000-000000000001"
     end
 
-    test "e2e review assigns for a non-stack task carry the 8-char slug unchanged" do
+    test "e2e review assigns for a non-stack task carry the full-UUID slug" do
+      # Was "…carry the 8-char slug unchanged". This assign is the reviewer's
+      # only pointer to a tree, so after task 019fb949 it has to name the
+      # full-UUID worktree the executor actually created.
+      id = "019e2474-11c1-7000-8000-000000000002"
+
       task = %{
-        id: "019e2474-11c1-7000-8000-000000000002",
+        id: id,
         execution_space_id: "space-2",
         project: %{repo_url: "https://github.com/test/app"},
         stack_id: nil
@@ -1995,7 +2308,151 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
       {_template_slug, assigns} = HeartbeatScheduler.select_review_template(pending, task)
 
-      assert assigns.task_slug == "019e2474"
+      assert assigns.task_slug == id
+    end
+  end
+
+  # Task 019fb949 stage 4. Stage 2 changed what NEW dispatches create; this
+  # block covers the tasks that change strands. A task already in flight was
+  # told to push `task/<first-hyphen-segment>` and its branch sits on the
+  # remote under that name, but its deploy dispatch now names
+  # `task/<full-uuid>` — a ref nobody created. Deploy is where the two meet,
+  # because it is the first step that touches a ref an earlier phase made.
+  #
+  # The commands are pinned by EQUALITY over the backtick-delimited spans of
+  # the recovery line rather than by `=~` on any one of them. A substring
+  # match is satisfied by a truncated, unquoted or `--heads`-less variant that
+  # still contains the fragment someone thought to assert on; the span list
+  # refuses everything it is not.
+  describe "transitional branch-name recovery in the pr_merge deploy flow" do
+    @recovery_marker "ls-remote"
+
+    defp deploying_prompt(id, opts \\ []) do
+      strategy =
+        Keyword.get(opts, :deploy_strategy, %{
+          "type" => "pr_merge",
+          "config" => %{"auto_merge" => false}
+        })
+
+      task = %{
+        id: id,
+        title: "Transitional deploy",
+        description: "Ship it",
+        status: "deploying",
+        priority: "high",
+        deploy_strategy: strategy,
+        project: %{repo_url: "https://github.com/test/app", default_branch: "main"},
+        stack_id: Keyword.get(opts, :stack_id)
+      }
+
+      plan = %{version: 1, stages: [%{}, %{}]}
+
+      stage = %{
+        id: "stage-deploy-transitional",
+        position: 2,
+        name: "Deploy",
+        validations: [%{id: "val-pr-merged-transitional", kind: "pr_merged"}]
+      }
+
+      HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+    end
+
+    defp recovery_lines(prompt) do
+      prompt
+      |> String.split("\n")
+      |> Enum.filter(&String.contains?(&1, @recovery_marker))
+      |> Enum.map(&String.trim/1)
+    end
+
+    defp backtick_spans(line) do
+      ~r/`([^`]+)`/
+      |> Regex.scan(line, capture: :all_but_first)
+      |> List.flatten()
+    end
+
+    test "the recovery line carries exactly the two ls-remote commands, full id then prefix" do
+      id = "019fb90f-36e3-7bff-a6f1-69cd689faa59"
+
+      lines = recovery_lines(deploying_prompt(id))
+
+      assert length(lines) == 1,
+             "the recovery guidance must be exactly one line, got: #{inspect(lines)}"
+
+      [line] = lines
+
+      assert backtick_spans(line) == [
+               "git ls-remote --heads origin 'task/#{id}'",
+               "git ls-remote --heads origin 'task/019fb90f*'",
+               "task/#{id}"
+             ]
+    end
+
+    test "the recovered prefix is derived from the id, strictly shorter than it" do
+      # Derived from the rendered output rather than compared to a literal:
+      # the defect this whole task exists to fix is a slug that was SHORTER
+      # than the id it named, so the assertion has to be about the relation
+      # between the two strings, not about one string someone typed out. A
+      # mutation that hands `legacy_branch_prefix` the full slug renders a
+      # perfectly plausible line and is caught only here and by the span pin.
+      id = "019fb90f-6226-7c68-9ec2-7bbc9378e8e2"
+      [line] = recovery_lines(deploying_prompt(id))
+
+      assert [_full_ref_cmd, prefix_cmd, _new_dispatch_ref] = backtick_spans(line)
+      assert [prefix] = Regex.run(~r/'task\/([^*']+)\*'/, prefix_cmd, capture: :all_but_first)
+
+      assert String.starts_with?(id, prefix),
+             "the recovery glob `#{prefix}` is not a prefix of `#{id}` — it would list " <>
+               "branches belonging to unrelated tasks"
+
+      assert byte_size(prefix) < byte_size(id),
+             "the recovery glob equals the full id, so it can only find the branch that " <>
+               "was already established to be missing"
+
+      assert prefix == hd(String.split(id, "-"))
+    end
+
+    test "recovery is offered before the PR is opened, not after" do
+      # An instruction to find the right branch that renders after `2. Open a
+      # PR` is decoration: by then the deployer has already opened a PR
+      # against a ref that does not exist. Same reasoning as the stage-3
+      # preflight ordering assertion.
+      prompt = deploying_prompt("019fb90f-36e3-7bff-a6f1-69cd689faa59")
+
+      assert {recovery_at, _} = :binary.match(prompt, @recovery_marker)
+      assert {open_pr_at, _} = :binary.match(prompt, "2. Open a PR against")
+      assert recovery_at < open_pr_at
+    end
+
+    test "a stack member's deploy dispatch carries the same recovery guidance" do
+      # Members were switched to the full uuid earlier than non-stack tasks,
+      # but a member whose branch predates THAT change is stranded the same
+      # way, and the deployer fetching `task/<8-char>` is a failure this repo
+      # has already seen. Scoping the recovery to non-stack tasks would leave
+      # that hole open.
+      id = "019fb90f-36e3-7bff-a6f1-69cd689faa59"
+
+      prompt =
+        deploying_prompt(id,
+          stack_id: "019e2782-09d6-7e2c-9502-c106290e5add"
+        )
+
+      assert [line] = recovery_lines(prompt)
+      assert hd(backtick_spans(line)) == "git ls-remote --heads origin 'task/#{id}'"
+    end
+
+    test "no other deploy strategy renders the recovery line" do
+      # docker_deploy and manual never reference a task branch, so a recovery
+      # line there would be advice about a ref the flow does not use.
+      for strategy <- [
+            %{"type" => "docker_deploy", "config" => %{"host" => "h", "image" => "i"}},
+            %{"type" => "manual", "config" => %{}}
+          ] do
+        prompt =
+          deploying_prompt("019fb90f-36e3-7bff-a6f1-69cd689faa59", deploy_strategy: strategy)
+
+        assert recovery_lines(prompt) == [],
+               "#{strategy["type"]} rendered transitional pr_merge recovery guidance"
+      end
     end
   end
 
@@ -2360,9 +2817,18 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       # ONE branch name across both worktrees — `Changelog.extract_task_id_from_branch/1`
       # reads the task id off the branch, so a per-repo suffix would break
       # resolution for every repository but one.
-      assert section =~ "../worktrees/task-core -b task/task "
-      assert section =~ "../worktrees/task-openclaw-suite-channel -b task/task "
-      refute section =~ "-b task/task-core"
+      #
+      # The slug is the FULL task id: task 019fb949 deleted the truncating
+      # helper this test's literals were written against. Derived through
+      # `member_slug/1`, the chokepoint the renderer uses, rather than spelled
+      # out again — a hand-written literal here is a second derivation, and
+      # this suite has already been bitten by one (see
+      # `deploy_merge_reconciler_test.exs`).
+      slug = HeartbeatScheduler.member_slug(task)
+
+      assert section =~ "../worktrees/#{slug}-core -b task/#{slug} "
+      assert section =~ "../worktrees/#{slug}-openclaw-suite-channel -b task/#{slug} "
+      refute section =~ "-b task/#{slug}-core"
 
       # The behavioural half of the same bug: one green gate read as a
       # finished deploy.
@@ -2453,11 +2919,26 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
     test "declaring no repos renders the byte-identical Git Workflow section" do
       # Backward-compat pin. Every task in the system today declares no
-      # `"repos"`, so this is the prompt almost every executor receives; the
-      # literal below is the section as it rendered at a6664ede (stage 4 HEAD),
-      # copied verbatim. If a future change to the multi-repo block leaks into
-      # the single-repo path, this fails with a diff rather than silently
-      # rewording nine thousand dispatches.
+      # `"repos"`, so this is the prompt almost every executor receives. If a
+      # future change to the multi-repo block leaks into the single-repo path,
+      # this fails with a diff rather than silently rewording nine thousand
+      # dispatches.
+      #
+      # RE-BASELINED by task 019fb949, which is the only other change entitled
+      # to move these bytes. Two things in the literal below are no longer what
+      # 019fa63a pinned at a6664ede, and both are that task's deliberate
+      # subject rather than multi-repo leakage:
+      #
+      #   * the slug is the FULL task id, not its first hyphen-segment — the
+      #     8-char form is constant across a ~65s UUIDv7 bucket, so siblings
+      #     collided on one branch and one worktree; and
+      #   * the worktree preflight and the reworded step 4, which stop an
+      #     executor adopting a directory that belongs to another task.
+      #
+      # What this test still guards is unchanged and is the reason to keep the
+      # byte-for-byte form: nothing from `### Repositories in scope` may appear
+      # here, and no line may differ from the single-repo rendering except by a
+      # change that owns it.
       {plan, stage} = repo_set_plan_and_stage()
 
       prompt =
@@ -2474,16 +2955,21 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       1. Create a worktree from the latest main branch:
          ```
          git fetch origin
-         git worktree add ../worktrees/task -b task/task origin/main
-         cd ../worktrees/task
+         # Preflight: if the worktree already exists, it MUST be on this task's branch.
+         if [ -d ../worktrees/task-1234abcd ]; then git -C ../worktrees/task-1234abcd rev-parse --abbrev-ref HEAD; fi
+         git worktree add ../worktrees/task-1234abcd -b task/task-1234abcd origin/main
+         cd ../worktrees/task-1234abcd
          ```
+         - Preflight printed NOTHING: the worktree does not exist. Run `git worktree add` exactly as shown.
+         - Preflight printed exactly `task/task-1234abcd`: this is a redispatch of THIS task. Skip `git worktree add`, `cd` into the existing worktree and continue on that branch.
+         - Preflight printed ANYTHING ELSE: STOP. That directory belongs to another task. Do NOT `cd` into it, do NOT commit, do NOT `git worktree add` over it. Call `report_blocker` naming both the expected branch `task/task-1234abcd` and the actual branch the preflight printed.
       2. Do ALL work in the worktree directory.
       3. When implementation is complete:
          - Run the full test suite and lint checks
-         - Commit all changes with a descriptive message referencing task task
-         - Push the branch: `git push -u origin task/task`
+         - Commit all changes with a descriptive message referencing task task-1234abcd
+         - Push the branch: `git push -u origin task/task-1234abcd`
          - Do NOT open a PR yet — PR opening happens in the deploy phase
-      4. NEVER work on an existing branch. ALWAYS branch from latest origin/main.
+      4. NEVER work on ANOTHER task's branch. When creating, branch from latest origin/main; reuse an existing worktree ONLY when its HEAD is `task/task-1234abcd`.
       """
 
       assert git_workflow_section(prompt) == expected

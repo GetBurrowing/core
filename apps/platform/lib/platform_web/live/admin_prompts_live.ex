@@ -1,7 +1,27 @@
 defmodule PlatformWeb.AdminPromptsLive do
   use PlatformWeb, :live_view
 
-  alias Platform.Orchestration.{PromptTemplate, PromptTemplates}
+  alias Platform.Orchestration.{HeartbeatScheduler, PromptTemplate, PromptTemplates}
+
+  # A prompt author reads the preview and the variable sidebar to learn what a
+  # placeholder will hold at render time, so a sample value is a contract
+  # statement, not decoration. `task_slug` sampled as `abc12345` taught an
+  # 8-character branch name that the renderer stopped producing in task
+  # 019fb949 — and that truncation was the defect itself, since tasks filed in
+  # the same ~65-second bucket share their first hyphen segment and collapse
+  # onto one branch. The sample is a full UUID so the preview shows the branch
+  # the executor is actually told to create.
+  @sample_task_slug "019a1b2c-3d4e-7f80-9abc-def012345678"
+
+  # The task shape `deploy_strategy_instructions_for/3` resolves the repository
+  # set and strategy from, for the `dispatch.deploying` preview. A literal
+  # `pr_merge` strategy rather than a project default so the preview shows the
+  # branch-and-PR flow, which is the one a prompt author is usually editing.
+  @sample_deploy_task %{
+    id: "019a1b2c-3d4e-7f80-9abc-def012345678",
+    deploy_strategy: %{"type" => "pr_merge", "config" => %{"auto_merge" => false}},
+    project: %{repo_url: "https://github.com/org/repo", default_branch: "main"}
+  }
 
   @sample_assigns %{
     "dispatch.planning" => %{
@@ -16,7 +36,7 @@ defmodule PlatformWeb.AdminPromptsLive do
       stage_info: "Plan: v1 (stage 1/3 — Setup OAuth providers)\n",
       repo_url: "https://github.com/org/repo",
       default_branch: "main",
-      task_slug: "abc12345",
+      task_slug: @sample_task_slug,
       skills_reference: "(skills attached to this task)",
       federation_preamble: "(federation preamble injected at render time)"
     },
@@ -25,7 +45,7 @@ defmodule PlatformWeb.AdminPromptsLive do
       stage_info: "Plan: v1 (stage 3/3 — Review & validation)\n",
       repo_url: "https://github.com/org/repo",
       default_branch: "main",
-      task_slug: "abc12345",
+      task_slug: @sample_task_slug,
       skills_reference: "(skills attached to this task)",
       federation_preamble: "(federation preamble injected at render time)"
     },
@@ -38,6 +58,23 @@ defmodule PlatformWeb.AdminPromptsLive do
       skills_reference: "(skills attached to this task)",
       federation_preamble: "(federation preamble injected at render time)"
     },
+    # `dispatch.deploying` is the ONLY seeded template that both declares
+    # `task_slug` and interpolates it, so it is the only place the preview can
+    # actually demonstrate the branch contract. It had no sample entry at all,
+    # which rendered the branch name as the literal `(task_slug)` — the least
+    # useful thing a preview of a branch reference can show.
+    "dispatch.deploying" => %{
+      task_id: "019a1b2c-3d4e-7f80-9abc-def012345678",
+      stage_id: "019a1b2c-3d4e-7f80-9abc-def0123456ff",
+      task_title: "Implement user authentication",
+      stage_info: "Plan: v1 (stage 3/3 — Deploy)\n",
+      repo_url: "https://github.com/org/repo",
+      default_branch: "main",
+      task_slug: @sample_task_slug,
+      deploy_strategy_type: "pr_merge",
+      deploy_strategy_config: ~s(%{"auto_merge" => false}),
+      federation_preamble: "(federation preamble injected at render time)"
+    },
     "heartbeat" => %{
       task_title: "Implement user authentication",
       stage_name: "Setup OAuth providers",
@@ -48,6 +85,8 @@ defmodule PlatformWeb.AdminPromptsLive do
   }
 
   @variable_descriptions %{
+    "task_id" => "The task's UUID — required by the ack-first preamble",
+    "stage_id" => "The running stage's UUID — required by the ack-first preamble",
     "task_title" => "The task's title",
     "task_description" => "The task's description (may be nil)",
     "task_priority" => "Task priority: low, medium, high, critical",
@@ -55,7 +94,12 @@ defmodule PlatformWeb.AdminPromptsLive do
     "stage_info" => "Formatted plan/stage info line (e.g. 'Plan: v1 (stage 1/3 — Name)\\n')",
     "repo_url" => "Project repository URL",
     "default_branch" => "Project default branch (e.g. main)",
-    "task_slug" => "Short task ID for use in branch names",
+    "task_slug" => "Full task UUID used for the worktree path and branch name (task/<uuid>)",
+    "deploy_strategy_instructions" =>
+      "The resolved strategy's own steps, built in code — one PR/CI/merge sequence per " <>
+        "repository the deploy touches, including the transitional branch-name recovery step",
+    "deploy_strategy_type" => "Resolved deploy strategy: pr_merge, docker_deploy, manual, etc.",
+    "deploy_strategy_config" => "Inspected deploy strategy config map",
     "skills_reference" => "Reference to attached skills",
     "federation_preamble" =>
       "Consolidated Claude Code federation guidance (subagent spawn, org memory, skill discovery, evidence chain, tool-name conventions)",
@@ -211,9 +255,30 @@ defmodule PlatformWeb.AdminPromptsLive do
   # ── Helpers ──────────────────────────────────────────────────────────────
 
   defp render_preview(slug, content) do
-    assigns = Map.get(@sample_assigns, slug, %{})
-    interpolate(content, assigns)
+    interpolate(content, sample_assigns(slug))
   end
+
+  # `deploy_strategy_instructions` is computed rather than stored in
+  # `@sample_assigns` because it is CODE, not copy: task 019fa63a moved the
+  # strategy steps out of the template body and into
+  # `HeartbeatScheduler.deploy_strategy_instructions/5`. Rendering it through
+  # the real function is what stops the preview teaching a deploy flow no
+  # dispatch produces — the failure mode task 019fb949 fixed for `task_slug`.
+  defp sample_assigns("dispatch.deploying" = slug) do
+    sample = Map.get(@sample_assigns, slug, %{})
+
+    Map.put(
+      sample,
+      :deploy_strategy_instructions,
+      HeartbeatScheduler.deploy_strategy_instructions_for(
+        @sample_deploy_task,
+        sample.default_branch,
+        sample.task_slug
+      )
+    )
+  end
+
+  defp sample_assigns(slug), do: Map.get(@sample_assigns, slug, %{})
 
   defp interpolate(content, assigns) do
     Regex.replace(~r/\{\{(\w+)\}\}/, content, fn _match, key ->

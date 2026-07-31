@@ -309,6 +309,50 @@ defmodule Platform.Changelog.ChangelogTest do
       assert Changelog.extract_task_id_from_body("Task: 019f9b11-97d7") == ctx.task_a.id
       assert Changelog.extract_task_id_from_body("Task: 019f9b11") == nil
     end
+
+    # ── Task 019fb949: the round trip a full-uuid branch name must survive ──
+    # The real incident pair — filed eleven seconds apart, sharing `019fb90f`.
+    @incident_a "019fb90f-36e3-7bff-a6f1-69cd689faa59"
+    @incident_b "019fb90f-6226-7c68-9ec2-7bbc9378e8e2"
+
+    defp incident_pair(project) do
+      {insert_task_with_id!(project, @incident_a, "Colliding task A"),
+       insert_task_with_id!(project, @incident_b, "Colliding task B")}
+    end
+
+    # The dispatch renderer is being changed to emit `task/<full uuid>` for
+    # NON-stack tasks too. These pin the reading end of that contract with the
+    # real incident pair (`019fb90f-36e3-…` and `019fb90f-6226-…`, filed eleven
+    # seconds apart, sharing `019fb90f`).
+    #
+    # GUARDS, not proofs of the renderer defect — they pass against the current
+    # code, because the reading end was already repaired for the 019f9b11 pair
+    # above. Their job is to stop the reading end from regressing while the
+    # writing end is changed, and to record what the old 8-char scheme could
+    # never have done (see the last test in this group).
+    test "each full-uuid incident branch resolves to its own task, no cross-attribution", ctx do
+      {a, b} = incident_pair(ctx.project)
+
+      assert Changelog.extract_task_id_from_branch("task/" <> a.id) == a.id
+      assert Changelog.extract_task_id_from_branch("task/" <> b.id) == b.id
+    end
+
+    test "a descriptive suffix on a full-uuid branch does not derail the parse", ctx do
+      {a, _b} = incident_pair(ctx.project)
+
+      assert Changelog.extract_task_id_from_branch("task/#{a.id}-runtime-channel") == a.id
+    end
+
+    test "the legacy 8-char slug the incident pair shared resolves to nobody", ctx do
+      # Not a nice-to-have: under the old naming scheme BOTH of these tasks
+      # pushed `task/019fb90f`, so deploy attribution for either one was
+      # already impossible — `find_task_by_prefix/1` fails closed rather than
+      # crediting a coin-flip twin. This is the state the renderer change
+      # exits, not a risk it avoids.
+      {_a, _b} = incident_pair(ctx.project)
+
+      assert Changelog.extract_task_id_from_branch("task/019fb90f") == nil
+    end
   end
 
   describe "extract_task_id_from_body/1" do

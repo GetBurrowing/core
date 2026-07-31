@@ -926,7 +926,27 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # because `PromptTemplates.seed_defaults/0` is INSERT-only and an earlier
       # migration already claimed this slug on every migrated environment, so
       # the module change would never reach the row the runtime renders from.
-      "20260731210000_force_update_intent_attention_target_space.exs"
+      "20260731210000_force_update_intent_attention_target_space.exs",
+      # Task 019fb949 stage 4: refreshes the `dispatch.deploying` row so the
+      # `### Deploy boundaries` section NAMES the branch being deployed
+      # (`task/{{task_slug}}`) instead of saying "the branch". Update-only; no
+      # schema change.
+      #
+      # It runs SECOND against the same slug as 20260731120000 above, and the
+      # two do not fight: both re-write the row from the current
+      # `default_content_for_slug/1` and re-copy the descriptor's variables, so
+      # they converge on the same body in either order. Version ordering makes
+      # this one the later write on a fresh DB; on an environment where
+      # 20260731120000 already ran, this one is what carries the reconciled
+      # body forward.
+      #
+      # The transitional `ls-remote` branch-recovery step does NOT live in the
+      # body and so is not what this migration ships. After 019fa63a the
+      # strategy section interpolates `{{deploy_strategy_instructions}}`, which
+      # `HeartbeatScheduler.deploy_strategy_instructions/5` builds in CODE —
+      # so that half reaches a deployed runtime with the image, no migration
+      # required.
+      "20260731000000_refresh_deploying_template_branch_recovery.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

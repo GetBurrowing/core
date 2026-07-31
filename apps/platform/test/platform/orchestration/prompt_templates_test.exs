@@ -7,6 +7,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
   alias Platform.Chat
   alias Platform.Orchestration.ContextAssembler
+  alias Platform.Orchestration.HeartbeatScheduler
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Tasks
   alias Platform.Tasks.CanvasAttachments
@@ -23,8 +24,23 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                                            "priv/repo/migrations/20260726000100_update_intent_classify_prompt_with_corrections.exs"
                                          ])
 
+  # Same reason, task 019fb949 stage 4. `mix ecto.migrate` only loads PENDING
+  # migration files, so once this one has been applied to the test DB its
+  # module is no longer defined in the VM and `migration.up()` raises
+  # UndefinedFunctionError — a failure that only appears on the SECOND run and
+  # would otherwise read as a real regression.
+  @deploying_branch_recovery_migration Path.join([
+                                         __ENV__.file
+                                         |> Path.dirname()
+                                         |> Path.dirname()
+                                         |> Path.dirname()
+                                         |> Path.dirname(),
+                                         "priv/repo/migrations/20260731000000_refresh_deploying_template_branch_recovery.exs"
+                                       ])
+
   setup_all do
     Code.require_file(@intent_classify_corrections_migration)
+    Code.require_file(@deploying_branch_recovery_migration)
     :ok
   end
 
@@ -3898,6 +3914,320 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     test "returns nil for a malformed id rather than raising" do
       assert PromptTemplates.get_template("higgins") == nil
       assert PromptTemplates.get_template("higginshigginsxx") == nil
+    end
+  end
+
+  # Task 019fb949 stage 4 — transitional branch-name recovery in the deploy
+  # phase.
+  #
+  # `HeartbeatScheduler.deploying_prompt/3` tries `render_template/2` FIRST and
+  # only falls back to its hardcoded body on `{:error, :not_found}`. The
+  # `20260326190000` migration seeded the `dispatch.deploying` row in every
+  # migrated environment, so the SEEDED template is what a real deployer reads
+  # and the fallback is a fixture path. `heartbeat_scheduler_test.exs` is
+  # `async: true` with no DB checkout, so `render_template/2` always rescues to
+  # not_found there and its assertions only ever see the fallback — which is
+  # precisely how a change to the fallback alone can look fully covered while
+  # being dead in production. These tests hold the DB path.
+  describe "dispatch.deploying — transitional branch-name recovery" do
+    @recovery_marker "ls-remote"
+
+    defp deploying_task(id) do
+      %{
+        id: id,
+        title: "Transitional deploy",
+        description: "Ship it",
+        status: "deploying",
+        priority: "high",
+        deploy_strategy: %{"type" => "pr_merge", "config" => %{"auto_merge" => false}},
+        project: %{repo_url: "https://github.com/test/app", default_branch: "main"},
+        stack_id: nil
+      }
+    end
+
+    defp deploy_stage, do: %{id: "stage-deploy-x", position: 2, name: "Deploy", validations: []}
+
+    # `seed_defaults/0` is INSERT-only and the row was written by a migration
+    # the first time this DB was created, so a plain `seed_defaults/0` leaves
+    # WHATEVER content that migration run happened to write. Without this, a
+    # later edit to `default_content_for_slug/1` is tested against a row frozen
+    # weeks earlier and the render assertions below quietly stop tracking the
+    # code they claim to cover. Same update the refresh migration performs.
+    defp refresh_deploying_row! do
+      :ok = PromptTemplates.seed_defaults()
+      slug = "dispatch.deploying"
+      descriptor = Enum.find(PromptTemplates.default_templates(), &(&1.slug == slug))
+
+      {:ok, _} =
+        slug
+        |> PromptTemplates.get_template_by_slug()
+        |> PromptTemplates.update_template(%{
+          content: PromptTemplates.default_content_for_slug(slug),
+          variables: descriptor.variables
+        })
+
+      :ok
+    end
+
+    defp recovery_line(prompt) do
+      lines =
+        prompt
+        |> String.split("\n")
+        |> Enum.filter(&String.contains?(&1, @recovery_marker))
+        |> Enum.map(&String.trim/1)
+
+      assert length(lines) == 1,
+             "expected exactly one recovery line, got: #{inspect(lines)}"
+
+      hd(lines)
+    end
+
+    test "the seeded template body names the branch it is deploying" do
+      content = PromptTemplates.default_content_for_slug("dispatch.deploying")
+
+      assert content =~ "Branch `task/{{task_slug}}` is already pushed from execution",
+             "the deploy template must name the branch it is deploying — it previously said " <>
+               "only \"the branch\", which named nothing and made the branch-naming change " <>
+               "invisible to the deployer"
+
+      # The strategy steps — and with them the transitional recovery line — are
+      # NOT in the body. Task 019fa63a replaced the body's static per-strategy
+      # summary with this one placeholder so the templated and hardcoded
+      # dispatch paths render from a single function and cannot drift. Asserting
+      # the delegation is what stops a later edit from pasting strategy prose
+      # back into the body, which is the divergence that task removed.
+      assert content =~ "{{deploy_strategy_instructions}}"
+
+      refute content =~ @recovery_marker,
+             "the recovery step belongs in `deploy_strategy_instructions/5`, not the body — " <>
+               "in the body it would render once per prompt regardless of how many " <>
+               "repositories the deploy touches, and a second time from the strategy fragment"
+
+      descriptor =
+        Enum.find(PromptTemplates.default_templates(), &(&1.slug == "dispatch.deploying"))
+
+      assert "deploy_strategy_instructions" in descriptor.variables,
+             "a placeholder that is not a declared variable renders literally in the admin " <>
+               "preview and is invisible to the variables sidebar"
+
+      refute "legacy_branch_prefix" in descriptor.variables,
+             "the body no longer interpolates it, and a declared-but-uninterpolated variable " <>
+               "advertises a contract the template does not keep"
+    end
+
+    test "the rendered recovery line carries exactly the two ls-remote commands" do
+      :ok = refresh_deploying_row!()
+      id = "019fb90f-36e3-7bff-a6f1-69cd689faa59"
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(
+          deploying_task(id),
+          %{version: 1, stages: [%{}, %{}]},
+          deploy_stage()
+        )
+
+      spans =
+        ~r/`([^`]+)`/
+        |> Regex.scan(recovery_line(prompt), capture: :all_but_first)
+        |> List.flatten()
+
+      assert spans == [
+               "git ls-remote --heads origin 'task/#{id}'",
+               "git ls-remote --heads origin 'task/019fb90f*'",
+               "task/#{id}"
+             ]
+
+      refute prompt =~ "{{deploy_strategy_instructions}}",
+             "the placeholder rendered literally — the assign is missing from deploying_prompt/3"
+    end
+
+    # The composition guard for this task's reconciliation with 019fa63a.
+    #
+    # 019fa63a made `pr_merge` render ONE PR/CI/merge sequence per resolved
+    # repository; this task added the transitional recovery step. Both intents
+    # have to hold at once, and the recovery step is PER REPOSITORY rather than
+    # per task even though the branch name is identical everywhere: `ls-remote`
+    # queries one clone's `origin`, and a task that predates the rename can have
+    # pushed the legacy ref in one repository and the full-uuid ref in another.
+    # A task-level line would send the deployer to check "the" remote when there
+    # are two.
+    test "a two-repo deploy keeps the multi-repo preamble AND one recovery step per repository" do
+      :ok = refresh_deploying_row!()
+      id = "019fb90f-9c47-7b66-b863-641b50d09eff"
+
+      # `repos` sits on the STRATEGY, not inside `config` — see
+      # `Tasks.repos_from_strategy/2`. `role` is derived from position (index 0
+      # is primary), not declared.
+      task =
+        Map.put(deploying_task(id), :deploy_strategy, %{
+          "type" => "pr_merge",
+          "config" => %{"auto_merge" => false},
+          "repos" => [
+            %{"repo_url" => "https://github.com/test/app"},
+            %{"repo_url" => "https://github.com/test/channel"}
+          ]
+        })
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(
+          task,
+          %{version: 1, stages: [%{}, %{}]},
+          deploy_stage()
+        )
+
+      assert prompt =~ "This deploy covers 2 repositories",
+             "019fa63a's multi-repo preamble was lost — a deployer reading one passing gate " <>
+               "as a finished deploy is the bug that change exists to prevent"
+
+      assert prompt =~ "https://github.com/test/app"
+      assert prompt =~ "https://github.com/test/channel"
+
+      recovery_lines =
+        prompt
+        |> String.split("\n")
+        |> Enum.filter(&String.contains?(&1, @recovery_marker))
+
+      assert length(recovery_lines) == 2,
+             "expected one recovery step per repository, got #{length(recovery_lines)}: " <>
+               inspect(recovery_lines)
+
+      assert Enum.any?(recovery_lines, &String.contains?(&1, "in https://github.com/test/app"))
+
+      assert Enum.any?(
+               recovery_lines,
+               &String.contains?(&1, "in https://github.com/test/channel")
+             )
+
+      for line <- recovery_lines do
+        assert String.contains?(line, "'task/#{id}'")
+        assert String.contains?(line, "'task/019fb90f*'")
+      end
+    end
+
+    test "the DB template and the hardcoded fallback emit a byte-identical recovery line" do
+      # This task originally duplicated the recovery text across the two
+      # renderers — the mustache body and the hardcoded heredoc — and this test
+      # existed to hold the two copies identical. 019fa63a removed the need for
+      # the duplication: both paths now interpolate the SAME
+      # `deploy_strategy_instructions/5` output, so there is one copy and drift
+      # is structurally impossible rather than merely tested for.
+      #
+      # The test is kept because that structure is the thing worth pinning. If a
+      # later change pastes strategy prose back into the template body, the two
+      # paths diverge again and this is what notices.
+      :ok = refresh_deploying_row!()
+      id = "019fb90f-6226-7c68-9ec2-7bbc9378e8e2"
+      task = deploying_task(id)
+      plan = %{version: 1, stages: [%{}, %{}]}
+
+      db_prompt = HeartbeatScheduler.dispatch_prompt(task, plan, deploy_stage())
+
+      # Delete the row so the SAME call falls through to the hardcoded body.
+      # Rendering the fallback by deleting the row (rather than calling a
+      # private function) also proves the fallback is still reachable.
+      "dispatch.deploying"
+      |> PromptTemplates.get_template_by_slug()
+      |> Platform.Repo.delete!()
+
+      fallback_prompt = HeartbeatScheduler.dispatch_prompt(task, plan, deploy_stage())
+
+      refute db_prompt == fallback_prompt,
+             "the two renderers produced identical whole prompts — the fallback did not " <>
+               "actually take over, so this test is comparing one path to itself"
+
+      assert recovery_line(db_prompt) == recovery_line(fallback_prompt)
+    end
+
+    test "20260731000000 migration refreshes a pre-change deploying row, idempotently" do
+      migration = Platform.Repo.Migrations.RefreshDeployingTemplateBranchRecovery
+
+      :ok = PromptTemplates.seed_defaults()
+
+      # Force the pre-upgrade state: the body a DB seeded before this stage
+      # carries, whose `### Deploy boundaries` section says "The branch" and
+      # names none.
+      template = PromptTemplates.get_template_by_slug("dispatch.deploying")
+
+      stale_content =
+        String.replace(
+          template.content,
+          "Branch `task/{{task_slug}}` is already pushed from execution",
+          "The branch is already pushed from execution"
+        )
+
+      refute stale_content == template.content,
+             "the stale-state rewrite matched nothing, so this test would assert the " <>
+               "migration fixed a row that was never broken"
+
+      {:ok, _} = PromptTemplates.update_template(template, %{content: stale_content})
+
+      refute PromptTemplates.get_template_by_slug("dispatch.deploying").content =~
+               "Branch `task/{{task_slug}}`"
+
+      :ok = migration.up()
+
+      row = PromptTemplates.get_template_by_slug("dispatch.deploying")
+
+      assert row.content == PromptTemplates.default_content_for_slug("dispatch.deploying")
+      assert row.content =~ "Branch `task/{{task_slug}}` is already pushed from execution"
+
+      :ok = migration.up()
+      assert PromptTemplates.get_template_by_slug("dispatch.deploying").content == row.content
+      assert PromptTemplates.get_template_by_slug("dispatch.deploying").variables == row.variables
+    end
+
+    test "20260731000000 migration is a safe no-op when the row is absent" do
+      migration = Platform.Repo.Migrations.RefreshDeployingTemplateBranchRecovery
+
+      # Purge the row the test DB's own migrations left behind so the nil
+      # branch is actually exercised (same convention as the 20260715220000
+      # and 20260719120100 no-op tests above).
+      case PromptTemplates.get_template_by_slug("dispatch.deploying") do
+        nil -> :ok
+        template -> {:ok, _} = PromptTemplates.delete_template(template)
+      end
+
+      assert migration.up() == :ok
+
+      assert PromptTemplates.get_template_by_slug("dispatch.deploying") == nil,
+             "dispatch.deploying must remain absent — the migration refreshes, it does not seed"
+    end
+  end
+
+  # Task 019fb949 stage 4 — the reviewer's only pointer to a worktree.
+  #
+  # `heartbeat_scheduler_test.exs` already pins that `select_review_template/2`
+  # ASSIGNS the full uuid. That is half the contract: the assign is worthless
+  # if the template drops it, and `dispatch.review_e2e` is a DB row that can be
+  # edited in the admin UI. This joins the two halves — real assigns from the
+  # scheduler, real template from the DB — and pins the rendered line by
+  # equality rather than `=~`, so a truncated or prefixed slug cannot satisfy
+  # it by containing the right characters.
+  describe "dispatch.review_e2e — the rendered task slug" do
+    test "the rendered Task slug line is exactly the full uuid the scheduler assigned" do
+      :ok = PromptTemplates.seed_defaults()
+      id = "019fb90f-36e3-7bff-a6f1-69cd689faa59"
+
+      task = %{
+        id: id,
+        execution_space_id: "019fb949-5c85-77a3-bf97-ec8a226d287d",
+        project: %{repo_url: "https://github.com/test/app"},
+        stack_id: nil
+      }
+
+      pending = [%{id: "val-e2e-1", kind: "e2e_behavior", evaluation_payload: %{"setup" => "x"}}]
+
+      {"dispatch.review_e2e", assigns} =
+        HeartbeatScheduler.select_review_template(pending, task)
+
+      assert {:ok, rendered} = PromptTemplates.render_template("dispatch.review_e2e", assigns)
+
+      slug_lines =
+        rendered
+        |> String.split("\n")
+        |> Enum.filter(&String.starts_with?(&1, "Task slug:"))
+
+      assert slug_lines == ["Task slug: #{id}"]
     end
   end
 end

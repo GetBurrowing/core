@@ -36,6 +36,7 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
 
   use Platform.DataCase, async: true
 
+  alias Platform.Orchestration.HeartbeatScheduler
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.DeployMergeReconciler
@@ -180,7 +181,17 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
   defp reload_stage(%Stage{id: id}), do: Repo.get!(Stage, id)
   defp reload_stage(id) when is_binary(id), do: Repo.get!(Stage, id)
 
-  defp short_branch(task), do: "task/" <> (task.id |> String.split("-") |> List.first())
+  # Routed through `HeartbeatScheduler.member_slug/1` — the single chokepoint
+  # every worktree/branch slug in the system goes through, and the one
+  # `DeployMergeReconciler.branch_for/1` itself uses.
+  #
+  # This read `task.id |> String.split("-") |> List.first()` until task
+  # 019fb949 deleted the truncating slug. That was a SECOND DERIVATION of the
+  # branch name, which is precisely the failure the test below warns about: it
+  # kept passing by reproducing the reconciler's old truncation, and would have
+  # kept passing if only one of the two had been fixed. Deriving it from the
+  # chokepoint means this can only agree with the dispatch.
+  defp dispatch_branch(task), do: "task/" <> HeartbeatScheduler.member_slug(task)
 
   # ── The sweep fires and finds ────────────────────────────────────────────
 
@@ -209,7 +220,7 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
       assert reload(gates[@core]).status == "pending"
       assert reload(gates[@core]).evidence == %{}
 
-      branch = short_branch(task)
+      branch = dispatch_branch(task)
       assert_received {:merged_pr_called, %{repo: repo_a, branch: ^branch}}
       assert_received {:merged_pr_called, %{repo: repo_b, branch: ^branch}}
 
@@ -224,11 +235,11 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
 
       DeployMergeReconciler.sweep(runner: StubRunner)
 
-      # `HeartbeatScheduler.member_slug/1`'s answer for a non-stack task is
-      # the 8-char id prefix. A second derivation here would poll a branch
-      # nobody pushed and report "not merged" forever — the silent-hang
-      # failure mode in a new place.
-      expected = short_branch(task)
+      # `HeartbeatScheduler.member_slug/1`'s answer is the FULL task uuid, for
+      # a stack member and a non-stack task alike (task 019fb949). A second
+      # derivation here would poll a branch nobody pushed and report "not
+      # merged" forever — the silent-hang failure mode in a new place.
+      expected = dispatch_branch(task)
       assert_received {:merged_pr_called, %{branch: ^expected}}
     end
 

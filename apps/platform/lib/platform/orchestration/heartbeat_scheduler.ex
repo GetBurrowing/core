@@ -432,9 +432,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     # placeholder to `""`.
     repo_url = primary_repo_url(repos)
     default_branch = resolve_branch(task)
-    # member_slug/1 — full UUID for a stack member so the deploy-phase branch
-    # reference matches the per-member branch created at in_progress; legacy
-    # 8-char slug for a non-stack task (output unchanged).
+    # member_slug/1 — full UUID, so the deploy-phase branch reference matches
+    # the branch the in_progress dispatch told the executor to create.
     task_slug = member_slug(task)
 
     # Extract strategy from the task context (preloaded by TaskRouter)
@@ -455,6 +454,13 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       # replacing them. Carries the per-repo PR/CI/merge sequence — which is
       # where the "one green gate means done" misread lives. Same function the
       # hardcoded fallback calls, so the two dispatch paths cannot drift.
+      #
+      # Task 019fb949 also routes its transitional `ls-remote` branch-recovery
+      # step through here rather than through a `legacy_branch_prefix` template
+      # variable of its own. Because BOTH dispatch paths call this one function,
+      # the recovery text cannot drift between them — which is what that task's
+      # separate `legacy_branch_prefix` assign existed to guard against, and no
+      # longer needs to.
       deploy_strategy_instructions:
         deploy_strategy_instructions(
           strategy_type,
@@ -1090,7 +1096,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       execution_space_id: resolve_execution_space_id(task, opts),
       repo_url: project_attr(task || %{}, :repo_url, ""),
       # member_slug/1 — a review agent that spins up a worktree dev server must
-      # land in the stack member's full-UUID worktree, not a truncated prefix.
+      # land in the full-UUID worktree the executor actually built, not a
+      # truncated prefix that may name a sibling's tree.
       task_slug: member_slug(task || %{})
     }
   end
@@ -1443,6 +1450,36 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
+  @doc false
+  # Renders the `{{deploy_strategy_instructions}}` fragment for a task-shaped
+  # map. Public for exactly one caller: the admin prompt preview
+  # (`PlatformWeb.AdminPromptsLive`), which since task 019fa63a cannot show that
+  # section at all without it — the strategy text left the template body and
+  # became code, so a hand-written sample string in the LiveView would be a
+  # THIRD rendering of guidance that 019fa63a spent its stage collapsing to one.
+  #
+  # This matters beyond tidiness: the preview is the surface a prompt author
+  # edits against, and task 019fb949 exists because that surface taught an
+  # 8-character branch name the renderer had stopped producing. Routing the
+  # preview through the real function is what makes the sample unable to drift
+  # from the dispatch again.
+  #
+  # Does no `Repo` work: `resolve_task_deploy_strategy/1` short-circuits on a
+  # plain map carrying `:deploy_strategy`, and `resolve_task_deploy_repos/1`
+  # goes through `Tasks.repos_from_strategy/2`, which is the arity that does not
+  # touch the database.
+  def deploy_strategy_instructions_for(task, default_branch, task_slug) do
+    strategy = resolve_task_deploy_strategy(task)
+
+    deploy_strategy_instructions(
+      Map.get(strategy, "type", "manual"),
+      Map.get(strategy, "config", %{}),
+      resolve_task_deploy_repos(task),
+      default_branch,
+      task_slug
+    )
+  end
+
   defp multi_repo_deploy_preamble(repos) when length(repos) < 2, do: ""
 
   defp multi_repo_deploy_preamble(repos) do
@@ -1462,10 +1499,38 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
     ### #{heading}
     1. Ensure all changes are committed and pushed to `task/#{task_slug}` in #{heading}.
+    #{legacy_branch_recovery_step(task_slug, heading)}
     2. Open a PR against `#{default_branch}` on #{heading} if not already open.
     #{ci_instruction(entry)}
     #{merge_instruction(entry, auto_merge)}
     """
+  end
+
+  # TRANSITIONAL (task 019fb949). Every task dispatched from now on is told to
+  # push `task/<full-uuid>`, but a task already in flight when that landed was
+  # told to push `task/<first-hyphen-segment>` and its branch is on the remote
+  # under THAT name. The deploy phase is where the two meet: it is the first
+  # step that touches a ref the executor created earlier, so it is the only
+  # place the mismatch can be caught, and `git push` to a nonexistent ref is not
+  # an error the deployer would recognise as a naming problem.
+  #
+  # PER REPOSITORY, not per task, even though the branch NAME is identical in
+  # every repository (see `additional_repos_block/3`): `git ls-remote` runs
+  # against ONE clone's `origin`, and a task that predates the rename can have
+  # pushed the legacy ref in one repository and the full-uuid ref in another.
+  # A single task-level line would tell the deployer to check "the" remote when
+  # there are several, which is the same one-repo assumption task 019fa63a
+  # removed from this function.
+  #
+  # The prefix is computed inline and deliberately NOT extracted into a helper:
+  # this is presentational recovery text, not a slug. `short_task_id/1` was
+  # deleted in this task's stage 2 exactly so no shared helper could truncate an
+  # id again, and a helper here would be the readiest thing to reach for when
+  # someone wants "the short form" back. Nothing else may call this.
+  defp legacy_branch_recovery_step(task_slug, heading) do
+    legacy_branch_prefix = task_slug |> String.split("-") |> hd()
+
+    "   - If `git ls-remote --heads origin 'task/#{task_slug}'` prints nothing in #{heading}, this task was dispatched before branch names carried the full task UUID and its branch may be on the remote under the 8-char prefix instead: run `git ls-remote --heads origin 'task/#{legacy_branch_prefix}*'`, deploy whichever ref actually exists, and name that branch explicitly in the PR body. Transitional only — every new dispatch creates `task/#{task_slug}`."
   end
 
   # `ci: "none"` is not a softer version of `ci: "required"` — it inverts what a
@@ -1761,14 +1826,20 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   # Build the "## Git Workflow (CRITICAL)" block for a dispatch prompt.
   #
-  # Non-stack tasks get the legacy section verbatim — slug is the 8-char
-  # `short_task_id/1`, output is byte-for-byte unchanged.
+  # BOTH branches slug the worktree path and branch name off the FULL task UUID
+  # (`member_slug/1`), so siblings minted in one batch can never collide on a
+  # shared id prefix. Membership (ADR 0041, detected via `stack_membership/1`)
+  # decides only the SHAPE of the section: a stack member branches from the
+  # rollup HEAD and gains a `## Task Stack Membership` sub-block naming the
+  # stack_id and rollup branch; a non-stack task branches from the default
+  # branch and gets neither.
   #
-  # Stack members (ADR 0041, detected via `stack_membership/1`) get a section
-  # whose worktree path + branch use the FULL task UUID (`member_slug/1`), so
-  # siblings minted in one batch can never collide on a shared id prefix. A
-  # `## Task Stack Membership` sub-block names the stack_id, the rollup branch,
-  # and flags the task as a stack member.
+  # Both branches also render the same worktree PREFLIGHT: unique slugs prevent
+  # two concurrent dispatches from colliding, but a stale tree, a redispatch, or
+  # a hand-created directory still puts an executor somewhere that is not its
+  # own. The platform never runs `git worktree add` itself for a non-stack task
+  # — the executor agent does, on its own box — so this rendered text is the
+  # only lever the orchestrator holds over that shell.
   defp git_workflow_section(task) do
     case stack_membership(task) do
       nil -> non_stack_git_workflow_section(task)
@@ -1779,7 +1850,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   defp non_stack_git_workflow_section(task) do
     repos = resolve_task_deploy_repos(task)
     default_branch = resolve_branch(task)
-    task_slug = short_task_id(task)
+    # Full UUID — collision-free across tasks that share an id prefix.
+    task_slug = member_slug(task)
 
     """
 
@@ -1791,16 +1863,21 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     1. Create a worktree from the latest #{default_branch} branch:
        ```
        git fetch origin
+       # Preflight: if the worktree already exists, it MUST be on this task's branch.
+       if [ -d ../worktrees/#{task_slug} ]; then git -C ../worktrees/#{task_slug} rev-parse --abbrev-ref HEAD; fi
        git worktree add ../worktrees/#{task_slug} -b task/#{task_slug} origin/#{default_branch}
        cd ../worktrees/#{task_slug}
        ```
+       - Preflight printed NOTHING: the worktree does not exist. Run `git worktree add` exactly as shown.
+       - Preflight printed exactly `task/#{task_slug}`: this is a redispatch of THIS task. Skip `git worktree add`, `cd` into the existing worktree and continue on that branch.
+       - Preflight printed ANYTHING ELSE: STOP. That directory belongs to another task. Do NOT `cd` into it, do NOT commit, do NOT `git worktree add` over it. Call `report_blocker` naming both the expected branch `task/#{task_slug}` and the actual branch the preflight printed.
     2. Do ALL work in the worktree directory.
     3. When implementation is complete:
        - Run the full test suite and lint checks
-       - Commit all changes with a descriptive message referencing task #{short_task_id(task)}
+       - Commit all changes with a descriptive message referencing task #{full_task_id(task)}
        - Push the branch: `git push -u origin task/#{task_slug}`
        - Do NOT open a PR yet — PR opening happens in the deploy phase
-    4. NEVER work on an existing branch. ALWAYS branch from latest origin/#{default_branch}.
+    4. NEVER work on ANOTHER task's branch. When creating, branch from latest origin/#{default_branch}; reuse an existing worktree ONLY when its HEAD is `task/#{task_slug}`.
     """
   end
 
@@ -1854,16 +1931,21 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     1. Create a worktree from the latest #{parent_branch} branch:
        ```
        git fetch origin
+       # Preflight: if the worktree already exists, it MUST be on this task's branch.
+       if [ -d ../worktrees/#{task_slug} ]; then git -C ../worktrees/#{task_slug} rev-parse --abbrev-ref HEAD; fi
        git worktree add ../worktrees/#{task_slug} -b task/#{task_slug} origin/#{parent_branch}
        cd ../worktrees/#{task_slug}
        ```
+       - Preflight printed NOTHING: the worktree does not exist. Run `git worktree add` exactly as shown.
+       - Preflight printed exactly `task/#{task_slug}`: this is a redispatch of THIS task. Skip `git worktree add`, `cd` into the existing worktree and continue on that branch.
+       - Preflight printed ANYTHING ELSE: STOP. That directory belongs to another task. Do NOT `cd` into it, do NOT commit, do NOT `git worktree add` over it. Call `report_blocker` naming both the expected branch `task/#{task_slug}` and the actual branch the preflight printed.
     2. Do ALL work in the worktree directory.
     3. When implementation is complete:
        - Run the full test suite and lint checks
        - Commit all changes with a descriptive message referencing task #{full_task_id(task)}
        - Push the branch: `git push -u origin task/#{task_slug}`
        - Do NOT open a PR yet — PR opening happens in the deploy phase
-    4. NEVER work on an existing branch. ALWAYS branch from latest origin/#{parent_branch}.
+    4. NEVER work on ANOTHER task's branch. When creating, branch from latest origin/#{parent_branch}; reuse an existing worktree ONLY when its HEAD is `task/#{task_slug}`.
 
     ## Task Stack Membership
     This task is a stack member (part of task stack `#{membership.stack_id}`).
@@ -2031,18 +2113,12 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     end
   end
 
-  defp short_task_id(task) do
-    task
-    |> Map.get(:id, Map.get(task, "id", "task"))
-    |> to_string()
-    |> String.split("-")
-    |> List.first()
-  end
-
   @doc false
-  # Full, un-truncated task UUID — the counterpart of `short_task_id/1`. Stack
-  # members route worktree/branch slugs through the full id so siblings minted
-  # in one batch (which share a first hyphen-segment) never collide.
+  # Full, un-truncated task UUID. EVERY worktree/branch slug routes through this
+  # (via `member_slug/1`) so siblings minted in one batch — which share a first
+  # hyphen-segment, because UUIDv7 is time-ordered — never collide. There is
+  # deliberately no truncating counterpart: a `short_task_id/1` helper existed
+  # until task 019fb949 and its only remaining caller was the defect.
   def full_task_id(task) do
     task
     |> Map.get(:id, Map.get(task, "id", "task"))
@@ -2105,10 +2181,23 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   @doc false
-  # The single chokepoint every worktree/branch slug routes through: the full
-  # UUID for a stack member (collision-free), the legacy 8-char prefix for a
-  # non-stack task (keeps existing dispatch output byte-for-byte unchanged).
-  def member_slug(task) do
-    if stack_membership(task), do: full_task_id(task), else: short_task_id(task)
-  end
+  # The single chokepoint every worktree/branch slug routes through: the FULL
+  # task UUID, for every task, stack member or not.
+  #
+  # This used to branch on `stack_membership/1` and hand a non-stack task the
+  # 8-char first hyphen-segment. That truncation is ambiguous by construction,
+  # not by bad luck: `Platform.Types.UUIDv7.generate/0` lays out
+  # `<<timestamp_ms::big-48, ...>>`, so chars 1-8 are the HIGH 32 BITS of the
+  # 48-bit millisecond timestamp and are therefore constant across a
+  # 2^16 ms = 65.536-second aligned bucket. Every task filed in the same
+  # ~minute-wide bucket collapses to one worktree path and one branch name, and
+  # two concurrently-dispatched executors are sent into the same tree. It also
+  # broke the reading end: `Changelog.extract_task_id_from_branch/1` fails
+  # closed on an ambiguous prefix, so a truncated branch resolved to `nil`
+  # rather than to its task. The full 36 chars take the exact-equality path
+  # instead, turning deploy attribution from a search into a lookup.
+  #
+  # `stack_membership/1` still decides whether the `## Task Stack Membership`
+  # sub-block renders — it just no longer decides the slug. Task 019fb949.
+  def member_slug(task), do: full_task_id(task)
 end

@@ -1164,12 +1164,13 @@ defmodule Platform.Tasks.StackDeployer do
   @doc false
   # Member branch convention: `task/<slug>`, where `<slug>` comes from
   # `HeartbeatScheduler.member_slug/1` — the single chokepoint every
-  # worktree/branch slug in the system routes through. For a stack member
-  # that is the FULL task uuid; for a non-stack task it is the legacy
-  # 8-char first hyphen-segment.
+  # worktree/branch slug in the system routes through. That is the FULL task
+  # uuid for every task, member or not (task 019fb949 removed the last
+  # truncating branch; see `member_slug/1` for why 8 chars is ambiguous by
+  # construction).
   #
   # This used to compute its own `short_id/1` (first hyphen-segment,
-  # unconditionally) and a comment claimed it mirrored
+  # unconditionally) and a comment claimed it mirrored a since-deleted
   # `HeartbeatScheduler.short_task_id/1`. It mirrored the wrong
   # counterpart: dispatch creates member branches via `member_slug/1`, so
   # executors pushed `task/<full-uuid>` while the deployer fetched
@@ -1179,16 +1180,26 @@ defmodule Platform.Tasks.StackDeployer do
   # ADR-0046 stack all collapsed to `task/019f9b28`), so the truncated form
   # is not merely wrong — it is ambiguous.
   #
-  # `member_slug/1` decides membership off the `tasks.stack_id` COLUMN
-  # (`HeartbeatScheduler.stack_membership/1`), not off the `:stack`
-  # association — the assoc only supplies the rollup branch name, which the
-  # slug never reads. So no preload is required here, and both call sites
-  # sit under a `%TaskRecord{stack_id: stack_id} when is_binary(stack_id)`
-  # guard, which means the full-uuid form is guaranteed for real members.
+  # `member_slug/1` reads nothing but `task.id` — not `tasks.stack_id`, not
+  # the `:stack` association — so no preload is required here and the
+  # full-uuid form is guaranteed regardless of what the caller loaded. (It
+  # did consult `stack_membership/1` until task 019fb949; both call sites sit
+  # under a `%TaskRecord{stack_id: stack_id} when is_binary(stack_id)` guard,
+  # which is why the deployer was never exposed to the truncating branch.)
   #
-  # The convention is documented in ADR 0041 §"Branch model" and in the
-  # planner template. Public (`@doc false`) so the regression test can pin
-  # the sibling-collision case directly.
+  # The convention is documented in
+  # 0045-task-stacks-v2.md § Branch model
+  # and in the planner template. This citation previously named ADR 0041 in
+  # the bare-number form, which resolved to nothing: ADR 0041 is the
+  # org-memory wiki system, and no ADR in the tree carried a `Branch model`
+  # heading at all. It survived because the bare form carries no filename, so
+  # `adr_citation_audit_test.exs` — which resolves the anchored
+  # `<file>.md § <heading>` form against the named ADR's real headings — had
+  # nothing to latch onto. Task 019fb949 wrote the rule into ADR 0045 and
+  # anchored the citation, so the heading is now pinned by that audit.
+  #
+  # Public (`@doc false`) so the regression test can pin the
+  # sibling-collision case directly.
   def member_branch_for(%TaskRecord{id: id} = task) when is_binary(id) do
     "task/" <> member_slug_for(task)
   end

@@ -892,6 +892,18 @@ defmodule Platform.Orchestration.PromptTemplates do
           # — `seed_defaults/0` is INSERT-only, so editing this body alone
           # leaves every already-seeded environment rendering the old text
           # forever.
+          #
+          # Task 019fb949 note. This task added a `legacy_branch_prefix`
+          # variable here so the body's static `pr_merge` line could offer the
+          # transitional `ls-remote` branch-recovery step. That variable is
+          # deliberately NOT carried forward: 019fa63a deleted the static line
+          # it was written for, and the recovery step now renders from
+          # `HeartbeatScheduler.deploy_strategy_instructions/5` — once per
+          # resolved repository, which is where it belongs, because
+          # `git ls-remote` is run in ONE repository's clone and a two-repo task
+          # can have the legacy ref in one and not the other. A declared
+          # variable the body never interpolates would show up in the admin
+          # variables sidebar as a contract this template does not keep.
           "deploy_strategy_instructions",
           "deploy_strategy_type",
           "deploy_strategy_config",
@@ -912,7 +924,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         ### Deploy boundaries
         - Do NOT modify code — if CI fails, report a blocker so the task returns to in_progress
         - Do NOT re-run tests or lint locally — CI handles that
-        - The branch is already pushed from execution; your job is to get it merged and deployed
+        - Branch `task/{{task_slug}}` is already pushed from execution; your job is to get it merged and deployed
 
         Push evidence using validation_pass as you complete each deploy step.
         Use report_blocker if you are stuck or the deploy fails.
