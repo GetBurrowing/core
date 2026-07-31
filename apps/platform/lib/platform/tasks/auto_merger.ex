@@ -3,8 +3,10 @@ defmodule Platform.Tasks.AutoMerger do
   Encapsulates the auto-merge decision and execution for PR-based deploy strategies.
 
   When `auto_merge: true` is configured in a project's deploy strategy, this module:
-  1. Detects whether auto-merge should fire (`should_auto_merge?/1`)
-  2. Determines the merge method (`merge_method/1`)
+  1. Detects whether auto-merge should fire, task-wide
+     (`should_auto_merge?/1`) or for ONE repository of a multi-repo
+     deploy (`should_auto_merge?/2`)
+  2. Determines the merge method (`merge_method/1`, `merge_method/2`)
   3. Executes the merge via `gh pr merge` (`execute_merge/3`)
   4. Records the result on the `pr_merged` validation (`record_merge_result/3`)
 
@@ -13,6 +15,44 @@ defmodule Platform.Tasks.AutoMerger do
   Called by `GithubWebhookController` after `ci_passed` validation passes.
   If auto-merge is enabled, the controller spawns an async task to merge
   and evaluate the `pr_merged` validation.
+
+  ## Per-repository gating (task 019fa63a stage 4)
+
+  The ticket's hard constraint is that **a green CI in repo A must never
+  authorize a merge in repo B**. `should_auto_merge?/1` cannot express
+  that: it reads one strategy-wide boolean and answers for the whole
+  task. `should_auto_merge?/2` takes the resolved repo entry — the same
+  shape `Tasks.resolve_deploy_repos/1` returns and the same shape
+  `DeployStageBuilder` writes into each `pr_merged` gate's
+  `evaluation_payload` — and answers for ONE repository.
+
+  It returns three values, not a boolean. See `should_auto_merge?/2`.
+
+  ### Events authorize; polls only observe
+
+  This module is only ever reached from an inbound CI delivery, and that
+  is deliberate. A merge is an ACTION taken on someone else's repository,
+  so the green that authorizes it has to be a green GitHub told us about.
+  Asking GitHub "is it green?" on a timer would introduce a second,
+  independently-drifting derivation of CI state whose failure mode is
+  PERMISSIVE — an unreachable API or a token without scope returns an
+  empty answer, and any retry loop built on that eventually merges on a
+  green it mis-read.
+
+  `Platform.Tasks.DeployMergeReconciler` (stage 6) polls, and that is
+  consistent rather than contradictory: it observes a merge that ALREADY
+  HAPPENED, which is monotone, and its failure mode is "we have not seen
+  it yet" — the gate stays pending. Observe by poll; authorize by
+  delivery.
+
+  The consequence for a repository Suite receives no webhooks from
+  (verified 2026-07-31: `Startup-Suite/claude-code-suite-channel` and
+  `Startup-Suite/openclaw-suite-channel` both have zero hooks installed)
+  is therefore NOT an indefinite silent wait. Such a repo carries
+  `ci: "none"`, which resolves to `{:no, :no_ci_to_gate}` at the first CI
+  delivery on the task — logged, telemetered, and written to that repo's
+  own gate as evidence, immediately and by name. A human merges it and
+  the reconciler observes the merge.
 
   ## Stack-member guard (T5 stage 3)
 
@@ -55,16 +95,45 @@ defmodule Platform.Tasks.AutoMerger do
   reports `"failed"` only.
   """
 
+  alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.PlanEngine
   alias Platform.Tasks.Task, as: TaskRecord
+  alias Platform.Tasks.Validation
 
   require Logger
+
+  @typedoc """
+  Per-repository auto-merge decision.
+
+  `{:no, :no_ci_to_gate}` and `{:no, :disabled}` MUST NEVER COLLAPSE INTO
+  ONE VALUE — same rule, and the same reason, as `not_applicable` vs
+  `failed` in `Platform.Tasks.Task`'s `planning_step_outcomes`
+  (`task.ex`, the `NEVER COLLAPSE INTO ONE VALUE` comment):
+
+    * `{:no, :disabled}` — there IS something here that could authorize a
+      machine merge, and we chose not to. Ordinary. A human merges, as
+      configured.
+    * `{:no, :no_ci_to_gate}` — there is NOTHING here that could ever
+      authorize a machine merge. This repository is never machine-merged,
+      no matter what `auto_merge` says, because `auto_merge` means "merge
+      once CI is green" and there is no CI to be green.
+
+  Collapsing them would make "we turned it off" indistinguishable from
+  "it can never turn on", which is exactly the class of conflation this
+  task exists to remove: a state that can never resolve, rendered as a
+  state that merely has not resolved yet.
+  """
+  @type auto_merge_decision :: :yes | {:no, :disabled} | {:no, :no_ci_to_gate}
 
   @doc """
   Returns true if the deploy strategy has auto_merge enabled.
 
   Reads `deploy_strategy.config.auto_merge` from the strategy map.
+
+  STRATEGY-WIDE — it answers for the whole task and cannot distinguish
+  one repository from another. Anything deciding whether to merge a
+  SPECIFIC repository's PR must use `should_auto_merge?/2`.
   """
   @spec should_auto_merge?(map()) :: boolean()
   def should_auto_merge?(%{"type" => "pr_merge", "config" => config}) do
@@ -72,6 +141,52 @@ defmodule Platform.Tasks.AutoMerger do
   end
 
   def should_auto_merge?(_strategy), do: false
+
+  @doc """
+  Whether ONE repository of a deploy may be machine-merged.
+
+  Returns `:yes`, `{:no, :disabled}`, or `{:no, :no_ci_to_gate}` — see
+  `t:auto_merge_decision/0` for why the two refusals stay distinct.
+
+  `repo_entry` is any of the three shapes a resolved repository arrives
+  in, because all three are the same fact written by different callers:
+
+    * the atom-keyed entry `Tasks.resolve_deploy_repos/1` returns
+      (`%{ci: _, config: _}`),
+    * the string-keyed entry `Tasks.resolve_deploy_strategy_with_repos/1`
+      writes back under `"repos"` (`%{"ci" => _, "config" => _}`),
+    * the `pr_merged` gate's own `evaluation_payload`, which
+      `DeployStageBuilder` writes with `"ci"` and an already-flattened
+      top-level `"auto_merge"` boolean.
+
+  The gate's payload is the one the webhook path actually uses: it is
+  what the repo set resolved to AT DEPLOY-STAGE INJECTION TIME, so a
+  strategy edited mid-deploy cannot retroactively authorize a merge of a
+  PR that was gated under the old config.
+
+  `nil` — no repo scoping at all, i.e. a legacy unscoped gate — falls
+  back to the strategy-wide answer, which is the pre-multi-repo world
+  where CI was implied by branch protection.
+
+  `ci` is checked BEFORE `auto_merge` on purpose: `ci: "none"` is
+  `{:no, :no_ci_to_gate}` "regardless of `auto_merge`", so an operator
+  who sets `auto_merge: true` on a repo with no CI gets the honest
+  answer rather than a merge.
+  """
+  @spec should_auto_merge?(map(), map() | nil) :: auto_merge_decision()
+  def should_auto_merge?(strategy, nil) do
+    if should_auto_merge?(strategy), do: :yes, else: {:no, :disabled}
+  end
+
+  def should_auto_merge?(strategy, repo_entry) when is_map(repo_entry) do
+    cond do
+      entry_ci(repo_entry) == "none" -> {:no, :no_ci_to_gate}
+      entry_auto_merge?(strategy, repo_entry) -> :yes
+      true -> {:no, :disabled}
+    end
+  end
+
+  def should_auto_merge?(_strategy, _repo_entry), do: {:no, :disabled}
 
   @doc """
   Returns the configured merge method for the strategy.
@@ -84,6 +199,66 @@ defmodule Platform.Tasks.AutoMerger do
   end
 
   def merge_method(_), do: "squash"
+
+  @doc """
+  `merge_method/1`, preferring the repository entry's own configuration.
+
+  A two-repo deploy may legitimately squash in one repo and merge-commit
+  in the other; the strategy-level value stays the fallback so a task
+  that declares nothing per-repo behaves exactly as it does today.
+  """
+  @spec merge_method(map(), map() | nil) :: String.t()
+  def merge_method(strategy, nil), do: merge_method(strategy)
+
+  def merge_method(strategy, repo_entry) when is_map(repo_entry) do
+    entry_config = entry_config(repo_entry)
+
+    Map.get(repo_entry, "merge_method") || Map.get(entry_config, "merge_method") ||
+      merge_method(strategy)
+  end
+
+  def merge_method(strategy, _repo_entry), do: merge_method(strategy)
+
+  @doc """
+  Record a per-repository auto-merge REFUSAL on that repo's `pr_merged`
+  gate, leaving the gate `pending`.
+
+  Deliberately NOT `record_merge_result/2`: its 3-tuple error clause
+  evaluates the validation as `"failed"` (moduledoc "Error types"), and a
+  repository with no CI is not a broken deploy — it is a deploy a person
+  has to look at. The gate must stay open so the human merge (and, from
+  stage 6, the reconciler that observes it) can still pass it.
+
+  Written with a direct `Validation.changeset/2` + `Repo.update/2` for
+  the same reason `GithubWebhookController` records an unmatched repo
+  delivery that way: `PlanEngine.evaluate_validation/2` transitions
+  status and would advance the stage.
+
+  Idempotent by `reason` — CI fires on every push, and one refusal is a
+  fact about the configuration, not about the push.
+  """
+  @spec record_auto_merge_refusal(Validation.t(), atom(), String.t() | nil) ::
+          {:ok, Validation.t()} | {:error, term()} | :already_recorded
+  def record_auto_merge_refusal(%Validation{} = validation, reason, repo) do
+    evidence = validation.evidence || %{}
+    reason = to_string(reason)
+
+    if Map.get(evidence, "auto_merge") == "refused" and Map.get(evidence, "reason") == reason do
+      :already_recorded
+    else
+      validation
+      |> Validation.changeset(%{
+        evidence:
+          Map.merge(evidence, %{
+            "auto_merge" => "refused",
+            "reason" => reason,
+            "repo" => repo,
+            "refused_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+          })
+      })
+      |> Repo.update()
+    end
+  end
 
   @doc """
   Returns true when the given task is a stack member and the per-task
@@ -301,6 +476,43 @@ defmodule Platform.Tasks.AutoMerger do
   end
 
   # ── Private helpers ────────────────────────────────────────────────────
+
+  # `"required"` is the DEFAULT for an absent or unrecognized value, matching
+  # `Tasks.normalize_repo_ci/2` — gating is the safe direction. Only the
+  # explicit string `"none"` opts a repository out, so a typo produces a gate
+  # that waits rather than a machine merge nobody authorized.
+  defp entry_ci(entry) do
+    case Map.get(entry, :ci) || Map.get(entry, "ci") do
+      "none" -> "none"
+      _ -> "required"
+    end
+  end
+
+  defp entry_config(entry) do
+    case Map.get(entry, :config) || Map.get(entry, "config") do
+      config when is_map(config) -> config
+      _ -> %{}
+    end
+  end
+
+  # THREE places can say `auto_merge`, in narrowing order of authority:
+  # the gate payload's flattened top-level boolean (what the deploy stage was
+  # actually built with), then the entry's merged `config`, then the
+  # strategy-wide config. The gate payload wins because it is the config the
+  # PR was gated under; re-reading the live strategy would let an edit made
+  # mid-deploy authorize a merge retroactively.
+  defp entry_auto_merge?(strategy, entry) do
+    case Map.get(entry, :auto_merge) || Map.get(entry, "auto_merge") do
+      value when is_boolean(value) ->
+        value
+
+      _ ->
+        case Map.get(entry_config(entry), "auto_merge") do
+          value when is_boolean(value) -> value
+          _ -> should_auto_merge?(strategy)
+        end
+    end
+  end
 
   defp extract_merge_sha(output) do
     # gh pr merge may output the merge commit SHA

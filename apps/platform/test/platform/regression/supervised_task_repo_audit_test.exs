@@ -199,7 +199,14 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # Task 019f7cb0 stage 3 — file retention purger. Hard-deletes
     # soft-deleted platform_files (bytes + row) once the 30-day restore
     # window elapses. Tests call `Platform.Files.Purger.sweep/1` directly.
-    :start_file_purger
+    :start_file_purger,
+    # Task 019fa63a stage 6 — polls `gh pr list` for merges in repositories
+    # that have no webhook installed, so their per-repo `pr_merged` gate can
+    # be passed on an observed merge instead of hanging forever. Tests call
+    # `Platform.Tasks.DeployMergeReconciler.sweep/1` directly with a stub
+    # runner; left running it would both hit Repo outside the sandbox and
+    # shell out to `gh` from a test process.
+    :start_deploy_merge_reconciler
   ]
 
   # ── Assertion 1: Task-Supervisor rescue audit ─────────────────────

@@ -246,6 +246,7 @@ defmodule Platform.Tasks.Task do
     |> validate_dependencies()
     |> validate_metadata()
     |> validate_deploy_target_config()
+    |> validate_deploy_strategy()
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:epic_id)
     |> foreign_key_constraint(:stack_id)
@@ -512,6 +513,30 @@ defmodule Platform.Tasks.Task do
 
       _other ->
         add_error(changeset, :deploy_target_config, "must be a map")
+    end
+  end
+
+  # `task.deploy_strategy` beats `project.deploy_config["default_strategy"]`
+  # in `Tasks.resolve_deploy_strategy/1`, and it is where a multi-repo
+  # deploy declares its repository set. `Project.changeset/2` has always
+  # routed the project-level strategy through
+  # `DeployStageBuilder.validate_strategy/1`; the task-level override went
+  # entirely unvalidated, so the refusal that matters most — `auto_merge`
+  # on a repo with no CI to wait for — was unreachable on the exact path
+  # the feature uses. Mirror the project clause here.
+  defp validate_deploy_strategy(changeset) do
+    case get_change(changeset, :deploy_strategy) do
+      nil ->
+        changeset
+
+      strategy when is_map(strategy) ->
+        case Platform.Tasks.DeployStageBuilder.validate_strategy(strategy) do
+          :ok -> changeset
+          {:error, reason} -> add_error(changeset, :deploy_strategy, reason)
+        end
+
+      _other ->
+        add_error(changeset, :deploy_strategy, "must be a map")
     end
   end
 end

@@ -2,6 +2,7 @@ defmodule Platform.Tasks.PlanEngineTest do
   use Platform.DataCase, async: true
 
   alias Platform.Tasks
+  alias Platform.Tasks.DeployStageBuilder
   alias Platform.Tasks.PlanEngine
 
   setup do
@@ -330,6 +331,152 @@ defmodule Platform.Tasks.PlanEngineTest do
       # Task should be in deploying status
       updated_task = Tasks.get_task_record(task.id)
       assert updated_task.status == "deploying"
+    end
+
+    # The gate set is what changes: a task landing in TWO repositories gets
+    # TWO `pr_merged` rows, each naming its own repository. This is also the
+    # only test that proves `maybe_put_evaluation_payload/2` reaches the
+    # database for a BUILDER-authored validation — it has only ever been
+    # exercised for planner-authored `e2e_behavior` payloads.
+    test "a two-repo task persists one pr_merged per repo, each carrying its identity",
+         %{project: project} do
+      strategy = %{
+        "type" => "pr_merge",
+        "config" => %{"auto_merge" => false},
+        "repos" => [
+          %{"repo_url" => "https://github.com/Startup-Suite/core", "ci" => "required"},
+          %{
+            "repo_url" => "Startup-Suite/claude-code-suite-channel",
+            "ci" => "none"
+          }
+        ]
+      }
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Two-repo deployable task",
+          status: "in_progress",
+          deploy_strategy: strategy,
+          deploy_target: "production"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+      deploy_stage = Enum.find(updated_plan.stages, &(&1.name == "Deploy: PR merge"))
+      assert deploy_stage != nil
+      assert deploy_stage.status == "running"
+
+      validations = Tasks.list_validations(deploy_stage.id)
+
+      assert length(validations) == 2,
+             "a two-repo task must gate on BOTH merges, not on whichever PR lands first"
+
+      assert Enum.map(validations, & &1.kind) == ["pr_merged", "pr_merged"]
+
+      assert Enum.all?(validations, &(&1.status == "pending"))
+
+      assert Enum.all?(validations, &is_map(&1.evaluation_payload)),
+             "the builder's evaluation_payload must survive the round-trip through " <>
+               "create_validation/1 — nothing else proves it reaches the DB"
+
+      repos = validations |> Enum.map(& &1.evaluation_payload["repo"]) |> Enum.sort()
+
+      assert repos == ["Startup-Suite/claude-code-suite-channel", "Startup-Suite/core"]
+
+      channel_gate =
+        Enum.find(
+          validations,
+          &(&1.evaluation_payload["repo"] == "Startup-Suite/claude-code-suite-channel")
+        )
+
+      assert channel_gate.evaluation_payload["ci"] == "none"
+      assert channel_gate.evaluation_payload["auto_merge"] == false
+
+      # And the stage must NOT advance on one of the two merging: passing a
+      # single gate leaves the stage running, which is the whole point of
+      # one row per repository.
+      core_gate =
+        Enum.find(validations, &(&1.evaluation_payload["repo"] == "Startup-Suite/core"))
+
+      {:ok, _} =
+        PlanEngine.evaluate_validation(core_gate.id, %{
+          status: "passed",
+          evaluated_by: "test"
+        })
+
+      assert Platform.Repo.get!(Platform.Tasks.Stage, deploy_stage.id).status == "running",
+             "the deploy stage must stay running until EVERY repo's PR has merged"
+    end
+
+    # A single-repo task that declares nothing still gets a SCOPED gate,
+    # resolved from `project.repo_url`. This is the assertion that fails if
+    # `PlanEngine` is still calling `resolve_deploy_strategy/1` — the
+    # two-repo test above would too, but this one isolates the swap from
+    # the builder change.
+    test "a task whose repo comes from the project gets a gate naming that repo" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Repo Project",
+          repo_url: "https://github.com/Startup-Suite/core"
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Single-repo deployable task",
+          status: "in_progress",
+          deploy_strategy: %{"type" => "pr_merge", "config" => %{}},
+          deploy_target: "production"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+      deploy_stage = Enum.find(updated_plan.stages, &(&1.name == "Deploy: PR merge"))
+      assert [validation] = Tasks.list_validations(deploy_stage.id)
+      assert validation.kind == "pr_merged"
+
+      assert validation.evaluation_payload["repo"] == "Startup-Suite/core",
+             "PlanEngine must resolve the repo set (resolve_deploy_strategy_with_repos/1), " <>
+               "not the bare strategy"
+    end
+
+    # The counterpart: a project with no usable repo_url resolves to an
+    # EMPTY repo set, which leaves `"repos"` absent — and absent means
+    # today's single unscoped gate, NOT a stage with zero validations
+    # (which `stage_verdict/1` would read as `:all_passed`).
+    test "a task with no resolvable repo still gets exactly one unscoped gate",
+         %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Repo-less deployable task",
+          status: "in_progress",
+          deploy_strategy: %{"type" => "pr_merge", "config" => %{}},
+          deploy_target: "production"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+      deploy_stage = Enum.find(updated_plan.stages, &(&1.name == "Deploy: PR merge"))
+
+      assert [validation] = Tasks.list_validations(deploy_stage.id),
+             "an empty repo set must not build a validation-free deploy stage"
+
+      assert validation.kind == "pr_merged"
+      assert validation.evaluation_payload == nil
     end
 
     test "injects the deploy stage when advance/1 finds every stage already terminal",
@@ -709,7 +856,16 @@ defmodule Platform.Tasks.PlanEngineTest do
       assert {:ok, [stage_def]} = PlanEngine.build_deploy_plan(task.id)
       assert stage_def.name == "Deploy: PR merge"
       assert stage_def.position == 1
-      assert stage_def.validations == [%{kind: "pr_merged"}]
+
+      # Still exactly ONE gate — the project resolves to exactly one
+      # repository — but the gate now names it. `pr_merged` means "the PR
+      # for THIS repo merged", not "a PR merged somewhere".
+      assert [validation] = stage_def.validations
+      assert validation.kind == "pr_merged"
+      assert validation.evaluation_payload["repo"] == "test/deploy-plan"
+      assert validation.evaluation_payload["repo_url"] == "https://github.com/test/deploy-plan"
+      assert validation.evaluation_payload["ci"] == "required"
+      assert validation.evaluation_payload["auto_merge"] == false
     end
 
     test "positions deploy stage after existing plan stages" do
@@ -1059,6 +1215,223 @@ defmodule Platform.Tasks.PlanEngineTest do
       assert_raise Ecto.NoResultsError, fn ->
         PlanEngine.evaluate_validation(@slug_16, %{status: "passed"})
       end
+    end
+  end
+
+  # ── Regression 019fa63a: the DESCRIPTION of the injected deploy stage ────
+  #
+  # `PlanEngine` resolves through `Tasks.resolve_deploy_strategy_with_repos/1`,
+  # which synthesizes a one-entry `"repos"` list from `project.repo_url` for
+  # every project whose URL normalizes. `DeployStageBuilder.build_stage/2`
+  # then takes its `repos when is_list(repos) and repos != []` branch for
+  # ORDINARY tasks — the ones that declare nothing — and the single-repo
+  # wording stopped rendering anywhere outside a repo-less project.
+  #
+  # Why this needs a PlanEngine-level test and could not have been caught
+  # below it: `deploy_stage_builder_test.exs` pins the single-repo text as
+  # byte-identical to pre-multi-repo output, and that pin STAYED GREEN — the
+  # function it pins never changed, it merely stopped being called. A test
+  # one layer down from the swap cannot observe the swap.
+  #
+  # Why counts are not enough: the injection tests above assert gate COUNT
+  # and `evaluation_payload`, both of which were correct throughout. The
+  # count was 1, the payload named the right repo, and the prose still told
+  # the deployer that "one merged PR out of 1 is a partial deploy". The
+  # description is the assertion that was missing, so it is the assertion
+  # these tests make.
+  describe "deploy stage injection — single-repo wording (regression 019fa63a)" do
+    test "a task with NO repos key renders today's single-repo wording" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Undeclared Repo Project #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/Startup-Suite/core"
+        })
+
+      # The shape EVERY pre-existing production task is in: a bare
+      # `pr_merge` strategy with no `"repos"` key anywhere.
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Ordinary single-repo task",
+          status: "in_progress",
+          deploy_strategy: %{"type" => "pr_merge", "config" => %{}},
+          deploy_target: "production"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      {:ok, updated_plan} = PlanEngine.advance(plan.id)
+      deploy_stage = Enum.find(updated_plan.stages, &(&1.name == "Deploy: PR merge"))
+
+      # The gate side was never wrong — assert it so a fix that restores the
+      # prose by collapsing back to an unscoped gate does not pass here.
+      assert [validation] = Tasks.list_validations(deploy_stage.id)
+      assert validation.kind == "pr_merged"
+      assert validation.evaluation_payload["repo"] == "Startup-Suite/core"
+
+      assert_single_repo_wording(deploy_stage.description)
+
+      # Strongest available form: the injected text must be exactly what the
+      # builder emits for an undeclared repo set — the rendering
+      # `deploy_stage_builder_test.exs` pins as byte-identical to
+      # pre-multi-repo output. Substring checks alone would tolerate an
+      # enumerating sentence appended to a single-repo opening.
+      assert deploy_stage.description ==
+               DeployStageBuilder.build_stage(
+                 %{"type" => "pr_merge", "config" => %{}},
+                 deploy_stage.position
+               ).description,
+             "the injected deploy stage must render the SAME description a task " <>
+               "that declares no repo set has always rendered"
+    end
+
+    # `inject_deploy_stage/1` (exercised above via `advance/1`) and
+    # `build_deploy_plan/1` resolve the strategy independently. Both were
+    # swapped onto `_with_repos`, so both regressed; pin both.
+    test "build_deploy_plan/1 renders the same single-repo wording" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Undeclared Plan Project #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/Startup-Suite/core",
+          deploy_config: %{
+            "default_strategy" => %{"type" => "pr_merge", "config" => %{}}
+          }
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Build-deploy-plan single repo"})
+
+      assert {:ok, [stage_def]} = PlanEngine.build_deploy_plan(task.id)
+      assert [validation] = stage_def.validations
+      assert validation.evaluation_payload["repo"] == "Startup-Suite/core"
+
+      assert_single_repo_wording(stage_def.description)
+    end
+
+    # The override case: the repo set is DECLARED, but declares exactly one
+    # repository. One repo is one repo however it was arrived at, so it reads
+    # the same as an undeclared single-repo task. An ordinary entry
+    # (resolvable slug, `ci: "required"`) is used deliberately — that is the
+    # shape the undeclared path always produces, so this test pins only the
+    # uncontested part of the single-entry case.
+    test "an explicit single-entry repos list renders the same single-repo wording" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Declared One Repo Project #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/Startup-Suite/core"
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Declared single-repo task",
+          status: "in_progress",
+          deploy_strategy: %{
+            "type" => "pr_merge",
+            "config" => %{},
+            "repos" => [
+              %{"repo_url" => "https://github.com/Startup-Suite/core", "ci" => "required"}
+            ]
+          },
+          deploy_target: "production"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      {:ok, updated_plan} = PlanEngine.advance(plan.id)
+      deploy_stage = Enum.find(updated_plan.stages, &(&1.name == "Deploy: PR merge"))
+
+      assert [validation] = Tasks.list_validations(deploy_stage.id)
+      assert validation.evaluation_payload["repo"] == "Startup-Suite/core"
+
+      assert_single_repo_wording(deploy_stage.description)
+    end
+
+    # The guard on the guard. Without this, a fix that routed EVERY repo set
+    # through the single-repo renderer would collapse the multi-repo path
+    # entirely and the suite would stay green — the failure mode that put the
+    # single-repo wording out of reach in the first place, run in reverse.
+    test "two repos still enumerate the repository set" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Two Repo Project #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/Startup-Suite/core"
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Two-repo task",
+          status: "in_progress",
+          deploy_strategy: %{
+            "type" => "pr_merge",
+            "config" => %{},
+            "repos" => [
+              %{"repo_url" => "https://github.com/Startup-Suite/core", "ci" => "required"},
+              %{"repo_url" => "Startup-Suite/claude-code-suite-channel", "ci" => "none"}
+            ]
+          },
+          deploy_target: "production"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      {:ok, updated_plan} = PlanEngine.advance(plan.id)
+      deploy_stage = Enum.find(updated_plan.stages, &(&1.name == "Deploy: PR merge"))
+
+      assert length(Tasks.list_validations(deploy_stage.id)) == 2
+
+      description = deploy_stage.description
+
+      assert description =~ "This deploy covers 2 repositories:",
+             "a genuinely multi-repo deploy must still enumerate its repository set"
+
+      assert description =~ "Startup-Suite/core"
+      assert description =~ "Startup-Suite/claude-code-suite-channel"
+
+      assert description =~ "one merged PR out of 2 is a partial deploy",
+             "the partial-deploy warning is the point of the multi-repo wording and " <>
+               "must survive the single-repo carve-out"
+
+      # The per-repo sentences, which only the enumerating renderer emits.
+      assert description =~ "has no required status checks",
+             "the ci: \"none\" repo must still get its hand-merge sentence"
+
+      refute description =~ "Stage completes when the PR is merged",
+             "the singular single-repo phrasing must not leak into a two-repo deploy"
+    end
+  end
+
+  # ── Test helpers ────────────────────────────────────────────────────────
+
+  # Two sentences that appear ONLY in the single-repo rendering, and four
+  # that appear ONLY in the enumerating one. The positive markers are exact
+  # to the terminating period: the enumerating renderer opens with the same
+  # words but continues "…default branch of every repository this task lands
+  # in", so a prefix match would not discriminate between them.
+  defp assert_single_repo_wording(description) do
+    assert description =~ "Push the task branch and open a PR against the default branch.",
+           "expected today's single-repo wording, got:\n\n#{description}"
+
+    assert description =~ "Stage completes when the PR is merged",
+           "expected today's single-repo wording, got:\n\n#{description}"
+
+    for leak <- [
+          "This deploy covers",
+          "repository this task lands in",
+          "is a partial deploy",
+          "One pr_merged validation is tracked per repository"
+        ] do
+      refute description =~ leak,
+             "single-repo deploy stage enumerated its repository set (#{inspect(leak)}) — " <>
+               "the plan forbids repo enumeration and any behavioural change for the " <>
+               "99% case. Got:\n\n#{description}"
     end
   end
 end

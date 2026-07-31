@@ -259,6 +259,75 @@ defmodule Platform.Tasks.TaskTest do
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "No strategy"})
       assert task.deploy_strategy == nil
     end
+
+    test "creates a task with a declared multi-repo set", %{project: project} do
+      strategy = %{
+        "type" => "pr_merge",
+        "config" => %{"auto_merge" => false},
+        "repos" => [
+          %{"repo_url" => "https://github.com/Startup-Suite/core", "ci" => "required"},
+          %{"repo_url" => "Startup-Suite/claude-code-suite-channel", "ci" => "none"}
+        ]
+      }
+
+      assert {:ok, task} =
+               Tasks.create_task(%{
+                 project_id: project.id,
+                 title: "Two repos",
+                 deploy_strategy: strategy
+               })
+
+      assert task.deploy_strategy == strategy
+    end
+
+    # `task.deploy_strategy` beats the project default in
+    # `resolve_deploy_strategy/1` but used to bypass
+    # `DeployStageBuilder.validate_strategy/1` entirely, which made the
+    # refusal unreachable on the exact path multi-repo deploys use.
+    test "rejects an unknown strategy type", %{project: project} do
+      assert {:error, changeset} =
+               Tasks.create_task(%{
+                 project_id: project.id,
+                 title: "Bogus",
+                 deploy_strategy: %{"type" => "teleport"}
+               })
+
+      assert %{deploy_strategy: [msg]} = errors_on(changeset)
+      assert msg =~ "unknown strategy type"
+    end
+
+    test "rejects an unrecognizable repo_url", %{project: project} do
+      assert {:error, changeset} =
+               Tasks.create_task(%{
+                 project_id: project.id,
+                 title: "Bad repo",
+                 deploy_strategy: %{
+                   "type" => "pr_merge",
+                   "repos" => [%{"repo_url" => "not a repo"}]
+                 }
+               })
+
+      assert %{deploy_strategy: [msg]} = errors_on(changeset)
+      assert msg =~ "not a recognizable GitHub repository"
+    end
+
+    test "rejects auto_merge on a repo with no CI to gate on", %{project: project} do
+      assert {:error, changeset} =
+               Tasks.create_task(%{
+                 project_id: project.id,
+                 title: "Fiction",
+                 deploy_strategy: %{
+                   "type" => "pr_merge",
+                   "config" => %{"auto_merge" => true},
+                   "repos" => [
+                     %{"repo_url" => "Startup-Suite/openclaw-suite-channel", "ci" => "none"}
+                   ]
+                 }
+               })
+
+      assert %{deploy_strategy: [msg]} = errors_on(changeset)
+      assert msg =~ "auto_merge is not expressible for Startup-Suite/openclaw-suite-channel"
+    end
   end
 
   describe "resolve_deploy_strategy/1" do

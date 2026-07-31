@@ -870,6 +870,29 @@ defmodule Platform.Orchestration.PromptTemplates do
           "repo_url",
           "default_branch",
           "task_slug",
+          # task 019fa63a stage 5 — the RESOLVED strategy's instructions, which
+          # for `pr_merge` is one PR/CI/merge sequence per resolved repository.
+          #
+          # ADDED ALONGSIDE `repo_url` / `default_branch` rather than replacing
+          # them. Both singular assigns now resolve from the same repo set
+          # (`repo_url` is the PRIMARY entry), so this is one source of truth
+          # with two renderings — and a template row an operator customized to
+          # interpolate `{{repo_url}}` keeps working, and now names the right
+          # repository. Deleting the singular assigns would have blanked those
+          # rows silently: `interpolate/2` resolves an unknown placeholder to
+          # `""`, so the failure would be missing text, not an error.
+          #
+          # It also collapses a divergence: the body used to carry a STATIC
+          # four-line summary of every strategy while the hardcoded fallback
+          # rendered only the resolved one. Two texts, one of which was never
+          # updated when a strategy changed.
+          #
+          # Requires the force-update migration
+          # `20260731120000_add_deploy_strategy_instructions_to_dispatch_deploying`
+          # — `seed_defaults/0` is INSERT-only, so editing this body alone
+          # leaves every already-seeded environment rendering the old text
+          # forever.
+          "deploy_strategy_instructions",
           "deploy_strategy_type",
           "deploy_strategy_config",
           "federation_preamble"
@@ -884,12 +907,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         ### Strategy-specific instructions
 
-        **pr_merge**: Open PR from task branch against {{default_branch}}, wait for CI to go green, then merge the PR in GitHub. The `pr_merged` validation auto-passes via the `pull_request.closed` webhook — do NOT create a `suite_review_request_create`.
-        **docker_deploy**: SSH to target, pull image, compose up, health check, push evidence.
-        **skill_driven**: Execute the attached skill's deploy procedure, confirm via manual approval.
-        **manual**: Create a review request describing what needs to be deployed; wait for human confirmation.
-
-        Follow the instructions for **{{deploy_strategy_type}}** above.
+        {{deploy_strategy_instructions}}
 
         ### Deploy boundaries
         - Do NOT modify code — if CI fails, report a blocker so the task returns to in_progress

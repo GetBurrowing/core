@@ -94,6 +94,11 @@ config :platform, :start_space_purger, false
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_container_purger, false
 
+# DeployMergeReconciler (task 019fa63a stage 6): tests call `sweep/1`
+# directly with a stub runner. Left running it would shell out to `gh`
+# every five minutes from a process outside the Ecto sandbox.
+config :platform, :start_deploy_merge_reconciler, false
+
 # FilePurger (task 019f7cb0 stage 3): tests call `sweep/1` directly
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_file_purger, false

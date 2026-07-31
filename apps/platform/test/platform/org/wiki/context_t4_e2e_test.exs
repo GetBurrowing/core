@@ -879,6 +879,16 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # reaches a deployed designer only through this overwrite.
       # Update-only; no schema change.
       "20260727210000_force_update_design_task_direction_decline.exs",
+      # Task 019fa63a stage 5: the `dispatch.deploying` row's
+      # `### Strategy-specific instructions` section was a STATIC summary
+      # whose `pr_merge` line named exactly one PR and one merge — the
+      # dispatch half of the auto-injected-deploy single-repo bug. It now
+      # interpolates `{{deploy_strategy_instructions}}`, which renders one
+      # PR/CI/merge sequence per resolved repository. `seed_defaults/0` is
+      # INSERT-only and 20260326190000 claimed this slug on every migrated
+      # environment, so the body edit reaches a deployed runtime only
+      # through this overwrite. Update-only; no schema change.
+      "20260731120000_add_deploy_strategy_instructions_to_dispatch_deploying.exs",
       # Task 019fa56b-ca2d stage 1: `federation_dead_letters`, the durable
       # replacement for `Platform.Federation.DeadLetterBuffer` — a 50-entry
       # in-process list that lost every row on BEAM restart and had already

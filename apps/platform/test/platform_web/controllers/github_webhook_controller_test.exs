@@ -728,20 +728,20 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
     end
   end
 
-  describe "find_pending_pr_merged_validation/1" do
+  describe "find_pending_pr_merged_validations/1" do
     test "finds pending pr_merged validation on running deploy stage" do
       %{task: task, pr_validation: pr_validation} = create_task_with_ci_validation!()
 
-      found =
-        PlatformWeb.GithubWebhookController.find_pending_pr_merged_validation(task.id)
+      assert [found] =
+               PlatformWeb.GithubWebhookController.find_pending_pr_merged_validations(task.id)
 
-      assert found != nil
       assert found.id == pr_validation.id
     end
 
-    test "returns nil when no pending pr_merged validation exists" do
+    test "returns [] when no pending pr_merged validation exists" do
       task = create_task!()
-      assert PlatformWeb.GithubWebhookController.find_pending_pr_merged_validation(task.id) == nil
+
+      assert PlatformWeb.GithubWebhookController.find_pending_pr_merged_validations(task.id) == []
     end
 
     test "finds ci_check kind validation (used when auto_merge is true)" do
@@ -769,10 +769,9 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       {:ok, ci_check_val} =
         Tasks.create_validation(%{stage_id: stage.id, kind: "ci_check"})
 
-      found =
-        PlatformWeb.GithubWebhookController.find_pending_pr_merged_validation(task.id)
+      assert [found] =
+               PlatformWeb.GithubWebhookController.find_pending_pr_merged_validations(task.id)
 
-      assert found != nil
       assert found.id == ci_check_val.id
     end
 
@@ -790,22 +789,20 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       assert Platform.Repo.get!(Platform.Tasks.Task, task.id).status == "done"
       assert Platform.Repo.get!(Platform.Tasks.Stage, pr_validation.stage_id).status == "running"
 
-      found =
-        PlatformWeb.GithubWebhookController.find_pending_pr_merged_validation(task.id)
-
-      assert found != nil,
+      assert [found] =
+               PlatformWeb.GithubWebhookController.find_pending_pr_merged_validations(task.id),
              "a completed plan must not hide a pending pr_merged validation on a " <>
                "running deploy stage (task 019f9b34)"
 
       assert found.id == pr_validation.id
     end
 
-    test "find_pending_ci_validation/1 also survives plan-status drift" do
+    test "find_pending_ci_validations/1 also survives plan-status drift" do
       %{task: task, ci_validation: ci_validation} = create_task_in_production_shape!()
 
-      found = PlatformWeb.GithubWebhookController.find_pending_ci_validation(task.id)
+      assert [found] =
+               PlatformWeb.GithubWebhookController.find_pending_ci_validations(task.id)
 
-      assert found != nil
       assert found.id == ci_validation.id
     end
 
@@ -830,7 +827,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
 
       assert Platform.Repo.get!(Platform.Tasks.Stage, stage.id).status == "pending"
 
-      assert PlatformWeb.GithubWebhookController.find_pending_pr_merged_validation(task.id) == nil,
+      assert PlatformWeb.GithubWebhookController.find_pending_pr_merged_validations(task.id) == [],
              "dropping the plan filter must not widen the query into 'any pending " <>
                "validation anywhere' — `s.status == \"running\"` still does the scoping"
     end

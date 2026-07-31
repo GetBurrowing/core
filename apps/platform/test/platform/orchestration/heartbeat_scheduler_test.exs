@@ -2247,4 +2247,320 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "`20260719120100`"
     end
   end
+
+  # ── task 019fa63a stage 5: the resolved repo set in dispatch prompts ───────
+  #
+  # Every dispatch site used to read `project_attr(task, :repo_url, "")`. Both
+  # cross-repo client tasks on 2026-07-27 (`019fa618-c860`, `019fa618-ca92`)
+  # therefore received git blocks naming `Startup-Suite/core` — the PROJECT's
+  # repo — rather than the repository their work actually lived in, and their
+  # executors had to be told by hand to ignore the instruction.
+  #
+  # Every test below pairs a PRESENCE assertion with an ABSENCE assertion on
+  # the same prompt. A presence assertion alone passes on template text that no
+  # resolver produced: both repositories are plausible strings to find in a
+  # dispatch, and the bug's signature is precisely that the WRONG one is there
+  # too.
+  describe "dispatch_prompt/3 — resolved repository set" do
+    @core_url "https://github.com/Startup-Suite/core"
+    @channel_url "Startup-Suite/openclaw-suite-channel"
+
+    defp repo_set_task(attrs) do
+      Map.merge(
+        %{
+          id: "task-1234abcd",
+          title: "Cross-repo task",
+          description: "Work spans more than the project repo",
+          status: "in_progress",
+          priority: "high",
+          project: %{repo_url: @core_url, default_branch: "main"}
+        },
+        Map.new(attrs)
+      )
+    end
+
+    defp repo_set_plan_and_stage do
+      {%{version: 1, stages: [%{}]},
+       %{
+         id: "stage-repos",
+         position: 1,
+         name: "coding",
+         validations: [%{id: "val-repos", kind: "test_pass"}]
+       }}
+    end
+
+    defp git_workflow_section(prompt) do
+      case String.split(prompt, "\n## Git Workflow (CRITICAL)\n", parts: 2) do
+        [_before, rest] ->
+          [section | _] = String.split(rest, "\n## Stage Execution Contract\n", parts: 2)
+          section
+
+        [_only] ->
+          nil
+      end
+    end
+
+    test "a one-entry repos override names the DECLARED repo and not the project's" do
+      # The exact 2026-07-27 bug. The project points at core; the work lives in
+      # openclaw-suite-channel; the declared entry is the one the executor must
+      # be handed. Without the `refute` this test passes on a prompt that names
+      # both, which is a strictly worse dispatch than naming only the wrong one
+      # — the executor has to guess.
+      {plan, stage} = repo_set_plan_and_stage()
+
+      task =
+        repo_set_task(
+          deploy_strategy: %{
+            "type" => "pr_merge",
+            "config" => %{"auto_merge" => false},
+            "repos" => [%{"repo_url" => @channel_url, "ci" => "none"}]
+          }
+        )
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "## Git Workflow (CRITICAL)"
+      assert prompt =~ "Repository: #{@channel_url}"
+      refute prompt =~ @core_url
+      refute prompt =~ "Startup-Suite/core"
+
+      # A one-entry set is still ONE repository — no multi-repo block, so the
+      # prompt an ordinary task reads is unchanged in shape.
+      refute prompt =~ "### Repositories in scope"
+    end
+
+    test "a two-entry repos set names both repos and carries per-repo CI wording" do
+      {plan, stage} = repo_set_plan_and_stage()
+
+      task =
+        repo_set_task(
+          deploy_strategy: %{
+            "type" => "pr_merge",
+            "config" => %{"auto_merge" => false},
+            "repos" => [
+              %{"repo_url" => @core_url, "ci" => "required"},
+              %{"repo_url" => @channel_url, "ci" => "none"}
+            ]
+          }
+        )
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+      section = git_workflow_section(prompt)
+
+      assert section
+      assert section =~ "### Repositories in scope (2)"
+      assert section =~ @core_url
+      assert section =~ @channel_url
+
+      # Index 0 is `:primary` — the singular `Repository:` line resolves to it.
+      assert section =~ "Repository: #{@core_url}"
+      assert section =~ "(primary, CI: required)"
+      assert section =~ "(secondary, CI: none)"
+
+      # ONE branch name across both worktrees — `Changelog.extract_task_id_from_branch/1`
+      # reads the task id off the branch, so a per-repo suffix would break
+      # resolution for every repository but one.
+      assert section =~ "../worktrees/task-core -b task/task "
+      assert section =~ "../worktrees/task-openclaw-suite-channel -b task/task "
+      refute section =~ "-b task/task-core"
+
+      # The behavioural half of the same bug: one green gate read as a
+      # finished deploy.
+      assert section =~ "one green gate is not a finished deploy"
+    end
+
+    test "the deploying dispatch enumerates one PR/CI/merge sequence per repo" do
+      task =
+        repo_set_task(
+          status: "deploying",
+          deploy_strategy: %{
+            "type" => "pr_merge",
+            "config" => %{"auto_merge" => true},
+            "repos" => [
+              %{"repo_url" => @core_url, "ci" => "required"},
+              %{"repo_url" => @channel_url, "ci" => "none"}
+            ]
+          }
+        )
+
+      plan = %{version: 1, stages: [%{}, %{}]}
+
+      stage = %{
+        id: "stage-deploy-repos",
+        position: 2,
+        name: "Deploy: PR merge",
+        validations: [
+          %{id: "val-pr-core", kind: "pr_merged"},
+          %{id: "val-pr-channel", kind: "pr_merged"}
+        ]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "This deploy covers 2 repositories"
+      assert prompt =~ "### #{@core_url}"
+      assert prompt =~ "### #{@channel_url}"
+
+      # `ci: "none"` is not a softer `ci: "required"` — it inverts what a clean
+      # merge state MEANS. Split the prompt at the second repo's heading so the
+      # presence/absence pair is scoped to the right half; asserting on the
+      # whole prompt would let the required-CI repo's block satisfy either one.
+      [core_block, channel_block] = String.split(prompt, "### #{@channel_url}", parts: 2)
+
+      assert channel_block =~ "A CLEAN merge state here means zero checks ran"
+      assert channel_block =~ "Do NOT enable auto-merge here"
+      refute core_block =~ "A CLEAN merge state here means zero checks ran"
+
+      assert core_block =~ "Wait for CI to go green on the PR"
+      refute channel_block =~ "Wait for CI to go green on the PR"
+
+      # Auto-merge is declared true at strategy level. The required-CI repo
+      # honours it; the zero-CI repo must not, because there is no check for
+      # auto-merge to wait on.
+      assert core_block =~ "auto-merge is enabled"
+      refute channel_block =~ "auto-merge is enabled"
+
+      assert prompt =~ "`pr_merged` gate PER repository and does NOT complete"
+      assert prompt =~ "Do not read one passing gate as a finished deploy"
+    end
+
+    test "a single-repo deploying dispatch omits the multi-repo preamble entirely" do
+      # Anti-vacuity companion to the test above. The "covers N repositories"
+      # framing must not appear on the dispatch every ordinary task receives,
+      # or the warning stops carrying information.
+      task =
+        repo_set_task(
+          status: "deploying",
+          deploy_strategy: %{"type" => "pr_merge", "config" => %{"auto_merge" => false}}
+        )
+
+      stage = %{
+        id: "stage-deploy-solo",
+        position: 2,
+        name: "Deploy: PR merge",
+        validations: [%{id: "val-pr-solo", kind: "pr_merged"}]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, %{version: 1, stages: [%{}, %{}]}, stage)
+
+      refute prompt =~ "This deploy covers"
+      refute prompt =~ "A CLEAN merge state here means zero checks ran"
+
+      # And it still resolves the project repo through the same resolver.
+      assert prompt =~ "### #{@core_url}"
+      assert prompt =~ "Merge the PR in GitHub once CI is green"
+    end
+
+    test "declaring no repos renders the byte-identical Git Workflow section" do
+      # Backward-compat pin. Every task in the system today declares no
+      # `"repos"`, so this is the prompt almost every executor receives; the
+      # literal below is the section as it rendered at a6664ede (stage 4 HEAD),
+      # copied verbatim. If a future change to the multi-repo block leaks into
+      # the single-repo path, this fails with a diff rather than silently
+      # rewording nine thousand dispatches.
+      {plan, stage} = repo_set_plan_and_stage()
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(
+          repo_set_task(project: %{repo_url: @core_url, default_branch: "main"}),
+          plan,
+          stage
+        )
+
+      expected = """
+      Repository: #{@core_url}
+      Base branch: main
+
+      1. Create a worktree from the latest main branch:
+         ```
+         git fetch origin
+         git worktree add ../worktrees/task -b task/task origin/main
+         cd ../worktrees/task
+         ```
+      2. Do ALL work in the worktree directory.
+      3. When implementation is complete:
+         - Run the full test suite and lint checks
+         - Commit all changes with a descriptive message referencing task task
+         - Push the branch: `git push -u origin task/task`
+         - Do NOT open a PR yet — PR opening happens in the deploy phase
+      4. NEVER work on an existing branch. ALWAYS branch from latest origin/main.
+      """
+
+      assert git_workflow_section(prompt) == expected
+    end
+
+    test "an unresolvable repo set strips the Git Workflow block, as a blank repo_url does" do
+      # `resolve_deploy_repos/1` returning `[]` is the new "no repo" signal.
+      # `example.invalid` is the fixture placeholder every local-proof task
+      # uses; a bare word is the other way a project reaches `[]`.
+      {plan, stage} = repo_set_plan_and_stage()
+
+      for repo_url <- ["", "https://example.invalid/local-task-lifecycle-proof", "not-a-repo"] do
+        prompt =
+          HeartbeatScheduler.dispatch_prompt(
+            repo_set_task(project: %{repo_url: repo_url, default_branch: "main"}),
+            plan,
+            stage
+          )
+
+        refute prompt =~ "## Git Workflow (CRITICAL)",
+               "expected the git block stripped for repo_url #{inspect(repo_url)}"
+
+        # Anti-vacuity: the prompt is still a real dispatch, not an empty
+        # string that trivially satisfies every refute above.
+        assert prompt =~ "Current stage_id: `stage-repos`"
+      end
+    end
+
+    test "a DECLARED placeholder repo strips the block too, rather than sending an executor to it" do
+      # Stage 1 KEEPS a declared-but-unresolvable entry (with `slug: nil`) so
+      # its deploy gate cannot be matched by accident. That is a gate decision,
+      # not a dispatch one: `real_repo_url?/1` still applies to the resolved
+      # primary entry, so nobody is told to clone `example.invalid`.
+      {plan, stage} = repo_set_plan_and_stage()
+
+      task =
+        repo_set_task(
+          deploy_strategy: %{
+            "type" => "pr_merge",
+            "repos" => [%{"repo_url" => "https://example.invalid/nope", "ci" => "none"}]
+          }
+        )
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      refute prompt =~ "## Git Workflow (CRITICAL)"
+      refute prompt =~ "example.invalid"
+      assert prompt =~ "Current stage_id: `stage-repos`"
+    end
+
+    test "a stack member's git block resolves the declared repo, not the project's" do
+      # The stack path builds its own section (full-UUID worktree + rollup
+      # membership block) and read `project_attr(task, :repo_url, "")`
+      # independently. Two readers, one bug — this pins the second.
+      {plan, stage} = repo_set_plan_and_stage()
+
+      task =
+        repo_set_task(
+          id: "019fa63a-86a5-779c-bbb4-088a15ddac51",
+          stack_id: "019fa000-0000-7000-8000-000000000001",
+          stack: %{
+            slug: "cross-repo",
+            rollup_branch: "stack/cross-repo",
+            metadata: %{"rollup_branch_ready" => %{"at" => "2026-07-31T00:00:00Z"}}
+          },
+          deploy_strategy: %{
+            "type" => "pr_merge",
+            "repos" => [%{"repo_url" => @channel_url, "ci" => "none"}]
+          }
+        )
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "## Task Stack Membership"
+      assert prompt =~ "Repository: #{@channel_url}"
+      refute prompt =~ @core_url
+      refute prompt =~ "Startup-Suite/core"
+    end
+  end
 end

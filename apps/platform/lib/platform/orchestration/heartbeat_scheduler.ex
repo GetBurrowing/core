@@ -421,7 +421,16 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   defp deploying_prompt(task, plan, stage) do
     stage_info = format_stage_info(plan, stage)
-    repo_url = project_attr(task, :repo_url, "")
+    repos = resolve_task_deploy_repos(task)
+    # `repo_url` KEEPS its name and its place in the template's variable list
+    # (task 019fa63a stage 5) but stops meaning `project.repo_url` — it is now
+    # the resolved PRIMARY entry. Retargeting the singular assign instead of
+    # deleting it is what makes this backwards compatible: a template row an
+    # operator customized to interpolate `{{repo_url}}` keeps rendering, and
+    # renders the RIGHT repo. Deleting the assign would have blanked those rows
+    # silently, because `PromptTemplates.interpolate/2` resolves an unknown
+    # placeholder to `""`.
+    repo_url = primary_repo_url(repos)
     default_branch = resolve_branch(task)
     # member_slug/1 — full UUID for a stack member so the deploy-phase branch
     # reference matches the per-member branch created at in_progress; legacy
@@ -442,6 +451,18 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       repo_url: repo_url,
       default_branch: default_branch,
       task_slug: task_slug,
+      # The PLURAL rendering, added alongside the singular assigns rather than
+      # replacing them. Carries the per-repo PR/CI/merge sequence — which is
+      # where the "one green gate means done" misread lives. Same function the
+      # hardcoded fallback calls, so the two dispatch paths cannot drift.
+      deploy_strategy_instructions:
+        deploy_strategy_instructions(
+          strategy_type,
+          Map.get(resolved_strategy, "config", %{}),
+          repos,
+          default_branch,
+          task_slug
+        ),
       deploy_strategy_type: strategy_type,
       deploy_strategy_config: strategy_config,
       skills_reference: @skills_reference,
@@ -1244,7 +1265,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     stage_info = format_stage_info(plan, stage)
     strategy_type = Map.get(resolved_strategy, "type", "manual")
     strategy_config = Map.get(resolved_strategy, "config", %{})
-    repo_url = project_attr(task, :repo_url, "")
+    repos = resolve_task_deploy_repos(task)
     default_branch = resolve_branch(task)
     # member_slug/1 — keeps the deploy-phase branch reference consistent with
     # the per-member branch a stack member was given at in_progress.
@@ -1257,7 +1278,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       deploy_strategy_instructions(
         strategy_type,
         strategy_config,
-        repo_url,
+        repos,
         default_branch,
         task_slug
       )
@@ -1287,29 +1308,40 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
-  defp deploy_strategy_instructions("pr_merge", config, repo_url, default_branch, task_slug) do
-    auto_merge = Map.get(config, "auto_merge", false)
+  # ONE PR/CI/merge sequence per resolved repository, keyed on THAT repository's
+  # own `ci` state (task 019fa63a stage 5). A single sequence naming a single
+  # repo is what let both cross-repo tasks on 2026-07-27 read one merged PR as a
+  # finished deploy — the behavioural half of the same bug stage 2 fixed on the
+  # gate side.
+  defp deploy_strategy_instructions("pr_merge", config, repos, default_branch, task_slug) do
+    sequences =
+      case repos do
+        # No resolvable repository. `pr_merge` on a task with no repo is a
+        # misconfiguration, but the deploy stage still dispatches, so say
+        # something actionable rather than emitting a flow with no steps in it.
+        [] ->
+          """
+          1. Ensure all changes are committed and pushed to `task/#{task_slug}`.
+          2. This task's project declares no usable GitHub repository, so there is no PR to open. Report a blocker naming the repository the work landed in.
+          """
 
-    merge_instruction =
-      if auto_merge,
-        do:
-          "4. Merge the PR via GitHub (auto-merge is enabled — it will merge automatically once CI is green). The `pr_merged` validation auto-passes when GitHub fires the `pull_request.closed` webhook.",
-        else:
-          "4. Merge the PR in GitHub once CI is green (the human or agent with merge rights clicks the merge button). The `pr_merged` validation auto-passes when GitHub fires the `pull_request.closed` webhook — do NOT create a `suite_review_request_create`."
+        entries ->
+          entries
+          |> Enum.with_index(1)
+          |> Enum.map_join("\n", &repo_pr_merge_sequence(&1, config, default_branch, task_slug))
+      end
 
     """
     ## PR Merge Deploy Flow
-    1. Ensure all changes are committed and pushed to `task/#{task_slug}`.
-    2. Open a PR against `#{default_branch}` on #{repo_url} if not already open.
-    3. Wait for CI to go green on the PR (GitHub branch protection / auto-merge waits for CI before allowing the merge — you do not need to push a separate `ci_passed` validation).
-    #{merge_instruction}
+    #{multi_repo_deploy_preamble(repos)}\
+    #{sequences}\
     """
   end
 
   defp deploy_strategy_instructions(
          "docker_deploy",
          config,
-         _repo_url,
+         _repos,
          _default_branch,
          _task_slug
        ) do
@@ -1329,7 +1361,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   defp deploy_strategy_instructions(
          "project_files",
          config,
-         _repo_url,
+         _repos,
          _default_branch,
          _task_slug
        ) do
@@ -1351,7 +1383,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   defp deploy_strategy_instructions(
          "skill_driven",
          _config,
-         _repo_url,
+         _repos,
          _default_branch,
          _task_slug
        ) do
@@ -1363,7 +1395,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
-  defp deploy_strategy_instructions("manual", _config, _repo_url, _default_branch, _task_slug) do
+  defp deploy_strategy_instructions("manual", _config, _repos, _default_branch, _task_slug) do
     """
     ## Manual Deploy
     1. The deploy must be performed manually (by a human or following manual steps).
@@ -1382,7 +1414,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   defp deploy_strategy_instructions(
          "no_op_wait_for_rollup",
          _config,
-         _repo_url,
+         _repos,
          _default_branch,
          _task_slug
        ) do
@@ -1403,12 +1435,63 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
-  defp deploy_strategy_instructions(_type, _config, _repo_url, _default_branch, _task_slug) do
+  defp deploy_strategy_instructions(_type, _config, _repos, _default_branch, _task_slug) do
     """
     ## Deploy
     Execute the deployment according to the project's deploy configuration.
     Push validation evidence as you complete each step.
     """
+  end
+
+  defp multi_repo_deploy_preamble(repos) when length(repos) < 2, do: ""
+
+  defp multi_repo_deploy_preamble(repos) do
+    """
+    This deploy covers #{length(repos)} repositories. The stage carries one
+    `pr_merged` gate PER repository and does NOT complete until every one of
+    them passes. Do not read one passing gate as a finished deploy, and do not
+    infer one repository's readiness from another's.
+
+    """
+  end
+
+  defp repo_pr_merge_sequence({entry, index}, config, default_branch, task_slug) do
+    auto_merge = Map.get(entry.config || config, "auto_merge", false)
+    heading = if entry.repo_url == "", do: "Repository #{index}", else: entry.repo_url
+
+    """
+    ### #{heading}
+    1. Ensure all changes are committed and pushed to `task/#{task_slug}` in #{heading}.
+    2. Open a PR against `#{default_branch}` on #{heading} if not already open.
+    #{ci_instruction(entry)}
+    #{merge_instruction(entry, auto_merge)}
+    """
+  end
+
+  # `ci: "none"` is not a softer version of `ci: "required"` — it inverts what a
+  # clean merge state MEANS. `openclaw-suite-channel` has no PR workflow at all
+  # and `claude-code-suite-channel` has a workflow but no branch protection, so
+  # a PR there merges with `statusCheckRollup: []`: zero checks ran. An executor
+  # reading "no failing checks" as "CI green" is reading the absence of a signal
+  # as the signal.
+  defp ci_instruction(%{ci: "none"}) do
+    "3. This repository has NO required status checks and its default branch is unprotected. A CLEAN merge state here means zero checks ran, NOT that checks passed. Do NOT infer this repository's readiness from another repository's green CI. A human merges this one, and a human looks at it first."
+  end
+
+  defp ci_instruction(_entry) do
+    "3. Wait for CI to go green on the PR (GitHub branch protection / auto-merge waits for CI before allowing the merge — you do not need to push a separate `ci_passed` validation)."
+  end
+
+  defp merge_instruction(%{ci: "none"}, _auto_merge) do
+    "4. Do NOT enable auto-merge here — there is no check for it to wait on. Hand the PR to a human for review and merge. The `pr_merged` validation for THIS repository auto-passes when GitHub fires the `pull_request.closed` webhook — do NOT create a `suite_review_request_create`."
+  end
+
+  defp merge_instruction(_entry, true) do
+    "4. Merge the PR via GitHub (auto-merge is enabled — it will merge automatically once CI is green). The `pr_merged` validation for THIS repository auto-passes when GitHub fires the `pull_request.closed` webhook."
+  end
+
+  defp merge_instruction(_entry, false) do
+    "4. Merge the PR in GitHub once CI is green (the human or agent with merge rights clicks the merge button). The `pr_merged` validation for THIS repository auto-passes when GitHub fires the `pull_request.closed` webhook — do NOT create a `suite_review_request_create`."
   end
 
   # Hardcoded fallback for `nudge_prompt/2` — mirrors the seeded `"nudge"`
@@ -1484,7 +1567,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   defp maybe_strip_git_workflow(prompt, task) do
-    if real_repo_url?(project_attr(task, :repo_url, "")) do
+    if deploy_repos_present?(task) do
       prompt
     else
       Regex.replace(
@@ -1496,9 +1579,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   defp maybe_insert_git_workflow(prompt, task) do
-    repo_url = project_attr(task, :repo_url, "")
-
-    if real_repo_url?(repo_url) and not String.contains?(prompt, "## Git Workflow (CRITICAL)") do
+    if deploy_repos_present?(task) and not String.contains?(prompt, "## Git Workflow (CRITICAL)") do
       insert_before_context(prompt, git_workflow_section(task))
     else
       prompt
@@ -1696,15 +1777,16 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   defp non_stack_git_workflow_section(task) do
-    repo_url = project_attr(task, :repo_url, "")
+    repos = resolve_task_deploy_repos(task)
     default_branch = resolve_branch(task)
     task_slug = short_task_id(task)
 
     """
 
     ## Git Workflow (CRITICAL)
-    Repository: #{repo_url}
+    Repository: #{primary_repo_url(repos)}
     Base branch: #{default_branch}
+    #{additional_repos_block(repos, task_slug, default_branch)}\
 
     1. Create a worktree from the latest #{default_branch} branch:
        ```
@@ -1723,7 +1805,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   defp stack_member_git_workflow_section(task, membership) do
-    repo_url = project_attr(task, :repo_url, "")
+    repos = resolve_task_deploy_repos(task)
     default_branch = resolve_branch(task)
     # Full UUID — collision-free across siblings that share an id prefix.
     task_slug = member_slug(task)
@@ -1765,8 +1847,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
 
     ## Git Workflow (CRITICAL)
-    Repository: #{repo_url}
+    Repository: #{primary_repo_url(repos)}
     Base branch: #{default_branch}
+    #{additional_repos_block(repos, task_slug, parent_branch)}\
 
     1. Create a worktree from the latest #{parent_branch} branch:
        ```
@@ -1814,6 +1897,104 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   defp real_repo_url?(_repo_url), do: false
+
+  # ── Resolved repository set (task 019fa63a stage 5) ──────────────────────
+  #
+  # Every dispatch site that used to read `project_attr(task, :repo_url, "")`
+  # reads this instead. The project's single `repo_url` was the source of the
+  # wrong-repo dispatches: both cross-repo client tasks on 2026-07-27 received
+  # git blocks naming `Startup-Suite/core` because that is what their PROJECT
+  # points at, not where their work lived.
+  #
+  # `Tasks.repos_from_strategy/2` rather than `Tasks.resolve_deploy_repos/1`
+  # because this module renders prompts for plain maps as well as `%Task{}`
+  # structs (see `resolve_task_deploy_strategy/1` directly above, which carries
+  # the same accommodation) and must not touch the `Repo` — the prompt tests
+  # are `async: true` with no sandbox checked out. Both arities share one
+  # resolution body, so a prompt can never name a different repo set than the
+  # deploy gates built from the same strategy.
+  defp resolve_task_deploy_repos(task) do
+    Platform.Tasks.repos_from_strategy(
+      resolve_task_deploy_strategy(task),
+      project_attr(task, :repo_url, "")
+    )
+  end
+
+  # The primary entry is what every SINGULAR repo rendering resolves to — the
+  # `Repository:` line, and the `repo_url` assign handed to `dispatch.deploying`.
+  # For a one-entry override this alone fixes the wrong-repo dispatch, with no
+  # template change at all.
+  defp primary_repo(repos) do
+    Enum.find(repos, &(&1.role == :primary)) || List.first(repos)
+  end
+
+  defp primary_repo_url(repos) do
+    case primary_repo(repos) do
+      nil -> ""
+      entry -> entry.repo_url
+    end
+  end
+
+  # `resolve_task_deploy_repos/1` returning `[]` is the new "no repo" signal and
+  # must strip the git block exactly as a blank `project.repo_url` does today —
+  # `Tasks.project_repo_entry/2` already returns `[]` for `""`, a non-GitHub
+  # host and `example.invalid`. `real_repo_url?/1` keeps its rules and is
+  # applied to the resolved primary entry, so a DECLARED placeholder repo (kept
+  # by stage 1 so its gate cannot be matched by accident) still strips the block
+  # rather than instructing an executor to clone `example.invalid`.
+  defp deploy_repos_present?(task) do
+    task |> resolve_task_deploy_repos() |> primary_repo_url() |> real_repo_url?()
+  end
+
+  # Rendered into the "## Git Workflow (CRITICAL)" block ONLY when the resolved
+  # set holds 2+ entries, so every single-repo task — which is every task that
+  # declares no `"repos"` — sees a byte-identical prompt to before.
+  #
+  # The branch name is deliberately the SAME in every repository:
+  # `Changelog.extract_task_id_from_branch/1` resolves a task from the branch
+  # name, and per-repo suffixes would break that for every repo but one.
+  defp additional_repos_block([], _task_slug, _base_branch), do: ""
+  defp additional_repos_block([_only], _task_slug, _base_branch), do: ""
+
+  defp additional_repos_block(repos, task_slug, base_branch) do
+    lines =
+      repos
+      |> Enum.with_index(1)
+      |> Enum.map_join("\n", fn {entry, index} ->
+        """
+        - #{entry.repo_url} (#{entry.role}, CI: #{entry.ci})
+          ```
+          git worktree add ../worktrees/#{task_slug}-#{repo_dir_suffix(entry, index)} -b task/#{task_slug} origin/#{base_branch}
+          ```\
+        """
+      end)
+
+    """
+
+    ### Repositories in scope (#{length(repos)})
+    This task's work spans MORE THAN ONE repository. Every one of them gets its own
+    worktree, and the BRANCH NAME is `task/#{task_slug}` in ALL of them — task
+    resolution reads the task id off the branch name, so per-repo suffixes would
+    break it for every repository but one.
+
+    #{lines}
+
+    The numbered procedure below describes ONE repository. Run steps 1-3 in each
+    repository listed above that your change touches, using that repository's
+    worktree path, and push every branch you created. The deploy stage carries one
+    `pr_merged` gate PER repository and does not complete until every one of them
+    passes — one green gate is not a finished deploy.
+    """
+  end
+
+  # Worktree directory suffix — the repository NAME when the URL resolves to a
+  # slug, the 1-based index otherwise. Two worktrees for one task cannot share a
+  # directory, and a declared-but-unresolvable entry still needs a unique one.
+  defp repo_dir_suffix(%{slug: slug}, _index) when is_binary(slug) do
+    slug |> String.split("/") |> List.last()
+  end
+
+  defp repo_dir_suffix(_entry, index), do: Integer.to_string(index)
 
   defp format_stage_info(nil, _stage), do: ""
 

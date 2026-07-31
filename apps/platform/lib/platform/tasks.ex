@@ -40,6 +40,7 @@ defmodule Platform.Tasks do
     PlanEngine,
     Project,
     References,
+    RepoRef,
     ReviewRequest,
     Stack,
     Stage,
@@ -1566,6 +1567,208 @@ defmodule Platform.Tasks do
        do: true
 
   defp stack_member_with_rollup?(_), do: false
+
+  @doc """
+  Resolve the ORDERED set of repositories a task's deploy covers.
+
+  Nothing in the schema records which repository a diff landed in: a task
+  carries a `project_id`, and the project carries exactly one `repo_url`.
+  A task whose work spans two repos — or whose work lives in a repo that
+  is not its project's — is therefore indistinguishable from a
+  single-repo task, and its deploy gate passes on the first PR that
+  merges anywhere. The repo set has to be DECLARED before anything can
+  gate on it, and it is declared inside the existing
+  `task.deploy_strategy` map (which already wins over the project default
+  in `resolve_deploy_strategy/1`), so this costs no migration:
+
+      %{"type" => "pr_merge",
+        "config" => %{"auto_merge" => false},
+        "repos" => [
+          %{"repo_url" => "https://github.com/Startup-Suite/core", "ci" => "required"},
+          %{"repo_url" => "Startup-Suite/claude-code-suite-channel", "ci" => "none"}
+        ]}
+
+  Returns a list of entries, in declaration order:
+
+      %{repo_url: String.t(), slug: String.t() | nil, config: map(),
+        ci: "required" | "none", role: :primary | :secondary}
+
+  Resolution order:
+
+    1. `strategy["repos"]` is a non-empty list → one entry per element.
+       The entry's own `"config"` overrides the strategy-level
+       `"config"`; `"ci"` defaults to `"required"`; index 0 is
+       `:primary`.
+    2. otherwise → a single entry from `project.repo_url`, carrying
+       `strategy["config"]`, `ci: "required"`, `role: :primary`. This is
+       exactly today's behavior for every task that declares nothing.
+    3. no resolvable repository → `[]`.
+
+  `[]` means "no git deploy", NOT an error — a project with a blank or
+  non-GitHub `repo_url` (`example.invalid` in fixtures) has no PR to
+  merge. Callers must treat it that way; `real_repo_url?/1` in
+  `HeartbeatScheduler` already draws the same line.
+
+  A DECLARED entry whose `repo_url` will not normalize is KEPT, with
+  `slug: nil`, and logged. `DeployStageBuilder.validate_strategy/1`
+  refuses those at write time, so one can only arrive by a raw write —
+  and dropping it would silently shrink the repo set back to the bug this
+  exists to fix. A gate that can never match is a task that hangs; a
+  dropped repo is a task that reports success it did not earn.
+  """
+  @spec resolve_deploy_repos(Task.t()) :: [
+          %{
+            repo_url: String.t(),
+            slug: String.t() | nil,
+            config: map(),
+            ci: String.t(),
+            role: :primary | :secondary
+          }
+        ]
+  def resolve_deploy_repos(%Task{} = task) do
+    task = ensure_project_loaded(task)
+
+    repos_from_strategy(resolve_deploy_strategy(task), task.project && task.project.repo_url)
+  end
+
+  @doc """
+  The pure core of `resolve_deploy_repos/1`: strategy map + project
+  `repo_url` in, ordered repo entries out. No `Repo` access, no `%Task{}`.
+
+  `resolve_deploy_repos/1` is the entry point whenever you hold a real
+  `%Task{}` — it preloads the project for you and is what
+  `DeployStageBuilder` and the webhook path resolve through. This arity
+  exists for the ONE caller that cannot use it: `HeartbeatScheduler`
+  renders dispatch prompts for plain maps as well as structs (its whole
+  test file is `async: true` with no database checked out), and
+  `ensure_project_loaded/1` would both `FunctionClauseError` on a map and
+  hit the `Repo` from an unsandboxed process.
+
+  Extracting the core rather than duplicating it is the point: prompt text
+  and deploy gates must never disagree about which repositories a task
+  covers, and a second `Map.get(strategy, "repos")` walk in
+  `HeartbeatScheduler` is exactly the independently-drifting derivation
+  `RepoRef`'s moduledoc argues against.
+  """
+  @spec repos_from_strategy(map(), String.t() | nil) :: [
+          %{
+            repo_url: String.t(),
+            slug: String.t() | nil,
+            config: map(),
+            ci: String.t(),
+            role: :primary | :secondary
+          }
+        ]
+  def repos_from_strategy(strategy, project_repo_url) when is_map(strategy) do
+    strategy_config = Map.get(strategy, "config", %{})
+
+    case Map.get(strategy, "repos") do
+      repos when is_list(repos) and repos != [] ->
+        repos
+        |> Enum.with_index()
+        |> Enum.map(&declared_repo_entry(&1, strategy_config))
+
+      _ ->
+        project_repo_entry(project_repo_url, strategy_config)
+    end
+  end
+
+  defp declared_repo_entry({entry, index}, strategy_config) when is_map(entry) do
+    repo_url = Map.get(entry, "repo_url")
+    slug = RepoRef.slug(repo_url)
+
+    if is_nil(slug) do
+      Logger.warning(
+        "[Tasks] declared deploy repo #{inspect(repo_url)} is not a recognizable GitHub " <>
+          "repository — keeping it with a nil slug so its gate cannot be matched by accident"
+      )
+    end
+
+    %{
+      repo_url: if(is_binary(repo_url), do: repo_url, else: ""),
+      slug: slug,
+      config: Map.merge(strategy_config, Map.get(entry, "config", %{})),
+      ci: normalize_repo_ci(Map.get(entry, "ci", "required"), repo_url),
+      role: if(index == 0, do: :primary, else: :secondary)
+    }
+  end
+
+  defp declared_repo_entry({other, index}, strategy_config) do
+    declared_repo_entry({%{"repo_url" => other}, index}, strategy_config)
+  end
+
+  defp project_repo_entry(repo_url, strategy_config) do
+    case RepoRef.normalize(repo_url) do
+      {:ok, slug} ->
+        [
+          %{
+            repo_url: repo_url,
+            slug: slug,
+            config: strategy_config,
+            ci: "required",
+            role: :primary
+          }
+        ]
+
+      # Blank, missing, `example.invalid`, or any non-GitHub URL: there is
+      # no PR to merge, so there is no repo to gate.
+      :error ->
+        []
+    end
+  end
+
+  defp normalize_repo_ci(ci, _repo_url) when ci in ["required", "none"], do: ci
+
+  defp normalize_repo_ci(other, repo_url) do
+    Logger.warning(
+      "[Tasks] declared deploy repo #{inspect(repo_url)} has invalid ci #{inspect(other)} — " <>
+        "treating as \"required\" (gating is the safe default)"
+    )
+
+    "required"
+  end
+
+  @doc """
+  `resolve_deploy_strategy/1` with the resolved repository set attached.
+
+  This is what deploy-stage construction consumes, so
+  `DeployStageBuilder.build_stage/2` keeps its arity and stays a pure
+  map → map function with no `Repo` access (its test file runs
+  `async: true` with no database).
+
+  The `"repos"` key is written back in the NORMALIZED shape — one
+  string-keyed map per repository, carrying `"repo_url"`, `"slug"`,
+  `"config"`, `"ci"` and `"role"` — so a consumer never has to redo the
+  merge of strategy-level and per-entry config.
+
+  When the repo set resolves EMPTY (no declared repos and no usable
+  `project.repo_url`) the key is left ABSENT rather than written as `[]`.
+  An empty list would read downstream as "build one gate per repo, of
+  which there are none" — a deploy stage with zero validations, which
+  auto-passes. Absent means "nothing was declared", which is the state
+  every pre-existing task is in and which resolves to today's single
+  unscoped gate.
+  """
+  @spec resolve_deploy_strategy_with_repos(Task.t()) :: map()
+  def resolve_deploy_strategy_with_repos(%Task{} = task) do
+    task = ensure_project_loaded(task)
+    strategy = resolve_deploy_strategy(task)
+
+    case resolve_deploy_repos(task) do
+      [] -> Map.delete(strategy, "repos")
+      repos -> Map.put(strategy, "repos", Enum.map(repos, &repo_entry_to_map/1))
+    end
+  end
+
+  defp repo_entry_to_map(entry) do
+    %{
+      "repo_url" => entry.repo_url,
+      "slug" => entry.slug,
+      "config" => entry.config,
+      "ci" => entry.ci,
+      "role" => Atom.to_string(entry.role)
+    }
+  end
 
   @doc """
   Resolve the effective deploy target for a task.

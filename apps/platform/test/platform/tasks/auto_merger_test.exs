@@ -44,6 +44,190 @@ defmodule Platform.Tasks.AutoMergerTest do
     end
   end
 
+  # ── Per-repository gating (task 019fa63a stage 4) ───────────────────────
+
+  describe "should_auto_merge?/2" do
+    @strategy_on %{"type" => "pr_merge", "config" => %{"auto_merge" => true}}
+    @strategy_off %{"type" => "pr_merge", "config" => %{"auto_merge" => false}}
+
+    test "returns :yes for a repo with required CI and auto_merge on" do
+      assert AutoMerger.should_auto_merge?(@strategy_on, %{"ci" => "required"}) == :yes
+
+      assert AutoMerger.should_auto_merge?(@strategy_off, %{
+               "ci" => "required",
+               "auto_merge" => true
+             }) == :yes
+    end
+
+    test "returns {:no, :disabled} when auto_merge is off" do
+      assert AutoMerger.should_auto_merge?(@strategy_off, %{"ci" => "required"}) ==
+               {:no, :disabled}
+
+      assert AutoMerger.should_auto_merge?(@strategy_on, %{
+               "ci" => "required",
+               "auto_merge" => false
+             }) == {:no, :disabled}
+    end
+
+    # THE LOAD-BEARING CASE. `ci: "none"` means there is no CI signal that
+    # could ever authorize a machine merge, so `auto_merge: true` at BOTH
+    # levels must not produce one.
+    test "returns {:no, :no_ci_to_gate} for ci: \"none\" even with auto_merge on everywhere" do
+      assert AutoMerger.should_auto_merge?(@strategy_on, %{
+               "ci" => "none",
+               "auto_merge" => true,
+               "config" => %{"auto_merge" => true}
+             }) == {:no, :no_ci_to_gate}
+
+      assert AutoMerger.should_auto_merge?(@strategy_on, %{ci: "none", config: %{}}) ==
+               {:no, :no_ci_to_gate}
+    end
+
+    # `not_applicable` vs `failed` in `Task.planning_step_outcomes`, one layer
+    # down: "we chose not to" and "it can never happen" are different facts
+    # and a caller must be able to branch on which one it got.
+    test "the two refusals are not the same value" do
+      no_ci =
+        AutoMerger.should_auto_merge?(@strategy_on, %{"ci" => "none", "auto_merge" => true})
+
+      disabled = AutoMerger.should_auto_merge?(@strategy_off, %{"ci" => "required"})
+
+      assert no_ci == {:no, :no_ci_to_gate}
+      assert disabled == {:no, :disabled}
+
+      refute no_ci == disabled,
+             "collapsing these makes a gate that can never open indistinguishable " <>
+               "from one that merely has not opened yet"
+    end
+
+    test "reads the atom-keyed entry Tasks.resolve_deploy_repos/1 returns" do
+      entry = %{
+        repo_url: "https://github.com/Startup-Suite/core",
+        slug: "Startup-Suite/core",
+        config: %{"auto_merge" => true},
+        ci: "required",
+        role: :primary
+      }
+
+      assert AutoMerger.should_auto_merge?(@strategy_off, entry) == :yes
+
+      assert AutoMerger.should_auto_merge?(@strategy_on, %{entry | ci: "none"}) ==
+               {:no, :no_ci_to_gate}
+    end
+
+    test "reads the payload DeployStageBuilder writes onto each pr_merged gate" do
+      strategy = %{
+        "type" => "pr_merge",
+        "config" => %{"auto_merge" => true},
+        "repos" => [
+          %{"repo_url" => "https://github.com/Startup-Suite/core", "ci" => "required"},
+          %{"repo_url" => "Startup-Suite/claude-code-suite-channel", "ci" => "none"}
+        ]
+      }
+
+      [core, bridge] =
+        Platform.Tasks.DeployStageBuilder.build_stage(strategy, 1).validations
+
+      assert AutoMerger.should_auto_merge?(strategy, core.evaluation_payload) == :yes
+
+      assert AutoMerger.should_auto_merge?(strategy, bridge.evaluation_payload) ==
+               {:no, :no_ci_to_gate}
+    end
+
+    test "an unrecognized ci value gates rather than merges" do
+      # Mirrors `Tasks.normalize_repo_ci/2`: only the literal "none" opts out,
+      # so a typo produces a gate that waits, not a merge nobody authorized.
+      assert AutoMerger.should_auto_merge?(@strategy_on, %{"ci" => "nope"}) == :yes
+      assert AutoMerger.should_auto_merge?(@strategy_off, %{"ci" => "nope"}) == {:no, :disabled}
+    end
+
+    test "a nil entry falls back to the strategy-wide answer" do
+      assert AutoMerger.should_auto_merge?(@strategy_on, nil) == :yes
+      assert AutoMerger.should_auto_merge?(@strategy_off, nil) == {:no, :disabled}
+    end
+  end
+
+  describe "merge_method/2" do
+    test "prefers the repo entry's own method" do
+      strategy = %{"config" => %{"merge_method" => "squash"}}
+
+      assert AutoMerger.merge_method(strategy, %{"merge_method" => "rebase"}) == "rebase"
+
+      assert AutoMerger.merge_method(strategy, %{"config" => %{"merge_method" => "merge"}}) ==
+               "merge"
+    end
+
+    test "falls back to the strategy when the entry says nothing" do
+      strategy = %{"config" => %{"merge_method" => "rebase"}}
+
+      assert AutoMerger.merge_method(strategy, %{"ci" => "required"}) == "rebase"
+      assert AutoMerger.merge_method(strategy, nil) == "rebase"
+      assert AutoMerger.merge_method(%{}, %{}) == "squash"
+    end
+  end
+
+  describe "record_auto_merge_refusal/3" do
+    test "records the refusal and leaves the gate pending" do
+      %{pr_validation: validation} = task_with_pr_validation!()
+
+      assert {:ok, updated} =
+               AutoMerger.record_auto_merge_refusal(validation, :no_ci_to_gate, "Owner/Repo")
+
+      assert updated.evidence["auto_merge"] == "refused"
+      assert updated.evidence["reason"] == "no_ci_to_gate"
+      assert updated.evidence["repo"] == "Owner/Repo"
+
+      # NOT `record_merge_result/2` — that would evaluate the validation as
+      # `failed` and close the gate against the human merge that is the
+      # entire point of a repository with no CI.
+      assert Platform.Repo.get!(Platform.Tasks.Validation, validation.id).status == "pending"
+    end
+
+    test "is idempotent for the same reason" do
+      %{pr_validation: validation} = task_with_pr_validation!()
+
+      {:ok, first} =
+        AutoMerger.record_auto_merge_refusal(validation, :no_ci_to_gate, "Owner/Repo")
+
+      assert AutoMerger.record_auto_merge_refusal(first, :no_ci_to_gate, "Owner/Repo") ==
+               :already_recorded
+    end
+
+    test "preserves evidence written by other paths" do
+      %{pr_validation: validation} = task_with_pr_validation!()
+
+      validation =
+        validation
+        |> Ecto.Changeset.change(%{evidence: %{"unmatched_repo_deliveries" => []}})
+        |> Platform.Repo.update!()
+
+      {:ok, updated} =
+        AutoMerger.record_auto_merge_refusal(validation, :no_ci_to_gate, "Owner/Repo")
+
+      assert updated.evidence["unmatched_repo_deliveries"] == []
+      assert updated.evidence["auto_merge"] == "refused"
+    end
+
+    defp task_with_pr_validation! do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Refusal #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/Startup-Suite/core"
+        })
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Refusal"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Deploy: PR merge"})
+
+      {:ok, _} = Tasks.transition_stage(stage, "running")
+      {:ok, validation} = Tasks.create_validation(%{stage_id: stage.id, kind: "pr_merged"})
+
+      %{task: task, pr_validation: validation}
+    end
+  end
+
   describe "merge_method/1" do
     test "returns configured merge method" do
       assert AutoMerger.merge_method(%{"config" => %{"merge_method" => "rebase"}}) == "rebase"

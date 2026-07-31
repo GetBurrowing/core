@@ -505,7 +505,13 @@ defmodule Platform.Tasks.PlanEngine do
 
       task ->
         task = Repo.preload(task, :project)
-        strategy = Tasks.resolve_deploy_strategy(task)
+
+        # `_with_repos` — the deploy stage gates on the repository SET the
+        # task lands in (one `pr_merged` per repo), not on whichever PR
+        # merges first. Resolves to exactly today's shape for a task that
+        # declares nothing: `"repos"` is left absent when the set is empty,
+        # and `DeployStageBuilder` reads absent as one unscoped gate.
+        strategy = Tasks.resolve_deploy_strategy_with_repos(task)
 
         # Determine position: after last existing stage if plan exists
         next_position =
@@ -899,7 +905,11 @@ defmodule Platform.Tasks.PlanEngine do
           Repo.preload(completed, stages_query())
 
         true ->
-          strategy = Tasks.resolve_deploy_strategy(task)
+          # `_with_repos` — see `build_deploy_plan/1`. The `:skip` split
+          # below and `skip_reason/1` read only `strategy["type"]`, which
+          # the repo set does not touch: a stack member still emits no
+          # deploy stage at all.
+          strategy = Tasks.resolve_deploy_strategy_with_repos(task)
 
           case DeployStageBuilder.build_stage(strategy, max_position(stages) + 1) do
             :skip ->

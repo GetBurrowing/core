@@ -128,6 +128,7 @@ defmodule Platform.Application do
       |> maybe_add_space_purger()
       |> maybe_add_container_purger()
       |> maybe_add_file_purger()
+      |> maybe_add_deploy_merge_reconciler()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -379,6 +380,27 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_summarizer_sweeper, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Meetings.SummarizerSweeper)
+    else
+      children
+    end
+  end
+
+  # DeployMergeReconciler (task 019fa63a stage 6): five-minute poll of the
+  # repositories that have no webhook installed, so their per-repo
+  # `pr_merged` gate can be passed on an observed merge instead of hanging
+  # forever waiting for a delivery that can never arrive. Needs Repo.
+  #
+  # Sibling of `Platform.Chat.AttachmentReaper` in shape, but registered
+  # here through the conditional pipeline rather than inline in the static
+  # child list: the reaper runs in the test environment harmlessly, whereas
+  # this one would shell out to `gh` from a process outside the Ecto sandbox.
+  # Disabled in config/test.exs — tests call `sweep/1` directly with a stub
+  # runner, which is also the only shape in which its behaviour is
+  # observable.
+  defp maybe_add_deploy_merge_reconciler(children) do
+    if Application.get_env(:platform, :start_deploy_merge_reconciler, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Tasks.DeployMergeReconciler)
     else
       children
     end

@@ -1140,6 +1140,20 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                                      "priv/repo/migrations/20260727210000_force_update_design_task_direction_decline.exs"
                                    ])
 
+    # Task 019fa63a stage 5. Force-update only — `20260326190000` claimed
+    # `dispatch.deploying` on every migrated environment, so the insert branch
+    # is dead for it and the row it has to move is a deployed one. The body's
+    # `### Strategy-specific instructions` section was a STATIC summary whose
+    # `pr_merge` line named exactly one PR and one merge.
+    @deploy_repos_migration_path Path.join([
+                                   __ENV__.file
+                                   |> Path.dirname()
+                                   |> Path.dirname()
+                                   |> Path.dirname()
+                                   |> Path.dirname(),
+                                   "priv/repo/migrations/20260731120000_add_deploy_strategy_instructions_to_dispatch_deploying.exs"
+                                 ])
+
     # Task 019fa61c stage 3. Force-update only, same reason as the two
     # above: `20260708120100_seed_prompt_templates_architect` claimed
     # `architecture.audit_diff.v1` on every migrated environment, so the
@@ -1162,6 +1176,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     Code.compile_file(@intent_attention_migration_path)
     Code.compile_file(@design_preplan_migration_path)
     Code.compile_file(@design_decline_migration_path)
+    Code.compile_file(@deploy_repos_migration_path)
     Code.compile_file(@audit_diff_tool_migration_path)
 
     test "seed_defaults seeds dispatch.planning with current default content" do
@@ -1383,6 +1398,164 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       refute PromptTemplates.get_template_by_slug("design.task_direction.v1"),
              "the migration must skip a missing row, not insert one"
+    end
+
+    # ── task 019fa63a stage 5: the resolved repo set in dispatch.deploying ───
+    #
+    # The row's `### Strategy-specific instructions` section was a STATIC
+    # summary of every strategy. Its `pr_merge` line named exactly one PR
+    # against one branch, which is the dispatch half of the single-repo deploy
+    # bug: a task whose work spanned two repositories was told to open one PR
+    # and read the one `pr_merged` gate that passed as a finished deploy.
+    #
+    # The section now interpolates `{{deploy_strategy_instructions}}`, resolved
+    # from `Tasks.repos_from_strategy/2` — one PR/CI/merge sequence per
+    # repository. That placeholder only reaches a deployed runtime through this
+    # migration.
+    @deploy_repos_placeholder "{{deploy_strategy_instructions}}"
+    @deploy_static_summary "**pr_merge**: Open PR from task branch"
+
+    defp stale_dispatch_deploying_row do
+      template = PromptTemplates.get_template_by_slug("dispatch.deploying")
+      assert template, "precondition: the dispatch.deploying row exists"
+
+      # Reconstruct the pre-stage body: swap the placeholder back out for the
+      # static four-strategy summary the row carried in production, and drop
+      # the new variable from the list. This is the deployed shape — measured
+      # on platform_test_019fa63a before the migration ran: 2427 content bytes
+      # with the summary and no placeholder, versus 1862 after.
+      stale =
+        String.replace(
+          template.content,
+          @deploy_repos_placeholder,
+          """
+          #{@deploy_static_summary} against {{default_branch}}, wait for CI to go green, then merge the PR in GitHub. The `pr_merged` validation auto-passes via the `pull_request.closed` webhook — do NOT create a `suite_review_request_create`.
+          **docker_deploy**: SSH to target, pull image, compose up, health check, push evidence.
+          **skill_driven**: Execute the attached skill's deploy procedure, confirm via manual approval.
+          **manual**: Create a review request describing what needs to be deployed; wait for human confirmation.
+
+          Follow the instructions for **{{deploy_strategy_type}}** above.\
+          """
+        )
+
+      refute stale =~ @deploy_repos_placeholder
+      assert stale =~ @deploy_static_summary
+
+      assert stale =~ "{{deploy_strategy_type}}",
+             "the stale body must still carry the singular assigns — otherwise the " <>
+               "force-update assertion below cannot tell 'the repo block was added' " <>
+               "from 'the whole section was replaced'"
+
+      {:ok, updated} =
+        PromptTemplates.update_template(template, %{
+          content: stale,
+          variables: List.delete(template.variables, "deploy_strategy_instructions")
+        })
+
+      updated
+    end
+
+    test "20260731120000 deploy-repos migration FORCE-UPDATES a row carrying the static one-PR summary" do
+      migration = Platform.Repo.Migrations.AddDeployStrategyInstructionsToDispatchDeploying
+
+      stale = stale_dispatch_deploying_row()
+      refute stale.content =~ @deploy_repos_placeholder
+      refute "deploy_strategy_instructions" in stale.variables
+      stale_bytes = byte_size(stale.content)
+
+      :ok = migration.up()
+
+      refreshed = PromptTemplates.get_template_by_slug("dispatch.deploying")
+
+      assert refreshed.content == PromptTemplates.default_content_for_slug("dispatch.deploying")
+      assert refreshed.content =~ @deploy_repos_placeholder
+      refute refreshed.content =~ @deploy_static_summary
+
+      # A measurable delta, not "the migration exited 0". The static summary is
+      # longer than the placeholder that replaced it, so the body must shrink.
+      assert byte_size(refreshed.content) < stale_bytes
+
+      # The `variables` list is the other half — `HeartbeatScheduler` supplies
+      # the assign either way, but an operator reading the template row in the
+      # UI needs to see the slot exists.
+      assert "deploy_strategy_instructions" in refreshed.variables
+
+      # ADD-ALONGSIDE, and the whole point of the pairing: `repo_url` and
+      # `default_branch` are RETARGETED (repo_url now resolves to the primary
+      # entry of the same repo set), not removed. A row that lost them would
+      # pass every assertion above and silently blank any operator-customized
+      # body that still interpolates them — `interpolate/2` renders an unknown
+      # placeholder as "", so the failure would be missing text, not an error.
+      assert "repo_url" in refreshed.variables
+      assert "default_branch" in refreshed.variables
+
+      # Idempotent, and it does not duplicate the row.
+      :ok = migration.up()
+
+      assert PromptTemplates.get_template_by_slug("dispatch.deploying").content ==
+               refreshed.content
+
+      assert Platform.Repo.aggregate(
+               Ecto.Query.from(t in Platform.Orchestration.PromptTemplate,
+                 where: t.slug == "dispatch.deploying"
+               ),
+               :count
+             ) == 1
+    end
+
+    test "seed_defaults/0 does NOT undo a stale dispatch.deploying row — the migration is load-bearing" do
+      # The control. This is not hypothetical for this stage: the row in
+      # `platform_test_019fa63a` was seeded by 20260326190000 during the
+      # baseline run and, after the code edit to `do_default_templates/0`, sat
+      # at 2427 bytes with no placeholder while the code said 1862 with one.
+      # That is the no-op-deploy state, reproduced by accident, and nothing
+      # short of the force-update moved it.
+      stale = stale_dispatch_deploying_row()
+
+      :ok = PromptTemplates.seed_defaults()
+
+      after_seed = PromptTemplates.get_template_by_slug("dispatch.deploying")
+
+      assert after_seed.content == stale.content,
+             "seed_defaults/0 must leave an existing row untouched (insert-only)"
+
+      refute after_seed.content =~ @deploy_repos_placeholder
+
+      :ok = Platform.Repo.Migrations.AddDeployStrategyInstructionsToDispatchDeploying.up()
+
+      assert PromptTemplates.get_template_by_slug("dispatch.deploying").content =~
+               @deploy_repos_placeholder
+    end
+
+    test "20260731120000 deploy-repos migration SKIPS a database with no dispatch.deploying row" do
+      template = PromptTemplates.get_template_by_slug("dispatch.deploying")
+      {:ok, _} = PromptTemplates.delete_template(template)
+
+      refute PromptTemplates.get_template_by_slug("dispatch.deploying")
+
+      assert :ok = Platform.Repo.Migrations.AddDeployStrategyInstructionsToDispatchDeploying.up()
+
+      refute PromptTemplates.get_template_by_slug("dispatch.deploying"),
+             "the migration must skip a missing row, not insert one"
+    end
+
+    test "the refreshed dispatch.deploying body interpolates the deploy_strategy_instructions assign" do
+      # Pins the ASSIGN NAME against the template body. Renaming the assign in
+      # `HeartbeatScheduler.deploying_prompt/3` without touching the body is a
+      # silent failure — `interpolate/2` resolves the orphaned placeholder to
+      # "", so the deploy dispatch would ship with an empty
+      # `### Strategy-specific instructions` section and no error anywhere.
+      :ok = Platform.Repo.Migrations.AddDeployStrategyInstructionsToDispatchDeploying.up()
+
+      {:ok, rendered} =
+        PromptTemplates.render_template("dispatch.deploying", %{
+          deploy_strategy_instructions: "SENTINEL_PER_REPO_SEQUENCES",
+          repo_url: "SENTINEL_PRIMARY_REPO",
+          deploy_strategy_type: "pr_merge"
+        })
+
+      assert rendered =~ "SENTINEL_PER_REPO_SEQUENCES"
+      refute rendered =~ @deploy_repos_placeholder
     end
 
     # ── task 019fa61c stage 3: the audit_diff tool the prompt never named ──

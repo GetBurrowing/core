@@ -628,7 +628,31 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/tenancy/lifecycle.ex" => 2,
     "platform/vault.ex" => 4,
     "platform/webhooks/github_signature.ex" => 1,
-    "platform_web/controllers/github_webhook_controller.ex" => 2,
+    # Task 019fa63a: was 2 before stage 3, 1 after it, 0 now. Both of this
+    # file's `Repo.one`s were the same defect in two spellings — `limit: 1`
+    # deciding WHICH REPOSITORY an event belongs to by row order:
+    #
+    #   * stage 3 turned `find_pending_pr_merged_validation/1` into
+    #     `find_pending_pr_merged_validations/1` (`Repo.all`), because the
+    #     first pending merge gate wins regardless of which repo merged.
+    #   * stage 4 turned `find_pending_ci_validation/1` into
+    #     `find_pending_ci_validations/1` (`Repo.all`) for the identical
+    #     reason on the CI side: the first pending `ci_passed` won regardless
+    #     of which repo ran the checks, so a green in repo B was recorded as
+    #     repo A's green — and then authorized repo A's merge.
+    #
+    # Hand-triage of the removed call, per this map's own instruction: both
+    # queries pinned `t.id == ^task_id` and both are reached only after
+    # `Changelog.extract_task_id_from_branch/1` has resolved a UUID-shaped
+    # branch to a task that EXISTS, so no id from the wire ever reached the
+    # `where:` uncast and no guard was owed. Removing them removes the risk
+    # rather than relocating it — the `Repo.all` replacements carry exactly
+    # the same `where:` clauses with the `limit: 1` dropped.
+    #
+    # The entry is kept at 0 rather than deleted so a future `Repo.one` added
+    # to this file lands as a DRIFT (recorded 0, source has 1) and is triaged,
+    # instead of as an unclassified site with no history attached.
+    "platform_web/controllers/github_webhook_controller.ex" => 0,
     "platform_web/controllers/message_controller.ex" => 1,
     "platform_web/live/shell_live.ex" => 2
   }
