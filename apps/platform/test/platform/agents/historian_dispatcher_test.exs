@@ -34,6 +34,70 @@ defmodule Platform.Agents.HistorianDispatcherTest do
   # (`SystemEventScheduler` fan-out, T6 e2e) use the same sentinel.
   @org_workspace Projects.org_scope_workspace_id()
 
+  # ── WALL-CLOCK CLASSIFICATION (task 019fa633 stage 4) ───────────────────
+  #
+  # Every remaining `DateTime.utc_now()` in this file, classified. Referenced
+  # by test name, not line number: the stage-4 plan's own line references had
+  # all drifted, and a comment that names a line is wrong within a stage.
+  #
+  # (i) INSTANT-COMPARISON ONLY inside one seeded row set — safe, left alone.
+  #     No date-valued filter, no date in an assertion or a failure message.
+  #   • "dispatches N messages (one per window) with cursor metadata"
+  #   • "advances the corpus cursor after each dispatched window"
+  #   • "rejects an oversize rendered body without persisting a chat_messages
+  #     row"
+  #   • "(c) 25-day backlog: sweep-1 dispatches 20, sweep-2 dispatches
+  #     remaining 5"
+  #   • all three org-scope-sentinel cases ("happy path…", "mixed rows…",
+  #     "messages+transcripts regression guard…")
+  #   • `insert_user_participant/2`'s `joined_at:` — participant metadata, read
+  #     by nothing in this file.
+  #
+  #     The first four and the sentinel cases DO sweep a range wider than one
+  #     calendar day (the default 30-day lookback, or 25 explicit days). They
+  #     are still class (i) rather than class (iii) because every instant they
+  #     derive is `now - k * 86_400`, so the whole fixture translates rigidly
+  #     with the clock and the calendar-day partition of the seeded set is
+  #     invariant under that translation — UTC has no DST, so a set of instants
+  #     exactly 86_400s apart always lands on the same number of distinct days.
+  #     Measured, not assumed: the 4-row seeded-backlog geometry swept through
+  #     /5 at pinned 00:05, 00:20, 00:44 and 12:00 dispatches exactly 4 windows
+  #     at every instant. The sentinel cases go further and pin their rows to
+  #     `~T[12:00:00]` of an explicit `Date` via `insert_page_at!` and friends,
+  #     which is why those helpers are left untouched.
+  #
+  #     `(c)` additionally must NOT be pinned: it seeds its newest transcript at
+  #     exactly `now`, and `pending_bytes_per_day/4` bounds the range
+  #     end-exclusive. Under real wall-clock the dispatch happens microseconds
+  #     later so the row is inside the sweep; pinning the clock would put the
+  #     newest row exactly ON the exclusive bound and drop a day, breaking its
+  #     `dispatched_1 + dispatched_2 == 25`.
+  #
+  # (ii) FEEDS A DATE-VALUED FILTER OR ASSERTION — all pinned already.
+  #     Concentrated-density (a) and both original midnight-straddle cases pin
+  #     via `@pinned_density_now` / `@straddle_*` (task 019fa633 stages 2–3).
+  #     No unpinned `utc_now()` reaches a date filter anywhere in this file:
+  #     `String.slice(0, 10)` and `Date.to_iso8601/1` appear only inside pinned
+  #     cases.
+  #
+  # (iii) DEFINES A SWEEP RANGE WHOSE GEOMETRY IS TIME-OF-DAY DEPENDENT — all
+  #     pinned by this stage. The three oversize cases each build a sub-day
+  #     range (1h or 2h) hanging off `now`, so the range's position within the
+  #     calendar day — not just its width — decides how many buckets the slicer
+  #     produces. They now run off `@pinned_oversize_now`.
+  #
+  # DELIBERATELY UNPINNED, and must stay that way:
+  #   • "(ii) /4 still sweeps to real wall-clock for its existing callers" —
+  #     its `before_dispatch = DateTime.utc_now()` is the counterfactual half
+  #     of the stage-1 pair. Pinning it would delete the only assertion that
+  #     the production `SystemEventScheduler` path still sweeps to real time.
+  #
+  # SIBLING FILES (checked, left alone): `historian_dispatcher_telemetry_test`
+  # asserts only `is_binary(md.day_span)` and never compares a date;
+  # `historian_dispatcher_slice_windows_test` has injected a fixed `now` since
+  # it was written — this task generalises that file's existing precedent up to
+  # the integration layer.
+
   # No-op chat module so the `AgentResponder.maybe_dispatch/1` call at the
   # tail of each windowed post doesn't try to hit a real LLM. We don't
   # assert on agent replies here — only on the messages the dispatcher
@@ -182,6 +246,24 @@ defmodule Platform.Agents.HistorianDispatcherTest do
   # ── Oversize truncation path ────────────────────────────────────────────
 
   describe "dispatch_windowed/4 — oversize window" do
+    # All three cases below dispatch through `dispatch_windowed/5` with this
+    # pinned instant (task 019fa633 stage 4). The describe name is left on /4
+    # deliberately — stages 2 and 3 made the same call for the
+    # concentrated-density block, and renaming churns the describe filters the
+    # stage-5 reviewer script and prior evidence refer to.
+    #
+    # Mid-day, so each case runs the single-calendar-day geometry it was
+    # written around. The watermark case at the bottom of this block is the
+    # one that MEASURABLY broke near midnight — see the band table above its
+    # straddle variant in the `dispatch_windowed/5 — UTC midnight straddle`
+    # describe.
+    #
+    # Microsecond precision is mandatory, not stylistic — see the note at
+    # `@pinned_sweep_now`. `Message.inserted_at` is `:utc_datetime_usec` and
+    # Ecto raises `ArgumentError: expects microsecond precision` on a
+    # second-precision sigil.
+    @pinned_oversize_now ~U[2026-03-05 12:00:00.000000Z]
+
     test "names the skipped row instead of cutting it, and steps past it", %{
       agent: agent
     } do
@@ -196,7 +278,7 @@ defmodule Platform.Agents.HistorianDispatcherTest do
 
       space = insert_channel_space("board-room")
 
-      now = DateTime.utc_now()
+      now = @pinned_oversize_now
       two_hours_ago = DateTime.add(now, -7_200, :second)
       completed_at = DateTime.add(now, -1_200, :second)
 
@@ -205,6 +287,16 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       # per-day byte estimate would fall below budget and skip oversize.
       {:ok, _} =
         Historian.advance_cursor(@org_workspace, "transcripts", nil, two_hours_ago)
+
+      # Park the corpora this case does not seed AT the pinned instant so
+      # their slice ranges are zero-width. Required once the clock is pinned
+      # into the past: `Platform.Org.Seeds` writes nil-workspace pages at real
+      # wall-clock time and `Historian.sum_corpus_bytes/3` has no upper bound,
+      # so the pages corpus would otherwise report bytes > 0 while the per-day
+      # query over the pinned sweep range finds none.
+      Enum.each(~w(pages journal messages), fn corpus ->
+        {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, now)
+      end)
 
       insert_transcript!(%{
         space_id: space.id,
@@ -237,7 +329,8 @@ defmodule Platform.Agents.HistorianDispatcherTest do
                  "historian",
                  "historian.threshold",
                  %{trigger: "threshold"},
-                 @org_workspace
+                 @org_workspace,
+                 now: now
                )
 
       assert n >= 1
@@ -295,7 +388,7 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       space = insert_channel_space("fits")
       participant = insert_user_participant(space.id, "Ada")
 
-      now = DateTime.utc_now()
+      now = @pinned_oversize_now
       at = DateTime.add(now, -1_800, :second)
 
       Enum.each(~w(pages journal transcripts), fn corpus ->
@@ -343,7 +436,8 @@ defmodule Platform.Agents.HistorianDispatcherTest do
                  "historian",
                  "historian.threshold",
                  %{trigger: "fits"},
-                 @org_workspace
+                 @org_workspace,
+                 now: now
                )
 
       assert n >= 1
@@ -375,7 +469,15 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       space = insert_channel_space("watermark")
       participant = insert_user_participant(space.id, "Ada")
 
-      now = DateTime.utc_now()
+      # PINNED (task 019fa633 stage 4). This case's cursor assertions below
+      # are single-bucket arithmetic: they hold only when the seeded hour
+      # lands inside ONE UTC calendar day. Measured, not argued — the same
+      # fixture swept at 00:10–00:34:59 UTC fans into two day buckets and
+      # detonates the two assertions at the "THE INVARIANT" comment. The
+      # measured band and its two failure modes are tabulated above the
+      # straddle variant in the `dispatch_windowed/5 — UTC midnight straddle`
+      # describe.
+      now = @pinned_oversize_now
       span_start = DateTime.add(now, -3_600, :second)
 
       # Park every other corpus in the future so only `messages` contributes
@@ -429,7 +531,8 @@ defmodule Platform.Agents.HistorianDispatcherTest do
                  "historian",
                  "historian.threshold",
                  %{trigger: "pass-1"},
-                 @org_workspace
+                 @org_workspace,
+                 now: now
                )
 
       system_space = Chat.get_space_by_slug("system-#{agent.slug}")
@@ -477,12 +580,16 @@ defmodule Platform.Agents.HistorianDispatcherTest do
 
       # Deferred, not lost: keep sweeping until the corpus drains, then
       # assert the UNION of every dispatched body carries all ten rows.
+      # Every follow-up pass sweeps to the SAME pinned instant. Leaving these
+      # on /4 would sweep to real wall-clock, silently widening the range to
+      # months and changing the geometry the drain is supposed to exercise.
       Enum.each(2..6, fn pass ->
         HistorianDispatcher.dispatch_windowed(
           "historian",
           "historian.threshold",
           %{trigger: "pass-#{pass}"},
-          @org_workspace
+          @org_workspace,
+          now: now
         )
       end)
 
@@ -497,6 +604,17 @@ defmodule Platform.Agents.HistorianDispatcherTest do
 
       assert DateTime.compare(cursor_final.last_processed_at, List.last(timestamps)) == :gt,
              "expected the cursor to reach past the newest row once everything drained"
+
+      # ...and never past the sweep's own end. This upper bound is what makes
+      # threading `now:` into the follow-up passes above load-bearing. Measured
+      # during stage 4: with only the lower bound, reverting those passes to
+      # `/4` — sweeping to real wall-clock instead of the pinned instant — was
+      # UNDETECTED, because a months-wide sweep drains the corpus just as
+      # happily. The cursor overshooting the sweep end is the observable that
+      # separates the two.
+      assert DateTime.compare(cursor_final.last_processed_at, now) != :gt,
+             "expected the cursor to stop at or before the pinned sweep end #{now}, got " <>
+               inspect(cursor_final.last_processed_at)
     end
   end
 
@@ -570,29 +688,62 @@ defmodule Platform.Agents.HistorianDispatcherTest do
   # ── Concentrated-density integration ────────────────────────────────────
 
   describe "dispatch_windowed/4 — concentrated-density integration" do
+    # A pinned mid-day sweep instant, threaded through `dispatch_windowed/5`
+    # (task 019fa633 stage 1). Mid-day so the seeded hour cannot straddle
+    # UTC midnight: the cases below are written around a tight 1h range that
+    # equals the halving floor, and a straddle silently fans it into two
+    # calendar-day buckets and changes the geometry under test.
+    #
+    # Microsecond precision is mandatory, not stylistic — see the note at
+    # `@pinned_sweep_now`. `Message.inserted_at` is `:utc_datetime_usec`
+    # and Ecto raises `ArgumentError: expects microsecond precision` on a
+    # second-precision sigil.
+    @pinned_density_now ~U[2026-03-05 12:00:00.000000Z]
+
     # (a) End-to-end: 120KB summary concentrated inside a tight 1h window.
     # Pre-stamp the cursor at 1h ago so the corpus slice range is exactly
     # 1h — matches @min_sub_window_seconds so the halving-floor triggers
     # the oversize path AND the per-day byte histogram cleanly attributes
-    # the 120KB to today's UTC date. Verifies the day_bytes telemetry
-    # field is stamped onto the emitted window and the oversize truncation
-    # marker is prepended to the dispatched message body.
-    test "(a) 120KB transcript, tight-range oversize path stamps day_bytes on today",
+    # the 120KB to the seeded row's UTC date. Verifies the day_bytes
+    # telemetry field is stamped onto the emitted window and the oversize
+    # truncation marker is prepended to the dispatched message body.
+    #
+    # WHICH DAY the assertion names is load-bearing (task 019fa633). The
+    # emitted `meta.day_span` is built from `window.window_start`
+    # (historian_dispatcher.ex:840-842), and for a per-day bucket that is
+    # UTC midnight of the bucket's date — the date the row's own corpus
+    # clock falls on, per `Historian.pending_bytes_per_day/4`. For the
+    # transcripts corpus that clock is `completed_at`, which the fixture
+    # sets to `thirty_min_ago`. So the anchor is `thirty_min_ago`'s date:
+    # anchoring on `now`'s date or on `one_hour_ago`'s date each leaves a
+    # 30-minute band per day where the filter looks for a date the event
+    # never carries.
+    test "(a) 120KB transcript, tight-range oversize path stamps day_bytes on the seeded day",
          %{agent: agent} do
       Application.put_env(:platform, :historian_window_token_budget, 500)
       Application.put_env(:platform, :historian_max_windows_per_pass, 20)
 
       space = insert_channel_space("concentrated-transcript")
 
-      now = DateTime.utc_now()
+      now = @pinned_density_now
       one_hour_ago = DateTime.add(now, -3_600, :second)
       thirty_min_ago = DateTime.add(now, -1_800, :second)
-      today_utc = DateTime.to_date(now)
 
       # Pre-stamp the transcripts cursor at 1h ago so the slice range is
       # tightly [1h_ago, now) = 3600s span — the halving floor.
       {:ok, _} =
         Historian.advance_cursor(@org_workspace, "transcripts", nil, one_hour_ago)
+
+      # Park every other corpus AT the pinned instant so its slice range is
+      # zero-width. Required, not cosmetic: `Platform.Org.Seeds` inserts
+      # nil-workspace pages at real wall-clock time and
+      # `Historian.sum_corpus_bytes/3` has no upper time bound, so under a
+      # pinned past `now` the pages corpus would report bytes > 0 while the
+      # per-day query over the sweep range finds none — a spurious empty
+      # window that perturbs the `dispatched` count.
+      Enum.each(~w(pages journal messages), fn corpus ->
+        {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, now)
+      end)
 
       transcript =
         insert_transcript!(%{
@@ -627,7 +778,8 @@ defmodule Platform.Agents.HistorianDispatcherTest do
                  "historian",
                  "historian.threshold",
                  %{trigger: "threshold"},
-                 @org_workspace
+                 @org_workspace,
+                 now: now
                )
 
       assert n >= 1
@@ -650,26 +802,30 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       assert oversized.content =~ "_(skipped —"
       assert String.valid?(oversized.content)
 
-      # Drain telemetry events and locate the transcripts-corpus event
-      # for today whose day_bytes matches the seeded summary. `octet_length`
-      # of the summary is 120_000 and `octet_length` of `[]::text` is 2;
-      # the transcripts corpus sums both, so day_bytes >= 120_000.
+      # Drain telemetry events and locate the transcripts-corpus event on
+      # the seeded row's day whose day_bytes matches the seeded summary.
+      # `octet_length` of the summary is 120_000 and `octet_length` of
+      # `[]::text` is 2; the transcripts corpus sums both, so
+      # day_bytes >= 120_000.
+      #
+      # ONE binding for the day, used by the filter AND by the failure
+      # message. That is the structural half of the fix: with two bindings
+      # the message could — and did — name a date the filter never looked
+      # for.
       events = drain_window_dispatched_events()
+      expected_day = DateTime.to_date(thirty_min_ago)
 
-      today_transcripts_events =
+      transcripts_events_on_day =
         Enum.filter(events, fn {_m, meta} ->
           meta.corpus == :transcripts and
-            String.starts_with?(
-              meta.day_span,
-              DateTime.to_iso8601(one_hour_ago) |> String.slice(0, 10)
-            )
+            String.starts_with?(meta.day_span, Date.to_iso8601(expected_day))
         end)
 
-      assert Enum.any?(today_transcripts_events, fn {m, _meta} ->
+      assert Enum.any?(transcripts_events_on_day, fn {m, _meta} ->
                is_map_key(m, :day_bytes) and m.day_bytes >= 120_000 and m.day_bytes <= 130_000
              end),
-             "expected a transcripts telemetry event on #{today_utc} with day_bytes ≈ 120_000, got: " <>
-               inspect(today_transcripts_events)
+             "expected a transcripts telemetry event on #{expected_day} with day_bytes ≈ 120_000, got: " <>
+               inspect(transcripts_events_on_day)
     end
 
     # (b) Cross-corpus independence: seed one messages row + one
@@ -686,16 +842,26 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       chat_participant = insert_user_participant(chat_space.id, "Voice")
       transcript_space = insert_channel_space("crosstalk-transcripts")
 
-      now = DateTime.utc_now()
+      now = @pinned_density_now
       one_hour_ago = DateTime.add(now, -3_600, :second)
       thirty_min_ago = DateTime.add(now, -1_800, :second)
 
       # Pre-stamp both cursors 1h ago so the messages + transcripts slice
       # ranges match at exactly the halving floor. This is what makes the
-      # two independent single-window emissions land on today, one per
-      # corpus.
+      # two independent single-window emissions land on one day, one per
+      # corpus. The clock is pinned mid-day for that reason: this case
+      # carries no date-valued filter (it groups on `meta.corpus` alone, so
+      # it is NOT a second instance of the day-anchor defect), but its
+      # "exactly one window per corpus at the halving floor" shape does
+      # change silently when the seeded hour straddles UTC midnight.
       {:ok, _} = Historian.advance_cursor(@org_workspace, "messages", nil, one_hour_ago)
       {:ok, _} = Historian.advance_cursor(@org_workspace, "transcripts", nil, one_hour_ago)
+
+      # Park the corpora this case does not seed at the pinned instant —
+      # same zero-width reasoning as case (a).
+      Enum.each(~w(pages journal), fn corpus ->
+        {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, now)
+      end)
 
       # 100KB message body → 25k tokens > 500 budget → per-day fanout →
       # halve until 1h floor → oversize. Same story for transcripts.
@@ -740,7 +906,8 @@ defmodule Platform.Agents.HistorianDispatcherTest do
                  "historian",
                  "historian.threshold",
                  %{trigger: "threshold"},
-                 @org_workspace
+                 @org_workspace,
+                 now: now
                )
 
       assert n >= 2, "expected at least one message per corpus, got #{n}"
@@ -757,7 +924,7 @@ defmodule Platform.Agents.HistorianDispatcherTest do
              "expected a transcripts-corpus dispatched message"
 
       # Telemetry: each corpus must carry its OWN day_bytes value —
-      # never the sum of both corpora. Both should land on today.
+      # never the sum of both corpora. Both land on the seeded day.
       events = drain_window_dispatched_events()
 
       messages_evts = for {m, meta} <- events, meta.corpus == :messages, do: m.day_bytes
@@ -897,6 +1064,467 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       assert dispatched_1 + dispatched_2 == 25,
              "expected sweep-1 (#{dispatched_1}) + sweep-2 (#{dispatched_2}) == 25 total, " <>
                "got #{dispatched_1 + dispatched_2}"
+    end
+  end
+
+  # ── UTC-midnight straddle (task 019fa633 stage 3) ───────────────────────
+
+  describe "dispatch_windowed/5 — UTC midnight straddle" do
+    # The deterministic regression check for the day-attribution defect that
+    # took down CI run 30317846340. Both cases pin `now` through the stage-1
+    # `:now` option, so the UTC boundary is exercised on EVERY invocation at
+    # every hour of the day — not only when CI happens to run near midnight.
+    # Neither can be satisfied by "CI is green now".
+    #
+    # WHICH CLOCK DECIDES THE DAY. The four corpora do not share one:
+    # pages key on `updated_at`, journal and messages on `inserted_at`, and
+    # transcripts on `completed_at` — `Historian.per_day_bytes_query/3`
+    # groups transcripts on `date_trunc('day', t.completed_at)`
+    # (historian.ex:552-563), `sum_corpus_bytes/3` filters on `completed_at`
+    # (:443-451), and `Meetings.list_transcripts_since/2` bounds on it
+    # (meetings.ex:1848). `updated_at` never enters the transcripts path.
+    # These fixtures therefore seed `completed_at` to place the row on a
+    # calendar day, and call `force_transcript_updated_at!/2` only so the
+    # autogenerated `updated_at` cannot contradict it in a future reading.
+    #
+    # Microsecond precision is mandatory, not stylistic — see the note at
+    # `@pinned_sweep_now`. Ecto raises `ArgumentError: expects microsecond
+    # precision` on a second-precision sigil for `:utc_datetime_usec`.
+    #
+    # Each case's sweep range is [cursor, now) = exactly 1h straddling
+    # midnight, which `enumerate_day_ranges/2` clips into two calendar-day
+    # buckets. Only the bucket holding the row has bytes; the other is
+    # dropped at the `day_bytes == 0` clause (historian_dispatcher.ex:527).
+    # 120_000 bytes / 4 = 30_000 tokens against a 500-token budget forces
+    # the per-day fanout, and each bucket is under the 3600s halving floor,
+    # so the surviving bucket is emitted directly.
+
+    # CASE 1 — the row lands AFTER midnight. Reproduces the geometry of CI
+    # run 30317846340, which failed at 00:44 UTC.
+    @straddle_after_now ~U[2026-03-06 00:45:00.000000Z]
+    @straddle_after_cursor ~U[2026-03-05 23:45:00.000000Z]
+    @straddle_after_completed_at ~U[2026-03-06 00:15:00.000000Z]
+
+    test "row lands after midnight — bytes attribute to the row's day, never the sweep-start day" do
+      Application.put_env(:platform, :historian_window_token_budget, 500)
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      space = insert_channel_space("straddle-after-midnight")
+
+      now = @straddle_after_now
+
+      # Sweep range [23:45 Mar-5, 00:45 Mar-6) — one hour across the
+      # boundary, so both sides of midnight are live candidates.
+      {:ok, _} =
+        Historian.advance_cursor(@org_workspace, "transcripts", nil, @straddle_after_cursor)
+
+      # Park the other three corpora AT the pinned instant so their slice
+      # ranges are zero-width — same reasoning as the concentrated-density
+      # cases: `Platform.Org.Seeds` writes nil-workspace pages at real
+      # wall-clock time and `sum_corpus_bytes/3` has no upper bound.
+      Enum.each(~w(pages journal messages), fn corpus ->
+        {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, now)
+      end)
+
+      transcript =
+        insert_transcript!(%{
+          space_id: space.id,
+          status: "complete",
+          started_at: @straddle_after_cursor,
+          # `completed_at` is the transcripts corpus clock — this is the
+          # field that decides which calendar-day bucket the bytes land in.
+          completed_at: @straddle_after_completed_at,
+          summary: String.duplicate("x", 120_000),
+          segments: []
+        })
+
+      force_transcript_updated_at!(transcript, @straddle_after_completed_at)
+
+      attach_window_dispatched_handler!("historian-straddle-after")
+
+      assert {:ok, %{dispatched: n, remaining: 0}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "threshold"},
+                 @org_workspace,
+                 now: now
+               )
+
+      assert n >= 1
+
+      events = drain_window_dispatched_events()
+
+      # ONE binding per day, used by both halves of the pair and by both
+      # failure messages (task 019fa633 stage 2's structural fix: a filter
+      # and a message that cannot name different dates).
+      attributed_day = DateTime.to_date(@straddle_after_completed_at)
+      other_side_of_midnight = DateTime.to_date(@straddle_after_cursor)
+
+      # POSITIVE and NEGATIVE are a pair over the SAME drained list. The
+      # negative alone is vacuous — it passes against a dispatcher that
+      # emits nothing at all.
+      assert Enum.any?(events, fn {m, meta} ->
+               meta.corpus == :transcripts and
+                 String.starts_with?(meta.day_span, Date.to_iso8601(attributed_day)) and
+                 m.day_bytes >= 120_000 and m.day_bytes <= 130_000
+             end),
+             "expected a transcripts event on #{attributed_day} with day_bytes ≈ 120_000, got: " <>
+               inspect(events)
+
+      refute Enum.any?(events, fn {m, meta} ->
+               meta.corpus == :transcripts and
+                 String.starts_with?(meta.day_span, Date.to_iso8601(other_side_of_midnight)) and
+                 m.day_bytes >= 120_000 and m.day_bytes <= 130_000
+             end),
+             "the 120KB was attributed to #{other_side_of_midnight}, the far side of the " <>
+               "midnight boundary — events: " <> inspect(events)
+    end
+
+    # CASE 2 — the mirror: the row lands BEFORE midnight while the sweep
+    # ends after it.
+    #
+    # THIS CASE EXISTS TO BREAK A SPECIFIC FUTURE EDIT (task 019fa633).
+    # The originating ticket prescribed anchoring the day filter on
+    # `DateTime.to_date(now)`. Under this fixture `now` is 2026-03-06 while
+    # the bytes are attributed to 2026-03-05, so that anchor makes this
+    # case fail in CI rather than shipping. The ticket's fix does not
+    # remove the bug — it moves the failure band from 00:30–01:00 UTC to
+    # 00:00–00:30 UTC. Do not "simplify" the anchor back to `now`.
+    @straddle_before_now ~U[2026-03-06 00:15:00.000000Z]
+    @straddle_before_cursor ~U[2026-03-05 23:15:00.000000Z]
+    @straddle_before_completed_at ~U[2026-03-05 23:45:00.000000Z]
+
+    test "row lands before midnight — bytes attribute to the row's day, never the sweep-end day" do
+      Application.put_env(:platform, :historian_window_token_budget, 500)
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      space = insert_channel_space("straddle-before-midnight")
+
+      now = @straddle_before_now
+
+      {:ok, _} =
+        Historian.advance_cursor(@org_workspace, "transcripts", nil, @straddle_before_cursor)
+
+      Enum.each(~w(pages journal messages), fn corpus ->
+        {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, now)
+      end)
+
+      transcript =
+        insert_transcript!(%{
+          space_id: space.id,
+          status: "complete",
+          started_at: @straddle_before_cursor,
+          completed_at: @straddle_before_completed_at,
+          summary: String.duplicate("y", 120_000),
+          segments: []
+        })
+
+      force_transcript_updated_at!(transcript, @straddle_before_completed_at)
+
+      attach_window_dispatched_handler!("historian-straddle-before")
+
+      assert {:ok, %{dispatched: n, remaining: 0}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "threshold"},
+                 @org_workspace,
+                 now: now
+               )
+
+      assert n >= 1
+
+      events = drain_window_dispatched_events()
+
+      attributed_day = DateTime.to_date(@straddle_before_completed_at)
+      # The day `now` falls on — i.e. exactly the ticket's `today_utc`.
+      other_side_of_midnight = DateTime.to_date(@straddle_before_now)
+
+      assert Enum.any?(events, fn {m, meta} ->
+               meta.corpus == :transcripts and
+                 String.starts_with?(meta.day_span, Date.to_iso8601(attributed_day)) and
+                 m.day_bytes >= 120_000 and m.day_bytes <= 130_000
+             end),
+             "expected a transcripts event on #{attributed_day} with day_bytes ≈ 120_000, got: " <>
+               inspect(events)
+
+      refute Enum.any?(events, fn {m, meta} ->
+               meta.corpus == :transcripts and
+                 String.starts_with?(meta.day_span, Date.to_iso8601(other_side_of_midnight)) and
+                 m.day_bytes >= 120_000 and m.day_bytes <= 130_000
+             end),
+             "the 120KB was attributed to #{other_side_of_midnight} — that is the ticket's " <>
+               "`today_utc` anchor, which this case exists to reject. Events: " <> inspect(events)
+    end
+
+    # CASE 3 — the straddle variant of the watermark case (task 019fa633
+    # stage 4). Same fixture as "holds the messages cursor at the digested
+    # watermark and defers the rest": ten 200-byte rows at `span_start +
+    # i*300s` across the hour `[now-3600, now)`, under a 200-token (800-byte)
+    # cap that fits exactly four rows per dispatched window.
+    #
+    # MEASURED FAILURE BAND FOR THAT CASE, not predicted. The plan predicted
+    # roughly T ∈ (600, 1800] — 00:10–00:30 — from arithmetic. Running the
+    # fixture through `dispatch_windowed/5` at pinned instants across a fixed
+    # date measured this instead (T = seconds past UTC midnight):
+    #
+    #   00:00 PASS  00:05 PASS  00:09 PASS   ← all ten rows pre-midnight,
+    #                                          one effective bucket
+    #   00:10 FAIL  00:15 FAIL  00:20 FAIL   ← cursor lands AT `now`
+    #   00:25 FAIL  00:26 FAIL  00:29 FAIL
+    #   00:30 FAIL  00:31 FAIL  00:33 FAIL   ← cursor arithmetic HOLDS,
+    #                                          rows are lost instead
+    #   00:35 PASS  00:40 PASS  00:44 PASS  00:45 PASS  00:50 PASS
+    #   01:00 PASS  12:00 PASS
+    #
+    # So the band is T ∈ [600, 2100) — 00:10:00 through 00:34:59 — 25 minutes
+    # wide, closed at the lower edge, and it carries TWO distinct failure
+    # modes rather than the one the plan predicted:
+    #
+    #   T ∈ [600, 1800): the post-midnight bucket holds ≤ 4 rows, fits the cap
+    #     whole, and its `advance_cursor` lands on `window_end` — which is
+    #     `now`, not one microsecond past a digested row. Both cursor
+    #     assertions detonate (`… == :lt` and `… in Enum.map(timestamps, …)`).
+    #   T ∈ [1800, 2100): the post-midnight bucket is itself truncated, so the
+    #     cursor DOES hold at a digested watermark and both cursor assertions
+    #     pass. The deferred-not-lost assertion is what fails.
+    #
+    # THE SECOND MODE IS A PRODUCTION DEFECT, NOT A TEST DEFECT, and it is
+    # live across the whole band. `do_dispatch_windowed/7` walks every sliced
+    # window in one pass and each window advances the corpus cursor
+    # independently (historian_dispatcher.ex:704-730 → :904). When an EARLIER
+    # calendar-day bucket truncates — holding the cursor at its digested
+    # watermark, `cursor_target/2` clause 2 — and a LATER bucket in the same
+    # pass is then dispatched, the later bucket's advance moves the cursor
+    # past the earlier bucket's withheld rows. Those rows are never re-sliced:
+    # measured at 00:20, tags 005/006/007 are absent from the union of all
+    # dispatched bodies across six passes. This is not specific to midnight —
+    # any corpus that fans into ≥2 day buckets in one pass with a truncation
+    # in a non-final bucket loses the withheld rows. It needs its own task; it
+    # is out of scope for a stage whose remit is pinning fixtures, and
+    # "fixing" it here would change `dispatched` counts across this file.
+    #
+    # This case therefore pins 00:40 — a genuine straddle (three rows before
+    # midnight, seven after, two buckets dispatched in pass 1) that sits above
+    # the defect's band, and asserts what the plan asked for: the split really
+    # happened, rows really were deferred, the union across six passes carries
+    # all ten, and the final cursor is past the newest row. It deliberately
+    # does NOT assert the single-bucket cursor arithmetic, which is
+    # legitimately different once the hour is split.
+    @watermark_straddle_now ~U[2026-03-06 00:40:00.000000Z]
+
+    test "watermark straddle: a split hour defers rows across passes without losing them", %{
+      agent: agent
+    } do
+      Application.put_env(:platform, :historian_window_token_budget, 200)
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      space = insert_channel_space("watermark-straddle")
+      participant = insert_user_participant(space.id, "Ada")
+
+      now = @watermark_straddle_now
+      span_start = DateTime.add(now, -3_600, :second)
+
+      Enum.each(~w(pages journal transcripts), fn corpus ->
+        {:ok, _} =
+          Historian.advance_cursor(
+            @org_workspace,
+            corpus,
+            nil,
+            DateTime.add(now, 3_600, :second)
+          )
+      end)
+
+      {:ok, _} = Historian.advance_cursor(@org_workspace, "messages", nil, span_start)
+
+      seeded =
+        Enum.map(1..10, fn i ->
+          content = String.pad_leading("#{i}", 3, "0") <> String.duplicate("x", 197)
+          at = DateTime.add(span_start, i * 300, :second)
+          insert_message!(space.id, participant.id, %{content: content, inserted_at: at})
+          {content, at}
+        end)
+
+      timestamps = Enum.map(seeded, &elem(&1, 1))
+      tags = Enum.map(1..10, &String.pad_leading("#{&1}", 3, "0"))
+
+      assert {:ok, %{dispatched: dispatched_1}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "straddle-pass-1"},
+                 @org_workspace,
+                 now: now
+               )
+
+      system_space = Chat.get_space_by_slug("system-#{agent.slug}")
+
+      # POSITIVE CONTROL — the hour really was split. Without this the
+      # deferred-not-lost assertion below would pass just as happily against a
+      # single-bucket geometry, i.e. against no straddle at all.
+      window_days =
+        system_space
+        |> system_space_messages()
+        |> Enum.filter(&(get_in(&1.metadata, ["cursor", "namespace"]) == "messages"))
+        |> Enum.map(&(&1.metadata["cursor"]["window_start"] |> String.slice(0, 10)))
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      assert window_days == ["2026-03-05", "2026-03-06"],
+             "expected the hour to fan into one window per side of midnight, got #{inspect(window_days)}"
+
+      assert dispatched_1 >= 2
+
+      # ...and rows really were withheld, so "nothing was lost" below is a
+      # statement about deferral rather than about a corpus that fit whole.
+      pass_1_text = system_space |> messages_corpus_bodies() |> Enum.join("\n")
+      withheld_in_pass_1 = Enum.reject(tags, &String.contains?(pass_1_text, &1))
+
+      refute Enum.empty?(withheld_in_pass_1)
+      assert pass_1_text =~ "_(partial — "
+
+      # THE INVARIANT THAT MUST SURVIVE A SPLIT. Not the single-bucket cursor
+      # arithmetic — "the cursor stopped mid-bucket" is an artifact of the
+      # bucket count. Deferred-not-lost is the contract.
+      Enum.each(2..6, fn pass ->
+        HistorianDispatcher.dispatch_windowed(
+          "historian",
+          "historian.threshold",
+          %{trigger: "straddle-pass-#{pass}"},
+          @org_workspace,
+          now: now
+        )
+      end)
+
+      all_text = system_space |> messages_corpus_bodies() |> Enum.join("\n")
+      missing = Enum.reject(tags, &String.contains?(all_text, &1))
+
+      assert missing == [],
+             "rows never digested across six passes of a midnight-straddling hour: " <>
+               inspect(missing)
+
+      cursor_final = messages_cursor()
+
+      assert DateTime.compare(cursor_final.last_processed_at, List.last(timestamps)) == :gt,
+             "expected the cursor to reach past the newest row once the split hour drained, got " <>
+               inspect(cursor_final.last_processed_at)
+
+      # Same upper bound as the single-bucket watermark case, and for the same
+      # measured reason: it is the only assertion here that can see the
+      # follow-up passes losing their pinned clock.
+      assert DateTime.compare(cursor_final.last_processed_at, now) != :gt,
+             "expected the cursor to stop at or before the pinned sweep end #{now}, got " <>
+               inspect(cursor_final.last_processed_at)
+    end
+  end
+
+  # ── Injected sweep clock (task 019fa633 stage 1) ────────────────────────
+
+  describe "dispatch_windowed/5 — injected sweep clock" do
+    # `slice_windows/2` has taken a `:now` option since it was written, so
+    # the day-boundary enumeration stays deterministic under test. The
+    # integration entry point was the one layer that dropped it, calling
+    # `slice_windows(workspace_id)` bare — which is why every windowed
+    # integration test here swept to real wall-clock time and picked up a
+    # UTC-midnight dependency.
+    #
+    # These two cases are a COUNTERFACTUAL PAIR and must be read together.
+    # (i) alone would pass unchanged against an implementation that
+    # accepted `:now` and threw it away, because it only shows the sweep
+    # ended at some instant. (ii) is what makes (i) load-bearing: the same
+    # fixture, dispatched through the 4-arity clause, must end its sweep
+    # strictly AFTER the pinned instant. The two differ in exactly one
+    # thing — whether the clock was injected — so the option demonstrably
+    # reaches `slice_windows/2` and decides the window geometry.
+    #
+    # (ii) doubles as the production-path pin: `SystemEventScheduler`
+    # calls `dispatch_windowed/4`, and this asserts that clause still
+    # sweeps to real `DateTime.utc_now/0`.
+    # Microsecond precision is mandatory, not stylistic: `Message.
+    # inserted_at` is `:utc_datetime_usec`, and Ecto raises
+    # `ArgumentError: expects microsecond precision` when a second-precision
+    # sigil is put on the changeset. Any later stage pinning a clock in
+    # this file must write `.000000` too.
+    @pinned_sweep_now ~U[2026-03-05 12:00:00.000000Z]
+
+    setup do
+      Application.put_env(:platform, :historian_window_token_budget, 30_000)
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+      seed_pinned_clock_fixture(@pinned_sweep_now)
+      :ok
+    end
+
+    test "(i) /5 ends the sweep at the injected instant, not at wall-clock", %{agent: agent} do
+      assert {:ok, %{dispatched: dispatched}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "threshold"},
+                 @org_workspace,
+                 now: @pinned_sweep_now
+               )
+
+      cursor = messages_window_cursor!(agent)
+
+      window_start = parse_cursor_instant!(cursor["window_start"])
+      window_end = parse_cursor_instant!(cursor["window_end"])
+
+      # The sweep END is the injected instant, exactly. This is the value
+      # `slice_windows/2` was handed; nothing downstream re-derives it.
+      assert DateTime.compare(window_end, @pinned_sweep_now) == :eq,
+             "expected the sweep to end at the injected #{@pinned_sweep_now}, got #{window_end}"
+
+      # ...and the START is the parked cursor, so the emitted geometry is
+      # the tight 1h range the fixture set up rather than a months-wide
+      # range clipped by wall-clock.
+      assert DateTime.compare(
+               window_start,
+               DateTime.add(@pinned_sweep_now, -3_600, :second)
+             ) == :eq
+
+      assert DateTime.diff(window_end, window_start, :second) == 3_600
+
+      # Every other corpus has its cursor parked AT the pinned instant, so
+      # under the injected clock its slice range is zero-width and emits
+      # nothing. One dispatch, and it is the seeded messages window. (Drop
+      # the injection and the pages corpus — seeded at real wall-clock by
+      # `Platform.Org.Seeds` — wakes up and this becomes 2.)
+      assert dispatched == 1
+    end
+
+    test "(ii) /4 still sweeps to real wall-clock for its existing callers", %{agent: agent} do
+      before_dispatch = DateTime.utc_now()
+
+      assert {:ok, %{dispatched: dispatched}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "threshold"},
+                 @org_workspace
+               )
+
+      assert dispatched >= 1
+
+      cursor = messages_window_cursor!(agent)
+
+      window_start = parse_cursor_instant!(cursor["window_start"])
+      window_end = parse_cursor_instant!(cursor["window_end"])
+
+      # Same parked cursor, so the sweep START is identical to (i) — the
+      # ONLY thing that differs between the two cases is the sweep end.
+      assert DateTime.compare(
+               window_start,
+               DateTime.add(@pinned_sweep_now, -3_600, :second)
+             ) == :eq
+
+      # The sweep end is real wall-clock time, months past the pinned
+      # instant (i) produced. Without the injection actually landing,
+      # (i) would have produced this value too.
+      assert DateTime.compare(window_end, @pinned_sweep_now) == :gt
+      assert DateTime.compare(window_end, before_dispatch) != :lt
+
+      assert DateTime.diff(window_end, window_start, :second) > 3_600
     end
   end
 
@@ -1240,20 +1868,107 @@ defmodule Platform.Agents.HistorianDispatcherTest do
     end
   end
 
+  # Fixture for the injected-sweep-clock pair. Parks pages/journal/
+  # transcripts cursors AT `pinned` so their slice range is zero-width
+  # (`corpus_start_at/2` clamps a cursor >= now to now, and a non-`:lt`
+  # range emits nothing), leaving `messages` as the only corpus that can
+  # dispatch. The messages cursor is parked 1h before `pinned` and one
+  # small row is seeded halfway through that hour, so the emitted window
+  # geometry is a tight, fully determined `[pinned - 1h, pinned)`.
+  #
+  # Parking the quiet corpora is required, not cosmetic: `Platform.Org.
+  # Seeds` inserts nil-workspace pages at real wall-clock time and
+  # `Historian.sum_corpus_bytes/3` has no upper time bound, so a pinned
+  # past sweep would otherwise see pages bytes > 0 and emit a window whose
+  # per-day query finds nothing.
+  defp seed_pinned_clock_fixture(%DateTime{} = pinned) do
+    Enum.each(~w(pages journal transcripts), fn corpus ->
+      {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, pinned)
+    end)
+
+    one_hour_before = DateTime.add(pinned, -3_600, :second)
+    {:ok, _} = Historian.advance_cursor(@org_workspace, "messages", nil, one_hour_before)
+
+    space = insert_channel_space("pinned-sweep-clock")
+    participant = insert_user_participant(space.id, "Pinned Voice")
+
+    insert_message!(space.id, participant.id, %{
+      content: String.duplicate("t", 400),
+      inserted_at: DateTime.add(pinned, -1_800, :second)
+    })
+
+    :ok
+  end
+
+  # The `cursor` metadata map off the single dispatched `messages`-corpus
+  # instruction in the historian's system space.
+  defp messages_window_cursor!(%Agent{} = agent) do
+    system_space = Chat.get_space_by_slug("system-#{agent.slug}")
+    assert %Chat.Space{} = system_space
+
+    cursors =
+      system_space
+      |> system_space_messages()
+      |> Enum.map(& &1.metadata["cursor"])
+      |> Enum.filter(&(is_map(&1) and &1["namespace"] == "messages"))
+
+    assert [cursor] = cursors,
+           "expected exactly one dispatched messages-corpus window, got: #{inspect(cursors)}"
+
+    cursor
+  end
+
+  defp parse_cursor_instant!(iso8601) when is_binary(iso8601) do
+    {:ok, dt, 0} = DateTime.from_iso8601(iso8601)
+    dt
+  end
+
   defp restore_env(_key, nil), do: :ok
   defp restore_env(key, value), do: Application.put_env(:platform, key, value)
 
   # `Transcript` autogenerates `updated_at` via `timestamps/1`. To simulate
-  # a backdated row for the per-day byte histogram (which keys on
-  # `date_trunc('day', updated_at)`), we push the timestamp back with a
-  # raw `update_all`. Test-only escape hatch — production never sets
+  # a fully backdated row we push that timestamp back with a raw
+  # `update_all`. Test-only escape hatch — production never sets
   # `updated_at` directly.
+  #
+  # CORRECTION (task 019fa633 stage 2, verified against the queries): the
+  # transcripts corpus clock is `completed_at`, NOT `updated_at`, at every
+  # layer — `Historian.per_day_bytes_query("transcripts", ...)` groups on
+  # `date_trunc('day', t.completed_at)` (historian.ex:558-563),
+  # `sum_corpus_bytes("transcripts", ...)` filters on `completed_at`
+  # (:448-451), and `Meetings.list_transcripts_since/2` bounds on it
+  # (meetings.ex:1848). So seeding `completed_at` is what decides the day
+  # a transcript's bytes are attributed to; this helper only keeps
+  # `updated_at` from contradicting it. Do not rely on this call to move a
+  # row between calendar-day buckets — set `completed_at`.
   defp force_transcript_updated_at!(%Transcript{id: id}, %DateTime{} = ts) do
     {1, _} =
       Repo.update_all(
         from(t in Transcript, where: t.id == ^id),
         set: [updated_at: ts]
       )
+
+    :ok
+  end
+
+  # Attach a `[:platform, :historian, :window_dispatched]` handler that
+  # forwards into the calling test's mailbox, detached on exit. The events
+  # are read back with `drain_window_dispatched_events/1` — the single drain
+  # helper in this file (task 019fa633 stage 3).
+  defp attach_window_dispatched_handler!(prefix) do
+    test_pid = self()
+    handler_id = "#{prefix}-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:platform, :historian, :window_dispatched],
+      fn _event, measurements, metadata, _config ->
+        send(test_pid, {:window_dispatched, measurements, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok
   end

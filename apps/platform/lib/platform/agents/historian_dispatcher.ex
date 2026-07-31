@@ -158,7 +158,7 @@ defmodule Platform.Agents.HistorianDispatcher do
        0, remaining: 0}}` when nobody is pinned — mirrors `dispatch/3`).
     2. Ensure the agent's system space + system participant + agent
        participant (idempotent — same helpers as `dispatch_to_agent/4`).
-    3. `slice_windows(workspace_id)` and take up to
+    3. `slice_windows(workspace_id, now: now)` and take up to
        `max_windows_per_pass/0` chronological windows.
     4. For each window in order:
          a. `ActivityDigest.build_windowed_result(window)` → corpus-scoped
@@ -186,13 +186,38 @@ defmodule Platform.Agents.HistorianDispatcher do
   Any per-window post_instruction failure short-circuits the loop with
   `{:error, reason}`; already-dispatched windows keep their cursor
   advance, so the next tick picks up cleanly at the next window.
+
+  ## Options
+
+    * `:now` — sweep window end, defaults to `DateTime.utc_now/0`. Injected
+      by tests so the day-boundary enumeration stays deterministic; the
+      value is handed straight to `slice_windows/2`, which is the single
+      place the sweep's calendar-day fanout is decided. Mirrors the
+      long-standing `:now` option on `slice_windows/2` — this arity is
+      what carries it across the integration boundary.
+
+  The 4-arity clause delegates here with `[]`, so every production caller
+  (notably `SystemEventScheduler.fire_threshold/2`) keeps the real
+  `DateTime.utc_now/0` sweep end and is unaffected by this option.
   """
   @spec dispatch_windowed(String.t(), String.t(), map(), binary() | nil) ::
           {:ok, %{dispatched: non_neg_integer(), remaining: non_neg_integer()}}
           | {:error, term()}
-  def dispatch_windowed(event_type, template_slug, extra_metadata, workspace_id)
-      when is_binary(event_type) and is_binary(template_slug) and is_map(extra_metadata) do
+  def dispatch_windowed(event_type, template_slug, extra_metadata, workspace_id),
+    do: dispatch_windowed(event_type, template_slug, extra_metadata, workspace_id, [])
+
+  @doc """
+  `dispatch_windowed/4` with an options keyword. See that function for the
+  pipeline and for the supported options; `:now` is the only one today.
+  """
+  @spec dispatch_windowed(String.t(), String.t(), map(), binary() | nil, keyword()) ::
+          {:ok, %{dispatched: non_neg_integer(), remaining: non_neg_integer()}}
+          | {:error, term()}
+  def dispatch_windowed(event_type, template_slug, extra_metadata, workspace_id, opts)
+      when is_binary(event_type) and is_binary(template_slug) and is_map(extra_metadata) and
+             is_list(opts) do
     t0 = System.monotonic_time(:millisecond)
+    now = Keyword.get(opts, :now, DateTime.utc_now())
 
     case agent_for_event(event_type) do
       %Agent{} = agent ->
@@ -201,7 +226,15 @@ defmodule Platform.Agents.HistorianDispatcher do
             "workspace=#{inspect(workspace_id)}"
         )
 
-        do_dispatch_windowed(agent, event_type, template_slug, extra_metadata, workspace_id, t0)
+        do_dispatch_windowed(
+          agent,
+          event_type,
+          template_slug,
+          extra_metadata,
+          workspace_id,
+          t0,
+          now
+        )
 
       nil ->
         Logger.info(
@@ -643,14 +676,15 @@ defmodule Platform.Agents.HistorianDispatcher do
          template_slug,
          extra_metadata,
          workspace_id,
-         t0
+         t0,
+         %DateTime{} = now
        ) do
     with :ok <- ensure_runtime_reachable(agent, event_type),
          {:ok, space} <- ensure_system_space(agent),
          {:ok, system_participant} <- ensure_system_participant(space),
          {:ok, agent_participant} <-
            Chat.add_agent_participant(space.id, agent, display_name: agent.name) do
-      all_windows = slice_windows(workspace_id)
+      all_windows = slice_windows(workspace_id, now: now)
       cap = max_windows_per_pass()
       taken = Enum.take(all_windows, cap)
       total_taken = length(taken)
