@@ -122,7 +122,7 @@ defmodule Platform.Meetings.IntentRuntimeAdapterTest do
     end
   end
 
-  describe "attention_payload/1" do
+  describe "attention_payload/2" do
     test "carries the seven signal fields off the row" do
       agent_id = Platform.Types.UUIDv7.generate()
       r = row(%{target_agent_id: agent_id})
@@ -136,6 +136,62 @@ defmodule Platform.Meetings.IntentRuntimeAdapterTest do
       assert payload.classified_intent == "book_followup"
       assert payload.target_agent_id == agent_id
       assert payload.confidence == 0.91
+    end
+
+    test "names the space as target_space_id and leaves the space_id slot free" do
+      space_id = Platform.Types.UUIDv7.generate()
+
+      payload = Adapter.attention_payload(row(%{}), space_id)
+
+      # BOTH halves, because either alone is satisfied by the bug. The
+      # positive alone passes for an envelope that helpfully emits both keys
+      # — which is the thing that would re-pin a live client-side permission
+      # prompt (see `Chat.AgentResponder.build_system_event_payload/1`). The
+      # negative alone passes for an envelope that names no space at all,
+      # which is the dead-on-arrival state this whole task exists to close.
+      assert payload.target_space_id == space_id
+      refute Map.has_key?(payload, :space_id)
+    end
+
+    test "a nil space omits the key rather than emitting a null one" do
+      r = row(%{})
+      payload = Adapter.attention_payload(r, nil)
+
+      refute Map.has_key?(payload, :target_space_id)
+      refute Map.has_key?(payload, :space_id)
+
+      # The rest of the envelope is unaffected — a missing space is not a
+      # reason to ship a degraded signal.
+      assert payload.reason == "meeting_intent_dispatch"
+      assert payload.intent_id == r.id
+    end
+  end
+
+  describe "send_attention/3" do
+    test "the space argument has no default — arity 2 is not exported" do
+      # Pinning the ABSENCE of `\\ nil` deliberately. A default would compile,
+      # keep every existing caller green, and let a future dispatch path ship
+      # an envelope with no space — reintroducing the dead-on-arrival gap
+      # without anyone editing the adapter. Making the argument mandatory is
+      # what forces that decision into the diff.
+      assert function_exported?(Adapter, :send_attention, 3)
+      refute function_exported?(Adapter, :send_attention, 2)
+    end
+
+    test "the resolved space reaches the wire as target_space_id" do
+      {agent, runtime} = create_linked_agent!()
+      :ok = PlatformWeb.Endpoint.subscribe("runtime:#{runtime.runtime_id}")
+
+      space_id = Platform.Types.UUIDv7.generate()
+      r = row(%{target_agent_id: agent.id})
+
+      assert :ok = Adapter.send_attention(r, %{agent: agent}, space_id)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention", payload: %{signal: signal}},
+                     500
+
+      assert signal.target_space_id == space_id
+      refute Map.has_key?(signal, :space_id)
     end
   end
 

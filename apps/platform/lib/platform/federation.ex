@@ -10,6 +10,7 @@ defmodule Platform.Federation do
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat
   alias Platform.Chat.{Participant, Space}
+  alias Platform.Federation.AttentionDispatch
   alias Platform.Federation.RuntimePresence
   alias Platform.Repo
 
@@ -261,6 +262,11 @@ defmodule Platform.Federation do
   `[:platform, :meetings, :scribe_dispatch, :assignee_unresolvable]` telemetry
   so the transcript-completion caller can invoke it inline without risking the
   existing Summarizer path.
+
+  The broadcast goes through `Platform.Federation.AttentionDispatch`, which
+  first puts the target agent in a writable posture in `payload.space_id` —
+  see that module on why the invite must commit before the signal leaves, and
+  why a refused invite never blocks delivery.
   """
   @spec dispatch_scribe_attention(binary(), map()) :: :ok
   def dispatch_scribe_attention(agent_id, payload)
@@ -282,10 +288,25 @@ defmodule Platform.Federation do
     end
   end
 
+  # Broadcast through the funnel, which invites the agent into
+  # `payload.space_id` first. `Meetings.maybe_dispatch_scribe_attention/1`
+  # already puts `transcript.space_id` there, and it is nullable — a nil space
+  # is a clean `:no_space_named` skip inside the funnel, with the signal still
+  # delivered.
+  #
+  # The `:broadcast_failed` / `:endpoint_not_ready` split and the always-`:ok`
+  # return are unchanged; only the primitive underneath moved. This function
+  # keeps its own telemetry name and log line rather than sharing the funnel's
+  # so a scribe dispatch failure stays greppable on its own — see the moduledoc
+  # on `dispatch_triage_attention/2` for why the three are parallel by design.
   defp broadcast_scribe_attention(agent_id, runtime_id, payload) do
-    topic = "runtime:#{runtime_id}"
+    topic = AttentionDispatch.topic(runtime_id)
 
-    case PlatformWeb.Endpoint.broadcast(topic, "attention", %{signal: payload}) do
+    case AttentionDispatch.broadcast(runtime_id, %{signal: payload},
+           space_id: Map.get(payload, :space_id),
+           agent_id: agent_id,
+           source: :meeting_scribe
+         ) do
       :ok ->
         Logger.info(
           "[Federation] dispatched meeting_scribe_completion to #{topic} for agent #{agent_id}"
@@ -293,35 +314,20 @@ defmodule Platform.Federation do
 
         :ok
 
-      {:error, err} ->
-        emit_scribe_dispatch_fallback(agent_id, :broadcast_failed, %{
-          broadcast_error: inspect(err)
-        })
-
+      {:error, reason} ->
+        emit_scribe_dispatch_fallback(agent_id, reason)
         :ok
     end
-  rescue
-    error in ArgumentError ->
-      Logger.warning(
-        "[Federation] endpoint not ready while dispatching scribe attention for agent #{agent_id}: #{Exception.message(error)}"
-      )
-
-      emit_scribe_dispatch_fallback(agent_id, :endpoint_not_ready)
-      :ok
   end
 
-  defp emit_scribe_dispatch_fallback(agent_id, reason, extra \\ %{}) do
-    metadata =
-      Map.merge(
-        %{
-          agent_id: agent_id,
-          reason: reason,
-          actor_type: "system",
-          resource_type: "agent",
-          resource_id: agent_id
-        },
-        extra
-      )
+  defp emit_scribe_dispatch_fallback(agent_id, reason) do
+    metadata = %{
+      agent_id: agent_id,
+      reason: reason,
+      actor_type: "system",
+      resource_type: "agent",
+      resource_id: agent_id
+    }
 
     :telemetry.execute(
       [:platform, :meetings, :scribe_dispatch, :assignee_unresolvable],
@@ -346,6 +352,10 @@ defmodule Platform.Federation do
   `[:platform, :meetings, :triage_dispatch, :assignee_unresolvable]` telemetry
   so the domain-hook caller can invoke it inline without risking the
   canvas-create path.
+
+  Broadcasts through `Platform.Federation.AttentionDispatch`, same as its two
+  siblings, tagged `source: :meeting_triage` so an auto-invite into a meeting
+  space is attributable to the triage dispatch rather than the scribe one.
   """
   @spec dispatch_triage_attention(binary(), map()) :: :ok
   def dispatch_triage_attention(agent_id, payload)
@@ -367,10 +377,18 @@ defmodule Platform.Federation do
     end
   end
 
+  # Same funnel, same ordering guarantee, different `:source` — which is the
+  # whole reason `:source` exists: scribe and triage dispatch into the SAME
+  # meeting space, so `[:platform, :chat, :dispatch_auto_invite]` would be
+  # unattributable without it.
   defp broadcast_triage_attention(agent_id, runtime_id, payload) do
-    topic = "runtime:#{runtime_id}"
+    topic = AttentionDispatch.topic(runtime_id)
 
-    case PlatformWeb.Endpoint.broadcast(topic, "attention", %{signal: payload}) do
+    case AttentionDispatch.broadcast(runtime_id, %{signal: payload},
+           space_id: Map.get(payload, :space_id),
+           agent_id: agent_id,
+           source: :meeting_triage
+         ) do
       :ok ->
         Logger.info(
           "[Federation] dispatched meeting_triage_dispatch to #{topic} for agent #{agent_id}"
@@ -378,35 +396,20 @@ defmodule Platform.Federation do
 
         :ok
 
-      {:error, err} ->
-        emit_triage_dispatch_fallback(agent_id, :broadcast_failed, %{
-          broadcast_error: inspect(err)
-        })
-
+      {:error, reason} ->
+        emit_triage_dispatch_fallback(agent_id, reason)
         :ok
     end
-  rescue
-    error in ArgumentError ->
-      Logger.warning(
-        "[Federation] endpoint not ready while dispatching triage attention for agent #{agent_id}: #{Exception.message(error)}"
-      )
-
-      emit_triage_dispatch_fallback(agent_id, :endpoint_not_ready)
-      :ok
   end
 
-  defp emit_triage_dispatch_fallback(agent_id, reason, extra \\ %{}) do
-    metadata =
-      Map.merge(
-        %{
-          agent_id: agent_id,
-          reason: reason,
-          actor_type: "system",
-          resource_type: "agent",
-          resource_id: agent_id
-        },
-        extra
-      )
+  defp emit_triage_dispatch_fallback(agent_id, reason) do
+    metadata = %{
+      agent_id: agent_id,
+      reason: reason,
+      actor_type: "system",
+      resource_type: "agent",
+      resource_id: agent_id
+    }
 
     :telemetry.execute(
       [:platform, :meetings, :triage_dispatch, :assignee_unresolvable],
@@ -446,6 +449,20 @@ defmodule Platform.Federation do
   tell it. A failure observed HERE — after resolution succeeded — is a
   race or a dead endpoint, and the row's ack window resolves it as
   `:timed_out` rather than as a red failure we cannot prove.
+
+  Broadcasts through `Platform.Federation.AttentionDispatch`, naming the space
+  the envelope carries as `target_space_id` — the meeting's own chat space,
+  resolved by `Platform.Meetings.IntentDispatcher`. The target agent is
+  therefore a participant of that space before this signal leaves.
+
+  The key is read as `:target_space_id`, NOT `:space_id`, and the two siblings
+  above are not inconsistent with that: their payloads legitimately carry a
+  top-level `space_id` because nothing pins a client-side permission prompt to
+  a scribe or triage envelope. See
+  `Platform.Meetings.IntentRuntimeAdapter.attention_payload/2` for why the
+  intent envelope must name a space without claiming that slot. An envelope
+  with no `target_space_id` (meeting row gone) resolves to `:no_space_named`
+  and is still delivered.
   """
   @spec dispatch_intent_attention(binary(), map()) :: :ok
   def dispatch_intent_attention(agent_id, payload)
@@ -467,10 +484,21 @@ defmodule Platform.Federation do
     end
   end
 
+  # `:target_space_id`, not `:space_id`. The meeting-intent envelope built by
+  # `Meetings.IntentRuntimeAdapter.attention_payload/2` deliberately keeps the
+  # top-level `signal.space_id` slot free, because a live client pins a pending
+  # permission prompt's answer space to it. Reading the key the envelope
+  # actually uses is what lets the funnel invite into a space the wire payload
+  # does not claim. Do not "unify" this with the two siblings above by renaming
+  # either half — the adapter's docs explain the whole constraint.
   defp broadcast_intent_attention(agent_id, runtime_id, payload) do
-    topic = "runtime:#{runtime_id}"
+    topic = AttentionDispatch.topic(runtime_id)
 
-    case PlatformWeb.Endpoint.broadcast(topic, "attention", %{signal: payload}) do
+    case AttentionDispatch.broadcast(runtime_id, %{signal: payload},
+           space_id: Map.get(payload, :target_space_id),
+           agent_id: agent_id,
+           source: :meeting_intent
+         ) do
       :ok ->
         Logger.info(
           "[Federation] dispatched meeting_intent_dispatch to #{topic} for agent #{agent_id}"
@@ -478,35 +506,20 @@ defmodule Platform.Federation do
 
         :ok
 
-      {:error, err} ->
-        emit_intent_dispatch_fallback(agent_id, :broadcast_failed, %{
-          broadcast_error: inspect(err)
-        })
-
+      {:error, reason} ->
+        emit_intent_dispatch_fallback(agent_id, reason)
         :ok
     end
-  rescue
-    error in ArgumentError ->
-      Logger.warning(
-        "[Federation] endpoint not ready while dispatching intent attention for agent #{agent_id}: #{Exception.message(error)}"
-      )
-
-      emit_intent_dispatch_fallback(agent_id, :endpoint_not_ready)
-      :ok
   end
 
-  defp emit_intent_dispatch_fallback(agent_id, reason, extra \\ %{}) do
-    metadata =
-      Map.merge(
-        %{
-          agent_id: agent_id,
-          reason: reason,
-          actor_type: "system",
-          resource_type: "agent",
-          resource_id: agent_id
-        },
-        extra
-      )
+  defp emit_intent_dispatch_fallback(agent_id, reason) do
+    metadata = %{
+      agent_id: agent_id,
+      reason: reason,
+      actor_type: "system",
+      resource_type: "agent",
+      resource_id: agent_id
+    }
 
     :telemetry.execute(
       [:platform, :meetings, :intent_dispatch, :assignee_unresolvable],

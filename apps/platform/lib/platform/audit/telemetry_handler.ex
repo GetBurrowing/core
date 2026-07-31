@@ -133,8 +133,14 @@ defmodule Platform.Audit.TelemetryHandler do
     # Platform.Federation.dispatch_scribe_attention/2 (via
     # emit_scribe_dispatch_fallback/3) when the scribe agent can't be
     # resolved to a live runtime or the broadcast fails. Metadata carries
-    # agent_id, reason (:agent_not_found | :runtime_unresolvable |
-    # :broadcast_failed | :endpoint_not_ready), and optional broadcast_error.
+    # agent_id and reason (:agent_not_found | :runtime_unresolvable |
+    # :broadcast_failed | :endpoint_not_ready).
+    #
+    # Task 019fb90f stage 2 dropped the optional `broadcast_error` key: the
+    # broadcast now happens inside `Platform.Federation.AttentionDispatch`,
+    # whose return is a closed set of atoms, and the underlying error term is
+    # logged there instead. It was unreachable in practice anyway — the PubSub
+    # adapter in use never returns `{:error, _}` from a broadcast.
     [:platform, :meetings, :scribe_dispatch, :assignee_unresolvable],
     # Task 019f5e66 stage 5 — project_files deploy strategy audit trail.
     # Emitted by Platform.Deploy.ProjectFiles.execute/2. The :deployed

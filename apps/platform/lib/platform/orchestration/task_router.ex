@@ -93,6 +93,7 @@ defmodule Platform.Orchestration.TaskRouter do
   alias Platform.Design.PreplanStep
   alias Platform.Execution.CredentialLease
   alias Platform.Federation
+  alias Platform.Federation.AttentionDispatch
 
   alias Platform.Orchestration.{
     ContextAssembler,
@@ -1545,6 +1546,22 @@ defmodule Platform.Orchestration.TaskRouter do
     end
   end
 
+  # Goes through `Platform.Federation.AttentionDispatch`, which puts the
+  # assignee in a writable posture in the task's execution space BEFORE the
+  # signal leaves. This is a real behaviour change, not a refactor:
+  # `Platform.Orchestration.ExecutionSpace.add_participant/2` had zero
+  # production call sites, so a federated assignee was dispatched into an
+  # execution space it had never been added to and only became able to write
+  # there *incidentally*, when a router prompt happened to contain an
+  # `@[slug]` token that `Chat.reinvite_and_pin_mentioned/1` picked up. That
+  # function is deleted in the same change — its `attention_mode: "all"` now
+  # lives in `DispatchMembership`'s per-kind policy, and two mechanisms saying
+  # one thing is how they drift.
+  #
+  # The `:broadcast_failed` / `:endpoint_not_ready` split is preserved exactly,
+  # because `handle_info(:dispatch, ...)` retries on the second and parks on
+  # the first. Only the raw error term moved: the funnel logs it, so these
+  # lines no longer restate it.
   defp dispatch_attention(%{type: :federated, id: runtime_id}, task_id, reason, context, prompt) do
     task_status = context[:task][:status] || context[:task]["status"]
     space_id = context[:execution_space_id]
@@ -1555,24 +1572,37 @@ defmodule Platform.Orchestration.TaskRouter do
       message: %{content: prompt, author: "TaskRouter"}
     }
 
-    topic = "runtime:#{runtime_id}"
+    topic = AttentionDispatch.topic(runtime_id)
 
-    case PlatformWeb.Endpoint.broadcast(topic, "attention", payload) do
+    # `Federation.lookup_assignment/1` is the resolution orchestration ALREADY
+    # uses to turn a `%{type: :federated, id: runtime_id}` assignee into
+    # `{agent, runtime}`. Reused rather than adding a second lookup path, and
+    # the struct is handed to the funnel directly so DispatchMembership does not
+    # repeat the query. An unresolvable runtime yields `nil`, which the funnel
+    # reports as `:no_agent_named` and which never blocks the broadcast — the
+    # signal is addressed by `runtime_id`, not by the agent row.
+    {agent, _runtime} = Federation.lookup_assignment(runtime_id)
+
+    case AttentionDispatch.broadcast(runtime_id, payload,
+           space_id: space_id,
+           agent_id: agent,
+           source: :task_router
+         ) do
       :ok ->
         Logger.info("[TaskRouter] dispatched #{reason} to #{topic} for task #{task_id}")
         :ok
 
-      {:error, err} ->
-        Logger.error("[TaskRouter] broadcast failed to #{topic}: #{inspect(err)}")
+      {:error, :endpoint_not_ready} ->
+        Logger.warning(
+          "[TaskRouter] endpoint not ready while dispatching #{reason} for task #{task_id}"
+        )
+
+        {:error, :endpoint_not_ready}
+
+      {:error, :broadcast_failed} ->
+        Logger.error("[TaskRouter] broadcast failed to #{topic}")
         {:error, :broadcast_failed}
     end
-  rescue
-    error in ArgumentError ->
-      Logger.warning(
-        "[TaskRouter] endpoint not ready while dispatching #{reason} for task #{task_id}: #{Exception.message(error)}"
-      )
-
-      {:error, :endpoint_not_ready}
   end
 
   # ── Liveness (LeaseManager) helpers ────────────────────────────────────

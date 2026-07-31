@@ -22,7 +22,7 @@ defmodule Platform.Chat.AgentResponder do
   alias Platform.Chat
   alias Platform.Chat.{ContextPlane, Message, Participant}
   alias Platform.Chat.PubSub, as: ChatPubSub
-  alias Platform.Federation.{DeadLetters, RuntimePresence, ToolSurface}
+  alias Platform.Federation.{AttentionDispatch, DeadLetters, RuntimePresence, ToolSurface}
   alias Platform.Repo
   alias Platform.Tasks.Task, as: TaskRecord
 
@@ -201,7 +201,7 @@ defmodule Platform.Chat.AgentResponder do
       runtime = Platform.Federation.get_runtime(runtime_id)
 
       if runtime do
-        topic = "runtime:#{runtime.runtime_id}"
+        topic = AttentionDispatch.topic(runtime.runtime_id)
 
         # Pre-check: is the runtime actually connected?
         unless RuntimePresence.online?(runtime.runtime_id) do
@@ -273,7 +273,21 @@ defmodule Platform.Chat.AgentResponder do
 
           Logger.info("[AgentResponder] broadcasting attention to #{topic}")
 
-          case PlatformWeb.Endpoint.broadcast(topic, "attention", payload) do
+          # Through the funnel like every other attention broadcast, and
+          # EXPECTED TO BE A NO-OP: `load_context/1` already refuses to build
+          # this context unless `Chat.get_agent_participant/2` resolves, so a
+          # channel dispatch reaches here only when the agent is already a
+          # member (`outcome: :already_member`) and a DM dispatch is refused by
+          # the funnel's privacy guard (`outcome: :direct_space`). The value is
+          # the invariant, not a change: routing this site keeps the source-scan
+          # guard's "exactly one broadcaster" claim true, so a future edit here
+          # cannot quietly reintroduce a dispatch that skips the invite. Tests
+          # assert both outcomes by name rather than asserting nothing.
+          case AttentionDispatch.broadcast(runtime.runtime_id, payload,
+                 space_id: space_id,
+                 agent_id: context.agent,
+                 source: :agent_responder
+               ) do
             :ok ->
               Logger.info("[AgentResponder] broadcast sent successfully to #{topic}")
 
@@ -288,7 +302,12 @@ defmodule Platform.Chat.AgentResponder do
             {:error, reason} ->
               Logger.error("[AgentResponder] broadcast failed to #{topic}: #{inspect(reason)}")
 
-              {:error, :broadcast_failed}
+              # Passed through rather than flattened to `:broadcast_failed`.
+              # Before the funnel an unready endpoint raised ArgumentError out
+              # of this function entirely (there was no rescue here); collapsing
+              # the two atoms now would trade an unhandled raise for a reason
+              # collapse, and this task exists to stop doing that.
+              {:error, reason}
           end
         end
       else
@@ -431,7 +450,7 @@ defmodule Platform.Chat.AgentResponder do
   end
 
   defp broadcast_system_event(runtime, %Agent{} = agent, context) do
-    topic = "runtime:#{runtime.runtime_id}"
+    topic = AttentionDispatch.topic(runtime.runtime_id)
     responsibility_key = context[:responsibility_key]
 
     # Built ONCE, before the presence branch, so what the dead-letter ledger
@@ -446,7 +465,21 @@ defmodule Platform.Chat.AgentResponder do
           "responsibility=#{inspect(responsibility_key)} agent=#{agent.slug}"
       )
 
-      case PlatformWeb.Endpoint.broadcast(topic, "attention", payload) do
+      # `space_id: nil` is a DECISION, not an omission, and it must stay nil.
+      # A system_event fire names no space: `build_system_event_signal/2`
+      # deliberately keeps `space_id` off the wire because
+      # `claude-code-suite-channel`'s `attention.ts` pins a pending permission
+      # prompt's answer space to the top-level `signal.space_id`, so a
+      # background responsibility fire that carried one would relocate a live
+      # approval prompt to a space nobody is watching. The funnel taking the
+      # space as an OPTION is what lets this path route through it without
+      # inventing one — the invite is a clean `:no_space_named` skip and the
+      # signal still goes out unchanged.
+      case AttentionDispatch.broadcast(runtime.runtime_id, payload,
+             space_id: nil,
+             agent_id: agent,
+             source: :agent_responder
+           ) do
         :ok ->
           :telemetry.execute(
             [:platform, :federation, :delivery_success],
@@ -461,7 +494,7 @@ defmodule Platform.Chat.AgentResponder do
             "[AgentResponder] system_event broadcast failed to #{topic}: #{inspect(reason)}"
           )
 
-          {:error, :broadcast_failed}
+          {:error, reason}
       end
     else
       Logger.error(

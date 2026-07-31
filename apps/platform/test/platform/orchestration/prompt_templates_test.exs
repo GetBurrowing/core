@@ -890,7 +890,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
              "dispatch.intent_attention sections are out of order: got #{inspect(sorted)}"
     end
 
-    test "declares exactly the eight planned variables" do
+    test "declares exactly the nine planned variables" do
       descriptor =
         PromptTemplates.default_templates()
         |> Enum.find(&(&1.slug == "dispatch.intent_attention"))
@@ -898,6 +898,12 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert descriptor,
              "dispatch.intent_attention descriptor must be registered in default_templates/0"
 
+      # Equality, not `in`. This list records a decision about the template's
+      # declared surface, so an addition has to be made deliberately here
+      # rather than slipping in unannounced — `target_space_id` is the ninth
+      # and it arrived with a force-update migration, because
+      # `seed_defaults/0` is INSERT-only and would never reach a migrated
+      # environment's existing row.
       expected_vars =
         Enum.sort([
           "federation_preamble",
@@ -906,12 +912,54 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
           "transcript_chunk_excerpt",
           "classified_intent",
           "target_rationale",
+          "target_space_id",
           "execution_space_id",
           "skills_reference"
         ])
 
       assert Enum.sort(descriptor.variables) == expected_vars,
-             "dispatch.intent_attention must declare exactly the eight planned variables"
+             "dispatch.intent_attention must declare exactly the nine planned variables"
+    end
+
+    test "the signal-context bullet tells the runtime to read target_space_id, not space_id" do
+      content = PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+
+      # Scoped to the ONE bullet line that documents the key, not the whole
+      # body. A body-wide `=~ "target_space_id"` is satisfied by the
+      # placeholder alone appearing anywhere — including in a line that tells
+      # the runtime to read `signal.space_id`.
+      line =
+        content
+        |> String.split("\n")
+        |> Enum.map(&String.trim/1)
+        |> Enum.find(&String.starts_with?(&1, "- `target_space_id`"))
+
+      assert line,
+             "dispatch.intent_attention must document `target_space_id` in the signal-context list"
+
+      assert line =~ "signal.target_space_id",
+             "the bullet must name the key as it appears on the wire"
+
+      assert line =~ "NOT `space_id`",
+             "the bullet must say the key is NOT space_id — that slot answers " <>
+               "permission prompts and an intent dispatch must not claim it"
+
+      assert line =~ "{{target_space_id}}",
+             "the bullet must interpolate the resolved space, not just describe the key"
+    end
+
+    test "a deliverable step sends the result to the meeting space, not the execution space" do
+      content = PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+
+      section = intent_attention_section(content, "## Deliverable steps", "## Cancellation")
+
+      assert section =~ "{{target_space_id}}",
+             "the deliverable steps must name the space the result goes into — a glossary " <>
+               "entry the runtime never reaches while following the numbered steps is not " <>
+               "an instruction"
+
+      assert section =~ "not in `{{execution_space_id}}`",
+             "the deliverable steps must distinguish the result space from the progress space"
     end
 
     test "every declared variable is actually interpolated into the body" do
@@ -939,6 +987,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         transcript_chunk_excerpt: "make that button teal",
         classified_intent: "visual_adjust",
         target_rationale: "visual_adjust routes to the designer role",
+        target_space_id: "019f9afa-1111-7795-aa79-5372ef9585a1",
         execution_space_id: "019f9afa-a6bd-7795-aa79-5372ef9585a1",
         skills_reference: "SKILLS-REFERENCE-FIXTURE"
       }

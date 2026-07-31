@@ -676,7 +676,71 @@ defmodule Platform.Federation.DeadLetterReplayTest do
     end
   end
 
+  # ── Attention funnel (task 019fb90f stage 3) ─────────────────────────
+
+  describe "the replay broadcast goes through Federation.AttentionDispatch" do
+    # This site was NOT in stage 3's survey — the plan counted six direct
+    # `Endpoint.broadcast(_, "attention", _)` call sites across four files and
+    # there were seven across five. It is covered here rather than exempted,
+    # because an exemption list is satisfied by whatever the author forgot,
+    # which is how the miscount happened in the first place.
+    test "delivery reports :no_space_named from :dead_letter_replay and invites nobody" do
+      ref = attach_invite_telemetry()
+      ctx = offline_runtime("funnel")
+      subject = fresh_subject()
+
+      _row = dead_letter_via_responder(ctx, stage_metadata(subject))
+
+      :ok = PlatformWeb.Endpoint.subscribe(ctx.topic)
+      RuntimePresence.track(ctx.runtime.runtime_id)
+
+      assert {:ok, %{delivered: 1}} =
+               DeadLetterReplay.replay_now(ctx.runtime.runtime_id, spacing_ms: 0)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2000
+
+      # `:dead_letter_replay`, not `:agent_responder`. Every row replayed here
+      # was captured on the responder's system_event path, so reusing that
+      # source would be true-ish and useless: telemetry could no longer tell a
+      # live dispatch from a drain of previously-failed ones.
+      #
+      # `:no_space_named` is the expected outcome and is a fact about the
+      # ledger, not about this module: `DeadLetterPolicy.classify/1` refuses
+      # any row with no stored payload, and the chat path — the only one that
+      # names a space — records with `payload: nil` by construction. So no
+      # space-bearing row is replayable today.
+      assert_receive {:auto_invite, ^ref, %{count: 1},
+                      %{outcome: :no_space_named, source: :dead_letter_replay}},
+                     2000
+
+      assert Repo.aggregate(
+               from(p in Platform.Chat.Participant,
+                 where: p.participant_type == "agent" and p.participant_id == ^ctx.agent.id
+               ),
+               :count
+             ) == 0
+    end
+  end
+
   # ── Helpers ──────────────────────────────────────────────────────────
+
+  defp attach_invite_telemetry do
+    ref = make_ref()
+    pid = self()
+    handler_id = {__MODULE__, ref}
+
+    :telemetry.attach(
+      handler_id,
+      [:platform, :chat, :dispatch_auto_invite],
+      fn _event, measurements, metadata, _cfg ->
+        send(pid, {:auto_invite, ref, measurements, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    ref
+  end
 
   defp runtime_rows(%{runtime: runtime}) do
     from(d in DeadLetter, where: d.runtime_id == ^runtime.runtime_id)

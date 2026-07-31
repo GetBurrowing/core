@@ -1148,6 +1148,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "transcript_chunk_excerpt",
           "classified_intent",
           "target_rationale",
+          "target_space_id",
           "execution_space_id",
           "skills_reference"
         ],
@@ -1167,6 +1168,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         - `transcript_chunk_excerpt`: `{{transcript_chunk_excerpt}}` — the verbatim words that produced this intent. This is the only ground truth about what was actually said.
         - `classified_intent`: `{{classified_intent}}` — the classifier's label for those words. It is a small fast model's guess, not an instruction.
         - `target_rationale`: `{{target_rationale}}` — why the classifier routed this to you rather than to somebody else.
+        - `target_space_id`: `{{target_space_id}}` — the meeting's own chat space, and **where your result goes**. You were added to it as a participant before this signal was sent, so `canvas_create` and `message_post` against it will succeed. Read it off the signal as `signal.target_space_id`: the key is NOT `space_id`, because that top-level slot answers pending permission prompts and an intent dispatch must not claim it. If the key is absent the meeting named no space — say so in your ack `note` rather than guessing at another space.
         - `execution_space_id`: `{{execution_space_id}}` — where progress commentary and any error surfacing goes.
 
         ## Ack contract
@@ -1203,7 +1205,9 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         5. **Do the work in the subagent, not in the parent.** For the rest of this intent the parent's only jobs are relaying a cancel and acking the outcome.
 
-        6. **Ack the outcome and say so.** `intent_ack(..., status: "completed")` when the deliverable lands, and post a one-line summary into `execution_space_id` `{{execution_space_id}}` naming what changed.
+        6. **Write the result into `{{target_space_id}}`.** That is the meeting's chat space and the only place the people in the meeting will look for it. Post the message or create the canvas there — not in `{{execution_space_id}}`, which is for progress and errors, and not in a DM. You are already a participant of it; you do not need to ask to be added.
+
+        7. **Ack the outcome and say so.** `intent_ack(..., status: "completed")` when the deliverable lands, and post a one-line summary into `execution_space_id` `{{execution_space_id}}` naming what changed.
 
         Meeting-speed work is small by construction: one chunk of speech, one adjustment. If what you are being asked for is genuinely multi-stage, file it as a task instead of doing it here and say so in the ack `note`.
 

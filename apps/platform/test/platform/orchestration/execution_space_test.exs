@@ -306,20 +306,37 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
     end
   end
 
-  describe "add_participant/2" do
-    test "adds an agent participant to the space" do
-      {:ok, space} = ExecutionSpace.find_or_create(@task_id)
+  describe "add_participant is deleted (task 019fb90f stage 3)" do
+    # The deleted function had zero production call sites; the test that used
+    # to live here was the only caller in the repo, which is precisely why its
+    # `attention_mode: "all"` could drift from the real dispatch path forever
+    # without anything going red. That policy now lives once, in
+    # `Platform.Chat.DispatchMembership`.
+    #
+    # This asserts on the RESIDUE, not on a remembered arity: it filters the
+    # export list by NAME and reports whatever it finds. Pinning
+    # `refute function_exported?(ExecutionSpace, :add_participant, 2)` would go
+    # green the moment someone reintroduced the function at arity 3.
+    test "ExecutionSpace exports no add_participant at any arity" do
+      Code.ensure_loaded!(ExecutionSpace)
 
-      # Create a real agent to add as participant
-      {:ok, agent} =
-        Platform.Repo.insert(%Platform.Agents.Agent{
-          name: "Test Agent",
-          slug: "test-agent-#{System.unique_integer([:positive])}",
-          runtime_type: "external"
-        })
+      residue =
+        ExecutionSpace.module_info(:exports)
+        |> Enum.filter(fn {name, _arity} -> name == :add_participant end)
 
-      assert {:ok, participant} = ExecutionSpace.add_participant(space.id, agent.id)
-      assert participant.participant_type == "agent"
+      assert residue == [], """
+      Platform.Orchestration.ExecutionSpace has re-grown an add_participant
+      function at arity #{Enum.map_join(residue, ", ", fn {_n, a} -> a end)}.
+
+      Membership in an execution space is owned by
+      Platform.Chat.DispatchMembership, which is reached from the dispatch
+      path via Platform.Federation.AttentionDispatch. A second entry point
+      here is a second copy of the attention_mode policy, and the two will
+      drift — that is the exact defect deleting the original closed.
+
+      Call DispatchMembership.ensure_writable(space_id, agent_id,
+      source: :task_router) instead.
+      """
     end
   end
 end

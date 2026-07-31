@@ -110,6 +110,23 @@ defmodule Platform.Meetings.IntentDispatcher do
   agent produces visible red rows instead of silent chat traffic, which
   is the trade this task was created to make.
 
+  ## Space resolution is not a dispatch failure
+
+  Every dispatch names the meeting's own chat space
+  (`meetings.chat_space_id`) so the funnel can put the target agent in a
+  writable posture there before the signal goes out. That resolution is
+  best-effort: a meeting id with no row behind it yields `nil`, the envelope
+  omits `target_space_id`, and the row still transitions to `:dispatched`.
+
+  It is deliberately NOT a member of the `dispatch_failure_reason` table
+  above. That table is about **reachability** — every reason in it means "this
+  intent can never reach anybody", which is why each one lands a red,
+  X-able row. "The dispatch reached a runtime but named no space it could
+  write to" is a writability problem, not a runtime outage, and folding it in
+  would make the two look identical to whoever is triaging a red strip. The
+  refusal is not lost either: it surfaces as a distinct outcome atom on
+  `[:platform, :chat, :dispatch_auto_invite]`.
+
   ## Concurrency
 
   Dispatch is INLINE. The old `Task.Supervisor.async_nolink` fan-out
@@ -158,6 +175,7 @@ defmodule Platform.Meetings.IntentDispatcher do
 
   alias Platform.Agents.Agent
   alias Platform.Meetings.IntentQueue
+  alias Platform.Meetings.Meeting
   alias Platform.Meetings.IntentRuntimeAdapter
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
@@ -408,7 +426,16 @@ defmodule Platform.Meetings.IntentDispatcher do
       {:ok, dispatched_row} ->
         # Built from the UPDATED row so the payload's target_agent_id
         # and the ETS row can never disagree about where this went.
-        :ok = IntentRuntimeAdapter.send_attention(dispatched_row, target)
+        #
+        # The space is resolved HERE rather than inside the adapter because
+        # this is the one frame holding `meeting_id` — the adapter reads a
+        # queue row, and a queue row knows nothing about chat.
+        :ok =
+          IntentRuntimeAdapter.send_attention(
+            dispatched_row,
+            target,
+            meeting_target_space_id(meeting_id)
+          )
 
         elapsed_ms = System.monotonic_time(:millisecond) - dispatch_started_at
         emit_dispatched_telemetry(meeting_id, dispatched_row, role_key, agent, target, elapsed_ms)
@@ -474,6 +501,40 @@ defmodule Platform.Meetings.IntentDispatcher do
 
       %{state | seen_unknown_roles: MapSet.put(state.seen_unknown_roles, key)}
     end
+  end
+
+  # The space a meeting-intent dispatch names: the meeting's own chat space.
+  # Resolving it is what lets `Platform.Federation.AttentionDispatch` put the
+  # target agent in a writable posture there BEFORE the signal goes out.
+  #
+  # `nil` is a RESULT here, never a failure. A meeting id with no row behind it
+  # (the queue is Registry-keyed and outlives nothing but itself, so this is a
+  # real state) means the dispatch simply names no space: the envelope omits
+  # the key, the funnel reports `:no_space_named`, the broadcast still goes
+  # out, and the row still transitions to `:dispatched`. See
+  # "Space resolution is not a dispatch failure" in the moduledoc for why this
+  # must not be folded into `dispatch_failure_reason`.
+  #
+  # A dangling `chat_space_id` is deliberately NOT filtered out here: passing
+  # the id through is what lets `DispatchMembership` answer `:space_not_found`
+  # rather than `:no_space_named`. Checking the space's existence first would
+  # collapse two operator situations into one atom — the exact defect this
+  # task keeps refusing.
+  defp meeting_target_space_id(meeting_id) do
+    if Platform.UUID.valid?(meeting_id) do
+      case Repo.get(Meeting, meeting_id) do
+        %Meeting{chat_space_id: chat_space_id} -> chat_space_id
+        nil -> nil
+      end
+    else
+      nil
+    end
+  rescue
+    # Same sandbox-ownership rescue every other lookup on this path carries:
+    # the dispatcher is a singleton GenServer and tests hand it ids whose
+    # ownership chain has gone away.
+    DBConnection.OwnershipError -> nil
+    Ecto.NoResultsError -> nil
   end
 
   defp safe_agent_id_for_role(role_key) do

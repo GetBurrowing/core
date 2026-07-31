@@ -1227,6 +1227,75 @@ defmodule Platform.MeetingsTest do
       :ok
     end
 
+    test "the scribe becomes writable in the meeting's chat space before the signal fires" do
+      # Task 019fb90f stage 2 — the behaviour change, at the layer it actually
+      # lands. `maybe_dispatch_scribe_attention/1` already put
+      # `transcript.space_id` in the payload, so routing the broadcast through
+      # `Platform.Federation.AttentionDispatch` makes the scribe a participant
+      # of the meeting's chat space with no payload change here.
+      #
+      # Before this, a scribe dispatched on transcript completion could not post
+      # a message or create its action-items canvas in the space it was told
+      # about: the dispatch was dead on arrival and nothing errored.
+      invite_handler = "meetings-test-invite-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :telemetry.attach(
+        invite_handler,
+        [:platform, :chat, :dispatch_auto_invite],
+        fn _e, m, meta, _ -> send(parent, {:auto_invite, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(invite_handler) end)
+
+      user = create_user!()
+      agent = create_agent!()
+
+      runtime_id = "scribe-writable-#{System.unique_integer([:positive])}"
+      {:ok, runtime} = Federation.register_runtime(user.id, %{runtime_id: runtime_id})
+      {:ok, _linked} = Federation.link_agent(runtime, agent)
+
+      :ok = Roles.unassign_role("meeting_scribe")
+      {:ok, _} = Roles.assign_role("meeting_scribe", agent.id)
+
+      n = System.unique_integer([:positive, :monotonic])
+
+      {:ok, space} =
+        Platform.Chat.create_space(%{
+          name: "Scribe Meeting #{n}",
+          slug: "scribe-meeting-#{n}",
+          kind: "meeting"
+        })
+
+      {:ok, transcript} =
+        Meetings.create_transcript(%{
+          room_id: "space-#{space.id}",
+          space_id: space.id,
+          status: "processing"
+        })
+
+      PlatformWeb.Endpoint.subscribe("runtime:#{runtime_id}")
+
+      # Negative control: the agent is NOT in the meeting space beforehand.
+      # `create_space/1` auto-adds nobody but the Historian, so membership does
+      # not follow from creation.
+      refute Platform.Chat.get_agent_participant(space.id, agent.id)
+
+      assert {:ok, %Transcript{status: "complete"}} =
+               Meetings.complete_transcript(transcript.id, "the summary text")
+
+      # Positional: invite first, signal second.
+      assert_receive first, 500
+      assert {:auto_invite, %{count: 1}, %{outcome: :invited, source: :meeting_scribe}} = first
+
+      assert_receive second, 500
+      assert %Phoenix.Socket.Broadcast{event: "attention"} = second
+
+      assert %Platform.Chat.Participant{attention_mode: "mention", role: "member"} =
+               Platform.Chat.get_agent_participant(space.id, agent.id)
+    end
+
     test "happy path: broadcasts attention signal on runtime topic when scribe role + runtime are wired" do
       user = create_user!()
       agent = create_agent!()

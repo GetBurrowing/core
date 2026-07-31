@@ -68,6 +68,7 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
 
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.Chat
   alias Platform.Federation
   alias Platform.Meetings
   alias Platform.Meetings.IntentClassifier
@@ -543,5 +544,109 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
       assert IntentQueue.cursor(meeting_b.id) == row_b.id
       refute row_a.id == row_b.id
     end
+  end
+
+  # ── Test 4: the dispatched target can actually write the named space ──────
+
+  describe "the dispatch names a space the target can write" do
+    test "the target cannot create a canvas in the meeting space before dispatch and can after",
+         %{classifier_pid: classifier_pid} do
+      plant_stub_fun(classifier_pid, fn _c, _m, _o ->
+        classifier_response("draft_brief", "designer", 0.9)
+      end)
+
+      {target_agent, runtime} =
+        seed_target!("designer", %{
+          slug: "e2e-dispatch-writable-#{System.unique_integer([:positive])}",
+          kind: "native"
+        })
+
+      meeting = create_meeting!("E2E Dispatch Writable")
+
+      # ── Negative control, captured rather than assumed ────────────────────
+      #
+      # "It can write after the dispatch" is equally consistent with "it could
+      # always write" unless the before-state is measured with the SAME call.
+      # The two probes below are byte-identical apart from when they run.
+      refute Chat.get_agent_participant(meeting.chat_space_id, target_agent.id)
+
+      assert {:error, before_error} = canvas_probe(meeting.chat_space_id, target_agent.id)
+
+      # `:error`, not `:message` — the refusal payload is built by
+      # `Canvas.ToolHandlers.create/2` and passed through `ToolSurface` unchanged.
+      assert before_error.recoverable == false
+      assert before_error.error =~ "is not a participant"
+
+      _ =
+        append_transcript_segment!(
+          meeting,
+          "e2e-dispatch-writable",
+          "user-4",
+          "can somebody draft a brief for the new landing page"
+        )
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: topic,
+                       event: "attention",
+                       payload: %{signal: signal}
+                     },
+                     3_000
+
+      assert topic == "runtime:#{runtime.runtime_id}"
+
+      # The envelope names the space, and does NOT claim the top-level
+      # `space_id` slot a live client uses to pin permission prompts.
+      assert signal.target_space_id == meeting.chat_space_id
+      refute Map.has_key?(signal, :space_id)
+
+      participant = Chat.get_agent_participant(meeting.chat_space_id, target_agent.id)
+      assert participant.attention_mode == "mention"
+      assert participant.role == "member"
+
+      # The same probe, now succeeding. Success is keyed `:id` — there is no
+      # `:canvas_id` on the `ToolSurface` result, though the handler beneath it
+      # uses that name.
+      assert {:ok, created} = canvas_probe(meeting.chat_space_id, target_agent.id)
+      assert is_binary(created.id)
+      refute Map.has_key?(created, :canvas_id)
+
+      row = await_single_row(meeting.id, :dispatched)
+      assert row.dispatch_failure_reason == nil
+    end
+  end
+
+  # Build the tool context the way `PlatformWeb.MCPController.build_context/2`
+  # does: resolve `agent_participant_id` from the space AT CALL TIME.
+  # `Canvas.ToolHandlers.create/2` reads that key and never derives it from
+  # `:agent_id`, so a bare `%{agent_id: id}` context refuses identically before
+  # AND after the invite — a negative control that looks like it passes while
+  # proving nothing.
+  defp canvas_probe(space_id, agent_id) do
+    participant_id =
+      case Chat.get_agent_participant(space_id, agent_id) do
+        %Platform.Chat.Participant{id: id} -> id
+        _ -> nil
+      end
+
+    args = %{
+      "space_id" => space_id,
+      "title" => "writability probe",
+      "document" => %{
+        "version" => 1,
+        "revision" => 1,
+        "root" => %{
+          "id" => "root",
+          "type" => "text",
+          "props" => %{"value" => "probe"},
+          "children" => []
+        }
+      }
+    }
+
+    Federation.ToolSurface.execute("canvas_create", args, %{
+      space_id: space_id,
+      agent_id: agent_id,
+      agent_participant_id: participant_id
+    })
   end
 end

@@ -919,7 +919,14 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # migrated environment, so the edit to `do_default_templates/0` is a
       # no-op deploy on its own — proved twice this cycle (019fa469,
       # 019fa504). Update-only; no schema change.
-      "20260728050000_force_update_architect_audit_diff_audit_tool.exs"
+      "20260728050000_force_update_architect_audit_diff_audit_tool.exs",
+      # Task 019fb90f stage 4: force-update `dispatch.intent_attention` so it
+      # names `target_space_id` — the meeting chat space a dispatched intent
+      # writes its result into. A migration rather than a module edit alone
+      # because `PromptTemplates.seed_defaults/0` is INSERT-only and an earlier
+      # migration already claimed this slug on every migrated environment, so
+      # the module change would never reach the row the runtime renders from.
+      "20260731210000_force_update_intent_attention_target_space.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

@@ -49,6 +49,7 @@ defmodule Platform.Meetings.IntentDispatcherTest do
 
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.Chat
   alias Platform.Federation
   alias Platform.Meetings.IntentCorrection
   alias Platform.Meetings.IntentCorrections
@@ -285,6 +286,33 @@ defmodule Platform.Meetings.IntentDispatcherTest do
     {agent, runtime}
   end
 
+  # Pull the `dispatch_auto_invite` event for ONE space out of the mailbox,
+  # skipping any that belong to a different space. Matching on `space_id`
+  # rather than taking the first event is what lets a single test drive two
+  # dispatches and compare their outcomes.
+  defp await_invite_outcome(space_id, timeout \\ 2_000) do
+    receive do
+      {:telemetry, [:platform, :chat, :dispatch_auto_invite], _measurements,
+       %{space_id: ^space_id, source: :meeting_intent} = metadata} ->
+        metadata.outcome
+
+      {:telemetry, [:platform, :chat, :dispatch_auto_invite], _measurements, _other} ->
+        await_invite_outcome(space_id, timeout)
+    after
+      timeout ->
+        flunk("no dispatch_auto_invite telemetry for space #{inspect(space_id)}")
+    end
+  end
+
+  defp participant_row_count(agent_id) do
+    Repo.aggregate(
+      from(p in Platform.Chat.Participant,
+        where: p.participant_type == "agent" and p.participant_id == ^agent_id
+      ),
+      :count
+    )
+  end
+
   defp in_flight_count(meeting_id) do
     meeting_id
     |> IntentQueue.list()
@@ -385,6 +413,131 @@ defmodule Platform.Meetings.IntentDispatcherTest do
       assert {:ok, acked} = ack!(intent_id, "instant-probe", "working")
       assert acked.status == :acked
       assert intent_id == row.id
+    end
+  end
+
+  # ── Target space naming ────────────────────────────────────────────────────
+
+  describe "the dispatch names the meeting's chat space" do
+    test "the target is a participant of that space by the time the signal lands" do
+      {agent, runtime} = seed_target!()
+      {meeting, _org_id} = new_real_meeting!()
+      start_dispatcher!()
+
+      # Negative control, CAPTURED rather than assumed. Without it, "the agent
+      # is a participant afterwards" is equally consistent with "it always
+      # was" — and `Meetings.create_meeting/1` adding the assignee would be a
+      # perfectly plausible reason for that, so this is not a hypothetical.
+      refute Chat.get_agent_participant(meeting.chat_space_id, agent.id)
+
+      row = enqueue!(meeting.id, %{classified_intent: "name-the-space"})
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: topic,
+                       event: "attention",
+                       payload: %{signal: signal}
+                     },
+                     1_000
+
+      assert topic == "runtime:#{runtime.runtime_id}"
+
+      # Both halves. See `IntentRuntimeAdapterTest` for why the refute is not
+      # decoration: an envelope carrying BOTH keys satisfies the assert alone
+      # and re-pins a live client-side permission prompt.
+      assert signal.target_space_id == meeting.chat_space_id
+      refute Map.has_key?(signal, :space_id)
+
+      # The invite committed BEFORE the broadcast (Federation.AttentionDispatch
+      # orders it that way), so it is already durable at this point rather
+      # than something we have to wait for.
+      participant = Chat.get_agent_participant(meeting.chat_space_id, agent.id)
+      assert participant.participant_type == "agent"
+      assert participant.attention_mode == "mention"
+      assert participant.role == "member"
+
+      dispatched = await_status(meeting.id, row.id, :dispatched)
+      assert dispatched.dispatch_failure_reason == nil
+    end
+
+    test "an unresolvable space and an archived one report DIFFERENT outcome atoms" do
+      # The whole point of the eight distinct refusal atoms is that an
+      # operator can tell these two apart. A guard that collapsed every
+      # refusal to one shared value would satisfy a per-case
+      # `assert outcome == :whatever` in every test that happened to exercise
+      # a single situation — so this case exercises BOTH and asserts they
+      # differ, which no collapse can survive.
+      {agent, _runtime} = seed_target!()
+      attach_telemetry!([[:platform, :chat, :dispatch_auto_invite]])
+
+      {archived_meeting, _org_id} = new_real_meeting!()
+      {:ok, _} = Chat.archive_space(Repo.get!(Chat.Space, archived_meeting.chat_space_id))
+
+      # A bare UUID with no `meetings` row behind it — the queue is
+      # Registry-keyed and never required one.
+      orphan_meeting_id = new_meeting!()
+
+      start_dispatcher!()
+
+      archived_row = enqueue!(archived_meeting.id, %{classified_intent: "archived-space"})
+      await_status(archived_meeting.id, archived_row.id, :dispatched)
+
+      orphan_row = enqueue!(orphan_meeting_id, %{classified_intent: "no-space"})
+      await_status(orphan_meeting_id, orphan_row.id, :dispatched)
+
+      archived_outcome = await_invite_outcome(archived_meeting.chat_space_id)
+      orphan_outcome = await_invite_outcome(nil)
+
+      assert archived_outcome == :space_archived
+      assert orphan_outcome == :no_space_named
+      refute archived_outcome == orphan_outcome
+
+      # Neither refusal produced a row anywhere, and neither turned into a
+      # red queue row: a writability problem is not a reachability problem.
+      assert participant_row_count(agent.id) == 0
+
+      assert IntentQueue.get(archived_meeting.id, archived_row.id)
+             |> elem(1)
+             |> Map.get(:dispatch_failure_reason) == nil
+
+      assert IntentQueue.get(orphan_meeting_id, orphan_row.id)
+             |> elem(1)
+             |> Map.get(:dispatch_failure_reason) == nil
+    end
+
+    test "the envelope omits target_space_id entirely when no space resolves" do
+      seed_target!()
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      enqueue!(meeting_id, %{classified_intent: "omit-the-key"})
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention", payload: %{signal: signal}},
+                     1_000
+
+      # Absent, not present-and-null. A `target_space_id: nil` on the wire
+      # reads to a runtime as "there is a space and it is nothing".
+      refute Map.has_key?(signal, :target_space_id)
+      refute Map.has_key?(signal, :space_id)
+    end
+
+    test "deleting a meeting's chat space deletes the meeting — why :space_not_found is unreachable here" do
+      # This pins a PREMISE, not this stage's code. The stage's test brief
+      # asked for a case where `meetings.chat_space_id` points at a deleted
+      # space and the invite reports `:space_not_found`. That state cannot
+      # exist: the FK is `on_delete: :delete_all`, so deleting the space takes
+      # the meeting with it and the dispatcher resolves `nil` —
+      # `:no_space_named`, covered above.
+      #
+      # The dispatcher still passes the column through UNFILTERED rather than
+      # verifying the space exists first, which is what keeps `:space_not_found`
+      # reachable the moment this cascade changes. If this test ever fails,
+      # that branch has become live and wants its own case.
+      {meeting, _org_id} = new_real_meeting!()
+      space = Repo.get!(Chat.Space, meeting.chat_space_id)
+
+      {:ok, _} = Repo.delete(space)
+
+      refute Repo.get(Platform.Meetings.Meeting, meeting.id)
     end
   end
 

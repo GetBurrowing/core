@@ -169,10 +169,43 @@ defmodule Platform.Meetings.IntentRuntimeAdapter do
   intent went to. Callers must therefore build this from the row
   AFTER it has been transitioned to `:dispatched` (which is when
   `target_agent_id` is stamped).
+
+  ## The space travels as `target_space_id`, and the key name is the decision
+
+  Until this argument existed the envelope named a `meeting_id` and a
+  `room_id` and no space at all, so the receiving subagent had nowhere
+  addressable to write its result and
+  `Platform.Chat.DispatchMembership.ensure_writable/3` had nothing to invite it
+  into — the dispatch was dead on arrival. `target_space_id` closes that: it is
+  the meeting's own `chat_space_id`, resolved by
+  `Platform.Meetings.IntentDispatcher` and threaded through here.
+
+  **It is deliberately NOT called `space_id`, and renaming it would break a
+  live client.** The `claude-code-suite-channel` client pins a pending
+  permission prompt's answer space to the **top-level `signal.space_id`** — the
+  constraint written up at length in `Platform.Chat.AgentResponder`
+  (`build_system_event_payload/1`). An intent dispatch that claimed that slot
+  would silently relocate an unrelated approval prompt to a space nobody is
+  watching. So this envelope NAMES a space without CLAIMING the prompt-pinning
+  slot, and `Platform.Federation.AttentionDispatch` receives the space as an
+  *option* rather than sniffing it back out of the wire payload.
+
+  If you are here because you want the key to be `space_id`: the sibling task
+  that consumes this signal does not need it renamed — it needs to read
+  `target_space_id`. Read this paragraph before changing either half.
+
+  ## `nil` omits the key
+
+  A meeting row that no longer exists resolves to `nil` and the key is left
+  out entirely, rather than emitted as `target_space_id: nil`. An absent key
+  and a null-valued one are the same fact to the funnel (`:no_space_named`),
+  but only the absent one is honest to a runtime reading the envelope: a
+  present-but-null key reads as "there is a space and it is nothing".
   """
-  @spec attention_payload(map()) :: map()
-  def attention_payload(row) when is_map(row) do
-    %{
+  @spec attention_payload(map(), binary() | nil) :: map()
+  def attention_payload(row, target_space_id \\ nil)
+      when is_map(row) and (is_binary(target_space_id) or is_nil(target_space_id)) do
+    payload = %{
       reason: @attention_reason,
       intent_id: row.id,
       meeting_id: row.meeting_id,
@@ -183,7 +216,14 @@ defmodule Platform.Meetings.IntentRuntimeAdapter do
       target_agent_id: row.target_agent_id,
       confidence: row.confidence
     }
+
+    put_target_space_id(payload, target_space_id)
   end
+
+  defp put_target_space_id(payload, nil), do: payload
+
+  defp put_target_space_id(payload, target_space_id) when is_binary(target_space_id),
+    do: Map.put(payload, :target_space_id, target_space_id)
 
   @doc """
   Send an intent's attention signal to an already-resolved target.
@@ -191,10 +231,17 @@ defmodule Platform.Meetings.IntentRuntimeAdapter do
   Always `:ok` — the delivery guarantee is the ack, not the broadcast.
   See the moduledoc for why a broadcast failure is not
   `:dispatch_failed`.
+
+  `target_space_id` has NO default on purpose. Every caller has to state
+  which space this dispatch names, including when the answer is `nil`; a
+  defaulted argument would let a future dispatch path silently ship an
+  envelope with no space and reintroduce the dead-on-arrival gap without
+  anybody editing this module.
   """
-  @spec send_attention(map(), target()) :: :ok
-  def send_attention(row, %{agent: %Agent{id: agent_id}}) when is_map(row) do
-    Federation.dispatch_intent_attention(agent_id, attention_payload(row))
+  @spec send_attention(map(), target(), binary() | nil) :: :ok
+  def send_attention(row, %{agent: %Agent{id: agent_id}}, target_space_id)
+      when is_map(row) and (is_binary(target_space_id) or is_nil(target_space_id)) do
+    Federation.dispatch_intent_attention(agent_id, attention_payload(row, target_space_id))
   end
 
   # ── Cancel ─────────────────────────────────────────────────────────────────

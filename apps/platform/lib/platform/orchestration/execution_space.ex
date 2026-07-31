@@ -88,13 +88,20 @@ defmodule Platform.Orchestration.ExecutionSpace do
     end
   end
 
-  @doc """
-  Ensure an agent is a participant in the execution space.
-  """
-  @spec add_participant(binary(), binary()) :: {:ok, Participant.t()} | {:error, term()}
-  def add_participant(space_id, agent_id) do
-    Chat.add_agent_participant(space_id, agent_id, attention_mode: "all")
-  end
+  # `add_participant/2` lived here and is DELETED (task 019fb90f stage 3).
+  #
+  # It had zero production call sites — the only reference in the repo was its
+  # own test — so the thing it claimed to do was never actually happening on
+  # the dispatch path. `Platform.Chat.DispatchMembership` now owns the rule,
+  # including this function's `attention_mode: "all"`, which survives as the
+  # per-kind policy for `kind == "execution"`, and the TaskRouter's dispatch
+  # goes through it via `Platform.Federation.AttentionDispatch`.
+  #
+  # Leaving it in place would have been two mechanisms saying one thing with
+  # only one of them wired up: either could be deleted with the suite green,
+  # which is the mutual-masking shape that lets a policy drift silently. If you
+  # need an agent in an execution space, call
+  # `DispatchMembership.ensure_writable(space_id, agent_id, source: :task_router)`.
 
   @doc """
   Ensure a system participant exists in the space for TaskRouter messages.

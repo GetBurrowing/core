@@ -22,6 +22,30 @@ defmodule Platform.Federation.DeadLetterReplay do
   `AgentResponder.broadcast_system_event/3`: that function's offline branch
   records, so reusing it would reintroduce the loop through the back door.
 
+  ## Not in the plan: this site broadcasts through the attention funnel
+
+  Task 019fb90f stage 3 was written against a survey that counted six
+  `Endpoint.broadcast(_, "attention", _)` sites across four files. There were
+  seven, across five — this module was the one nobody counted, which is exactly
+  the failure mode a whitelist of known sites has and a scan-and-subtract guard
+  does not. `Platform.Regression.AttentionBroadcastFunnelAuditTest` is written
+  the second way for that reason, and it is why this site had to migrate rather
+  than be exempted.
+
+  Routing the broadcast through `Platform.Federation.AttentionDispatch` does
+  NOT reopen the loop guard above. The rule is about `DeadLetters.record/1`,
+  and the funnel never calls it — what was refused was reusing
+  `AgentResponder.broadcast_system_event/3`, whose *offline branch* records.
+  The funnel is the shared primitive underneath both, with no ledger of its
+  own.
+
+  One behaviour change comes with it: an endpoint that is not ready used to
+  raise `ArgumentError` straight out of the drain. The funnel converts that to
+  `{:error, :endpoint_not_ready}`, which lands on the existing failure branch —
+  the row reverts to `pending` and the drain aborts. Strictly better: an
+  unready endpoint now costs one attempt and a retry instead of an uncaught
+  exception mid-sweep.
+
   ## Claim, then deliver
 
   Each row is marked `replaying` BEFORE the presence re-check and the
@@ -99,6 +123,7 @@ defmodule Platform.Federation.DeadLetterReplay do
 
   require Logger
 
+  alias Platform.Federation.AttentionDispatch
   alias Platform.Federation.DeadLetterPolicy
   alias Platform.Federation.DeadLetters
   alias Platform.Federation.RuntimePresence
@@ -372,8 +397,25 @@ defmodule Platform.Federation.DeadLetterReplay do
     end
   end
 
+  # Routed through `Platform.Federation.AttentionDispatch` like every other
+  # attention broadcast — see the "Not in the plan" note in the moduledoc for
+  # why this site had to move too, and why routing the BROADCAST through the
+  # funnel does not violate the loop guard above (the funnel never records a
+  # dead letter; only `AgentResponder.broadcast_system_event/3` does).
+  #
+  # Today this is a no-op invite: `DeadLetterPolicy.classify/1` refuses any row
+  # with no stored payload, and the chat path is the only one that names a
+  # space — it records with `payload: nil` by construction, so no space-bearing
+  # row is ever replayable. `row.space_id` is passed anyway rather than
+  # hardcoding `nil`: hardcoding would be a second place encoding "replayable
+  # rows have no space", and if chat payloads ever become rebuildable the
+  # invite arrives with them instead of being silently absent.
   defp broadcast(row, runtime_id, envelope, acc) do
-    case PlatformWeb.Endpoint.broadcast("runtime:#{runtime_id}", "attention", envelope) do
+    case AttentionDispatch.broadcast(runtime_id, envelope,
+           space_id: row.space_id,
+           agent_id: row.agent_id,
+           source: :dead_letter_replay
+         ) do
       :ok ->
         # `reason` is deliberately NOT overwritten here. It records why the row
         # exists (`runtime_offline`), which stays true after a successful
