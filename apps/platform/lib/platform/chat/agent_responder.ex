@@ -610,6 +610,20 @@ defmodule Platform.Chat.AgentResponder do
     # `signal.prompt` without digging — mirrors :feature / :trigger_kind.
     # Omitted entirely when there's no rendered prompt.
     |> maybe_put(:prompt, Map.get(metadata, :prompt))
+    # WHY THE BODY'S ABSENCE NEEDED A NAME (task 019fb8ed stage 3). `prompt`
+    # is omitted whenever there is no body, and that omission meant three
+    # unrelated things at once: the provider deliberately declined (a blank
+    # transcript is not worth a model round-trip), the key was never wired to
+    # a builder, or its `default_prompt_template` names a row that isn't
+    # there. Only the first is legitimate. `prompt_status` is
+    # `:rendered | :no_work | :render_gap` and `prompt_absence_reason` names
+    # the cause; both are lifted here for the same reason `prompt` is, so a
+    # runtime need not dig into `metadata`. `maybe_put/3` keeps a caller that
+    # supplies neither (the chat path, `HistorianDispatcher`) from growing
+    # nil keys, and `prompt` is still ABSENT rather than `""` — this is an
+    # addition, not a replacement.
+    |> maybe_put(:prompt_status, Map.get(metadata, :prompt_status))
+    |> maybe_put(:prompt_absence_reason, Map.get(metadata, :prompt_absence_reason))
     |> lift_correlation_ids(metadata)
     |> Map.put(:metadata, metadata)
   end

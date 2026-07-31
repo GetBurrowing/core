@@ -123,6 +123,7 @@ defmodule Platform.Responsibilities.Router do
 
   alias Platform.Chat.Message
   alias Platform.ExternalAgents.Dispatcher, as: ExternalDispatcher
+  alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
   alias Platform.Responsibilities
   alias Platform.Responsibilities.{ContextGatherer, Cron, Providers, Responsibility}
@@ -1162,7 +1163,7 @@ defmodule Platform.Responsibilities.Router do
 
         case kind do
           "external" -> dispatch_external(responsibility, agent, trigger_meta, context, rendered)
-          _ -> dispatch_native(responsibility, agent, trigger_meta, kind, rendered)
+          _ -> dispatch_native(responsibility, agent, trigger_meta, kind, context, rendered)
         end
     end
   end
@@ -1499,10 +1500,34 @@ defmodule Platform.Responsibilities.Router do
 
   # ── Native / federated dispatch ───────────────────────────────────────────
 
-  defp dispatch_native(%Responsibility{} = responsibility, agent, trigger_meta, kind, rendered) do
-    log_native_prompt_fidelity(responsibility, agent, rendered)
+  defp dispatch_native(
+         %Responsibility{} = responsibility,
+         agent,
+         trigger_meta,
+         kind,
+         context,
+         rendered
+       ) do
+    # Classified ONCE, here, and handed to both consumers. Previously each
+    # of them re-derived the outcome from `rendered` independently, which is
+    # how the logger and the envelope could disagree about what happened.
+    #
+    # `{:absent, :legacy}` is the ONE outcome that is not final at this
+    # point: it means "no provider spoke for this key", which is exactly
+    # the case the responsibility's own `default_prompt_template` exists
+    # to answer. Resolving it here — after classification, before the
+    # signal is built — keeps the whole prompt decision in one place for
+    # the logger and the envelope to read.
+    outcome =
+      case classify_prompt_outcome(rendered) do
+        {:absent, :legacy} -> render_default_template(responsibility, context)
+        other -> other
+      end
 
-    signal = build_native_signal(responsibility, agent, trigger_meta, rendered)
+    log_native_prompt_fidelity(responsibility, agent, outcome)
+    emit_prompt_absent_telemetry(responsibility, outcome)
+
+    signal = build_native_signal(responsibility, agent, trigger_meta, outcome)
 
     Logger.info(
       "[ResponsibilityRouter] #{kind} dispatch key=#{responsibility.key} " <>
@@ -1536,7 +1561,14 @@ defmodule Platform.Responsibilities.Router do
   # when there isn't one (e.g. cron-fired native responsibilities) — the
   # AgentResponder treats nil ids as "synthesize a system instruction"
   # and the historian path is the precedent.
-  defp build_native_signal(%Responsibility{} = responsibility, agent, trigger_meta, rendered) do
+  #
+  # Takes the CLASSIFIED outcome, not the raw provider return. `prompt` is
+  # still emitted only for `{:rendered, text}` and the key is still omitted
+  # for every `{:absent, _}` — stage 3 ADDS `prompt_status` beside it rather
+  # than replacing the omission with an empty string. See
+  # `prompt_disposition/1` for why an empty body must never become an empty
+  # `prompt`.
+  defp build_native_signal(%Responsibility{} = responsibility, agent, trigger_meta, outcome) do
     reason = native_reason_for(Map.get(trigger_meta, :kind))
 
     metadata =
@@ -1548,7 +1580,8 @@ defmodule Platform.Responsibilities.Router do
         agent_slug: agent_slug(agent)
       }
       |> put_trigger_scalars(trigger_meta)
-      |> maybe_put(:prompt, rendered_prompt_text(rendered))
+      |> maybe_put(:prompt, prompt_body(outcome))
+      |> put_prompt_status(outcome)
 
     %{reason: reason, metadata: metadata}
     |> maybe_put(:message_id, Map.get(trigger_meta, :message_id))
@@ -1628,46 +1661,335 @@ defmodule Platform.Responsibilities.Router do
     end)
   end
 
-  # THE FOURTH COLLAPSE POINT (found while auditing task 019f9b28).
+  @typedoc """
+  The named outcome of asking a provider for a prompt body.
+
+  `{:absent, _}` carries the CAUSE, not merely the fact of absence — see
+  `classify_prompt_outcome/1`.
+  """
+  @type prompt_outcome ::
+          {:rendered, String.t()}
+          | {:absent, :legacy}
+          | {:absent, :empty_render}
+          | {:absent, {:refused, term()}}
+          | {:absent, {:unexpected_shape, term()}}
+          | {:absent, {:template_missing, String.t()}}
+          | {:absent, {:template_blank, String.t()}}
+
+  @doc false
+  # THE FOURTH COLLAPSE POINT (found while auditing task 019f9b28), closed
+  # here by task 019fb8ed stage 1.
   #
-  # `rendered_prompt_text/1` maps BOTH `:legacy` (no provider at all, or a
-  # provider with no `build_prompt/1`) and `{:error, reason}` (a provider
-  # that explicitly refused to build one) to `nil`, which `maybe_put/3`
-  # then drops. So a federated runtime receives a byte-identical bare
-  # signal whether the architect refused to speak or was never asked —
-  # the same indistinguishability the registry exists to kill, one layer
-  # further down.
+  # This function used to be `rendered_prompt_text/1`, and it mapped FOUR
+  # distinct inputs onto `nil` — `:legacy` (no provider at all, or a
+  # provider that ships no `build_prompt/1`), `{:error, reason}` (a
+  # provider that explicitly refused), a `{:messages, _}` whose contents
+  # join to `""`, and any unexpected shape. `maybe_put/3` then dropped the
+  # key, so a federated runtime received a byte-identical bare signal
+  # whether the architect refused to speak, was never asked, or answered
+  # with nothing. That is the same indistinguishability
+  # `Platform.Responsibilities.Providers` exists to kill, one layer
+  # further down, and it is why three responsibility keys could fire
+  # empty every time for weeks while looking exactly like the one
+  # legitimate no-work case.
   #
-  # The *value* stays collapsed here on purpose: the external path aborts
-  # on `{:error, _}` (`dispatch_external/5`) but changing what native
-  # dispatch sends or returns is explicitly out of scope for this stage,
-  # and `fire_trigger/3`'s return contract is a sibling stack member's
-  # work. What this stage can and does fix is the observability: see
-  # `log_native_prompt_fidelity/3`, which emits a different, actionable
-  # line for each of the three causes before the signal goes out.
+  # So the outcome is now NAMED. Each cause gets its own value, and the
+  # values are pairwise distinct — that distinctness is the property the
+  # stage exists to create and is asserted directly (as a `uniq` count,
+  # not as five independent equality assertions, which would all stay
+  # green if two causes were re-collapsed onto one value).
   #
-  # The shapes are enumerated rather than caught wholesale so a new return
-  # from `build_prompt_via_provider/2` has to be considered here instead
-  # of silently becoming `nil`; the trailing catch-all remains because a
-  # `nil` prompt beats a FunctionClauseError inside a plan-submit
-  # transaction.
-  defp rendered_prompt_text({:messages, messages}) when is_list(messages) do
+  # `{:absent, {:refused, reason}}` deliberately carries the provider's
+  # OWN reason through rather than flattening to a bare atom: downstream,
+  # `:no_transcript_text` (a legitimate refusal to spend a model
+  # round-trip on an empty transcript — see
+  # `Handlers.MeetingActionItems.build_prompt/1`) and `:no_build_prompt`
+  # (a wiring gap) have to reach different conclusions. Flattening here
+  # would recreate the collapse one layer up.
+  #
+  # The shapes stay enumerated rather than caught wholesale so a new
+  # return from `build_prompt_via_provider/2` has to be considered here
+  # instead of silently becoming an absence; the trailing catch-all
+  # remains because an absent prompt beats a FunctionClauseError inside a
+  # plan-submit transaction — but it now RECORDS the shape it could not
+  # read instead of discarding it.
+  #
+  # Exposed as a `@doc false` public function for the same reason
+  # `native_trigger_scalar_keys/0` is: driving all five shapes through the
+  # full dispatch path would need five throwaway providers, and a test
+  # that can only reach four of them is not a distinctness test. The
+  # end-to-end wiring is pinned separately, so this seam cannot be
+  # green while nothing calls it.
+  #
+  # REACHABILITY — measured, and narrower than the enumeration suggests.
+  # `build_prompt_via_provider/2` collapses two of these five BEFORE this
+  # function is reached: it maps `{:error, :no_build_prompt}` to `:legacy`
+  # (deliberately — that error means "this key does not own its own prompt,
+  # use the legacy template render", not "fail") and it maps an unexpected
+  # return and a raise to `:legacy` too. So `{:absent, {:refused,
+  # :no_build_prompt}}` and `{:absent, {:unexpected_shape, _}}` cannot come
+  # from live traffic today; they are reachable only by a direct call.
+  #
+  # They stay enumerated because that is where the un-collapsed values will
+  # land, but do NOT read the list as a description of what arrives. That
+  # un-collapsing is wire-visible on the OTHER path — `dispatch_external/5`
+  # aborts on `{:error, _}` with failed telemetry, so letting
+  # `:no_build_prompt` through as an error would stop every external agent
+  # whose provider asks for the legacy render from dispatching at all — so
+  # it needs its own change with its own external-path coverage. The
+  # current pre-collapse is pinned by test in `prompt_outcome_test.exs`,
+  # under "the provider layer pre-collapses two of the five outcomes", to
+  # give that change a red line to flip.
+  @spec classify_prompt_outcome(term()) :: prompt_outcome()
+  def classify_prompt_outcome({:messages, messages}) when is_list(messages) do
     text =
       messages
       |> Enum.map(&Map.get(&1, :content))
       |> Enum.filter(&(is_binary(&1) and &1 != ""))
       |> Enum.join("\n\n")
 
-    if text == "", do: nil, else: text
+    if text == "", do: {:absent, :empty_render}, else: {:rendered, text}
   end
 
-  defp rendered_prompt_text(:legacy), do: nil
-  defp rendered_prompt_text({:error, _reason}), do: nil
-  defp rendered_prompt_text(_), do: nil
+  def classify_prompt_outcome(:legacy), do: {:absent, :legacy}
+  def classify_prompt_outcome({:error, reason}), do: {:absent, {:refused, reason}}
+  def classify_prompt_outcome(other), do: {:absent, {:unexpected_shape, other}}
 
-  defp log_native_prompt_fidelity(_responsibility, _agent, {:messages, _messages}), do: :ok
+  # The body a `{:rendered, _}` outcome carries, or `nil` for every
+  # absence — `maybe_put/3` turns the nil into an omitted key. Kept as a
+  # named function so the "absent means NO key, never an empty string"
+  # decision (argued at `agent_responder.ex:477-499`) has one home.
+  defp prompt_body({:rendered, text}) when is_binary(text), do: text
+  defp prompt_body({:absent, _cause}), do: nil
 
-  defp log_native_prompt_fidelity(%Responsibility{} = responsibility, agent, {:error, reason}) do
+  # THE WIRE STATUS (task 019fb8ed stage 3).
+  #
+  # Stages 1 and 2 named the causes SERVER-SIDE. A federated runtime still
+  # received the same bare envelope for all of them, so the one question a
+  # receiving agent actually has to answer — "is this silence deliberate, or
+  # is something broken?" — was unanswerable on the wire.
+  #
+  # AN EMPTY PROMPT IS SOMETIMES LEGITIMATE.
+  # `Handlers.MeetingActionItems.build_prompt/1` returns
+  # `{:error, :no_transcript_text}` ON PURPOSE when the transcript has no
+  # text: a model round-trip over no content is spend with no possible
+  # output. `gather_transcript(nil)` yields `formatted_text: ""` too, so a
+  # fire with no resolvable `transcript_id` lands there as well. That is
+  # content-dependent, not a regression — and it is exactly why the
+  # `meetings.action_items` fire that rendered and the one that did not
+  # looked identical in the original report. A wiring gap (no
+  # `build_prompt/1`) and a render gap (a `default_prompt_template` slug
+  # with no row) are NOT legitimate, and now say so.
+  #
+  # WHY A WHITELIST OF NO-WORK REASONS RATHER THAN A BLACKLIST OF GAPS.
+  # The asymmetry is deliberate: the default has to be `:render_gap`. A new
+  # provider refusal that is wrongly reported as a gap is NOISE — someone
+  # reads the reason, sees it is legitimate, and adds one line here. A new
+  # gap wrongly reported as `:no_work` is SILENCE, which is the whole defect
+  # this task exists to remove. So adding a legitimate refusal is a
+  # one-line, reviewable edit and forgetting to make it cannot hide a
+  # defect.
+  @no_work_refusals [:no_transcript_text]
+
+  @typedoc """
+  What a receiving runtime is told about the prompt it did (not) get.
+
+    * `:rendered` — a body is present at `signal.prompt`.
+    * `:no_work` — the provider deliberately declined; there was nothing to
+      say. The agent should still wake and may say so.
+    * `:render_gap` — the server meant to say something and could not. A
+      defect, with `prompt_absence_reason` naming which one.
+  """
+  @type prompt_status :: :rendered | :no_work | :render_gap
+
+  @doc false
+  # Exposed so a test can pin the list rather than restating it, and can
+  # assert what is NOT on it — `:no_build_prompt` in particular, which is a
+  # wiring gap wearing a refusal's clothes.
+  @spec no_work_refusals() :: [atom()]
+  def no_work_refusals, do: @no_work_refusals
+
+  # REACHABILITY, MEASURED — read this before adding a row.
+  #
+  # `build_prompt_via_provider/2` maps `{:error, :no_build_prompt}`, an
+  # unexpected return AND a raise onto `:legacy` before the classifier is
+  # reached. So `{:absent, {:refused, :no_build_prompt}}` and
+  # `{:absent, {:unexpected_shape, _}}` cannot arrive here from live
+  # traffic; a clause keyed on either would never fire, and would rot
+  # unnoticed. They are therefore NOT given their own rows: they fall
+  # through the same default every other absence takes, which is the
+  # answer that stays correct if the pre-collapse is ever undone.
+  #
+  # Undoing it is deliberately not this stage's change: `dispatch_external/5`
+  # ABORTS on `{:error, _}` with failed telemetry, so letting
+  # `:no_build_prompt` through as an error would stop every external agent
+  # whose provider asks for the legacy render from dispatching at all. The
+  # pre-collapse is pinned by test in `prompt_outcome_test.exs` under "the
+  # provider layer pre-collapses two of the five outcomes".
+  @spec prompt_disposition(prompt_outcome()) :: {prompt_status(), String.t() | nil}
+  defp prompt_disposition({:rendered, _text}), do: {:rendered, nil}
+
+  defp prompt_disposition({:absent, {:refused, reason}}) when reason in @no_work_refusals,
+    do: {:no_work, absence_reason_text(reason)}
+
+  defp prompt_disposition({:absent, cause}), do: {:render_gap, absence_cause_text(cause)}
+
+  # Short, greppable, and stable enough for a client to branch on. The slug
+  # rides along for the two template causes because it names the row to go
+  # seed — the reason a runtime can act on, not merely report.
+  defp absence_cause_text(:legacy), do: "provider_has_no_build_prompt"
+  defp absence_cause_text(:empty_render), do: "empty_render"
+  defp absence_cause_text({:refused, reason}), do: absence_reason_text(reason)
+  defp absence_cause_text({:template_missing, slug}), do: "template_missing:#{slug}"
+  defp absence_cause_text({:template_blank, slug}), do: "template_blank:#{slug}"
+
+  # The offending value is deliberately NOT interpolated: it is an arbitrary
+  # provider return of unknown size and shape, and this string goes over the
+  # wire to a third-party runtime. `log_native_prompt_fidelity/3` already
+  # records it in full, server-side, where it belongs.
+  defp absence_cause_text({:unexpected_shape, _other}), do: "unexpected_shape"
+
+  defp absence_reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp absence_reason_text(reason), do: inspect(reason)
+
+  # `prompt_status` is ALWAYS present, including for `:rendered`; a client
+  # can therefore treat its absence as "this server predates the field"
+  # rather than having to guess. `prompt_absence_reason` is present only
+  # when there is one — a status field that is always populated would not be
+  # evidence that any branch ran.
+  #
+  # AND `prompt` STAYS ABSENT WHEN THERE IS NO BODY. This is an addition,
+  # not a replacement: an empty `prompt` reads to a client as "the server
+  # had something to say and it was nothing" (argued at
+  # `agent_responder.ex`, `build_system_event_payload/1`, and pinned by
+  # `native_dispatch_envelope_test.exs`).
+  defp put_prompt_status(metadata, outcome) do
+    {status, reason} = prompt_disposition(outcome)
+
+    metadata
+    |> Map.put(:prompt_status, status)
+    |> maybe_put(:prompt_absence_reason, reason)
+  end
+
+  # THE OBSERVABILITY HALF OF THE NATIVE/EXTERNAL ASYMMETRY.
+  #
+  # `dispatch_external/5` aborts on a refusal and emits `failed` telemetry;
+  # `dispatch_native/6` proceeds silently. Native's dispatch DECISION is
+  # deliberately unchanged — an agent that receives a `no_work` envelope
+  # should still wake and be able to say so — but the event makes render
+  # gaps countable instead of only greppable. Emitted before the hand-off,
+  # so it reports what the envelope carried whether or not the runtime
+  # accepted it.
+  defp emit_prompt_absent_telemetry(%Responsibility{} = responsibility, outcome) do
+    case prompt_disposition(outcome) do
+      {:rendered, _reason} ->
+        :ok
+
+      {status, reason} ->
+        :telemetry.execute(
+          [:platform, :responsibilities, :prompt_absent],
+          %{system_time: System.system_time()},
+          %{
+            key: responsibility.key,
+            feature: responsibility.feature,
+            prompt_status: status,
+            reason: reason,
+            dispatch: :native
+          }
+        )
+
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  # THE MISSING HALF OF THE NATIVE PROMPT PATH (task 019fb8ed stage 2).
+  #
+  # `responsibilities.default_prompt_template` holds a prompt template
+  # SLUG — `"tasks.triage.v1"`, `"design.task_direction.v1"` — and the
+  # rows those slugs name are real, seeded by migration. Nothing on the
+  # native path ever looked one up. So every `tasks.triage`,
+  # `tasks.weekly_review` and `tasks.unblock` fire classified
+  # `{:absent, :legacy}` (their provider, `Providers.Tasks`, exports no
+  # `build_prompt/1` — legal, `@optional_callbacks build_prompt: 1`) and
+  # shipped a bare envelope. Not intermittent: those three keys had
+  # never once rendered.
+  #
+  # WHY A DB LOOKUP, AND NOT "DO WHAT THE EXTERNAL PATH DOES". The
+  # external legacy path is itself broken and mirroring it would ship
+  # garbage. `ExternalAgents.Dispatcher.legacy_messages/2` passes this
+  # same slug STRING straight into an `EEx.eval_string/2` and falls back
+  # to the literal on failure, so an external agent receives the message
+  # `[%{role: "user", content: "meetings.action_items.v1"}]` — the
+  # literal slug as its prompt. That module contains no reference to
+  # `PromptTemplates` at all. The defect is general, not
+  # meetings-specific, and it is deliberately NOT fixed here: switching
+  # the external path to a DB lookup changes the prompt every external
+  # agent receives, which is a far larger blast radius than this change
+  # owns. Its current behaviour is pinned by a characterisation test in
+  # `external_agents/dispatcher_test.exs` so this change provably does
+  # not alter it and the follow-up has a red line to flip.
+  #
+  # A MISSING ROW IS NOT A LEGACY FIRE. `{:absent, {:template_missing,
+  # slug}}` and `{:absent, {:template_blank, slug}}` are separate
+  # outcomes rather than a fall-back to `{:absent, :legacy}` for the
+  # reason the whole taxonomy exists: "this key was never wired to a
+  # prompt" and "this key names a prompt that isn't there" need different
+  # fixes, and collapsing them would make the second invisible. The slug
+  # rides along so the reader is told WHICH row to go seed.
+  defp render_default_template(%Responsibility{default_prompt_template: slug}, context)
+       when is_binary(slug) do
+    case String.trim(slug) do
+      "" ->
+        {:absent, :legacy}
+
+      slug ->
+        case PromptTemplates.render_template(slug, template_assigns(context)) do
+          {:ok, body} ->
+            if String.trim(body) == "",
+              do: {:absent, {:template_blank, slug}},
+              else: {:rendered, body}
+
+          {:error, :not_found} ->
+            {:absent, {:template_missing, slug}}
+        end
+    end
+  end
+
+  defp render_default_template(_responsibility, _context), do: {:absent, :legacy}
+
+  # `PromptTemplates.render_template/2` interpolates `{{name}}` by calling
+  # `to_string/1` on the assign — and it wraps the whole render in a
+  # `rescue -> {:error, :not_found}`. So a context value that doesn't
+  # implement `String.Chars` would be reported as a MISSING TEMPLATE, which
+  # is a lie about a row that is sitting right there. Gather-provided
+  # context is routinely nested (`Providers.Tasks` returns
+  # `%{org_identity: %{missing?: true, ...}}`), so this is not
+  # hypothetical the moment a template grows its first placeholder.
+  #
+  # `:__responsibility__` is dropped rather than inspected: it is a
+  # `%Responsibility{}` the Router stamped on for its own use, not
+  # something a prompt author asked for.
+  defp template_assigns(context) when is_map(context) do
+    context
+    |> Map.delete(:__responsibility__)
+    |> Map.new(fn {key, value} -> {key, printable_assign(value)} end)
+  end
+
+  defp template_assigns(_context), do: %{}
+
+  defp printable_assign(value) when is_binary(value), do: value
+  defp printable_assign(value) when is_number(value) or is_atom(value), do: to_string(value)
+  defp printable_assign(value), do: inspect(value)
+
+  defp log_native_prompt_fidelity(_responsibility, _agent, {:rendered, _text}), do: :ok
+
+  defp log_native_prompt_fidelity(
+         %Responsibility{} = responsibility,
+         agent,
+         {:absent, {:refused, reason}}
+       ) do
     Logger.warning(
       "[ResponsibilityRouter] provider build_prompt refused but native dispatch proceeds " <>
         "with no prompt key=#{responsibility.key} agent=#{agent_slug(agent)} " <>
@@ -1677,7 +1999,78 @@ defmodule Platform.Responsibilities.Router do
     :ok
   end
 
-  defp log_native_prompt_fidelity(%Responsibility{} = responsibility, _agent, :legacy) do
+  # A provider that answered, with nothing. Distinct from a refusal: the
+  # callback ran to completion and produced messages whose contents were
+  # all blank or non-binary, which is a defect in the provider rather than
+  # a decision by it. Silent before this stage, because the old
+  # `{:messages, _}` clause matched it and returned `:ok`.
+  defp log_native_prompt_fidelity(
+         %Responsibility{} = responsibility,
+         agent,
+         {:absent, :empty_render}
+       ) do
+    Logger.warning(
+      "[ResponsibilityRouter] provider build_prompt returned messages that render to an " <>
+        "empty body key=#{responsibility.key} agent=#{agent_slug(agent)} — native dispatch " <>
+        "proceeds with no prompt"
+    )
+
+    :ok
+  end
+
+  defp log_native_prompt_fidelity(
+         %Responsibility{} = responsibility,
+         agent,
+         {:absent, {:unexpected_shape, other}}
+       ) do
+    Logger.warning(
+      "[ResponsibilityRouter] prompt outcome has an unrecognised shape " <>
+        "key=#{responsibility.key} agent=#{agent_slug(agent)} result=#{inspect(other)} — " <>
+        "add a clause to classify_prompt_outcome/1 rather than leaving it in the catch-all"
+    )
+
+    :ok
+  end
+
+  # The responsibility named a prompt template and the row is not there.
+  # `:warning`, not `:debug` — unlike `{:absent, :legacy}` (a key that
+  # never claimed to own a prompt) this is a broken promise, and the fix
+  # is a one-line seed migration for the named slug.
+  defp log_native_prompt_fidelity(
+         %Responsibility{} = responsibility,
+         agent,
+         {:absent, {:template_missing, slug}}
+       ) do
+    Logger.warning(
+      "[ResponsibilityRouter] default_prompt_template names a slug with no prompt_templates " <>
+        "row key=#{responsibility.key} agent=#{agent_slug(agent)} slug=#{inspect(slug)} — " <>
+        "native dispatch proceeds with no prompt. Fix: seed the row (see " <>
+        "priv/repo/migrations for the pattern), do not edit the hardcoded default list — " <>
+        "PromptTemplates.seed_defaults/0 is INSERT-only and skips migrated environments."
+    )
+
+    :ok
+  end
+
+  # The row exists and is empty. Distinct from a missing row because the
+  # remedy is different: someone edited the content to nothing (templates
+  # are editable live via `prompt_template_update`), so there is no
+  # migration to write.
+  defp log_native_prompt_fidelity(
+         %Responsibility{} = responsibility,
+         agent,
+         {:absent, {:template_blank, slug}}
+       ) do
+    Logger.warning(
+      "[ResponsibilityRouter] default_prompt_template resolved to a blank body " <>
+        "key=#{responsibility.key} agent=#{agent_slug(agent)} slug=#{inspect(slug)} — " <>
+        "the row exists but its content is empty; native dispatch proceeds with no prompt"
+    )
+
+    :ok
+  end
+
+  defp log_native_prompt_fidelity(%Responsibility{} = responsibility, _agent, {:absent, :legacy}) do
     case Providers.feature_provider(responsibility.feature) do
       {:ok, module} ->
         Logger.debug(

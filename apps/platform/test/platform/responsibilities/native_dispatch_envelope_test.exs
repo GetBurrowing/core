@@ -95,16 +95,18 @@ defmodule Platform.Responsibilities.NativeDispatchEnvelopeTest do
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.Federation.RuntimePresence
+  alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
   alias Platform.Responsibilities
   alias Platform.Responsibilities.Handlers.ArchitectureReviewPlan
+  alias Platform.Responsibilities.Handlers.MeetingActionItems
   alias Platform.Responsibilities.Router
   alias Platform.Roles
   alias Platform.Tasks
 
   # Measured off a probe run, not restated from the handler source. These are
   # the first and last sentences of `ArchitectureReviewPlan.build_prompt/1`'s
-  # SYSTEM slot, which `Router.rendered_prompt_text/1` joins to the user slot
+  # SYSTEM slot, which `Router.classify_prompt_outcome/1` joins to the user slot
   # with exactly one blank line. Pinning both ends of the system half plus the
   # start of the user half is what makes the join itself observable: collapse
   # the "\n\n" separator, or drop the system turn from
@@ -144,7 +146,7 @@ defmodule Platform.Responsibilities.NativeDispatchEnvelopeTest do
   defp uniq, do: System.unique_integer([:positive])
 
   # `kind: "native"` + `runtime_type: "external"` is the federated shape:
-  # `Router.dispatch_assignee/4` sends it down `dispatch_native/5` (an
+  # `Router.dispatch_assignee/4` sends it down `dispatch_native/6` (an
   # `Agent.kind` of "external" would take the HTTP path instead), and
   # `AgentResponder.dispatch_system_event/2`'s first clause matches on
   # `runtime_type: "external"` with a binary `runtime_id`. Both halves are
@@ -295,7 +297,7 @@ defmodule Platform.Responsibilities.NativeDispatchEnvelopeTest do
       assert is_binary(prompt)
       assert prompt =~ plan_summary_block(ctx)
 
-      # The join `rendered_prompt_text/1` performs, both ends of it. Two
+      # The join `classify_prompt_outcome/1` performs, both ends of it. Two
       # halves, one blank line, system first.
       assert [system_half, user_half] = String.split(prompt, "\n\n", parts: 2)
       assert String.starts_with?(system_half, @system_half_opens)
@@ -334,6 +336,21 @@ defmodule Platform.Responsibilities.NativeDispatchEnvelopeTest do
       assert signal.metadata.stage_id == ctx.stage.id
       assert signal.metadata.project_id == ctx.project.id
       assert signal.metadata.prompt == prompt
+
+      # ── the status, on the case that HAS a body ──────────────────────────
+      #
+      # `prompt_status` is present even when it is `:rendered`, so a client
+      # can read its ABSENCE as "this server predates the field" rather than
+      # having to infer the status from whether `prompt` showed up.
+      assert signal.prompt_status == :rendered
+      assert signal.metadata.prompt_status == :rendered
+
+      # And the reason key is absent here. A status field that is always
+      # populated is not evidence that any branch ran; this refute is what
+      # makes the `:no_work` / `:render_gap` reasons below mean something,
+      # and it sits beside a `prompt` pinned to seeded content above.
+      refute Map.has_key?(signal, :prompt_absence_reason)
+      refute Map.has_key?(signal.metadata, :prompt_absence_reason)
 
       # ── routing identity ─────────────────────────────────────────────────
       assert signal.reason == :system_event
@@ -421,10 +438,11 @@ defmodule Platform.Responsibilities.NativeDispatchEnvelopeTest do
     test "omits the prompt key entirely rather than sending an empty body, and still lifts the ids",
          ctx do
       # `Providers.feature_provider("ndenoprovider")` returns `:error`, so
-      # `build_prompt_via_provider/2` falls to `:legacy` and
-      # `rendered_prompt_text(:legacy)` is nil. This is the real production
-      # shape for a feature with no `build_prompt/1`, driven end to end
-      # rather than simulated by handing the responder a nil prompt.
+      # `build_prompt_via_provider/2` falls to `:legacy`, which
+      # `classify_prompt_outcome/1` names `{:absent, :legacy}` and
+      # `build_native_signal/4` renders as an omitted key. This is the real
+      # production shape for a feature with no `build_prompt/1`, driven end to
+      # end rather than simulated by handing the responder a nil prompt.
       assert {:ok, :dispatched} =
                Router.fire_trigger(ctx.row, %{
                  kind: :cron,
@@ -460,6 +478,14 @@ defmodule Platform.Responsibilities.NativeDispatchEnvelopeTest do
       # `System dispatch: <reason>` placeholder do its job.
       refute Map.has_key?(signal, :prompt)
 
+      # ...but the SILENCE IS NOW NAMED (stage 3). The key stays absent; what
+      # changed is that the envelope says why, so a runtime can tell this
+      # apart from a provider that deliberately declined.
+      assert signal.prompt_status == :render_gap
+      assert signal.prompt_absence_reason == "provider_has_no_build_prompt"
+      assert signal.metadata.prompt_status == :render_gap
+      assert signal.metadata.prompt_absence_reason == "provider_has_no_build_prompt"
+
       # Same bare envelope as the body-bearing case — the shape does not vary
       # with whether a prompt rendered, only `signal.prompt` does.
       assert Map.keys(payload) == [:signal]
@@ -473,6 +499,248 @@ defmodule Platform.Responsibilities.NativeDispatchEnvelopeTest do
       # for the two ids asserted present above.
       refute Map.has_key?(signal, :stage_id)
       refute Map.has_key?(signal.metadata, :stage_id)
+    end
+  end
+
+  # ── deliberate silence vs. a broken render ─────────────────────────────────
+  #
+  # THE QUESTION THIS SECTION ANSWERS ON THE WIRE, and the reason the whole
+  # task exists.
+  #
+  # An empty prompt is SOMETIMES LEGITIMATE.
+  # `Handlers.MeetingActionItems.build_prompt/1` returns
+  # `{:error, :no_transcript_text}` on purpose over a blank transcript — a
+  # model round-trip over no content is spend with no possible output — and
+  # `gather_transcript(nil)` yields `formatted_text: ""`, so a fire whose
+  # `transcript_id` does not resolve lands there too. That is the
+  # discriminating datapoint in the original report: the `meetings.action_items`
+  # fire that rendered had transcript text and the later one had none.
+  # Content-dependent, not intermittent, not a regression.
+  #
+  # A wiring gap and a render gap are NOT legitimate. Before this stage all
+  # three left the server as the same envelope.
+  describe "prompt_status tells deliberate silence apart from a render gap" do
+    setup do
+      # (a) THE LEGITIMATE NO-WORK FIRE — the real registered row, the real
+      # handler, the real refusal. A throwaway provider returning
+      # `{:error, :no_transcript_text}` would prove the mapping table and
+      # nothing about whether any shipping key can reach it.
+      [action_items_attrs] = MeetingActionItems.register()
+      {:ok, no_work_row} = Responsibilities.upsert_by_key(action_items_attrs)
+      no_work = Map.put(federated_assignee(no_work_row.key), :row, no_work_row)
+
+      # (b) THE RENDER GAP — a feature with no registered provider at all,
+      # which is the production shape of `tasks.*` before stage 2 and of any
+      # key whose provider ships no `build_prompt/1`.
+      gap_key = "ndenoprovider.gap#{uniq()}"
+
+      {:ok, gap_row} =
+        Responsibilities.create_responsibility(%{
+          key: gap_key,
+          feature: "ndenoprovider",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "0 5 * * *"},
+          scope: "global",
+          cost_profile: "low_freq_capable"
+        })
+
+      gap = Map.put(federated_assignee(gap_key), :row, gap_row)
+
+      %{no_work: no_work, gap: gap}
+    end
+
+    # THE ASSERTION THE WHOLE TASK EXISTS FOR. Two REAL envelopes, captured
+    # from two real fires, held side by side.
+    #
+    # WHAT FAILURE LOOKS LIKE: if a future edit maps both causes onto one
+    # atom — the exact defect being removed — the inequality goes red and
+    # prints the shared value. A pair of independent equality assertions
+    # would BOTH stay green if the mapping table were deleted and replaced
+    # with a constant, as long as the constant were the right one for each;
+    # only the inequality refuses a collapse directly. Both shapes are here
+    # because the inequality alone is satisfied by any two distinct wrong
+    # values.
+    test "a blank transcript is :no_work, an absent builder is :render_gap, and they differ",
+         ctx do
+      assert {:ok, :dispatched} =
+               Router.fire_trigger(ctx.no_work.row, %{
+                 kind: :event_topic,
+                 payload: %{transcript_id: nil}
+               })
+
+      no_work = await_envelope(ctx.no_work.topic).signal
+
+      assert {:ok, :dispatched} =
+               Router.fire_trigger(ctx.gap.row, %{kind: :cron, fired_at: DateTime.utc_now()})
+
+      gap = await_envelope(ctx.gap.topic).signal
+
+      # POSITIVE CONTROL FIRST, on BOTH envelopes and before any refutation.
+      # `refute Map.has_key?/2` passes on an envelope that never arrived, so
+      # without this a broken fixture reads as a pass.
+      assert no_work.reason == :system_event
+      assert no_work.responsibility_key == "meetings.action_items"
+      assert no_work.feature == "meetings"
+      assert no_work.trigger_kind == :event_topic
+      assert no_work.agent_id == ctx.no_work.agent.id
+
+      assert gap.reason == :system_event
+      assert gap.responsibility_key == ctx.gap.row.key
+      assert gap.feature == "ndenoprovider"
+      assert gap.trigger_kind == :cron
+      assert gap.agent_id == ctx.gap.agent.id
+
+      # THE DISTINGUISHABILITY ASSERTION.
+      assert no_work.prompt_status != gap.prompt_status,
+             "two causes that need different fixes collapsed onto the shared status " <>
+               inspect(no_work.prompt_status) <>
+               " — that is the defect this task exists to remove"
+
+      assert no_work.prompt_status == :no_work
+      assert gap.prompt_status == :render_gap
+
+      # The reason names the cause, not merely the fact.
+      assert no_work.prompt_absence_reason == "no_transcript_text"
+      assert gap.prompt_absence_reason == "provider_has_no_build_prompt"
+
+      # NEITHER SHIPS A BODY. The status is an ADDITION; re-adding an empty
+      # `prompt` would break this for the right reason.
+      refute Map.has_key?(no_work, :prompt)
+      refute Map.has_key?(gap, :prompt)
+
+      # `metadata` is passed whole by `AgentResponder.build_system_event_signal/2`,
+      # so the metadata copy comes free — asserted rather than assumed, since
+      # a consumer reading `signal.metadata.prompt_status` is as likely as one
+      # reading the root.
+      assert no_work.metadata.prompt_status == :no_work
+      assert gap.metadata.prompt_absence_reason == "provider_has_no_build_prompt"
+    end
+
+    # TWO DIFFERENT GAPS, ONE STATUS, DIFFERENT REASONS. `:render_gap` is a
+    # verdict a client branches on; `prompt_absence_reason` is what tells a
+    # human which row to go seed. Pinning the slug-carrying shape is what
+    # stops the reason from quietly becoming a constant per status.
+    test "a default_prompt_template with no row is a render gap that names the slug", ctx do
+      slug = "nde.nonexistent_#{uniq()}.v1"
+      refute PromptTemplates.get_template_by_slug(slug)
+
+      key = "ndenoprovider.missingtmpl#{uniq()}"
+
+      {:ok, row} =
+        Responsibilities.create_responsibility(%{
+          key: key,
+          feature: "ndenoprovider",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "0 6 * * *"},
+          scope: "global",
+          cost_profile: "low_freq_capable",
+          default_prompt_template: slug
+        })
+
+      %{topic: topic, agent: agent} = federated_assignee(key)
+
+      assert {:ok, :dispatched} =
+               Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()})
+
+      signal = await_envelope(topic).signal
+
+      assert signal.responsibility_key == key
+      assert signal.agent_id == agent.id
+      assert signal.prompt_status == :render_gap
+      assert signal.prompt_absence_reason == "template_missing:#{slug}"
+      refute Map.has_key?(signal, :prompt)
+
+      # Same status as the no-builder gap in the test above — deliberately,
+      # a client's branch is on the status — but NOT the same reason, which
+      # is the half a human acts on.
+      refute signal.prompt_absence_reason == "provider_has_no_build_prompt"
+
+      # ...and still distinct from the legitimate case, driven here rather
+      # than restated so the comparison is between two received envelopes.
+      assert {:ok, :dispatched} =
+               Router.fire_trigger(ctx.no_work.row, %{
+                 kind: :event_topic,
+                 payload: %{transcript_id: nil}
+               })
+
+      no_work = await_envelope(ctx.no_work.topic).signal
+      assert no_work.prompt_status != signal.prompt_status
+    end
+
+    # THE OBSERVABILITY HALF. `dispatch_external/5` aborts on a refusal and
+    # emits `failed` telemetry; `dispatch_native/6` proceeds silently, which
+    # is why three keys could ship empty for weeks without a counter moving.
+    # Native's dispatch DECISION is deliberately unchanged — the agent still
+    # wakes — but the gap is now countable rather than only greppable.
+    #
+    # Attached and asserted directly rather than read off a globally-attached
+    # handler: `TelemetryHandlerTest`'s `on_exit` detaches
+    # `Platform.Audit.TelemetryHandler` globally, and a test that depended on
+    # it would silently stop observing anything.
+    test "a gap emits prompt_absent telemetry and a rendered dispatch does not", ctx do
+      test_pid = self()
+      handler_id = "nde-prompt-absent-#{uniq()}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :responsibilities, :prompt_absent],
+          fn _event, measurements, metadata, _config ->
+            send(test_pid, {:prompt_absent, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      # THE RENDERED FIRE FIRST, so the refute below has a positive control:
+      # a real dispatch that really happened and really carried a body.
+      review_row = review_plan_row()
+      seeded = seed_plan()
+      %{topic: review_topic} = federated_assignee(review_row.key)
+
+      assert {:ok, :dispatched} =
+               Router.fire_trigger(review_row, %{
+                 kind: :event_topic,
+                 plan_id: seeded.plan.id,
+                 task_id: seeded.task.id
+               })
+
+      rendered = await_envelope(review_topic).signal
+      assert rendered.prompt_status == :rendered
+      assert is_binary(rendered.prompt)
+
+      refute_receive {:prompt_absent, _measurements, _metadata}, 200
+
+      # ...and now the gap.
+      assert {:ok, :dispatched} =
+               Router.fire_trigger(ctx.gap.row, %{kind: :cron, fired_at: DateTime.utc_now()})
+
+      _ = await_envelope(ctx.gap.topic)
+
+      assert_receive {:prompt_absent, measurements, metadata}, 1000
+
+      assert metadata.key == ctx.gap.row.key
+      assert metadata.feature == "ndenoprovider"
+      assert metadata.prompt_status == :render_gap
+      assert metadata.reason == "provider_has_no_build_prompt"
+      assert metadata.dispatch == :native
+      assert is_integer(measurements.system_time)
+    end
+  end
+
+  # WHICH REFUSALS COUNT AS LEGITIMATE — pinned, because the list is the one
+  # place a real gap could be mislabelled as deliberate silence.
+  #
+  # The whitelist's asymmetry is the point: a new refusal wrongly reported as
+  # a gap is noise someone fixes in one line, while a new gap wrongly
+  # reported as `:no_work` is silence, which is the defect. `:no_build_prompt`
+  # is the trap — it arrives shaped like a refusal but means "this key does
+  # not own its prompt", which is a wiring gap.
+  describe "the no-work refusal whitelist" do
+    test "names only reasons a provider chose, and never :no_build_prompt" do
+      assert Router.no_work_refusals() == [:no_transcript_text]
+      refute :no_build_prompt in Router.no_work_refusals()
     end
   end
 end

@@ -3367,12 +3367,19 @@ defmodule Platform.Responsibilities.RouterTest do
 
   # ── task 019f9b28 stage 2: the fourth collapse point ────────────────────
   #
-  # `rendered_prompt_text/1` maps both `:legacy` and `{:error, reason}` to
-  # nil, and `maybe_put/3` drops nil — so a federated runtime receives a
+  # `rendered_prompt_text/1` mapped both `:legacy` and `{:error, reason}` to
+  # nil, and `maybe_put/3` drops nil — so a federated runtime received a
   # byte-identical bare signal whether the provider refused to build a
-  # prompt or was never asked for one. This stage does not change what the
-  # signal *contains* (dispatch return values are a sibling stack member's
-  # scope); it makes the three causes tell themselves apart in the log.
+  # prompt or was never asked for one. That stage did not change what the
+  # signal *contains* (dispatch return values were a sibling stack member's
+  # scope); it made the three causes tell themselves apart in the log.
+  #
+  # Task 019fb8ed stage 1 replaced `rendered_prompt_text/1` with
+  # `Router.classify_prompt_outcome/1`, which names each cause as its own
+  # value; the two log assertions below are unchanged, because the log
+  # wording they pin is unchanged. The taxonomy itself, its pairwise
+  # distinctness, and the empty-render cause these two do not cover are
+  # tested in `prompt_outcome_test.exs`.
   describe "native dispatch prompt fidelity" do
     setup do
       previous = Application.get_env(:platform, :responsibility_router_native_dispatcher)
@@ -3440,7 +3447,7 @@ defmodule Platform.Responsibilities.RouterTest do
           # `{:ok, :dispatched}`, NOT `{:error, {:build_prompt_refused, _}}`.
           # The refusal short-circuit member 1 added lives in
           # `dispatch_external/5` only; this row has a NATIVE assignee, and
-          # `dispatch_native/5` deliberately proceeds with a bare signal —
+          # `dispatch_native/6` deliberately proceeds with a bare signal —
           # that asymmetry is exactly what the log line below records. If a
           # later stage makes native abort too, this is the assertion that
           # should change, and the "native dispatch proceeds" log assertion
@@ -3469,7 +3476,14 @@ defmodule Platform.Responsibilities.RouterTest do
           key: key,
           feature: feature_str,
           trigger_kind: "cron",
-          trigger_config: %{"expression" => "*/5 * * * *"}
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          # EXPLICITLY nil, overriding `base_attrs/1`'s `"routertest.v1"`.
+          # This test is about a key with NO provider; since task 019fb8ed
+          # stage 2 a key that also names a prompt template slug takes the
+          # template lookup and reports `{:absent, {:template_missing, _}}`
+          # instead, which is a different (and more specific) statement.
+          # That case has its own coverage in `prompt_outcome_test.exs`.
+          default_prompt_template: nil
         })
 
       _agent = wire_native_assignee(key)
