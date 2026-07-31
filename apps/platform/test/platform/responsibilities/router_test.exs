@@ -1032,23 +1032,41 @@ defmodule Platform.Responsibilities.RouterTest do
   describe "placeholder responsibilities are skipped at fire time" do
     @placeholder_log "[ResponsibilityRouter] placeholder responsibility="
 
-    test "one meeting:finished broadcast fires meetings.action_items but NOT meetings.attendance_followup" do
+    test "one meeting:finished broadcast fires meetings.summarize but NOT meetings.attendance_followup" do
       # Driven off the handlers' OWN `register/0` specs, not hand-built
       # rows: if either module's metadata declaration changes, this test
       # changes verdict rather than quietly testing a stale fixture.
-      [action_items_spec] = Platform.Responsibilities.Handlers.MeetingActionItems.register()
+      #
+      # The live sibling used to be `meetings.action_items`. Task
+      # 019fb90f-36e3 moved that key off `meeting:finished` and onto the
+      # live intent path, so it is no longer on this topic at all and
+      # would make the positive control unreachable for a reason that
+      # has nothing to do with placeholder metadata. `meetings.summarize`
+      # is the remaining active row on the topic and plays the same part.
+      [summarize_spec] = Platform.Responsibilities.Handlers.MeetingSummarize.register()
 
       [followup_spec] =
         Platform.Responsibilities.Handlers.MeetingAttendanceFollowup.register()
 
-      {:ok, action_items} = Responsibilities.upsert_by_key(action_items_spec)
+      [action_items_spec] = Platform.Responsibilities.Handlers.MeetingActionItems.register()
+
+      {:ok, summarize} = Responsibilities.upsert_by_key(summarize_spec)
       {:ok, followup} = Responsibilities.upsert_by_key(followup_spec)
+
+      # Registered, enabled, and assignee-less exactly like the other
+      # two — the ONLY thing keeping it out of this broadcast is its
+      # topic. Without this row in the snapshot the refute below would
+      # be vacuous: it would pass against a reverted registration
+      # simply because nothing named that key existed.
+      {:ok, action_items} = Responsibilities.upsert_by_key(action_items_spec)
+      assert action_items.enabled
+      refute action_items.trigger_config["topic"] == "meeting:finished"
 
       # Both are enabled and both subscribe the same topic with the same
       # event_match — the ONLY thing separating them is the metadata.
-      assert action_items.enabled and followup.enabled
-      assert action_items.trigger_config == followup.trigger_config
-      refute Map.has_key?(action_items.metadata, "dispatch")
+      assert summarize.enabled and followup.enabled
+      assert summarize.trigger_config == followup.trigger_config
+      refute Map.has_key?(summarize.metadata, "dispatch")
       assert followup.metadata["dispatch"] == "inert"
 
       {_pid, _name} = start_router()
@@ -1067,7 +1085,13 @@ defmodule Platform.Responsibilities.RouterTest do
 
       # POSITIVE CONTROL — the sibling got past the gate to assignee
       # resolution on this very broadcast.
-      assert log =~ "[ResponsibilityRouter] unfilled responsibility=meetings.action_items"
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=meetings.summarize"
+
+      # And the retargeted key is not on this topic at all any more —
+      # neither fired nor refused as a placeholder. Asserted here rather
+      # than left implicit because this test is the one place the real
+      # `meeting:finished` fan-in is exercised against production rows.
+      refute log =~ "responsibility=meetings.action_items"
 
       # …which is what makes this absence mean "refused", not "nothing ran".
       refute log =~ "[ResponsibilityRouter] unfilled responsibility=meetings.attendance_followup"
@@ -2151,6 +2175,176 @@ defmodule Platform.Responsibilities.RouterTest do
 
       assert reason =~ "build_prompt_refused"
       assert reason =~ "no_transcript_text"
+    end
+
+    # Task 019fb90f-36e3 e2e fix. A refusal is the one dispatch outcome a
+    # provider could not observe: `invoke_handle_output/3` runs only from
+    # `run_external_dispatch/5`, i.e. only when a model answered. A
+    # provider holding per-dispatch state therefore had nowhere to
+    # release it. For `meetings.action_items` that state is an
+    # `IntentQueue` row pinning the meeting's serial cursor, so one
+    # refused utterance stalled every intent behind it for the full 90s
+    # ack window.
+    #
+    # These two pin the ROUTER half — that both refusals reach
+    # `handle_refusal/3`, carrying the trigger meta the provider needs to
+    # find its own state. The meetings half (what the row actually
+    # becomes) is pinned in `meeting_action_items_dispatch_test.exs`.
+    for {label, refusal_kind, provider_body_key, reason_atom} <- [
+          {"build_prompt", :build_prompt_refused, :build_prompt, :no_prompt_material},
+          {"gather_context", :context_gather_refused, :gather_context, :nothing_to_say}
+        ] do
+      test "a #{label} refusal reaches the provider's handle_refusal/3" do
+        feature_str = "router_refusal_cb_#{System.unique_integer([:positive])}"
+        test_pid = self()
+
+        Application.put_env(:platform, :router_refusal_test_pid, test_pid)
+        on_exit(fn -> Application.delete_env(:platform, :router_refusal_test_pid) end)
+
+        refusing = unquote(provider_body_key)
+        reason_atom = unquote(reason_atom)
+
+        gather =
+          if refusing == :gather_context do
+            quote(do: def(gather_context(_r, _m), do: {:error, unquote(reason_atom)}))
+          else
+            quote(do: def(gather_context(_r, _m), do: {:ok, %{}}))
+          end
+
+        build =
+          if refusing == :build_prompt do
+            quote(do: def(build_prompt(_ctx), do: {:error, unquote(reason_atom)}))
+          else
+            quote(do: def(build_prompt(_ctx), do: {:ok, %{system: "s", user: "u"}}))
+          end
+
+        define_provider(
+          feature_str,
+          quote do
+            @behaviour Platform.Responsibilities.Provider
+
+            @impl true
+            def register, do: []
+
+            @impl true
+            unquote(gather)
+
+            @impl true
+            unquote(build)
+
+            @impl true
+            def handle_output(_r, _o), do: :ok
+
+            @impl true
+            def handle_output(_r, _o, _m), do: :ok
+
+            # The pid rides in application env rather than being closed
+            # over: this body is compiled by `Module.create/3`, so there
+            # is no enclosing scope to capture from.
+            @impl true
+            def handle_refusal(r, refusal, meta) do
+              send(
+                Application.get_env(:platform, :router_refusal_test_pid),
+                {:handle_refusal, r.key, refusal, meta}
+              )
+
+              :ok
+            end
+          end
+        )
+
+        key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+        row =
+          insert!(%{
+            key: key,
+            feature: feature_str,
+            trigger_kind: "cron",
+            trigger_config: %{"expression" => "*/5 * * * *"},
+            default_prompt_template: "do the thing"
+          })
+
+        _agent = wire_external_assignee(key)
+
+        Req.Test.stub(:router_external_dispatch_test, fn conn ->
+          send(test_pid, :dispatched_anyway)
+          Req.Test.json(conn, %{"choices" => []})
+        end)
+
+        expected_kind = unquote(refusal_kind)
+
+        capture_log([level: :warning], fn ->
+          assert {:error, {^expected_kind, ^reason_atom}} =
+                   Router.fire_trigger(
+                     row,
+                     %{kind: :cron, fired_at: DateTime.utc_now(), payload: %{marker: key}},
+                     %{}
+                   )
+        end)
+
+        refute_receive :dispatched_anyway, 100
+
+        # The refusal is delivered whole — the Router's seam label AND
+        # the provider's own reason. A provider that only got the label
+        # could not tell a blank utterance from a dead upstream.
+        assert_receive {:handle_refusal, ^key, {^expected_kind, ^reason_atom}, meta}
+
+        # And it carries the trigger meta. Without it the callback
+        # cannot find the state it is being asked to release — the
+        # meeting id and intent id live in the trigger payload.
+        assert meta.payload == %{marker: key}
+      end
+    end
+
+    test "a provider WITHOUT handle_refusal/3 refuses silently and does not crash the dispatch" do
+      # The negative control for the pair above. `handle_refusal/3` is an
+      # optional callback and most providers hold no per-dispatch state,
+      # so the probe missing has to be a no-op — not a log line per
+      # refusal, and certainly not a raise inside `fire_trigger/3`.
+      feature_str = "router_refusal_none_#{System.unique_integer([:positive])}"
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: {:ok, %{}}
+
+          @impl true
+          def build_prompt(_ctx), do: {:error, :no_prompt_material}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          default_prompt_template: "do the thing"
+        })
+
+      _agent = wire_external_assignee(key)
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert {:error, {:build_prompt_refused, :no_prompt_material}} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      refute log =~ "handle_refusal"
     end
 
     test "provider without build_prompt/1 continues to use the legacy template render path" do

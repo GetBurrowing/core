@@ -509,13 +509,19 @@ defmodule Platform.Responsibilities.NativeDispatchEnvelopeTest do
   #
   # An empty prompt is SOMETIMES LEGITIMATE.
   # `Handlers.MeetingActionItems.build_prompt/1` returns
-  # `{:error, :no_transcript_text}` on purpose over a blank transcript — a
-  # model round-trip over no content is spend with no possible output — and
-  # `gather_transcript(nil)` yields `formatted_text: ""`, so a fire whose
-  # `transcript_id` does not resolve lands there too. That is the
+  # `{:error, :no_intent_text}` on purpose when there is no utterance to act
+  # on — a model round-trip over no content is spend with no possible output
+  # — and a fire carrying no `meeting_intent` lands there too. That is the
   # discriminating datapoint in the original report: the `meetings.action_items`
-  # fire that rendered had transcript text and the later one had none.
+  # fire that rendered had content and the later one had none.
   # Content-dependent, not intermittent, not a regression.
+  #
+  # The atom is `:no_intent_text` rather than `:no_transcript_text` since
+  # task 019fb90f-36e3 stage 3 moved this key off `meeting:finished` onto the
+  # live intent queue: the empty input it guards is the chunk, not the
+  # transcript. The KIND of refusal is unchanged, which is why it is on the
+  # same whitelist; `Handlers.MeetingSummarize` still owns
+  # `:no_transcript_text`.
   #
   # A wiring gap and a render gap are NOT legitimate. Before this stage all
   # three left the server as the same envelope.
@@ -523,7 +529,7 @@ defmodule Platform.Responsibilities.NativeDispatchEnvelopeTest do
     setup do
       # (a) THE LEGITIMATE NO-WORK FIRE — the real registered row, the real
       # handler, the real refusal. A throwaway provider returning
-      # `{:error, :no_transcript_text}` would prove the mapping table and
+      # `{:error, :no_intent_text}` would prove the mapping table and
       # nothing about whether any shipping key can reach it.
       [action_items_attrs] = MeetingActionItems.register()
       {:ok, no_work_row} = Responsibilities.upsert_by_key(action_items_attrs)
@@ -600,7 +606,7 @@ defmodule Platform.Responsibilities.NativeDispatchEnvelopeTest do
       assert gap.prompt_status == :render_gap
 
       # The reason names the cause, not merely the fact.
-      assert no_work.prompt_absence_reason == "no_transcript_text"
+      assert no_work.prompt_absence_reason == "no_intent_text"
       assert gap.prompt_absence_reason == "provider_has_no_build_prompt"
 
       # NEITHER SHIPS A BODY. The status is an ADDITION; re-adding an empty
@@ -739,7 +745,18 @@ defmodule Platform.Responsibilities.NativeDispatchEnvelopeTest do
   # not own its prompt", which is a wiring gap.
   describe "the no-work refusal whitelist" do
     test "names only reasons a provider chose, and never :no_build_prompt" do
-      assert Router.no_work_refusals() == [:no_transcript_text]
+      # EXACT, not a membership check. The list is a decision record: each
+      # atom is someone having judged one provider's silence deliberate, so
+      # an addition must break this test and be re-argued in review. A
+      # `x in list` assertion would let a future atom join silently, which
+      # is the one way a real gap gets relabelled as no-work.
+      #
+      # `:no_intent_text` joined on task 019fb90f-36e3 stage 3, when
+      # `meetings.action_items` moved off `meeting:finished` onto the live
+      # intent queue and its empty input became the chunk rather than the
+      # transcript. It replaced no entry — `:no_transcript_text` is still
+      # reachable through `Handlers.MeetingSummarize`.
+      assert Router.no_work_refusals() == [:no_transcript_text, :no_intent_text]
       refute :no_build_prompt in Router.no_work_refusals()
     end
   end

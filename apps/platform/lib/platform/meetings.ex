@@ -2342,15 +2342,26 @@ defmodule Platform.Meetings do
 
   Modelled on `post_summary_to_space/3` — same space resolution
   (`ExecutionSpace.ensure_system_participant/1`), same message-insert path
-  (`Platform.Chat.post_message/1`), same `{:error, reason}` shape — because
-  this is the delivery surface for `meetings.action_items`, whose handler
-  previously extracted the items and threw them away.
+  (`Platform.Chat.post_message/1`), same `{:error, reason}` shape.
 
-  The items render as a markdown checklist under a short header. There is
-  no `meeting_transcripts.action_items` column and this function does not
-  add one: the space post IS the delivery the seeded
-  `meetings.action_items.v1` prompt template promises the model.
-  Persistence, if ever wanted, is additive on top of this.
+  The items render as a markdown checklist under a short header.
+
+  ## This is the POST-MEETING surface, not the live one
+
+  It used to be described here as "the delivery surface for
+  `meetings.action_items`". That stopped being true in task
+  019fb90f-36e3, which retargeted that key to fire per utterance DURING
+  the meeting and land on a canvas
+  (`Platform.Meetings.ActionItemsCanvas`) instead. This function renders
+  the WHOLE list every time it is called, so calling it per utterance
+  would repost the entire list once per action item mentioned — each
+  message superseding the last, none of them the current state.
+
+  Nothing here changed and nothing about it is deprecated. A
+  once-per-meeting caller wanting a flat, quotable checklist in the
+  transcript of the space is exactly what it is for. There is still no
+  `meeting_transcripts.action_items` column and this function does not
+  add one.
 
   An empty list is a caller error rather than a no-op here — a meeting with
   no action items is a legitimate outcome, but the decision not to post is

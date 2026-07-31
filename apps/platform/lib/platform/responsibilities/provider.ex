@@ -146,6 +146,47 @@ defmodule Platform.Responsibilities.Provider do
   @callback build_prompt(context :: map()) ::
               {:ok, %{system: String.t(), user: String.t()}} | {:error, term()}
 
+  @doc """
+  Called when a dispatch was refused BEFORE the model was invoked
+  (task 019fb90f-36e3 e2e fix).
+
+  Two refusals reach here, both of them the Router's own decision not to
+  call the LLM:
+
+    * `{:context_gather_refused, reason}` — `gather_context/2` returned
+      anything other than `{:ok, map}`.
+    * `{:build_prompt_refused, reason}` — `build_prompt/1` returned
+      `{:error, reason}` on the external path.
+
+  ## Why this callback exists at all
+
+  A refusal is the one dispatch outcome a provider could not observe.
+  `handle_output/3` is reachable only from a dispatch that produced a
+  model response, so a provider holding per-dispatch state — a queue
+  row, a lease, a claim — had no seam at which to release it when the
+  Router declined to dispatch. `meetings.action_items` is the worked
+  example: `Platform.Meetings.IntentQueue` pins a per-meeting SERIAL
+  cursor to the in-flight row, so a refused utterance stalled every
+  intent behind it until the 90-second claim watchdog fired.
+
+  The refusal is deliberately surfaced HERE rather than inside the
+  feature's own dispatcher. The fork that produced the trigger
+  (`Platform.Meetings.IntentDispatcher` → PubSub broadcast → Router) is
+  fire-and-forget, so the dispatcher never sees the Router's return
+  value and cannot close its own row from there.
+
+  Return `:ok` when the refusal is handled; `{:error, term}` is logged
+  and swallowed. The Router's own return value is unchanged either way —
+  this callback is a side-effect seam, not a veto. It is NOT called on
+  the native path's build_prompt refusal, which currently dispatches
+  anyway (see `log_native_prompt_fidelity/3` in the Router).
+  """
+  @callback handle_refusal(
+              responsibility :: Platform.Responsibilities.Responsibility.t(),
+              refusal :: {:context_gather_refused | :build_prompt_refused, term()},
+              trigger_meta :: map()
+            ) :: :ok | {:error, term()}
+
   # Arity-3 handle_output is optional so M1 providers that still use
   # arity-2 keep compiling without forced churn. The Router probes for
   # the 3-arity version first and falls back to logging "no output
@@ -155,5 +196,10 @@ defmodule Platform.Responsibilities.Provider do
   # via the legacy `default_prompt_template` render path in the
   # ExternalDispatcher. New providers implement it to own the full
   # (system + user) prompt end-to-end.
-  @optional_callbacks handle_output: 3, build_prompt: 1
+  #
+  # `handle_refusal/3` is optional because most providers hold no
+  # per-dispatch state and have nothing to release when the Router
+  # declines to dispatch. Implement it only when a refusal leaves
+  # something of yours in flight.
+  @optional_callbacks handle_output: 3, build_prompt: 1, handle_refusal: 3
 end

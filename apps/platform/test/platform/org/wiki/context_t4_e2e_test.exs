@@ -920,6 +920,12 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # no-op deploy on its own — proved twice this cycle (019fa469,
       # 019fa504). Update-only; no schema change.
       "20260728050000_force_update_architect_audit_diff_audit_tool.exs",
+      # Task 019fb90f-36e3 stage 3: force-update `meetings.action_items.v1`
+      # for mid-meeting canvas work. The row has existed since
+      # 20260703120200 and `seed_defaults/0` is INSERT-only, so editing
+      # the seed file is a no-op on every migrated environment — the same
+      # trap the two entries above document. Update-only; no schema change.
+      "20260731194500_update_action_items_prompt_for_live_meeting.exs",
       # Task 019fb90f stage 4: force-update `dispatch.intent_attention` so it
       # names `target_space_id` — the meeting chat space a dispatched intent
       # writes its result into. A migration rather than a module edit alone

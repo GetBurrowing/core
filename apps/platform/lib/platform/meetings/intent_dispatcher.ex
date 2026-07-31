@@ -148,10 +148,25 @@ defmodule Platform.Meetings.IntentDispatcher do
     * `[:platform, :meetings, :intent_dispatched]` — measurements
       `%{count: 1, dispatch_ms: elapsed_ms}`, metadata
       `%{meeting_id, room_id, intent_id, target_role, intent, agent_id,
-      agent_slug, runtime_id, dispatch_kind}`. `dispatch_kind` is now
-      always `:runtime_attention` (it was `:native | :external`); the
+      agent_slug, runtime_id, dispatch_kind}`. `dispatch_kind` is
+      `:runtime_attention` for the role path and `:responsibility` for
+      the action-item fork below (it was `:native | :external`); the
       key survives because listeners match on it, and `runtime_id` is
-      new — it is the topic the signal actually went to.
+      new — it is the topic the signal actually went to, and is nil on
+      the responsibility path because there is no runtime involved.
+
+  ## Responsibility fork (task 019fb90f-36e3 stage 1)
+
+  One classified intent — `action_items` — is NOT handed to a role's
+  runtime. `@responsibility_intents` maps it to the
+  `meetings.action_items` responsibility, and `dispatch_row/3` forks on
+  it before any role resolution: the row is marked `:dispatched` and a
+  single global `{:action_item_intent, payload}` broadcast goes out for
+  `Platform.Responsibilities.Router` to pick up. The fork lives here
+  rather than in `IntentClassifier` on purpose — broadcasting at
+  classify time would double-produce (the row would ALSO go out as
+  runtime attention) and would lose both the meeting's serial cursor
+  and the producer's cancel/correct control over the row.
 
     * `[:platform, :meetings, :intent_dropped]` — measurements
       `%{count: 1}`, metadata `%{meeting_id, room_id, intent_id,
@@ -174,6 +189,7 @@ defmodule Platform.Meetings.IntentDispatcher do
   require Logger
 
   alias Platform.Agents.Agent
+  alias Platform.Meetings
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.IntentRuntimeAdapter
@@ -185,6 +201,17 @@ defmodule Platform.Meetings.IntentDispatcher do
   # 30 s belt-and-braces tick — the PubSub notify path handles the hot
   # case, the tick just recovers dropped notifies + dispatcher restarts.
   @default_tick_interval_ms 30_000
+
+  # Classified intents that are handled by a RESPONSIBILITY rather than
+  # by a role's runtime (task 019fb90f-36e3 stage 1).
+  #
+  # Deliberately a one-entry roster, not a general mechanism. Adding a
+  # second entry means claiming that another intent is better served by
+  # a router-dispatched responsibility than by an agent's runtime, and
+  # that claim should be argued per key — a growing map here would
+  # quietly turn "the classifier picks a role" into "the classifier
+  # picks a code path".
+  @responsibility_intents %{"action_items" => "meetings.action_items"}
 
   # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -324,8 +351,22 @@ defmodule Platform.Meetings.IntentDispatcher do
   defp dispatch_row(meeting_id, row, state) do
     dispatch_started_at = System.monotonic_time(:millisecond)
     target_role = row.target_role
+    responsibility_key = responsibility_key_for(row.classified_intent)
 
     cond do
+      # Checked BEFORE the target_role arms, deliberately: these rows
+      # carry whatever role the cheap classifier guessed (usually
+      # `meeting_scribe`), and resolving it would send a runtime
+      # attention broadcast in ADDITION to the responsibility fire.
+      not is_nil(responsibility_key) ->
+        dispatch_to_responsibility(
+          meeting_id,
+          row,
+          responsibility_key,
+          dispatch_started_at,
+          state
+        )
+
       is_nil(target_role) ->
         fail_dispatch(meeting_id, row, :no_target_role, state)
 
@@ -336,6 +377,149 @@ defmodule Platform.Meetings.IntentDispatcher do
       true ->
         resolve_and_dispatch(meeting_id, row, to_string(target_role), dispatch_started_at, state)
     end
+  end
+
+  # ── Responsibility fork (task 019fb90f-36e3 stage 1) ───────────────────────
+  #
+  # The one branch that does NOT resolve a runtime. The row is moved to
+  # `:dispatched` — which arms the queue's 90s ack window AND keeps the
+  # meeting's serial cursor HELD across the model round-trip, so two
+  # utterances can never be reconciling one action-items canvas at the
+  # same time — and then a single global broadcast hands the utterance
+  # to `Platform.Responsibilities.Router`.
+  #
+  # The row is closed terminally by the responsibility handler's
+  # `handle_output/3`. Between here and there, the queue server's ack
+  # window (`@default_ack_timeout_ms 90_000`) is the safety net: a model
+  # call that overruns it lands the row `:timed_out` and releases the
+  # cursor. That is the same contract every runtime target already lives
+  # under and is deliberately NOT extended for this path.
+  defp dispatch_to_responsibility(meeting_id, row, responsibility_key, started_at, state) do
+    # Stamped for honesty, not for routing: the broadcast is global and
+    # the Router resolves the assignee itself. A nil here (role
+    # unassigned) is not a failure — the Router's own no-assignee
+    # handling owns that outcome, and failing the row for it would make
+    # the queue lie about what happened.
+    agent = safe_assignee_for(responsibility_key)
+
+    attrs =
+      case agent do
+        %Agent{} = agent -> %{target_agent_id: agent.id, target_agent_slug: agent.slug}
+        nil -> %{}
+      end
+
+    case IntentQueue.transition(meeting_id, row.id, :dispatched, attrs) do
+      {:ok, dispatched_row} ->
+        :ok =
+          MeetingsPubSub.broadcast_action_item_intent(
+            action_item_payload(meeting_id, dispatched_row)
+          )
+
+        elapsed_ms = System.monotonic_time(:millisecond) - started_at
+
+        emit_responsibility_dispatched_telemetry(
+          meeting_id,
+          dispatched_row,
+          responsibility_key,
+          agent,
+          elapsed_ms
+        )
+
+        %{state | dispatched_count: state.dispatched_count + 1}
+
+      {:error, reason} ->
+        Logger.debug(
+          "[IntentDispatcher] could not mark dispatched (responsibility) — " <>
+            "meeting=#{meeting_id} intent=#{row.id} key=#{responsibility_key} " <>
+            "reason=#{inspect(reason)}"
+        )
+
+        state
+    end
+  end
+
+  defp responsibility_key_for(intent) when is_binary(intent),
+    do: Map.get(@responsibility_intents, intent)
+
+  defp responsibility_key_for(intent) when is_atom(intent) and not is_nil(intent),
+    do: Map.get(@responsibility_intents, Atom.to_string(intent))
+
+  defp responsibility_key_for(_), do: nil
+
+  # Everything the handler's context gatherer reads. Only `intent_id`,
+  # `meeting_id` and `chunk_excerpt` are reliably non-nil; the rest come
+  # off the room's transcript row, which mid-meeting may not exist yet.
+  # Each is left nil rather than defaulted, because "we don't know the
+  # space" and "the space is X" have to stay distinguishable downstream.
+  defp action_item_payload(meeting_id, row) do
+    transcript = safe_transcript_for_room(row.room_id)
+
+    %{
+      intent_id: row.id,
+      meeting_id: meeting_id,
+      room_id: row.room_id,
+      space_id: transcript && transcript.space_id,
+      transcript_id: transcript && transcript.id,
+      chunk_excerpt: row.chunk_excerpt,
+      classified_intent: row.classified_intent,
+      confidence: row.confidence,
+      speaker: speaker_for(transcript, row.chunk_excerpt)
+    }
+  end
+
+  # Speaker attribution is recovered from the transcript rather than
+  # read off the row, because the row has no speaker column. It cannot
+  # be recovered by id either: `transcript_chunk_id` is
+  # `segment[:id] || payload.transcript_id` (intent_classifier.ex) and
+  # production segments — built by `normalize_segment/1` in
+  # `MeetingAgentController` — carry no `id` at all, so that field is
+  # the TRANSCRIPT id in practice and matching on it would silently
+  # attribute every utterance to nobody.
+  #
+  # So we match on the text: `chunk_excerpt` is a 280-char prefix of the
+  # segment's own text (`IntentClassifier.excerpt/1`), and we scan from
+  # the newest segment backwards because a speaker can repeat a line.
+  # No match → nil, which is honest: stage 2's window still carries the
+  # speaker-attributed lines.
+  defp speaker_for(nil, _excerpt), do: nil
+  defp speaker_for(_transcript, excerpt) when excerpt in [nil, ""], do: nil
+
+  defp speaker_for(transcript, excerpt) do
+    (transcript.segments || [])
+    |> Enum.reverse()
+    |> Enum.find_value(fn segment ->
+      text = segment_field(segment, "text", :text)
+
+      if is_binary(text) and String.starts_with?(text, excerpt) do
+        segment_field(segment, "speaker_name", :speaker_name) ||
+          segment_field(segment, "speaker", :speaker)
+      end
+    end)
+  end
+
+  # Segments are `{:array, :map}` JSONB, so they come back
+  # string-keyed from the database and atom-keyed from a test fixture
+  # or an in-flight broadcast payload. Both spellings are read rather
+  # than depending on either.
+  defp segment_field(segment, string_key, atom_key) when is_map(segment),
+    do: Map.get(segment, string_key) || Map.get(segment, atom_key)
+
+  defp segment_field(_segment, _string_key, _atom_key), do: nil
+
+  defp safe_assignee_for(responsibility_key) do
+    Roles.assignee_for(responsibility_key)
+  rescue
+    DBConnection.OwnershipError -> nil
+    Ecto.NoResultsError -> nil
+  end
+
+  defp safe_transcript_for_room(nil), do: nil
+
+  defp safe_transcript_for_room(room_id) when is_binary(room_id) do
+    Meetings.get_transcript_for_room(room_id)
+  rescue
+    DBConnection.OwnershipError -> nil
+    Ecto.NoResultsError -> nil
   end
 
   defp resolve_and_dispatch(meeting_id, row, role_key, dispatch_started_at, state) do
@@ -592,6 +776,32 @@ defmodule Platform.Meetings.IntentDispatcher do
         agent_slug: agent.slug,
         runtime_id: target.runtime_id,
         dispatch_kind: :runtime_attention
+      }
+    )
+  rescue
+    _ -> :ok
+  end
+
+  # Same event name as the runtime path so "how many intents went out"
+  # stays one number, distinguished by `dispatch_kind`. `runtime_id` is
+  # nil by construction — there is no runtime on this path — and
+  # `target_role` carries whatever the classifier guessed, which the
+  # fork deliberately ignored.
+  defp emit_responsibility_dispatched_telemetry(meeting_id, row, key, agent, elapsed_ms) do
+    :telemetry.execute(
+      [:platform, :meetings, :intent_dispatched],
+      %{count: 1, dispatch_ms: elapsed_ms},
+      %{
+        meeting_id: meeting_id,
+        room_id: row.room_id,
+        intent_id: row.id,
+        target_role: row.target_role,
+        intent: row.classified_intent,
+        agent_id: agent && agent.id,
+        agent_slug: agent && agent.slug,
+        runtime_id: nil,
+        responsibility_key: key,
+        dispatch_kind: :responsibility
       }
     )
   rescue

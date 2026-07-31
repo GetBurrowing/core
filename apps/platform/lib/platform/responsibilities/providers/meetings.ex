@@ -176,6 +176,37 @@ defmodule Platform.Responsibilities.Providers.Meetings do
   end
 
   @doc """
+  Route a pre-model refusal to the handler that owns per-dispatch state
+  (task 019fb90f-36e3 e2e fix).
+
+  Only `meetings.action_items` implements it: it is the one meetings key
+  whose trigger arrives holding an `IntentQueue` row, and that row pins
+  the meeting's serial cursor until something closes it. Every other key
+  answers `:ok` — a refusal leaves nothing of theirs in flight.
+
+  An UNMAPPED key still routes through `unknown_key/1` rather than
+  `:ok`, for the same reason `handle_output/3` does: a meetings key with
+  no clause here is drift between `BuiltIns.providers/0` and this
+  dispatch table, and the refusal path is exactly where a silently
+  unmapped key would go unnoticed.
+  """
+  @impl true
+  @spec handle_refusal(Responsibility.t(), {atom(), term()}, map()) :: :ok | {:error, term()}
+  def handle_refusal(%Responsibility{} = responsibility, refusal, trigger_meta)
+      when is_map(trigger_meta) do
+    case handler_for(responsibility) do
+      nil ->
+        unknown_key(responsibility)
+
+      Handlers.MeetingActionItems ->
+        MeetingActionItems.handle_refusal(responsibility, refusal, trigger_meta)
+
+      _handler ->
+        :ok
+    end
+  end
+
+  @doc """
   Provider-level `build_prompt/1` (task 019f2570 bug 1 fix).
 
   The Router's `dispatch_assignee/4` calls this after

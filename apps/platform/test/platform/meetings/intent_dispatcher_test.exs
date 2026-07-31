@@ -541,6 +541,264 @@ defmodule Platform.Meetings.IntentDispatcherTest do
     end
   end
 
+  # ── Responsibility fork (task 019fb90f-36e3 stage 1) ───────────────────────
+  #
+  # `action_items` is the one classified intent that is NOT handed to a
+  # role's runtime. It goes out as a single global
+  # `{:action_item_intent, payload}` broadcast for the Responsibilities
+  # Router, and the row stays on the meeting's serial cursor until the
+  # `meetings.action_items` handler closes it.
+  #
+  # The positive case and the negative control below are a pair. A fork
+  # that matched EVERY intent would pass the positive case alone; a fork
+  # that matched nothing would pass a `refute_receive` on the broadcast.
+  # Only both together pin it to exactly one intent.
+
+  describe "responsibility fork for action_items" do
+    test "the row goes to the responsibility topic and NOT to a runtime" do
+      # `meeting_scribe` is the role the classifier actually stamps on
+      # these rows, and it is seeded here with a real runtime. That is
+      # what makes the refute below mean something: the role path is
+      # fully wired and WOULD have produced an attention broadcast, so
+      # the silence is the fork's doing rather than a missing fixture.
+      {agent, _runtime} = seed_target!("meeting_scribe")
+
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, "meeting:action_item_intent")
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row =
+        enqueue!(meeting_id, %{
+          classified_intent: "action_items",
+          target_role: "meeting_scribe",
+          chunk_excerpt: "Priya will revert the onboarding flow by Friday",
+          confidence: 0.91
+        })
+
+      assert_receive {:action_item_intent, payload}, 1_000
+
+      assert payload.intent_id == row.id
+      assert payload.meeting_id == meeting_id
+      assert payload.room_id == row.room_id
+      assert payload.classified_intent == "action_items"
+      assert payload.confidence == 0.91
+      assert payload.chunk_excerpt == "Priya will revert the onboarding flow by Friday"
+
+      # No runtime attention. `seed_target!/1` subscribed this process
+      # to `runtime:<runtime_id>`, so a dispatcher that fell through to
+      # the role arms would deliver here.
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
+
+      # The row is committed and the cursor is HELD — that is what stops
+      # a second utterance reconciling the same canvas concurrently. It
+      # is released by the handler's terminal transition, or by the
+      # queue's 90s ack window if the model call overruns.
+      dispatched = await_status(meeting_id, row.id, :dispatched)
+      assert dispatched.dispatched_at
+      assert IntentQueue.cursor(meeting_id) == row.id
+
+      # Stamped from the responsibility's own assignee.
+      assert dispatched.target_agent_id == agent.id
+      assert dispatched.target_agent_slug == agent.slug
+    end
+
+    test "any OTHER intent still takes the runtime path and fires no responsibility" do
+      # The negative control. Without it the fork could match every row
+      # and the case above would still be green.
+      {agent, runtime} = seed_target!("designer")
+
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, "meeting:action_item_intent")
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row =
+        enqueue!(meeting_id, %{
+          classified_intent: "visual_adjust",
+          target_role: "designer"
+        })
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: topic,
+                       event: "attention",
+                       payload: %{signal: %{intent_id: intent_id}}
+                     },
+                     1_000
+
+      assert topic == "runtime:#{runtime.runtime_id}"
+      assert intent_id == row.id
+
+      refute_receive {:action_item_intent, _payload}, 300
+
+      dispatched = await_status(meeting_id, row.id, :dispatched)
+      assert dispatched.target_agent_id == agent.id
+    end
+
+    test "the stamped agent comes from the RESPONSIBILITY, not from the classifier's role" do
+      # These two resolutions normally agree — `meetings.action_items`
+      # lives in the `meeting_scribe` bundle — so agreement proves
+      # nothing. A responsibility override forces them apart: the role
+      # resolves to `role_agent`, the responsibility to `resp_agent`.
+      # A fork that reused `Roles.agent_id_for_role/1` stamps the
+      # former and goes red here.
+      {role_agent, _runtime} = seed_target!("meeting_scribe")
+      resp_agent = create_agent!()
+      {:ok, _} = Roles.set_override("meetings.action_items", resp_agent.id)
+
+      refute resp_agent.id == role_agent.id
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      # `target_role` is set to the role the classifier really stamps
+      # on these rows, and it IS assigned — so a role-based stamp would
+      # produce `role_agent.id`, a plausible wrong answer, rather than
+      # nil. A control that can only fail by producing nil is weaker:
+      # nil is also what a lookup that simply errored would give.
+      row =
+        enqueue!(meeting_id, %{
+          classified_intent: "action_items",
+          target_role: "meeting_scribe"
+        })
+
+      dispatched = await_status(meeting_id, row.id, :dispatched)
+      assert dispatched.target_agent_id == resp_agent.id
+      assert dispatched.target_agent_slug == resp_agent.slug
+      refute dispatched.target_agent_id == role_agent.id
+    end
+
+    test "an unassigned responsibility still dispatches — the Router owns that outcome" do
+      # No role assignment and no override anywhere. The runtime path
+      # would land `:dispatch_failed{:no_assignee}` here; the
+      # responsibility path must NOT, because the broadcast is global
+      # and the Router resolves the assignee itself. Failing the row for
+      # a lookup this code path does not depend on would make the queue
+      # lie about what happened.
+      :ok = Roles.unassign_role("meeting_scribe")
+
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, "meeting:action_item_intent")
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{classified_intent: "action_items"})
+
+      assert_receive {:action_item_intent, _payload}, 1_000
+
+      dispatched = await_status(meeting_id, row.id, :dispatched)
+      assert is_nil(dispatched.target_agent_id)
+      refute dispatched.status == :dispatch_failed
+    end
+
+    test "the payload carries the room's transcript, space and speaker" do
+      seed_target!("meeting_scribe")
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, "meeting:action_item_intent")
+
+      room_id = "room-#{System.unique_integer([:positive])}"
+      space_id = Platform.Types.UUIDv7.generate()
+
+      {:ok, transcript} =
+        Platform.Meetings.create_transcript(%{
+          room_id: room_id,
+          space_id: space_id,
+          segments: [
+            %{"speaker_name" => "Alex", "text" => "morning everyone", "final" => true},
+            %{
+              "speaker_name" => "Priya",
+              "text" => "I will revert the onboarding flow by Friday",
+              "final" => true
+            }
+          ]
+        })
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      _row =
+        enqueue!(meeting_id, %{
+          classified_intent: "action_items",
+          room_id: room_id,
+          chunk_excerpt: "I will revert the onboarding flow by Friday"
+        })
+
+      assert_receive {:action_item_intent, payload}, 1_000
+
+      assert payload.transcript_id == transcript.id
+      assert payload.space_id == space_id
+      # Attributed to the segment whose text the excerpt is a prefix of
+      # — NOT to the newest segment, and NOT to the first. Alex spoke
+      # first and Priya spoke the line; a "just take the last segment"
+      # implementation would answer "Priya" here too, so the sibling
+      # case below (where the excerpt matches Alex's earlier line)
+      # is what actually pins the matching.
+      assert payload.speaker == "Priya"
+    end
+
+    test "speaker attribution follows the excerpt, not recency" do
+      seed_target!("meeting_scribe")
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, "meeting:action_item_intent")
+
+      room_id = "room-#{System.unique_integer([:positive])}"
+
+      {:ok, _transcript} =
+        Platform.Meetings.create_transcript(%{
+          room_id: room_id,
+          space_id: Platform.Types.UUIDv7.generate(),
+          segments: [
+            %{
+              "speaker_name" => "Alex",
+              "text" => "I will email the deploy audit",
+              "final" => true
+            },
+            %{"speaker_name" => "Priya", "text" => "sounds good", "final" => true}
+          ]
+        })
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      _row =
+        enqueue!(meeting_id, %{
+          classified_intent: "action_items",
+          room_id: room_id,
+          chunk_excerpt: "I will email the deploy audit"
+        })
+
+      assert_receive {:action_item_intent, payload}, 1_000
+
+      # Alex's line is NOT the newest segment. A recency heuristic
+      # answers "Priya" and this goes red.
+      assert payload.speaker == "Alex"
+    end
+
+    test "a room with no transcript row still fires, with the unknown fields nil" do
+      # Mid-meeting the utterance is the ground truth; transcript
+      # enrichment is optional. Each unknown stays nil rather than
+      # collapsing into a default, so the handler can tell "no space
+      # known" from "space X".
+      seed_target!("meeting_scribe")
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, "meeting:action_item_intent")
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row =
+        enqueue!(meeting_id, %{
+          classified_intent: "action_items",
+          chunk_excerpt: "we should ship the audit"
+        })
+
+      assert_receive {:action_item_intent, payload}, 1_000
+
+      assert payload.intent_id == row.id
+      assert payload.chunk_excerpt == "we should ship the audit"
+      assert is_nil(payload.transcript_id)
+      assert is_nil(payload.space_id)
+      assert is_nil(payload.speaker)
+    end
+  end
+
   # ── Serial cursor ──────────────────────────────────────────────────────────
 
   describe "ack-gated serial cursor" do

@@ -123,9 +123,13 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
   #                  that reaches the fire, asserted exported below so
   #                  renaming the hook out from under the row goes red.
   #
-  # `:pubsub` entries assume an arity-2 publisher taking `(room_id, payload)`.
-  # A future publisher with a different shape needs a builder here, not a
-  # special case in the test body.
+  # `:pubsub` entries default to an arity-2 publisher taking
+  # `(room_id, payload)`. An entry may declare `arg_shape: :payload_only`
+  # for an arity-1 publisher that takes the payload alone (room folded
+  # in as a field). Any OTHER shape needs a builder here, not a special
+  # case in the test body — the generated case asserts the declared
+  # arity matches the args it built, so an unlisted shape fails loudly
+  # rather than calling the publisher wrong.
   @topic_delivery %{
     "meeting:finished" => %{
       mode: :pubsub,
@@ -138,6 +142,17 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
       publisher: {Platform.Meetings.PubSub, :broadcast_transcript_chunk, 2},
       event_match: "transcript_chunk",
       payload_keys: [:room_id, :transcript_id, :meeting_id, :segment]
+    },
+    "meeting:action_item_intent" => %{
+      mode: :pubsub,
+      publisher: {Platform.Meetings.PubSub, :broadcast_action_item_intent, 1},
+      event_match: "action_item_intent",
+      payload_keys: [:meeting_id, :intent_id, :chunk_excerpt],
+      # The one arity-1 publisher: it takes the payload alone, because
+      # the room is a field inside the payload rather than a topic
+      # segment (the topic is global — the Router subscribes once at
+      # boot and cannot subscribe per room or per meeting).
+      arg_shape: :payload_only
     },
     "platform.security.sweeper_only" => %{
       mode: :sweeper_only,
@@ -442,9 +457,11 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
                  "#{inspect(@publisher_module)}.#{@publisher_fun}/#{@publisher_arity} " <>
                  "is not exported — nothing can deliver this topic."
 
-        assert @publisher_arity == 2,
-               "@topic_delivery's e2e case assumes an arity-2 (room_id, payload) publisher; " <>
-                 "#{@topic} needs an explicit arg builder."
+        arg_shape = Map.get(@entry, :arg_shape, :room_and_payload)
+
+        assert arg_shape in [:room_and_payload, :payload_only],
+               "@topic_delivery entry for #{@topic} declares an unknown arg_shape " <>
+                 "#{inspect(arg_shape)}; add a builder below rather than a special case."
 
         feature = "evt_delivery_#{System.unique_integer([:positive])}"
         key = "#{feature}.probe_#{System.unique_integer([:positive])}"
@@ -497,7 +514,17 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
             {field, "#{field}-#{System.unique_integer([:positive])}"}
           end)
 
-        :ok = apply(@publisher_module, @publisher_fun, [room_id, payload])
+        args =
+          case arg_shape do
+            :room_and_payload -> [room_id, payload]
+            :payload_only -> [Map.put(payload, :room_id, room_id)]
+          end
+
+        assert @publisher_arity == length(args),
+               "#{@topic}'s declared publisher arity (#{@publisher_arity}) disagrees with " <>
+                 "the #{inspect(arg_shape)} arg builder (#{length(args)} args)."
+
+        :ok = apply(@publisher_module, @publisher_fun, args)
 
         assert_receive {:fired, ^key, meta}, 2_000
 
@@ -507,7 +534,7 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
         # Payload IDENTITY, not merely "a payload arrived": the publisher must
         # hand the subscriber exactly what it was given. A publisher that
         # started wrapping, renaming, or dropping fields fails here.
-        assert meta.payload == payload
+        assert meta.payload == List.last(args)
       end
     end
 
@@ -563,7 +590,188 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
     end
   end
 
+  # ── the post-meeting path survives the retarget (task 019fb90f-36e3) ─────
+  #
+  # Stage 1 moved `meetings.action_items` off `meeting:finished` and onto the
+  # live intent path. These two cases are a PAIR and only mean something
+  # together: the first proves meeting-end no longer reaches action items
+  # while still reaching the summariser, the second proves the same rows,
+  # provider and router DO reach action items on the new broadcast. Either
+  # alone is satisfiable by a broken registration — a row that fires for
+  # nothing passes the first, and a row that fires for everything passes the
+  # second.
+
+  describe "meeting end no longer fires meetings.action_items" do
+    setup do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, :event_topic_delivery_test})
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+      end)
+
+      :ok
+    end
+
+    test "meeting_finished reaches meetings.summarize and NOT meetings.action_items" do
+      %{router: _router} = seed_real_meetings_rows!()
+
+      :ok =
+        Platform.Meetings.PubSub.broadcast_meeting_finished("room-postmeeting", %{
+          transcript_id: Platform.Types.UUIDv7.generate(),
+          room_id: "room-postmeeting",
+          space_id: Platform.Types.UUIDv7.generate()
+        })
+
+      # The post-meeting path is untouched: the summariser still fires.
+      assert_receive {:fired, "meetings.summarize", _meta}, 2_000
+
+      # …and the retargeted key does not. `refute_receive` AFTER the
+      # positive `assert_receive` on the same broadcast, deliberately:
+      # by the time the summariser's fire has landed, an action-items
+      # fire from the same message would already be in the mailbox, so
+      # this cannot pass merely by being checked too early.
+      refute_receive {:fired, "meetings.action_items", _meta}, 500
+    end
+
+    test "the SAME rows fire meetings.action_items on the live intent broadcast" do
+      %{router: _router} = seed_real_meetings_rows!()
+
+      :ok =
+        Platform.Meetings.PubSub.broadcast_action_item_intent(%{
+          meeting_id: Platform.Types.UUIDv7.generate(),
+          intent_id: Platform.Types.UUIDv7.generate(),
+          chunk_excerpt: "Priya will revert the onboarding flow by Friday"
+        })
+
+      assert_receive {:fired, "meetings.action_items", meta}, 2_000
+      assert meta.kind == :event_topic
+      assert meta.topic == "meeting:action_item_intent"
+      assert meta.payload.chunk_excerpt == "Priya will revert the onboarding flow by Friday"
+
+      # The dual of the case above: the intent broadcast must not
+      # cross-fire the summariser. Both keys are subscribed through the
+      # same router with the same assignee, so a router that fired every
+      # event_topic row on every atom-headed message would pass both
+      # positive assertions and fail here.
+      refute_receive {:fired, "meetings.summarize", _meta}, 500
+    end
+  end
+
   # ── fixtures ─────────────────────────────────────────────────────────────
+
+  # Registers the REAL `meetings.summarize` + `meetings.action_items`
+  # specs (read from each handler's own `register/0`, so the rows track
+  # the code rather than a hand-copied literal), stubs the `meetings`
+  # feature provider so a fire is observable without invoking the real
+  # handlers, gives both keys one assignee through the production
+  # `meeting_scribe` bundle, and starts a router that snapshots all of
+  # it.
+  defp seed_real_meetings_rows! do
+    test_pid = self()
+
+    define_provider(
+      "meetings",
+      quote do
+        @behaviour Platform.Responsibilities.Provider
+
+        @impl true
+        def register, do: []
+
+        @impl true
+        def gather_context(responsibility, meta) do
+          send(unquote(test_pid), {:fired, responsibility.key, meta})
+          {:ok, %{}}
+        end
+
+        @impl true
+        def handle_output(_r, _o), do: :ok
+
+        @impl true
+        def handle_output(_r, _o, _m), do: :ok
+      end
+    )
+
+    for module <- [
+          Platform.Responsibilities.Handlers.MeetingSummarize,
+          Platform.Responsibilities.Handlers.MeetingActionItems
+        ],
+        spec <- module.register() do
+      {:ok, _row} = Responsibilities.upsert_by_key(spec)
+    end
+
+    agent = wire_meeting_scribe_assignee!()
+
+    Req.Test.stub(:event_topic_delivery_test, fn conn ->
+      Req.Test.json(conn, %{
+        "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+      })
+    end)
+
+    {router_pid, _name} = start_router()
+    Req.Test.allow(:event_topic_delivery_test, self(), router_pid)
+
+    %{router: router_pid, agent: agent}
+  end
+
+  # One assignee for BOTH keys, through the real `meeting_scribe`
+  # bundle rather than a synthetic role — `Roles.assignee_for/1` joins
+  # role_responsibilities to role_assignments, so an unassigned bundle
+  # contributes nothing and an unfilled row stops before
+  # `gather_context/2`, which would make every assertion above
+  # unreachable for the wrong reason.
+  defp wire_meeting_scribe_assignee! do
+    role_key = "meeting_scribe"
+
+    Repo.insert!(
+      %Role{
+        key: role_key,
+        name: "Meeting Scribe",
+        description: "test",
+        icon: "hero-calendar-days"
+      },
+      on_conflict: :nothing,
+      conflict_target: :key
+    )
+
+    for responsibility_key <- ["meetings.summarize", "meetings.action_items"] do
+      Repo.insert!(
+        %Platform.Roles.RoleResponsibility{
+          role_key: role_key,
+          responsibility_key: responsibility_key
+        },
+        on_conflict: :nothing,
+        conflict_target: [:role_key, :responsibility_key]
+      )
+    end
+
+    agent =
+      %Agent{}
+      |> Agent.changeset(%{
+        slug: "evt-delivery-scribe-#{System.unique_integer([:positive])}",
+        name: "Event Delivery Scribe",
+        status: "active",
+        kind: "external",
+        endpoint_kind: "openai_compat",
+        base_url: "https://api.example.test",
+        model: "test-model",
+        workspace_id: nil
+      })
+      |> Repo.insert!()
+
+    :ok = Platform.ExternalAgents.EphemeralCredentials.put(agent.id, "sk-evt-delivery-test")
+    on_exit(fn -> Platform.ExternalAgents.EphemeralCredentials.delete(agent.id) end)
+
+    :ok = Roles.unassign_role(role_key)
+    {:ok, _} = Roles.assign_role(role_key, agent.id)
+
+    agent
+  end
 
   defp insert!(overrides) do
     attrs =

@@ -1155,7 +1155,7 @@ defmodule Platform.Responsibilities.Router do
       # the refusal here — above the external/native branch — is the only
       # placement that is still "before build_prompt" for both paths.
       {:refused, reason} ->
-        refuse_dispatch(responsibility, agent, kind, reason)
+        refuse_dispatch(responsibility, agent, kind, reason, trigger_meta)
 
       {:ok, ctx} ->
         context = Map.put(ctx, :__responsibility__, responsibility)
@@ -1168,7 +1168,7 @@ defmodule Platform.Responsibilities.Router do
     end
   end
 
-  defp refuse_dispatch(%Responsibility{} = responsibility, agent, kind, reason) do
+  defp refuse_dispatch(%Responsibility{} = responsibility, agent, kind, reason, trigger_meta) do
     dispatch_kind = if kind == "external", do: :external, else: :native
 
     Logger.warning(
@@ -1182,6 +1182,8 @@ defmodule Platform.Responsibilities.Router do
       dispatch_kind,
       {:context_gather_refused, reason}
     )
+
+    invoke_handle_refusal(responsibility, {:context_gather_refused, reason}, trigger_meta)
 
     {:error, {:context_gather_refused, reason}}
   end
@@ -1203,6 +1205,18 @@ defmodule Platform.Responsibilities.Router do
         )
 
         emit_failed_telemetry(responsibility, agent, :external, {:build_prompt_refused, reason})
+
+        # The refusal is correct and stays correct — no model call, no
+        # side effect. But it used to be the ONE dispatch outcome the
+        # provider could not observe: `invoke_handle_output/3` is
+        # reachable only from `run_external_dispatch/5`, i.e. only when
+        # a model answered. A provider holding per-dispatch state had
+        # nowhere to release it, and for `meetings.action_items` that
+        # state is a queue row pinning the meeting's SERIAL cursor, so
+        # one blank utterance stalled every intent behind it for the
+        # full 90s ack window (task 019fb90f-36e3 e2e finding).
+        invoke_handle_refusal(responsibility, {:build_prompt_refused, reason}, trigger_meta)
+
         {:error, {:build_prompt_refused, reason}}
 
       {:messages, messages} ->
@@ -1440,6 +1454,65 @@ defmodule Platform.Responsibilities.Router do
   defp invoke_handle_output(%Responsibility{} = responsibility, _parsed, _meta) do
     log_missing_output_handler(responsibility)
   end
+
+  # The refusal counterpart of `invoke_handle_output/3` — same probe,
+  # same swallow-and-log discipline, one deliberate difference: a
+  # provider that does not export `handle_refusal/3` is SILENT here,
+  # where a missing output handler warns.
+  #
+  # The asymmetry is the point. A dispatch that produced a model
+  # response and found no handler has lost work, and that deserves a
+  # line. A refusal has produced nothing to lose; the callback exists
+  # only for providers holding per-dispatch state, which is the
+  # minority. Warning on every refusal for every provider would put a
+  # line in the log for the ordinary case and train people to skip it —
+  # the same rot `log_missing_output_handler/1` documents.
+  #
+  # Nothing here can change the Router's return value. The refusal has
+  # already been decided and already been reported by the caller; this
+  # is a side-effect seam, not a veto.
+  defp invoke_handle_refusal(%Responsibility{feature: feature} = responsibility, refusal, meta)
+       when is_binary(feature) and is_map(meta) do
+    provider_module = provider_module_for(feature)
+
+    if is_atom(provider_module) and Code.ensure_loaded?(provider_module) and
+         function_exported?(provider_module, :handle_refusal, 3) do
+      try do
+        case provider_module.handle_refusal(responsibility, refusal, meta) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "[ResponsibilityRouter] handle_refusal returned error key=#{responsibility.key} " <>
+                "refusal=#{inspect(refusal)} reason=#{inspect(reason)}"
+            )
+
+            :ok
+
+          other ->
+            Logger.warning(
+              "[ResponsibilityRouter] handle_refusal returned unexpected shape " <>
+                "key=#{responsibility.key} result=#{inspect(other)}"
+            )
+
+            :ok
+        end
+      rescue
+        error ->
+          Logger.warning(
+            "[ResponsibilityRouter] handle_refusal raised key=#{responsibility.key} " <>
+              "error=#{Exception.message(error)}"
+          )
+
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp invoke_handle_refusal(%Responsibility{}, _refusal, _meta), do: :ok
 
   # One log line, three causes — told apart. Before task 019f9b28 stage 2
   # this was a bare `Logger.info`, so a provider module that was never
@@ -1703,7 +1776,7 @@ defmodule Platform.Responsibilities.Router do
   # OWN reason through rather than flattening to a bare atom: downstream,
   # `:no_transcript_text` (a legitimate refusal to spend a model
   # round-trip on an empty transcript — see
-  # `Handlers.MeetingActionItems.build_prompt/1`) and `:no_build_prompt`
+  # `Handlers.MeetingSummarize.build_prompt/1`) and `:no_build_prompt`
   # (a wiring gap) have to reach different conclusions. Flattening here
   # would recreate the collapse one layer up.
   #
@@ -1770,7 +1843,7 @@ defmodule Platform.Responsibilities.Router do
   # is something broken?" — was unanswerable on the wire.
   #
   # AN EMPTY PROMPT IS SOMETIMES LEGITIMATE.
-  # `Handlers.MeetingActionItems.build_prompt/1` returns
+  # `Handlers.MeetingSummarize.build_prompt/1` returns
   # `{:error, :no_transcript_text}` ON PURPOSE when the transcript has no
   # text: a model round-trip over no content is spend with no possible
   # output. `gather_transcript(nil)` yields `formatted_text: ""` too, so a
@@ -1781,6 +1854,17 @@ defmodule Platform.Responsibilities.Router do
   # `build_prompt/1`) and a render gap (a `default_prompt_template` slug
   # with no row) are NOT legitimate, and now say so.
   #
+  # `:no_intent_text` is the SAME KIND of refusal for the mid-meeting
+  # `meetings.action_items` path (task 019fb90f-36e3 stage 3). That key
+  # stopped firing once over a finished meeting and now fires per
+  # utterance, so the thing it can have nothing to say about moved from
+  # the transcript to the chunk: `Handlers.MeetingActionItems.build_prompt/1`
+  # refuses `{:error, :no_intent_text}` on a blank excerpt and no longer
+  # returns `:no_transcript_text` at all. Both atoms name a provider that
+  # CHOSE silence over an empty input, so both are no-work; they stay
+  # distinct atoms because they name different empty inputs, which is what
+  # tells a human which of the two paths went quiet.
+  #
   # WHY A WHITELIST OF NO-WORK REASONS RATHER THAN A BLACKLIST OF GAPS.
   # The asymmetry is deliberate: the default has to be `:render_gap`. A new
   # provider refusal that is wrongly reported as a gap is NOISE — someone
@@ -1789,7 +1873,7 @@ defmodule Platform.Responsibilities.Router do
   # this task exists to remove. So adding a legitimate refusal is a
   # one-line, reviewable edit and forgetting to make it cannot hide a
   # defect.
-  @no_work_refusals [:no_transcript_text]
+  @no_work_refusals [:no_transcript_text, :no_intent_text]
 
   @typedoc """
   What a receiving runtime is told about the prompt it did (not) get.

@@ -147,6 +147,22 @@ defmodule Platform.Meetings.PubSub do
   def intents_topic(meeting_id) when is_binary(meeting_id),
     do: "meeting:#{meeting_id}:intents"
 
+  @doc """
+  Returns the canonical "a classified utterance is about action items"
+  topic (task 019fb90f-36e3 stage 1).
+
+  GLOBAL, deliberately — and this is the whole reason it exists rather
+  than reusing `intents_topic/1`. The consumer is
+  `Platform.Responsibilities.Router`, which calls
+  `subscribe_event_topics/1` ONCE at boot from the topic strings its
+  enabled rows declare. It cannot subscribe to a topic whose name
+  embeds a runtime meeting id, so a per-meeting mirror would be a
+  topic the router is structurally unable to hear. Same shape, and for
+  the same reason, as `intent_enqueued_topic/0`.
+  """
+  @spec action_item_intent_topic() :: String.t()
+  def action_item_intent_topic, do: "meeting:action_item_intent"
+
   # ── Subscribe ────────────────────────────────────────────────────────────────
 
   @doc "Subscribe the calling process to a user's meeting events."
@@ -394,6 +410,40 @@ defmodule Platform.Meetings.PubSub do
   @spec broadcast_intent_enqueued(map()) :: :ok
   def broadcast_intent_enqueued(payload) when is_map(payload) do
     Phoenix.PubSub.broadcast(@pubsub, intent_enqueued_topic(), {:intent_enqueued, payload})
+  end
+
+  @doc """
+  Broadcast one action-item-classified utterance to the Responsibilities
+  Router (task 019fb90f-36e3 stage 1).
+
+  Fired by `Platform.Meetings.IntentDispatcher` — NOT by the classifier
+  — from the narrow fork in `dispatch_row/3`, after the row has been
+  moved to `:dispatched`. Broadcasting at classify time instead would
+  double-produce (the row would also go out as runtime attention to
+  `meeting_scribe`) and would drop the meeting's serial cursor, which
+  is the only thing stopping two concurrent utterances from racing on
+  one action-items canvas.
+
+  `payload` carries `meeting_id`, `room_id`, `intent_id`, `space_id`,
+  `transcript_id`, `chunk_excerpt`, `classified_intent`, `confidence`
+  and `speaker`. Only `meeting_id`, `intent_id` and `chunk_excerpt` are
+  reliably non-nil; the rest degrade to nil when the room has no
+  transcript row yet, and the handler's context gatherer is written to
+  treat each of them as independently missing.
+
+  The event atom at the head — `:action_item_intent` — is the router's
+  `event_match` for `meetings.action_items`. Renaming it silently
+  unfires the responsibility, which is what
+  `test/platform/responsibilities/event_topic_delivery_test.exs` binds
+  end-to-end.
+  """
+  @spec broadcast_action_item_intent(map()) :: :ok
+  def broadcast_action_item_intent(payload) when is_map(payload) do
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      action_item_intent_topic(),
+      {:action_item_intent, payload}
+    )
   end
 
   # ── Per-meeting intent-queue transitions (task 019f70b8 stage 2) ─────────────
