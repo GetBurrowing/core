@@ -263,6 +263,80 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
     end
   end
 
+  # ── runtime_reconnected follows the PHASE, not the flat pointer ────────
+  #
+  # Task 019fb977 stage 3. `redispatch_for_runtime/1` needed no change: it
+  # decides eligibility with `resolve_runtime_for_task/1`, which stage 2
+  # re-pointed at `PhaseRuntime.resolve/1`, so it now pokes routers on behalf
+  # of the phase-correct runtime for free. This asserts that rather than
+  # trusting the reading. The task's flat pointer names the PLANNING agent
+  # (A) while its execution phase names B — so a reconnect for A must be a
+  # no-op and a reconnect for B must redispatch. Under the pre-stage-2 watcher
+  # the two were exactly inverted.
+  describe "runtime_reconnected redispatch (019fb977)" do
+    test "reconnecting the EXECUTION-phase runtime redispatches; the planning one does not",
+         %{task: task} do
+      {agent_a, runtime_a} = create_linked_agent_runtime()
+      {agent_b, runtime_b} = create_linked_agent_runtime()
+
+      task =
+        task
+        |> Ecto.Changeset.change(%{
+          status: "in_progress",
+          # Flat pointer at the PLANNING agent. It has to be an agent id for
+          # `list_should_run_tasks/0` to return the row at all — the point is
+          # that it names the WRONG agent.
+          assignee_id: agent_a.id,
+          assignee_type: "agent",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => agent_a.id, "assignee_type" => "agent"},
+            "execution" => %{"assignee_id" => agent_b.id, "assignee_type" => "agent"}
+          }
+        })
+        |> Repo.update!()
+
+      {:ok, _pid} =
+        TaskRouterSupervisor.start_assignment(task.id, %{type: :federated, id: runtime_a})
+
+      # Drain the boot dispatch before subscribing, so every broadcast the
+      # assertions below see is attributable to a reconnect.
+      assert %{task_id: _} = TaskRouter.current_status(task.id)
+
+      PlatformWeb.Endpoint.subscribe("runtime:#{runtime_a}")
+      PlatformWeb.Endpoint.subscribe("runtime:#{runtime_b}")
+
+      watcher = Process.whereis(TaskRouterWatcher)
+      assert watcher != nil, "TaskRouterWatcher should be running"
+
+      # The PLANNING agent's runtime reconnects. It owns no current phase of
+      # this task, so nothing should be poked.
+      send(watcher, {:runtime_reconnected, runtime_a})
+      TaskRouterWatcher.sync()
+      assert %{task_id: _} = TaskRouter.current_status(task.id)
+
+      # Two exact barriers, not a sleep: `sync/0` returns only after the
+      # watcher handled the reconnect, and `current_status/1` only after the
+      # router handled any `:dispatch` that reconnect could have sent. So an
+      # untimed `refute_received` is a complete statement.
+      refute_received %Phoenix.Socket.Broadcast{event: "attention"},
+                      "a reconnect from the PLANNING-phase runtime redispatched a task whose " <>
+                        "current phase belongs to another agent"
+
+      # The EXECUTION agent's runtime reconnects — this one owns the phase.
+      send(watcher, {:runtime_reconnected, runtime_b})
+      TaskRouterWatcher.sync()
+      assert %{task_id: _} = TaskRouter.current_status(task.id)
+
+      assert_received %Phoenix.Socket.Broadcast{
+                        event: "attention",
+                        topic: "runtime:" <> ^runtime_b
+                      },
+                      "the execution-phase runtime reconnected and no redispatch followed"
+
+      TaskRouterSupervisor.stop_assignment(task.id)
+    end
+  end
+
   # ── Reconciliation ─────────────────────────────────────────────────────
 
   describe "reconciliation" do
@@ -505,6 +579,23 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       name: "Watcher Test User",
       oidc_sub: "oidc-watcher-test-#{System.unique_integer([:positive])}"
     })
+  end
+
+  # An agent linked to its own activated runtime — the only shape
+  # `PhaseRuntime.resolve/1` can follow all the way to a runtime id.
+  defp create_linked_agent_runtime do
+    user = create_user()
+    agent = create_agent()
+
+    {:ok, runtime} =
+      Federation.register_runtime(user.id, %{
+        runtime_id: "watcher-phase-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, activated, _raw_token} = Federation.activate_runtime(runtime)
+    {:ok, _linked} = Federation.link_agent(activated, agent)
+
+    {agent, activated.runtime_id}
   end
 
   defp create_agent(attrs \\ %{}) do

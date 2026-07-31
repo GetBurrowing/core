@@ -52,7 +52,14 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   import Ecto.Query
 
   alias Platform.Agents.AgentRuntime
-  alias Platform.Orchestration.{RuntimeSupervision, SandboxGuard, TaskRouterSupervisor}
+
+  alias Platform.Orchestration.{
+    PhaseRuntime,
+    RuntimeSupervision,
+    SandboxGuard,
+    TaskRouterSupervisor
+  }
+
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{Plan, Stacks, Task}
@@ -448,67 +455,29 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   # ── Runtime resolution ─────────────────────────────────────────────────
 
   @doc """
-  Resolve the agent runtime for a task with an agent assignee.
+  Resolve the agent runtime that owns this task's CURRENT phase.
 
-  Given a task with `assignee_id` (agent UUID), looks up the agent, then
-  follows the FK to the `AgentRuntime`, and returns `{:ok, %{type: :federated,
-  id: runtime_id}}`.
+  Delegates to `Platform.Orchestration.PhaseRuntime.resolve/1`, which looks
+  up `phase_assignees[current_phase(task)]` (falling back to the flat
+  `assignee_id` pointer), follows the agent's FK to its `AgentRuntime`, and
+  returns `{:ok, %{type: :federated, id: runtime_id}}`.
 
-  Returns `{:error, reason}` if the agent or runtime cannot be resolved.
+  Returns `{:error, reason}` if the agent or runtime cannot be resolved; see
+  `PhaseRuntime`'s moduledoc for the five distinct reasons. The
+  `%{assignee_id: nil}` shape still yields `{:error, :no_assignee}`, now via
+  that module's `{nil, _}` clause rather than a head here.
+
+  Kept as a public function with its original name and `@spec` because
+  `resolve_and_start/1`, `redispatch_for_runtime/1`,
+  `Platform.Orchestration.resolve_runtime_for_task/1` and
+  `task_router_watcher_test.exs` all call it. Moving the BODY (task 019fb977)
+  is what removes the split-brain: before, the watcher decided eligibility
+  and redispatch from the flat pointer while `TaskRouter` dispatched to a
+  frozen copy, so `redispatch_for_runtime/1` could poke a router on behalf of
+  runtime B and watch it send to runtime A. Both sides now ask one function.
   """
   @spec resolve_runtime_for_task(map()) :: {:ok, map()} | {:error, atom()}
-  def resolve_runtime_for_task(%{assignee_id: nil}), do: {:error, :no_assignee}
-
-  def resolve_runtime_for_task(%{assignee_id: agent_id}) do
-    agent = Repo.get(Platform.Agents.Agent, agent_id)
-
-    if agent do
-      runtime = Platform.Federation.get_runtime_for_agent(agent)
-
-      if runtime do
-        {:ok, %{type: :federated, id: runtime.runtime_id}}
-      else
-        {:error, :no_runtime}
-      end
-    else
-      {:error, :agent_not_found}
-    end
-  rescue
-    DBConnection.OwnershipError ->
-      # The watcher is a globally-supervised singleton receiving
-      # `{:task_created, ...}` / `{:task_updated, ...}` PubSub broadcasts.
-      # In an `async: true` DataCase test the sandbox is in MANUAL mode
-      # (`data_case.ex` calls `Sandbox.start_owner!(Repo, shared: not
-      # tags[:async])`), so those broadcasts arrive on the watcher's own
-      # process, which is NOT part of the sandbox owner chain — the
-      # `Repo.get` above raises. Reporting a distinct error tag lets
-      # `evaluate_task/1` short-circuit rather than crash the GenServer.
-      #
-      # Under `async: false` the sandbox is SHARED and the watcher can use
-      # the connection, so this clause is unreachable there — that case is
-      # the `catch` below, not this `rescue`. The mode qualifier is
-      # load-bearing and is enforced by
-      # test/platform/regression/boot_telemetry_handler_detach_audit_test.exs
-      # (task 019f9d80 stage 4): the unconditional version of this claim
-      # was measured false in stage 3.
-      {:error, :sandbox_unowned}
-  catch
-    # Same singleton-vs-sandbox race, but the OTHER shape: when a test that
-    # HAS allowed the watcher onto its shared connection exits while this
-    # `Repo.get` is mid-flight, the sandbox connection is torn down and the
-    # query fails as a `DBConnection.ConnectionError` delivered as an EXIT
-    # ("owner #PID exited"), which the `rescue` above does not catch. These
-    # task-board broadcasts fire on nearly every task insert/update across
-    # the suite, so on an unlucky interleaving the watcher crashes several
-    # times inside Platform.Supervisor's restart window and takes sibling
-    # Platform.Repo down — the same cascade `boot_reconcile/0` guards.
-    # "owner exited" is a sandbox-only condition (production has no sandbox
-    # owner), and degrading to `{:error, ...}` just skips starting the router
-    # this cycle — the next task event or reconcile tick retries — so
-    # production behaviour is unchanged.
-    :exit, _reason ->
-      {:error, :sandbox_unowned}
-  end
+  def resolve_runtime_for_task(task), do: PhaseRuntime.resolve(task)
 
   # ── Bug #4 (task 019f708f): in-review stall sweep ─────────────────────
 

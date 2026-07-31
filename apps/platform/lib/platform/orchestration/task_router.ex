@@ -39,6 +39,33 @@ defmodule Platform.Orchestration.TaskRouter do
      events are gated by `LeaseManager.mark_*_fired/1` so a spurious re-wake
      never re-fires.
 
+  ## Assignee resolution (task 019fb977)
+
+  `state.assignee` is a CACHE, refreshed from
+  `Platform.Orchestration.PhaseRuntime.resolve/1` on every dispatch — never an
+  immutable start argument. The router was previously phase-blind: it froze
+  the runtime handed to `start_link/1` and dispatched there for its whole
+  life, so a task with `phase_assignees` naming one agent for `planning` and
+  another for `execution` sent every post-planning prompt to the planner.
+
+  The router does NOT read `task.assignee_id` to decide where to dispatch.
+  That flat pointer is what `TaskRouterWatcher`'s eligibility queries and the
+  board read paths use, and it is what `PhaseRuntime` falls back to when a
+  task has no entry for its current phase — but keeping it fresh (task
+  019f42fd, and this ticket's single-write fold in
+  `Tasks.transition_task_status/2`) is NOT what makes dispatch correct. The
+  writer fix and the reader fix are independent, and stage 5's mutation
+  controls measured the seam: with the reader mutated back to the flat
+  pointer and the fold left in place, two of the three dispatch cases go
+  green and only the one that forces the pointer stale at READ time still
+  fails.
+
+  Two refusals, not one policy: `{:error, :user_assignee}` SUPPRESSES the
+  dispatch (a human-owned phase has no runtime, and falling back to the
+  previously-held agent is the original bug wearing a different hat); every
+  other atom FAILS OPEN to the held assignee. Collapsing the two is a
+  measured regression, not a style question — see `refresh_assignee/2`.
+
   manual_approval stages get NO liveness timers (both `ack_ms` and
   `safety_net_ms` are `nil` in `LeaseManager.stage_kind_timeouts/0`); a daily
   digest surfaces long-pending review requests separately (out of scope for
@@ -73,6 +100,7 @@ defmodule Platform.Orchestration.TaskRouter do
     ExecutionSpace,
     HeartbeatScheduler,
     LeaseManager,
+    PhaseRuntime,
     RuntimeSupervision
   }
 
@@ -124,7 +152,15 @@ defmodule Platform.Orchestration.TaskRouter do
       # optimisation, never the correctness guarantee (see
       # `handle_info({:architecture_gate_deadline, _}, _)`).
       :architecture_deadline_ref,
-      status: :dispatching
+      status: :dispatching,
+      # Task 019fb977. Provenance of `:assignee` as of the LAST dispatch:
+      # `:resolved` means `PhaseRuntime.resolve/1` answered and the field was
+      # overwritten with its answer; `:frozen_fallback` means resolution
+      # failed and the dispatch went to whatever `start_link/1` was handed.
+      # Surfaced through `current_status/1` so an operator can tell "the
+      # router agrees with the DB" from "the router is coasting on its start
+      # argument" without reading the log.
+      assignee_source: :frozen_fallback
     ]
   end
 
@@ -361,7 +397,14 @@ defmodule Platform.Orchestration.TaskRouter do
       last_runtime_event_at: state.last_runtime_event_at,
       last_dispatch_at: state.last_dispatch_at,
       task_status: state.task_status,
-      lease_status: state.lease_status
+      lease_status: state.lease_status,
+      # Task 019fb977. `:assignee` alone cannot be audited — a runtime id is
+      # only correct RELATIVE to the phase it was resolved for, and a caller
+      # comparing it against the DB needs to know whether the router resolved
+      # it or fell back. `nil` phase means the router has not observed a task
+      # status yet (no dispatch since boot).
+      phase: state.task_status && Tasks.current_phase(state.task_status),
+      assignee_source: state.assignee_source
     }
 
     {:reply, reply, state}
@@ -1255,6 +1298,121 @@ defmodule Platform.Orchestration.TaskRouter do
     # episode-start narration at those two sites (task 019f9b34).
     entry_status = state.status
 
+    case refresh_assignee(state, task) do
+      {:suppress, state} -> {:noreply, state}
+      {:dispatch, state} -> do_dispatch_resolved(state, task, plan, stage, entry_status)
+    end
+  end
+
+  # Task 019fb977. Re-resolve the dispatch runtime from the task's CURRENT
+  # phase, using the fresh `%Task{}` `do_dispatch/2` already loaded, and
+  # REPLACE `state.assignee` with the answer.
+  #
+  # Replacing the FIELD rather than shadowing a local is load-bearing:
+  # `state.assignee` is also read by the `Assignee:` execution-space log line
+  # and by `current_status/1`. A local would fix the broadcast target and
+  # leave both readers disagreeing with it.
+  #
+  # MEASURED (stage 5 control M4): resolving correctly, dispatching to the
+  # resolved runtime, but NOT writing it back fails exactly one assertion —
+  # case 2's `current_status(task.id).assignee.id == runtime_b`. So the
+  # write-back is load-bearing, but for `current_status/1`, not for
+  # everything an earlier draft of this comment claimed.
+  #
+  # SPECIFICALLY RETRACTED: this comment used to also name
+  # `maybe_hydrate_from_lease/1`'s foreign-lease comparison as a reader that
+  # depends on the write-back. It is not. `maybe_hydrate_from_lease/1` has
+  # exactly one call site (`init/1`, above), which runs strictly BEFORE any
+  # dispatch, so the comparison there always reads the `start_link/1`
+  # argument and the dispatch-time write-back cannot reach it. M4 confirms
+  # it: all three foreign-lease tests stay GREEN under that mutation. If you
+  # want the drift check to see a re-resolved assignee, you would have to
+  # call it after a dispatch — nothing does today.
+  defp refresh_assignee(state, task) do
+    case PhaseRuntime.resolve(task) do
+      {:ok, resolved} ->
+        # Never a silent swap. A CHANGE of runtime is the exact event a human
+        # debugging a "wrong agent picked up my task" report needs in the log,
+        # and its absence is why the 2026-07-31 incident took a human staring
+        # at a dirty worktree to diagnose. An unchanged resolution is the
+        # common case and stays quiet.
+        if resolved.id != state.assignee.id do
+          Logger.info(
+            "[TaskRouter] task #{state.task_id} phase=#{Tasks.current_phase(task)} " <>
+              "reassigning dispatch from runtime #{state.assignee.id} to #{resolved.id}"
+          )
+        end
+
+        {:dispatch, %{state | assignee: resolved, assignee_source: :resolved}}
+
+      {:error, :user_assignee} ->
+        {:suppress, suppress_user_phase_assignee(state, task)}
+
+      {:error, reason} ->
+        # FAIL OPEN, deliberately asymmetric with the clause above. A
+        # transient resolution failure (`:no_runtime`, `:agent_not_found`,
+        # `:sandbox_unowned`, `:no_assignee`) costs one dispatch to a
+        # possibly-stale runtime; failing closed strands the task with no
+        # prompt and no operator signal. Same policy as
+        # `unresolved_stage_dispatch?/3`: "failing open costs one redundant
+        # prompt; failing closed costs a stalled task."
+        #
+        # `:user_assignee` is NOT in this bucket and must never be folded into
+        # it — there is no runtime behind a human, so falling back to the
+        # previously-held agent is the phase-blind bug wearing a different hat.
+        #
+        # HOW MUCH OF THE SUITE RIDES ON THIS ARM (stage 5 control M8).
+        # Making this clause suppress instead of dispatch fails exactly ONE
+        # test in `task_router_phase_assignee_test.exs` — the one whose
+        # fixture builds a real `Agent` row deliberately unlinked from any
+        # runtime, so `:no_runtime` is the only answer available. That is the
+        # discrimination the fixture was built for and it is clean.
+        #
+        # Across `test/platform/orchestration` + `tasks_test.exs`, though,
+        # the same mutation fails 67 of 748. Those are NOT independent
+        # evidence for the fail-open policy: they are older fixtures that
+        # start a router with a synthetic `%{type: :federated, id:
+        # "runtime-test-..."}` map against a task carrying no assignee at
+        # all, so `PhaseRuntime.resolve/1` answers `:no_assignee` and this
+        # arm is the only reason they dispatch. If you ever want to revisit
+        # the fail-open policy, budget for rewriting those fixtures to wire a
+        # real agent -> runtime link first; otherwise their redness will look
+        # like a policy signal when it is a fixture artefact.
+        Logger.warning(
+          "[TaskRouter] task #{state.task_id} could not resolve a phase runtime " <>
+            "(#{inspect(reason)}); dispatching to held assignee #{state.assignee.id}"
+        )
+
+        {:dispatch, %{state | assignee_source: :frozen_fallback}}
+    end
+  end
+
+  # A phase owned by a HUMAN has no runtime to broadcast to. Mirrors the
+  # `suppress_unresolved_stage_dispatch/2` shape above — log, telemetry,
+  # execution-space line — and returns without arming any liveness timer,
+  # because nothing was dispatched and there is no ack to wait for.
+  defp suppress_user_phase_assignee(state, task) do
+    phase = Tasks.current_phase(task)
+
+    Logger.info(
+      "[TaskRouter] suppressed dispatch for task=#{state.task_id}: " <>
+        "the #{phase} phase is assigned to a user, not an agent runtime"
+    )
+
+    emit_dispatch_suppressed_telemetry(state.task_id, :user_phase_assignee)
+
+    if state.execution_space_id do
+      ExecutionSpace.post_log(
+        state.execution_space_id,
+        "Dispatch withheld: #{task.title} | Phase: #{phase} | " <>
+          "assigned to a user — no runtime to dispatch to"
+      )
+    end
+
+    state
+  end
+
+  defp do_dispatch_resolved(state, task, plan, stage, entry_status) do
     # Lease deploy credentials if this is a deploy stage
     state = maybe_lease_deploy_credentials(state, task, stage)
 
@@ -1292,7 +1450,16 @@ defmodule Platform.Orchestration.TaskRouter do
           # report. When no stage resolved, say so.
           stage_pos = if stage, do: Integer.to_string(stage.position), else: "-"
 
-          assignee_log = "Assignee: #{state.assignee.id}"
+          # A runtime id ALONE does not tell a human reading the execution
+          # space which AGENT was chosen, nor for which phase — that opacity
+          # is why the 2026-07-31 phase-blind dispatch took a human staring at
+          # a dirty worktree to diagnose (task 019fb977). `agent` is the
+          # `Federation.lookup_assignment/1` result a few lines up and is nil
+          # for an unlinked runtime, so name it only when we have it.
+          agent_log = if agent, do: " (agent #{agent.slug})", else: ""
+
+          assignee_log =
+            "Assignee: #{state.assignee.id}#{agent_log} | Phase: #{Tasks.current_phase(task)}"
 
           log_content =
             "Task assigned: #{task.title} | Stage: #{stage_pos}/#{stage_count} | #{assignee_log}"
@@ -1709,10 +1876,87 @@ defmodule Platform.Orchestration.TaskRouter do
             lease_status: lease.status
         }
 
+      # A live lease whose holder is NOT the runtime this router intends to
+      # dispatch to. Before task 019fb977 this fell through the bare `_`
+      # clause below and was discarded silently — despite being the single
+      # most diagnostic fact available at boot: the current stage's liveness
+      # is anchored to a runtime nobody means to talk to.
+      #
+      # Still NOT hydrated. `last_runtime_event_at` / `lease_status` from a
+      # foreign lease would credit this router's assignee with another
+      # runtime's activity; the whole point is that the two disagree.
+      %{runtime_id: _} = foreign ->
+        note_foreign_lease(state, foreign)
+        state
+
       _ ->
         state
     end
   end
+
+  # Surface + clear a lease held by the wrong runtime (task 019fb977 stage 3).
+  #
+  # Reached only from `maybe_hydrate_from_lease/1`'s foreign-lease clause, and
+  # only for a lease that already survived `lease_targets_passed_stage?/2` —
+  # a lease pointing at a `passed` stage is historical and is dropped before
+  # this code sees it, otherwise every router boot would re-emit drift for
+  # leases the task has long moved past.
+  #
+  # SERVER-SIDE HALF OF A PAIR. Task 019fb949's stage 3 adds a
+  # `git ls-remote origin 'task/<slug>*'` preflight to the dispatch prompt
+  # renderers in `heartbeat_scheduler.ex` — the git-side half, which catches a
+  # branch another agent already pushed. This is the server-side half: that
+  # plan's reasoning says the platform cannot detect an occupied worktree
+  # without a worktree registry, but it has one — `execution_leases.runtime_id`
+  # names the runtime currently holding the stage. Neither half subsumes the
+  # other (a lease exists before any branch does; a branch outlives its lease),
+  # and each lives in the other ticket's file. Do not fold them together.
+  #
+  # IDEMPOTENCY IS THE STATE CHANGE, not a seen-set.
+  # `abandon_current_lease_for_task/2` sets `status: "abandoned"` and
+  # `expires_at: now`, while `current_lease_for_stage/2` and
+  # `current_lease_for_task/1` both filter on `status in ~w(active blocked)`
+  # AND `expires_at > now`. The next hydrate therefore finds no lease at all
+  # and cannot reach this function a second time. A bookkeeping set would add
+  # a second source of truth that a router restart wipes anyway.
+  defp note_foreign_lease(
+         %State{assignee: %{id: expected}} = state,
+         %{runtime_id: actual} = lease
+       )
+       when is_binary(expected) and is_binary(actual) and expected != actual do
+    Logger.warning(
+      "[TaskRouter] task #{state.task_id} stage #{lease.stage_id} — assignee drift: " <>
+        "lease held by runtime #{actual} but this router dispatches to #{expected} " <>
+        "(phase #{lease.phase}); abandoning the foreign lease"
+    )
+
+    broadcast_router_event("execution.assignee_drift", state.task_id, lease.stage_id, %{
+      "task_id" => state.task_id,
+      "stage_id" => lease.stage_id,
+      "expected_runtime_id" => expected,
+      "actual_runtime_id" => actual,
+      "phase" => lease.phase,
+      "lease_id" => lease.id
+    })
+
+    if state.execution_space_id do
+      ExecutionSpace.post_log(
+        state.execution_space_id,
+        "Assignee drift detected on the #{lease.phase} phase: the live execution lease is " <>
+          "held by runtime `#{actual}`, but this task's #{lease.phase} phase resolves to " <>
+          "runtime `#{expected}`. Abandoning the foreign lease so the stage's liveness is " <>
+          "no longer anchored to a runtime this task will not dispatch to."
+      )
+    end
+
+    # The recoverability half: with no live lease, the wrong agent's next
+    # `task_ack` / heartbeat has nothing to extend.
+    RuntimeSupervision.abandon_current_lease_for_task(state.task_id, lease.phase)
+
+    :ok
+  end
+
+  defp note_foreign_lease(_state, _lease), do: :ok
 
   defp lease_targets_passed_stage?(%{stage_id: nil}, _plan), do: false
   defp lease_targets_passed_stage?(_lease, nil), do: false
@@ -1739,6 +1983,14 @@ defmodule Platform.Orchestration.TaskRouter do
   # our own event types keeps the state machine hermetic.
   defp apply_runtime_event(state, %{event_type: "execution.no_ack_timeout"}), do: state
   defp apply_runtime_event(state, %{event_type: "execution.safety_net_fired"}), do: state
+
+  # Same hermeticism, and load-bearing for task 019fb977 stage 3's stated
+  # invariant. `note_foreign_lease/2` fires during `init/1`, AFTER
+  # `Tasks.subscribe_board/0`, so the router receives its own drift alert one
+  # message later. Without this clause the generic arm below would stamp
+  # `last_runtime_event_at` from it — hydrating, by the back door, exactly the
+  # liveness the foreign-lease clause deliberately refuses to hydrate.
+  defp apply_runtime_event(state, %{event_type: "execution.assignee_drift"}), do: state
 
   defp apply_runtime_event(state, event) do
     event_time = event.occurred_at || DateTime.utc_now()

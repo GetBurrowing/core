@@ -1360,22 +1360,29 @@ defmodule Platform.Tasks do
       allowed = Map.get(@valid_task_transitions, task.status, [])
 
       if new_status in allowed do
+        # Task 019fb977 stage 4: the flat pointer is derived BEFORE the
+        # write, against the NEW status, and folded into the SAME
+        # changeset. It used to be a second `Repo.update` fired after the
+        # status commit (`maybe_apply_phase_assignee_and_reload/1`), which
+        # left a window in which any reader — `TaskRouterWatcher`'s
+        # `list_should_run_tasks/0` and `redispatch_for_runtime/1` are
+        # exactly such readers — saw the new status paired with the
+        # PREVIOUS phase's assignee.
+        pointer_attrs = phase_pointer_attrs(task, new_status)
+
         task
-        |> Task.changeset(%{status: new_status})
+        |> Task.changeset(Map.put(pointer_attrs, :status, new_status))
         |> Repo.update()
         |> case do
           {:ok, updated} ->
             maybe_dispatch_teardown(updated, new_status)
-            # Re-derive the flat `assignee_id` / `assignee_type` pointer
-            # from `phase_assignees[current_phase(updated)]` so the MCP
-            # `task_update({status: ...})` path — which calls this
-            # directly, bypassing `transition_task/2` +
-            # `maybe_finalize_transition/3` — doesn't leave the flat
-            # pointer stuck on the previous phase's agent. See task
-            # 019f42fd (ADR-preventing regression: `phase_assignees`
-            # intact, `current_phase="execution"`, but flat pointer still
-            # at planning agent).
-            updated = maybe_apply_phase_assignee_and_reload(updated)
+            # `maybe_apply_phase_assignee/1` is what used to broadcast on a
+            # pointer change; folding its write into the status changeset
+            # removes that broadcast, so it is re-emitted here with the
+            # SAME preloads (`tasks.ex:4978`). A `{:task_updated, ...}`
+            # carrying a different association set is a silent break for
+            # every `tasks:board` subscriber, the watcher included.
+            maybe_broadcast_pointer_move(updated, pointer_attrs)
             maybe_append_timeline(updated, new_status)
             {:ok, updated}
 
@@ -1408,26 +1415,64 @@ defmodule Platform.Tasks do
 
   defp maybe_append_timeline(_task, _new_status), do: :ok
 
-  # `maybe_apply_phase_assignee/1` returns `:ok` and swallows the updated
-  # struct — fine for the transition_task/2 side effects, but the raw
-  # `transition_task_status/2` caller wants the derived pointer visible
-  # on the returned Task. Reload from DB when a write occurred; return
-  # the input struct otherwise.
-  defp maybe_apply_phase_assignee_and_reload(%Task{} = task) do
-    new_phase = current_phase(task)
-    {phase_id, phase_type} = assignee_for_phase(task, new_phase)
+  # Changeset attrs re-deriving the flat `assignee_id` / `assignee_type`
+  # pointer from `phase_assignees[current_phase(new_status)]`, for folding
+  # into the same write as `status`. Empty map = leave the pointer alone.
+  #
+  # Resolved against the POST-transition struct so `current_phase/1` and
+  # `assignee_for_phase/2` answer for the phase the task is moving INTO,
+  # which is the whole point: the MCP `task_update({status: ...})` path
+  # calls `transition_task_status/2` directly, bypassing
+  # `transition_task/2` + `maybe_finalize_transition/3`, and would
+  # otherwise leave the pointer stuck on the previous phase's agent (task
+  # 019f42fd: `phase_assignees` intact, `current_phase == "execution"`,
+  # flat pointer still at the planning agent).
+  #
+  # The `Platform.UUID.valid?/1` guard is load-bearing now that this write
+  # shares a changeset with `status`. `Task.validate_phase_assignees/1`
+  # (`tasks/task.ex:348`) checks only the phase KEYS, so an MCP
+  # `task_update` can persist `phase_assignees["execution"]["assignee_id"]
+  # == "higgins"`. MEASURED on the pre-fold code, not assumed: the second
+  # `Repo.update` did not fail softly into that function's `_error -> :ok`
+  # arm — `:binary_id` is a DUMP-time type error, so it RAISED
+  # `Ecto.ChangeError` straight out of `transition_task_status/2` (and, on
+  # the `in_progress` path, rolled the just-committed status back out of
+  # `transition_with_policy2_freeze/2`'s transaction). Folded into one
+  # changeset it would raise even more directly. Skipping the pointer is
+  # therefore a repair, not just preservation: a malformed phase payload
+  # can no longer take a legitimate status transition down with it.
+  defp phase_pointer_attrs(%Task{} = task, new_status) do
+    next = %{task | status: new_status}
+    {phase_id, phase_type} = assignee_for_phase(next, current_phase(new_status))
 
     cond do
       is_nil(phase_id) ->
-        task
+        %{}
 
       phase_id == task.assignee_id and phase_type == task.assignee_type ->
-        task
+        %{}
+
+      not Platform.UUID.valid?(phase_id) ->
+        Logger.warning(
+          "[Tasks] task #{task.id}: phase_assignees[#{current_phase(new_status)}] carries a " <>
+            "malformed assignee_id #{inspect(phase_id)}; leaving the flat pointer unchanged"
+        )
+
+        %{}
 
       true ->
-        _ = maybe_apply_phase_assignee(task)
-        Repo.get(Task, task.id) || task
+        %{assignee_id: phase_id, assignee_type: phase_type}
     end
+  end
+
+  defp maybe_broadcast_pointer_move(%Task{}, attrs) when map_size(attrs) == 0, do: :ok
+
+  defp maybe_broadcast_pointer_move(%Task{} = updated, _attrs) do
+    broadcast_board(
+      {:task_updated, Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])}
+    )
+
+    :ok
   end
 
   # Stage 4: cancellation is terminal (see @valid_task_transitions —
@@ -5156,10 +5201,42 @@ defmodule Platform.Tasks do
   end
 
   # When a task crosses a phase boundary, re-derive the top-level
-  # `assignee_id` / `assignee_type` from `phase_assignees[new_phase]`. This
-  # is what makes the per-phase modal actually take effect: the runtime
-  # router and every read path consults `task.assignee_id`, so it has to
-  # match the new phase's configured agent.
+  # `assignee_id` / `assignee_type` from `phase_assignees[new_phase]`.
+  #
+  # CORRECTED, task 019fb977 stage 5. This comment used to end "the runtime
+  # router and every read path consults `task.assignee_id`, so it has to match
+  # the new phase's configured agent". That was FALSE for the router, and its
+  # falseness is why 019f42fd's pointer repair looked sufficient for two
+  # months while every post-planning dispatch went to the planning agent.
+  #
+  # `TaskRouter` does NOT consult `task.assignee_id`. It calls
+  # `Platform.Orchestration.PhaseRuntime.resolve/1`, which reads
+  # `phase_assignees[current_phase(task)]` and only falls back to the flat
+  # pointer through `assignee_for_phase/2`'s own resolution order. Repairing
+  # the pointer therefore never repaired the dispatch: a phase-BLIND reader
+  # was the defect, and a phase-AWARE reader is the fix.
+  #
+  # What the flat pointer is still for: `TaskRouterWatcher`'s eligibility
+  # queries, the board/UI read paths, and `PhaseRuntime`'s own fallback when a
+  # task carries no entry for its current phase. Keeping it fresh is worth
+  # doing — it is just not what makes dispatch correct.
+  #
+  # Measured, not asserted (stage 5 control M1): with the phase-aware reader
+  # mutated back to `{task.assignee_id, task.assignee_type}` and this
+  # ticket's single-write fold still in place, the flat pointer is fresh
+  # enough to satisfy two of the three dispatch cases — and case 3 of
+  # `task_router_phase_assignee_test.exs`, which forces the pointer stale at
+  # READ time, still fails. That is the whole difference between the writer
+  # fix and the reader fix, in one test.
+  #
+  # Task 019fb977 stage 4: for STATUS-DRIVEN transitions this is now a
+  # no-op — `transition_task_status/2` folds the same derivation into the
+  # status write (`phase_pointer_attrs/2`), so by the time the five
+  # `maybe_finalize_transition/3` call sites reach here the `phase_id ==
+  # task.assignee_id` arm below short-circuits. Deliberately kept: it is
+  # still the correct pointer-repair for any caller that changes
+  # `phase_assignees` without changing `status`, and its broadcast is the
+  # one `transition_task_status/2` now re-emits itself.
   defp maybe_apply_phase_assignee(%Task{} = task) do
     new_phase = current_phase(task)
     {phase_id, phase_type} = assignee_for_phase(task, new_phase)

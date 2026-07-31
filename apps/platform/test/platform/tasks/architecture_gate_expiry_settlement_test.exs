@@ -300,7 +300,10 @@ defmodule Platform.Tasks.ArchitectureGateExpirySettlementTest do
       _ = expire_deadline!(gated, 3600)
 
       # A stack member's task-level `assignee_type` is DERIVED from its phase
-      # assignees by `maybe_apply_phase_assignee_and_reload/1`, so asserting
+      # assignees by `transition_task_status/2`'s `phase_pointer_attrs/2`
+      # (task 019fb977 stage 4 folded the old
+      # `maybe_apply_phase_assignee_and_reload/1` second write into the
+      # status changeset; same derivation, one write), so asserting
       # `should_run?/1` is false is a real check, not a restatement.
       assert reload(task).auto_approve_plan == false
       assert Repo.preload(reload(task), :stack).stack.auto_accept_plan == true
