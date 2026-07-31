@@ -106,53 +106,227 @@
 
     <%!-- Dead Letters --%>
     <div>
-      <div class="flex items-center justify-between mb-3">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
         <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
           Dead Letters
-          <span class="badge badge-error badge-xs ml-1">{length(@dead_letters)}</span>
+          <span class="badge badge-ghost badge-xs ml-1">
+            {length(@dead_letters)} in ledger
+          </span>
         </h2>
         <%= if not Enum.empty?(@dead_letters) do %>
-          <button phx-click="clear_dead_letters" class="btn btn-xs btn-ghost text-error">
-            Clear
+          <button
+            id="prune-dead-letters"
+            phx-click="prune_dead_letters"
+            class="btn btn-xs btn-ghost text-error"
+            title="Deletes settled rows only. Pending and replaying rows are the replay queue and cannot be pruned from here."
+          >
+            Prune settled
           </button>
+        <% end %>
+      </div>
+
+      <%!-- Cumulative loss counters. Monotonic, never pruned — see the caption. --%>
+      <div id="dead-letter-cumulative" class="rounded-lg border border-base-300 p-3 mb-3">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+            Cumulative loss
+          </h3>
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-base-content/40">
+              replay rate {:erlang.float_to_binary(@loss_summary.replay_rate * 100, decimals: 1)}%
+            </span>
+            <span class={[
+              "badge badge-xs",
+              if(@loss_summary.balanced, do: "badge-success", else: "badge-error")
+            ]}>
+              {if @loss_summary.balanced, do: "books balance", else: "books do not balance"}
+            </span>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+          <div class="rounded-md bg-base-200 px-3 py-2">
+            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+              Recorded
+            </div>
+            <div
+              id="dead-letter-count-recorded"
+              class="text-lg font-semibold tabular-nums"
+            >
+              {@loss_summary.recorded}
+            </div>
+          </div>
+          <div class="rounded-md bg-base-200 px-3 py-2">
+            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+              Replayed
+            </div>
+            <div
+              id="dead-letter-count-replayed"
+              class="text-lg font-semibold tabular-nums text-success"
+            >
+              {@loss_summary.replayed}
+            </div>
+          </div>
+          <div class="rounded-md bg-base-200 px-3 py-2">
+            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+              Dropped · policy
+            </div>
+            <div
+              id="dead-letter-count-dropped-policy"
+              class="text-lg font-semibold tabular-nums"
+            >
+              {@loss_summary.dropped_policy}
+            </div>
+          </div>
+          <div class="rounded-md bg-base-200 px-3 py-2">
+            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+              Dropped · stale
+            </div>
+            <div
+              id="dead-letter-count-dropped-stale"
+              class="text-lg font-semibold tabular-nums"
+            >
+              {@loss_summary.dropped_stale}
+            </div>
+          </div>
+          <div class="rounded-md bg-base-200 px-3 py-2">
+            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+              Superseded
+            </div>
+            <div
+              id="dead-letter-count-superseded-duplicate"
+              class="text-lg font-semibold tabular-nums"
+            >
+              {@loss_summary.superseded_duplicate}
+            </div>
+          </div>
+          <div class="rounded-md bg-base-200 px-3 py-2">
+            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+              Abandoned
+            </div>
+            <div
+              id="dead-letter-count-abandoned"
+              class="text-lg font-semibold tabular-nums text-error"
+            >
+              {@loss_summary.abandoned}
+            </div>
+          </div>
+          <div class="rounded-md bg-base-200 px-3 py-2">
+            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+              Awaiting replay
+            </div>
+            <div
+              id="dead-letter-count-pending"
+              class="text-lg font-semibold tabular-nums text-warning"
+            >
+              {@loss_summary.pending}
+            </div>
+          </div>
+        </div>
+
+        <p id="dead-letter-cumulative-caption" class="mt-2 text-xs text-base-content/50">
+          Totals since inception — every fire ever dead-lettered, not a snapshot of the
+          rows below and not a 24h window. Pruning the ledger does not move these numbers.
+          Subtract two readings to get a window. "Awaiting replay" is the only live term:
+          it is counted off the ledger, which never prunes a queued row.
+        </p>
+
+        <%= if not Enum.empty?(@key_breakdown) do %>
+          <div id="dead-letter-key-breakdown" class="mt-3 overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+                <tr>
+                  <th class="px-2 py-1 text-left">Responsibility key</th>
+                  <th class="px-2 py-1 text-right">Recorded</th>
+                  <th class="px-2 py-1 text-right">Replayed</th>
+                  <th class="px-2 py-1 text-right">Dropped</th>
+                  <th class="px-2 py-1 text-right">Abandoned</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-base-200">
+                <%= for entry <- @key_breakdown do %>
+                  <tr id={entry.dom_id}>
+                    <td class="px-2 py-1 font-mono text-xs">{entry.label}</td>
+                    <td data-count="recorded" class="px-2 py-1 text-right tabular-nums">
+                      {entry.recorded}
+                    </td>
+                    <td data-count="replayed" class="px-2 py-1 text-right tabular-nums">
+                      {entry.replayed}
+                    </td>
+                    <td data-count="dropped" class="px-2 py-1 text-right tabular-nums">
+                      {entry.dropped}
+                    </td>
+                    <td data-count="abandoned" class="px-2 py-1 text-right tabular-nums">
+                      {entry.abandoned}
+                    </td>
+                  </tr>
+                <% end %>
+              </tbody>
+            </table>
+          </div>
         <% end %>
       </div>
 
       <%= if Enum.empty?(@dead_letters) do %>
         <div class="rounded-lg border border-base-300 p-6 text-center text-base-content/40 text-sm">
-          No delivery failures since last restart.
+          The ledger is empty. That means nothing is queued and nothing settled recently —
+          it does not mean nothing was ever lost; read the cumulative totals above.
         </div>
       <% else %>
-        <div class="rounded-lg border border-base-300 overflow-hidden">
+        <div class="rounded-lg border border-base-300 overflow-x-auto">
           <table class="w-full text-sm">
             <thead class="bg-base-200 text-xs uppercase tracking-wider text-base-content/50">
               <tr>
-                <th class="px-4 py-2 text-left">Timestamp</th>
-                <th class="px-4 py-2 text-left">Agent</th>
-                <th class="px-4 py-2 text-left">Runtime ID</th>
-                <th class="px-4 py-2 text-left">Space ID</th>
-                <th class="px-4 py-2 text-left">Reason</th>
+                <th class="px-3 py-2 text-left">Occurred</th>
+                <th class="px-3 py-2 text-left">Disposition</th>
+                <th class="px-3 py-2 text-left">Responsibility</th>
+                <th class="px-3 py-2 text-left">Trigger</th>
+                <th class="px-3 py-2 text-left">Agent</th>
+                <th class="px-3 py-2 text-left">Subject</th>
+                <th class="px-3 py-2 text-right">Attempts</th>
               </tr>
             </thead>
-            <tbody class="divide-y divide-base-200">
+            <tbody id="dead-letter-rows" class="divide-y divide-base-200">
               <%= for letter <- @dead_letters do %>
-                <tr class="hover:bg-base-100">
-                  <td class="px-4 py-2 text-xs text-base-content/60">
-                    {format_dt(letter.timestamp)}
+                <tr id={"dead-letter-#{letter.id}"} class="hover:bg-base-100">
+                  <td class="px-3 py-2 text-xs text-base-content/60 whitespace-nowrap">
+                    {format_dt(letter.occurred_at)}
                   </td>
-                  <td class="px-4 py-2">
-                    {letter.agent_slug || letter.agent_id}
-                  </td>
-                  <td class="px-4 py-2 font-mono text-xs text-base-content/60">
-                    {letter.runtime_id}
-                  </td>
-                  <td class="px-4 py-2 font-mono text-xs text-base-content/60">
-                    {letter.space_id}
-                  </td>
-                  <td class="px-4 py-2">
-                    <span class="badge badge-error badge-sm">
-                      {letter.reason}
+                  <td class="px-3 py-2">
+                    <span
+                      data-disposition={letter.disposition}
+                      class={["badge badge-sm", disposition_badge(letter.disposition)]}
+                      title={letter.reason}
+                    >
+                      {letter.disposition}
                     </span>
+                  </td>
+                  <td class="px-3 py-2 font-mono text-xs">
+                    {letter.responsibility_key || "—"}
+                  </td>
+                  <td class="px-3 py-2 text-xs text-base-content/60">
+                    {letter.trigger_kind || "—"}
+                  </td>
+                  <td class="px-3 py-2 text-xs">
+                    {letter.agent_slug || "—"}
+                  </td>
+                  <td class="px-3 py-2 font-mono text-xs text-base-content/60">
+                    <%= cond do %>
+                      <% is_nil(letter.subject_id) -> %>
+                        <span class="text-base-content/30">—</span>
+                      <% letter.subject_task_id -> %>
+                        <.link
+                          navigate={~p"/tasks/#{letter.subject_task_id}"}
+                          class="link link-hover"
+                        >
+                          {letter.subject_type} {letter.subject_short}
+                        </.link>
+                      <% true -> %>
+                        <span>{letter.subject_type} {letter.subject_short}</span>
+                    <% end %>
+                  </td>
+                  <td class="px-3 py-2 text-right tabular-nums text-xs">
+                    {letter.attempts}
                   </td>
                 </tr>
               <% end %>

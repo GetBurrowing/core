@@ -71,8 +71,10 @@ defmodule Platform.Application do
            Platform.Federation.NodeContext,
            # Federation runtime presence tracker — before Endpoint so channels can use it
            Platform.Federation.RuntimePresence,
-           # Dead letter buffer — in-process ring buffer for delivery failures
-           Platform.Federation.DeadLetterBuffer,
+           # Dead-letter replay drain (task 019fa56b-ca2d stage 3). Immediately
+           # AFTER RuntimePresence and for a structural reason: every delivery
+           # re-checks presence, so this must not outlive the process it reads.
+           Platform.Federation.DeadLetterReplay,
            # Task supervisor for parallel agent dispatch (ADR 0027)
            {Task.Supervisor, name: Platform.TaskSupervisor},
            # Context plane — shared ETS context for federation (after Repo, before AttentionRouter)

@@ -96,6 +96,14 @@ defmodule PlatformWeb.RuntimeChannel do
       # Notify the task board so the watcher can re-dispatch to this runtime
       Platform.Tasks.broadcast_board({:runtime_reconnected, runtime_id})
 
+      # Drain anything that was dead-lettered while this runtime was away
+      # (task 019fa56b-ca2d stage 3). A `cast`, so join/3 never blocks on a
+      # Repo read — and deliberately here in join/3 rather than beside the
+      # OTHER `RuntimePresence.track/1` call, which is the 30-second
+      # `:presence_retrack` self-heal. Scheduling a drain there would re-drain
+      # every connected runtime twice a minute, forever.
+      Platform.Federation.DeadLetterReplay.schedule(runtime_id)
+
       # Push capabilities after join completes (push/3 not allowed during join/3)
       send(self(), :send_capabilities)
 

@@ -878,7 +878,22 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # claimed this slug on every migrated environment, so the prompt edit
       # reaches a deployed designer only through this overwrite.
       # Update-only; no schema change.
-      "20260727210000_force_update_design_task_direction_decline.exs"
+      "20260727210000_force_update_design_task_direction_decline.exs",
+      # Task 019fa56b-ca2d stage 1: `federation_dead_letters`, the durable
+      # replacement for `Platform.Federation.DeadLetterBuffer` — a 50-entry
+      # in-process list that lost every row on BEAM restart and had already
+      # partially overwritten the 2026-07-27 evidence (39 responsibility
+      # drops sharing the cap with chat drops) before that day's audit read
+      # it. Also the first row shape that carries the failed ENVELOPE, so a
+      # dead letter becomes replayable rather than merely counted.
+      "20260728000000_create_federation_dead_letters.exs",
+      # Task 019fa56b-ca2d stage 4: `federation_dead_letter_stats`, the
+      # monotonic loss counters. Separate from the ledger because the ledger is
+      # a work queue that dedupes pending fires and prunes terminal rows — both
+      # correct for a queue, both fatal to a cumulative measure. Counting off
+      # the ledger would reproduce the ticket's own snapshot defect one layer
+      # down. Bounded cardinality (keys x runtimes x counters), never pruned.
+      "20260728000100_create_federation_dead_letter_stats.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

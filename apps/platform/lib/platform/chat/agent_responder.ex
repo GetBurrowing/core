@@ -22,7 +22,7 @@ defmodule Platform.Chat.AgentResponder do
   alias Platform.Chat
   alias Platform.Chat.{ContextPlane, Message, Participant}
   alias Platform.Chat.PubSub, as: ChatPubSub
-  alias Platform.Federation.{DeadLetterBuffer, RuntimePresence, ToolSurface}
+  alias Platform.Federation.{DeadLetters, RuntimePresence, ToolSurface}
   alias Platform.Repo
   alias Platform.Tasks.Task, as: TaskRecord
 
@@ -209,14 +209,28 @@ defmodule Platform.Chat.AgentResponder do
             "[AgentResponder] DEAD LETTER: runtime #{runtime.runtime_id} not in presence — agent #{context.agent.slug} unreachable (topic=#{topic})"
           )
 
-          DeadLetterBuffer.record(%{
-            runtime_id: runtime.runtime_id,
-            agent_id: context.agent.id,
-            agent_slug: context.agent.slug,
-            space_id: space_id,
-            reason: :runtime_offline,
-            timestamp: DateTime.utc_now()
-          })
+          # Counted, never replayed. The chat envelope is DERIVED at dispatch
+          # time from a ContextPlane bundle, a 12-message history snapshot and
+          # the live tool surface; storing it would let a replay deliver a
+          # stale context bundle hours later. The correct fix is to rebuild
+          # from the persisted `message_id` at replay time, which is a
+          # different design and a different task — so the row is written
+          # terminal, with `payload: nil` and the refusal recorded as its
+          # reason rather than discovered later by a policy that has nothing
+          # to inspect.
+          _ =
+            DeadLetters.record(%{
+              runtime_id: runtime.runtime_id,
+              runtime_pk: runtime.id,
+              agent_id: context.agent.id,
+              agent_slug: context.agent.slug,
+              space_id: space_id,
+              source: "chat",
+              payload: nil,
+              disposition: "dropped_policy",
+              reason: "chat_payload_not_replayable",
+              occurred_at: DateTime.utc_now()
+            })
 
           :telemetry.execute(
             [:platform, :federation, :delivery_failed],
@@ -420,9 +434,13 @@ defmodule Platform.Chat.AgentResponder do
     topic = "runtime:#{runtime.runtime_id}"
     responsibility_key = context[:responsibility_key]
 
-    if RuntimePresence.online?(runtime.runtime_id) do
-      payload = agent |> build_system_event_signal(context) |> build_system_event_payload()
+    # Built ONCE, before the presence branch, so what the dead-letter ledger
+    # stores is byte-identical to what we would have put on the wire. Building
+    # it separately inside each branch is how a replay ends up delivering
+    # something subtly different from the fire it claims to be.
+    payload = agent |> build_system_event_signal(context) |> build_system_event_payload()
 
+    if RuntimePresence.online?(runtime.runtime_id) do
       Logger.info(
         "[AgentResponder] broadcasting system_event to #{topic} " <>
           "responsibility=#{inspect(responsibility_key)} agent=#{agent.slug}"
@@ -451,14 +469,30 @@ defmodule Platform.Chat.AgentResponder do
           "system_event for agent #{agent.slug} responsibility=#{inspect(responsibility_key)} unreachable (topic=#{topic})"
       )
 
-      DeadLetterBuffer.record(%{
-        runtime_id: runtime.runtime_id,
-        agent_id: agent.id,
-        agent_slug: agent.slug,
-        space_id: nil,
-        reason: :runtime_offline,
-        timestamp: DateTime.utc_now()
-      })
+      metadata = context[:metadata] || %{}
+      subject = DeadLetters.derive_subject(metadata)
+
+      # The envelope is the point. Before this, the recorded map named the
+      # failure (`runtime_id`, `reason`, `timestamp`) but not the work, so a
+      # dead letter could be counted and never replayed.
+      _ =
+        DeadLetters.record(%{
+          runtime_id: runtime.runtime_id,
+          runtime_pk: runtime.id,
+          agent_id: agent.id,
+          agent_slug: agent.slug,
+          space_id: nil,
+          source: "system_event",
+          responsibility_key: responsibility_key,
+          feature: Map.get(metadata, :feature),
+          trigger_kind: Map.get(metadata, :trigger_kind),
+          subject_type: subject.subject_type,
+          subject_id: subject.subject_id,
+          payload: payload,
+          reason: :runtime_offline,
+          disposition: "pending",
+          occurred_at: DateTime.utc_now()
+        })
 
       :telemetry.execute(
         [:platform, :federation, :delivery_failed],

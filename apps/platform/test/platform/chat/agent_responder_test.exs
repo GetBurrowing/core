@@ -8,6 +8,8 @@ defmodule Platform.Chat.AgentResponderTest do
   alias Platform.Chat
   alias Platform.Chat.AgentResponder
   alias Platform.Chat.AttentionRouter
+  alias Platform.Federation.DeadLetter
+  alias Platform.Federation.DeadLetters
   alias Platform.Federation.RuntimePresence
   alias Platform.Repo
 
@@ -668,7 +670,7 @@ defmodule Platform.Chat.AgentResponderTest do
       refute :space_id in AgentResponder.correlation_id_keys()
     end
 
-    test "federated agent with offline runtime dead-letters instead of crashing" do
+    test "federated agent with offline runtime persists a replayable dead letter" do
       runtime_pres = Process.whereis(RuntimePresence) || start_supervised!(RuntimePresence)
       Sandbox.allow(Repo, self(), runtime_pres)
 
@@ -690,6 +692,7 @@ defmodule Platform.Chat.AgentResponderTest do
         })
 
       # NOT tracked — presence is empty for this runtime.
+      refute RuntimePresence.online?(runtime.runtime_id)
 
       agent =
         create_agent(%{
@@ -699,21 +702,124 @@ defmodule Platform.Chat.AgentResponderTest do
           runtime_id: runtime.id
         })
 
+      stage_id = Ecto.UUID.generate()
+      plan_id = Ecto.UUID.generate()
+      task_id = Ecto.UUID.generate()
+
       signal = %{
         reason: :system_event,
         metadata: %{
-          feature: "memory",
+          feature: "architecture",
           agent_id: agent.id,
           agent_slug: "higgins-off",
-          responsibility_key: "memory.dreaming",
-          trigger_kind: :cron
+          responsibility_key: "architecture.audit_diff",
+          trigger_kind: :event_topic,
+          task_id: task_id,
+          plan_id: plan_id,
+          stage_id: stage_id
         }
       }
 
-      # The offline-runtime branch returns {:error, :runtime_offline}
-      # from dispatch_system_event/2; the important behaviour is that
-      # the pipeline reaches that structured error instead of raising.
       assert {:error, :runtime_offline} = AgentResponder.respond(signal)
+
+      # The structured error is the LEAST interesting half. What this test
+      # exists to pin is that the fire was CAPTURED with everything a replay
+      # needs — before this stage the recorded map carried no payload, no
+      # responsibility_key and no subject, so the assertion above passed
+      # while replay was flatly impossible.
+      assert [letter] = Repo.all(DeadLetter)
+      assert letter.runtime_id == runtime.runtime_id
+      assert letter.runtime_pk == runtime.id
+      assert letter.agent_id == agent.id
+      assert letter.agent_slug == "higgins-off"
+      assert letter.disposition == "pending"
+      assert letter.source == "system_event"
+      assert letter.responsibility_key == "architecture.audit_diff"
+      assert letter.feature == "architecture"
+      assert letter.trigger_kind == "event_topic"
+      assert letter.subject_type == "stage"
+      assert letter.subject_id == stage_id
+      assert letter.reason == "runtime_offline"
+      assert letter.attempts == 0
+
+      assert letter.payload["signal"]["metadata"]["stage_id"] == stage_id
+      assert letter.payload["signal"]["metadata"]["plan_id"] == plan_id
+      assert letter.payload["signal"]["metadata"]["task_id"] == task_id
+      assert letter.payload["signal"]["responsibility_key"] == "architecture.audit_diff"
+
+      # And the stored envelope rebuilds into exactly what would have gone
+      # onto the wire, atoms and all.
+      envelope = DeadLetters.to_envelope(letter)
+      assert envelope.signal.reason == :system_event
+      assert envelope.signal.trigger_kind == :event_topic
+      assert envelope.signal.metadata.stage_id == stage_id
+    end
+
+    test "federated agent with an ONLINE runtime broadcasts and writes zero dead letters" do
+      # The negative control for the test above: same signal, same code path,
+      # presence flipped. Without this pair, a `record/1` that fired on every
+      # dispatch would still make the offline test green.
+      runtime_pres = Process.whereis(RuntimePresence) || start_supervised!(RuntimePresence)
+      Sandbox.allow(Repo, self(), runtime_pres)
+
+      owner =
+        Repo.insert!(%User{
+          email: "ar-cron-on-#{System.unique_integer([:positive])}@example.com",
+          name: "AR Cron Online Owner",
+          oidc_sub: "oidc-ar-cron-on-#{System.unique_integer([:positive])}"
+        })
+
+      runtime_token = "rt-cron-on-#{System.unique_integer([:positive])}"
+
+      runtime =
+        Repo.insert!(%AgentRuntime{
+          owner_user_id: owner.id,
+          status: "active",
+          runtime_id: runtime_token,
+          display_name: "higgins-runtime-online"
+        })
+
+      RuntimePresence.track(runtime.runtime_id)
+
+      agent =
+        create_agent(%{
+          slug: "higgins-on",
+          name: "Higgins Online",
+          runtime_type: "external",
+          runtime_id: runtime.id
+        })
+
+      topic = "runtime:#{runtime.runtime_id}"
+      :ok = PlatformWeb.Endpoint.subscribe(topic)
+
+      stage_id = Ecto.UUID.generate()
+
+      signal = %{
+        reason: :system_event,
+        metadata: %{
+          feature: "architecture",
+          agent_id: agent.id,
+          agent_slug: "higgins-on",
+          responsibility_key: "architecture.audit_diff",
+          trigger_kind: :event_topic,
+          stage_id: stage_id
+        }
+      }
+
+      assert :ok = AgentResponder.respond(signal)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "attention",
+                       payload: %{signal: broadcast_signal}
+                     },
+                     1500
+
+      assert broadcast_signal.responsibility_key == "architecture.audit_diff"
+      assert broadcast_signal.metadata.stage_id == stage_id
+      assert Repo.aggregate(DeadLetter, :count) == 0
+
+      RuntimePresence.untrack(runtime.runtime_id)
     end
   end
 end

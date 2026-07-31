@@ -7,6 +7,9 @@ defmodule PlatformWeb.RuntimeChannelTest do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Federation
+  alias Platform.Federation.DeadLetter
+  alias Platform.Federation.DeadLetterReplay
+  alias Platform.Federation.DeadLetters
   alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolSurface
   alias Platform.Orchestration.ExecutionSpace
@@ -147,6 +150,96 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       assert Platform.Federation.RuntimePresence.online?(ctx.runtime.runtime_id)
     end
+
+    test "join drains this runtime's dead letters, and the 30s retrack does NOT", ctx do
+      # There are exactly two `RuntimePresence.track/1` call sites in this
+      # module: join/3 and the periodic `:presence_retrack` self-heal. Only the
+      # first is a reconnect. Hooking the second would re-drain every connected
+      # runtime twice a minute forever, so this test pins BOTH halves — a
+      # drain-on-join assertion alone would still pass with the hook in the
+      # wrong place.
+      first = seed_dead_letter(ctx, 1)
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, joined_socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      # A sync call behind join/3's cast: the replay server's mailbox is FIFO,
+      # so this returns only once the join-triggered drain has finished.
+      assert DeadLetterReplay.drain_count(ctx.runtime.runtime_id) == 1
+      assert Repo.get(DeadLetter, first.id).disposition == "replayed"
+
+      # Now a fresh, equally replayable letter — and the retrack path.
+      second = seed_dead_letter(ctx, 2)
+
+      send(joined_socket.channel_pid, :presence_retrack)
+      _ = :sys.get_state(joined_socket.channel_pid)
+
+      assert DeadLetterReplay.drain_count(ctx.runtime.runtime_id) == 1
+      assert Repo.get(DeadLetter, second.id).disposition == "pending"
+
+      # The positive control: that row was drainable the whole time, so its
+      # survival above is the retrack declining to schedule, not an
+      # undeliverable row.
+      :ok = DeadLetterReplay.schedule(ctx.runtime.runtime_id)
+      assert DeadLetterReplay.drain_count(ctx.runtime.runtime_id) == 2
+      assert Repo.get(DeadLetter, second.id).disposition == "replayed"
+    end
+  end
+
+  # A pending, policy-eligible `architecture.audit_diff` letter for this
+  # context's runtime: a real current plan with a `passed` stage, which is what
+  # `DeadLetterPolicy.audit_diff_freshness/1` rules on.
+  defp seed_dead_letter(ctx, position) do
+    suffix = System.unique_integer([:positive])
+    {:ok, project} = Tasks.create_project(%{name: "DL Channel Project #{suffix}"})
+
+    {:ok, task} =
+      Tasks.create_task(%{project_id: project.id, title: "DL Channel Task #{suffix}"})
+
+    {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        position: position,
+        name: "Stage #{position}",
+        status: "passed"
+      })
+
+    {:ok, letter} =
+      DeadLetters.record(%{
+        runtime_id: ctx.runtime.runtime_id,
+        runtime_pk: ctx.runtime.id,
+        agent_id: ctx.agent.id,
+        agent_slug: ctx.agent.slug,
+        source: "system_event",
+        responsibility_key: "architecture.audit_diff",
+        feature: "architecture",
+        trigger_kind: :event_topic,
+        subject_type: "stage",
+        subject_id: stage.id,
+        payload: %{
+          signal: %{
+            reason: :system_event,
+            agent_id: ctx.agent.id,
+            agent_slug: ctx.agent.slug,
+            responsibility_key: "architecture.audit_diff",
+            feature: "architecture",
+            trigger_kind: :event_topic,
+            metadata: %{stage_id: stage.id, plan_id: plan.id, task_id: task.id}
+          }
+        },
+        reason: :runtime_offline
+      })
+
+    assert letter.disposition == "pending"
+    letter
   end
 
   defp join_and_capture_capabilities(runtime, raw_token) do

@@ -1543,7 +1543,7 @@ defmodule Platform.Responsibilities.Router do
       %{
         responsibility_key: responsibility.key,
         feature: responsibility.feature,
-        trigger_kind: Map.get(trigger_meta, :kind),
+        trigger_kind: native_trigger_kind(responsibility, trigger_meta),
         agent_id: Map.get(agent, :id) || Map.get(agent, "id"),
         agent_slug: agent_slug(agent)
       }
@@ -1555,6 +1555,51 @@ defmodule Platform.Responsibilities.Router do
     |> maybe_put(:space_id, Map.get(trigger_meta, :space_id))
     |> maybe_put(:participant_id, Map.get(trigger_meta, :participant_id))
     |> maybe_put(:meeting_id, Map.get(trigger_meta, :meeting_id))
+  end
+
+  # THE `trigger_kind` FALLBACK (task 019fa56b-ca2d).
+  #
+  # `trigger_meta[:kind]` is supplied by exactly ONE producer in the tree:
+  # `maybe_fire_cron/4`, which passes `%{kind: :cron, fired_at: now}`. Every
+  # `event_topic` producer calls `Responsibilities.fire/2` with a
+  # subject-shaped map and no `:kind` at all —
+  # `PlanEngine.after_stage_completed/1` passes
+  # `%{stage_id:, plan_id:, task_id:, stage:, plan:, task:}` and
+  # `Tasks.fire_architecture_review_plan/1` passes
+  # `%{plan_id:, task_id:, plan:}`. So this field was `nil` on every real
+  # `architecture.*` fire, `AgentResponder` recorded that `nil` onto the
+  # dead-letter row, and `DeadLetterPolicy.classify/1` normalised it to
+  # `{:drop, :unclassified}` — the whole ledger recorded and then dropped
+  # 34 fires it was built to replay.
+  #
+  # The row is the authority. `responsibilities.trigger_kind` is NOT NULL
+  # and `validate_inclusion`-guarded against `Responsibility.trigger_kinds/0`,
+  # so it always carries the same closed vocabulary the policy rules on. A
+  # producer that forgets to say how it was triggered is not evidence that
+  # the responsibility has no trigger kind.
+  #
+  # Fixing it HERE rather than at the two call sites is deliberate: the call
+  # sites are a list that grows, and the next producer would re-open this
+  # bug silently. This is the single place every native fire passes through.
+  # Backfilling in `DeadLetters.record/1` was also rejected — it would repair
+  # the ledger while leaving the live signal on the wire still missing
+  # `trigger_kind`, so an ONLINE runtime would keep receiving an unlabelled
+  # fire.
+  #
+  # `trigger_meta[:kind]` still WINS when present. The cron path must keep
+  # recording `cron` even on a row whose `trigger_kind` says otherwise —
+  # reclassifying a cron fire as `event_topic` would replay wall-clock-stale
+  # work that the Router's own tick is already going to redo.
+  #
+  # Type note: the override is an atom (`:cron`), the fallback a string
+  # (`"event_topic"`). Both are accepted downstream —
+  # `DeadLetters.record/1` stringifies via `stringify/1`, `to_envelope/1`
+  # restores the atom against `@trigger_kind_value_strings`, and
+  # `DeadLetterPolicy.normalize_kind/1` handles either. Coercing here would
+  # change what the ONLINE runtime sees on the cron path, which is out of
+  # scope for this fix.
+  defp native_trigger_kind(%Responsibility{} = responsibility, trigger_meta) do
+    Map.get(trigger_meta, :kind) || responsibility.trigger_kind
   end
 
   # Scalar correlation ids the receiving runtime needs to act on the fire.
