@@ -1,22 +1,62 @@
 defmodule Platform.Chat.AgentResponderSystemEventPayloadTest do
   # ─────────────────────────────────────────────────────────────────────────────
+  # ENVELOPE-RECORD 1/3 — system_event attention envelope
+  # DECIDED: the system_event attention envelope is BARE — `%{signal: ...}` and
+  #   nothing else. `signal.prompt` is the sole named interface for the body,
+  #   and the payload carries NO `:message` key. The assertions in this file are
+  #   what hold that contract in place.
+  # WHY: adding `message` here would paper over the client defect rather than
+  #   fix it, and this test is what makes that a deliberate, visible choice.
+  # WHAT WOULD RETIRE THIS: the condition record 2/3 states — the argument above
+  #   rests on a client that silently DROPS this envelope and swallows the
+  #   throw, so a server-side `message` mirror would have hidden an invisible
+  #   client defect. Once a client no longer drops the envelope and no longer
+  #   swallows the throw, the papering-over argument no longer applies, and
+  #   "should the server also emit `message`?" is reopenable on its merits.
+  # RETIREMENT STATUS 2026-07-31: MET — `019fa618-ca92` has landed. The sibling
+  #   repo `openclaw-suite-channel` is at v0.6.9 (`429dfd5`), which contains fix
+  #   commit `3f014a1`; its `dist/src/inbound.js` now reads
+  #   `const author = payload.message?.author;` — optional-chained, where it
+  #   previously read `payload.message.author` bare — and
+  #   `openclaw-gateway.service` has run that build since 2026-07-31 12:40:00
+  #   CDT.
+  #   THE ASSERTIONS IN THIS FILE ARE UNCHANGED AND THEY STAY. Nothing about
+  #   this status line makes this test optional, weaker, or safe to delete: the
+  #   task that stamped it changed comments and one helper name and touched no
+  #   assertion. A met condition makes the question ASKABLE; it does not answer
+  #   it. Retiring these assertions is a separate decision requiring its own
+  #   argument and its own ticket — annotating a guard is not retiring one.
+  # SIBLING RECORDS:
+  #   2/3 core:apps/platform/lib/platform/chat/agent_responder.ex § build_system_event_payload/1 (019fa510)
+  #   3/3 claude-code-suite-channel:src/attention.ts § makeEmitAttention (019fa618-c860)
+  # ─────────────────────────────────────────────────────────────────────────────
   # CHARACTERIZATION — the "attention" envelope asymmetry (019fa56b stage 1).
   #
   # Core broadcasts `"attention"` on `runtime:<id>` from THREE sites, and they
   # do NOT agree on where the human-readable body lives:
   #
-  #   1. `task_router.ex:1381-1389` (`dispatch_attention/5`)
+  #   1. core:apps/platform/lib/platform/orchestration/task_router.ex
+  #      § dispatch_attention/5
   #      → `payload.message.content`   (pinned in `task_router_test.exs`)
-  #   2. `agent_responder.ex:240-251` (`dispatch_to_external/2`)
+  #   2. core:apps/platform/lib/platform/chat/agent_responder.ex
+  #      § dispatch_to_external/2
   #      → `payload.message.content`   (pinned here)
-  #   3. `agent_responder.ex:419-424` (`broadcast_system_event/3`)
+  #   3. core:apps/platform/lib/platform/chat/agent_responder.ex
+  #      § broadcast_system_event/3
   #      → `payload.signal.prompt`, and there is NO `:message` key at all
   #                                   (pinned here)
   #
-  # The Claude Code bridge reads `payload.message?.content ?? ""`. Sites 1 and 2
-  # satisfy that read; site 3 does not, so its body is silently discarded and a
-  # broken runtime still renders task dispatches perfectly. That is the whole
-  # defect, and it is invisible precisely because two of three shapes work.
+  # The Claude Code bridge READ `payload.message?.content ?? ""` at
+  # `claude-code-suite-channel@4691bdb`, which is the read this file was written
+  # against. Sites 1 and 2 satisfied that read; site 3 did not, so its body was
+  # silently discarded and a broken runtime still rendered task dispatches
+  # perfectly. That was the whole defect, and it was invisible precisely because
+  # two of three shapes worked. As of `claude-code-suite-channel@4edd170` the
+  # bridge reads `payload.message?.content ?? payload.signal?.prompt ?? ""` in
+  # `claude-code-suite-channel:src/attention.ts § makeEmitAttention` — the
+  # fallback landed, so site 3's body is recovered there now. The envelope
+  # contract asserted below is unchanged by that; see the retirement status
+  # above.
   #
   # WHY THESE ASSERTIONS ARE SHAPED THE WAY THEY ARE: a test that only says
   # "the prompt is reachable somewhere in the payload" passes on all three
@@ -26,9 +66,13 @@ defmodule Platform.Chat.AgentResponderSystemEventPayloadTest do
   # sits next to a positive assertion on the same received payload, so it
   # cannot pass on a dispatch that never fired.
   #
-  # `bridge_content/1` below is a literal transcription of the bridge's read
-  # (`src/index.ts:256`, `payload.message?.content ?? ""`). It exists so the
-  # asymmetry itself — not just the two shapes — is the thing under test.
+  # `pre_fix_bridge_content/1` below is a literal transcription of the bridge's
+  # read AS IT WAS at `claude-code-suite-channel@4691bdb`
+  # (`payload.message?.content ?? ""`). It exists so the asymmetry itself — not
+  # just the two shapes — is the thing under test. The live read now lives in
+  # `claude-code-suite-channel:src/attention.ts § makeEmitAttention` and carries
+  # a `signal.prompt` fallback; the helper deliberately does NOT track it,
+  # because what it models is the pre-fix read that this asymmetry breaks.
   # ─────────────────────────────────────────────────────────────────────────────
   use Platform.DataCase, async: false
 
@@ -89,7 +133,8 @@ defmodule Platform.Chat.AgentResponderSystemEventPayloadTest do
 
       # The Router's original stash still round-trips untouched alongside the
       # lifted copy. `build_system_event_signal/2` keeps `metadata` whole
-      # (agent_responder.ex:494), so a runtime reading either path agrees.
+      # (core:apps/platform/lib/platform/chat/agent_responder.ex §
+      # build_system_event_signal/2), so a runtime reading either path agrees.
       assert payload.signal.metadata.prompt == sentinel
 
       assert payload.signal.reason == :system_event
@@ -105,7 +150,8 @@ defmodule Platform.Chat.AgentResponderSystemEventPayloadTest do
       refute Map.has_key?(payload, :message)
 
       # The system_event envelope is BARE: `%{signal: ...}` and nothing else
-      # (agent_responder.ex:424). Site 2's `history` / `context` / `tools` keys
+      # (core:apps/platform/lib/platform/chat/agent_responder.ex §
+      # build_system_event_payload/1). Site 2's `history` / `context` / `tools` keys
       # are absent here too. Pinned so a future "normalize the attention
       # payload" refactor cannot quietly widen this envelope — adding
       # `message` here would paper over the client defect rather than fix it,
@@ -140,7 +186,7 @@ defmodule Platform.Chat.AgentResponderSystemEventPayloadTest do
       assert payload.signal.prompt == sentinel
       # …and the pre-fix bridge read still yields the empty string. Both halves
       # in one test: the drop is a client-side read gap, not a missing body.
-      assert bridge_content(payload) == ""
+      assert pre_fix_bridge_content(payload) == ""
 
       RuntimePresence.untrack(runtime.runtime_id)
       _ = AgentRuntime
@@ -167,7 +213,7 @@ defmodule Platform.Chat.AgentResponderSystemEventPayloadTest do
       # The contrast case. Same event name, same topic, DIFFERENT key path.
       assert payload.message.content =~ sentinel
       assert payload.message.author == "Alice"
-      assert bridge_content(payload) =~ sentinel
+      assert pre_fix_bridge_content(payload) =~ sentinel
 
       # And the mirror image of site 3's absence: the chat envelope has no
       # `signal.prompt`, so a client that ONLY learned to read `signal.prompt`
@@ -189,9 +235,17 @@ defmodule Platform.Chat.AgentResponderSystemEventPayloadTest do
 
   # ── helpers ────────────────────────────────────────────────────────────────
 
-  # Transcription of `src/index.ts:256` in claude-code-suite-channel@4691bdb:
+  # Transcription of the PRE-FIX bridge read, as it stood in
+  # `claude-code-suite-channel:src/index.ts` at commit `4691bdb`:
   #   const text = payload.message?.content ?? "";
-  defp bridge_content(payload) do
+  #
+  # Named `pre_fix_` because that read is history. The live bridge read moved
+  # FILE — it is now in `claude-code-suite-channel:src/attention.ts §
+  # makeEmitAttention` and reads
+  # `payload.message?.content ?? payload.signal?.prompt ?? ""`. This helper
+  # intentionally still models the narrow pre-fix read: it is the read that the
+  # site-3 envelope defeats, and that defeat is the property under test.
+  defp pre_fix_bridge_content(payload) do
     case payload do
       %{message: %{content: content}} when is_binary(content) -> content
       _ -> ""

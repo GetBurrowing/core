@@ -508,61 +508,91 @@ defmodule Platform.Chat.AgentResponder do
     end
   end
 
-  # The native system_event envelope is BARE: `%{signal: signal}`, in every
-  # case. No `message`, no `history`, no `context`.
-  #
-  # A `message` key WAS considered here — mirroring `message.content` from
-  # `signal.prompt` so a client reading the chat shape would find the body
-  # without changing — and was deliberately not shipped. The body already has a
-  # named interface on this path: `signal.prompt`, lifted to the signal root by
-  # `build_system_event_signal/2` precisely so a federated runtime does not have
-  # to dig into `metadata` for it. Emitting both would give the server two ways
-  # to say one thing, and the next client written against this envelope would
-  # read whichever one it happened to find first. That two independently
-  # written clients both typed `message` as REQUIRED is evidence of a shared
-  # error — each encoded the only shape it had seen — not of the contract; both
-  # are converging on root-first resolution. Superseded by the client-side fix
-  # in task `019fa618-ca92`.
-  #
-  # WHAT WOULD REOPEN THIS: the condition that justified declining the shim is
-  # that a client silently DROPS this envelope and swallows the throw, so a
-  # server-side mirror would have been papering over an invisible client
-  # defect. Once `019fa618-ca92` has landed and the client's error-swallowing
-  # is closed, that is no longer true, and "should the server also emit
-  # `message`?" becomes a legitimately reopenable question to be decided on its
-  # merits — deliberately, not as a merge side effect.
+  # ENVELOPE-RECORD 2/3 — system_event attention envelope
+  # DECIDED: the native system_event envelope is BARE — `%{signal: signal}`, in
+  #   every case. No `message`, no `history`, no `context`. `signal.prompt` is
+  #   the sole named interface for the body.
+  # WHY: a `message` key WAS considered here — mirroring `message.content` from
+  #   `signal.prompt` so a client reading the chat shape would find the body
+  #   without changing — and was deliberately not shipped. The body already has
+  #   a named interface on this path: `signal.prompt`, lifted to the signal root
+  #   by `build_system_event_signal/2` precisely so a federated runtime does not
+  #   have to dig into `metadata` for it. Emitting both would give the server
+  #   two ways to say one thing, and the next client written against this
+  #   envelope would read whichever one it happened to find first. That two
+  #   independently written clients both typed `message` as REQUIRED is evidence
+  #   of a shared error — each encoded the only shape it had seen — not of the
+  #   contract; both are converging on root-first resolution.
+  # WHAT WOULD RETIRE THIS: the condition that justified declining the shim is
+  #   that a client silently DROPS this envelope and swallows the throw, so a
+  #   server-side mirror would have been papering over an invisible client
+  #   defect. Once `019fa618-ca92` has landed and the client's error-swallowing
+  #   is closed, that is no longer true, and "should the server also emit
+  #   `message`?" becomes a legitimately reopenable question to be decided on
+  #   its merits — deliberately, not as a merge side effect.
+  # RETIREMENT STATUS 2026-07-31: MET — `019fa618-ca92` has landed. The sibling
+  #   repo `openclaw-suite-channel` is at v0.6.9 (`429dfd5`), which contains fix
+  #   commit `3f014a1`; its `dist/src/inbound.js` now reads
+  #   `const author = payload.message?.author;` — optional-chained, where it
+  #   previously read `payload.message.author` bare — and
+  #   `openclaw-gateway.service` has been running that build since
+  #   2026-07-31 12:40:00 CDT. What that task superseded is the REASON FOR
+  #   DECLINING THE SHIM. It did not supersede this contract.
+  #   THE GUARD STAYS. `build_system_event_payload/1` still returns
+  #   `%{signal: signal}`, and the assertions in the sibling record below are
+  #   unchanged by the task that stamped this line. A met condition makes the
+  #   question askable; it does not answer it. Retiring the guard is a separate
+  #   decision requiring its own argument and its own ticket — annotating a
+  #   guard is not retiring one.
+  # SIBLING RECORDS:
+  #   1/3 core:apps/platform/test/platform/chat/agent_responder_system_event_payload_test.exs § describe "site 3 — broadcast_system_event/3" (019fa56b-c5ef)
+  #   3/3 claude-code-suite-channel:src/attention.ts § makeEmitAttention (019fa618-c860)
   defp build_system_event_payload(signal), do: %{signal: signal}
 
-  # CONFIRMED 2026-07-27 (019fa510 stage 3), against live logs on both sides:
-  # the envelope this builds is DROPPED by the openclaw client, silently.
+  # FINDING 2026-07-27 (019fa510 stage 3) — CLOSED 2026-07-31, see the end of
+  # this block. Read the paragraphs below as history: they describe the openclaw
+  # client as it behaved on 2026-07-27, NOT as it behaves today. They are kept
+  # rather than deleted because they are this decision's provenance and the
+  # log-line forensics in them are reusable the next time an envelope goes quiet.
+  #
+  # Confirmed at the time against live logs on both sides: the envelope this
+  # builds WAS DROPPED by the openclaw client, silently.
   #
   # `%{signal: build_system_event_signal(...)}` carries no `message` key, and
-  # the openclaw client reads `payload.message.author` with no optional
-  # chaining. That throws
+  # the openclaw client READ `payload.message.author` with no optional
+  # chaining. That THREW
   # `TypeError: Cannot read properties of undefined (reading 'author')`, which
-  # the client's channel layer swallows into one generic `attention handler
-  # error` line. The agent never wakes. This signal also lifts neither
+  # the client's channel layer SWALLOWED into one generic `attention handler
+  # error` line. The agent never woke. This signal also lifts neither
   # `space_id` nor `task_id`, so even a client that survived that line would
   # reply into `"unknown"`.
   #
-  # Evidence: every `attention handler error` line on the client side pairs to
+  # Evidence: every `attention handler error` line on the client side PAIRED to
   # the second with a `broadcasting system_event` line here, and no
-  # `[suite-inbound]` line follows any of them.
+  # `[suite-inbound]` line FOLLOWED any of them.
   #
-  # The apparent counter-evidence is a different population. The surviving
+  # The apparent counter-evidence was a different population. The surviving
   # `[suite-inbound] reason=system_event` lines exist, but every one carries
   # Higgins's system space — they come from `HistorianDispatcher`, which posts a
-  # real chat message and so travels the `dispatch_to_external/2` path at `:248`
-  # WITH a `message` key. The two are distinguishable in this module's own log:
+  # real chat message and so travels the `dispatch_to_external/2` path WITH a
+  # `message` key. The two are distinguishable in this module's own log:
   # `respond called with reason=system_event signal=%{}` is the native fire that
-  # dies, `signal=%{space_id: ..., message_id: ...}` is the chat fire that lives.
-  # Zero `space=unknown` lines exist in the whole journal, which is the proof no
-  # native envelope has ever reached the client's post-line-70 logging.
+  # DIED, `signal=%{space_id: ..., message_id: ...}` is the chat fire that LIVED.
+  # Zero `space=unknown` lines existed in the whole journal, which was the proof
+  # that no native envelope had ever reached the client's post-line-70 logging.
   #
   # `memory.daily_summary` / `memory.dreaming` outcomes survived this only
   # because they are still dual-written by the legacy scheduler path (see
   # `Platform.Responsibilities.CutoverMonitor`). Removing that shim before the
   # envelope is fixed would silence Higgins outright.
+  #
+  # CLOSED 2026-07-31 by `019fa618-ca92`. `openclaw-suite-channel` is at v0.6.9
+  # (`429dfd5`), which contains fix commit `3f014a1`; `dist/src/inbound.js` now
+  # reads `const author = payload.message?.author;` — optional-chained — and
+  # `openclaw-gateway.service` has run that build since 2026-07-31 12:40:00 CDT.
+  # The silent drop described above no longer occurs. The ENVELOPE CONTRACT IS
+  # UNCHANGED by that closure — see the record above `build_system_event_payload/1`,
+  # which states why the guard stays and what retiring it would require.
   defp build_system_event_signal(%Agent{} = agent, context) do
     metadata = context[:metadata] || %{}
 
