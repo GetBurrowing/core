@@ -150,6 +150,43 @@ defmodule Platform.Meetings.InvitesTest do
     end
   end
 
+  # ── Malformed ids (the Repo lookup boundary) ────────────────────────────────
+  #
+  # `Repo.get_by/2` and a `where: x.id == ^value` on a UUID column both RAISE
+  # `Ecto.Query.CastError` rather than returning nil, and `Platform.
+  # RepoLookupBoundaryTest` exists because that defect has been re-fixed at one
+  # site three times. These ids reach the API from a LiveView `params` map once
+  # the host-facing invite UI lands downstream, so each site answers its own
+  # miss value instead.
+  #
+  # The 16-byte case is the one worth writing down: `Ecto.UUID.cast/1` accepts
+  # ANY 16-byte binary and hex-encodes it into a well-formed but INVENTED
+  # UUID, so a cast-based guard would not raise — it would silently look up a
+  # fabricated id. Only `Platform.UUID.valid?/1` rejects it.
+
+  describe "malformed ids" do
+    test "invite_user/3 refuses a non-UUID user_id as a changeset error, not a raise" do
+      meeting = meeting!()
+
+      for bad <- ["higgins", "abcdefghijklmnop"] do
+        assert {:error, changeset} = Meetings.invite_user(meeting, bad)
+        assert Keyword.has_key?(changeset.errors, :user_id)
+      end
+
+      assert count_invites(meeting.id) == 0
+    end
+
+    test "revoke_invite/1 answers {:error, :not_found} for a non-UUID id" do
+      assert {:error, :not_found} = Meetings.revoke_invite("higgins")
+      assert {:error, :not_found} = Meetings.revoke_invite("abcdefghijklmnop")
+    end
+
+    test "list_invites/2 answers [] for a non-UUID meeting_id" do
+      assert Meetings.list_invites("higgins") == []
+      assert Meetings.list_invites("abcdefghijklmnop", include_revoked: true) == []
+    end
+  end
+
   # ── invite_guest/2 ──────────────────────────────────────────────────────────
 
   describe "invite_guest/2" do

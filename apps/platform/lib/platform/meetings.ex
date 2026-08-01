@@ -971,6 +971,14 @@ defmodule Platform.Meetings do
   Options: `:display_name`, `:email` — both optional, both pass-through. The
   user's own record is authoritative for their name, so these are only useful
   when the host wants to record what they typed.
+
+  A `user_id` that is not a well-formed UUID answers `{:error, changeset}` with
+  the error on `:user_id`. It is checked with `Platform.UUID.valid?/1` before
+  any query: `Repo.get_by/2` RAISES `Ecto.Query.CastError` on a malformed id
+  rather than returning nil, and the host-facing UI downstream of this
+  function will hand it a value straight out of a LiveView `params` map. An
+  `Ecto.UUID.cast/1` guard would NOT do — it hex-encodes any 16-byte binary
+  into a well-formed but invented UUID (see `RepoLookupBoundaryTest`).
   """
   @spec invite_user(Meeting.t(), binary(), keyword()) ::
           {:ok, Invite.t()} | {:error, Ecto.Changeset.t()}
@@ -982,6 +990,17 @@ defmodule Platform.Meetings do
       email: Keyword.get(opts, :email)
     }
 
+    if Platform.UUID.valid?(user_id) do
+      upsert_user_invite(meeting, user_id, attrs)
+    else
+      {:error,
+       %Invite{}
+       |> Invite.changeset(Map.delete(attrs, :user_id))
+       |> Ecto.Changeset.add_error(:user_id, "is invalid")}
+    end
+  end
+
+  defp upsert_user_invite(%Meeting{} = meeting, user_id, attrs) do
     case Repo.get_by(Invite, meeting_id: meeting.id, user_id: user_id) do
       %Invite{} = existing ->
         {:ok, existing}
@@ -1087,9 +1106,24 @@ defmodule Platform.Meetings do
   Ordered by `inserted_at`, with `id` as a tiebreak so the order is total
   rather than merely usually-stable; ids are UUIDv7, so the tiebreak sorts the
   same direction as the timestamp.
+
+  A malformed `meeting_id` answers `[]`. `where: i.meeting_id == ^meeting_id`
+  pins a UUID column, so it raises `Ecto.Query.CastError` on a bad id exactly
+  as `Repo.get/2` would — an empty invitee list is the same answer the query
+  would give for any id that names no meeting.
   """
   @spec list_invites(binary(), keyword()) :: [Invite.t()]
-  def list_invites(meeting_id, opts \\ []) when is_binary(meeting_id) do
+  def list_invites(meeting_id, opts \\ [])
+
+  def list_invites(meeting_id, opts) when is_binary(meeting_id) do
+    if Platform.UUID.valid?(meeting_id) do
+      do_list_invites(meeting_id, opts)
+    else
+      []
+    end
+  end
+
+  defp do_list_invites(meeting_id, opts) do
     query =
       from(i in Invite,
         where: i.meeting_id == ^meeting_id,
@@ -1116,11 +1150,25 @@ defmodule Platform.Meetings do
   loaded before the first — returns the row with its ORIGINAL `revoked_at`
   rather than re-stamping it. That matters because `revoked_at` is evidence of
   when access was cut; silently moving it forward would rewrite that record.
+
+  A malformed id answers `{:error, :not_found}` — the site's existing miss
+  return — rather than raising. Both the guarded `UPDATE ... WHERE id = $1`
+  and the `Repo.get/2` behind it pin a UUID column and so raise
+  `Ecto.Query.CastError` on a bad id, and the revoke control that will call
+  this is a `phx-value-` attribute: attacker-supplied by definition.
   """
   @spec revoke_invite(Invite.t() | binary()) :: {:ok, Invite.t()} | {:error, :not_found}
   def revoke_invite(%Invite{id: id}), do: revoke_invite(id)
 
   def revoke_invite(invite_id) when is_binary(invite_id) do
+    if Platform.UUID.valid?(invite_id) do
+      do_revoke_invite(invite_id)
+    else
+      {:error, :not_found}
+    end
+  end
+
+  defp do_revoke_invite(invite_id) do
     now = DateTime.utc_now()
 
     query =
