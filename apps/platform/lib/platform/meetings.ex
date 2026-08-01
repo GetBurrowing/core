@@ -21,6 +21,7 @@ defmodule Platform.Meetings do
   alias Platform.Chat.ExternalScope
   alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript}
   alias Platform.Meetings.GuestInvite
+  alias Platform.Meetings.Invite
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
 
@@ -923,6 +924,227 @@ defmodule Platform.Meetings do
       %Platform.Tasks.Project{org_id: org_id} -> org_id
       _ -> nil
     end
+  end
+
+  # ── Invites (task 019fb954) ──────────────────────────────────────────────
+  #
+  # "Invited" used to be an inference: `MeetingNotifier` derived recipients
+  # from the human participants of the meeting's backing chat space. You could
+  # therefore not invite anyone who was not already in that space, nor invite
+  # anyone *before* that membership existed. `meeting_invites` is the
+  # declaration; these four functions are the whole public surface over it.
+  #
+  # THE GUEST TOKEN BINDS TO THE ROW, NOT TO THE MEETING. `invite_guest/2`
+  # mints exactly one token per `meeting_invites` row, and there is
+  # deliberately NO meeting-wide invite-link function on this module. A single
+  # forwardable link is unattributable: whoever walks through it cannot be told
+  # apart from anyone else who was handed the same string, so their speech has
+  # no speaker in the transcript and any action item extracted from it has no
+  # principal to land on. Per-row tokens also make revocation granular — an
+  # issued HMAC cannot be un-issued, so `revoke_invite/1` stamping one row is
+  # the only way to kill one guest's link without invalidating every other
+  # guest's at the same time. Do not add a `meeting_invite_link/1`.
+
+  # Guest links expire in 24h unless the caller says otherwise, matching
+  # `GuestInvite`'s own `@default_expiry_seconds` so the row's `expires_at`
+  # (authoritative) and the token payload's copy agree by construction.
+  @guest_invite_default_expiry_hours 24
+
+  @doc """
+  Declare a user as an invitee of `meeting`.
+
+  Serves BOTH account-holding kinds. An internal user and an external
+  qualified user produce the same row — external-ness is not stored here, it
+  is a property of the user's org membership (`org_memberships.external`),
+  which `Platform.Accounts.ExternalAdmission.admit/2` already wrote. This
+  function deliberately does not re-check that membership: an invite is a
+  *declaration*, admission is a separate gate, and conflating them would mean
+  a host could not name someone before their access was provisioned — the
+  exact limitation this table exists to remove.
+
+  Idempotent on the partial `unique_index(:meeting_invites, [:meeting_id,
+  :user_id])`: re-inviting returns the EXISTING row as `{:ok, invite}` rather
+  than an error, so a double-submit does not 500 a caller. The insert is still
+  attempted and its constraint error still handled, so two concurrent callers
+  race to the same row instead of one of them blowing up.
+
+  Options: `:display_name`, `:email` — both optional, both pass-through. The
+  user's own record is authoritative for their name, so these are only useful
+  when the host wants to record what they typed.
+  """
+  @spec invite_user(Meeting.t(), binary(), keyword()) ::
+          {:ok, Invite.t()} | {:error, Ecto.Changeset.t()}
+  def invite_user(%Meeting{} = meeting, user_id, opts \\ []) when is_binary(user_id) do
+    attrs = %{
+      meeting_id: meeting.id,
+      user_id: user_id,
+      display_name: Keyword.get(opts, :display_name),
+      email: Keyword.get(opts, :email)
+    }
+
+    case Repo.get_by(Invite, meeting_id: meeting.id, user_id: user_id) do
+      %Invite{} = existing ->
+        {:ok, existing}
+
+      nil ->
+        %Invite{}
+        |> Invite.changeset(attrs)
+        |> Repo.insert()
+        |> case do
+          {:ok, invite} ->
+            {:ok, invite}
+
+          {:error, changeset} ->
+            # Lost a race with a concurrent invite of the same user: the
+            # unique index fired between our lookup and our insert. The row
+            # the other caller wrote is the answer, not an error.
+            case Repo.get_by(Invite, meeting_id: meeting.id, user_id: user_id) do
+              %Invite{} = existing -> {:ok, existing}
+              nil -> {:error, changeset}
+            end
+        end
+    end
+  end
+
+  @doc """
+  Declare a guest — someone with no account — as an invitee, and mint the
+  signed link that lets them in.
+
+  Returns `{:ok, %{invite: %Invite{}, token: binary, url: binary}}`.
+
+  `display_name` is required. The database's `meeting_invites_identity_check`
+  enforces it (a row with neither `user_id` nor `display_name` is an
+  unattributable invite), but it is validated in the changeset too so the
+  caller gets `{:error, changeset}` instead of a raised `Postgrex.Error`.
+
+  Optional `email` — the only address a guest can be reached at, since they
+  have no account. Optional `expires_in_hours`, defaulting to
+  #{@guest_invite_default_expiry_hours}.
+
+  ## Order of operations, and why
+
+  The row is inserted FIRST so its id exists to sign into the token. Then a
+  per-invite guest chat space (`create_guest_chat_space/2` — identity
+  bookkeeping, NOT the LiveKit routing space) and finally the token, carrying
+  `invite_id`. That ordering is what makes the token revocable: the id it
+  names is already durable when the signature is computed, so
+  `revoke_invite/1` has a row to stamp and the resolver has a row to check.
+
+  `expires_at` is written to the row AND copied into the token payload. The
+  row is authoritative — a token's expiry cannot be shortened after issue,
+  the row's can.
+
+  One call, one row, one token. Calling this twice for two guests on one
+  meeting yields two distinct tokens; there is no shared meeting-wide link
+  (see the section comment above for why that matters).
+  """
+  @spec invite_guest(Meeting.t(), map() | keyword()) ::
+          {:ok, %{invite: Invite.t(), token: binary(), url: binary()}}
+          | {:error, Ecto.Changeset.t() | atom() | term()}
+  def invite_guest(%Meeting{} = meeting, attrs) do
+    attrs = normalize_attrs(attrs)
+
+    hours = Map.get(attrs, :expires_in_hours) || @guest_invite_default_expiry_hours
+    expires_at = DateTime.add(DateTime.utc_now(), trunc(hours * 3600), :second)
+    display_name = Map.get(attrs, :display_name)
+
+    changeset =
+      %Invite{}
+      |> Invite.changeset(%{
+        meeting_id: meeting.id,
+        display_name: display_name,
+        email: Map.get(attrs, :email),
+        expires_at: expires_at
+      })
+      |> Ecto.Changeset.validate_required([:display_name])
+
+    with {:ok, invite} <- Repo.insert(changeset),
+         {:ok, guest_space} <-
+           create_guest_chat_space(meeting, Map.get(attrs, :host_user_id)) do
+      token =
+        GuestInvite.sign(
+          meeting.slug,
+          DateTime.to_unix(expires_at),
+          invite.display_name,
+          guest_space_id: guest_space.id,
+          meeting_id: meeting.id,
+          # The whole point: this token names ONE row, so it can be revoked
+          # on its own.
+          invite_id: invite.id
+        )
+
+      {:ok, %{invite: invite, token: token, url: guest_invite_url(meeting, token)}}
+    end
+  end
+
+  @doc """
+  List a meeting's declared invitees, oldest first.
+
+  `include_revoked: false` by default — a revoked invitee is not an invitee,
+  and every reader in v1 (the notifier above all) wants the live set. Pass
+  `include_revoked: true` for an audit view.
+
+  Ordered by `inserted_at`, with `id` as a tiebreak so the order is total
+  rather than merely usually-stable; ids are UUIDv7, so the tiebreak sorts the
+  same direction as the timestamp.
+  """
+  @spec list_invites(binary(), keyword()) :: [Invite.t()]
+  def list_invites(meeting_id, opts \\ []) when is_binary(meeting_id) do
+    query =
+      from(i in Invite,
+        where: i.meeting_id == ^meeting_id,
+        order_by: [asc: i.inserted_at, asc: i.id]
+      )
+
+    query =
+      if Keyword.get(opts, :include_revoked, false) do
+        query
+      else
+        from(i in query, where: is_nil(i.revoked_at))
+      end
+
+    Repo.all(query)
+  end
+
+  @doc """
+  Revoke an invite, by struct or by id. Returns `{:ok, invite}` with
+  `revoked_at` stamped, or `{:error, :not_found}` for an unknown id.
+
+  Idempotent, and idempotent against the ROW rather than against the struct
+  the caller happens to be holding: the update is guarded by `is_nil(
+  revoked_at)` in SQL, so a second revoke — even one passing a stale struct
+  loaded before the first — returns the row with its ORIGINAL `revoked_at`
+  rather than re-stamping it. That matters because `revoked_at` is evidence of
+  when access was cut; silently moving it forward would rewrite that record.
+  """
+  @spec revoke_invite(Invite.t() | binary()) :: {:ok, Invite.t()} | {:error, :not_found}
+  def revoke_invite(%Invite{id: id}), do: revoke_invite(id)
+
+  def revoke_invite(invite_id) when is_binary(invite_id) do
+    now = DateTime.utc_now()
+
+    query =
+      from(i in Invite,
+        where: i.id == ^invite_id and is_nil(i.revoked_at),
+        select: i
+      )
+
+    case Repo.update_all(query, set: [revoked_at: now, updated_at: now]) do
+      {1, [invite]} ->
+        {:ok, invite}
+
+      {0, _} ->
+        case Repo.get(Invite, invite_id) do
+          %Invite{} = already_revoked -> {:ok, already_revoked}
+          nil -> {:error, :not_found}
+        end
+    end
+  end
+
+  defp guest_invite_url(%Meeting{} = meeting, token) do
+    host = Application.get_env(:platform, :meeting_guest_host)
+
+    "https://#{host}/#{meeting.slug}/#{token}"
   end
 
   # ── Meeting helpers (private) ────────────────────────────────────────────
