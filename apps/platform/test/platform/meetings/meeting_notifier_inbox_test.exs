@@ -55,14 +55,47 @@ defmodule Platform.Meetings.MeetingNotifierInboxTest do
   end
 
   defmodule NotifStub do
-    @moduledoc "No-op stand-in for `Platform.Notifications` push fan-out."
-    def fan_out_to_humans(_recipients, _payload, _opts \\ []), do: :ok
+    @moduledoc """
+    Stand-in for `Platform.Notifications` push fan-out. Records BOTH entry
+    points so a test can tell the two push paths apart:
+
+      * `{:push_humans, participant_row_ids, payload, opts}` — the
+        chat-participant path (`fan_out_to_humans/3`).
+      * `{:push_user, user_id, payload}` — the user-keyed path
+        (`fan_out_to_user/2`), the only one that can reach an invitee who is
+        not in the meeting's chat space.
+
+    Recording rather than no-op'ing lets the fallback test assert the push
+    *and* the inbox arm in one place — the fallback is the path every
+    pre-existing meeting takes, so it is worth proving end to end.
+    """
+    def install(pid \\ self()) do
+      :persistent_term.put({__MODULE__, :owner}, pid)
+    end
+
+    def fan_out_to_humans(recipients, payload, opts \\ []) do
+      notify({:push_humans, recipients, payload, opts})
+    end
+
+    def fan_out_to_user(user_id, payload, opts \\ []) do
+      notify({:push_user, user_id, payload, opts})
+    end
+
+    defp notify(msg) do
+      case :persistent_term.get({__MODULE__, :owner}, nil) do
+        nil -> :ok
+        owner -> send(owner, msg)
+      end
+
+      :ok
+    end
   end
 
   setup do
     Application.put_env(:platform, :inbox_module, InboxRecorder)
     Application.put_env(:platform, :notifications_module, NotifStub)
     InboxRecorder.install(self())
+    NotifStub.install(self())
 
     on_exit(fn ->
       Application.delete_env(:platform, :inbox_module)
@@ -234,6 +267,185 @@ defmodule Platform.Meetings.MeetingNotifierInboxTest do
 
       assert_receive {:inbox_emit, %{user_id: ^a_uid} = attrs}, 2_000
       assert attrs.body == "Host: Someone · 1 invited"
+    end
+  end
+
+  # ── Declared invitees vs the chat-participant fallback ────────────────────
+  #
+  # `Meetings.recipients_for_meeting/1` picks between two rules. Both are
+  # exercised against the SAME fixture — a chat space holding the host plus
+  # three other users — so the only difference between the branches is whether
+  # invite rows exist. That matters because the failure being guarded against
+  # is silent: a wrong fallback emits nothing, logs nothing, and raises
+  # nothing, and EVERY meeting that predates `meeting_invites` takes it.
+
+  describe "invite-driven fan-out" do
+    # Host + three non-host user participants, all real users so the invite
+    # rows' `user_id` FK resolves. Deliberately three, so the chat-participant
+    # count (3) can never coincide with the invitee counts asserted below.
+    defp host_and_three(project_name, meeting_name) do
+      project = create_project(project_name)
+      _pid = start_notifier!()
+
+      meeting = create_meeting(project, meeting_name)
+
+      host = create_user("Host")
+      one = create_user("One")
+      two = create_user("Two")
+      three = create_user("Three")
+
+      host_p = add_user_participant(meeting, host.id, "Host")
+      _ = add_user_participant(meeting, one.id, "One")
+      _ = add_user_participant(meeting, two.id, "Two")
+      _ = add_user_participant(meeting, three.id, "Three")
+
+      %{
+        meeting: assign_host(meeting, host_p),
+        host: host,
+        host_p: host_p,
+        one: one,
+        two: two,
+        three: three
+      }
+    end
+
+    test "notifies the declared invitee and NOT the uninvited chat participants" do
+      ctx = host_and_three("Invite Path", "Kickoff")
+
+      {:ok, _user_invite} = Meetings.invite_user(ctx.meeting, ctx.one.id)
+      {:ok, %{invite: _}} = Meetings.invite_guest(ctx.meeting, %{display_name: "Grace"})
+
+      {:ok, _live} = Meetings.start_meeting(ctx.meeting)
+
+      one_id = ctx.one.id
+      two_id = ctx.two.id
+      three_id = ctx.three.id
+      host_id = ctx.host.id
+
+      assert_receive {:inbox_emit, %{user_id: ^one_id} = attrs}, 2_000
+      assert attrs.kind == "meeting_starting"
+      assert attrs.source_id == ctx.meeting.id
+
+      # The count is the DECLARED set — 1 user invite + 1 guest invite — not
+      # the 3 non-host chat participants. The two numbers differ on purpose:
+      # a fixture where they coincided would pass identically against the
+      # pre-invite implementation and prove nothing.
+      assert attrs.body == "Host: Host · 2 invited"
+
+      # Both halves. Asserting only that the invitee was notified passes on an
+      # implementation that notifies everybody — which is the bug being fixed.
+      refute_receive {:inbox_emit, %{user_id: ^two_id}}, 300
+      refute_receive {:inbox_emit, %{user_id: ^three_id}}, 300
+      refute_receive {:inbox_emit, %{user_id: ^host_id}}, 300
+
+      # The guest counts toward "2 invited" but gets no row of their own —
+      # no account to hang one on. Nothing else was emitted at all.
+      refute_receive {:inbox_emit, _}, 200
+
+      # Push is user-keyed on this branch: `fan_out_to_humans/3` takes
+      # chat-participant ROW ids and could not address an invitee outside the
+      # space even if it wanted to.
+      assert_receive {:push_user, ^one_id, _payload, _opts}, 2_000
+      refute_receive {:push_user, _, _, _}, 200
+      refute_receive {:push_humans, _, _, _}, 200
+    end
+
+    test "with ZERO invite rows, every non-host chat participant is still notified" do
+      # THE REGRESSION SURFACE. Every meeting in production has no invite rows.
+      ctx = host_and_three("Fallback Path", "Legacy")
+
+      assert Meetings.list_invites(ctx.meeting.id) == []
+
+      assert %{source: :chat_participants, invitee_count: 3} =
+               Meetings.recipients_for_meeting(ctx.meeting)
+
+      {:ok, _live} = Meetings.start_meeting(ctx.meeting)
+
+      emits = collect_emits(3)
+
+      assert Map.has_key?(emits, ctx.one.id)
+      assert Map.has_key?(emits, ctx.two.id)
+      assert Map.has_key?(emits, ctx.three.id)
+      refute Map.has_key?(emits, ctx.host.id)
+
+      assert emits[ctx.one.id].body == "Host: Host · 3 invited"
+      refute_receive {:inbox_emit, _}, 200
+
+      # Push stays on the participant-row path, host dropped by the opt (not
+      # by pre-filtering the list) exactly as before invites existed.
+      assert_receive {:push_humans, row_ids, payload, opts}, 2_000
+      assert length(row_ids) == 4
+      assert ctx.host_p.id in row_ids
+      assert Keyword.get(opts, :exclude_participant_id) == ctx.host_p.id
+      assert payload.body == "Legacy"
+      refute_receive {:push_user, _, _, _}, 200
+    end
+
+    test "a revoked user invite does not resurrect the chat-participant fallback" do
+      ctx = host_and_three("Revoked Invite", "Board")
+
+      {:ok, user_invite} = Meetings.invite_user(ctx.meeting, ctx.one.id)
+      {:ok, %{invite: _guest}} = Meetings.invite_guest(ctx.meeting, %{display_name: "Grace"})
+      {:ok, _revoked} = Meetings.revoke_invite(user_invite)
+
+      # One guest invite survives, so the meeting still carries a declaration.
+      # `list_invites/2` excludes revoked rows, so the count reads 1 — and the
+      # resolution must NOT read the empty *user* set as "no declaration".
+      assert %{source: :invites, user_ids: [], invitee_count: 1} =
+               Meetings.recipients_for_meeting(ctx.meeting)
+
+      {:ok, _live} = Meetings.start_meeting(ctx.meeting)
+
+      # Nobody is invited who has an account, so nobody gets a row — and in
+      # particular the three chat participants do not.
+      refute_receive {:inbox_emit, _}, 500
+      refute_receive {:push_user, _, _, _}, 200
+      refute_receive {:push_humans, _, _, _}, 200
+    end
+
+    test "a host self-invite neither notifies the host nor inflates the count" do
+      ctx = host_and_three("Host Self Invite", "Ops")
+
+      {:ok, _} = Meetings.invite_user(ctx.meeting, ctx.host.id)
+      {:ok, _} = Meetings.invite_user(ctx.meeting, ctx.one.id)
+
+      # Two invite rows, one of them the host's own — the host is not their
+      # own invitee, so both the recipient list and the count drop them.
+      assert %{source: :invites, invitee_count: 1} =
+               Meetings.recipients_for_meeting(ctx.meeting)
+
+      {:ok, _live} = Meetings.start_meeting(ctx.meeting)
+
+      one_id = ctx.one.id
+      host_id = ctx.host.id
+
+      assert_receive {:inbox_emit, %{user_id: ^one_id} = attrs}, 2_000
+      assert attrs.body == "Host: Host · 1 invited"
+
+      refute_receive {:inbox_emit, %{user_id: ^host_id}}, 300
+      refute_receive {:push_user, ^host_id, _, _}, 200
+    end
+
+    test "an invitee who is already active in the meeting is skipped, count unchanged" do
+      ctx = host_and_three("Invite Active Skip", "Sync")
+
+      {:ok, _} = Meetings.invite_user(ctx.meeting, ctx.one.id)
+      {:ok, _} = Meetings.invite_user(ctx.meeting, ctx.two.id)
+
+      # One is already in the room → no inbox row for them.
+      _room = mark_active(ctx.meeting, ctx.one.id, "One")
+
+      {:ok, _live} = Meetings.start_meeting(ctx.meeting)
+
+      two_id = ctx.two.id
+      one_id = ctx.one.id
+
+      assert_receive {:inbox_emit, %{user_id: ^two_id} = attrs}, 2_000
+      # The declared count is 2 and stays 2: the active-skip suppresses a row,
+      # it does not un-invite anyone.
+      assert attrs.body == "Host: Host · 2 invited"
+
+      refute_receive {:inbox_emit, %{user_id: ^one_id}}, 300
     end
   end
 

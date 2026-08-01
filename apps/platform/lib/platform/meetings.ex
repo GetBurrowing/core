@@ -1283,6 +1283,119 @@ defmodule Platform.Meetings do
     end
   end
 
+  @doc """
+  Resolve who should be notified about `meeting`, and say which rule answered.
+
+  Returns
+
+      %{
+        source: :invites | :chat_participants,
+        user_ids: [binary()],
+        chat_participants: [Platform.Chat.Participant.t()],
+        invitee_count: non_neg_integer()
+      }
+
+  ## Why this is a context function and not private to `MeetingNotifier`
+
+  The notifier is a supervised GenServer, so a rule living inside it can only
+  be tested by booting it under `start_supervised/1` inside the Ecto sandbox
+  and inferring the rule from its side effects. A plain context function is
+  callable directly, which is what lets the fallback below be pinned on its
+  own terms rather than through an inbox emit.
+
+  ## The empty-invite fallback is the production path, not an edge case
+
+  Every meeting that existed before `meeting_invites` has zero invite rows, and
+  will keep having zero until a host declares one. So the `[]` branch has to
+  reproduce the previous behaviour EXACTLY — `Chat.list_participants(
+  chat_space_id, participant_type: "user")`, host dropped by chat-participant
+  ROW id. If it does not, every pre-existing meeting silently stops notifying:
+  an empty recipient list raises nothing, logs no error, and returns `:ok`.
+
+  That is why `user_ids` on this branch is a bare `Enum.map/2` over
+  `participant_id` with no `uniq/1` and no nil rejection. Both would look like
+  tidying and neither is: they would change what the only path production
+  currently takes does. Filtering belongs on the `:invites` branch, which is
+  new and has no behaviour to preserve.
+
+  ## `:invites` deliberately carries no chat participants
+
+  `chat_participants: []` on the invite branch is not an omission. The point of
+  a declared invitee set is that an invitee need not be in the meeting's chat
+  space at all, so a caller reaching for a chat-participant row here would be
+  reintroducing the bug this table exists to fix. There is nothing to hand it.
+
+  `user_ids` excludes the host, resolved from `host_participant_id` — for a
+  `participant_type: "user"` chat row, `participant_id` holds the `users.id`.
+  A host does not need to be told about their own meeting.
+
+  `invitee_count` counts every non-revoked invite except a host self-invite,
+  **guests included**. A guest is an invitee even though they get no push and
+  no inbox row (they have no account; their channel is the per-invite link), so
+  the "N invited" a recipient reads has to match the list the host typed. It is
+  therefore NOT `length(user_ids)`, and the two genuinely differ whenever a
+  guest is invited.
+  """
+  @spec recipients_for_meeting(Meeting.t()) :: %{
+          source: :invites | :chat_participants,
+          user_ids: [binary()],
+          chat_participants: [Chat.Participant.t()],
+          invitee_count: non_neg_integer()
+        }
+  def recipients_for_meeting(%Meeting{} = meeting) do
+    case list_invites(meeting.id) do
+      [] -> recipients_from_chat_participants(meeting)
+      invites -> recipients_from_invites(meeting, invites)
+    end
+  end
+
+  defp recipients_from_chat_participants(%Meeting{} = meeting) do
+    chat_participants = Chat.list_participants(meeting.chat_space_id, participant_type: "user")
+
+    non_host = Enum.reject(chat_participants, &(&1.id == meeting.host_participant_id))
+
+    %{
+      source: :chat_participants,
+      user_ids: Enum.map(non_host, & &1.participant_id),
+      chat_participants: chat_participants,
+      invitee_count: length(non_host)
+    }
+  end
+
+  defp recipients_from_invites(%Meeting{} = meeting, invites) do
+    host_user_id = host_user_id(meeting)
+
+    non_host_invites =
+      Enum.reject(invites, fn invite ->
+        not is_nil(host_user_id) and invite.user_id == host_user_id
+      end)
+
+    user_ids =
+      non_host_invites
+      |> Enum.map(& &1.user_id)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    %{
+      source: :invites,
+      user_ids: user_ids,
+      chat_participants: [],
+      invitee_count: length(non_host_invites)
+    }
+  end
+
+  # Resolved by query rather than off a preload: callers hand us whatever
+  # `%Meeting{}` they are holding, and a `%Ecto.Association.NotLoaded{}` here
+  # would silently read as "no host" — which quietly re-invites the host.
+  defp host_user_id(%Meeting{host_participant_id: nil}), do: nil
+
+  defp host_user_id(%Meeting{host_participant_id: participant_id}) do
+    case Chat.get_participant(participant_id) do
+      %Chat.Participant{participant_type: "user", participant_id: user_id} -> user_id
+      _ -> nil
+    end
+  end
+
   defp guest_invite_url(%Meeting{} = meeting, token) do
     host = Application.get_env(:platform, :meeting_guest_host)
 

@@ -5,10 +5,30 @@ defmodule Platform.Meetings.MeetingNotifier do
 
   Sits in the supervision tree (not in a LiveView) because the per-session
   subscriber in `PlatformWeb.MeetingLive` only fires when a meetings page is
-  open — drops the broadcast otherwise. Recipients are the human participants
-  of the meeting's backing chat space (Option A scope: smallest blast radius,
-  structurally cheapest); agents are excluded by `participant_type: "user"`
-  and the host is excluded by `:exclude_participant_id`.
+  open — drops the broadcast otherwise.
+
+  ## Recipients are resolved by the context, not here
+
+  `Platform.Meetings.recipients_for_meeting/1` answers who gets told, and says
+  which rule answered. Two shapes come back and this module fans out
+  differently for each:
+
+    * `source: :invites` — the meeting has a declared invitee set
+      (`meeting_invites`). Push goes out per invited user via
+      `Platform.Notifications.fan_out_to_user/2`, because `fan_out_to_humans/3`
+      takes chat-participant ROW ids and therefore structurally cannot reach an
+      invitee who is not in the meeting's chat space — the exact gap the invite
+      table exists to close. Guests produce no push and no inbox row: they have
+      no account, and their delivery channel is the per-invite link.
+    * `source: :chat_participants` — no declaration exists, so recipients are
+      the human participants of the meeting's backing chat space, exactly as
+      before invites existed. Agents are excluded by `participant_type: "user"`
+      and the host by `:exclude_participant_id`.
+
+  **The second branch is not a fallback in the "rare" sense.** Every meeting
+  that predates `meeting_invites` has zero invite rows, so it is the only path
+  production takes until a host declares an invitee. If it breaks, the failure
+  is silent — an empty recipient list emits nothing and raises nothing.
 
   ## Subscription strategy
 
@@ -48,7 +68,6 @@ defmodule Platform.Meetings.MeetingNotifier do
 
   require Logger
 
-  alias Platform.Chat
   alias Platform.Chat.Participant
   alias Platform.Meetings
   alias Platform.Meetings.Meeting
@@ -151,11 +170,10 @@ defmodule Platform.Meetings.MeetingNotifier do
         _ -> "Someone"
       end
 
-    # Single recipient source for BOTH the #440 push path and the inbox path:
-    # the meeting's backing chat space's human participants.
-    user_participants = Chat.list_participants(meeting.chat_space_id, participant_type: "user")
-
-    recipients = Enum.map(user_participants, & &1.id)
+    # Single recipient source for BOTH the #440 push path and the inbox path.
+    # Which rule answered is carried on `:source` and drives the push branch
+    # below; the inbox branch is the same either way.
+    recipients = Meetings.recipients_for_meeting(meeting)
 
     payload = %{
       title: "#{host_display_name} started a meeting",
@@ -165,25 +183,47 @@ defmodule Platform.Meetings.MeetingNotifier do
 
     Logger.info(
       "[MeetingNotifier] meeting_started — meeting=#{meeting.id} " <>
-        "project=#{meeting.project_id} recipients=#{length(recipients)}"
+        "project=#{meeting.project_id} source=#{recipients.source} " <>
+        "invitees=#{recipients.invitee_count} recipients=#{length(recipients.user_ids)}"
     )
 
-    # #440 push fan-out — must stay byte-for-byte identical (no regression).
-    notifications_module().fan_out_to_humans(recipients, payload,
-      exclude_participant_id: meeting.host_participant_id
-    )
+    fan_out_push(meeting, recipients, payload)
 
     # Parallel, additive inbox fan-out: one durable Inbox row per invited
     # human. Independent of the push path above — a per-recipient failure
     # never aborts the push or the remaining rows.
-    fan_out_inbox(meeting, user_participants, host_display_name)
+    fan_out_inbox(meeting, recipients, host_display_name)
   end
 
-  # Emit one `meeting_starting` inbox row per invited human, skipping the
-  # host (no self-row) and anyone already active in the meeting (no attention
-  # needed). `invitee_count` is the candidate count (user participants minus
-  # host), independent of the already-active skip.
-  defp fan_out_inbox(%Meeting{} = meeting, user_participants, host_display_name) do
+  # No declaration: the #440 participant-row push path, unchanged. Passes the
+  # FULL participant list (host included) and lets `fan_out_to_humans/3` drop
+  # the host via `:exclude_participant_id`, exactly as before invites existed.
+  defp fan_out_push(%Meeting{} = meeting, %{source: :chat_participants} = recipients, payload) do
+    participant_row_ids = Enum.map(recipients.chat_participants, & &1.id)
+
+    notifications_module().fan_out_to_humans(participant_row_ids, payload,
+      exclude_participant_id: meeting.host_participant_id
+    )
+  end
+
+  # Declared invitees: user-keyed push, one call per invited user.
+  # `fan_out_to_humans/3` is NOT usable here — it takes chat-participant row
+  # ids, so it cannot address an invitee who has no row in this meeting's chat
+  # space, which is precisely who the invite table was added to reach.
+  # `fan_out_to_user/2` resolves subscriptions across all of a user's
+  # participant rows and dedups by endpoint.
+  defp fan_out_push(%Meeting{}, %{source: :invites} = recipients, payload) do
+    Enum.each(recipients.user_ids, fn user_id ->
+      notifications_module().fan_out_to_user(user_id, payload)
+    end)
+  end
+
+  # Emit one `meeting_starting` inbox row per invited human, skipping anyone
+  # already active in the meeting (no attention needed). The host is already
+  # absent from `user_ids` on both branches. `invitee_count` is the declared
+  # count, independent of the already-active skip — and on the `:invites`
+  # branch it includes guests, who get no row of their own.
+  defp fan_out_inbox(%Meeting{} = meeting, recipients, host_display_name) do
     active_user_ids =
       meeting.chat_space_id
       |> Meetings.active_participants_for_space()
@@ -191,18 +231,9 @@ defmodule Platform.Meetings.MeetingNotifier do
       |> Enum.reject(&is_nil/1)
       |> MapSet.new()
 
-    invitees =
-      Enum.reject(user_participants, fn p -> p.id == meeting.host_participant_id end)
-
-    invitee_count = length(invitees)
-
-    Enum.each(invitees, fn participant ->
-      # For a `participant_type: "user"` chat row, participant_id holds the
-      # users.id FK.
-      user_id = participant.participant_id
-
+    Enum.each(recipients.user_ids, fn user_id ->
       unless MapSet.member?(active_user_ids, user_id) do
-        emit_inbox_row(meeting, user_id, host_display_name, invitee_count)
+        emit_inbox_row(meeting, user_id, host_display_name, recipients.invitee_count)
       end
     end)
   end
