@@ -16,7 +16,7 @@ defmodule Platform.Meetings.IntentRoutingTest do
   and the row times out 90 seconds later against a listener that was
   never there. Nothing goes red; the meeting just gets slower.
   """
-  use ExUnit.Case, async: true
+  use Platform.DataCase, async: true
 
   alias Platform.Meetings.IntentRouting
   alias Platform.Responsibilities.Providers.Meetings, as: MeetingsProvider
@@ -102,7 +102,36 @@ defmodule Platform.Meetings.IntentRoutingTest do
       end
     end
 
-    test "every routing row's key is in the bundle of the role it names" do
+    test "every routing row's key is in the SEEDED bundle of the role it names" do
+      # Against the DATABASE, not `Seeds.default_roles/0`. This
+      # distinction is the whole reason this test exists in this shape.
+      #
+      # The code-list version of this assertion was green while
+      # production had no bundle rows at all for these keys, because
+      # `Roles.Seeds.seed_defaults/0` runs from a migration and Ecto
+      # invokes each migration exactly once per version — so a bundle
+      # key added to `@default_roles` afterwards never reaches an
+      # already-migrated database. Found on prod after deploying, with
+      # every other check green: responsibility rows present and
+      # enabled, Router subscribed to all five topics, prompt rows
+      # correct, and `assignee_for/1` still nil for all five.
+      #
+      # That is the quiet failure. The dispatcher forks, the Router
+      # receives the broadcast, resolves nobody, and answers
+      # `{:ok, :unfilled}` — which reads like success. Nothing stalls,
+      # nothing errors, the feature is simply inert.
+      for %{key: key, role: role} <- IntentRouting.entries() do
+        seeded = Platform.Roles.bundle_for(role)
+
+        assert key in seeded,
+               "#{key} routes to #{role} but no role_responsibilities row pairs them. " <>
+                 "Adding the key to Roles.Seeds.@default_roles is not enough on an " <>
+                 "already-migrated database — it needs a migration that re-runs " <>
+                 "seed_defaults/0 (see 20260801022000_seed_meeting_intent_role_bundles)."
+      end
+    end
+
+    test "every routing row's key is in the declared bundle of the role it names" do
       bundles =
         Map.new(Seeds.default_roles(), fn role -> {role.key, role.bundle} end)
 
