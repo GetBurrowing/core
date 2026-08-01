@@ -145,13 +145,11 @@ defmodule Platform.Meetings.GuestInviteTest do
       assert payload.invite_id == invite_id
     end
 
-    test "a legacy token minted without invite_id still verifies and yields invite_id: nil" do
+    test "omitting the invite_id opt yields invite_id: nil" do
       expires_at = future_ts(3600)
       space_id = Ecto.UUID.generate()
       meeting_id = Ecto.UUID.generate()
 
-      # Exactly the pre-019fb954 mint shape: guest_space_id + meeting_id,
-      # no invite_id. This is what the only live mint site produces today.
       token =
         GuestInvite.sign("standup-2026-07", expires_at, nil,
           guest_space_id: space_id,
@@ -159,14 +157,44 @@ defmodule Platform.Meetings.GuestInviteTest do
         )
 
       assert {:ok, payload} = GuestInvite.verify(token)
-      # Normalised: the key is always present, even for legacy tokens.
-      assert Map.has_key?(payload, :invite_id)
       assert is_nil(payload.invite_id)
       # And the rest of the payload is untouched by the new key.
       assert payload.meeting_slug == "standup-2026-07"
       assert payload.guest_space_id == space_id
       assert payload.meeting_id == meeting_id
       assert is_nil(payload.display_name)
+    end
+
+    test "a genuinely legacy token whose payload OMITS the key verifies and normalises to nil" do
+      # This must be hand-signed, and that is the whole point. Every token
+      # `sign/4` produces now carries `invite_id:` explicitly (nil when the
+      # opt is omitted), so a token minted through the module can never
+      # exercise the `Map.put/3` normalisation in `verify/2` — the key is
+      # already there. Only a token minted by the PREVIOUS version of this
+      # module has a payload map lacking the key, and that is exactly the
+      # shape sitting in every guest invite URL in the wild right now.
+      #
+      # Measured, not assumed: with the sign/4-minted "legacy" test above
+      # as the only coverage, deleting the `Map.put(:invite_id, ...)` line
+      # left the suite green. Same held for the pre-existing
+      # `Map.put(:meeting_id, ...)`, whose legacy test has the identical
+      # blind spot. This test is what makes both lines load-bearing.
+      token =
+        raw_sign(%{
+          meeting_slug: "standup-2026-07",
+          expires_at: future_ts(3600),
+          display_name: "Juno Fairbanks",
+          guest_space_id: nil
+          # no :meeting_id, no :invite_id — pre-019f9b14 / pre-019fb954
+        })
+
+      assert {:ok, payload} = GuestInvite.verify(token)
+      assert Map.has_key?(payload, :invite_id)
+      assert is_nil(payload.invite_id)
+      assert Map.has_key?(payload, :meeting_id)
+      assert is_nil(payload.meeting_id)
+      assert payload.meeting_slug == "standup-2026-07"
+      assert payload.display_name == "Juno Fairbanks"
     end
 
     test "invite_id: nil roundtrips as nil" do
@@ -320,13 +348,8 @@ defmodule Platform.Meetings.GuestInviteTest do
       # `sign/4` refuses a non-binary invite_id, so this shape can only be
       # produced by something holding the signing key directly. The verify
       # guard exists for that case: a valid HMAC is not a valid payload.
-      # Salt and key are duplicated here deliberately — they are the wire
-      # format, and a test that reached through the module could not mint
-      # a shape the module refuses to mint.
-      key = Application.get_env(:platform, :meeting_guest_signing_key)
-
       token =
-        Plug.Crypto.sign(key, "meeting_guest_invite", %{
+        raw_sign(%{
           meeting_slug: "standup-2026-07",
           expires_at: future_ts(3600),
           display_name: "Juno Fairbanks",
@@ -341,6 +364,18 @@ defmodule Platform.Meetings.GuestInviteTest do
 
   # ---------------------------------------------------------------------
   # Helpers
+
+  # Sign an ARBITRARY payload map with the module's key and salt, bypassing
+  # `sign/4`'s shape guarantees. Needed for two things `sign/4` structurally
+  # cannot produce: a payload that OMITS an optional key (i.e. a token minted
+  # by an older version of the module), and a payload carrying a value the
+  # signer refuses (non-binary ids). Key and salt are duplicated here on
+  # purpose — they are the token's wire format, and reaching through the
+  # module would defeat the point.
+  defp raw_sign(payload) do
+    key = Application.get_env(:platform, :meeting_guest_signing_key)
+    Plug.Crypto.sign(key, "meeting_guest_invite", payload)
+  end
 
   # Plug.Crypto tokens are `header.body.signature` (three base64url
   # segments separated by `.`). We flip a character in either the body or
