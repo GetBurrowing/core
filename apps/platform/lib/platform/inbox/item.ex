@@ -20,7 +20,14 @@ defmodule Platform.Inbox.Item do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting task_sponsor_assigned)
+  # `meeting_invited` and `meeting_starting` are deliberately distinct kinds:
+  # an INVITE is asynchronous ("you are on the list for a meeting later"),
+  # while `meeting_starting` fires when the meeting is beginning NOW. Different
+  # trigger, different urgency, different copy — and only a typed invite row can
+  # be grouped or counted as an invite. No migration is needed to add a kind:
+  # `inbox_items.kind` is a plain string column with no DB CHECK; the enum is
+  # guarded solely by `validate_inclusion(:kind, @kinds)` below.
+  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited task_sponsor_assigned)
   # `task_review` is the per-task rollup source for review-gate attention rows:
   # one durable row per (sponsor, task) regardless of how many review requests
   # the task fans out (see `Platform.Tasks.ReviewRequests`). Kept distinct from

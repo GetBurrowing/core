@@ -225,6 +225,163 @@ defmodule PlatformWeb.InboxLiveTest do
     end
   end
 
+  # ── meeting_invited: the typed invite row ──────────────────────────────
+  #
+  # `section_for/1`'s catch-all deliberately routes unknown kinds to :review, so
+  # an invite renders perfectly well WITHOUT the explicit clause — filed under
+  # "Awaiting your review" beside plan reviews. Every test below therefore
+  # asserts BOTH sides (present in Meetings AND absent from Review); an "it
+  # rendered somewhere" assertion passes against the catch-all and proves
+  # nothing.
+
+  describe "meeting_invited rows" do
+    defp invite!(user, overrides \\ []) do
+      emit!(
+        user,
+        Keyword.merge(
+          [
+            kind: "meeting_invited",
+            source_type: "meeting",
+            title: "Rowan invited you to Weekly sync",
+            url: "/meetings/weekly-sync"
+          ],
+          overrides
+        )
+      )
+    end
+
+    # The kind badge text on one row, e.g. "Meeting invite". Scoped to the row
+    # and read as text (not a substring match) because the humanizing catch-all
+    # renders "Meeting invited" — which CONTAINS "Meeting invite", so a `=~`
+    # assertion would stay green with the clause deleted.
+    defp kind_label_text(lv, %Item{id: id}) do
+      lv
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-item-id="#{id}"] [data-role="inbox-item-kind"]))
+      |> LazyHTML.text()
+      |> String.trim()
+    end
+
+    test "renders under Meetings and NOT under Awaiting your review", %{conn: conn} do
+      user = insert_user()
+
+      # A genuine review row so the review section really renders. Without it
+      # the "absent from review" refute would pass trivially (no such section).
+      review =
+        emit!(user,
+          kind: "review_request_pending",
+          source_type: "review_request",
+          title: "Approve the deploy"
+        )
+
+      invite = invite!(user)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      assert has_element?(lv, ~s([data-section="review"]))
+      assert has_element?(lv, ~s([data-section="review"] #{row_selector(review)}))
+
+      # Present in Meetings...
+      assert has_element?(lv, ~s([data-section="meetings"] #{row_selector(invite)}))
+      # ...and NOWHERE in Review. Both halves detonate when
+      # `section_for("meeting_invited")` is removed.
+      refute has_element?(lv, ~s([data-section="review"] #{row_selector(invite)}))
+    end
+
+    test "sits in Meetings alongside a meeting_starting row", %{conn: conn} do
+      user = insert_user()
+
+      starting =
+        emit!(user,
+          kind: "meeting_starting",
+          source_type: "meeting",
+          title: "Standup starting",
+          url: "/meetings/standup"
+        )
+
+      invite = invite!(user)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      assert has_element?(lv, ~s([data-section="meetings"] #{row_selector(starting)}))
+      assert has_element?(lv, ~s([data-section="meetings"] #{row_selector(invite)}))
+      refute has_element?(lv, ~s([data-section="review"]))
+    end
+
+    test "renders the label 'Meeting invite' exactly — not the humanized fallback",
+         %{conn: conn} do
+      user = insert_user()
+      invite = invite!(user)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      # Equality, not `=~`: "Meeting invited" (the Phoenix.Naming.humanize
+      # catch-all) contains "Meeting invite" as a prefix.
+      assert kind_label_text(lv, invite) == "Meeting invite"
+      refute kind_label_text(lv, invite) == "Meeting invited"
+    end
+
+    test "carries the envelope icon, not the meeting_starting camera or the bell catch-all",
+         %{conn: conn} do
+      user = insert_user()
+      invite = invite!(user)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      icon_classes =
+        lv
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s(#{row_selector(invite)} [data-role="inbox-item-kind"] > span))
+        |> LazyHTML.attribute("class")
+        |> Enum.join(" ")
+
+      assert icon_classes =~ "hero-envelope"
+      refute icon_classes =~ "hero-bell"
+      refute icon_classes =~ "hero-video-camera"
+    end
+
+    test "a LIVE-broadcast invite streams into Meetings, not Review", %{conn: conn} do
+      user = insert_user()
+
+      emit!(user,
+        kind: "review_request_pending",
+        source_type: "review_request",
+        title: "Approve the deploy"
+      )
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      refute has_element?(lv, ~s([data-section="meetings"]))
+
+      # The PubSub insert path calls the same section_for/1, so the previously
+      # hidden Meetings section must appear carrying the row.
+      invite = invite!(user, title: "Rowan invited you to Live one")
+
+      assert has_element?(lv, ~s([data-section="meetings"] #{row_selector(invite)}))
+      refute has_element?(lv, ~s([data-section="review"] #{row_selector(invite)}))
+    end
+
+    test "dismissing an invite removes it from Meetings and does not resurface in Review",
+         %{conn: conn} do
+      user = insert_user()
+      invite = invite!(user)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      lv
+      |> element(~s(#{row_selector(invite)} [data-role="inbox-item-dismiss"]))
+      |> render_click()
+
+      # A dismiss routes through `item_sections`, which is built from the same
+      # section_for/1 — a mis-routed row would delete from the wrong stream and
+      # linger on screen.
+      refute has_element?(lv, row_selector(invite))
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, invite.id)
+      assert render(lv) =~ "empty-minimal"
+    end
+  end
+
   # ── Mention space labels (task 019fabe8 stage 4) ───────────────────────
   #
   # `Chat.space_path_segment/1` now emits a UUID for org-scoped and slug-less
