@@ -290,7 +290,11 @@ defmodule PlatformWeb.MeetingLive do
          |> assign(:meeting, nil)
          |> seed_guest_index_fallback_assigns()}
 
-      {:error, :invalid} ->
+      # `:revoked` (task 019fb954) renders as `:invalid` deliberately —
+      # one rendered outcome, no new template branch. A guest whose link
+      # was revoked is told it does not work; telling them it *used to*
+      # would confirm the meeting exists to someone the host just cut off.
+      {:error, reason} when reason in [:invalid, :revoked] ->
         {:ok,
          socket
          |> assign(:page_title, "Invite link is not valid")

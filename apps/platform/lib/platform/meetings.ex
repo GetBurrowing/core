@@ -737,6 +737,8 @@ defmodule Platform.Meetings do
     * `GuestInvite.verify/1` — signature + expiry check.
     * URL-vs-payload `meeting_slug` tampering guard — payload slug must
       equal the URL slug (else `{:error, :invalid}`).
+    * The `meeting_invites` row check — revocation and the row's own
+      expiry (see the section below).
     * Meeting resolution + `:chat_space` preload (a deleted meeting whose
       token was signed pre-deletion resolves to `{:error, :invalid}`).
     * Display-name branching — `nil` in the payload signals the
@@ -773,9 +775,47 @@ defmodule Platform.Meetings do
       on a project, and the lookup never raises. With the 24h default
       expiry these age out within a day.
 
+  ## Revocation lives here, not in the token module (task 019fb954)
+
+  An HMAC is stateless: once signed it verifies until its embedded
+  expiry passes, and nothing can un-issue it. `GuestInvite.verify/2` is
+  a pure function with no `Repo` access and must stay that way, so
+  revocation cannot live there. This function is already the
+  `Repo`-backed resolver, so the gate goes here — after the signature
+  clears, before the meeting is resolved.
+
+  A token minted by `invite_guest/2` names a `meeting_invites` row via
+  `:invite_id`. That row is the authority on whether the link still
+  works:
+
+    * row missing — `{:error, :invalid}`. A token naming an invite that
+      no longer exists is not a capability.
+    * `revoked_at` set — `{:error, :revoked}`.
+    * row's `expires_at` in the past — `{:error, :expired}`. The row is
+      authoritative and the token carries only a copy, so tampering with
+      neither alone extends access: the token's expiry is checked by
+      `verify/2` and the row's is checked here.
+    * row's `meeting_id` disagrees with the payload's — `{:error,
+      :invalid}`. `nil` disagrees with a uuid, so a payload carrying an
+      `invite_id` but no `meeting_id` (a shape `invite_guest/2` never
+      produces) is refused too.
+
+  Because the token names a ROW, revoking one guest is a single-row
+  `UPDATE` and touches no shared secret. Do NOT ever implement guest
+  revocation by rotating `:meeting_guest_signing_key` or by stamping
+  anything on the meeting — either kills every outstanding guest link at
+  once, which is the opposite of what this exists to do.
+
+  `invite_id: nil` (every token minted before this task, including
+  everything the guest-link mint site in `MeetingLive` still produces)
+  skips the lookup entirely and behaves exactly as it did before. That
+  compatibility branch is load-bearing until those tokens age out.
+
   `PlatformWeb.MeetingLive` (with `chrome_mode: :none` on the `meet.`
   host scope) mounts against this resolver so guest-surface behavior
-  can't drift from what `Meetings` intends to return.
+  can't drift from what `Meetings` intends to return. It maps `:revoked`
+  onto the same rendered outcome as `:invalid` — a revoked guest is told
+  the link does not work, not that it *used* to.
 
   Return shape:
 
@@ -787,14 +827,17 @@ defmodule Platform.Meetings do
       display_name: binary()}}` — token verified, payload carried a
       pre-provisioned display name. Caller should call
       `mint_guest_join_bundle/2` next.
-    * `{:error, :expired}` — token past its `expires_at`.
+    * `{:error, :expired}` — token past its own `expires_at`, or the
+      named invite row past the row's.
+    * `{:error, :revoked}` — the named invite row carries a `revoked_at`.
     * `{:error, :invalid}` — signature/shape check failed, slug mismatch,
-      or the meeting slug no longer resolves.
+      the meeting slug no longer resolves, the named invite row is gone,
+      or the row and the payload name different meetings.
   """
   @spec resolve_guest_invite(String.t(), String.t()) ::
           {:ok, %{state: :name_entry, meeting: Meeting.t()}}
           | {:ok, %{state: :in_meeting, meeting: Meeting.t(), display_name: String.t()}}
-          | {:error, :invalid | :expired}
+          | {:error, :invalid | :expired | :revoked}
   def resolve_guest_invite(slug, token) when is_binary(slug) and is_binary(token) do
     case GuestInvite.verify(token) do
       {:error, :expired} ->
@@ -810,21 +853,72 @@ defmodule Platform.Meetings do
         {:error, :invalid}
 
       {:ok, %{meeting_slug: ^slug, display_name: display_name} = payload} ->
-        case resolve_invited_meeting(payload, slug) do
-          {:error, :invalid} ->
-            # Signature checked out but the target meeting has been
-            # deleted, never existed, or (legacy slug-only token) the
-            # slug matches more than one meeting and we refuse to guess.
-            {:error, :invalid}
+        # The row gate runs BEFORE the meeting is resolved: a revoked
+        # link should not so much as read the meeting it used to admit to.
+        with :ok <- check_invite_row(payload) do
+          case resolve_invited_meeting(payload, slug) do
+            {:error, :invalid} ->
+              # Signature checked out but the target meeting has been
+              # deleted, never existed, or (legacy slug-only token) the
+              # slug matches more than one meeting and we refuse to guess.
+              {:error, :invalid}
 
-          {:ok, meeting} when is_binary(display_name) ->
-            {:ok, %{state: :in_meeting, meeting: meeting, display_name: display_name}}
+            {:ok, meeting} when is_binary(display_name) ->
+              {:ok, %{state: :in_meeting, meeting: meeting, display_name: display_name}}
 
-          {:ok, meeting} ->
-            {:ok, %{state: :name_entry, meeting: meeting}}
+            {:ok, meeting} ->
+              {:ok, %{state: :name_entry, meeting: meeting}}
+          end
         end
     end
   end
+
+  # Legacy token (anything minted before task 019fb954, which is every
+  # token in the wild plus everything the `MeetingLive` guest-link mint
+  # site still produces): it names no row, so there is nothing to check
+  # and the answer must be exactly what it was before this stage. No
+  # lookup, no new error. `verify/2` normalises the key in, so this is
+  # `nil`-valued rather than absent by the time it reaches here.
+  defp check_invite_row(%{invite_id: nil}), do: :ok
+
+  # Row-bound token. The row — not the signature, and not the copy of
+  # `expires_at` baked into the payload — decides whether this link still
+  # works. See the `## Revocation lives here` section on
+  # `resolve_guest_invite/2` for why each branch answers what it does.
+  defp check_invite_row(%{invite_id: invite_id} = payload) when is_binary(invite_id) do
+    case get_invite(invite_id) do
+      nil ->
+        {:error, :invalid}
+
+      %Invite{revoked_at: %DateTime{}} ->
+        {:error, :revoked}
+
+      %Invite{} = invite ->
+        cond do
+          invite_row_expired?(invite) -> {:error, :expired}
+          invite.meeting_id != Map.get(payload, :meeting_id) -> {:error, :invalid}
+          true -> :ok
+        end
+    end
+  end
+
+  # Boundary lookup. `invite_id` comes out of a token payload: the HMAC
+  # proves the payload was minted by a holder of the signing key, it does
+  # NOT prove the value is a uuid. `Platform.UUID.valid?/1` and NOT
+  # `Ecto.UUID.cast/1` — a bare cast hex-encodes any 16-byte binary into a
+  # well-formed but INVENTED uuid, and a fabricated id is the last thing
+  # you want deciding whether a capability was revoked. A malformed id
+  # answers nil here, which the caller folds to `{:error, :invalid}`,
+  # rather than raising `Ecto.Query.CastError` out of a public,
+  # unauthenticated ingress.
+  defp get_invite(invite_id) do
+    if Platform.UUID.valid?(invite_id), do: Repo.get(Invite, invite_id), else: nil
+  end
+
+  defp invite_row_expired?(%Invite{expires_at: nil}), do: false
+
+  defp invite_row_expired?(%Invite{expires_at: %DateTime{} = expires_at}),
+    do: DateTime.compare(expires_at, DateTime.utc_now()) == :lt
 
   # Id-bearing token: the payload names its subject exactly. Still require
   # the row's slug to match the URL slug the host actually shared.

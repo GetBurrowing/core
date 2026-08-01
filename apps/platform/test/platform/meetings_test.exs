@@ -1028,6 +1028,382 @@ defmodule Platform.MeetingsTest do
     end
   end
 
+  # ── The invite ROW is the authority on a guest link (task 019fb954 stage 4)
+  #
+  # An HMAC cannot be un-issued: once signed it verifies until its embedded
+  # expiry passes, and `GuestInvite.verify/2` is a pure function with no Repo
+  # access. So revocation has to be a row fact checked by the Repo-backed
+  # resolver, which is what this group pins.
+  #
+  # WHY THE PAIRED ASSERTION IN THE FIRST TEST IS THE POINT. Asserting only
+  # that the revoked token fails passes on an implementation that kills every
+  # link on the meeting (rotate the signing key, stamp the meeting row) —
+  # which is the exact design this whole task exists to avoid, because one
+  # forwardable, unattributable link is what per-row invites replace.
+  # Asserting only that the surviving token still works passes on a revoke
+  # that does nothing at all. Both halves, always.
+  #
+  # WHY SEVERAL TESTS ASSERT WHICH TABLE WAS QUERIED. `{:error, :invalid}` is
+  # returned for at least five distinct reasons (bad signature, slug
+  # tampering, missing invite row, row/payload meeting disagreement,
+  # malformed invite id). A test that asserts only the tuple cannot tell those
+  # apart, so a mutation collapsing two of them survives. Ecto's query
+  # telemetry is the cheapest available provenance: it says whether the row
+  # gate ran, and whether the resolver bailed before ever reading `meetings`.
+  describe "resolve_guest_invite/2 invite-row gate (task 019fb954 stage 4)" do
+    alias Platform.Meetings.GuestInvite
+
+    @query_event [:platform, :repo, :query]
+
+    test "the query event name is the one Repo actually emits" do
+      # Guards every `refute "meeting_invites" in sources` below from going
+      # vacuous because the event name drifted away from what Repo emits.
+      assert Platform.Repo.config()[:telemetry_prefix] ++ [:query] == @query_event
+    end
+
+    test "revoking one guest's invite kills that link and leaves the other's alone" do
+      meeting = create_meeting!()
+
+      assert {:ok, %{invite: invite_a, token: token_a}} =
+               Meetings.invite_guest(meeting, %{display_name: "Guest A"})
+
+      assert {:ok, %{invite: invite_b, token: token_b}} =
+               Meetings.invite_guest(meeting, %{display_name: "Guest B"})
+
+      refute invite_a.id == invite_b.id
+
+      # Both work before the revoke — otherwise the "b still works" half
+      # below could be passing on a fixture that never worked.
+      assert {:ok, %{state: :in_meeting}} = Meetings.resolve_guest_invite(meeting.slug, token_a)
+      assert {:ok, %{state: :in_meeting}} = Meetings.resolve_guest_invite(meeting.slug, token_b)
+
+      assert {:ok, revoked} = Meetings.revoke_invite(invite_a)
+      assert %DateTime{} = revoked.revoked_at
+
+      # Half one: the revoked link is dead, and dead with its OWN reason —
+      # not folded into :invalid at the context boundary.
+      assert {:error, :revoked} = Meetings.resolve_guest_invite(meeting.slug, token_a)
+
+      # Half two: the other guest on the SAME meeting is untouched. This is
+      # what makes revocation per-row rather than per-meeting.
+      assert {:ok, %{state: :in_meeting, display_name: "Guest B"}} =
+               Meetings.resolve_guest_invite(meeting.slug, token_b)
+    end
+
+    test "revoking does not touch the signing key or any other meeting's links" do
+      meeting_a = create_meeting!()
+      meeting_b = create_meeting!()
+
+      assert {:ok, %{invite: invite_a, token: token_a}} =
+               Meetings.invite_guest(meeting_a, %{display_name: "Guest A"})
+
+      assert {:ok, %{token: token_b}} =
+               Meetings.invite_guest(meeting_b, %{display_name: "Guest B"})
+
+      assert {:ok, _} = Meetings.revoke_invite(invite_a)
+
+      assert {:error, :revoked} = Meetings.resolve_guest_invite(meeting_a.slug, token_a)
+
+      # A key rotation would take this one down too. It must not.
+      assert {:ok, %{state: :in_meeting}} =
+               Meetings.resolve_guest_invite(meeting_b.slug, token_b)
+    end
+
+    test "a revoke is idempotent at the resolver too" do
+      meeting = create_meeting!()
+
+      assert {:ok, %{invite: invite, token: token}} =
+               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+
+      assert {:ok, _} = Meetings.revoke_invite(invite)
+      assert {:ok, _} = Meetings.revoke_invite(invite)
+
+      assert {:error, :revoked} = Meetings.resolve_guest_invite(meeting.slug, token)
+    end
+
+    test "the ROW's expires_at is authoritative even when the token's is still in the future" do
+      meeting = create_meeting!()
+
+      # 24h default: the token payload's own expiry is comfortably ahead.
+      assert {:ok, %{invite: invite, token: token}} =
+               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+
+      assert {:ok, payload} = GuestInvite.verify(token)
+      assert payload.expires_at > DateTime.to_unix(DateTime.utc_now())
+
+      # Back-date the ROW, not the token. A host shortening a link's life
+      # after issue can only write the row — the signature is already out.
+      invite
+      |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+      |> Repo.update!()
+
+      assert {:error, :expired} = Meetings.resolve_guest_invite(meeting.slug, token)
+    end
+
+    test "a row whose expires_at is still in the future resolves" do
+      meeting = create_meeting!()
+
+      assert {:ok, %{invite: invite, token: token}} =
+               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+
+      invite
+      |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), 60, :second))
+      |> Repo.update!()
+
+      assert {:ok, %{state: :in_meeting}} = Meetings.resolve_guest_invite(meeting.slug, token)
+    end
+
+    test "a token naming an invite row that no longer exists is :invalid, and never reads meetings" do
+      meeting = create_meeting!()
+
+      assert {:ok, %{invite: invite, token: token}} =
+               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+
+      Repo.delete!(invite)
+
+      {result, sources} =
+        capture_repo_sources(fn -> Meetings.resolve_guest_invite(meeting.slug, token) end)
+
+      assert result == {:error, :invalid}
+      # Provenance: this :invalid came from the row gate. The resolver never
+      # got as far as loading the meeting.
+      assert "meeting_invites" in sources
+      refute "meetings" in sources
+    end
+
+    test "a token whose payload meeting disagrees with the row's is :invalid at the row gate" do
+      meeting_a = create_meeting!()
+      meeting_b = create_meeting!()
+
+      assert {:ok, %{invite: invite_b}} =
+               Meetings.invite_guest(meeting_b, %{display_name: "Guest B"})
+
+      # Hand-signed: `invite_guest/2` structurally cannot mint a token whose
+      # meeting_id and invite_id name different meetings.
+      token =
+        raw_sign(%{
+          meeting_slug: meeting_a.slug,
+          expires_at: DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600),
+          display_name: "Guest B",
+          guest_space_id: nil,
+          meeting_id: meeting_a.id,
+          invite_id: invite_b.id
+        })
+
+      {result, sources} =
+        capture_repo_sources(fn -> Meetings.resolve_guest_invite(meeting_a.slug, token) end)
+
+      assert result == {:error, :invalid}
+      # Distinguishes this :invalid from the pre-existing slug-mismatch one:
+      # the invite row was read, and the meeting never was.
+      assert "meeting_invites" in sources
+      refute "meetings" in sources
+    end
+
+    test "a token carrying an invite_id but no meeting_id is :invalid" do
+      meeting = create_meeting!()
+
+      assert {:ok, %{invite: invite}} =
+               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+
+      # nil disagrees with the row's meeting_id. This shape is not one the
+      # public API produces — a row-bound token always names its meeting.
+      token =
+        raw_sign(%{
+          meeting_slug: meeting.slug,
+          expires_at: DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600),
+          display_name: "Juno Fairbanks",
+          guest_space_id: nil,
+          meeting_id: nil,
+          invite_id: invite.id
+        })
+
+      assert {:error, :invalid} = Meetings.resolve_guest_invite(meeting.slug, token)
+    end
+
+    test "a non-UUID invite_id is :invalid and never reaches the database" do
+      meeting = create_meeting!()
+
+      # `sign/4`'s `is_binary` guard permits this string, and `verify/2`
+      # returns it unchanged — the boundary is here.
+      token =
+        GuestInvite.sign(
+          meeting.slug,
+          DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600),
+          "Juno Fairbanks",
+          meeting_id: meeting.id,
+          invite_id: "not-a-uuid"
+        )
+
+      {result, sources} =
+        capture_repo_sources(fn -> Meetings.resolve_guest_invite(meeting.slug, token) end)
+
+      assert result == {:error, :invalid}
+      # `Platform.UUID.valid?/1` refused it before Repo could raise
+      # `Ecto.Query.CastError` out of a public, unauthenticated ingress. The
+      # positive control for this refutation is the test below.
+      refute "meeting_invites" in sources
+    end
+
+    test "a 16-byte invite_id is refused too — the Ecto.UUID.cast/1 gap" do
+      meeting = create_meeting!()
+
+      # `Ecto.UUID.cast/1` hex-encodes this into a well-formed but INVENTED
+      # uuid. A fabricated id must never decide whether a link was revoked.
+      token =
+        GuestInvite.sign(
+          meeting.slug,
+          DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600),
+          "Juno Fairbanks",
+          meeting_id: meeting.id,
+          invite_id: "higginshigginsxx"
+        )
+
+      assert {:ok, _} = Ecto.UUID.cast("higginshigginsxx")
+
+      {result, sources} =
+        capture_repo_sources(fn -> Meetings.resolve_guest_invite(meeting.slug, token) end)
+
+      assert result == {:error, :invalid}
+      refute "meeting_invites" in sources
+    end
+
+    test "a live row-bound token DOES read the invite row (positive control)" do
+      meeting = create_meeting!()
+
+      assert {:ok, %{token: token}} =
+               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+
+      {result, sources} =
+        capture_repo_sources(fn -> Meetings.resolve_guest_invite(meeting.slug, token) end)
+
+      assert {:ok, %{state: :in_meeting}} = result
+      # Without this, every `refute "meeting_invites" in sources` above could
+      # be passing because the gate does not exist.
+      assert "meeting_invites" in sources
+      assert "meetings" in sources
+    end
+
+    # ── The legacy path must not regress ─────────────────────────────────
+    #
+    # Every guest token in the wild today, plus everything the untouched
+    # mint site in `MeetingLive` still produces, carries no invite_id. A row
+    # gate that treats "no row named" as "no capability" locks all of them
+    # out. The pre-existing `meeting_live_guest_*` suites cover this from the
+    # ingress side; these cover the branch itself.
+
+    test "a payload that OMITS invite_id entirely resolves exactly as before" do
+      meeting = create_meeting!()
+
+      # Genuinely key-absent — `sign/4` always writes the key, so a fixture
+      # built from the public API is not actually a legacy token.
+      token =
+        raw_sign(%{
+          meeting_slug: meeting.slug,
+          expires_at: DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600),
+          display_name: "Juno Fairbanks",
+          guest_space_id: nil,
+          meeting_id: meeting.id
+        })
+
+      {result, sources} =
+        capture_repo_sources(fn -> Meetings.resolve_guest_invite(meeting.slug, token) end)
+
+      assert {:ok, %{state: :in_meeting, display_name: "Juno Fairbanks"}} = result
+      # No row named, so no row read. The legacy path costs nothing.
+      refute "meeting_invites" in sources
+    end
+
+    test "a payload with an explicit invite_id: nil resolves exactly as before" do
+      meeting = create_meeting!()
+
+      token =
+        GuestInvite.sign(
+          meeting.slug,
+          DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600),
+          nil,
+          meeting_id: meeting.id
+        )
+
+      assert {:ok, %{state: :name_entry, meeting: resolved}} =
+               Meetings.resolve_guest_invite(meeting.slug, token)
+
+      assert resolved.id == meeting.id
+    end
+
+    test "revoking an invite does not affect a legacy token on the same meeting" do
+      meeting = create_meeting!()
+
+      assert {:ok, %{invite: invite, token: bound_token}} =
+               Meetings.invite_guest(meeting, %{display_name: "Bound Guest"})
+
+      legacy_token =
+        raw_sign(%{
+          meeting_slug: meeting.slug,
+          expires_at: DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600),
+          display_name: "Legacy Guest",
+          guest_space_id: nil,
+          meeting_id: meeting.id
+        })
+
+      assert {:ok, _} = Meetings.revoke_invite(invite)
+
+      assert {:error, :revoked} = Meetings.resolve_guest_invite(meeting.slug, bound_token)
+
+      assert {:ok, %{state: :in_meeting, display_name: "Legacy Guest"}} =
+               Meetings.resolve_guest_invite(meeting.slug, legacy_token)
+    end
+
+    # ── Helpers ──────────────────────────────────────────────────────────
+
+    # Sign an ARBITRARY payload with the module's key and salt, bypassing
+    # `sign/4`'s shape guarantees. Two shapes the signer structurally cannot
+    # produce are needed here: a payload that OMITS an optional key (a real
+    # legacy token), and one whose meeting_id and invite_id disagree. Key and
+    # salt are duplicated on purpose — they are the token's wire format, and
+    # reaching through the module would defeat the point.
+    defp raw_sign(payload) do
+      key = Application.get_env(:platform, :meeting_guest_signing_key)
+      Plug.Crypto.sign(key, "meeting_guest_invite", payload)
+    end
+
+    # Run `fun` and return `{result, sources}` where `sources` is the list of
+    # table names Ecto queried FROM THIS PROCESS. The handler runs in the
+    # emitting process, so the `self() == test_pid` filter discards every
+    # query the rest of the concurrently-running suite is issuing — which is
+    # what makes this safe under `async: true`.
+    defp capture_repo_sources(fun) do
+      test_pid = self()
+      handler_id = "invite-row-gate-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        @query_event,
+        fn _event, _measurements, metadata, _config ->
+          if self() == test_pid, do: send(test_pid, {:repo_source, metadata[:source]})
+        end,
+        nil
+      )
+
+      result =
+        try do
+          fun.()
+        after
+          :telemetry.detach(handler_id)
+        end
+
+      {result, drain_repo_sources([])}
+    end
+
+    defp drain_repo_sources(acc) do
+      receive do
+        {:repo_source, source} -> drain_repo_sources([source | acc])
+      after
+        0 -> acc
+      end
+    end
+  end
+
   # ── The unscoped slug read is gone (task 019f9b14 stage 3) ───────────────
   #
   # `get_meeting_by_slug/1` was a public, unscoped `Repo.get_by(Meeting,
