@@ -516,6 +516,29 @@ defmodule Platform.Meetings.MeetingContextTest do
       assert missed_slugs(project_id: project.id, now: @now) == []
     end
 
+    test "a live row that nonetheless carries no started_at is not missed" do
+      project = create_project()
+      meeting = scheduled_meeting(project, "In The Room", @an_hour_ago)
+
+      # The mirror image of the test above, and it exists for the same
+      # reason. Measured: without it, deleting the `status == "scheduled"`
+      # clause from BOTH `missed?/2` and `list_missed_meetings/1` leaves the
+      # suite green — every other fixture that is non-scheduled is also
+      # started, so `is_nil(started_at)` alone excludes it and clause 1 is
+      # shadowed. Only a row that is non-scheduled and unstarted separates
+      # them. `start_meeting/1` writes both in one update, so this row has to
+      # be synthesized.
+      {:ok, live} = meeting |> change(status: "live") |> Repo.update()
+
+      assert live.status == "live"
+      assert is_nil(live.started_at)
+      assert live.scheduled_start_at == @an_hour_ago
+      assert live.id in Enum.map(Meetings.list_all_meetings(), & &1.id)
+
+      refute Meetings.missed?(live, @now)
+      assert missed_slugs(project_id: project.id, now: @now) == []
+    end
+
     test "orders by intended time, oldest miss first — not by creation order" do
       project = create_project()
 
