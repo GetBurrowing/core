@@ -1248,6 +1248,25 @@ defmodule Platform.Responsibilities.Router do
         emit_fired_telemetry(responsibility, agent, :external)
         {:ok, :dispatched}
 
+      # THE DISPATCH DIED BEFORE THE ENDPOINT (task 019fba51 stage 4). These
+      # three are the prompt-absence taxonomy `ExternalDispatcher` returns
+      # from `resolve_messages/3` — its FIRST clause, so `post/2` was never
+      # entered and no HTTP request left the box. They are matched ahead of
+      # the generic failure arm below because the generic arm's three
+      # behaviours are all wrong for them: it calls the outcome a
+      # `:dispatch_failed` round trip that never happened, it logs a line an
+      # operator reads as an endpoint problem, and — the reason this arm
+      # exists — it leaves the provider unaware that the dispatch it gathered
+      # context for is over.
+      {:error, {:template_missing, _slug} = reason} ->
+        abort_prompt_absent(responsibility, agent, trigger_meta, reason)
+
+      {:error, {:template_blank, _slug} = reason} ->
+        abort_prompt_absent(responsibility, agent, trigger_meta, reason)
+
+      {:error, :no_prompt_template = reason} ->
+        abort_prompt_absent(responsibility, agent, trigger_meta, reason)
+
       {:error, reason} ->
         Logger.warning(
           "[ResponsibilityRouter] external dispatch failed key=#{responsibility.key} " <>
@@ -1257,6 +1276,68 @@ defmodule Platform.Responsibilities.Router do
         emit_failed_telemetry(responsibility, agent, :external, reason)
         {:error, {:dispatch_failed, reason}}
     end
+  end
+
+  # THE ASYMMETRY WITH `dispatch_native/6` IS DELIBERATE — DO NOT UNIFY.
+  #
+  # Given the same responsibility row, the same missing `prompt_templates`
+  # slug and the same context, this arm ABORTS and `dispatch_native/6`
+  # PROCEEDS: it resolves `{:absent, :legacy}` through
+  # `render_default_template/2`, gets `{:absent, {:template_missing, slug}}`
+  # back, and ships a bare envelope carrying `prompt_status: :render_gap`
+  # and `prompt_absence_reason: "template_missing:<slug>"`. That is not
+  # drift between two paths that forgot about each other. A native runtime
+  # receiving a bare signal can act on it — read the reason, ask, log, wake
+  # a human — and the handoff is free. An OpenAI-compat endpoint receiving
+  # an empty user turn can only return garbage, and the round trip is
+  # billed. Hoisting either behaviour onto the other path would break the
+  # half that is correct for its transport.
+  #
+  # Mirrors the `{:build_prompt_refused, _}` arm of `dispatch_external/5`
+  # rather than inventing a second refusal protocol: same telemetry event,
+  # same `invoke_handle_refusal/3` seam, same reason-carries-the-cause rule.
+  defp abort_prompt_absent(%Responsibility{} = responsibility, agent, trigger_meta, reason) do
+    # Phrased off the external-dispatch-failed line above so the two sort
+    # together in a grep, and worded so they are never confused: "aborted
+    # before the model call" is a fact about OUR side, where "failed" is a
+    # fact about theirs. `inspect(reason)` carries the slug for the two
+    # template causes, which is the whole point — it names the row to seed.
+    Logger.warning(
+      "[ResponsibilityRouter] external dispatch aborted before the model call " <>
+        "key=#{responsibility.key} agent=#{agent_slug(agent)} reason=#{inspect(reason)}"
+    )
+
+    emit_failed_telemetry(responsibility, agent, :external, reason)
+
+    # The half the generic arm cannot do. `invoke_handle_output/3` is
+    # reachable only from the `{:ok, parsed}` branch above, i.e. only when a
+    # model answered, so a provider holding per-dispatch state had nowhere
+    # to release it — the failure mode `{:build_prompt_refused, _}` was
+    # given this seam for after `meetings.action_items` stalled a meeting's
+    # serial cursor for a full 90s ack window on one blank utterance (task
+    # 019fb90f-36e3 e2e finding).
+    #
+    # MEASURED, NOT ASSUMED (task 019fba51 stage 4): no provider that can
+    # reach this arm holds such state TODAY. The arm is reachable only for
+    # the eleven builder-less keys, whose providers (`Providers.Tasks`,
+    # `Providers.Memory`, `Providers.Design`, and `Handlers.IntentClassify`,
+    # whose `gather_context/2` returns a static `missing?: true` placeholder)
+    # export no `handle_refusal/3` and acquire nothing during a gather. The
+    # one implementation that does — `Handlers.MeetingActionItems` — owns a
+    # key with its own `build_prompt/1`, so it never takes the legacy
+    # template render and cannot arrive here. This is therefore plumbing for
+    # the next provider that holds state, not a fix for a stall happening
+    # now, and saying otherwise would be dressing a speculative benefit up
+    # as a closed bug.
+    invoke_handle_refusal(responsibility, {:prompt_template_absent, reason}, trigger_meta)
+
+    # NOT wrapped in `{:dispatch_failed, _}`. Nothing was dispatched, and
+    # the wrapper would cost the caller the taxonomy: `{:template_missing,
+    # slug}` says which row to seed, `{:template_blank, slug}` says which
+    # row to refill, and `:no_prompt_template` says the key never named one.
+    # `Responsibilities.outcome/1` maps every `{:error, _}` to `:failed`, so
+    # the ADR-0046 step vocabulary is unchanged by carrying the cause up.
+    {:error, reason}
   end
 
   defp safe_dispatch(responsibility, agent, context, opts) do

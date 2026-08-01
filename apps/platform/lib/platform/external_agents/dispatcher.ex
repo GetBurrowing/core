@@ -10,12 +10,13 @@ defmodule Platform.ExternalAgents.Dispatcher do
 
   ## Pipeline
 
-    1. Render `responsibility.default_prompt_template` with the
-       supplied `context`. We first run `EEx.eval_string/2` so callers
-       can use embedded Elixir if they want, then string-substitute
-       any leftover `{key}` placeholders against `context` keys (this
-       mirrors the fallback shape `HistorianDispatcher.post_instruction`
-       uses when the named prompt template can't be resolved).
+    1. Resolve `responsibility.default_prompt_template` — a prompt
+       template SLUG — against the `prompt_templates` table via
+       `Platform.Orchestration.PromptTemplates.render_template/2`, then
+       string-substitute any leftover `{key}` placeholders against
+       `context` keys. A slug naming no row, a blank body, or a
+       nil/blank `default_prompt_template` ABORTS the dispatch before
+       any HTTP call — see "Prompt-absence taxonomy" below.
     2. POST to either `openai_compat` (`<base_url>/chat/completions`)
        or `ollama_native` (`<base_url>/api/chat`). Bearer auth is
        resolved via `Platform.ExternalAgents.resolve_credential/1`
@@ -26,6 +27,43 @@ defmodule Platform.ExternalAgents.Dispatcher do
     4. Validate the response against the responsibility's
        `output_contract` via
        `Platform.ExternalAgents.ContractValidator.validate/2`.
+
+  ## Prompt-absence taxonomy (task 019fba51 stage 3)
+
+  When the legacy render cannot produce a prompt, this module ABORTS —
+  it returns `{:error, reason}` from `dispatch/4` with no `Req.post/2`
+  and no request body built. The three causes are kept apart, and the
+  slug rides along, because they need different fixes:
+
+    * `{:error, {:template_missing, slug}}` — `default_prompt_template`
+      names a slug with no `prompt_templates` row. Fix: seed the row.
+    * `{:error, {:template_blank, slug}}` — the row is there and its
+      body renders to whitespace. Fix: put content back in the row;
+      there is no migration to write.
+    * `{:error, :no_prompt_template}` — `default_prompt_template` is
+      nil or blank, so the key was never wired to a prompt at all. Fix:
+      wire one, or give the feature provider a `build_prompt/1`.
+
+  The vocabulary is `Router.log_native_prompt_fidelity/3`'s, not a new
+  one: `:no_prompt_template` is this path's name for the router's
+  `{:absent, :legacy}`, and the other two are its `{:absent, {...}}`
+  causes verbatim. Collapsing the three would make the second invisible,
+  which is the whole reason the native taxonomy exists.
+
+  ## Why abort, when the native path does the opposite
+
+  `Router.dispatch_external/5` (router.ex:1193) already aborts on
+  `{:error, reason}` from `build_prompt_via_provider/2` — no model call,
+  `emit_failed_telemetry(..., :external, {:build_prompt_refused, reason})`.
+  A named prompt whose row is absent is the same class of outcome and
+  gets the same treatment.
+
+  The native path deliberately does NOT abort: it dispatches a bare
+  envelope carrying `prompt_status: :render_gap`, because a native
+  runtime can still act on a bare signal. An OpenAI-compat endpoint
+  cannot, and the call costs money. Emitting the slug would be worse
+  still (the model is handed the NAME of its prompt), and emitting an
+  empty user turn is a paid round-trip that can only return garbage.
 
   ## HTTP config
 
@@ -58,6 +96,7 @@ defmodule Platform.ExternalAgents.Dispatcher do
   alias Platform.Agents.Kind, as: AgentKind
   alias Platform.ExternalAgents
   alias Platform.ExternalAgents.ContractValidator
+  alias Platform.Orchestration.PromptTemplates
   alias Platform.Responsibilities.Responsibility
 
   # Task 019f2566 stage 3 — reserved context key carrying the resolved
@@ -105,6 +144,15 @@ defmodule Platform.ExternalAgents.Dispatcher do
     * `{:error, %Req.TransportError{}}` — connection / timeout
     * `{:error, {:contract_violation, reason}}` — response failed the
       output-contract check
+    * `{:error, {:template_missing, slug}}` — `default_prompt_template`
+      names no `prompt_templates` row (task 019fba51)
+    * `{:error, {:template_blank, slug}}` — the row exists but renders
+      to whitespace
+    * `{:error, :no_prompt_template}` — `default_prompt_template` is
+      nil or blank
+
+  The last three abort BEFORE any HTTP call; see the moduledoc's
+  "Prompt-absence taxonomy" for why they are three and not one.
 
   Delegates to `dispatch/4` with empty opts — backward compatible.
   """
@@ -138,9 +186,18 @@ defmodule Platform.ExternalAgents.Dispatcher do
     started_at = System.monotonic_time()
 
     context = ensure_agent_kind(context, agent)
-    messages = resolve_messages(responsibility, context, opts)
 
-    with {:ok, body} <- post(agent, messages, responsibility),
+    # ORDERING IS THE ABORT (task 019fba51 stage 3). `resolve_messages/3` is
+    # the FIRST clause, so a prompt-absence error returns through the `else`
+    # arm below with `post/2` never entered — no `Req.post`, no request body
+    # built, no paid round-trip. The `else` arm is also the single telemetry
+    # site for it: the abort lands on `[:platform, :external_agent, :error]`
+    # with the same `endpoint_kind` / `agent_slug` / `responsibility_key`
+    # metadata as an HTTP failure, plus `reason: inspect(reason)` carrying
+    # the slug, so it shows up in the stream operators already watch rather
+    # than in a new one nobody has a dashboard for.
+    with {:ok, messages} <- resolve_messages(responsibility, context, opts),
+         {:ok, body} <- post(agent, messages, responsibility),
          {:ok, content} <- parse_response(agent, body),
          {:ok, validated} <- ContractValidator.validate(content, responsibility.output_contract) do
       emit_telemetry(
@@ -172,11 +229,20 @@ defmodule Platform.ExternalAgents.Dispatcher do
   end
 
   # Prefer explicit messages > explicit prompt map > legacy template render.
-  # Always returns a `[%{role:, content:}]` list ready to hand to `post/2`.
+  # Returns `{:ok, [%{role:, content:}]}` ready to hand to `post/3`, or
+  # `{:error, reason}` when the legacy render cannot produce a prompt at
+  # all (task 019fba51 stage 2 — previously impossible, because the legacy
+  # render always "succeeded" by shipping the slug).
+  #
+  # THE PRECEDENCE IS UNCHANGED BY THE ABORT (task 019fba51 stage 3). An
+  # explicit `messages:` or `prompt:` never touches the template at all, so
+  # a caller that already has a prompt in hand cannot be aborted by a
+  # `default_prompt_template` that names a missing row. Only the third
+  # branch can return an error.
   defp resolve_messages(responsibility, context, opts) when is_list(opts) do
     cond do
       is_list(opts[:messages]) and opts[:messages] != [] ->
-        opts[:messages]
+        {:ok, opts[:messages]}
 
       is_map(opts[:prompt]) ->
         prompt_to_messages_or_legacy(opts[:prompt], responsibility, context)
@@ -189,67 +255,161 @@ defmodule Platform.ExternalAgents.Dispatcher do
   defp prompt_to_messages_or_legacy(%{system: sys, user: user}, _r, _c)
        when is_binary(sys) and is_binary(user) do
     case sys do
-      "" -> [%{role: "user", content: user}]
-      _ -> [%{role: "system", content: sys}, %{role: "user", content: user}]
+      "" -> {:ok, [%{role: "user", content: user}]}
+      _ -> {:ok, [%{role: "system", content: sys}, %{role: "user", content: user}]}
     end
   end
 
   defp prompt_to_messages_or_legacy(%{user: user}, _r, _c) when is_binary(user),
-    do: [%{role: "user", content: user}]
+    do: {:ok, [%{role: "user", content: user}]}
 
   defp prompt_to_messages_or_legacy(_bad, responsibility, context),
     do: legacy_messages(responsibility, context)
 
-  defp legacy_messages(%Responsibility{default_prompt_template: template}, context) do
-    prompt = render_prompt(template, context)
-    {system_prompt, user_prompt} = split_prompt(prompt)
+  # THE FIX (task 019fba51 stage 2).
+  #
+  # `responsibility.default_prompt_template` holds a prompt template SLUG
+  # — `"tasks.triage.v1"`, `"meetings.intent_classify.v1"` — and the rows
+  # those slugs name are real, seeded by migration. This module never
+  # looked one up: it handed the slug to `EEx.eval_string/2`, rescued to
+  # the literal, `{var}`-substituted it (a slug has no placeholders) and
+  # shipped it, so an external agent received `[%{role: "user", content:
+  # "tasks.triage.v1"}]` — the NAME of its prompt instead of its prompt.
+  # Eleven builder-less responsibility keys took this path; ten of them
+  # name a seeded row of 365..4732 characters.
+  #
+  # `Router.render_default_template/2` (router.ex:2025) fixed the native
+  # half of the same defect in task 019fb8ed and explicitly left this half
+  # alone, pinned by a characterisation test. This is that test's inverse.
+  #
+  # THE RENDER IS DELIBERATELY NOT HOISTED INTO THE ROUTER.
+  # `render_default_template/2` returns a bare string; handing it to this
+  # module as `messages:` would bypass `split_prompt/1` and a seeded body
+  # whose head is a `<system>` block would stop becoming a system turn.
+  # Rendering here also fixes `dispatch/3` for DIRECT callers, which a
+  # Router-only fix would not.
+  defp legacy_messages(%Responsibility{default_prompt_template: slug}, context) do
+    assigns = template_assigns(context)
 
-    case system_prompt do
-      nil -> [%{role: "user", content: user_prompt}]
-      sys -> [%{role: "system", content: sys}, %{role: "user", content: user_prompt}]
+    with {:ok, slug} <- resolved_slug(slug),
+         {:ok, body} <- render_template_body(slug, assigns) do
+      body
+      |> substitute_placeholders(assigns)
+      |> split_prompt()
+      |> to_messages()
     end
   end
 
   # ── Prompt rendering ──────────────────────────────────────────────────────
 
-  defp render_prompt(nil, _context), do: ""
-
-  defp render_prompt(template, context) when is_binary(template) and is_map(context) do
-    bindings = context_to_bindings(context)
-
-    rendered_eex =
-      try do
-        EEx.eval_string(template, bindings)
-      rescue
-        # EEx may fail on user-supplied content that isn't real EEx — fall back
-        # to the literal template and let the `{key}` substitution pass do
-        # its work.
-        _ -> template
-      end
-
-    substitute_placeholders(rendered_eex, context)
-  end
-
-  defp render_prompt(_template, _context), do: ""
-
-  defp context_to_bindings(context) do
-    Enum.flat_map(context, fn
-      {k, v} when is_atom(k) -> [{k, v}]
-      {k, v} when is_binary(k) -> bindings_from_string_key(k, v)
-      _ -> []
-    end)
-  end
-
-  # Only atomize string keys that are valid identifiers AND already exist as
-  # atoms — never `String.to_atom/1` user input (memory leak).
-  defp bindings_from_string_key(k, v) do
-    try do
-      atom = String.to_existing_atom(k)
-      [{atom, v}]
-    rescue
-      ArgumentError -> []
+  # NO SLUG AT ALL IS NOT A MISSING ROW (task 019fba51 stage 3). Stage 2
+  # returned `{:template_missing, slug}` here as a provisional shape; it is
+  # the wrong name for this cause and it names a slug that does not exist.
+  # `:no_prompt_template` is this path's analogue of the router's
+  # `{:absent, :legacy}` (router.ex:2029/2044, which uses exactly this
+  # `String.trim/1`-then-catch-all shape): the key was never wired to a
+  # prompt, which is a different fix from a slug whose row needs seeding.
+  # Both still abort — an external endpoint cannot act on a bare signal the
+  # way a native runtime can — but the operator has to be told which of the
+  # two happened, or the seeding gap hides inside the wiring gap.
+  defp resolved_slug(slug) when is_binary(slug) do
+    case String.trim(slug) do
+      "" -> {:error, :no_prompt_template}
+      trimmed -> {:ok, trimmed}
     end
   end
+
+  defp resolved_slug(_slug), do: {:error, :no_prompt_template}
+
+  # NO EEx PASS. The old render ran `EEx.eval_string/2` over the template
+  # before substituting, rescuing to the literal when the string was not
+  # valid EEx. It is dropped rather than moved onto the resolved body,
+  # for three reasons:
+  #
+  #   1. Template bodies are OPERATOR-EDITABLE rows (admin prompt-template
+  #      UI). EEx-evaluating one is arbitrary code execution inside the
+  #      BEAM with whatever anything that can write `prompt_templates`
+  #      typed. `PromptTemplates`' own moduledoc says exactly this —
+  #      "mustache-style interpolation (NOT EEx — too dangerous for
+  #      user-editable content)". Keeping the pass would have turned a
+  #      previously-harmless quirk (it only ever saw a slug) into a real
+  #      exposure the moment the body started coming from the database.
+  #   2. It buys nothing for the actual corpus: zero of the eleven
+  #      builder-less rows contains a `<%` sequence (measured against the
+  #      live table).
+  #   3. The native path does no EEx either. Leaving it here would mean the
+  #      two paths render the same row differently — the exact asymmetry
+  #      this task exists to close.
+  #
+  # TWO PLACEHOLDER SYNTAXES, LAYERED IN A FIXED ORDER — this is a
+  # decision, not a drift. `PromptTemplates.interpolate/2` replaces
+  # `{{var}}` (the syntax the seeded corpus uses) and runs FIRST, inside
+  # `render_template/2`. `substitute_placeholders/2` replaces `{var}` (this
+  # module's long-standing contract, which `dispatch/3`'s direct callers
+  # rely on) and runs SECOND, over whatever the first pass left. The order
+  # is what keeps them from interfering: `interpolate/2` resolves an
+  # unknown `{{x}}` to `""`, so no `{{x}}` can survive to be re-read as
+  # `{x}`. Measured on the live rows: a single-brace scan of all eleven
+  # bodies returns exactly the same names as the double-brace scan and
+  # nothing else — i.e. every single-brace hit today is the inner half of
+  # a `{{...}}` pair the first pass has already consumed.
+  #
+  # THE BLANK CHECK IS ON THE RENDERED BODY, not on the stored column, and
+  # that is the reachable case. `PromptTemplate.changeset/2` runs
+  # `validate_required([:content])`, whose default `:trim` makes `"   "`
+  # indistinguishable from `nil` — so a whitespace row cannot be created or
+  # updated through `PromptTemplates`. What CAN happen through the ordinary
+  # editor is a body that is nothing but `{{placeholders}}`: with no
+  # matching assigns `interpolate/2` resolves each to `""` and the render
+  # comes back empty. Same trim check as the native half
+  # (router.ex:2034), same reason.
+  defp render_template_body(slug, assigns) do
+    case PromptTemplates.render_template(slug, assigns) do
+      {:ok, body} ->
+        if String.trim(body) == "",
+          do: {:error, {:template_blank, slug}},
+          else: {:ok, body}
+
+      {:error, :not_found} ->
+        {:error, {:template_missing, slug}}
+    end
+  end
+
+  defp to_messages({nil, user_prompt}), do: {:ok, [%{role: "user", content: user_prompt}]}
+
+  defp to_messages({system_prompt, user_prompt}),
+    do: {:ok, [%{role: "system", content: system_prompt}, %{role: "user", content: user_prompt}]}
+
+  # Mirrors `Router.template_assigns/1` + `printable_assign/1`
+  # (router.ex:2058-2068), and for the same measured reason.
+  # `PromptTemplates.interpolate/2` calls `to_string/1` on each matched
+  # assign and `render_template/2` wraps the whole render in
+  # `rescue -> {:error, :not_found}` — so a context value that does not
+  # implement `String.Chars` would be reported as a MISSING TEMPLATE,
+  # which is a lie about a row that is sitting right there. Not
+  # hypothetical on this path: `Handlers.Dreaming.gather_context/2`
+  # returns `%{org_identity: <nested map>, recent_journal: ...}` and
+  # `memory.dreaming.v1` is one of the two seeded bodies that carries
+  # `{{...}}` placeholders.
+  #
+  # The normalised map is used for the `{var}` pass too — that one also
+  # calls `to_string/1` on the substituted value, so the same raise was
+  # reachable there, unrescued.
+  #
+  # `:__responsibility__` is dropped rather than inspected: it is a
+  # `%Responsibility{}` the Router stamps on for its own use, not
+  # something a prompt author asked for.
+  defp template_assigns(context) when is_map(context) do
+    context
+    |> Map.delete(:__responsibility__)
+    |> Map.new(fn {key, value} -> {key, printable_assign(value)} end)
+  end
+
+  defp template_assigns(_context), do: %{}
+
+  defp printable_assign(value) when is_binary(value), do: value
+  defp printable_assign(value) when is_number(value) or is_atom(value), do: to_string(value)
+  defp printable_assign(value), do: inspect(value)
 
   defp substitute_placeholders(content, context) do
     Regex.replace(~r/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/, content, fn whole, key ->

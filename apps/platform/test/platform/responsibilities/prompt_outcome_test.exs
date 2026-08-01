@@ -542,34 +542,39 @@ defmodule Platform.Responsibilities.PromptOutcomeTest do
     end
   end
 
-  # ── the external path, pinned UNCHANGED ───────────────────────────────────
+  # ── the external path, now SYMMETRIC with the native one ──────────────────
   #
-  # THE SCOPE FENCE, MADE FALSIFIABLE.
+  # THE SCOPE FENCE, TAKEN DOWN ON PURPOSE (task 019fba51 stage 2).
   #
-  # `ExternalAgents.Dispatcher.legacy_messages/2` passes
+  # Until this stage `ExternalAgents.Dispatcher.legacy_messages/2` passed
   # `responsibility.default_prompt_template` — the slug STRING — straight
-  # into `EEx.eval_string/2` and falls back to the literal on failure. That
-  # module contains no reference to `PromptTemplates` at all, so an external
-  # agent whose provider asks for the legacy render receives the message
-  # `[%{role: "user", content: "tasks.triage.v1"}]`: the name of its prompt
-  # instead of its prompt. This is the already-captured defect quoted in
-  # `Providers.Meetings`' moduledoc, and it is GENERAL, not
-  # meetings-specific.
+  # into `EEx.eval_string/2` and fell back to the literal on failure. That
+  # module contained no reference to `PromptTemplates` at all, so an
+  # external agent whose provider asks for the legacy render received the
+  # message `[%{role: "user", content: "tasks.triage.v1"}]`: the name of
+  # its prompt instead of its prompt. The defect was GENERAL, not
+  # meetings-specific, and 019fb8ed deliberately fixed only the native half
+  # (`Router.render_default_template/2`) because the external half changes
+  # the prompt every external agent receives.
   #
-  # It is deliberately NOT fixed in this stage. Switching the external path
-  # to a DB lookup changes the prompt every external agent receives, which
-  # is a much larger blast radius than a native-path render gap, and it
-  # needs its own e2e coverage. So the current behaviour is pinned here
-  # instead: this test asserts the slug still comes back as a literal even
-  # though a real seeded row for it now exists and the native path now
-  # finds it.
+  # This describe is the inverse of the one 019fb8ed left here. Same file,
+  # same fixture, same seeded row; the assertions are flipped. The
+  # invariant is now: a `default_prompt_template` slug naming a real row
+  # reaches the model AS THE ROW'S BODY, and the slug itself never appears
+  # on the wire.
   #
-  # WHAT FAILURE LOOKS LIKE, AND WHY THAT IS THE POINT. The task that fixes
-  # the external path deletes this test and replaces it with its inverse.
-  # A green test here means "the asymmetry is still there on purpose"; a
-  # red one means someone changed the external path without noticing they
-  # had.
-  describe "the external dispatch path still ships the slug, not the row" do
+  # BOTH SIDES ARE ASSERTED, deliberately. `content != slug` alone would
+  # pass on the empty string (a paid round trip carrying nothing);
+  # `content =~ body` alone would pass if the slug were prepended to the
+  # body. The byte-equality assertion plus the slug-absence assertion is
+  # what makes this load-bearing.
+  #
+  # The expectation is the row read straight out of the database — NOT
+  # `PromptTemplates.render_template/2`'s return value, which is the
+  # collaborator the dispatcher calls. `tasks.triage.v1` carries no
+  # `{{mustache}}` placeholder (measured: 478 chars, zero `{{...}}`
+  # matches) so the rendered body is the stored body byte-for-byte.
+  describe "the external dispatch path resolves the slug to the seeded row" do
     setup do
       {:ok, _} = Application.ensure_all_started(:req)
 
@@ -597,7 +602,7 @@ defmodule Platform.Responsibilities.PromptOutcomeTest do
       :ok
     end
 
-    test "a default_prompt_template slug with a real row reaches the model as the slug" do
+    test "a default_prompt_template slug with a real row reaches the model as the row's body" do
       slug = TaskTriage.template_slug()
 
       # The premise: the row EXISTS. Without this the test would pass on an
@@ -640,9 +645,216 @@ defmodule Platform.Responsibilities.PromptOutcomeTest do
       assert_receive {:external_body, raw_body}
       decoded = Jason.decode!(raw_body)
 
-      assert decoded["messages"] == [%{"role" => "user", "content" => slug}]
+      assert decoded["messages"] == [%{"role" => "user", "content" => template.content}]
 
-      refute Enum.any?(decoded["messages"], &(&1["content"] =~ "propose a priority pass"))
+      refute Enum.any?(decoded["messages"], &(&1["content"] == slug))
+
+      assert Enum.any?(decoded["messages"], &(&1["content"] =~ "propose a priority pass"))
+    end
+  end
+
+  # ── the abort is TOLD, not merely returned (task 019fba51 stage 4) ────────
+  #
+  # Stage 3 made `ExternalDispatcher.dispatch/4` refuse to spend a round trip
+  # on a prompt it could not produce. It returns `{:error, {:template_missing,
+  # slug}}` before `post/2` is entered. Until this stage that error reached
+  # `Router.run_external_dispatch/5` as a GENERIC failure: wrapped into
+  # `{:dispatch_failed, reason}` (naming a round trip that never happened),
+  # logged as an endpoint problem, and — the part with consequences — never
+  # told to the provider that had just gathered context for the dispatch.
+  #
+  # WHAT THIS DOES AND DOES NOT CLAIM. `invoke_handle_refusal/3` exists
+  # because `invoke_handle_output/3` is reachable only from the `{:ok,
+  # parsed}` branch, so a provider holding per-dispatch state had nowhere to
+  # release it; for `meetings.action_items` that state is a queue row pinning
+  # the meeting's serial cursor (task 019fb90f-36e3). MEASURED for this
+  # stage: no provider that can reach the template abort holds such state
+  # today. The arm is reachable only for the eleven builder-less keys, and
+  # `Providers.Tasks` / `Providers.Memory` / `Providers.Design` /
+  # `Handlers.IntentClassify` export no `handle_refusal/3` and acquire
+  # nothing during a gather. `Handlers.MeetingActionItems`, the one
+  # implementation that does, owns a key with its own `build_prompt/1` and
+  # therefore never takes the legacy template render. So these tests pin
+  # PLUMBING for the next provider that holds state — not a stall being
+  # fixed. The ad-hoc provider below supplies the `handle_refusal/3` that
+  # production does not yet have, which is exactly why the seam needs a test
+  # rather than a live example.
+  #
+  # WHY THE NO-HTTP ASSERTION IS ALONE IN ITS TEST. Stage 3's finding: ExUnit
+  # stops at the first failed assertion, so an emptiness assertion sharing a
+  # test with a value assertion is dead weight under every mutation the value
+  # assertion also catches — including the prescribed ones. A mutation that
+  # broke only the ORDERING (dispatch, then return the right error) would
+  # sail past a combined test. The refute therefore gets a test to itself,
+  # with nothing asserted before it, and the speculative-post control in the
+  # stage report is what proves it can go red.
+  describe "an external dispatch aborted before the model call is surfaced" do
+    setup :capture_refusals
+    setup :stub_external_endpoint
+
+    # THE FIXTURE PROOF. Every `refute_receive` below is worthless against a
+    # stub that was never wired, an agent that never dispatched, or a fire
+    # that never reached the dispatcher. Same wiring, same stub, same agent
+    # shape — only the slug differs, and this one names a seeded row.
+    test "positive control: the same wiring with a seeded slug DOES reach the endpoint" do
+      row = external_row_with_slug(TaskTriage.template_slug())
+      _agent = wire_external_assignee(row.key)
+
+      assert PromptTemplates.get_template_by_slug(TaskTriage.template_slug()),
+             "the control's premise moved — tasks.triage.v1 no longer has a row"
+
+      assert {:ok, :dispatched} =
+               Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+
+      assert_receive {:external_request, "/chat/completions", _body}
+    end
+
+    # (a) NO HTTP REQUEST LEFT THE BOX. Nothing is asserted before the
+    # refute, deliberately — see the describe's note.
+    test "no request reaches the endpoint" do
+      slug = missing_slug()
+      row = external_row_with_slug(slug)
+      _agent = wire_external_assignee(row.key)
+
+      _ = Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+
+      refute_receive {:external_request, _path, _body}
+    end
+
+    # (b) THE STREAM OPERATORS ALREADY WATCH. `[:platform, :responsibility,
+    # :failed]` read out of `emit_failed_telemetry/4` rather than guessed,
+    # including the metadata key: it is `dispatch_kind`, not `dispatch`, and
+    # `reason` is an INSPECTED STRING, not a term.
+    #
+    # HONEST SCOPE (measured, see the stage report): this assertion alone
+    # does NOT prove the new arm ran. The generic failure arm it displaced
+    # already emitted this event with this reason, so deleting the arm
+    # entirely leaves this test green. It is here because the arm must not
+    # LOSE the telemetry, which is a different claim and one that a deleted
+    # `emit_failed_telemetry/4` call does turn red.
+    test "the failure telemetry fires with dispatch_kind :external and a reason naming the slug" do
+      slug = missing_slug()
+      row = external_row_with_slug(slug)
+      agent = wire_external_assignee(row.key)
+
+      attach_failed_telemetry()
+
+      _ = Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+
+      assert_receive {:failed_telemetry, %{system_time: _}, meta}
+      assert meta.key == row.key
+      assert meta.dispatch_kind == :external
+      assert meta.agent_slug == agent.slug
+      assert meta.reason =~ "template_missing"
+
+      # The slug is the actionable half — it names the row to go seed.
+      assert meta.reason =~ slug
+    end
+
+    # (c) THE PROVIDER IS TOLD. This is the assertion that did not exist
+    # before this stage at all: the pre-stage tree had no path from a
+    # template abort to any provider callback.
+    test "the provider's handle_refusal/3 is invoked, carrying the cause and the slug" do
+      slug = missing_slug()
+      row = external_row_with_slug(slug)
+      _agent = wire_external_assignee(row.key)
+
+      _ = Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+
+      assert_receive {:handle_refusal, refusal, meta}
+      assert refusal == {:prompt_template_absent, {:template_missing, slug}}
+
+      # The trigger meta is passed through, not swallowed: a provider
+      # releasing per-dispatch state identifies the dispatch from it (for
+      # `meetings.action_items` that is `payload.intent_id`).
+      assert meta.kind == :cron
+    end
+
+    test "a nil default_prompt_template also reaches handle_refusal/3, with its own cause" do
+      row = external_row_with_slug(nil)
+      _agent = wire_external_assignee(row.key)
+
+      _ = Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+
+      # Not `{:template_missing, nil}` — the taxonomy stage 3 split survives
+      # the trip through the Router untouched.
+      assert_receive {:handle_refusal, {:prompt_template_absent, :no_prompt_template}, _meta}
+    end
+
+    # THE RETURN VALUE CARRIES THE CAUSE. `{:dispatch_failed, _}` would name a
+    # round trip that never happened AND cost the caller the taxonomy: which
+    # row to seed, which to refill, which key never named one.
+    test "the caller receives the cause, not a dispatch_failed wrapper" do
+      slug = missing_slug()
+      row = external_row_with_slug(slug)
+      _agent = wire_external_assignee(row.key)
+
+      assert {:error, {:template_missing, ^slug}} =
+               Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+    end
+
+    # THE OPERATOR'S GREP. `:warning`, so `config/test.exs`'s global level
+    # permits the capture without a module-level override — the fidelity
+    # describes above need `Logger.put_module_level(Router, :info)` and this
+    # one deliberately does not, which is itself part of the contract: the
+    # abort must be visible at the level a production node runs at.
+    test "the abort is logged at :warning with the slug in the line" do
+      slug = missing_slug()
+      row = external_row_with_slug(slug)
+      _agent = wire_external_assignee(row.key)
+
+      log =
+        capture_log([level: :warning], fn ->
+          _ = Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      assert log =~ "external dispatch aborted before the model call"
+      assert log =~ "key=#{row.key}"
+      assert log =~ slug
+
+      # NOT the endpoint-failure line. The two say different things about
+      # whose fault it is, and collapsing them is the confusion this arm
+      # exists to remove.
+      refute log =~ "external dispatch failed key=#{row.key}"
+    end
+  end
+
+  # ── the native path is unchanged by the stage above ───────────────────────
+  #
+  # THE ASYMMETRY IS THE DESIGN. Same missing row, same slug, same provider
+  # shape: external aborts, native ships. A native runtime can act on a bare
+  # envelope carrying a reason; an OpenAI-compat endpoint cannot, and its
+  # round trip is billed. This describe is the regression half — it goes red
+  # if a later reader "cleans up" the two paths into one.
+  #
+  # `native_dispatch_envelope_test.exs` already pins the same two fields for
+  # a no-provider row. This is not a duplicate of it: that test predates the
+  # external abort and would stay green if the abort were hoisted onto the
+  # native path via a different route. This one sits beside the abort's own
+  # tests, on the identical fixture, so the pair reads as one statement.
+  describe "the native path still ships a render-gap envelope for the same missing row" do
+    setup :capture_native_dispatch
+
+    test "prompt_status is :render_gap and the reason names the slug" do
+      slug = missing_slug()
+
+      # Byte-identical fixture to the external describe above — same helper,
+      # same provider shape, same slug generator. Only the assignee's `kind`
+      # differs, which is the whole claim.
+      row = external_row_with_slug(slug)
+      _agent = wire_native_assignee(row.key)
+
+      assert_dispatched(row)
+
+      assert_receive {:captured_signal, signal}
+      assert signal.metadata.responsibility_key == row.key
+      assert signal.metadata.prompt_status == :render_gap
+      assert signal.metadata.prompt_absence_reason == "template_missing:#{slug}"
+
+      # Still no body — the status is an addition, never a substitute for
+      # one. A `prompt` key here would read to a runtime as "the server had
+      # something to say and it was nothing".
+      refute Map.has_key?(signal.metadata, :prompt)
     end
   end
 
@@ -801,6 +1013,20 @@ defmodule Platform.Responsibilities.PromptOutcomeTest do
 
         @impl true
         def handle_output(_r, _o, _m), do: :ok
+
+        # The optional callback production does not yet implement anywhere
+        # a template abort can reach (measured — see the stage 4 describe).
+        # Defined unconditionally rather than per-case so no test can pass
+        # by accident of the probe finding nothing to call:
+        # `invoke_handle_refusal/3` is SILENT for a provider without it, so
+        # an ad-hoc module that omitted it would make every refusal
+        # assertion below a test of the mailbox timing out.
+        @impl true
+        def handle_refusal(_r, refusal, meta) do
+          pid = Application.get_env(:platform, :prompt_outcome_refusal_pid)
+          if is_pid(pid), do: send(pid, {:handle_refusal, refusal, meta})
+          :ok
+        end
       end,
       Macro.Env.location(__ENV__)
     )
@@ -891,6 +1117,126 @@ defmodule Platform.Responsibilities.PromptOutcomeTest do
         workspace_id: nil
       })
       |> Repo.insert!()
+
+    {:ok, _} = Roles.assign_role(role_key, agent.id)
+
+    agent
+  end
+
+  # ── task 019fba51 stage 4 fixtures ────────────────────────────────────────
+
+  # The ad-hoc provider's `handle_refusal/3` writes here rather than to the
+  # `:prompt_outcome_capture_pid` the native dispatcher uses, so a test can
+  # tell "the refusal seam fired" apart from "a native signal arrived"
+  # without reading which tuple came out of the same mailbox slot.
+  defp capture_refusals(_context) do
+    Application.put_env(:platform, :prompt_outcome_refusal_pid, self())
+    on_exit(fn -> Application.delete_env(:platform, :prompt_outcome_refusal_pid) end)
+    :ok
+  end
+
+  # Mirrors the seeded-row describe's stub, with the request PATH captured
+  # too: a `refute_receive` wants the loudest possible message if it is ever
+  # wrong, and "which endpoint did we hit" is the first thing a reader asks.
+  defp stub_external_endpoint(_context) do
+    {:ok, _} = Application.ensure_all_started(:req)
+
+    Application.put_env(
+      :platform,
+      :external_agents_dispatcher_req_client,
+      Req.new(plug: {Req.Test, :prompt_outcome_abort_test})
+    )
+
+    on_exit(fn ->
+      Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+    end)
+
+    test_pid = self()
+
+    Req.Test.stub(:prompt_outcome_abort_test, fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:external_request, conn.request_path, body})
+
+      Req.Test.json(conn, %{
+        "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+      })
+    end)
+
+    :ok
+  end
+
+  # A slug guaranteed to name no row, with the guarantee ASSERTED rather
+  # than assumed — a generator collision or a future seeding migration would
+  # otherwise turn every abort test green for the wrong reason.
+  defp missing_slug do
+    slug = "promptoutcome.absent_#{System.unique_integer([:positive])}.v1"
+    refute PromptTemplates.get_template_by_slug(slug)
+    slug
+  end
+
+  # The production shape of a builder-less key: a provider that exists and
+  # asks for the legacy template render (`{:error, :no_build_prompt}` is
+  # pre-collapsed to `:legacy` by `build_prompt_via_provider/2`), plus a
+  # `default_prompt_template` the dispatcher must resolve.
+  defp external_row_with_slug(slug) do
+    responsibility_with_provider(
+      build_prompt: {:error, :no_build_prompt},
+      default_prompt_template: slug
+    )
+  end
+
+  defp attach_failed_telemetry do
+    handler_id = "promptoutcome-failed-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:platform, :responsibility, :failed],
+      fn _event, measurements, metadata, pid ->
+        send(pid, {:failed_telemetry, measurements, metadata})
+      end,
+      self()
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    :ok
+  end
+
+  # `kind: "external"` with an `openai_compat` endpoint takes
+  # `dispatch_external/5`. Credentials are seeded because the positive
+  # control has to get all the way to `post/2`; the abort tests never reach
+  # the resolver, which is the point.
+  defp wire_external_assignee(responsibility_key) do
+    role_key = "historian"
+
+    Repo.insert!(
+      %Role{key: role_key, name: "Historian", description: "test", icon: "hero-star"},
+      on_conflict: :nothing,
+      conflict_target: :key
+    )
+
+    %Platform.Roles.RoleResponsibility{}
+    |> Platform.Roles.RoleResponsibility.changeset(%{
+      role_key: role_key,
+      responsibility_key: responsibility_key
+    })
+    |> Repo.insert!()
+
+    agent =
+      %Agent{}
+      |> Agent.changeset(%{
+        slug: "prompt-outcome-ext-#{System.unique_integer([:positive])}",
+        name: "Prompt Outcome External Assignee",
+        status: "active",
+        kind: "external",
+        endpoint_kind: "openai_compat",
+        base_url: "https://api.example.test",
+        model: "test-model",
+        workspace_id: nil
+      })
+      |> Repo.insert!()
+
+    :ok = EphemeralCredentials.put(agent.id, "sk-prompt-outcome")
+    on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
 
     {:ok, _} = Roles.assign_role(role_key, agent.id)
 

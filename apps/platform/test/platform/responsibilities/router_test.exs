@@ -14,6 +14,7 @@ defmodule Platform.Responsibilities.RouterTest do
 
   alias Platform.Agents.Agent
   alias Platform.Chat
+  alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
   alias Platform.Responsibilities
   alias Platform.Responsibilities.{Cron, Router, WebhookRouter}
@@ -50,7 +51,64 @@ defmodule Platform.Responsibilities.RouterTest do
       },
       overrides
     )
+    |> ensure_prompt_template_row()
   end
+
+  # Task 019fba51 stage 2 — `ExternalAgents.Dispatcher` now resolves
+  # `default_prompt_template` as a SLUG against the `prompt_templates`
+  # table instead of treating the field as an inline prompt body, and
+  # aborts with `{:error, {:template_missing, slug}}` when no row exists.
+  # These fixtures predate that: some carry a bare slug with no row
+  # (`"routertest.v1"`), others an inline body (`"echo: ping"`,
+  # `"Please cover the {topic} update."`).
+  #
+  # Rather than rewrite every call site, the row is created on demand with
+  # the fixture's own string as BOTH slug and content. That is deliberate:
+  # the previous behaviour put the `default_prompt_template` string itself
+  # on the wire, so seeding `content == slug` keeps every existing
+  # assertion in this file (`user["content"] =~ "quarterly"`,
+  # `refute ... =~ "meetings.summarize.v1"`, the byte-exact preamble guard)
+  # meaning exactly what it meant before. `{topic}`-style placeholders in
+  # those bodies still substitute through the dispatcher's `{var}` pass.
+  #
+  # THE OPT-OUT IS A SLUG PREFIX, and it is load-bearing for the NATIVE
+  # path. `"unseeded."`-prefixed slugs are never seeded here, because the
+  # fixtures that use them are about a slug that names NO row —
+  # `Router.render_default_template/2` answering
+  # `{:absent, {:template_missing, slug}}` so the native signal carries no
+  # `:prompt` key at all. Seeding those would delete the premise and make
+  # two native-path assertions pass for the wrong reason (measured: they
+  # went red with `prompt_status: :rendered` when the blanket seeding
+  # first landed).
+  @unseeded_slug_prefix "unseeded."
+
+  defp ensure_prompt_template_row(%{default_prompt_template: slug} = attrs)
+       when is_binary(slug) do
+    cond do
+      String.trim(slug) == "" ->
+        attrs
+
+      String.starts_with?(slug, @unseeded_slug_prefix) ->
+        attrs
+
+      PromptTemplates.get_template_by_slug(slug) ->
+        attrs
+
+      true ->
+        {:ok, _} =
+          PromptTemplates.create_template(%{
+            slug: slug,
+            name: "router_test.exs fixture",
+            description: "Seeded by Platform.Responsibilities.RouterTest",
+            variables: [],
+            content: slug
+          })
+
+        attrs
+    end
+  end
+
+  defp ensure_prompt_template_row(attrs), do: attrs
 
   defp insert!(overrides) do
     {:ok, row} = Responsibilities.create_responsibility(base_attrs(overrides))
@@ -3187,7 +3245,11 @@ defmodule Platform.Responsibilities.RouterTest do
           feature: feature_str,
           trigger_kind: "cron",
           trigger_config: %{"expression" => "*/5 * * * *"},
-          default_prompt_template: "Please cover the {topic} update."
+          # Deliberately names NO `prompt_templates` row (see
+          # `@unseeded_slug_prefix`): this test is about the native signal
+          # omitting `:prompt` when neither a provider `build_prompt/1` nor
+          # a template row can supply one.
+          default_prompt_template: "unseeded.#{feature_str}.v1"
         })
 
       agent = wire_native_assignee(key)
@@ -3217,7 +3279,12 @@ defmodule Platform.Responsibilities.RouterTest do
           key: key,
           feature: "definitely_not_a_real_feature_#{System.unique_integer([:positive])}",
           trigger_kind: "cron",
-          trigger_config: %{"expression" => "*/5 * * * *"}
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          # Deliberately names NO `prompt_templates` row (see
+          # `@unseeded_slug_prefix`) — same premise as the sibling test
+          # above, with no provider module at all.
+          default_prompt_template:
+            "unseeded.fed_noprovider_#{System.unique_integer([:positive])}.v1"
         })
 
       _agent = wire_native_assignee(key)
