@@ -54,6 +54,20 @@ config :platform, Platform.Responsibilities,
     Platform.Responsibilities.Handlers.IntentClassify,
     Platform.Responsibilities.Handlers.MeetingActionItems,
     Platform.Responsibilities.Handlers.MeetingAttendanceFollowup,
+    # Mid-meeting intent responsibilities (2026-07-31). These MUST be
+    # here and not only in `BuiltIns.providers/0`: the boot-time Registry
+    # reads THIS key, and the Router subscribes at boot to the topic
+    # strings its registered rows declare. A handler present only in
+    # BuiltIns registers no row, so the Router never subscribes, and
+    # every dispatch for that intent is marked `:dispatched`, holds the
+    # meeting's serial cursor, and times out 90s later against nobody.
+    # `built_ins_test.exs` pins the two lists equal for exactly this
+    # reason — it caught this omission.
+    Platform.Responsibilities.Handlers.MeetingVisualAdjust,
+    Platform.Responsibilities.Handlers.MeetingInteractionDesign,
+    Platform.Responsibilities.Handlers.MeetingBriefWorthy,
+    Platform.Responsibilities.Handlers.MeetingDecisionRecorded,
+    Platform.Responsibilities.Handlers.MeetingOpenQuestion,
     Platform.Responsibilities.Handlers.DesignCritique,
     Platform.Responsibilities.Handlers.DesignSpecWriter,
     Platform.Responsibilities.Handlers.DesignBrandCheck,

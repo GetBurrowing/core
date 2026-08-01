@@ -57,7 +57,15 @@ defmodule Platform.Roles.Seeds do
         # DBs pick this up from
         # `20260726051346_seed_design_task_direction.exs`, which re-runs
         # `seed_defaults/0` — the pair index makes that safe.
-        "design.task_direction"
+        "design.task_direction",
+        # A `meetings.*` key in the DESIGNER's bundle, deliberately
+        # (Rowan, 2026-07-31): the namespace records where the work
+        # originates — one utterance in a live meeting — and the bundle
+        # records who does it. `Platform.Meetings.IntentRouting` holds
+        # both facts in one row so they cannot drift, and
+        # `intent_routing_test.exs` asserts this bundle agrees with it.
+        "meetings.visual_adjust",
+        "meetings.interaction_design"
       ]
     },
     %{
@@ -77,7 +85,13 @@ defmodule Platform.Roles.Seeds do
         # panel row whose override is read by nothing. Existing DBs are
         # repointed by
         # `20260727000000_rename_dream_consolidation_bundle_key.exs`.
-        "memory.dreaming"
+        "memory.dreaming",
+        # Mid-meeting intent key (2026-07-31). A `meetings.*` key in the
+        # HISTORIAN's bundle: the namespace records where the work comes
+        # from, the bundle records who does it. This is also the intent
+        # that proves the pattern is not canvas-specific — its artifact
+        # is the org journal.
+        "meetings.decision_recorded"
       ]
     },
     %{
@@ -96,7 +110,11 @@ defmodule Platform.Roles.Seeds do
       bundle: [
         "meetings.summarize",
         "meetings.action_items",
-        "meetings.attendance_followup"
+        "meetings.attendance_followup",
+        # Mid-meeting intent key (2026-07-31). The scribe already owns
+        # what a meeting leaves behind; `brief_worthy` is the same job
+        # done live, one utterance at a time, instead of once at the end.
+        "meetings.brief_worthy"
       ]
     },
     %{
@@ -104,7 +122,14 @@ defmodule Platform.Roles.Seeds do
       name: "Triage Officer",
       description: "Task hygiene: sort, unblock, weekly rollup",
       icon: "hero-clipboard-document-check",
-      bundle: ["tasks.triage", "tasks.unblock", "tasks.weekly_review"]
+      bundle: [
+        "tasks.triage",
+        "tasks.unblock",
+        "tasks.weekly_review",
+        # Mid-meeting intent key (2026-07-31) — an unanswered question
+        # surfacing live is triage work before it is anybody's task.
+        "meetings.open_question"
+      ]
     },
     %{
       key: "security_guard",

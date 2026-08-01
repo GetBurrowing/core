@@ -55,6 +55,7 @@ defmodule Platform.Meetings.IntentDispatcherTest do
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentDispatcher
   alias Platform.Meetings.IntentQueue
+  alias Platform.Meetings.IntentRouting
   alias Platform.Repo
   alias Platform.Roles
 
@@ -284,6 +285,50 @@ defmodule Platform.Meetings.IntentDispatcherTest do
     :ok = assign_role!(role_key, agent)
     subscribe_runtime!(runtime)
     {agent, runtime}
+  end
+
+  # Subscribe to EVERY topic the responsibility fork can broadcast on,
+  # read from `IntentRouting` rather than listed here. A hardcoded list
+  # would go stale the next time an intent is added and would quietly
+  # narrow `intent_broadcasts_received/1` to the topics it still knew
+  # about — the failure mode being that a fork firing on the NEW topic
+  # looks like silence.
+  #
+  # NB `intent_broadcasts_received/1` below drains greedily: it empties
+  # every atom-headed 2-tuple from the mailbox, not only routing ones.
+  # Call it after the `assert_receive`s a case needs, never before.
+  defp subscribe_all_intent_topics! do
+    for %{topic: topic} <- IntentRouting.entries() do
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, topic)
+    end
+
+    :ok
+  end
+
+  # Every responsibility-fork broadcast sitting in the mailbox, as
+  # `{event_atom, payload}`. One drain window for all topics rather than
+  # a `refute_receive` per topic, so the wait does not grow with the
+  # routing table — and so a failure NAMES the intent that fired instead
+  # of just reporting a mailbox that was not empty.
+  defp intent_broadcasts_received(timeout \\ 300) do
+    events = MapSet.new(IntentRouting.entries(), & &1.event)
+    drain_intent_broadcasts(events, System.monotonic_time(:millisecond) + timeout, [])
+  end
+
+  defp drain_intent_broadcasts(events, deadline, acc) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      Enum.reverse(acc)
+    else
+      receive do
+        {event, payload} when is_atom(event) ->
+          acc = if MapSet.member?(events, event), do: [{event, payload} | acc], else: acc
+          drain_intent_broadcasts(events, deadline, acc)
+      after
+        remaining -> Enum.reverse(acc)
+      end
+    end
   end
 
   # Pull the `dispatch_auto_invite` event for ONE space out of the mailbox,
@@ -543,18 +588,24 @@ defmodule Platform.Meetings.IntentDispatcherTest do
 
   # ── Responsibility fork (task 019fb90f-36e3 stage 1) ───────────────────────
   #
-  # `action_items` is the one classified intent that is NOT handed to a
-  # role's runtime. It goes out as a single global
-  # `{:action_item_intent, payload}` broadcast for the Responsibilities
-  # Router, and the row stays on the meeting's serial cursor until the
-  # `meetings.action_items` handler closes it.
+  # Some classified intents are NOT handed to a role's runtime. Each
+  # goes out as a single global `{<event>, payload}` broadcast for the
+  # Responsibilities Router, and the row stays on the meeting's serial
+  # cursor until that intent's handler closes it.
   #
-  # The positive case and the negative control below are a pair. A fork
-  # that matched EVERY intent would pass the positive case alone; a fork
-  # that matched nothing would pass a `refute_receive` on the broadcast.
-  # Only both together pin it to exactly one intent.
+  # `action_items` was the only such intent when this block was written;
+  # 2026-07-31 added five more, and `Platform.Meetings.IntentRouting` is
+  # now the single table saying which. So the fork is no longer "one
+  # intent vs everything else" and the cases below stopped naming a
+  # specific intent as the dividing line — what divides is whether the
+  # intent HAS a routing row.
+  #
+  # The positive cases and the negative controls are a pair. A fork that
+  # matched EVERY intent would pass the positive cases alone; a fork
+  # that matched nothing would pass the controls alone. Only both
+  # together pin the fork to exactly the routed set.
 
-  describe "responsibility fork for action_items" do
+  describe "responsibility fork — routed intents vs everything else" do
     test "the row goes to the responsibility topic and NOT to a runtime" do
       # `meeting_scribe` is the role the classifier actually stamps on
       # these rows, and it is seeded here with a real runtime. That is
@@ -603,19 +654,36 @@ defmodule Platform.Meetings.IntentDispatcherTest do
       assert dispatched.target_agent_slug == agent.slug
     end
 
-    test "any OTHER intent still takes the runtime path and fires no responsibility" do
+    test "an intent with NO routing row takes the runtime path and fires no responsibility" do
       # The negative control. Without it the fork could match every row
       # and the case above would still be green.
-      {agent, runtime} = seed_target!("designer")
+      #
+      # This used to enqueue `visual_adjust` and call it "any OTHER
+      # intent". That premise died on 2026-07-31, when `visual_adjust`
+      # got a routing row of its own — so the case was asserting the
+      # opposite of the shipped behaviour and would have had to be
+      # loosened to survive. The honest version pins what the fork
+      # actually keys on: the PRESENCE of a row in `IntentRouting`, not
+      # a hardcoded one-intent allowlist.
+      #
+      # `off_topic` is the canonical unrouted intent — deliberately
+      # absent from the table (see `IntentRouting`'s moduledoc: a
+      # routing row for it would wake an agent for every joke). The
+      # premise is asserted rather than assumed, because if someone ever
+      # DOES route it, this test would otherwise quietly start proving
+      # nothing.
+      assert IntentRouting.entry("off_topic") == nil,
+             "off_topic gained a routing row; pick another unrouted intent for this control"
 
-      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, "meeting:action_item_intent")
+      {agent, runtime} = seed_target!("designer")
+      subscribe_all_intent_topics!()
 
       meeting_id = new_meeting!()
       start_dispatcher!()
 
       row =
         enqueue!(meeting_id, %{
-          classified_intent: "visual_adjust",
+          classified_intent: "off_topic",
           target_role: "designer"
         })
 
@@ -629,10 +697,99 @@ defmodule Platform.Meetings.IntentDispatcherTest do
       assert topic == "runtime:#{runtime.runtime_id}"
       assert intent_id == row.id
 
-      refute_receive {:action_item_intent, _payload}, 300
+      # Silence on EVERY responsibility topic, not just the action-items
+      # one the old version watched — a fork that fell through to some
+      # other intent's broadcast would have passed a single-topic refute.
+      assert intent_broadcasts_received() == []
 
       dispatched = await_status(meeting_id, row.id, :dispatched)
       assert dispatched.target_agent_id == agent.id
+    end
+
+    test "an unknown intent string the classifier could emit also takes the runtime path" do
+      # `off_topic` above is a *known* intent the table deliberately
+      # omits. This is the other half: `classified_intent` is free text
+      # from a small local model, so the fork must also decline a string
+      # nobody has ever declared — rather than, say, deriving a topic
+      # from it and broadcasting into the void (which would hold the
+      # meeting's serial cursor for the full 90s ack window).
+      {_agent, runtime} = seed_target!("designer")
+      subscribe_all_intent_topics!()
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row =
+        enqueue!(meeting_id, %{
+          classified_intent: "vsual_adjsut",
+          target_role: "designer"
+        })
+
+      row_id = row.id
+      expected_topic = "runtime:#{runtime.runtime_id}"
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^expected_topic,
+                       event: "attention",
+                       payload: %{signal: %{intent_id: ^row_id}}
+                     },
+                     1_000
+
+      assert intent_broadcasts_received() == []
+      assert await_status(meeting_id, row.id, :dispatched).target_agent_id
+    end
+
+    test "every intent WITH a routing row takes the fork, not the runtime path" do
+      # The generalisation of the action-items case above, driven over
+      # `IntentRouting.entries/0` rather than a second hand-kept list.
+      #
+      # This is NOT circular. The table supplies the inputs and the
+      # expected topic/event; what is asserted is observable dispatcher
+      # behaviour — a broadcast landed on that topic and no runtime
+      # attention did. Stop consulting `IntentRouting` in
+      # `dispatch_row/3` (or drop the fork entirely) and every iteration
+      # goes red on an empty mailbox. What the table CANNOT protect
+      # against is a row being deleted from it, which would silently
+      # shrink this loop; `intent_routing_test.exs` owns that side with
+      # its own non-empty and per-row pins, and the guard below keeps
+      # the loop from passing over nothing.
+      entries = IntentRouting.entries()
+
+      assert length(entries) >= 6,
+             "IntentRouting shrank to #{length(entries)} rows — this loop would prove less " <>
+               "than it did; confirm the deletion was intended, then update this floor"
+
+      # `target_role` is the SAME assigned-and-runtime-backed role for
+      # every iteration, regardless of which role actually owns the
+      # intent. That is deliberate: the fork is checked BEFORE role
+      # resolution, so a fully-wired runtime target is precisely what
+      # makes the silence below evidence rather than a missing fixture.
+      {_agent, _runtime} = seed_target!("designer")
+      subscribe_all_intent_topics!()
+
+      start_dispatcher!()
+
+      for %{intent: intent, event: event, key: key} <- entries do
+        # A fresh meeting per intent: the fork HOLDS the serial cursor
+        # until the handler closes the row, so a second enqueue on the
+        # same meeting would never be claimed.
+        meeting_id = new_meeting!()
+
+        row =
+          enqueue!(meeting_id, %{
+            classified_intent: intent,
+            target_role: "designer",
+            chunk_excerpt: "utterance routing to #{key}"
+          })
+
+        assert_receive {^event, payload}, 1_000
+        assert payload.intent_id == row.id
+        assert payload.classified_intent == intent
+
+        refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 200
+
+        await_status(meeting_id, row.id, :dispatched)
+      end
     end
 
     test "the stamped agent comes from the RESPONSIBILITY, not from the classifier's role" do

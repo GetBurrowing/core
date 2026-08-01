@@ -79,7 +79,7 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
   alias Platform.Responsibilities.BuiltIns
   alias Platform.Roles.Seeds
 
-  # The 21 prompt-template slugs the closed roster depends on. Kept as
+  # The 26 prompt-template slugs the closed roster depends on. Kept as
   # a literal list here (rather than derived from the responsibility
   # rows) so a stale expected list forces an intentional edit alongside
   # the code change that introduced a new template. ADR-0044 stage 1
@@ -90,6 +90,15 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
   # `019f3e8e-4406` v2 stage 2 flipped the four security responsibility
   # rows to point at them, so the enrichment path is required-by-default
   # for the whole roster now.
+  #
+  # 21 → 26 on 2026-07-31: the five mid-meeting intent keys
+  # (`meetings.{brief_worthy,decision_recorded,interaction_design,
+  # open_question,visual_adjust}`) each declare a `.v1` slug, all five
+  # seeded by
+  # `20260731234500_seed_meeting_intent_prompt_templates.exs`. They are
+  # therefore OWNED, and must NOT be added to `@unseeded_roster_slugs`
+  # below — putting them there would pin a render gap that does not
+  # exist and would go red the moment anyone read the migration.
   @closed_roster_template_slugs [
     "architecture.audit_diff.v1",
     "architecture.cron_sweep.v1",
@@ -100,8 +109,13 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     "design.task_direction.v1",
     "meetings.action_items.v1",
     "meetings.attendance_followup.v1",
+    "meetings.brief_worthy.v1",
+    "meetings.decision_recorded.v1",
     "meetings.intent_classify.v1",
+    "meetings.interaction_design.v1",
+    "meetings.open_question.v1",
     "meetings.summarize.v1",
+    "meetings.visual_adjust.v1",
     "memory.daily_summary.v1",
     "memory.dreaming.v1",
     "memory.propose_long_term.v1",

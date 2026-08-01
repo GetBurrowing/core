@@ -91,7 +91,12 @@ defmodule Platform.Responsibilities.Providers.Meetings do
     IntentClassify,
     MeetingActionItems,
     MeetingAttendanceFollowup,
-    MeetingSummarize
+    MeetingBriefWorthy,
+    MeetingDecisionRecorded,
+    MeetingInteractionDesign,
+    MeetingOpenQuestion,
+    MeetingSummarize,
+    MeetingVisualAdjust
   }
 
   alias Platform.Responsibilities.Responsibility
@@ -101,7 +106,12 @@ defmodule Platform.Responsibilities.Providers.Meetings do
     MeetingSummarize.register() ++
       IntentClassify.register() ++
       MeetingActionItems.register() ++
-      MeetingAttendanceFollowup.register()
+      MeetingAttendanceFollowup.register() ++
+      MeetingVisualAdjust.register() ++
+      MeetingInteractionDesign.register() ++
+      MeetingBriefWorthy.register() ++
+      MeetingDecisionRecorded.register() ++
+      MeetingOpenQuestion.register()
   end
 
   @doc """
@@ -123,6 +133,14 @@ defmodule Platform.Responsibilities.Providers.Meetings do
 
   def handler_for("meetings.attendance_followup"),
     do: Handlers.MeetingAttendanceFollowup
+
+  # `meetings.*` key, DESIGNER's bundle — namespace records origin, the
+  # bundle records who does the work. See `Platform.Meetings.IntentRouting`.
+  def handler_for("meetings.visual_adjust"), do: Handlers.MeetingVisualAdjust
+  def handler_for("meetings.interaction_design"), do: Handlers.MeetingInteractionDesign
+  def handler_for("meetings.brief_worthy"), do: Handlers.MeetingBriefWorthy
+  def handler_for("meetings.decision_recorded"), do: Handlers.MeetingDecisionRecorded
+  def handler_for("meetings.open_question"), do: Handlers.MeetingOpenQuestion
 
   def handler_for(_), do: nil
 
@@ -171,7 +189,21 @@ defmodule Platform.Responsibilities.Providers.Meetings do
         MeetingSummarize.handle_output(responsibility, parsed, normalize_meta(trigger_meta))
 
       handler ->
-        handler.handle_output(responsibility, parsed, trigger_meta)
+        # Arity probe, not a blind arity-3 call. Every mid-meeting intent
+        # handler defines only `handle_output/2`: their recipients write
+        # the artifact themselves with their own tools, so there is no
+        # parsed payload for the platform to apply and no trigger meta to
+        # apply it against. Calling arity 3 on them raises
+        # `UndefinedFunctionError`, which `Router.invoke_handle_output/3`
+        # rescues and logs as "handle_output raised" — a real error line
+        # for a handler that is behaving exactly as designed, on a path
+        # (external dispatch) that none of these keys takes in production
+        # anyway. That is a log nobody can act on, so probe instead.
+        if function_exported?(handler, :handle_output, 3) do
+          handler.handle_output(responsibility, parsed, trigger_meta)
+        else
+          handler.handle_output(responsibility, parsed)
+        end
     end
   end
 
@@ -245,6 +277,11 @@ defmodule Platform.Responsibilities.Providers.Meetings do
     case handler_for(Map.get(context, :__responsibility__)) do
       Handlers.MeetingSummarize -> MeetingSummarize.build_prompt(context)
       Handlers.MeetingActionItems -> MeetingActionItems.build_prompt(context)
+      Handlers.MeetingVisualAdjust -> MeetingVisualAdjust.build_prompt(context)
+      Handlers.MeetingInteractionDesign -> MeetingInteractionDesign.build_prompt(context)
+      Handlers.MeetingBriefWorthy -> MeetingBriefWorthy.build_prompt(context)
+      Handlers.MeetingDecisionRecorded -> MeetingDecisionRecorded.build_prompt(context)
+      Handlers.MeetingOpenQuestion -> MeetingOpenQuestion.build_prompt(context)
       _ -> {:error, :no_build_prompt}
     end
   end

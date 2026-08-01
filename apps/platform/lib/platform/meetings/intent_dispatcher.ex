@@ -155,18 +155,31 @@ defmodule Platform.Meetings.IntentDispatcher do
       new — it is the topic the signal actually went to, and is nil on
       the responsibility path because there is no runtime involved.
 
-  ## Responsibility fork (task 019fb90f-36e3 stage 1)
+  ## Responsibility fork (task 019fb90f-36e3 stage 1; generalised 2026-07-31)
 
-  One classified intent — `action_items` — is NOT handed to a role's
-  runtime. `@responsibility_intents` maps it to the
-  `meetings.action_items` responsibility, and `dispatch_row/3` forks on
-  it before any role resolution: the row is marked `:dispatched` and a
-  single global `{:action_item_intent, payload}` broadcast goes out for
+  Some classified intents are NOT handed to a role's runtime.
+  `Platform.Meetings.IntentRouting` maps each such intent to the
+  responsibility that serves it, and `dispatch_row/3` forks on that
+  BEFORE any role resolution: the row is marked `:dispatched` and a
+  single global `{<event>, payload}` broadcast goes out for
   `Platform.Responsibilities.Router` to pick up. The fork lives here
   rather than in `IntentClassifier` on purpose — broadcasting at
   classify time would double-produce (the row would ALSO go out as
   runtime attention) and would lose both the meeting's serial cursor
   and the producer's cancel/correct control over the row.
+
+  The roster started as a one-entry map inline in this module, with a
+  comment requiring each addition to be argued per key. Rowan made that
+  argument on 2026-07-31 — every classified intent should reach its
+  responsibility with a prompt an operator can tune, rather than every
+  intent but one sharing a single generic runtime envelope. The table
+  moved to `IntentRouting` at the same time, because the topic and the
+  event atom were being restated in three files and a disagreement
+  between any two of them produces a dispatch nobody hears and a
+  cursor held until the ack window expires.
+
+  An intent with NO routing row still takes the runtime-attention path
+  below. That is the ordinary case, not a gap.
 
     * `[:platform, :meetings, :intent_dropped]` — measurements
       `%{count: 1}`, metadata `%{meeting_id, room_id, intent_id,
@@ -191,6 +204,7 @@ defmodule Platform.Meetings.IntentDispatcher do
   alias Platform.Agents.Agent
   alias Platform.Meetings
   alias Platform.Meetings.IntentQueue
+  alias Platform.Meetings.IntentRouting
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.IntentRuntimeAdapter
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
@@ -202,16 +216,11 @@ defmodule Platform.Meetings.IntentDispatcher do
   # case, the tick just recovers dropped notifies + dispatcher restarts.
   @default_tick_interval_ms 30_000
 
-  # Classified intents that are handled by a RESPONSIBILITY rather than
-  # by a role's runtime (task 019fb90f-36e3 stage 1).
-  #
-  # Deliberately a one-entry roster, not a general mechanism. Adding a
-  # second entry means claiming that another intent is better served by
-  # a router-dispatched responsibility than by an agent's runtime, and
-  # that claim should be argued per key — a growing map here would
-  # quietly turn "the classifier picks a role" into "the classifier
-  # picks a code path".
-  @responsibility_intents %{"action_items" => "meetings.action_items"}
+  # The roster of intents served by a RESPONSIBILITY rather than by a
+  # role's runtime now lives in `Platform.Meetings.IntentRouting`, which
+  # also owns the topic and the event atom each one travels on. It moved
+  # out of this module when the second entry landed; see the
+  # "Responsibility fork" section of the moduledoc for why.
 
   # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -410,22 +419,50 @@ defmodule Platform.Meetings.IntentDispatcher do
 
     case IntentQueue.transition(meeting_id, row.id, :dispatched, attrs) do
       {:ok, dispatched_row} ->
-        :ok =
-          MeetingsPubSub.broadcast_action_item_intent(
-            action_item_payload(meeting_id, dispatched_row)
-          )
+        # NOT `:ok = ...`. `broadcast_intent/2` answers
+        # `{:error, :unroutable_intent}` for an intent with no routing
+        # row, and a hard match would turn a table inconsistency into a
+        # crash of the ONE dispatcher process that serves every live
+        # meeting. It is unreachable today — we only got here because
+        # `responsibility_key_for/1` found a row, and the topic comes
+        # off that same row — so this arm exists to bound the blast
+        # radius of a future half-added intent, not because the case is
+        # expected.
+        case MeetingsPubSub.broadcast_intent(
+               to_string(dispatched_row.classified_intent),
+               intent_payload(meeting_id, dispatched_row)
+             ) do
+          :ok ->
+            elapsed_ms = System.monotonic_time(:millisecond) - started_at
 
-        elapsed_ms = System.monotonic_time(:millisecond) - started_at
+            emit_responsibility_dispatched_telemetry(
+              meeting_id,
+              dispatched_row,
+              responsibility_key,
+              agent,
+              elapsed_ms
+            )
 
-        emit_responsibility_dispatched_telemetry(
-          meeting_id,
-          dispatched_row,
-          responsibility_key,
-          agent,
-          elapsed_ms
-        )
+            %{state | dispatched_count: state.dispatched_count + 1}
 
-        %{state | dispatched_count: state.dispatched_count + 1}
+          {:error, :unroutable_intent} ->
+            # Logged and left `:dispatched` on purpose. The row's ack
+            # window is already armed and will land it `:timed_out` in
+            # 90s, releasing the cursor — a legal transition the queue
+            # already owns. Forcing `:dispatch_failed` from here would
+            # mean inventing a new `dispatch_failure_reason` and
+            # transitioning out of `:dispatched`, i.e. two new contracts
+            # for a branch that is unreachable while this table and the
+            # handlers agree.
+            Logger.error(
+              "[IntentDispatcher] responsibility fork found key=#{responsibility_key} for " <>
+                "intent=#{inspect(dispatched_row.classified_intent)} but IntentRouting has no " <>
+                "topic for it — the row is dispatched with nothing listening and will time out. " <>
+                "Add the routing row or remove the key."
+            )
+
+            state
+        end
 
       {:error, reason} ->
         Logger.debug(
@@ -438,20 +475,23 @@ defmodule Platform.Meetings.IntentDispatcher do
     end
   end
 
-  defp responsibility_key_for(intent) when is_binary(intent),
-    do: Map.get(@responsibility_intents, intent)
-
-  defp responsibility_key_for(intent) when is_atom(intent) and not is_nil(intent),
-    do: Map.get(@responsibility_intents, Atom.to_string(intent))
-
-  defp responsibility_key_for(_), do: nil
+  # Delegated to `Platform.Meetings.IntentRouting`, which is the single
+  # declaration of intent -> {responsibility key, topic, event atom}.
+  # Kept as a private wrapper rather than inlined so every call site in
+  # this module keeps reading as a question about THIS dispatcher's
+  # fork, and so the string/atom normalisation lives in one place.
+  defp responsibility_key_for(intent), do: IntentRouting.responsibility_key(intent)
 
   # Everything the handler's context gatherer reads. Only `intent_id`,
   # `meeting_id` and `chunk_excerpt` are reliably non-nil; the rest come
   # off the room's transcript row, which mid-meeting may not exist yet.
   # Each is left nil rather than defaulted, because "we don't know the
   # space" and "the space is X" have to stay distinguishable downstream.
-  defp action_item_payload(meeting_id, row) do
+  #
+  # Named `action_item_payload/2` until 2026-07-31 — the shape was never
+  # action-item-specific and every intent responsibility reads the same
+  # fields via `Platform.Meetings.IntentContext`.
+  defp intent_payload(meeting_id, row) do
     transcript = safe_transcript_for_room(row.room_id)
 
     %{

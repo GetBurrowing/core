@@ -246,7 +246,7 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
   # ── role bundle ───────────────────────────────────────────────────────────
 
   describe "the designer role bundle" do
-    test "seed_defaults/0 lands all four keys, and a second run inserts nothing" do
+    test "seed_defaults/0 lands all six keys, and a second run inserts nothing" do
       # The migration already seeded this DB, so clear the designer pairs
       # first — otherwise "seed_defaults inserted the key" would be
       # indistinguishable from "the key was already there".
@@ -257,15 +257,24 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
 
       assert :ok = Platform.Roles.Seeds.seed_defaults()
 
+      # Four → six on 2026-07-31: `meetings.visual_adjust` and
+      # `meetings.interaction_design` joined the designer's bundle. This
+      # file is `design.task_direction`'s test, but the assertion is
+      # deliberately on the WHOLE bundle rather than on that one key —
+      # `seed_defaults/0` writes the designer's pairs as a set, so a
+      # membership check here would stay green through a re-seed that
+      # dropped every other key.
       assert Roles.bundle_for("designer") == [
                "design.brand_check",
                "design.critique",
                "design.spec_writer",
-               "design.task_direction"
+               "design.task_direction",
+               "meetings.interaction_design",
+               "meetings.visual_adjust"
              ]
 
       after_first = Repo.aggregate(RoleResponsibility, :count, :id)
-      assert after_first == before + 4
+      assert after_first == before + 6
 
       assert :ok = Platform.Roles.Seeds.seed_defaults()
       assert Repo.aggregate(RoleResponsibility, :count, :id) == after_first

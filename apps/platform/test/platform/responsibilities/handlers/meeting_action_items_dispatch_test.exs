@@ -5,36 +5,40 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
 
   ## Why this file exists separately from `meeting_action_items_test.exs`
 
-  The 19 tests in `meeting_action_items_test.exs` all call
-  `handle_output/3` DIRECTLY with an already-decoded map
-  (`%{"action_items" => [...]}`). They were green while the production
-  key was completely unfireable, because none of them crosses the
-  string/map seam that production actually walks:
+  The unit tests call the handler's callbacks directly. Nothing there
+  crosses the seams that production actually walks:
 
       Router.fire
         → Providers.Meetings.gather_context/2
         → Providers.Meetings.build_prompt/1     <-- defect 2 lived here
         → Dispatcher.dispatch/4  (HTTP)
-        → ContractValidator.validate/2          <-- returns a BINARY,
-        →   invoke_handle_output/3                  never a map
-        → MeetingActionItems.handle_output/3    <-- defect 1 lived here
+        → ContractValidator.validate/2
+        →   invoke_handle_output/3
+        → invoke_handle_refusal/3               <-- the row-closing seam
 
-  `ContractValidator.classify/1` has no clause for the field-map
-  contract shape `%{"action_items" => "list[string]"}`, so it falls
-  through to `:unknown` → freeform → `validate/2` hands the handler the
-  RAW STRING. Every responsibility in the tree declares its contract in
-  that shape, so this is the universal production shape, not an edge
-  case. See `MeetingActionItems`'s moduledoc for why the fix is at the
-  handler and not in the shared classifier.
+  Every test here drives `Router.fire/2` for real, with HTTP stubbed via
+  `Req.Test`, and asserts on what came out of the router rather than on
+  what the handler returned.
 
-  Both tests here drive `Router.fire/2` for real, with HTTP stubbed via
-  `Req.Test`, and assert on the two things the live e2e run
-  (case 019fa57b-4544) proved were broken:
+  ## What these tests stopped asserting
 
-    * the POST body carries transcript content, not the literal
-      un-seeded template name `"meetings.action_items.v1"`
-    * a freeform string response lands as a message in the meeting space
-      with every item in it
+  They used to end at a checklist canvas: the handler parsed the model's
+  answer into `operations` and applied them server-side. That reconciler
+  is gone — it was reachable only from `run_external_dispatch/5` while
+  this key's assignee resolves NATIVE, so it never ran in production, and
+  the recipient holds `canvas_create` / `canvas_patch` and does the work
+  itself. The platform now writes NOTHING in response to a model answer,
+  which is asserted here directly rather than left implied.
+
+  What survives, and is the reason this file still earns its place:
+
+    * the POST body carries the utterance and the rendered context, not
+      the literal un-seeded template name `"meetings.action_items.v1"`
+      (the live e2e capture, case 019fa57b-4544)
+    * a REFUSAL closes the `IntentQueue` row instead of leaving it
+      holding the meeting's serial cursor for 90 seconds
+    * a dispatch that DOES happen leaves that row open, because the
+      recipient's `intent_ack` is now the only thing that closes it
 
   Structure mirrors `Platform.Review.MeetingSummarizeE2EReviewTest`,
   which is the existing template for router-fired dispatch coverage.
@@ -206,10 +210,10 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
           transcript_id: transcript_id,
           space_id: space_id,
           # Every payload `IntentDispatcher.action_item_payload/2`
-          # broadcasts carries a meeting id; `handle_output/3` refuses
-          # without one because it has no canvas to reconcile. There is
-          # deliberately no meeting ROW behind it here, so the space
-          # resolves via the payload rung of the ladder rather than via
+          # broadcasts carries a meeting id; `handle_refusal/3` needs it
+          # to find the queue row. There is deliberately no meeting ROW
+          # behind it here, so the canvas inventory resolves via the
+          # payload's own `space_id` rather than via
           # `Meetings.get_meeting/1` — which is what a dispatch looks
           # like when the meeting row is not the thing under test.
           meeting_id: Platform.Types.UUIDv7.generate(),
@@ -244,17 +248,12 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
     |> Enum.filter(&(get_in(&1.metadata, ["source"]) == "meeting_action_items"))
   end
 
-  # The delivery surface as of task 019fb90f-36e3 stage 4: a canvas, not
-  # a message. `action_item_messages/1` is kept because the absence of
-  # that markdown post is now itself an assertion — mid-meeting it would
-  # repost the whole list once per utterance.
-  defp action_items_canvases(space_id) do
-    space_id
-    |> Chat.list_canvases()
-    |> Enum.filter(
-      &(get_in(&1.metadata, ["source"]) == Platform.Meetings.ActionItemsCanvas.metadata_source())
-    )
-  end
+  # Everything the platform wrote into the space as a result of the
+  # dispatch. Deliberately UNFILTERED: the point of these assertions is
+  # that the platform writes nothing at all any more, and a filter keyed
+  # on the reconciler's own metadata would pass against a handler that
+  # wrote canvases under some other tag.
+  defp canvases(space_id), do: Chat.list_canvases(space_id)
 
   # A live queue row in `:dispatched` for `meeting_id`, exactly as
   # `IntentDispatcher` leaves it before broadcasting the trigger the
@@ -280,14 +279,6 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
   defp row_status(meeting_id, intent_id) do
     {:ok, row} = IntentQueue.get(meeting_id, intent_id)
     row
-  end
-
-  defp labels_on(canvas_id) do
-    {:ok, %{document: document}} = Platform.Chat.Canvas.Server.describe(canvas_id)
-
-    document
-    |> Platform.Meetings.ActionItemsCanvas.summarize()
-    |> Enum.map(& &1.label)
   end
 
   # ── defect 2 — the prompt never carried the transcript ────────────────────
@@ -321,26 +312,24 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
       refute user_msg["content"] == "meetings.action_items.v1"
       refute user_msg["content"] =~ "meetings.action_items.v1"
 
-      # Stage 3 splits the turns: the user turn is the ONE classified
+      # The turns are split: the user turn is the ONE classified
       # utterance being acted on, and everything standing — the window,
-      # the canvas, the org identity — is in the system turn.
+      # the canvas inventory, the org identity — is in the system turn.
       assert user_msg["content"] =~ "Priya"
       assert user_msg["content"] =~ "onboarding revert has to happen"
 
       system_msg = Enum.find(messages, &(&1["role"] == "system"))
       assert system_msg
-      assert system_msg["content"] =~ "action item"
 
-      # The system turn is the migrated DB row, rendered — not a
-      # heredoc, and not a body carrying literal markers. Both halves
-      # matter: the mid-meeting framing only exists in the migrated row,
-      # and surrounding transcript only reaches the model through an
-      # interpolated assign.
-      assert system_msg["content"] =~ "DURING a live meeting"
-      refute system_msg["content"] =~ "A meeting just ended"
-      refute system_msg["content"] =~ "{{"
+      # Asserted on the ASSIGNS, not on the wording of the prompt body.
+      # The body is a DB row an operator retunes live through
+      # `prompt_template_update`; a test that pinned a phrase from it
+      # would go red on a legitimate edit and prove nothing about
+      # whether the context reached the model. Surrounding transcript
+      # can only get here through an interpolated assign.
       assert system_msg["content"] =~ "Alex"
       assert system_msg["content"] =~ "deploy audit"
+      refute system_msg["content"] =~ "{{"
     end
 
     test "a blank utterance refuses the dispatch rather than prompting on nothing" do
@@ -353,7 +342,10 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
       transcript =
         create_transcript!(%{space_id: space.id, segments: dialogue_segments()})
 
-      stub_ok(~s({"operations": []}))
+      # Armed so that a dispatch reaching the endpoint would SUCCEED.
+      # `refute_receive` below is only evidence of a refusal if the stub
+      # would have answered.
+      stub_ok("Nothing to change.")
 
       meeting_id = Platform.Types.UUIDv7.generate()
       row = dispatched_row!(meeting_id)
@@ -401,11 +393,20 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
       assert IntentQueue.cursor(meeting_id) == nil
     end
 
-    test "POSITIVE CONTROL: a dispatch that DOES happen still lands the row :completed" do
-      # The presence side of the absence assertion above. "The row is no
-      # longer stuck in :dispatched" is satisfiable by never dispatching
-      # at all, so the refusal case cannot be read on its own — this
-      # pins the same row, at the same seam, through a real round trip.
+    test "POSITIVE CONTROL: a dispatch that DOES happen leaves the row for the RECIPIENT" do
+      # The other side of the assertion above, and the half that keeps it
+      # honest. "The row is no longer `:dispatched`" is satisfiable by a
+      # handler that closes every row it sees, which would make the
+      # refusal case prove nothing about `handle_refusal/3`. Fire the
+      # same seam with a real round trip and the row must still be open:
+      # only the refusal path closes rows now.
+      #
+      # This is a DELIBERATE change of shape. The handler used to write
+      # `:completed` here off the back of an HTTP 200, which claimed the
+      # canvas was up to date on evidence it did not have. The recipient
+      # is the only thing that knows, and it says so with `intent_ack` —
+      # which is why the ack contract is asserted on the wire below
+      # rather than left to the tunable prompt row.
       _ = seed_action_items_row!()
       _agent = seed_action_items_agent!()
       _registry = start_registry!()
@@ -415,7 +416,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
       transcript =
         create_transcript!(%{space_id: space.id, segments: dialogue_segments()})
 
-      stub_ok(~s({"operations": [{"op": "add", "label": "Ship the adapter fix"}]}))
+      stub_ok("Added one item to the running list.")
 
       meeting_id = Platform.Types.UUIDv7.generate()
       row = dispatched_row!(meeting_id)
@@ -423,13 +424,24 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
       assert {:ok, :dispatched} =
                fire!(transcript.id, space.id, %{meeting_id: meeting_id, intent_id: row.id})
 
-      assert_receive {:dispatch_body, _}, 5_000
+      assert_receive {:dispatch_body, raw_body}, 5_000
 
-      closed = row_status(meeting_id, row.id)
+      still_open = row_status(meeting_id, row.id)
 
-      assert closed.status == :completed
-      assert is_nil(closed.dispatch_failure_reason)
-      assert IntentQueue.cursor(meeting_id) == nil
+      assert still_open.status == :dispatched
+      assert is_nil(still_open.dispatch_failure_reason)
+
+      # And the recipient was told how to release it. Without this the
+      # assertion above is indistinguishable from a row nobody will ever
+      # close — the 90-second stall the refusal path exists to prevent.
+      system_msg =
+        raw_body
+        |> Jason.decode!()
+        |> Map.fetch!("messages")
+        |> Enum.find(&(&1["role"] == "system"))
+
+      assert system_msg["content"] =~ "intent_ack"
+      assert system_msg["content"] =~ row.id
     end
 
     test "an utterance with NO transcript still dispatches — the refusal moved off the window" do
@@ -444,7 +456,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
       space = create_space!()
       transcript = create_transcript!(%{space_id: space.id, segments: []})
 
-      stub_ok(~s({"operations": []}))
+      stub_ok("Nothing to change.")
 
       assert {:ok, :dispatched} = fire!(transcript.id, space.id)
       assert_receive {:dispatch_body, raw_body}, 5_000
@@ -458,107 +470,43 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
     end
   end
 
-  # ── defect 1 — the freeform string never became items ─────────────────────
+  # ── the reconciler's grave ────────────────────────────────────────────────
+  #
+  # These asserted a checklist canvas built server-side out of the model's
+  # answer, across four answer shapes (contract JSON, bare array, prose
+  # with list markers, blank). The parsing and the applying are both gone.
+  #
+  # What replaces them is one assertion in three shapes: whatever the
+  # model says, the PLATFORM writes nothing. A single case would be
+  # satisfied by a handler that still parsed one shape and quietly failed
+  # on the others; running the three shapes that used to take three
+  # different code paths is what makes the absence mean "the reconciler is
+  # gone" rather than "this particular string did not parse".
 
-  describe "output handling (defect 1 — validator hands the handler a binary)" do
-    test "a JSON-object STRING response lands both items on a canvas" do
-      _ = seed_action_items_row!()
-      _agent = seed_action_items_agent!()
-      _registry = start_registry!()
+  describe "output handling — the platform applies nothing" do
+    for {label, answer} <- [
+          {"contract JSON", ~s({"operations": [{"op": "add", "label": "Ship the adapter fix"}]})},
+          {"a bare JSON array", ~s(["Book the review", "Send the doc"])},
+          {"prose with list markers", "- Revert the onboarding flow\n* Email the deploy audit\n"}
+        ] do
+      test "#{label} writes no canvas and no message" do
+        _ = seed_action_items_row!()
+        _agent = seed_action_items_agent!()
+        _registry = start_registry!()
 
-      space = create_space!()
+        space = create_space!()
 
-      transcript =
-        create_transcript!(%{space_id: space.id, segments: dialogue_segments()})
+        transcript =
+          create_transcript!(%{space_id: space.id, segments: dialogue_segments()})
 
-      stub_ok(
-        ~s({"operations": [{"op": "add", "label": "Ship the adapter fix"},) <>
-          ~s( {"op": "add", "label": "Email Rowan the audit"}]})
-      )
+        stub_ok(unquote(answer))
 
-      assert {:ok, :dispatched} = fire!(transcript.id, space.id)
-      assert_receive {:dispatch_body, _}, 5_000
+        assert {:ok, :dispatched} = fire!(transcript.id, space.id)
+        assert_receive {:dispatch_body, _}, 5_000
 
-      assert [canvas] = action_items_canvases(space.id)
-      assert labels_on(canvas.id) == ["Ship the adapter fix", "Email Rowan the audit"]
-
-      # And the POST-meeting markdown surface stayed out of it.
-      assert action_item_messages(space.id) == []
-    end
-
-    test "the pre-stage-3 action_items JSON shape is refused, not shredded into prose" do
-      # Byte-for-byte the content the live e2e run's model returned —
-      # `server3.log:1392` logged it as an "unexpected output shape".
-      # It parses as JSON and is not the operations contract, so it is a
-      # contract violation. Sending it to the prose splitter would invent
-      # action items out of its punctuation.
-      _ = seed_action_items_row!()
-      _agent = seed_action_items_agent!()
-      _registry = start_registry!()
-
-      space = create_space!()
-
-      transcript =
-        create_transcript!(%{space_id: space.id, segments: dialogue_segments()})
-
-      stub_ok(~s({"action_items": ["Ship the adapter fix", "Email Rowan the audit"]}))
-
-      assert {:ok, :dispatched} = fire!(transcript.id, space.id)
-      assert_receive {:dispatch_body, _}, 5_000
-
-      assert action_items_canvases(space.id) == []
-      assert action_item_messages(space.id) == []
-    end
-
-    test "a plain-prose bulleted list response lands every item" do
-      _ = seed_action_items_row!()
-      _agent = seed_action_items_agent!()
-      _registry = start_registry!()
-
-      space = create_space!()
-
-      transcript =
-        create_transcript!(%{space_id: space.id, segments: dialogue_segments()})
-
-      stub_ok("""
-      - Revert the onboarding flow before the mobile launch (Priya, Friday)
-
-      * Email Rowan the deploy audit once the adapter fix lands
-      1. Book the compliance sign-off with the design partners
-      """)
-
-      assert {:ok, :dispatched} = fire!(transcript.id, space.id)
-      assert_receive {:dispatch_body, _}, 5_000
-
-      assert [canvas] = action_items_canvases(space.id)
-
-      # List markers are stripped exactly once, not doubled up — asserted
-      # as equality on the labels rather than as a `refute` on a rendered
-      # body, so a marker that survives cannot hide inside other text.
-      assert labels_on(canvas.id) == [
-               "Revert the onboarding flow before the mobile launch (Priya, Friday)",
-               "Email Rowan the deploy audit once the adapter fix lands",
-               "Book the compliance sign-off with the design partners"
-             ]
-    end
-
-    test "a string with no extractable items writes nothing and stays :ok" do
-      _ = seed_action_items_row!()
-      _agent = seed_action_items_agent!()
-      _registry = start_registry!()
-
-      space = create_space!()
-
-      transcript =
-        create_transcript!(%{space_id: space.id, segments: dialogue_segments()})
-
-      stub_ok("   \n\n  \n")
-
-      assert {:ok, :dispatched} = fire!(transcript.id, space.id)
-      assert_receive {:dispatch_body, _}, 5_000
-
-      assert action_items_canvases(space.id) == []
-      assert action_item_messages(space.id) == []
+        assert canvases(space.id) == []
+        assert action_item_messages(space.id) == []
+      end
     end
   end
 end

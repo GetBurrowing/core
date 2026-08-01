@@ -666,7 +666,19 @@ defmodule Platform.Chat.AgentResponderTest do
 
       # Control against the pin passing trivially on two empty lists, and
       # against `space_id` creeping in later.
-      assert AgentResponder.correlation_id_keys() == [:task_id, :plan_id, :stage_id, :project_id]
+      #
+      # `:intent_id` joined 2026-07-31 so a meeting intent dispatched to a
+      # NATIVE assignee carries the handle it must `intent_ack` with —
+      # without it the row could only leave `:dispatched` via the 90s
+      # timeout, holding the meeting's serial cursor for the whole window.
+      assert AgentResponder.correlation_id_keys() == [
+               :task_id,
+               :plan_id,
+               :stage_id,
+               :project_id,
+               :intent_id
+             ]
+
       refute :space_id in AgentResponder.correlation_id_keys()
     end
 

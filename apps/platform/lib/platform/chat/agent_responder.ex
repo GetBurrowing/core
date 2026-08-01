@@ -679,7 +679,16 @@ defmodule Platform.Chat.AgentResponder do
   # lifted its own `space_id` here would silently move a live approval prompt
   # to a space nobody is watching. Adding `space_id` to this list would defeat
   # a client-side guard the client cannot defend itself against.
-  @correlation_id_keys [:task_id, :plan_id, :stage_id, :project_id]
+  # `:intent_id` added 2026-07-31. A meeting intent dispatched down the
+  # responsibility path holds the meeting's SERIAL cursor until the
+  # recipient calls `intent_ack`, and the recipient cannot ack a handle
+  # it was never given. Before this, `meetings.action_items` fired at a
+  # native assignee that received no `intent_id` at all, so every
+  # classified action item rode the full 90s ack window and landed
+  # `:timed_out` — the meeting queue serialised at one intent per ninety
+  # seconds. It is a correlation id in exactly the sense the rest of this
+  # list is, and unlike `space_id` it re-pins nothing on the client.
+  @correlation_id_keys [:task_id, :plan_id, :stage_id, :project_id, :intent_id]
 
   @doc false
   # Exposed so the envelope test can pin this list against the Router's

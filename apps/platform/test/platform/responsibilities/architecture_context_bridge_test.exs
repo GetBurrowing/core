@@ -175,22 +175,23 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
       "meetings.intent_classify placeholder — the chunk arrives on the " <>
         "trigger payload, not through a resolver",
     "meeting_intent" =>
-      "meetings.action_items reads the classified utterance straight off " <>
-        "the `meeting:action_item_intent` broadcast payload in its own " <>
-        "gather_context/2 — there is no row to resolve it from, the " <>
-        "payload IS the source (task 019fb90f-36e3 stage 2)",
+      "every meetings.* intent key reads the classified utterance straight " <>
+        "off its broadcast payload via Platform.Meetings.IntentContext — " <>
+        "there is no row to resolve it from, the payload IS the source " <>
+        "(task 019fb90f-36e3 stage 2)",
     "transcript_window" =>
-      "meetings.action_items takes the last 8 segments itself. The shared " <>
+      "IntentContext takes the last 8 segments itself. The shared " <>
         ":meeting_transcript resolver returns the WHOLE transcript, which " <>
         "is the unbounded per-utterance cost the retarget exists to " <>
         "remove; a resolver clause would need a window-size argument the " <>
         "batch path has no way to pass (task 019fb90f-36e3 stage 2)",
-    "action_items_canvas" =>
-      "meetings.action_items resolves this through " <>
-        "Platform.Meetings.ActionItemsCanvas.locate/2, which needs a " <>
-        "space_id AND a meeting_id resolved through a three-way fallback " <>
-        "ladder — not something the flat opts map the shared resolver " <>
-        "takes can express (task 019fb90f-36e3 stage 2)"
+    "meeting_canvases" =>
+      "IntentContext.space_canvases/1 lists the meeting's space through " <>
+        "Chat.list_canvases/1 after resolving the space from the payload " <>
+        "or the meeting row. The shared resolver's flat opts map cannot " <>
+        "express that fallback, and the slot is an INVENTORY the recipient " <>
+        "reads further with its own canvas tools rather than a typed " <>
+        "artifact the platform reconciles"
   }
 
   setup do

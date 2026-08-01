@@ -18,8 +18,9 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
        string literal reports the working key callerless.
 
     2. It measures the wrong edge. After stage 1 the dominant trigger path for
-       all four `meetings.*` keys is a `Phoenix.PubSub` broadcast the Router
-       converts into a fire internally — there is no `fire/2` call site at all.
+       every `meetings.*` key (four then, nine since 2026-07-31) is a
+       `Phoenix.PubSub` broadcast the Router converts into a fire internally —
+       there is no `fire/2` call site at all.
 
     3. It cannot see the failure that actually happened here. A census would
        have found `broadcast_meeting_finished/2` at
@@ -42,7 +43,10 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
 
   The stage plan asked for: "assert every `event_topic` spec declares a
   non-empty `event_match`." That assertion is WRONG as written — it fails on 7
-  of the 11 rows shipping today, and satisfying it by bolting `event_match`
+  of the 16 rows shipping today (7 of 11 when this was written; the 2026-07-31
+  mid-meeting intent keys added five more PubSub rows and no new exempt ones,
+  so the numerator is unchanged and only the denominator moved), and
+  satisfying it by bolting `event_match`
   onto them would be actively harmful, because `event_match` is what the
   Router routes PubSub deliveries by (`router.ex` `fire_event_match/3`).
   Declaring one on a row nothing broadcasts to would either be inert noise or,
@@ -57,7 +61,7 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
       calling `Responsibilities.fire/2`. Their `topic` string is documentation
       for operators inspecting the row, not a live subscription.
 
-  Only the four meetings-family rows are PubSub-delivered, and only those
+  Only the nine meetings-family rows are PubSub-delivered, and only those
   declare `event_match`. So the assertion is restated as: **every spec whose
   topic is classified `:pubsub` in `@topic_delivery` declares a non-empty
   `event_match`, and every spec whose topic is not so classified declares
@@ -126,10 +130,23 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
   # `:pubsub` entries default to an arity-2 publisher taking
   # `(room_id, payload)`. An entry may declare `arg_shape: :payload_only`
   # for an arity-1 publisher that takes the payload alone (room folded
-  # in as a field). Any OTHER shape needs a builder here, not a special
-  # case in the test body — the generated case asserts the declared
-  # arity matches the args it built, so an unlisted shape fails loudly
-  # rather than calling the publisher wrong.
+  # in as a field), or `arg_shape: :intent_and_payload` for the generic
+  # `broadcast_intent/2`, which takes the classified-intent STRING and
+  # the payload and looks the topic up in `Platform.Meetings.IntentRouting`
+  # — such an entry must also carry `intent:`. Any OTHER shape needs a
+  # builder here, not a special case in the test body — the generated
+  # case asserts the declared arity matches the args it built, so an
+  # unlisted shape fails loudly rather than calling the publisher wrong.
+  #
+  # The five `meeting:*_intent` rows below are worth reading as a group.
+  # They are delivered by the SAME publisher call the dispatcher makes
+  # (`broadcast_intent(classified_intent, payload)`), which resolves the
+  # topic from `IntentRouting` rather than being handed one. So each
+  # generated case proves the routing row and the subscription agree —
+  # a mistyped `intent:` here, or a routing row pointing at a different
+  # topic, broadcasts somewhere nothing is listening and the case goes
+  # red on an empty mailbox. That is the exact envelope-drift failure
+  # this file exists for, one level up from the topic string.
   @topic_delivery %{
     "meeting:finished" => %{
       mode: :pubsub,
@@ -153,6 +170,55 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
       # segment (the topic is global — the Router subscribes once at
       # boot and cannot subscribe per room or per meeting).
       arg_shape: :payload_only
+    },
+    # ── the five mid-meeting intent topics (2026-07-31) ──────────────────
+    #
+    # Same delivery story as `meeting:action_item_intent` above, but
+    # through the generalised `broadcast_intent/2` rather than the
+    # per-intent helper: `Platform.Meetings.IntentDispatcher`'s
+    # responsibility fork publishes each one after the queue row reaches
+    # `:dispatched`. There is no `broadcast_<intent>/1` helper for these
+    # and there should not be — five more one-line wrappers would be
+    # five more places for the topic to drift from `IntentRouting`.
+    "meeting:visual_adjust_intent" => %{
+      mode: :pubsub,
+      publisher: {Platform.Meetings.PubSub, :broadcast_intent, 2},
+      intent: "visual_adjust",
+      event_match: "visual_adjust_intent",
+      payload_keys: [:meeting_id, :intent_id, :chunk_excerpt],
+      arg_shape: :intent_and_payload
+    },
+    "meeting:interaction_design_intent" => %{
+      mode: :pubsub,
+      publisher: {Platform.Meetings.PubSub, :broadcast_intent, 2},
+      intent: "interaction_design",
+      event_match: "interaction_design_intent",
+      payload_keys: [:meeting_id, :intent_id, :chunk_excerpt],
+      arg_shape: :intent_and_payload
+    },
+    "meeting:brief_worthy_intent" => %{
+      mode: :pubsub,
+      publisher: {Platform.Meetings.PubSub, :broadcast_intent, 2},
+      intent: "brief_worthy",
+      event_match: "brief_worthy_intent",
+      payload_keys: [:meeting_id, :intent_id, :chunk_excerpt],
+      arg_shape: :intent_and_payload
+    },
+    "meeting:decision_recorded_intent" => %{
+      mode: :pubsub,
+      publisher: {Platform.Meetings.PubSub, :broadcast_intent, 2},
+      intent: "decision_recorded",
+      event_match: "decision_recorded_intent",
+      payload_keys: [:meeting_id, :intent_id, :chunk_excerpt],
+      arg_shape: :intent_and_payload
+    },
+    "meeting:open_question_intent" => %{
+      mode: :pubsub,
+      publisher: {Platform.Meetings.PubSub, :broadcast_intent, 2},
+      intent: "open_question",
+      event_match: "open_question_intent",
+      payload_keys: [:meeting_id, :intent_id, :chunk_excerpt],
+      arg_shape: :intent_and_payload
     },
     "platform.security.sweeper_only" => %{
       mode: :sweeper_only,
@@ -329,9 +395,13 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
     test "event_match values are unique ACROSS distinct topics" do
       # Because PubSub withholds the topic, the Router cannot tell which
       # subscription an atom-headed message arrived through. Same-topic
-      # sharing is correct fan-in (three meetings.* rows share
-      # `meeting_finished` on `meeting:finished`); cross-topic sharing would
-      # make either broadcast fire both families.
+      # sharing is correct fan-in (`meetings.summarize` and
+      # `meetings.attendance_followup` share `meeting_finished` on
+      # `meeting:finished`); cross-topic sharing would make either
+      # broadcast fire both families. The five 2026-07-31 intent topics
+      # are one row each, so they add no fan-in — but they DO each add a
+      # distinct `event_match`, which is what this test's cross-topic
+      # uniqueness rule now has to hold across nine PubSub rows.
       collisions =
         event_topic_specs()
         |> Enum.reject(&(&1.event_match in [nil, ""]))
@@ -459,9 +529,21 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
 
         arg_shape = Map.get(@entry, :arg_shape, :room_and_payload)
 
-        assert arg_shape in [:room_and_payload, :payload_only],
+        assert arg_shape in [:room_and_payload, :payload_only, :intent_and_payload],
                "@topic_delivery entry for #{@topic} declares an unknown arg_shape " <>
                  "#{inspect(arg_shape)}; add a builder below rather than a special case."
+
+        # `:intent_and_payload` publishes through the generic
+        # `broadcast_intent/2`, which derives the topic from the intent
+        # string. Without an `intent:` the builder would have nothing to
+        # pass and the case would fail somewhere far less legible than
+        # here.
+        if arg_shape == :intent_and_payload do
+          assert is_binary(Map.get(@entry, :intent)),
+                 "@topic_delivery entry for #{@topic} declares arg_shape " <>
+                   ":intent_and_payload but names no `intent:` — " <>
+                   "broadcast_intent/2 resolves the topic FROM the intent string."
+        end
 
         feature = "evt_delivery_#{System.unique_integer([:positive])}"
         key = "#{feature}.probe_#{System.unique_integer([:positive])}"
@@ -516,8 +598,18 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
 
         args =
           case arg_shape do
-            :room_and_payload -> [room_id, payload]
-            :payload_only -> [Map.put(payload, :room_id, room_id)]
+            :room_and_payload ->
+              [room_id, payload]
+
+            :payload_only ->
+              [Map.put(payload, :room_id, room_id)]
+
+            # `Map.fetch!/2`, not `@entry.intent`: this `case` is compiled
+            # into EVERY generated test, including the ones whose entry
+            # has no `:intent` key, and dot access on a statically-known
+            # map type warns in those (dead) clauses.
+            :intent_and_payload ->
+              [Map.fetch!(@entry, :intent), Map.put(payload, :room_id, room_id)]
           end
 
         assert @publisher_arity == length(args),

@@ -18,7 +18,12 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
   alias Platform.Responsibilities.Handlers.IntentClassify
   alias Platform.Responsibilities.Handlers.MeetingActionItems
   alias Platform.Responsibilities.Handlers.MeetingAttendanceFollowup
+  alias Platform.Responsibilities.Handlers.MeetingBriefWorthy
+  alias Platform.Responsibilities.Handlers.MeetingDecisionRecorded
+  alias Platform.Responsibilities.Handlers.MeetingInteractionDesign
+  alias Platform.Responsibilities.Handlers.MeetingOpenQuestion
   alias Platform.Responsibilities.Handlers.MeetingSummarize
+  alias Platform.Responsibilities.Handlers.MeetingVisualAdjust
   alias Platform.Responsibilities.Providers.Meetings, as: MeetingsProvider
   alias Platform.Responsibilities.Responsibility
 
@@ -78,18 +83,29 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
     test "fans in every meetings handler's specs" do
       specs = MeetingsProvider.register()
 
-      # Four responsibilities: summariser + intent-classify placeholder
+      # Nine responsibilities: summariser + intent-classify placeholder
       # (task 019f2451 stage 3) + action-items + attendance-followup
-      # (task 019f2455 stage 3).
-      assert length(specs) == 4
+      # (task 019f2455 stage 3) + the five mid-meeting intent handlers
+      # added 2026-07-31.
+      #
+      # The length pin is not redundant with the key list below: the
+      # shim fans in with `++`, so a handler whose `register/0` returned
+      # two specs under one key would keep the sorted-uniq-looking key
+      # list intact and only show up as a count.
+      assert length(specs) == 9
 
       keys = Enum.map(specs, & &1.key) |> Enum.sort()
 
       assert keys == [
                "meetings.action_items",
                "meetings.attendance_followup",
+               "meetings.brief_worthy",
+               "meetings.decision_recorded",
                "meetings.intent_classify",
-               "meetings.summarize"
+               "meetings.interaction_design",
+               "meetings.open_question",
+               "meetings.summarize",
+               "meetings.visual_adjust"
              ]
 
       # Each concrete spec is passed through verbatim — the shim doesn't
@@ -98,6 +114,11 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
       assert IntentClassify.register() -- specs == []
       assert MeetingActionItems.register() -- specs == []
       assert MeetingAttendanceFollowup.register() -- specs == []
+      assert MeetingVisualAdjust.register() -- specs == []
+      assert MeetingInteractionDesign.register() -- specs == []
+      assert MeetingBriefWorthy.register() -- specs == []
+      assert MeetingDecisionRecorded.register() -- specs == []
+      assert MeetingOpenQuestion.register() -- specs == []
     end
 
     test "still exposes meetings.summarize after per-key fan-out refactor (regression)" do

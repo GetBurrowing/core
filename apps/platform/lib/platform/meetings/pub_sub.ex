@@ -63,6 +63,8 @@ defmodule Platform.Meetings.PubSub do
   | `meeting:{meeting_id}:intents`            | `{:intent_no_ack_spawn_failed, row}`     | intent-queue row map                                                        |
   """
 
+  alias Platform.Meetings.IntentRouting
+
   @pubsub Platform.PubSub
 
   # ── Topics ──────────────────────────────────────────────────────────────────
@@ -161,7 +163,19 @@ defmodule Platform.Meetings.PubSub do
   the same reason, as `intent_enqueued_topic/0`.
   """
   @spec action_item_intent_topic() :: String.t()
-  def action_item_intent_topic, do: "meeting:action_item_intent"
+  def action_item_intent_topic, do: IntentRouting.topic("action_items")
+
+  @doc """
+  Returns the global topic a classified intent is broadcast on, or `nil`
+  when the intent has no routing row (it takes the runtime-attention
+  path instead).
+
+  The generalisation of `action_item_intent_topic/0`. Global for the
+  reason described there: the Router subscribes once at boot and cannot
+  hear a topic whose name embeds a runtime meeting id.
+  """
+  @spec intent_topic(String.t()) :: String.t() | nil
+  def intent_topic(intent) when is_binary(intent), do: IntentRouting.topic(intent)
 
   # ── Subscribe ────────────────────────────────────────────────────────────────
 
@@ -439,11 +453,38 @@ defmodule Platform.Meetings.PubSub do
   """
   @spec broadcast_action_item_intent(map()) :: :ok
   def broadcast_action_item_intent(payload) when is_map(payload) do
-    Phoenix.PubSub.broadcast(
-      @pubsub,
-      action_item_intent_topic(),
-      {:action_item_intent, payload}
-    )
+    broadcast_intent("action_items", payload)
+  end
+
+  @doc """
+  Broadcast one classified utterance to the Responsibilities Router on
+  the topic its intent routes to.
+
+  The generalisation of `broadcast_action_item_intent/1` — same
+  contract, same caller (`IntentDispatcher`'s responsibility fork,
+  after the row is `:dispatched`), with the topic and the event atom
+  read from `Platform.Meetings.IntentRouting` instead of hardcoded.
+  That table is also what the handlers' `register/0` reads its
+  `trigger_config` from, so the broadcast and the subscription cannot
+  name different topics.
+
+  Returns `{:error, :unroutable_intent}` for an intent with no routing
+  row rather than broadcasting into a topic nobody declared. That is a
+  caller bug — `IntentDispatcher` only reaches this function after
+  `IntentRouting.responsibility_key/1` returned non-nil — and a silent
+  `:ok` would hold the meeting's serial cursor until the 90s ack window
+  expired, which is exactly the invisibility the queue exists to
+  remove.
+  """
+  @spec broadcast_intent(String.t(), map()) :: :ok | {:error, :unroutable_intent}
+  def broadcast_intent(intent, payload) when is_binary(intent) and is_map(payload) do
+    case IntentRouting.entry(intent) do
+      %{topic: topic, event: event} ->
+        Phoenix.PubSub.broadcast(@pubsub, topic, {event, payload})
+
+      nil ->
+        {:error, :unroutable_intent}
+    end
   end
 
   # ── Per-meeting intent-queue transitions (task 019f70b8 stage 2) ─────────────

@@ -2,13 +2,22 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
   @moduledoc """
   Tests for `Platform.Responsibilities.Handlers.MeetingActionItems`.
 
-  Task 019fa56b-c81f stage 3 turned this from a registration-only stub
-  (extract the items, log the count, discard them) into a handler that
-  actually delivers. The tests are written accordingly: the positive
-  control asserts a MESSAGE ROW EXISTS carrying both item strings, not
-  that `handle_output/3` returned `:ok` — returning `:ok` while doing
-  nothing is precisely what the stub did, and is why the defect survived
-  its own test file.
+  ## What this file stopped testing, and why
+
+  Until the reconciler was deleted, most of this file drove
+  `handle_output/3` with a JSON `operations` payload and asserted on the
+  checklist that came out the other side. None of it ran in production:
+  `handle_output/3` is reachable only from
+  `Router.run_external_dispatch/5`, and this key's assignee resolves
+  NATIVE, so the reconciler never executed once. The recipient holds
+  `canvas_describe` / `canvas_create` / `canvas_patch` and does the work
+  itself.
+
+  So the surface under test is the same as every sibling intent
+  handler's: registration, the four gathered slots, the prompt built
+  over them — plus the one thing this key owns that the siblings do not,
+  `handle_refusal/3`, which closes the `IntentQueue` row a refusal would
+  otherwise leave holding the meeting's serial cursor for 90 seconds.
   """
   use Platform.DataCase, async: false
 
@@ -16,7 +25,6 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
 
   alias Platform.Chat
   alias Platform.Meetings
-  alias Platform.Meetings.ActionItemsCanvas
   alias Platform.Meetings.IntentQueue
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Orchestration.PromptTemplates
@@ -24,17 +32,6 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
   alias Platform.Responsibilities.Responsibility
 
   defp unique_id, do: Platform.Types.UUIDv7.generate()
-
-  # The `{{marker}}` names a prompt body actually interpolates. Derived
-  # with the same regex `PromptTemplates.interpolate/2` uses, so the set
-  # is what the renderer sees rather than what someone remembered to
-  # list.
-  defp markers(content) do
-    ~r/\{\{(\w+)\}\}/
-    |> Regex.scan(content)
-    |> Enum.map(fn [_full, marker] -> marker end)
-    |> MapSet.new()
-  end
 
   defp responsibility do
     %Responsibility{
@@ -48,7 +45,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
         "org_identity",
         "meeting_intent",
         "transcript_window",
-        "action_items_canvas"
+        "meeting_canvases"
       ],
       enabled: true
     }
@@ -65,8 +62,6 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
       Map.merge(
         %{
           room_id: unique_id(),
-          # `Map.merge/2` (not `||`) so an explicit `space_id: nil` sticks —
-          # the no-space-to-post-to case needs a genuinely null column.
           space_id: unique_id(),
           segments: [
             %{
@@ -95,13 +90,6 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
     }
   end
 
-  # The `meeting:finished` trigger fixture is GONE, along with the tests
-  # that used it (task 019fb90f-36e3 stage 4). This key no longer has a
-  # post-meeting shape to be triggered with; every dispatch carries the
-  # live intent payload below.
-
-  # ── live-intent fixtures (task 019fb90f-36e3 stage 2) ──────────────────────
-
   # A fixed intent id so a test can assert the slot carried THIS row's
   # id rather than merely a non-nil one.
   @intent_id "019fb90f-36e3-7000-8000-000000000001"
@@ -118,10 +106,10 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
   end
 
   # `Meetings.create_meeting/1` MINTS the backing chat space itself and
-  # ignores any `chat_space_id` in the attrs (meetings.ex:295-306), so a
-  # fixture that creates a space and hands it in gets a meeting bound to
-  # a DIFFERENT space — and every canvas assertion silently looks in the
-  # wrong place. The meeting's own `chat_space_id` is the space.
+  # ignores any `chat_space_id` in the attrs, so a fixture that creates a
+  # space and hands it in gets a meeting bound to a DIFFERENT space — and
+  # every canvas assertion silently looks in the wrong place. The
+  # meeting's own `chat_space_id` is the space.
   defp create_meeting! do
     {:ok, meeting} =
       Meetings.create_meeting(%{
@@ -152,30 +140,22 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
     %{kind: :event_topic, topic: "meeting:action_item_intent", payload: payload}
   end
 
-  defp create_action_items_canvas!(space_id, meeting_id, items) do
+  # A plain canvas in the meeting's space. There is no longer a blessed
+  # action-items canvas SHAPE the platform recognises — the slot is an
+  # inventory of whatever the space holds, and the recipient decides
+  # which of them is the running list.
+  defp create_canvas!(space_id, title) do
     {:ok, participant} = ExecutionSpace.ensure_system_participant(space_id)
 
     {:ok, canvas} =
       Chat.create_canvas(%{
         "space_id" => space_id,
         "created_by" => participant.id,
-        "title" => "Action Items",
-        "metadata" => Platform.Meetings.ActionItemsCanvas.metadata_for(meeting_id),
+        "title" => title,
         "document" => %{
           "version" => 1,
           "revision" => 1,
-          "root" => %{
-            "id" => "root",
-            "type" => "checklist",
-            "children" =>
-              Enum.map(items, fn {node_id, label, state} ->
-                %{
-                  "id" => node_id,
-                  "type" => "checklist_item",
-                  "props" => %{"label" => label, "state" => state}
-                }
-              end)
-          }
+          "root" => %{"id" => "root", "type" => "checklist", "children" => []}
         }
       })
 
@@ -200,112 +180,104 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
       assert spec.key == "meetings.action_items"
       assert spec.feature == "meetings"
       assert spec.trigger_kind == "event_topic"
-
-      assert spec.trigger_config == %{
-               "topic" => "meeting:action_item_intent",
-               "event_match" => "action_item_intent"
-             }
-
       assert spec.scope == "per_meeting"
 
       assert spec.context_provided == [
                "org_identity",
                "meeting_intent",
                "transcript_window",
-               "action_items_canvas"
+               "meeting_canvases"
              ]
 
-      # The retired slot, named explicitly. `context_provided` is
-      # declarative for this key (nothing validates it against a
-      # roster), so its only value is telling the next reader what the
-      # handler is obliged to gather — and leaving `meeting_transcript`
-      # on the list would be a live claim that the whole transcript is
-      # still being loaded on every utterance.
+      # The two retired slots, named explicitly. `meeting_transcript`
+      # was the whole transcript on every utterance;
+      # `action_items_canvas` was the server-side reconciler's read of
+      # one blessed canvas. Leaving either on the list would be a live
+      # claim that the handler still gathers it.
       refute "meeting_transcript" in spec.context_provided
+      refute "action_items_canvas" in spec.context_provided
+
       assert spec.default_prompt_template == "meetings.action_items.v1"
       assert spec.cost_profile == "low_freq_capable"
     end
 
-    test "the trigger points at the live intent path, NOT at meeting end" do
-      # Split out from the exact-map assertion above deliberately. That
-      # assertion pins the whole map, so it fails for any edit at all —
-      # including a harmless one — and its failure message does not say
-      # WHICH property broke. These name the two properties that
-      # actually carry the retarget (task 019fb90f-36e3), so a
-      # regression reads as "it went back to firing at meeting end"
-      # rather than "a map changed".
+    test "the trigger is READ from IntentRouting, not restated here" do
+      # Three copies of one fact is how a responsibility is silently
+      # unfired: the Router subscribes at boot to the topic the ROW
+      # declares, so a handler that names a different topic than the
+      # dispatcher broadcasts on produces no error, no log and no
+      # dispatch — just a row that times out 90 seconds later against a
+      # listener that was never there.
       [spec] = MeetingActionItems.register()
-      config = spec.trigger_config
+      entry = Platform.Meetings.IntentRouting.entry_for_key("meetings.action_items")
 
-      assert config["topic"] == "meeting:action_item_intent"
-      assert config["event_match"] == "action_item_intent"
+      assert spec.trigger_config == %{
+               "topic" => entry.topic,
+               "event_match" => Atom.to_string(entry.event)
+             }
 
-      # The negative halves. `event_match` is what the Router actually
-      # routes on (Phoenix.PubSub withholds the topic), so a row that
-      # kept `"meeting_finished"` would still fire at meeting end even
-      # with the topic changed.
-      refute config["topic"] == "meeting:finished"
-      refute config["event_match"] == "meeting_finished"
+      # Pinned as literals as well as derived, because deriving both
+      # sides from the same table would stay green if the table itself
+      # were renamed. The singular "item" against the plural intent is
+      # deliberate and load-bearing.
+      assert spec.trigger_config["topic"] == "meeting:action_item_intent"
+      assert spec.trigger_config["event_match"] == "action_item_intent"
 
-      # `topic_pattern` described a wildcard subscribe that never
-      # existed. Leaving it behind would be a live claim about a
-      # `meeting:finished:*` subscription this key no longer has.
-      refute Map.has_key?(config, "topic_pattern")
+      # The negative halves. `event_match` is what the Router routes on
+      # (Phoenix.PubSub withholds the topic), so a row that kept
+      # `"meeting_finished"` would still fire at meeting end even with
+      # the topic changed.
+      refute spec.trigger_config["topic"] == "meeting:finished"
+      refute spec.trigger_config["event_match"] == "meeting_finished"
+      refute Map.has_key?(spec.trigger_config, "topic_pattern")
     end
 
-    test "the retarget PROPAGATES to a pre-existing row without a migration" do
-      # `trigger_config` is in `@upsert_replace_fields`, which is the
-      # stated reason this stage ships no migration. If it were ever
-      # removed from that list, the code would say
-      # "meeting:action_item_intent" while every already-migrated
-      # environment kept firing on `meeting:finished` — a silent
-      # no-op deploy indistinguishable from success.
+    test "the output contract is EMPTY — the recipient owns the canvas write" do
+      [spec] = MeetingActionItems.register()
+
+      assert spec.output_contract == %{}
+
+      # Named rather than implied by the equality above, because this is
+      # the defect being removed: an `operations` schema asked a model
+      # holding canvas_create/canvas_patch to answer in JSON verbs so
+      # Elixir could re-derive what it had already decided, and the
+      # applying code was unreachable on the native path anyway.
+      refute Map.has_key?(spec.output_contract, "operations")
+      refute Map.has_key?(spec.output_contract, "action_items")
+    end
+
+    test "the empty contract PROPAGATES to a row still holding the operations schema" do
+      # `output_contract` is in `@upsert_replace_fields`, which is why
+      # this ships without a migration. If it were ever dropped from that
+      # list the code would declare no contract while every migrated
+      # environment kept validating model output against the reconciler's
+      # JSON schema — a silent no-op deploy indistinguishable from
+      # success.
       [spec] = MeetingActionItems.register()
 
       {:ok, existing} =
         Platform.Responsibilities.upsert_by_key(%{
           spec
-          | trigger_config: %{
-              "topic" => "meeting:finished",
-              "topic_pattern" => "meeting:finished:*",
-              "event_match" => "meeting_finished"
-            }
+          | output_contract: %{
+              "operations" =>
+                "list[object{op:add|update|remove, match:string, label:string, state:pending|active|complete}]"
+            },
+            context_provided: [
+              "org_identity",
+              "meeting_intent",
+              "transcript_window",
+              "action_items_canvas"
+            ]
         })
 
-      assert existing.trigger_config["topic"] == "meeting:finished"
+      assert existing.output_contract["operations"]
 
       {:ok, reregistered} = Platform.Responsibilities.upsert_by_key(spec)
 
       assert reregistered.id == existing.id
-      assert reregistered.trigger_config["topic"] == "meeting:action_item_intent"
-      assert reregistered.trigger_config["event_match"] == "action_item_intent"
-      refute Map.has_key?(reregistered.trigger_config, "topic_pattern")
-    end
-
-    test "output_contract satisfies the M1 schema invariant (map-of-strings)" do
-      [spec] = MeetingActionItems.register()
-
-      Enum.each(spec.output_contract, fn {key, value} ->
-        assert is_binary(key)
-        assert is_binary(value), "#{inspect(key)}=#{inspect(value)} must be a string type name"
-      end)
-
-      # The contract is a list of CANVAS OPERATIONS, not a list of items
-      # (task 019fb90f-36e3 stage 3). The key answers with what to change
-      # about a canvas that already exists, so an item list cannot
-      # express "mark that one complete" or "drop that one".
-      assert [{"operations", shape}] = Map.to_list(spec.output_contract)
-      refute Map.has_key?(spec.output_contract, "action_items")
-
-      for verb <- ["add", "update", "remove"] do
-        assert shape =~ verb, "contract shape must name the #{verb} operation"
-      end
-
-      # A changeset round-trip, because `Responsibility.changeset/2`
-      # casts this into JSONB and a non-string value would be rejected
-      # at the DB seam rather than here.
-      assert {:ok, row} = Platform.Responsibilities.upsert_by_key(spec)
-      assert row.output_contract == spec.output_contract
+      assert reregistered.output_contract == %{}
+      assert "meeting_canvases" in reregistered.context_provided
+      refute "action_items_canvas" in reregistered.context_provided
     end
 
     test "metadata identifies the platform owner and declares the key active" do
@@ -315,8 +287,8 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
     end
 
     test "the active declaration PROPAGATES to a pre-existing row, where enabled would not" do
-      # The whole reason `status` lives in `metadata` and not in `enabled`.
-      # Simulate the production row as it exists today (no status, and an
+      # The whole reason `status` lives in `metadata` and not in
+      # `enabled`. Simulate the production row (no status, and an
       # operator-flipped `enabled: false`), then re-run registration the
       # way boot does.
       [spec] = MeetingActionItems.register()
@@ -352,11 +324,11 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
   end
 
   describe "gather_context/2 — the live mid-meeting slots" do
-    # Task 019fb90f-36e3 stage 2. Every degraded case below asserts a
-    # DIFFERENT observable, on purpose. If they all asserted "something
-    # is missing", one collapsed `%{missing?: true}` map returned for
-    # every slot would satisfy the lot of them and the suite could not
-    # tell a working gatherer from a stub that gives up.
+    # Every degraded case below asserts a DIFFERENT observable, on
+    # purpose. If they all asserted "something is missing", one collapsed
+    # `%{missing?: true}` map returned for every slot would satisfy the
+    # lot of them and the suite could not tell a working gatherer from a
+    # stub that gives up.
     test "POSITIVE CONTROL: all four slots populate from a live payload" do
       meeting = create_meeting!()
       space_id = meeting.chat_space_id
@@ -364,10 +336,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
       transcript =
         create_transcript!(%{space_id: space_id, segments: [segment("Priya", "I'll revert it.")]})
 
-      canvas =
-        create_action_items_canvas!(space_id, meeting.id, [
-          {"item-1", "Alex emails the deploy audit", "pending"}
-        ])
+      canvas = create_canvas!(space_id, "Action Items")
 
       assert {:ok, ctx} =
                MeetingActionItems.gather_context(
@@ -393,20 +362,17 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
       refute ctx.transcript_window.missing?
       assert ctx.transcript_window.formatted_text =~ "Priya"
 
-      assert ctx.action_items_canvas.canvas_id == canvas.id
-      assert ctx.action_items_canvas.revision == 1
+      refute ctx.meeting_canvases.missing?
+      assert ctx.meeting_canvases.space_id == space_id
 
-      assert ctx.action_items_canvas.items == [
-               %{node_id: "item-1", label: "Alex emails the deploy audit", state: "pending"}
-             ]
-
-      refute ctx.action_items_canvas.missing?
+      assert [%{id: id, title: "Action Items", kind: "checklist"}] = ctx.meeting_canvases.canvases
+      assert id == canvas.id
     end
 
     test "the window is BOUNDED at 8 — 12 segments in, the last 8 out" do
       # Non-emptiness would pass against a gatherer that hands over the
       # whole transcript, which is precisely the unbounded per-utterance
-      # cost this stage exists to remove. Assert the bound and the
+      # cost this shape exists to remove. Assert the bound and the
       # DIRECTION of the trim: the tail is what matters mid-meeting.
       meeting = create_meeting!()
       space_id = meeting.chat_space_id
@@ -434,7 +400,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
       # legitimately arrive before a transcript row exists, and the
       # utterance is still the ground truth. A gatherer that treated a
       # missing transcript as a whole-context failure would refuse the
-      # very first action item of every meeting.
+      # very first commitment of every meeting.
       meeting = create_meeting!()
 
       assert {:ok, ctx} =
@@ -467,7 +433,10 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
       refute ctx.meeting_intent.missing?
     end
 
-    test "no canvas in the space: missing? is true and canvas_id is nil" do
+    test "an empty space is an empty INVENTORY, not a failure" do
+      # How the recipient learns it must create the list rather than
+      # patch one. The other two slots staying populated is what stops
+      # this from being satisfiable by a bail-out.
       meeting = create_meeting!()
       space_id = meeting.chat_space_id
       transcript = create_transcript!(%{space_id: space_id, segments: [segment("Priya", "Hi")]})
@@ -478,50 +447,39 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
                  intent_trigger_meta(meeting, transcript, %{chunk_excerpt: "Ship it"})
                )
 
-      assert ctx.action_items_canvas.missing?
-      assert ctx.action_items_canvas.canvas_id == nil
-      assert ctx.action_items_canvas.items == []
+      assert ctx.meeting_canvases.missing?
+      assert ctx.meeting_canvases.canvases == []
 
-      # And the OTHER two slots are fine — a missing canvas is the normal
-      # state before the meeting's first action item, not a failure.
       refute ctx.transcript_window.missing?
       refute ctx.meeting_intent.missing?
     end
 
-    test "NEGATIVE CONTROL: another meeting's canvas in the same space is not adopted" do
-      # A space can hold more than one meeting's action-items canvas — a
-      # recurring standup, or a meeting re-created after a cancel.
-      # Reconciling this meeting's utterance onto the previous one's
-      # canvas is a silent merge of two meetings' work, and every content
-      # assertion above would still pass while it happened.
+    test "the inventory lists EVERY canvas in the space, not one blessed shape" do
+      # The reconciler recognised exactly one canvas, by metadata it had
+      # written itself, and anything else in the space was invisible to
+      # the prompt. The recipient decides which canvas is the running
+      # list, so it has to be shown all of them — including the ones it
+      # made itself, which carry none of the platform's metadata.
       meeting = create_meeting!()
-      other_meeting = create_meeting!()
       space_id = meeting.chat_space_id
-      transcript = create_transcript!(%{space_id: space_id, segments: [segment("Priya", "Hi")]})
 
-      foreign =
-        create_action_items_canvas!(space_id, other_meeting.id, [
-          {"item-1", "Belongs to the other meeting", "pending"}
-        ])
+      a = create_canvas!(space_id, "Action Items")
+      b = create_canvas!(space_id, "Rough notes")
 
       assert {:ok, ctx} =
                MeetingActionItems.gather_context(
                  responsibility(),
-                 intent_trigger_meta(meeting, transcript, %{chunk_excerpt: "Ship it"})
+                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "Ship it"})
                )
 
-      assert ctx.action_items_canvas.missing?
-      assert ctx.action_items_canvas.canvas_id == nil
-
-      # The foreign canvas is genuinely in the space this gatherer looked
-      # at — otherwise the refusal above would be proving nothing.
-      assert Enum.any?(Chat.list_canvases(space_id), &(&1.id == foreign.id))
+      ids = Enum.map(ctx.meeting_canvases.canvases, & &1.id)
+      assert Enum.sort(ids) == Enum.sort([a.id, b.id])
+      assert "Rough notes" in Enum.map(ctx.meeting_canvases.canvases, & &1.title)
     end
 
     test "a blank chunk_excerpt is missing? true — and the other slots still populate" do
-      # Stage 3 owns the refusal; the gatherer's job is only to report
-      # it honestly. Asserting the window is STILL populated is what
-      # stops this from being satisfiable by a bail-out.
+      # `build_prompt/1` owns the refusal; the gatherer's job is only to
+      # report it honestly.
       meeting = create_meeting!()
       space_id = meeting.chat_space_id
       transcript = create_transcript!(%{space_id: space_id, segments: [segment("Priya", "Hi")]})
@@ -551,7 +509,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
       assert Map.has_key?(ctx, :org_identity)
       assert ctx.meeting_intent.missing?
       assert ctx.transcript_window.missing?
-      assert ctx.action_items_canvas.missing?
+      assert ctx.meeting_canvases.missing?
     end
 
     test "string-keyed payloads resolve the same as atom-keyed ones" do
@@ -574,41 +532,46 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
       refute ctx.transcript_window.missing?
     end
 
-    test "the canvas is found via the MEETING's chat_space_id, with no space_id on the payload" do
-      # The first rung of the ladder. A canvas belongs to a meeting;
-      # reaching its space through the transcript is an inference where
-      # `chat_space_id` is a fact. Omit `space_id` AND `transcript_id`
-      # so only the meeting rung can succeed.
+    test "the space resolves from the MEETING when the payload carries no space_id" do
+      # A canvas belongs to a meeting, and `chat_space_id` is a fact
+      # where anything derived from the payload is what the dispatcher
+      # managed to stamp at broadcast time. Omit `space_id` entirely so
+      # only the meeting rung can succeed.
       meeting = create_meeting!()
-      space_id = meeting.chat_space_id
-      canvas = create_action_items_canvas!(space_id, meeting.id, [{"i", "Existing", "pending"}])
+      canvas = create_canvas!(meeting.chat_space_id, "Action Items")
 
       assert {:ok, ctx} =
                MeetingActionItems.gather_context(responsibility(), %{
                  payload: %{meeting_id: meeting.id, chunk_excerpt: "Ship it"}
                })
 
-      assert ctx.action_items_canvas.canvas_id == canvas.id
+      assert ctx.meeting_canvases.space_id == meeting.chat_space_id
+      assert [%{id: found}] = ctx.meeting_canvases.canvases
+      assert found == canvas.id
     end
 
-    test "the canvas is found via the TRANSCRIPT's space when the meeting row is gone" do
-      # The last rung. A meeting_id that resolves to no row must fall
-      # through rather than short-circuit the ladder.
-      space = create_space!()
-      meeting_id = Ecto.UUID.generate()
-      transcript = create_transcript!(%{space_id: space.id, segments: [segment("Priya", "Hi")]})
-      canvas = create_action_items_canvas!(space.id, meeting_id, [{"i", "Existing", "pending"}])
+    test "the payload's own space_id wins over the meeting's" do
+      # The dispatcher stamps `space_id` when it resolved one; a meeting
+      # can outlive the space its current conversation is happening in,
+      # and writing to the meeting's original space would put the list
+      # where nobody is looking.
+      meeting = create_meeting!()
+      elsewhere = create_space!()
+      canvas = create_canvas!(elsewhere.id, "Action Items")
+      _decoy = create_canvas!(meeting.chat_space_id, "Old meeting's list")
 
       assert {:ok, ctx} =
                MeetingActionItems.gather_context(responsibility(), %{
                  payload: %{
-                   meeting_id: meeting_id,
-                   transcript_id: transcript.id,
+                   meeting_id: meeting.id,
+                   space_id: elsewhere.id,
                    chunk_excerpt: "Ship it"
                  }
                })
 
-      assert ctx.action_items_canvas.canvas_id == canvas.id
+      assert ctx.meeting_canvases.space_id == elsewhere.id
+      assert [%{id: found}] = ctx.meeting_canvases.canvases
+      assert found == canvas.id
     end
 
     test "the whole transcript is NOT gathered any more" do
@@ -626,13 +589,13 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
                )
 
       refute Map.has_key?(ctx, :meeting_transcript)
+      refute Map.has_key?(ctx, :action_items_canvas)
     end
 
     # The claim is keyed by transcript and MeetingSummarize takes it.
-    # Taking it here too would starve whichever co-subscriber lost —
-    # and now that this key fires many times per transcript rather than
-    # once, it would take the token on the first utterance and never
-    # give it back.
+    # Taking it here too would starve whichever co-subscriber lost — and
+    # since this key fires many times per transcript, it would take the
+    # token on the first utterance and never give it back.
     test "does NOT claim the router dispatch — summarize must still win its claim" do
       meeting = create_meeting!()
       space_id = meeting.chat_space_id
@@ -651,9 +614,6 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
   end
 
   describe "build_prompt/1" do
-    # Stage 3: the system turn is the `meetings.action_items.v1` DB row
-    # rendered over the four gathered slots, and the refusal moves from
-    # the transcript window onto the classified chunk.
     test "renders the DB row over the assigns — no marker survives into the system turn" do
       meeting = create_meeting!()
       space_id = meeting.chat_space_id
@@ -675,9 +635,9 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
 
       assert {:ok, %{system: system, user: user}} = MeetingActionItems.build_prompt(ctx)
 
-      # A value that exists ONLY in the assigns. A body that rendered
-      # its `{{...}}` markers literally, or a build_prompt that stopped
-      # passing the slots, cannot produce this.
+      # Values that exist ONLY in the assigns. A body that rendered its
+      # `{{...}}` markers literally, or a build_prompt that stopped
+      # passing the slots, cannot produce these.
       assert system =~ "I'll revert onboarding by Friday"
       assert system =~ "Priya"
 
@@ -686,28 +646,20 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
 
       refute system =~ "{{", "an un-interpolated marker survived into the system turn"
 
-      # The mid-meeting framing came from the migrated row, not from a
-      # heredoc that happens to be in the module.
-      assert system =~ "DURING a live meeting"
-      refute system =~ "A meeting just ended"
-
-      # The user turn is the utterance, and never the template NAME —
-      # the live capture that opened task 019fa56b-c81f had exactly the
-      # slug as the whole user turn.
+      # The user turn is the utterance, and never the template NAME — the
+      # live capture that opened task 019fa56b-c81f had exactly the slug
+      # as the whole user turn.
       assert user =~ "I'll revert onboarding by Friday"
       refute user =~ "meetings.action_items.v1"
     end
 
     test "the DB row is LIVE — editing it changes what goes to the model" do
-      # The trap this stage exists for. Until now the row was DORMANT:
-      # `Router.build_prompt_via_provider/2` never renders
-      # `default_prompt_template` when the provider exports
-      # `build_prompt/1`, so the live body was a heredoc and an operator
-      # who edited the row through `prompt_template_update` observed
-      # nothing. Every other assertion in this file is satisfiable by a
+      # Every other assertion in this file is satisfiable by a
       # `system_prompt/1` that ignores the row and returns the inline
-      # fallback — the two bodies deliberately share their anchors. Only
-      # editing the row and watching the render move can tell them apart.
+      # fallback: the two bodies deliberately share their subject matter.
+      # Only editing the row and watching the render move can tell them
+      # apart, and an operator retuning this key through
+      # `prompt_template_update` is relying on exactly that.
       template = PromptTemplates.get_template_by_slug("meetings.action_items.v1")
       assert template
 
@@ -725,61 +677,60 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
              "the rendered system turn did not come from the DB row"
 
       assert system =~ "Ship the adapter fix"
-      refute system =~ "DURING a live meeting"
     end
 
-    test "renders the canvas contents, and its absence, into the system turn" do
-      meeting = create_meeting!()
-      space_id = meeting.chat_space_id
-      transcript = create_transcript!(%{space_id: space_id})
-
-      meta =
-        intent_trigger_meta(meeting, transcript, %{chunk_excerpt: "Ship the adapter fix"})
-
-      {:ok, before_ctx} = MeetingActionItems.gather_context(responsibility(), meta)
-      assert {:ok, %{system: before_system}} = MeetingActionItems.build_prompt(before_ctx)
-      assert before_system =~ "No action-items canvas exists for this meeting yet"
-
-      _canvas =
-        create_action_items_canvas!(space_id, meeting.id, [
-          {"item-1", "Priya reverts the onboarding flow by Friday", "pending"},
-          {"item-2", "Alex emails the deploy audit", "complete"}
-        ])
-
-      {:ok, after_ctx} = MeetingActionItems.gather_context(responsibility(), meta)
-      assert {:ok, %{system: after_system}} = MeetingActionItems.build_prompt(after_ctx)
-
-      assert after_system =~ "Priya reverts the onboarding flow by Friday"
-      assert after_system =~ "[complete] Alex emails the deploy audit"
-      refute after_system =~ "No action-items canvas exists for this meeting yet"
-
-      # Node ids are deliberately withheld: item identity is matched on
-      # label text downstream, and a model that has seen a node id will
-      # start quoting node ids back as handles.
-      refute after_system =~ "item-1"
-      refute after_system =~ "item-2"
-    end
-
-    test "falls back to the inline body when the row is missing, with the SAME marker set" do
+    test "the ack contract is composed on in CODE, ahead of the tunable body" do
+      # The meeting's serial cursor is released by the recipient's
+      # `intent_ack` and by nothing else on the native path — the
+      # platform-side close died with the reconciler. A prompt author who
+      # deleted this section from the row would reintroduce a 90-second
+      # stall per intent and nothing would go red, so it is not in the
+      # row to delete.
       template = PromptTemplates.get_template_by_slug("meetings.action_items.v1")
-      assert template, "the migrated row must exist for its removal to prove anything"
 
-      db_markers = markers(template.content)
-      fallback_markers = markers(MeetingActionItems.fallback_prompt())
+      {:ok, _} =
+        PromptTemplates.update_template(template, %{content: "TUNED-BODY\n\n{{meeting_intent}}\n"})
 
-      assert MapSet.size(db_markers) > 0
+      assert {:ok, %{system: system}} =
+               MeetingActionItems.build_prompt(%{
+                 meeting_intent: %{chunk_excerpt: "Ship it", intent_id: intent_id()}
+               })
 
-      assert db_markers == fallback_markers,
-             "rollout gap: DB markers #{inspect(db_markers)} != fallback #{inspect(fallback_markers)}"
+      assert system =~ "intent_ack"
+      assert system =~ intent_id()
 
-      # …and the declared variables agree with both, so the migration
-      # descriptor cannot drift from either body. Derived on all three
-      # sides rather than compared against a listed set.
-      assert MapSet.new(template.variables) == db_markers
+      # FIRST, not merely present. A recipient that stops reading early
+      # must still have seen the thing that unblocks the meeting.
+      {preamble_at, _} = :binary.match(system, "intent_ack")
+      {body_at, _} = :binary.match(system, "TUNED-BODY")
 
+      assert preamble_at < body_at
+    end
+
+    test "a fire with no intent id renders no ack section rather than naming a nil handle" do
+      # A direct `Router.fire/2` from a console has no queue row behind
+      # it and nothing to release.
+      assert {:ok, %{system: system}} =
+               MeetingActionItems.build_prompt(%{meeting_intent: %{chunk_excerpt: "Ship it"}})
+
+      refute system =~ "intent_ack"
+    end
+
+    test "falls back to the inline body when the row is missing, and every marker is fed" do
+      template = PromptTemplates.get_template_by_slug("meetings.action_items.v1")
+      assert template, "the row must exist for its removal to prove anything"
       {:ok, _} = PromptTemplates.delete_template(template)
 
-      ctx = %{meeting_intent: %{chunk_excerpt: "Ship the adapter fix", speaker: "Alex"}}
+      ctx = %{
+        meeting_intent: %{chunk_excerpt: "Ship the adapter fix", speaker: "Alex"},
+        transcript_window: %{formatted_text: "Alex: we still owe the audit", missing?: false},
+        meeting_canvases: %{
+          space_id: unique_id(),
+          canvases: [%{id: "c-1", title: "Action Items", kind: "checklist"}],
+          missing?: false
+        },
+        org_identity: %{content: "Ellis ships Startup Suite", missing?: false}
+      }
 
       {result, log} = with_log(fn -> MeetingActionItems.build_prompt(ctx) end)
 
@@ -788,23 +739,81 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
       assert log =~ "meetings.action_items.v1 missing",
              "a silent fallback is how a rollout gap goes unnoticed"
 
+      # THE DRIFT GUARD. `substitute/2` replaces only the markers it has
+      # an assign for, so a marker added to the fallback body without a
+      # matching slot survives literally — which is what this refutes.
+      # (The DB path cannot be guarded this way: `PromptTemplates`
+      # interpolates an unknown marker to "", leaving a heading with
+      # nothing under it and no evidence in the output.)
+      refute system =~ "{{", "a fallback marker has no assign feeding it"
+
+      # And each of the four slots reached the body, so the guard above
+      # is not passing on a body that dropped its markers entirely.
       assert system =~ "Ship the adapter fix"
-      refute system =~ "{{", "the fallback was returned un-interpolated"
-      assert system =~ "DURING a live meeting"
+      assert system =~ "we still owe the audit"
+      assert system =~ "Action Items"
+      assert system =~ "Ellis ships Startup Suite"
+    end
+
+    test "the fallback asks for judgement, not for a JSON schema" do
+      # The defect this shape exists to remove. A prompt that specifies
+      # an output contract puts the model's answer into operation verbs
+      # for Elixir to re-apply — code that was unreachable on the native
+      # path — instead of into the wording of the item and the decision
+      # of whether anything changed at all.
+      body = MeetingActionItems.fallback_prompt()
+
+      refute body =~ "JSON"
+      refute body =~ "operations"
+      refute body =~ ~s("op")
+
+      # The instructions that must survive the deletion.
+      assert body =~ "Reconcile, do not append"
+      assert body =~ "ground truth"
+      assert body =~ "Never open a second"
+      assert body =~ "Changing nothing is a correct outcome"
+    end
+
+    test "renders the canvas inventory, and its absence, into the system turn" do
+      # Asserted through the fallback because the inventory is what tells
+      # the recipient to create rather than patch, and "there is nothing
+      # here yet" has to be STATED — a section that interpolates to
+      # nothing reads as truncated rather than as empty.
+      template = PromptTemplates.get_template_by_slug("meetings.action_items.v1")
+      {:ok, _} = PromptTemplates.delete_template(template)
+
+      meeting = create_meeting!()
+      space_id = meeting.chat_space_id
+      meta = intent_trigger_meta(meeting, nil, %{chunk_excerpt: "Ship the adapter fix"})
+
+      {:ok, before_ctx} = MeetingActionItems.gather_context(responsibility(), meta)
+
+      {{:ok, %{system: before_system}}, _log} =
+        with_log(fn -> MeetingActionItems.build_prompt(before_ctx) end)
+
+      assert before_system =~ "(no canvases in this meeting's space yet)"
+
+      canvas = create_canvas!(space_id, "Action Items — Standup")
+
+      {:ok, after_ctx} = MeetingActionItems.gather_context(responsibility(), meta)
+
+      {{:ok, %{system: after_system}}, _log} =
+        with_log(fn -> MeetingActionItems.build_prompt(after_ctx) end)
+
+      assert after_system =~ "Action Items — Standup"
+      assert after_system =~ canvas.id
+      refute after_system =~ "(no canvases in this meeting's space yet)"
     end
 
     test "refuses a blank chunk — and a blank WINDOW is an ordinary render" do
-      # These two must diverge. Before stage 3 both refused, so this
-      # pair is the behavioural proof that the refusal moved off the
-      # transcript and onto the utterance.
+      # These two must diverge. A blank window is the normal state at a
+      # meeting's first commitment, so refusing on it would silently
+      # drop the one utterance the list starts from.
       assert {:error, :no_intent_text} = MeetingActionItems.build_prompt(%{})
 
       assert {:error, :no_intent_text} =
                MeetingActionItems.build_prompt(%{meeting_intent: %{chunk_excerpt: "   "}})
 
-      # A present utterance with no transcript window at all: mid-meeting
-      # the first action item routinely lands before the transcript row
-      # exists, and that must cost a model call, not a refusal.
       assert {:ok, %{system: system, user: user}} =
                MeetingActionItems.build_prompt(%{
                  meeting_intent: %{chunk_excerpt: "Priya will revert onboarding by Friday"},
@@ -813,6 +822,10 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
 
       assert user =~ "Priya will revert onboarding by Friday"
       assert system =~ "no surrounding transcript captured yet"
+    end
+
+    test "a non-map context refuses rather than raising" do
+      assert {:error, :no_intent_text} = MeetingActionItems.build_prompt(nil)
     end
 
     test "an unattributed speaker is rendered as an absence, never as a name" do
@@ -825,68 +838,57 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
                })
 
       assert user =~ "Unattributed speaker"
-      assert system =~ "best-effort attribution"
+      assert system =~ "Speaker: (unknown)"
     end
   end
 
-  # ── handle_output/3 (task 019fb90f-36e3 stage 4) ───────────────────────────
+  describe "handle_output/2" do
+    test "returns :ok and writes NOTHING — the recipient owns the canvas" do
+      # The reconciler's grave. `apply_operations/2` was reachable only
+      # from the external dispatch path and this key's assignee resolves
+      # native, so nothing it did ever ran; what it WOULD have done —
+      # minting a canvas out of a parsed JSON body — is what this refutes.
+      meeting = create_meeting!()
+      space_id = meeting.chat_space_id
+      before_messages = messages(space_id)
+
+      assert :ok =
+               MeetingActionItems.handle_output(
+                 responsibility(),
+                 %{"operations" => [%{"op" => "add", "label" => "Ship the adapter fix"}]}
+               )
+
+      assert Chat.list_canvases(space_id) == []
+      assert messages(space_id) == before_messages
+    end
+
+    test "an unparseable answer is still :ok — there is no contract to violate" do
+      assert :ok = MeetingActionItems.handle_output(responsibility(), nil)
+      assert :ok = MeetingActionItems.handle_output(responsibility(), "any prose at all")
+    end
+  end
+
+  # ── handle_refusal/3 ───────────────────────────────────────────────────────
   #
-  # The delivery surface moved from a markdown message to a canvas, and
-  # the handler picked up a second job: closing the intent row that the
-  # dispatcher left `:dispatched`.
-  #
-  # The load-bearing control in this block is
-  # `assert length(action_items_canvases(space_id)) == 1` on the UPDATE
-  # path. Every content assertion here — "the item is present", "its
-  # state is complete" — is equally satisfied by a handler that creates a
-  # brand-new canvas on every single utterance, which is the exact defect
-  # this stage exists to avoid. Only the count separates them.
-
-  defp canvases(space_id), do: Chat.list_canvases(space_id)
-
-  defp action_items_canvases(space_id) do
-    space_id
-    |> canvases()
-    |> Enum.filter(&(&1.metadata["source"] == ActionItemsCanvas.metadata_source()))
-  end
-
-  # Read the LIVE document, not the row. `Canvas.Server` is the
-  # authoritative writer and Postgres is a write-through sink; in test
-  # `:canvas_persist_sync` makes the two agree, but asserting against the
-  # server means these tests keep meaning the same thing if it ever does
-  # not.
-  defp live_document(canvas_id) do
-    {:ok, %{document: document}} = Platform.Chat.Canvas.Server.describe(canvas_id)
-    document
-  end
-
-  defp live_revision(canvas_id) do
-    {:ok, %{revision: revision}} = Platform.Chat.Canvas.Server.describe(canvas_id)
-    revision
-  end
-
-  defp items_on(canvas_id), do: canvas_id |> live_document() |> ActionItemsCanvas.summarize()
-
-  defp labels_on(canvas_id), do: canvas_id |> items_on() |> Enum.map(& &1.label)
-
-  defp operations_payload(operations), do: %{"operations" => operations}
+  # The one piece of per-dispatch state this key holds. `IntentDispatcher`
+  # marks the row `:dispatched` before handing off, which pins the
+  # meeting's SERIAL cursor; a refusal returns up through
+  # `Router.dispatch_external/5` without ever reaching a recipient, so
+  # no `intent_ack` is coming and the only other exit is the 90-second
+  # claim watchdog. Measured before this existed: one whitespace-only
+  # utterance cost the meeting 90 seconds of queue and every intent
+  # behind it waited.
 
   # A live queue row in `:dispatched`, exactly as `IntentDispatcher`
   # leaves it before the model round trip.
-  defp dispatched_row!(meeting, overrides \\ %{}) do
+  defp dispatched_row!(meeting) do
     {:ok, row} =
-      IntentQueue.enqueue(
-        meeting.id,
-        Map.merge(
-          %{
-            room_id: "room-#{System.unique_integer([:positive])}",
-            chunk_excerpt: "Priya will revert the onboarding flow by Friday",
-            classified_intent: "action_items",
-            confidence: 0.9
-          },
-          overrides
-        )
-      )
+      IntentQueue.enqueue(meeting.id, %{
+        room_id: "room-#{System.unique_integer([:positive])}",
+        chunk_excerpt: "Priya will revert the onboarding flow by Friday",
+        classified_intent: "action_items",
+        confidence: 0.9
+      })
 
     {:ok, dispatched} = IntentQueue.transition(meeting.id, row.id, :dispatched)
 
@@ -900,685 +902,157 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
     row
   end
 
-  describe "handle_output/3 — the CREATE path" do
-    test "POSITIVE CONTROL: no canvas yet, add operations create exactly one" do
-      meeting = create_meeting!()
-      space_id = meeting.chat_space_id
-
-      assert action_items_canvases(space_id) == []
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([
-                   %{"op" => "add", "label" => "Priya reverts the onboarding flow by Friday"},
-                   %{"op" => "add", "label" => "Alex emails the deploy audit"}
-                 ]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert [canvas] = action_items_canvases(space_id)
-
-      assert canvas.metadata["source"] == "meeting_action_items"
-      assert canvas.metadata["meeting_id"] == meeting.id
-
-      # The items are on a CHECKLIST — not a markdown blob that happens
-      # to contain the same words. `summarize/1` only collects
-      # `checklist_item` children of a `checklist`, so this fails for a
-      # markdown document even though the labels would still be visible.
-      assert labels_on(canvas.id) == [
-               "Priya reverts the onboarding flow by Friday",
-               "Alex emails the deploy audit"
-             ]
-
-      assert Enum.all?(items_on(canvas.id), &(&1.state == "pending"))
-    end
-
-    test "the create posts exactly one companion canvas message" do
-      meeting = create_meeting!()
-      space_id = meeting.chat_space_id
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([%{"op" => "add", "label" => "Ship the adapter fix"}]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert [canvas] = action_items_canvases(space_id)
-
-      canvas_messages =
-        space_id
-        |> messages()
-        |> Enum.filter(&(&1.canvas_id == canvas.id))
-
-      assert length(canvas_messages) == 1
-    end
-
-    test "the canvas title names the meeting" do
-      meeting = create_meeting!()
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([%{"op" => "add", "label" => "Ship it"}]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert [canvas] = action_items_canvases(meeting.chat_space_id)
-      assert canvas.title == "Action Items — #{meeting.name}"
-    end
-
-    test "NEGATIVE CONTROL: zero operations creates NO canvas at all" do
-      # The failure mode this pins is "skip the create" — but the mirror
-      # failure, creating an empty canvas for every quiet utterance, is
-      # just as real and only this assertion catches it.
-      meeting = create_meeting!()
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert canvases(meeting.chat_space_id) == []
-    end
-
-    test "update and remove operations against a canvas that does not exist create nothing" do
-      # There is nothing to update. Reinterpreting them as adds would put
-      # items on the canvas that the model explicitly did not ask to add.
-      meeting = create_meeting!()
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([
-                   %{"op" => "update", "match" => "something", "state" => "complete"},
-                   %{"op" => "remove", "match" => "something else"}
-                 ]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert canvases(meeting.chat_space_id) == []
-    end
-
-    test "does NOT post the post-meeting markdown checklist" do
-      # `post_action_items_to_space/3` renders the WHOLE list every call.
-      # Mid-meeting that reposts everything once per utterance. The
-      # companion canvas message is the announcement; this message is not.
-      meeting = create_meeting!()
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([%{"op" => "add", "label" => "Ship the adapter fix"}]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      refute Enum.any?(messages(meeting.chat_space_id), &(&1.content =~ "**Action Items**"))
-    end
-  end
-
-  describe "handle_output/3 — the UPDATE path" do
-    test "POSITIVE CONTROL: adds and completes land on the SAME canvas" do
-      meeting = create_meeting!()
-      space_id = meeting.chat_space_id
-
-      canvas =
-        create_action_items_canvas!(space_id, meeting.id, [
-          {"item-1", "Priya reverts the onboarding flow", "pending"},
-          {"item-2", "Book the compliance sign-off", "pending"}
-        ])
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([
-                   %{"op" => "add", "label" => "Alex emails the deploy audit"},
-                   %{
-                     "op" => "update",
-                     "match" => "Priya reverts the onboarding flow",
-                     "state" => "complete"
-                   }
-                 ]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      # THE control. Every assertion below is also satisfied by a handler
-      # that created a second canvas and wrote to that.
-      assert length(action_items_canvases(space_id)) == 1
-      assert [found] = action_items_canvases(space_id)
-      assert found.id == canvas.id
-
-      items = items_on(canvas.id)
-      assert length(items) == 3
-
-      assert Enum.find(items, &(&1.label == "Priya reverts the onboarding flow")).state ==
-               "complete"
-
-      assert Enum.any?(items, &(&1.label == "Alex emails the deploy audit"))
-      assert Enum.find(items, &(&1.label == "Book the compliance sign-off")).state == "pending"
-    end
-
-    test "a remove operation deletes the item and leaves the others" do
-      meeting = create_meeting!()
-
-      canvas =
-        create_action_items_canvas!(meeting.chat_space_id, meeting.id, [
-          {"item-1", "Retracted idea", "pending"},
-          {"item-2", "Still standing", "pending"}
-        ])
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([%{"op" => "remove", "match" => "Retracted idea"}]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert labels_on(canvas.id) == ["Still standing"]
-    end
-
-    test "an item the operations do not touch is left exactly as it was" do
-      meeting = create_meeting!()
-
-      canvas =
-        create_action_items_canvas!(meeting.chat_space_id, meeting.id, [
-          {"item-1", "Untouched", "active"}
-        ])
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([%{"op" => "add", "label" => "Brand new"}]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert Enum.find(items_on(canvas.id), &(&1.label == "Untouched")).state == "active"
-    end
-
-    test "ZERO operations leave the document byte-identical and the revision unchanged" do
-      meeting = create_meeting!()
-
-      canvas =
-        create_action_items_canvas!(meeting.chat_space_id, meeting.id, [
-          {"item-1", "Unchanged", "pending"}
-        ])
-
-      before_document = live_document(canvas.id)
-      before_revision = live_revision(canvas.id)
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert live_document(canvas.id) == before_document
-      assert live_revision(canvas.id) == before_revision
-      assert length(action_items_canvases(meeting.chat_space_id)) == 1
-    end
-
-    test "an add whose label already exists updates that item instead of duplicating it" do
-      # The e2e case: the model says "add: Priya reverts the onboarding
-      # flow" on a canvas that already holds it. Reconcile, don't append.
-      meeting = create_meeting!()
-
-      canvas =
-        create_action_items_canvas!(meeting.chat_space_id, meeting.id, [
-          {"item-1", "Priya reverts the onboarding flow", "pending"}
-        ])
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([
-                   %{
-                     "op" => "add",
-                     "label" => "Priya reverts the onboarding flow",
-                     "state" => "complete"
-                   }
-                 ]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert [item] = items_on(canvas.id)
-      assert item.state == "complete"
-    end
-
-    test "an operation with NO verb but a match is an update, not an add" do
-      # A model that quotes an existing item back without naming a verb
-      # means "this one changes". Reading it as an add duplicates the
-      # item it was pointing at.
-      meeting = create_meeting!()
-
-      canvas =
-        create_action_items_canvas!(meeting.chat_space_id, meeting.id, [
-          {"item-1", "Ship the adapter fix", "pending"}
-        ])
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([
-                   %{"match" => "Ship the adapter fix", "state" => "complete"}
-                 ]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert [item] = items_on(canvas.id)
-      assert item.state == "complete"
-    end
-
-    test "an operation with NO verb and NO match is an add" do
-      meeting = create_meeting!()
-
-      canvas =
-        create_action_items_canvas!(meeting.chat_space_id, meeting.id, [
-          {"item-1", "Ship the adapter fix", "pending"}
-        ])
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([%{"label" => "Brand new commitment"}]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert labels_on(canvas.id) == ["Ship the adapter fix", "Brand new commitment"]
-    end
-
-    test "an unresolvable match is SKIPPED, not turned into an add" do
-      meeting = create_meeting!()
-
-      canvas =
-        create_action_items_canvas!(meeting.chat_space_id, meeting.id, [
-          {"item-1", "Ship the adapter fix", "pending"}
-        ])
-
-      before_revision = live_revision(canvas.id)
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([
-                   %{
-                     "op" => "update",
-                     "match" => "nothing like this exists",
-                     "state" => "complete"
-                   }
-                 ]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert labels_on(canvas.id) == ["Ship the adapter fix"]
-      assert live_revision(canvas.id) == before_revision
-    end
-
-    test "the canvas is found by meeting, so a sibling meeting's canvas is untouched" do
-      # Two meetings can share nothing but the space in a recurring
-      # standup. Writing to the wrong one merges two meetings' lists.
-      meeting = create_meeting!()
-      other_meeting_id = unique_id()
-
-      ours =
-        create_action_items_canvas!(meeting.chat_space_id, meeting.id, [
-          {"item-1", "Ours", "pending"}
-        ])
-
-      theirs =
-        create_action_items_canvas!(meeting.chat_space_id, other_meeting_id, [
-          {"item-2", "Theirs", "pending"}
-        ])
-
-      theirs_before = live_document(theirs.id)
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([%{"op" => "add", "label" => "New item"}]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert length(labels_on(ours.id)) == 2
-      assert live_document(theirs.id) == theirs_before
-    end
-  end
-
-  describe "handle_output/3 — failure outcomes" do
-    test "a malformed output writes NOTHING and returns an error" do
-      meeting = create_meeting!()
-
-      canvas =
-        create_action_items_canvas!(meeting.chat_space_id, meeting.id, [
-          {"item-1", "Unchanged", "pending"}
-        ])
-
-      before_revision = live_revision(canvas.id)
-
-      log =
-        capture_log(fn ->
-          assert {:error, :unexpected_output_shape} =
-                   MeetingActionItems.handle_output(
-                     responsibility(),
-                     nil,
-                     intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-                   )
-        end)
-
-      assert log =~ "unexpected output shape"
-      assert live_revision(canvas.id) == before_revision
-      assert length(action_items_canvases(meeting.chat_space_id)) == 1
-    end
-
-    test "JSON that is not the operations contract is an error, NOT prose" do
-      # Sending a decoded JSON object to the prose splitter would shred
-      # its punctuation into invented action items.
-      meeting = create_meeting!()
-
-      log =
-        capture_log(fn ->
-          assert {:error, :unexpected_operations_shape} =
-                   MeetingActionItems.handle_output(
-                     responsibility(),
-                     ~s({"action_items": ["Ship the adapter fix"]}),
-                     intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-                   )
-        end)
-
-      assert log =~ "not the operations"
-      assert canvases(meeting.chat_space_id) == []
-    end
-
-    test "no meeting_id in the payload is {:error, :missing_meeting_id}" do
-      capture_log(fn ->
-        assert {:error, :missing_meeting_id} =
-                 MeetingActionItems.handle_output(
-                   responsibility(),
-                   operations_payload([%{"op" => "add", "label" => "orphan"}]),
-                   %{kind: :event_topic, topic: "meeting:action_item_intent", payload: %{}}
-                 )
-      end)
-    end
-
-    test "a meeting whose space cannot be resolved is {:error, :missing_space_id}" do
-      log =
-        capture_log(fn ->
-          assert {:error, :missing_space_id} =
-                   MeetingActionItems.handle_output(
-                     responsibility(),
-                     operations_payload([%{"op" => "add", "label" => "nowhere to go"}]),
-                     %{
-                       kind: :event_topic,
-                       topic: "meeting:action_item_intent",
-                       payload: %{meeting_id: unique_id(), intent_id: intent_id()}
-                     }
-                   )
-        end)
-
-      assert log =~ "no space for meeting"
-    end
-
-    test "arity-2 delegates to arity-3, which has no meeting to reconcile" do
-      capture_log(fn ->
-        assert {:error, :missing_meeting_id} =
-                 MeetingActionItems.handle_output(
-                   responsibility(),
-                   operations_payload([%{"op" => "add", "label" => "x"}])
-                 )
-      end)
-    end
-  end
-
-  describe "handle_output/3 — closing the intent row" do
-    test "a landed canvas write completes the row" do
-      meeting = create_meeting!()
-      row = dispatched_row!(meeting)
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([%{"op" => "add", "label" => "Ship the adapter fix"}]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "...", intent_id: row.id})
-               )
-
-      assert row_status(meeting.id, row.id).status == :completed
-    end
-
-    test "a ZERO-operation response still completes the row" do
-      # A quiet utterance is a successful dispatch that changed nothing.
-      # Leaving it `:dispatched` would hold the meeting's serial cursor
-      # for the full 90-second ack window.
-      meeting = create_meeting!()
-      row = dispatched_row!(meeting)
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "...", intent_id: row.id})
-               )
-
-      assert row_status(meeting.id, row.id).status == :completed
-    end
-
-    test "a malformed output lands the row :dispatch_failed with the reason" do
-      # Paired with the zero-operation case above ON PURPOSE. If both
-      # landed the same status the suite could not tell a parse failure
-      # from a quiet meeting, which is the whole reason
-      # `extract_operations/1` stopped returning a bare list.
-      meeting = create_meeting!()
-      row = dispatched_row!(meeting)
-
-      capture_log(fn ->
-        assert {:error, :unexpected_output_shape} =
-                 MeetingActionItems.handle_output(
-                   responsibility(),
-                   nil,
-                   intent_trigger_meta(meeting, nil, %{chunk_excerpt: "...", intent_id: row.id})
-                 )
-      end)
-
-      closed = row_status(meeting.id, row.id)
-
-      assert closed.status == :dispatch_failed
-      assert closed.dispatch_failure_reason == :unexpected_output_shape
-    end
-
-    test "the cursor is released, so the next intent can go out" do
+  describe "handle_refusal/3 — closing the row a refusal leaves behind" do
+    test "POSITIVE CONTROL: the row lands :dispatch_failed and the cursor is released" do
       meeting = create_meeting!()
       row = dispatched_row!(meeting)
 
       assert IntentQueue.cursor(meeting.id) == row.id
 
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([%{"op" => "add", "label" => "Ship the adapter fix"}]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "...", intent_id: row.id})
-               )
+      capture_log(fn ->
+        assert :ok =
+                 MeetingActionItems.handle_refusal(
+                   responsibility(),
+                   {:build_prompt_refused, :no_intent_text},
+                   intent_trigger_meta(meeting, nil, %{chunk_excerpt: "   ", intent_id: row.id})
+                 )
+      end)
 
+      closed = row_status(meeting.id, row.id)
+
+      # The INNER reason, not the `{:build_prompt_refused, _}` wrapper.
+      # The wrapper names the Router's seam; the inner atom names what
+      # was wrong with the utterance, which is what the meeting UI's
+      # intent strip is for.
+      assert closed.status == :dispatch_failed
+      assert closed.dispatch_failure_reason == :no_intent_text
+
+      # No round trip is claimed for a round trip that never happened —
+      # `:timed_out` would have stamped this.
+      assert is_nil(closed.timed_out_at)
+
+      # The consequence the row status is a proxy for: the next intent
+      # can go out now, not in 90 seconds.
       assert IntentQueue.cursor(meeting.id) == nil
     end
 
-    test "a row that ALREADY timed out is left alone, and the canvas write still stands" do
+    test "a bare reason with no wrapper is carried through unchanged" do
+      meeting = create_meeting!()
+      row = dispatched_row!(meeting)
+
+      capture_log(fn ->
+        assert :ok =
+                 MeetingActionItems.handle_refusal(
+                   responsibility(),
+                   :some_other_reason,
+                   intent_trigger_meta(meeting, nil, %{intent_id: row.id})
+                 )
+      end)
+
+      assert row_status(meeting.id, row.id).dispatch_failure_reason == :some_other_reason
+    end
+
+    test "a tuple reason is coerced to text rather than reaching the intent strip raw" do
+      # `dispatch_failure_reason` is typed `atom | binary | nil` and is
+      # rendered straight into the meeting UI. A tuple would arrive at a
+      # person mid-meeting as Elixir debug output.
+      meeting = create_meeting!()
+      row = dispatched_row!(meeting)
+
+      capture_log(fn ->
+        assert :ok =
+                 MeetingActionItems.handle_refusal(
+                   responsibility(),
+                   {:context_gather_refused, {:nested, :shape}},
+                   intent_trigger_meta(meeting, nil, %{intent_id: row.id})
+                 )
+      end)
+
+      reason = row_status(meeting.id, row.id).dispatch_failure_reason
+
+      assert is_binary(reason)
+      assert reason =~ "nested"
+    end
+
+    test "a row that ALREADY timed out is left alone" do
       # `transition/4` does not police terminal -> terminal, so writing
-      # `:completed` here would SUCCEED and erase the timeout from the
-      # operator's view. Delete the terminal guard and this goes red.
+      # here would SUCCEED and erase the timeout from the operator's
+      # view. Delete the terminal guard and this goes red.
       meeting = create_meeting!()
       row = dispatched_row!(meeting)
 
       {:ok, timed_out} = IntentQueue.transition(meeting.id, row.id, :timed_out)
 
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([%{"op" => "add", "label" => "Late but real"}]),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "...", intent_id: row.id})
-               )
+      capture_log(fn ->
+        assert :ok =
+                 MeetingActionItems.handle_refusal(
+                   responsibility(),
+                   {:build_prompt_refused, :no_intent_text},
+                   intent_trigger_meta(meeting, nil, %{intent_id: row.id})
+                 )
+      end)
 
       closed = row_status(meeting.id, row.id)
 
       assert closed.status == :timed_out
 
       # The timeout's own stamp is intact too — a transition would have
-      # left `timed_out_at` in place while adding `completed_at`, so the
-      # status assertion alone does not prove no write happened.
+      # left `timed_out_at` in place while adding a second terminal
+      # marker, so the status assertion alone does not prove no write.
       assert closed.timed_out_at == timed_out.timed_out_at
-      assert is_nil(closed.completed_at)
-
-      # The work is not thrown away just because the row gave up on it.
-      assert [canvas] = action_items_canvases(meeting.chat_space_id)
-      assert labels_on(canvas.id) == ["Late but real"]
+      assert is_nil(closed.dispatch_failure_reason)
     end
 
-    test "no queue server for the meeting: the canvas write still lands and nothing raises" do
-      # The meeting ended, or this row was never queued. A handler that
-      # treated the missing row as a failure would throw away a canvas
-      # write that succeeded.
+    test "no queue server for the meeting: nothing raises and none is started" do
+      # The meeting ended, or this row was never queued. Treating the
+      # missing row as a failure — or starting a queue to close a row
+      # that does not exist — would be worse than the silence.
       meeting = create_meeting!()
       refute IntentQueue.running?(meeting.id)
 
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 operations_payload([%{"op" => "add", "label" => "Ship the adapter fix"}]),
-                 intent_trigger_meta(meeting, nil, %{
-                   chunk_excerpt: "...",
-                   intent_id: unique_id()
-                 })
-               )
+      capture_log(fn ->
+        assert :ok =
+                 MeetingActionItems.handle_refusal(
+                   responsibility(),
+                   {:build_prompt_refused, :no_intent_text},
+                   intent_trigger_meta(meeting, nil, %{intent_id: unique_id()})
+                 )
+      end)
 
-      assert [canvas] = action_items_canvases(meeting.chat_space_id)
-      assert labels_on(canvas.id) == ["Ship the adapter fix"]
-
-      # And no queue was started as a side effect of trying to close a
-      # row that does not exist.
       refute IntentQueue.running?(meeting.id)
     end
-  end
 
-  # Task 019fa56b-c81f e2e fix, defect 1. In production the handler is
-  # only ever reached via `Router.invoke_handle_output/3`, whose `parsed`
-  # comes from `ContractValidator.validate/2` — which returns the RAW
-  # STRING for this responsibility's field-map contract. The map-shaped
-  # tests above never exercise the shape production actually sends. These
-  # pin the string rules documented on `extract_operations/1`.
-  #
-  # End-to-end proof that the dispatch path really produces these shapes
-  # lives in `meeting_action_items_dispatch_test.exs`.
-  describe "handle_output/3 — freeform STRING output (the production shape)" do
-    defp apply_string!(string, meeting) do
+    test "a payload with no ids at all is a no-op" do
       assert :ok =
-               MeetingActionItems.handle_output(
+               MeetingActionItems.handle_refusal(
                  responsibility(),
-                 string,
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
+                 {:build_prompt_refused, :no_intent_text},
+                 %{kind: :event_topic, topic: "meeting:action_item_intent", payload: %{}}
                )
-
-      action_items_canvases(meeting.chat_space_id)
     end
 
-    test "rule 1: a JSON object carrying the operations contract decodes" do
+    test "string-keyed payloads close the row the same as atom-keyed ones" do
+      # Atom-keyed from an in-process broadcast, string-keyed from
+      # anything that made a JSON round trip. A refusal that only
+      # understood one spelling would leave half the rows stalled.
       meeting = create_meeting!()
+      row = dispatched_row!(meeting)
 
-      assert [canvas] =
-               apply_string!(
-                 ~s({"operations": [{"op": "add", "label": "Ship the adapter fix"},
-                                    {"op": "add", "label": "Email Rowan the audit"}]}),
-                 meeting
-               )
+      capture_log(fn ->
+        assert :ok =
+                 MeetingActionItems.handle_refusal(
+                   responsibility(),
+                   {:build_prompt_refused, :no_intent_text},
+                   %{
+                     "payload" => %{
+                       "meeting_id" => meeting.id,
+                       "intent_id" => row.id
+                     }
+                   }
+                 )
+      end)
 
-      assert labels_on(canvas.id) == ["Ship the adapter fix", "Email Rowan the audit"]
-    end
-
-    test "rule 1: a bare JSON array of strings reads as adds" do
-      # The pre-stage-3 `list[string]` contract. A model still answering
-      # it adds items rather than failing.
-      meeting = create_meeting!()
-
-      assert [canvas] = apply_string!(~s(["Book the review", "Send the doc"]), meeting)
-      assert labels_on(canvas.id) == ["Book the review", "Send the doc"]
-    end
-
-    test "rule 3: prose with markers keeps ONLY the marked lines, as adds" do
-      meeting = create_meeting!()
-
-      assert [canvas] =
-               apply_string!(
-                 """
-                 Here are the action items from the meeting:
-
-                 - Revert the onboarding flow
-                 * Email the deploy audit
-                 3. Book the compliance sign-off
-
-                 Let me know if I missed anything.
-                 """,
-                 meeting
-               )
-
-      assert labels_on(canvas.id) == [
-               "Revert the onboarding flow",
-               "Email the deploy audit",
-               "Book the compliance sign-off"
-             ]
-    end
-
-    test "rule 3b: with no marked line, every non-blank line is an add" do
-      meeting = create_meeting!()
-
-      assert [canvas] =
-               apply_string!(
-                 "Revert the onboarding flow\n\n   \nEmail the deploy audit\n",
-                 meeting
-               )
-
-      assert labels_on(canvas.id) == ["Revert the onboarding flow", "Email the deploy audit"]
-    end
-
-    test "rule 4: the marker is stripped once, so an inner hyphen survives" do
-      meeting = create_meeting!()
-
-      assert [canvas] = apply_string!("- see - the tradeoff doc", meeting)
-      assert labels_on(canvas.id) == ["see - the tradeoff doc"]
-    end
-
-    test "a blank string writes nothing and creates no canvas" do
-      meeting = create_meeting!()
-
-      assert apply_string!("   \n\n \n", meeting) == []
-      assert apply_string!("", meeting) == []
-    end
-
-    test "an empty operations array writes nothing and creates no canvas" do
-      meeting = create_meeting!()
-
-      assert apply_string!(~s({"operations": []}), meeting) == []
-    end
-
-    test "a string answer can complete an existing item" do
-      meeting = create_meeting!()
-
-      canvas =
-        create_action_items_canvas!(meeting.chat_space_id, meeting.id, [
-          {"item-1", "Revert the onboarding flow", "pending"}
-        ])
-
-      assert [^canvas] = [canvas]
-
-      assert :ok =
-               MeetingActionItems.handle_output(
-                 responsibility(),
-                 ~s({"operations": [{"op": "update", "match": "revert the onboarding flow",
-                                     "state": "complete"}]}),
-                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: "..."})
-               )
-
-      assert [item] = items_on(canvas.id)
-      assert item.state == "complete"
+      assert row_status(meeting.id, row.id).status == :dispatch_failed
     end
   end
 
@@ -1613,15 +1087,13 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
     end
 
     test "a space_id with no spaces row raises, exactly as post_summary_to_space/3 does" do
-      # PINS PRE-EXISTING BEHAVIOUR, not a choice made by this stage.
+      # PINS PRE-EXISTING BEHAVIOUR, not a choice made here.
       # `ExecutionSpace.ensure_system_participant/1` inserts a
       # chat_participants row whose changeset declares no
       # `foreign_key_constraint`, so a dangling space_id surfaces as an
       # Ecto.ConstraintError rather than `{:error, _}`. The gold-standard
       # `post_summary_to_space/3` goes through the identical `with`, so
-      # this stage deliberately mirrors it instead of diverging. The blast
-      # radius is bounded: `Router.invoke_handle_output/3` already rescues
-      # and logs "handle_output raised" (router.ex:1349).
+      # this deliberately mirrors it instead of diverging.
       transcript = create_transcript!()
 
       assert_raise Ecto.ConstraintError, fn ->

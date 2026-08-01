@@ -1797,7 +1797,12 @@ defmodule Platform.Responsibilities.Router do
   # carries a frozen history snapshot under `:metadata`. Forwarding either
   # would push an unbounded payload onto a websocket — see commit
   # `babba0bf` for the same reasoning on the chat side.
-  @native_trigger_scalar_keys [:task_id, :plan_id, :stage_id, :project_id]
+  # `:intent_id` added 2026-07-31 — see the matching comment on
+  # `AgentResponder.@correlation_id_keys`. Without it a meeting intent
+  # dispatched to a NATIVE assignee had no handle to `intent_ack` with,
+  # so the row could only leave `:dispatched` via the 90s timeout while
+  # holding the meeting's serial cursor for the whole window.
+  @native_trigger_scalar_keys [:task_id, :plan_id, :stage_id, :project_id, :intent_id]
 
   @doc false
   # Exposed so `AgentResponder`'s system_event envelope can be pinned against

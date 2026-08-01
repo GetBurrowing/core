@@ -2351,11 +2351,15 @@ defmodule Platform.Meetings do
   It used to be described here as "the delivery surface for
   `meetings.action_items`". That stopped being true in task
   019fb90f-36e3, which retargeted that key to fire per utterance DURING
-  the meeting and land on a canvas
-  (`Platform.Meetings.ActionItemsCanvas`) instead. This function renders
-  the WHOLE list every time it is called, so calling it per utterance
-  would repost the entire list once per action item mentioned — each
-  message superseding the last, none of them the current state.
+  the meeting. It now lands on a canvas the RECIPIENT maintains with its
+  own `canvas_create` / `canvas_patch` tools — the platform-side
+  reconciler that briefly sat behind that key is gone, and nothing in
+  `Platform.Responsibilities.Handlers.MeetingActionItems` writes to a
+  space any more. This
+  function renders the WHOLE list every time it is called, so calling it
+  per utterance would repost the entire list once per action item
+  mentioned — each message superseding the last, none of them the
+  current state.
 
   Nothing here changed and nothing about it is deprecated. A
   once-per-meeting caller wanting a flat, quotable checklist in the
@@ -2365,8 +2369,8 @@ defmodule Platform.Meetings do
 
   An empty list is a caller error rather than a no-op here — a meeting with
   no action items is a legitimate outcome, but the decision not to post is
-  the caller's to make (see `MeetingActionItems.handle_output/3`), so this
-  function refuses rather than silently inserting an empty checklist.
+  the caller's to make, so this function refuses rather than silently
+  inserting an empty checklist.
   """
   @doc since: "task 019fa56b-c81f stage 3"
   @spec post_action_items_to_space(String.t(), String.t(), [String.t()]) ::

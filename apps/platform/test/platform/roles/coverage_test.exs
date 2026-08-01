@@ -8,9 +8,11 @@ defmodule Platform.Roles.CoverageTest do
   called out that the earlier files don't (or only thinly) cover:
 
     * **Category 1 — seed shape.** Pin that `bundle_for("designer")`
-      returns the v2-canvas `design.*` keys verbatim (not just
-      "round-trips through seed data"), and that every seeded role
-      bundle is non-empty when viewed through the resolver.
+      returns the v2-canvas `design.*` keys verbatim — plus, since
+      2026-07-31, the two mid-meeting `meetings.*` intent keys the
+      designer owns (not just "round-trips through seed data") — and
+      that every seeded role bundle is non-empty when viewed through
+      the resolver.
     * **Category 2 — cardinality.** Re-pin Decision 1 at the raw SQL
       layer (constraint violation surfaces from Postgres directly), not
       just via the changeset wrapping. Re-pin `roles_for/1` ordering
@@ -39,6 +41,7 @@ defmodule Platform.Roles.CoverageTest do
 
   alias Ecto.Adapters.SQL
   alias Platform.Agents.Agent
+  alias Platform.Meetings.IntentRouting
   alias Platform.Repo
   alias Platform.Roles
   alias Platform.Roles.ResponsibilityOverride
@@ -94,21 +97,48 @@ defmodule Platform.Roles.CoverageTest do
              ]
     end
 
-    test "bundle_for(\"designer\") returns the v2-canvas design.* keys" do
+    test "bundle_for(\"designer\") returns the design.* keys plus the two mid-meeting intent keys" do
       bundle = Roles.bundle_for("designer")
 
       # Canvas 019e0fb8-d87d-72b2-aab4-205b84fe23aa rev 3, plus
       # `design.task_direction` from ADR-0046 stack member 7 (task
-      # 019f9b29-5ecd stage 3) — the pre-plan design step.
+      # 019f9b29-5ecd stage 3) — the pre-plan design step — plus the two
+      # mid-meeting intent keys added 2026-07-31.
       assert bundle == [
                "design.brand_check",
                "design.critique",
                "design.spec_writer",
-               "design.task_direction"
+               "design.task_direction",
+               "meetings.interaction_design",
+               "meetings.visual_adjust"
              ]
 
-      # Sanity: every key in the bundle is namespaced under `design.`.
-      assert Enum.all?(bundle, &String.starts_with?(&1, "design."))
+      # This used to be `Enum.all?(bundle, &String.starts_with?(&1, "design."))`
+      # — "the designer's work is all named after design". 2026-07-31
+      # broke that on purpose: a `meetings.*` key records where the work
+      # ORIGINATES (one utterance in a live meeting) while the bundle
+      # records who does it.
+      #
+      # Widening the prefix rule to `design.` OR `meetings.` would have
+      # been a strictly weaker check — it would wave through ANY
+      # meetings key landing in this bundle. So the escape hatch is
+      # named instead: a non-`design.` key is only legitimate here if
+      # `IntentRouting` says the DESIGNER owns that intent. A stray
+      # `meetings.summarize` in the designer bundle fails this;
+      # a prefix rule would not.
+      designer_intent_keys =
+        IntentRouting.entries()
+        |> Enum.filter(&(&1.role == "designer"))
+        |> Enum.map(& &1.key)
+
+      assert designer_intent_keys != [],
+             "no designer-owned routing rows — the check below would pass vacuously"
+
+      for key <- bundle do
+        assert String.starts_with?(key, "design.") or key in designer_intent_keys,
+               "designer bundle key #{inspect(key)} is neither design-namespaced nor a " <>
+                 "mid-meeting intent IntentRouting assigns to the designer"
+      end
     end
 
     test "every seeded role has a non-empty bundle" do
@@ -241,16 +271,33 @@ defmodule Platform.Roles.CoverageTest do
       assert Roles.responsibilities_for("designer", exclude_overridden: true) ==
                Roles.bundle_for("designer")
 
-      # 1 override → subtracted.
+      # 1 override → subtracted. The remainder is the designer bundle
+      # minus exactly one key, so it grew with the bundle when the two
+      # mid-meeting intent keys landed 2026-07-31 — an override removes
+      # one key, it does not filter by namespace.
       {:ok, _} = Roles.set_override("design.brand_check", override_agent.id)
 
       assert Roles.responsibilities_for("designer", exclude_overridden: true) ==
-               ["design.critique", "design.spec_writer", "design.task_direction"]
+               [
+                 "design.critique",
+                 "design.spec_writer",
+                 "design.task_direction",
+                 "meetings.interaction_design",
+                 "meetings.visual_adjust"
+               ]
 
-      # All overridden → empty. Four keys since ADR-0046 stack member 7.
+      # All overridden → empty. Six keys since the 2026-07-31 intent
+      # keys (four before that, since ADR-0046 stack member 7). Every
+      # key has to be listed here for the "all" case to mean "all" —
+      # missing one would leave a non-empty remainder and redden the
+      # assertion below, which is why this list is spelled out rather
+      # than looped over `bundle_for/1` (looping would make the case
+      # pass by construction no matter what the bundle held).
       {:ok, _} = Roles.set_override("design.critique", override_agent.id)
       {:ok, _} = Roles.set_override("design.spec_writer", override_agent.id)
       {:ok, _} = Roles.set_override("design.task_direction", override_agent.id)
+      {:ok, _} = Roles.set_override("meetings.interaction_design", override_agent.id)
+      {:ok, _} = Roles.set_override("meetings.visual_adjust", override_agent.id)
 
       assert Roles.responsibilities_for("designer", exclude_overridden: true) == []
 
