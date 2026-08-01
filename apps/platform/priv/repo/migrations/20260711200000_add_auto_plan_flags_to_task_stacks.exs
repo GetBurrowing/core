@@ -19,6 +19,9 @@ defmodule Platform.Repo.Migrations.AddAutoPlanFlagsToTaskStacks do
   `null: false` so downstream reads never have to handle a nil case.
   Mirrors the top-level boolean pattern already in place for
   `tasks.auto_approve_plan` (see d0aaadf4).
+
+  Admitted by task 019f487e stage 1, PR #531 — Stack v2 (ADR 0042)
+  auto-plan cascade.
   """
 
   def change do

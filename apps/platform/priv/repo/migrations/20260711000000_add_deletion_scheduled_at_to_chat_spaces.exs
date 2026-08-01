@@ -1,14 +1,16 @@
 defmodule Platform.Repo.Migrations.AddDeletionScheduledAtToChatSpaces do
   use Ecto.Migration
 
-  # Task 019e95ea stage 3 — scheduled channel deletion. A Fabrikam admin can
-  # flag an archived channel for permanent deletion; the flag stamps this
-  # column and `Platform.Chat.SpacePurger` hard-deletes the space (children
-  # cascade via existing FKs) once the retention window has elapsed.
-  #
-  # NULL means "not scheduled" — the overwhelmingly common case — so the
-  # sweep's observability index is partial on the non-NULL predicate to
-  # keep it lean.
+  @moduledoc """
+  Task 019e95ea stage 3 — scheduled channel deletion. A Fabrikam admin can
+  flag an archived channel for permanent deletion; the flag stamps this
+  column and `Platform.Chat.SpacePurger` hard-deletes the space (children
+  cascade via existing FKs) once the retention window has elapsed.
+
+  NULL means "not scheduled" — the overwhelmingly common case — so the
+  sweep's observability index is partial on the non-NULL predicate to
+  keep it lean.
+  """
 
   def up do
     alter table(:chat_spaces) do

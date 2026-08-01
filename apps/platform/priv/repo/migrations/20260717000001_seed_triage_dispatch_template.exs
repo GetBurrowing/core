@@ -1,7 +1,7 @@
 defmodule Platform.Repo.Migrations.SeedTriageDispatchTemplate do
   use Ecto.Migration
 
-  @doc """
+  @moduledoc """
   Re-run seed_defaults to insert the dispatch.triage_dispatch template on
   existing deployments where prior seed migrations ran before the triage
   template existed. Idempotent — only inserts missing slugs.

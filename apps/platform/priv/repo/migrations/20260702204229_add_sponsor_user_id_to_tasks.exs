@@ -1,12 +1,14 @@
 defmodule Platform.Repo.Migrations.AddSponsorUserIdToTasks do
   use Ecto.Migration
 
-  # ADR 0042 (Task Sponsor): human shepherd distinct from the technical
-  # assignee. Nullable — a task can have no sponsor. `on_delete: :nilify_all`
-  # so deleting a user does not orphan or hard-delete their sponsored tasks;
-  # the sponsor slot simply clears. Partial index on non-NULL rows keeps the
-  # "tasks I'm sponsoring" lookup cheap without paying storage for the many
-  # tasks with no sponsor.
+  @moduledoc """
+  ADR 0042 (Task Sponsor): human shepherd distinct from the technical
+  assignee. Nullable — a task can have no sponsor. `on_delete: :nilify_all`
+  so deleting a user does not orphan or hard-delete their sponsored tasks;
+  the sponsor slot simply clears. Partial index on non-NULL rows keeps the
+  "tasks I'm sponsoring" lookup cheap without paying storage for the many
+  tasks with no sponsor.
+  """
 
   def up do
     alter table(:tasks) do

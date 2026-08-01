@@ -1,18 +1,20 @@
 defmodule Platform.Repo.Migrations.ForceUpdateArchitectReviewPlanTemplate do
   use Ecto.Migration
 
-  # ADR-0044 stage 3 (task `019f3da3`): the stage-1 placeholder body for
-  # `architecture.review_plan.v1` was seeded by
-  # `20260708120100_seed_prompt_templates_architect.exs`. Stage 3 ships
-  # the real prompt via `Platform.Orchestration.PromptTemplates.do_default_templates/0`,
-  # but `seed_defaults/0` is INSERT-only — a deployment that already ran
-  # the stage-1 migration would keep serving the placeholder body
-  # without an explicit overwrite. Force-update to
-  # `default_content_for_slug/1`'s current output.
-  #
-  # Skips slugs with no DB row (fresh boots pick them up via
-  # `seed_defaults/0`). Mirrors the `force_update_*` migration pattern
-  # at 20260520010000.
+  @moduledoc """
+  ADR-0044 stage 3 (task `019f3da3`): the stage-1 placeholder body for
+  `architecture.review_plan.v1` was seeded by
+  `20260708120100_seed_prompt_templates_architect.exs`. Stage 3 ships
+  the real prompt via `Platform.Orchestration.PromptTemplates.do_default_templates/0`,
+  but `seed_defaults/0` is INSERT-only — a deployment that already ran
+  the stage-1 migration would keep serving the placeholder body
+  without an explicit overwrite. Force-update to
+  `default_content_for_slug/1`'s current output.
+
+  Skips slugs with no DB row (fresh boots pick them up via
+  `seed_defaults/0`). Mirrors the `force_update_*` migration pattern
+  at 20260520010000.
+  """
 
   @slug "architecture.review_plan.v1"
 

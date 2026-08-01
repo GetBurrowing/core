@@ -17,6 +17,9 @@ defmodule Platform.Repo.Migrations.CreateChannelSections do
   the existing `.text-<token>` / `.bg-<token>-dot` classes. `ON CONFLICT
   (org_id) DO NOTHING` makes the seed idempotent on replay. UUIDv7 ids match
   the app-generated shape (see `SeedRootOrgs`).
+
+  Admitted by task 019e467d, PR #432 — customizable channel sidebar (org
+  sections, per-user layout, admin curation).
   """
   use Ecto.Migration
 

@@ -29,6 +29,9 @@ defmodule Platform.Repo.Migrations.AddStageIdToExecutionLeases do
   the schema consistent with the pre-migration router code. The
   `stage_id` column is dropped in reverse order so the unique index
   drop precedes the column drop.
+
+  Admitted by task 019f6791 stage 1, PR #554 — router arch fix:
+  stage-scoped leases.
   """
 
   use Ecto.Migration

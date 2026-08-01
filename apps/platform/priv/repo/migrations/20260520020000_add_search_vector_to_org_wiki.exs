@@ -16,6 +16,9 @@ defmodule Platform.Repo.Migrations.AddSearchVectorToOrgWiki do
   flagged the column as missing. Stage 4 ships the migration alongside
   the `Search` module so the lexical channel uses tsvector rather than
   the noisier `ilike` fallback.
+
+  Admitted by task 019e41d9 (ADR-0041 org-memory stack, T5 stage 4:
+  Wiki.Search RRF fusion + the memory_search tool).
   """
 
   def up do

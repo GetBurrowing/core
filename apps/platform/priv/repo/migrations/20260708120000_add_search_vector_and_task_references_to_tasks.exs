@@ -37,6 +37,9 @@ defmodule Platform.Repo.Migrations.AddSearchVectorAndTaskReferencesToTasks do
   `search_vector` is populated for every existing row automatically as
   part of the `ALTER TABLE ... GENERATED ALWAYS AS ... STORED` — no
   separate app-side backfill is needed for the lexical column.
+
+  Admitted by task 019f3dbb, PR #494 — vectorize tasks: memory_search task
+  corpus + task_create similar_tasks advisory.
   """
 
   def up do

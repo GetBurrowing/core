@@ -18,6 +18,9 @@ defmodule Platform.Repo.Migrations.CreateOrgMemoryFeedback do
       content) and required for edit rows (enforced at the changeset layer).
     * No `updated_at` — the table is append-only. Once written, feedback
       rows are immutable.
+
+  Admitted by task 019f6381 stage 1, PR #558 — memory-feedback training
+  corpus, layer-1 storage.
   """
 
   def change do

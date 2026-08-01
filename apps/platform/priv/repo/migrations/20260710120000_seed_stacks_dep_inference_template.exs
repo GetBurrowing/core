@@ -1,7 +1,7 @@
 defmodule Platform.Repo.Migrations.SeedStacksDepInferenceTemplate do
   use Ecto.Migration
 
-  @doc """
+  @moduledoc """
   Re-run seed_defaults to insert the `stacks.dep_inference.v1` template on
   existing deployments where the original seed migration ran before this
   template was registered. Idempotent — `seed_defaults/0` only inserts when

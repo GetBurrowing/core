@@ -63,6 +63,10 @@ defmodule Platform.Repo.Migrations.PageGrammarFileKeysAndAliasBackfill do
   its page-grammar rewrite), revert the link-row rewrites, then delete
   those alias rows. Pages created directly under the page grammar
   (no flat alias) are untouched.
+
+  Admitted by PR #433 (ADR-0041 org-memory stack rollup), Sloane-authorized
+  2026-06-11 — flat page keys to the `<ns>/page/<rest>` routing grammar plus
+  alias backfill.
   """
 
   # Org-scoped alias rows live under the sentinel workspace UUID

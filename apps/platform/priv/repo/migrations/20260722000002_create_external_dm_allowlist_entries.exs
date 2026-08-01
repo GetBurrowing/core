@@ -16,6 +16,9 @@ defmodule Platform.Repo.Migrations.CreateExternalDmAllowlistEntries do
     * `(user_id, allowed_org_id)` unique — one entry per pair
       (idempotent `allow_dm/2`).
     * `user_id` — the "which orgs may this user DM?" lookup M8 issues.
+
+  Admitted by task 019f8837 stages 1-3 — external-users schema foundation
+  (rbac-external-users stack member M1, the only member adding migrations).
   """
 
   use Ecto.Migration

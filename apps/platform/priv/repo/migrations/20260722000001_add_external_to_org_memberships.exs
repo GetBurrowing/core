@@ -19,6 +19,9 @@ defmodule Platform.Repo.Migrations.AddExternalToOrgMemberships do
   Additive and backwards-compatible: **no change** to
   `org_memberships_role_check`, no data migration. Existing admin/member
   rows are untouched (default `false`).
+
+  Admitted by task 019f8837 stages 1-3 — external-users schema foundation
+  (rbac-external-users stack member M1, the only member adding migrations).
   """
 
   use Ecto.Migration

@@ -31,6 +31,9 @@ defmodule Platform.Repo.Migrations.BackfillMeetingChatSpaceSlugs do
   blank, so re-running is a no-op once every meeting space has a slug.
   Rows that already carry a slug (including those written by the fixed
   `create_meeting/1`) are left untouched.
+
+  Admitted by PR #422 — fix(meetings): give meeting chat spaces a unique
+  slug so the discussion panel mounts.
   """
 
   use Ecto.Migration

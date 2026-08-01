@@ -78,6 +78,23 @@ The full-suite test run auto-creates and migrates the test database on each invo
 
 For a fuller local-only check, the repo also supports `mix precommit` (compile with warnings-as-errors, unused-dep check, format, test). CI does not gate on warnings-as-errors, so pre-existing warnings may block precommit even when CI is green.
 
+## Adding a migration
+
+Every migration under `apps/platform/priv/repo/migrations` with a version at or after `20260520000000` must carry a `@moduledoc` of at least 40 characters saying why it exists, and must cite the work that admitted it: a Suite task id (`019fba52`), an ADR number (`ADR-0033`), or a PR number (`#647`). The guard is `apps/platform/test/platform/org/wiki/context_t4_e2e_test.exs`, and its failure message restates all of this.
+
+There is no list to append to and no count to bump. Admission is a property of the migration file itself, so two branches adding migrations on the same day touch only the files they each created.
+
+This replaced a hand-maintained allow-list (`@t4_allowed_new_migrations`), which every branch adding a migration had to append to. That put each of those branches behind a merge conflict in a file none of them were working on. On 2026-07-31 four PRs (#645, #648, #647, #651) each added a migration and each had to edit that one list; #648 merged while #647 was open, and #647 was rebased eight minutes later to absorb the line #648 had just added. Do not reintroduce a list.
+
+To run a new migration before you commit it, point at a scratch database:
+
+```bash
+cd apps/platform
+PLATFORM_TEST_DATABASE=platform_test_scratch mix test
+```
+
+`mix test`'s alias in `apps/platform/mix.exs` runs `ecto.create` and `ecto.migrate` inside a `try/rescue` that swallows every error and exit, so a broken migration run against the shared `platform_test` database reports nothing at the point of damage. A migration that succeeds is recorded in that database's `schema_migrations` and will not run again, which is the other reason to keep experiments off it.
+
 ## Overriding DB defaults
 
 If you already have a Postgres instance and don't want a separate `postgres` role, export the credentials before running mix:

@@ -29,11 +29,20 @@ defmodule Platform.Federation.ToolArgumentsTest do
     "lib/platform/skills/tool_handlers.ex"
   ]
 
-  # Ratchet, in the style this repo already uses for `@t6_baseline_tool_count`
-  # and `@t4_allowed_new_migrations`: the number of `required: true`
-  # declarations the survey actually classified. A new declaration is not
-  # "enforceable by default" — it is unclassified until somebody reads the
-  # handler, and moving this number is how they record that they did.
+  # Ratchet, in the style this repo already uses for `@t6_baseline_tool_count`:
+  # the number of `required: true` declarations the survey actually
+  # classified. A new declaration is not "enforceable by default" — it is
+  # unclassified until somebody reads the handler, and moving this number is
+  # how they record that they did.
+  #
+  # This comment used to cite `@t4_allowed_new_migrations` as a second
+  # exemplar; task 019fba52 deleted that attribute. It was a per-item
+  # allow-LIST rather than a count, so every branch adding a migration had to
+  # edit the same list and they serialised behind the conflict. A single
+  # ratchet number is cheaper but not free of that: two branches adding tools
+  # both bump this line. Prefer a property of the thing itself (as the
+  # migration guard now does, requiring a @moduledoc in the migration) when
+  # one is available; a shared counter is the fallback, not the ideal.
   #
   # Counted from `tool_definitions/0` at 9021-line `tool_surface.ex`; the
   # ticket's figure of 119 was already stale when it was filed.

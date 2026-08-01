@@ -29,6 +29,9 @@ defmodule Platform.Repo.Migrations.CreatePendingExternalGrants do
       pending grant per identity.
     * plain `index` on each of `email` / `oidc_sub` to support
       lookup-by-either.
+
+  Admitted by task 019f8837 stages 1-3 — external-users schema foundation
+  (rbac-external-users stack member M1, the only member adding migrations).
   """
 
   use Ecto.Migration

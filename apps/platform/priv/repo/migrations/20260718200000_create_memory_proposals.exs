@@ -34,6 +34,9 @@ defmodule Platform.Repo.Migrations.CreateMemoryProposals do
       (`inserted_at + 7 days`) rather than as a fragment default,
       because we want the changeset to be able to see + override it in
       tests that need to seed already-expired rows.
+
+  Admitted by task 019f70e9 stage 2, PR #571 — Historian dreaming:
+  synthesis-proposal review flow.
   """
 
   def change do

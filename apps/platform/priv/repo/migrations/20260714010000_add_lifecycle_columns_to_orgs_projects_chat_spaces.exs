@@ -1,24 +1,26 @@
 defmodule Platform.Repo.Migrations.AddLifecycleColumnsToOrgsProjectsChatSpaces do
   use Ecto.Migration
 
-  # Task 019f4eaa stage 2 — soft-delete lifecycle columns for the container
-  # tables (orgs, projects, chat_spaces), copying the proven two-column
-  # chat_spaces shape (archived_at + deletion_scheduled_at) per table rather
-  # than a generic abstraction.
-  #
-  # `archived_cascade_org_id` is the provenance marker: when an org is
-  # archived and that archive cascades down to its projects / chat_spaces,
-  # each cascaded child records which org drove the cascade so the action can
-  # be attributed and (later) undone. `on_delete: :nilify_all` keeps a hard
-  # org delete from orphaning the child rows.
-  #
-  # chat_spaces ALREADY carries archived_at + deletion_scheduled_at (added in
-  # 20260314080000 / 20260711000000) — this migration only adds its
-  # provenance marker.
-  #
-  # Every new column is NULL-by-default; the observability indexes are partial
-  # on the non-NULL predicate so the common "not archived / not scheduled"
-  # case stays out of the index.
+  @moduledoc """
+  Task 019f4eaa stage 2 — soft-delete lifecycle columns for the container
+  tables (orgs, projects, chat_spaces), copying the proven two-column
+  chat_spaces shape (archived_at + deletion_scheduled_at) per table rather
+  than a generic abstraction.
+
+  `archived_cascade_org_id` is the provenance marker: when an org is
+  archived and that archive cascades down to its projects / chat_spaces,
+  each cascaded child records which org drove the cascade so the action can
+  be attributed and (later) undone. `on_delete: :nilify_all` keeps a hard
+  org delete from orphaning the child rows.
+
+  chat_spaces ALREADY carries archived_at + deletion_scheduled_at (added in
+  20260314080000 / 20260711000000) — this migration only adds its
+  provenance marker.
+
+  Every new column is NULL-by-default; the observability indexes are partial
+  on the non-NULL predicate so the common "not archived / not scheduled"
+  case stays out of the index.
+  """
 
   def up do
     alter table(:orgs) do

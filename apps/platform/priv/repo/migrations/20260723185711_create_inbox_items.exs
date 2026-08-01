@@ -1,6 +1,20 @@
 defmodule Platform.Repo.Migrations.CreateInboxItems do
   use Ecto.Migration
 
+  @moduledoc """
+  Task 019f904c (inbox-system stack member M1), PR #589 — the notification
+  source contract.
+
+  Creates `inbox_items`, the durable per-user attention row backing
+  `Platform.Inbox.emit/1`. M1 is the only member of the inbox stack that
+  adds a migration; M2-M7 read and render these rows.
+
+  `source_id` is deliberately a plain `:uuid` rather than a `references/2`
+  FK: source rows live in other schemas (chat_messages, tasks,
+  review_requests, ...), so it is a cross-schema pointer with no single
+  parent table to constrain against.
+  """
+
   def change do
     create table(:inbox_items, primary_key: false) do
       add(:id, :uuid, primary_key: true)

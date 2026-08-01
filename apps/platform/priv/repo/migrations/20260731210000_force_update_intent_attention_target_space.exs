@@ -21,6 +21,9 @@ defmodule Platform.Repo.Migrations.ForceUpdateIntentAttentionTargetSpace do
   `down/0` is `:ok`. Rolling the body back to one that omits `target_space_id`
   would leave the wire payload and the prompt disagreeing about where results
   go, which is worse than leaving the newer copy in place.
+
+  Admitted by task 019fb90f stage 4, PR #648 — invite a dispatched agent
+  into the space it was dispatched to.
   """
 
   @slug "dispatch.intent_attention"

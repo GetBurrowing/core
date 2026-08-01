@@ -22,6 +22,9 @@ defmodule Platform.Repo.Migrations.AddExternalKindToAgents do
   kind == "external"). The `runtime_type` column added in
   `20260319140000_create_agent_runtimes.exs` is preserved as a distinct
   concept (runtime ownership) per the stack decision; do not merge.
+
+  Admitted by task 019ef65b, PR #454 — Responsibilities & External Agents
+  stack, M2 stage 1.
   """
 
   def change do

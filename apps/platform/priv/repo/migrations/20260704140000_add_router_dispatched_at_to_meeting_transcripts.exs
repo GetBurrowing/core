@@ -1,17 +1,19 @@
 defmodule Platform.Repo.Migrations.AddRouterDispatchedAtToMeetingTranscripts do
   use Ecto.Migration
 
-  # Task 019f2566 stage 1 — foundation for the responsibility-router
-  # heartbeat + fallback path (ADR 0041 M5/M6). Stamps the moment the
-  # Summarizer hands a completed transcript off to the responsibility
-  # router so the SummarizerSweeper (stage 2) can detect dispatches that
-  # stalled without their agent ever picking the job up.
-  #
-  # Only rows in `status = 'processing'` are candidates for stall
-  # detection (recording is still accumulating segments, complete/failed
-  # are already terminal), so the observability index is partial on
-  # that predicate to keep it lean. Non-processing rows carry the
-  # timestamp harmlessly but are never scanned via this index.
+  @moduledoc """
+  Task 019f2566 stage 1 — foundation for the responsibility-router
+  heartbeat + fallback path (ADR 0041 M5/M6). Stamps the moment the
+  Summarizer hands a completed transcript off to the responsibility
+  router so the SummarizerSweeper (stage 2) can detect dispatches that
+  stalled without their agent ever picking the job up.
+
+  Only rows in `status = 'processing'` are candidates for stall
+  detection (recording is still accumulating segments, complete/failed
+  are already terminal), so the observability index is partial on
+  that predicate to keep it lean. Non-processing rows carry the
+  timestamp harmlessly but are never scanned via this index.
+  """
 
   def up do
     alter table(:meeting_transcripts) do

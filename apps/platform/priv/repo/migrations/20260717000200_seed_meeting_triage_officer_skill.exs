@@ -1,7 +1,7 @@
 defmodule Platform.Repo.Migrations.SeedMeetingTriageOfficerSkill do
   use Ecto.Migration
 
-  @doc """
+  @moduledoc """
   Seed the `meeting-triage-officer` skill via `Platform.Skills.seed_defaults/0`
   (task 019f5e2b stack member M4 Stage 3). The helper iterates the hardcoded
   `do_default_skills/0` list and inserts each skill only if the slug is
