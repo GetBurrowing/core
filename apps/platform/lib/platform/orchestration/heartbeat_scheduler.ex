@@ -123,6 +123,54 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   **Do not** post screenshots via `suite_reply_with_media` and call them evidence — those messages don't reliably render in the reviewer's UI and the `manual_approval` gate doesn't watch the chat thread anyway. Evidence flows through `review_request_create`.\
   """
 
+  # ── Post-processor insertion anchors (task 019fba28 v2 stage 1) ──────────
+  #
+  # `insert_before_context/2` splices each phase contract in just BEFORE the
+  # dispatch body's closing guidance paragraph. It used to hardcode ONE prose
+  # sentence, "The attention signal …". Stages 1 and 3 of this task's v1
+  # correctly deleted that sentence from `dispatch.in_progress` and
+  # `dispatch.in_review` (it told agents to treat a `context` field as their
+  # source of truth — text the channel bridge never surfaces), but the
+  # sentence was ALSO a machine anchor. With it gone the Stage Execution
+  # Contract and the Review Validation Contract silently relocated to the very
+  # END of every DB-rendered execution / human-gate dispatch.
+  #
+  # Declaring the anchors as a list makes the replacement paragraph a
+  # first-class anchor instead of an accident, and changes ZERO template
+  # content (an interpolated `{{context_anchor}}` sentinel would have needed a
+  # force-update migration per seeded row and would still be a string an
+  # operator can delete from the admin UI).
+  #
+  # ORDER IS SIGNIFICANT — first entry PRESENT in the prompt wins, not first
+  # by position. Entry 1 stays at the head so rows that still carry the old
+  # sentence (dispatch.planning, dispatch.deploying, dispatch.fallback,
+  # dispatch.review_e2e) keep their exact pre-branch insertion point.
+  #
+  # Entry 2 is the literal opening of prompt_templates.ex:562 (in_progress
+  # body) and :785 (in_review body), and of the hardcoded fallbacks at
+  # heartbeat_scheduler.ex:1009 and :1073. It occupies EXACTLY the position
+  # the deleted sentence did, so anchoring here RESTORES the pre-branch
+  # insertion point rather than approximating it:
+  #
+  #   75a21aa6~1:prompt_templates.ex:545  {{git_workflow_block}}
+  #                                  :546  The attention signal that delivered this message …
+  #   HEAD      :prompt_templates.ex:561  {{git_workflow_block}}
+  #                                  :562  The Stage Description block above is your specification …
+  #
+  # Both entries begin with "\n" so they only ever match at a line start —
+  # `dispatch.in_review` contains a mid-line, lower-cased "the Stage
+  # Description block above" in its first-turn rule that must NOT be matched.
+  @context_anchors ["\nThe attention signal", "\nThe Stage Description block above"]
+
+  @doc false
+  @spec context_anchors() :: [String.t()]
+  def context_anchors, do: @context_anchors
+
+  # Heading `git_workflow_section/1` emits, and the thing
+  # `maybe_strip_git_workflow/2` looks for. One literal so the producer, the
+  # stripper and the re-inserter cannot drift apart.
+  @git_workflow_heading "## Git Workflow (CRITICAL)"
+
   @doc "Heartbeat interval in milliseconds for the given stage type."
   @spec interval_ms(stage_type()) :: non_neg_integer() | nil
   def interval_ms(stage_type) do
@@ -340,11 +388,41 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       stage_id: contract_id(stage || %{}, :id) || "",
       task_title: task.title,
       stage_info: stage_info,
+      # The planner's authored stage prose (task 019fba28 stage 1). Before
+      # this, the ONLY stage text in an execution dispatch was
+      # `format_stage_info/2`'s `Plan: v1 (stage 1/3 — <name>)` line — name,
+      # position, count. The stage `description`, which is the entire artifact
+      # a planner produces and the implementer's actual specification, reached
+      # the agent only if it called `plan_get`, which this very template used
+      # to argue against ("avoid redundant task/plan lookup churn"). It is a
+      # SEPARATE assign rather than a widening of `stage_info` because
+      # `{{stage_info}}` is also interpolated by `dispatch.in_review` and
+      # `dispatch.deploying` (whose stage descriptions are engine-synthesized
+      # boilerplate) and by operator-customized rows that position it as a
+      # one-line header.
+      stage_description: format_stage_description(stage),
       # Pre-rendered Git Workflow block — single source of truth shared with
       # the hardcoded fallback's enrichment path (git_workflow_section/1).
       # Stack-aware: full-UUID worktree/branch + stack membership block for
       # stack members, legacy 8-char-slug section for non-stack tasks.
-      git_workflow_block: git_workflow_section(task),
+      #
+      # SUPPRESSED AT THE ASSIGN when the task resolves to no usable repo
+      # (task 019fba28 v2 stage 2). This used to be unconditional, and
+      # `non_stack_git_workflow_section/1` emits the "## Git Workflow
+      # (CRITICAL)" heading regardless of the resolved repo set, so a
+      # repo-less task always got a block that `maybe_strip_git_workflow/2`
+      # then had to delete out of the rendered body. When that strip's
+      # lookahead stopped matching, its `\z` branch ate the remaining 8,023
+      # bytes of the prompt — the federation preamble, the skills reference
+      # and the whole evidence-workflow chain. Not producing the block
+      # removes the class; the strip below is the second line of defence for
+      # operator rows that hardcode a literal section.
+      #
+      # `maybe_insert_git_workflow/2` is already conditional on the same
+      # predicate and already guards on the block's absence, so the
+      # repo-PRESENT path renders byte-identically to before this change.
+      git_workflow_block:
+        if(deploy_repos_present?(task), do: git_workflow_section(task), else: ""),
       # Reserved Ecto migration timestamp for THIS stage (task 019f7b7e
       # stage 3). Empty string for solo tasks and for stack members whose
       # current stage holds no reservation.
@@ -388,6 +466,21 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         stage_id: contract_id(stage || %{}, :id) || "",
         task_title: task.title,
         stage_info: stage_info,
+        # Same helper stage 1 added for the execution branch, unchanged — one
+        # formatter, two consumers (task 019fba28 stage 3). An agent handling a
+        # `manual_approval` gate is judging whether the stage did what the
+        # planner specified, and until now it was sent the stage NAME and
+        # nothing else while its own template told it not to call
+        # `suite_plan_get` — closing the only route to the specification it was
+        # asked to judge against.
+        #
+        # This assign is shared with the `dispatch.review_e2e` branch because
+        # both slugs run through this one function. Only `dispatch.in_review`
+        # declares `{{stage_description}}`, so the e2e body is unchanged: the
+        # planner's authored substance already reaches it through
+        # `pending_e2e_validations_json` (`e2e_review_assigns/3`), and
+        # `interpolate/2` ignores an assign no placeholder references.
+        stage_description: format_stage_description(stage),
         provider_specific_guidance: provider_guidance,
         skills_reference: @skills_reference,
         evidence_workflow_reference: @evidence_workflow_reference,
@@ -850,6 +943,34 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       single synthetic task-level review stage automatically — do NOT attach them to
       multiple stages or create a separate review stage for them.
 
+    ## A constraint binds only if you restate it inside a stage description
+
+    The task description above is rendered into THIS dispatch and no other. The execution
+    dispatch and the human-gate (manual_approval) dispatch carry the task TITLE, the stage
+    position and name, and that stage's own `description` — they do not carry the ticket body
+    you are reading now. So anything in this ticket that must bind the implementer has to be
+    restated inside the relevant stage's `description`, because that is the only authored text
+    the implementer is sent.
+
+    Restate it in checkable form — name the file path, name the assertion, and say what failure
+    looks like. "Follow the ticket's testing guidance" survives this boundary as nothing at all.
+    "In apps/platform/test/platform/orchestration/foo_test.exs, assert the sentinel literal, not
+    `stage.description` — an expectation re-derived from the function under test cannot fail for
+    any value" survives as an instruction the implementer can act on and a reviewer can check.
+
+    The constraints that most often need restating, because they are written to bind the coder
+    rather than you:
+    - **What NOT to do** — approaches already ruled out, and why they were ruled out.
+    - **What is out of scope** — the adjacent code the implementer must leave alone.
+    - **Mutation / anti-vacuity requirements** — which mutation to make, that the guard must be
+      shown to fire, and that a non-detonation is a finding to report rather than something to
+      quietly fix.
+    - **Any premise you verified while planning**, stated as verified with the file and line you
+      checked, so the implementer does not re-litigate it or silently work around it.
+
+    This rule applies to itself: a planner that reads it and does not restate the ticket's
+    binding constraints inside its stage descriptions has already lost them.
+
     ## Validation kinds
 
     Per-stage:
@@ -922,6 +1043,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   defp hardcoded_dispatch_in_progress(task, plan, stage, provider_guidance \\ "") do
     stage_info = format_stage_info(plan, stage)
+    # Parity with the `{{stage_description}}` placeholder in the DB
+    # `dispatch.in_progress` body — same value, same position. An environment
+    # that has never seeded the row must not be silently worse off.
+    stage_description = format_stage_description(stage)
 
     ack_preamble =
       render_task_ack_preamble(contract_id(task, :id), contract_id(stage || %{}, :id))
@@ -938,6 +1063,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     Task: #{task.title}
     #{stage_info}
+    #{stage_description}
     #{provider_guidance}
 
     Push evidence using validation_pass or stage_complete as you finish each step. \
@@ -945,9 +1071,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Use report_blocker if you are stuck.
     #{migration_slot_section}
 
-    The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
-    Start from the concrete stage contract and any attached/bundled skill content in that payload before re-fetching broad task/project context.
-    Avoid redundant task/plan lookup churn on the first turn unless an identifier is genuinely missing or the stage contract is ambiguous.
+    The Stage Description block above is your specification — it is the planner's own authored text for this stage, and it is the authority over any summary of it. The full task hierarchy (project, epic, task body, whole plan) is NOT in this message; fetch it with suite_task_get / suite_plan_get if you need it.
+    Start from that stage description and any attached/bundled skill content before re-fetching broad task/project context.
+    Avoid redundant task/plan lookup churn on the first turn — but if the Stage Description block is absent, empty, or looks cut off, call suite_plan_get and read the stage description there before doing anything else.
 
     #{@evidence_workflow_reference}
 
@@ -958,6 +1084,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   defp hardcoded_dispatch_in_review(task, plan, stage, provider_guidance \\ "") do
     stage_info = format_stage_info(plan, stage)
+    # Parity with the `{{stage_description}}` placeholder in the DB
+    # `dispatch.in_review` body — same value, same position. An environment
+    # that has never seeded the row must not be silently worse off.
+    stage_description = format_stage_description(stage)
 
     ack_preamble =
       render_task_ack_preamble(contract_id(task, :id), contract_id(stage || %{}, :id))
@@ -968,6 +1098,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     Task: #{task.title}
     #{stage_info}
+    #{stage_description}
     #{provider_guidance}
 
     Your job is experiential review: exercise the feature in a running environment and produce \
@@ -989,7 +1120,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       2. publish concrete evidence into the execution space,
       3. call `suite_review_request_create` for the provided `validation_id` with labelled checklist items and links to that evidence.
     - Only call `suite_task_get`, `suite_plan_get`, or `suite_validation_list` if an identifier is actually missing or \
-    the dispatch context is contradicted by direct evidence.
+    the dispatch context is contradicted by direct evidence — but if the Stage Description block above is absent, empty, \
+    or looks cut off, call `suite_plan_get` and read the stage description there before judging anything.
     - Reach the evidence + review-request step in the same attempt unless a real blocker prevents it.
 
     ## Review rules
@@ -1003,8 +1135,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     the task can return to `in_progress`.
     - If review passes, let the plan engine advance the task; do not force status changes manually.
 
-    The attention signal that delivered this message includes a `context` field with the full task hierarchy:
-    project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
+    The Stage Description block above is the planner's own authored specification for this stage — judge the implementation against it, not against a summary of it. The full task hierarchy (project, epic, task body, whole plan) is NOT in this message; fetch it with suite_task_get / suite_plan_get if something you need is missing.
 
     #{@evidence_workflow_reference}
 
@@ -1631,20 +1762,87 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     end
   end
 
+  # SECOND line of defence only. `in_progress_prompt/4` no longer ASSIGNS a git
+  # block for a repo-less task, so on the shipped `dispatch.in_progress` body
+  # there is nothing here to delete. What survives for is an operator-customized
+  # row that hardcodes a literal "## Git Workflow (CRITICAL)" section inline
+  # instead of interpolating `{{git_workflow_block}}`.
+  #
+  # FAIL-CLOSED — THERE IS NO `\z` BRANCH ANY MORE. The previous implementation
+  # was:
+  #
+  #     ~r/\n## Git Workflow \(CRITICAL\).*?(?=\nThe attention signal|\z)/s
+  #
+  # and that `|\z` alternative is the whole regression. Once v1 deleted "The
+  # attention signal …" from the dispatch bodies the lookahead matched nothing,
+  # the lazy quantifier ran to end-of-string, and a repo-less execution
+  # dispatch rendered 2,004 bytes where it had rendered 10,027 — the federation
+  # preamble, the skills reference, the evidence-workflow chain and the
+  # paragraphs naming the Stage Description as the agent's specification all
+  # deleted, silently, with the three `refute prompt =~ "Git Workflow"` tests
+  # still green.
+  #
+  # Now the terminator is the FIRST `@context_anchors` entry occurring after the
+  # heading, and a heading we cannot BOUND is left in place and logged. Leaving
+  # a git block in a repo-less dispatch is a cosmetic defect; deleting the
+  # agent's entire preamble is a silent capability loss. Fail toward the
+  # cosmetic one, loudly.
   defp maybe_strip_git_workflow(prompt, task) do
     if deploy_repos_present?(task) do
       prompt
     else
-      Regex.replace(
-        ~r/\n## Git Workflow \(CRITICAL\).*?(?=\nThe attention signal|\z)/s,
-        prompt,
-        "\n"
-      )
+      strip_bounded_git_workflow(prompt, task)
     end
   end
 
+  defp strip_bounded_git_workflow(prompt, task) do
+    case :binary.match(prompt, "\n" <> @git_workflow_heading) do
+      :nomatch ->
+        prompt
+
+      {heading_at, _len} ->
+        tail = binary_part(prompt, heading_at, byte_size(prompt) - heading_at)
+
+        case first_context_anchor_offset(tail) do
+          nil ->
+            Logger.warning(
+              "Dispatch prompt for task #{contract_id(task, :id) || "unknown"} carries a " <>
+                "#{@git_workflow_heading} section that cannot be bounded: none of " <>
+                "#{inspect(@context_anchors)} follows it. Leaving the git block in place " <>
+                "rather than deleting to end-of-string. Restore one of those anchor " <>
+                "sentences to the template body, or add the sentence that replaced it to " <>
+                "HeartbeatScheduler.context_anchors/0."
+            )
+
+            prompt
+
+          anchor_at ->
+            head = binary_part(prompt, 0, heading_at)
+            rest = binary_part(tail, anchor_at, byte_size(tail) - anchor_at)
+            # Recurse so a body carrying two hardcoded git sections loses both,
+            # matching the old `Regex.replace/3`'s global behaviour. Each pass
+            # removes one heading, so this terminates.
+            strip_bounded_git_workflow(head <> "\n" <> rest, task)
+        end
+    end
+  end
+
+  # Lowest offset at which ANY declared context anchor occurs — the lazy
+  # quantifier's stopping point, expressed without a regex so there is no
+  # end-of-string alternative to fall through to. `nil` means unbounded.
+  defp first_context_anchor_offset(tail) do
+    @context_anchors
+    |> Enum.flat_map(fn anchor ->
+      case :binary.match(tail, anchor) do
+        {at, _len} -> [at]
+        :nomatch -> []
+      end
+    end)
+    |> Enum.min(fn -> nil end)
+  end
+
   defp maybe_insert_git_workflow(prompt, task) do
-    if deploy_repos_present?(task) and not String.contains?(prompt, "## Git Workflow (CRITICAL)") do
+    if deploy_repos_present?(task) and not String.contains?(prompt, @git_workflow_heading) do
       insert_before_context(prompt, git_workflow_section(task))
     else
       prompt
@@ -1965,12 +2163,13 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   defp insert_before_context(prompt, ""), do: prompt
 
   defp insert_before_context(prompt, addition) do
-    context_anchor = "\nThe attention signal"
-
-    if String.contains?(prompt, context_anchor) do
-      String.replace(prompt, context_anchor, addition <> context_anchor, global: false)
-    else
-      prompt <> addition
+    # First @context_anchors entry PRESENT in the prompt wins (list order, not
+    # string position). Falling through to `prompt <> addition` is deliberate:
+    # an operator-customized row may legitimately carry neither anchor, and
+    # appending the contract at the end is still better than dropping it.
+    case Enum.find(@context_anchors, &String.contains?(prompt, &1)) do
+      nil -> prompt <> addition
+      anchor -> String.replace(prompt, anchor, addition <> anchor, global: false)
     end
   end
 
@@ -2091,6 +2290,44 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     position = stage.position || 0
     "Plan: v#{plan.version} (stage #{position}/#{stage_count} — #{stage.name})\n"
   end
+
+  # The running stage's own description, labelled, or "" when there is nothing
+  # to carry (task 019fba28 stage 1).
+  #
+  # DELIBERATELY NOT TRUNCATED. A character cap on the one field that carries
+  # the implementer's constraints would reintroduce the exact defect this
+  # exists to close, at a different boundary: the block would render, look
+  # well-formed, and silently drop the back half of the specification. The
+  # length is already bounded by plan authoring. If a cap is ever wanted it
+  # belongs at plan-create time, where the author can see it, not silently at
+  # render time.
+  #
+  # Reads the field the way `contract_id/2` does — atom key first, string key
+  # second — because callers in this module pass structs in production and
+  # plain maps in tests.
+  defp format_stage_description(nil), do: ""
+
+  defp format_stage_description(stage) when is_map(stage) do
+    stage
+    |> Map.get(:description)
+    |> Kernel.||(Map.get(stage, "description"))
+    |> case do
+      text when is_binary(text) ->
+        case String.trim(text) do
+          "" ->
+            ""
+
+          trimmed ->
+            "## Stage Description (authored by the planner — this is your specification)\n\n" <>
+              trimmed <> "\n"
+        end
+
+      _ ->
+        ""
+    end
+  end
+
+  defp format_stage_description(_stage), do: ""
 
   defp project_attr(task, key, default) do
     project = Map.get(task, :project) || Map.get(task, "project") || %{}

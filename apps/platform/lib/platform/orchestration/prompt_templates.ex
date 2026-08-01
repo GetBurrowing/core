@@ -445,6 +445,20 @@ defmodule Platform.Orchestration.PromptTemplates do
         Example of a good stage description:
         "Add a module-level drafts Map to ComposeInput JS hook (assets/js/hooks/compose_input.js). On every input event, store the current textarea value keyed by space_id (read from data-space-id attribute on the element). On mounted(), restore any saved draft and push it to the server via compose_changed event. On compose_reset, delete the draft for that space."
 
+        ## A constraint binds only if you restate it inside a stage description
+
+        The task description above is rendered into THIS dispatch and no other. The execution dispatch and the human-gate (manual_approval) dispatch carry the task TITLE, the stage position and name, and that stage's own `description` — they do not carry the ticket body you are reading now. So anything in this ticket that must bind the implementer has to be restated inside the relevant stage's `description`, because that is the only authored text the implementer is sent.
+
+        Restate it in checkable form — name the file path, name the assertion, and say what failure looks like. "Follow the ticket's testing guidance" survives this boundary as nothing at all. "In apps/platform/test/platform/orchestration/foo_test.exs, assert the sentinel literal, not `stage.description` — an expectation re-derived from the function under test cannot fail for any value" survives as an instruction the implementer can act on and a reviewer can check.
+
+        The constraints that most often need restating, because they are written to bind the coder rather than you:
+        - **What NOT to do** — approaches already ruled out, and why they were ruled out.
+        - **What is out of scope** — the adjacent code the implementer must leave alone.
+        - **Mutation / anti-vacuity requirements** — which mutation to make, that the guard must be shown to fire, and that a non-detonation is a finding to report rather than something to quietly fix.
+        - **Any premise you verified while planning**, stated as verified with the file and line you checked, so the implementer does not re-litigate it or silently work around it.
+
+        This rule applies to itself: a planner that reads it and does not restate the ticket's binding constraints inside its stage descriptions has already lost them.
+
         ## Validation kinds
 
         Per-stage validations (attach to the implementation stage they protect):
@@ -527,6 +541,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "stage_id",
           "task_title",
           "stage_info",
+          "stage_description",
           "migration_slot_section",
           "git_workflow_block",
           "provider_specific_guidance",
@@ -538,14 +553,15 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         Task: {{task_title}}
         {{stage_info}}
+        {{stage_description}}
         {{provider_specific_guidance}}
 
         Push evidence using validation_pass or stage_complete as you finish each step. Post commentary to the execution space so reviewers can follow along. Use report_blocker if you are stuck.
         {{migration_slot_section}}
         {{git_workflow_block}}
-        The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
-        Start from the concrete stage contract and any attached/bundled skill content in that payload before re-fetching broad task/project context.
-        Avoid redundant task/plan lookup churn on the first turn unless an identifier is genuinely missing or the stage contract is ambiguous.
+        The Stage Description block above is your specification — it is the planner's own authored text for this stage, and it is the authority over any summary of it. The full task hierarchy (project, epic, task body, whole plan) is NOT in this message; fetch it with suite_task_get / suite_plan_get if you need it.
+        Start from that stage description and any attached/bundled skill content before re-fetching broad task/project context.
+        Avoid redundant task/plan lookup churn on the first turn — but if the Stage Description block is absent, empty, or looks cut off, call suite_plan_get and read the stage description there before doing anything else.
 
         {{federation_preamble}}
         """
@@ -723,6 +739,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "stage_id",
           "task_title",
           "stage_info",
+          "stage_description",
           "provider_specific_guidance",
           "federation_preamble"
         ],
@@ -732,6 +749,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         Task: {{task_title}}
         {{stage_info}}
+        {{stage_description}}
         {{provider_specific_guidance}}
 
         This prompt covers UI judgment (`manual_approval`) only. Behavioral end-to-end review is
@@ -755,7 +773,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           1. exercise the UI in a running environment,
           2. publish concrete evidence into the execution space,
           3. call `suite_review_request_create` for the provided `validation_id` with labelled checklist items and links to that evidence.
-        - Only call `suite_task_get`, `suite_plan_get`, or `suite_validation_list` if an identifier is actually missing or the dispatch context is contradicted by direct evidence.
+        - Only call `suite_task_get`, `suite_plan_get`, or `suite_validation_list` if an identifier is actually missing or the dispatch context is contradicted by direct evidence — but if the Stage Description block above is absent, empty, or looks cut off, call `suite_plan_get` and read the stage description there before judging anything.
         - Reach the evidence + review-request step in the same attempt unless a real blocker prevents it.
 
         ## Review rules
@@ -764,7 +782,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         - Do NOT self-approve `manual_approval` validations.
         - Do NOT call `task_update` for lifecycle status changes — review outcomes flow through validations and review requests.
 
-        The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
+        The Stage Description block above is the planner's own authored specification for this stage — judge the implementation against it, not against a summary of it. The full task hierarchy (project, epic, task body, whole plan) is NOT in this message; fetch it with suite_task_get / suite_plan_get if something you need is missing.
 
         {{federation_preamble}}
         """

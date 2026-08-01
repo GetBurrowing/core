@@ -4230,4 +4230,670 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert slug_lines == ["Task slug: #{id}"]
     end
   end
+
+  # ── Task 019fba28 stage 5 ────────────────────────────────────────────────
+  #
+  # Stages 1, 3 and 4 each added a value that travels from a private assigns
+  # map, through a mustache placeholder in a DB row, to an agent's screen.
+  # `PromptTemplates.interpolate/2` (prompt_templates.ex:145 — verified at this
+  # commit) resolves any placeholder it cannot find in the assigns to the EMPTY
+  # STRING. So the failure mode for all three is silent: drop the assign,
+  # rename it, or edit a row in the admin UI, and the dispatch keeps rendering,
+  # keeps looking well-formed, and quietly stops carrying the specification.
+  # That is the same silence this task was filed about, one layer down. These
+  # two describe blocks make it loud.
+  #
+  # WHAT IS DELIBERATELY NOT HERE:
+  # `assert get_template_by_slug(slug).content == default_content_for_slug(slug)`
+  # for every dispatch slug looks like protection against a MISSING
+  # FORCE-UPDATE MIGRATION, and against that specific failure it is vacuous: in
+  # this database every `dispatch.*` row is inserted by
+  # `20260324200001_seed_prompt_templates` calling `seed_defaults/0` against the
+  # CURRENT code, so the two sides are equal by construction and the assertion
+  # stays green with every force-update migration in the repo deleted.
+  # Environment reach cannot be tested from the test database; it is tested by
+  # the migration tests (`test/platform/repo/migrations/force_update_*.exs`),
+  # which run `up/0` against a deliberately stale row.
+  #
+  # That is NOT the same as saying the equality shape is worthless — stage 4
+  # measured the distinction and it is worth stating precisely. The equality
+  # DOES catch ROW DRIFT: a row left in a non-default state by something
+  # outside the sandbox. It did exactly that during stage 4, when a `mix run`
+  # render-diff script under `Sandbox.mode(:auto)` wrote the pre-change body
+  # into the live row and the two pre-existing guards at line 246 and line 1247
+  # of this file went red. So: vacuous against a missing migration, load-bearing
+  # against drift. Not added here (those two guards already cover the drift
+  # case for the rows this task touches), and named rather than dismissed.
+
+  defp s5_dispatch_descriptors do
+    PromptTemplates.default_templates()
+    |> Enum.filter(&String.starts_with?(&1.slug, "dispatch."))
+  end
+
+  defp s5_placeholders(content) do
+    ~r/\{\{(\w+)\}\}/
+    |> Regex.scan(content)
+    |> Enum.map(fn [_full, name] -> name end)
+    |> Enum.uniq()
+  end
+
+  defp s5_undeclared_placeholders(descriptor) do
+    s5_placeholders(descriptor.content) -- (descriptor.variables || [])
+  end
+
+  describe "dispatch.* placeholder/variable agreement (task 019fba28 stage 5)" do
+    # ONE DIRECTION ONLY: every `{{placeholder}}` in a body must be declared in
+    # that descriptor's `variables`. That is the direction that catches the
+    # renders-blank shape.
+    #
+    # The reverse direction (a declared variable no placeholder interpolates)
+    # is NOT asserted, because this repo has two deliberate instances of it and
+    # both are argued in place: `dispatch.deploying` keeps `repo_url` /
+    # `default_branch` so operator-customized rows that interpolate them keep
+    # working (prompt_templates.ex, the comment above `deploy_strategy_instructions`),
+    # and `dispatch.planning` keeps `task_id` after task 019fa469 stage 5
+    # deleted the ack preamble that used to interpolate it. Enforcing the
+    # reverse direction would require deleting those, which is a different
+    # argument than this stage's.
+    @s5_placeholder_exemptions %{
+      # `dispatch.scribe_completion` embeds the shared `task_ack` preamble, so
+      # its body carries `{{task_id}}` and `{{stage_id}}` — but it declares
+      # neither, and, more to the point, NO CODE PATH RENDERS THIS SLUG AT ALL
+      # (`grep -rn "render_template(" lib/` at this commit lists 16 call sites;
+      # none names it). Both placeholders therefore resolve to "" for any
+      # caller that ever does render it. This is a real instance of exactly the
+      # defect class this guard exists for, found by writing the guard.
+      #
+      # It is EXEMPTED rather than papered over. Adding the two names to
+      # `variables` would make this file green while advertising, in the admin
+      # variables sidebar, a contract no render site keeps. The honest fix is
+      # to drop the ack preamble from a stage-less template — the same shape
+      # task 019fa469 stage 5 removed from `dispatch.planning` — which changes
+      # `content` and therefore needs its own force-update migration. Out of
+      # scope for this stage; recorded here so it cannot be forgotten.
+      #
+      # The exemption is SELF-RETIRING: the test below asserts the violation is
+      # still present, so whoever fixes the descriptor is forced to delete this
+      # entry rather than leave a hole behind.
+      "dispatch.scribe_completion" => ["task_id", "stage_id"]
+    }
+
+    test "every {{placeholder}} in a dispatch.* body is declared in that descriptor's variables" do
+      descriptors = s5_dispatch_descriptors()
+
+      # Liveness. A loop over an empty list, or over descriptors whose bodies
+      # happen to carry no placeholders, passes without asserting anything.
+      assert length(descriptors) >= 9,
+             "expected the dispatch.* family to be present; found #{length(descriptors)}"
+
+      assert Enum.count(descriptors, &(s5_placeholders(&1.content) != [])) == length(descriptors),
+             "every dispatch.* body should interpolate at least one placeholder"
+
+      for descriptor <- descriptors do
+        exempt = Map.get(@s5_placeholder_exemptions, descriptor.slug, [])
+
+        for name <- s5_placeholders(descriptor.content), name not in exempt do
+          assert name in (descriptor.variables || []),
+                 "#{descriptor.slug} interpolates {{#{name}}} but does not declare " <>
+                   "\"#{name}\" in its variables list. interpolate/2 resolves an " <>
+                   "undeclared placeholder to the empty string, so this renders " <>
+                   "blank rather than failing — declare it, or delete the placeholder."
+        end
+      end
+    end
+
+    test "every recorded placeholder exemption is still necessary" do
+      for {slug, exempted} <- @s5_placeholder_exemptions do
+        descriptor = Enum.find(s5_dispatch_descriptors(), &(&1.slug == slug))
+
+        refute is_nil(descriptor),
+               "the exemption list names #{slug}, which is no longer a dispatch.* " <>
+                 "descriptor — delete the entry"
+
+        assert Enum.sort(s5_undeclared_placeholders(descriptor)) == Enum.sort(exempted),
+               "the #{slug} exemption is stale. It records " <>
+                 "#{inspect(Enum.sort(exempted))} as undeclared, but the descriptor " <>
+                 "now has #{inspect(Enum.sort(s5_undeclared_placeholders(descriptor)))}. " <>
+                 "If the violation was fixed, delete the exemption entry."
+      end
+    end
+  end
+
+  # Four DISTINCT sentinels — task title, task description, stage name, stage
+  # description — on one fixture, rendered through the real `dispatch_prompt/4`
+  # entry point so `DispatchPhase.resolve/3` does the routing for real.
+  #
+  # Every expectation below is a LITERAL. Never `stage.description`, and never
+  # a value recomputed by calling `format_stage_description/1` — an expectation
+  # derived from the function under test cannot fail for any value that
+  # function returns, which is how a working guard in this repo was silenced
+  # six days ago (`test/platform/tasks/deploy_merge_reconciler_test.exs`; the
+  # stage cited it as `:183`, the note actually sits at `:184-:190` in this
+  # checkout, commit 4849cbd1 on task/019fb949).
+  #
+  # The setup writes the shipped default body into the three live rows first,
+  # for the reason stages 1 and 3 give on their sibling files: the row in this
+  # database may predate the branch, and reading whatever happens to be there
+  # makes the test depend on the age of a Postgres volume. All writes are
+  # inside the DataCase sandbox transaction and roll back.
+  @s5_title_sentinel "S5-TITLE-SENTINEL-b41c: the task title travels on every dispatch"
+  @s5_task_body_sentinel "S5-TICKET-BODY-SENTINEL-9f27: ticket prose is PLANNER-ONLY material"
+  @s5_stage_name_sentinel "S5-STAGE-NAME-SENTINEL-3ae8"
+  @s5_stage_spec_sentinel "S5-STAGE-SPEC-SENTINEL-7d10: the planner's authored specification"
+  @s5_heading "## Stage Description (authored by the planner — this is your specification)"
+  @s5_slugs ["dispatch.planning", "dispatch.in_progress", "dispatch.in_review"]
+
+  defp s5_task(status) do
+    %{
+      id: "019fba28-fadf-7fb1-804e-e62817c06211",
+      title: @s5_title_sentinel,
+      # Real, non-empty, and distinct from every other sentinel — precisely
+      # so the refutes below have something to be wrong about. A refute whose
+      # fixture never creates the thing whose absence it asserts is worthless.
+      description: @s5_task_body_sentinel,
+      status: status,
+      priority: "medium",
+      project: %{repo_url: "https://github.com/test/router", default_branch: "main"}
+    }
+  end
+
+  # An implementation-shaped stage: pending `test_pass` routes to
+  # `dispatch.in_progress` through `DispatchPhase.resolve/3`.
+  defp s5_execution_plan_and_stage do
+    stage = %{
+      id: "019fba30-c97e-7217-835a-37d834db3cf5",
+      position: 1,
+      name: @s5_stage_name_sentinel,
+      description: @s5_stage_spec_sentinel,
+      validations: [%{id: "val-test-1", kind: "test_pass", status: "pending"}]
+    }
+
+    {%{version: 1, stages: [stage, %{}]}, stage}
+  end
+
+  # A human-gate stage: pending validations ALL `manual_approval` routes to
+  # `dispatch.in_review`.
+  defp s5_review_plan_and_stage do
+    stage = %{
+      id: "019fba30-c97e-7217-835a-37d834db3cf6",
+      position: 1,
+      name: @s5_stage_name_sentinel,
+      description: @s5_stage_spec_sentinel,
+      validations: [%{id: "val-manual-1", kind: "manual_approval", status: "pending"}]
+    }
+
+    {%{version: 1, stages: [stage, %{}]}, stage}
+  end
+
+  describe "rendered dispatch coverage — the specification and the ticket body (task 019fba28 stage 5)" do
+    setup do
+      for slug <- @s5_slugs do
+        descriptor = Enum.find(PromptTemplates.default_templates(), &(&1.slug == slug))
+        refute is_nil(descriptor), "the #{slug} descriptor must exist to be seeded"
+
+        case Repo.get_by(Platform.Orchestration.PromptTemplate, slug: slug) do
+          nil ->
+            {:ok, _} = PromptTemplates.create_template(descriptor)
+
+          existing ->
+            {:ok, _} =
+              PromptTemplates.update_template(existing, %{
+                content: descriptor.content,
+                variables: descriptor.variables
+              })
+        end
+      end
+
+      :ok
+    end
+
+    test "the stage-description sentinel reaches both execution dispatches" do
+      {in_progress_plan, in_progress_stage} = s5_execution_plan_and_stage()
+      {review_plan, review_stage} = s5_review_plan_and_stage()
+
+      rendered = [
+        {"dispatch.in_progress",
+         HeartbeatScheduler.dispatch_prompt(
+           s5_task("in_progress"),
+           in_progress_plan,
+           in_progress_stage
+         )},
+        {"dispatch.in_review",
+         HeartbeatScheduler.dispatch_prompt(s5_task("in_review"), review_plan, review_stage)}
+      ]
+
+      for {slug, prompt} <- rendered do
+        # Fixture liveness: two of the other three sentinels DO arrive, through
+        # separate assigns. Without this, a refute-only fixture cannot tell
+        # "the ticket body is correctly withheld" from "nothing rendered".
+        assert prompt =~ @s5_title_sentinel,
+               "#{slug} must interpolate the task title"
+
+        assert prompt =~ @s5_stage_name_sentinel,
+               "#{slug} must carry the stage name through stage_info"
+
+        assert prompt =~ @s5_heading,
+               "#{slug} must interpolate {{stage_description}}"
+
+        assert prompt =~ @s5_stage_spec_sentinel,
+               "#{slug} must carry the planner's authored stage description verbatim"
+
+        refute prompt =~ "{{stage_description}}",
+               "#{slug} must resolve the placeholder, not render it verbatim"
+      end
+    end
+
+    test "the ticket body is withheld from both execution dispatches and delivered to the planner" do
+      {in_progress_plan, in_progress_stage} = s5_execution_plan_and_stage()
+      {review_plan, review_stage} = s5_review_plan_and_stage()
+
+      in_progress_prompt =
+        HeartbeatScheduler.dispatch_prompt(
+          s5_task("in_progress"),
+          in_progress_plan,
+          in_progress_stage
+        )
+
+      review_prompt =
+        HeartbeatScheduler.dispatch_prompt(s5_task("in_review"), review_plan, review_stage)
+
+      # A planning dispatch has no plan and no stage — that IS the planning
+      # shape, and it is what `DispatchPhase.resolve/3` keys on.
+      planning_prompt = HeartbeatScheduler.dispatch_prompt(s5_task("planning"), nil, nil)
+
+      # The routing really happened. Without these, the assertions below could
+      # be describing three copies of the wrong prompt.
+      assert in_progress_prompt =~ "Git Workflow",
+             "the in_progress fixture must actually route to dispatch.in_progress"
+
+      assert review_prompt =~ "The Stage Description block above is the planner's own",
+             "the in_review fixture must actually route to dispatch.in_review"
+
+      assert planning_prompt =~ "## Stage scope (planner's responsibility)",
+             "the planning fixture must actually route to dispatch.planning"
+
+      # THE BOUNDARY THIS TASK IS ABOUT, asserted directly. The ticket body is
+      # the planner's input; the stage description is the implementer's and the
+      # reviewer's. If someone later "helpfully" interpolates the task body into
+      # an execution dispatch, this goes red and they have to argue option (a)
+      # again rather than land it silently.
+      refute in_progress_prompt =~ @s5_task_body_sentinel,
+             "the ticket body must NOT reach the implementer's dispatch"
+
+      refute review_prompt =~ @s5_task_body_sentinel,
+             "the ticket body must NOT reach the reviewer's dispatch"
+
+      # The positive half, on the SAME fixture: the same string does arrive
+      # where it belongs, so the two refutes above are about placement, not
+      # about a value that never existed.
+      assert planning_prompt =~ @s5_task_body_sentinel,
+             "the planner's dispatch must carry the ticket body — that is the " <>
+               "constraint channel the whole task is about"
+
+      assert planning_prompt =~ @s5_title_sentinel,
+             "the planner's dispatch must carry the task title"
+    end
+  end
+
+  # ══ Task 019fba28 v2 stage 3 — the context-anchor contract ═══════════════
+  #
+  # WHAT THIS DEFENDS. `HeartbeatScheduler.insert_before_context/2` splices
+  # each phase contract in just before a dispatch body's closing guidance
+  # block, and `maybe_strip_git_workflow/2` uses the same landmarks as the
+  # terminator that stops it deleting to end-of-string. Both read
+  # `HeartbeatScheduler.context_anchors/0`. Nothing in the repo previously
+  # stopped an editor from deleting the anchor sentence out of a template
+  # body — which is exactly what v1 stages 1 and 3 did, relocating both
+  # contracts to the end of every DB-rendered dispatch and, once the strip
+  # lost its terminator, amputating 8,023 bytes off a repo-less execution
+  # dispatch. Ten thousand tests stayed green.
+  #
+  # WHY THE ANCHOR LIST IS READ AND NOT COPIED. The literals come from
+  # `HeartbeatScheduler.context_anchors/0`, the accessor v2 stage 1 added for
+  # this purpose. Retyping them here would produce a guard that agrees with
+  # itself and drifts from the implementation it protects.
+  #
+  # WHY THIS LIVES IN prompt_templates_test.exs. The whole
+  # placeholder-and-anchor contract for the `dispatch.*` family is kept in one
+  # file: the placeholder/variable-agreement guard (v1 stage 5) is at :4321 and
+  # the rendered-output coverage at :4450. Line numbers verified at 80b77fd7.
+  #
+  # ── (C) ON THE PLANNER-FACING RULE, AND WHAT WE ARE NOT CLAIMING ────────
+  #
+  # v1 stage 4 added a rule to the `dispatch.planning` body telling planners to
+  # restate a ticket's stated constraints. That rule STAYS: it is correct by
+  # inspection, its render evidence was clean (+1,817 B, one added hunk, zero
+  # removed lines), and it costs nothing per dispatch.
+  #
+  # What does NOT stand is any claim that it has been SHOWN to change planner
+  # behaviour. The only A/B anyone has run is the v1 review's: both rendered
+  # prompts fed verbatim to `claude -p` with tools disallowed, n=2 per arm. The
+  # constraint sentinel appeared in MORE stages under the OLD prompt (3/4 and
+  # 2/4) than the new (1/4 and 0/4), and the out-of-scope boundary appeared in
+  # every plan in both arms. At n=2 that is neither evidence the rule is
+  # counterproductive nor evidence it works — the experiment as designed cannot
+  # measure what it claims.
+  #
+  # DO NOT RE-RUN IT AT THAT SIZE, and do not add a test asserting an effect on
+  # model prose. Separating a plausible effect size on a binary per-plan outcome
+  # needs on the order of TENS of plans per arm (a difference of ~0.5 in
+  # proportion at 80% power and alpha 0.05 needs roughly 20 per arm; anything
+  # subtler needs hundreds), and it needs a fixture ticket whose constraint a
+  # strong model would NOT restate by default — the v1 fixture's was restated in
+  # 4/4 control plans, so that arm had no headroom to show an effect in. Until
+  # both conditions are met the honest statement is "adopted on inspection,
+  # unmeasured", which is what this comment records. No code in the repo asserts
+  # the behavioural effect today, so there is nothing to delete.
+
+  # The dispatch slugs whose rendered output is post-processed by an `enrich_*`
+  # function in `HeartbeatScheduler`, plus `dispatch.fallback`.
+  #
+  # MEASURED CORRECTION to this stage's own description, which claims all five
+  # flow through an `enrich_*`: `dispatch.fallback` does NOT.
+  # `fallback_prompt/3` (heartbeat_scheduler.ex:585) renders and returns.
+  # Only `in_progress_prompt/4` (:447), `review_prompt/5` (:512 — serving BOTH
+  # `dispatch.in_review` and `dispatch.review_e2e` through one function) and
+  # `deploying_prompt/3` (:582) enrich. `dispatch.fallback` is kept in the
+  # matrix anyway: its body carries an anchor today, it is one `|> enrich_…`
+  # away from needing one, and a guard that only covers the slugs that
+  # currently happen to matter is the shape that let this regression through.
+  @s3_anchored_slugs [
+    "dispatch.in_progress",
+    "dispatch.in_review",
+    "dispatch.review_e2e",
+    "dispatch.deploying",
+    "dispatch.fallback"
+  ]
+
+  # The federation preamble's own heading. It is the LAST block of all five
+  # rendered bodies and sits immediately AFTER the anchor paragraph in every
+  # one of them (prompt_templates.ex: :562/:566, :785/:787, :871/:874,
+  # :950/:952, :1300/:1302). That adjacency is what makes the offset
+  # comparisons below meaningful.
+  @s3_preamble "## Subagent-spawn discipline"
+
+  # Heading each `enrich_*` post-processor splices in, per slug. `nil` means no
+  # post-processor runs for that slug — see the note on @s3_anchored_slugs.
+  @s3_contract_headings %{
+    "dispatch.in_progress" => "## Stage Execution Contract",
+    "dispatch.in_review" => "## Review Validation Contract",
+    "dispatch.review_e2e" => "## Review Validation Contract",
+    "dispatch.deploying" => "## Deploy Stage Contract",
+    "dispatch.fallback" => nil
+  }
+
+  # Opening line of each body, used purely as routing liveness. Without it a
+  # render that silently resolved to a DIFFERENT slug would satisfy every
+  # assertion below while measuring the wrong prompt.
+  @s3_routing_sentinels %{
+    "dispatch.in_progress" => "Plan approved — execute the current stage.",
+    "dispatch.in_review" => "Task is in review — produce a human-judgment review request",
+    "dispatch.review_e2e" => "Task is in behavioral review — execute each planner-authored",
+    "dispatch.deploying" => "Task is deploying — execute the deploy stage based on the resolved",
+    "dispatch.fallback" => "Review the task context and begin working."
+  }
+
+  @s3_repo_present "https://github.com/StartupSuite/core"
+  # `Tasks.project_repo_entry/2` treats `example.invalid` as no repo at all, so
+  # this is the repo-ABSENT arm without needing a blank url.
+  @s3_repo_absent "https://example.invalid/no-repo"
+
+  @s3_stage_sentinel "S3-ANCHOR-STAGE-SPEC-4c19"
+
+  describe "context anchors in the shipped dispatch bodies (task 019fba28 v2 stage 3)" do
+    test "the anchor list itself is non-empty and every entry is a line-start anchor" do
+      anchors = HeartbeatScheduler.context_anchors()
+
+      # Liveness for the whole describe block: every per-slug test below is a
+      # search over this list, and a search over an empty list would pass
+      # nothing and fail nothing.
+      # `length/1` rather than `anchors == []` so the type checker does not
+      # flag the comparison as statically decidable — it is, today, because the
+      # accessor returns a literal, and that is a stronger guarantee than this
+      # assertion. The assertion stays for the day the list is computed.
+      assert length(anchors) >= 1,
+             "HeartbeatScheduler.context_anchors/0 is empty; every anchor assertion in this " <>
+               "file degenerates to `false` and every one in stage 1's file to a no-op"
+
+      for anchor <- anchors do
+        assert String.starts_with?(anchor, "\n"),
+               "#{inspect(anchor)} does not begin with a newline. dispatch.in_review carries a " <>
+                 "mid-line, lower-cased \"the Stage Description block above\" in its first-turn " <>
+                 "rule (prompt_templates.ex:776); an anchor that can match mid-line would splice " <>
+                 "a contract into the middle of a bullet."
+      end
+    end
+
+    for slug <- @s3_anchored_slugs do
+      @s3_slug slug
+
+      test "#{slug}'s default body carries at least one declared context anchor" do
+        assert s3_anchors_in(PromptTemplates.default_content_for_slug(@s3_slug)) != [],
+               s3_anchor_failure_message(@s3_slug)
+      end
+    end
+
+    # NO UPSERT IN THIS DESCRIBE BLOCK, deliberately — that is what makes this
+    # test load-bearing. It compares the row as the migrations actually left it
+    # against the body the code declares today.
+    #
+    # Scope, stated precisely so the next reader does not repeat the blanket
+    # "this guard is vacuous" claim v1 attracted: it is vacuous against a
+    # MISSING FORCE-UPDATE MIGRATION reaching production, because a code-default
+    # edit with no migration leaves this test's own database untouched and green
+    # while a deployed environment keeps the old row. It is NOT vacuous against
+    # ROW DRIFT — a migration that rewrites a body without updating
+    # `default_templates/0`, or the reverse, reds here — and that is the
+    # condition v1 stage 5 documented. The rendered describe block below then
+    # upserts precisely so its renders exercise the CURRENT code default rather
+    # than whatever the migration froze.
+    test "the seeded rows still equal default_content_for_slug/1" do
+      for slug <- @s3_anchored_slugs do
+        row = Repo.get_by(Platform.Orchestration.PromptTemplate, slug: slug)
+
+        assert row,
+               "#{slug} is not seeded in this database, so no render below can be exercising " <>
+                 "the DB-row path"
+
+        assert row.content == PromptTemplates.default_content_for_slug(slug),
+               "#{slug}'s seeded body has drifted from default_content_for_slug/1. Either a " <>
+                 "migration rewrote the row without updating the code default, or the code " <>
+                 "default was edited and its force-update migration was not written."
+      end
+    end
+  end
+
+  describe "context anchors, rendered through the DB row (task 019fba28 v2 stage 3)" do
+    setup do
+      # UPSERT from `default_templates/0` so each render below exercises (a)
+      # the DB-row path rather than the hardcoded fallback, and (b) the body
+      # the code declares RIGHT NOW. The un-upserted drift comparison lives in
+      # the describe block above; doing both here would make one of them a
+      # tautology.
+      for slug <- @s3_anchored_slugs do
+        descriptor = Enum.find(PromptTemplates.default_templates(), &(&1.slug == slug))
+        refute is_nil(descriptor), "the #{slug} descriptor must exist to be seeded"
+
+        case Repo.get_by(Platform.Orchestration.PromptTemplate, slug: slug) do
+          nil ->
+            {:ok, _} = PromptTemplates.create_template(descriptor)
+
+          existing ->
+            {:ok, _} =
+              PromptTemplates.update_template(existing, %{
+                content: descriptor.content,
+                variables: descriptor.variables
+              })
+        end
+
+        assert Repo.get_by(Platform.Orchestration.PromptTemplate, slug: slug),
+               "#{slug} did not persist; the renders below would silently take the hardcoded " <>
+                 "fallback instead of the DB row"
+      end
+
+      :ok
+    end
+
+    # Five slugs x two repo states. The single uncovered cell of this matrix —
+    # repo-ABSENT `dispatch.in_progress` — is the one that shipped the
+    # regression, so the matrix is enumerated rather than sampled.
+    #
+    # ONE ASSERTION OF INTEREST PER TEST throughout. The first failing
+    # assertion ends a test, so two survival checks in one body would leave the
+    # second unreachable under exactly the mutation it exists to catch.
+    for slug <- @s3_anchored_slugs, repo_state <- [:present, :absent] do
+      @s3_slug slug
+      @s3_repo_state repo_state
+
+      test "#{slug} (repo #{repo_state}) routes to its own body" do
+        assert s3_render(@s3_slug, @s3_repo_state) =~ @s3_routing_sentinels[@s3_slug],
+               "the #{@s3_slug} / repo-#{@s3_repo_state} fixture did not route to #{@s3_slug}; " <>
+                 "every other assertion for this cell would be measuring the wrong prompt"
+      end
+
+      test "#{slug} (repo #{repo_state}) keeps the federation preamble" do
+        prompt = s3_render(@s3_slug, @s3_repo_state)
+
+        assert prompt =~ @s3_preamble,
+               """
+               The federation preamble is missing from a rendered #{@s3_slug} \
+               (repo #{@s3_repo_state}) dispatch — #{byte_size(prompt)} bytes rendered. This is \
+               the shape of the original regression: an unbounded git-workflow strip deleted \
+               everything from the "## Git Workflow (CRITICAL)" heading to end-of-string, \
+               costing 8,023 bytes of preamble, skills reference and evidence workflow. \
+               #{s3_anchor_failure_message(@s3_slug)}
+               """
+      end
+
+      test "#{slug} (repo #{repo_state}) keeps the planner's stage description" do
+        prompt = s3_render(@s3_slug, @s3_repo_state)
+
+        # `dispatch.review_e2e` and `dispatch.fallback` do not interpolate
+        # {{stage_description}} at all (the e2e body carries the planner's
+        # substance through pending_e2e_validations_json instead, and the
+        # fallback has no stage). Asserting presence there would be asserting a
+        # contract the templates do not have.
+        if @s3_slug in ["dispatch.in_progress", "dispatch.in_review"] do
+          assert prompt =~ @s3_stage_sentinel,
+                 "the planner's authored stage description did not survive into a rendered " <>
+                   "#{@s3_slug} (repo #{@s3_repo_state}) dispatch"
+        else
+          refute prompt =~ @s3_stage_sentinel,
+                 "#{@s3_slug} began interpolating {{stage_description}}. That may well be an " <>
+                   "improvement, but it is a template-content change: add the slug to the " <>
+                   "positive branch above and write its force-update migration."
+        end
+      end
+    end
+
+    # THE SENSITIVE HALF. A presence assertion passes in both the correct and
+    # the relocated layout; only an offset comparison can tell them apart, and
+    # relocation is what an anchor deletion actually causes now that stage 2
+    # has closed the amputation path. Stage 1 covered `dispatch.in_progress`
+    # and `dispatch.in_review` against the DB row and the fallback; these
+    # extend the same check to the two enriched slugs it did not reach.
+    for slug <- @s3_anchored_slugs,
+        repo_state <- [:present, :absent],
+        not is_nil(@s3_contract_headings[slug]) do
+      @s3_slug slug
+      @s3_repo_state repo_state
+
+      test "#{slug} (repo #{repo_state}) splices its contract BEFORE the preamble" do
+        prompt = s3_render(@s3_slug, @s3_repo_state)
+        heading = @s3_contract_headings[@s3_slug]
+
+        assert s3_offset!(prompt, heading) < s3_offset!(prompt, @s3_preamble),
+               """
+               #{heading} landed AFTER the federation preamble in a rendered #{@s3_slug} \
+               (repo #{@s3_repo_state}) dispatch, which means \
+               HeartbeatScheduler.insert_before_context/2 found no entry of \
+               #{inspect(HeartbeatScheduler.context_anchors())} in the body and fell through to \
+               its `prompt <> addition` clause. #{s3_anchor_failure_message(@s3_slug)}
+               """
+      end
+    end
+  end
+
+  # ── (A) helpers ─────────────────────────────────────────────────────────
+
+  defp s3_anchors_in(content) do
+    Enum.filter(HeartbeatScheduler.context_anchors(), &String.contains?(content, &1))
+  end
+
+  # The failure message the stage contract specifies, verbatim, plus the list
+  # it is talking about. Shared by the descriptor half and the rendered half so
+  # a reader who trips either gets the same instruction.
+  defp s3_anchor_failure_message(slug) do
+    "#{slug} no longer contains any of the declared context anchors " <>
+      "#{inspect(HeartbeatScheduler.context_anchors())}; " <>
+      "HeartbeatScheduler.insert_before_context/2 will append the contract at the end of the " <>
+      "prompt and maybe_strip_git_workflow/2 will refuse to bound the git block. Either keep " <>
+      "one of the anchor sentences in the body, or add the new sentence to @context_anchors."
+  end
+
+  defp s3_offset!(prompt, needle) do
+    case :binary.match(prompt, needle) do
+      {start, _len} ->
+        start
+
+      :nomatch ->
+        flunk("""
+        expected #{inspect(needle)} to be present in the rendered prompt so its byte offset \
+        could be compared, but it is absent entirely. Rendered prompt was #{byte_size(prompt)} \
+        bytes.
+        """)
+    end
+  end
+
+  defp s3_render(slug, repo_state) do
+    {plan, stage} = s3_plan_and_stage(slug)
+    HeartbeatScheduler.dispatch_prompt(s3_task(slug, repo_state), plan, stage)
+  end
+
+  defp s3_task(slug, repo_state) do
+    repo_url = if repo_state == :present, do: @s3_repo_present, else: @s3_repo_absent
+
+    %{
+      id: "019fba30-c97e-7217-835a-37d834db3d01",
+      title: "S3 anchor probe (#{slug} / #{repo_state})",
+      description: "S3-ANCHOR-TASK-BODY",
+      status: s3_status_for(slug),
+      priority: "medium",
+      # FIXTURE-SHAPE KEY, not a schema field. `resolve_execution_space_id/2`
+      # consults it before falling through to `ExecutionSpace.find_by_task_id/1`,
+      # which `dispatch.review_e2e` would otherwise reach on every render.
+      execution_space_id: "019fba28-fc37-7772-b2df-8e1c65c9cac9",
+      project: %{repo_url: repo_url, default_branch: "main"}
+    }
+  end
+
+  # Routing is driven by the STAGE's pending validation kinds through
+  # `DispatchPhase.resolve/3`, never by `task.status` — the status below is set
+  # consistently anyway so the fixture is not self-contradictory.
+  defp s3_status_for("dispatch.in_progress"), do: "in_progress"
+  defp s3_status_for("dispatch.in_review"), do: "in_review"
+  defp s3_status_for("dispatch.review_e2e"), do: "in_review"
+  defp s3_status_for("dispatch.deploying"), do: "deploying"
+  defp s3_status_for("dispatch.fallback"), do: "todo"
+
+  # `dispatch.fallback` is the NO-STAGE shape — that is how `DispatchPhase`
+  # selects it, and a fixture that handed it a stage would be routed elsewhere.
+  defp s3_plan_and_stage("dispatch.fallback"), do: {nil, nil}
+
+  defp s3_plan_and_stage(slug) do
+    stage = %{
+      id: "019fba30-c97e-7217-835a-37d834db3d02",
+      position: 1,
+      name: "S3 anchor probe stage",
+      description: "#{@s3_stage_sentinel} — the planner's authored specification for this stage.",
+      validations: [%{id: "val-s3-1", kind: s3_pending_kind(slug), status: "pending"}]
+    }
+
+    {%{version: 1, stages: [stage, %{}]}, stage}
+  end
+
+  defp s3_pending_kind("dispatch.in_progress"), do: "test_pass"
+  defp s3_pending_kind("dispatch.in_review"), do: "manual_approval"
+  defp s3_pending_kind("dispatch.review_e2e"), do: "e2e_behavior"
+  defp s3_pending_kind("dispatch.deploying"), do: "pr_merged"
 end

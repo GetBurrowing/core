@@ -207,6 +207,124 @@ defmodule Platform.Orchestration.DispatchPlanningAckTest do
     end
   end
 
+  describe "dispatch.planning states the stage-description boundary (task 019fba28 stage 4)" do
+    # Stages 1-3 of task 019fba28 made the running stage's `description` a
+    # field the execution and human-gate dispatches actually render. This block
+    # covers stage 4, the instruction half: the planning body must tell the
+    # planner that the ticket body reaches THIS dispatch and no other, so a
+    # constraint binds the implementer only when it is restated inside a stage
+    # `description`.
+    #
+    # Three distinct anchor phrases rather than one, following the
+    # spot-check convention in
+    # `test/platform/repo/migrations/seed_prompt_template_intent_classify_test.exs`.
+    # Each is a phrase that cannot survive deleting the section, and each sits
+    # on a single line in BOTH the descriptor body and the hardcoded fallback
+    # body (which wraps at a different width), so the same anchors check both
+    # renderers.
+    @rule_anchors [
+      "## A constraint binds only if you restate it inside a stage description",
+      "restated inside the relevant stage's `description`",
+      "survives this boundary as nothing at all",
+      "has already lost them."
+    ]
+
+    test "the shipped dispatch.planning default content carries the rule" do
+      content = PromptTemplates.default_content_for_slug("dispatch.planning")
+
+      # Positive pin FIRST — if `default_content_for_slug/1` returned nil or
+      # some other slug's body, the anchor assertions below would be checking
+      # the wrong string.
+      assert is_binary(content)
+
+      assert content =~ "You have been assigned a task that requires a plan",
+             "the string under test must actually be the planning body"
+
+      for anchor <- @rule_anchors do
+        assert content =~ anchor,
+               "dispatch.planning default content is missing the stage-description-boundary anchor #{inspect(anchor)}"
+      end
+    end
+
+    test "the rule reaches the RENDERED planning dispatch, not just the descriptor" do
+      # The descriptor assertion above cannot catch a body that never
+      # interpolates — a section added between two placeholders that the
+      # renderer drops, a slug that resolves elsewhere, an interpolation error
+      # swallowed into "". This drives the real entry point,
+      # `HeartbeatScheduler.dispatch_prompt/4`, against the seeded DB row
+      # (`render_template/2` is tried first and the row wins in every migrated
+      # environment).
+      force_default!("dispatch.planning")
+
+      output = HeartbeatScheduler.dispatch_prompt(planning_task(), nil, nil)
+
+      assert output =~ "You have been assigned a task that requires a plan",
+             "the planning body must actually have rendered"
+
+      assert String.length(output) > 200,
+             "an empty or truncated render must not satisfy the anchors below"
+
+      for anchor <- @rule_anchors do
+        assert output =~ anchor,
+               "the rendered planning dispatch is missing the anchor #{inspect(anchor)} — " <>
+                 "a rule the planner never reads binds nothing"
+      end
+
+      # Ordering pin: the rule has to be readable while the planner is still
+      # writing stage bodies, so it sits ABOVE "## Validation kinds" rather
+      # than after it.
+      rule_at = :binary.match(output, "## A constraint binds only if you restate it")
+      kinds_at = :binary.match(output, "## Validation kinds")
+
+      assert {rule_index, _} = rule_at
+      assert {kinds_index, _} = kinds_at
+
+      assert rule_index < kinds_index,
+             "the stage-description rule must precede the Validation kinds section"
+    end
+
+    test "the hardcoded fallback planning body carries the same rule (parity)" do
+      # `hardcoded_dispatch_planning/4` is documented as "kept in parity with
+      # the DB dispatch.planning template". An environment with no seeded row
+      # (fresh dev DB before migrations) takes it, and a rule that lives only
+      # in the DB body would simply relocate the gap to those environments.
+      template = Repo.get_by(PromptTemplate, slug: "dispatch.planning")
+      {:ok, _} = PromptTemplates.delete_template(template)
+      refute PromptTemplates.get_template_by_slug("dispatch.planning")
+
+      output = HeartbeatScheduler.dispatch_prompt(planning_task(), nil, nil)
+
+      assert output =~ "You have been assigned a task that requires a plan",
+             "the hardcoded fallback body must actually have rendered"
+
+      assert String.length(output) > 200
+
+      for anchor <- @rule_anchors do
+        assert output =~ anchor,
+               "the hardcoded planning fallback is missing the anchor #{inspect(anchor)}"
+      end
+    end
+
+    test "no other dispatch.* body carries the rule (scope control)" do
+      # The rule is addressed to the agent that AUTHORS stage descriptions.
+      # Nothing else reaches one, and every dispatch body is paid for on every
+      # dispatch forever. If a later change sprays this section across the
+      # other dispatch slugs, this goes red rather than silently inflating
+      # every execution prompt.
+      for slug <- @stage_scoped_slugs ++ ["dispatch.review_e2e", "dispatch.fallback"] do
+        content = PromptTemplates.default_content_for_slug(slug)
+
+        # Positive pin so the refute cannot pass on a nil/empty body.
+        assert is_binary(content) and String.length(content) > 200,
+               "#{slug} must have a real default body for this refute to mean anything"
+
+        refute content =~
+                 "## A constraint binds only if you restate it inside a stage description",
+               "#{slug} must not carry the planner-only stage-description rule"
+      end
+    end
+  end
+
   describe "stage-scoped dispatch slugs KEEP the ack (counterfactual)" do
     # The negative control for this whole stage. These slugs are only ever
     # rendered with a resolved running stage, `arm_liveness_timers/3` DOES arm

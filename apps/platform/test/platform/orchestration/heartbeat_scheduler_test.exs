@@ -1829,13 +1829,44 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert solo_guard == guard_of.(ctx.member, @preflight_member_id)
     end
 
-    # The strip regex runs from `## Git Workflow (CRITICAL)` to the next
-    # `The attention signal` marker with the /s flag, so the added lines are
-    # consumed along with the rest. Proof that it still holds lives in the two
-    # placeholder-repo tests ("in_progress omits git workflow for placeholder
-    # repos …" and "placeholder-repo stack member strips the whole Git Workflow
-    # + Stack Membership block"); this asserts the non-stack half directly so a
-    # regression here is not attributed to an unrelated file.
+    # HOW THE BLOCK ACTUALLY DISAPPEARS NOW (rewritten, task 019fba28 v2
+    # stage 3). This comment used to say the strip "runs from
+    # `## Git Workflow (CRITICAL)` to the next `The attention signal` marker
+    # with the /s flag, so the added lines are consumed along with the rest",
+    # and cited the two placeholder-repo tests as proof the invariant holds.
+    # BOTH HALVES OF THAT ARE NOW WRONG.
+    #
+    #   * There is no `/s` regex any more, and no `\z` alternative. v2 stage 2
+    #     rewrote `maybe_strip_git_workflow/2` to bound the block with the
+    #     FIRST `HeartbeatScheduler.context_anchors/0` entry occurring after
+    #     the heading, and to FAIL CLOSED — a heading it cannot bound is left
+    #     in place and a `Logger.warning` is emitted. The old `|\z` branch was
+    #     the regression: once v1 deleted "The attention signal …" from the
+    #     dispatch bodies, the lazy quantifier ran to end-of-string and a
+    #     repo-less execution dispatch lost 8,023 bytes.
+    #   * On the DB-ROW path nothing is stripped at all. v2 stage 2 also made
+    #     `in_progress_prompt/4` suppress `git_workflow_block` AT THE ASSIGN
+    #     when `deploy_repos_present?/1` is false, so a repo-less task is never
+    #     handed a block to delete. The strip is now a second line of defence
+    #     for operator-customized rows that hardcode a literal git section.
+    #
+    # AND THESE TESTS PROVE NOTHING ABOUT THAT PATH. This file is
+    # `use ExUnit.Case` with no DB ownership, so `PromptTemplates.render_template/2`
+    # rescues its `Repo` call and every `dispatch_prompt/4` here silently takes
+    # the HARDCODED FALLBACK. That is exactly how the regression shipped green.
+    # Worse, every repo-less check in this file is a bare
+    # `refute prompt =~ "Git Workflow (CRITICAL)"` — :381, :1885 and :2087 (the
+    # three v2 stage 2 named, renumbered by this comment's own insertion), plus
+    # :3021 and :3047. A refute cannot distinguish "correctly absent" from
+    # "catastrophically deleted": an over-consuming strip satisfies one
+    # perfectly.
+    #
+    # DB-path coverage, with survival ASSERTS and byte-offset comparisons,
+    # lives in `heartbeat_scheduler_context_anchor_test.exs` (v2 stage 1) and
+    # `heartbeat_scheduler_repoless_dispatch_test.exs` (v2 stage 2), both
+    # `use Platform.DataCase`. The test below is kept for what it does cover:
+    # that the non-stack preflight text travels with the block on the fallback
+    # path, so a regression there is not misattributed to another file.
     test "a placeholder repo_url still strips the preflight along with the block" do
       {plan, stage} = simple_plan_with_stage()
 
@@ -3047,6 +3078,273 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "Repository: #{@channel_url}"
       refute prompt =~ @core_url
       refute prompt =~ "Startup-Suite/core"
+    end
+  end
+
+  # ── Stage description in the execution dispatch (task 019fba28 stage 1) ───
+  #
+  # This module is `use ExUnit.Case` with no DB ownership, so
+  # `PromptTemplates.render_template/2` rescues its Repo call and every
+  # `dispatch_prompt/4` here takes the HARDCODED FALLBACK path. That is the
+  # branch these tests pin. The DB-row path — the one every migrated
+  # environment actually serves — is pinned separately in
+  # `heartbeat_scheduler_stage_description_test.exs`, which is `DataCase`.
+  # Both are needed: deleting the assign breaks both, deleting the
+  # `{{stage_description}}` placeholder from the template body breaks only the
+  # DataCase one, and that asymmetry is what proves each covers its own path.
+  describe "stage description in the in_progress dispatch — hardcoded fallback" do
+    # A LITERAL. Never `stage.description` — an expectation re-derived from the
+    # value under test cannot fail for any value that value takes.
+    @sentinel "MUTATION-CONTROL-SENTINEL: the guard must be shown to fire"
+    @heading "## Stage Description (authored by the planner — this is your specification)"
+
+    defp stage_description_task do
+      %{
+        id: "019fba28-fadf-7fb1-804e-e62817c06211",
+        title: "Carry the stage description into the execution dispatch",
+        description: "Ticket body — planner-only material, must NOT reach this dispatch.",
+        status: "in_progress",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"}
+      }
+    end
+
+    defp stage_description_plan(description) do
+      stage = %{
+        id: "019fba30-c97d-7869-a2ec-975f0f176d3a",
+        position: 1,
+        name: "coding",
+        description: description,
+        validations: []
+      }
+
+      {%{version: 1, stages: [stage, %{}]}, stage}
+    end
+
+    test "renders the stage's own description verbatim under a labelled heading" do
+      {plan, stage} = stage_description_plan("Prose before.\n\n#{@sentinel}\n\nProse after.")
+
+      prompt = HeartbeatScheduler.dispatch_prompt(stage_description_task(), plan, stage)
+
+      assert prompt =~ @heading,
+             "the execution dispatch must label the planner's stage description"
+
+      assert prompt =~ @sentinel,
+             "the stage description must reach the implementer verbatim"
+
+      assert prompt =~ "Prose after.",
+             "the block must not be truncated — the tail carries constraints too"
+    end
+
+    test "the description block lands after the Plan: v line, not in some other region" do
+      {plan, stage} = stage_description_plan(@sentinel)
+
+      prompt = HeartbeatScheduler.dispatch_prompt(stage_description_task(), plan, stage)
+
+      plan_line_at = :binary.match(prompt, "Plan: v1 (stage 1/2 — coding)") |> elem(0)
+      heading_at = :binary.match(prompt, @heading) |> elem(0)
+      sentinel_at = :binary.match(prompt, @sentinel) |> elem(0)
+
+      assert plan_line_at < heading_at,
+             "the stage-description heading must follow the plan/stage line"
+
+      assert heading_at < sentinel_at,
+             "the sentinel must sit under its own heading"
+    end
+
+    test "a nil description renders no heading and does not crash" do
+      {plan, stage} = stage_description_plan(nil)
+
+      prompt = HeartbeatScheduler.dispatch_prompt(stage_description_task(), plan, stage)
+
+      refute prompt =~ "## Stage Description",
+             "a nil description must render nothing at all — not a dangling heading"
+    end
+
+    test "a whitespace-only description renders no heading" do
+      {plan, stage} = stage_description_plan("   ")
+
+      prompt = HeartbeatScheduler.dispatch_prompt(stage_description_task(), plan, stage)
+
+      refute prompt =~ "## Stage Description",
+             "a whitespace-only description must render nothing at all"
+    end
+
+    test "a stage with no description key at all renders no heading" do
+      stage = %{id: "stage-no-desc", position: 1, name: "coding", validations: []}
+      plan = %{version: 1, stages: [stage]}
+
+      prompt = HeartbeatScheduler.dispatch_prompt(stage_description_task(), plan, stage)
+
+      refute prompt =~ "## Stage Description"
+    end
+
+    test "string-keyed description is read too (map shape from JSON payloads)" do
+      stage = %{
+        :id => "stage-string-key",
+        :position => 1,
+        :name => "coding",
+        :validations => [],
+        "description" => @sentinel
+      }
+
+      plan = %{version: 1, stages: [stage]}
+
+      prompt = HeartbeatScheduler.dispatch_prompt(stage_description_task(), plan, stage)
+
+      assert prompt =~ @sentinel
+    end
+  end
+
+  # ── Stage description in the in_review dispatch (task 019fba28 stage 3) ────
+  #
+  # Same path note as the block above: this module has no DB ownership, so
+  # every `dispatch_prompt/4` here renders the HARDCODED FALLBACK
+  # (`hardcoded_dispatch_in_review/4`). The DB-row path — the one every
+  # migrated environment actually serves — is pinned in
+  # `heartbeat_scheduler_in_review_stage_description_test.exs`, which is
+  # `DataCase`. The asymmetry is deliberate and is what proves each file covers
+  # its own branch: dropping the assign from `review_prompt/5` reddens the
+  # DataCase file only (this file never reaches that function), while dropping
+  # the `#{stage_description}` interpolation from the hardcoded body reddens
+  # this one only.
+  describe "stage description in the in_review dispatch — hardcoded fallback" do
+    # LITERALS. Never `stage.description`, and never a value recomputed by
+    # calling the formatter under test.
+    @review_sentinel "MUTATION-CONTROL-SENTINEL: the reviewer must be shown the specification"
+    @review_tail_sentinel "NOT-IN-SCOPE-SENTINEL: the tail of the block must survive too"
+    @review_heading "## Stage Description (authored by the planner — this is your specification)"
+
+    defp review_description_task(status \\ "in_review") do
+      %{
+        id: "019fba28-fadf-7fb1-804e-e62817c06211",
+        title: "Carry the stage description into the human-gate dispatch",
+        description: "Ticket body — planner-only material, must NOT reach this dispatch.",
+        status: status,
+        priority: "medium",
+        deploy_strategy: %{"type" => "pr_merge", "config" => %{"auto_merge" => false}},
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"}
+      }
+    end
+
+    # All-pending-manual_approval routes to `dispatch.in_review` via
+    # `DispatchPhase.resolve/3`.
+    defp review_description_plan(description) do
+      stage = %{
+        id: "019fba30-c97e-73b8-9480-9c93e6ce6a95",
+        position: 1,
+        name: "human gate",
+        description: description,
+        validations: [%{id: "val-manual-1", kind: "manual_approval", status: "pending"}]
+      }
+
+      {%{version: 1, stages: [stage, %{}]}, stage}
+    end
+
+    # The `"Deploy: "` prefix is what `DeployStageBuilder.deploy_stage_name?/1`
+    # keys on, so this routes for real rather than by assertion.
+    defp deploy_description_plan(description) do
+      stage = %{
+        id: "019fba30-dead-73b8-9480-9c93e6ce6a95",
+        position: 2,
+        name: "Deploy: PR merge",
+        description: description,
+        validations: [%{id: "val-pr-merged-1", kind: "pr_merged", status: "pending"}]
+      }
+
+      {%{version: 1, stages: [%{}, stage]}, stage}
+    end
+
+    test "renders the stage's own description verbatim under a labelled heading" do
+      {plan, stage} =
+        review_description_plan(
+          "Prose before.\n\n#{@review_sentinel}\n\n#{@review_tail_sentinel}\n"
+        )
+
+      prompt = HeartbeatScheduler.dispatch_prompt(review_description_task(), plan, stage)
+
+      assert prompt =~ @review_heading,
+             "the review dispatch must label the planner's stage description"
+
+      assert prompt =~ @review_sentinel,
+             "the reviewer judges the stage against this text — it must arrive verbatim"
+
+      assert prompt =~ @review_tail_sentinel,
+             "the block must not be truncated — the tail carries constraints too"
+    end
+
+    test "the description block lands after the Plan: v line, not in some other region" do
+      {plan, stage} = review_description_plan(@review_sentinel)
+
+      prompt = HeartbeatScheduler.dispatch_prompt(review_description_task(), plan, stage)
+
+      plan_line_at = :binary.match(prompt, "Plan: v1 (stage 1/2 — human gate)") |> elem(0)
+      heading_at = :binary.match(prompt, @review_heading) |> elem(0)
+      sentinel_at = :binary.match(prompt, @review_sentinel) |> elem(0)
+
+      assert plan_line_at < heading_at
+      assert heading_at < sentinel_at
+    end
+
+    test "nil and whitespace-only descriptions render no heading and do not crash" do
+      for description <- [nil, "   ", "\n\n"] do
+        {plan, stage} = review_description_plan(description)
+
+        prompt = HeartbeatScheduler.dispatch_prompt(review_description_task(), plan, stage)
+
+        refute prompt =~ "## Stage Description",
+               "description #{inspect(description)} must render nothing, not a dangling heading"
+      end
+    end
+
+    test "the fallback body no longer points the reviewer at a `context` field it cannot read" do
+      {plan, stage} = review_description_plan(@review_sentinel)
+
+      prompt = HeartbeatScheduler.dispatch_prompt(review_description_task(), plan, stage)
+
+      refute prompt =~ "Use it as your source of truth"
+
+      assert prompt =~
+               "The Stage Description block above is the planner's own authored specification"
+
+      assert prompt =~ "call `suite_plan_get` and read the stage description there"
+    end
+
+    test "DISCRIMINATION: the same description routed to deploy carries no sentinel" do
+      # Without this, the tests above cannot distinguish "in_review carries the
+      # description" from "every dispatch carries it" — which is the claim
+      # actually being made. Identical description text on both fixtures; the
+      # only difference is which stage `DispatchPhase.resolve/3` routes.
+      description = "Prose before.\n\n#{@review_sentinel}\n\n#{@review_tail_sentinel}\n"
+
+      {review_plan, review_stage} = review_description_plan(description)
+      {deploy_plan, deploy_stage} = deploy_description_plan(description)
+
+      review_prompt =
+        HeartbeatScheduler.dispatch_prompt(review_description_task(), review_plan, review_stage)
+
+      deploy_prompt =
+        HeartbeatScheduler.dispatch_prompt(
+          review_description_task("deploying"),
+          deploy_plan,
+          deploy_stage
+        )
+
+      # Positive half — proves the fixture text is capable of appearing at all.
+      assert review_prompt =~ @review_sentinel
+      assert review_prompt =~ @review_heading
+
+      # The routing really happened: this is the deploy body, not the review one.
+      assert deploy_prompt =~ "Deploy Stage Contract",
+             "the deploy fixture must actually route to dispatch.deploying, or the " <>
+               "refutes below are refuting the wrong prompt"
+
+      refute deploy_prompt =~ @review_heading,
+             "a deploy stage's description is engine-synthesized boilerplate from " <>
+               "DeployStageBuilder — carrying it buys nothing and costs context"
+
+      refute deploy_prompt =~ @review_sentinel
+      refute deploy_prompt =~ @review_tail_sentinel
     end
   end
 end
