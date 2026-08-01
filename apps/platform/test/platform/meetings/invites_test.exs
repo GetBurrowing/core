@@ -224,20 +224,36 @@ defmodule Platform.Meetings.InvitesTest do
       refute payload_a.guest_space_id == payload_b.guest_space_id
     end
 
-    test "requires display_name — returns a changeset error, not a raised Postgrex error" do
+    # The shape assertions below (`{:error, changeset}`, an error keyed
+    # `:display_name`, zero rows) are NOT enough on their own, and a mutation
+    # probe proved it: deleting the changeset-level `validate_required` left
+    # every one of them green. `Invite.changeset/2` already carries
+    # `check_constraint(:display_name, name: :meeting_invites_identity_check)`,
+    # so the database's own CHECK produces the same tuple with the same error
+    # key — the caller cannot tell "refused before the query" from "refused by
+    # Postgres" by shape.
+    #
+    # The difference is real, though: the pre-flight validation costs no round
+    # trip and, unlike a constraint error, cannot abort an enclosing
+    # transaction a future caller wraps this in. So the error's PROVENANCE is
+    # asserted: `validation: :required` only appears when the changeset
+    # rejected it, and `constraint: :check` only when Postgres did.
+    test "requires display_name — refused by the changeset, before Postgres sees it" do
       meeting = meeting!()
 
       assert {:error, changeset} = Meetings.invite_guest(meeting, %{email: "nobody@example.com"})
       refute changeset.valid?
-      assert Keyword.has_key?(changeset.errors, :display_name)
+      assert {_msg, meta} = changeset.errors[:display_name]
+      assert meta[:validation] == :required
       assert count_invites(meeting.id) == 0
     end
 
-    test "a blank display_name is refused too" do
+    test "a blank display_name is refused too — cast empties it, validation catches it" do
       meeting = meeting!()
 
       assert {:error, changeset} = Meetings.invite_guest(meeting, %{display_name: "   "})
-      assert Keyword.has_key?(changeset.errors, :display_name)
+      assert {_msg, meta} = changeset.errors[:display_name]
+      assert meta[:validation] == :required
       assert count_invites(meeting.id) == 0
     end
 
