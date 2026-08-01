@@ -288,6 +288,119 @@ defmodule Platform.Meetings.MeetingContextTest do
     end
   end
 
+  describe "list_meetings_in_range/3" do
+    # Every fixture meeting gets a 30-minute intended window; only
+    # `scheduled_start_at` is what the range query places rows by.
+    defp scheduled_meeting(project, name, start_at) do
+      {:ok, meeting} =
+        Meetings.create_meeting(%{
+          project_id: project.id,
+          name: name,
+          scheduled_start_at: start_at,
+          scheduled_end_at: DateTime.add(start_at, 30 * 60, :second)
+        })
+
+      meeting
+    end
+
+    defp slugs_in_range(from, to, opts \\ []) do
+      from |> Meetings.list_meetings_in_range(to, opts) |> Enum.map(& &1.slug)
+    end
+
+    test "returns only the meetings intended inside the window" do
+      project = create_project()
+      from = ~U[2026-09-07 00:00:00.000000Z]
+      to = ~U[2026-09-08 00:00:00.000000Z]
+
+      scheduled_meeting(project, "In Morning", ~U[2026-09-07 09:00:00.000000Z])
+      scheduled_meeting(project, "In Evening", ~U[2026-09-07 20:00:00.000000Z])
+
+      # Rows on BOTH sides of the window. Without them a "range" test passes
+      # identically against a query carrying no `where` clause at all: the
+      # out-of-window rows are what make the filter observable.
+      scheduled_meeting(project, "Prior Day", ~U[2026-09-06 09:00:00.000000Z])
+      scheduled_meeting(project, "Next Day", ~U[2026-09-09 09:00:00.000000Z])
+
+      assert slugs_in_range(from, to) == ["in-morning", "in-evening"]
+    end
+
+    test "the window is half-open: a row exactly at `from` is in, one exactly at `to` is out" do
+      project = create_project()
+      from = ~U[2026-09-14 00:00:00.000000Z]
+      to = ~U[2026-09-15 00:00:00.000000Z]
+
+      scheduled_meeting(project, "At From", from)
+      scheduled_meeting(project, "At To", to)
+
+      # A closed-on-both-ends window would return "at-to" here AND again from
+      # the next day's call, putting one meeting in two columns of a grid.
+      assert slugs_in_range(from, to) == ["at-from"]
+    end
+
+    test "orders by intended time, not by creation order" do
+      project = create_project()
+      from = ~U[2026-09-21 00:00:00.000000Z]
+      to = ~U[2026-09-22 00:00:00.000000Z]
+
+      # Creation order is deliberately neither the intended order nor its
+      # reverse, so BOTH `asc: inserted_at` and `desc: inserted_at` produce a
+      # different list than the assertion below.
+      scheduled_meeting(project, "Mid", ~U[2026-09-21 11:00:00.000000Z])
+      scheduled_meeting(project, "Late", ~U[2026-09-21 13:00:00.000000Z])
+      scheduled_meeting(project, "Early", ~U[2026-09-21 09:00:00.000000Z])
+
+      assert slugs_in_range(from, to) == ["early", "mid", "late"]
+    end
+
+    test "falls back to inserted_at only to break a tie at the same intended instant" do
+      project = create_project()
+      from = ~U[2026-09-28 00:00:00.000000Z]
+      to = ~U[2026-09-29 00:00:00.000000Z]
+      same_instant = ~U[2026-09-28 10:00:00.000000Z]
+
+      scheduled_meeting(project, "Tie First", same_instant)
+      scheduled_meeting(project, "Tie Second", same_instant)
+
+      assert slugs_in_range(from, to) == ["tie-first", "tie-second"]
+    end
+
+    test "narrows to :project_id when given and spans projects when it is not" do
+      a = create_project()
+      b = create_project()
+      from = ~U[2026-10-05 00:00:00.000000Z]
+      to = ~U[2026-10-06 00:00:00.000000Z]
+
+      scheduled_meeting(a, "Project A Sync", ~U[2026-10-05 09:00:00.000000Z])
+      scheduled_meeting(b, "Project B Sync", ~U[2026-10-05 10:00:00.000000Z])
+
+      assert slugs_in_range(from, to, project_id: a.id) == ["project-a-sync"]
+      assert slugs_in_range(from, to, project_id: b.id) == ["project-b-sync"]
+      assert slugs_in_range(from, to) == ["project-a-sync", "project-b-sync"]
+    end
+
+    test "excludes ad-hoc meetings with no intended time, which list_all_meetings/0 still returns" do
+      project = create_project()
+      from = ~U[2026-10-12 00:00:00.000000Z]
+      to = ~U[2026-10-13 00:00:00.000000Z]
+
+      {:ok, ad_hoc} = Meetings.create_meeting(%{project_id: project.id, name: "Ad Hoc"})
+      scheduled = scheduled_meeting(project, "Scheduled", ~U[2026-10-12 09:00:00.000000Z])
+
+      assert ad_hoc.scheduled_start_at == nil
+
+      # The presence half of the pair. Asserting only the absence below would
+      # also pass if the row had never been inserted at all.
+      all_ids = Meetings.list_all_meetings() |> Enum.map(& &1.id)
+      assert ad_hoc.id in all_ids
+      assert scheduled.id in all_ids
+
+      # The absence half: `scheduled_start_at IS NULL` never satisfies `>=`.
+      range_ids = from |> Meetings.list_meetings_in_range(to) |> Enum.map(& &1.id)
+      refute ad_hoc.id in range_ids
+      assert range_ids == [scheduled.id]
+    end
+  end
+
   describe "start_meeting/1 and end_meeting/1" do
     test "scheduled → live → ended lifecycle stamps timestamps" do
       project = create_project()

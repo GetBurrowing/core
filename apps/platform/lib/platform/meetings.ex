@@ -437,6 +437,54 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  List the meetings *intended* to happen inside a time window, in intended
+  order. This is the query a calendar grid places rows with, so its edges are
+  part of its contract:
+
+    * The window is HALF-OPEN — `[from, to)`. A meeting is returned when
+      `scheduled_start_at >= from` and `scheduled_start_at < to`. Closed on
+      both ends, a meeting sitting exactly on a day boundary would come back
+      in BOTH adjacent day columns of a grid rendered by calling this once
+      per day.
+
+    * Only `scheduled_start_at` is compared. A meeting is placed by when it
+      is meant to START; a long meeting overlapping the window but starting
+      before `from` is NOT returned.
+
+    * Rows with `scheduled_start_at IS NULL` — the ad-hoc "started, never
+      scheduled" meetings — are excluded by construction, because a `>=`
+      comparison against NULL is never true in SQL. That exclusion is
+      INTENDED, not an oversight: a meeting with no intended time has no
+      cell to sit in. Do not "fix" it with an `or is_nil(m.scheduled_start_at)`;
+      `list_all_meetings/0` is the query that still sees those rows.
+
+    * Ordering is `asc: scheduled_start_at` — intended time first — with
+      `asc: inserted_at` only as a deterministic tiebreak between two
+      meetings intended at the same instant. `inserted_at` is never the
+      primary sort here; it answers "when was this created", not "when is
+      this".
+
+  Options:
+
+    * `:project_id` — when given, narrows to that project. When absent the
+      query deliberately spans projects, matching the unscoped
+      `meetings(scheduled_start_at)` index.
+  """
+  @spec list_meetings_in_range(DateTime.t(), DateTime.t(), keyword()) :: [Meeting.t()]
+  def list_meetings_in_range(%DateTime{} = from, %DateTime{} = to, opts \\ []) do
+    Meeting
+    |> where([m], m.scheduled_start_at >= ^from and m.scheduled_start_at < ^to)
+    |> scope_range_to_project(Keyword.get(opts, :project_id))
+    |> order_by([m], asc: m.scheduled_start_at, asc: m.inserted_at)
+    |> Repo.all()
+  end
+
+  defp scope_range_to_project(query, nil), do: query
+
+  defp scope_range_to_project(query, project_id),
+    do: where(query, [m], m.project_id == ^project_id)
+
+  @doc """
   Transition a meeting from `scheduled` to `live`, stamping `started_at`.
 
   Returns `{:error, changeset}` (with an `:status` error) on any illegal
