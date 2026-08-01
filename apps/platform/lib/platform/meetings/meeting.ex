@@ -40,6 +40,13 @@ defmodule Platform.Meetings.Meeting do
     field(:livekit_room_name, :string)
     field(:started_at, :utc_datetime_usec)
     field(:ended_at, :utc_datetime_usec)
+    # INTENDED time, as opposed to the actuals above (task 019fb953). Both
+    # endpoints are stored rather than a start plus a duration, so the
+    # calendar grid, the .ics renderer and the notification copy read one
+    # source instead of each recomputing a duration. Both nil means "ad hoc
+    # — started, never scheduled", which is a supported state.
+    field(:scheduled_start_at, :utc_datetime_usec)
+    field(:scheduled_end_at, :utc_datetime_usec)
     # Idempotency stamp for `:meeting_started` push fan-out (task 019edbc1
     # stage 3). `Platform.Meetings.mark_notified/1` uses an atomic
     # compare-and-swap on this column to guarantee exactly-one notification
@@ -53,25 +60,60 @@ defmodule Platform.Meetings.Meeting do
   def statuses, do: @statuses
 
   @cast_fields ~w(project_id host_participant_id chat_space_id slug name status
-                  livekit_room_name started_at ended_at)a
+                  livekit_room_name started_at ended_at
+                  scheduled_start_at scheduled_end_at)a
   @required_fields ~w(project_id chat_space_id slug name livekit_room_name)a
 
   @doc """
   Changeset for creating a meeting.
 
-  Validates required fields, the status enum, and the per-project slug +
-  global livekit_room_name unique constraints.
+  Validates required fields, the status enum, the intended-time window, and
+  the per-project slug + global livekit_room_name unique constraints.
+
+  The intended-time pair (`scheduled_start_at` / `scheduled_end_at`) is
+  optional — deliberately absent from `@required_fields`, because the ad-hoc
+  "start a meeting now" path creates a row with neither.
   """
   def changeset(meeting, attrs) do
     meeting
     |> cast(attrs, @cast_fields)
     |> validate_required(@required_fields)
     |> validate_inclusion(:status, @statuses)
+    |> validate_scheduled_window()
     |> unique_constraint([:project_id, :slug], name: :meetings_project_id_slug_index)
     |> unique_constraint(:livekit_room_name)
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:host_participant_id)
     |> foreign_key_constraint(:chat_space_id)
+  end
+
+  # The intended-time pair is both-nil or both-present with the end strictly
+  # after the start. Every failure keys on `:scheduled_end_at`, because in all
+  # three cases it is the end that is wrong or missing.
+  #
+  # A start with no end is rejected rather than defaulted. A calendar block
+  # and an iCal `VEVENT` both need an end, and with no `duration` column there
+  # is nothing to synthesise one from — a schema-level default duration is the
+  # duration column under another name, so a caller that only collects a start
+  # must pick an explicit end at its own call site.
+  defp validate_scheduled_window(changeset) do
+    case {get_field(changeset, :scheduled_start_at), get_field(changeset, :scheduled_end_at)} do
+      {nil, nil} ->
+        changeset
+
+      {nil, _end_at} ->
+        add_error(changeset, :scheduled_end_at, "cannot be set without scheduled_start_at")
+
+      {_start_at, nil} ->
+        add_error(changeset, :scheduled_end_at, "is required when scheduled_start_at is set")
+
+      {start_at, end_at} ->
+        if DateTime.compare(end_at, start_at) == :gt do
+          changeset
+        else
+          add_error(changeset, :scheduled_end_at, "must be after scheduled_start_at")
+        end
+    end
   end
 
   @doc """
