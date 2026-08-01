@@ -9,6 +9,7 @@ defmodule Platform.Meetings.MeetingContextTest do
 
   alias Platform.Chat
   alias Platform.Meetings
+  alias Platform.Meetings.Meeting
   alias Platform.Repo
   alias Platform.Tasks
 
@@ -144,6 +145,111 @@ defmodule Platform.Meetings.MeetingContextTest do
                  project_id: project.id,
                  name: "Another",
                  slug: "dup"
+               })
+
+      assert Repo.aggregate(Chat.Space, :count) == spaces_before
+    end
+
+    test "persists the intended-time pair to the columns, not just the returned struct" do
+      project = create_project()
+      start_at = ~U[2026-08-04 15:00:00.000000Z]
+      end_at = ~U[2026-08-04 15:30:00.000000Z]
+
+      assert {:ok, meeting} =
+               Meetings.create_meeting(%{
+                 project_id: project.id,
+                 name: "Roadmap",
+                 scheduled_start_at: start_at,
+                 scheduled_end_at: end_at
+               })
+
+      assert meeting.scheduled_start_at == start_at
+      assert meeting.scheduled_end_at == end_at
+
+      # Read the row back rather than trusting the struct: `create_meeting/1`
+      # builds an explicit whitelist map instead of forwarding `attrs`, so a
+      # field missing from that map is dropped before the insert. The returned
+      # struct would still carry the value if it were merely echoed, which is
+      # exactly the bug this asserts against.
+      reloaded = Repo.get(Meeting, meeting.id)
+      assert reloaded.scheduled_start_at == start_at
+      assert reloaded.scheduled_end_at == end_at
+    end
+
+    test "accepts string-keyed intended times" do
+      project = create_project()
+      start_at = ~U[2026-08-05 09:00:00.000000Z]
+      end_at = ~U[2026-08-05 10:00:00.000000Z]
+
+      assert {:ok, meeting} =
+               Meetings.create_meeting(%{
+                 "project_id" => project.id,
+                 "name" => "Planning",
+                 "scheduled_start_at" => start_at,
+                 "scheduled_end_at" => end_at
+               })
+
+      reloaded = Repo.get(Meeting, meeting.id)
+      assert reloaded.scheduled_start_at == start_at
+      assert reloaded.scheduled_end_at == end_at
+    end
+
+    test "an ad-hoc meeting is created with no intended time and still starts" do
+      project = create_project()
+
+      assert {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: "Ad Hoc"})
+
+      assert meeting.scheduled_start_at == nil
+      assert meeting.scheduled_end_at == nil
+      assert Repo.get(Meeting, meeting.id).scheduled_start_at == nil
+      assert Repo.get(Meeting, meeting.id).scheduled_end_at == nil
+
+      # This is the path `MeetingLive.maybe_start_meeting/1` drives on every
+      # auto-join. Starting must stamp the actual and leave the intent alone —
+      # a meeting can be live without ever having been on anyone's calendar.
+      assert {:ok, started} = Meetings.start_meeting(meeting)
+      assert started.status == "live"
+      assert started.started_at != nil
+
+      reloaded = Repo.get(Meeting, meeting.id)
+      assert reloaded.status == "live"
+      assert reloaded.started_at != nil
+      assert reloaded.scheduled_start_at == nil
+      assert reloaded.scheduled_end_at == nil
+    end
+
+    test "an inverted intended-time pair errors and rolls back the backing chat space" do
+      project = create_project()
+
+      spaces_before = Repo.aggregate(Chat.Space, :count)
+      meetings_before = Repo.aggregate(Meeting, :count)
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Meetings.create_meeting(%{
+                 project_id: project.id,
+                 name: "Backwards",
+                 scheduled_start_at: ~U[2026-08-06 16:00:00.000000Z],
+                 scheduled_end_at: ~U[2026-08-06 15:00:00.000000Z]
+               })
+
+      assert {"must be after scheduled_start_at", _} = changeset.errors[:scheduled_end_at]
+
+      # The insert runs inside `Repo.transaction/1`, so a rejected intent must
+      # take the already-created chat space down with it rather than leaving an
+      # orphan space that no meeting points at.
+      assert Repo.aggregate(Chat.Space, :count) == spaces_before
+      assert Repo.aggregate(Meeting, :count) == meetings_before
+    end
+
+    test "a half-populated intended-time pair errors" do
+      project = create_project()
+      spaces_before = Repo.aggregate(Chat.Space, :count)
+
+      assert {:error, %Ecto.Changeset{}} =
+               Meetings.create_meeting(%{
+                 project_id: project.id,
+                 name: "Open Ended",
+                 scheduled_start_at: ~U[2026-08-07 16:00:00.000000Z]
                })
 
       assert Repo.aggregate(Chat.Space, :count) == spaces_before

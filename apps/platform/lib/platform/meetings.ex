@@ -258,7 +258,19 @@ defmodule Platform.Meetings do
   Required attrs: `:project_id`, `:name`.
   Optional: `:slug` (auto-generated from `:name` when omitted, with a
   numeric suffix appended if it collides within the project),
-  `:host_participant_id`.
+  `:host_participant_id`, `:scheduled_start_at`, `:scheduled_end_at`.
+
+  `:scheduled_start_at` / `:scheduled_end_at` are the meeting's INTENDED
+  time, as opposed to the `started_at` / `ended_at` actuals that
+  `start_meeting/1` and `end_meeting/1` stamp. They are validated as a pair
+  by `Meeting.changeset/2` — both nil or both present with the end strictly
+  after the start — and a violation comes back as `{:error, changeset}`,
+  rolling back the backing chat space with it.
+
+  Omitting them is a supported state, not a defect: an ad-hoc meeting is one
+  that was started but never scheduled, so both columns stay nil for its
+  whole life. Nothing here synthesises a missing endpoint from the other —
+  a caller that has only a start must choose an explicit end itself.
 
   Wraps the backing chat-space creation and the meeting insert in a single
   `Repo.transaction/1` — if either fails, neither is persisted. The
@@ -313,7 +325,14 @@ defmodule Platform.Meetings do
             slug: slug,
             name: name,
             status: "scheduled",
-            livekit_room_name: "meeting-#{meeting_id}"
+            livekit_room_name: "meeting-#{meeting_id}",
+            # The intended-time pair has to be listed here explicitly: this map
+            # is a whitelist, not `attrs`, so any key missing from it is
+            # silently dropped before the changeset ever sees it. Passing nil
+            # for both leaves the ad-hoc path byte-for-byte unchanged, since
+            # `cast/3` treats nil for an already-nil field as no change.
+            scheduled_start_at: attrs[:scheduled_start_at],
+            scheduled_end_at: attrs[:scheduled_end_at]
           }
 
           changeset =
