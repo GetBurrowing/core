@@ -485,6 +485,95 @@ defmodule Platform.Meetings do
     do: where(query, [m], m.project_id == ^project_id)
 
   @doc """
+  Was this meeting *meant* to have happened by `now`, and never started?
+
+  This is a REPORT over the `(status, scheduled_start_at, started_at)`
+  triple — NOT a state. Nothing writes a `"missed"` status; `@statuses` in
+  `Platform.Meetings.Meeting` stays `~w(scheduled live ended)` and
+  `Meeting.status_changeset/3` remains its sole writer. "Missed" is a
+  question you ask a row, not a thing that happens to it.
+
+  Deriving `status` from the clock instead was considered and rejected: a
+  meeting would flip to `"live"` at its scheduled minute with nobody in the
+  room, and `MeetingLive.maybe_start_meeting/1` — which pattern-matches
+  `%{status: "scheduled"}` to decide whether to start — would never fire
+  again. A fourth `"missed"` status was rejected for the same family of
+  reasons: it would need a transition rule, a writer and a sweeper, and
+  every existing three-way `status_bucket/1` clause would silently funnel it
+  into `:upcoming`.
+
+  All four clauses are load-bearing and each excludes a different row:
+
+    * `status == "scheduled"` — a live or ended meeting is never missed.
+    * `scheduled_start_at` non-nil — an ad-hoc meeting (no intended time)
+      can't be missed, because nothing was ever intended.
+    * `scheduled_start_at < now` — a meeting intended for the future is not
+      missed yet, it is merely upcoming.
+    * `started_at` is nil — a meeting that started is not missed, whatever
+      its status column says.
+
+  Clauses 1 and 4 overlap in practice: `start_meeting/1` flips the status
+  and stamps `started_at` in a single update, so no row the application
+  writes distinguishes them. They are kept separate deliberately, so the
+  predicate stays correct against a row that acquired a `started_at` by any
+  other path.
+
+  `now` is injectable so callers (and tests) never have to sleep.
+  """
+  @spec missed?(Meeting.t(), DateTime.t()) :: boolean()
+  def missed?(meeting, now \\ DateTime.utc_now())
+
+  def missed?(%Meeting{} = meeting, %DateTime{} = now) do
+    meeting.status == "scheduled" and
+      not is_nil(meeting.scheduled_start_at) and
+      DateTime.compare(meeting.scheduled_start_at, now) == :lt and
+      is_nil(meeting.started_at)
+  end
+
+  @doc """
+  The query counterpart of `missed?/2`: every meeting intended before `now`
+  that never started, in intended order.
+
+  Same caveat as `missed?/2` — this is a report, not a state transition. It
+  reads rows; it writes nothing, and no row is marked as having been
+  reported.
+
+  The `where` clauses mirror `missed?/2` one-for-one so the two cannot drift.
+  Note that `not is_nil(m.scheduled_start_at)` is *redundant in SQL*: under
+  three-valued logic `NULL < now` is NULL, never true, so the ad-hoc rows are
+  already excluded by the comparison alone. It is kept because deleting it
+  from the Elixir predicate is a real bug (`DateTime.compare(nil, now)`
+  raises), and a reader comparing the two implementations should see the same
+  four clauses in the same order rather than having to re-derive the NULL
+  semantics.
+
+  Ordering is `asc: scheduled_start_at` — oldest missed intent first, which
+  is the order a "you missed these" report wants to read in. Unlike
+  `list_meetings_in_range/3` there is no `inserted_at` tiebreak, so two
+  meetings intended at the same instant come back in an unspecified order.
+
+  Options:
+
+    * `:project_id` — when given, narrows to that project. When absent the
+      query spans projects.
+    * `:now` — the instant to compare against, defaulting to
+      `DateTime.utc_now/0`. Injectable so tests never sleep.
+  """
+  @spec list_missed_meetings(keyword()) :: [Meeting.t()]
+  def list_missed_meetings(opts \\ []) do
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+
+    Meeting
+    |> where([m], m.status == "scheduled")
+    |> where([m], not is_nil(m.scheduled_start_at))
+    |> where([m], m.scheduled_start_at < ^now)
+    |> where([m], is_nil(m.started_at))
+    |> scope_range_to_project(Keyword.get(opts, :project_id))
+    |> order_by([m], asc: m.scheduled_start_at)
+    |> Repo.all()
+  end
+
+  @doc """
   Transition a meeting from `scheduled` to `live`, stamping `started_at`.
 
   Returns `{:error, changeset}` (with an `:status` error) on any illegal

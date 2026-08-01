@@ -401,6 +401,163 @@ defmodule Platform.Meetings.MeetingContextTest do
     end
   end
 
+  describe "missed?/2 and list_missed_meetings/1" do
+    # A fixed anchor passed as `:now` everywhere below. Nothing here reads
+    # the wall clock, so the block cannot go red because the box was slow
+    # between inserting a fixture and querying for it.
+    @now ~U[2026-11-09 12:00:00.000000Z]
+    @an_hour_ago ~U[2026-11-09 11:00:00.000000Z]
+    @an_hour_ahead ~U[2026-11-09 13:00:00.000000Z]
+
+    defp missed_slugs(opts) do
+      opts |> Meetings.list_missed_meetings() |> Enum.map(& &1.slug)
+    end
+
+    test "a meeting intended an hour ago and never started is missed" do
+      project = create_project()
+      meeting = scheduled_meeting(project, "Standup", @an_hour_ago)
+
+      assert meeting.status == "scheduled"
+      assert is_nil(meeting.started_at)
+
+      assert Meetings.missed?(meeting, @now)
+      assert missed_slugs(project_id: project.id, now: @now) == ["standup"]
+    end
+
+    test "asking the question does not answer it: the row is still `scheduled` afterwards" do
+      project = create_project()
+      meeting = scheduled_meeting(project, "Standup", @an_hour_ago)
+
+      assert Meetings.missed?(meeting, @now)
+      assert missed_slugs(project_id: project.id, now: @now) == ["standup"]
+
+      # Re-read from the database, not from the struct in hand — a predicate
+      # that quietly wrote a "missed" status would still leave the original
+      # struct saying "scheduled".
+      reloaded = Meetings.get_meeting(meeting.id)
+      assert reloaded.status == "scheduled"
+      assert is_nil(reloaded.started_at)
+      assert reloaded.scheduled_start_at == @an_hour_ago
+      assert reloaded.status in Meeting.statuses()
+    end
+
+    test "starting it clears the miss: started_at is stamped and status is live" do
+      project = create_project()
+      meeting = scheduled_meeting(project, "Standup", @an_hour_ago)
+
+      assert Meetings.missed?(meeting, @now)
+      assert missed_slugs(project_id: project.id, now: @now) == ["standup"]
+
+      assert {:ok, live} = Meetings.start_meeting(meeting)
+      assert live.status == "live"
+      assert %DateTime{} = live.started_at
+
+      refute Meetings.missed?(live, @now)
+      assert missed_slugs(project_id: project.id, now: @now) == []
+
+      # Presence pair for the exclusion above: the row is still there, it is
+      # just no longer missed.
+      assert live.id in Enum.map(Meetings.list_all_meetings(), & &1.id)
+    end
+
+    test "an ad-hoc meeting with no intended time is never missed" do
+      project = create_project()
+      {:ok, ad_hoc} = Meetings.create_meeting(%{project_id: project.id, name: "Ad Hoc"})
+      scheduled_meeting(project, "Standup", @an_hour_ago)
+
+      # Presence half: the row exists and is exactly the shape claimed —
+      # scheduled, unstarted, and with no intended time. Only the nil intent
+      # separates it from the missed row.
+      assert ad_hoc.scheduled_start_at == nil
+      assert ad_hoc.status == "scheduled"
+      assert is_nil(ad_hoc.started_at)
+      assert ad_hoc.id in Enum.map(Meetings.list_all_meetings(), & &1.id)
+
+      # Absence half.
+      refute Meetings.missed?(ad_hoc, @now)
+      assert missed_slugs(project_id: project.id, now: @now) == ["standup"]
+    end
+
+    test "a meeting intended an hour from now is upcoming, not missed" do
+      project = create_project()
+      future = scheduled_meeting(project, "Retro", @an_hour_ahead)
+      scheduled_meeting(project, "Standup", @an_hour_ago)
+
+      # Presence half: the future row is real, scheduled and unstarted. Its
+      # ONLY difference from the missed row is which side of `now` its
+      # intended time falls on.
+      assert future.status == "scheduled"
+      assert is_nil(future.started_at)
+      assert future.scheduled_start_at == @an_hour_ahead
+      assert future.id in Enum.map(Meetings.list_all_meetings(), & &1.id)
+
+      # Absence half.
+      refute Meetings.missed?(future, @now)
+      assert missed_slugs(project_id: project.id, now: @now) == ["standup"]
+    end
+
+    test "a scheduled row that nonetheless carries a started_at is not missed" do
+      project = create_project()
+      meeting = scheduled_meeting(project, "Half Written", @an_hour_ago)
+
+      # `start_meeting/1` flips the status and stamps `started_at` in ONE
+      # update, so no application write produces this row. It is synthesized
+      # here on purpose: without it the `is_nil(started_at)` clause of the
+      # predicate is fully shadowed by the `status == "scheduled"` clause and
+      # could be deleted with the suite staying green.
+      {:ok, started} =
+        meeting |> change(started_at: @an_hour_ago) |> Repo.update()
+
+      assert started.status == "scheduled"
+      assert %DateTime{} = started.started_at
+      assert started.id in Enum.map(Meetings.list_all_meetings(), & &1.id)
+
+      refute Meetings.missed?(started, @now)
+      assert missed_slugs(project_id: project.id, now: @now) == []
+    end
+
+    test "orders by intended time, oldest miss first — not by creation order" do
+      project = create_project()
+
+      # Created Mid → Late → Early, so `asc: inserted_at` (["mid", "late",
+      # "early"]), `desc: inserted_at` (["early", "late", "mid"]) and
+      # `desc: scheduled_start_at` (["late", "mid", "early"]) each produce a
+      # DIFFERENT list from the assertion. Two rows would only exclude one of
+      # those three wrong answers.
+      scheduled_meeting(project, "Mid", ~U[2026-11-09 10:00:00.000000Z])
+      scheduled_meeting(project, "Late", ~U[2026-11-09 11:00:00.000000Z])
+      scheduled_meeting(project, "Early", ~U[2026-11-09 09:00:00.000000Z])
+
+      assert missed_slugs(project_id: project.id, now: @now) == ["early", "mid", "late"]
+    end
+
+    test "narrows to :project_id when given and spans projects when it is not" do
+      a = create_project()
+      b = create_project()
+
+      scheduled_meeting(a, "Project A Missed", ~U[2026-11-09 09:00:00.000000Z])
+      scheduled_meeting(b, "Project B Missed", ~U[2026-11-09 10:00:00.000000Z])
+
+      assert missed_slugs(project_id: a.id, now: @now) == ["project-a-missed"]
+      assert missed_slugs(project_id: b.id, now: @now) == ["project-b-missed"]
+
+      unscoped = missed_slugs(now: @now)
+      assert "project-a-missed" in unscoped
+      assert "project-b-missed" in unscoped
+    end
+
+    test ":now defaults to the wall clock when it is not passed" do
+      project = create_project()
+      past = DateTime.add(DateTime.utc_now(), -3600, :second)
+      meeting = scheduled_meeting(project, "Defaulted", past)
+
+      # The one case that exercises the defaults on both arities. Everything
+      # else pins `now` explicitly.
+      assert Meetings.missed?(meeting)
+      assert meeting.slug in (Meetings.list_missed_meetings() |> Enum.map(& &1.slug))
+    end
+  end
+
   describe "start_meeting/1 and end_meeting/1" do
     test "scheduled → live → ended lifecycle stamps timestamps" do
       project = create_project()
