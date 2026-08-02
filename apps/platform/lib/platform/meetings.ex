@@ -730,6 +730,137 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  Resolve — or mint — the chat space an EXTERNAL invitee can actually be
+  reached in, and make sure both ends of the conversation are in it.
+
+  Task `019fb955-6577-7fb0-8c97-c70d233bba23` stage 4. This is the
+  collaborator behind `Platform.Meetings.InviteDelivery`'s external
+  carrier; see that moduledoc for why chat is the only surface this
+  audience has.
+
+  ## The ticket's premise is only half true, and the other half is this function
+
+  The ticket says the invitee "is scoped to that space by construction"
+  because `guest_space_id` is already in the invite token. That holds for
+  GUEST invites only. `invite_guest/2` mints a `kind: "guest_meeting"`
+  space per link and signs its id into the token. An external QUALIFIED
+  USER invite comes from `invite_user/3`, which mints no token and no
+  space — so for that audience there is no pre-existing space to point at
+  and one has to be resolved or created here.
+
+  ## Why `create_guest_chat_space/2` and not a second constructor
+
+  The space this audience needs has exactly the shape that function
+  already builds: `kind: "guest_meeting"` (so the eventual 24h reaper
+  targets it without sweeping real meeting spaces), org-scoped to the
+  MEETING's project, and carrying `meeting_id` in `metadata` for
+  forensics. A parallel constructor would be the same row with a second
+  set of bugs.
+
+  ## Order, and what each step buys
+
+    1. `invite.delivery_space_id` set → load and return that space. A
+       re-delivery reuses it and never mints a second, so a host who
+       re-invites does not scatter one conversation across two rooms. A
+       `delivery_space_id` naming a row that no longer exists answers
+       `{:error, :delivery_space_missing}` rather than quietly minting a
+       replacement — a space that was deleted out from under a recorded
+       receipt is an operator event, and inventing a new one would hide
+       it while splitting the thread.
+    2. Otherwise mint via `create_guest_chat_space/2` and persist the id
+       onto the invite. Persisting is what makes step 1 reachable.
+    3. Ensure the SENDER's agent participant row.
+       `Chat.add_agent_participant/3` is already get-or-insert
+       (`chat.ex`'s `do_add_agent_participant/3`), so calling it on every
+       delivery is safe and no guard is owed.
+    4. Ensure the INVITEE's `participant_type: "user"` row. This is the
+       step that makes the space reachable at all:
+       `PlatformWeb.Plugs.ExternalUserScope` admits an external user to
+       `/chat/:slug` only when `Chat.participant?/2` is true, and
+       `Platform.Chat.ExternalScope` narrows every external read to
+       `chat_participants` membership — so without this row the message
+       is written and unreachable, which is the exact failure the whole
+       stage exists to avoid.
+
+  `Chat.add_participant/2` has NO get-or-insert branch and
+  `chat_participants_unique` rejects a second insert, so step 4 is
+  guarded by a `Repo.get_by/2` mirroring `do_add_agent_participant/3`.
+  The `user_id` is checked with `Platform.UUID.valid?/1` first —
+  `participant_id` is a `:binary_id`, and `Repo.get_by(_, participant_id:
+  nil)` raises `ArgumentError` besides.
+
+  Returns `{:ok, %Platform.Chat.Space{}}`, or `{:error, term}` for a
+  missing space, a changeset failure, an archived space
+  (`{:error, :space_archived}` out of `Chat.add_participant/2`) or an
+  invite with no `user_id` — a guest never routes here.
+  """
+  @spec delivery_space_for_invite(Invite.t(), Meeting.t()) ::
+          {:ok, Platform.Chat.Space.t()} | {:error, term()}
+  def delivery_space_for_invite(%Invite{} = invite, %Meeting{} = meeting) do
+    with {:ok, space} <- resolve_delivery_space(invite, meeting),
+         {:ok, _sender} <- ensure_delivery_sender(space),
+         {:ok, _invitee} <- ensure_delivery_invitee(space, invite.user_id) do
+      {:ok, space}
+    end
+  end
+
+  defp resolve_delivery_space(%Invite{delivery_space_id: space_id}, _meeting)
+       when is_binary(space_id) do
+    case Chat.get_space(space_id) do
+      %Platform.Chat.Space{} = space -> {:ok, space}
+      nil -> {:error, :delivery_space_missing}
+    end
+  end
+
+  defp resolve_delivery_space(%Invite{} = invite, %Meeting{} = meeting) do
+    with {:ok, space} <- create_guest_chat_space(meeting, invite.user_id),
+         {:ok, _invite} <- persist_delivery_space(invite, space) do
+      {:ok, space}
+    end
+  end
+
+  defp persist_delivery_space(%Invite{} = invite, %Platform.Chat.Space{id: space_id}) do
+    invite
+    |> Invite.changeset(%{delivery_space_id: space_id})
+    |> Repo.update()
+  end
+
+  # The seeded agent is an AUTHORSHIP IDENTITY and nothing more — no role
+  # lookup, no runtime, no model. `SenderSeed.ensure!/0` is idempotent and
+  # is called here rather than assumed, so a boot that has not seeded yet
+  # (the flag flipped on after start-up) still delivers.
+  defp ensure_delivery_sender(%Platform.Chat.Space{id: space_id}) do
+    {:ok, agent} = Platform.Meetings.SenderSeed.ensure!()
+
+    Chat.add_agent_participant(space_id, agent, display_name: agent.name)
+  end
+
+  defp ensure_delivery_invitee(%Platform.Chat.Space{}, nil), do: {:error, :no_invitee_user}
+
+  defp ensure_delivery_invitee(%Platform.Chat.Space{id: space_id}, user_id)
+       when is_binary(user_id) do
+    if Platform.UUID.valid?(user_id) do
+      case Repo.get_by(Platform.Chat.Participant,
+             space_id: space_id,
+             participant_type: "user",
+             participant_id: user_id
+           ) do
+        %Platform.Chat.Participant{} = existing ->
+          {:ok, existing}
+
+        nil ->
+          Chat.add_participant(space_id, %{
+            participant_type: "user",
+            participant_id: user_id,
+            joined_at: DateTime.utc_now()
+          })
+      end
+    else
+      {:error, :invalid_user_id}
+    end
+  end
+
+  @doc """
   Resolve a guest-invite URL (URL `slug` + signed `token`) into the
   state a guest ingress LiveView needs to render.
 

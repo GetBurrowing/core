@@ -52,19 +52,62 @@ defmodule Platform.Meetings.InviteDelivery do
   telemetry is therefore the honest outcome, and inventing a mail path here
   would be a much larger change wearing this task's name. Do not add one.
 
-  ## The external branch refuses rather than falls through
+  ## The external carrier is a chat message, and the audience picked it
 
-  Until stage 4 lands its chat carrier, an external invitee answers
-  `{:error, :not_implemented}` and logs. It deliberately does NOT fall
-  through to the internal carrier: that would write an inbox row the
-  external user cannot reach and fire a push that deep-links them into a
-  403.
+  `PlatformWeb.Plugs.ExternalUserScope.gate_external/2` allowlists exactly
+  `[]`, `["chat"]` and `["chat", slug]`; every other path falls through to
+  a uniform 403. `/inbox` is not on that list, so an external user's inbox
+  row is written and **unreachable**. Push is OS-level and would still
+  fire, deep-linking them into that 403 — a notification that looks BROKEN
+  rather than absent, which is strictly worse than silence. Chat is the
+  only surface they have, so the audience determines the carrier and this
+  branch writes NEITHER an inbox row NOR a push.
 
-  The claim taken in step 2 is RELEASED on that branch — `delivered_at`
-  goes back to NULL — because nothing carried it. A row that carried
-  nothing must not read as delivered, and releasing re-opens no duplicate
-  window: the duplicate the CAS exists to prevent is a duplicate *send*,
-  and on this branch there was no send.
+  ### Not a DM
+
+  `Chat.find_or_create_dm/4` gates on `external_dm_permitted?/3`, which
+  returns FALSE unconditionally when the initiator is external and the
+  target is an agent. Our sender IS an agent. In the other direction, a
+  platform agent opening a DM with an external user is itself a
+  DM-creation event and can fail closed for exactly the audience this
+  feature serves. `find_or_create_dm/4` is not called anywhere in this
+  module, and must not be.
+
+  The `kind: "guest_meeting"` space `Meetings.delivery_space_for_invite/2`
+  resolves is what makes posting work at all: `post_message/2`'s
+  `ensure_dm_send_allowed/2` guard engages only for `kind in ["dm",
+  "group"]` with a `participant_type: "user"` author, so an agent author
+  in a guest space falls through to `:ok`.
+
+  ### The URL is the space UUID, never the slug
+
+  `ExternalUserScope.resolve_space/2` resolves `/chat/:slug` via
+  `Chat.get_space_by_slug(slug, org_id: <the EXTERNAL user's own org>)`,
+  but `create_guest_chat_space/2` stamps `org_id` from the MEETING's
+  project org. For an external invitee those differ by definition, so the
+  slug lookup returns nil and only the `valid_uuid?(slug) &&
+  Chat.get_space(slug)` fallback admits them. A slug-shaped link is a
+  403 for the one person it was addressed to.
+
+  ### The message is a deterministic template, not agent-authored prose
+
+  It is rendered from the meeting name, the host display name and the
+  space URL. No runtime is started, no model is called, and
+  `Platform.Roles.assignee_for/1` / `Roles.agent_id_for_role/1` are
+  consulted NOWHERE in this module. The seeded `Platform.Meetings.SenderSeed`
+  agent is an authorship identity and nothing more — `chat_messages`
+  points at a participant row and there is no `system` participant type,
+  so "the platform sent this" needs an agent to be sent as. That is the
+  whole reason an invite cannot fail for want of a `meeting_producer`.
+
+  ## A branch that sends nothing RELEASES its claim
+
+  If the external branch cannot deliver — the recorded delivery space was
+  deleted, the space is archived, the participant insert fails — the claim
+  taken in step 2 is released (`delivered_at` back to NULL) and the error
+  is returned. A row that carried nothing must not read as delivered, and
+  releasing re-opens no duplicate window: the duplicate the CAS exists to
+  prevent is a duplicate *send*, and on that path there was no send.
 
   ## The internal carrier makes TWO calls, deliberately, every time
 
@@ -97,9 +140,12 @@ defmodule Platform.Meetings.InviteDelivery do
 
   import Ecto.Query, only: [from: 2]
 
+  alias Platform.Chat
+  alias Platform.Meetings
   alias Platform.Meetings.Config
   alias Platform.Meetings.Invite
   alias Platform.Meetings.Meeting
+  alias Platform.Meetings.SenderSeed
   alias Platform.Repo
 
   require Logger
@@ -122,8 +168,11 @@ defmodule Platform.Meetings.InviteDelivery do
       `Meetings.invite_guest/2` returned.
     * `{:ok, :internal_inbox_push}` — internal user; an inbox row AND a
       user-keyed web push both went out.
-    * `{:error, :not_implemented}` — external user. Stage 4 owns this
-      branch; until then the claim is released and nothing is sent.
+    * `{:ok, :external_chat}` — external user; a message was posted into
+      the invite's delivery space, which they are a participant of. No
+      inbox row and no push, deliberately.
+    * `{:error, reason}` — the external carrier could not deliver. The
+      claim is released, so a later call can try again.
 
   Never raises for an expected condition, and never turns a committed
   invite row into a caller-visible failure — see
@@ -196,19 +245,72 @@ defmodule Platform.Meetings.InviteDelivery do
 
   defp deliver_user(%Invite{} = invite, %Meeting{} = meeting) do
     if Platform.Tenancy.external_user?(%{id: invite.user_id}) do
-      release(invite)
-
-      Logger.warning(
-        "[InviteDelivery] external invitee has no carrier yet — " <>
-          "invite=#{invite.id} meeting=#{meeting.id}. Not falling through to " <>
-          "the internal carrier: an inbox row they cannot open plus a push " <>
-          "into a 403 is worse than silence."
-      )
-
-      {:error, :not_implemented}
+      deliver_external(invite, meeting)
     else
       deliver_internal(invite, meeting)
     end
+  end
+
+  # ── The external carrier: a chat message, and ONLY a chat message ────────
+
+  defp deliver_external(%Invite{} = invite, %Meeting{} = meeting) do
+    with {:ok, space} <- Meetings.delivery_space_for_invite(invite, meeting),
+         {:ok, author_participant_id} <- sender_participant_id(space),
+         {:ok, _message} <-
+           Chat.post_message(%{
+             space_id: space.id,
+             # The agent's PARTICIPANT ROW id, not the agent id.
+             # `chat_messages.participant_id` points at `chat_participants`.
+             participant_id: author_participant_id,
+             content_type: "text",
+             content: external_message(meeting, space)
+           }) do
+      stamp_delivery(invite, :external_chat, space.id)
+      emit_telemetry(invite, meeting, :external_chat)
+
+      {:ok, :external_chat}
+    else
+      {:error, reason} ->
+        # Nothing carried this invite, so it must not read as delivered.
+        release(invite)
+
+        Logger.warning(
+          "[InviteDelivery] external chat carrier failed — invite=#{invite.id} " <>
+            "meeting=#{meeting.id}: #{inspect(reason)}. NOT falling through to " <>
+            "the internal carrier: an inbox row they cannot open plus a push " <>
+            "into a 403 is worse than silence."
+        )
+
+        {:error, reason}
+    end
+  end
+
+  # The space function has already ensured this row exists; this is a strict
+  # read of it, so nothing here can insert a duplicate participant.
+  defp sender_participant_id(space) do
+    with %Platform.Agents.Agent{} = agent <- SenderSeed.get(),
+         %Platform.Chat.Participant{id: id} <- Chat.get_agent_participant(space.id, agent) do
+      {:ok, id}
+    else
+      _ -> {:error, :sender_not_seeded}
+    end
+  end
+
+  # Deterministic template. Meeting name, host display name, space URL —
+  # rendered here, in this call stack, with no model and no role lookup.
+  #
+  # `/chat/<space.id>`, NEVER `/chat/<space.slug>`: the slug branch of
+  # `ExternalUserScope.resolve_space/2` scopes to the EXTERNAL user's own
+  # org while the space carries the MEETING's project org, so a slug link
+  # is a 403 for its own addressee. See the moduledoc.
+  defp external_message(%Meeting{} = meeting, space) do
+    host = host_display_name(meeting)
+
+    """
+    #{host} invited you to "#{meeting.name}".
+
+    This space is where that invite reaches you: /chat/#{space.id}
+    """
   end
 
   # ── The internal carrier: inbox row AND push, both, every time ───────────
@@ -268,6 +370,20 @@ defmodule Platform.Meetings.InviteDelivery do
   defp stamp_carrier(%Invite{} = invite, carrier) when is_atom(carrier) do
     from(i in Invite, where: i.id == ^invite.id)
     |> Repo.update_all(set: [delivery_carrier: Atom.to_string(carrier)])
+
+    :ok
+  end
+
+  # The external carrier's receipt names the SPACE as well as the carrier.
+  # `delivery_space_for_invite/2` already persisted the id when it minted the
+  # space; writing it here too makes the receipt land in one statement on the
+  # reuse path as well, so "which space did this go to" is answered by the
+  # invite row regardless of which branch resolved it.
+  defp stamp_delivery(%Invite{} = invite, carrier, space_id) when is_atom(carrier) do
+    from(i in Invite, where: i.id == ^invite.id)
+    |> Repo.update_all(
+      set: [delivery_carrier: Atom.to_string(carrier), delivery_space_id: space_id]
+    )
 
     :ok
   end

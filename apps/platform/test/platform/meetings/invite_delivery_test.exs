@@ -381,12 +381,18 @@ defmodule Platform.Meetings.InviteDeliveryTest do
       :ok
     end
 
-    test "refuses rather than falling through to the internal carrier" do
+    test "takes the chat carrier and does NOT fall through to the internal one" do
       # An inbox row an external user cannot open, plus a push that
       # deep-links them into a 403, is a notification that looks BROKEN
-      # rather than absent. Stage 4 owns this branch; until then it must
-      # refuse, and the refusal has to be tested or the fall-through is
-      # free to reappear.
+      # rather than absent. Stage 3 refused this branch outright and
+      # released its `delivered_at` claim; stage 4 landed the chat carrier,
+      # so a successful delivery now STAMPS the receipt. What did not change
+      # — and what this test is really here to pin — is that neither the
+      # inbox nor the push fires for this audience.
+      #
+      # The carrier's own behaviour (the message, the participant rows, the
+      # space reuse, the slug-vs-UUID trap and the release on a genuine
+      # failure) lives in `invite_delivery_external_test.exs`.
       {meeting, _host} = meeting_hosted_by("Cross Org", "Ada")
       user = create_user("External")
 
@@ -400,16 +406,18 @@ defmodule Platform.Meetings.InviteDeliveryTest do
 
       invite = invite_row(meeting, user)
 
-      assert InviteDelivery.deliver(invite, meeting) == {:error, :not_implemented}
+      assert InviteDelivery.deliver(invite, meeting) == {:ok, :external_chat}
 
       assert count_messages(:inbox_emit) == 0
       assert count_messages(:push_user) == 0
 
-      # The claim is released: nothing carried this invite, so it must not
-      # read as delivered, and stage 4 has to be able to deliver it later.
+      # The receipt names the surface that actually carried it, and the
+      # space it landed in — so "what did this person get" is answered by
+      # the row rather than by reading three tables.
       persisted = reload(invite)
-      assert is_nil(persisted.delivered_at)
-      assert is_nil(persisted.delivery_carrier)
+      assert %DateTime{} = persisted.delivered_at
+      assert persisted.delivery_carrier == "external_chat"
+      assert is_binary(persisted.delivery_space_id)
     end
   end
 
