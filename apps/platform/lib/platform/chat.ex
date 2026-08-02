@@ -907,6 +907,7 @@ defmodule Platform.Chat do
 
   - Channel: space.name
   - Meeting: space.name (falls back to "Meeting")
+  - Guest meeting: space.name (falls back to "Meeting")
   - DM: the other participant's display_name
   - Group: comma-separated names (excluding current user), truncated
   """
@@ -942,6 +943,30 @@ defmodule Platform.Chat do
         _current_user_id
       ) do
     Platform.Tasks.ChatPins.display_name_for_space(space)
+  end
+
+  # Guest-meeting spaces (`Meetings.create_guest_chat_space/2`) became
+  # human-navigable when task 019fb955's stage 4 made them the delivery
+  # surface for EXTERNAL meeting invites: `delivery_space_for_invite/2`
+  # reuses this kind, and the invite message body the invitee receives is
+  # literally `/chat/<space.id>`. That url lands in `ChatLive`, whose
+  # `handle_params/3` routes every non-"channel" kind through here — so
+  # the single link the invite hands its addressee raised
+  # `FunctionClauseError` and answered HTTP 500. Both the
+  # `live_session :external_chat` and `:authenticated` scopes map
+  # `/chat/:space_slug` to the same LiveView, so the internal surface
+  # crashed on these spaces too.
+  #
+  # Mirrors the "meeting" clause exactly — the name, falling back to
+  # "Meeting". `create_guest_chat_space/2` always stamps a name
+  # ("Guest — <meeting.name>"), so the fallback is defensive only, and it
+  # reads as a meeting to the person looking at it.
+  def display_name_for_space(
+        %Space{kind: "guest_meeting"} = space,
+        _participants,
+        _current_user_id
+      ) do
+    space.name || "Meeting"
   end
 
   def display_name_for_space(%Space{kind: "dm"}, participants, current_user_id) do

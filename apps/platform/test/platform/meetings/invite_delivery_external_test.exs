@@ -41,7 +41,10 @@ defmodule Platform.Meetings.InviteDeliveryExternalTest do
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tenancy
+  alias Platform.ExternalUserFixtures, as: World
   alias PlatformWeb.Plugs.ExternalUserScope
+
+  import Phoenix.LiveViewTest
 
   defmodule InboxRecorder do
     @moduledoc "Records `Platform.Inbox.emit/1` calls as `{:inbox_emit, attrs}`."
@@ -336,6 +339,89 @@ defmodule Platform.Meetings.InviteDeliveryExternalTest do
       # Only the bare-UUID fallback admits them.
       admitted = gate("/chat/#{space.id}", user, org)
       refute admitted.halted
+    end
+  end
+
+  # ── The link has to RENDER, not merely be admitted ─────────────────────────
+
+  describe "the invite URL, driven through the router" do
+    # `gate/3` above calls `ExternalUserScope.call/2` DIRECTLY. The plug is not
+    # the router and it is certainly not the LiveView: `refute admitted.halted`
+    # says "the gate let this request past", never "the page came back". Those
+    # are different claims, and the gap between them is where a real 500 lived.
+    #
+    # `ChatLive.handle_params/3` calls `space_page_title/3`, which routes every
+    # non-"channel" kind through `Chat.display_name_for_space/3`. That function
+    # matches on `kind`, and this space's kind is "guest_meeting" — a kind it
+    # had no clause for. So the single URL the invite message hands the
+    # external invitee raised `FunctionClauseError` and answered HTTP 500,
+    # while every plug-level assertion above stayed green. Only a request that
+    # MOUNTS the page can see that, so these tests drive `/chat/<uuid>` end to
+    # end.
+    test "the UUID url the invitee is handed actually renders", %{conn: conn} do
+      {meeting, _host} = meeting_hosted_by("Rendered", "Ada")
+      {user, _org} = external_user("External")
+      invite = invite_row(meeting, user)
+
+      assert {:ok, :external_chat} = InviteDelivery.deliver(invite, meeting)
+      space = Chat.get_space(reload(invite).delivery_space_id)
+
+      # The url is read out of the message the invitee actually received, so
+      # this test cannot drift onto a path the carrier stopped producing.
+      assert [message] = messages_in(space.id)
+      assert message.content =~ "/chat/#{space.id}"
+
+      response =
+        conn
+        |> World.login(user.id)
+        |> get("/chat/#{space.id}")
+
+      # 200, not 403 and not 500. The status is the whole point: the plug
+      # tests above pass identically whether this is 200 or 500.
+      assert response.status == 200
+      body = html_response(response, 200)
+
+      # And it must render THIS space under its own name — via the code path
+      # that crashed. Note the assertion is against the <title>, NOT the body
+      # at large: a bare `body =~ space.name` passes on the compose
+      # textarea's `placeholder="Message #<name>"`, which renders
+      # `@active_space.name` raw and never calls `display_name_for_space/3`.
+      # Measured — a mutation returning a hardcoded wrong name from the new
+      # clause left `body =~ space.name` green, because that placeholder still
+      # carried the real name. The title is fed by `space_page_title/3` and so
+      # binds to the function under test.
+      assert title(body) =~ space.name
+    end
+
+    test "and mounts connected, over the socket", %{conn: conn} do
+      {meeting, _host} = meeting_hosted_by("Mounted", "Ada")
+      {user, _org} = external_user("External")
+      invite = invite_row(meeting, user)
+
+      assert {:ok, :external_chat} = InviteDelivery.deliver(invite, meeting)
+      space = Chat.get_space(reload(invite).delivery_space_id)
+
+      # `live/2` runs the dead render AND the connected mount, so this also
+      # covers `handle_params/3`'s `connected?(socket)` branch — the one a
+      # plain `get/2` never reaches.
+      {:ok, view, _html} =
+        conn
+        |> World.login(user.id)
+        |> live("/chat/#{space.id}")
+
+      # `page_title/1` reads exactly what `space_page_title/3` assigned, so
+      # this cannot be satisfied by an incidental render of the name
+      # elsewhere on the page (see the sibling test for why that matters).
+      assert page_title(view) =~ space.name
+    end
+  end
+
+  # The <title> of a dead render. `Phoenix.LiveViewTest.page_title/1` only
+  # works on a connected view, so the `get/2` case extracts it by hand.
+  defp title(body) do
+    case Regex.run(~r|<title[^>]*>(.*?)</title>|s, body) do
+      [_, inner] -> inner
+      nil -> flunk("no <title> in the rendered body")
     end
   end
 
