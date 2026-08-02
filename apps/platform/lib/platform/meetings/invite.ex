@@ -37,6 +37,30 @@ defmodule Platform.Meetings.Invite do
   NULL on every row — worse than absent, because a reader will trust it. The
   correct future move is to encode the invite id into the LiveKit participant
   identity so the webhook can resolve it. Do not add a dead FK here.
+
+  ## Delivery receipt (task `019fb955-6577-7fb0-8c97-c70d233bba23`)
+
+  `delivered_at`, `delivery_carrier` and `delivery_space_id` record what
+  `Platform.Meetings.InviteDelivery` actually did with this row. They are
+  NOT the `status` column rejected above, and the difference is the same
+  test that rejected it — whether anything reads the value:
+
+    * `delivered_at` is read on EVERY delivery as the compare-and-swap
+      claim (`UPDATE ... WHERE id = ? AND delivered_at IS NULL`, the idiom
+      `Platform.Meetings.mark_notified/1` uses on `meetings.notified_at`).
+      It is concurrency control, not bookkeeping. `Meetings.invite_user/3`
+      returns the EXISTING row on a re-invite, so without it a double
+      submit sends the same person a second inbox row and a second push.
+    * `delivery_carrier` is the only after-the-fact answer to "which
+      surface did this person actually get" — the inbox row, the push
+      subscription and the chat message live in three tables and none of
+      them knows the other two were skipped.
+    * `delivery_space_id` names the chat space stage 4's external carrier
+      wrote into.
+
+  None of the three claims to know the invitee's INTENT, which is what
+  `accepted` / `declined` would have asserted and been wrong about. They
+  record what this system did.
   """
 
   use Ecto.Schema
@@ -57,10 +81,18 @@ defmodule Platform.Meetings.Invite do
     field(:expires_at, :utc_datetime_usec)
     field(:revoked_at, :utc_datetime_usec)
 
+    # Delivery receipt (task `019fb955-6577-7fb0-8c97-c70d233bba23`). See the
+    # "Delivery receipt" section of the moduledoc for why these three are not
+    # the rejected `status` column.
+    field(:delivered_at, :utc_datetime_usec)
+    field(:delivery_carrier, :string)
+    belongs_to(:delivery_space, Platform.Chat.Space)
+
     timestamps(type: :utc_datetime_usec)
   end
 
-  @cast_fields ~w(meeting_id user_id display_name email expires_at revoked_at)a
+  @cast_fields ~w(meeting_id user_id display_name email expires_at revoked_at
+                  delivered_at delivery_carrier delivery_space_id)a
 
   @doc """
   Changeset for creating or updating an invite.

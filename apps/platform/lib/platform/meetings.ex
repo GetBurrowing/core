@@ -22,6 +22,7 @@ defmodule Platform.Meetings do
   alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript}
   alias Platform.Meetings.GuestInvite
   alias Platform.Meetings.Invite
+  alias Platform.Meetings.InviteDelivery
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
 
@@ -1085,7 +1086,14 @@ defmodule Platform.Meetings do
     }
 
     if Platform.UUID.valid?(user_id) do
-      upsert_user_invite(meeting, user_id, attrs)
+      case upsert_user_invite(meeting, user_id, attrs) do
+        {:ok, %Invite{} = invite} ->
+          deliver_invite(invite, meeting)
+          {:ok, invite}
+
+        {:error, _changeset} = error ->
+          error
+      end
     else
       {:error,
        %Invite{}
@@ -1186,8 +1194,32 @@ defmodule Platform.Meetings do
           invite_id: invite.id
         )
 
+      deliver_invite(invite, meeting)
+
       {:ok, %{invite: invite, token: token, url: guest_invite_url(meeting, token)}}
     end
+  end
+
+  # Delivery runs SYNCHRONOUSLY AND IN-LINE on the success path of both
+  # invite functions — not as a PubSub broadcast consumed by a GenServer.
+  # "Cannot fail for want of a role" means the send sits in the same call
+  # stack as the insert, with no runtime, no dispatcher and no role lookup
+  # in between; a dropped subscription is invisible.
+  #
+  # It is a side effect and stays one: it never changes either function's
+  # return shape, and a raise inside it never turns a committed invite row
+  # into an error for the caller. Same posture as
+  # `MeetingNotifier.emit_inbox_row/4`.
+  defp deliver_invite(%Invite{} = invite, %Meeting{} = meeting) do
+    InviteDelivery.deliver(invite, meeting)
+  rescue
+    error ->
+      Logger.warning(
+        "[Meetings] invite delivery raised — invite=#{invite.id} " <>
+          "meeting=#{meeting.id}: #{inspect(error)}"
+      )
+
+      {:error, :delivery_raised}
   end
 
   @doc """
