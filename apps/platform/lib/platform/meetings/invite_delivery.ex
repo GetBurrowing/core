@@ -46,11 +46,43 @@ defmodule Platform.Meetings.InviteDelivery do
 
   A guest's channel is the per-invite URL `Meetings.invite_guest/2` already
   minted and returned to the host; the carrier is `:guest_link`. There is
-  **no outbound email capability in this repository** — verified: no
-  swoosh, bamboo, gen_smtp or mail dependency in `mix.lock`, no `Mailer`
-  module, no SMTP configuration. Recording the carrier and emitting
-  telemetry is therefore the honest outcome, and inventing a mail path here
-  would be a much larger change wearing this task's name. Do not add one.
+  **no outbound email capability in this repository** — re-verified for
+  this stage: `mix.lock` matches none of swoosh / bamboo / gen_smtp, no
+  module named `*Mailer` is defined anywhere under `apps/`, `runtime.exs`
+  carries no SMTP configuration, and a repo-wide grep for `deliver_now` /
+  `send_email` outside `deps/` returns no call site at all.
+  Recording the carrier and emitting telemetry is therefore the honest
+  outcome, and inventing a mail path here would be a much larger change
+  wearing this task's name. Do not add one.
+
+  This is a REAL LIMIT and not a TODO. A guest has no account, therefore no
+  inbox row, no push subscription and no chat identity: this system cannot
+  reach them through any channel it owns. `:guest_link` is not a degraded
+  send, it is an accurate record that the only channel is the URL already
+  in the host's hands, and handing that URL to a human is the separate
+  concern tracked as `019fb955-1d7b`. The telemetry event is what keeps the
+  gap legible — a `carrier: :guest_link` event says plainly that nobody was
+  contacted, where a silent success would read as a delivery that happened.
+
+  ## Cancellation is not modelled here, deliberately
+
+  There is no "invite cancelled" carrier and no test that assumes one,
+  because meetings have no cancellation concept to hang it on:
+  `Meeting.@statuses` is `~w(scheduled live ended)` and
+  `status_changeset/3` admits only `scheduled -> live` and `live -> ended`.
+  Sibling task `019fb954-c848` has an approved plan whose first stage adds
+  exactly that model. Adding it here would duplicate that stage, put a
+  second concurrent migration on `meetings`, and leave the sibling's tests
+  exercising this module's code. It is filed, not smuggled in.
+
+  ## Where the cross-cutting properties are checked
+
+  The four properties this feature is accountable for span every stage of
+  the task, so they have one home rather than being scattered:
+  `test/platform/meetings/invite_delivery_invariants_test.exs` states each
+  one as a claim with both of its sides. `invite_delivery_test.exs` and
+  `invite_delivery_external_test.exs` remain the per-carrier behavioural
+  suites.
 
   ## The external carrier is a chat message, and the audience picked it
 
@@ -390,10 +422,24 @@ defmodule Platform.Meetings.InviteDelivery do
 
   # Guarded like every other :telemetry.execute in this subsystem so a
   # broken listener cannot tap the delivery path.
+  #
+  # `%{system_time: System.system_time()}` and not `%{count: 1}`, mirroring
+  # `Platform.Chat.add_participant/2`'s `[:platform, :chat, :participant_added]`.
+  # This is an OCCURRENCE, not a measurement: nothing here is summed or
+  # averaged, and what a reader wants from the event is WHEN it happened,
+  # which a constant `1` cannot answer.
+  #
+  # METADATA IS IDS AND THE CARRIER ATOM, DELIBERATELY. This repository is
+  # public and this event flows into the audit handler, so no email address,
+  # no display name, no host name and no URL may be added here. Every field
+  # below is an opaque id or a closed-set atom. `:carrier` is the field with
+  # the actual answer in it: a `:guest_link` row is a delivery that recorded
+  # a URL and contacted NOBODY, and without this event that is
+  # indistinguishable after the fact from a message that arrived.
   defp emit_telemetry(%Invite{} = invite, %Meeting{} = meeting, carrier) do
     :telemetry.execute(
       [:platform, :meetings, :invite_delivered],
-      %{count: 1},
+      %{system_time: System.system_time()},
       %{
         invite_id: invite.id,
         meeting_id: meeting.id,
