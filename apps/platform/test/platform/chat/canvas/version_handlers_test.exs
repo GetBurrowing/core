@@ -118,12 +118,16 @@ defmodule Platform.Chat.Canvas.VersionHandlersTest do
       assert cursor2 == 3
     end
 
+    # The sentence changed with task 019fb01b stage 3: the not-found answer now
+    # comes from the shared seam rather than this module's `fetch_canvas/1`.
     test "404 on missing canvas", %{agent_id: agent_id} do
-      assert {:error, %{error: "Canvas not found:" <> _, recoverable: false}} =
+      assert {:error, %{error: error, recoverable: false}} =
                VersionHandlers.versions(
                  %{"canvas_id" => Ecto.UUID.generate()},
                  %{agent_id: agent_id}
                )
+
+      assert error =~ "not found"
     end
 
     test "403 when agent is not in the space", %{
@@ -138,6 +142,42 @@ defmodule Platform.Chat.Canvas.VersionHandlersTest do
                  %{"canvas_id" => canvas.id},
                  %{agent_id: outsider_agent_id}
                )
+    end
+
+    # Task 019fb01b stage 3. `assert_member/2` returned `:ok` whenever
+    # `context.agent_id` was nil, on the theory that such a caller had to be
+    # the in-app LiveView. This handler is only reached from the federation
+    # tool surface, and `agent_id` is a nullable `:binary_id` on
+    # `Platform.Agents.AgentRuntime`, so nil was reachable for an authenticated
+    # remote runtime — which could then read any canvas's revision numbers,
+    # write timestamps and `written_by` attribution in any org. The fail-open
+    # is deleted, not narrowed; this case now mirrors the peer already asserted
+    # on `canvas.restore` below.
+    test "403 when the caller carries no identity at all", %{
+      space: space,
+      agent_participant: ap
+    } do
+      canvas = create_canvas(space.id, ap.id)
+
+      assert {:ok, 2} = CanvasServer.apply_patches(canvas.id, add_text_op("a", "A"), 1)
+
+      assert {:error, payload} = VersionHandlers.versions(%{"canvas_id" => canvas.id}, %{})
+
+      assert payload.error =~ "Access denied"
+      assert payload.recoverable == false
+      refute Map.has_key?(payload, :versions)
+    end
+
+    # Deleted, not narrowed. A narrowed private helper is one careless `with`
+    # clause away from being load-bearing again; a deleted one has to be
+    # rewritten on purpose. The moduledoc still NAMES `assert_member/2` to
+    # record what was removed and why, so this matches a definition or a call
+    # site (`assert_member(`) rather than the bare word.
+    test "assert_member/2 is gone, so nothing can reach the fail-open again" do
+      source = File.read!("lib/platform/chat/canvas/version_handlers.ex")
+
+      refute source =~ "defp assert_member"
+      refute source =~ "assert_member("
     end
   end
 

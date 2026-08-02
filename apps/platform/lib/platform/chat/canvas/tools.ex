@@ -63,15 +63,35 @@ defmodule Platform.Chat.Canvas.Tools do
   # form needs a signing key, a guest host scope and a revocation model, none
   # of which shipped. Naming a mechanism that does not exist would be the one
   # failure mode worse than the missing feature.
+  # The agent clause (task 019fb01b stage 2) is stated separately from the
+  # human ones because it is keyed on a different column. The three human
+  # grants read `org_memberships.user_id`, which is meaningless for an agent
+  # id; an agent reaches a canvas outside its own spaces only through a task's
+  # `phase_assignees` map. It says "an agent assigned to" rather than naming the
+  # column, because the reader of this sentence is a model deciding whether to
+  # paste a link, not a maintainer.
   @sharing_boundary "Returned URLs are canonical Suite links, never share tokens. A link opens only " <>
                       "for a viewer who already holds a grant on the canvas: a participant of its " <>
-                      "space, a member of the org that owns a LIVE task the canvas is attached to, " <>
-                      "or a member of the org that owns the space when the canvas lives in a " <>
-                      "NON-ARCHIVED channel. External users never reach the page whatever their " <>
-                      "grant. No share-token mechanism exists, so a link cannot be widened past " <>
-                      "that. A canvas created in an execution space is reachable only through the " <>
-                      "task path, so attach it to a task in your reader's org with " <>
-                      "task_attach_canvas before pasting the link or they get a 403."
+                      "space, an AGENT assigned to a LIVE task the canvas is attached to, a member " <>
+                      "of the org that owns such a task, or a member of the org that owns the space " <>
+                      "when the canvas lives in a NON-ARCHIVED channel. External users never reach " <>
+                      "the page whatever their grant. No share-token mechanism exists, so a link " <>
+                      "cannot be widened past that. A canvas created in an execution space is " <>
+                      "reachable only through the task path, so attach it to a task in your " <>
+                      "reader's org with task_attach_canvas before pasting the link or they get a " <>
+                      "403."
+
+  # The read gate, quoted by the two canvas READS (task 019fb01b stage 3).
+  # Separate from `@sharing_boundary`: that one is about who can open a URL you
+  # hand a human, this one is about whether the tool call you are making now
+  # will resolve. They were one sentence-set until describe and versions were
+  # gated, at which point conflating them would have left a model unable to
+  # tell "I cannot read this" from "my reader cannot open this".
+  @read_gate "You can read a canvas if you participate in its space, or if you are assigned to a " <>
+               "live task it is attached to. Otherwise the call is denied. A denial for a canvas " <>
+               "that does not exist reads differently from one you may not read: not-found means " <>
+               "the id or the attachment is stale, denied means ask a human to add you to the " <>
+               "space or to attach the canvas to your task."
 
   @doc "Tool names handled by this module."
   @spec tool_names() :: [String.t()]
@@ -87,6 +107,20 @@ defmodule Platform.Chat.Canvas.Tools do
   """
   @spec sharing_boundary() :: String.t()
   def sharing_boundary, do: @sharing_boundary
+
+  @doc """
+  The read gate for the canvas-id-keyed READS, quoted verbatim by every
+  description of one.
+
+  Exposed for the same reason `sharing_boundary/0` is, plus one specific to
+  this stage: `PlatformWeb.MCPController.to_mcp_tool/1` forwards only `name`,
+  `description` and `inputSchema`, so a gate stated only in a `limitations`
+  field is read by maintainers and by nobody who calls the tool. An agent that
+  is denied needs to know from the description whether to ask for roster or to
+  drop a stale attachment.
+  """
+  @spec read_gate() :: String.t()
+  def read_gate, do: @read_gate
 
   @doc "Return the list of agent tool definitions."
   @spec definitions() :: [map()]
@@ -150,7 +184,7 @@ defmodule Platform.Chat.Canvas.Tools do
     %{
       "name" => "canvas.describe",
       "description" =>
-        "Return the current document, revision, view_url, presence, and recent events for a canvas. Cheap and idempotent; call this before emitting patches to ensure the caller's base_revision is fresh, or to recover the view_url of a canvas you did not create. #{@sharing_boundary}",
+        "Return the current document, revision, view_url, presence, and recent events for a canvas you hold a grant on. Cheap and idempotent; call this before emitting patches to ensure the caller's base_revision is fresh, or to recover the view_url of a canvas you did not create. #{@read_gate} #{@sharing_boundary}",
       "parameters" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -168,7 +202,7 @@ defmodule Platform.Chat.Canvas.Tools do
     %{
       "name" => "canvas.versions",
       "description" =>
-        "List a canvas's revision history newest-first. Each entry has revision, written_at, written_by, and a 1-sentence op_summary. Use limit + before_revision to paginate. Same auth gate as canvas.describe. #{@sharing_boundary}",
+        "List a canvas's revision history newest-first. Each entry has revision, written_at, written_by, and a 1-sentence op_summary. Use limit + before_revision to paginate. Same auth gate as canvas.describe, literally: both resolve through Platform.Chat.Canvas.ToolAccess.fetch_for_read/2. #{@read_gate} #{@sharing_boundary}",
       "parameters" => %{
         "type" => "object",
         "additionalProperties" => false,

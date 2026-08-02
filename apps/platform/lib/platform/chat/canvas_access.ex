@@ -39,30 +39,54 @@ defmodule Platform.Chat.CanvasAccess do
   does NOT fall back to `:system`, because a silent bypass on an
   authorization path is worse than an outage.
 
-  **Agent principals resolve `:member` or nothing.** They never reach
-  `:task_reader` / `:org_reader`, and this is not a policy preference — it is
-  the only well-typed answer. `Tenancy.member_of?/2`, `external_user?/1` and
+  **Agents get no ORG-derived grant.** They never reach `:task_reader` or
+  `:org_reader`, and this is not a policy preference — it is the only
+  well-typed answer. `Tenancy.member_of?/2`, `external_user?/1` and
   `fabrikam_admin?/1` all query `org_memberships.user_id`; an agent id passed to
   them is not "denied", it is meaningless. Do not "fix" this by adding an org
   path for agents without first giving agents org membership.
 
-  ## Three grant paths, evaluated in order — any one is sufficient
+  What agents DO get is a TASK-derived grant, `:task_agent` (task 019fb01b
+  stage 2), which queries `tasks` and `chat_participants` — both of which
+  carry first-class agent rows, so the question it asks is answerable for an
+  agent id in a way the org questions are not.
 
-    1. `:member` — the viewer is a `"user"` participant of the canvas's parent
-       space (`Chat.participant?/2`). Today's in-chat behavior, unchanged.
+  **Never promote a runtime's `owner_user_id` into `{:user, id}`.**
+  `Platform.Agents.AgentRuntime` has a nullable `agent_id` and a required
+  `owner_user_id` (agent_runtime.ex:23-24), so rescuing a nil-agent runtime by
+  falling back to its owner looks like a small robustness fix. It would hand a
+  remote process its human owner's org-wide `:task_reader` and `:org_reader`
+  reach. A runtime with no agent has no principal here, and denies.
 
-    2. `:task_reader` — the canvas is attached to at least one live task whose
-       project org the viewer belongs to. This is the path that fixes the
-       reported incident: the audit canvas lived in an **execution** space,
-       which `Chat.space_accessible?/1` correctly excludes, but it was attached
-       to the spike task and the humans reviewing that task can read the task.
-       Agent deliverables become reachable without opening execution spaces
-       wholesale.
+  ## Four grant paths, evaluated in order — any one is sufficient
 
-    3. `:org_reader` — the parent space passes `Chat.space_accessible?/1`
-       (exists, not archived, not an execution space) AND `kind == "channel"`
-       AND `org_id` is non-nil AND the viewer is `Tenancy.fabrikam_admin?/1` or
-       `Tenancy.member_of?/2` that org.
+    1. `:member` — the viewer is a participant of the canvas's parent space
+       (`Chat.participant?/2` for users, `Chat.get_agent_participant/2` for
+       agents). Today's in-chat behavior, unchanged.
+
+    2. `:task_agent` — AGENT principals only. The canvas is attached to at
+       least one live task, and the calling agent id appears in that task's
+       `phase_assignees` map (`Platform.Tasks.Task`, task.ex:113) in any slot
+       explicitly typed `"agent"`. Keyed on the per-phase MAP, never on the
+       flat `assignee_id` pair: the flat pair is the CURRENT-phase assignee and
+       rotates planning → execution → review, so a grant keyed on it would
+       blink out mid-task. Not `owner_id` either (political ownership, per
+       task.ex:12-30), and not the attachment row's `attached_by_id`
+       (attribution is not authorization, stated verbatim at
+       design_task_direction.ex:580-581).
+
+    3. `:task_reader` — USER principals only. The canvas is attached to at
+       least one live task whose project org the viewer belongs to. This is the
+       path that fixes the reported incident: the audit canvas lived in an
+       **execution** space, which `Chat.space_accessible?/1` correctly excludes,
+       but it was attached to the spike task and the humans reviewing that task
+       can read the task. Agent deliverables become reachable without opening
+       execution spaces wholesale.
+
+    4. `:org_reader` — USER principals only. The parent space passes
+       `Chat.space_accessible?/1` (exists, not archived, not an execution
+       space) AND `kind == "channel"` AND `org_id` is non-nil AND the viewer is
+       `Tenancy.fabrikam_admin?/1` or `Tenancy.member_of?/2` that org.
 
   ## Deliberate inversions and exclusions
 
@@ -88,16 +112,23 @@ defmodule Platform.Chat.CanvasAccess do
   both org-reach paths, preserving the rbac-external-users M6/M7 boundary rather
   than punching through it.
 
-  ## PRECONDITION on `:task_reader` — CLOSED in stage 2
+  ## PRECONDITION on the attachment-derived grants
 
-  `:task_reader` derives a read grant from a `task_canvas_attachments` row, so
-  an unauthorized attach is a self-service grant of org-wide read on someone
-  else's canvas. `Platform.Tasks.CanvasAttachments.attach_canvas/4` therefore
-  takes an actor and calls `fetch_for_viewer/3` on the attacher before the row
-  is written: you cannot confer a read grant on a canvas you could not read.
+  `:task_reader` and `:task_agent` both derive a read grant from a
+  `task_canvas_attachments` row, so an unauthorized attach is a self-service
+  grant of read on someone else's canvas.
+  `Platform.Tasks.CanvasAttachments.attach_canvas/4` therefore takes an actor
+  and calls `fetch_for_viewer/3` on the attacher before the row is written: you
+  cannot confer a read grant on a canvas you could not read.
 
   Keep that gate in place. Anything that reintroduces an unauthenticated attach
-  reopens `:task_reader` as a privilege-escalation path.
+  reopens both as a privilege-escalation path.
+
+  Only the CANVAS half of that precondition is closed. `task_attach_canvas`
+  (`Platform.Federation.ToolSurface`) never authorizes the caller against the
+  TASK, because no such primitive exists in `apps/platform/lib/platform/tasks/`
+  yet. Filed as task `019fb581-8a1f-7c49-ba42-72f4ab29e758`; see the comment on
+  the `:task_agent` arm below for what that means and why it was accepted.
 
   ## `:not_found` and `:forbidden` are distinct, and that is the point
 
@@ -123,14 +154,24 @@ defmodule Platform.Chat.CanvasAccess do
 
   ## Audit
 
-  A successful `:task_reader` or `:org_reader` resolution emits
+  A successful `:task_agent`, `:task_reader` or `:org_reader` resolution emits
   `[:platform, :chat, :canvas_read]` — a non-member reading a canvas is exactly
   the sensitive read the audit stream exists for. `:member` reads are NOT
-  audited; they are already in-space and would bury the signal.
+  audited; they are already in-space and would bury the signal. `:task_agent`
+  rows carry `actor_type: "agent"`, which `Platform.Audit.Event` already
+  allows (audit/event.ex:39).
 
   The event is registered in `Platform.Audit.TelemetryHandler`'s explicit
   allowlist. Without that registration `:telemetry.execute/3` here is a silent
   no-op.
+
+  Its mirror is `[:platform, :chat, :canvas_read_denied]`, emitted from
+  `Platform.Chat.Canvas.ToolAccess` on a forbidden MCP read (task 019fb01b
+  stage 5) and registered in the same allowlist. It is deliberately NOT emitted
+  from here: this module also answers the LiveView, where a denial is a human
+  hitting a page they may not see, and mixing the two would cost the signal
+  its meaning. Denials decided on this door for non-MCP callers are not
+  covered by either event.
 
   LiveView remounts on reconnect, so callers that mount repeatedly for one
   human sitting on one page should pass `audit: false` on the remount rather
@@ -145,11 +186,12 @@ defmodule Platform.Chat.CanvasAccess do
   alias Platform.Repo
   alias Platform.Tasks.CanvasAttachments
   alias Platform.Tasks.Project
+  alias Platform.Tasks.Task
   alias Platform.Tenancy
 
   import Ecto.Query, only: [from: 2]
 
-  @type level :: :member | :task_reader | :org_reader | :system
+  @type level :: :member | :task_agent | :task_reader | :org_reader | :system
 
   @typedoc """
   Acting principal. Mirrors `Platform.Tasks`'s `actor` triple and
@@ -212,10 +254,10 @@ defmodule Platform.Chat.CanvasAccess do
 
   ## Read levels do not confer write
 
-  `:task_reader` and `:org_reader` are READ grants and are rejected here. That
-  asymmetry is the entire point of the function: without it, the moment the
-  standalone route hands a URL to org-wide readers, org-wide read silently
-  becomes org-wide write.
+  `:task_agent`, `:task_reader` and `:org_reader` are READ grants and are
+  rejected here. That asymmetry is the entire point of the function: without
+  it, the moment the standalone route hands a URL to org-wide readers or to a
+  task's agents, read silently becomes write.
 
   ## Soft-deleted canvases are `:not_found` here, even for a member
 
@@ -291,12 +333,12 @@ defmodule Platform.Chat.CanvasAccess do
       member?(canvas, viewer) ->
         :member
 
-      # Agent principals stop here: `:member` or nothing. The org-reach paths
-      # below query `org_memberships.user_id` and are meaningless for an agent
-      # id — see the moduledoc. Checked on principal SHAPE, before the
-      # external-user check, which is itself user-shaped.
+      # Agent principals stop here: `:member`, `:task_agent`, or nothing. The
+      # org-reach paths below query `org_memberships.user_id` and are
+      # meaningless for an agent id — see the moduledoc. Checked on principal
+      # SHAPE, before the external-user check, which is itself user-shaped.
       match?({:agent, _}, viewer) ->
-        nil
+        agent_grant(canvas, viewer)
 
       # Both org-reach paths are closed to external users. Checked once, here,
       # rather than inside each arm — one place to read, one place to change.
@@ -337,7 +379,71 @@ defmodule Platform.Chat.CanvasAccess do
 
   defp member?(_canvas, _viewer), do: false
 
-  # ── 2. :task_reader ───────────────────────────────────────────────────────
+  # ── 2. :task_agent ────────────────────────────────────────────────────────
+  #
+  # Task 019fb01b stage 2. The canvas is attached to a live task and the
+  # calling agent is bound to that task by `phase_assignees`.
+  #
+  # ACCEPTED RESIDUAL RISK, filed as task
+  # `019fb581-8a1f-7c49-ba42-72f4ab29e758` and knowingly accepted at plan time
+  # — this must not be rediscovered later as a surprise. `task_attach_canvas`
+  # never authorizes its caller against the TASK (no such primitive exists in
+  # `apps/platform/lib/platform/tasks/` yet), so an agent holding read on
+  # canvas C can staple C onto any task and hand it to that task's agents.
+  # `:task_agent` widens who that reaches from "humans in the task's project
+  # org" to "those humans plus every agent in `phase_assignees`". It is a PUSH,
+  # not a pull: the attacher must already be able to read C, so it cannot
+  # exfiltrate a canvas it cannot see. 019fb581 closes the task half.
+
+  defp agent_grant(%Canvas{} = canvas, {:agent, agent_id}) when is_binary(agent_id) do
+    if task_agent?(canvas, agent_id), do: :task_agent
+  end
+
+  defp agent_grant(_canvas, _viewer), do: nil
+
+  # `list_canvas_tasks/1` already drops soft-deleted tasks to `task: nil`
+  # (canvas_attachments.ex:291-308), so a grant cannot outlive the task that
+  # conferred it — the same property `:task_reader` relies on. The envelope is
+  # deliberately thin (`id`, `title`, `status`, `project_id`), so the assignee
+  # map is fetched in one follow-up query keyed on the live task ids.
+  defp task_agent?(%Canvas{id: canvas_id}, agent_id) do
+    canvas_id
+    |> CanvasAttachments.list_canvas_tasks()
+    |> Enum.map(fn %{task: task} -> task && task.id end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> task_phase_assignees()
+    |> Enum.any?(&agent_in_phase_assignees?(&1, agent_id))
+  end
+
+  defp task_phase_assignees([]), do: []
+
+  defp task_phase_assignees(task_ids) do
+    Repo.all(from(t in Task, where: t.id in ^task_ids, select: t.phase_assignees))
+  end
+
+  # Kept as a NAMED predicate with this signature on purpose. Task
+  # `019fb581-8a1f-7c49-ba42-72f4ab29e758` (task-side authorization) keys its
+  # write gate on the same field and will traverse the same map. Whichever of
+  # the two lands second deletes its copy and calls the shared predicate; a
+  # traversal inlined into the `cond` above would make that a rewrite instead
+  # of a deletion.
+  #
+  # `"assignee_type" => "agent"` is required EXPLICITLY. `Tasks`'s own
+  # `per_phase_assignee/2` defaults a type-less `%{"assignee_id" => id}` slot
+  # to "agent"; this does not. An untyped id could be a user id, and an
+  # authorization path is the wrong place to guess which.
+  @spec agent_in_phase_assignees?(map() | nil, binary()) :: boolean()
+  defp agent_in_phase_assignees?(phase_assignees, agent_id) when is_map(phase_assignees) do
+    Enum.any?(phase_assignees, fn
+      {_phase, %{"assignee_id" => ^agent_id, "assignee_type" => "agent"}} -> true
+      {_phase, _slot} -> false
+    end)
+  end
+
+  defp agent_in_phase_assignees?(_phase_assignees, _agent_id), do: false
+
+  # ── 3. :task_reader ───────────────────────────────────────────────────────
   #
   # Attached to a live task whose project org the viewer belongs to. Strict
   # `member_of?/2` — see the moduledoc on why `fabrikam_admin?/1` is not here.
@@ -366,7 +472,7 @@ defmodule Platform.Chat.CanvasAccess do
     |> Enum.uniq()
   end
 
-  # ── 3. :org_reader ────────────────────────────────────────────────────────
+  # ── 4. :org_reader ────────────────────────────────────────────────────────
 
   defp org_reader?(%Canvas{space_id: space_id}, viewer) when is_binary(space_id) do
     # `space_accessible?/1` is the documented access gate for cross-space
@@ -417,9 +523,10 @@ defmodule Platform.Chat.CanvasAccess do
     :ok
   end
 
-  # Derived from the actor tag rather than hardcoded. Agents only ever reach
-  # `:member` today, so no agent row can be minted here — but a hardcoded
-  # `"user"` would start lying silently the day that changes.
+  # Derived from the actor tag rather than hardcoded. Since task 019fb01b
+  # stage 2 this really does mint `"agent"` rows: `:task_agent` is an audited
+  # level and agent-shaped. A hardcoded `"user"` here would now be a lie in the
+  # audit stream rather than merely a latent one.
   defp audit_actor({:user, id}) when is_binary(id), do: {"user", id}
   defp audit_actor({:agent, id}) when is_binary(id), do: {"agent", id}
   defp audit_actor(_), do: {"user", nil}

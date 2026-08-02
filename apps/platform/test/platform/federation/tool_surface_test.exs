@@ -5,6 +5,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
   alias Platform.Chat
 
   alias Platform.Tasks
+  alias Platform.Tasks.CanvasAttachments
+  alias Platform.Tenancy
   alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
@@ -34,6 +36,24 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
+
+  # A live task in a fresh project with `canvas` attached to it — the relation
+  # the `:task_agent` canvas grant reads (task 019fb01b stage 2).
+  #
+  # `:system` is the attaching actor because whether the ATTACHER was
+  # authorized against the task is a separate open question, filed as task
+  # 019fb581. What these tests need is only that the attachment row exists.
+  defp task_with_attached_canvas!(canvas) do
+    project = create_project()
+    {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Design direction task"})
+
+    {:ok, _attachment} =
+      CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+        attached_by: %{kind: "user", id: Ecto.UUID.generate()}
+      )
+
+    task
+  end
 
   # Insert a bare user row for sponsor-round-trip tests (ADR 0042).
   # Bypasses the `Platform.Accounts.User.changeset/2` name requirement
@@ -4666,15 +4686,24 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert result.document["root"]["type"] == "stack"
     end
 
-    test "canvas_get with non-existent canvas returns error", ctx do
+    # Reworded by task 019fb01b stage 4, which moved this tool onto
+    # `Platform.Chat.Canvas.ToolAccess.fetch_for_read/2`. The sentence is now
+    # the one every canvas-id-keyed read on this surface emits, which is the
+    # point of the move: a caller cannot tell which tool it knocked on from the
+    # answer it got back.
+    test "canvas_get with non-existent canvas returns the shared not-found envelope", ctx do
+      canvas_id = Ecto.UUID.generate()
+
       {:error, error} =
         ToolSurface.execute(
           "canvas_get",
-          %{"canvas_id" => Ecto.UUID.generate()},
+          %{"canvas_id" => canvas_id},
           ctx.context
         )
 
-      assert error.error =~ "Canvas not found"
+      assert error.error =~ "not found"
+      assert error.recoverable == false
+      assert error.canvas_id == canvas_id
     end
 
     test "canvas_get denied for canvas in non-member space", ctx do
@@ -4694,6 +4723,112 @@ defmodule Platform.Federation.ToolSurfaceTest do
         )
 
       assert error.error =~ "Access denied"
+    end
+
+    # ── canvas_get and the :task_agent grant (task 019fb01b stage 4) ──
+    #
+    # The widening this stage ships, stated as a test. Before it, `canvas_get`
+    # asked only "is this agent in the canvas's space". These pin the two
+    # halves of the new answer: a task binding is enough, and it is the ONLY
+    # thing that is enough.
+    #
+    # This is the shape `prompt_templates.ex:506` has been instructing the
+    # planner into: "If a design direction canvas is attached to this task,
+    # read it with `canvas_get`." When the designer built that canvas in its
+    # own space (the ADR-0046 native path) rather than the execution space,
+    # that instruction was false until this stage.
+
+    test "canvas_get resolves for an agent bound to the attached task, not the space", ctx do
+      designer_space = create_space(%{name: "Designer Space"})
+      designer = create_participant(designer_space.id, %{display_name: "Saru"})
+
+      {:ok, canvas, _msg} =
+        Chat.create_canvas_with_message(designer_space.id, designer.id, %{
+          "title" => "Design direction"
+        })
+
+      task = task_with_attached_canvas!(canvas)
+
+      # The real writer, not a hand-rolled map: the grant classifies on
+      # `phase_assignees` as `Tasks.set_phase_assignees/2` writes it.
+      {:ok, _task} =
+        Tasks.set_phase_assignees(task, %{
+          "planning" => %{"assignee_id" => ctx.agent.id, "assignee_type" => "agent"}
+        })
+
+      refute Chat.get_agent_participant(designer_space.id, ctx.agent.id)
+
+      {:ok, summary} =
+        ToolSurface.execute("canvas_get", %{"canvas_id" => canvas.id}, ctx.context)
+
+      assert summary.id == canvas.id
+      assert summary.title == "Design direction"
+
+      # Full mode is the mode the planner actually needs; the grant has to
+      # carry the document, not just the metadata.
+      {:ok, full} =
+        ToolSurface.execute(
+          "canvas_get",
+          %{"canvas_id" => canvas.id, "mode" => "full"},
+          ctx.context
+        )
+
+      assert is_map(full.document)
+    end
+
+    # The grant is task-derived, and a task carries an org. An agent whose only
+    # roster is in another org holds no grant on either side, so the widening
+    # must not have opened a cross-tenant read.
+    test "canvas_get denies an agent whose only roster is in another org", ctx do
+      org_a = Tenancy.get_org_by_slug!("sxi")
+      org_b = Tenancy.get_org_by_slug!("soylent")
+
+      space_a = create_space(%{name: "Org A Channel", org_id: org_a.id})
+      author = create_participant(space_a.id)
+
+      {:ok, canvas, _msg} =
+        Chat.create_canvas_with_message(space_a.id, author.id, %{"title" => "Merger Terms"})
+
+      task_with_attached_canvas!(canvas)
+
+      outsider = create_agent()
+      space_b = create_space(%{name: "Org B Channel", org_id: org_b.id})
+
+      outsider_participant =
+        create_participant(space_b.id, %{
+          participant_type: "agent",
+          participant_id: outsider.id,
+          display_name: outsider.name
+        })
+
+      context = %{agent_id: outsider.id, agent_participant_id: outsider_participant.id}
+
+      {:error, error} = ToolSurface.execute("canvas_get", %{"canvas_id" => canvas.id}, context)
+
+      assert error.error =~ "Access denied"
+      assert error.recoverable == false
+      refute Map.has_key?(error, :space_id)
+      refute inspect(error) =~ "Merger Terms"
+    end
+
+    # `agent_id` is a nullable `:binary_id` on `Platform.Agents.AgentRuntime`,
+    # so a runtime with no linked agent reaches this tool. It failed closed
+    # before the move and it has to still fail closed after: the widening is
+    # "agents bound to the task", never "callers we cannot identify".
+    test "canvas_get denies a context with no agent identity", ctx do
+      {:ok, canvas, _msg} =
+        Chat.create_canvas_with_message(ctx.space.id, ctx.participant.id, %{
+          "title" => "In-space Canvas"
+        })
+
+      for context <- [%{agent_id: nil, space_id: ctx.space.id}, %{}] do
+        assert {:error, error} =
+                 ToolSurface.execute("canvas_get", %{"canvas_id" => canvas.id}, context)
+
+        assert error.recoverable == false
+        refute Map.has_key?(error, :document)
+        refute inspect(error) =~ "In-space Canvas"
+      end
     end
 
     # ── principal_search ──────────────────────────────────────────

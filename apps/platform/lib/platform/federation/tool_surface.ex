@@ -3,6 +3,37 @@ defmodule Platform.Federation.ToolSurface do
   Tool surface for federated agents.
   Same tools available to built-in and external runtimes.
   Includes both write tools and bounded read tools for space context.
+
+  ## `canvas_get` is WIDER than it was (task 019fb01b, stage 4)
+
+  `canvas_get` used to ask `assert_agent_in_space/2` one question: is this agent
+  a participant of the canvas's space. It now asks
+  `Platform.Chat.Canvas.ToolAccess.fetch_for_read/2`, the same seam
+  `canvas.describe` and `canvas.versions` use, so every canvas-id-keyed read on
+  this surface has one rule.
+
+  That move ADDS callers. It denied a non-rostered agent before and it still
+  denies one with no other claim, but an agent holding the `:task_agent` grant —
+  bound by a task's `phase_assignees` map to a live task the canvas is attached
+  to — now resolves a canvas in a space it was never added to. It also keeps
+  failing closed on a nil `agent_id`, which is the boundary of the widening: the
+  new reach is "agents bound to the task", never "callers we cannot identify".
+
+  The widening is the point of the stage, not a side effect of code reuse.
+  `Platform.Orchestration.PromptTemplates` has been instructing the planner
+  "if a design direction canvas is attached to this task, read it with
+  `canvas_get`" while that call denied the planner in the exact shape the
+  instruction describes: ADR-0046's native path has the designer create the
+  canvas in its OWN space, which the planner is not rostered in. The instruction
+  was false. This makes it true.
+
+  What it does not widen: `canvas_get` still returns nothing about a canvas the
+  caller may not read, `canvas_list` still enumerates only spaces the agent
+  participates in (see the comment on its clause), and read grants still confer
+  no write. The residual risk this inherits — `task_attach_canvas` does not
+  authorize the attacher against the task, so an attachment can be pushed onto a
+  task by anyone who can already read the canvas — is knowingly accepted and
+  filed as task 019fb581, not discovered here.
   """
 
   require Logger
@@ -1041,6 +1072,8 @@ defmodule Platform.Federation.ToolSurface do
         name: "canvas_get",
         description:
           "Get a canvas by ID. Returns summary by default, or full document state with mode=full. The summary includes view_url, the canonical page for the canvas. " <>
+            Platform.Chat.Canvas.Tools.read_gate() <>
+            " " <>
             Platform.Chat.Canvas.Tools.sharing_boundary(),
         parameters: %{
           canvas_id: %{type: "string", required: true, description: "UUID of the canvas"},
@@ -1053,10 +1086,15 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns:
           "Canvas object with id, title, type, space_id, view_url, and optionally the full state document",
+        # Task 019fb01b stage 4 widened this read to the `:task_agent` grant.
+        # The string it replaces named only the space clause, so from that
+        # commit on it described a narrower tool than the one that ships — and
+        # a `limitations` field is a contract a remote runtime branches on, not
+        # a maintainer's note.
         limitations:
-          "Only works for canvases in spaces the agent is a participant in. Full mode may return large payloads for complex canvases.",
+          "Reads only canvases you hold a grant on: a participant of the canvas's space, or an agent bound by phase_assignees to a live task the canvas is attached to. Anything else is denied, and a canvas that does not exist is reported separately from one you may not read. Full mode may return large payloads for complex canvases.",
         when_to_use:
-          "When you need to inspect a canvas's content before updating it, to present canvas data to a user, or to get its view_url"
+          "When you need to inspect a canvas's content before updating it, to present canvas data to a user, to read a design direction canvas attached to your task, or to get its view_url"
       },
       %{
         name: "principal_search",
@@ -1157,22 +1195,22 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "canvas.describe",
         description:
-          "Read the current document, revision, view_url, presence, and recent events for a canvas. Cheap, idempotent — call before patching so base_revision is fresh, or to recover the view_url of a canvas you did not create. " <>
+          "Read the current document, revision, view_url, presence, and recent events for a canvas you hold a grant on. Cheap, idempotent — call before patching so base_revision is fresh, or to recover the view_url of a canvas you did not create. " <>
+            Platform.Chat.Canvas.Tools.read_gate() <>
+            " " <>
             Platform.Chat.Canvas.Tools.sharing_boundary(),
         parameters: %{
           canvas_id: %{type: "string", required: true}
         },
         returns:
           "%{canvas_id, title, space_id, kind, revision, document, view_url, presence, recent_events}",
-        # This read resolves whatever canvas id it is handed; there is no
-        # per-space gate on it today (`ToolHandlers.describe/2` ignores its
-        # context and goes through `Chat.get_canvas/1`, the deliberately
-        # unauthorized primitive). The previous string here claimed a
-        # participation gate that does not exist, which is exactly the kind of
-        # description this stage exists to stop shipping. Gating the read is a
-        # behaviour change and is flagged as follow-up work, not absorbed here.
+        # Task 019fb01b stage 3 gated this read. The string it replaces
+        # ("not gated on space participation today") was accurate when written
+        # and is now false; a description that lags the gate is the defect this
+        # tool's own history is a case study in, so it moves in the same commit
+        # as the gate.
         limitations:
-          "Resolves any canvas id it is given; this read is not gated on space participation today. The view_url it returns still opens only for a viewer who holds a grant.",
+          "Reads only canvases you hold a grant on: a participant of the canvas's space, or an agent bound by phase_assignees to a live task the canvas is attached to. Anything else is denied, and a canvas that does not exist is reported separately from one you may not read. The view_url it returns likewise opens only for a viewer who holds a grant.",
         when_to_use:
           "Before emitting canvas.patch, to present canvas state to a user, or to recover the view_url of a canvas you did not create"
       },
@@ -1208,7 +1246,9 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "canvas.versions",
         description:
-          "List a canvas's revision history newest-first. Each entry is the revision number, write timestamp, written_by attribution snapshot, and a 1-sentence op_summary derived from the patch ops. Pair with canvas.restore to roll back. " <>
+          "List a canvas's revision history newest-first. Each entry is the revision number, write timestamp, written_by attribution snapshot, and a 1-sentence op_summary derived from the patch ops. Pair with canvas.restore to roll back. Same gate as canvas.describe, literally: both resolve through one seam. " <>
+            Platform.Chat.Canvas.Tools.read_gate() <>
+            " " <>
             Platform.Chat.Canvas.Tools.sharing_boundary(),
         parameters: %{
           canvas_id: %{type: "string", required: true},
@@ -1225,8 +1265,13 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns:
           "%{canvas_id, versions: [%{revision, written_at, written_by, op_summary}], next_cursor}",
+        # Same gate as canvas.describe, stated the same way on purpose (task
+        # 019fb01b stage 3). The string it replaces claimed participation only,
+        # which was wrong in both directions: it omitted the task grant, and
+        # the gate it named fell open entirely for a runtime with no linked
+        # agent.
         limitations:
-          "Only works for canvases in spaces the agent is a participant in. Versions older than the table's existence are not back-filled.",
+          "Reads only canvases you hold a grant on: a participant of the canvas's space, or an agent bound by phase_assignees to a live task the canvas is attached to. Anything else is denied. Versions older than the table's existence are not back-filled.",
         when_to_use:
           "Before canvas.restore so you can show the user (or the model) what's available; or after a destructive patch to find a known-good revision to roll back to."
       },
@@ -3149,6 +3194,20 @@ defmodule Platform.Federation.ToolSurface do
     end)
   end
 
+  # `canvas_list` stays on `assert_agent_in_space/2` while `canvas_get` moved onto
+  # `Platform.Chat.Canvas.ToolAccess` (task 019fb01b stage 4). Deliberate, not an
+  # oversight left behind by that move: this tool takes a `space_id` and
+  # ENUMERATES a space, so there is no canvas to resolve a grant from.
+  # `CanvasAccess` answers "may this actor read THIS canvas", and every grant it
+  # knows — space membership, a task attachment, an org — is a fact about one
+  # canvas row. Asked about a space with no canvas in hand it has nothing to add,
+  # and space participation is the right question about an enumeration.
+  #
+  # The consequence, stated here so it is not refiled later as an inconsistency:
+  # an agent holding `:task_agent` on a canvas in a space it is not rostered in
+  # can read that canvas by id and cannot list the space. That is correct. The
+  # grant is scoped to the canvas someone attached to its task, not to
+  # everything sitting next to it.
   def execute("canvas_list", args, context) do
     space_id = Map.get(args, "space_id")
 
@@ -3169,40 +3228,34 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # Task 019fb01b stage 4 moved this read onto the shared canvas authorization
+  # seam. See the "canvas_get is WIDER than it was" section of this module's
+  # moduledoc for what changed and why. `ToolAccess` is referenced in full,
+  # matching `Platform.Chat.Canvas.Links` and `Platform.Chat.CanvasDocument`
+  # below it, so the move adds no line to the alias block.
   def execute("canvas_get", args, context) do
     canvas_id = Map.get(args, "canvas_id")
     mode = Map.get(args, "mode", "summary")
 
-    case Chat.get_canvas(canvas_id) do
-      nil ->
-        {:error,
-         %{
-           error: "Canvas not found: #{canvas_id}",
-           recoverable: false,
-           suggestion: "Use canvas_list to find available canvases in the space"
-         }}
+    with {:ok, canvas} <- Platform.Chat.Canvas.ToolAccess.fetch_for_read(canvas_id, context) do
+      result = %{
+        id: canvas.id,
+        title: canvas.title,
+        kind: Platform.Chat.CanvasDocument.root_kind(canvas.document),
+        space_id: canvas.space_id,
+        view_url: Platform.Chat.Canvas.Links.view_url(canvas.id),
+        inserted_at: format_datetime(canvas.inserted_at),
+        updated_at: format_datetime(canvas.updated_at)
+      }
 
-      canvas ->
-        with :ok <- assert_agent_in_space(canvas.space_id, context) do
-          result = %{
-            id: canvas.id,
-            title: canvas.title,
-            kind: Platform.Chat.CanvasDocument.root_kind(canvas.document),
-            space_id: canvas.space_id,
-            view_url: Platform.Chat.Canvas.Links.view_url(canvas.id),
-            inserted_at: format_datetime(canvas.inserted_at),
-            updated_at: format_datetime(canvas.updated_at)
-          }
-
-          result =
-            if mode == "full" do
-              Map.put(result, :document, canvas.document)
-            else
-              result
-            end
-
-          {:ok, result}
+      result =
+        if mode == "full" do
+          Map.put(result, :document, canvas.document)
+        else
+          result
         end
+
+      {:ok, result}
     end
   end
 
