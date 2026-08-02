@@ -25,6 +25,11 @@ defmodule Platform.Meetings.Config do
   and no filesystem access happens. `config/test.exs` sets this to the
   provider-less default so the suite is hermetic regardless of what is on
   the box. Production leaves the key unset and reads the YAML as before.
+
+  `enabled?/0` uses the identical mechanism against `:meetings_enabled`,
+  short-circuiting a read of the `MEETINGS_ENABLED` OS environment
+  variable. Same reason: a test that depended on the host's environment
+  would pass or fail according to who ran it.
   """
 
   @default_summary %{
@@ -57,6 +62,38 @@ defmodule Platform.Meetings.Config do
   @doc "True if a summary provider other than `:none` is configured."
   def summary_enabled? do
     summary().provider != :none
+  end
+
+  @doc """
+  Master switch for the meetings subsystem's outbound behaviour.
+
+  Reads the `MEETINGS_ENABLED` environment variable, which must be exactly
+  the string `"true"` to enable. Anything else — including absence — means
+  disabled: the flag is **fail-closed**, so a deploy that forgets to set it
+  sends nothing rather than sending on a half-configured path.
+
+  Modelled on `Platform.Application.maybe_add_node_client/1`, which gates
+  the node client on `System.get_env("OPENCLAW_NODE_ENABLED") == "true"`.
+  Deliberately NOT added to `Platform.Config.@required_in_prod`: an absent
+  optional flag is a valid disabled state, not a boot error.
+
+  Setting `config :platform, :meetings_enabled, true | false`
+  short-circuits the environment read entirely (see "Injected config"
+  above). `config/test.exs` sets it to `false`.
+
+  The name is plural because it names the *module*, not an individual
+  meeting — unlike the per-resource `MEETING_GUEST_SIGNING_KEY` /
+  `MEETING_GUEST_HOST` / `MEETING_AGENT_TOKEN` settings.
+
+  This flag gates **sending**. It does not gate seeding, and turning it off
+  never un-seeds anything — see `Platform.Meetings.SenderSeed`.
+  """
+  @spec enabled?() :: boolean()
+  def enabled? do
+    case Application.fetch_env(:platform, :meetings_enabled) do
+      {:ok, injected} -> injected == true
+      :error -> System.get_env("MEETINGS_ENABLED") == "true"
+    end
   end
 
   # ── Private ──────────────────────────────────────────────────────────────

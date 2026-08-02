@@ -626,6 +626,14 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/inbox.ex" => 1,
     "platform/meetings.ex" => 9,
     "platform/meetings/intent_corrections.ex" => 1,
+    # Task 019fb955 stage 2 — `SenderSeed.get/0`. Triaged by hand as this map
+    # asks: the `where:` clause is `a.slug == ^@slug and is_nil(a.workspace_id)`,
+    # where `@slug` is the compile-time constant `"meetings"`. No id is pinned
+    # and no value on the clause originates at a boundary, so no
+    # `Ecto.Query.CastError` is reachable and no `Platform.UUID.valid?/1` guard
+    # applies. Nil-tolerant on purpose: "not seeded yet" is the expected state
+    # whenever `MEETINGS_ENABLED` is unset.
+    "platform/meetings/sender_seed.ex" => 1,
     "platform/memory_feedback.ex" => 1,
     "platform/orchestration/context_assembler.ex" => 1,
     "platform/orchestration/execution_space.ex" => 3,

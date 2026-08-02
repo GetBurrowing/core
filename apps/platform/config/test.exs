@@ -173,6 +173,15 @@ config :platform, :start_meeting_intent_classifier, false
 # tests exercising it don't need to boot the GenServer.
 config :platform, :start_meeting_intent_dispatcher, false
 
+# Meetings master switch (task 019fb955 stage 2). `Meetings.Config.enabled?/0`
+# otherwise falls through to reading the `MEETINGS_ENABLED` OS environment
+# variable, which would make the suite a function of the host — the same
+# hazard the injected `:meetings_summary` key above exists to close. Off for
+# the same reason `:start_meeting_notifier` is off: the boot-time sender seed
+# would otherwise insert outside any test's sandbox ownership. Tests that need
+# it on flip it per-test with `Application.put_env` + `on_exit` restore.
+config :platform, :meetings_enabled, false
+
 # LiveKit webhook signature enforcement (task 019f3312 stage 2): tests
 # keep this off so the ~28 existing controller tests don't need to mint
 # a JWT per payload. The signature-verification plug's own test file
