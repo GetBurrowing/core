@@ -3,7 +3,8 @@ defmodule Platform.Meetings.Meeting do
   Schema for the `meetings` table — the durable meeting entity (ADR 0042).
 
   A meeting is project-scoped, has a human-readable `slug` (unique per
-  project), a status lifecycle (`scheduled → live → ended`), an embedded
+  project), a status lifecycle (`scheduled → live → ended`, with `cancelled`
+  reachable from the first two — see `status_changeset/3`), an embedded
   `chat_space` (the placeholder for what becomes the intent panel), and a
   globally-unique `livekit_room_name` for the voice/video room.
 
@@ -27,12 +28,16 @@ defmodule Platform.Meetings.Meeting do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @statuses ~w(scheduled live ended)
+  @statuses ~w(scheduled live ended cancelled)
 
   schema "meetings" do
     belongs_to(:project, Platform.Tasks.Project)
     belongs_to(:host_participant, Platform.Chat.Participant)
     belongs_to(:chat_space, Platform.Chat.Space)
+    # Who called the meeting off (task 019fb954-c848). Nilified rather than
+    # cascaded if the participant row goes: the cancellation is the durable
+    # fact, the attribution is the nice-to-have.
+    belongs_to(:cancelled_by_participant, Platform.Chat.Participant)
 
     field(:slug, :string)
     field(:name, :string)
@@ -52,6 +57,15 @@ defmodule Platform.Meetings.Meeting do
     # compare-and-swap on this column to guarantee exactly-one notification
     # even when two callers race `start_meeting/1` for the same row.
     field(:notified_at, :utc_datetime_usec)
+    # Cancellation actuals (task 019fb954-c848). `cancelled_at` is the
+    # ordering key the archive reads and the value a cancellation notice
+    # quotes; `status == "cancelled"` stays authoritative for "is it off".
+    field(:cancelled_at, :utc_datetime_usec)
+    # Idempotency stamp for `:meeting_cancelled` fan-out, the exact analogue
+    # of `notified_at` above. A SEPARATE column deliberately: a meeting can
+    # be both started-and-notified and later cancelled-and-notified, and one
+    # column cannot carry both stamps.
+    field(:cancellation_notified_at, :utc_datetime_usec)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -123,20 +137,33 @@ defmodule Platform.Meetings.Meeting do
 
     * `scheduled → live` (stamps `started_at`)
     * `live → ended` (stamps `ended_at`)
+    * `scheduled → cancelled` (stamps `cancelled_at`)
+    * `live → cancelled` (stamps `cancelled_at`)
 
   Any other transition adds an error on `:status` rather than silently
   flipping the value.
+
+  `ended → cancelled` is deliberately NOT legal (task 019fb954-c848). A
+  meeting that already happened cannot be un-happened: it has a transcript,
+  possibly a recording, and attendees who were in it. Cancelling it would
+  claim to every reader that it never took place, and would send a
+  cancellation notice to people who already attended. Correcting an ended
+  meeting is a different operation from calling one off, and this changeset
+  refuses to conflate them.
   """
   def status_changeset(%__MODULE__{status: from} = meeting, to, attrs \\ %{}) do
     meeting
-    |> cast(attrs, [:started_at, :ended_at])
+    |> cast(attrs, [:started_at, :ended_at, :cancelled_at, :cancelled_by_participant_id])
     |> put_change(:status, to)
     |> validate_inclusion(:status, @statuses)
     |> validate_transition(from, to)
+    |> foreign_key_constraint(:cancelled_by_participant_id)
   end
 
   defp validate_transition(changeset, "scheduled", "live"), do: changeset
   defp validate_transition(changeset, "live", "ended"), do: changeset
+  defp validate_transition(changeset, "scheduled", "cancelled"), do: changeset
+  defp validate_transition(changeset, "live", "cancelled"), do: changeset
 
   defp validate_transition(changeset, from, to) do
     add_error(changeset, :status, "illegal transition from #{from} to #{to}")

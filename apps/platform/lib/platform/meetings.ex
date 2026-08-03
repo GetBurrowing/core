@@ -672,6 +672,86 @@ defmodule Platform.Meetings do
     end
   end
 
+  @doc """
+  Call a meeting off, stamping `cancelled_at` and who did it.
+
+  Legal from `scheduled` and from `live`. `ended → cancelled` returns
+  `{:error, changeset}` with an error on `:status` — a meeting that already
+  happened cannot be un-happened; see `Meeting.status_changeset/3`.
+
+  On success broadcasts `{:meeting_cancelled, meeting}` on the project's
+  PubSub topic, same shape as `end_meeting/1`. That broadcast is the ONLY
+  thing that reaches `Platform.Meetings.MeetingNotifier`, which is what
+  turns a cancellation into a notice to the people who were expecting to
+  attend — so it is load-bearing, not telemetry.
+
+  `cancelled_by_participant_id` is a `chat_participants` row id.
+  """
+  @spec cancel_meeting(Meeting.t(), binary() | nil) ::
+          {:ok, Meeting.t()} | {:error, Ecto.Changeset.t()}
+  def cancel_meeting(%Meeting{} = meeting, cancelled_by_participant_id) do
+    attrs = %{
+      cancelled_at: DateTime.utc_now(),
+      cancelled_by_participant_id: cancelled_by_participant_id
+    }
+
+    case meeting
+         |> Meeting.status_changeset("cancelled", attrs)
+         |> Repo.update() do
+      {:ok, updated} = ok ->
+        Phoenix.PubSub.broadcast(
+          Platform.PubSub,
+          project_meetings_topic(updated.project_id),
+          {:meeting_cancelled, updated}
+        )
+
+        ok
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Atomically claim the right to notify subscribers that this meeting is off.
+
+  The exact analogue of `mark_notified/1`, against
+  `meetings.cancellation_notified_at` instead of `meetings.notified_at`:
+  a compare-and-swap via `UPDATE ... WHERE id = ? AND
+  cancellation_notified_at IS NULL`, so concurrent callers race the SQL and
+  exactly one sees `{1, _}`.
+
+  A separate column from `notified_at` on purpose — a meeting that went live
+  and was then called off has legitimately been notified about twice, for two
+  different facts, and one column cannot carry both stamps.
+
+  Returns:
+
+    * `{:ok, meeting}` — caller WON; `meeting.cancellation_notified_at` is
+      stamped and the caller must fan out.
+    * `{:already_notified, meeting}` — somebody else won; do NOT fan out, and
+      the stored stamp is the winner's, left untouched.
+  """
+  @spec mark_cancellation_notified(Meeting.t()) ::
+          {:ok, Meeting.t()} | {:already_notified, Meeting.t()}
+  def mark_cancellation_notified(%Meeting{cancellation_notified_at: nil} = meeting) do
+    now = DateTime.utc_now()
+
+    {count, _} =
+      from(m in Meeting,
+        where: m.id == ^meeting.id and is_nil(m.cancellation_notified_at),
+        update: [set: [cancellation_notified_at: ^now]]
+      )
+      |> Repo.update_all([])
+
+    case count do
+      1 -> {:ok, %{meeting | cancellation_notified_at: now}}
+      0 -> {:already_notified, meeting}
+    end
+  end
+
+  def mark_cancellation_notified(%Meeting{} = meeting), do: {:already_notified, meeting}
+
   # ── Guest ingress (per-invite chat_space) ────────────────────────────────
   #
   # See `guest_livekit_token/2` (below) for the mint side. The per-invite

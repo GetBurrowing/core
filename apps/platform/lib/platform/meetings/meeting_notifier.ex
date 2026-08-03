@@ -1,7 +1,8 @@
 defmodule Platform.Meetings.MeetingNotifier do
   @moduledoc """
   GenServer that subscribes to every project's meeting lifecycle topic and
-  fans out a push notification on `{:meeting_started, meeting}`.
+  fans out a push notification on `{:meeting_started, meeting}` and on
+  `{:meeting_cancelled, meeting}`.
 
   Sits in the supervision tree (not in a LiveView) because the per-session
   subscriber in `PlatformWeb.MeetingLive` only fires when a meetings page is
@@ -129,6 +130,31 @@ defmodule Platform.Meetings.MeetingNotifier do
       {:already_notified, _} ->
         Logger.debug(
           "[MeetingNotifier] meeting_started — meeting=#{meeting.id} " <>
+            "already notified, skipping fan-out"
+        )
+
+        :ok
+    end
+
+    {:noreply, state}
+  end
+
+  # A cancellation is told to the same people, through the same recipient
+  # resolution, as a start (task 019fb954-c848) — which is the reason it is
+  # routed here rather than fanned out at the call site: `fan_out/1` already
+  # knows how to answer "who was expecting this meeting", invite rows first
+  # and chat participants otherwise, and duplicating that query is how the
+  # two answers drift apart. Same CAS-before-any-work shape as
+  # `:meeting_started`, against the separate `cancellation_notified_at`
+  # stamp, so a re-broadcast cannot notify twice.
+  def handle_info({:meeting_cancelled, %Meeting{} = meeting}, state) do
+    case Meetings.mark_cancellation_notified(meeting) do
+      {:ok, claimed} ->
+        fan_out(claimed)
+
+      {:already_notified, _} ->
+        Logger.debug(
+          "[MeetingNotifier] meeting_cancelled — meeting=#{meeting.id} " <>
             "already notified, skipping fan-out"
         )
 
