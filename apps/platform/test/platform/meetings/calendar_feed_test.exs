@@ -407,6 +407,110 @@ defmodule Platform.Meetings.CalendarFeedTest do
     end
   end
 
+  describe "render/1 — cancellation" do
+    test "a cancelled row swaps METHOD, STATUS and SEQUENCE — and NOTHING else" do
+      # `render/1` is pure, so the same struct differing only in `status`
+      # gives a clean two-document diff. That is the point of asserting it
+      # here rather than only end-to-end: it pins the *whole* delta, so
+      # the same-UID assertion in the controller test cannot be satisfied
+      # by some second mechanism holding the UID steady. If anything else
+      # moves — UID, DTSTART, DTEND, SUMMARY, DTSTAMP, TRANSP, PRODID —
+      # this list stops matching.
+      live = ICSContentLines.parse(render!())
+      cancelled = ICSContentLines.parse(render!(%{status: "cancelled"}))
+
+      # Same properties, in the same order. A cancel is the same document
+      # with different values, not a differently shaped one.
+      assert Enum.map(live, & &1.name) == Enum.map(cancelled, & &1.name)
+
+      differing =
+        live
+        |> Enum.zip(cancelled)
+        |> Enum.reject(fn {a, b} -> a == b end)
+        |> Enum.map(fn {a, b} -> {a.name, a.value, b.value} end)
+
+      # EXACT equality, not a subset check. A floor assertion ("these
+      # three moved") admits a fourth change silently, and the fourth
+      # change this stage exists to forbid is a moved UID.
+      assert differing == [
+               {"METHOD", "PUBLISH", "CANCEL"},
+               {"STATUS", "CONFIRMED", "CANCELLED"},
+               {"SEQUENCE", "0", "1"}
+             ]
+    end
+
+    test "METHOD:CANCEL sits at calendar level, outside the VEVENT" do
+      body = render!(%{status: "cancelled"})
+      pairs = body |> ICSContentLines.parse() |> Enum.map(&{&1.name, &1.value})
+
+      method_index = Enum.find_index(pairs, &(&1 == {"METHOD", "CANCEL"}))
+      vevent_index = Enum.find_index(pairs, &(&1 == {"BEGIN", "VEVENT"}))
+
+      # `is_integer` on both before comparing: `Enum.find_index/2` returns
+      # nil when absent, and Elixir's term order puts every integer below
+      # every atom — so a bare `method_index < vevent_index` would pass
+      # spuriously if it were the VEVENT that had gone missing.
+      assert is_integer(method_index)
+      assert is_integer(vevent_index)
+      assert method_index < vevent_index
+
+      # And METHOD is a calendar property, so exactly one of them.
+      assert Enum.count(ICSContentLines.names(body), &(&1 == "METHOD")) == 1
+    end
+
+    test "the cancelled document keeps the original UID and scheduled times" do
+      subject = meeting(%{status: "cancelled"})
+      body = render!(%{status: "cancelled"})
+
+      # The UID a client already holds. A cancel addressed to a fresh UID
+      # files a second, already-cancelled entry and leaves the original
+      # sitting on the calendar forever.
+      assert ICSContentLines.value!(body, "UID") == "meeting-" <> @meeting_id
+      assert ICSContentLines.value!(body, "UID") == CalendarFeed.uid(subject)
+      assert one_event!(body).uid == "meeting-" <> @meeting_id
+
+      # Blanking the times would leave the client nothing to match the
+      # cancel against.
+      assert ICSContentLines.value!(body, "DTSTART") == "20260815T140000Z"
+      assert ICSContentLines.value!(body, "DTEND") == "20260815T150000Z"
+    end
+
+    test "`status` is authoritative, not `cancelled_at`" do
+      # The migration states it: a NULL `cancelled_at` and a status that
+      # is not `cancelled` are the same statement. A predicate
+      # keyed on the timestamp would render a cancel for a row that is
+      # still scheduled — e.g. a half-applied write, or a future
+      # reschedule flow that clears the status but not the stamp.
+      body = render!(%{cancelled_at: ~U[2026-08-12 11:00:00.000000Z]})
+
+      assert ICSContentLines.value!(body, "METHOD") == "PUBLISH"
+      assert ICSContentLines.value!(body, "STATUS") == "CONFIRMED"
+      assert ICSContentLines.value!(body, "SEQUENCE") == "0"
+    end
+
+    test "the other statuses render the uncancelled document" do
+      # `live` and `ended` are not cancellations. An `ended` meeting in
+      # particular happened — telling a calendar it was called off would
+      # be a lie, and is the transition `status_changeset/3` refuses.
+      for status <- ~w(scheduled live ended) do
+        body = render!(%{status: status})
+
+        assert ICSContentLines.value!(body, "METHOD") == "PUBLISH", "status=#{status}"
+        assert ICSContentLines.value!(body, "STATUS") == "CONFIRMED", "status=#{status}"
+        assert ICSContentLines.value!(body, "SEQUENCE") == "0", "status=#{status}"
+      end
+    end
+
+    test "a cancelled meeting with no intended time is still {:error, :unscheduled}" do
+      # The intersection of the two cases. Nothing was ever published for
+      # this row, so there is no event on anyone's calendar to clear —
+      # the 404 rationale survives cancellation.
+      subject = meeting(%{status: "cancelled", scheduled_start_at: nil, scheduled_end_at: nil})
+
+      assert CalendarFeed.render(subject) == {:error, :unscheduled}
+    end
+  end
+
   describe "render/1 — unscheduled meetings" do
     test "both intended-time columns nil returns {:error, :unscheduled}" do
       # The ad-hoc "start a meeting now" row. No intended time means no

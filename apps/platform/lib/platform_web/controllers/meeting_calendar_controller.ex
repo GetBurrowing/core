@@ -43,10 +43,32 @@ defmodule PlatformWeb.MeetingCalendarController do
 
   A 404 is safe *here* specifically because nothing was ever published
   for those rows: no client holds an event to be corrected, so there is
-  nothing to strand. That reasoning does **not** extend to the
-  cancellation path (a later stage), where a 404 in place of a
-  `STATUS:CANCELLED` document leaves a ghost event sitting on someone's
-  calendar forever with no way to remove it.
+  nothing to strand.
+
+  ## A cancelled meeting is 200, not 404
+
+  That reasoning does **not** extend to cancellation, and the two cases
+  must not be conflated:
+
+    * *Never scheduled* — no client ever received an event. A 404 strands
+      nobody, and answering anything else would be inventing an event.
+    * *Cancelled* — every invitee's calendar is holding a real event
+      right now. The only way to remove it is to serve a document that
+      says so. A 404 here leaves that event in place forever, with the
+      link that could have corrected it now permanently dead: the precise
+      failure this endpoint exists to prevent, and strictly worse than
+      having sent nothing at all.
+
+  So a cancelled meeting keeps returning **200**, with
+  `Platform.Meetings.CalendarFeed.render/1` supplying `METHOD:CANCEL`,
+  `STATUS:CANCELLED` and an advanced `SEQUENCE` on the *same* `UID`.
+  Cancellation likewise does not invalidate the token — an invalidated
+  link is a 404 by another name.
+
+  The one exception is the intersection: a cancelled meeting that never
+  had an intended time is still a 404, because it was never on anyone's
+  calendar. `render/1` decides that, on the row, for the same reason as
+  above.
   """
 
   use PlatformWeb, :controller

@@ -51,13 +51,39 @@ defmodule Platform.Meetings.CalendarFeed do
 
   ## SEQUENCE is always emitted
 
-  `SEQUENCE:0` here; the cancelled path adds `SEQUENCE:1`. RFC 5545
-  §3.8.7.4 defaults an absent SEQUENCE to 0, so omitting it from *both*
-  states would give a cancellation the same effective sequence as the
-  original — and Google and Outlook discard an update whose sequence
+  `SEQUENCE:0` on the live path, `SEQUENCE:1` on the cancelled one. RFC
+  5545 §3.8.7.4 defaults an absent SEQUENCE to 0, so omitting it from
+  *both* states would give a cancellation the same effective sequence as
+  the original — and Google and Outlook discard an update whose sequence
   does not exceed the stored one. That is precisely the "cancel the
   client ignores" failure. Both values are derived from the row; there
   is no counter column and none should be added.
+
+  ## Cancellation — a different document, never a different event
+
+  `status == "cancelled"` (read through the single `cancelled?/1`
+  predicate) swaps three properties together:
+
+    * calendar-level `METHOD:CANCEL` for `METHOD:PUBLISH`
+    * `STATUS:CANCELLED` for `STATUS:CONFIRMED` inside the `VEVENT`
+    * `SEQUENCE:1` for `SEQUENCE:0`
+
+  All three, because clients disagree about which one they honour: a
+  document that says only `METHOD:CANCEL` is ignored by a client keying
+  on `STATUS`, and one that advances neither `SEQUENCE` is discarded as
+  a stale replay by clients that key on that.
+
+  **The `UID` does not change.** It is still `uid/1` of the meeting id,
+  with no cancellation-specific branch anywhere near it. A cancel is not
+  a new event; it is a correction addressed to an event a client already
+  holds, and the UID is the only handle it has for finding it. Mint a
+  fresh UID on this path and the client files the cancellation as a
+  second, already-cancelled entry while the original sits on the
+  calendar forever — the exact ghost this endpoint exists to clear.
+
+  `DTSTART`/`DTEND` likewise keep the original scheduled times. Blanking
+  them would leave the client nothing to match, and RFC 5545 requires a
+  `DTSTART` regardless.
 
   ## METHOD:PUBLISH, and the properties deliberately absent
 
@@ -127,21 +153,34 @@ defmodule Platform.Meetings.CalendarFeed do
   def render(%Meeting{scheduled_end_at: nil}), do: {:error, :unscheduled}
 
   def render(%Meeting{} = meeting) do
+    # The three cancellation-sensitive properties are chosen together,
+    # from one predicate, in one place. Scattering three separate
+    # `if cancelled?` branches through the list is how a document ends up
+    # saying CANCEL at the calendar level and CONFIRMED inside the event.
+    #
+    # UID is deliberately NOT in this tuple, and must never join it.
+    {method, status, sequence} =
+      if cancelled?(meeting) do
+        {"CANCEL", "CANCELLED", "1"}
+      else
+        {"PUBLISH", "CONFIRMED", "0"}
+      end
+
     document =
       [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
         "PRODID:" <> @prodid,
         "CALSCALE:GREGORIAN",
-        "METHOD:PUBLISH",
+        "METHOD:" <> method,
         "BEGIN:VEVENT",
         "UID:" <> uid(meeting),
         "DTSTAMP:" <> utc_stamp(meeting.updated_at),
         "DTSTART:" <> utc_stamp(meeting.scheduled_start_at),
         "DTEND:" <> utc_stamp(meeting.scheduled_end_at),
         "SUMMARY:" <> escape(meeting.name),
-        "STATUS:CONFIRMED",
-        "SEQUENCE:0",
+        "STATUS:" <> status,
+        "SEQUENCE:" <> sequence,
         "TRANSP:OPAQUE",
         "END:VEVENT",
         "END:VCALENDAR"
@@ -151,6 +190,13 @@ defmodule Platform.Meetings.CalendarFeed do
 
     {:ok, document}
   end
+
+  # The ONE place the cancelled state is read. `status` is authoritative,
+  # not `cancelled_at`: the two are the same statement (see the
+  # cancellation migration), and keying on the timestamp would make a
+  # row with a stamp and a non-cancelled status render a cancel.
+  defp cancelled?(%Meeting{status: "cancelled"}), do: true
+  defp cancelled?(%Meeting{}), do: false
 
   # RFC 5545 §3.3.5 form 2. An iCalendar DATE-TIME has no
   # fractional-second field at all, and `:utc_datetime_usec` carries

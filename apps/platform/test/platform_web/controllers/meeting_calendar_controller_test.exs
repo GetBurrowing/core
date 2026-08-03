@@ -193,6 +193,139 @@ defmodule PlatformWeb.MeetingCalendarControllerTest do
     end
   end
 
+  describe "show/2 — a cancelled meeting" do
+    test "the SAME URL returns 200 with METHOD:CANCEL on the SAME UID" do
+      meeting = create_meeting!()
+
+      # Minted once, BEFORE the cancellation, and reused verbatim. This
+      # is the URL an invitee's calendar client is subscribed to; it has
+      # no way to learn a new one.
+      path = feed_path(meeting)
+
+      before = get(Phoenix.ConnTest.build_conn(), path)
+      assert before.status == 200
+
+      before_lines = ICSContentLines.parse(before.resp_body)
+      before_uid = ICSContentLines.value!(before_lines, "UID")
+      before_sequence = before_lines |> ICSContentLines.value!("SEQUENCE") |> String.to_integer()
+
+      # Anti-vacuity: `value!/2` raises on an absent property, so
+      # `before_uid` cannot be nil — but pin what it actually is, or the
+      # equality below could be two copies of some other string.
+      assert before_uid == CalendarFeed.uid(meeting)
+
+      assert {:ok, _cancelled} = Meetings.cancel_meeting(meeting, nil)
+
+      conn = get(Phoenix.ConnTest.build_conn(), path)
+
+      # (a) 200, NOT 404. Every invitee is holding a real event right
+      # now; a 404 leaves it there forever and kills the only channel
+      # that could have corrected it.
+      assert conn.status == 200
+
+      lines = ICSContentLines.parse(conn.resp_body)
+      pairs = Enum.map(lines, &{&1.name, &1.value})
+
+      # (b) METHOD:CANCEL, read through the content-line grammar and
+      # asserted by POSITION. `body =~ "METHOD:CANCEL"` would pass on an
+      # unfolded document, on a METHOD illegally inside the VEVENT, and
+      # on the string appearing inside a SUMMARY value.
+      method_index = Enum.find_index(pairs, &(&1 == {"METHOD", "CANCEL"}))
+      vevent_index = Enum.find_index(pairs, &(&1 == {"BEGIN", "VEVENT"}))
+
+      # Both indices proven to exist first: `find_index/2` returns nil
+      # when absent, and integers sort below atoms, so a bare `<` would
+      # pass spuriously if the VEVENT were the missing one.
+      assert is_integer(method_index)
+      assert is_integer(vevent_index)
+      assert method_index < vevent_index
+
+      # (c) THE ASSERTION THAT MATTERS. A test asserting only that
+      # METHOD:CANCEL is present passes against an implementation that
+      # mints a fresh UID for the cancelled path — which files a second,
+      # already-cancelled entry and leaves the original event on the
+      # calendar. That is the exact failure this endpoint exists to
+      # prevent.
+      assert ICSContentLines.value!(lines, "UID") == before_uid
+
+      # (d) STATUS, at its wire casing. `ICalendar.from_ics/1` downcases
+      # it, so the RFC token is only visible here.
+      assert ICSContentLines.value!(lines, "STATUS") == "CANCELLED"
+
+      # (e) SEQUENCE strictly advanced. Google and Outlook discard an
+      # update whose sequence does not exceed the stored one, so an
+      # un-advanced cancel is a cancel the client ignores. Compared as
+      # integers against the captured pre-cancel value rather than
+      # hard-coded, so this reads as "advanced" and not "is 1".
+      assert String.to_integer(ICSContentLines.value!(lines, "SEQUENCE")) > before_sequence
+    end
+
+    test "a token minted before the cancellation still works after it" do
+      meeting = create_meeting!()
+
+      # Held from before the cancellation, exactly as a subscribed client
+      # holds it. An invalidated link is a 404 by another name — the
+      # ghost event stays and nothing can clear it.
+      token = CalendarLink.sign(meeting.id)
+
+      assert {:ok, _cancelled} = Meetings.cancel_meeting(meeting, nil)
+
+      conn = get(Phoenix.ConnTest.build_conn(), feed_path(meeting.id, token))
+
+      assert conn.status == 200
+      assert ICSContentLines.value!(conn.resp_body, "METHOD") == "CANCEL"
+      assert ICSContentLines.value!(conn.resp_body, "UID") == CalendarFeed.uid(meeting)
+    end
+
+    test "cancellation advances DTSTAMP, because it changes the row" do
+      meeting = create_meeting!() |> seed_updated_at!(@seeded_updated_at)
+      path = feed_path(meeting)
+
+      before = get(Phoenix.ConnTest.build_conn(), path)
+
+      assert ICSContentLines.value!(before.resp_body, "DTSTAMP") ==
+               Calendar.strftime(@seeded_updated_at, "%Y%m%dT%H%M%SZ")
+
+      assert {:ok, cancelled} = Meetings.cancel_meeting(meeting, nil)
+
+      conn = get(Phoenix.ConnTest.build_conn(), path)
+
+      # DTSTAMP is `updated_at` (stage 2). The claim that the stamp moves
+      # "when, and only when, something moved" is only true of the
+      # cancellation path if `cancel_meeting/2` actually bumps the row's
+      # `updated_at` — asserted here rather than assumed, because a
+      # client that sees an unchanged DTSTAMP on an advanced SEQUENCE is
+      # being handed a self-contradictory document.
+      assert DateTime.compare(cancelled.updated_at, @seeded_updated_at) == :gt
+
+      assert ICSContentLines.value!(conn.resp_body, "DTSTAMP") ==
+               cancelled.updated_at
+               |> DateTime.truncate(:second)
+               |> Calendar.strftime("%Y%m%dT%H%M%SZ")
+
+      refute ICSContentLines.value!(conn.resp_body, "DTSTAMP") ==
+               ICSContentLines.value!(before.resp_body, "DTSTAMP")
+    end
+
+    test "a cancelled meeting that was never scheduled is still 404" do
+      # The intersection of the two rules. Nothing was ever published for
+      # this row, so no client holds an event to clear — the never-
+      # published 404 rationale survives the cancellation.
+      meeting = create_meeting!(%{scheduled_start_at: nil, scheduled_end_at: nil})
+      path = feed_path(meeting)
+
+      # CONTROL: it is 404 for being unscheduled, before any cancelling.
+      assert get(Phoenix.ConnTest.build_conn(), path).status == 404
+
+      assert {:ok, _cancelled} = Meetings.cancel_meeting(meeting, nil)
+
+      conn = get(Phoenix.ConnTest.build_conn(), path)
+
+      assert conn.status == 404
+      assert conn.resp_body == ""
+    end
+  end
+
   describe "show/2 — response headers" do
     test "is text/calendar, never cached, nosniff, inline" do
       meeting = create_meeting!()
