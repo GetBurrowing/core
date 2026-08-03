@@ -108,6 +108,32 @@ defmodule PlatformWeb.Router do
     post("/chat/attachments/upload/:token", ChatAttachmentUploadController, :create)
   end
 
+  # Calendar feed pipeline (task 019fb955-b702 stage 3) — same posture as
+  # the presigned upload above: the HMAC token in the URL is the only auth.
+  # No session, no bearer, no `:require_auth`, no `ExternalUserScope`,
+  # because Google / Apple / Outlook fetch a subscribed .ics from THEIR
+  # servers and carry none of our cookies.
+  #
+  # Deliberately NO `plug(:accepts, ...)`. Those same fetchers send
+  # inconsistent Accept headers — `text/calendar`, `*/*`, sometimes none at
+  # all — and an allowlist turns that into a 406 that never reproduces in a
+  # browser, where the Accept header always looks fine. The controller
+  # sends a raw response with an explicit content type, so there is no
+  # format negotiation to drive anyway.
+  pipeline :calendar_feed do
+    plug(:put_secure_browser_headers)
+  end
+
+  # Declared BEFORE the authenticated `scope "/"` below. The path is three
+  # segments so it cannot collide with `live("/meetings/:slug", ...)`, but
+  # the ordering is what keeps it out of reach of the authenticated
+  # scope's plugs regardless of what routes are added there later.
+  scope "/", PlatformWeb do
+    pipe_through(:calendar_feed)
+
+    get("/meetings/:id/invite.ics", MeetingCalendarController, :show)
+  end
+
   scope "/", PlatformWeb do
     pipe_through(:browser)
 
