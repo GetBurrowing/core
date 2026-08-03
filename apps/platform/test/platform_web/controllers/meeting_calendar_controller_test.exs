@@ -132,6 +132,34 @@ defmodule PlatformWeb.MeetingCalendarControllerTest do
       refute conn.private[:plug_session_fetch] == :done
     end
 
+    test "serves whatever the fetcher's Accept header says, including none" do
+      meeting = create_meeting!()
+      path = feed_path(meeting)
+
+      # The `:calendar_feed` pipeline omits `plug(:accepts, ...)` on
+      # purpose: Google, Apple and Outlook send inconsistent Accept
+      # headers on a subscribed fetch, and an allowlist turns that into a
+      # 406 that never reproduces in a browser. This pins that choice —
+      # the omission is a decision, not an oversight, so it gets an
+      # assertion rather than only a comment.
+      for accept <- ["text/calendar", "*/*", "application/json", "text/html"] do
+        conn =
+          Phoenix.ConnTest.build_conn()
+          |> Plug.Conn.put_req_header("accept", accept)
+          |> get(path)
+
+        assert conn.status == 200, "Accept: #{accept} returned #{conn.status}"
+      end
+
+      # And with no Accept header at all.
+      bare =
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Conn.delete_req_header("accept")
+        |> get(path)
+
+      assert bare.status == 200
+    end
+
     test "two independent fetches agree on the UID and are byte-identical" do
       meeting = create_meeting!()
       path = feed_path(meeting)
