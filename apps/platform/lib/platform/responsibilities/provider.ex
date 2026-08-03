@@ -87,6 +87,28 @@ defmodule Platform.Responsibilities.Provider do
   match (or are a superset of) the strings in `context_provided`.
   Returns `{:error, term}` if the context cannot be assembled (missing
   record, upstream service down, etc.).
+
+  ## `:dispatch_space_id` — the one key that is not a prompt slot
+
+  A provider whose dispatch WRITES somewhere may return
+  `dispatch_space_id: "<space uuid>"` alongside its slots. It is not
+  rendered into any prompt. `Platform.Responsibilities.Router` lifts it
+  into the native signal's `metadata.space_id`, from which
+  `Platform.Chat.AgentResponder` passes it to
+  `Platform.Federation.AttentionDispatch.broadcast/3` as the `space_id:`
+  option — the only input `Platform.Chat.DispatchMembership.ensure_writable/3`
+  has. Without it a native recipient is told to create a canvas in a
+  space it is not a participant of, and the dispatch is dead on arrival.
+
+  It is OPT-IN on purpose, and it is deliberately not spelled
+  `:space_id`. Most fires — cron sweeps, webhooks — name no space and
+  must keep taking the funnel's clean `:no_space_named` skip; a
+  responsibility should start inviting its agent into a space only
+  because its provider said to, never because some unrelated context
+  slot happened to mention one.
+
+  Set today by the six `meetings.*` mid-meeting intent handlers, from
+  `Platform.Meetings.IntentContext.space_id/1`.
   """
   @callback gather_context(
               responsibility :: Platform.Responsibilities.Responsibility.t(),

@@ -270,5 +270,109 @@ defmodule Platform.Chat.AgentResponderAttentionFunnelTest do
                :count
              ) == 0
     end
+
+    test "a fire whose metadata NAMES a space invites the agent into it" do
+      # THE DEFECT THIS CLOSES (2026-08-01, Rowan's DM). A mid-meeting
+      # classified intent routes to a responsibility whose assignee is a
+      # native agent, and the prompt tells it to create or patch a canvas
+      # "in this meeting's space". `broadcast_system_event/3` passed
+      # `space_id: nil` unconditionally, so `ensure_writable/3` took the
+      # `:no_space_named` skip and the agent was never a participant —
+      # `Canvas.ToolHandlers.create/2` requires a resolved
+      # `agent_participant_id`, so every one of those dispatches was dead
+      # on arrival. Traced on the production meeting
+      # `019fb8ec-8644-75a4-b764-cc859d082dce`: six intents dispatched,
+      # zero invites, two genuine items lost.
+      ref = attach_invite_telemetry()
+      %{agent: agent} = online_agent()
+
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Meeting #{System.unique_integer([:positive])}",
+          slug: "arf-meeting-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      refute Chat.get_agent_participant(space.id, agent),
+             "the agent must NOT be a member before the fire, or the invite proves nothing"
+
+      signal = %{
+        reason: :system_event,
+        metadata: %{
+          feature: "meetings",
+          agent_id: agent.id,
+          agent_slug: agent.slug,
+          responsibility_key: "meetings.action_items",
+          trigger_kind: :event_topic,
+          intent_id: Ecto.UUID.generate(),
+          # The carrier. `Responsibilities.Router.put_dispatch_space/2`
+          # writes this from the provider's `:dispatch_space_id`.
+          space_id: space.id
+        }
+      }
+
+      assert :ok = AgentResponder.respond(signal)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention", payload: payload}, 1_000
+
+      # Named, not `{:ok, _}`: `:already_member` would mean the fixture
+      # invited it, and `:no_space_named` is the bug.
+      assert_receive {:auto_invite, ^ref, %{count: 1},
+                      %{
+                        outcome: :invited,
+                        source: :agent_responder,
+                        space_kind: "channel",
+                        space_id: invited_space
+                      }},
+                     1_000
+
+      assert invited_space == space.id
+
+      # The row is what makes the dispatch live, so assert the row and not
+      # only the telemetry.
+      assert %Participant{} = Chat.get_agent_participant(space.id, agent)
+
+      # ── THE INVARIANT ───────────────────────────────────────────────────
+      # Top-level `signal.space_id` must STILL be absent. The option fed
+      # the invite; the wire is a separate argument it never touches. A
+      # regression that "simplified" this by lifting the space onto the
+      # signal would satisfy every assertion above while silently
+      # relocating whatever permission prompt the receiving client had
+      # pending — `attention.ts` pins that space from the top level ONLY.
+      # Asserted as key ABSENCE, since a nil-valued key still reads as
+      # present to the client.
+      refute Map.has_key?(payload.signal, :space_id)
+
+      # And the carrier IS on the wire, in metadata, where the same client
+      # resolves a reply target ("rides this list as a reply target only").
+      # Without this the two refutations above would also be satisfied by a
+      # responder that dropped the space entirely.
+      assert payload.signal.metadata.space_id == space.id
+    end
+
+    test "a blank space in metadata is still :no_space_named, not :invalid_space_id" do
+      # `""` is not a space that failed to resolve — it is a producer that
+      # named none. Reporting it as `:invalid_space_id` would page an
+      # operator toward a malformed id that does not exist.
+      ref = attach_invite_telemetry()
+      %{agent: agent} = online_agent()
+
+      signal = %{
+        reason: :system_event,
+        metadata: %{
+          feature: "meetings",
+          agent_id: agent.id,
+          agent_slug: agent.slug,
+          responsibility_key: "meetings.brief_worthy",
+          trigger_kind: :event_topic,
+          space_id: ""
+        }
+      }
+
+      assert :ok = AgentResponder.respond(signal)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+      assert_receive {:auto_invite, ^ref, _, %{outcome: :no_space_named}}, 1_000
+    end
   end
 end

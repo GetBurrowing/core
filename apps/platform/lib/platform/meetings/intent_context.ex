@@ -262,6 +262,42 @@ defmodule Platform.Meetings.IntentContext do
   def format_window(_), do: "(no surrounding transcript captured yet)"
 
   @doc """
+  Render the chat space the recipient writes into, for the prompt.
+
+  ## Why the id is stated rather than implied
+
+  Every intent prompt tells the recipient to create or patch a canvas
+  "in this meeting's space", and until this existed the prompt named no
+  space at all. The six `meetings.*.v1` bodies carried
+  `meeting_intent` / `transcript_window` / `meeting_canvases` /
+  `org_identity` and nothing else, so a native recipient — which holds
+  `canvas_create` and `canvas_patch`, both of which take a `space_id` —
+  was asked to write somewhere it could not name. Measured on the
+  2026-08-01 production meeting `019fb8ec-8644-75a4-b764-cc859d082dce`:
+  six intents dispatched, and the two genuine items in them (an action
+  item and a brief entry) were never recorded.
+
+  The value was already in hand and thrown away: `space_canvases/1`
+  returns the id it inventoried alongside the inventory, and
+  `format_canvases/1` rendered the list and dropped the id.
+
+  Takes the canvas-inventory slot (or any map carrying `:space_id`), so
+  the id the prompt names is BY CONSTRUCTION the one the inventory was
+  read from. Deriving it a second time from the payload would let the
+  two disagree, and a prompt that lists one space's canvases while
+  naming another is worse than one that names none.
+
+  Absence is stated, like every other slot here — a marker that
+  interpolates to `""` leaves the recipient guessing at a space, which
+  is the one thing it must not do.
+  """
+  @spec format_space(map()) :: String.t()
+  def format_space(%{space_id: space_id}) when is_binary(space_id) and space_id != "",
+    do: space_id
+
+  def format_space(_), do: "(this meeting names no chat space — do not guess at another)"
+
+  @doc """
   Render the canvas inventory. An empty space is stated as empty rather
   than omitted — "there is nothing here yet" is how the recipient knows
   to create rather than patch.

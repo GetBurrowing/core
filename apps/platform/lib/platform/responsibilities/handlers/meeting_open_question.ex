@@ -122,6 +122,10 @@ defmodule Platform.Responsibilities.Handlers.MeetingOpenQuestion do
 
   If there is no genuine open question here, say so plainly and change nothing. That is the correct answer, and it is a better one than a list item nobody wanted.
 
+  ## Where your work goes
+
+  This meeting's own chat space is `{{meeting_space_id}}`. Create and patch canvases THERE — you were added to it as a participant before this dispatch was sent, so `canvas_create` and `canvas_patch` against it will succeed. If that line says the meeting names no chat space, say so in your ack `note` rather than writing into another one — a canvas nobody in the meeting can see is the same as no canvas.
+
   ## What is already in the space
 
   {{meeting_canvases}}
@@ -199,6 +203,13 @@ defmodule Platform.Responsibilities.Handlers.MeetingOpenQuestion do
     workspace_id = Map.get(payload, :workspace_id) || Map.get(payload, "workspace_id")
     base_opts = if workspace_id, do: [workspace_id: workspace_id], else: []
 
+    # Resolved ONCE and used twice. The canvas inventory is read FROM
+    # this space and `dispatch_space_id` is what gets the recipient
+    # invited INTO it, so resolving it twice would let the two disagree
+    # — an agent shown one space's canvases and made writable in
+    # another is a worse dispatch than the dead one this closes.
+    space_id = IntentContext.space_id(payload)
+
     with {:ok, %{org_identity: identity}} <-
            ContextProviders.gather_context(:org_identity, base_opts) do
       {:ok,
@@ -206,7 +217,14 @@ defmodule Platform.Responsibilities.Handlers.MeetingOpenQuestion do
          org_identity: identity,
          meeting_intent: IntentContext.meeting_intent(payload),
          transcript_window: IntentContext.transcript_window(payload),
-         meeting_canvases: IntentContext.space_canvases(IntentContext.space_id(payload))
+         meeting_canvases: IntentContext.space_canvases(space_id),
+         # NOT a prompt slot. This is the provider OPTING IN to the
+         # dispatch invite: `Router.build_native_signal/5` lifts it to
+         # the native signal's `metadata.space_id`, which is the only
+         # input `Platform.Chat.DispatchMembership.ensure_writable/3`
+         # has. A provider that names none keeps the `:no_space_named`
+         # skip. See `Platform.Responsibilities.Provider`.
+         dispatch_space_id: space_id
        }}
     end
   end
@@ -304,6 +322,10 @@ defmodule Platform.Responsibilities.Handlers.MeetingOpenQuestion do
       meeting_intent: IntentContext.format_intent(Map.get(context, :meeting_intent) || %{}),
       transcript_window: IntentContext.format_window(Map.get(context, :transcript_window) || %{}),
       meeting_canvases: IntentContext.format_canvases(Map.get(context, :meeting_canvases) || %{}),
+      # Read off the INVENTORY slot, not re-derived from the payload:
+      # the space the prompt names is by construction the space the
+      # canvas list was read from.
+      meeting_space_id: IntentContext.format_space(Map.get(context, :meeting_canvases) || %{}),
       org_identity: IntentContext.format_identity(Map.get(context, :org_identity))
     }
   end
