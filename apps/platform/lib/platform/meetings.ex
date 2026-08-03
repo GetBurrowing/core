@@ -20,6 +20,7 @@ defmodule Platform.Meetings do
   alias Platform.Chat
   alias Platform.Chat.ExternalScope
   alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript}
+  alias Platform.Meetings.CalendarLink
   alias Platform.Meetings.GuestInvite
   alias Platform.Meetings.Invite
   alias Platform.Meetings.InviteDelivery
@@ -1329,6 +1330,24 @@ defmodule Platform.Meetings do
 
       {:ok, %{invite: invite, token: token, url: guest_invite_url(meeting, token)}}
     end
+  end
+
+  @doc """
+  Build the calendar-link path for `meeting`.
+
+  Returns a PATH, not a URL — no scheme, no host. `core` is a public
+  repository and nothing here hardcodes or threads a hostname; the caller
+  that renders this into a UI or a message is responsible for absolutising
+  it against its own endpoint.
+
+  The token is a per-MEETING bearer capability minted by
+  `Platform.Meetings.CalendarLink` — one meeting, one link, no expiry.
+  Contrast `invite_guest/2`, whose token is per-invite and admits to a
+  room; this one discloses calendar metadata only.
+  """
+  @spec calendar_link_path(Meeting.t()) :: String.t()
+  def calendar_link_path(%Meeting{id: id}) when is_binary(id) do
+    "/meetings/#{id}/invite.ics?token=#{CalendarLink.sign(id)}"
   end
 
   # Delivery runs SYNCHRONOUSLY AND IN-LINE on the success path of both

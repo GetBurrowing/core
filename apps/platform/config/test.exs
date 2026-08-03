@@ -29,6 +29,7 @@ config :platform,
   skip_attachment_storage_check: true,
   attachment_signing_key: "test-attachment-signing-key-0123456789abcdef",
   meeting_guest_signing_key: "test-meeting-guest-signing-key-0123456789abcdef",
+  meeting_calendar_signing_key: "test-meeting-calendar-signing-key-0123456789abcdef",
   meeting_guest_host: "meet.test.local"
 
 # Print only warnings and errors during test

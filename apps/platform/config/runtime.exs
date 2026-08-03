@@ -163,6 +163,19 @@ if config_env() == :prod do
         raise("MEETING_GUEST_SIGNING_KEY must be set for guest meeting invites")
 end
 
+# :meeting_calendar_signing_key is used by Platform.Meetings.CalendarLink
+# to sign the per-meeting calendar link token. It is deliberately a
+# SEPARATE key from :meeting_guest_signing_key: a calendar link never
+# expires and rotating this key is its only revocation lever, so it must
+# be rotatable without invalidating guest invites. Dev/test set stable
+# local values; prod must read it from an env var and fail fast if unset.
+if config_env() == :prod do
+  config :platform,
+    meeting_calendar_signing_key:
+      System.get_env("MEETING_CALENDAR_SIGNING_KEY") ||
+        raise("MEETING_CALENDAR_SIGNING_KEY must be set for meeting calendar links")
+end
+
 # :meeting_guest_host is the public hostname where guest meeting links
 # resolve — used by MeetingLive's Copy-guest-link sheet to build the
 # outbound URL. Defaults to prod; override with MEETING_GUEST_HOST for
