@@ -282,6 +282,7 @@ defmodule PlatformWeb.MeetingCalendarControllerTest do
       path = feed_path(meeting)
 
       before = get(Phoenix.ConnTest.build_conn(), path)
+      assert before.status == 200
 
       assert ICSContentLines.value!(before.resp_body, "DTSTAMP") ==
                Calendar.strftime(@seeded_updated_at, "%Y%m%dT%H%M%SZ")
@@ -289,6 +290,12 @@ defmodule PlatformWeb.MeetingCalendarControllerTest do
       assert {:ok, cancelled} = Meetings.cancel_meeting(meeting, nil)
 
       conn = get(Phoenix.ConnTest.build_conn(), path)
+
+      # Asserted before parsing. A 404 has an empty body, and
+      # `ICSContentLines.value!/2` would raise an ArgumentError on it —
+      # a red, but one that reports a parser complaint instead of the
+      # status that actually moved.
+      assert conn.status == 200
 
       # DTSTAMP is `updated_at` (stage 2). The claim that the stamp moves
       # "when, and only when, something moved" is only true of the
