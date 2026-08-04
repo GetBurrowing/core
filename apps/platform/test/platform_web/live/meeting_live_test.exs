@@ -3154,11 +3154,26 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn,
       project: project
     } do
-      meeting = seed_detail_meeting(project)
+      # Deliberately NOT on the anchor the page opens at. "Leaves the week
+      # alone" is unfalsifiable while the week IS this week: a handler that
+      # snapped the anchor back to today would be indistinguishable from one
+      # that touched nothing. Paging forward first makes the reset visible,
+      # and the meeting is seeded a week out so there is something to select
+      # once we are there.
+      meeting =
+        seed_grid_meeting(project,
+          slug: "detail-next-week",
+          name: "Next Week Meeting",
+          scheduled_start_at: zoned_utc(Date.add(grid_today(), 7), 14, 0),
+          scheduled_end_at: zoned_utc(Date.add(grid_today(), 7), 15, 0)
+        )
 
-      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      html = view |> element(~s([phx-click="calendar_next_week"])) |> render_click()
+
       week_before = week_label(view)
       day_before = day_heading_date(html)
+      refute week_before == PlatformWeb.MeetingLive.calendar_week_label(grid_today())
 
       html = select_meeting(view, meeting)
 
