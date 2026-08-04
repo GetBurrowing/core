@@ -135,7 +135,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
 
       input = one(html, "[data-role=meeting-invite-search]")
 
-      assert attr(input, "phx-keyup") == ["meeting_invite_search"]
+      assert attr(input, "phx-keyup") == ["meeting_create_invite_search"]
       assert attr(input, "value") == ["sam@"]
 
       assert class_of(one(html, "[data-role=meeting-invite-control] label")) =~ "min-h-11"
@@ -267,6 +267,61 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
     end
   end
 
+  # ── mode-derived event names (stage 4) ─────────────────────────────────
+  #
+  # Both surfaces live in one LiveView, so the event name is the only
+  # thing that distinguishes a create-sheet click from a detail-panel
+  # click before it reaches a handler.
+
+  describe "event/2" do
+    test "draft and live never share an event name" do
+      draft = Enum.map([:search, :stage], &InviteControl.event(:draft, &1))
+      live = Enum.map([:search, :stage], &InviteControl.event(:live, &1))
+
+      assert draft == ["meeting_create_invite_search", "meeting_create_invite_stage"]
+      assert live == ["meeting_invite_search", "meeting_invite_stage"]
+      assert MapSet.disjoint?(MapSet.new(draft), MapSet.new(live))
+    end
+
+    test "asking a mode for a control it does not own raises" do
+      assert_raise ArgumentError, ~r/no :add_people event exists in invite mode :draft/, fn ->
+        InviteControl.event(:draft, :add_people)
+      end
+
+      assert_raise ArgumentError, ~r/no :unstage event exists in invite mode :live/, fn ->
+        InviteControl.event(:live, :unstage)
+      end
+    end
+  end
+
+  describe "invite_control/1 — one stage event per mode, kinded" do
+    test "all three draft options emit the draft stage event" do
+      html =
+        control(mode: :draft, candidates: [], email_option: "sam@example.test") <>
+          control(
+            mode: :draft,
+            candidates: [user("11111111-0000-4000-8000-000000000001", "Dalton", "d@example.test")]
+          )
+
+      clicked =
+        q(html, "[data-role=meeting-invite-option], [data-role=meeting-invite-candidate]")
+
+      assert Enum.count(clicked) == 3
+      assert attr(clicked, "phx-click") |> Enum.uniq() == ["meeting_create_invite_stage"]
+      assert attr(clicked, "phx-value-kind") == ["guest", "external", "user"]
+    end
+
+    test "the live control emits the live stage event instead" do
+      html = control(mode: :live, candidates: [], email_option: "sam@example.test")
+
+      assert attr(q(html, "[data-role=meeting-invite-option]"), "phx-click") |> Enum.uniq() ==
+               ["meeting_invite_stage"]
+
+      assert attr(one(html, "[data-role=meeting-invite-search]"), "phx-keyup") ==
+               ["meeting_invite_search"]
+    end
+  end
+
   # ── tag derivation ─────────────────────────────────────────────────────
 
   describe "tag/1 — the four derivations" do
@@ -351,7 +406,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
       html = row(guest_entry(removable: true), mode: :draft, removable: true)
 
       unstage = one(html, "[data-role=meeting-invite-unstage]")
-      assert attr(unstage, "phx-click") == ["meeting_invite_unstage"]
+      assert attr(unstage, "phx-click") == ["meeting_create_invite_unstage"]
       assert attr(unstage, "phx-value-id") == ["entry-1"]
 
       # Nothing has been minted at create time, so there is no link.

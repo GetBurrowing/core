@@ -24,6 +24,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   | the row's `X` | UNSTAGES (drops from the assign list); nothing is written and nothing is revoked | absent |
   | copy control | absent — no token has been minted, so there is no link to copy | present on guest rows |
   | `Add people` row | absent — the search box is already open above the list | present |
+  | event names | `meeting_create_invite_*` | `meeting_invite_*` |
 
   ## No revoke control, deliberately
 
@@ -116,6 +117,51 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   use PlatformWeb, :html
 
   @tag_keys ~w(agent user_id external expires_at email)a
+
+  # ── Event names are DERIVED FROM `:mode`, not hard-coded ───────────────
+  #
+  # Both surfaces live in the same LiveView (`PlatformWeb.MeetingLive`), so
+  # one shared event name would arrive at one `handle_event/3` clause that
+  # could not tell a create-sheet click from a detail-panel click. Rather
+  # than have that clause re-derive the mode from socket state — which is
+  # the same guess by another name — the mode picks the event, and the two
+  # sets of handlers are structurally separate.
+  #
+  # There is ONE stage event per mode carrying `phx-value-kind`, not three
+  # per-option events. The three options differ in what they stage, not in
+  # whether they stage, and a caller that handled two of the three would
+  # otherwise fail silently on the third.
+  @events %{
+    draft: %{
+      search: "meeting_create_invite_search",
+      stage: "meeting_create_invite_stage",
+      unstage: "meeting_create_invite_unstage"
+    },
+    live: %{
+      search: "meeting_invite_search",
+      stage: "meeting_invite_stage",
+      add_people: "meeting_invite_add_people"
+    }
+  }
+
+  @doc """
+  The `phx-` event name a control emits in `mode`.
+
+  Raises on a pair no mode owns — `:draft` has no `Add people` row and
+  `:live` has no unstage, so asking for one is a template bug, and a
+  fallback would wire a live control to an event nothing handles.
+  """
+  @spec event(atom(), atom()) :: binary()
+  def event(mode, name) do
+    case @events do
+      %{^mode => %{^name => event}} ->
+        event
+
+      _ ->
+        raise ArgumentError,
+              "no #{inspect(name)} event exists in invite mode #{inspect(mode)}"
+    end
+  end
 
   @tag_tones %{
     internal: "primary",
@@ -212,7 +258,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
           placeholder="Name or email"
           aria-label="Invite someone"
           autocomplete="off"
-          phx-keyup="meeting_invite_search"
+          phx-keyup={event(@mode, :search)}
           phx-debounce="120"
           phx-target={@target}
           value={@query}
@@ -246,7 +292,8 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         data-role="meeting-invite-candidate"
         data-user-id={user.id}
         class="flex w-full items-center gap-2.5 border-b border-base-300 px-3 py-2 text-left last:border-b-0 min-h-[52px] sm:min-h-11 hover:bg-base-200"
-        phx-click="meeting_invite_select_member"
+        phx-click={event(@mode, :stage)}
+        phx-value-kind="user"
         phx-value-id={user.id}
         phx-target={@target}
       >
@@ -293,7 +340,8 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         data-option="guest"
         data-default="true"
         class="flex w-full items-center gap-2.5 border-b border-base-300 bg-primary/10 px-3 py-2 text-left min-h-[52px] sm:min-h-11 hover:bg-primary/15"
-        phx-click="meeting_invite_as_guest"
+        phx-click={event(@mode, :stage)}
+        phx-value-kind="guest"
         phx-value-email={@email_option}
         phx-target={@target}
       >
@@ -329,7 +377,8 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         data-role="meeting-invite-option"
         data-option="external"
         class="flex w-full items-center gap-2.5 px-3 py-2 text-left min-h-[52px] sm:min-h-11 hover:bg-base-200"
-        phx-click="meeting_invite_as_external"
+        phx-click={event(@mode, :stage)}
+        phx-value-kind="external"
         phx-value-email={@email_option}
         phx-target={@target}
       >
@@ -423,7 +472,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         class="flex shrink-0 items-center justify-center rounded-lg text-base-content/40 min-h-11 min-w-11 hover:bg-base-300 hover:text-base-content"
         aria-label={"Remove #{@entry.name}"}
         title="Remove"
-        phx-click="meeting_invite_unstage"
+        phx-click={event(@mode, :unstage)}
         phx-value-id={@entry.id}
         phx-target={@target}
       >
@@ -491,7 +540,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         type="button"
         data-role="meeting-invite-add-people"
         class="flex w-full items-center gap-2 rounded-lg border border-dashed border-base-300 px-2 py-1.5 text-left text-sm font-medium text-primary min-h-11 hover:bg-primary/5"
-        phx-click="meeting_invite_add_people"
+        phx-click={event(@mode, :add_people)}
         phx-target={@target}
       >
         <span class="hero-plus size-4 shrink-0" aria-hidden="true"></span>

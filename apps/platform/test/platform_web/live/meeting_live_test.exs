@@ -24,6 +24,7 @@ defmodule PlatformWeb.MeetingLiveTest do
   alias Platform.Meetings.GuestInvite
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentQueue
+  alias Platform.Meetings.Invite
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Tasks.Project
@@ -3003,11 +3004,18 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> render_click()
 
       assert open_html =~ ~s(data-role="start-meeting-sheet")
-      # Sheet header + form fields are rendered.
-      assert open_html =~ "Start a meeting"
+
+      # The TITLE ELEMENT, not the document. `assert open_html =~ "New
+      # meeting"` would also be satisfied by the FAB's own label, which is
+      # rendered on the same page and is not what this asserts.
+      assert open_html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("#start-meeting-sheet-title")
+             |> LazyHTML.text()
+             |> String.trim() == "New meeting"
+
       assert open_html =~ ~s(name="start_meeting[name]")
       assert open_html =~ ~s(name="start_meeting[project_id]")
-      assert open_html =~ ~s(name="start_meeting[description]")
     end
 
     test "close button + backdrop dismiss the sheet", %{conn: conn} do
@@ -3037,34 +3045,26 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute backdrop_closed =~ ~s(data-role="start-meeting-sheet")
     end
 
-    test "submitting valid params creates a meeting and navigates to its slug", %{
+    test "submitting a name and a project creates a meeting", %{
       conn: conn,
       project: project
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings")
 
-      # Open the sheet first.
       _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
 
-      # Submit the form. push_navigate should redirect us to the new
-      # meeting's /meetings/<slug>.
       result =
         view
         |> form("#start-meeting-form",
-          start_meeting: %{
-            "name" => "Synthesis Sync",
-            "project_id" => project.id,
-            "description" => "Quick check-in"
-          }
+          start_meeting: %{"name" => "Synthesis Sync", "project_id" => project.id}
         )
         |> render_submit()
 
-      assert {:error, {:live_redirect, %{to: to}}} = result
-      assert to =~ ~r{^/meetings/}
-
-      # The meeting now exists in the DB with the submitted name.
-      assert [%Meeting{name: "Synthesis Sync"} = created] = Repo.all(Meeting)
-      assert to == "/meetings/#{created.slug}"
+      # Stage 4 deliberately stopped redirecting into the room. See the
+      # "does not open the room" test below for the assertion that pins it;
+      # this one only cares that the row landed.
+      assert is_binary(result)
+      assert [%Meeting{name: "Synthesis Sync"}] = Repo.all(Meeting)
     end
 
     test "submitting with a blank name shows an inline error and keeps the sheet open", %{
@@ -3078,11 +3078,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       html =
         view
         |> form("#start-meeting-form",
-          start_meeting: %{
-            "name" => "",
-            "project_id" => project.id,
-            "description" => ""
-          }
+          start_meeting: %{"name" => "", "project_id" => project.id}
         )
         |> render_submit()
 
@@ -3094,31 +3090,625 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ ~s(data-role="start-meeting-error")
       assert html =~ "Name is required"
     end
+  end
 
-    test "submitting with no project_id shows an inline error and keeps the sheet open", %{
-      conn: conn
-    } do
-      # Drop all projects so the form has nothing to pre-fill with.
-      Repo.delete_all(Platform.Tasks.Project)
+  # ── New-meeting create sheet (task 019fb955-1d7b stage 4) ────────────────
+  #
+  # The sheet the stage-2 FAB opens is now the canvas's CREATE sheet: a
+  # schedulable time, a required project, and a list of invites staged
+  # client-side and replayed after the meeting commits.
+  #
+  # ## Every absence assertion here has a positive control
+  #
+  # `refute Repo.exists?(Meeting)` passes on a fixture that could never
+  # have written a row — a broken `create_project/0`, a form that never
+  # reached the handler, an authenticated_conn that 302s. So the refusal
+  # tests submit AGAIN with the missing field supplied and assert the row
+  # appears. The control runs against the same view, the same form and the
+  # same session, which is the only way it constrains the same code path.
+  #
+  # ## And each side of a present/absent pair is its own test
+  #
+  # ExUnit halts a test at its first failed assertion, so an `assert
+  # rendered / refute written` pair can only ever report one of the two.
 
+  describe ":index action — new-meeting create sheet" do
+    # A real IANA zone with a non-zero UTC offset. Fixed rather than
+    # inherited from the machine: the whole contract is "the wall clock the
+    # VIEWER typed", and a fixture running in the server's zone cannot tell
+    # a correct conversion from no conversion at all.
+    @create_zone "America/Chicago"
+
+    setup %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      Repo.delete_all(Meeting)
+      project = create_project()
+
+      {:ok,
+       conn: put_connect_params(conn, %{"timezone" => @create_zone}), user: user, project: project}
+    end
+
+    defp open_create_sheet(conn) do
       {:ok, view, _html} = live(conn, ~p"/meetings")
+      _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+      view
+    end
 
+    defp create_params(overrides) do
+      Map.merge(
+        %{
+          "name" => "Design review",
+          "project_id" => "",
+          "date" => "",
+          "start_time" => "",
+          "duration_minutes" => "30"
+        },
+        overrides
+      )
+    end
+
+    defp submit_create(view, overrides) do
+      view
+      |> form("#start-meeting-form", start_meeting: create_params(overrides))
+      |> render_submit()
+    end
+
+    # A UTC instant for a wall-clock reading in @create_zone. Everything
+    # persisted is UTC; everything typed is local; this is where they meet.
+    defp create_zone_utc(%Date{} = date, hour, minute) do
+      date
+      |> DateTime.new!(Time.new!(hour, minute, 0), @create_zone)
+      |> DateTime.shift_zone!("Etc/UTC")
+    end
+
+    defp seed_invitee(name, email) do
+      user =
+        Repo.insert!(%User{
+          email: email,
+          name: name,
+          oidc_sub: "oidc-invitee-#{System.unique_integer([:positive])}"
+        })
+
+      member!(user, Platform.TenancyFixtures.fabrikam_org_id())
+    end
+
+    defp search_invites(view, query) do
+      view
+      |> element(~s([data-role="meeting-invite-search"]))
+      |> render_keyup(%{"value" => query})
+    end
+
+    defp staged_ids(view) do
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-role="meeting-invite-row"]))
+      |> LazyHTML.attribute("data-entry-id")
+    end
+
+    # ── the schedule ───────────────────────────────────────────────────────
+
+    test "a date and a start time persist both endpoints, converted from the viewer's zone",
+         %{conn: conn, project: project} do
+      view = open_create_sheet(conn)
+
+      submit_create(view, %{
+        "name" => "Design review",
+        "project_id" => project.id,
+        "date" => "2026-09-16",
+        "start_time" => "09:30",
+        "duration_minutes" => "45"
+      })
+
+      assert [%Meeting{} = created] = Repo.all(Meeting)
+
+      # 09:30 CDT is 14:30 UTC. A handler that read the wall clock as UTC
+      # would store 09:30Z and this fails by five hours.
+      assert DateTime.compare(
+               created.scheduled_start_at,
+               create_zone_utc(~D[2026-09-16], 9, 30)
+             ) == :eq
+
+      assert DateTime.compare(
+               created.scheduled_end_at,
+               create_zone_utc(~D[2026-09-16], 10, 15)
+             ) == :eq
+    end
+
+    test "leaving the date and start blank creates an ad-hoc meeting with neither endpoint",
+         %{conn: conn, project: project} do
+      view = open_create_sheet(conn)
+
+      submit_create(view, %{"project_id" => project.id})
+
+      assert [%Meeting{scheduled_start_at: nil, scheduled_end_at: nil}] = Repo.all(Meeting)
+    end
+
+    test "a date without a start time is refused", %{conn: conn, project: project} do
+      view = open_create_sheet(conn)
+
+      html = submit_create(view, %{"project_id" => project.id, "date" => "2026-09-16"})
+
+      assert html =~ "Date and start time are required together."
+    end
+
+    test "a date without a start time writes no row, and the same form then does", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+
+      submit_create(view, %{"project_id" => project.id, "date" => "2026-09-16"})
+      refute Repo.exists?(Meeting)
+
+      # Positive control on the SAME view and form: supplying the missing
+      # field writes a row, so the refute above constrained the guard rather
+      # than a fixture that could never have written anything.
+      submit_create(view, %{
+        "project_id" => project.id,
+        "date" => "2026-09-16",
+        "start_time" => "09:30"
+      })
+
+      assert Repo.exists?(Meeting)
+    end
+
+    test "a duration the select never offered is refused", %{conn: conn, project: project} do
+      view = open_create_sheet(conn)
+
+      # Sent as a raw event: `form/3` cannot select an option the sheet does
+      # not render, and the point is precisely a value that did not come
+      # from this form.
+      html =
+        render_submit(view, "start_meeting", %{
+          "start_meeting" =>
+            create_params(%{
+              "project_id" => project.id,
+              "date" => "2026-09-16",
+              "start_time" => "09:30",
+              "duration_minutes" => "37"
+            })
+        })
+
+      assert html =~ "Duration is invalid."
+    end
+
+    test "a duration the select never offered writes no row, and an offered one does", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+
+      base = %{"project_id" => project.id, "date" => "2026-09-16", "start_time" => "09:30"}
+
+      render_submit(view, "start_meeting", %{
+        "start_meeting" => create_params(Map.put(base, "duration_minutes", "37"))
+      })
+
+      refute Repo.exists?(Meeting)
+
+      submit_create(view, Map.put(base, "duration_minutes", "60"))
+      assert Repo.exists?(Meeting)
+    end
+
+    test "an hour the wall clock reads twice resolves to the earlier instant", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+
+      # 2026-11-01 01:30 occurs twice in America/Chicago: once on CDT
+      # (06:30Z) and again an hour later on CST (07:30Z).
+      submit_create(view, %{
+        "project_id" => project.id,
+        "date" => "2026-11-01",
+        "start_time" => "01:30"
+      })
+
+      assert [%Meeting{} = created] = Repo.all(Meeting)
+
+      assert DateTime.to_iso8601(DateTime.shift_zone!(created.scheduled_start_at, "Etc/UTC")) =~
+               "2026-11-01T06:30:00"
+    end
+
+    test "an hour that does not exist is refused rather than nudged", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+
+      # 2026-03-08 02:30 is skipped by the spring transition in
+      # America/Chicago — the clock goes 01:59:59 to 03:00:00.
+      html =
+        submit_create(view, %{
+          "project_id" => project.id,
+          "date" => "2026-03-08",
+          "start_time" => "02:30"
+        })
+
+      assert html =~ "That time does not exist on that date."
+    end
+
+    test "an hour that does not exist writes no row, and a real one does", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+      base = %{"project_id" => project.id, "date" => "2026-03-08"}
+
+      submit_create(view, Map.put(base, "start_time", "02:30"))
+      refute Repo.exists?(Meeting)
+
+      submit_create(view, Map.put(base, "start_time", "03:30"))
+      assert Repo.exists?(Meeting)
+    end
+
+    # ── the time zone the calendar member already plumbed ──────────────────
+
+    test "a browser that named no zone cannot schedule a time", %{
+      conn: conn,
+      project: project
+    } do
+      # No `put_connect_params`, so `resolve_time_zone/1` answers nil — the
+      # same answer the dead render gives. There is no honest conversion of
+      # "09:30" without a zone, so it is refused rather than read as UTC.
+      {:ok, view, _html} = live(build_conn() |> authenticated_conn() |> elem(0), ~p"/meetings")
       _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
 
       html =
-        view
-        |> form("#start-meeting-form",
-          start_meeting: %{
-            "name" => "Project-less Meeting",
-            "project_id" => "",
-            "description" => ""
-          }
-        )
-        |> render_submit()
+        submit_create(view, %{
+          "project_id" => project.id,
+          "date" => "2026-09-16",
+          "start_time" => "09:30"
+        })
 
-      assert Repo.all(Meeting) == []
+      assert html =~ "Time zone unavailable"
+      refute Repo.exists?(Meeting)
+    end
+
+    test "a browser that named no zone can still create an ad-hoc meeting", %{
+      conn: conn,
+      project: project
+    } do
+      # The refusal above is scoped to a SCHEDULED create. Without this
+      # control it would be indistinguishable from a zone-less mount that
+      # cannot create anything at all.
+      {:ok, view, _html} = live(build_conn() |> authenticated_conn() |> elem(0), ~p"/meetings")
+      _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+
+      submit_create(view, %{"project_id" => project.id})
+
+      assert [%Meeting{scheduled_start_at: nil}] = Repo.all(Meeting)
+      assert is_map(conn)
+    end
+
+    # ── the project gate ───────────────────────────────────────────────────
+
+    test "submitting with no project renders the server-side refusal", %{conn: conn} do
+      Repo.delete_all(Project)
+      view = open_create_sheet(conn)
+
+      html = submit_create(view, %{"name" => "Project-less meeting", "project_id" => ""})
+
       assert html =~ ~s(data-role="start-meeting-sheet")
-      assert html =~ "Project is required"
+      assert html =~ ~s(data-role="start-meeting-error")
+      assert html =~ "Project is required."
+    end
+
+    test "submitting with no project writes no row, and supplying one then does", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+
+      submit_create(view, %{"name" => "Project-less meeting", "project_id" => ""})
+      refute Repo.exists?(Meeting)
+
+      # Positive control: same view, same form, project supplied.
+      submit_create(view, %{"name" => "Project-less meeting", "project_id" => project.id})
+      assert Repo.exists?(Meeting)
+    end
+
+    # ── the behaviour change: create does not open the room ────────────────
+
+    test "a successful create keeps the viewer on the index", %{conn: conn, project: project} do
+      view = open_create_sheet(conn)
+
+      result = submit_create(view, %{"project_id" => project.id})
+
+      # A `push_navigate` comes back as `{:error, {:live_redirect, …}}`. A
+      # meeting scheduled for next week must not open its room now.
+      assert is_binary(result)
+      refute result =~ ~s(data-role="start-meeting-sheet")
+    end
+
+    test "a successful create flashes that the meeting was created", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+
+      assert submit_create(view, %{"project_id" => project.id}) =~ "Meeting created."
+    end
+
+    # ── staged invites ─────────────────────────────────────────────────────
+
+    test "staging a member then submitting writes an invite carrying their user_id", %{
+      conn: conn,
+      project: project
+    } do
+      invitee = seed_invitee("Dalton Reeve", "dalton.reeve@example.com")
+
+      view = open_create_sheet(conn)
+      search_invites(view, "Dalton Reeve")
+
+      view
+      |> element(~s([data-role="meeting-invite-candidate"][data-user-id="#{invitee.id}"]))
+      |> render_click()
+
+      assert staged_ids(view) == ["user:#{invitee.id}"]
+
+      submit_create(view, %{"project_id" => project.id})
+
+      assert [%Meeting{} = meeting] = Repo.all(Meeting)
+      assert [%Invite{} = invite] = Repo.all(Invite)
+      assert invite.meeting_id == meeting.id
+      assert invite.user_id == invitee.id
+    end
+
+    test "staging then unstaging a member writes no invite", %{conn: conn, project: project} do
+      invitee = seed_invitee("Marlowe Sun", "marlowe.sun@example.com")
+
+      view = open_create_sheet(conn)
+      search_invites(view, "Marlowe Sun")
+
+      view
+      |> element(~s([data-role="meeting-invite-candidate"][data-user-id="#{invitee.id}"]))
+      |> render_click()
+
+      view
+      |> element(~s([data-role="meeting-invite-unstage"][data-entry-id="user:#{invitee.id}"]))
+      |> render_click()
+
+      assert staged_ids(view) == []
+
+      submit_create(view, %{"project_id" => project.id})
+
+      # The meeting IS written — the positive control for the refute below
+      # is in the same submit, so a create that silently failed could not
+      # masquerade as an unstage that worked.
+      assert Repo.exists?(Meeting)
+      assert Repo.all(Invite) == []
+    end
+
+    test "staging a guest writes a row with an expiry and no user", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+      search_invites(view, "outsider@example.test")
+
+      view
+      |> element(~s([data-role="meeting-invite-option"][data-option="guest"]))
+      |> render_click()
+
+      assert staged_ids(view) == ["guest:outsider@example.test"]
+
+      submit_create(view, %{"project_id" => project.id})
+
+      assert [%Invite{} = invite] = Repo.all(Invite)
+      assert invite.user_id == nil
+      assert %DateTime{} = invite.expires_at
+    end
+
+    test "staging an external address writes a row with the address and no expiry", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+      search_invites(view, "contractor@example.test")
+
+      view
+      |> element(~s([data-role="meeting-invite-option"][data-option="external"]))
+      |> render_click()
+
+      assert staged_ids(view) == ["external:contractor@example.test"]
+
+      submit_create(view, %{"project_id" => project.id})
+
+      assert [%Invite{} = invite] = Repo.all(Invite)
+      assert invite.user_id == nil
+      assert invite.email == "contractor@example.test"
+      assert invite.expires_at == nil
+    end
+
+    test "dismissing the sheet drops the staged invites", %{conn: conn} do
+      invitee = seed_invitee("Rae Molina", "rae.molina@example.com")
+
+      view = open_create_sheet(conn)
+      search_invites(view, "Rae Molina")
+
+      view
+      |> element(~s([data-role="meeting-invite-candidate"][data-user-id="#{invitee.id}"]))
+      |> render_click()
+
+      assert staged_ids(view) == ["user:#{invitee.id}"]
+
+      _ = view |> element(~s([data-role="start-meeting-sheet-close"])) |> render_click()
+      _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+
+      assert staged_ids(view) == []
+    end
+
+    test "an invite that cannot be written is reported rather than swallowed", %{
+      conn: conn,
+      project: project
+    } do
+      invitee = seed_invitee("Vanishing Vic", "vanishing.vic@example.com")
+
+      view = open_create_sheet(conn)
+      search_invites(view, "Vanishing Vic")
+
+      view
+      |> element(~s([data-role="meeting-invite-candidate"][data-user-id="#{invitee.id}"]))
+      |> render_click()
+
+      # The invitee stops existing between staging and submit, so the
+      # invite's foreign key fails while the meeting itself is fine.
+      Repo.delete!(invitee)
+
+      html = submit_create(view, %{"project_id" => project.id})
+
+      assert html =~ "1 invite could not be sent."
+    end
+
+    test "an invite that cannot be written does not roll the meeting back", %{
+      conn: conn,
+      project: project
+    } do
+      invitee = seed_invitee("Vanishing Val", "vanishing.val@example.com")
+
+      view = open_create_sheet(conn)
+      search_invites(view, "Vanishing Val")
+
+      view
+      |> element(~s([data-role="meeting-invite-candidate"][data-user-id="#{invitee.id}"]))
+      |> render_click()
+
+      Repo.delete!(invitee)
+      submit_create(view, %{"project_id" => project.id})
+
+      assert Repo.exists?(Meeting)
+      assert Repo.all(Invite) == []
+    end
+
+    test "an id no candidate row offered crashes rather than staging a stranger", %{conn: conn} do
+      Process.flag(:trap_exit, true)
+      view = open_create_sheet(conn)
+
+      # The only legal source of that id is a candidate row this socket
+      # just drew. Anything else is a forged event, and staging it would
+      # invite someone the host never saw offered.
+      reason =
+        catch_exit(
+          render_click(view, "meeting_create_invite_stage", %{
+            "kind" => "user",
+            "id" => Ecto.UUID.generate()
+          })
+        )
+
+      assert {{%ArgumentError{message: message}, _stacktrace}, _from} = reason
+      assert message =~ "no candidate is currently offered"
+    end
+
+    # ── the rendered frame ─────────────────────────────────────────────────
+
+    test "the description textarea is gone and the schedule fields took its place", %{
+      conn: conn
+    } do
+      html = conn |> open_create_sheet() |> render()
+
+      # `create_meeting/1` never persisted a description, so the field
+      # silently discarded whatever was typed into it.
+      refute html =~ ~s(name="start_meeting[description]")
+
+      # The positive side, so the refute above cannot pass off a sheet that
+      # failed to render at all.
+      assert html =~ ~s(name="start_meeting[date]")
+      assert html =~ ~s(name="start_meeting[start_time]")
+      assert html =~ ~s(name="start_meeting[duration_minutes]")
+    end
+
+    test "the mobile Create button is hidden from sm up and submits the sheet's form", %{
+      conn: conn
+    } do
+      doc = conn |> open_create_sheet() |> render() |> LazyHTML.from_fragment()
+      mobile = LazyHTML.query(doc, ~s([data-role="meeting-create-submit-mobile"]))
+
+      # Exactly one, and its `form` attribute is what lets a control OUTSIDE
+      # the `<form>` element submit it — the canvas puts it in the header.
+      assert LazyHTML.attribute(mobile, "form") == ["start-meeting-form"]
+      assert LazyHTML.attribute(mobile, "type") == ["submit"]
+      assert [class] = LazyHTML.attribute(mobile, "class")
+      assert class =~ "sm:hidden"
+    end
+
+    test "the desktop footer bar is hidden below sm and holds Cancel plus the primary", %{
+      conn: conn
+    } do
+      doc = conn |> open_create_sheet() |> render() |> LazyHTML.from_fragment()
+
+      assert [class] =
+               doc
+               |> LazyHTML.query(~s([data-role="meeting-create-footer"]))
+               |> LazyHTML.attribute("class")
+
+      assert class =~ "hidden"
+      assert class =~ "sm:flex"
+
+      # Both live INSIDE the footer, so the two breakpoints cannot end up
+      # offering the same control twice.
+      assert doc
+             |> LazyHTML.query(
+               ~s([data-role="meeting-create-footer"] [data-role="start-meeting-cancel"])
+             )
+             |> Enum.count() == 1
+
+      assert doc
+             |> LazyHTML.query(
+               ~s([data-role="meeting-create-footer"] [data-role="start-meeting-submit"])
+             )
+             |> Enum.count() == 1
+    end
+
+    test "every control in the sheet clears a 44px tap target", %{conn: conn} do
+      doc = conn |> open_create_sheet() |> render() |> LazyHTML.from_fragment()
+
+      roles = [
+        "start-meeting-name",
+        "start-meeting-project",
+        "meeting-create-date",
+        "meeting-create-start-time",
+        "meeting-create-duration",
+        "start-meeting-cancel",
+        "start-meeting-submit",
+        "meeting-create-submit-mobile"
+      ]
+
+      # `Enum.each` with an explicit one-element match, NOT a comprehension:
+      # `for {role, [class]} <- …` silently SKIPS a role that rendered zero
+      # elements, which is exactly the failure this is looking for.
+      Enum.each(roles, fn role ->
+        assert [class] =
+                 doc
+                 |> LazyHTML.query(~s([data-role="#{role}"]))
+                 |> LazyHTML.attribute("class"),
+               "#{role} did not render exactly once"
+
+        assert class =~ "min-h-11", "#{role} does not clear 44px"
+      end)
+    end
+
+    test "the sheet stays an overlay with safe-area padding, not a second bottom sheet", %{
+      conn: conn
+    } do
+      doc = conn |> open_create_sheet() |> render() |> LazyHTML.from_fragment()
+
+      assert [wrapper] =
+               doc
+               |> LazyHTML.query(~s([data-role="start-meeting-sheet"]))
+               |> LazyHTML.attribute("class")
+
+      assert wrapper =~ "fixed inset-0"
+      assert wrapper =~ "items-end sm:items-center"
+
+      # Out of flow, so the safe-area inset is the whole clearance — the
+      # bottom-nav reservation applies to in-flow scroll regions, which
+      # already end above a sticky nav.
+      assert doc
+             |> LazyHTML.query(~s([data-role="start-meeting-sheet"] > div.relative))
+             |> LazyHTML.attribute("class")
+             |> List.first() =~ "pb-[env(safe-area-inset-bottom)]"
     end
   end
 

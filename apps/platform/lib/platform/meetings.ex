@@ -1262,6 +1262,18 @@ defmodule Platform.Meetings do
   @guest_invite_default_expiry_hours 24
 
   @doc """
+  The expiry, in hours, `invite_guest/2` mints a link with when the caller
+  names none.
+
+  Exposed so a UI that PROMISES an expiry before the row exists — the
+  create sheet stages guests and mints nothing until submit — reads the
+  number it will actually get instead of restating it. Two copies of a
+  policy number drift, and the drifting copy is the one a user reads.
+  """
+  @spec guest_invite_default_expiry_hours() :: pos_integer()
+  def guest_invite_default_expiry_hours, do: @guest_invite_default_expiry_hours
+
+  @doc """
   Declare a user as an invitee of `meeting`.
 
   Serves BOTH account-holding kinds. An internal user and an external

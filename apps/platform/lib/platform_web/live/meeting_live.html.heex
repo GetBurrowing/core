@@ -2080,18 +2080,29 @@
       <button
         type="button"
         phx-click="open_start_meeting_sheet"
-        aria-label="Start a meeting"
-        title="Start a meeting"
+        aria-label="New meeting"
+        title="New meeting"
         data-role="start-meeting-fab"
         class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg"
       >
         <span class="hero-video-camera size-6"></span>
       </button>
 
-      <%!-- ── Start-meeting bottom-sheet ──────────────────────────────────
-         Mobile-first wrapper: full-bleed slide-up from the bottom on
-         small viewports, centered card on >=sm. Backdrop is
-         `bg-black/40` and click-dismisses. Pairs with the FAB above. --%>
+      <%!-- ── New-meeting create sheet ────────────────────────────────────
+         Task 019fb955-1d7b stage 4. The sheet CHROME is unchanged from
+         the stage-2 start-meeting sheet — full-bleed slide-up below
+         `sm`, centred card above, `bg-black/40` backdrop that
+         click-dismisses — because that is already the geometry the
+         canvas draws. What changed is what the panel holds: a
+         schedulable time, a required project, and a staged invite list.
+
+         `data-role` values from the old sheet are KEPT even where the
+         copy moved on (`start-meeting-*`); tests and sibling members key
+         on them. New controls take `meeting-create-*`.
+
+         Out of flow, so `pb-[env(safe-area-inset-bottom)]` is the right
+         clearance here — the in-flow bottom-nav reservation does not
+         apply to an overlay. --%>
       <div
         :if={@show_start_meeting_sheet}
         class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
@@ -2111,23 +2122,35 @@
 
         <%!-- Sheet panel --%>
         <div class="relative w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[75vh] overflow-y-auto">
-          <%!-- Header --%>
-          <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+          <%!-- Header. Below `sm` the primary action lives HERE (mobile
+               frame 3): the footer bar is the first thing a soft keyboard
+               covers, so the commit control has to be reachable above it. --%>
+          <div class="flex items-center justify-between gap-2 border-b border-base-300 px-4 py-3">
             <div class="flex items-center gap-2 min-w-0">
               <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
               <h2 id="start-meeting-sheet-title" class="text-base font-semibold">
-                Start a meeting
+                New meeting
               </h2>
             </div>
-            <button
-              type="button"
-              phx-click="close_start_meeting_sheet"
-              class="btn btn-sm btn-ghost btn-square"
-              aria-label="Close"
-              data-role="start-meeting-sheet-close"
-            >
-              <span class="hero-x-mark size-4"></span>
-            </button>
+            <div class="flex items-center gap-1">
+              <button
+                type="submit"
+                form="start-meeting-form"
+                class="btn btn-ghost btn-sm px-3 font-semibold text-primary min-h-11 sm:hidden"
+                data-role="meeting-create-submit-mobile"
+              >
+                Create
+              </button>
+              <button
+                type="button"
+                phx-click="close_start_meeting_sheet"
+                class="btn btn-sm btn-ghost btn-square"
+                aria-label="Close"
+                data-role="start-meeting-sheet-close"
+              >
+                <span class="hero-x-mark size-4"></span>
+              </button>
+            </div>
           </div>
 
           <%!-- Form --%>
@@ -2162,12 +2185,80 @@
                 required
                 autocomplete="off"
                 placeholder="What's the meeting about?"
-                class="input input-bordered w-full text-sm"
+                class="input input-bordered w-full text-sm font-semibold min-h-11"
                 data-role="start-meeting-name"
               />
             </div>
 
-            <%!-- Project (required) --%>
+            <%!-- Date / Start / Duration. Three across from `sm` up; below
+                 it, Date takes its own row and Start + Duration pair, so
+                 no control is narrower than its own content at 375px.
+                 Leaving Date and Start blank creates an AD-HOC meeting —
+                 `create_meeting/1` takes the intended-time pair as
+                 both-or-neither and both nil is a supported state. --%>
+            <div class="grid grid-cols-2 sm:grid-cols-[1.4fr_1fr_1fr] gap-2">
+              <div class="col-span-2 flex flex-col gap-1 sm:col-span-1">
+                <label
+                  for="meeting-create-date"
+                  class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                >
+                  Date
+                </label>
+                <input
+                  id="meeting-create-date"
+                  type="date"
+                  name="start_meeting[date]"
+                  value={@start_meeting_form["date"]}
+                  class="input input-bordered w-full text-sm min-h-11"
+                  data-role="meeting-create-date"
+                />
+              </div>
+
+              <div class="flex flex-col gap-1">
+                <label
+                  for="meeting-create-start-time"
+                  class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                >
+                  Start
+                </label>
+                <input
+                  id="meeting-create-start-time"
+                  type="time"
+                  name="start_meeting[start_time]"
+                  value={@start_meeting_form["start_time"]}
+                  class="input input-bordered w-full text-sm min-h-11"
+                  data-role="meeting-create-start-time"
+                />
+              </div>
+
+              <div class="flex flex-col gap-1">
+                <label
+                  for="meeting-create-duration"
+                  class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                >
+                  Duration
+                </label>
+                <select
+                  id="meeting-create-duration"
+                  name="start_meeting[duration_minutes]"
+                  class="select select-bordered w-full text-sm min-h-11"
+                  data-role="meeting-create-duration"
+                >
+                  <option
+                    :for={minutes <- PlatformWeb.MeetingLive.duration_options()}
+                    value={minutes}
+                    selected={@start_meeting_form["duration_minutes"] == to_string(minutes)}
+                  >
+                    {PlatformWeb.MeetingLive.duration_label(minutes)}
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <%!-- Project (required). The `required` attribute is a hint;
+                 the server-side guard in `handle_event("start_meeting", …)`
+                 is the gate, because `meetings.project_id` is NOT NULL and
+                 the slug is unique per project. --%>
             <div class="flex flex-col gap-1">
               <label
                 for="start-meeting-project"
@@ -2179,7 +2270,7 @@
                 id="start-meeting-project"
                 name="start_meeting[project_id]"
                 required
-                class="select select-bordered w-full text-sm"
+                class="select select-bordered w-full text-sm min-h-11"
                 data-role="start-meeting-project"
               >
                 <option value="" disabled selected={@start_meeting_form["project_id"] == ""}>
@@ -2195,41 +2286,48 @@
               </select>
             </div>
 
-            <%!-- Description (optional) --%>
-            <div class="flex flex-col gap-1">
-              <label
-                for="start-meeting-description"
-                class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-              >
-                Description <span class="text-base-content/40 normal-case">(optional)</span>
-              </label>
-              <textarea
-                id="start-meeting-description"
-                name="start_meeting[description]"
-                rows="3"
-                placeholder="Optional context for who's joining."
-                class="textarea textarea-bordered w-full text-sm"
-                data-role="start-meeting-description"
-              >{@start_meeting_form["description"]}</textarea>
+            <%!-- Invite. `:draft` mode — nothing is written until submit,
+                 and the row `X` unstages rather than revoking. --%>
+            <div class="flex flex-col gap-2" data-role="meeting-create-invite-section">
+              <span class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+                Invite
+              </span>
+
+              <.invite_control
+                mode={:draft}
+                id="meeting-create-invite"
+                query={@meeting_create_invite_query}
+                candidates={@meeting_create_invite_candidates}
+                email_option={@meeting_create_invite_email}
+              />
+
+              <.invite_list
+                mode={:draft}
+                entries={PlatformWeb.MeetingLive.draft_invite_rows(@meeting_create_invites)}
+              />
             </div>
 
-            <%!-- Footer actions --%>
-            <div class="flex items-center justify-end gap-2 pt-1">
+            <%!-- Footer actions. Hidden below `sm`, where the header's
+                 `Create` carries the same submit. --%>
+            <div
+              class="hidden items-center justify-end gap-2 pt-1 min-h-11 sm:flex"
+              data-role="meeting-create-footer"
+            >
               <button
                 type="button"
                 phx-click="close_start_meeting_sheet"
-                class="btn btn-ghost btn-sm"
+                class="btn btn-ghost btn-sm min-h-11"
                 data-role="start-meeting-cancel"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                class="btn btn-primary btn-sm gap-1.5"
+                class="btn btn-primary btn-sm gap-1.5 min-h-11"
                 data-role="start-meeting-submit"
               >
-                <span class="hero-video-camera size-4"></span>
-                <span>Start meeting</span>
+                <span class="hero-paper-airplane size-4"></span>
+                <span>Create &amp; send invites</span>
               </button>
             </div>
           </form>
