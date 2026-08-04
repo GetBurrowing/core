@@ -188,6 +188,9 @@ defmodule PlatformWeb.MeetingLive do
   import PlatformWeb.Components.Meetings.InviteControl,
     only: [invite_control: 1, invite_list: 1]
 
+  import PlatformWeb.Components.Meetings.MeetingDetail,
+    only: [meeting_detail_body: 1, meeting_detail_actions: 1]
+
   import PlatformWeb.Components.Meetings.ParticipantRail, only: [participant_rail: 1]
 
   alias Platform.Agents.Agent
@@ -1013,6 +1016,40 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   defp month_abbrev(%Date{} = date), do: Calendar.strftime(date, "%b")
+
+  # ── Meeting detail selection (task 019fb954-8ead stage 4) ────────────────
+
+  @doc """
+  The meeting the detail panel/sheet is open on, or `nil`.
+
+  Resolved out of `@calendar_week_meetings` rather than re-queried, and
+  that is the whole point: the panel can only ever describe a meeting the
+  RENDERED WEEK contains. `select_meeting` carries an id from a block the
+  grid drew, so the row is already loaded, and paging away from the week
+  a selection was made in closes the panel rather than leaving it
+  describing a meeting no longer on screen.
+
+  It also means a `phx-value-id` naming any other row — the event is
+  attacker-supplied by definition — resolves to `nil` and renders
+  nothing, with no query issued for it.
+  """
+  @spec selected_meeting(map()) :: Meeting.t() | nil
+  def selected_meeting(%{selected_meeting_id: nil}), do: nil
+
+  def selected_meeting(%{selected_meeting_id: id, calendar_week_meetings: meetings})
+      when is_binary(id) and is_list(meetings),
+      do: Enum.find(meetings, &(&1.id == id))
+
+  @doc """
+  How many people currently hold an invite to `meeting`.
+
+  `list_invites/2` defaults to `include_revoked: false`, and that default
+  is the whole answer: a revoked invitee is precisely someone who is NOT
+  invited, so counting them would overstate the room to the one person
+  looking at this panel to decide whether to chase anybody.
+  """
+  @spec invited_count(Meeting.t()) :: non_neg_integer()
+  def invited_count(%Meeting{id: id}), do: length(Meetings.list_invites(id))
 
   # ── Archive half of the index (task 019fb954-c848) ───────────────────────
   #

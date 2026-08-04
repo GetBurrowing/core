@@ -21,6 +21,7 @@ defmodule PlatformWeb.MeetingLiveTest do
   alias Platform.{Chat, Meetings, Repo}
   alias Platform.Accounts.User
   alias Platform.Chat.PubSub, as: ChatPubSub
+  alias Platform.Meetings.CalendarLink
   alias Platform.Meetings.GuestInvite
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentQueue
@@ -30,6 +31,7 @@ defmodule PlatformWeb.MeetingLiveTest do
   alias Platform.Tasks.Project
   alias Platform.Tenancy.OrgMembership
   alias PlatformWeb.Components.Meetings.IntentsCollapse
+  alias PlatformWeb.Components.Meetings.MeetingDetail
 
   # Org plumbing (task 019f9b14 stage 2): `/meetings/:slug` now resolves
   # through `Meetings.fetch_meeting_for_user/2`, which requires the viewer to
@@ -2298,7 +2300,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "the grid is the `lg` surface and the day view is the surface below it",
-         %{conn: conn} do
+         %{conn: conn, project: project} do
       # ONE test, ONE document, BOTH halves — extended by stage 3 rather
       # than joined by a second test. LiveView renders a single document
       # containing every breakpoint's markup and there is no viewport at
@@ -2307,19 +2309,27 @@ defmodule PlatformWeb.MeetingLiveTest do
       # draws the day view at every width, and "the day view carries
       # lg:hidden" passes on one that draws neither. Only the pair says
       # the two halves swap at `lg`.
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      #
+      # Stage 4 extends the SAME test rather than adding a second one, for
+      # the same reason: the detail PANEL and the detail SHEET are one more
+      # pair that has to swap at exactly this breakpoint, and asserting
+      # each alone admits a build that draws both at 375px.
+      meeting =
+        seed_grid_meeting(project,
+          slug: "grid-responsive",
+          name: "Responsive Meeting",
+          scheduled_start_at: zoned_utc(grid_today(), 10, 0),
+          scheduled_end_at: zoned_utc(grid_today(), 11, 0)
+        )
 
-      grid_classes =
-        html
-        |> attrs_of(~s([data-role="calendar-week-grid"]), "class")
-        |> List.first()
-        |> String.split()
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
 
-      day_view_classes =
-        html
-        |> attrs_of(~s([data-role="calendar-day-view"]), "class")
-        |> List.first()
-        |> String.split()
+      classes = fn html, selector ->
+        html |> attrs_of(selector, "class") |> List.first() |> String.split()
+      end
+
+      grid_classes = classes.(html, ~s([data-role="calendar-week-grid"]))
+      day_view_classes = classes.(html, ~s([data-role="calendar-day-view"]))
 
       assert "hidden" in grid_classes
       assert "lg:grid" in grid_classes
@@ -2327,6 +2337,20 @@ defmodule PlatformWeb.MeetingLiveTest do
       # …and the day view is not ALSO hidden below `lg`, which is the way
       # `lg:hidden` can be present and still mean "never drawn".
       refute "hidden" in day_view_classes
+
+      # The detail pair, in the same document, on the same render.
+      html =
+        view
+        |> element(in_grid(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"])))
+        |> render_click()
+
+      panel_classes = classes.(html, ~s([data-role="meeting-detail-panel"]))
+      sheet_classes = classes.(html, ~s([data-role="meeting-detail-sheet"]))
+
+      assert "hidden" in panel_classes
+      assert "lg:flex" in panel_classes
+      assert "lg:hidden" in sheet_classes
+      refute "hidden" in sheet_classes
     end
 
     test "a meeting lands in the column matching its local date, at its computed offset",
@@ -2912,6 +2936,447 @@ defmodule PlatformWeb.MeetingLiveTest do
       # was narrowed.
       assert Enum.sort(attrs_of(html, ~s([data-role="calendar-strip-day"]), "data-date")) ==
                Enum.sort(monday_first_week(Date.add(today, 7)))
+    end
+  end
+
+  # ── Meeting detail panel + sheet (task 019fb954-8ead stage 4) ────────────
+  #
+  # The selection made in the grid or the day view has to become something
+  # a reader can act on, and until this stage there was NO path from the
+  # index to a meeting page at any width: the old grouped rows linked to
+  # `/meetings/<slug>` and both calendar halves now select instead.
+  # `data-role="meeting-detail-open"` is what restores it, which is why the
+  # tests below care so much about whether it can scroll out of view.
+  describe ":index action — meeting detail" do
+    setup %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      Repo.delete_all(Meeting)
+      project = create_project()
+      {:ok, conn: conn, user: user, project: project}
+    end
+
+    # 2:00–3:00 PM local on the viewer's today, so the meeting is inside the
+    # rendered week AND inside the default {8, 18} hour window whatever time
+    # the suite runs at.
+    defp seed_detail_meeting(project, opts \\ []) do
+      today = grid_today()
+
+      seed_grid_meeting(project,
+        slug: Keyword.get(opts, :slug, "detail-meeting"),
+        name: Keyword.get(opts, :name, "Detail Meeting"),
+        status: Keyword.get(opts, :status, "scheduled"),
+        scheduled_start_at: zoned_utc(today, Keyword.get(opts, :start_hour, 14), 0),
+        scheduled_end_at: zoned_utc(today, Keyword.get(opts, :end_hour, 15), 0)
+      )
+    end
+
+    # Both calendar halves render `data-role="calendar-event"` for the same
+    # meeting — one contract, two surfaces — so an unscoped selector matches
+    # two nodes and `element/2` refuses it. The grid's copy is the one
+    # clicked here; the day view's carries the identical `phx-click`.
+    defp select_meeting(view, meeting) do
+      view
+      |> element(in_grid(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"])))
+      |> render_click()
+    end
+
+    defp detail_panel(doc), do: LazyHTML.query(doc, ~s([data-role="meeting-detail-panel"]))
+    defp detail_sheet(doc), do: LazyHTML.query(doc, ~s([data-role="meeting-detail-sheet"]))
+
+    defp detail_text(node, selector),
+      do: node |> LazyHTML.query(selector) |> LazyHTML.text() |> String.trim()
+
+    # An invite row written directly rather than through `invite_guest/2`:
+    # that function also mints a token and creates a guest chat space, and
+    # none of that is what the count is about. `revoked_at` is the one
+    # variable these fixtures vary.
+    defp seed_invite!(meeting, display_name, revoked_at \\ nil) do
+      %Invite{}
+      |> Invite.changeset(%{
+        meeting_id: meeting.id,
+        display_name: display_name,
+        revoked_at: revoked_at
+      })
+      |> Repo.insert!()
+    end
+
+    test "neither the panel nor the sheet renders before a selection", %{
+      conn: conn,
+      project: project
+    } do
+      # The meeting EXISTS and is drawn — so this is "nothing is selected",
+      # not "there was nothing to select", which would pass on a build that
+      # never renders the detail surface at all.
+      meeting = seed_detail_meeting(project)
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [meeting.id]
+
+      assert attrs_of(html, ~s([data-role="meeting-detail-panel"]), "data-role") == []
+      assert attrs_of(html, ~s([data-role="meeting-detail-sheet"]), "data-role") == []
+    end
+
+    test "clicking a calendar event opens both surfaces on that meeting", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project, name: "Quarterly Planning")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      # Both surfaces, both naming the meeting. Asserted per-surface rather
+      # than against the whole document: "Quarterly Planning" is also the
+      # text of the grid block that was clicked, so a page-level `=~` is
+      # satisfied by a build that renders neither.
+      assert detail_text(detail_panel(doc), ~s([data-role="meeting-detail-name"])) ==
+               "Quarterly Planning"
+
+      assert detail_text(detail_sheet(doc), ~s([data-role="meeting-detail-name"])) ==
+               "Quarterly Planning"
+
+      # The same local time range on both, rendered server-side in the
+      # VIEWER's zone — the one property that makes this string agree with
+      # the column the block was clicked in.
+      expected_when = MeetingDetail.when_label(meeting, @grid_zone)
+      assert expected_when == "#{Calendar.strftime(grid_today(), "%a %b %-d")} · 2:00–3:00 PM"
+
+      assert detail_text(detail_panel(doc), ~s([data-role="meeting-detail-when"])) ==
+               expected_when
+
+      assert detail_text(detail_sheet(doc), ~s([data-role="meeting-detail-when"])) ==
+               expected_when
+
+      # Status is carried, not guessed.
+      assert detail_panel(doc)
+             |> LazyHTML.query(~s([data-role="meeting-detail-status"]))
+             |> LazyHTML.attribute("data-status") == ["scheduled"]
+
+      # And the escape hatch back to the meeting page exists on both.
+      assert detail_panel(doc)
+             |> LazyHTML.query(~s([data-role="meeting-detail-open"]))
+             |> LazyHTML.attribute("href") == ["/meetings/#{meeting.slug}"]
+
+      assert detail_sheet(doc)
+             |> LazyHTML.query(~s([data-role="meeting-detail-open"]))
+             |> LazyHTML.attribute("href") == ["/meetings/#{meeting.slug}"]
+    end
+
+    # The stage text asks for the `.ics` href to be pinned by EQUALITY
+    # against a second `CalendarLink.sign/1` call. That premise is false and
+    # was checked rather than obeyed: `Plug.Crypto.sign/4` encodes a
+    # `signed_at` MILLISECOND stamp into the payload, so two calls a
+    # millisecond apart produce different tokens and the equality would be
+    # flaky-by-construction.
+    #
+    # What replaces it is strictly stronger than the substring the stage
+    # text was guarding against: the path is pinned by equality, `token` is
+    # the ONLY query parameter (so a longer wrong query string fails), and
+    # the token is required to VERIFY back to this meeting's id — which a
+    # token for a different meeting, or a truncated one, does not.
+    test "the calendar link names the meeting id and carries a token that verifies to it", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      [href] =
+        detail_panel(doc)
+        |> LazyHTML.query(~s([data-role="meeting-detail-ics"]))
+        |> LazyHTML.attribute("href")
+
+      # The sheet's link is the same link — one component, so it cannot drift.
+      assert detail_sheet(doc)
+             |> LazyHTML.query(~s([data-role="meeting-detail-ics"]))
+             |> LazyHTML.attribute("href")
+             |> length() == 1
+
+      %URI{path: path, query: query} = URI.parse(href)
+      assert path == "/meetings/#{meeting.id}/invite.ics"
+
+      params = URI.decode_query(query)
+      assert Map.keys(params) == ["token"]
+      assert CalendarLink.verify(params["token"]) == {:ok, %{meeting_id: meeting.id}}
+    end
+
+    test "the rendered calendar link is fetchable and the same path without the token is not",
+         %{conn: conn, project: project} do
+      # The end-to-end version of the assertion above, and the one that says
+      # the token is load-bearing rather than decorative: `show/2` answers a
+      # uniform 404 for an absent token, so dropping `?token=` from the href
+      # ships a link that is dead on arrival.
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      [href] =
+        detail_panel(doc)
+        |> LazyHTML.query(~s([data-role="meeting-detail-ics"]))
+        |> LazyHTML.attribute("href")
+
+      assert build_conn() |> get(href) |> response(200) =~ "BEGIN:VCALENDAR"
+      assert build_conn() |> get("/meetings/#{meeting.id}/invite.ics") |> response(404)
+    end
+
+    test "the invited count counts the invites that are still live, not the rows", %{
+      conn: conn,
+      project: project
+    } do
+      # Two rows, ONE variable. Both name the same meeting, both carry a
+      # display name, and only `revoked_at` differs — so a failure here can
+      # only be about whether a revoked invite is counted as invited.
+      meeting = seed_detail_meeting(project)
+      seed_invite!(meeting, "Still Invited")
+      seed_invite!(meeting, "Revoked Invitee", DateTime.utc_now())
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        count = LazyHTML.query(surface, ~s([data-role="meeting-detail-invited-count"]))
+        assert LazyHTML.attribute(count, "data-count") == ["1"]
+        assert count |> LazyHTML.text() |> String.trim() == "1 invited"
+      end
+    end
+
+    test "closing the detail removes both surfaces and leaves the anchor week alone", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+      week_before = week_label(view)
+      day_before = day_heading_date(html)
+
+      html = select_meeting(view, meeting)
+
+      assert attrs_of(html, ~s([data-role="meeting-detail-panel"]), "data-role") ==
+               ["meeting-detail-panel"]
+
+      # Selecting is not navigation: it must not page the week or move the
+      # selected day out from under the reader.
+      assert week_label(view) == week_before
+      assert day_heading_date(html) == day_before
+
+      html =
+        view
+        |> element(~s([data-role="meeting-detail-panel-close"]))
+        |> render_click()
+
+      assert attrs_of(html, ~s([data-role="meeting-detail-panel"]), "data-role") == []
+      assert attrs_of(html, ~s([data-role="meeting-detail-sheet"]), "data-role") == []
+
+      # …and closing is not navigation either.
+      assert week_label(view) == week_before
+      assert day_heading_date(html) == day_before
+    end
+
+    test "the sheet's backdrop closes it", %{conn: conn, project: project} do
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      _ = select_meeting(view, meeting)
+
+      html =
+        view
+        |> element(~s([data-role="meeting-detail-sheet-backdrop"]))
+        |> render_click()
+
+      assert attrs_of(html, ~s([data-role="meeting-detail-sheet"]), "data-role") == []
+    end
+
+    test "the sheet rises from the bottom edge and carries the frames' drag handle", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      sheet_classes = doc |> detail_sheet() |> class_of() |> String.split()
+
+      # `items-end` is what makes this a bottom SHEET rather than a centred
+      # modal: a thumb starts at the bottom edge of a phone, and the frames
+      # draw it there. Both halves named — `items-center` present alongside
+      # `items-end` would be the same defect with the pin still green.
+      assert "items-end" in sheet_classes
+      refute "items-center" in sheet_classes
+      assert "fixed" in sheet_classes
+      assert "inset-0" in sheet_classes
+
+      assert doc
+             |> detail_sheet()
+             |> LazyHTML.query(~s([data-role="meeting-detail-sheet-handle"]))
+             |> Enum.count() == 1
+
+      # Out of flow, so the safe-area inset is the right clearance and the
+      # in-flow bottom-nav reservation is not.
+      panel_class =
+        doc |> LazyHTML.query(~s([data-role="meeting-detail-sheet"] > div.relative)) |> class_of()
+
+      assert panel_class =~ "pb-[env(safe-area-inset-bottom)]"
+      refute panel_class =~ "--bottom-nav-height"
+    end
+
+    # ── The rejected geometry, in a second place ──────────────────────────
+    #
+    # The sponsor rejected the create sheet for exactly this: the panel was
+    # one scroll region, so a long staged-invite list carried the primary
+    # action off the bottom of the modal. This surface is the SAME shape and
+    # the create+invite member's next stage fills its body with per-invitee
+    # rows, so the content grows without bound here too.
+    #
+    # Asserting the action row is PRESENT cannot see the defect — it was
+    # present the whole time, just out of view — so what is asserted is the
+    # structure that makes it impossible: the surface caps and CLIPS,
+    # exactly one descendant scrolls, and the action row is not inside it.
+    # That property holds at any content length, which is why it is
+    # preferable to any assertion about a particular one.
+    defp detail_scrollers(node),
+      do: node |> LazyHTML.query("*") |> Enum.filter(&(&1 |> class_of() |> scrolls?()))
+
+    test "each detail surface clips, scrolls in one place, and pins its action row", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      # The panel is the element itself; the sheet's cap lives on the panel
+      # INSIDE the fixed backdrop wrapper, so each names its own host.
+      surfaces = [
+        {"panel", detail_panel(doc), "meeting-detail-panel-body"},
+        {"sheet", LazyHTML.query(doc, ~s([data-role="meeting-detail-sheet"] > div.relative)),
+         "meeting-detail-sheet-body"}
+      ]
+
+      for {name, surface, body_role} <- surfaces do
+        surface_class = class_of(surface)
+
+        assert surface_class =~ "flex", "the #{name} is not a flex container"
+        assert surface_class =~ "flex-col", "the #{name} is not a flex COLUMN"
+
+        refute scrolls?(surface_class),
+               "the #{name} itself scrolls (#{surface_class}) — its action row scrolls away " <>
+                 "with the body, which is the geometry the sponsor rejected"
+
+        # `LazyHTML.query(node, "*")` INCLUDES the node it is rooted at, so a
+        # surface that scrolled would be counted here rather than skipped.
+        assert [body] = detail_scrollers(surface),
+               "expected exactly one scrolling region in the #{name}, found " <>
+                 "#{length(detail_scrollers(surface))}"
+
+        assert LazyHTML.attribute(body, "data-role") == [body_role]
+
+        # `min-h-0` is the load-bearing bit: a flex child defaults to
+        # `min-height: auto` and refuses to shrink below its content, so
+        # without it the body never scrolls and the action row is pushed out
+        # of the surface even though the surface is a flex column.
+        body_class = class_of(body)
+        assert body_class =~ "min-h-0", "the #{name}'s body can grow past the surface's cap"
+        assert body_class =~ "flex-1", "the #{name}'s body does not take the free space"
+
+        # The action row renders exactly once per surface …
+        assert surface |> LazyHTML.query(~s([data-role="meeting-detail-open"])) |> Enum.count() ==
+                 1
+
+        # … and NOT from inside the region that scrolls away.
+        assert body |> LazyHTML.query(~s([data-role="meeting-detail-open"])) |> Enum.count() == 0,
+               "meeting-detail-open is inside the #{name}'s scrolling body — enough invitee " <>
+                 "rows push it out of view"
+
+        # …while the content that GROWS is inside it, without which the two
+        # assertions above hold trivially on a surface whose body is empty.
+        assert body
+               |> LazyHTML.query(~s([data-role="meeting-detail-body-content"]))
+               |> Enum.count() == 1
+      end
+    end
+
+    test "a long invite list does not move the action row into the scrolling region", %{
+      conn: conn,
+      project: project
+    } do
+      # The COUNT is the variable, not the kind — that is the specification
+      # error that let the rejected defect through the first time. Twelve
+      # live invitees is well past the point where the per-invitee rows the
+      # next stage adds would overflow a 75vh sheet.
+      meeting = seed_detail_meeting(project)
+      for index <- 1..12, do: seed_invite!(meeting, "Invitee #{index}")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [
+            detail_panel(doc),
+            LazyHTML.query(doc, ~s([data-role="meeting-detail-sheet"] > div.relative))
+          ] do
+        assert surface
+               |> LazyHTML.query(~s([data-role="meeting-detail-invited-count"]))
+               |> LazyHTML.attribute("data-count") == ["12"]
+
+        assert [body] = detail_scrollers(surface)
+
+        assert surface |> LazyHTML.query(~s([data-role="meeting-detail-open"])) |> Enum.count() ==
+                 1
+
+        assert body |> LazyHTML.query(~s([data-role="meeting-detail-open"])) |> Enum.count() == 0
+      end
+    end
+  end
+
+  describe "MeetingDetail.when_label/2" do
+    # Pinned with `==` rather than `=~` throughout: `=~ "2:00"` is satisfied
+    # by "12:00", by "2:001" and by a string that merely contains it.
+    test "a range inside one meridiem prints the meridiem once" do
+      meeting = %Meeting{
+        scheduled_start_at: ~U[2026-08-05 19:00:00.000000Z],
+        scheduled_end_at: ~U[2026-08-05 20:00:00.000000Z]
+      }
+
+      assert MeetingDetail.when_label(meeting, "America/Chicago") == "Wed Aug 5 · 2:00–3:00 PM"
+    end
+
+    test "a range crossing noon prints both meridiems" do
+      meeting = %Meeting{
+        scheduled_start_at: ~U[2026-08-05 16:30:00.000000Z],
+        scheduled_end_at: ~U[2026-08-05 17:30:00.000000Z]
+      }
+
+      assert MeetingDetail.when_label(meeting, "America/Chicago") ==
+               "Wed Aug 5 · 11:30 AM–12:30 PM"
+    end
+
+    test "the label is the VIEWER's local day, not the stored UTC one" do
+      # 01:30 UTC on the 6th is 8:30 PM on the 5th in Chicago. A label built
+      # from the stored instant would name Thu Aug 6 while the block sits in
+      # Wednesday's column.
+      meeting = %Meeting{
+        scheduled_start_at: ~U[2026-08-06 01:30:00.000000Z],
+        scheduled_end_at: ~U[2026-08-06 02:30:00.000000Z]
+      }
+
+      assert MeetingDetail.when_label(meeting, "America/Chicago") == "Wed Aug 5 · 8:30–9:30 PM"
+      assert MeetingDetail.when_label(meeting, "Etc/UTC") == "Thu Aug 6 · 1:30–2:30 AM"
+    end
+
+    test "an unresolved zone raises rather than rendering server time as the viewer's" do
+      meeting = %Meeting{
+        scheduled_start_at: ~U[2026-08-05 19:00:00.000000Z],
+        scheduled_end_at: ~U[2026-08-05 20:00:00.000000Z]
+      }
+
+      assert_raise FunctionClauseError, fn -> MeetingDetail.when_label(meeting, nil) end
     end
   end
 

@@ -1267,6 +1267,13 @@
        meeting linking to `/meetings/<slug>`. The "Start meeting" FAB
        is owned by stage 2 and lands later — the empty-state CTA below
        is the only action surface in this stage. --%>
+    <%!-- Resolved ONCE for the whole arm (task 019fb954-8ead stage 4).
+       The desktop panel and the mobile sheet render the same meeting and
+       the same invited count; deriving each of them where it is used
+       would issue the invite count query twice per render and let the two
+       surfaces disagree if one call ever picked up different options. --%>
+    <% detail_meeting = selected_meeting(assigns) %>
+    <% detail_invited_count = detail_meeting && invited_count(detail_meeting) %>
     <div
       class="flex h-full min-h-0 flex-col bg-base-100 text-base-content"
       data-page="meetings-index"
@@ -1703,185 +1710,192 @@
          surface are now GONE: the week strip and day view below are
          what stage 2 was holding the place for. Leaving them would
          draw both surfaces on a phone, one under the other. --%>
-      <div
-        :if={@meetings_view == :calendar}
-        class="flex-1 overflow-y-auto px-3 py-3 sm:px-6 sm:py-5"
-        data-region="meetings-list"
-      >
-        <%!-- Week nav. Renders at every width — paging the week and
+      <%!-- Stage 4 wraps the calendar region and the detail panel in one
+         ROW so the panel can be frame 1's right rail. The region element
+         below keeps its own `:if` even though this wrapper now carries the
+         same guard: it and its `data-region` are the archive sibling's
+         pin, reproduced byte-identically so a rollup merge has nothing to
+         resolve on that line. The redundancy is the cheaper of the two. --%>
+      <div :if={@meetings_view == :calendar} class="flex min-h-0 flex-1">
+        <div
+          :if={@meetings_view == :calendar}
+          class="flex-1 overflow-y-auto px-3 py-3 sm:px-6 sm:py-5"
+          data-region="meetings-list"
+        >
+          <%!-- Week nav. Renders at every width — paging the week and
            naming the zone are not desktop concerns, and stage 3's
            mobile strip sits under this rather than replacing it. --%>
-        <div class="mb-3 flex items-center gap-1" data-role="calendar-week-nav">
-          <button
-            type="button"
-            phx-click="calendar_prev_week"
-            aria-label="Previous week"
-            class="btn btn-ghost btn-sm btn-square min-h-11"
-          >
-            <span class="hero-chevron-left size-4"></span>
-          </button>
+          <div class="mb-3 flex items-center gap-1" data-role="calendar-week-nav">
+            <button
+              type="button"
+              phx-click="calendar_prev_week"
+              aria-label="Previous week"
+              class="btn btn-ghost btn-sm btn-square min-h-11"
+            >
+              <span class="hero-chevron-left size-4"></span>
+            </button>
 
-          <span class="px-1 text-sm font-semibold" data-role="calendar-week-label">
-            {calendar_week_label(@calendar_anchor_date)}
-          </span>
+            <span class="px-1 text-sm font-semibold" data-role="calendar-week-label">
+              {calendar_week_label(@calendar_anchor_date)}
+            </span>
 
-          <button
-            type="button"
-            phx-click="calendar_next_week"
-            aria-label="Next week"
-            class="btn btn-ghost btn-sm btn-square min-h-11"
-          >
-            <span class="hero-chevron-right size-4"></span>
-          </button>
+            <button
+              type="button"
+              phx-click="calendar_next_week"
+              aria-label="Next week"
+              class="btn btn-ghost btn-sm btn-square min-h-11"
+            >
+              <span class="hero-chevron-right size-4"></span>
+            </button>
 
-          <button
-            type="button"
-            phx-click="calendar_today"
-            class="btn btn-outline btn-sm ml-1 min-h-11"
-          >
-            Today
-          </button>
+            <button
+              type="button"
+              phx-click="calendar_today"
+              class="btn btn-outline btn-sm ml-1 min-h-11"
+            >
+              Today
+            </button>
 
-          <div class="flex-1"></div>
+            <div class="flex-1"></div>
 
-          <%!-- Only when the zone is KNOWN. On the dead render there is
+            <%!-- Only when the zone is KNOWN. On the dead render there is
              no resolved zone, and printing `UTC` there would be a
              confident wrong answer — a calendar silently drawn in
              server time is wrong in a way nobody notices until they
              miss a call. --%>
-          <span
-            :if={@calendar_time_zone}
-            class="truncate font-mono text-[10px] text-base-content/40"
-            data-role="calendar-timezone"
-          >
-            {@calendar_time_zone}
-          </span>
-        </div>
+            <span
+              :if={@calendar_time_zone}
+              class="truncate font-mono text-[10px] text-base-content/40"
+              data-role="calendar-timezone"
+            >
+              {@calendar_time_zone}
+            </span>
+          </div>
 
-        <%!-- ── Desktop week grid (`lg` and up) ──────────────────────────
+          <%!-- ── Desktop week grid (`lg` and up) ──────────────────────────
            `hidden lg:grid` is one decision in two classes and both are
            load-bearing: `grid` alone would draw seven ~45px columns on
            a phone, `hidden` alone would draw nothing anywhere. The
            gutter is 3.25rem (52px) and each hour row is the same, so
            the seven day columns inherit their height from the gutter
            and no pixel arithmetic reaches the day cells. --%>
-        <div
-          data-role="calendar-week-grid"
-          class="hidden overflow-hidden rounded-lg border border-base-300 bg-base-100 lg:grid"
-          style="grid-template-columns: 3.25rem repeat(7, minmax(0, 1fr))"
-        >
-          <%!-- Header row: the gutter's corner, then seven day headings. --%>
-          <div class="border-b border-base-300 bg-base-200/40"></div>
           <div
-            :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
-            class="flex flex-col items-center gap-1 border-b border-l border-base-300 bg-base-200/40 py-2"
-            data-role="calendar-week-day-heading"
-            data-date={Date.to_iso8601(day.date)}
+            data-role="calendar-week-grid"
+            class="hidden overflow-hidden rounded-lg border border-base-300 bg-base-100 lg:grid"
+            style="grid-template-columns: 3.25rem repeat(7, minmax(0, 1fr))"
           >
-            <span class="text-[10px] font-semibold uppercase tracking-widest text-base-content/50">
-              {calendar_weekday_abbrev(day.date)}
-            </span>
-            <span
-              class={[
-                "size-6 text-center text-sm font-semibold leading-6",
-                day.today? && "rounded-full bg-primary text-primary-content"
-              ]}
-              data-today={day.today? && "true"}
-            >
-              {day.date.day}
-            </span>
-          </div>
-
-          <%!-- Body row: the hour gutter, then seven day columns. --%>
-          <div class="flex flex-col bg-base-200/20">
+            <%!-- Header row: the gutter's corner, then seven day headings. --%>
+            <div class="border-b border-base-300 bg-base-200/40"></div>
             <div
-              :for={hour <- calendar_hours(@calendar_hour_window)}
-              class="h-13 pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-base-content/40"
+              :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
+              class="flex flex-col items-center gap-1 border-b border-l border-base-300 bg-base-200/40 py-2"
+              data-role="calendar-week-day-heading"
+              data-date={Date.to_iso8601(day.date)}
             >
-              {calendar_hour_label(hour)}
+              <span class="text-[10px] font-semibold uppercase tracking-widest text-base-content/50">
+                {calendar_weekday_abbrev(day.date)}
+              </span>
+              <span
+                class={[
+                  "size-6 text-center text-sm font-semibold leading-6",
+                  day.today? && "rounded-full bg-primary text-primary-content"
+                ]}
+                data-today={day.today? && "true"}
+              >
+                {day.date.day}
+              </span>
             </div>
-          </div>
 
-          <div
-            :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
-            class="relative border-l border-base-300"
-            style="background-image: repeating-linear-gradient(to bottom, transparent 0, transparent calc(3.25rem - 1px), var(--color-base-300) calc(3.25rem - 1px), var(--color-base-300) 3.25rem)"
-            data-role="calendar-day-column"
-            data-date={Date.to_iso8601(day.date)}
-          >
-            <%!-- The now-line lives INSIDE today's column, never spanning
+            <%!-- Body row: the hour gutter, then seven day columns. --%>
+            <div class="flex flex-col bg-base-200/20">
+              <div
+                :for={hour <- calendar_hours(@calendar_hour_window)}
+                class="h-13 pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-base-content/40"
+              >
+                {calendar_hour_label(hour)}
+              </div>
+            </div>
+
+            <div
+              :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
+              class="relative border-l border-base-300"
+              style="background-image: repeating-linear-gradient(to bottom, transparent 0, transparent calc(3.25rem - 1px), var(--color-base-300) calc(3.25rem - 1px), var(--color-base-300) 3.25rem)"
+              data-role="calendar-day-column"
+              data-date={Date.to_iso8601(day.date)}
+            >
+              <%!-- The now-line lives INSIDE today's column, never spanning
                the grid: "now" is a fact about one day, and a rule drawn
                across all seven says it is 2:14 PM on Sunday too. It is
                absent entirely when the zone is unresolved or the current
                hour falls outside the drawn window. --%>
-            <div
-              :for={
-                offset <-
-                  calendar_now_line(day.today?, @calendar_time_zone, @calendar_hour_window)
-              }
-              class="pointer-events-none absolute inset-x-0 z-10 h-[1.5px] bg-error"
-              style={"top:#{offset}%"}
-              data-role="calendar-now-line"
-              aria-hidden="true"
-            >
-              <span class="absolute -left-px -top-[3px] size-2 rounded-full bg-error"></span>
-            </div>
+              <div
+                :for={
+                  offset <-
+                    calendar_now_line(day.today?, @calendar_time_zone, @calendar_hour_window)
+                }
+                class="pointer-events-none absolute inset-x-0 z-10 h-[1.5px] bg-error"
+                style={"top:#{offset}%"}
+                data-role="calendar-now-line"
+                aria-hidden="true"
+              >
+                <span class="absolute -left-px -top-[3px] size-2 rounded-full bg-error"></span>
+              </div>
 
-            <button
-              :for={
-                {meeting, placement} <-
-                  calendar_day_events(
-                    @calendar_week_meetings,
-                    day.date,
-                    @calendar_time_zone,
-                    @calendar_hour_window
-                  )
-              }
-              type="button"
-              phx-click="select_meeting"
-              phx-value-id={meeting.id}
-              class={
-                [
-                  # `min-h-11` is the 44px touch-target floor, and it is also
-                  # what keeps a short meeting readable: a 30-minute block is
-                  # 26px in a 52px hour row, which clips the second line off
-                  # entirely. The percentage height stays the truth about
-                  # WHEN; this is a floor on how small the box may be drawn.
-                  "absolute inset-x-1 flex min-h-11 flex-col items-start overflow-hidden rounded-md border-l-[3px] px-1.5 py-1 text-left",
-                  meeting.status == "live" && "border-success bg-success/15 hover:bg-success/25",
-                  meeting.status != "live" && "border-primary bg-primary/15 hover:bg-primary/25",
-                  @selected_meeting_id == meeting.id && "ring-2 ring-primary"
-                ]
-              }
-              style={"top:#{placement.top}%;height:#{placement.height}%"}
-              data-role="calendar-event"
-              data-meeting-id={meeting.id}
-              data-meeting-status={meeting.status}
-              data-live={meeting.status == "live" && "true"}
-              data-selected={@selected_meeting_id == meeting.id && "true"}
-            >
-              <span class="flex w-full items-center gap-1">
-                <%!-- A shape, not a glyph: "live" is carried by motion
+              <button
+                :for={
+                  {meeting, placement} <-
+                    calendar_day_events(
+                      @calendar_week_meetings,
+                      day.date,
+                      @calendar_time_zone,
+                      @calendar_hour_window
+                    )
+                }
+                type="button"
+                phx-click="select_meeting"
+                phx-value-id={meeting.id}
+                class={
+                  [
+                    # `min-h-11` is the 44px touch-target floor, and it is also
+                    # what keeps a short meeting readable: a 30-minute block is
+                    # 26px in a 52px hour row, which clips the second line off
+                    # entirely. The percentage height stays the truth about
+                    # WHEN; this is a floor on how small the box may be drawn.
+                    "absolute inset-x-1 flex min-h-11 flex-col items-start overflow-hidden rounded-md border-l-[3px] px-1.5 py-1 text-left",
+                    meeting.status == "live" && "border-success bg-success/15 hover:bg-success/25",
+                    meeting.status != "live" && "border-primary bg-primary/15 hover:bg-primary/25",
+                    @selected_meeting_id == meeting.id && "ring-2 ring-primary"
+                  ]
+                }
+                style={"top:#{placement.top}%;height:#{placement.height}%"}
+                data-role="calendar-event"
+                data-meeting-id={meeting.id}
+                data-meeting-status={meeting.status}
+                data-live={meeting.status == "live" && "true"}
+                data-selected={@selected_meeting_id == meeting.id && "true"}
+              >
+                <span class="flex w-full items-center gap-1">
+                  <%!-- A shape, not a glyph: "live" is carried by motion
                    and by the accent token, so it survives both a
                    missing icon font and a monochrome reading. --%>
-                <span
-                  :if={meeting.status == "live"}
-                  class="size-1.5 flex-shrink-0 rounded-full bg-success animate-pulse"
-                  data-role="calendar-event-live-dot"
-                >
+                  <span
+                    :if={meeting.status == "live"}
+                    class="size-1.5 flex-shrink-0 rounded-full bg-success animate-pulse"
+                    data-role="calendar-event-live-dot"
+                  >
+                  </span>
+                  <span class="truncate text-[11px] font-medium leading-tight text-base-content">
+                    {meeting.name}
+                  </span>
                 </span>
-                <span class="truncate text-[11px] font-medium leading-tight text-base-content">
-                  {meeting.name}
+                <span class="truncate text-[10px] leading-tight text-base-content/60">
+                  {calendar_event_time(meeting, @calendar_time_zone)}
                 </span>
-              </span>
-              <span class="truncate text-[10px] leading-tight text-base-content/60">
-                {calendar_event_time(meeting, @calendar_time_zone)}
-              </span>
-            </button>
+              </button>
+            </div>
           </div>
-        </div>
 
-        <%!-- ── Below `lg`: week strip over a single-column day view ─────
+          <%!-- ── Below `lg`: week strip over a single-column day view ─────
            A DIFFERENT INFORMATION ARCHITECTURE, not a narrower grid.
            Seven columns at 375px leaves ~45px per day — titles are
            unreadable and blocks untappable — so the phone splits the
@@ -1894,75 +1908,75 @@
            That is deliberate: a wrapper would make each element's own
            breakpoint class decorative, and a test pinning a class that
            does nothing is worse than no test. --%>
-        <div
-          data-role="calendar-week-strip"
-          class="grid grid-cols-7 overflow-hidden rounded-t-lg border border-base-300 bg-base-200 lg:hidden"
-        >
-          <button
-            :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
-            type="button"
-            phx-click="select_calendar_day"
-            phx-value-date={Date.to_iso8601(day.date)}
-            aria-current={Date.compare(day.date, @calendar_selected_date) == :eq && "date"}
-            class="flex min-h-11 flex-col items-center justify-center gap-0.5 px-0 py-1.5 transition hover:bg-base-300/60"
-            data-role="calendar-strip-day"
-            data-date={Date.to_iso8601(day.date)}
-            data-selected={Date.compare(day.date, @calendar_selected_date) == :eq && "true"}
-            data-today={day.today? && "true"}
+          <div
+            data-role="calendar-week-strip"
+            class="grid grid-cols-7 overflow-hidden rounded-t-lg border border-base-300 bg-base-200 lg:hidden"
           >
-            <%!-- Today stays identifiable even when another day is
+            <button
+              :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
+              type="button"
+              phx-click="select_calendar_day"
+              phx-value-date={Date.to_iso8601(day.date)}
+              aria-current={Date.compare(day.date, @calendar_selected_date) == :eq && "date"}
+              class="flex min-h-11 flex-col items-center justify-center gap-0.5 px-0 py-1.5 transition hover:bg-base-300/60"
+              data-role="calendar-strip-day"
+              data-date={Date.to_iso8601(day.date)}
+              data-selected={Date.compare(day.date, @calendar_selected_date) == :eq && "true"}
+              data-today={day.today? && "true"}
+            >
+              <%!-- Today stays identifiable even when another day is
                selected. The frames only ever draw a day that is both,
                so they do not answer this; without the tell, selecting
                Friday leaves a phone with nothing on screen that says
                which day it actually is. Carried by the accent token on
                the letter, NOT by a second circle, so the filled circle
                keeps meaning exactly one thing: selection. --%>
-            <span class={[
-              "text-[10px] font-semibold uppercase leading-none tracking-widest",
-              day.today? && "text-primary",
-              !day.today? && "text-base-content/50"
-            ]}>
-              {calendar_weekday_initial(day.date)}
-            </span>
-            <span
-              class={[
-                "size-6 text-center text-sm font-semibold leading-6",
-                Date.compare(day.date, @calendar_selected_date) == :eq &&
-                  "rounded-full bg-primary text-primary-content"
-              ]}
-              data-role="calendar-strip-day-number"
-            >
-              {day.date.day}
-            </span>
-          </button>
-        </div>
+              <span class={[
+                "text-[10px] font-semibold uppercase leading-none tracking-widest",
+                day.today? && "text-primary",
+                !day.today? && "text-base-content/50"
+              ]}>
+                {calendar_weekday_initial(day.date)}
+              </span>
+              <span
+                class={[
+                  "size-6 text-center text-sm font-semibold leading-6",
+                  Date.compare(day.date, @calendar_selected_date) == :eq &&
+                    "rounded-full bg-primary text-primary-content"
+                ]}
+                data-role="calendar-strip-day-number"
+              >
+                {day.date.day}
+              </span>
+            </button>
+          </div>
 
-        <%!-- The mobile count lives HERE, not in the page header. Both
+          <%!-- The mobile count lives HERE, not in the page header. Both
            mobile frames strip the header back to icon + `Meetings` +
            the segmented control and put `Wednesday, Aug 5 · 2
            meetings` under the strip instead, where it describes the
            day actually being drawn rather than a week-wide total the
            single column cannot show. --%>
-        <div
-          class="flex items-baseline gap-1.5 border-x border-b border-base-300 bg-base-200/40 px-3 py-2 text-[11px] font-semibold uppercase tracking-widest text-base-content/50 lg:hidden"
-          data-role="calendar-day-heading"
-          data-date={Date.to_iso8601(@calendar_selected_date)}
-        >
-          <span>{calendar_day_label(@calendar_selected_date)}</span>
-          <span aria-hidden="true">·</span>
-          <span data-role="calendar-day-count">
-            {calendar_day_count_label(
-              calendar_day_meeting_count(
-                @calendar_week_meetings,
-                @calendar_selected_date,
-                @calendar_time_zone,
-                @calendar_hour_window
-              )
-            )}
-          </span>
-        </div>
+          <div
+            class="flex items-baseline gap-1.5 border-x border-b border-base-300 bg-base-200/40 px-3 py-2 text-[11px] font-semibold uppercase tracking-widest text-base-content/50 lg:hidden"
+            data-role="calendar-day-heading"
+            data-date={Date.to_iso8601(@calendar_selected_date)}
+          >
+            <span>{calendar_day_label(@calendar_selected_date)}</span>
+            <span aria-hidden="true">·</span>
+            <span data-role="calendar-day-count">
+              {calendar_day_count_label(
+                calendar_day_meeting_count(
+                  @calendar_week_meetings,
+                  @calendar_selected_date,
+                  @calendar_time_zone,
+                  @calendar_hour_window
+                )
+              )}
+            </span>
+          </div>
 
-        <%!-- One day, one column, its own 44px gutter. The hour rows
+          <%!-- One day, one column, its own 44px gutter. The hour rows
            are 3rem here against the desktop grid's 3.25rem, and that
            costs nothing: `CalendarWindow.place/4` answers in
            PERCENTAGES of the drawn window, so both halves place the
@@ -1974,48 +1988,48 @@
            region already ends above it. The FAB is the thing that
            overlays: it is fixed 1.5rem above the nav and is ~3rem
            tall, so without this the last hour sits under it. --%>
-        <div
-          data-role="calendar-day-view"
-          class="mb-20 grid overflow-hidden rounded-b-lg border-x border-b border-base-300 bg-base-100 lg:hidden"
-          style="grid-template-columns: 2.75rem 1fr"
-        >
-          <div class="flex flex-col bg-base-200/20">
-            <div
-              :for={hour <- calendar_hours(@calendar_hour_window)}
-              class="h-12 pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-base-content/40"
-            >
-              {calendar_hour_label(hour)}
-            </div>
-          </div>
-
           <div
-            class="relative border-l border-base-300"
-            style="background-image: repeating-linear-gradient(to bottom, transparent 0, transparent calc(3rem - 1px), var(--color-base-300) calc(3rem - 1px), var(--color-base-300) 3rem)"
-            data-role="calendar-day-body"
-            data-date={Date.to_iso8601(@calendar_selected_date)}
+            data-role="calendar-day-view"
+            class="mb-20 grid overflow-hidden rounded-b-lg border-x border-b border-base-300 bg-base-100 lg:hidden"
+            style="grid-template-columns: 2.75rem 1fr"
           >
-            <%!-- Same two conditions as the desktop column, asked of
+            <div class="flex flex-col bg-base-200/20">
+              <div
+                :for={hour <- calendar_hours(@calendar_hour_window)}
+                class="h-12 pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-base-content/40"
+              >
+                {calendar_hour_label(hour)}
+              </div>
+            </div>
+
+            <div
+              class="relative border-l border-base-300"
+              style="background-image: repeating-linear-gradient(to bottom, transparent 0, transparent calc(3rem - 1px), var(--color-base-300) calc(3rem - 1px), var(--color-base-300) 3rem)"
+              data-role="calendar-day-body"
+              data-date={Date.to_iso8601(@calendar_selected_date)}
+            >
+              <%!-- Same two conditions as the desktop column, asked of
                the SELECTED day rather than of each of seven: the line
                is a fact about today, so it is absent whenever the day
                on screen is not today or the zone is unresolved. --%>
-            <div
-              :for={
-                offset <-
-                  calendar_selected_now_line(
-                    @calendar_selected_date,
-                    @calendar_time_zone,
-                    @calendar_hour_window
-                  )
-              }
-              class="pointer-events-none absolute inset-x-0 z-10 h-[1.5px] bg-error"
-              style={"top:#{offset}%"}
-              data-role="calendar-now-line"
-              aria-hidden="true"
-            >
-              <span class="absolute -left-px -top-[3px] size-2 rounded-full bg-error"></span>
-            </div>
+              <div
+                :for={
+                  offset <-
+                    calendar_selected_now_line(
+                      @calendar_selected_date,
+                      @calendar_time_zone,
+                      @calendar_hour_window
+                    )
+                }
+                class="pointer-events-none absolute inset-x-0 z-10 h-[1.5px] bg-error"
+                style={"top:#{offset}%"}
+                data-role="calendar-now-line"
+                aria-hidden="true"
+              >
+                <span class="absolute -left-px -top-[3px] size-2 rounded-full bg-error"></span>
+              </div>
 
-            <%!-- The SAME contract as the desktop block — same
+              <%!-- The SAME contract as the desktop block — same
                `data-role`, same id/status/live attributes, same
                percentage geometry, same event — so one selector reads
                both halves and neither half can drift from the other.
@@ -2023,47 +2037,181 @@
                padding, and the same `min-h-11` floor, which is what
                keeps a 30-minute block (24px in a 48px hour row) from
                clipping its own time line off. --%>
+              <button
+                :for={
+                  {meeting, placement} <-
+                    calendar_day_events(
+                      @calendar_week_meetings,
+                      @calendar_selected_date,
+                      @calendar_time_zone,
+                      @calendar_hour_window
+                    )
+                }
+                type="button"
+                phx-click="select_meeting"
+                phx-value-id={meeting.id}
+                class={[
+                  "absolute inset-x-1.5 flex min-h-11 flex-col items-start justify-center overflow-hidden rounded-md border-l-[3px] px-2 py-1.5 text-left",
+                  meeting.status == "live" && "border-success bg-success/15",
+                  meeting.status != "live" && "border-primary bg-primary/15",
+                  @selected_meeting_id == meeting.id && "ring-2 ring-primary"
+                ]}
+                style={"top:#{placement.top}%;height:#{placement.height}%"}
+                data-role="calendar-event"
+                data-meeting-id={meeting.id}
+                data-meeting-status={meeting.status}
+                data-live={meeting.status == "live" && "true"}
+                data-selected={@selected_meeting_id == meeting.id && "true"}
+              >
+                <span class="flex w-full items-center gap-1.5">
+                  <span
+                    :if={meeting.status == "live"}
+                    class="size-1.5 flex-shrink-0 rounded-full bg-success animate-pulse"
+                    data-role="calendar-event-live-dot"
+                  >
+                  </span>
+                  <span class="truncate text-xs font-medium leading-tight text-base-content">
+                    {meeting.name}
+                  </span>
+                </span>
+                <span class="truncate text-[11px] leading-tight text-base-content/60">
+                  {calendar_event_time(meeting, @calendar_time_zone)}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <%!-- ── Meeting detail panel — desktop right rail (frame 1) ───────
+           `hidden lg:flex` is one decision in two classes: the mobile
+           surface for the same selection is the sheet below, and drawing
+           both at 375px would stack a 322px rail under the day view.
+
+           GEOMETRY — the panel CLIPS, the body SCROLLS, the footer is a
+           SIBLING of the body. Making the panel itself the scroll region
+           is the shape the sponsor rejected on the create sheet: with
+           enough content the footer scrolls away with it. `min-h-0` on
+           the body is what makes this real — a flex child defaults to
+           `min-height: auto` and will not shrink below its content, so
+           without it the body never scrolls and the footer is pushed out
+           of the panel anyway. The per-invitee rows the create+invite
+           member's next stage puts in this body are exactly the content
+           that grows without bound. --%>
+        <aside
+          :if={detail_meeting}
+          class="hidden w-[20.125rem] flex-none flex-col overflow-hidden border-l border-base-300 bg-base-100 lg:flex"
+          data-role="meeting-detail-panel"
+          aria-label="Meeting detail"
+        >
+          <div class="flex flex-none items-center gap-2 border-b border-base-300 px-4 py-3">
+            <h2 class="min-w-0 flex-1 truncate text-sm font-semibold">Meeting detail</h2>
             <button
-              :for={
-                {meeting, placement} <-
-                  calendar_day_events(
-                    @calendar_week_meetings,
-                    @calendar_selected_date,
-                    @calendar_time_zone,
-                    @calendar_hour_window
-                  )
-              }
               type="button"
-              phx-click="select_meeting"
-              phx-value-id={meeting.id}
-              class={[
-                "absolute inset-x-1.5 flex min-h-11 flex-col items-start justify-center overflow-hidden rounded-md border-l-[3px] px-2 py-1.5 text-left",
-                meeting.status == "live" && "border-success bg-success/15",
-                meeting.status != "live" && "border-primary bg-primary/15",
-                @selected_meeting_id == meeting.id && "ring-2 ring-primary"
-              ]}
-              style={"top:#{placement.top}%;height:#{placement.height}%"}
-              data-role="calendar-event"
-              data-meeting-id={meeting.id}
-              data-meeting-status={meeting.status}
-              data-live={meeting.status == "live" && "true"}
-              data-selected={@selected_meeting_id == meeting.id && "true"}
+              phx-click="close_meeting_detail"
+              aria-label="Close meeting detail"
+              title="Close"
+              class="btn btn-ghost btn-sm btn-square min-h-11"
+              data-role="meeting-detail-panel-close"
             >
-              <span class="flex w-full items-center gap-1.5">
-                <span
-                  :if={meeting.status == "live"}
-                  class="size-1.5 flex-shrink-0 rounded-full bg-success animate-pulse"
-                  data-role="calendar-event-live-dot"
-                >
-                </span>
-                <span class="truncate text-xs font-medium leading-tight text-base-content">
-                  {meeting.name}
-                </span>
-              </span>
-              <span class="truncate text-[11px] leading-tight text-base-content/60">
-                {calendar_event_time(meeting, @calendar_time_zone)}
-              </span>
+              <span class="hero-x-mark size-4"></span>
             </button>
+          </div>
+
+          <div
+            class="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4"
+            data-role="meeting-detail-panel-body"
+          >
+            <.meeting_detail_body
+              meeting={detail_meeting}
+              time_zone={@calendar_time_zone}
+              invited_count={detail_invited_count}
+            />
+          </div>
+
+          <div
+            class="flex-none border-t border-base-300 px-4 py-3"
+            data-role="meeting-detail-panel-footer"
+          >
+            <.meeting_detail_actions meeting={detail_meeting} />
+          </div>
+        </aside>
+      </div>
+
+      <%!-- ── Meeting detail sheet — below `lg` (mobile frame 2) ──────────
+         The same selection, the same two shared components, a different
+         presentation: a bottom sheet over the day view rather than a rail
+         beside it. Shape is the create sheet's — `bg-black/40` backdrop
+         that click-dismisses, `items-end` so it rises from the bottom
+         edge a thumb starts at — plus the frames' drag handle.
+
+         Out of flow, so `pb-[env(safe-area-inset-bottom)]` is the right
+         clearance and `--bottom-nav-height` is NOT: the in-flow bottom
+         nav reservation does not apply to an overlay that paints over it.
+
+         Geometry is the panel's, for the same reason — see the panel's
+         comment above. Here the cap is explicit (`max-h-[75vh]`) because
+         a fixed overlay has no parent to inherit a height from. --%>
+      <div
+        :if={detail_meeting}
+        class="lg:hidden fixed inset-0 z-50 flex items-end justify-center"
+        data-role="meeting-detail-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="meeting-detail-sheet-title"
+      >
+        <div
+          class="absolute inset-0 bg-black/40"
+          phx-click="close_meeting_detail"
+          aria-hidden="true"
+          data-role="meeting-detail-sheet-backdrop"
+        >
+        </div>
+
+        <div class="relative flex max-h-[75vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl bg-base-100 pb-[env(safe-area-inset-bottom)] shadow-2xl">
+          <div class="flex flex-none justify-center pt-2">
+            <span
+              class="h-1 w-8 rounded-full bg-base-300"
+              data-role="meeting-detail-sheet-handle"
+              aria-hidden="true"
+            >
+            </span>
+          </div>
+
+          <div class="flex flex-none items-center gap-2 border-b border-base-300 px-4 py-3">
+            <h2
+              id="meeting-detail-sheet-title"
+              class="min-w-0 flex-1 truncate text-sm font-semibold"
+            >
+              Meeting detail
+            </h2>
+            <button
+              type="button"
+              phx-click="close_meeting_detail"
+              aria-label="Close meeting detail"
+              title="Close"
+              class="btn btn-ghost btn-sm btn-square min-h-11"
+              data-role="meeting-detail-sheet-close"
+            >
+              <span class="hero-x-mark size-4"></span>
+            </button>
+          </div>
+
+          <div
+            class="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4"
+            data-role="meeting-detail-sheet-body"
+          >
+            <.meeting_detail_body
+              meeting={detail_meeting}
+              time_zone={@calendar_time_zone}
+              invited_count={detail_invited_count}
+            />
+          </div>
+
+          <div
+            class="flex-none border-t border-base-300 px-4 py-3"
+            data-role="meeting-detail-sheet-footer"
+          >
+            <.meeting_detail_actions meeting={detail_meeting} />
           </div>
         </div>
       </div>
