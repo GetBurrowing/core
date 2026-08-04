@@ -3665,6 +3665,129 @@ defmodule PlatformWeb.MeetingLiveTest do
              |> Enum.count() == 1
     end
 
+    # The sponsor rejected stage 4 at the UI gate: "having too many meeting
+    # invites pushes the button off the modal on desktop". The panel was one
+    # scroll region (`max-h-[75vh] overflow-y-auto` on the panel itself), so
+    # the footer bar scrolled WITH the staged-invite list instead of staying
+    # pinned, and past a few staged rows `start-meeting-submit` sat below the
+    # visible edge of the modal.
+    #
+    # Asserting the button is PRESENT cannot see this — it was present the
+    # whole time, just out of view. So assert the structure that makes the
+    # defect impossible: the panel caps height but does not scroll, exactly
+    # one descendant scrolls, and the primary action is NOT inside it.
+    defp create_sheet_panel(doc) do
+      LazyHTML.query(doc, ~s([data-role="start-meeting-sheet"] > div.relative))
+    end
+
+    defp class_of(lazy), do: lazy |> LazyHTML.attribute("class") |> List.first("")
+
+    # A class list that establishes a scroll container on the block axis.
+    # `overflow-hidden` is deliberately NOT one of these — it clips, it does
+    # not scroll, and it is what the panel is supposed to carry.
+    defp scrolls?(class) do
+      Enum.any?(
+        ~w(overflow-y-auto overflow-y-scroll overflow-auto overflow-scroll),
+        &String.contains?(class, &1)
+      )
+    end
+
+    test "the panel caps height without scrolling, so the footer cannot be pushed off", %{
+      conn: conn
+    } do
+      doc = conn |> open_create_sheet() |> render() |> LazyHTML.from_fragment()
+      panel_class = doc |> create_sheet_panel() |> class_of()
+
+      # Positive side first: the panel rendered at all.
+      assert panel_class =~ "max-h-[75vh]", "the panel no longer caps its height"
+
+      # A capped-height flex column. Without `flex-col` the body cannot be
+      # the only thing that grows, and the cap goes back to clipping or
+      # scrolling the footer along with the list.
+      assert panel_class =~ "flex", "the panel is not a flex container"
+      assert panel_class =~ "flex-col", "the panel is not a flex COLUMN"
+
+      refute scrolls?(panel_class),
+             "the panel itself scrolls (#{panel_class}) — the footer bar scrolls with the " <>
+               "staged-invite list and leaves the modal, which is the rejected defect"
+    end
+
+    test "the primary action lives outside the sheet's one scrolling region", %{conn: conn} do
+      doc = conn |> open_create_sheet() |> render() |> LazyHTML.from_fragment()
+      panel = create_sheet_panel(doc)
+
+      # Per-node walk, not a `class*=` selector: read each node's own class
+      # list and decide, so a scroll container introduced anywhere in the
+      # panel is counted rather than matched by luck of the selector.
+      # `LazyHTML.query(node, "*")` includes the node it is rooted at, so
+      # the panel is in this walk too — a panel that scrolls shows up here
+      # as a region that contains the footer.
+      scrollers =
+        panel
+        |> LazyHTML.query("*")
+        |> Enum.filter(&(&1 |> class_of() |> scrolls?()))
+
+      assert [body] = scrollers,
+             "expected exactly one scrolling region inside the panel, found #{length(scrollers)}"
+
+      # `min-h-0` is the load-bearing bit: a flex child defaults to
+      # `min-height: auto` and refuses to shrink below its content, so
+      # without it the body never scrolls and the footer is pushed off
+      # again even though the panel is a flex column.
+      body_class = class_of(body)
+      assert body_class =~ "min-h-0", "the scrolling body can grow past the panel's cap"
+      assert body_class =~ "flex-1", "the scrolling body does not take the free space"
+
+      # The submit renders exactly once in the panel …
+      assert panel |> LazyHTML.query(~s([data-role="start-meeting-submit"])) |> Enum.count() == 1
+
+      # … and not from inside the region that scrolls away.
+      assert body |> LazyHTML.query(~s([data-role="start-meeting-submit"])) |> Enum.count() == 0,
+             "start-meeting-submit is inside the scrolling body — enough staged invites push " <>
+               "it out of the visible modal"
+
+      assert body |> LazyHTML.query(~s([data-role="start-meeting-cancel"])) |> Enum.count() == 0,
+             "start-meeting-cancel is inside the scrolling body"
+
+      # The staged invites are what grows, so they MUST be inside it —
+      # otherwise the assertions above hold trivially on a sheet whose body
+      # scrolls nothing.
+      assert body
+             |> LazyHTML.query(~s([data-role="meeting-create-invite-section"]))
+             |> Enum.count() == 1
+    end
+
+    test "a long staged-invite list does not move the primary action into the scroll region", %{
+      conn: conn
+    } do
+      view = open_create_sheet(conn)
+
+      # Ten staged externals — well past the point where the old markup had
+      # already carried the footer below the panel's visible edge.
+      for index <- 1..10 do
+        _ = search_invites(view, "overflow#{index}@example.com")
+
+        view
+        |> element(~s([data-role="meeting-invite-option"][data-option="guest"]))
+        |> render_click()
+      end
+
+      doc = view |> render() |> LazyHTML.from_fragment()
+      assert doc |> LazyHTML.query(~s([data-role="meeting-invite-row"])) |> Enum.count() == 10
+
+      panel = create_sheet_panel(doc)
+
+      assert [body] =
+               panel
+               |> LazyHTML.query("*")
+               |> Enum.filter(&(&1 |> class_of() |> scrolls?()))
+
+      assert body |> LazyHTML.query(~s([data-role="meeting-invite-row"])) |> Enum.count() == 10
+
+      assert body |> LazyHTML.query(~s([data-role="start-meeting-submit"])) |> Enum.count() == 0,
+             "with ten invites staged the primary action sits inside the scrolling body"
+    end
+
     test "every control in the sheet clears a 44px tap target", %{conn: conn} do
       doc = conn |> open_create_sheet() |> render() |> LazyHTML.from_fragment()
 

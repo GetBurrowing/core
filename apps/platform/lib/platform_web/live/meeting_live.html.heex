@@ -2120,12 +2120,22 @@
         >
         </div>
 
-        <%!-- Sheet panel --%>
-        <div class="relative w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[75vh] overflow-y-auto">
+        <%!-- Sheet panel. A flex COLUMN whose height is capped, not a single
+             scroll region: the cap belongs to the panel and the scrolling
+             belongs to the body alone, so the footer bar stays pinned no
+             matter how many invites are staged. Scrolling the whole panel
+             instead (`max-h-[75vh] overflow-y-auto` here) pushes the footer
+             — and with it `start-meeting-submit` — off the bottom of the
+             modal once the staged list is long enough, which is the defect
+             the sponsor rejected stage 4 for.
+
+             `overflow-hidden` keeps the body's scroll from painting over
+             the rounded corners. --%>
+        <div class="relative flex flex-col w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[75vh] overflow-hidden">
           <%!-- Header. Below `sm` the primary action lives HERE (mobile
                frame 3): the footer bar is the first thing a soft keyboard
                covers, so the commit control has to be reachable above it. --%>
-          <div class="flex items-center justify-between gap-2 border-b border-base-300 px-4 py-3">
+          <div class="flex-none flex items-center justify-between gap-2 border-b border-base-300 px-4 py-3">
             <div class="flex items-center gap-2 min-w-0">
               <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
               <h2 id="start-meeting-sheet-title" class="text-base font-semibold">
@@ -2158,159 +2168,170 @@
             id="start-meeting-form"
             phx-submit="start_meeting"
             phx-change="start_meeting_form_change"
-            class="flex flex-col gap-3 px-4 py-4"
+            class="flex flex-1 flex-col min-h-0"
           >
-            <%!-- Inline error (server-side validation feedback) --%>
+            <%!-- Scrolling body. `min-h-0` is load-bearing: a flex child
+                 defaults to `min-height: auto` and refuses to shrink below
+                 its content, so without it this never scrolls and the
+                 footer is pushed out of the panel again. --%>
             <div
-              :if={@start_meeting_error}
-              class="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs text-error"
-              data-role="start-meeting-error"
+              class="flex flex-1 flex-col gap-3 min-h-0 overflow-y-auto px-4 py-4"
+              data-role="meeting-create-body"
             >
-              {@start_meeting_error}
-            </div>
-
-            <%!-- Name (required) --%>
-            <div class="flex flex-col gap-1">
-              <label
-                for="start-meeting-name"
-                class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+              <%!-- Inline error (server-side validation feedback) --%>
+              <div
+                :if={@start_meeting_error}
+                class="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs text-error"
+                data-role="start-meeting-error"
               >
-                Name <span class="text-error">*</span>
-              </label>
-              <input
-                id="start-meeting-name"
-                type="text"
-                name="start_meeting[name]"
-                value={@start_meeting_form["name"]}
-                required
-                autocomplete="off"
-                placeholder="What's the meeting about?"
-                class="input input-bordered w-full text-sm font-semibold min-h-11"
-                data-role="start-meeting-name"
-              />
-            </div>
+                {@start_meeting_error}
+              </div>
 
-            <%!-- Date / Start / Duration. Three across from `sm` up; below
+              <%!-- Name (required) --%>
+              <div class="flex flex-col gap-1">
+                <label
+                  for="start-meeting-name"
+                  class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                >
+                  Name <span class="text-error">*</span>
+                </label>
+                <input
+                  id="start-meeting-name"
+                  type="text"
+                  name="start_meeting[name]"
+                  value={@start_meeting_form["name"]}
+                  required
+                  autocomplete="off"
+                  placeholder="What's the meeting about?"
+                  class="input input-bordered w-full text-sm font-semibold min-h-11"
+                  data-role="start-meeting-name"
+                />
+              </div>
+
+              <%!-- Date / Start / Duration. Three across from `sm` up; below
                  it, Date takes its own row and Start + Duration pair, so
                  no control is narrower than its own content at 375px.
                  Leaving Date and Start blank creates an AD-HOC meeting —
                  `create_meeting/1` takes the intended-time pair as
                  both-or-neither and both nil is a supported state. --%>
-            <div class="grid grid-cols-2 sm:grid-cols-[1.4fr_1fr_1fr] gap-2">
-              <div class="col-span-2 flex flex-col gap-1 sm:col-span-1">
-                <label
-                  for="meeting-create-date"
-                  class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-                >
-                  Date
-                </label>
-                <input
-                  id="meeting-create-date"
-                  type="date"
-                  name="start_meeting[date]"
-                  value={@start_meeting_form["date"]}
-                  class="input input-bordered w-full text-sm min-h-11"
-                  data-role="meeting-create-date"
-                />
-              </div>
-
-              <div class="flex flex-col gap-1">
-                <label
-                  for="meeting-create-start-time"
-                  class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-                >
-                  Start
-                </label>
-                <input
-                  id="meeting-create-start-time"
-                  type="time"
-                  name="start_meeting[start_time]"
-                  value={@start_meeting_form["start_time"]}
-                  class="input input-bordered w-full text-sm min-h-11"
-                  data-role="meeting-create-start-time"
-                />
-              </div>
-
-              <div class="flex flex-col gap-1">
-                <label
-                  for="meeting-create-duration"
-                  class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-                >
-                  Duration
-                </label>
-                <select
-                  id="meeting-create-duration"
-                  name="start_meeting[duration_minutes]"
-                  class="select select-bordered w-full text-sm min-h-11"
-                  data-role="meeting-create-duration"
-                >
-                  <option
-                    :for={minutes <- PlatformWeb.MeetingLive.duration_options()}
-                    value={minutes}
-                    selected={@start_meeting_form["duration_minutes"] == to_string(minutes)}
+              <div class="grid grid-cols-2 sm:grid-cols-[1.4fr_1fr_1fr] gap-2">
+                <div class="col-span-2 flex flex-col gap-1 sm:col-span-1">
+                  <label
+                    for="meeting-create-date"
+                    class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
                   >
-                    {PlatformWeb.MeetingLive.duration_label(minutes)}
-                  </option>
-                </select>
-              </div>
-            </div>
+                    Date
+                  </label>
+                  <input
+                    id="meeting-create-date"
+                    type="date"
+                    name="start_meeting[date]"
+                    value={@start_meeting_form["date"]}
+                    class="input input-bordered w-full text-sm min-h-11"
+                    data-role="meeting-create-date"
+                  />
+                </div>
 
-            <%!-- Project (required). The `required` attribute is a hint;
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="meeting-create-start-time"
+                    class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                  >
+                    Start
+                  </label>
+                  <input
+                    id="meeting-create-start-time"
+                    type="time"
+                    name="start_meeting[start_time]"
+                    value={@start_meeting_form["start_time"]}
+                    class="input input-bordered w-full text-sm min-h-11"
+                    data-role="meeting-create-start-time"
+                  />
+                </div>
+
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="meeting-create-duration"
+                    class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                  >
+                    Duration
+                  </label>
+                  <select
+                    id="meeting-create-duration"
+                    name="start_meeting[duration_minutes]"
+                    class="select select-bordered w-full text-sm min-h-11"
+                    data-role="meeting-create-duration"
+                  >
+                    <option
+                      :for={minutes <- PlatformWeb.MeetingLive.duration_options()}
+                      value={minutes}
+                      selected={@start_meeting_form["duration_minutes"] == to_string(minutes)}
+                    >
+                      {PlatformWeb.MeetingLive.duration_label(minutes)}
+                    </option>
+                  </select>
+                </div>
+              </div>
+
+              <%!-- Project (required). The `required` attribute is a hint;
                  the server-side guard in `handle_event("start_meeting", …)`
                  is the gate, because `meetings.project_id` is NOT NULL and
                  the slug is unique per project. --%>
-            <div class="flex flex-col gap-1">
-              <label
-                for="start-meeting-project"
-                class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-              >
-                Project <span class="text-error">*</span>
-              </label>
-              <select
-                id="start-meeting-project"
-                name="start_meeting[project_id]"
-                required
-                class="select select-bordered w-full text-sm min-h-11"
-                data-role="start-meeting-project"
-              >
-                <option value="" disabled selected={@start_meeting_form["project_id"] == ""}>
-                  Select a project…
-                </option>
-                <option
-                  :for={project <- assigns[:projects] || []}
-                  value={project.id}
-                  selected={@start_meeting_form["project_id"] == project.id}
+              <div class="flex flex-col gap-1">
+                <label
+                  for="start-meeting-project"
+                  class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
                 >
-                  {project.name}
-                </option>
-              </select>
-            </div>
+                  Project <span class="text-error">*</span>
+                </label>
+                <select
+                  id="start-meeting-project"
+                  name="start_meeting[project_id]"
+                  required
+                  class="select select-bordered w-full text-sm min-h-11"
+                  data-role="start-meeting-project"
+                >
+                  <option value="" disabled selected={@start_meeting_form["project_id"] == ""}>
+                    Select a project…
+                  </option>
+                  <option
+                    :for={project <- assigns[:projects] || []}
+                    value={project.id}
+                    selected={@start_meeting_form["project_id"] == project.id}
+                  >
+                    {project.name}
+                  </option>
+                </select>
+              </div>
 
-            <%!-- Invite. `:draft` mode — nothing is written until submit,
+              <%!-- Invite. `:draft` mode — nothing is written until submit,
                  and the row `X` unstages rather than revoking. --%>
-            <div class="flex flex-col gap-2" data-role="meeting-create-invite-section">
-              <span class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
-                Invite
-              </span>
+              <div class="flex flex-col gap-2" data-role="meeting-create-invite-section">
+                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+                  Invite
+                </span>
 
-              <.invite_control
-                mode={:draft}
-                id="meeting-create-invite"
-                query={@meeting_create_invite_query}
-                candidates={@meeting_create_invite_candidates}
-                email_option={@meeting_create_invite_email}
-              />
+                <.invite_control
+                  mode={:draft}
+                  id="meeting-create-invite"
+                  query={@meeting_create_invite_query}
+                  candidates={@meeting_create_invite_candidates}
+                  email_option={@meeting_create_invite_email}
+                />
 
-              <.invite_list
-                mode={:draft}
-                entries={PlatformWeb.MeetingLive.draft_invite_rows(@meeting_create_invites)}
-              />
+                <.invite_list
+                  mode={:draft}
+                  entries={PlatformWeb.MeetingLive.draft_invite_rows(@meeting_create_invites)}
+                />
+              </div>
             </div>
 
             <%!-- Footer actions. Hidden below `sm`, where the header's
-                 `Create` carries the same submit. --%>
+                 `Create` carries the same submit. OUTSIDE the scrolling
+                 body and `flex-none`, so a long staged-invite list scrolls
+                 under it instead of pushing it off the panel. --%>
             <div
-              class="hidden items-center justify-end gap-2 pt-1 min-h-11 sm:flex"
+              class="hidden flex-none items-center justify-end gap-2 border-t border-base-300 px-4 py-3 min-h-11 sm:flex"
               data-role="meeting-create-footer"
             >
               <button
