@@ -191,6 +191,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Meetings
+  alias Platform.Meetings.Archive
   alias Platform.Meetings.IntentCorrection
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentQueue
@@ -626,7 +627,7 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
-  def handle_params(_params, _url, socket) do
+  def handle_params(params, _url, socket) do
     # `:index` action — grouped meetings list (live / upcoming / ended)
     # plus an empty-state when no meetings exist. Pre-project-routing
     # the index lists every meeting; per-project subscription keeps
@@ -668,7 +669,8 @@ defmodule PlatformWeb.MeetingLive do
      |> assign_new(:start_meeting_form, fn -> blank_start_meeting_form(projects) end)
      |> assign_new(:start_meeting_error, fn -> nil end)
      |> assign_new(:selected_meeting_id, fn -> nil end)
-     |> assign_calendar_week(calendar_today(socket))}
+     |> assign_calendar_week(calendar_today(socket))
+     |> assign_archive(params)}
   end
 
   # ── Calendar window (task 019fb954-8ead) ─────────────────────────────────
@@ -722,6 +724,342 @@ defmodule PlatformWeb.MeetingLive do
       time_zone -> DateTime.utc_now() |> DateTime.shift_zone!(time_zone) |> DateTime.to_date()
     end
   end
+
+  # ── Archive half of the index (task 019fb954-c848) ───────────────────────
+  #
+  # The index has two halves — the calendar ("what is coming up?") and the
+  # archive ("what came out of what already happened?"). Which one is showing
+  # is URL state (`?view=archive`), not a bare assign, so a reload, a shared
+  # link and the browser's back button all land on the same half the reader
+  # was looking at. Every filter (`q`, `types`, `person_id`, `project_id`)
+  # rides the same URL for the same reason: an archive search that cannot be
+  # pasted to someone else is half a feature.
+  #
+  # `Meetings.list_all_meetings/0` is deliberately NOT the source here. It is
+  # unscoped (it carries its own `TODO(scope)`), and the archive is a
+  # viewer-facing search — `Archive.search/2` does the org narrowing.
+  defp assign_archive(socket, params) do
+    view = archive_view(params)
+    query = archive_param(params, "q") || ""
+    types = archive_param_types(params)
+    person_id = archive_param(params, "person_id")
+    project_id = archive_param(params, "project_id")
+
+    socket
+    |> assign(:meetings_view, view)
+    |> assign(:archive_query, query)
+    |> assign(:archive_types, types)
+    |> assign(:archive_person_id, person_id)
+    |> assign(:archive_project_id, project_id)
+    |> assign(:archive_time_zone, socket.assigns[:calendar_time_zone] || "Etc/UTC")
+    |> assign_archive_result(view, query, types, person_id, project_id)
+  end
+
+  # The calendar half pays for nothing the archive needs. `nil` rather than an
+  # empty result map so a template that reads `@archive_result` on the
+  # calendar half fails loudly instead of rendering a confident "0 of 0".
+  defp assign_archive_result(socket, :calendar, _query, _types, _person_id, _project_id) do
+    socket
+    |> assign(:archive_result, nil)
+    |> assign(:archive_artifacts, %{})
+  end
+
+  defp assign_archive_result(socket, :archive, query, types, person_id, project_id) do
+    # The viewer is the USER RECORD, not `:current_user` — that assign holds a
+    # display STRING (see `PlatformWeb.ShellLive.on_mount/4`), and handing a
+    # string to `Archive.search/2` would land in its `viewer_org_ids(_)`
+    # fallback and silently return an empty archive to everyone.
+    viewer = socket.assigns[:current_user_record]
+
+    result =
+      Archive.search(viewer,
+        query: query,
+        types: types,
+        person_id: person_id,
+        project_id: project_id
+      )
+
+    socket
+    |> assign(:archive_result, result)
+    |> assign(:archive_artifacts, Archive.artifacts_for(viewer, result.matches ++ result.others))
+  end
+
+  defp archive_view(%{"view" => "archive"}), do: :archive
+  defp archive_view(_params), do: :calendar
+
+  defp archive_param(params, key) do
+    case Map.get(params, key) do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  # A comma list of `Archive.types/0` names. Unknown names are dropped rather
+  # than raised on: this is a URL a human can hand-edit, and the empty list
+  # already means "search everything", so a typo degrades to the default view
+  # rather than to a 500.
+  defp archive_param_types(params) do
+    known = Map.new(Archive.types(), &{Atom.to_string(&1), &1})
+
+    case archive_param(params, "types") do
+      nil ->
+        []
+
+      types ->
+        types
+        |> String.split(",", trim: true)
+        |> Enum.map(&String.trim/1)
+        |> Enum.flat_map(&List.wrap(Map.get(known, &1)))
+        |> Enum.uniq()
+    end
+  end
+
+  # ── Archive URL building ─────────────────────────────────────────────────
+  #
+  # One builder for every archive link and for the filter form's `push_patch`,
+  # so a control can never drop a filter another control set. `overrides` is a
+  # string-keyed map; an explicit `nil` CLEARS the parameter (the reject below
+  # strips it), which is how "deselect this chip" is expressed.
+  defp archive_path(assigns, overrides \\ %{}) do
+    params =
+      %{
+        "view" => "archive",
+        "q" => Map.get(overrides, "q", assigns.archive_query),
+        "types" => Map.get(overrides, "types", archive_types_param(assigns.archive_types)),
+        "person_id" => Map.get(overrides, "person_id", assigns.archive_person_id),
+        "project_id" => Map.get(overrides, "project_id", assigns.archive_project_id)
+      }
+      |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+      |> Map.new()
+
+    ~p"/meetings?#{params}"
+  end
+
+  # A key the form did not send is left alone; a key it sent EMPTY is cleared
+  # (`archive_param/2` normalises blank to `nil`, and `archive_path/2` strips
+  # nils out of the query string).
+  defp archive_override(overrides, params, key) do
+    case Map.get(params, key) do
+      value when is_binary(value) -> Map.put(overrides, key, archive_param(params, key))
+      _ -> overrides
+    end
+  end
+
+  defp archive_types_param([]), do: nil
+  defp archive_types_param(types), do: types |> Enum.map(&Atom.to_string/1) |> Enum.join(",")
+
+  # Toggling a type chip. Selecting none is the same query as selecting all
+  # (`Archive.search/2` normalises `[]` to every type), so the "all off" state
+  # is represented by dropping the parameter entirely rather than by an empty
+  # `types=` that would have to be special-cased on the way back in.
+  defp archive_toggle_types_path(assigns, type) do
+    next =
+      if type in assigns.archive_types do
+        List.delete(assigns.archive_types, type)
+      else
+        assigns.archive_types ++ [type]
+      end
+
+    archive_path(assigns, %{"types" => archive_types_param(next)})
+  end
+
+  # The person filter is a two-state toggle (Anyone / Just me) rather than a
+  # picker: `person_id` is honoured from the URL for any user id, so a link
+  # naming someone else still works, but this codebase has no viewer-scoped
+  # people list to populate a dropdown from, and inventing one here would be
+  # a second, unaudited answer to "who may this viewer see?".
+  defp archive_person_path(assigns) do
+    next = if assigns.archive_person_id, do: nil, else: assigns[:current_user_id]
+
+    archive_path(assigns, %{"person_id" => next})
+  end
+
+  # ── Archive labels ───────────────────────────────────────────────────────
+
+  # "2 of 47 · filtered" — MATCHED of total. A bare total answers a question
+  # nobody asked: the reader already knows the archive is big, what they want
+  # to know is how much of it their query reached. The un-queried archive has
+  # no matched partition at all (see `Archive`'s moduledoc on why blank is a
+  # different state from zero matches), so it reads as a plain total.
+  defp archive_count_label(%{query: "", total: total}, _suffix), do: "#{total} archived"
+
+  defp archive_count_label(%{matched: matched, total: total}, suffix),
+    do: "#{matched} of #{total} · #{suffix}"
+
+  defp archive_sort_label(%{query: ""}), do: "sorted by date"
+  defp archive_sort_label(_result), do: "sorted by relevance"
+
+  defp archive_type_label(:canvases), do: "Canvases"
+  defp archive_type_label(:summaries), do: "Summaries"
+  defp archive_type_label(:action_items), do: "Action items"
+  defp archive_type_label(:transcripts), do: "Transcripts"
+
+  # Mobile truncates the longest label rather than letting CSS clip it —
+  # `Act…` is the design's own abbreviation, and an ellipsis the browser
+  # chose would land in a different place at every text size.
+  defp archive_type_short_label(:action_items), do: "Act…"
+  defp archive_type_short_label(type), do: archive_type_label(type)
+
+  defp archive_type_icon(:canvases), do: "hero-squares-2x2"
+  defp archive_type_icon(:summaries), do: "hero-document-text"
+  defp archive_type_icon(:action_items), do: "hero-check-circle"
+  defp archive_type_icon(:transcripts), do: "hero-chat-bubble-left-ellipsis"
+
+  defp archive_chip_icon(:canvas), do: "hero-squares-2x2"
+  defp archive_chip_icon(:summary), do: "hero-document-text"
+  defp archive_chip_icon(:action_items), do: "hero-check-circle"
+  defp archive_chip_icon(:transcript), do: "hero-chat-bubble-left-ellipsis"
+
+  # Colour is TYPE, expressed in semantic token slots. The mock's hex values
+  # are scaffolding — a canvas chip is "the accent thing", not "#8b5cf6".
+  defp archive_chip_class(:canvas), do: "border-secondary/40 bg-secondary/10 text-secondary"
+  defp archive_chip_class(:summary), do: "border-primary/30 bg-primary/10 text-primary"
+  defp archive_chip_class(:action_items), do: "border-warning/30 bg-warning/10 text-warning"
+  defp archive_chip_class(:transcript), do: "border-base-300 bg-base-200 text-base-content/60"
+
+  # Mobile shortens the chips that CARRY a short form — `artifacts_for/2`
+  # ships `:short_label` on the action-item chip precisely so the phone does
+  # not have to guess at one. A canvas chip has none, and it should not: its
+  # label is the canvas's own title plus its revision span, and trimming a
+  # word off a title the user chose is mangling their data, not abbreviating.
+  # `nil` means "the full label is already the short one".
+  defp archive_chip_short_label(%{short_label: short_label}), do: short_label
+  defp archive_chip_short_label(_chip), do: nil
+
+  # The two result sections. A BLANK query has no matched partition at all
+  # (`Archive`'s moduledoc: blank is a different state from zero matches), so
+  # it renders as one undivided list rather than as an empty "Matches" plus
+  # everything under a heading that would be claiming they failed to match.
+  defp archive_sections(%{total: 0}), do: []
+
+  defp archive_sections(%{query: ""} = result) do
+    [%{key: "others", heading: nil, rows: result.others, dim?: false}]
+  end
+
+  defp archive_sections(result) do
+    [
+      %{key: "matches", heading: "Matches", rows: result.matches, dim?: false},
+      %{
+        key: "others",
+        heading: "Also in this range, no match",
+        rows: result.others,
+        dim?: true
+      }
+    ]
+  end
+
+  defp archive_person_label(%{archive_person_id: nil}), do: "Anyone"
+  defp archive_person_label(%{archive_person_id: id, current_user_id: id}), do: "Just me"
+  defp archive_person_label(_assigns), do: "One person"
+
+  # A meeting the viewer may not see is ABSENT from `artifacts_for/2`'s map —
+  # that is the function's contract, not an error. The correct render for an
+  # absent key is a row with no artifacts, so the default is a real empty
+  # payload rather than a `Map.fetch!` that would 500 on a stale URL.
+  defp archive_artifacts(artifacts, %{id: id}) do
+    Map.get(artifacts, id, %{
+      chips: [],
+      duration_minutes: nil,
+      host_name: nil,
+      attendee_count: 0,
+      project_path: ""
+    })
+  end
+
+  # The row's date is when it LEFT the calendar: ended, or — for a meeting
+  # that never ran — cancelled. Same `coalesce` the archive's `:others`
+  # partition orders by, so the gutter cannot disagree with the sort.
+  defp archive_row_at(%{ended_at: %DateTime{} = at}), do: at
+  defp archive_row_at(%{cancelled_at: %DateTime{} = at}), do: at
+  defp archive_row_at(%{scheduled_start_at: %DateTime{} = at}), do: at
+  defp archive_row_at(_entry), do: nil
+
+  defp archive_row_month(entry, time_zone), do: archive_strftime(entry, time_zone, "%b")
+  defp archive_row_day(entry, time_zone), do: archive_strftime(entry, time_zone, "%-d")
+  defp archive_row_date(entry, time_zone), do: archive_strftime(entry, time_zone, "%b %-d")
+
+  defp archive_strftime(entry, time_zone, format) do
+    case archive_row_at(entry) do
+      nil ->
+        ""
+
+      %DateTime{} = at ->
+        case DateTime.shift_zone(at, time_zone) do
+          {:ok, shifted} -> Calendar.strftime(shifted, format)
+          {:error, _reason} -> Calendar.strftime(at, format)
+        end
+    end
+  end
+
+  # "52 min · hosted by Rowan · 5 attended · Suite / Control Center". A
+  # cancelled meeting has no duration (it never ran), and saying so is the
+  # first thing the subtitle owes the reader.
+  defp archive_row_subtitle(entry, artifacts) do
+    [
+      archive_cancelled_part(entry),
+      archive_duration_part(entry, artifacts),
+      archive_host_part(artifacts),
+      archive_attended_part(artifacts),
+      archive_project_part(artifacts)
+    ]
+    |> archive_join_parts()
+  end
+
+  # Mobile drops host and project — the two parts a phone-width row cannot
+  # show without wrapping — and folds the date gutter in at the front.
+  defp archive_row_mobile_subtitle(entry, artifacts, time_zone) do
+    [
+      archive_row_date(entry, time_zone),
+      archive_cancelled_part(entry),
+      archive_duration_part(entry, artifacts),
+      archive_attended_part(artifacts)
+    ]
+    |> archive_join_parts()
+  end
+
+  defp archive_join_parts(parts) do
+    parts |> Enum.reject(&(&1 in [nil, ""])) |> Enum.join(" · ")
+  end
+
+  defp archive_cancelled_part(%{status: "cancelled"}), do: "Cancelled"
+  defp archive_cancelled_part(_entry), do: nil
+
+  defp archive_duration_part(%{status: "cancelled"}, _artifacts), do: nil
+  defp archive_duration_part(_entry, %{duration_minutes: nil}), do: nil
+  defp archive_duration_part(_entry, %{duration_minutes: minutes}), do: "#{minutes} min"
+
+  defp archive_host_part(%{host_name: nil}), do: nil
+  defp archive_host_part(%{host_name: ""}), do: nil
+  defp archive_host_part(%{host_name: host_name}), do: "hosted by #{host_name}"
+
+  defp archive_attended_part(%{attendee_count: count}) when is_integer(count) and count > 0,
+    do: "#{count} attended"
+
+  defp archive_attended_part(_artifacts), do: nil
+
+  defp archive_project_part(%{project_path: path}) when is_binary(path) and path != "", do: path
+  defp archive_project_part(_artifacts), do: nil
+
+  # The design's overlapping stack, one ring per attendee up to four. The
+  # rings carry a generic person glyph rather than initials: `artifacts_for/2`
+  # returns a COUNT, not identities, and initials derived from anything else
+  # would be a second answer to "who was in this meeting" that nobody
+  # authorised.
+  defp archive_attendee_rings(%{attendee_count: count}) when is_integer(count) and count > 0,
+    do: Enum.to_list(1..min(count, 4))
+
+  defp archive_attendee_rings(_artifacts), do: []
+
+  defp archive_attendee_overflow(%{attendee_count: count}) when is_integer(count) and count > 4,
+    do: count - 4
+
+  defp archive_attendee_overflow(_artifacts), do: 0
 
   # ── Events ───────────────────────────────────────────────────────────────
 
@@ -1027,6 +1365,21 @@ defmodule PlatformWeb.MeetingLive do
 
   def handle_event("close_meeting_detail", _params, socket) do
     {:noreply, assign(socket, :selected_meeting_id, nil)}
+  end
+
+  # ── Archive filters (`:index` action only, task 019fb954-c848) ──────────
+  #
+  # The search box and the project select are ONE form, and it pushes into
+  # the URL rather than into an assign. Results are then linkable, survive a
+  # reload, and the back button steps through searches — which is the whole
+  # reason the archive's state lives in `handle_params/3`.
+  def handle_event("archive_filter", params, socket) do
+    overrides =
+      %{}
+      |> archive_override(params, "q")
+      |> archive_override(params, "project_id")
+
+    {:noreply, push_patch(socket, to: archive_path(socket.assigns, overrides))}
   end
 
   # Paging keeps the selected day's OFFSET within the week (a Wednesday

@@ -1271,18 +1271,386 @@
       class="flex h-full min-h-0 flex-col bg-base-100 text-base-content"
       data-page="meetings-index"
     >
-      <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
+      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-base-300 bg-base-200/60 px-3 sm:gap-3">
         <div class="flex min-w-0 items-center gap-2">
           <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
           <h1 class="truncate text-sm font-semibold">Meetings</h1>
         </div>
 
+        <%!-- ── Calendar · Archive toggle (task 019fb954-c848) ────────────
+           URL state, not an assign: `?view=archive` survives a reload, a
+           pasted link and the back button. The calendar half is the
+           default, so its segment drops every archive parameter rather
+           than carrying a dead `view=calendar` around. Labels shorten to
+           `Cal` on phones per the mobile frame; both segments are 44px
+           tall at every width. --%>
+        <div
+          class="flex flex-shrink-0 items-center gap-0.5 rounded-lg border border-base-300 bg-base-100 p-0.5"
+          data-role="meetings-view-toggle"
+          role="group"
+          aria-label="Meetings view"
+        >
+          <.link
+            patch={~p"/meetings"}
+            data-view="calendar"
+            aria-current={@meetings_view == :calendar && "page"}
+            class={[
+              "flex min-h-11 items-center rounded-md px-3 text-xs font-medium transition sm:min-h-9",
+              @meetings_view == :calendar &&
+                "bg-base-200 text-base-content shadow-sm",
+              @meetings_view != :calendar && "text-base-content/60 hover:text-base-content"
+            ]}
+          >
+            <span class="sm:hidden">Cal</span>
+            <span class="hidden sm:inline">Calendar</span>
+          </.link>
+          <.link
+            patch={archive_path(assigns)}
+            data-view="archive"
+            aria-current={@meetings_view == :archive && "page"}
+            class={[
+              "flex min-h-11 items-center rounded-md px-3 text-xs font-medium transition sm:min-h-9",
+              @meetings_view == :archive &&
+                "bg-base-200 text-base-content shadow-sm",
+              @meetings_view != :archive && "text-base-content/60 hover:text-base-content"
+            ]}
+          >
+            Archive
+          </.link>
+        </div>
+
         <div class="flex-1"></div>
 
-        <span class="text-xs text-base-content/50" data-role="meetings-count">
+        <span
+          :if={@meetings_view == :calendar}
+          class="text-xs text-base-content/50"
+          data-role="meetings-count"
+        >
           {length(assigns[:meetings] || [])} total
         </span>
+
+        <%!-- MATCHED of total, not a bare total — see `archive_count_label/2`.
+           Desktop only: the mobile frame moves this string onto the results
+           section heading, so on a phone it renders there instead. --%>
+        <span
+          :if={@meetings_view == :archive}
+          class="hidden text-xs text-base-content/50 sm:inline"
+          data-role="archive-count"
+        >
+          {archive_count_label(@archive_result, "filtered")}
+        </span>
       </header>
+
+      <%!-- ── Archive pane (task 019fb954-c848) ───────────────────────────
+         The index's second half. The `:if={@meetings_view == :calendar}`
+         guards on the empty-state and `data-region="meetings-list"` blocks
+         below are the ONLY edit this task makes to the calendar side — the
+         two panes are mutually exclusive, expressed as a guard on each
+         root rather than as a wrapper so the calendar half's markup keeps
+         its exact shape and indentation for the sibling that owns it.
+
+         "Also in this range, no match" is the canvas's own heading, and it
+         presupposes a date range that frame 4's filter bar does not
+         contain (search, four artifact chips, person, project — no date
+         picker). That is a real gap in the design, resolved deliberately
+         rather than silently: "this range" here IS the full in-scope
+         archive — every ended or cancelled meeting the viewer can see. A
+         bounded range would be an additive control in the same bar and
+         would not change this heading. --%>
+      <div
+        :if={@meetings_view == :archive}
+        class="flex min-h-0 flex-1 flex-col"
+        data-region="meetings-archive"
+      >
+        <%!-- Filter bar. Search and project are one form so a change to
+           either carries the other into the URL; the chips are links for
+           the same reason. Everything lands in `handle_params/3`, so a
+           result set is a URL somebody else can open. --%>
+        <form
+          class="flex flex-shrink-0 flex-col gap-2 border-b border-base-300 bg-base-200/40 px-3 py-2 sm:flex-row sm:items-center sm:px-4"
+          phx-change="archive_filter"
+          phx-submit="archive_filter"
+        >
+          <label class="flex min-h-11 flex-shrink-0 items-center gap-2 rounded-lg border border-base-300 bg-base-100 px-3 sm:w-72">
+            <span class="hero-magnifying-glass size-4 flex-shrink-0 text-base-content/40"></span>
+            <input
+              type="search"
+              name="q"
+              value={@archive_query}
+              placeholder="Search meetings"
+              autocomplete="off"
+              aria-label="Search the meetings archive"
+              phx-debounce="300"
+              data-role="archive-search"
+              class="w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-base-content/40"
+            />
+          </label>
+
+          <%!-- One row on every viewport; the phone SCROLLS it sideways
+             rather than wrapping, so the results start at the same place
+             regardless of how many chips there are. --%>
+          <div
+            class="-mx-3 flex items-center gap-1.5 overflow-x-auto px-3 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0"
+            data-role="archive-filter-chips"
+          >
+            <.link
+              :for={type <- Archive.types()}
+              patch={archive_toggle_types_path(assigns, type)}
+              data-role="archive-type-chip"
+              data-type={type}
+              data-active={to_string(type in @archive_types)}
+              class={[
+                "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
+                type in @archive_types && "border-primary bg-primary text-primary-content",
+                type not in @archive_types &&
+                  "border-base-300 bg-base-100 text-base-content/60 hover:text-base-content"
+              ]}
+            >
+              <span class={[archive_type_icon(type), "size-3.5 flex-shrink-0"]}></span>
+              <span class="sm:hidden">{archive_type_short_label(type)}</span>
+              <span class="hidden sm:inline">{archive_type_label(type)}</span>
+              <span
+                :if={type in @archive_types}
+                class="font-mono text-[10px] opacity-75"
+                data-role="archive-type-count"
+              >
+                {Map.get(@archive_result.type_counts, type, 0)}
+              </span>
+            </.link>
+
+            <.link
+              patch={archive_person_path(assigns)}
+              data-role="archive-person-chip"
+              data-active={to_string(@archive_person_id != nil)}
+              class={[
+                "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
+                @archive_person_id && "border-primary bg-primary text-primary-content",
+                is_nil(@archive_person_id) &&
+                  "border-base-300 bg-base-100 text-base-content/60 hover:text-base-content"
+              ]}
+            >
+              <span class="hero-user size-3.5 flex-shrink-0"></span>
+              <span>{archive_person_label(assigns)}</span>
+            </.link>
+
+            <label class={[
+              "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
+              @archive_project_id && "border-primary bg-primary text-primary-content",
+              is_nil(@archive_project_id) && "border-base-300 bg-base-100 text-base-content/60"
+            ]}>
+              <span class="hero-folder size-3.5 flex-shrink-0"></span>
+              <select
+                name="project_id"
+                aria-label="Filter the archive by project"
+                data-role="archive-project-filter"
+                class="max-w-36 truncate bg-transparent text-xs outline-none"
+              >
+                <option value="" selected={is_nil(@archive_project_id)}>Any project</option>
+                <option
+                  :for={project <- assigns[:projects] || []}
+                  value={project.id}
+                  selected={project.id == @archive_project_id}
+                >
+                  {project.name}
+                </option>
+              </select>
+            </label>
+          </div>
+
+          <div class="hidden flex-1 sm:block"></div>
+
+          <span
+            class="hidden flex-shrink-0 text-[10px] text-base-content/40 sm:inline"
+            data-role="archive-sort-label"
+          >
+            {archive_sort_label(@archive_result)}
+          </span>
+        </form>
+
+        <%!-- Results. The bottom padding clears the safe area AND the mobile
+           bottom nav, matching the FAB offset below — nothing in the
+           archive may come to rest under the nav row. --%>
+        <div
+          class="flex-1 overflow-y-auto px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+5rem)] sm:px-6 sm:py-5"
+          data-role="archive-results"
+        >
+          <div class="mx-auto flex max-w-[840px] flex-col gap-5">
+            <div
+              :if={@archive_result.total == 0}
+              class="flex flex-col items-center justify-center py-16 text-center"
+              data-empty-state="meetings-archive"
+            >
+              <span class="hero-squares-2x2 size-12 text-base-content/30"></span>
+              <h2 class="mt-3 text-lg font-semibold">Nothing archived yet</h2>
+            </div>
+
+            <%= for {section, index} <- Enum.with_index(archive_sections(@archive_result)) do %>
+              <section data-archive-section={section.key}>
+                <h2 class="mb-2 flex items-baseline gap-2 text-[10px] font-semibold uppercase tracking-widest text-base-content/40">
+                  <%!-- The count lives in the header on desktop and HERE on a
+                     phone, which has no room for it up top. --%>
+                  <span :if={index == 0} class="sm:hidden" data-role="archive-count-mobile">
+                    {archive_count_label(@archive_result, "by relevance")}
+                  </span>
+                  <span
+                    :if={section.heading}
+                    class={index == 0 && "hidden sm:inline"}
+                    data-role={"archive-#{section.key}-heading"}
+                  >
+                    {section.heading}
+                  </span>
+                </h2>
+
+                <p
+                  :if={section.key == "matches" and section.rows == []}
+                  class="mb-2 text-xs text-base-content/50"
+                  data-role="archive-no-matches"
+                >
+                  No matches for “{@archive_result.query}”
+                </p>
+
+                <div class="flex flex-col gap-2">
+                  <%= for entry <- section.rows,
+                        artifacts = archive_artifacts(@archive_artifacts, entry) do %>
+                    <article
+                      class={[
+                        "flex gap-3 rounded-lg border border-base-300 bg-base-100 p-2.5",
+                        section.dim? && "opacity-60"
+                      ]}
+                      data-role="archive-row"
+                      data-meeting-id={entry.id}
+                      data-meeting-status={entry.status}
+                    >
+                      <%!-- Date gutter — desktop only. The phone folds the
+                         date into the subtitle instead. --%>
+                      <div
+                        class="hidden w-11 flex-shrink-0 border-r border-base-300 pr-2.5 text-center sm:block"
+                        data-role="archive-row-date"
+                      >
+                        <div class="text-[9px] uppercase tracking-wide text-base-content/40">
+                          {archive_row_month(entry, @archive_time_zone)}
+                        </div>
+                        <div class="text-lg font-semibold leading-tight text-base-content/70">
+                          {archive_row_day(entry, @archive_time_zone)}
+                        </div>
+                      </div>
+
+                      <div class="flex min-w-0 flex-1 flex-col">
+                        <.link
+                          navigate={~p"/meetings/#{entry.slug}"}
+                          class="flex min-h-11 items-center text-sm font-semibold hover:text-primary sm:min-h-0"
+                          data-role="archive-row-title"
+                        >
+                          <span class="truncate">{entry.name}</span>
+                        </.link>
+
+                        <span
+                          class={[
+                            "truncate text-xs sm:hidden",
+                            entry.status == "cancelled" && "text-error",
+                            entry.status != "cancelled" && "text-base-content/50"
+                          ]}
+                          data-role="archive-row-subtitle-mobile"
+                        >
+                          {archive_row_mobile_subtitle(entry, artifacts, @archive_time_zone)}
+                        </span>
+                        <span
+                          class={[
+                            "hidden truncate text-xs sm:block",
+                            entry.status == "cancelled" && "text-error",
+                            entry.status != "cancelled" && "text-base-content/50"
+                          ]}
+                          data-role="archive-row-subtitle"
+                        >
+                          {archive_row_subtitle(entry, artifacts)}
+                        </span>
+
+                        <%!-- Artifact chips WRAP at every width — they are the
+                           row's content, not its chrome. --%>
+                        <div class="mt-1.5 flex flex-wrap gap-1.5" data-role="archive-row-chips">
+                          <span
+                            :for={chip <- artifacts.chips}
+                            class={[
+                              "inline-flex min-h-11 items-center gap-1.5 rounded border px-2 text-[10px] sm:min-h-0 sm:py-0.5",
+                              archive_chip_class(chip.type)
+                            ]}
+                            data-role="archive-chip"
+                            data-chip-type={chip.type}
+                          >
+                            <span class={[archive_chip_icon(chip.type), "size-3 flex-shrink-0"]}>
+                            </span>
+                            <span
+                              class={archive_chip_short_label(chip) && "hidden sm:inline"}
+                              data-role="archive-chip-label"
+                            >
+                              {chip.label}
+                            </span>
+                            <span
+                              :if={archive_chip_short_label(chip)}
+                              class="sm:hidden"
+                              data-role="archive-chip-label-short"
+                            >
+                              {archive_chip_short_label(chip)}
+                            </span>
+                          </span>
+
+                          <span
+                            :if={artifacts.chips == []}
+                            class="inline-flex min-h-11 items-center rounded border border-base-300 bg-base-200 px-2 font-mono text-[10px] text-base-content/40 sm:min-h-0 sm:py-0.5"
+                            data-role="archive-no-artifacts"
+                          >
+                            no artifacts
+                          </span>
+                        </div>
+
+                        <%!-- The phone drops the stack BELOW the chips; the
+                           desktop column keeps it to the right. --%>
+                        <div
+                          class="mt-2 flex items-center sm:hidden"
+                          data-role="archive-attendees-mobile"
+                          data-attendee-count={artifacts.attendee_count}
+                        >
+                          <span
+                            :for={_ring <- archive_attendee_rings(artifacts)}
+                            class="-ml-1.5 flex size-5 items-center justify-center rounded-full bg-base-300 text-base-content/60 ring-2 ring-base-100 first:ml-0"
+                          >
+                            <span class="hero-user size-3"></span>
+                          </span>
+                          <span
+                            :if={archive_attendee_overflow(artifacts) > 0}
+                            class="ml-1.5 text-[10px] text-base-content/40"
+                          >
+                            +{archive_attendee_overflow(artifacts)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div
+                        class="hidden flex-shrink-0 items-start pl-1.5 sm:flex"
+                        data-role="archive-attendees"
+                        data-attendee-count={artifacts.attendee_count}
+                      >
+                        <span
+                          :for={_ring <- archive_attendee_rings(artifacts)}
+                          class="-ml-1.5 flex size-5 items-center justify-center rounded-full bg-base-300 text-base-content/60 ring-2 ring-base-100 first:ml-0"
+                        >
+                          <span class="hero-user size-3"></span>
+                        </span>
+                        <span
+                          :if={archive_attendee_overflow(artifacts) > 0}
+                          class="ml-1.5 text-[10px] text-base-content/40"
+                        >
+                          +{archive_attendee_overflow(artifacts)}
+                        </span>
+                      </div>
+                    </article>
+                  <% end %>
+                </div>
+              </section>
+            <% end %>
+          </div>
+        </div>
+      </div>
 
       <%= if assigns[:meetings] in [nil, []] do %>
         <%!-- Empty state. Mirrors the FAB icon + label so the visual
@@ -1290,6 +1658,7 @@
            "Start a meeting" wording. The FAB itself sits at the
            bottom-right of the page. --%>
         <div
+          :if={@meetings_view == :calendar}
           class="flex flex-1 flex-col items-center justify-center px-6 text-center"
           data-empty-state="meetings-index"
         >
@@ -1310,6 +1679,7 @@
         </div>
       <% else %>
         <div
+          :if={@meetings_view == :calendar}
           class="flex-1 overflow-y-auto px-3 py-3 sm:px-6 sm:py-5"
           data-region="meetings-list"
         >
