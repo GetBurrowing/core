@@ -31,9 +31,40 @@ defmodule PlatformWeb.MeetingLive.CalendarWindow do
   window so the template does no pixel arithmetic and the same numbers
   drive the desktop grid and the mobile single-column day view, whose
   hour rows are different heights.
+
+  This is also why the minimum drawn size is expressed in MINUTES rather
+  than pixels. A pixel floor inside a proportional box is a contradiction:
+  any floor larger than the slot's own share necessarily reaches into the
+  next slot, and the block below it then renders its text on top of the
+  block above. Stating the floor as "no block is drawn shorter than half
+  an hour" keeps the floor in the same currency as the placement, so the
+  two can no longer disagree.
+
+  ## Lanes
+
+  `assign_lanes/1` is the second half of "two blocks never sit on top of
+  each other". Placement alone answers WHEN, which is not enough: two
+  meetings at the same time get the same `top` and `height`, so without a
+  horizontal split they are the same box and their labels overprint. Lanes
+  are computed from the DRAWN geometry rather than the scheduled times, so
+  a pair pushed into contact by the half-hour floor is separated on exactly
+  the same rule as a pair that genuinely overlaps.
   """
 
   alias Platform.Meetings.Meeting
+
+  @typedoc "Where a block sits vertically, as percentages of the drawn window."
+  @type placement :: %{top: float(), height: float()}
+
+  @typedoc "A placement that also knows how wide it is and which lane it took."
+  @type laid_out :: %{
+          top: float(),
+          height: float(),
+          lane: non_neg_integer(),
+          lanes: pos_integer(),
+          left: float(),
+          width: float()
+        }
 
   # Which statuses may occupy a slot in the grid. An ALLOWLIST, chosen
   # over `status != "cancelled"` deliberately: a denylist would silently
@@ -54,9 +85,22 @@ defmodule PlatformWeb.MeetingLive.CalendarWindow do
   # means "the host never said", not "zero minutes".
   @default_duration_minutes 30
 
-  # Floor so a 5-minute meeting is still a tappable target at 375px
-  # rather than a 1px hairline.
-  @min_height_percent 3.0
+  # Floor so a 5-minute meeting is still a tappable target at 375px rather
+  # than a 1px hairline — stated in MINUTES, not pixels or percent, because
+  # the drawn box is proportional and a floor in any other unit competes
+  # with the placement instead of participating in it. Half an hour is the
+  # number the mobile day view's row height is chosen against: at 5.5rem an
+  # hour, thirty drawn minutes is exactly the 44px touch target, so the
+  # floor is met by the geometry and nothing has to override it in CSS.
+  @min_drawn_minutes 30
+
+  # Placement percentages are floats, and `top + height` for one block is
+  # two divisions summed where the next block's `top` is one — the same
+  # boundary can therefore land a few ulps apart. Compared bare, two
+  # back-to-back meetings occasionally read as overlapping and get split
+  # into lanes for no reason a viewer can see. Well below any real overlap
+  # (a single minute of a 24-hour window is still 0.07%).
+  @overlap_epsilon 1.0e-9
 
   # Any instant works to ask Tzdata whether a zone exists; a fixed one
   # keeps `resolve_time_zone/1` free of a clock read.
@@ -187,7 +231,7 @@ defmodule PlatformWeb.MeetingLive.CalendarWindow do
   the row to the top edge would hide that.
   """
   @spec place(Meeting.t(), Date.t(), String.t(), {integer(), integer()}) ::
-          {:ok, %{top: float(), height: float()}} | :skip
+          {:ok, placement()} | :skip
   def place(%Meeting{} = meeting, %Date{} = date, time_zone, {first_hour, last_hour})
       when is_binary(time_zone) and is_integer(first_hour) and is_integer(last_hour) and
              last_hour > first_hour do
@@ -207,7 +251,7 @@ defmodule PlatformWeb.MeetingLive.CalendarWindow do
         {:ok,
          %{
            top: offset_minutes / window_minutes * 100,
-           height: max(duration_minutes / window_minutes * 100, @min_height_percent)
+           height: max(duration_minutes, @min_drawn_minutes) / window_minutes * 100
          }}
       else
         :skip
@@ -216,6 +260,103 @@ defmodule PlatformWeb.MeetingLive.CalendarWindow do
       :skip
     end
   end
+
+  @doc """
+  Splits one day's placements into side-by-side lanes so that no two drawn
+  boxes occupy the same space.
+
+  Takes and returns `{term, placement}` pairs — the caller's term is opaque
+  here, which keeps this module free of `Meeting` for the layout half. Each
+  returned placement gains `:lane` (0-based), `:lanes` (how many the block
+  shares its cluster with), and the `:left` / `:width` percentages the two
+  are shorthand for. A block with no neighbour comes back `lane: 0, lanes:
+  1, left: 0.0, width: 100.0` — full width, exactly as before lanes existed.
+
+  Overlap is decided on the DRAWN interval `[top, top + height)`, not on
+  the scheduled times, and that is the point: `place/4`'s half-hour floor
+  can push a five-minute meeting into the block below it, and a viewer
+  cannot tell that collision apart from a real double-booking. Deciding on
+  what is actually drawn covers both with one rule.
+
+  Half-open, so back-to-back meetings share no boundary and stay full
+  width — a 09:00–09:30 followed by a 09:30–10:00 is not a conflict and
+  must not be drawn as one.
+
+  Lanes are counted per CLUSTER of transitively-overlapping blocks, so a
+  10:00 meeting that merely follows a crowded 09:00 does not inherit that
+  crowd's width.
+  """
+  @spec assign_lanes([{term(), placement()}]) :: [{term(), laid_out()}]
+  def assign_lanes(placements) when is_list(placements) do
+    placements
+    # Longest first among blocks that start together, so the widest
+    # commitment takes lane 0 and the reading order down a cluster is
+    # stable rather than dependent on insertion order.
+    |> Enum.sort_by(fn {_term, %{top: top, height: height}} -> {top, -height} end)
+    |> cluster()
+    |> Enum.flat_map(&lay_out_cluster/1)
+  end
+
+  # Groups the sorted placements into runs of transitively-overlapping
+  # blocks. `max_bottom` rather than the previous block's bottom: a long
+  # block keeps its cluster open across shorter ones nested inside it.
+  defp cluster(sorted) do
+    sorted
+    |> Enum.reduce([], fn {_term, placement} = entry, acc ->
+      bottom = placement.top + placement.height
+
+      case acc do
+        [{members, max_bottom} | rest] ->
+          if overlapping?(placement.top, max_bottom) do
+            [{[entry | members], max(max_bottom, bottom)} | rest]
+          else
+            [{[entry], bottom} | acc]
+          end
+
+        [] ->
+          [{[entry], bottom}]
+      end
+    end)
+    |> Enum.reverse()
+    |> Enum.map(fn {members, _max_bottom} -> Enum.reverse(members) end)
+  end
+
+  defp lay_out_cluster(members) do
+    {laned, lane_bottoms} =
+      Enum.map_reduce(members, [], fn {term, placement}, lane_bottoms ->
+        lane = first_free_lane(lane_bottoms, placement.top)
+
+        {{term, placement, lane},
+         put_lane_bottom(lane_bottoms, lane, placement.top + placement.height)}
+      end)
+
+    lanes = length(lane_bottoms)
+    width = 100 / lanes
+
+    Enum.map(laned, fn {term, placement, lane} ->
+      {term, Map.merge(placement, %{lane: lane, lanes: lanes, left: lane * width, width: width})}
+    end)
+  end
+
+  # Reuse the leftmost lane whose last block has already ended, so a
+  # cluster of three staggered meetings is three lanes wide only while all
+  # three genuinely coincide.
+  defp first_free_lane(lane_bottoms, top) do
+    case Enum.find_index(lane_bottoms, fn bottom -> not overlapping?(top, bottom) end) do
+      nil -> length(lane_bottoms)
+      index -> index
+    end
+  end
+
+  defp put_lane_bottom(lane_bottoms, lane, bottom) do
+    if lane < length(lane_bottoms) do
+      List.replace_at(lane_bottoms, lane, bottom)
+    else
+      lane_bottoms ++ [bottom]
+    end
+  end
+
+  defp overlapping?(top, bottom), do: top + @overlap_epsilon < bottom
 
   # Local midnight of `date` in `time_zone`, returned as UTC.
   #

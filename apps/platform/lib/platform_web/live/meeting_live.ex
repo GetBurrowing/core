@@ -714,6 +714,32 @@ defmodule PlatformWeb.MeetingLive do
 
   # ── Calendar window (task 019fb954-8ead) ─────────────────────────────────
 
+  @typedoc """
+  Which of the two calendar halves is asking.
+
+  Not a breakpoint and not a device: the two halves are different
+  information architectures that happen to draw the same meetings, and the
+  only thing the geometry helpers need from the distinction is how tall
+  that half draws an hour.
+  """
+  @type calendar_view :: :week | :day
+
+  @typedoc "A placement plus the one question only the view can answer."
+  @type calendar_block :: %{
+          top: float(),
+          height: float(),
+          lane: non_neg_integer(),
+          lanes: pos_integer(),
+          left: float(),
+          width: float(),
+          compact?: boolean()
+        }
+
+  # `rem` is resolved against the root font size, which the shell does not
+  # override; converting here rather than emitting a px threshold keeps the
+  # comparison in the same units the template lays out in.
+  @root_font_px 16
+
   # Recompute every calendar assign from one anchor date. The SINGLE path
   # by which the week's meetings are loaded: `handle_params/3` and all four
   # navigation events funnel through here, so there is exactly one range
@@ -861,19 +887,148 @@ defmodule PlatformWeb.MeetingLive do
   NOTHING is placed. That is the contract `resolve_time_zone/1` sets up:
   one beat of empty grid rather than seven columns of meetings that jump
   sideways the moment the browser tells us where it is.
-  """
-  @spec calendar_day_events([Meeting.t()], Date.t(), String.t() | nil, {integer(), integer()}) ::
-          [{Meeting.t(), %{top: float(), height: float()}}]
-  def calendar_day_events(_meetings, %Date{}, nil, _window), do: []
 
-  def calendar_day_events(meetings, %Date{} = date, time_zone, window)
-      when is_list(meetings) and is_binary(time_zone) do
-    Enum.flat_map(meetings, fn meeting ->
+  The returned placement is everything the template needs to draw the
+  block and nothing it has to derive: vertical position from
+  `CalendarWindow.place/4`, horizontal position from
+  `CalendarWindow.assign_lanes/1`, and `:compact?` from the one piece the
+  arithmetic module cannot know — how tall this particular view draws an
+  hour. `view` is therefore load-bearing rather than cosmetic: the same
+  meeting is compact in the week grid's 3.25rem rows and roomy in the day
+  view's 5.5rem ones.
+  """
+  @spec calendar_day_events(
+          [Meeting.t()],
+          Date.t(),
+          String.t() | nil,
+          {integer(), integer()},
+          calendar_view()
+        ) :: [{Meeting.t(), calendar_block()}]
+  def calendar_day_events(_meetings, %Date{}, nil, _window, _view), do: []
+
+  def calendar_day_events(meetings, %Date{} = date, time_zone, window, view)
+      when is_list(meetings) and is_binary(time_zone) and view in [:week, :day] do
+    meetings
+    |> Enum.flat_map(fn meeting ->
       case CalendarWindow.place(meeting, date, time_zone, window) do
         {:ok, placement} -> [{meeting, placement}]
         :skip -> []
       end
     end)
+    |> CalendarWindow.assign_lanes()
+    |> Enum.map(fn {meeting, placement} ->
+      {meeting, Map.put(placement, :compact?, calendar_compact_block?(placement, window, view))}
+    end)
+  end
+
+  @doc """
+  How tall one hour is drawn, in `rem`, for each of the two calendar halves.
+
+  The single source of truth for the vertical rhythm: the gutter row, the
+  hour rules painted behind the column, and the compact-block threshold all
+  read it, so none of them can drift from the others.
+
+  `:week` keeps the design frame's 3.25rem — ten hours over a 520px body,
+  a working day visible without scrolling. `:day` is 5.5rem, and that number
+  is derived rather than chosen: `CalendarWindow`'s half-hour floor times
+  5.5rem is exactly 44px, so the shortest block a phone can draw IS the
+  touch target. Meeting the 44px floor by geometry is what lets the block
+  carry no CSS minimum at all — a pixel minimum inside a proportional
+  column is what put two meetings' text on top of each other.
+  """
+  @spec calendar_hour_row_rem(calendar_view()) :: float()
+  def calendar_hour_row_rem(:week), do: 3.25
+  def calendar_hour_row_rem(:day), do: 5.5
+
+  @doc """
+  The height a two-line block needs, in px, before its second line clips.
+
+  Title line plus time line at each half's own font sizes and leading, plus
+  that half's vertical padding. A block shorter than this renders compact —
+  one line — rather than drawing a time label the viewer only sees the top
+  half of.
+  """
+  @spec calendar_two_line_px(calendar_view()) :: number()
+  # 11px + 10px at leading-tight, plus `py-1`.
+  def calendar_two_line_px(:week), do: 35
+  # 12px + 11px at leading-tight, plus `py-1.5`.
+  def calendar_two_line_px(:day), do: 41
+
+  @doc """
+  How tall `placement` actually renders, in px, in `view`.
+
+  Note the window cancels out — a percentage of a window that is itself
+  `hours * row` px tall is just the block's own duration in rows — which is
+  the property that makes the compact threshold stable no matter how far
+  `hour_window/2` has widened the grid.
+  """
+  @spec calendar_block_height_px(
+          %{height: float()},
+          {integer(), integer()},
+          calendar_view()
+        ) :: float()
+  def calendar_block_height_px(%{height: height}, {first_hour, last_hour}, view) do
+    height / 100 * (last_hour - first_hour) * calendar_hour_row_rem(view) * @root_font_px
+  end
+
+  @doc """
+  Whether this block must drop to a single line to stay legible.
+  """
+  @spec calendar_compact_block?(%{height: float()}, {integer(), integer()}, calendar_view()) ::
+          boolean()
+  def calendar_compact_block?(placement, window, view),
+    do: calendar_block_height_px(placement, window, view) < calendar_two_line_px(view)
+
+  @doc """
+  The gutter, in `rem`, between an event block and its column's edges — and
+  between two blocks that had to share the column's width.
+  """
+  @spec calendar_block_gutter_rem(calendar_view()) :: float()
+  def calendar_block_gutter_rem(:week), do: 0.25
+  def calendar_block_gutter_rem(:day), do: 0.375
+
+  @doc """
+  The whole geometry of one event block as an inline `style`.
+
+  All four edges in one string, because they are one decision: `top` /
+  `height` say WHEN, `left` / `width` say which lane, and a block whose
+  lane came from a stale copy of its placement would be drawn over its
+  neighbour. The `calc` keeps the gutter in `rem` while the lane split
+  stays in percent, so a two-lane pair gets one gutter between them and
+  half a column each without either unit having to know the other.
+  """
+  @spec calendar_block_style(
+          %{top: float(), height: float(), left: float(), width: float()},
+          calendar_view()
+        ) :: String.t()
+  def calendar_block_style(%{top: top, height: height, left: left, width: width}, view) do
+    gutter = calendar_block_gutter_rem(view)
+
+    "top:#{top}%;height:#{height}%;" <>
+      "left:calc(#{left}% + #{gutter}rem);width:calc(#{width}% - #{gutter * 2}rem)"
+  end
+
+  @doc """
+  One hour row's height, as an inline `style` for the gutter column.
+  """
+  @spec calendar_hour_row_style(calendar_view()) :: String.t()
+  def calendar_hour_row_style(view), do: "height:#{calendar_hour_row_rem(view)}rem"
+
+  @doc """
+  The hour rules painted behind a day column, as an inline `style`.
+
+  A repeating gradient rather than one element per hour: the rules are
+  decoration, and the column's only children should be the things a reader
+  can click. Driven off the same `rem` as the gutter rows, so the lines
+  cannot land anywhere but on the hour.
+  """
+  @spec calendar_hour_rules_style(calendar_view()) :: String.t()
+  def calendar_hour_rules_style(view) do
+    row = calendar_hour_row_rem(view)
+
+    "background-image: repeating-linear-gradient(to bottom, transparent 0, " <>
+      "transparent calc(#{row}rem - 1px), var(--color-base-300) calc(#{row}rem - 1px), " <>
+      "var(--color-base-300) #{row}rem)"
   end
 
   @doc """
@@ -983,7 +1138,7 @@ defmodule PlatformWeb.MeetingLive do
           {integer(), integer()}
         ) :: non_neg_integer()
   def calendar_day_meeting_count(meetings, %Date{} = date, time_zone, window),
-    do: meetings |> calendar_day_events(date, time_zone, window) |> length()
+    do: meetings |> calendar_day_events(date, time_zone, window, :day) |> length()
 
   @doc """
   The count half of the mobile day heading — `No meetings`, `1 meeting`,

@@ -2410,9 +2410,11 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       # Hand-computed against the default {8, 18} window this single 10:00
       # meeting does not widen: the window is 600 minutes, the meeting starts
-      # 120 minutes into it (120/600 = 20%) and runs 60 (60/600 = 10%).
+      # 120 minutes into it (120/600 = 20%) and runs 60 (60/600 = 10%). With
+      # nothing to share the column with it takes the whole width, less the
+      # 0.25rem gutter on each side.
       assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "style") ==
-               ["top:20.0%;height:10.0%"]
+               ["top:20.0%;height:10.0%;left:calc(0.0% + 0.25rem);width:calc(100.0% - 0.5rem)"]
 
       # And it carries its own status, not a rendered guess at one.
       assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-status") ==
@@ -2515,6 +2517,123 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert attrs_of(html, in_grid(~s([data-role="calendar-event-live-dot"])), "data-role") ==
                ["calendar-event-live-dot"]
+    end
+
+    test "concurrent meetings take separate lanes in the week grid and sequential ones do not",
+         %{conn: conn, project: project} do
+      # The sponsor's defect, pinned. Two 30-minute meetings at the same
+      # time and two 30-minute meetings back to back, in the same column, on
+      # the same day: one variable across two rows. Nothing about "both
+      # render" would have failed before the fix.
+      today = grid_today()
+
+      concurrent_a =
+        seed_grid_meeting(project,
+          slug: "grid-lane-same-a",
+          name: "Same Time A",
+          scheduled_start_at: zoned_utc(today, 10, 0),
+          scheduled_end_at: zoned_utc(today, 10, 30)
+        )
+
+      concurrent_b =
+        seed_grid_meeting(project,
+          slug: "grid-lane-same-b",
+          name: "Same Time B",
+          scheduled_start_at: zoned_utc(today, 10, 0),
+          scheduled_end_at: zoned_utc(today, 10, 30)
+        )
+
+      sequential_a =
+        seed_grid_meeting(project,
+          slug: "grid-lane-seq-a",
+          name: "Sequential A",
+          scheduled_start_at: zoned_utc(today, 14, 0),
+          scheduled_end_at: zoned_utc(today, 14, 30)
+        )
+
+      sequential_b =
+        seed_grid_meeting(project,
+          slug: "grid-lane-seq-b",
+          name: "Sequential B",
+          scheduled_start_at: zoned_utc(today, 14, 30),
+          scheduled_end_at: zoned_utc(today, 15, 0)
+        )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert grid_lane_of(html, concurrent_a) == {"0", "2"}
+      assert grid_lane_of(html, concurrent_b) == {"1", "2"}
+
+      assert grid_horizontal_of(html, concurrent_a) ==
+               "left:calc(0.0% + 0.25rem);width:calc(50.0% - 0.5rem)"
+
+      assert grid_horizontal_of(html, concurrent_b) ==
+               "left:calc(50.0% + 0.25rem);width:calc(50.0% - 0.5rem)"
+
+      # Back to back is not a conflict: both keep the full column, and it is
+      # their VERTICAL position that differs.
+      assert grid_lane_of(html, sequential_a) == {"0", "1"}
+      assert grid_lane_of(html, sequential_b) == {"0", "1"}
+
+      assert grid_horizontal_of(html, sequential_a) ==
+               "left:calc(0.0% + 0.25rem);width:calc(100.0% - 0.5rem)"
+
+      assert grid_horizontal_of(html, sequential_a) == grid_horizontal_of(html, sequential_b)
+
+      refute grid_style_of(html, sequential_a) == grid_style_of(html, sequential_b)
+    end
+
+    test "a block too short for two lines drops to one, and a taller one does not",
+         %{conn: conn, project: project} do
+      # The other half of dropping the pixel floor. The floor existed
+      # because a half-hour block in a 3.25rem row is 26px and clips its own
+      # time line; removing it without answering that would re-open the
+      # defect it was added for. The answer is one line, not a taller box —
+      # a taller box is what collided with the block below it.
+      today = grid_today()
+
+      short =
+        seed_grid_meeting(project,
+          slug: "grid-compact-short",
+          name: "Short Meeting",
+          scheduled_start_at: zoned_utc(today, 10, 0),
+          scheduled_end_at: zoned_utc(today, 10, 30)
+        )
+
+      tall =
+        seed_grid_meeting(project,
+          slug: "grid-compact-tall",
+          name: "Long Meeting",
+          scheduled_start_at: zoned_utc(today, 14, 0),
+          scheduled_end_at: zoned_utc(today, 16, 0)
+        )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert attrs_of(html, grid_selector(short), "data-compact") == ["true"]
+      assert attrs_of(html, grid_selector(tall), "data-compact") == []
+
+      # And the threshold is a real measurement of the two halves, not a
+      # duration guess: 26px of a 35px requirement against 104px of it.
+      window = {8, 18}
+      assert PlatformWeb.MeetingLive.calendar_compact_block?(%{height: 5.0}, window, :week)
+      refute PlatformWeb.MeetingLive.calendar_compact_block?(%{height: 20.0}, window, :week)
+    end
+
+    defp grid_selector(meeting),
+      do: in_grid(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"]))
+
+    defp grid_style_of(html, meeting),
+      do: html |> attrs_of(grid_selector(meeting), "style") |> List.first()
+
+    defp grid_horizontal_of(html, meeting),
+      do: html |> grid_style_of(meeting) |> String.split(";") |> Enum.drop(2) |> Enum.join(";")
+
+    defp grid_lane_of(html, meeting) do
+      {
+        html |> attrs_of(grid_selector(meeting), "data-lane") |> List.first(),
+        html |> attrs_of(grid_selector(meeting), "data-lanes") |> List.first()
+      }
     end
 
     test "the now-line renders inside today's column only", %{conn: conn, project: project} do
@@ -2862,12 +2981,28 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert day_count_text(html) in ["No meetings", "1 meeting"]
     end
 
-    test "a short meeting still clears the 44px floor in the day column",
+    # The mobile touch-target floor, named once. It is the same 44px the
+    # strip cells and every control on this page are asserted against.
+    @mobile_touch_target_px 44
+
+    test "the shortest block a phone can draw is a 44px touch target by GEOMETRY, with no CSS floor",
          %{conn: conn, project: project} do
-      # 30 minutes is 24px in a 48px hour row, which clips the second line
-      # off entirely — invisible to every DOM assertion, because the text
-      # is in the document either way. The floor is what keeps it readable
-      # AND what keeps it tappable; both are the same 44px.
+      # The two constraints that were in direct conflict, asserted together
+      # so they cannot silently diverge again.
+      #
+      # A CSS `min-height` of 44px is what the day view used to carry, and
+      # it is what the sponsor saw: in a 48px hour row a half-hour block's
+      # own slot is 24px, so a 44px floor drew it 20px into the block below
+      # and the two labels overprinted. No DOM assertion could see that —
+      # both elements are present and individually correct — so it survived
+      # every green run until someone looked at a screenshot.
+      #
+      # The fix is to meet 44px with the ROW HEIGHT instead of overriding
+      # the box: at 5.5rem an hour, the half-hour floor in
+      # `CalendarWindow.place/4` lands on exactly 44px. Both bounds are
+      # asserted because either one alone is satisfiable by the bug — "at
+      # least 44px" passes with the CSS floor back, and "no more than its
+      # slot" passes with rows too short to touch.
       today = grid_today()
 
       seed_grid_meeting(project,
@@ -2877,16 +3012,150 @@ defmodule PlatformWeb.MeetingLiveTest do
         scheduled_end_at: zoned_utc(today, 10, 30)
       )
 
+      # A five-minute meeting too: the floor that the row height is sized
+      # against is the placement's, so the smallest block a phone can draw
+      # has to clear the target as well.
+      seed_grid_meeting(project,
+        slug: "mob-tiny",
+        name: "Tiny Meeting",
+        scheduled_start_at: zoned_utc(today, 14, 0),
+        scheduled_end_at: zoned_utc(today, 14, 5)
+      )
+
       {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
 
-      [class] = attrs_of(html, day_view(~s([data-role="calendar-event"])), "class")
-      assert "min-h-11" in String.split(class)
+      window = {8, 18}
 
-      # The percentage geometry is still the truth about WHEN — the floor
-      # is a floor on the drawn box, not a rewrite of the placement.
-      assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "style") ==
-               ["top:20.0%;height:5.0%"]
+      for {height, minutes} <- [{5.0, 30}, {5.0, 5}] do
+        drawn = PlatformWeb.MeetingLive.calendar_block_height_px(%{height: height}, window, :day)
+
+        assert drawn >= @mobile_touch_target_px,
+               "a #{minutes}-minute block draws #{drawn}px, under the #{@mobile_touch_target_px}px target"
+
+        # And it is met by the slot, not by spilling out of it: the drawn
+        # box is never taller than the share of the hour the placement gave
+        # it. `place/4` floors a 5-minute meeting to a half hour, so its
+        # share IS half an hour — the floor lives in the geometry, where a
+        # lane split can see it, rather than in CSS, where nothing can.
+        slot_px =
+          max(minutes, 30) / 60 * PlatformWeb.MeetingLive.calendar_hour_row_rem(:day) * 16
+
+        assert drawn <= slot_px,
+               "a #{minutes}-minute block draws #{drawn}px into a #{slot_px}px slot"
+      end
+
+      # Structural half of the same claim: nothing may put the pixel floor
+      # back on the box. The comparison above is arithmetic and cannot see
+      # a CSS class.
+      for class <- attrs_of(html, day_view(~s([data-role="calendar-event"])), "class") do
+        refute Enum.any?(String.split(class), &String.starts_with?(&1, "min-h-")),
+               "the day-view block carries a pixel height floor again: #{class}"
+      end
+
+      # Two lines fit at this row height, which is why the phone half needs
+      # no compact variant where the week grid does.
+      refute PlatformWeb.MeetingLive.calendar_compact_block?(%{height: 5.0}, window, :day)
+
+      # The percentage geometry is still the truth about WHEN, and with
+      # nothing to share the column with, the block spans it.
+      assert "top:20.0%;height:5.0%;left:calc(0.0% + 0.375rem);width:calc(100.0% - 0.75rem)" in attrs_of(
+               html,
+               day_view(~s([data-role="calendar-event"])),
+               "style"
+             )
     end
+
+    test "concurrent meetings take separate lanes in the day column and sequential ones do not",
+         %{conn: conn, project: project} do
+      # Two rows, one variable. Both pairs are two 30-minute meetings in the
+      # same column; the only difference is whether their times coincide.
+      # A test asserting merely that all four render would have passed
+      # before this fix too — that is exactly the shape that let the defect
+      # through.
+      today = grid_today()
+
+      concurrent_a =
+        seed_grid_meeting(project,
+          slug: "mob-lane-same-a",
+          name: "Same Time A",
+          scheduled_start_at: zoned_utc(today, 10, 0),
+          scheduled_end_at: zoned_utc(today, 10, 30)
+        )
+
+      concurrent_b =
+        seed_grid_meeting(project,
+          slug: "mob-lane-same-b",
+          name: "Same Time B",
+          scheduled_start_at: zoned_utc(today, 10, 0),
+          scheduled_end_at: zoned_utc(today, 10, 30)
+        )
+
+      sequential_a =
+        seed_grid_meeting(project,
+          slug: "mob-lane-seq-a",
+          name: "Sequential A",
+          scheduled_start_at: zoned_utc(today, 14, 0),
+          scheduled_end_at: zoned_utc(today, 14, 30)
+        )
+
+      sequential_b =
+        seed_grid_meeting(project,
+          slug: "mob-lane-seq-b",
+          name: "Sequential B",
+          scheduled_start_at: zoned_utc(today, 14, 30),
+          scheduled_end_at: zoned_utc(today, 15, 0)
+        )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      # The concurrent pair: same vertical box, DIFFERENT horizontal one.
+      assert lane_of(html, concurrent_a) == {"0", "2"}
+      assert lane_of(html, concurrent_b) == {"1", "2"}
+      refute block_style(html, concurrent_a) == block_style(html, concurrent_b)
+
+      # The sequential pair: different vertical box, SAME horizontal one —
+      # both full width, because 10:30 following 10:00 is not a conflict.
+      assert lane_of(html, sequential_a) == {"0", "1"}
+      assert lane_of(html, sequential_b) == {"0", "1"}
+
+      assert horizontal_of(block_style(html, sequential_a)) ==
+               horizontal_of(block_style(html, sequential_b))
+
+      refute vertical_of(block_style(html, sequential_a)) ==
+               vertical_of(block_style(html, sequential_b))
+
+      # And the split really is a split: the two lanes are half a column
+      # each, not two full-width boxes with different `left`s.
+      assert horizontal_of(block_style(html, concurrent_a)) ==
+               "left:calc(0.0% + 0.375rem);width:calc(50.0% - 0.75rem)"
+
+      assert horizontal_of(block_style(html, concurrent_b)) ==
+               "left:calc(50.0% + 0.375rem);width:calc(50.0% - 0.75rem)"
+    end
+
+    defp lane_of(html, meeting) do
+      selector = day_view(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"]))
+
+      {
+        html |> attrs_of(selector, "data-lane") |> List.first(),
+        html |> attrs_of(selector, "data-lanes") |> List.first()
+      }
+    end
+
+    defp block_style(html, meeting) do
+      html
+      |> attrs_of(
+        day_view(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"])),
+        "style"
+      )
+      |> List.first()
+    end
+
+    defp vertical_of(style),
+      do: style |> String.split(";") |> Enum.take(2) |> Enum.join(";")
+
+    defp horizontal_of(style),
+      do: style |> String.split(";") |> Enum.drop(2) |> Enum.join(";")
 
     test "the now-line is drawn for today and disappears when another day is selected",
          %{conn: conn, project: project} do

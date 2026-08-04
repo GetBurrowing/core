@@ -1829,7 +1829,8 @@
             <div class="flex flex-col bg-base-200/20">
               <div
                 :for={hour <- calendar_hours(@calendar_hour_window)}
-                class="h-13 pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-base-content/40"
+                class="pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-base-content/40"
+                style={calendar_hour_row_style(:week)}
               >
                 {calendar_hour_label(hour)}
               </div>
@@ -1838,7 +1839,7 @@
             <div
               :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
               class="relative border-l border-base-300"
-              style="background-image: repeating-linear-gradient(to bottom, transparent 0, transparent calc(3.25rem - 1px), var(--color-base-300) calc(3.25rem - 1px), var(--color-base-300) 3.25rem)"
+              style={calendar_hour_rules_style(:week)}
               data-role="calendar-day-column"
               data-date={Date.to_iso8601(day.date)}
             >
@@ -1860,6 +1861,15 @@
                 <span class="absolute -left-px -top-[3px] size-2 rounded-full bg-error"></span>
               </div>
 
+              <%!-- The block carries NO pixel minimum height. It used to,
+               and that is the defect the sponsor caught: a 44px floor in a
+               52px hour row makes a half-hour block 18px taller than its
+               own slot, so the next block starts inside it and the two
+               labels overprint. The box is now exactly its share of the
+               window, `CalendarWindow`'s half-hour floor keeps the
+               smallest one from being a hairline, and blocks that
+               genuinely coincide are separated sideways by lanes rather
+               than stacked. --%>
               <button
                 :for={
                   {meeting, placement} <-
@@ -1867,7 +1877,8 @@
                       @calendar_week_meetings,
                       day.date,
                       @calendar_time_zone,
-                      @calendar_hour_window
+                      @calendar_hour_window,
+                      :week
                     )
                 }
                 type="button"
@@ -1875,25 +1886,39 @@
                 phx-value-id={meeting.id}
                 class={
                   [
-                    # `min-h-11` is the 44px touch-target floor, and it is also
-                    # what keeps a short meeting readable: a 30-minute block is
-                    # 26px in a 52px hour row, which clips the second line off
-                    # entirely. The percentage height stays the truth about
-                    # WHEN; this is a floor on how small the box may be drawn.
-                    "absolute inset-x-1 flex min-h-11 flex-col items-start overflow-hidden rounded-md border-l-[3px] px-1.5 py-1 text-left",
+                    "absolute flex overflow-hidden rounded-md border-l-[3px] px-1.5 py-1 text-left",
+                    # A half-hour block is 26px here, which two lines do not
+                    # fit in. Dropping to one line is the honest answer —
+                    # growing the box instead is what collided.
+                    placement.compact? && "flex-row items-center gap-1.5",
+                    !placement.compact? && "flex-col items-start",
                     meeting.status == "live" && "border-success bg-success/15 hover:bg-success/25",
                     meeting.status != "live" && "border-primary bg-primary/15 hover:bg-primary/25",
                     @selected_meeting_id == meeting.id && "ring-2 ring-primary"
                   ]
                 }
-                style={"top:#{placement.top}%;height:#{placement.height}%"}
+                style={calendar_block_style(placement, :week)}
                 data-role="calendar-event"
                 data-meeting-id={meeting.id}
                 data-meeting-status={meeting.status}
+                data-lane={placement.lane}
+                data-lanes={placement.lanes}
+                data-compact={placement.compact? && "true"}
                 data-live={meeting.status == "live" && "true"}
                 data-selected={@selected_meeting_id == meeting.id && "true"}
               >
-                <span class="flex w-full items-center gap-1">
+                <%!-- On one line the two labels compete for the same
+                 width, and in a three-lane column there is not enough for
+                 both. The NAME wins: where a block sits already says when
+                 it is, so a block showing only `14:15` identifies nothing,
+                 while `Bud…` at quarter past still does. `flex-auto` (not
+                 `flex-1`) is what makes that real — a zero basis cannot
+                 claim space back off a shrinking sibling. --%>
+                <span class={[
+                  "flex min-w-0 items-center gap-1",
+                  placement.compact? && "flex-auto",
+                  !placement.compact? && "w-full"
+                ]}>
                   <%!-- A shape, not a glyph: "live" is carried by motion
                    and by the accent token, so it survives both a
                    missing icon font and a monochrome reading. --%>
@@ -1907,7 +1932,10 @@
                     {meeting.name}
                   </span>
                 </span>
-                <span class="truncate text-[10px] leading-tight text-base-content/60">
+                <span class={[
+                  "truncate text-[10px] leading-tight text-base-content/60",
+                  placement.compact? && "min-w-0 shrink-[10]"
+                ]}>
                   {calendar_event_time(meeting, @calendar_time_zone)}
                 </span>
               </button>
@@ -1996,10 +2024,18 @@
           </div>
 
           <%!-- One day, one column, its own 44px gutter. The hour rows
-           are 3rem here against the desktop grid's 3.25rem, and that
+           are 5.5rem here against the desktop grid's 3.25rem, and that
            costs nothing: `CalendarWindow.place/4` answers in
            PERCENTAGES of the drawn window, so both halves place the
            same meeting correctly at different row heights.
+
+           5.5rem is DERIVED, not picked. The shortest block the placement
+           maths will draw is half an hour, and half of 5.5rem is exactly
+           the 44px touch target — so on a phone the smallest block is
+           tappable because of its geometry, and needs no CSS minimum
+           reaching down into the block below it. A shorter row would put
+           the two constraints back in conflict, which is what the
+           geometric test on this file pins.
 
            The bottom margin is FAB clearance, not nav clearance —
            `.bottom-nav` is `position: sticky` inside the shell's flex
@@ -2015,7 +2051,8 @@
             <div class="flex flex-col bg-base-200/20">
               <div
                 :for={hour <- calendar_hours(@calendar_hour_window)}
-                class="h-12 pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-base-content/40"
+                class="pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-base-content/40"
+                style={calendar_hour_row_style(:day)}
               >
                 {calendar_hour_label(hour)}
               </div>
@@ -2023,7 +2060,7 @@
 
             <div
               class="relative border-l border-base-300"
-              style="background-image: repeating-linear-gradient(to bottom, transparent 0, transparent calc(3rem - 1px), var(--color-base-300) calc(3rem - 1px), var(--color-base-300) 3rem)"
+              style={calendar_hour_rules_style(:day)}
               data-role="calendar-day-body"
               data-date={Date.to_iso8601(@calendar_selected_date)}
             >
@@ -2050,12 +2087,19 @@
 
               <%!-- The SAME contract as the desktop block — same
                `data-role`, same id/status/live attributes, same
-               percentage geometry, same event — so one selector reads
-               both halves and neither half can drift from the other.
-               What differs is only what a thumb needs: more vertical
-               padding, and the same `min-h-11` floor, which is what
-               keeps a 30-minute block (24px in a 48px hour row) from
-               clipping its own time line off. --%>
+               percentage geometry, same lanes, same event — so one
+               selector reads both halves and neither half can drift from
+               the other. What differs is only what a thumb needs: more
+               vertical padding, and taller hour rows, which is where the
+               44px floor comes from now. There is no `min-h-` here for
+               the same reason there is none on the desktop block: a pixel
+               minimum inside a proportional column steals the next
+               block's space and the labels collide.
+
+               Lanes cannot arise from a narrower screen — this half has
+               one day, not seven — but they arise from the same
+               double-booking the week grid draws, so the phone splits the
+               column too rather than stacking two meetings' text. --%>
               <button
                 :for={
                   {meeting, placement} <-
@@ -2063,26 +2107,29 @@
                       @calendar_week_meetings,
                       @calendar_selected_date,
                       @calendar_time_zone,
-                      @calendar_hour_window
+                      @calendar_hour_window,
+                      :day
                     )
                 }
                 type="button"
                 phx-click="select_meeting"
                 phx-value-id={meeting.id}
                 class={[
-                  "absolute inset-x-1.5 flex min-h-11 flex-col items-start justify-center overflow-hidden rounded-md border-l-[3px] px-2 py-1.5 text-left",
+                  "absolute flex flex-col items-start justify-center overflow-hidden rounded-md border-l-[3px] px-2 py-1.5 text-left",
                   meeting.status == "live" && "border-success bg-success/15",
                   meeting.status != "live" && "border-primary bg-primary/15",
                   @selected_meeting_id == meeting.id && "ring-2 ring-primary"
                 ]}
-                style={"top:#{placement.top}%;height:#{placement.height}%"}
+                style={calendar_block_style(placement, :day)}
                 data-role="calendar-event"
                 data-meeting-id={meeting.id}
                 data-meeting-status={meeting.status}
+                data-lane={placement.lane}
+                data-lanes={placement.lanes}
                 data-live={meeting.status == "live" && "true"}
                 data-selected={@selected_meeting_id == meeting.id && "true"}
               >
-                <span class="flex w-full items-center gap-1.5">
+                <span class="flex w-full min-w-0 items-center gap-1.5">
                   <span
                     :if={meeting.status == "live"}
                     class="size-1.5 flex-shrink-0 rounded-full bg-success animate-pulse"

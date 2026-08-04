@@ -374,8 +374,14 @@ defmodule PlatformWeb.MeetingLive.CalendarWindowTest do
       assert_in_delta height, 5.0, 0.001
     end
 
-    test "a very short meeting still gets a tappable minimum height" do
-      # Five minutes is 0.83% of the window — a hairline nobody can tap.
+    test "a very short meeting is drawn as a half hour, the same as an unended one" do
+      # Five minutes is 0.83% of the window — a hairline nobody can tap. The
+      # floor is HALF AN HOUR of the window rather than a fixed percentage,
+      # and pinned exactly rather than as `>= something`: the number is a
+      # decision, not a bound. It is the number the mobile day view's row
+      # height is chosen against (5.5rem an hour puts half an hour at exactly
+      # 44px), so a floor that drifted would silently take the phone's touch
+      # target with it.
       meeting =
         meeting_struct(
           scheduled_start_at: ~U[2026-08-05 15:00:00Z],
@@ -385,7 +391,37 @@ defmodule PlatformWeb.MeetingLive.CalendarWindowTest do
       assert {:ok, %{height: height}} =
                CalendarWindow.place(meeting, ~D[2026-08-05], @zone, @window)
 
-      assert height == 3.0
+      # 30 of 600 minutes — identical to the nil-end case above, and that is
+      # deliberate: "the host said five minutes" and "the host said nothing"
+      # are drawn the same because the grid cannot render either honestly at
+      # its true size.
+      assert height == 5.0
+    end
+
+    test "a floored short meeting does not steal the following meeting's space" do
+      # The regression the sponsor caught, stated in the arithmetic rather
+      # than in CSS. A floor is only safe while the drawn box stays inside
+      # the slot; the moment a 09:00 block is drawn past 09:30 the 09:30
+      # block starts inside it and their labels overprint.
+      short =
+        meeting_struct(
+          scheduled_start_at: ~U[2026-08-05 14:00:00Z],
+          scheduled_end_at: ~U[2026-08-05 14:05:00Z]
+        )
+
+      following =
+        meeting_struct(
+          scheduled_start_at: ~U[2026-08-05 14:30:00Z],
+          scheduled_end_at: ~U[2026-08-05 15:00:00Z]
+        )
+
+      assert {:ok, %{top: short_top, height: short_height}} =
+               CalendarWindow.place(short, ~D[2026-08-05], @zone, @window)
+
+      assert {:ok, %{top: following_top}} =
+               CalendarWindow.place(following, ~D[2026-08-05], @zone, @window)
+
+      assert short_top + short_height <= following_top
     end
 
     test "skips a meeting whose local date is a different day" do
@@ -445,6 +481,145 @@ defmodule PlatformWeb.MeetingLive.CalendarWindowTest do
 
       assert_in_delta top, 100 * 4 / 12, 0.001
       assert_in_delta height, 100 * 1 / 12, 0.001
+    end
+  end
+
+  describe "assign_lanes/1" do
+    # Placements straight from the geometry, so a change to `place/4` that
+    # moved a boundary would be visible here rather than papered over by a
+    # hand-written percentage.
+    defp placed(start_at, end_at) do
+      meeting = meeting_struct(scheduled_start_at: start_at, scheduled_end_at: end_at)
+      {:ok, placement} = CalendarWindow.place(meeting, ~D[2026-08-05], @zone, {8, 18})
+      placement
+    end
+
+    defp lanes_of(pairs) do
+      pairs
+      |> CalendarWindow.assign_lanes()
+      |> Map.new(fn {name, placement} -> {name, {placement.lane, placement.lanes}} end)
+    end
+
+    test "a lone meeting keeps the whole column" do
+      assert [{:only, placement}] =
+               CalendarWindow.assign_lanes([
+                 {:only, placed(~U[2026-08-05 15:00:00Z], ~U[2026-08-05 16:00:00Z])}
+               ])
+
+      assert placement.lane == 0
+      assert placement.lanes == 1
+      assert placement.left == 0.0
+      assert placement.width == 100.0
+    end
+
+    test "concurrent meetings are split and back-to-back ones are not" do
+      # The whole claim, as ONE fixture with one variable: four meetings,
+      # two of which coincide and two of which merely touch. Asserting only
+      # the split half would pass on an implementation that lanes
+      # everything, which is the same defect drawn sideways.
+      lanes =
+        lanes_of([
+          {:same_a, placed(~U[2026-08-05 15:00:00Z], ~U[2026-08-05 16:00:00Z])},
+          {:same_b, placed(~U[2026-08-05 15:00:00Z], ~U[2026-08-05 16:00:00Z])},
+          {:back_to_back_a, placed(~U[2026-08-05 18:00:00Z], ~U[2026-08-05 18:30:00Z])},
+          {:back_to_back_b, placed(~U[2026-08-05 18:30:00Z], ~U[2026-08-05 19:00:00Z])}
+        ])
+
+      assert lanes[:same_a] == {0, 2}
+      assert lanes[:same_b] == {1, 2}
+
+      assert lanes[:back_to_back_a] == {0, 1}
+      assert lanes[:back_to_back_b] == {0, 1}
+    end
+
+    test "a partial overlap splits, and the count follows how many coincide" do
+      # Three meetings, three different overlap depths: a 09:00–10:00 that
+      # everything touches, a 09:30–10:30 that overlaps it, and an
+      # 09:45–10:15 nested across both. Two lanes would leave one pair on
+      # top of each other.
+      lanes =
+        lanes_of([
+          {:first, placed(~U[2026-08-05 14:00:00Z], ~U[2026-08-05 15:00:00Z])},
+          {:second, placed(~U[2026-08-05 14:30:00Z], ~U[2026-08-05 15:30:00Z])},
+          {:third, placed(~U[2026-08-05 14:45:00Z], ~U[2026-08-05 15:15:00Z])}
+        ])
+
+      assert lanes[:first] == {0, 3}
+      assert lanes[:second] == {1, 3}
+      assert lanes[:third] == {2, 3}
+    end
+
+    test "a later meeting reuses a lane its cluster has finished with" do
+      # 09:00–10:00 and 09:00–10:00 fill two lanes; 09:30–11:00 overlaps
+      # both so the cluster stays open, and 10:00–10:30 then fits back in
+      # lane 0. A layout that opened a fourth lane would be narrower than
+      # the day needs.
+      lanes =
+        lanes_of([
+          {:a, placed(~U[2026-08-05 14:00:00Z], ~U[2026-08-05 15:00:00Z])},
+          {:b, placed(~U[2026-08-05 14:00:00Z], ~U[2026-08-05 15:00:00Z])},
+          {:spanner, placed(~U[2026-08-05 14:30:00Z], ~U[2026-08-05 16:00:00Z])},
+          {:later, placed(~U[2026-08-05 15:00:00Z], ~U[2026-08-05 15:30:00Z])}
+        ])
+
+      assert lanes[:a] == {0, 3}
+      assert lanes[:b] == {1, 3}
+      assert lanes[:spanner] == {2, 3}
+      assert lanes[:later] == {0, 3}
+    end
+
+    test "a separate cluster does not inherit the crowded one's width" do
+      # 09:00 is double-booked; 15:00 is not, and must not be drawn at half
+      # width because of something that happened six hours earlier.
+      lanes =
+        lanes_of([
+          {:crowded_a, placed(~U[2026-08-05 14:00:00Z], ~U[2026-08-05 15:00:00Z])},
+          {:crowded_b, placed(~U[2026-08-05 14:00:00Z], ~U[2026-08-05 15:00:00Z])},
+          {:alone, placed(~U[2026-08-05 20:00:00Z], ~U[2026-08-05 21:00:00Z])}
+        ])
+
+      assert lanes[:crowded_a] == {0, 2}
+      assert lanes[:crowded_b] == {1, 2}
+      assert lanes[:alone] == {0, 1}
+    end
+
+    test "two floored short meetings that would collide are laned apart" do
+      # 09:00–09:05 and 09:15–09:20 do not overlap as SCHEDULED, but both
+      # are drawn as half hours, so the boxes do. Lanes are assigned on the
+      # drawn geometry precisely so this reads the same as a real
+      # double-booking instead of printing one label over the other.
+      lanes =
+        lanes_of([
+          {:tiny_a, placed(~U[2026-08-05 14:00:00Z], ~U[2026-08-05 14:05:00Z])},
+          {:tiny_b, placed(~U[2026-08-05 14:15:00Z], ~U[2026-08-05 14:20:00Z])}
+        ])
+
+      assert lanes[:tiny_a] == {0, 2}
+      assert lanes[:tiny_b] == {1, 2}
+    end
+
+    test "left and width partition the column exactly" do
+      [{_a, first}, {_b, second}, {_c, third}] =
+        CalendarWindow.assign_lanes([
+          {:a, placed(~U[2026-08-05 14:00:00Z], ~U[2026-08-05 15:00:00Z])},
+          {:b, placed(~U[2026-08-05 14:00:00Z], ~U[2026-08-05 15:00:00Z])},
+          {:c, placed(~U[2026-08-05 14:00:00Z], ~U[2026-08-05 15:00:00Z])}
+        ])
+
+      for placement <- [first, second, third] do
+        assert_in_delta placement.width, 100 / 3, 0.001
+      end
+
+      assert_in_delta first.left, 0.0, 0.001
+      assert_in_delta second.left, 100 / 3, 0.001
+      assert_in_delta third.left, 200 / 3, 0.001
+
+      # No gap and no overlap: the last lane's right edge is the column's.
+      assert_in_delta third.left + third.width, 100.0, 0.001
+    end
+
+    test "an empty day lays out to nothing" do
+      assert CalendarWindow.assign_lanes([]) == []
     end
   end
 
