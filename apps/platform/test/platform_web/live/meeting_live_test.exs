@@ -3198,6 +3198,44 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert day_heading_date(html) == day_before
     end
 
+    test "the FAB steps aside for the desktop panel and only for it", %{
+      conn: conn,
+      project: project
+    } do
+      # Measured at 1440x900 before this offset existed: the start-meeting
+      # FAB is anchored to the VIEWPORT's bottom-right, the panel is an
+      # opaque 322px rail pinned to the same edge, and its action row sits
+      # in that corner — so the FAB painted over `meeting-detail-open`, the
+      # one control this whole surface exists to provide.
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      fab = fn html ->
+        html |> attrs_of(~s([data-role="start-meeting-fab"]), "class") |> List.first()
+      end
+
+      # Both sides, because a FAB that carries the offset unconditionally
+      # would sit 322px from the edge on a page with nothing selected — the
+      # same class present for the wrong reason.
+      refute fab.(html) =~ "lg:right-[calc(20.125rem+1.5rem)]"
+
+      html = select_meeting(view, meeting)
+      assert fab.(html) =~ "lg:right-[calc(20.125rem+1.5rem)]"
+
+      # `lg:`-prefixed, not bare: below `lg` the panel is not drawn at all,
+      # so an unprefixed offset would move the FAB on a phone for a rail
+      # that is not there.
+      refute fab.(html) =~ ~r/(^| )right-\[calc\(20\.125rem/
+
+      html =
+        view
+        |> element(~s([data-role="meeting-detail-panel-close"]))
+        |> render_click()
+
+      refute fab.(html) =~ "lg:right-[calc(20.125rem+1.5rem)]"
+    end
+
     test "the sheet's backdrop closes it", %{conn: conn, project: project} do
       meeting = seed_detail_meeting(project)
 

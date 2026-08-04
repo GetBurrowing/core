@@ -2224,14 +2224,28 @@
          the tasks_live FAB pattern (apps/platform/lib/platform_web/
          live/tasks_live.html.heex:2391). Only renders on `:index`
          (this branch is inside the `<%= if @meeting do … else …%>`
-         else arm). --%>
+         else arm).
+
+         Stage 4 adds the `lg` offset: the detail panel is an OPAQUE 322px
+         rail pinned to the same right edge, and its action row sits in the
+         same corner, so a viewport-anchored FAB lands on top of
+         `meeting-detail-open` — measured at 1440x900, the FAB covering the
+         button's right end. Offsetting is preferable to hiding the FAB
+         while the panel is open: chrome that vanishes when you select
+         something is a second surprise, and "New meeting" is still a
+         reasonable thing to want with a meeting selected. Below `lg` the
+         panel is not drawn, the sheet is an overlay ABOVE the FAB's z-30,
+         and the offset must not apply — hence `lg:`. --%>
       <button
         type="button"
         phx-click="open_start_meeting_sheet"
         aria-label="New meeting"
         title="New meeting"
         data-role="start-meeting-fab"
-        class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg"
+        class={[
+          "btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg",
+          detail_meeting && "lg:right-[calc(20.125rem+1.5rem)]"
+        ]}
       >
         <span class="hero-video-camera size-6"></span>
       </button>
