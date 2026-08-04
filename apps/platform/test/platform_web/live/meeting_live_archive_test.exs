@@ -397,8 +397,14 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
                "q" => @query
              }
 
-      assert element_text(view, "[data-role='archive-count']") ==
-               "#{@matched} of #{@total} · filtered"
+      # The patch has to RE-RUN the search, not just rewrite the address bar.
+      # Asserted on the partition rather than on the count element: the count
+      # is the subject of its own test above, and duplicating it here would
+      # make two tests fail for one broken expression, which makes each of
+      # them a weaker signal about what actually broke.
+      assert has_element?(view, "[data-archive-section='matches']")
+
+      refute has_element?(view, "[data-role='archive-no-matches']")
     end
   end
 
