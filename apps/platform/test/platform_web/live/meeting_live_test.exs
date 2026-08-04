@@ -3520,7 +3520,13 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert invite.expires_at == nil
     end
 
-    test "dismissing the sheet drops the staged invites", %{conn: conn} do
+    # Named for what it can actually detect. An earlier version of this
+    # said "dismissing the sheet drops the staged invites" and could not:
+    # the list is only observable through a rendered sheet, rendering one
+    # requires an open, and the open resets. A mutant deleting the
+    # close-side reset left it green, so the close-side reset went away and
+    # this asserts the guarantee that survives — a reopened sheet is clean.
+    test "reopening the sheet starts with no staged invites", %{conn: conn} do
       invitee = seed_invitee("Rae Molina", "rae.molina@example.com")
 
       view = open_create_sheet(conn)

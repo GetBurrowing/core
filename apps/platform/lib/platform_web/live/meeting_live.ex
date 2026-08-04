@@ -1797,14 +1797,17 @@ defmodule PlatformWeb.MeetingLive do
      |> reset_create_sheet()}
   end
 
+  # Dismissal only HIDES. The reset lives on the open path, and duplicating
+  # it here was measurably unfalsifiable: a mutant that deleted the
+  # close-side reset left every test green, because the staged list is only
+  # observable through a rendered sheet and rendering one requires an open,
+  # which resets. Belt-and-braces no test can constrain is a claim nobody
+  # is checking.
   def handle_event("close_start_meeting_sheet", _params, socket) do
-    # Reset on close, not just on open: staged invites are per-meeting, and
-    # a list that survived a dismissal would attach the people you backed
-    # out of inviting to whatever you created next.
     {:noreply,
      socket
      |> assign(:show_start_meeting_sheet, false)
-     |> reset_create_sheet()}
+     |> assign(:start_meeting_error, nil)}
   end
 
   # Live-update form state on input change so re-render keeps the user's
