@@ -299,6 +299,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "keyed `livekit_room_name:` (string) and `space_id:`; the `space_id` callers pass a `%Space{}` id already resolved by `Chat.get_space/1`"},
     {"platform/meetings.ex", :get_by, "User", 1, :safe_internal,
      "019fb955-1d7b stage 2 — `invite_external_user/3` resolving the address a host TYPED into an account, which is the whole three-way branch. The value IS a boundary value, and it is safe for a reason this inventory should state precisely: the lookup is keyed `email:` only, a `:string` column, and casting a binary to `:string` cannot fail — `Ecto.Query.CastError`, the defect this test exists to catch, is only reachable when a boundary value is cast to `:binary_id`. No `Platform.UUID.valid?/1` guard applies because no UUID is pinned. `users.email` also carries a unique index, so `get_by/3` cannot raise `Ecto.MultipleResultsError` here either"},
+    {"platform/meetings/archive.ex", :platform_uuid_guard, "-", 3, :safe_internal,
+     "019fb954-c848 stage 2 — `maybe_filter_project/2` and `maybe_filter_person/2` each guard with Platform.UUID.valid?/1 before their id reaches a `where:`. Both come straight off the archive LiveView's `params` map (`?project=` / `?person=`), and `where: m.project_id == ^value` raises the same Ecto.Query.CastError as Repo.get/2 would. A malformed id narrows the query to nothing rather than dropping the filter — failing open on a scoping filter would turn a no-results page into a listing of every project the viewer can see. Stage 3 adds the third: `meeting_ids/1` filters the page's ids with the same guard before they reach `where: m.id in ^ids`, for the same reason and with the same failure mode — the ids reach `artifacts_for/2` by way of the page that rendered them, so one stale or hand-edited value would otherwise raise on a read that is supposed to degrade to 'that row has no artifacts'. Classification is unchanged: every one of the three narrows a query that is already org-scoped by `scoped_query/2`"},
     {"platform/meetings/intent_classifier.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
      "`agent_slug/1` receives an `agent_id` the classifier read off a `%Participant{}` row in the same pipeline"},
     {"platform/meetings/intent_dispatcher.ex", :get, "Agent", 1, :safe_internal,
@@ -642,6 +644,15 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `[meeting_id, email]` for `user_id`-NULL rows (the one on the table
     # is partial on `user_id IS NOT NULL`), so dedupe must be a lookup.
     "platform/meetings.ex" => 10,
+    # Task 019fb954-c848 stage 2 — `Archive.counts/3`, the single aggregate
+    # pass behind `search/2`. Triaged by hand as this map asks: its `where:`
+    # clauses come from `scoped_query/2`, and TWO of them pin ids that arrive
+    # from a boundary — `:project_id` and `:person_id` are read off a LiveView
+    # `params` map. Both are therefore guarded by `Platform.UUID.valid?/1`
+    # before they reach a `where:`, and a malformed one narrows the query to
+    # nothing rather than dropping the filter. The remaining clauses pin no id
+    # (`m.status in`) or a value read from a persisted row.
+    "platform/meetings/archive.ex" => 1,
     "platform/meetings/intent_corrections.ex" => 1,
     # Task 019fb955 stage 2 — `SenderSeed.get/0`. Triaged by hand as this map
     # asks: the `where:` clause is `a.slug == ^@slug and is_nil(a.workspace_id)`,
