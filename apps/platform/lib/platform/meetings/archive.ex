@@ -127,14 +127,82 @@ defmodule Platform.Meetings.Archive do
   `Platform.Meetings.list_all_meetings/0` is deliberately not reused here: it
   is unscoped (it carries its own `TODO(scope)`) and calling it from a
   viewer-facing search would ship a cross-tenant read.
+
+  ## Artifacts — `artifacts_for/2`
+
+  `search/2` answers *which* meetings; `artifacts_for/2` answers *what came
+  out of them*, which is the row's primary content in the design. It is a
+  second call rather than a wider `select` because the chips are one-to-many
+  in three different directions at once — a row-per-meeting query that
+  carried them would multiply the archive page by the cross product of its
+  canvases, transcripts and action items.
+
+  ### A canvas chip is a REVISION SPAN, not a title
+
+  The design's chips read `Bucket policy canvas · rev 14` and `Bucket policy
+  canvas · rev 1–3`: the *same* canvas hanging off *two* meetings a month
+  apart, each labelled with the revisions that meeting produced. That is the
+  whole point of the archive — you remember the artifact, not the date, and
+  the span is what tells you which meeting to open.
+
+  So a canvas's contribution to a meeting is
+  `min(revision)..max(revision)` over `canvas_versions` rows whose
+  `written_at` falls inside that meeting's **actual** window
+  `[started_at, ended_at]`. A canvas sitting in the meeting's space with no
+  version written during it contributes **no chip**: it was not touched here,
+  and listing it would attribute someone else's work to this meeting.
+
+  Two consequences worth stating because they look like bugs otherwise:
+
+    * a cancelled meeting has a `NULL` `started_at`, so every window
+      comparison is `NULL`, so it has no canvas chips at all — which is
+      exactly what the design shows for a meeting that never ran;
+    * revisions written *between* two meetings belong to neither.
+
+  The span is rendered with an EN DASH (`–`, U+2013), not a hyphen, to match
+  the design.
+
+  ### The other three chips
+
+    * **Summary** — the `meeting_transcripts` row for the meeting's chat
+      space has a non-`NULL`, non-blank `summary`.
+    * **Transcript** — that same row has a non-empty `segments` array. Both
+      chips resolve from one row and are independent of each other: a
+      transcript that is still recording has segments and no summary, and a
+      summary imported without its source has the converse.
+    * **Action items** — a *count*, `3 action items` (`3 actions` on mobile,
+      hence the separate `:short_label`), over the same two-hop
+      canvas → `tasks.metadata->>'source_canvas_id'` join `search/2` uses.
+
+  ### Join keys, restated
+
+  Same trap as above, and it fails silently in a worse way here: canvases are
+  `chat_canvases.space_id == meetings.chat_space_id` with
+  `deleted_at IS NULL`, and transcripts are `meeting_transcripts.space_id ==
+  meetings.chat_space_id`. **Not** `meeting_transcripts.room_id` — that
+  column holds a LiveKit room identifier, and its schema type (`:string`)
+  does not even agree with its migration type. Joining on it yields the empty
+  set, and an empty set satisfies every "this artifact is absent" assertion.
+
+  ### Batching
+
+  Four queries for a whole page, independent of how many rows are on it — one
+  per chip family plus one for the row context. The page's ids are pushed
+  into each as an `IN` list rather than each row fetching its own artifacts.
   """
 
   import Ecto.Query
 
+  alias Platform.Chat.Canvas
+  alias Platform.Chat.Canvas.Version, as: CanvasVersion
+  alias Platform.Chat.Participant, as: ChatParticipant
   alias Platform.Meetings.Meeting
+  alias Platform.Meetings.Transcript
   alias Platform.Repo
   alias Platform.Tasks.Project
+  alias Platform.Tasks.Task, as: TaskRecord
   alias Platform.Tenancy
+  alias Platform.Tenancy.Org
   alias Platform.Tenancy.OrgMembership
 
   @archived_statuses ~w(ended cancelled)
@@ -154,6 +222,32 @@ defmodule Platform.Meetings.Archive do
           scheduled_start_at: DateTime.t() | nil,
           scheduled_end_at: DateTime.t() | nil,
           score: float()
+        }
+
+  @type chip ::
+          %{
+            required(:type) => :canvas,
+            required(:canvas_id) => binary(),
+            required(:title) => String.t(),
+            required(:revision_min) => pos_integer(),
+            required(:revision_max) => pos_integer(),
+            required(:revision_label) => String.t(),
+            required(:label) => String.t()
+          }
+          | %{required(:type) => :summary | :transcript, required(:label) => String.t()}
+          | %{
+              required(:type) => :action_items,
+              required(:count) => pos_integer(),
+              required(:label) => String.t(),
+              required(:short_label) => String.t()
+            }
+
+  @type artifacts :: %{
+          chips: [chip()],
+          duration_minutes: non_neg_integer() | nil,
+          host_name: String.t() | nil,
+          attendee_count: non_neg_integer(),
+          project_path: String.t()
         }
 
   @type result :: %{
@@ -216,6 +310,239 @@ defmodule Platform.Meetings.Archive do
       queried_result(scoped, query_text, types, limit, offset)
     end
   end
+
+  @doc """
+  The chip payload and row context for a whole page of archive rows, keyed by
+  meeting id.
+
+  `meetings` is the page — `search/2` entries, `Platform.Meetings.Meeting`
+  structs, or bare ids, mixed freely. `viewer` re-scopes: ids reach this
+  function from a `params` map by way of the page that rendered them, and a
+  read that trusted them would be a cross-tenant leak one stale URL away.
+  A meeting the viewer may not see, or one that is not archived, is simply
+  absent from the result — callers must not assume a key exists.
+
+  Each value is:
+
+    * `:chips` — canvases (by title) with their revision span, then `Summary`,
+      then `Transcript`, then the action-item count. Empty for a meeting that
+      produced nothing, which is a real and renderable state.
+    * `:duration_minutes` — whole minutes between the actuals, `nil` when the
+      meeting never ran.
+    * `:host_name` — the host participant's display name, `nil` if unset.
+    * `:attendee_count` — distinct participants of the meeting's chat space.
+    * `:project_path` — `"<org> / <project>"`, the row's trailing context.
+
+  See the moduledoc for why a canvas chip carries a revision span and why an
+  untouched canvas contributes nothing.
+  """
+  @spec artifacts_for(map() | nil, [map() | binary()]) :: %{binary() => artifacts()}
+  def artifacts_for(viewer, meetings) do
+    case meeting_ids(meetings) do
+      [] ->
+        %{}
+
+      ids ->
+        scoped = where(scoped_query(viewer, []), [m], m.id in ^ids)
+
+        canvases = canvas_chips(scoped)
+        transcripts = transcript_chips(scoped)
+        actions = action_item_chips(scoped)
+
+        scoped
+        |> row_context()
+        |> Map.new(fn {id, context} ->
+          chips =
+            Map.get(canvases, id, []) ++
+              Map.get(transcripts, id, []) ++ Map.get(actions, id, [])
+
+          {id, Map.put(context, :chips, chips)}
+        end)
+    end
+  end
+
+  defp meeting_ids(meetings) when is_list(meetings) do
+    meetings
+    |> Enum.map(fn
+      %{id: id} -> id
+      id when is_binary(id) -> id
+    end)
+    |> Enum.filter(&Platform.UUID.valid?/1)
+    |> Enum.uniq()
+  end
+
+  defp meeting_ids(_), do: []
+
+  # ── Chips ─────────────────────────────────────────────────────────────────
+
+  # One row per (meeting, canvas) pair that has at least one version written
+  # DURING the meeting. The window predicate lives in the join rather than a
+  # `where`, so a canvas with no in-window version drops out of the inner
+  # join entirely instead of surfacing as a chip with a NULL span.
+  defp canvas_chips(scoped) do
+    scoped
+    |> join(:inner, [m], c in Canvas, on: c.space_id == m.chat_space_id and is_nil(c.deleted_at))
+    |> join(:inner, [m, _p, c], v in CanvasVersion,
+      on:
+        v.canvas_id == c.id and v.written_at >= m.started_at and
+          v.written_at <= m.ended_at
+    )
+    |> group_by([m, _p, c], [m.id, c.id, c.title])
+    |> order_by([_m, _p, c], asc: c.title, asc: c.id)
+    |> select([m, _p, c, v], %{
+      meeting_id: m.id,
+      canvas_id: c.id,
+      title: c.title,
+      revision_min: min(v.revision),
+      revision_max: max(v.revision)
+    })
+    |> Repo.all()
+    |> Enum.group_by(& &1.meeting_id, &canvas_chip/1)
+  end
+
+  defp canvas_chip(row) do
+    title = canvas_title(row.title)
+    revision_label = revision_label(row.revision_min, row.revision_max)
+
+    %{
+      type: :canvas,
+      canvas_id: row.canvas_id,
+      title: title,
+      revision_min: row.revision_min,
+      revision_max: row.revision_max,
+      revision_label: revision_label,
+      label: title <> " · " <> revision_label
+    }
+  end
+
+  defp canvas_title(title) when is_binary(title) do
+    case String.trim(title) do
+      "" -> "Untitled canvas"
+      trimmed -> trimmed
+    end
+  end
+
+  defp canvas_title(_), do: "Untitled canvas"
+
+  # `rev 14` for one revision, `rev 1–3` for a span. The separator is an EN
+  # DASH (U+2013) — a hyphen here would be a different string from the one the
+  # design specifies, and the whole chip is a string the reader scans.
+  defp revision_label(revision, revision), do: "rev #{revision}"
+  defp revision_label(min_revision, max_revision), do: "rev #{min_revision}–#{max_revision}"
+
+  # Both chips come from the SAME transcript row and are computed
+  # independently: `summary` present but `segments` empty is a real state (the
+  # summariser ran on an externally-supplied text), and so is its converse (a
+  # recording that never got summarised).
+  defp transcript_chips(scoped) do
+    scoped
+    |> join(:inner, [m], t in Transcript, on: t.space_id == m.chat_space_id)
+    |> group_by([m], m.id)
+    |> select([m, _p, t], %{
+      meeting_id: m.id,
+      summary?: fragment("bool_or(? IS NOT NULL AND btrim(?) <> '')", t.summary, t.summary),
+      transcript?: fragment("bool_or(jsonb_array_length(?) > 0)", t.segments)
+    })
+    |> Repo.all()
+    |> Map.new(fn row ->
+      chips =
+        [
+          {row.summary?, %{type: :summary, label: "Summary"}},
+          {row.transcript?, %{type: :transcript, label: "Transcript"}}
+        ]
+        |> Enum.filter(fn {present?, _chip} -> present? end)
+        |> Enum.map(fn {_present?, chip} -> chip end)
+
+      {row.meeting_id, chips}
+    end)
+  end
+
+  # The two-hop join `search/2` documents: there is no `meeting_id` on
+  # `tasks`, so an action item is reached through the canvas that produced it.
+  # `count(distinct)` because a task could in principle be reached twice if
+  # two canvases in the space claimed it.
+  defp action_item_chips(scoped) do
+    scoped
+    |> join(:inner, [m], c in Canvas, on: c.space_id == m.chat_space_id and is_nil(c.deleted_at))
+    |> join(:inner, [m, _p, c], ai in TaskRecord,
+      on:
+        fragment("(? ->> 'source_canvas_id')", ai.metadata) == fragment("?::text", c.id) and
+          is_nil(ai.deleted_at)
+    )
+    |> group_by([m], m.id)
+    |> select([m, _p, _c, ai], %{meeting_id: m.id, count: count(ai.id, :distinct)})
+    |> Repo.all()
+    |> Map.new(fn %{meeting_id: id, count: count} -> {id, action_item_chips_for(count)} end)
+  end
+
+  defp action_item_chips_for(0), do: []
+
+  defp action_item_chips_for(count) do
+    [
+      %{
+        type: :action_items,
+        count: count,
+        label: "#{count} action #{pluralize("item", count)}",
+        short_label: "#{count} #{pluralize("action", count)}"
+      }
+    ]
+  end
+
+  defp pluralize(word, 1), do: word
+  defp pluralize(word, _count), do: word <> "s"
+
+  # ── Row context ───────────────────────────────────────────────────────────
+
+  # The subtitle the design renders under the meeting name:
+  # "52 min · hosted by Rowan · 5 attended · Suite / Control Center".
+  #
+  # The attendee count is a correlated sub-select rather than a fifth join so
+  # it cannot multiply this query's rows — it must stay one row per meeting,
+  # since it is the map the other three fold into.
+  defp row_context(scoped) do
+    scoped
+    |> join(:left, [m], hp in ChatParticipant, on: hp.id == m.host_participant_id)
+    |> join(:left, [_m, p], o in Org, on: o.id == p.org_id)
+    |> select([m, p, hp, o], %{
+      id: m.id,
+      started_at: m.started_at,
+      ended_at: m.ended_at,
+      host_name: hp.display_name,
+      project_name: p.name,
+      org_name: o.name,
+      attendee_count:
+        fragment(
+          """
+          (SELECT count(DISTINCT (cp.participant_type, cp.participant_id))
+           FROM chat_participants AS cp
+           WHERE cp.space_id = ?)\
+          """,
+          m.chat_space_id
+        )
+    })
+    |> Repo.all()
+    |> Map.new(fn row ->
+      {row.id,
+       %{
+         duration_minutes: duration_minutes(row.started_at, row.ended_at),
+         host_name: row.host_name,
+         attendee_count: row.attendee_count,
+         project_path: project_path(row.org_name, row.project_name)
+       }}
+    end)
+  end
+
+  # Whole minutes, truncated. A meeting that never ran has no duration at all
+  # — `0` would claim it ran for under a minute.
+  defp duration_minutes(%DateTime{} = started_at, %DateTime{} = ended_at) do
+    started_at |> DateTime.diff(ended_at) |> abs() |> div(60)
+  end
+
+  defp duration_minutes(_started_at, _ended_at), do: nil
+
+  defp project_path(nil, project_name), do: project_name || ""
+  defp project_path(org_name, nil), do: org_name
+  defp project_path(org_name, project_name), do: org_name <> " / " <> project_name
 
   # ── The two answer shapes ─────────────────────────────────────────────────
 
