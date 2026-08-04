@@ -834,4 +834,76 @@ defmodule Platform.Chat.AgentResponderTest do
       RuntimePresence.untrack(runtime.runtime_id)
     end
   end
+
+  describe "external signal forwarding" do
+    test "forwards message_id and omits responsibility keys on chat signals" do
+      space = create_space()
+      user = create_participant(space.id)
+
+      runtime_pres = Process.whereis(RuntimePresence) || start_supervised!(RuntimePresence)
+      Sandbox.allow(Repo, self(), runtime_pres)
+
+      owner =
+        Repo.insert!(%User{
+          email: "sig-test-#{System.unique_integer([:positive])}@example.com",
+          name: "Sig Owner",
+          oidc_sub: "oidc-sig-#{System.unique_integer([:positive])}"
+        })
+
+      runtime =
+        Repo.insert!(%AgentRuntime{
+          owner_user_id: owner.id,
+          status: "active",
+          runtime_id: "rt-#{System.unique_integer([:positive])}",
+          display_name: "sig-rt"
+        })
+
+      RuntimePresence.track(runtime.runtime_id)
+
+      agent =
+        create_agent(%{
+          slug: "sig-agent",
+          name: "Sig",
+          runtime_type: "external",
+          runtime_id: runtime.id
+        })
+
+      {:ok, _agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Sig")
+
+      trigger = create_message(space.id, user.id, %{content: "@sig ping"})
+
+      topic = "runtime:#{runtime.runtime_id}"
+      :ok = PlatformWeb.Endpoint.subscribe(topic)
+
+      assert {:ok, _} = AttentionRouter.route(trigger)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "attention",
+                       payload: payload
+                     },
+                     1500
+
+      # Without this a federated runtime has no stable per-firing id and must
+      # key isolated dispatch sessions on arrival time, so a reconnect
+      # redelivery spawns a duplicate session for the same dispatch.
+      assert payload.signal.message_id == trigger.id
+
+      # Chat signals aren't responsibility firings — the keys must be absent,
+      # not nil, so runtimes can test presence.
+      refute Map.has_key?(payload.signal, :responsibility_key)
+      refute Map.has_key?(payload.signal, :trigger_kind)
+
+      # `dispatch_parallel/3` stores the frozen history snapshot under
+      # `:metadata`. It is already delivered under `payload.history`; echoing it
+      # inside the signal would duplicate an unbounded payload.
+      refute Map.has_key?(payload.signal, :metadata)
+
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      RuntimePresence.untrack(runtime.runtime_id)
+      _ = AgentRuntime
+    end
+  end
 end

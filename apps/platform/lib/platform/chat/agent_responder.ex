@@ -870,6 +870,29 @@ defmodule Platform.Chat.AgentResponder do
     |> maybe_put(:task_status, task_status)
     |> maybe_put(:agent_id, Map.get(agent || %{}, :id))
     |> maybe_put(:agent_slug, Map.get(agent || %{}, :slug))
+    # Forwarded for federated runtimes that isolate each dispatch into its own
+    # session. `message_id` is the only stable per-firing identifier we can
+    # offer; without it a runtime must key on arrival time, so a reconnect
+    # redelivery spawns a duplicate session for the same dispatch.
+    |> maybe_put(:message_id, Map.get(signal, :message_id))
+    # Same flattened shape as `build_system_event_signal/2` so a runtime sees
+    # one contract on both external paths. A `:chat_pattern` responsibility
+    # arrives here (it has a chat message) rather than via the system_event
+    # path, and without these it is indistinguishable from a human mention.
+    #
+    # Deliberately NOT forwarding the raw `:metadata` map: `dispatch_parallel/3`
+    # stores the frozen history snapshot there, which is already delivered under
+    # `payload.history` and can be arbitrarily large.
+    |> maybe_put(:responsibility_key, responsibility_field(signal, :responsibility_key))
+    |> maybe_put(:feature, responsibility_field(signal, :feature))
+    |> maybe_put(:trigger_kind, responsibility_field(signal, :trigger_kind))
+  end
+
+  defp responsibility_field(signal, key) do
+    case Map.get(signal, :metadata) do
+      meta when is_map(meta) -> Map.get(meta, key)
+      _ -> nil
+    end
   end
 
   defp execution_task_context(space_id) do
