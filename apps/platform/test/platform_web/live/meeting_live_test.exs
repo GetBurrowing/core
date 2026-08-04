@@ -2666,6 +2666,46 @@ defmodule PlatformWeb.MeetingLiveTest do
              ) == ["calendar-now-line"]
     end
 
+    test "the now-line MOVES on the beat", %{conn: conn} do
+      # The defect this pins: the line rendered at the right place on the
+      # first paint and then never moved again for the life of the session.
+      # A now-line frozen at mount is a confidently wrong answer that looks
+      # exactly like a right one, and it survived review because the only
+      # thing asserted about it was that the ELEMENT existed — which it did,
+      # the whole time. So the assertion here is on the rendered `top`, and
+      # it is that two beats produce two DIFFERENT values.
+      #
+      # The instants are injected via the tick's arity-2 message rather than
+      # slept for: the offset is minute-granular, so a test driving the bare
+      # `:calendar_tick` twice inside one wall-clock minute reads the same
+      # percentage both times and cannot tell a working line from a frozen
+      # one. No meetings are seeded, so `hour_window/2` stays at its default
+      # {8, 18} — 600 minutes — and the arithmetic below is exact.
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+
+      today = grid_today()
+
+      beat = fn hour, minute ->
+        send(view.pid, {:calendar_tick, zoned_utc(today, hour, minute)})
+        attrs_of(render(view), in_grid(~s([data-role="calendar-now-line"])), "style")
+      end
+
+      # 09:00 is 60 minutes into a 600-minute window.
+      first = beat.(9, 0)
+      # 09:06 is 66. Six minutes on rather than one so the expected values
+      # are exact decimals and the assertion pins a number instead of a
+      # float repr.
+      second = beat.(9, 6)
+
+      assert first == ["top:10.0%"]
+      assert second == ["top:11.0%"]
+
+      # Stated separately and on purpose. The two equalities above would
+      # both hold against a lucky clock; this is the claim the defect
+      # violated, and it cannot hold for a line that is not recomputed.
+      assert first != second
+    end
+
     test "today's day heading is the only one marked, and it is the viewer's today",
          %{conn: conn} do
       {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")

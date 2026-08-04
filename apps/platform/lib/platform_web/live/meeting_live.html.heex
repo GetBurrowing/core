@@ -1847,11 +1847,23 @@
                the grid: "now" is a fact about one day, and a rule drawn
                across all seven says it is 2:14 PM on Sunday too. It is
                absent entirely when the zone is unresolved or the current
-               hour falls outside the drawn window. --%>
+               hour falls outside the drawn window.
+
+               `@calendar_now` is passed IN rather than read inside the
+               helper. That assign is what makes the line move: LiveView
+               re-evaluates this expression when one of the assigns it
+               names changes, and only then, so a helper reading the
+               clock on its own draws whatever time the last unrelated
+               re-render happened at. --%>
               <div
                 :for={
                   offset <-
-                    calendar_now_line(day.today?, @calendar_time_zone, @calendar_hour_window)
+                    calendar_now_line(
+                      day.today?,
+                      @calendar_time_zone,
+                      @calendar_hour_window,
+                      @calendar_now
+                    )
                 }
                 class="pointer-events-none absolute inset-x-0 z-10 h-[1.5px] bg-error"
                 style={"top:#{offset}%"}
@@ -2074,7 +2086,8 @@
                     calendar_selected_now_line(
                       @calendar_selected_date,
                       @calendar_time_zone,
-                      @calendar_hour_window
+                      @calendar_hour_window,
+                      @calendar_now
                     )
                 }
                 class="pointer-events-none absolute inset-x-0 z-10 h-[1.5px] bg-error"

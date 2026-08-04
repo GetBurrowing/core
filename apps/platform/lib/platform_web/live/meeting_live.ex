@@ -319,6 +319,7 @@ defmodule PlatformWeb.MeetingLive do
       |> assign(:captions_visible, false)
       |> seed_intent_assigns()
       |> assign_calendar_time_zone()
+      |> seed_calendar_now()
       |> assign(:meeting_slug, slug)
       |> assign(:token, token)
 
@@ -470,7 +471,8 @@ defmodule PlatformWeb.MeetingLive do
      # render without a KeyError even though neither shows the bar.
      # `handle_params/3` resolves the real values for the `:show` action.
      |> seed_intent_assigns()
-     |> assign_calendar_time_zone()}
+     |> assign_calendar_time_zone()
+     |> seed_calendar_now()}
   end
 
   # The viewer's IANA zone, off the LiveSocket connect params (set in
@@ -495,6 +497,18 @@ defmodule PlatformWeb.MeetingLive do
 
     assign(socket, :calendar_time_zone, time_zone)
   end
+
+  # The instant the now-line is drawn from, seeded at MOUNT and moved by
+  # nothing but `:calendar_tick`. Seeded in both mount clauses — same
+  # discipline as `assign_calendar_time_zone/1` — so no template can
+  # KeyError on it.
+  #
+  # Seeding it here rather than leaving it absent until the first beat is
+  # what keeps the DEAD render exactly as it was: the disconnected render
+  # has no zone, `calendar_now_line/4` answers `[]` on the zone whatever
+  # the instant, and it must reach that clause rather than raise on its
+  # way there.
+  defp seed_calendar_now(socket), do: assign(socket, :calendar_now, DateTime.utc_now())
 
   # Defaults for the intents-collapse bar. `:intents_visible?` is false
   # here on purpose: absent-until-proven-assigned is the safe direction
@@ -804,10 +818,21 @@ defmodule PlatformWeb.MeetingLive do
   Both correct themselves on the same beat, when the connect params land.
   """
   @spec calendar_today_date(String.t() | nil) :: Date.t()
-  def calendar_today_date(nil), do: Date.utc_today()
+  def calendar_today_date(time_zone), do: calendar_today_date(time_zone, DateTime.utc_now())
 
-  def calendar_today_date(time_zone) when is_binary(time_zone),
-    do: DateTime.utc_now() |> DateTime.shift_zone!(time_zone) |> DateTime.to_date()
+  @doc """
+  `calendar_today_date/1` against a GIVEN instant rather than the clock.
+
+  The arity-1 form reads the clock and is the one navigation calls; this
+  is the form the render path uses, so "today" on screen is derived from
+  the same `@calendar_now` the now-line's offset is, and the two cannot
+  disagree about which day it is across a midnight beat.
+  """
+  @spec calendar_today_date(String.t() | nil, DateTime.t()) :: Date.t()
+  def calendar_today_date(nil, %DateTime{} = now), do: DateTime.to_date(now)
+
+  def calendar_today_date(time_zone, %DateTime{} = now) when is_binary(time_zone),
+    do: now |> DateTime.shift_zone!(time_zone) |> DateTime.to_date()
 
   # ── Calendar rendering helpers (task 019fb954-8ead stage 2) ──────────────
   #
@@ -1056,21 +1081,31 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   @doc """
-  How far down the rendered hour window "now" sits, as a percentage, or
-  `nil` when there is no honest answer.
+  How far down the rendered hour window a GIVEN instant sits, as a
+  percentage, or `nil` when there is no honest answer.
+
+  The instant is an ARGUMENT, never the clock. Two reasons, and the
+  first is a correctness one: LiveView diffs on assigns, so a helper
+  that reads the clock inside the render is only ever re-evaluated when
+  something else on the page changes, and the line it draws is the one
+  from whenever that last happened. Taking `now` in means the offset
+  moves exactly when `@calendar_now` does — every beat, and only then.
+  The second is that it makes the value testable at an arbitrary time of
+  day without sleeping through one.
 
   `nil` for an unresolved zone — the caller draws no line rather than a
   line in server time, which is the same call `resolve_time_zone/1`
-  makes. `nil` too when the current hour falls OUTSIDE the drawn window:
-  a now-line pinned to the top edge at 3 AM is not a smaller error than
-  no line, it is a confident wrong one.
+  makes. `nil` too when the instant's hour falls OUTSIDE the drawn
+  window: a now-line pinned to the top edge at 3 AM is not a smaller
+  error than no line, it is a confident wrong one.
   """
-  @spec calendar_now_offset(String.t() | nil, {integer(), integer()}) :: float() | nil
-  def calendar_now_offset(nil, _window), do: nil
+  @spec calendar_now_offset(String.t() | nil, {integer(), integer()}, DateTime.t()) ::
+          float() | nil
+  def calendar_now_offset(nil, _window, %DateTime{}), do: nil
 
-  def calendar_now_offset(time_zone, {first_hour, last_hour})
+  def calendar_now_offset(time_zone, {first_hour, last_hour}, %DateTime{} = now)
       when is_binary(time_zone) and last_hour > first_hour do
-    now = DateTime.utc_now() |> DateTime.shift_zone!(time_zone)
+    now = DateTime.shift_zone!(now, time_zone)
     window_minutes = (last_hour - first_hour) * 60
     offset_minutes = (now.hour - first_hour) * 60 + now.minute
 
@@ -1084,19 +1119,20 @@ defmodule PlatformWeb.MeetingLive do
   `[]` when that column must not draw one.
 
   A list rather than a `nil`-able value so the template renders it with
-  the same `:for` it renders everything else with, reading the clock
-  exactly once per column and never on a path where the guard said no.
+  the same `:for` it renders everything else with, and never places a
+  line on a path where the guard said no.
 
   Two independent reasons to draw nothing, and they are different
   reasons: this is not today's column (the line is a fact about ONE day
   — drawn across all seven it claims it is also 2:14 PM on Sunday), or
-  there is no honest offset at all (see `calendar_now_offset/2`).
+  there is no honest offset at all (see `calendar_now_offset/3`).
   """
-  @spec calendar_now_line(boolean(), String.t() | nil, {integer(), integer()}) :: [float()]
-  def calendar_now_line(false, _time_zone, _window), do: []
+  @spec calendar_now_line(boolean(), String.t() | nil, {integer(), integer()}, DateTime.t()) ::
+          [float()]
+  def calendar_now_line(false, _time_zone, _window, %DateTime{}), do: []
 
-  def calendar_now_line(true, time_zone, window) do
-    case calendar_now_offset(time_zone, window) do
+  def calendar_now_line(true, time_zone, window, %DateTime{} = now) do
+    case calendar_now_offset(time_zone, window, now) do
       nil -> []
       offset -> [offset]
     end
@@ -1168,15 +1204,23 @@ defmodule PlatformWeb.MeetingLive do
   The now-line offsets for the mobile day column — a single-element list,
   or `[]`.
 
-  Same two conditions as `calendar_now_line/3` on the desktop grid,
+  Same two conditions as `calendar_now_line/4` on the desktop grid,
   asked of the ONE day on screen instead of each of seven: the line is a
   fact about today, so a day view showing Friday draws none.
+
+  Both conditions are answered from the SAME injected instant — "is this
+  today" and "where in the day" cannot come from two different readings
+  of the clock without a beat existing on which they disagree.
   """
-  @spec calendar_selected_now_line(Date.t(), String.t() | nil, {integer(), integer()}) ::
-          [float()]
-  def calendar_selected_now_line(%Date{} = selected, time_zone, window) do
-    today? = Date.compare(selected, calendar_today_date(time_zone)) == :eq
-    calendar_now_line(today?, time_zone, window)
+  @spec calendar_selected_now_line(
+          Date.t(),
+          String.t() | nil,
+          {integer(), integer()},
+          DateTime.t()
+        ) :: [float()]
+  def calendar_selected_now_line(%Date{} = selected, time_zone, window, %DateTime{} = now) do
+    today? = Date.compare(selected, calendar_today_date(time_zone, now)) == :eq
+    calendar_now_line(today?, time_zone, window, now)
   end
 
   defp month_abbrev(%Date{} = date), do: Calendar.strftime(date, "%b")
@@ -2558,11 +2602,31 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   # The minute tick that keeps the now-line honest. Re-arms itself so the
-  # cadence survives as long as the index is mounted. Re-assigns nothing:
-  # the render reads the clock, this only forces the beat.
-  def handle_info(:calendar_tick, socket) do
+  # cadence survives as long as the index is mounted.
+  #
+  # It MUST re-assign the instant, and this clause used to claim the
+  # opposite ("re-assigns nothing: the render reads the clock, this only
+  # forces the beat"). That premise is false and it shipped a now-line
+  # frozen at mount for the life of the session. LiveView diffs on
+  # ASSIGNS: a beat that changes no assign produces no diff, the
+  # template's offset expression is never re-evaluated, and it does not
+  # matter what that expression would have read had it run. Observed
+  # directly — an unrelated broadcast that re-rendered the page left the
+  # line's `top` byte-identical two minutes on, because the broadcast
+  # dirtied the meetings list and nothing the line depends on.
+  #
+  # The timer itself was never the fault: traced on the LiveView process,
+  # `:calendar_tick` lands 60s after mount and again 60s after that.
+  def handle_info(:calendar_tick, socket),
+    do: handle_info({:calendar_tick, DateTime.utc_now()}, socket)
+
+  # The instant arrives as an argument on this clause so the beat is
+  # drivable at a chosen time without sleeping through a real minute —
+  # which is the only way to assert that the rendered offset MOVED,
+  # rather than that a now-line element exists (it always did).
+  def handle_info({:calendar_tick, %DateTime{} = now}, socket) do
     schedule_calendar_tick()
-    {:noreply, socket}
+    {:noreply, assign(socket, :calendar_now, now)}
   end
 
   # Only the `:index` action holds calendar assigns; the `:show` and guest
