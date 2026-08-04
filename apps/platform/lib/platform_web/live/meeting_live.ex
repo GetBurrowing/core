@@ -195,6 +195,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Meetings.IntentCorrection
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentQueue
+  alias Platform.Meetings.Meeting
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
   alias Platform.Roles
@@ -718,12 +719,195 @@ defmodule PlatformWeb.MeetingLive do
   # exactly the class of error the connect-param zone exists to prevent.
   # With no zone we have nothing better than UTC, and the grid is empty
   # anyway on that render.
-  defp calendar_today(socket) do
-    case socket.assigns.calendar_time_zone do
-      nil -> Date.utc_today()
-      time_zone -> DateTime.utc_now() |> DateTime.shift_zone!(time_zone) |> DateTime.to_date()
+  defp calendar_today(socket), do: calendar_today_date(socket.assigns.calendar_time_zone)
+
+  @doc """
+  The viewer's current date in `time_zone`, or the server's when the zone
+  is unknown.
+
+  The `nil` clause is NOT a second guess: it returns exactly the date
+  `assign_calendar_week/3` already anchored the rendered week on, so the
+  day the grid highlights and the week the grid draws can never disagree.
+  Both correct themselves on the same beat, when the connect params land.
+  """
+  @spec calendar_today_date(String.t() | nil) :: Date.t()
+  def calendar_today_date(nil), do: Date.utc_today()
+
+  def calendar_today_date(time_zone) when is_binary(time_zone),
+    do: DateTime.utc_now() |> DateTime.shift_zone!(time_zone) |> DateTime.to_date()
+
+  # ── Calendar rendering helpers (task 019fb954-8ead stage 2) ──────────────
+  #
+  # Every one of these is a total function of its arguments so the grid
+  # template does no arithmetic of its own. `CalendarWindow` owns the
+  # date maths; these own the FORMATTING and the assign-shaped plumbing
+  # between it and the markup.
+
+  @doc """
+  The rendered week's label — `Aug 3 – 9, 2026`.
+
+  The year is printed ONCE for a week that stays inside a year, which is
+  every week but one. The three clauses widen only as far as they must:
+  the month repeats only when the week straddles two, and the year only
+  when it straddles two. The separator is an en dash (U+2013), the
+  typographic range mark, not a hyphen.
+  """
+  @spec calendar_week_label(Date.t()) :: String.t()
+  def calendar_week_label(%Date{} = anchor) do
+    days = CalendarWindow.week_days(anchor)
+    first = List.first(days)
+    last = List.last(days)
+
+    cond do
+      first.year != last.year ->
+        "#{month_abbrev(first)} #{first.day}, #{first.year} – " <>
+          "#{month_abbrev(last)} #{last.day}, #{last.year}"
+
+      first.month != last.month ->
+        "#{month_abbrev(first)} #{first.day} – #{month_abbrev(last)} #{last.day}, #{last.year}"
+
+      true ->
+        "#{month_abbrev(first)} #{first.day} – #{last.day}, #{last.year}"
     end
   end
+
+  @doc """
+  The seven days of the rendered week, Monday first, each already tagged
+  with whether it is the viewer's today.
+
+  The tag is computed here rather than per-cell in the template so the
+  clock is read ONCE for the whole grid. Two reads either side of
+  midnight would let the header circle and the now-line disagree about
+  which day it is, in the one render where that is most visible.
+  """
+  @spec calendar_week_days(Date.t(), String.t() | nil) :: [
+          %{date: Date.t(), today?: boolean()}
+        ]
+  def calendar_week_days(%Date{} = anchor, time_zone) do
+    today = calendar_today_date(time_zone)
+
+    anchor
+    |> CalendarWindow.week_days()
+    |> Enum.map(&%{date: &1, today?: Date.compare(&1, today) == :eq})
+  end
+
+  @doc """
+  The hours the gutter draws a label for, one per rendered row.
+
+  The window is half-open — `{8, 18}` is eight AM through the END of the
+  five PM row — so the last hour gets no label of its own.
+  """
+  @spec calendar_hours({integer(), integer()}) :: [integer()]
+  def calendar_hours({first_hour, last_hour}) when last_hour > first_hour,
+    do: Enum.to_list(first_hour..(last_hour - 1))
+
+  @doc """
+  A gutter label for a 24-hour clock hour — `8 AM`, `12 PM`, `11 PM`.
+  """
+  @spec calendar_hour_label(integer()) :: String.t()
+  def calendar_hour_label(0), do: "12 AM"
+  def calendar_hour_label(12), do: "12 PM"
+  def calendar_hour_label(hour) when hour > 0 and hour < 12, do: "#{hour} AM"
+  def calendar_hour_label(hour) when hour > 12 and hour < 24, do: "#{hour - 12} PM"
+
+  @doc """
+  The `{meeting, placement}` pairs that belong in `date`'s column.
+
+  Filtering happens in `CalendarWindow.place/4`, which answers `:skip`
+  both for a meeting that cannot be drawn at all (cancelled, or never
+  scheduled) and for one that simply belongs to another day. The template
+  therefore never asks "should this be here?" — it renders what it is
+  handed.
+
+  With no resolved zone there is no local date to compare against, so
+  NOTHING is placed. That is the contract `resolve_time_zone/1` sets up:
+  one beat of empty grid rather than seven columns of meetings that jump
+  sideways the moment the browser tells us where it is.
+  """
+  @spec calendar_day_events([Meeting.t()], Date.t(), String.t() | nil, {integer(), integer()}) ::
+          [{Meeting.t(), %{top: float(), height: float()}}]
+  def calendar_day_events(_meetings, %Date{}, nil, _window), do: []
+
+  def calendar_day_events(meetings, %Date{} = date, time_zone, window)
+      when is_list(meetings) and is_binary(time_zone) do
+    Enum.flat_map(meetings, fn meeting ->
+      case CalendarWindow.place(meeting, date, time_zone, window) do
+        {:ok, placement} -> [{meeting, placement}]
+        :skip -> []
+      end
+    end)
+  end
+
+  @doc """
+  A placed meeting's local start time as `HH:MM`.
+
+  Rendered SERVER-SIDE in the resolved zone rather than by a client hook,
+  so the string inside a block and the column the block sits in can never
+  disagree about what day it is.
+  """
+  @spec calendar_event_time(Meeting.t(), String.t()) :: String.t()
+  def calendar_event_time(%Meeting{scheduled_start_at: start_at}, time_zone)
+      when is_binary(time_zone) do
+    start_at
+    |> DateTime.shift_zone!(time_zone)
+    |> Calendar.strftime("%H:%M")
+  end
+
+  @doc """
+  How far down the rendered hour window "now" sits, as a percentage, or
+  `nil` when there is no honest answer.
+
+  `nil` for an unresolved zone — the caller draws no line rather than a
+  line in server time, which is the same call `resolve_time_zone/1`
+  makes. `nil` too when the current hour falls OUTSIDE the drawn window:
+  a now-line pinned to the top edge at 3 AM is not a smaller error than
+  no line, it is a confident wrong one.
+  """
+  @spec calendar_now_offset(String.t() | nil, {integer(), integer()}) :: float() | nil
+  def calendar_now_offset(nil, _window), do: nil
+
+  def calendar_now_offset(time_zone, {first_hour, last_hour})
+      when is_binary(time_zone) and last_hour > first_hour do
+    now = DateTime.utc_now() |> DateTime.shift_zone!(time_zone)
+    window_minutes = (last_hour - first_hour) * 60
+    offset_minutes = (now.hour - first_hour) * 60 + now.minute
+
+    if offset_minutes >= 0 and offset_minutes <= window_minutes do
+      offset_minutes / window_minutes * 100
+    end
+  end
+
+  @doc """
+  The now-line's offset for one day column, as a single-element list, or
+  `[]` when that column must not draw one.
+
+  A list rather than a `nil`-able value so the template renders it with
+  the same `:for` it renders everything else with, reading the clock
+  exactly once per column and never on a path where the guard said no.
+
+  Two independent reasons to draw nothing, and they are different
+  reasons: this is not today's column (the line is a fact about ONE day
+  — drawn across all seven it claims it is also 2:14 PM on Sunday), or
+  there is no honest offset at all (see `calendar_now_offset/2`).
+  """
+  @spec calendar_now_line(boolean(), String.t() | nil, {integer(), integer()}) :: [float()]
+  def calendar_now_line(false, _time_zone, _window), do: []
+
+  def calendar_now_line(true, time_zone, window) do
+    case calendar_now_offset(time_zone, window) do
+      nil -> []
+      offset -> [offset]
+    end
+  end
+
+  @doc """
+  A day column's heading abbreviation — `MON`, `TUE`.
+  """
+  @spec calendar_weekday_abbrev(Date.t()) :: String.t()
+  def calendar_weekday_abbrev(%Date{} = date),
+    do: date |> Calendar.strftime("%a") |> String.upcase()
+
+  defp month_abbrev(%Date{} = date), do: Calendar.strftime(date, "%b")
 
   # ── Archive half of the index (task 019fb954-c848) ───────────────────────
   #
