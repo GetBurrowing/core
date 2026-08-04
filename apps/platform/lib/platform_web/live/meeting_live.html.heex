@@ -2251,15 +2251,20 @@
          `position: fixed` — out of flow — which is exactly the case where
          reserving the in-flow nav height is correct.
 
-         Stage 4 had carried a `lg:right-[calc(20.125rem+1.5rem)]` offset,
-         applied while the detail panel was open, so the FAB would not paint
-         over the panel's action row. `lg:hidden` DELETES that state: the
-         panel is `hidden lg:flex`, so it exists only at `lg` and above,
-         which is precisely where the FAB no longer renders. The offset was
-         therefore unreachable in every state and is gone rather than left
-         behind as a guard that cannot fire. Below `lg` nothing overlaps
-         either — the detail SHEET is a z-50 overlay above the FAB's
-         z-30. --%>
+         Stage 4 had carried an `lg:`-scoped horizontal offset — the panel's
+         width plus a gutter — applied while the detail panel was open, so
+         the FAB would not paint over the panel's action row. `lg:hidden`
+         DELETES that state: the panel is `hidden lg:flex`, so it exists
+         only at `lg` and above, which is precisely where the FAB no longer
+         renders. The offset was therefore unreachable in every state and is
+         gone rather than left behind as a guard that cannot fire. Below
+         `lg` nothing overlaps either — the detail SHEET is a z-50 overlay
+         above the FAB's z-30.
+
+         Deliberately NOT naming that offset as a literal class string here:
+         Tailwind scans this directory as plain text, so a class written in
+         a COMMENT is still a build candidate and would emit the rule this
+         change exists to retire. --%>
       <button
         type="button"
         phx-click="open_start_meeting_sheet"
