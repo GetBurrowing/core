@@ -1201,6 +1201,53 @@ defmodule PlatformWeb.MeetingLive do
     do: "#{count} meetings"
 
   @doc """
+  How many meetings the rendered WEEK actually draws.
+
+  The seven day columns summed through `calendar_day_meeting_count/4`,
+  so this counts placed BLOCKS and not rows: `place/4` answers `:skip`
+  for a meeting that is cancelled, for one that was never scheduled, and
+  for one whose local start date is not the column's — and it matches
+  exactly one of the seven columns for every meeting it does place, so
+  nothing is counted twice.
+
+  Derived from the same function the grid draws with, deliberately. The
+  header chip this feeds read `7 total` beside a grid holding 5 blocks,
+  because it was `length(@meetings)` — every meeting row the LiveView had
+  loaded, including the two the grid refuses to place. A count next to a
+  grid is read as a count OF the grid.
+  """
+  @spec calendar_week_meeting_count(
+          [Meeting.t()],
+          Date.t(),
+          String.t() | nil,
+          {integer(), integer()}
+        ) :: non_neg_integer()
+  def calendar_week_meeting_count(meetings, %Date{} = anchor, time_zone, window) do
+    anchor
+    |> CalendarWindow.week_days()
+    |> Enum.map(&calendar_day_meeting_count(meetings, &1, time_zone, window))
+    |> Enum.sum()
+  end
+
+  @doc """
+  The header chip beside the Calendar/Archive tabs — `No meetings this
+  week`, `1 meeting this week`, `5 meetings this week`.
+
+  It says "this week" because the number is about the rendered week, and
+  the string it replaced (`7 total`) named no scope at all. Unlabelled
+  was the other half of the defect: `total` invites the reader to take it
+  as a fact about the whole surface, so a reader who counts the grid and
+  gets a different number has no way to tell which of the two is lying.
+
+  Pluralisation is borrowed from `calendar_day_count_label/1` rather than
+  rewritten, so the chip and the day heading cannot disagree about how to
+  say one.
+  """
+  @spec calendar_week_count_label(non_neg_integer()) :: String.t()
+  def calendar_week_count_label(count) when is_integer(count) and count >= 0,
+    do: "#{calendar_day_count_label(count)} this week"
+
+  @doc """
   The now-line offsets for the mobile day column — a single-element list,
   or `[]`.
 

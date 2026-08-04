@@ -1328,12 +1328,30 @@
 
         <div class="flex-1"></div>
 
+        <%!-- Counts what the GRID DRAWS, not what the LiveView loaded.
+           This read `length(@meetings) total` — a binding left over from
+           the meetings LIST this surface used to be, where `@meetings`
+           was the thing on screen and the count was honest. The calendar
+           replaced the list and the chip kept pointing at the old
+           collection, so it counted rows the grid deliberately refuses to
+           place (cancelled, and never-scheduled) and reported 7 beside 5
+           blocks. Worse than stale: `@meetings` is
+           `Meetings.list_all_meetings/0`, which is unscoped and unbounded
+           in time — the archive half already refuses to source from it
+           for that reason. --%>
         <span
           :if={@meetings_view == :calendar}
           class="text-xs text-base-content/50"
           data-role="meetings-count"
         >
-          {length(assigns[:meetings] || [])} total
+          {calendar_week_count_label(
+            calendar_week_meeting_count(
+              @calendar_week_meetings,
+              @calendar_anchor_date,
+              @calendar_time_zone,
+              @calendar_hour_window
+            )
+          )}
         </span>
 
         <%!-- MATCHED of total, not a bare total — see `archive_count_label/2`.

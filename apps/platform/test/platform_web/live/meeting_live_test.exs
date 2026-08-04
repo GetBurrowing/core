@@ -2401,6 +2401,74 @@ defmodule PlatformWeb.MeetingLiveTest do
       end
     end
 
+    test "the header count chip counts the blocks the grid drew, not the rows it loaded",
+         %{conn: conn, project: project} do
+      # The defect this pins: the chip read `7 total` beside a grid holding
+      # 5 blocks. It was `length(@meetings)` — a binding left over from the
+      # meetings LIST this surface used to be, where `@meetings` WAS what
+      # was on screen. The calendar replaced the list; the chip kept
+      # pointing at the old collection.
+      #
+      # The fixture is sized so that three different wrong answers are three
+      # different numbers, because a fixture where the wrong answer happens
+      # to equal the right one cannot fail:
+      #
+      #   5 — every row loaded (the defect)
+      #   3 — every PLACEABLE row, ignoring the rendered week
+      #   2 — the blocks actually drawn (correct)
+      today = grid_today()
+
+      for {slug, hour} <- [{"chip-placed-a", 10}, {"chip-placed-b", 14}] do
+        seed_grid_meeting(project,
+          slug: slug,
+          scheduled_start_at: zoned_utc(today, hour, 0),
+          scheduled_end_at: zoned_utc(today, hour + 1, 0)
+        )
+      end
+
+      # Excluded by the status conjunct of `placeable?/1`…
+      seed_grid_meeting(project,
+        slug: "chip-cancelled",
+        status: "cancelled",
+        scheduled_start_at: zoned_utc(today, 11, 0),
+        scheduled_end_at: zoned_utc(today, 12, 0)
+      )
+
+      # …and by the `scheduled_start_at` conjunct. Both are rows the grid
+      # deliberately refuses to place, and both were counted.
+      seed_grid_meeting(project, slug: "chip-unscheduled", status: "scheduled")
+
+      # Placeable, but three weeks out — so it is not in the rendered week
+      # and must not be in the rendered week's count. This is the half of
+      # the defect that a `total` label made invisible: the old source was
+      # unscoped in time as well as unfiltered by status.
+      far = Date.add(today, 21)
+
+      seed_grid_meeting(project,
+        slug: "chip-next-month",
+        scheduled_start_at: zoned_utc(far, 10, 0),
+        scheduled_end_at: zoned_utc(far, 11, 0)
+      )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      chip =
+        html |> doc() |> LazyHTML.query(~s([data-role="meetings-count"])) |> LazyHTML.text()
+
+      # Equality on the whole string, not `=~ "2"`. A substring assertion
+      # for the digit is satisfied by `2 total` — which is the un-scoped
+      # label the fix exists to retire — and by `12 meetings this week`.
+      assert String.trim(chip) == "2 meetings this week"
+
+      # And it agrees with the grid it sits beside, counted independently
+      # off the rendered document rather than restated from the fixture.
+      # This is the claim the chip makes and the one it broke; if a future
+      # change makes the two disagree, the number above being right about
+      # the fixture would not save it.
+      assert length(attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id")) ==
+               2
+    end
+
     test "the FAB meets the 44px touch-target floor", %{conn: conn} do
       # The defect this pins: the FAB measured 35.00 × 35.00px, computed
       # `min-height: 0px` / `min-width: 0px`, on the ONLY create path a
