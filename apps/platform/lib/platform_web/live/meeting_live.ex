@@ -200,6 +200,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Tasks
   alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.Components.Meetings.IntentsCollapse
+  alias PlatformWeb.MeetingLive.CalendarWindow
 
   # The role that may see and drive the intents-collapse bar. Passed to
   # `Platform.Roles.agent_id_for_role/1` as a STRING — that function is
@@ -278,6 +279,7 @@ defmodule PlatformWeb.MeetingLive do
       |> assign(:chat_panel_collapsed, false)
       |> assign(:captions_visible, false)
       |> seed_intent_assigns()
+      |> assign_calendar_time_zone()
       |> assign(:meeting_slug, slug)
       |> assign(:token, token)
 
@@ -426,7 +428,31 @@ defmodule PlatformWeb.MeetingLive do
      # BOTH mount clauses so the `:index` action and the guest surface
      # render without a KeyError even though neither shows the bar.
      # `handle_params/3` resolves the real values for the `:show` action.
-     |> seed_intent_assigns()}
+     |> seed_intent_assigns()
+     |> assign_calendar_time_zone()}
+  end
+
+  # The viewer's IANA zone, off the LiveSocket connect params (set in
+  # `assets/js/app.js`) and validated at `CalendarWindow`'s single choke
+  # point. Seeded in BOTH mount clauses — same discipline as
+  # `seed_intent_assigns/1` — so no template can KeyError on it even on
+  # the guest surface, which never draws a calendar.
+  #
+  # `get_connect_params/1` is legal ONLY inside `mount/3`, which is why
+  # this lives here rather than in `handle_params/3`. On the disconnected
+  # render it returns nil, which flows through `resolve_time_zone/1` to
+  # nil — the intended dead-render answer, not a failure to handle.
+  defp assign_calendar_time_zone(socket) do
+    time_zone =
+      socket
+      |> get_connect_params()
+      |> case do
+        %{"timezone" => time_zone} -> time_zone
+        _ -> nil
+      end
+      |> CalendarWindow.resolve_time_zone()
+
+    assign(socket, :calendar_time_zone, time_zone)
   end
 
   # Defaults for the intents-collapse bar. `:intents_visible?` is false
@@ -621,17 +647,80 @@ defmodule PlatformWeb.MeetingLive do
     meetings = Meetings.list_all_meetings()
     grouped = group_meetings_by_status(meetings)
 
+    # The now-line has to move on its own. Arming the tick here (only when
+    # connected — a dead render has no later beat) rather than at mount
+    # keeps it scoped to the `:index` action. A now-line frozen at mount
+    # time is a wrong answer that looks like a right one.
+    if connected?(socket), do: schedule_calendar_tick()
+
     {:noreply,
      socket
      |> assign(:page_title, "Meetings")
      |> assign(:meeting, nil)
+     # `:meetings` and `:grouped_meetings` keep their exact prior meaning:
+     # `data-role="meetings-count"` and the archive sibling both read them,
+     # and the calendar is an additional projection, not a replacement.
      |> assign(:meetings, meetings)
      |> assign(:grouped_meetings, grouped)
      |> assign(:meeting_subscribed_project_ids, project_ids)
      |> assign_new(:projects, fn -> projects end)
      |> assign_new(:show_start_meeting_sheet, fn -> false end)
      |> assign_new(:start_meeting_form, fn -> blank_start_meeting_form(projects) end)
-     |> assign_new(:start_meeting_error, fn -> nil end)}
+     |> assign_new(:start_meeting_error, fn -> nil end)
+     |> assign_new(:selected_meeting_id, fn -> nil end)
+     |> assign_calendar_week(calendar_today(socket))}
+  end
+
+  # ── Calendar window (task 019fb954-8ead) ─────────────────────────────────
+
+  # Recompute every calendar assign from one anchor date. The SINGLE path
+  # by which the week's meetings are loaded: `handle_params/3` and all four
+  # navigation events funnel through here, so there is exactly one range
+  # query in the module and no way for a handler to drift from it.
+  #
+  # One query per WEEK, not seven per day: `list_meetings_in_range/3` is
+  # already half-open over the same bounds `week_bounds/2` produces, and
+  # the day columns are a partition of that result in memory.
+  defp assign_calendar_week(socket, %Date{} = anchor, selected \\ nil) do
+    time_zone = socket.assigns.calendar_time_zone
+    selected = selected || anchor
+    meetings = list_calendar_week_meetings(anchor, time_zone)
+
+    socket
+    |> assign(:calendar_anchor_date, anchor)
+    |> assign(:calendar_selected_date, selected)
+    |> assign(:calendar_week_meetings, meetings)
+    |> assign(:calendar_hour_window, calendar_hour_window(meetings, time_zone))
+  end
+
+  # No zone means no query. The dead render places NOTHING rather than
+  # placing everything in UTC: a row that visibly jumps between day
+  # columns one beat after connect is a worse answer than one beat of
+  # empty grid, and the extra range query would be work done to be undone.
+  defp list_calendar_week_meetings(_anchor, nil), do: []
+
+  defp list_calendar_week_meetings(%Date{} = anchor, time_zone) do
+    {from, to} = CalendarWindow.week_bounds(anchor, time_zone)
+    Meetings.list_meetings_in_range(from, to)
+  end
+
+  defp calendar_hour_window(_meetings, nil), do: CalendarWindow.hour_window([], "Etc/UTC")
+
+  defp calendar_hour_window(meetings, time_zone),
+    do: CalendarWindow.hour_window(meetings, time_zone)
+
+  defp schedule_calendar_tick, do: Process.send_after(self(), :calendar_tick, 60_000)
+
+  # "Today" is the viewer's today, not the server's. Near midnight those
+  # are different DATES, and opening the calendar to the wrong week is
+  # exactly the class of error the connect-param zone exists to prevent.
+  # With no zone we have nothing better than UTC, and the grid is empty
+  # anyway on that render.
+  defp calendar_today(socket) do
+    case socket.assigns.calendar_time_zone do
+      nil -> Date.utc_today()
+      time_zone -> DateTime.utc_now() |> DateTime.shift_zone!(time_zone) |> DateTime.to_date()
+    end
   end
 
   # ── Events ───────────────────────────────────────────────────────────────
@@ -898,6 +987,55 @@ defmodule PlatformWeb.MeetingLive do
 
   def handle_event("submit_name", _params, socket) do
     {:noreply, assign(socket, :name_error, "Please enter your name.")}
+  end
+
+  # ── Calendar navigation (`:index` action only, task 019fb954-8ead) ───────
+  #
+  # Every one of these recomputes through `assign_calendar_week/3`, so the
+  # week query and the hour window can never drift between the arrows, the
+  # Today button and the initial render.
+
+  def handle_event("calendar_prev_week", _params, socket) do
+    {:noreply, shift_calendar_week(socket, -7)}
+  end
+
+  def handle_event("calendar_next_week", _params, socket) do
+    {:noreply, shift_calendar_week(socket, 7)}
+  end
+
+  def handle_event("calendar_today", _params, socket) do
+    today = calendar_today(socket)
+    {:noreply, assign_calendar_week(socket, today, today)}
+  end
+
+  # A `phx-click` payload is a message from a client, so an unparseable
+  # date is IGNORED rather than raised on: the only thing that can send
+  # one is a stale or hand-edited DOM, and neither deserves a 500.
+  def handle_event("select_calendar_day", %{"date" => iso8601}, socket) do
+    case Date.from_iso8601(iso8601) do
+      {:ok, date} ->
+        {:noreply, assign(socket, :calendar_selected_date, date)}
+
+      {:error, _reason} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("select_meeting", %{"id" => meeting_id}, socket) do
+    {:noreply, assign(socket, :selected_meeting_id, meeting_id)}
+  end
+
+  def handle_event("close_meeting_detail", _params, socket) do
+    {:noreply, assign(socket, :selected_meeting_id, nil)}
+  end
+
+  # Paging keeps the selected day's OFFSET within the week (a Wednesday
+  # stays a Wednesday) rather than snapping back to Monday, so stepping
+  # through weeks does not silently move which day is highlighted.
+  defp shift_calendar_week(socket, days) do
+    anchor = Date.add(socket.assigns.calendar_anchor_date, days)
+    selected = Date.add(socket.assigns.calendar_selected_date, days)
+    assign_calendar_week(socket, anchor, selected)
   end
 
   # ── Start-meeting FAB + bottom-sheet (`:index` action only) ──────────────
@@ -1239,17 +1377,43 @@ defmodule PlatformWeb.MeetingLive do
   # assigns — the dataset is small (one row per meeting per project) and
   # simplicity beats cleverness here. Subscribe-once-per-project ensures
   # the broadcast lands on a process that owns these assigns.
+  #
+  # `:meeting_cancelled` is on the list because the calendar must UNDRAW a
+  # cancelled meeting: `CalendarWindow.placeable?/1` excludes the status,
+  # but only if the assigns are refreshed to notice the change. Without it
+  # the grid would keep showing a meeting that is off until a navigation.
   def handle_info({tag, %Meetings.Meeting{}}, socket)
-      when tag in [:meeting_created, :meeting_started, :meeting_ended] do
+      when tag in [:meeting_created, :meeting_started, :meeting_ended, :meeting_cancelled] do
     if Map.has_key?(socket.assigns, :meetings) do
       meetings = Meetings.list_all_meetings()
 
       {:noreply,
        socket
        |> assign(:meetings, meetings)
-       |> assign(:grouped_meetings, group_meetings_by_status(meetings))}
+       |> assign(:grouped_meetings, group_meetings_by_status(meetings))
+       |> refresh_calendar_week()}
     else
       {:noreply, socket}
+    end
+  end
+
+  # The minute tick that keeps the now-line honest. Re-arms itself so the
+  # cadence survives as long as the index is mounted. Re-assigns nothing:
+  # the render reads the clock, this only forces the beat.
+  def handle_info(:calendar_tick, socket) do
+    schedule_calendar_tick()
+    {:noreply, socket}
+  end
+
+  # Only the `:index` action holds calendar assigns; the `:show` and guest
+  # surfaces share this PubSub clause and must not be re-queried.
+  defp refresh_calendar_week(socket) do
+    case socket.assigns do
+      %{calendar_anchor_date: %Date{} = anchor, calendar_selected_date: selected} ->
+        assign_calendar_week(socket, anchor, selected)
+
+      _ ->
+        socket
     end
   end
 
