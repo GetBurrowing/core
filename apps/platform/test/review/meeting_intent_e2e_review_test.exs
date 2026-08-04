@@ -458,7 +458,7 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
         Meetings.append_segment(transcript.id, %{
           participant_identity: "alice",
           speaker_name: "Alice",
-          text: "second attempt after provider recovers",
+          text: "we should retry after the provider recovers",
           start_time: 3000,
           end_time: 5500
         })

@@ -9,10 +9,49 @@ defmodule Platform.Meetings.IntentClassifier do
   process per node fielding every room's traffic, mirroring the design
   the M6 responsibility router uses for `meeting:finished`.
 
+  ## Utterance debounce (same-speaker merge)
+
+  Upstream, `meeting-transcriber` emits one FINAL per Silero-VAD
+  delimited utterance and `Meetings.append_segment/2` broadcasts one
+  `transcript_chunk` per segment. Those boundaries are BREATH
+  delimited, not thought delimited — roughly half of real chunks are
+  partial clauses (`"I just put together a file"` /
+  `"in the past 30 minutes."` arrived as two chunks and classified
+  separately, both wrong).
+
+  So an arriving chunk is HELD for `debounce_ms` instead of
+  classifying immediately. Another chunk from the SAME speaker inside
+  that window is concatenated onto the held one and the timer
+  restarts; the merged text classifies ONCE, on the boundary:
+
+    * **quiet timeout** — `debounce_ms` elapses with no follow-up;
+    * **speaker change** — a different speaker's chunk arrives, which
+      is itself an utterance boundary, so the held turn flushes
+      immediately and the new speaker starts their own hold;
+    * **max hold** — `max_hold_ms` since the first held fragment, so a
+      monologue cannot postpone classification indefinitely;
+    * **`:meeting_finished` / process termination** — see below.
+
+  The hold is keyed on ARRIVAL time (`System.monotonic_time/1`), NOT
+  on `start_time` / `end_time`: both are currently hardcoded `0`
+  upstream (`MeetingAgentController.normalize_segment/1`,
+  `LivekitWebhookController`), so segment time carries no information.
+  Nothing here reads them — if they later become real, the boundary
+  rules can consult them without restructuring.
+
+  A held chunk that never classifies is silent data loss, which would
+  be strictly worse than the noise this removes. So the hold is
+  flushed — classified, not dropped — on `:meeting_finished` for the
+  room and in `terminate/2` for every room (the process traps exits so
+  `terminate/2` actually runs on a supervised shutdown).
+
+  Setting `debounce_ms` to `0` disables holding entirely: every chunk
+  delivers synchronously inside `handle_info/2`, which is the shape
+  `config/test.exs` pins so timing-sensitive tests stay deterministic.
+
   ## Guard chain
 
-  `handle_info({:transcript_chunk, payload}, state)` walks three
-  guards in order:
+  Every DELIVERED chunk (post-merge) walks the guards in order:
 
     1. **No assignee** — `Platform.Roles.assignee_for("meetings.intent_classify")`
        returns `nil`. Log at `:info` the FIRST time we see a room
@@ -24,8 +63,33 @@ defmodule Platform.Meetings.IntentClassifier do
        payload's `meeting_id` (task 019fbaac stage 2). Emits the SAME
        `:skipped` event as guard 1 with `%{reason: :muted}`. No prompt
        render, no provider call, no queue write.
-    3. **Assignee found, meeting live** — hand off to
-       `classify_and_enqueue/4`.
+    3. **No content** — `content_bearing?/1` (a pure function, see its
+       own docs) rejects backchannels, bare fragments and single
+       address terms BEFORE a model call is spent. Emits
+       `%{reason: :no_content}` — a distinct atom, deliberately not
+       folded into `:no_assignee` or `:muted`, because "nobody is
+       listening", "a human said hold" and "nothing was said" are
+       different facts about a meeting and the telemetry stream is how
+       they get told apart.
+    4. **Assignee found, meeting live, chunk has content** — hand off
+       to `classify_and_enqueue/4`.
+
+  ## Why mute sits ABOVE the content gate
+
+  Guards 2 and 3 answer different questions and the mute answer wins.
+  `:muted` is a human saying "hold this meeting"; `:no_content` is a
+  heuristic saying "this utterance is not worth a model call". A muted
+  meeting must skip EVERY chunk, substantive ones included, so the
+  explicit instruction has to short-circuit before any heuristic can
+  reclassify the skip under a different reason. It is also the cheaper
+  test — one indexed context read versus tokenising and scanning the
+  utterance — so nothing is paid to reach the answer that was already
+  decided.
+
+  Merge runs BEFORE the gate. That ordering is load bearing: several
+  fragments the gate would reject on their own (`"and assign them."`,
+  `"with the back end."`) are legitimate halves of a sentence that
+  survives once merged.
 
   ## Why mute gates HERE and not at the dispatcher
 
@@ -110,6 +174,18 @@ defmodule Platform.Meetings.IntentClassifier do
   @prompt_slug "meetings.intent_classify.v1"
   @default_context_window_size 3
 
+  # Quiet window a chunk is held for before it classifies. Sized to sit
+  # comfortably above a normal inter-breath gap and well below the
+  # point where a producer would notice the intent strip lagging the
+  # conversation. Overridable per-instance via `:debounce_ms` or
+  # globally via `:intent_classifier_debounce_ms`; `0` disables holding.
+  @default_debounce_ms 1_500
+
+  # Ceiling on how long a single merged utterance may accumulate. A
+  # speaker who never pauses would otherwise restart the debounce timer
+  # forever and never classify.
+  @default_max_hold_ms 4_000
+
   # Few-shot exemplar window (task 019f70b8 stage 6, AC16). Bounded so
   # the prompt cannot grow without limit as an org accumulates
   # corrections; overridable per-instance via the
@@ -165,6 +241,12 @@ defmodule Platform.Meetings.IntentClassifier do
 
   @impl GenServer
   def init(opts) do
+    # Trap exits so `terminate/2` runs on a supervised shutdown and can
+    # flush any held chunk. `:gen_server` intercepts the parent's
+    # `{:EXIT, parent, reason}` ahead of `handle_info/2`, so the
+    # catch-all clause below cannot swallow a shutdown signal.
+    Process.flag(:trap_exit, true)
+
     :ok = MeetingsPubSub.subscribe_transcript_chunk()
     :ok = MeetingsPubSub.subscribe_meeting_finished()
 
@@ -197,13 +279,30 @@ defmodule Platform.Meetings.IntentClassifier do
         )
       )
 
+    debounce_ms =
+      Keyword.get(
+        opts,
+        :debounce_ms,
+        Application.get_env(:platform, :intent_classifier_debounce_ms, @default_debounce_ms)
+      )
+
+    max_hold_ms =
+      Keyword.get(
+        opts,
+        :max_hold_ms,
+        Application.get_env(:platform, :intent_classifier_max_hold_ms, @default_max_hold_ms)
+      )
+
     {:ok,
      %{
        seen_rooms: MapSet.new(),
        provider_module: provider_module,
        recent_chunks: %{},
        context_window_size: context_window_size,
-       correction_exemplar_limit: correction_exemplar_limit
+       correction_exemplar_limit: correction_exemplar_limit,
+       debounce_ms: debounce_ms,
+       max_hold_ms: max_hold_ms,
+       pending: %{}
      }}
   end
 
@@ -211,39 +310,29 @@ defmodule Platform.Meetings.IntentClassifier do
   def handle_info({:transcript_chunk, payload}, state) when is_map(payload) do
     room_id = Map.get(payload, :room_id)
 
-    # Push into the per-room context buffer BEFORE the guard chain so the
-    # window stays warm even when no assignee is set — the moment a role
-    # lands, subsequent chunks classify against real prior context.
-    state = push_chunk_into_buffer(state, room_id, payload)
+    cond do
+      # Unkeyable: no room means no debounce slot and no context buffer.
+      # Delivers straight through, exactly as it did before the debounce
+      # landed — a sparse cross-org broadcast must not be swallowed.
+      not is_binary(room_id) ->
+        {:noreply, deliver_chunk(payload, room_id, state)}
 
-    case Roles.assignee_for(@responsibility_key) do
-      nil ->
-        handle_no_assignee(room_id, state)
+      state.debounce_ms <= 0 ->
+        {:noreply, deliver_chunk(payload, room_id, state)}
 
-      agent ->
-        meeting_id = Map.get(payload, :meeting_id)
+      true ->
+        {:noreply, hold_chunk(state, room_id, payload)}
+    end
+  end
 
-        # Guard 2 — per-meeting mute (task 019fbaac stage 2). Checked
-        # AFTER the assignee guard so an unassigned responsibility still
-        # reports `:no_assignee` (the actionable reason) rather than
-        # being masked by a mute, and BEFORE any prompt render so a muted
-        # meeting costs nothing. `intent_muted?/1` is total: nil,
-        # malformed and unknown ids all answer `false`, which is the
-        # correct answer for a chunk whose space has no meeting.
-        if Meetings.intent_muted?(meeting_id) do
-          handle_muted(room_id, meeting_id, state)
-        else
-          # `state.recent_chunks[room_id]` is stored newest-first with the
-          # current chunk at the head; drop 1 removes the current, take N
-          # bounds the window at exactly `context_window_size`.
-          prior_chunks =
-            state.recent_chunks
-            |> Map.get(room_id, [])
-            |> Enum.drop(1)
-            |> Enum.take(state.context_window_size)
-
-          handle_chunk(payload, agent, prior_chunks, state)
-        end
+  # Quiet-timeout boundary. The `ref` match discards timers whose hold
+  # was already flushed by a speaker change or a max-hold cutoff — a
+  # cancelled `Process.send_after/3` can still have its message in
+  # flight.
+  def handle_info({:intent_debounce_flush, room_id, ref}, state) do
+    case Map.get(state.pending, room_id) do
+      %{ref: ^ref} = held -> {:noreply, flush_pending(state, room_id, held)}
+      _ -> {:noreply, state}
     end
   end
 
@@ -251,8 +340,14 @@ defmodule Platform.Meetings.IntentClassifier do
   # long-running nodes don't accumulate transcript windows for rooms
   # that have shut down. Scoped to the room_id in the payload — other
   # active rooms' buffers are untouched.
+  #
+  # The held chunk is FLUSHED (classified), not discarded, before the
+  # buffer goes: the last thing said in a meeting is exactly the kind
+  # of thing that carries an action item, and losing it silently would
+  # be a worse bug than the noise the debounce exists to remove.
   def handle_info({:meeting_finished, %{room_id: room_id}}, state)
       when is_binary(room_id) do
+    state = flush_room(state, room_id)
     {:noreply, %{state | recent_chunks: Map.delete(state.recent_chunks, room_id)}}
   end
 
@@ -272,6 +367,294 @@ defmodule Platform.Meetings.IntentClassifier do
   # topic is shared with per-room subscribers and future producers may
   # broadcast slightly different payloads.
   def handle_info(_other, state), do: {:noreply, state}
+
+  # Last-chance flush. Node draining, supervisor shutdown, a rolling
+  # deploy: whatever the reason, anything still held classifies now.
+  @impl GenServer
+  def terminate(_reason, state) when is_map(state) do
+    state
+    |> Map.get(:pending, %{})
+    |> Map.keys()
+    |> Enum.reduce(state, fn room_id, acc -> flush_room(acc, room_id) end)
+
+    :ok
+  end
+
+  def terminate(_reason, _state), do: :ok
+
+  # ── Debounce / same-speaker merge ─────────────────────────────────────────
+
+  defp hold_chunk(state, room_id, payload) do
+    speaker = payload_speaker(payload)
+
+    case Map.get(state.pending, room_id) do
+      nil ->
+        start_hold(state, room_id, payload, speaker)
+
+      %{speaker: ^speaker} = held ->
+        extend_hold(state, room_id, held, payload)
+
+      held ->
+        # A different speaker IS an utterance boundary — the held turn
+        # is complete, so classify it now instead of waiting out a
+        # timer that can only add latency.
+        state
+        |> flush_pending(room_id, held)
+        |> start_hold(room_id, payload, speaker)
+    end
+  end
+
+  defp start_hold(state, room_id, payload, speaker) do
+    ref = make_ref()
+    timer = Process.send_after(self(), {:intent_debounce_flush, room_id, ref}, state.debounce_ms)
+
+    held = %{
+      # The FIRST fragment's payload carries the merged utterance:
+      # meeting_id / transcript_id are turn-invariant, and the segment
+      # id names where the utterance BEGAN, which is the stable choice
+      # when fragments are folded together.
+      payload: payload,
+      texts: [payload_text(payload)],
+      speaker: speaker,
+      ref: ref,
+      timer: timer,
+      held_since: System.monotonic_time(:millisecond)
+    }
+
+    %{state | pending: Map.put(state.pending, room_id, held)}
+  end
+
+  defp extend_hold(state, room_id, held, payload) do
+    _ = Process.cancel_timer(held.timer)
+
+    held = %{held | texts: held.texts ++ [payload_text(payload)]}
+    elapsed = System.monotonic_time(:millisecond) - held.held_since
+
+    if elapsed >= state.max_hold_ms do
+      flush_pending(state, room_id, held)
+    else
+      ref = make_ref()
+      wait = min(state.debounce_ms, state.max_hold_ms - elapsed)
+      timer = Process.send_after(self(), {:intent_debounce_flush, room_id, ref}, wait)
+
+      %{state | pending: Map.put(state.pending, room_id, %{held | ref: ref, timer: timer})}
+    end
+  end
+
+  defp flush_room(state, room_id) do
+    case Map.get(state.pending, room_id) do
+      nil -> state
+      held -> flush_pending(state, room_id, held)
+    end
+  end
+
+  defp flush_pending(state, room_id, held) do
+    _ = Process.cancel_timer(held.timer)
+
+    %{state | pending: Map.delete(state.pending, room_id)}
+    |> then(&deliver_chunk(merged_payload(held), room_id, &1))
+  end
+
+  # Fold the held fragments back into one payload. Fragments are joined
+  # with a single space — VAD splits mid-sentence, so the pieces are
+  # adjacent clauses, not separate sentences.
+  defp merged_payload(%{payload: payload, texts: texts}) do
+    merged =
+      texts
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.join(" ")
+
+    segment = Map.get(payload, :segment) || %{}
+    Map.put(payload, :segment, put_segment_text(segment, merged))
+  end
+
+  defp put_segment_text(segment, text) when is_map(segment) do
+    if Map.has_key?(segment, "text") and not Map.has_key?(segment, :text) do
+      Map.put(segment, "text", text)
+    else
+      Map.put(segment, :text, text)
+    end
+  end
+
+  # ── Delivery (buffer push + guard chain) ──────────────────────────────────
+
+  # Push into the per-room context buffer BEFORE the guard chain so the
+  # window stays warm even when no assignee is set (and even when the
+  # content gate rejects the chunk) — the moment a role lands,
+  # subsequent chunks classify against real prior context, fragments
+  # included, because a fragment is still useful for resolving a
+  # pronoun in the NEXT utterance.
+  #
+  # The merged utterance enters the buffer as exactly ONE entry, which
+  # is what keeps the `+1` head semantics below intact: the head is the
+  # chunk about to be classified, no matter how many broadcasts it was
+  # assembled from.
+  defp deliver_chunk(payload, room_id, state) do
+    state = push_chunk_into_buffer(state, room_id, payload)
+
+    case Roles.assignee_for(@responsibility_key) do
+      nil ->
+        note_no_assignee(room_id, state)
+
+      agent ->
+        meeting_id = Map.get(payload, :meeting_id)
+
+        # Guard 2 — per-meeting mute (task 019fbaac stage 2). Checked
+        # AFTER the assignee guard so an unassigned responsibility still
+        # reports `:no_assignee` (the actionable reason) rather than
+        # being masked by a mute, and BEFORE the content gate so an
+        # explicit human "hold this meeting" always reports `:muted` —
+        # a muted meeting skips every chunk, however substantive, and
+        # never has that skip relabelled `:no_content`. It is also the
+        # cheaper check: one indexed read versus tokenising the
+        # utterance. `intent_muted?/1` is total: nil, malformed and
+        # unknown ids all answer `false`, which is the correct answer
+        # for a chunk whose space has no meeting.
+        if Meetings.intent_muted?(meeting_id) do
+          note_muted(room_id, meeting_id, state)
+        else
+          chunk_text = payload_text(payload)
+
+          if content_bearing?(chunk_text) do
+            # `state.recent_chunks[room_id]` is stored newest-first with
+            # the current chunk at the head; drop 1 removes the current,
+            # take N bounds the window at exactly `context_window_size`.
+            prior_chunks =
+              state.recent_chunks
+              |> Map.get(room_id, [])
+              |> Enum.drop(1)
+              |> Enum.take(state.context_window_size)
+
+            classify_and_enqueue(payload, agent, prior_chunks, state)
+            state
+          else
+            note_no_content(room_id, payload, chunk_text)
+            state
+          end
+        end
+    end
+  end
+
+  # ── Content gate ──────────────────────────────────────────────────────────
+
+  # An utterance longer than this is ALWAYS classified. The gate's
+  # rules below only ever look at short utterances, which is the whole
+  # precision bias in one number: a dropped real item is invisible and
+  # unrecoverable, a surviving noisy one costs one model call.
+  @gate_short_utterance_words 5
+
+  # Tokens that carry no proposition on their own: backchannels,
+  # discourse markers, hedges, determiners, address terms. Used two
+  # ways — an utterance made ENTIRELY of these is noise at any length,
+  # and leading runs of them are stripped before looking for a verb.
+  @filler_tokens MapSet.new(~w(
+    a ah all alright also an anyway anyways
+    basically cool dude er everybody everyone exactly
+    folks good gotcha great guys her here hey hi his hm hmm huh
+    i i'm im it it's its just k like literally man mhm mm mmhmm my
+    nah nice no nope oh ok okay our please really right
+    sorry sure team thank thanks that that's the their
+    then there these this those totally uh uhm um well whatever
+    y'know ya yah yeah yep yes you your yup
+  ))
+
+  # Tokens that open a subordinate or coordinate continuation. A SHORT
+  # utterance starting with one of these is a clause that got cut off
+  # from its head — `"and assign them."`, `"with the back end."` — not
+  # a thought anybody can act on. The same words mid-sentence are
+  # unremarkable, which is why only the first token is consulted.
+  @continuation_starters MapSet.new(~w(
+    about after although and at because before but by for from
+    however in into nor of on onto or so than that though through
+    to unless until when where whereas which while who whom whose with
+  ))
+
+  # Verbs and modals that signal something to be DONE. Deliberately
+  # EXCLUDES perception and state verbs (see, look, think, know, feel,
+  # seem, sound, be) — a four-word perception remark
+  # (`"I didn't see this."`, `"Yeah, that looks good."`) is an
+  # observation, never an action item, and letting those through was
+  # most of the measured noise.
+  @action_tokens MapSet.new(~w(
+    add assign book build buy call cancel change check close
+    configure confirm create cut deploy design do document draft drop
+    email enable ensure explore file finish fix follow generate get
+    give handle hire implement include invite launch let's lets
+    make merge migrate move must need needs open own pay pick ping
+    plan post prep prepare publish pull push put refactor release
+    remove rename reply research reschedule review revise rewrite run
+    schedule send set setup ship should split start stop submit
+    summarise summarize swap sync take test track try update upgrade
+    upload use validate verify want wants will wire write
+  ))
+
+  @doc """
+  True when an utterance is worth spending a model call on.
+
+  Pure — no state, no I/O — so the whole gate is testable against a
+  transcript corpus without a running classifier.
+
+  Biased hard toward PRECISION over recall. An utterance is dropped
+  only when it is cheaply and obviously non-content:
+
+    1. nothing but punctuation or whitespace;
+    2. every token is a backchannel / discourse marker / address term
+       (`"Yep."`, `"Mm-hmm."`, `"You guys?"`) — at any length;
+    3. **more than #{@gate_short_utterance_words} words ⇒ always kept.**
+       Every rule past this point applies to short utterances only;
+    4. a short utterance opening on a continuation word
+       (`"and assign them."`, `"with the back end."`) — a clause
+       severed from its head;
+    5. a short utterance with no action verb or modal once leading
+       discourse markers are stripped (`"Skills."`, `"the problem."`,
+       `"Yeah, that looks good."`).
+
+  Anything else is kept, including short imperatives (`"ship it"`),
+  because those are exactly the items that must never be lost.
+
+  Note the known, accepted cost of rule 4: a short imperative opening
+  on a discourse `"so"` (`"So ship it today."`) is dropped. In the live
+  pipeline the same-speaker merge runs FIRST, so such a fragment is
+  almost always folded into its neighbour and classified as part of a
+  longer utterance well before it reaches this function alone.
+  """
+  @spec content_bearing?(term()) :: boolean()
+  def content_bearing?(text) when is_binary(text) do
+    tokens = tokenize(text)
+    stripped = Enum.drop_while(tokens, &MapSet.member?(@filler_tokens, &1))
+
+    cond do
+      tokens == [] -> false
+      Enum.all?(tokens, &MapSet.member?(@filler_tokens, &1)) -> false
+      length(tokens) > @gate_short_utterance_words -> true
+      continuation_fragment?(tokens, stripped) -> false
+      true -> Enum.any?(stripped, &MapSet.member?(@action_tokens, &1))
+    end
+  end
+
+  def content_bearing?(_), do: false
+
+  defp continuation_fragment?(tokens, stripped) do
+    starts_with_continuation?(tokens) or starts_with_continuation?(stripped)
+  end
+
+  defp starts_with_continuation?([head | _]), do: MapSet.member?(@continuation_starters, head)
+  defp starts_with_continuation?([]), do: false
+
+  # Lowercase, fold curly apostrophes to straight ones (so `didn't` and
+  # `didn’t` tokenize identically), then split on anything that is not a
+  # letter, digit or apostrophe. Contractions survive as single tokens;
+  # hyphenated forms split, which is what makes `mm-hmm` read as two
+  # backchannel tokens rather than one unknown word.
+  defp tokenize(text) do
+    text
+    |> String.downcase()
+    |> String.replace(~r/[\x{2018}\x{2019}]/u, "'")
+    |> String.replace(~r/[^\p{L}\p{N}']+/u, " ")
+    |> String.split(" ", trim: true)
+    |> Enum.map(&String.trim(&1, "'"))
+    |> Enum.reject(&(&1 == ""))
+  end
 
   # ── Chunk buffer ──────────────────────────────────────────────────────────
 
@@ -310,7 +693,7 @@ defmodule Platform.Meetings.IntentClassifier do
 
   # ── Guard branches ────────────────────────────────────────────────────────
 
-  defp handle_no_assignee(room_id, state) do
+  defp note_no_assignee(room_id, state) do
     {log?, updated_state} =
       if is_binary(room_id) and not MapSet.member?(state.seen_rooms, room_id) do
         {true, %{state | seen_rooms: MapSet.put(state.seen_rooms, room_id)}}
@@ -328,15 +711,20 @@ defmodule Platform.Meetings.IntentClassifier do
       %{reason: :no_assignee, room_id: room_id}
     )
 
-    {:noreply, updated_state}
+    updated_state
   end
 
-  # Mirror of `handle_no_assignee/2` for the mute guard. Same
+  # Mirror of `note_no_assignee/2` for the mute guard. Same
   # spam-suppressor SHAPE — the `state.seen_rooms` MapSet — but keyed
   # `{:muted, room_id}` rather than the bare `room_id` the no-assignee
   # branch uses, so a room that already logged one reason can still log
   # the other. They are different operator-facing facts.
-  defp handle_muted(room_id, meeting_id, state) do
+  #
+  # Returns the updated state (not `{:noreply, …}`): the guard chain
+  # moved out of `handle_info/2` into `deliver_chunk/3` when the
+  # debounce landed, and `deliver_chunk/3` is also reached from a
+  # timer flush, where there is no `handle_info` return to piggyback on.
+  defp note_muted(room_id, meeting_id, state) do
     key = {:muted, room_id}
 
     {log?, updated_state} =
@@ -358,12 +746,25 @@ defmodule Platform.Meetings.IntentClassifier do
       %{reason: :muted, room_id: room_id, meeting_id: meeting_id}
     )
 
-    {:noreply, updated_state}
+    updated_state
   end
 
-  defp handle_chunk(payload, agent, prior_chunks, state) do
-    classify_and_enqueue(payload, agent, prior_chunks, state)
-    {:noreply, state}
+  # Distinct reason atom on the SAME `:skipped` event. `:no_content` is
+  # not `:no_assignee` and not `:muted` — this module keeps refusal
+  # reasons separable so a tuning session can tell "the classifier is
+  # off" from "a human muted this meeting" from "the transcript said
+  # nothing".
+  defp note_no_content(room_id, payload, chunk_text) do
+    :telemetry.execute(
+      [:platform, :meetings, :intent_classifier, :skipped],
+      %{count: 1},
+      %{
+        reason: :no_content,
+        room_id: room_id,
+        meeting_id: Map.get(payload, :meeting_id),
+        chunk_excerpt: excerpt(chunk_text)
+      }
+    )
   end
 
   # ── Stage-4 pipeline ──────────────────────────────────────────────────────
@@ -852,4 +1253,18 @@ defmodule Platform.Meetings.IntentClassifier do
   end
 
   defp segment_speaker(_, _), do: ""
+
+  defp payload_text(payload) when is_map(payload) do
+    payload
+    |> Map.get(:segment)
+    |> case do
+      segment when is_map(segment) -> segment_text(segment)
+      _ -> ""
+    end
+  end
+
+  defp payload_speaker(payload) when is_map(payload) do
+    segment = Map.get(payload, :segment) || %{}
+    segment_speaker(segment, payload)
+  end
 end
