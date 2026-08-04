@@ -1818,10 +1818,151 @@ defmodule Platform.Meetings do
       if Keyword.get(opts, :include_revoked, false) do
         query
       else
-        from(i in query, where: is_nil(i.revoked_at))
+        exclude_revoked(query)
       end
 
     Repo.all(query)
+  end
+
+  # The single definition of "not revoked" on this module. `do_list_invites/2`
+  # and `active_invite_query/1` both compose it, so a change to what revocation
+  # means cannot land in the listing and miss the access gate.
+  defp exclude_revoked(query), do: from(i in query, where: is_nil(i.revoked_at))
+
+  @doc """
+  Does `user` hold a live invite to a meeting with this `slug`?
+
+  The route-level half of external meeting access. `invited_to_space?/2` below
+  answers the same question keyed on the meeting's backing chat space.
+
+  ## Why this keys on the INVITE ROW and not on space membership
+
+  `invite_external_user/3` already seats the invitee in `meeting.chat_space_id`,
+  and `fetch_meeting_for_user/2` already authorises external users through
+  `Chat.ExternalScope.visible_space_id?/2` against that participant row. So
+  membership is the SECOND layer and it runs AFTER this one — the two are ANDed
+  by being in series, and this function supplies the part membership cannot
+  express.
+
+  The direction that matters is revocation. `revoke_invite/1` stamps
+  `revoked_at` and deliberately does NOT delete the participant row (the row is
+  evidence, and tearing down space membership is a separate decision with its
+  own blast radius). A membership-keyed gate would therefore keep admitting a
+  revoked invitee forever. Keying on the row makes revocation effective at the
+  route.
+
+  The opposite divergence — an invite whose space grant never applied — fails
+  safe: this function admits, `fetch_meeting_for_user/2` denies, nothing leaks.
+
+  Do NOT relax this into `invited? or member?`. An OR reinstates exactly the
+  revoked invitee the row check exists to exclude.
+
+  ## Why the email disjunct is load-bearing rather than defensive
+
+  `invite_external_user/3` writes `user_id: nil` plus `email` for an invitee who
+  has no account yet, and stages a pending grant.
+  `Platform.Accounts.ExternalAdmission` applies that grant at first login —
+  minting the user, the external org membership and the chat participant row —
+  but NOTHING backfills `meeting_invites.user_id`. A gate keyed on `user_id`
+  alone would deny precisely the flow this stack was built for: invite an
+  address, they log in, they attend. Hence the `is_nil(i.user_id) and
+  lower(email) = lower(email)` branch, matched case-insensitively because
+  neither column is normalised on write.
+
+  Backfilling `user_id` at admission is NOT the fix: that is a shared login path
+  owned by another stack, and it puts a write on a read gate.
+
+  ## No slug resolution happens here
+
+  `meetings.slug` is unique per PROJECT only (`unique_index(:meetings,
+  [:project_id, :slug])`), so there is no such thing as "the meeting with this
+  slug" — a slug-only `Repo.get_by/2` raises `Ecto.MultipleResultsError` the
+  moment two projects pick the same one. The whole question is therefore asked
+  as a single `Repo.exists?` over a join: does ANY live invite addressed to this
+  user hang off ANY meeting carrying this slug? Existence is well-defined where
+  identity is not.
+
+  ## Totality
+
+  Callers pass values straight off a session assign and a URL segment, so this
+  answers `false` rather than raising for a nil or non-binary slug, a nil user,
+  a user without a binary `:id`, and a user whose `:email` is nil — the last by
+  building the query WITHOUT the email disjunct rather than letting `lower(NULL)`
+  into SQL. `slug` is a plain string column, so no UUID cast is reachable.
+  """
+  @spec invited_to_slug?(term(), term()) :: boolean()
+  def invited_to_slug?(slug, %{id: user_id} = user)
+      when is_binary(slug) and is_binary(user_id) do
+    user
+    |> active_invite_query()
+    |> where([_i, m], m.slug == ^slug)
+    |> Repo.exists?()
+  end
+
+  def invited_to_slug?(_slug, _user), do: false
+
+  @doc """
+  Does `user` hold a live invite to the meeting backed by this chat space?
+
+  Same predicate as `invited_to_slug?/2` — same rows, same liveness conditions,
+  same email disjunct — asked with the meeting identified by
+  `meetings.chat_space_id` instead of by slug. The join seam that consumes it
+  has a space id in hand and no slug.
+
+  `chat_space_id` is a uuid column, so a malformed id is filtered with
+  `Platform.UUID.valid?/1` before it reaches `Repo` — the same guard
+  `list_invites/2` uses — because a cast failure inside the query raises
+  `Ecto.Query.CastError` instead of answering the boolean the caller asked for.
+
+  A space that backs no meeting answers `false`: the join finds no meeting row,
+  so there is nothing for the invite to hang off.
+  """
+  @spec invited_to_space?(term(), term()) :: boolean()
+  def invited_to_space?(space_id, %{id: user_id} = user)
+      when is_binary(space_id) and is_binary(user_id) do
+    if Platform.UUID.valid?(space_id) do
+      user
+      |> active_invite_query()
+      |> where([_i, m], m.chat_space_id == ^space_id)
+      |> Repo.exists?()
+    else
+      false
+    end
+  end
+
+  def invited_to_space?(_space_id, _user), do: false
+
+  # The conditions shared by both entry points: a live invite row, joined to
+  # its meeting, addressed to this user. The caller adds the clause that picks
+  # the meeting out.
+  #
+  # The email disjunct is omitted entirely when the account carries no address,
+  # rather than being compared against a nil parameter — `lower(NULL) =
+  # lower(NULL)` is NULL, not true, but a nil binding also has no inferrable
+  # type for the parameter, which is a raise rather than a `false`.
+  defp active_invite_query(user) do
+    user_id = user.id
+
+    query =
+      from(i in Invite,
+        join: m in Meeting,
+        on: m.id == i.meeting_id,
+        where: is_nil(i.expires_at) or i.expires_at > ^DateTime.utc_now()
+      )
+      |> exclude_revoked()
+
+    case Map.get(user, :email) do
+      email when is_binary(email) ->
+        where(
+          query,
+          [i, _m],
+          i.user_id == ^user_id or
+            (is_nil(i.user_id) and fragment("lower(?) = lower(?)", i.email, ^email))
+        )
+
+      _ ->
+        where(query, [i, _m], i.user_id == ^user_id)
+    end
   end
 
   @doc """
