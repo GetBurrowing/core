@@ -28,7 +28,17 @@ import Hooks from "./hooks"
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
-  params: {_csrf_token: csrfToken},
+  // `timezone` is the viewer's IANA zone, read in `mount/3` via
+  // `get_connect_params/1` and validated server-side by
+  // `PlatformWeb.MeetingLive.CalendarWindow.resolve_time_zone/1`. Not
+  // persisted — `users` has no timezone column and this needs no migration.
+  //
+  // Every other local time in this app is formatted in the browser by the
+  // LocalTime hook, and deliberately so. The calendar cannot use that path:
+  // WHICH DAY COLUMN a meeting lands in is a bucketing decision the server
+  // makes before any HTML exists, so the zone has to arrive with the
+  // connect rather than after the render.
+  params: {_csrf_token: csrfToken, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone},
   hooks: Hooks,
 })
 
