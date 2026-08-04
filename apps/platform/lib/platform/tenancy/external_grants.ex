@@ -67,6 +67,98 @@ defmodule Platform.Tenancy.ExternalGrants do
   end
 
   @doc """
+  Fetch the grant for `email` **regardless of `applied_at`**.
+
+  This exists because `lookup_by_email_or_sub/1` above is deliberately
+  blind to applied grants — and that blindness is fail-open for any
+  caller deciding whether it may `create_grant/1`.
+
+  `pending_external_grants` carries `unique_index([:email]) WHERE email IS
+  NOT NULL`. That index is **not** partial on `applied_at`: an applied row
+  still occupies it, forever. So a caller that branches on
+  `lookup_by_email_or_sub/1` sees `nil` for an applied grant, concludes it
+  may insert, and hits the constraint — and keeps hitting it on every
+  subsequent attempt, because applying a grant never frees the slot.
+
+  Branch on THIS function when the question is "may I insert a row for
+  this address?". Branch on `lookup_by_email_or_sub/1` only when the
+  question is "is there provisioning still owed to this identity?".
+
+  Returns `nil` for a blank/absent address — a NULL email column is never
+  matched against a NULL argument.
+  """
+  @spec get_grant_by_email(binary() | nil) :: PendingExternalGrant.t() | nil
+  def get_grant_by_email(email) do
+    case presence(email) do
+      nil ->
+        nil
+
+      addr ->
+        PendingExternalGrant
+        |> where([g], g.email == ^addr)
+        |> limit(1)
+        |> Repo.one()
+    end
+  end
+
+  @doc """
+  Append one `%{"space_id" => id, "role" => role}` entry to an existing
+  grant's `space_grants`, without inserting a second grant row.
+
+  This is the write that lets a SECOND meeting invite the same external
+  address. `create_grant/1` cannot serve it — see `get_grant_by_email/1`
+  for the unique index that forbids it — so widening the grant already on
+  file is the only shape that works.
+
+  **Idempotent on `space_id`.** Appending a space already present is a
+  no-op returning `{:ok, grant}` unchanged, so re-inviting the same person
+  to the same meeting cannot grow the list. The row is locked `FOR UPDATE`
+  and re-read inside a transaction, so two concurrent appends serialize
+  instead of one clobbering the other's entry with a stale read.
+
+  Entries are normalized to STRING keys, matching what jsonb round-trips
+  and what `apply_grant/2`'s `add_participants/2` consumes.
+
+  Works on applied and unapplied grants alike. Note that appending to an
+  ALREADY-APPLIED grant does not itself seat anyone: `apply_grant/2` is an
+  idempotent no-op once `applied_at` is set. The caller is responsible for
+  seating a user it can resolve (see `add_space_participants/2`); this
+  function's job on an applied row is to keep the grant an accurate record
+  and to keep the unique index satisfied.
+  """
+  @spec add_pending_space_grant(PendingExternalGrant.t(), map()) ::
+          {:ok, PendingExternalGrant.t()} | {:error, any()}
+  def add_pending_space_grant(%PendingExternalGrant{id: grant_id}, space_grant)
+      when is_map(space_grant) do
+    space_id = map_get(space_grant, "space_id")
+    role = map_get(space_grant, "role") || "member"
+
+    Repo.transaction(fn ->
+      grant =
+        PendingExternalGrant
+        |> where([g], g.id == ^grant_id)
+        |> lock("FOR UPDATE")
+        |> Repo.one!()
+
+      existing = grant.space_grants || []
+
+      if Enum.any?(existing, &(map_get(&1, "space_id") == space_id)) do
+        grant
+      else
+        entry = %{"space_id" => space_id, "role" => role}
+
+        grant
+        |> PendingExternalGrant.changeset(%{space_grants: existing ++ [entry]})
+        |> Repo.update()
+        |> case do
+          {:ok, updated} -> updated
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end
+    end)
+  end
+
+  @doc """
   Apply a pending grant for a resolved user, materializing all of its
   state in a single transaction:
 

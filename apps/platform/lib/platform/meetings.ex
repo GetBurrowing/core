@@ -16,6 +16,8 @@ defmodule Platform.Meetings do
 
   import Ecto.Query
 
+  alias Platform.Accounts
+  alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.ExternalScope
@@ -26,6 +28,8 @@ defmodule Platform.Meetings do
   alias Platform.Meetings.InviteDelivery
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
+  alias Platform.Tenancy.ExternalGrants
+  alias Platform.Tenancy.PendingExternalGrant
 
   require Logger
 
@@ -1409,6 +1413,258 @@ defmodule Platform.Meetings do
       deliver_invite(invite, meeting)
 
       {:ok, %{invite: invite, token: token, url: guest_invite_url(meeting, token)}}
+    end
+  end
+
+  # ── External invites (task 019fb955-1d7b, stage 2) ───────────────────────
+  #
+  # One input from the host's picker has to answer three questions — is this
+  # a member, an external account-holder, or a stranger — and the stranger
+  # branch has to survive a unique index that bites on the SECOND meeting,
+  # not the first. `resolve_invite_candidates/2` answers the first question;
+  # `invite_external_user/3` acts on the other two.
+
+  # Deliberately the SAME predicate `Platform.Accounts.User.changeset/2`
+  # validates `:email` with. The picker must not offer an address the
+  # account schema would later refuse — that would be an invite that can
+  # never resolve to a login.
+  @invite_email_format ~r/^[^\s]+@[^\s]+$/
+
+  @doc """
+  Resolve one picker query into the two things a host may act on: the
+  account-holders it matches, and — **only when it matches none** — the
+  external address it could be.
+
+  Returns `%{users: [User.t()], email: binary() | nil}`.
+
+  ## The two are mutually exclusive by construction
+
+  A query that matches a member must never also offer "invite as external
+  guest": the host picks the wrong one, and a colleague who already has an
+  account gets a staged external grant instead of the membership they
+  have. Making that impossible in a template `:if` is one edit away from
+  regressing, so it is enforced structurally here — `guest_option/3`
+  dispatches on the users list and the non-empty head returns `nil` before
+  the address is ever examined. There is no code path that populates both.
+
+  ## Search is not re-implemented
+
+  `users` comes from `Platform.Accounts.list_users/1`, which already ilikes
+  name OR email and already drops `archived_at` rows. This mirrors
+  `PlatformWeb.Live.Chat.NewConversationComponent`'s picker: the same
+  server-side filter runs on open and on every keystroke, so a second
+  search with its own drift is neither needed nor wanted.
+
+  ## Options
+
+    * `:exclude_user_ids` — user ids already invited or staged in this
+      picker session. Dropped from `users`.
+    * `:exclude_emails` — addresses already invited or staged. Dropped from
+      `users` (matching on `User.email`) **and** suppressed as the `:email`
+      option, so the same person cannot be added twice from either side of
+      the fork.
+  """
+  @spec resolve_invite_candidates(binary() | nil, keyword()) ::
+          %{users: [User.t()], email: binary() | nil}
+  def resolve_invite_candidates(query, opts \\ []) do
+    trimmed = query |> to_string() |> String.trim()
+
+    excluded_ids = opts |> Keyword.get(:exclude_user_ids, []) |> MapSet.new()
+
+    excluded_emails =
+      opts
+      |> Keyword.get(:exclude_emails, [])
+      |> Enum.map(&String.trim(to_string(&1)))
+      |> MapSet.new()
+
+    matched = Accounts.list_users(query: trimmed)
+
+    users =
+      Enum.reject(matched, fn user ->
+        MapSet.member?(excluded_ids, user.id) or MapSet.member?(excluded_emails, user.email)
+      end)
+
+    # The guest option is decided against the UNFILTERED match set, not the
+    # post-exclusion one. Otherwise excluding an already-invited member
+    # empties `users` and the fork re-opens on their own address — offering
+    # to stage an external grant for a colleague who has an account. The
+    # invariant is "this query matches a member", which exclusion does not
+    # change.
+    %{users: users, email: guest_option(trimmed, matched, excluded_emails)}
+  end
+
+  # A match on a member forecloses the external option. This head is the
+  # enforcement — not a caller-side check.
+  defp guest_option(_trimmed, [_ | _], _excluded), do: nil
+
+  defp guest_option(trimmed, [], excluded) do
+    if Regex.match?(@invite_email_format, trimmed) and
+         not MapSet.member?(excluded, trimmed) do
+      trimmed
+    else
+      nil
+    end
+  end
+
+  @doc """
+  Invite an email address that the host typed rather than picked, staging
+  whatever access the invitee will need to actually arrive.
+
+  Returns `{:ok, %Invite{}}` or `{:error, changeset | reason}`.
+
+  ## Why a real grant row, not a note-to-self
+
+  `PlatformWeb.Plugs.ExternalUserScope` is a fail-closed allowlist. An
+  external user who signs in carrying no grant lands in the external
+  holding view and can never reach `/meetings/:slug` — so an invite that
+  merely *records intent* is an invite guaranteed to fail at the door.
+  A staged `pending_external_grants` row is the least privilege this
+  system can express (one space, role `member`, empty DM allowlist), and
+  `Platform.Tenancy.ExternalGrants.apply_grant/2` materializes it on first
+  login with no admin step in between. That is what lets the dropdown stay
+  open to every host instead of routing through an operator.
+
+  ## Three branches, one address
+
+    1. **The address already has a `users` row.** Delegate to
+       `invite_user/3` (idempotent on `[:meeting_id, :user_id]`) and seat
+       them in this meeting's chat space with
+       `ExternalGrants.add_space_participants/2`. That helper exists
+       precisely so an already-provisioned external user does not get a
+       second grant row — see its docstring; do not re-derive it.
+
+    2. **No user, but a grant row exists for the address.** Widen the grant
+       on file via `ExternalGrants.add_pending_space_grant/2` rather than
+       inserting a second one.
+
+    3. **Neither.** `ExternalGrants.create_grant/1` at the least-privileged
+       shape, `target_org_id` resolved meeting -> project -> org.
+
+  ## The index that forces branches 2 and 3 apart
+
+  `pending_external_grants` carries `unique_index([:email]) WHERE email IS
+  NOT NULL`, and it is **not** partial on `applied_at`. An applied grant
+  still occupies the slot. So a naive `create_grant/1` for the same address
+  on a SECOND meeting violates the index — and keeps violating it forever
+  once the first grant has been applied.
+
+  The branch is taken on `ExternalGrants.get_grant_by_email/1`, NOT on
+  `lookup_by_email_or_sub/1`. The latter filters `applied_at IS NULL` and
+  is therefore blind to exactly the rows that would kill the insert;
+  branching on it is fail-open.
+
+  ## The invite row
+
+  Written in all three branches, because an invitee who does not render is
+  not invited. Branch 1 sets `user_id`. Branches 2 and 3 write `email`
+  with `user_id` NULL, `expires_at` NULL and no token — this is an
+  external invite awaiting a login, NOT a guest with a signed link.
+
+  Two consequences worth naming:
+
+    * `display_name` is set (defaulting to the address) because
+      `meeting_invites_identity_check` requires `user_id IS NOT NULL OR
+      display_name IS NOT NULL`. An email-only row with a NULL
+      `display_name` raises `Postgrex.Error`; it is not a legal row.
+    * `Invite.kind/1` returns `:guest` for this row, since it dispatches on
+      `user_id: nil`. Any UI tag distinguishing external-invite from guest
+      must therefore NOT be derived from `kind/1` alone.
+
+  Idempotent per `[meeting_id, email]`: there is no unique index covering
+  that pair (the one on the table is partial on `user_id IS NOT NULL`, so
+  it does not constrain these rows), so re-invites are deduped by lookup
+  before insert.
+
+  ## Options
+
+    * `:display_name` — what the host typed, if anything. Defaults to the
+      address.
+  """
+  @spec invite_external_user(Meeting.t(), binary(), keyword()) ::
+          {:ok, Invite.t()} | {:error, Ecto.Changeset.t() | term()}
+  def invite_external_user(%Meeting{} = meeting, email, opts \\ []) when is_binary(email) do
+    address = String.trim(email)
+    space_grant = %{"space_id" => meeting.chat_space_id, "role" => "member"}
+
+    case Repo.get_by(User, email: address) do
+      %User{} = user ->
+        # Branch 1. Seat them BEFORE the invite row so the delivery that
+        # `invite_user/3` runs in-line has a space the recipient is in.
+        with :ok <- ExternalGrants.add_space_participants(user, [space_grant]) do
+          invite_user(meeting, user.id, Keyword.put(opts, :email, address))
+        end
+
+      nil ->
+        with {:ok, _grant} <- stage_external_grant(meeting, address, space_grant) do
+          upsert_external_invite(meeting, address, opts)
+        end
+    end
+  end
+
+  # Branches 2 and 3. Reads through `get_grant_by_email/1` — the
+  # applied-blind `lookup_by_email_or_sub/1` would return nil for a row
+  # that still owns the unique-index slot.
+  defp stage_external_grant(%Meeting{} = meeting, address, space_grant) do
+    case ExternalGrants.get_grant_by_email(address) do
+      %PendingExternalGrant{} = grant ->
+        ExternalGrants.add_pending_space_grant(grant, space_grant)
+
+      nil ->
+        ExternalGrants.create_grant(%{
+          email: address,
+          target_org_id: external_grant_org_id!(meeting),
+          space_grants: [space_grant],
+          dm_allowlist_org_ids: [],
+          applied_at: nil
+        })
+    end
+  end
+
+  # `target_org_id` is NOT NULL and a grant staged into the wrong org is a
+  # silent privilege error, so an unresolvable org RAISES rather than
+  # defaulting. `meetings.project_id` is NOT NULL with an FK, so reaching
+  # here means the project carries no `org_id` — a broken row, not a case
+  # to paper over.
+  defp external_grant_org_id!(%Meeting{} = meeting) do
+    case resolve_meeting_org_id(meeting) do
+      org_id when is_binary(org_id) ->
+        org_id
+
+      nil ->
+        raise ArgumentError,
+              "cannot stage an external grant for meeting #{meeting.id}: " <>
+                "its project resolves to no org_id"
+    end
+  end
+
+  # No unique index covers [meeting_id, email] for user_id-NULL rows, so
+  # dedupe is a lookup. Scoped to `is_nil(user_id)` on purpose: branch 1
+  # writes a row carrying BOTH a user_id and this address, and that row is
+  # a different invite with a different owner.
+  defp upsert_external_invite(%Meeting{} = meeting, address, opts) do
+    result =
+      Invite
+      |> where([i], i.meeting_id == ^meeting.id and i.email == ^address and is_nil(i.user_id))
+      |> order_by([i], asc: i.inserted_at)
+      |> limit(1)
+      |> Repo.one()
+      |> case do
+        %Invite{} = existing ->
+          {:ok, existing}
+
+        nil ->
+          %Invite{}
+          |> Invite.changeset(%{
+            meeting_id: meeting.id,
+            email: address,
+            display_name: Keyword.get(opts, :display_name) || address
+          })
+          |> Repo.insert()
+      end
+
+    with {:ok, invite} <- result do
+      deliver_invite(invite, meeting)
+      {:ok, invite}
     end
   end
 
