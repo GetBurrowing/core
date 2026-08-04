@@ -2314,6 +2314,13 @@ defmodule PlatformWeb.MeetingLiveTest do
       # the same reason: the detail PANEL and the detail SHEET are one more
       # pair that has to swap at exactly this breakpoint, and asserting
       # each alone admits a build that draws both at 375px.
+      #
+      # Stage 5 adds the third pair: the header's `new-meeting-button` and
+      # the corner FAB are two entry points to ONE create flow, and exactly
+      # one of them may be drawn at any width. Asserting the button alone
+      # passes on a build that shows both at 1440px (a redundant, competing
+      # create affordance); asserting the FAB alone passes on a build that
+      # shows NEITHER at 1024px — a surface with no way to create a meeting.
       meeting =
         seed_grid_meeting(project,
           slug: "grid-responsive",
@@ -2337,6 +2344,29 @@ defmodule PlatformWeb.MeetingLiveTest do
       # …and the day view is not ALSO hidden below `lg`, which is the way
       # `lg:hidden` can be present and still mean "never drawn".
       refute "hidden" in day_view_classes
+
+      # ── The create pair (stage 5) ──────────────────────────────────────
+      button_classes = classes.(html, ~s([data-role="new-meeting-button"]))
+      fab_classes = classes.(html, ~s([data-role="start-meeting-fab"]))
+
+      assert "hidden" in button_classes
+      assert "lg:inline-flex" in button_classes
+      assert "lg:hidden" in fab_classes
+      # The same trap as the day view: a FAB carrying both `hidden` and
+      # `lg:hidden` is never drawn at any width, and the mobile surface
+      # loses its only create path while this pin stays green.
+      refute "hidden" in fab_classes
+
+      # The FAB is `position: fixed`, so it is out of flow and the in-flow
+      # bottom nav does NOT push it up — the offset has to reserve that
+      # height itself or the FAB sits behind the nav on a phone. Asserted by
+      # EQUALITY on the whole token, not by substring: the token is a literal
+      # class string with no clock and no entropy, so it is stable, and a
+      # substring assertion cannot see a LONGER token that silently changed
+      # the arithmetic. (Equality would be the wrong tool on a generated
+      # value; it is the right one here.)
+      assert Enum.find(fab_classes, &String.starts_with?(&1, "bottom-[")) ==
+               "bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))]"
 
       # The detail pair, in the same document, on the same render.
       html =
@@ -3198,42 +3228,49 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert day_heading_date(html) == day_before
     end
 
-    test "the FAB steps aside for the desktop panel and only for it", %{
+    test "the FAB cannot collide with the desktop panel, because it is not drawn there", %{
       conn: conn,
       project: project
     } do
-      # Measured at 1440x900 before this offset existed: the start-meeting
-      # FAB is anchored to the VIEWPORT's bottom-right, the panel is an
-      # opaque 322px rail pinned to the same edge, and its action row sits
-      # in that corner — so the FAB painted over `meeting-detail-open`, the
-      # one control this whole surface exists to provide.
+      # HISTORY, because the shape of this test changed with the defect it
+      # guards. Stage 4 measured a real collision at 1440x900: the FAB is
+      # anchored to the VIEWPORT's bottom-right, the panel is an opaque
+      # 322px rail pinned to the same edge with its action row in that
+      # corner, so the FAB painted over `meeting-detail-open`. Stage 4 fixed
+      # it by sliding the FAB left by the panel's width while the panel was
+      # open.
+      #
+      # Stage 5 makes the FAB `lg:hidden`. The panel is `hidden lg:flex`, so
+      # it exists ONLY at `lg` and above — precisely where the FAB now
+      # renders nothing. The two can no longer occupy a viewport together at
+      # any width, so the offset was deleted rather than left in place: a
+      # `lg:right-…` class on a `lg:hidden` element is a rule that can never
+      # apply, and asserting its presence would have read as protection
+      # while guarding a state that cannot be reached.
+      #
+      # So what is pinned here is the REPLACEMENT invariant, on the same
+      # observable (the FAB's class list with the panel open): the FAB is
+      # absent at the panel's breakpoint, and it carries NO horizontal
+      # displacement — which is only safe BECAUSE it is absent. Re-adding
+      # the offset without re-adding a reason fails here.
       meeting = seed_detail_meeting(project)
 
-      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
-
-      fab = fn html ->
-        html |> attrs_of(~s([data-role="start-meeting-fab"]), "class") |> List.first()
-      end
-
-      # Both sides, because a FAB that carries the offset unconditionally
-      # would sit 322px from the edge on a page with nothing selected — the
-      # same class present for the wrong reason.
-      refute fab.(html) =~ "lg:right-[calc(20.125rem+1.5rem)]"
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
 
       html = select_meeting(view, meeting)
-      assert fab.(html) =~ "lg:right-[calc(20.125rem+1.5rem)]"
 
-      # `lg:`-prefixed, not bare: below `lg` the panel is not drawn at all,
-      # so an unprefixed offset would move the FAB on a phone for a rail
-      # that is not there.
-      refute fab.(html) =~ ~r/(^| )right-\[calc\(20\.125rem/
+      assert attrs_of(html, ~s([data-role="meeting-detail-panel"]), "data-role") ==
+               ["meeting-detail-panel"]
 
-      html =
-        view
-        |> element(~s([data-role="meeting-detail-panel-close"]))
-        |> render_click()
+      fab_classes =
+        html |> attrs_of(~s([data-role="start-meeting-fab"]), "class") |> List.first()
 
-      refute fab.(html) =~ "lg:right-[calc(20.125rem+1.5rem)]"
+      assert "lg:hidden" in String.split(fab_classes)
+      refute fab_classes =~ ~r/(^| )(lg:)?right-\[calc\(20\.125rem/
+
+      # Its horizontal anchor is the plain edge offset at EVERY width — no
+      # panel-conditional variant survives.
+      assert Enum.filter(String.split(fab_classes), &(&1 =~ ~r/right-/)) == ["right-6"]
     end
 
     test "the sheet's backdrop closes it", %{conn: conn, project: project} do
@@ -3539,6 +3576,43 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert open_html =~ ~s(name="start_meeting[name]")
       assert open_html =~ ~s(name="start_meeting[project_id]")
+    end
+
+    test "the desktop New meeting button renders and opens the SAME sheet", %{conn: conn} do
+      {:ok, view, html} = live(conn, ~p"/meetings")
+
+      doc = LazyHTML.from_fragment(html)
+      button = LazyHTML.query(doc, ~s([data-role="new-meeting-button"]))
+
+      assert Enum.count(button) == 1
+
+      # The glyph the toolbar frame draws — a hero icon, not a typographic
+      # `+`, so it inherits the icon sizing the rest of the header uses.
+      assert button |> LazyHTML.query("span") |> class_of() =~ "hero-plus"
+      assert button |> LazyHTML.text() |> String.trim() == "New meeting"
+
+      refute html =~ ~s(data-role="start-meeting-sheet")
+
+      open_html =
+        view
+        |> element(~s([data-role="new-meeting-button"]))
+        |> render_click()
+
+      # The point of this test: ONE sheet, reached from a second entry
+      # point. A button wired to its own handler and its own duplicate sheet
+      # would satisfy "a sheet opened" — so this asserts the sheet the FAB
+      # opens, by the id the FAB's own test keys on, and asserts there is
+      # exactly one of it.
+      assert open_html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(~s([data-role="start-meeting-sheet"]))
+             |> Enum.count() == 1
+
+      assert open_html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("#start-meeting-sheet-title")
+             |> LazyHTML.text()
+             |> String.trim() == "New meeting"
     end
 
     test "close button + backdrop dismiss the sheet", %{conn: conn} do

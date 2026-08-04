@@ -1346,6 +1346,25 @@
         >
           {archive_count_label(@archive_result, "filtered")}
         </span>
+
+        <%!-- ── Desktop `New meeting` button (task 019fb954-8ead stage 5) ──
+           The create path the frames put in the toolbar at `lg`, where a
+           corner FAB is the wrong affordance for a pointer surface. It
+           REUSES `open_start_meeting_sheet` — the same event the FAB
+           pushes, the same sheet — so there is one create flow with two
+           entry points rather than two flows that can drift.
+
+           `hidden lg:inline-flex` is the exact inverse of the FAB's
+           `lg:hidden`: below `lg` this is not drawn and the FAB is the
+           only create path; at `lg` and above they swap. --%>
+        <button
+          type="button"
+          phx-click="open_start_meeting_sheet"
+          data-role="new-meeting-button"
+          class="btn btn-primary btn-sm hidden lg:inline-flex gap-1.5"
+        >
+          <span class="hero-plus size-4"></span> New meeting
+        </button>
       </header>
 
       <%!-- ── Archive pane (task 019fb954-c848) ───────────────────────────
@@ -2226,26 +2245,28 @@
          (this branch is inside the `<%= if @meeting do … else …%>`
          else arm).
 
-         Stage 4 adds the `lg` offset: the detail panel is an OPAQUE 322px
-         rail pinned to the same right edge, and its action row sits in the
-         same corner, so a viewport-anchored FAB lands on top of
-         `meeting-detail-open` — measured at 1440x900, the FAB covering the
-         button's right end. Offsetting is preferable to hiding the FAB
-         while the panel is open: chrome that vanishes when you select
-         something is a second surprise, and "New meeting" is still a
-         reasonable thing to want with a meeting selected. Below `lg` the
-         panel is not drawn, the sheet is an overlay ABOVE the FAB's z-30,
-         and the offset must not apply — hence `lg:`. --%>
+         `lg:hidden` (stage 5) makes this the MOBILE create path only; at
+         `lg` and above the header's `new-meeting-button` takes over and
+         pushes the same event. The bottom offset stays because a FAB is
+         `position: fixed` — out of flow — which is exactly the case where
+         reserving the in-flow nav height is correct.
+
+         Stage 4 had carried a `lg:right-[calc(20.125rem+1.5rem)]` offset,
+         applied while the detail panel was open, so the FAB would not paint
+         over the panel's action row. `lg:hidden` DELETES that state: the
+         panel is `hidden lg:flex`, so it exists only at `lg` and above,
+         which is precisely where the FAB no longer renders. The offset was
+         therefore unreachable in every state and is gone rather than left
+         behind as a guard that cannot fire. Below `lg` nothing overlaps
+         either — the detail SHEET is a z-50 overlay above the FAB's
+         z-30. --%>
       <button
         type="button"
         phx-click="open_start_meeting_sheet"
         aria-label="New meeting"
         title="New meeting"
         data-role="start-meeting-fab"
-        class={[
-          "btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg",
-          detail_meeting && "lg:right-[calc(20.125rem+1.5rem)]"
-        ]}
+        class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg lg:hidden"
       >
         <span class="hero-video-camera size-6"></span>
       </button>
