@@ -184,6 +184,13 @@ end
 config :platform,
   meeting_guest_host: System.get_env("MEETING_GUEST_HOST") || "meet.example.com"
 
+# Request-time meet host. Read here rather than only inside the prod
+# block so a dev/CI process can set it; unset means the meet surface
+# does not exist and every external request on any host is denied the
+# meeting route. Deliberately NO `||` default — a guessed host is an
+# authorization decision made from missing information.
+config :platform, :meet_host, System.get_env("MEET_HOST")
+
 config :platform, :execution,
   proof_repo_path: proof_repo_path,
   local_run_root: proof_run_root,

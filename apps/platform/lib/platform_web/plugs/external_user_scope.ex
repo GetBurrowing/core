@@ -22,6 +22,7 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
   alias Platform.Chat
   alias Platform.Tenancy
   alias PlatformWeb.ExternalRedirect
+  alias PlatformWeb.ExternalSurface
 
   def init(opts), do: opts
 
@@ -69,14 +70,12 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
   #   * never when the request is ALREADY on the chat host (avoid a redirect loop).
   # Internal users never reach here (the caller gates on `Tenancy.external_user?/1`).
   defp fence_to_chat_host(conn) do
-    if ExternalRedirect.chat_host_configured?() and not on_chat_host?(conn) do
+    if ExternalRedirect.chat_host_configured?() and not ExternalSurface.on_chat_host?(conn) do
       conn
       |> Phoenix.Controller.redirect(external: ExternalRedirect.chat_url("/chat"))
       |> halt()
     end
   end
-
-  defp on_chat_host?(conn), do: String.starts_with?(to_string(conn.host), "chat.")
 
   defp gate_space(conn, user, slug) do
     if authorized_space?(user, resolve_space(conn, slug)) do
