@@ -1134,6 +1134,41 @@ defmodule PlatformWeb.MeetingLive do
     archive_path(assigns, %{"person_id" => next})
   end
 
+  # The no-matches state's one control: back to the whole archive. It clears
+  # the QUERY AND every filter, because the state it exits is reachable from
+  # any combination of them and a control that cleared only the query would
+  # leave the reader in the same place it just told them was empty.
+  defp archive_clear_path(assigns) do
+    archive_path(assigns, %{
+      "q" => nil,
+      "types" => nil,
+      "person_id" => nil,
+      "project_id" => nil
+    })
+  end
+
+  # ── The archive's two empty states ───────────────────────────────────────
+  #
+  # They are two ANSWERS, not two renderings of one answer, and the whole
+  # point of this pair is that they never both hold:
+  #
+  #   * nothing archived AT ALL — `unfiltered_total` is what says so, not
+  #     `total`, which already has the person and project filters applied and
+  #     so reads zero for a filter that excluded everything.
+  #   * archived meetings exist, this query/filter set reached none of them.
+  #     With a query that is `matched == 0`; with a blank query there is no
+  #     matched partition at all (see `Archive`'s moduledoc) and the filters
+  #     having emptied the in-scope set is the same statement.
+  #
+  # A blank query over an unfiltered archive with meetings in it is NEITHER:
+  # the full list under "Also in this range, no match" is the answer.
+  defp archive_no_meetings?(%{unfiltered_total: 0}), do: true
+  defp archive_no_meetings?(_result), do: false
+
+  defp archive_no_matches?(%{unfiltered_total: 0}), do: false
+  defp archive_no_matches?(%{query: "", total: total}), do: total == 0
+  defp archive_no_matches?(%{matched: matched}), do: matched == 0
+
   # ── Archive labels ───────────────────────────────────────────────────────
 
   # "2 of 47 · filtered" — MATCHED of total. A bare total answers a question
@@ -1196,6 +1231,10 @@ defmodule PlatformWeb.MeetingLive do
     [%{key: "others", heading: nil, rows: result.others, dim?: false}]
   end
 
+  # A section with no rows is DROPPED rather than rendered as a bare heading.
+  # "Matches" over nothing, sitting directly above an empty state that says
+  # "No matches", is the same fact told twice in two registers — and the one
+  # in the smaller type is the one that reads as a bug.
   defp archive_sections(result) do
     [
       %{key: "matches", heading: "Matches", rows: result.matches, dim?: false},
@@ -1206,6 +1245,7 @@ defmodule PlatformWeb.MeetingLive do
         dim?: true
       }
     ]
+    |> Enum.reject(&(&1.rows == []))
   end
 
   defp archive_person_label(%{archive_person_id: nil}), do: "Anyone"
@@ -1222,7 +1262,9 @@ defmodule PlatformWeb.MeetingLive do
       duration_minutes: nil,
       host_name: nil,
       attendee_count: 0,
-      project_path: ""
+      project_path: "",
+      cancelled_by_name: nil,
+      cancellation_notified_at: nil
     })
   end
 
@@ -1255,25 +1297,25 @@ defmodule PlatformWeb.MeetingLive do
   # cancelled meeting has no duration (it never ran), and saying so is the
   # first thing the subtitle owes the reader.
   defp archive_row_subtitle(entry, artifacts) do
-    [
-      archive_cancelled_part(entry),
-      archive_duration_part(entry, artifacts),
-      archive_host_part(artifacts),
-      archive_attended_part(artifacts),
-      archive_project_part(artifacts)
-    ]
+    (archive_cancelled_parts(entry, artifacts) ++
+       [
+         archive_duration_part(entry, artifacts),
+         archive_host_part(artifacts),
+         archive_attended_part(artifacts),
+         archive_project_part(artifacts)
+       ])
     |> archive_join_parts()
   end
 
   # Mobile drops host and project — the two parts a phone-width row cannot
   # show without wrapping — and folds the date gutter in at the front.
   defp archive_row_mobile_subtitle(entry, artifacts, time_zone) do
-    [
-      archive_row_date(entry, time_zone),
-      archive_cancelled_part(entry),
-      archive_duration_part(entry, artifacts),
-      archive_attended_part(artifacts)
-    ]
+    ([archive_row_date(entry, time_zone)] ++
+       archive_cancelled_parts(entry, artifacts) ++
+       [
+         archive_duration_part(entry, artifacts),
+         archive_attended_part(artifacts)
+       ])
     |> archive_join_parts()
   end
 
@@ -1281,8 +1323,38 @@ defmodule PlatformWeb.MeetingLive do
     parts |> Enum.reject(&(&1 in [nil, ""])) |> Enum.join(" · ")
   end
 
-  defp archive_cancelled_part(%{status: "cancelled"}), do: "Cancelled"
-  defp archive_cancelled_part(_entry), do: nil
+  # "Cancelled by Rowan · attendees notified" — the design's third row.
+  #
+  # THE MISSING NUMBER IS DELIBERATE. The mock reads "4 notified in chat", and
+  # nothing on this branch can answer that 4 as a FACT about this
+  # cancellation. `meetings.cancellation_notified_at` is a bare timestamp with
+  # no recipient list beside it, and the only public function that resolves
+  # recipients — `Platform.Meetings.recipients_for_meeting/1` — answers who
+  # would be notified NOW, not who was notified THEN, and falls back to every
+  # human in the chat space when the invite list comes back empty. Revoking
+  # the last invitee therefore WIDENS its count, which is the one case the
+  # sponsor has not ruled on. A number that is right in the ordinary case and
+  # silently wrong in the contested one is worse here than no number: the
+  # reader cannot tell which they are looking at. So the count is omitted and
+  # the fact that a notification happened is not.
+  #
+  # A `nil` `cancellation_notified_at` renders WITHOUT the notified clause —
+  # claiming a fan-out that never ran is the same lie in the other direction.
+  # A `nil` `cancelled_by_name` renders a bare "Cancelled": the FK nilifies
+  # rather than cascades, so an absent canceller is a real state.
+  defp archive_cancelled_parts(%{status: "cancelled"}, artifacts) do
+    [archive_cancelled_by_part(artifacts), archive_notified_part(artifacts)]
+  end
+
+  defp archive_cancelled_parts(_entry, _artifacts), do: []
+
+  defp archive_cancelled_by_part(%{cancelled_by_name: name}) when is_binary(name) and name != "",
+    do: "Cancelled by #{name}"
+
+  defp archive_cancelled_by_part(_artifacts), do: "Cancelled"
+
+  defp archive_notified_part(%{cancellation_notified_at: %DateTime{}}), do: "attendees notified"
+  defp archive_notified_part(_artifacts), do: nil
 
   defp archive_duration_part(%{status: "cancelled"}, _artifacts), do: nil
   defp archive_duration_part(_entry, %{duration_minutes: nil}), do: nil

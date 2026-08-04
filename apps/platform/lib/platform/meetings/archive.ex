@@ -247,7 +247,9 @@ defmodule Platform.Meetings.Archive do
           duration_minutes: non_neg_integer() | nil,
           host_name: String.t() | nil,
           attendee_count: non_neg_integer(),
-          project_path: String.t()
+          project_path: String.t(),
+          cancelled_by_name: String.t() | nil,
+          cancellation_notified_at: DateTime.t() | nil
         }
 
   @type result :: %{
@@ -255,6 +257,7 @@ defmodule Platform.Meetings.Archive do
           others: [entry()],
           total: non_neg_integer(),
           matched: non_neg_integer(),
+          unfiltered_total: non_neg_integer(),
           type_counts: %{atom() => non_neg_integer()},
           query: String.t()
         }
@@ -294,6 +297,15 @@ defmodule Platform.Meetings.Archive do
   meetings per artifact type — computed for **every** type, not just the
   selected ones, so an unselected filter chip can still show what it would
   reveal.
+
+  `:unfiltered_total` counts what the viewer could see with NO query and NO
+  `:person_id` / `:project_id` — the archive "at all". It exists because
+  "you have nothing archived" and "your filters matched nothing" are two
+  different answers with two different next actions, and `:total` cannot
+  tell them apart: it already has the person and project filters applied, so
+  a filter that excludes everything drives it to zero exactly as an empty
+  archive does. The extra count is only issued when one of those two filters
+  is actually set; the query narrows `:matches`, never the in-scope set.
   """
   @spec search(map() | nil, keyword()) :: result()
   def search(viewer, opts \\ []) do
@@ -304,10 +316,21 @@ defmodule Platform.Meetings.Archive do
 
     scoped = scoped_query(viewer, opts)
 
-    if query_text == "" do
-      blank_result(scoped, query_text, limit, offset)
+    result =
+      if query_text == "" do
+        blank_result(scoped, query_text, limit, offset)
+      else
+        queried_result(scoped, query_text, types, limit, offset)
+      end
+
+    Map.put(result, :unfiltered_total, unfiltered_total(viewer, opts, result.total))
+  end
+
+  defp unfiltered_total(viewer, opts, scoped_total) do
+    if Keyword.get(opts, :person_id) || Keyword.get(opts, :project_id) do
+      Repo.aggregate(scoped_query(viewer, []), :count, :id)
     else
-      queried_result(scoped, query_text, types, limit, offset)
+      scoped_total
     end
   end
 
@@ -332,6 +355,11 @@ defmodule Platform.Meetings.Archive do
     * `:host_name` — the host participant's display name, `nil` if unset.
     * `:attendee_count` — distinct participants of the meeting's chat space.
     * `:project_path` — `"<org> / <project>"`, the row's trailing context.
+    * `:cancelled_by_name` — the display name on `cancelled_by_participant_id`,
+      `nil` for a meeting that was not cancelled AND for one whose canceller's
+      participant row is gone (the FK nilifies).
+    * `:cancellation_notified_at` — when the cancellation fan-out ran, `nil`
+      when it did not. A renderer must not claim a notification on a `nil`.
 
   See the moduledoc for why a canvas chip carries a revision span and why an
   untouched canvas contributes nothing.
@@ -499,17 +527,30 @@ defmodule Platform.Meetings.Archive do
   # The attendee count is a correlated sub-select rather than a fifth join so
   # it cannot multiply this query's rows — it must stay one row per meeting,
   # since it is the map the other three fold into.
+  #
+  # The cancellation attribution rides here rather than on `search/2`'s entry
+  # for the same reason the host name does: it is one more left join on
+  # `chat_participants`, and the page pays for it ONCE instead of once per
+  # cancelled row. A `Repo.preload(:cancelled_by_participant)` would need a
+  # `%Meeting{}` per row, which the archive deliberately does not load.
+  #
+  # `cancelled_by_participant_id` is NILIFIED rather than cascaded when the
+  # participant row goes, so a NULL `display_name` here is a real and expected
+  # state — "Cancelled" with no attribution — not a missing join.
   defp row_context(scoped) do
     scoped
     |> join(:left, [m], hp in ChatParticipant, on: hp.id == m.host_participant_id)
     |> join(:left, [_m, p], o in Org, on: o.id == p.org_id)
-    |> select([m, p, hp, o], %{
+    |> join(:left, [m], cbp in ChatParticipant, on: cbp.id == m.cancelled_by_participant_id)
+    |> select([m, p, hp, o, cbp], %{
       id: m.id,
       started_at: m.started_at,
       ended_at: m.ended_at,
       host_name: hp.display_name,
       project_name: p.name,
       org_name: o.name,
+      cancelled_by_name: cbp.display_name,
+      cancellation_notified_at: m.cancellation_notified_at,
       attendee_count:
         fragment(
           """
@@ -527,7 +568,9 @@ defmodule Platform.Meetings.Archive do
          duration_minutes: duration_minutes(row.started_at, row.ended_at),
          host_name: row.host_name,
          attendee_count: row.attendee_count,
-         project_path: project_path(row.org_name, row.project_name)
+         project_path: project_path(row.org_name, row.project_name),
+         cancelled_by_name: row.cancelled_by_name,
+         cancellation_notified_at: row.cancellation_notified_at
        }}
     end)
   end

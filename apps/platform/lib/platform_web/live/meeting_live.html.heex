@@ -1475,13 +1475,54 @@
           data-role="archive-results"
         >
           <div class="mx-auto flex max-w-[840px] flex-col gap-5">
+            <%!-- ── The two empty states ──────────────────────────────────
+               Deliberately NOT one card with a swapped noun. "You have
+               nothing archived" and "your search reached nothing" are
+               different facts with different next actions, and a shared
+               component would let a future edit collapse them back into the
+               single ambiguous card this surface started with. They carry
+               different `data-empty-state` values, different glyphs,
+               different headings, and only one of them offers a control —
+               there is nothing to clear when there is nothing to find.
+
+               Their bottom padding clears the safe area and the mobile
+               bottom nav on its own, because a centred card in a short
+               archive is exactly the element that comes to rest under the
+               nav row. --%>
             <div
-              :if={@archive_result.total == 0}
-              class="flex flex-col items-center justify-center py-16 text-center"
-              data-empty-state="meetings-archive"
+              :if={archive_no_meetings?(@archive_result)}
+              class="flex flex-col items-center justify-center py-16 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+4rem)] text-center sm:pb-16"
+              data-empty-state="archive-no-meetings"
             >
-              <span class="hero-squares-2x2 size-12 text-base-content/30"></span>
-              <h2 class="mt-3 text-lg font-semibold">Nothing archived yet</h2>
+              <span class="hero-video-camera size-12 text-base-content/30"></span>
+              <h2 class="mt-3 text-lg font-semibold" data-role="archive-no-meetings-heading">
+                No meetings yet
+              </h2>
+            </div>
+
+            <%!-- The matched partition is empty, but the archive is not — so
+               this state renders ABOVE the "Also in this range, no match"
+               section rather than instead of it. Showing the meetings that
+               exist is precisely what distinguishes it from the state above,
+               and hiding them would make the two indistinguishable to a
+               reader no matter what the markup says. --%>
+            <div
+              :if={archive_no_matches?(@archive_result)}
+              class="flex flex-col items-center justify-center py-16 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+4rem)] text-center sm:pb-16"
+              data-empty-state="archive-no-matches"
+            >
+              <span class="hero-magnifying-glass size-12 text-base-content/30"></span>
+              <h2 class="mt-3 text-lg font-semibold" data-role="archive-no-matches-heading">
+                No matches
+              </h2>
+              <.link
+                patch={archive_clear_path(assigns)}
+                data-action="archive-clear-filters"
+                class="mt-4 inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-base-300 bg-base-100 px-4 text-sm font-medium hover:border-primary hover:text-primary"
+              >
+                <span class="hero-arrow-uturn-left size-4 flex-shrink-0"></span>
+                <span>Clear search and filters</span>
+              </.link>
             </div>
 
             <%= for {section, index} <- Enum.with_index(archive_sections(@archive_result)) do %>
@@ -1500,14 +1541,6 @@
                     {section.heading}
                   </span>
                 </h2>
-
-                <p
-                  :if={section.key == "matches" and section.rows == []}
-                  class="mb-2 text-xs text-base-content/50"
-                  data-role="archive-no-matches"
-                >
-                  No matches for “{@archive_result.query}”
-                </p>
 
                 <div class="flex flex-col gap-2">
                   <%= for entry <- section.rows,
