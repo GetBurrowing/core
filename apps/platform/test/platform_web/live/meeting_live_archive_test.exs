@@ -116,6 +116,29 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
     cancelled
   end
 
+  # Cancelled WITH an attribution, and — when `notified?` — with the
+  # cancellation fan-out's own stamp put on by the function that production
+  # uses. `Meeting.status_changeset/3` does not cast
+  # `cancellation_notified_at` (it is claimed by a conditional UPDATE, not by
+  # a changeset), so writing it here by hand would be testing a column this
+  # code never sets that way.
+  defp cancelled_by!(%Meeting{} = meeting, canceller, cancelled_at, notified?) do
+    {:ok, cancelled} =
+      meeting
+      |> Meeting.status_changeset("cancelled", %{
+        cancelled_at: cancelled_at,
+        cancelled_by_participant_id: canceller.id
+      })
+      |> Repo.update()
+
+    if notified? do
+      {:ok, notified} = Meetings.mark_cancellation_notified(cancelled)
+      notified
+    else
+      cancelled
+    end
+  end
+
   defp participant!(%Meeting{} = meeting, display_name) do
     {:ok, participant} =
       Chat.add_participant(meeting.chat_space_id, %{
@@ -230,6 +253,62 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
   defp archive_conn(conn) do
     world = archive_world!()
     {login(conn, world.viewer), world}
+  end
+
+  # A viewer with a membership and NOTHING archived. Deliberately not
+  # `archive_world!/0` with its rows deleted: the empty archive is the state a
+  # new org is actually in, and it has to be reachable by building nothing.
+  defp empty_conn(conn) do
+    viewer = viewer!()
+    {login(conn, viewer), viewer}
+  end
+
+  # Two rows and no filler — everything below is about ONE row's copy or about
+  # which of two cards renders, and forty-seven meetings would only make a
+  # failure harder to read.
+  #
+  #   * `retro` — ended, one canvas revised inside its window. It is the
+  #     POSITIVE CONTROL for "the cancelled row has no chips": without a row
+  #     that does have chips in the same render, "no chips" is satisfied by a
+  #     page where chips never render at all.
+  #   * `workshop` — cancelled by Rowan, notified, and it produced nothing.
+  #
+  # Rowan is a plain participant rather than the host, so the subtitle under
+  # test carries the cancellation clause and the attendee count and no
+  # "hosted by" — one fewer moving part in a string asserted with `==`.
+  defp cancellation_world! do
+    viewer = viewer!()
+    project = project!()
+
+    retro =
+      project
+      |> meeting!("Quarterly retro")
+      |> ran!(at("2026-07-28T15:00:00Z"), at("2026-07-28T16:00:00Z"))
+
+    retro |> canvas!("Retro board") |> version!(7, at("2026-07-28T15:30:00Z"))
+
+    workshop = meeting!(project, "Pricing workshop")
+    rowan = participant!(workshop, "Rowan")
+    workshop = cancelled_by!(workshop, rowan, at("2026-07-22T10:00:00Z"), true)
+
+    %{
+      viewer: viewer,
+      project: project,
+      retro: retro,
+      workshop: workshop,
+      rowan: rowan,
+      org_name: Tenancy.get_org_by_slug!("fabrikam").name
+    }
+  end
+
+  defp chip_count(view, meeting_id) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(
+      "[data-meeting-id='#{meeting_id}'] [data-role='archive-row-chips'] [data-role='archive-chip']"
+    )
+    |> Enum.count()
   end
 
   # ── 1. The count ───────────────────────────────────────────────────────────
@@ -404,11 +483,211 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       # them a weaker signal about what actually broke.
       assert has_element?(view, "[data-archive-section='matches']")
 
-      refute has_element?(view, "[data-role='archive-no-matches']")
+      refute has_element?(view, "[data-empty-state='archive-no-matches']")
     end
   end
 
-  # ── 5. External users ──────────────────────────────────────────────────────
+  # ── 5. Cancelled rows ──────────────────────────────────────────────────────
+
+  describe "a cancelled meeting's row" do
+    test "carries its attribution and no chips, beside a control row that has one",
+         %{conn: conn} do
+      world = cancellation_world!()
+      conn = login(conn, world.viewer)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=archive")
+
+      # A cancellation that vanishes is indistinguishable from a meeting that
+      # never existed, so the row is PRESENT — dimmed, not dropped.
+      assert has_element?(
+               view,
+               "[data-role='archive-row'][data-meeting-id='#{world.workshop.id}']"
+             )
+
+      # `==`, not `=~`. "Cancelled by Rowan" is a proper substring of every
+      # wrong-but-longer value this expression can produce — a count nobody
+      # can source, a second attribution, a duration for a meeting that never
+      # ran — and `=~` is green against all of them.
+      assert element_text(
+               view,
+               "[data-meeting-id='#{world.workshop.id}'] [data-role='archive-row-subtitle']"
+             ) ==
+               "Cancelled by Rowan · attendees notified · 1 attended · " <>
+                 "#{world.org_name} / Control Center"
+
+      assert element_text(
+               view,
+               "[data-meeting-id='#{world.workshop.id}'] [data-role='archive-no-artifacts']"
+             ) == "no artifacts"
+
+      # Both halves of one claim, in ONE render. The zero is only evidence
+      # that the cancelled row produced nothing if a row in the same render
+      # produced something — otherwise it is evidence that chips are broken.
+      assert chip_count(view, world.workshop.id) == 0
+      assert chip_count(view, world.retro.id) > 0
+
+      # And the converse of the pill: a row WITH chips does not claim it has
+      # none.
+      refute has_element?(
+               view,
+               "[data-meeting-id='#{world.retro.id}'] [data-role='archive-no-artifacts']"
+             )
+    end
+
+    test "claims a notification only when one happened", %{conn: conn} do
+      viewer = viewer!()
+      project = project!()
+
+      quiet = meeting!(project, "Quiet cancellation")
+      quiet_rowan = participant!(quiet, "Rowan")
+      quiet = cancelled_by!(quiet, quiet_rowan, at("2026-07-21T10:00:00Z"), false)
+
+      loud = meeting!(project, "Announced cancellation")
+      loud_dalton = participant!(loud, "Dalton")
+      loud = cancelled_by!(loud, loud_dalton, at("2026-07-20T10:00:00Z"), true)
+
+      org_name = Tenancy.get_org_by_slug!("fabrikam").name
+      conn = login(conn, viewer)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=archive")
+
+      # BOTH directions in one run. A renderer that dropped the notified
+      # clause entirely satisfies the nil case on its own; one that always
+      # rendered it satisfies the non-nil case on its own.
+      assert element_text(
+               view,
+               "[data-meeting-id='#{quiet.id}'] [data-role='archive-row-subtitle']"
+             ) == "Cancelled by Rowan · 1 attended · #{org_name} / Control Center"
+
+      assert element_text(
+               view,
+               "[data-meeting-id='#{loud.id}'] [data-role='archive-row-subtitle']"
+             ) ==
+               "Cancelled by Dalton · attendees notified · 1 attended · " <>
+                 "#{org_name} / Control Center"
+    end
+
+    test "falls back to a bare Cancelled when the canceller's row is gone", %{conn: conn} do
+      viewer = viewer!()
+      project = project!()
+
+      orphan = meeting!(project, "Orphaned cancellation")
+      orphan = cancelled_by!(orphan, %{id: nil}, at("2026-07-19T10:00:00Z"), true)
+
+      org_name = Tenancy.get_org_by_slug!("fabrikam").name
+      conn = login(conn, viewer)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=archive")
+
+      # `cancelled_by_participant_id` NILIFIES rather than cascades by design,
+      # so an unattributable cancellation is a real state that must render as
+      # itself rather than as "Cancelled by " with a hole where a name was.
+      # `==` is what catches that hole: "Cancelled by " CONTAINS "Cancelled".
+      assert element_text(
+               view,
+               "[data-meeting-id='#{orphan.id}'] [data-role='archive-row-subtitle']"
+             ) == "Cancelled · attendees notified · #{org_name} / Control Center"
+    end
+  end
+
+  # ── 6. The two empty states ────────────────────────────────────────────────
+  #
+  # This surface has spent a week removing exactly one defect: two different
+  # answers rendered as one card. The pair below is asserted FROM BOTH SIDES
+  # every time — a present-only assertion is satisfied by a renderer that
+  # shows both states at once, which is the defect wearing the fix's markup.
+
+  describe "the archive's two empty states" do
+    test "an archive with nothing in it renders no-meetings and NOT no-matches", %{conn: conn} do
+      {conn, _viewer} = empty_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=archive")
+
+      assert has_element?(view, "[data-empty-state='archive-no-meetings']")
+      refute has_element?(view, "[data-empty-state='archive-no-matches']")
+    end
+
+    test "a query that matched nothing renders no-matches, over the rows that exist",
+         %{conn: conn} do
+      world = cancellation_world!()
+      conn = login(conn, world.viewer)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=archive&q=quokka")
+
+      assert has_element?(view, "[data-empty-state='archive-no-matches']")
+
+      # The control that gets the reader out. 44px minimum, and it clears the
+      # filters as well as the query — see `archive_clear_path/1`.
+      assert has_element?(view, "[data-action='archive-clear-filters']")
+
+      # The meetings ARE there, they just did not match — and showing them is
+      # what distinguishes this state from an empty archive. A no-matches card
+      # rendered over a blank page says the same thing as "No meetings yet".
+      assert element_text(view, "[data-role='archive-others-heading']") ==
+               "Also in this range, no match"
+
+      assert has_element?(
+               view,
+               "[data-archive-section='others'] [data-role='archive-row'][data-meeting-id='#{world.retro.id}']"
+             )
+    end
+
+    # Split from its twin above ON PURPOSE. ExUnit stops at the first failing
+    # assertion, so a conflation that made the no-matches branch render the
+    # no-meetings card would only ever be scored against whichever of the two
+    # came first. As two tests, both sides report.
+    test "a query that matched nothing does NOT render no-meetings", %{conn: conn} do
+      world = cancellation_world!()
+      conn = login(conn, world.viewer)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=archive&q=quokka")
+
+      refute has_element?(view, "[data-empty-state='archive-no-meetings']")
+    end
+
+    test "the two states' headings are different strings", %{conn: conn} do
+      {blank_conn, _viewer} = empty_conn(conn)
+      {:ok, empty_view, _html} = live(blank_conn, ~p"/meetings?view=archive")
+
+      world = cancellation_world!()
+
+      {:ok, queried_view, _html} =
+        live(login(conn, world.viewer), ~p"/meetings?view=archive&q=quokka")
+
+      no_meetings = element_text(empty_view, "[data-role='archive-no-meetings-heading']")
+      no_matches = element_text(queried_view, "[data-role='archive-no-matches-heading']")
+
+      assert no_meetings == "No meetings yet"
+      assert no_matches == "No matches"
+
+      # Compared to EACH OTHER, not just to their literals. A refactor that
+      # collapsed the two cards into one shared component with one heading
+      # would keep both literals satisfiable only by breaking here.
+      refute no_meetings == no_matches
+    end
+
+    test "a blank query over a populated archive is NEITHER empty state", %{conn: conn} do
+      world = cancellation_world!()
+      conn = login(conn, world.viewer)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=archive")
+
+      refute has_element?(view, "[data-empty-state='archive-no-meetings']")
+      refute has_element?(view, "[data-empty-state='archive-no-matches']")
+
+      # It renders the archive itself instead. A blank query has no matched
+      # partition at all, so every in-scope row sits in the `others` section
+      # — which is the answer, not an empty state.
+      assert has_element?(view, "[data-archive-section='others']")
+
+      assert has_element?(
+               view,
+               "[data-archive-section='others'] [data-role='archive-row'][data-meeting-id='#{world.retro.id}']"
+             )
+    end
+  end
+
+  # ── 7. External users ──────────────────────────────────────────────────────
 
   describe "external users" do
     test "are denied the archive route outright", %{conn: conn} do
