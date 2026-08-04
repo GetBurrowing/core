@@ -57,12 +57,28 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
 
   ## Scope
 
-  The canvas also draws per-invitee rows, an `Add people` row and a red
-  `Cancel meeting` action on this surface. None are here: the invitee
-  rows and `Add people` belong to `InviteControl`'s `:live` mode and land
-  with the create+invite member, and cancellation is the archive member's
-  affordance. `meeting_detail_body/1` and `meeting_detail_actions/1` are
-  the hosts they will land in.
+  The invitee rows and the `Add people` row landed in stage 5 of task
+  019fb955-1d7b — they are `InviteControl`'s `:live` mode, hosted inside
+  `meeting_detail_body/1` because they are precisely the content that
+  grows. The red `Cancel meeting` action the canvas draws in the footer is
+  still absent: `Meetings.cancel_meeting/2` and the `"cancelled"` status
+  belong to the archive member, and rendering its control from here would
+  collide.
+
+  There is deliberately no REVOKE control on any row. See
+  `PlatformWeb.Components.Meetings.InviteControl`'s moduledoc for why —
+  short version, `recipients_for_meeting/1` falls back to chat
+  participants when the live invite list is empty, so revoking the last
+  invitee WIDENS the notified audience. The canvas draws none either.
+
+  ## The invited count is the list's own header
+
+  There is one count on this surface and it is `invite_list/1`'s
+  `Invited · N`, which counts the rows the reader can see. The chip that
+  used to sit beside the status tag counted `list_invites/2` instead, and
+  the two numbers legitimately differ — the producer agent is a rendered
+  row and is not a `meeting_invites` row. Two numbers a reader cannot
+  reconcile is worse than one, and the canvas draws one.
 
   ## DOM contract
 
@@ -73,16 +89,37 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
 
   use PlatformWeb, :html
 
+  import PlatformWeb.Components.Meetings.InviteControl,
+    only: [invite_control: 1, invite_list: 1]
+
   alias Platform.Meetings.CalendarLink
   alias Platform.Meetings.Meeting
 
   @doc """
   The scrolling half of the detail surface: name, local time range,
-  status, invited count, and the calendar-subscription link.
+  status, the invitee list with its `Add people` row, and the
+  calendar-subscription link.
+
+  `@id_prefix` is what keeps the panel and the sheet from colliding. Both
+  render this component in the same document, and the copy control carries
+  a `phx-hook` — which LiveView keys by DOM id — so the two surfaces have
+  to namespace theirs. It is required rather than defaulted for exactly
+  that reason: a caller that forgets it would silently ship one working
+  copy button and one dead one.
+
+  `@invite_open` gates the search box the `Add people` row expands. It is
+  the CALLER's assign rather than component state because both surfaces
+  read it, and a component owning it would have to be told which of the
+  two it was standing in for.
   """
   attr(:meeting, Meeting, required: true)
   attr(:time_zone, :string, required: true)
-  attr(:invited_count, :integer, required: true)
+  attr(:invite_entries, :list, required: true)
+  attr(:id_prefix, :string, required: true)
+  attr(:invite_open, :boolean, required: true)
+  attr(:invite_query, :string, required: true)
+  attr(:invite_candidates, :list, required: true)
+  attr(:invite_email_option, :string, default: nil)
 
   def meeting_detail_body(assigns) do
     ~H"""
@@ -108,15 +145,29 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
         >
           {@meeting.status}
         </.chip>
+      </div>
 
-        <span
-          class="inline-flex items-center gap-1.5 text-xs text-base-content/60"
-          data-role="meeting-detail-invited-count"
-          data-count={@invited_count}
-        >
-          <span class="hero-user-group size-3.5 flex-shrink-0" aria-hidden="true"></span>
-          {invited_label(@invited_count)}
-        </span>
+      <%!-- The invitee list, and the reason this whole surface is a
+         cap-and-clip flex column: it is the one region that grows with
+         the meeting rather than with the schema. It sits INSIDE the
+         scrolling body — never between the body and the action row —
+         so however many people are invited, `Open meeting` stays put.
+
+         `Add people` is the last row of the list and there is no invite
+         control in any toolbar, deliberately: a meeting-wide invite
+         affordance is how a forwardable link gets minted, and a
+         forwardable link destroys transcript attribution. Every invite
+         here is minted per person. --%>
+      <.invite_list mode={:live} entries={@invite_entries} id_prefix={@id_prefix} />
+
+      <div :if={@invite_open} data-role="meeting-detail-invite-expansion">
+        <.invite_control
+          mode={:live}
+          id={"#{@id_prefix}-control"}
+          query={@invite_query}
+          candidates={@invite_candidates}
+          email_option={@invite_email_option}
+        />
       </div>
 
       <%!-- A LINK, never a download of a snapshot: the endpoint re-renders
@@ -216,14 +267,11 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
 
   defp clock(%DateTime{} = at), do: Calendar.strftime(at, "%-I:%M")
 
-  @doc """
-  The invited-count line — the set of people who currently hold an
-  invite, so a revoked row is not one of them.
-  """
-  @spec invited_label(non_neg_integer()) :: String.t()
-  def invited_label(0), do: "No invites"
-  def invited_label(1), do: "1 invited"
-  def invited_label(count) when is_integer(count) and count > 1, do: "#{count} invited"
+  # `invited_label/1` lived here until task 019fb955-1d7b stage 5. It
+  # rendered the count chip this surface no longer draws — the invitee
+  # list's own `Invited · N` header is the single count now — so it had no
+  # caller left. Deleted rather than kept "in case": a helper nothing calls
+  # is a claim nothing checks.
 
   # `secondary` is absent on purpose: in this theme `--color-secondary` is
   # a grey chromatically indistinguishable from `--chip-neutral`, so a

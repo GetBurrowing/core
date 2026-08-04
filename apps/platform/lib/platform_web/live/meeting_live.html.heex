@@ -1269,11 +1269,11 @@
        is the only action surface in this stage. --%>
     <%!-- Resolved ONCE for the whole arm (task 019fb954-8ead stage 4).
        The desktop panel and the mobile sheet render the same meeting and
-       the same invited count; deriving each of them where it is used
-       would issue the invite count query twice per render and let the two
-       surfaces disagree if one call ever picked up different options. --%>
+       the same invitee rows; deriving each of them where it is used would
+       issue the invite queries twice per render and let the two surfaces
+       disagree if one call ever picked up different options. --%>
     <% detail_meeting = selected_meeting(assigns) %>
-    <% detail_invited_count = detail_meeting && invited_count(detail_meeting) %>
+    <% detail_invites = (detail_meeting && detail_invite_rows(detail_meeting)) || [] %>
     <div
       class="flex h-full min-h-0 flex-col bg-base-100 text-base-content"
       data-page="meetings-index"
@@ -2190,7 +2190,12 @@
             <.meeting_detail_body
               meeting={detail_meeting}
               time_zone={@calendar_time_zone}
-              invited_count={detail_invited_count}
+              invite_entries={detail_invites}
+              id_prefix="meeting-detail-panel-invite"
+              invite_open={@meeting_invite_open}
+              invite_query={@meeting_invite_query}
+              invite_candidates={@meeting_invite_candidates}
+              invite_email_option={@meeting_invite_email}
             />
           </div>
 
@@ -2269,7 +2274,12 @@
             <.meeting_detail_body
               meeting={detail_meeting}
               time_zone={@calendar_time_zone}
-              invited_count={detail_invited_count}
+              invite_entries={detail_invites}
+              id_prefix="meeting-detail-sheet-invite"
+              invite_open={@meeting_invite_open}
+              invite_query={@meeting_invite_query}
+              invite_candidates={@meeting_invite_candidates}
+              invite_email_option={@meeting_invite_email}
             />
           </div>
 

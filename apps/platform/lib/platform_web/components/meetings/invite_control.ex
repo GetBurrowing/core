@@ -415,6 +415,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   attr(:removable, :boolean, default: false)
   attr(:copy_url, :string, default: nil)
   attr(:target, :any, default: nil)
+  attr(:id_prefix, :string, default: "meeting-invite")
 
   @doc """
   One invitee row: avatar, name, optional state sub-line, tag, optional
@@ -424,6 +425,13 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   `:draft` can only unstage and `:live` can only copy, so a caller that
   passes a `copy_url` into a draft row gets no control rather than a
   button that would copy a token nobody minted.
+
+  `@id_prefix` namespaces the copy button's DOM id. It exists because the
+  detail surface renders this row TWICE — once in the desktop panel, once
+  in the mobile sheet — and the copy button carries `phx-hook`, which
+  LiveView keys by id. Two elements sharing one id means one of the two
+  hooks never mounts and that button silently copies nothing. The default
+  keeps the single-instance create sheet unchanged.
   """
   def invite_row(assigns) do
     assigns = assign(assigns, :tag, tag(assigns.entry))
@@ -482,12 +490,12 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       <button
         :if={@mode == :live and @copy_url}
         type="button"
-        id={"meeting-invite-copy-#{@entry.id}"}
+        id={"#{@id_prefix}-copy-#{@entry.id}"}
         phx-hook="CopyToClipboard"
         data-clipboard-text={@copy_url}
         data-role="meeting-invite-copy"
         data-entry-id={@entry.id}
-        class="flex shrink-0 items-center gap-1 rounded-lg border border-warning/35 bg-warning/10 px-2 text-[11px] font-semibold text-warning min-h-11 hover:bg-warning/20"
+        class="flex shrink-0 items-center justify-center gap-1 rounded-lg border border-warning/35 bg-warning/10 px-2 text-[11px] font-semibold text-warning min-h-11 min-w-11 hover:bg-warning/20"
         aria-label={"Copy the personal link for #{@entry.name}"}
         title="Copy link"
       >
@@ -503,6 +511,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   attr(:entries, :list, required: true)
   attr(:mode, :atom, required: true, values: [:draft, :live])
   attr(:target, :any, default: nil)
+  attr(:id_prefix, :string, default: "meeting-invite")
 
   @doc """
   The `Invited · N` header, the rows, and — in `:live` only — the
@@ -533,6 +542,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         removable={entry.removable}
         copy_url={entry.copy_url}
         target={@target}
+        id_prefix={@id_prefix}
       />
 
       <button

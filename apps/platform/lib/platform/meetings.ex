@@ -1428,6 +1428,66 @@ defmodule Platform.Meetings do
     end
   end
 
+  @doc """
+  The personal join URL for a guest invite ROW that already exists.
+
+  `invite_guest/2` returns a token once, at mint time, and nothing stores
+  it — a signed token is a capability, not a record. The detail panel has
+  to answer "what link do I send this person?" long after that call
+  returned, so the answer is re-derived from the row rather than looked
+  up.
+
+  ## Re-minting is not re-issuing
+
+  The new token carries a fresh `signed_at` and is therefore a different
+  STRING from the one the host got at mint time, but it names the same
+  `meeting_invites` row and the same expiry. Both links live and die
+  together: `resolve_guest_invite/2` gates on the ROW's `revoked_at` and
+  the ROW's `expires_at`, so revoking the invite kills every token ever
+  minted for it. There is no way for this function to widen access — it
+  can only restate a capability the row already grants.
+
+  Two guests therefore still get two links that cannot be swapped: each
+  token verifies back to its OWN `invite_id`, which is exactly the
+  property a meeting-wide link destroys.
+
+  ## `guest_space_id` is deliberately absent
+
+  `invite_guest/2` signs the id of the per-link guest chat space it mints.
+  Nothing in the codebase READS that key back out — `verify/2` normalises
+  it and every consumer ignores it — and the invite row does not record
+  which space it was, so there is nothing to re-sign here and no observable
+  difference from omitting it. Recorded rather than papered over: if a
+  reader for it ever lands, this function needs a persisted id first.
+
+  ## Guest rows only
+
+  There is no clause for an account-holding invitee (`user_id` set) or for
+  an external row awaiting a grant (`expires_at` nil): neither has a signed
+  link, so asking for one is a caller bug. It raises `FunctionClauseError`
+  naming the shape rather than returning a URL that cannot admit anyone.
+  """
+  @spec guest_invite_link(Meeting.t(), Invite.t()) :: String.t()
+  def guest_invite_link(
+        %Meeting{id: meeting_id} = meeting,
+        %Invite{
+          meeting_id: meeting_id,
+          user_id: nil,
+          expires_at: %DateTime{} = expires_at
+        } = invite
+      ) do
+    token =
+      GuestInvite.sign(
+        meeting.slug,
+        DateTime.to_unix(expires_at),
+        invite.display_name,
+        meeting_id: meeting.id,
+        invite_id: invite.id
+      )
+
+    guest_invite_url(meeting, token)
+  end
+
   # ── External invites (task 019fb955-1d7b, stage 2) ───────────────────────
   #
   # One input from the host's picker has to answer three questions — is this

@@ -28,6 +28,7 @@ defmodule PlatformWeb.MeetingLiveTest do
   alias Platform.Meetings.Invite
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
+  alias Platform.Meetings.SenderSeed
   alias Platform.Tasks.Project
   alias Platform.Tenancy.OrgMembership
   alias PlatformWeb.Components.Meetings.IntentsCollapse
@@ -3285,15 +3286,25 @@ defmodule PlatformWeb.MeetingLiveTest do
     defp detail_text(node, selector),
       do: node |> LazyHTML.query(selector) |> LazyHTML.text() |> String.trim()
 
-    # An invite row written directly rather than through `invite_guest/2`:
-    # that function also mints a token and creates a guest chat space, and
-    # none of that is what the count is about. `revoked_at` is the one
-    # variable these fixtures vary.
+    @guest_window_seconds 24 * 60 * 60
+
+    # A GUEST invite row written directly rather than through
+    # `invite_guest/2`: that function also mints a token, creates a guest
+    # chat space and runs delivery, and none of that is what these tests
+    # are about. `revoked_at` is the one variable they vary.
+    #
+    # `expires_at` is not decoration. Until stage 5 of task 019fb955-1d7b
+    # this fixture wrote `display_name` alone, which is a row shape NO
+    # writer in the codebase produces — `invite_guest/2` always stamps an
+    # expiry and `invite_external_user/3` always writes an email — and the
+    # rendered surface refuses it by raising rather than guessing a tag.
+    # The fixture was the thing that was wrong, so the fixture moved.
     defp seed_invite!(meeting, display_name, revoked_at \\ nil) do
       %Invite{}
       |> Invite.changeset(%{
         meeting_id: meeting.id,
         display_name: display_name,
+        expires_at: DateTime.add(DateTime.utc_now(), @guest_window_seconds, :second),
         revoked_at: revoked_at
       })
       |> Repo.insert!()
@@ -3428,7 +3439,24 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert build_conn() |> get("/meetings/#{meeting.id}/invite.ics") |> response(404)
     end
 
-    test "the invited count counts the invites that are still live, not the rows", %{
+    # Stage 5 of task 019fb955-1d7b deleted the count CHIP this test used to
+    # read. The chip counted `list_invites/2` while the list beneath it drew
+    # the rendered rows, and the two legitimately differ — the producer agent
+    # is a rendered row and is not a `meeting_invites` row — so one of the
+    # two numbers had to go, and the canvas draws one. Re-pointed at the
+    # surviving observable rather than deleted: the claim (a revoked invitee
+    # is not an invitee) is unchanged and still worth pinning.
+    defp invite_rows(surface),
+      do: LazyHTML.query(surface, ~s([data-role="meeting-invite-row"]))
+
+    defp list_header(surface) do
+      surface
+      |> LazyHTML.query(~s([data-role="meeting-invite-list-header"]))
+      |> LazyHTML.text()
+      |> String.trim()
+    end
+
+    test "a revoked invitee is neither counted nor drawn", %{
       conn: conn,
       project: project
     } do
@@ -3436,16 +3464,21 @@ defmodule PlatformWeb.MeetingLiveTest do
       # display name, and only `revoked_at` differs — so a failure here can
       # only be about whether a revoked invite is counted as invited.
       meeting = seed_detail_meeting(project)
-      seed_invite!(meeting, "Still Invited")
-      seed_invite!(meeting, "Revoked Invitee", DateTime.utc_now())
+      live_invite = seed_invite!(meeting, "Still Invited")
+      revoked = seed_invite!(meeting, "Revoked Invitee", DateTime.utc_now())
 
       {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       for surface <- [detail_panel(doc), detail_sheet(doc)] do
-        count = LazyHTML.query(surface, ~s([data-role="meeting-detail-invited-count"]))
-        assert LazyHTML.attribute(count, "data-count") == ["1"]
-        assert count |> LazyHTML.text() |> String.trim() == "1 invited"
+        assert list_header(surface) == "Invited · 1"
+
+        # Both sides asserted: the live row is drawn AND the revoked one is
+        # not. A bare count of 1 is also satisfied by drawing the wrong row.
+        assert surface |> invite_rows() |> LazyHTML.attribute("data-entry-id") ==
+                 [live_invite.id]
+
+        refute revoked.id in (surface |> invite_rows() |> LazyHTML.attribute("data-entry-id"))
       end
     end
 
@@ -3685,11 +3718,13 @@ defmodule PlatformWeb.MeetingLiveTest do
             detail_panel(doc),
             LazyHTML.query(doc, ~s([data-role="meeting-detail-sheet"] > div.relative))
           ] do
-        assert surface
-               |> LazyHTML.query(~s([data-role="meeting-detail-invited-count"]))
-               |> LazyHTML.attribute("data-count") == ["12"]
-
         assert [body] = detail_scrollers(surface)
+
+        # The twelve rows are the growing content, and they are INSIDE the
+        # region that scrolls. Counted on the body rather than the surface:
+        # rows rendered between the body and the action row would satisfy a
+        # surface-level count while re-creating the exact defect.
+        assert body |> invite_rows() |> Enum.count() == 12
 
         assert surface |> LazyHTML.query(~s([data-role="meeting-detail-open"])) |> Enum.count() ==
                  1
@@ -3697,6 +3732,450 @@ defmodule PlatformWeb.MeetingLiveTest do
         assert body |> LazyHTML.query(~s([data-role="meeting-detail-open"])) |> Enum.count() == 0
       end
     end
+
+    # ── The invitee list (task 019fb955-1d7b stage 5) ────────────────────
+    #
+    # Rows are written directly rather than through `invite_guest/2` /
+    # `invite_user/3` for the same reason the count fixtures above are:
+    # those functions also mint tokens, create guest chat spaces and run
+    # delivery, and none of that is what the RENDERING is about. What the
+    # panel reads off a row is `user_id`, `email`, `expires_at` and the
+    # invitee's org membership, so those are what the fixtures vary — one
+    # variable per kind.
+    #
+    # The guest link is derived from the row rather than stored on it, so
+    # seeding the row directly is also the only way to assert the derivation
+    # rather than re-reading whatever `invite_guest/2` happened to return.
+
+    defp seed_user_invite!(meeting, user) do
+      %Invite{}
+      |> Invite.changeset(%{meeting_id: meeting.id, user_id: user.id})
+      |> Repo.insert!()
+    end
+
+    # `user_id` NULL, an `email`, and NO expiry — the interim row
+    # `invite_external_user/3` writes for an address with no account yet.
+    # `Invite.kind/1` calls this `:guest`; the panel must not.
+    defp seed_external_pending_invite!(meeting, email) do
+      %Invite{}
+      |> Invite.changeset(%{meeting_id: meeting.id, display_name: email, email: email})
+      |> Repo.insert!()
+    end
+
+    defp seed_invitee_user!(name, opts \\ []) do
+      user =
+        Repo.insert!(%User{
+          email: "invitee_#{System.unique_integer([:positive])}@example.com",
+          name: name,
+          oidc_sub: "oidc-invitee-#{System.unique_integer([:positive])}"
+        })
+
+      %OrgMembership{}
+      |> OrgMembership.changeset(%{
+        user_id: user.id,
+        org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+        role: "member",
+        external: Keyword.get(opts, :external, false)
+      })
+      |> Repo.insert!()
+
+      user
+    end
+
+    defp copy_controls(surface),
+      do: LazyHTML.query(surface, ~s([data-role="meeting-invite-copy"]))
+
+    # The token is the last path segment of the guest URL. Written to
+    # survive a URL that is not a guest URL at all — the prescribed mutant
+    # emits `meeting.slug` here — so that a mutation fails on the token
+    # COMPARISON below rather than crashing in this helper, which would
+    # prove nothing about distinctness.
+    defp guest_token(url) do
+      %URI{path: path} = URI.parse(url)
+
+      path |> to_string() |> String.split("/") |> List.last()
+    end
+
+    test "the list draws one row per live invite, in `list_invites/2`'s order", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project)
+
+      # Seeded in a deliberate order and asserted against the CONTEXT's
+      # ordering rather than against the literal insertion sequence: the
+      # claim is that the panel does not re-sort, and re-deriving the
+      # expectation here would let both drift together.
+      seed_invite!(meeting, "Sam Ortiz")
+      seed_user_invite!(meeting, seed_invitee_user!("Dalton Reyes"))
+      seed_external_pending_invite!(meeting, "juno@fairbanksco.example")
+      seed_invite!(meeting, "Jess Tran")
+
+      expected = Enum.map(Meetings.list_invites(meeting.id), & &1.id)
+      assert length(expected) == 4
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert surface |> invite_rows() |> LazyHTML.attribute("data-entry-id") == expected
+        assert list_header(surface) == "Invited · 4"
+      end
+    end
+
+    test "each kind gets the tag the canvas draws, not `Invite.kind/1`'s two", %{
+      conn: conn,
+      project: project
+    } do
+      # The one place the stored model and the rendered model disagree.
+      # `Invite.kind/1` answers `:guest` for BOTH rows with a NULL
+      # `user_id` — the guest and the external-pending — and `:user` for
+      # both rows with one, so it cannot tell any of these four apart.
+      meeting = seed_detail_meeting(project)
+
+      internal = seed_user_invite!(meeting, seed_invitee_user!("Dalton Reyes"))
+      external = seed_user_invite!(meeting, seed_invitee_user!("Juno Fairbanks", external: true))
+      guest = seed_invite!(meeting, "Sam Ortiz")
+      pending = seed_external_pending_invite!(meeting, "jess@fairbanksco.example")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      tag = fn surface, invite ->
+        surface
+        |> LazyHTML.query(~s([data-role="meeting-invite-row"][data-entry-id="#{invite.id}"]))
+        |> LazyHTML.query(~s([data-role="meeting-invite-tag"]))
+        |> LazyHTML.text()
+        |> String.trim()
+      end
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert tag.(surface, internal) == "internal"
+        assert tag.(surface, external) == "external"
+        assert tag.(surface, guest) == "guest"
+
+        # The row `kind/1` gets wrong. Pinned by equality, because
+        # `=~ "external"` is satisfied by the word appearing anywhere in
+        # the row — including in the address the subtitle prints.
+        assert tag.(surface, pending) == "external"
+      end
+    end
+
+    test "two guests get two rows carrying two DISTINCT personal links", %{
+      conn: conn,
+      project: project
+    } do
+      # The regression this whole task exists for. A meeting-wide link
+      # handed out twice renders two copy controls too, so "two controls
+      # exist" is not the claim — "the two admit different people" is.
+      meeting = seed_detail_meeting(project)
+      sam = seed_invite!(meeting, "Sam Ortiz")
+      jess = seed_invite!(meeting, "Jess Tran")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert [sam_url, jess_url] =
+                 surface |> copy_controls() |> LazyHTML.attribute("data-clipboard-text")
+
+        # Which control belongs to whom, before anything is decoded — so a
+        # build that rendered both links on one row fails here rather than
+        # further down with a confusing message.
+        assert surface |> copy_controls() |> LazyHTML.attribute("data-entry-id") ==
+                 [sam.id, jess.id]
+
+        sam_token = guest_token(sam_url)
+        jess_token = guest_token(jess_url)
+
+        # THE assertion. Not "both are present" — different.
+        refute sam_token == jess_token,
+               "both guests were handed the same token, which is a meeting-wide link"
+
+        # And each token is not merely different, it is THEIRS.
+        # `verify/1` rather than equality against a freshly signed token:
+        # `Plug.Crypto.sign/4` stamps a millisecond `signed_at`, so two
+        # signatures of the same payload differ and an equality assertion
+        # would be flaky by construction. The round trip is deterministic
+        # and strictly stronger — it pins what the token MEANS.
+        assert {:ok, sam_payload} = GuestInvite.verify(sam_token)
+        assert {:ok, jess_payload} = GuestInvite.verify(jess_token)
+
+        assert sam_payload.invite_id == sam.id
+        assert jess_payload.invite_id == jess.id
+        refute sam_payload.invite_id == jess_payload.invite_id
+
+        # The token names its meeting exactly — a slug alone is unique per
+        # project only, which is why `meeting_id` is on the payload.
+        assert sam_payload.meeting_id == meeting.id
+        assert sam_payload.meeting_slug == meeting.slug
+        assert sam_payload.display_name == "Sam Ortiz"
+
+        # Path shape pinned by equality, and the whole path: a link with the
+        # right token under the wrong route admits nobody.
+        assert %URI{path: path, query: nil} = URI.parse(sam_url)
+        assert path == "/#{meeting.slug}/#{sam_token}"
+      end
+    end
+
+    test "a re-minted link still dies with the row it names", %{conn: conn, project: project} do
+      # The panel derives the link from the row rather than reading a stored
+      # token, so the string a host copies today is not byte-identical to the
+      # one `invite_guest/2` returned. This is what makes that safe: the row
+      # is the revocation surface, and revoking it kills the derived link
+      # too. Without this, re-minting would be a way to hand out a
+      # capability that was deliberately withdrawn.
+      meeting = seed_detail_meeting(project)
+      sam = seed_invite!(meeting, "Sam Ortiz")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      [url] =
+        doc |> detail_panel() |> copy_controls() |> LazyHTML.attribute("data-clipboard-text")
+
+      token = guest_token(url)
+
+      # Live before, dead after — one variable, and the link is the same
+      # string on both sides of it.
+      assert {:ok, %{state: :in_meeting, display_name: "Sam Ortiz"}} =
+               Meetings.resolve_guest_invite(meeting.slug, token)
+
+      {:ok, _revoked} = Meetings.revoke_invite(sam)
+
+      assert Meetings.resolve_guest_invite(meeting.slug, token) == {:error, :revoked}
+    end
+
+    test "only guest rows carry a copy control, and it is a 44px target", %{
+      conn: conn,
+      project: project
+    } do
+      # An account-holder signs in as themselves and an external invite
+      # awaiting a grant has no token at all, so a copy control on either
+      # would copy something that cannot admit anyone.
+      meeting = seed_detail_meeting(project)
+      seed_user_invite!(meeting, seed_invitee_user!("Dalton Reyes"))
+      seed_external_pending_invite!(meeting, "juno@fairbanksco.example")
+      guest = seed_invite!(meeting, "Sam Ortiz")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert surface |> invite_rows() |> Enum.count() == 3
+        assert surface |> copy_controls() |> LazyHTML.attribute("data-entry-id") == [guest.id]
+
+        # A real BUTTON at 375px, not a chip: both axes, because the label
+        # makes the horizontal one look satisfied while a shorter label
+        # would not be.
+        control = copy_controls(surface)
+        assert LazyHTML.attribute(control, "type") == ["button"]
+
+        control_class = class_of(control)
+        assert control_class =~ "min-h-11"
+        assert control_class =~ "min-w-11"
+
+        # Wired to the ONE clipboard hook that already exists, reading the
+        # attribute that hook reads.
+        assert LazyHTML.attribute(control, "phx-hook") == ["CopyToClipboard"]
+      end
+    end
+
+    test "the panel and the sheet do not share the copy control's DOM id", %{
+      conn: conn,
+      project: project
+    } do
+      # Both surfaces render simultaneously — one is hidden by CSS, not by
+      # absence — and LiveView keys `phx-hook` by DOM id. Two elements
+      # sharing one id means one hook never mounts, and that button then
+      # copies nothing while looking identical to the working one.
+      meeting = seed_detail_meeting(project)
+      seed_invite!(meeting, "Sam Ortiz")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      ids = doc |> copy_controls() |> LazyHTML.attribute("id")
+
+      assert length(ids) == 2, "expected one copy control per surface"
+      assert ids == Enum.uniq(ids)
+    end
+
+    test "the producer agent row renders when the sender agent is seeded", %{
+      conn: conn,
+      project: project
+    } do
+      # `config/test.exs` sets `meetings_enabled: false`, so the boot-time
+      # seed does not run and `SenderSeed.get/0` is nil for the whole suite
+      # unless a test asks for it. That makes the two states genuinely
+      # independent rather than a flag flipped in one direction.
+      meeting = seed_detail_meeting(project)
+      seed_invite!(meeting, "Sam Ortiz")
+
+      {:ok, agent} = SenderSeed.ensure!()
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        row =
+          LazyHTML.query(
+            surface,
+            ~s([data-role="meeting-invite-row"][data-entry-id="agent:#{agent.id}"])
+          )
+
+        assert LazyHTML.attribute(row, "data-tag") == ["agent"]
+
+        assert row
+               |> LazyHTML.query(~s([data-role="meeting-invite-row-subtitle"]))
+               |> LazyHTML.text()
+               |> String.trim() == "meeting producer"
+
+        # Display-only: no remove control and no copy control, and it is
+        # counted in the header alongside the invite it sits under.
+        assert row |> LazyHTML.query(~s([data-role="meeting-invite-copy"])) |> Enum.count() == 0
+
+        assert row |> LazyHTML.query(~s([data-role="meeting-invite-unstage"])) |> Enum.count() ==
+                 0
+
+        assert list_header(surface) == "Invited · 2"
+      end
+    end
+
+    test "the producer agent row is OMITTED when the sender agent is not seeded", %{
+      conn: conn,
+      project: project
+    } do
+      # The expected state wherever the meetings subsystem was never
+      # enabled. No placeholder: a synthesised row would name an agent that
+      # does not exist and cannot be messaged.
+      meeting = seed_detail_meeting(project)
+      seed_invite!(meeting, "Sam Ortiz")
+
+      assert SenderSeed.get() == nil
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert surface |> invite_rows() |> Enum.count() == 1
+        assert surface |> invite_rows() |> LazyHTML.attribute("data-tag") == ["guest"]
+        assert list_header(surface) == "Invited · 1"
+      end
+    end
+
+    test "there is no revoke control on any row, at either width", %{
+      conn: conn,
+      project: project
+    } do
+      # Not an omission. `recipients_for_meeting/1` falls back to the chat
+      # space's participants when the live invite list is EMPTY, so revoking
+      # the last invitee WIDENS the notified audience instead of narrowing
+      # it; and guests carry no `user_id`, so a guest-only list silences
+      # every human. Both need a sponsor ruling, and shipping the control
+      # first ships the widening.
+      meeting = seed_detail_meeting(project)
+      seed_invite!(meeting, "Sam Ortiz")
+      seed_user_invite!(meeting, seed_invitee_user!("Dalton Reyes"))
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert surface |> invite_rows() |> Enum.count() == 2
+
+        assert surface |> LazyHTML.query(~s([data-role="meeting-invite-unstage"])) |> Enum.count() ==
+                 0
+
+        assert surface |> LazyHTML.query("[phx-click='meeting_invite_revoke']") |> Enum.count() ==
+                 0
+      end
+    end
+
+    test "`Add people` is the only invite affordance, and it writes a real row", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      # There is deliberately no invite button in any toolbar: the row at
+      # the end of the list is the whole affordance.
+      assert doc |> LazyHTML.query(~s([data-role="meeting-invite-add-people"])) |> Enum.count() ==
+               2
+
+      # Closed until asked for.
+      assert doc
+             |> LazyHTML.query(~s([data-role="meeting-detail-invite-expansion"]))
+             |> Enum.count() == 0
+
+      doc =
+        view
+        |> element(in_panel(~s([data-role="meeting-invite-add-people"])))
+        |> render_click()
+        |> LazyHTML.from_fragment()
+
+      assert doc
+             |> LazyHTML.query(~s([data-role="meeting-detail-invite-expansion"]))
+             |> Enum.count() == 2
+
+      view
+      |> element(in_panel(~s([data-role="meeting-invite-search"])))
+      |> render_keyup(%{"value" => "newguest@fairbanksco.example"})
+
+      doc =
+        view
+        |> element(in_panel(~s([data-role="meeting-invite-option"][data-option="guest"])))
+        |> render_click()
+        |> LazyHTML.from_fragment()
+
+      # `:live` means WRITTEN, not staged — there is no submit to lose it
+      # at, so the assertion is against the database as well as the DOM.
+      assert [%Invite{} = invite] = Meetings.list_invites(meeting.id)
+      assert invite.display_name == "newguest@fairbanksco.example"
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert surface |> invite_rows() |> LazyHTML.attribute("data-entry-id") == [invite.id]
+        assert surface |> invite_rows() |> LazyHTML.attribute("data-tag") == ["guest"]
+
+        # …with its own link, minted for the row that was just written.
+        assert [url] = surface |> copy_controls() |> LazyHTML.attribute("data-clipboard-text")
+        assert {:ok, payload} = GuestInvite.verify(guest_token(url))
+        assert payload.invite_id == invite.id
+      end
+    end
+
+    test "changing the selection closes the invite control", %{conn: conn, project: project} do
+      # It is scoped to ONE meeting. Left open across a change of selection
+      # it would be a search box under a different meeting's list, and the
+      # next thing chosen in it would be written to that meeting.
+      first = seed_detail_meeting(project, slug: "detail-first", name: "First")
+
+      second =
+        seed_detail_meeting(project,
+          slug: "detail-second",
+          name: "Second",
+          start_hour: 16,
+          end_hour: 17
+        )
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      _ = select_meeting(view, first)
+
+      html =
+        view |> element(in_panel(~s([data-role="meeting-invite-add-people"]))) |> render_click()
+
+      assert attrs_of(html, ~s([data-role="meeting-detail-invite-expansion"]), "data-role") ==
+               ["meeting-detail-invite-expansion", "meeting-detail-invite-expansion"]
+
+      html = select_meeting(view, second)
+
+      assert attrs_of(html, ~s([data-role="meeting-detail-invite-expansion"]), "data-role") == []
+    end
+
+    defp in_panel(selector), do: ~s([data-role="meeting-detail-panel"] #{selector})
   end
 
   describe "MeetingDetail.when_label/2" do

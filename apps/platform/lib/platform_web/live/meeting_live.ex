@@ -193,6 +193,7 @@ defmodule PlatformWeb.MeetingLive do
 
   import PlatformWeb.Components.Meetings.ParticipantRail, only: [participant_rail: 1]
 
+  alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
@@ -201,11 +202,14 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Meetings.IntentCorrection
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentQueue
+  alias Platform.Meetings.Invite
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
+  alias Platform.Meetings.SenderSeed
   alias Platform.Repo
   alias Platform.Roles
   alias Platform.Tasks
+  alias Platform.Tenancy
   alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.Components.Meetings.IntentsCollapse
   alias PlatformWeb.MeetingLive.CalendarWindow
@@ -376,6 +380,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:start_meeting_form, blank_start_meeting_form([]))
     |> assign(:start_meeting_error, nil)
     |> seed_create_invite_assigns()
+    |> seed_live_invite_assigns()
   end
 
   # Seed the meeting-shell-tree assigns the current (stage-3) heex reads
@@ -708,6 +713,10 @@ defmodule PlatformWeb.MeetingLive do
      |> assign_new(:meeting_create_invite_candidates, fn -> [] end)
      |> assign_new(:meeting_create_invite_email, fn -> nil end)
      |> assign_new(:selected_meeting_id, fn -> nil end)
+     |> assign_new(:meeting_invite_open, fn -> false end)
+     |> assign_new(:meeting_invite_query, fn -> "" end)
+     |> assign_new(:meeting_invite_candidates, fn -> [] end)
+     |> assign_new(:meeting_invite_email, fn -> nil end)
      |> assign_calendar_week(calendar_today(socket))
      |> assign_archive(params)}
   end
@@ -1195,16 +1204,176 @@ defmodule PlatformWeb.MeetingLive do
       when is_binary(id) and is_list(meetings),
       do: Enum.find(meetings, &(&1.id == id))
 
-  @doc """
-  How many people currently hold an invite to `meeting`.
+  # ── The detail surface's invitee rows (task 019fb955-1d7b stage 5) ───────
+  #
+  # `invited_count/1` lived here until this stage. It answered `length(
+  # list_invites(id))` for a chip beside the status tag; the rows now carry
+  # their own `Invited · N` header, so the chip and the function behind it
+  # were deleted rather than left to disagree with the list beneath them.
 
-  `list_invites/2` defaults to `include_revoked: false`, and that default
-  is the whole answer: a revoked invitee is precisely someone who is NOT
-  invited, so counting them would overstate the room to the one person
-  looking at this panel to decide whether to chase anybody.
+  @doc """
+  The rows the detail surface's invitee list draws for `meeting`.
+
+  `Meetings.list_invites/2` defaults to `include_revoked: false`, and that
+  default is the whole reason no filtering happens here: a revoked invitee
+  is precisely someone who is NOT invited, so drawing them would overstate
+  the room to the one person looking at this panel to decide whether to
+  chase anybody. Order is that function's — `inserted_at` ascending, `id`
+  as a total tiebreak — so the list does not reshuffle between renders.
+
+  ## Three queries, not three per row
+
+  A rendered list asks three questions of every account-holding invitee:
+  what is their name, what is their address, and are they external. All
+  three are per-USER facts, and asking them a row at a time is a query per
+  row on a surface that re-renders on every calendar event. So the users
+  are preloaded in one round trip and
+  `Platform.Tenancy.external_user_ids/1` answers the membership question
+  for the whole list in a second.
+
+  ## The producer agent row is not an invite and cannot be one
+
+  `meeting_invites` carries `user_id` and `email` and no `agent_id`, so
+  the agent that produces meetings has no row to be listed from. It is
+  rendered from `Platform.Meetings.SenderSeed.get/0` instead, appended
+  after the invites, and OMITTED ENTIRELY when that returns `nil` — which
+  is the expected state wherever the meetings subsystem was never enabled.
+  A synthesised placeholder would name an agent that cannot be messaged.
+
+  It is also not the agent currently sitting in a meeting's chat space:
+  `Chat.create_space/1` attaches the HISTORIAN to any space slugged
+  `meeting-<uuid>`, which is a different agent doing a different job and
+  is deliberately not drawn here.
   """
-  @spec invited_count(Meeting.t()) :: non_neg_integer()
-  def invited_count(%Meeting{id: id}), do: length(Meetings.list_invites(id))
+  @spec detail_invite_rows(Meeting.t()) :: [map()]
+  def detail_invite_rows(%Meeting{} = meeting) do
+    invites = Repo.preload(Meetings.list_invites(meeting.id), :user)
+
+    external_ids =
+      invites
+      |> Enum.map(& &1.user_id)
+      |> Enum.reject(&is_nil/1)
+      |> Tenancy.external_user_ids()
+
+    Enum.map(invites, &invite_row(&1, meeting, external_ids)) ++ producer_rows()
+  end
+
+  defp invite_row(%Invite{} = invite, %Meeting{} = meeting, external_ids) do
+    external? = is_binary(invite.user_id) and MapSet.member?(external_ids, invite.user_id)
+
+    %{
+      id: invite.id,
+      name: invite_row_name(invite),
+      subtitle: invite_row_subtitle(invite, external?),
+      user_id: invite.user_id,
+      email: invite_row_email(invite),
+      expires_at: invite.expires_at,
+      external: external?,
+      agent: false,
+      avatar_url: nil,
+      removable: false,
+      copy_url: invite_row_copy_url(meeting, invite)
+    }
+  end
+
+  # The user's own record wins over `display_name`, which is only ever
+  # what the host happened to type — `invite_user/3` says as much. A row
+  # that can name nobody RAISES: `meeting_invites_identity_check` forbids
+  # it at the database level, so reaching here means the check was dropped,
+  # and a row rendered as a blank line is a person nobody notices is
+  # missing.
+  defp invite_row_name(%Invite{user: %User{} = user} = invite),
+    do: user.name || user.email || invite.display_name || raise_nameless(invite)
+
+  defp invite_row_name(%Invite{} = invite),
+    do: invite.display_name || invite.email || raise_nameless(invite)
+
+  defp raise_nameless(%Invite{} = invite) do
+    raise ArgumentError,
+          "meeting invite #{invite.id} names nobody: user_id, display_name and email are all nil"
+  end
+
+  # STATE, never explanation — the one line under a name says what is true
+  # of this invitee right now:
+  #
+  #   * an external account-holder — their address, because "external" on
+  #     its own does not say which org they came from;
+  #   * an internal member — nothing. Their name is the whole fact.
+  #   * a guest — how long their link has left, which is the only thing
+  #     about a guest that changes on its own;
+  #   * an external invite awaiting a grant — the address it was sent to,
+  #     since there is no account to name yet.
+  defp invite_row_subtitle(%Invite{user: %User{} = user}, true), do: user.email
+  defp invite_row_subtitle(%Invite{user: %User{}}, false), do: nil
+
+  defp invite_row_subtitle(%Invite{expires_at: %DateTime{} = expires_at}, _external?),
+    do: guest_expiry_label(expires_at)
+
+  defp invite_row_subtitle(%Invite{email: email}, _external?) when is_binary(email), do: email
+  defp invite_row_subtitle(%Invite{}, _external?), do: nil
+
+  @doc """
+  How long a guest link has left — `expires in 12h`, `expires in <1h`, or
+  `expired`.
+
+  Whole hours and no minutes: the window is 24h by default and the reader
+  is deciding whether to re-send, not timing anything. The sub-hour and
+  past-due cases get their own strings because rounding them into the
+  hours form produces `expires in 0h`, which reads as a live link, and
+  `expires in -3h`, which reads as a bug. `list_invites/2` filters revoked
+  rows and not expired ones, so the past-due case is reachable.
+  """
+  @spec guest_expiry_label(DateTime.t()) :: String.t()
+  def guest_expiry_label(%DateTime{} = expires_at) do
+    case DateTime.diff(expires_at, DateTime.utc_now(), :second) do
+      seconds when seconds <= 0 -> "expired"
+      seconds when seconds < 3600 -> "expires in <1h"
+      seconds -> "expires in #{div(seconds, 3600)}h"
+    end
+  end
+
+  # `email` on an account-holding row is whatever the host typed, and the
+  # account is authoritative. Only the tag derivation reads this key, and
+  # only for rows with no `user_id`.
+  defp invite_row_email(%Invite{user: %User{} = user}), do: user.email
+  defp invite_row_email(%Invite{email: email}), do: email
+
+  # ONLY a guest row has a link to copy. An account-holder signs in as
+  # themselves and an external invite awaiting a grant has no token at
+  # all, so both get no control rather than one that copies something
+  # that cannot admit anyone.
+  defp invite_row_copy_url(
+         %Meeting{} = meeting,
+         %Invite{user_id: nil, expires_at: %DateTime{}} = i
+       ),
+       do: Meetings.guest_invite_link(meeting, i)
+
+  defp invite_row_copy_url(%Meeting{}, %Invite{}), do: nil
+
+  # Display-only, no remove control, and absent when the seed is absent.
+  defp producer_rows do
+    case SenderSeed.get() do
+      %Agent{} = agent ->
+        [
+          %{
+            id: "agent:" <> agent.id,
+            name: agent.name,
+            subtitle: "meeting producer",
+            user_id: nil,
+            email: nil,
+            expires_at: nil,
+            external: nil,
+            agent: true,
+            avatar_url: nil,
+            removable: false,
+            copy_url: nil
+          }
+        ]
+
+      nil ->
+        []
+    end
+  end
 
   # ── Archive half of the index (task 019fb954-c848) ───────────────────────
   #
@@ -1921,12 +2090,58 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
+  # Both of these reset the invite control, and for the same reason: it is
+  # scoped to ONE meeting. Left open across a change of selection it would
+  # be a search box sitting under a different meeting's invitee list, and
+  # the next thing staged in it would be written to that meeting instead.
   def handle_event("select_meeting", %{"id" => meeting_id}, socket) do
-    {:noreply, assign(socket, :selected_meeting_id, meeting_id)}
+    {:noreply,
+     socket
+     |> assign(:selected_meeting_id, meeting_id)
+     |> seed_live_invite_assigns()}
   end
 
   def handle_event("close_meeting_detail", _params, socket) do
-    {:noreply, assign(socket, :selected_meeting_id, nil)}
+    {:noreply,
+     socket
+     |> assign(:selected_meeting_id, nil)
+     |> seed_live_invite_assigns()}
+  end
+
+  # ── Live invites (detail panel + sheet, task 019fb955-1d7b stage 5) ──────
+  #
+  # `:live` mode of `PlatformWeb.Components.Meetings.InviteControl`. The
+  # difference from the create sheet's `:draft` set is not cosmetic: there
+  # IS a meeting row here, so choosing someone WRITES a `meeting_invites`
+  # row and delivers the invite in the same call. Nothing is staged and
+  # there is no submit to lose it at.
+
+  def handle_event("meeting_invite_add_people", _params, socket) do
+    {:noreply, socket |> seed_live_invite_assigns() |> assign(:meeting_invite_open, true)}
+  end
+
+  def handle_event("meeting_invite_search", %{"value" => query}, socket) do
+    {:noreply, assign_live_invite_candidates(socket, to_string(query))}
+  end
+
+  def handle_event("meeting_invite_stage", %{"kind" => kind} = params, socket) do
+    meeting = selected_live_invite_meeting!(socket)
+
+    socket =
+      case deliver_live_invite(meeting, kind, params, socket) do
+        {:ok, _result} ->
+          socket
+
+        {:error, _reason} ->
+          # A failure here is a real runtime outcome — a changeset error, a
+          # grant that could not be staged — not a caller bug, so it is
+          # reported rather than raised. What it must never be is silent:
+          # the row simply not appearing looks identical to a click that
+          # missed.
+          put_flash(socket, :error, "That invite could not be sent.")
+      end
+
+    {:noreply, clear_live_invite_search(socket)}
   end
 
   # ── Archive filters (`:index` action only, task 019fb954-c848) ──────────
@@ -3260,6 +3475,95 @@ defmodule PlatformWeb.MeetingLive do
 
   defp deliver_draft_invite(meeting, %{kind: :external} = entry),
     do: Meetings.invite_external_user(meeting, entry.email, display_name: entry.display_name)
+
+  # ── Live invites (private) ───────────────────────────────────────────────
+
+  # Closed, empty, and no candidates. Called on open as well as on close so
+  # the control never re-appears carrying the previous meeting's query.
+  defp seed_live_invite_assigns(socket) do
+    socket
+    |> assign(:meeting_invite_open, false)
+    |> clear_live_invite_search()
+  end
+
+  defp clear_live_invite_search(socket) do
+    socket
+    |> assign(:meeting_invite_query, "")
+    |> assign(:meeting_invite_candidates, [])
+    |> assign(:meeting_invite_email, nil)
+  end
+
+  # The exclusions come from the WRITTEN rows, not from a staging list:
+  # in live mode the invite exists the moment it is chosen, so "already
+  # invited" is a fact about the database. Without them the picker keeps
+  # offering someone who is already on the list one row above it.
+  defp assign_live_invite_candidates(socket, query) do
+    invites =
+      case selected_meeting(socket.assigns) do
+        %Meeting{} = meeting -> Meetings.list_invites(meeting.id)
+        nil -> []
+      end
+
+    %{users: users, email: email} =
+      Meetings.resolve_invite_candidates(query,
+        exclude_user_ids: for(%Invite{user_id: id} <- invites, is_binary(id), do: id),
+        exclude_emails: for(%Invite{email: address} <- invites, is_binary(address), do: address)
+      )
+
+    socket
+    |> assign(:meeting_invite_query, query)
+    |> assign(:meeting_invite_candidates, users)
+    |> assign(:meeting_invite_email, email)
+  end
+
+  # The control only renders inside a rendered detail surface, and that
+  # surface only renders for a meeting in the loaded week — so an invite
+  # event arriving with no selection did not come from this UI. Raise
+  # rather than no-op: a silently-dropped invite is the failure mode this
+  # whole surface exists to remove.
+  defp selected_live_invite_meeting!(socket) do
+    case selected_meeting(socket.assigns) do
+      %Meeting{} = meeting ->
+        meeting
+
+      nil ->
+        raise ArgumentError, "cannot invite: no meeting is selected in the detail surface"
+    end
+  end
+
+  # `:user` resolves against the RENDERED candidate list rather than the
+  # database, the same rule the draft path follows: the only legal source
+  # of that id is a row this socket just drew.
+  defp deliver_live_invite(meeting, "user", %{"id" => user_id}, socket) do
+    case Enum.find(socket.assigns.meeting_invite_candidates, &(&1.id == user_id)) do
+      nil ->
+        raise ArgumentError,
+              "cannot invite: no candidate is currently offered for that id"
+
+      user ->
+        Meetings.invite_user(meeting, user.id, display_name: user.name || user.email)
+    end
+  end
+
+  defp deliver_live_invite(meeting, "guest", %{"email" => email}, socket) do
+    address = email |> to_string() |> String.trim()
+
+    Meetings.invite_guest(meeting, %{
+      display_name: address,
+      email: address,
+      host_user_id: socket.assigns.user_id
+    })
+  end
+
+  defp deliver_live_invite(meeting, "external", %{"email" => email}, _socket) do
+    address = email |> to_string() |> String.trim()
+
+    Meetings.invite_external_user(meeting, address, display_name: address)
+  end
+
+  defp deliver_live_invite(_meeting, kind, _params, _socket) do
+    raise ArgumentError, "no live invite kind #{inspect(kind)}"
+  end
 
   defp flash_undelivered_invites(socket, []), do: socket
 
