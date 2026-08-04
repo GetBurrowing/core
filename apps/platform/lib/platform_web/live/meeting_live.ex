@@ -350,6 +350,13 @@ defmodule PlatformWeb.MeetingLive do
 
     socket
     |> assign(:meeting, meeting)
+    # Per-meeting intent mute (task 019fbaac stage 4). `seed_intent_assigns/1`
+    # seeded `false` in the guest mount clause, but that is the
+    # PRE-RESOLUTION default, not the answer — and unlike the authenticated
+    # surface there is no `handle_params/3` pass to resolve it later. Read
+    # it here so a guest who joins a meeting that is ALREADY muted sees the
+    # badge on first paint rather than only after the next toggle.
+    |> assign(:intent_muted?, Meetings.intent_muted?(meeting.id))
     |> assign(:participants, participants)
     |> assign(:agents_by_id, %{})
     |> assign(:speaking_participant_ids, MapSet.new())
@@ -442,6 +449,13 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:intent_pending_cancels, MapSet.new())
     |> assign(:intent_agent_options, [])
     |> assign(:intent_error, nil)
+    # Per-meeting intent mute (task 019fbaac stage 3). `false` here is
+    # the PRE-RESOLUTION default, not the answer — `handle_params/3`
+    # reads the real value for the `:show` action. Seeded in this shared
+    # helper because it is called from BOTH mount clauses, and the badge
+    # renders in the top bar, which the `:index` action and the guest
+    # surface also reach.
+    |> assign(:intent_muted?, false)
   end
 
   @impl true
@@ -593,6 +607,10 @@ defmodule PlatformWeb.MeetingLive do
           |> seed_intent_assigns()
           |> assign_intents_gate()
           |> assign(:intents, IntentQueue.list(meeting.id))
+          # Durable per-meeting mute, resolved from the row rather than
+          # inherited from the seed: a viewer joining a meeting that was
+          # muted before they arrived must see it muted on first paint.
+          |> assign(:intent_muted?, Meetings.intent_muted?(meeting.id))
           |> MeetingHooks.attach(List.wrap(meeting.chat_space_id))
 
         # Auto-join on connected mount unless ?no_autojoin=true is set
@@ -1123,6 +1141,63 @@ defmodule PlatformWeb.MeetingLive do
     end)
   end
 
+  # Per-meeting intent mute (task 019fbaac stage 3).
+  #
+  # Deliberately does NOT assign `:intent_muted?` here. The write
+  # broadcasts on `"meeting:<id>"`, and the `{:intent_mute_changed, …}`
+  # clause below updates the assign — for the clicking client on exactly
+  # the same path as for every other connected client. A local assign
+  # would give the clicker a second, faster path to the same state, and
+  # two paths to one piece of state is where divergence comes from.
+  #
+  # Authorization reuses `with_intents_gate/2`, the same gate governing
+  # the per-row cancel and correct buttons. Read its real semantics at
+  # its definition: it asks whether `meeting_producer` is assigned to any
+  # agent ORG-WIDE, not whether this viewer holds it. Matching the
+  # existing posture is deliberate; tightening it to viewer identity is a
+  # separate decision and is being raised as its own ticket.
+  #
+  # GUEST REJECTION (task 019fbaac stage 4). Guests SEE the muted state and
+  # cannot change it. This clause must stay ABOVE the one below, and it is
+  # not redundant with `with_intents_gate/2`: that helper asks whether
+  # `meeting_producer` is assigned to any agent ORG-WIDE, which says
+  # nothing about who is holding the socket. A guest is blocked by it today
+  # only incidentally — `:intents_visible?` is `false` on the guest path
+  # because `handle_params/3` no-ops and never resolves it, not because
+  # anything checked the viewer. The day someone resolves intent assigns
+  # for guests (a read-only intent rail is an obvious next ask), that
+  # incidental block evaporates and this one does not.
+  #
+  # The mutation control for this clause is documented in
+  # `meeting_live_guest_mount_test.exs`: removing it does NOT redden the
+  # plain guest test, precisely because the incidental guard still holds.
+  # The test that DOES redden neutralizes `:intents_visible?` first so this
+  # clause is the only thing left standing.
+  def handle_event("toggle_intent_mute", _params, %{assigns: %{chrome_mode: :none}} = socket) do
+    {:noreply, socket}
+  end
+
+  def handle_event("toggle_intent_mute", _params, socket) do
+    with_intents_gate(socket, fn socket ->
+      case socket.assigns[:meeting] do
+        %{id: meeting_id} ->
+          # The ID, never the in-memory struct. `set_intent_muted/2`'s
+          # struct clause delegates here anyway so the row is re-read
+          # before the write, but passing the id makes that explicit at
+          # the call site: this socket's `:meeting` was loaded once at
+          # `handle_params/3` and its `intent_muted_at` is stale the
+          # moment any other client toggles.
+          case Meetings.set_intent_muted(meeting_id, not socket.assigns.intent_muted?) do
+            {:ok, _meeting} -> socket
+            {:error, _reason} -> assign(socket, :intent_error, "Could not change the agent mute.")
+          end
+
+        _ ->
+          socket
+      end
+    end)
+  end
+
   # The X opens a reason picker rather than removing immediately. A
   # cancel carries no reason until a human states one, and stage 6's
   # corpus requires a reason on every row — so the reason has to be
@@ -1412,6 +1487,33 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
+  # Per-meeting intent mute changed (task 019fbaac stage 3).
+  #
+  # MUST stay ABOVE the catch-all below, like the intent-queue clauses.
+  # A clause declared after it is silently swallowed, and a swallowed
+  # mute event is a toggle that needs a page reload — which fails the one
+  # requirement of this task that cannot be traded away.
+  #
+  # No `push_event` and no new subscription: every MeetingLive is already
+  # subscribed to `meeting_topic(meeting.id)` at mount, and each one
+  # re-renders from its own assign. Same shape as the
+  # `:role_assignment_changed` clause above, which is how the intents bar
+  # already appears and disappears mid-meeting.
+  #
+  # The id guard reuses `intents_for_this_meeting?/2` — the payload
+  # carries `:meeting_id`, which is the only key that predicate reads —
+  # so one LiveView cannot be muted by another meeting's broadcast.
+  def handle_info(
+        {:intent_mute_changed, %{meeting_id: _id, muted_at: muted_at} = payload},
+        socket
+      ) do
+    if intents_for_this_meeting?(socket, payload) do
+      {:noreply, assign(socket, :intent_muted?, not is_nil(muted_at))}
+    else
+      {:noreply, socket}
+    end
+  end
+
   # Catch-all: chat-space topic carries many event shapes (messages,
   # reactions, pins, …). The shell only cares about roster + canvas
   # events; ignore the rest so a broadcast can't crash the LV.
@@ -1470,6 +1572,20 @@ defmodule PlatformWeb.MeetingLive do
       {:ok, bundle} ->
         if connected?(socket) and is_binary(meeting.chat_space_id) do
           MeetingsPubSub.subscribe_presence(meeting.chat_space_id)
+
+          # Per-meeting intent mute (task 019fbaac stage 4). This one line
+          # is what makes the guest badge live-update, and it is needed
+          # HERE precisely because it cannot be inherited: the guest mount
+          # clause seeds `:state`, which makes `handle_params/3` no-op, so
+          # the guest surface never reaches the `:show` body where the
+          # authenticated surface subscribes to `meeting_topic/1`. Same
+          # topic string, same `{:intent_mute_changed, …}` clause — the
+          # guest LiveView is the SAME module, so no second handler.
+          #
+          # Ordered BEFORE `seed_guest_shell_tree_assigns/2` reads the
+          # current value below: subscribe-then-read leaves no window in
+          # which a toggle lands between the read and the subscription.
+          MeetingsPubSub.subscribe_meeting(meeting.id)
 
           case Meetings.get_active_room(meeting.chat_space_id) do
             %{id: room_id} -> MeetingsPubSub.subscribe_room(room_id)

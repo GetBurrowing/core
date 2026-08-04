@@ -271,8 +271,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/files.ex", :get!, "~q:File", 1, :safe_internal,
      "Files.get_file!/2 checks Platform.UUID.valid?/1 and raises Ecto.NoResultsError — its documented miss exception — rather than Ecto.Query.CastError"},
     # ── Meetings ───────────────────────────────────────────────────────
-    {"platform/meetings.ex", :platform_uuid_guard, "-", 9, :safe_internal,
-     "cast_identity/2 now uses Platform.UUID.cast/1, so a 16-byte LiveKit webhook identity suffix yields :unknown instead of a fabricated user_id/agent_id FK; the remaining guards cover get_meeting/1, get_room/1, get_transcript/1, get_transcript_with_segments/1, the two recording lookups, resolve_agent/1, and claim_router_dispatch/1 (019fa56b-c81f stage 2), whose transcript_id arrives inside a meeting:finished PubSub payload and must answer {:error, :no_such_transcript} rather than raise on the Router's dispatch path"},
+    {"platform/meetings.ex", :platform_uuid_guard, "-", 10, :safe_internal,
+     "cast_identity/2 now uses Platform.UUID.cast/1, so a 16-byte LiveKit webhook identity suffix yields :unknown instead of a fabricated user_id/agent_id FK; the remaining guards cover get_meeting/1, get_room/1, get_transcript/1, get_transcript_with_segments/1, the two recording lookups, resolve_agent/1, claim_router_dispatch/1 (019fa56b-c81f stage 2), whose transcript_id arrives inside a meeting:finished PubSub payload and must answer {:error, :no_such_transcript} rather than raise on the Router's dispatch path, and intent_muted?/1 (019fbaac stage 1), whose meeting_id arrives inside a meeting:transcript_chunk PubSub payload and is legitimately nil whenever the chunk's space has no meeting — it is read per transcript chunk from the singleton IntentClassifier GenServer, so a raise there stops classification for every room on the node at once"},
     {"platform/meetings.ex", :get, "Agent", 1, :safe_internal,
      "the one remaining call is inside resolve_agent/1, which checks Platform.UUID.valid?/1 and falls back to Repo.get_by(Agent, slug:). generate_agent_token/3, dispatch_meeting_join/3 and dismiss_agent/2 all route through it"},
     {"platform/meetings.ex", :get, "Meeting", 1, :safe_internal,
@@ -620,7 +620,18 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/federation/tool_surface.ex" => 2,
     "platform/files.ex" => 1,
     "platform/inbox.ex" => 1,
-    "platform/meetings.ex" => 9,
+    # Task 019fbaac stage 1 — `intent_muted?/1`. Triaged by hand as this
+    # map asks: its `where:` clause DOES pin `m.id == ^meeting_id`, and
+    # the id DOES arrive from a boundary — the `meeting:transcript_chunk`
+    # PubSub payload, where it is nil whenever the chunk's space has no
+    # meeting. So this one needs the guard and has it: the call sits
+    # inside `if Platform.UUID.valid?(meeting_id)`, which is why the
+    # `:platform_uuid_guard` count for this file moved 9 → 10 in the same
+    # change. Without it the nil case raises ArgumentError out of the
+    # query builder and a 16-byte binary raises Ecto.Query.CastError,
+    # both from the singleton IntentClassifier GenServer that classifies
+    # for every room on the node.
+    "platform/meetings.ex" => 10,
     "platform/meetings/intent_corrections.ex" => 1,
     "platform/memory_feedback.ex" => 1,
     "platform/orchestration/context_assembler.ex" => 1,

@@ -816,4 +816,201 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       assert html =~ ~s(id="meeting-client")
     end
   end
+
+  # ── Per-meeting intent mute on the guest surface (task 019fbaac stage 4) ──
+  #
+  # Guests SEE the muted state, live, and cannot change it. The badge lives
+  # in the `data-role="meeting-controls"` cluster, which is NOT `@shell?`-
+  # gated, so the guest inherits it from the same shell tree. The toggle
+  # lives inside `<.intents_collapse :if={@intents_visible?}>`, which the
+  # guest never renders — twice over: `:intents_visible?` is `false` on the
+  # guest path AND the whole chat aside that hosts the bar is `@shell?`-
+  # gated. Both are asserted below rather than reasoned about.
+
+  defp assign_producer! do
+    agent =
+      Repo.insert!(%Platform.Agents.Agent{
+        slug: "guest-mute-producer-#{System.unique_integer([:positive])}",
+        name: "Meeting Producer",
+        status: "active"
+      })
+
+    {:ok, _} = Platform.Roles.assign_role("meeting_producer", agent.id)
+    agent
+  end
+
+  # An authenticated conn that can reach `/meetings/:slug` for a meeting
+  # built by `create_meeting/1` — i.e. a Fabrikam-root member, mirroring the
+  # shell regression test above.
+  defp authenticated_meeting_conn do
+    user =
+      Repo.insert!(%Platform.Accounts.User{
+        email: "guest_mute_#{System.unique_integer([:positive])}@example.com",
+        name: "Producer User",
+        oidc_sub: "oidc-guest-mute-#{System.unique_integer([:positive])}"
+      })
+
+    Repo.insert!(
+      Platform.Tenancy.OrgMembership.changeset(%Platform.Tenancy.OrgMembership{}, %{
+        user_id: user.id,
+        org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+        role: "member"
+      })
+    )
+
+    Phoenix.ConnTest.build_conn()
+    |> Phoenix.ConnTest.init_test_session(current_user_id: user.id)
+  end
+
+  defp guest_token(meeting, name \\ "Juno Fairbanks") do
+    expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+    GuestInvite.sign(meeting.slug, expires_at, name)
+  end
+
+  describe "per-meeting intent mute — guest surface (task 019fbaac stage 4)" do
+    test "a guest joining an ALREADY-muted meeting paints the badge and NO toggle",
+         %{conn: conn} do
+      meeting = create_meeting()
+      {:ok, _} = Meetings.set_intent_muted(meeting.id, true)
+
+      {:ok, view, html} =
+        conn |> with_meet_host() |> live("/#{meeting.slug}/#{guest_token(meeting)}")
+
+      # Positive first: the guest can see that the agents are held.
+      assert html =~ ~s(data-role="meeting-intent-mute-badge")
+      assert html =~ "Agents muted"
+      # Negative second, and it means something only because the positive
+      # above proves the guest surface rendered at all.
+      refute html =~ ~s(data-role="meeting-intent-mute-toggle")
+
+      # The assign resolved on FIRST PAINT, not via a later broadcast —
+      # `seed_intent_assigns/1` seeds `false` and `handle_params/3` no-ops
+      # for guests, so without the read in `seed_guest_shell_tree_assigns/2`
+      # this would be `false` here.
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.intent_muted? == true
+      # ...and the reason there is no toggle, asserted rather than assumed.
+      assert assigns.intents_visible? == false
+      assert assigns.shell? == false
+    end
+
+    test "a guest joining an UNMUTED meeting gets neither badge nor toggle",
+         %{conn: conn} do
+      meeting = create_meeting()
+
+      {:ok, view, html} =
+        conn |> with_meet_host() |> live("/#{meeting.slug}/#{guest_token(meeting)}")
+
+      refute html =~ ~s(data-role="meeting-intent-mute-badge")
+      refute html =~ ~s(data-role="meeting-intent-mute-toggle")
+
+      # The presence pair for the two refutes above: the guest shell DID
+      # render, so "absent" is about the mute state and not about a surface
+      # that failed to mount.
+      assert html =~ ~s(data-role="meeting-controls")
+      assert html =~ ~s(id="meeting-client")
+      assert :sys.get_state(view.pid).socket.assigns.intent_muted? == false
+    end
+
+    test "LIVE, NO REJOIN: an authenticated toggle reaches an already-connected GUEST",
+         %{conn: conn} do
+      meeting = create_meeting()
+      assign_producer!()
+      on_exit(fn -> Platform.Meetings.IntentQueue.stop(meeting.id) end)
+
+      {:ok, guest_view, guest_html} =
+        conn |> with_meet_host() |> live("/#{meeting.slug}/#{guest_token(meeting)}")
+
+      refute guest_html =~ ~s(data-role="meeting-intent-mute-badge")
+      guest_pid = guest_view.pid
+
+      {:ok, auth_view, _auth_html} =
+        live(authenticated_meeting_conn(), ~p"/meetings/#{meeting.slug}")
+
+      auth_view |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
+
+      # No reload, no re-mount, no navigation — the guest view we already
+      # had simply re-renders. That is the whole requirement.
+      guest_html = render(guest_view)
+      assert guest_html =~ ~s(data-role="meeting-intent-mute-badge")
+      assert guest_view.pid == guest_pid
+      # Still no toggle: visibility is not the same as control.
+      refute guest_html =~ ~s(data-role="meeting-intent-mute-toggle")
+
+      # Both directions. A badge that appears and never leaves would tell a
+      # guest the agents are held for the rest of the meeting.
+      auth_view |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
+
+      guest_html = render(guest_view)
+      refute guest_html =~ ~s(data-role="meeting-intent-mute-badge")
+      assert guest_view.pid == guest_pid
+    end
+
+    test "a guest replaying `toggle_intent_mute` cannot change the mute, while a producer can",
+         %{conn: conn} do
+      meeting = create_meeting()
+      assign_producer!()
+      on_exit(fn -> Platform.Meetings.IntentQueue.stop(meeting.id) end)
+
+      {:ok, guest_view, _html} =
+        conn |> with_meet_host() |> live("/#{meeting.slug}/#{guest_token(meeting)}")
+
+      # The hand-crafted event a guest console can push. No element exists
+      # to click, which is the point — this bypasses the DOM entirely.
+      render_click(guest_view, "toggle_intent_mute", %{})
+      refute Meetings.intent_muted?(meeting.id)
+
+      # The paired positive, in the same test body: the identical event
+      # from an authenticated producer DOES flip the row. Without this, the
+      # refute above is satisfiable by a fixture where nothing works.
+      {:ok, auth_view, _} = live(authenticated_meeting_conn(), ~p"/meetings/#{meeting.slug}")
+      auth_view |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
+      assert Meetings.intent_muted?(meeting.id)
+
+      # And the guest still cannot flip it back.
+      render_click(guest_view, "toggle_intent_mute", %{})
+      assert Meetings.intent_muted?(meeting.id)
+    end
+
+    test "the guest rejection holds even with `:intents_visible?` forced true",
+         %{conn: conn} do
+      # ISOLATION CONTROL. The test above passes with the `chrome_mode ==
+      # :none` clause deleted, because `with_intents_gate/2` also blocks a
+      # guest today — not by checking the viewer, but incidentally, because
+      # `handle_params/3` no-ops for guests and never resolves
+      # `:intents_visible?`. Two guards, one assertion, and the mutation
+      # cannot tell them apart.
+      #
+      # So neutralize the incidental one and leave the deliberate one alone.
+      # With `:intents_visible?` forced true, `with_intents_gate/2` lets the
+      # event through and the `chrome_mode == :none` clause is the ONLY
+      # thing standing between a guest console and the meeting's mute state.
+      meeting = create_meeting()
+      assign_producer!()
+      on_exit(fn -> Platform.Meetings.IntentQueue.stop(meeting.id) end)
+
+      {:ok, guest_view, _html} =
+        conn |> with_meet_host() |> live("/#{meeting.slug}/#{guest_token(meeting)}")
+
+      :sys.replace_state(guest_view.pid, fn state ->
+        put_in(state.socket.assigns.intents_visible?, true)
+      end)
+
+      # Prove the neutralization LANDED before relying on it. A silently
+      # failed state replacement would leave this test asserting nothing.
+      assert :sys.get_state(guest_view.pid).socket.assigns.intents_visible? == true
+      assert :sys.get_state(guest_view.pid).socket.assigns.chrome_mode == :none
+
+      render_click(guest_view, "toggle_intent_mute", %{})
+      refute Meetings.intent_muted?(meeting.id)
+
+      # Presence pair: the same forced socket DOES still process events, so
+      # the refute above is about the guard and not about a wedged process.
+      # `toggle_intents_collapse` runs through the very same
+      # `with_intents_gate/2` that the mute handler uses, and now passes it.
+      before_open = :sys.get_state(guest_view.pid).socket.assigns.intents_open
+      render_click(guest_view, "toggle_intents_collapse", %{})
+      assert :sys.get_state(guest_view.pid).socket.assigns.intents_open == !before_open
+    end
+  end
 end

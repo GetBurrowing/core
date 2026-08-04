@@ -487,6 +487,111 @@ defmodule Platform.Meetings do
 
   def mark_notified(%Meeting{} = meeting), do: {:already_notified, meeting}
 
+  # ── Per-meeting intent mute (task 019fbaac stage 1) ───────────────────────
+  #
+  # A hold on the Meeting Producer for THIS meeting, so a human in a live
+  # meeting can stop agents diving in on classified intent without
+  # unassigning the org-wide `meeting_producer` role — which is the only
+  # switch that existed before, and which silences every meeting on the
+  # platform.
+  #
+  # The state is a nullable timestamp on `meetings`, not a key in
+  # `meeting_rooms.config`: that map is keyed per chat SPACE, so a mute
+  # placed in Monday's standup would still be in force next Monday. It is
+  # also not ETS on the intent queue, which fails OPEN — `IntentQueue.list/1`
+  # returns `[]` when no owner is running, so a queue-owner crash would
+  # silently resume the agents. A hold switch must fail closed.
+
+  @doc """
+  Place or lift the per-meeting intent mute.
+
+  Accepts a `%Meeting{}` or a meeting id. `muted? == true` stamps
+  `intent_muted_at` with `DateTime.utc_now()`; `false` clears it to
+  `nil`. Returns `{:ok, meeting}` with the updated row, or
+  `{:error, :not_found}` for an unknown or malformed id.
+
+  Re-muting an already-muted meeting does NOT move the timestamp — the
+  hold was placed once and the record of when should not drift every
+  time somebody clicks a toggle that is already on. It DOES still
+  broadcast: a second client that missed the first event needs it, and
+  suppressing the duplicate trades a cheap message for a permanently
+  wrong badge on somebody else's screen.
+
+  A `%Meeting{}` argument is re-read before the write rather than
+  trusted (task 019fbaac stage 2). Callers hold this struct for a long
+  time — `PlatformWeb.MeetingLive` loads it once at `handle_params` and
+  keeps it in socket assigns for the life of the meeting — so by the
+  time somebody clicks the toggle, `meeting.intent_muted_at` is
+  whatever it was at mount. Acting on that stale field produced two
+  wrong outcomes: unmuting from a struct that already read `nil` built
+  an EMPTY changeset, which `Repo.update/1` answers `{:ok, stale}`
+  without touching the row — a broadcast saying "unmuted", a badge that
+  cleared, and a classifier that stayed muted forever. And re-muting
+  from a stale `nil` re-clocked a timestamp the docs above promise not
+  to move. One indexed primary-key read on a human-initiated toggle
+  buys both invariants back.
+  """
+  @spec set_intent_muted(Meeting.t() | binary(), boolean()) ::
+          {:ok, Meeting.t()} | {:error, term()}
+  def set_intent_muted(%Meeting{id: id}, muted?) when is_boolean(muted?) do
+    set_intent_muted(id, muted?)
+  end
+
+  def set_intent_muted(meeting_id, muted?) when is_boolean(muted?) do
+    case get_meeting(meeting_id) do
+      %Meeting{} = meeting -> write_intent_mute(meeting, muted?)
+      nil -> {:error, :not_found}
+    end
+  end
+
+  defp write_intent_mute(%Meeting{} = meeting, muted?) do
+    muted_at =
+      cond do
+        not muted? -> nil
+        # Already muted: keep the original stamp, don't re-clock it.
+        not is_nil(meeting.intent_muted_at) -> meeting.intent_muted_at
+        true -> DateTime.utc_now()
+      end
+
+    case meeting |> Meeting.intent_mute_changeset(muted_at) |> Repo.update() do
+      {:ok, updated} ->
+        MeetingsPubSub.broadcast_intent_mute_changed(updated.id, updated.intent_muted_at)
+        {:ok, updated}
+
+      {:error, _changeset} = error ->
+        error
+    end
+  end
+
+  @doc """
+  Is the intent classifier muted for this meeting?
+
+  Returns a plain boolean, and returns `false` — never raises — for
+  `nil`, a malformed id, and a well-formed id with no row. That
+  totality is load-bearing rather than defensive: the caller is
+  `Platform.Meetings.IntentClassifier`, a singleton GenServer handling
+  transcript chunks for every room on the node. A raise inside `Repo`
+  reached from there kills classification for every meeting at once, and
+  a transcript chunk whose space has no meeting (`meeting_id: nil`) is
+  an ordinary occurrence, not an error.
+
+  Reads the column directly rather than loading the row so the
+  per-chunk cost is one indexed primary-key lookup. Deliberately NOT
+  cached: a stale cache is a mute that does not take effect
+  mid-meeting, which is the one requirement here that cannot be traded
+  away.
+  """
+  @spec intent_muted?(term()) :: boolean()
+  def intent_muted?(meeting_id) do
+    if Platform.UUID.valid?(meeting_id) do
+      from(m in Meeting, where: m.id == ^meeting_id, select: not is_nil(m.intent_muted_at))
+      |> Repo.one()
+      |> Kernel.==(true)
+    else
+      false
+    end
+  end
+
   @doc """
   Transition a meeting from `live` to `ended`, stamping `ended_at`.
 

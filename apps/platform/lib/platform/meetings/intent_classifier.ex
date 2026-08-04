@@ -11,7 +11,7 @@ defmodule Platform.Meetings.IntentClassifier do
 
   ## Guard chain
 
-  `handle_info({:transcript_chunk, payload}, state)` walks two
+  `handle_info({:transcript_chunk, payload}, state)` walks three
   guards in order:
 
     1. **No assignee** — `Platform.Roles.assignee_for("meetings.intent_classify")`
@@ -20,7 +20,32 @@ defmodule Platform.Meetings.IntentClassifier do
        silent — the `state.seen_rooms` MapSet is the spam-suppressor).
        Emit telemetry with `%{reason: :no_assignee}`. Assignment IS
        the enable signal — no env-var double-gate.
-    2. **Assignee found** — hand off to `classify_and_enqueue/3`.
+    2. **Meeting muted** — `Platform.Meetings.intent_muted?/1` on the
+       payload's `meeting_id` (task 019fbaac stage 2). Emits the SAME
+       `:skipped` event as guard 1 with `%{reason: :muted}`. No prompt
+       render, no provider call, no queue write.
+    3. **Assignee found, meeting live** — hand off to
+       `classify_and_enqueue/4`.
+
+  ## Why mute gates HERE and not at the dispatcher
+
+  The requirement is a meeting without agents diving in to assume our
+  intent. Gating at the classifier means a muted meeting costs no model
+  call and writes no row — nothing lands in the intent rail or in the
+  corrections corpus for a meeting nobody will action. Gating at
+  `IntentDispatcher.dispatch_row/3` instead would keep classifying and
+  keep filling the queue with rows the producer never asked for; that
+  is a dry-run preview, not a mute.
+
+  The lookup is one indexed primary-key read per chunk, on a path that
+  already does a `Roles.assignee_for/1` and a `Repo.get(Agent, …)` per
+  chunk. It is deliberately NOT cached or memoised per room: a stale
+  cache is a mute that does not take effect mid-meeting, which is the
+  one property the toggle exists to provide.
+
+  `push_chunk_into_buffer/3` stays ABOVE every guard, mute included, so
+  the context window keeps filling while muted — an unmute at minute 20
+  classifies against real prior context instead of `(no prior context)`.
 
   ## Stage 4 pipeline (`classify_and_enqueue/3`)
 
@@ -74,6 +99,7 @@ defmodule Platform.Meetings.IntentClassifier do
 
   require Logger
 
+  alias Platform.Meetings
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
@@ -195,16 +221,29 @@ defmodule Platform.Meetings.IntentClassifier do
         handle_no_assignee(room_id, state)
 
       agent ->
-        # `state.recent_chunks[room_id]` is stored newest-first with the
-        # current chunk at the head; drop 1 removes the current, take N
-        # bounds the window at exactly `context_window_size`.
-        prior_chunks =
-          state.recent_chunks
-          |> Map.get(room_id, [])
-          |> Enum.drop(1)
-          |> Enum.take(state.context_window_size)
+        meeting_id = Map.get(payload, :meeting_id)
 
-        handle_chunk(payload, agent, prior_chunks, state)
+        # Guard 2 — per-meeting mute (task 019fbaac stage 2). Checked
+        # AFTER the assignee guard so an unassigned responsibility still
+        # reports `:no_assignee` (the actionable reason) rather than
+        # being masked by a mute, and BEFORE any prompt render so a muted
+        # meeting costs nothing. `intent_muted?/1` is total: nil,
+        # malformed and unknown ids all answer `false`, which is the
+        # correct answer for a chunk whose space has no meeting.
+        if Meetings.intent_muted?(meeting_id) do
+          handle_muted(room_id, meeting_id, state)
+        else
+          # `state.recent_chunks[room_id]` is stored newest-first with the
+          # current chunk at the head; drop 1 removes the current, take N
+          # bounds the window at exactly `context_window_size`.
+          prior_chunks =
+            state.recent_chunks
+            |> Map.get(room_id, [])
+            |> Enum.drop(1)
+            |> Enum.take(state.context_window_size)
+
+          handle_chunk(payload, agent, prior_chunks, state)
+        end
     end
   end
 
@@ -287,6 +326,36 @@ defmodule Platform.Meetings.IntentClassifier do
       [:platform, :meetings, :intent_classifier, :skipped],
       %{count: 1},
       %{reason: :no_assignee, room_id: room_id}
+    )
+
+    {:noreply, updated_state}
+  end
+
+  # Mirror of `handle_no_assignee/2` for the mute guard. Same
+  # spam-suppressor SHAPE — the `state.seen_rooms` MapSet — but keyed
+  # `{:muted, room_id}` rather than the bare `room_id` the no-assignee
+  # branch uses, so a room that already logged one reason can still log
+  # the other. They are different operator-facing facts.
+  defp handle_muted(room_id, meeting_id, state) do
+    key = {:muted, room_id}
+
+    {log?, updated_state} =
+      if is_binary(room_id) and not MapSet.member?(state.seen_rooms, key) do
+        {true, %{state | seen_rooms: MapSet.put(state.seen_rooms, key)}}
+      else
+        {false, state}
+      end
+
+    if log? do
+      Logger.info(
+        "[IntentClassifier] intent muted for this meeting — room=#{room_id} meeting=#{meeting_id}"
+      )
+    end
+
+    :telemetry.execute(
+      [:platform, :meetings, :intent_classifier, :skipped],
+      %{count: 1},
+      %{reason: :muted, room_id: room_id, meeting_id: meeting_id}
     )
 
     {:noreply, updated_state}

@@ -5387,6 +5387,187 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
+  describe "per-meeting intent mute — toggle + badge (task 019fbaac stage 3)" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "intent-mute", name: "Intent Mute"})
+      {conn, user} = authenticated_conn(conn)
+      assign_producer!()
+      on_exit(fn -> IntentQueue.stop(meeting.id) end)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "an unmuted meeting renders the toggle live and NO badge", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-role="meeting-intent-mute-toggle")
+      assert html =~ ~s(data-muted="false")
+      refute html =~ ~s(data-role="meeting-intent-mute-badge")
+    end
+
+    test "clicking the toggle mutes: the toggle flips, the badge appears, the ROW changes",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      view |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
+
+      # `render/1`, not `render_click/1`'s return value, and that is by
+      # design rather than by accident. The handler deliberately does
+      # NOT assign `:intent_muted?` — it writes, and the write's
+      # broadcast updates the assign. So the diff `render_click/1`
+      # returns is the one produced BEFORE the LiveView has processed
+      # its own broadcast, and it still reads `data-muted="false"`.
+      # The next message settles it. Asserting here is what pins the
+      # clicking client onto the same path as every other client: one
+      # code path, so a divergence has nowhere to come from.
+      html = render(view)
+
+      assert html =~ ~s(data-muted="true")
+      assert html =~ ~s(data-role="meeting-intent-mute-badge")
+      # The DB assertion is the one that catches a purely-cosmetic
+      # toggle — a control that repaints itself and mutes nothing.
+      assert Meetings.intent_muted?(meeting.id)
+    end
+
+    test "clicking again unmutes: the toggle flips back, the badge goes, the ROW clears",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Mute first, and assert it took — otherwise the unmute half below
+      # is satisfiable by a toggle that never did anything at all.
+      # (`render/1` after the click, not the click's own return: see the
+      # note in the mute test above.)
+      view |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
+      assert render(view) =~ ~s(data-muted="true")
+      assert Meetings.intent_muted?(meeting.id)
+
+      view |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
+      html = render(view)
+
+      assert html =~ ~s(data-muted="false")
+      refute html =~ ~s(data-role="meeting-intent-mute-badge")
+      refute Meetings.intent_muted?(meeting.id)
+    end
+
+    test "a meeting already muted before mount renders muted on first paint", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, _} = Meetings.set_intent_muted(meeting.id, true)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-role="meeting-intent-mute-badge")
+      assert html =~ ~s(data-muted="true")
+
+      # Colour is not the only signal, at any width. The glyph is always
+      # painted; the word is `sr-only sm:not-sr-only`, so it is in the
+      # DOM and announced even on the 375px viewport where painting it
+      # would push three top-bar controls off screen.
+      assert html =~ "Agents muted"
+      assert html =~ "hero-eye-slash"
+      assert html =~ ~s(class="sr-only sm:not-sr-only")
+    end
+
+    test "LIVE, NO REJOIN: a toggle in one view reaches a SECOND already-connected view",
+         %{conn: conn, meeting: meeting} do
+      # The requirement this task exists for: "we are in a meeting right
+      # now and we want it to stop". A control that needs a page reload
+      # does not solve it, so this test never reloads or re-mounts the
+      # observing view — it only re-renders the one it already has.
+      {:ok, view_a, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      {conn_b, _user_b} = authenticated_conn(build_conn())
+      {:ok, view_b, html_b} = live(conn_b, ~p"/meetings/#{meeting.slug}")
+
+      refute html_b =~ ~s(data-role="meeting-intent-mute-badge")
+      pid_b = view_b.pid
+
+      view_a |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
+
+      html_b = render(view_b)
+      assert html_b =~ ~s(data-role="meeting-intent-mute-badge")
+      assert html_b =~ ~s(data-muted="true")
+
+      # Same process on the other side of the update: a re-mount would
+      # have replaced it, and a re-mount is the rejoin the requirement
+      # forbids.
+      assert view_b.pid == pid_b
+
+      # Both directions. A toggle that only propagates on mute leaves
+      # the second viewer permanently believing the agents are held.
+      view_a |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
+
+      html_b = render(view_b)
+      refute html_b =~ ~s(data-role="meeting-intent-mute-badge")
+      assert html_b =~ ~s(data-muted="false")
+      assert view_b.pid == pid_b
+    end
+
+    test "another meeting's mute does not mute this view", %{conn: conn, meeting: meeting} do
+      {other, _space} = create_meeting(%{slug: "intent-mute-other", name: "Other"})
+      on_exit(fn -> IntentQueue.stop(other.id) end)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Presence half first: prove the view DOES react to its own
+      # meeting, so the absence below is about the id guard and not
+      # about a handler that never fires.
+      {:ok, _} = Meetings.set_intent_muted(meeting.id, true)
+      assert render(view) =~ ~s(data-role="meeting-intent-mute-badge")
+
+      {:ok, _} = Meetings.set_intent_muted(meeting.id, false)
+      {:ok, _} = Meetings.set_intent_muted(other.id, true)
+
+      refute render(view) =~ ~s(data-role="meeting-intent-mute-badge")
+    end
+
+    test "a viewer without the producer role cannot mute by replaying the event", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      :ok = Platform.Roles.unassign_role("meeting_producer")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      render_click(view, "toggle_intent_mute", %{})
+
+      refute Meetings.intent_muted?(meeting.id)
+    end
+
+    test "the stage-mode control yields its width so the drawer toggle never leaves the viewport",
+         %{conn: conn, meeting: meeting} do
+      # The badge adds ~40px to a top bar that already overflowed 375px by
+      # 16. Every one of those pixels lands on the LAST item in the row,
+      # `chat-panel-toggle` — the only affordance that opens the drawer
+      # holding the mute toggle. Measured in CDP at 375x812 before this
+      # was fixed: the toggle went from 12 of its 28px visible (unmuted)
+      # to −28 (muted), and a fresh load of an already-muted meeting had
+      # no route back to unmuting.
+      #
+      # The invariant that keeps that from recurring is structural, not
+      # cosmetic: the stage-mode segmented control is the bar's ONE
+      # flexible region. `flex-shrink-0` there re-exports the squeeze to
+      # its siblings and makes the `overflow-x-auto` beside it inert, so
+      # this asserts its absence the same way the Producer-chip test above
+      # asserts the chip can yield.
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      [control_tag] = Regex.run(~r/<div[^>]*data-stage-mode-control="active"[^>]*>/, html)
+
+      assert control_tag =~ "overflow-x-auto"
+
+      refute control_tag =~ "flex-shrink-0",
+             "the stage-mode control must be able to yield, or the top bar exports its " <>
+               "overflow to chat-panel-toggle and muting becomes a one-way door at 375px"
+
+      # And the control it protects is still rendered, so this cannot pass
+      # by the toggle having been deleted instead.
+      assert html =~ ~s(data-role="chat-panel-toggle")
+    end
+  end
+
   # ── Intents-collapse test helpers ──────────────────────────────────────────
 
   defp assign_producer! do

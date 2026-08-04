@@ -45,6 +45,13 @@ defmodule Platform.Meetings.Meeting do
     # compare-and-swap on this column to guarantee exactly-one notification
     # even when two callers race `start_meeting/1` for the same row.
     field(:notified_at, :utc_datetime_usec)
+    # Per-meeting hold on the intent classifier (task 019fbaac stage 1).
+    # NULL means "not muted"; a timestamp records when the hold was
+    # placed. Deliberately NOT in `@cast_fields` — mute is never set at
+    # create time, only by `Platform.Meetings.set_intent_muted/2` via
+    # `intent_mute_changeset/2`, so a stray attrs map cannot silently
+    # create a meeting the agents are already ignoring.
+    field(:intent_muted_at, :utc_datetime_usec)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -91,6 +98,25 @@ defmodule Platform.Meetings.Meeting do
     |> put_change(:status, to)
     |> validate_inclusion(:status, @statuses)
     |> validate_transition(from, to)
+  end
+
+  @doc """
+  Changeset for placing or lifting the per-meeting intent mute
+  (task 019fbaac stage 1).
+
+  Only ever touches `:intent_muted_at`, and does so with `put_change/3`
+  rather than `cast/3`: the caller is `Platform.Meetings.set_intent_muted/2`,
+  which supplies the value itself (a `DateTime` to mute, `nil` to
+  unmute). There is no attrs map to cast from, and routing this through
+  `changeset/2` would drag the full `@required_fields` validation into a
+  single-column toggle on an already-valid row.
+  """
+  @spec intent_mute_changeset(%__MODULE__{}, DateTime.t() | nil) :: Ecto.Changeset.t()
+  def intent_mute_changeset(%__MODULE__{} = meeting, muted_at)
+      when is_nil(muted_at) or is_struct(muted_at, DateTime) do
+    meeting
+    |> change()
+    |> put_change(:intent_muted_at, muted_at)
   end
 
   defp validate_transition(changeset, "scheduled", "live"), do: changeset

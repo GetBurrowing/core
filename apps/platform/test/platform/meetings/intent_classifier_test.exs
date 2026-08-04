@@ -22,6 +22,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
   import Platform.TenancyFixtures
 
   alias Platform.Agents.Agent
+  alias Platform.Meetings
   alias Platform.Meetings.IntentClassifier
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
@@ -1376,5 +1377,211 @@ defmodule Platform.Meetings.IntentClassifierTest do
         assert_receive {:classified, _measurements, _metadata}, 1_000
       end)
     end
+  end
+
+  # ── Per-meeting mute (task 019fbaac stage 2) ───────────────────────────────
+  #
+  # Every case here assigns the responsibility first. Without an
+  # assignee the chunk stops at guard 1 and a mute test would go green
+  # against a classifier that had never heard of mute — the reason
+  # metadata (`:muted` vs `:no_assignee`) is what tells the two apart,
+  # and test 2 asserts on exactly that.
+  describe "handle_info/2 — per-meeting mute" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-mute-#{System.unique_integer([:positive])}"})
+      assign_intent_role!(agent)
+      %{agent: agent}
+    end
+
+    test "holds classification while muted and resumes on unmute" do
+      # THE load-bearing case, and both halves live in one body on
+      # purpose. A lone `refute_receive` cannot tell "correctly held"
+      # from "the classifier is broken for an unrelated reason"; the
+      # assert BEFORE it proves the pipeline works for this fixture and
+      # the assert AFTER it proves the harness was still live when the
+      # refute ran.
+      meeting = create_meeting!()
+      room = "room-mute-holds-#{System.unique_integer([:positive])}"
+      on_exit(fn -> IntentQueue.stop(meeting.id) end)
+
+      _ = attach_terminal_recorder!(:classified)
+      {pid, _name} = start_classifier!()
+      test_pid = self()
+
+      plant_stub_fun(pid, fn _creds, messages, _opts ->
+        send(test_pid, {:model_called, messages})
+
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "schedule_follow_up",
+               "target_role" => "scribe",
+               "confidence" => 0.9
+             })
+         }}
+      end)
+
+      # 1. UNMUTED — the model is called and a row lands.
+      _ = broadcast_mute_chunk(room, meeting.id, "first utterance before the mute")
+      assert_receive {:model_called, _}, 1_000
+      assert_receive {:classified, _measurements, _metadata}, 1_000
+      assert length(IntentQueue.list(meeting.id)) == 1
+
+      # 2. MUTED — no model call, no new row.
+      {:ok, _} = Meetings.set_intent_muted(meeting, true)
+      _ = broadcast_mute_chunk(room, meeting.id, "second utterance while muted")
+      refute_receive {:model_called, _}, 500
+      assert length(IntentQueue.list(meeting.id)) == 1
+
+      # 3. UNMUTED AGAIN — the model is called again. This is what makes
+      # step 2's absence mean something.
+      {:ok, _} = Meetings.set_intent_muted(meeting, false)
+      _ = broadcast_mute_chunk(room, meeting.id, "third utterance after the unmute")
+      assert_receive {:model_called, _}, 1_000
+      assert_receive {:classified, _measurements, _metadata}, 1_000
+      assert length(IntentQueue.list(meeting.id)) == 2
+    end
+
+    test "emits skipped telemetry with reason :muted, not :no_assignee" do
+      # Separate test rather than an extra assertion on the one above:
+      # the first failing assertion ends a test, so a telemetry
+      # assertion appended after the refute would be unreachable the
+      # moment the mute itself regressed.
+      meeting = create_meeting!()
+      room = "room-mute-telemetry-#{System.unique_integer([:positive])}"
+      meeting_id = meeting.id
+      {:ok, _} = Meetings.set_intent_muted(meeting, true)
+
+      _ = attach_recorder!(:skipped, :skipped)
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _creds, _messages, _opts ->
+        {:ok, %{content: ~s({"intent":"x","target_role":"scribe","confidence":0.5})}}
+      end)
+
+      capture_log(fn ->
+        _ = broadcast_mute_chunk(room, meeting.id, "muted utterance for telemetry")
+
+        assert_receive {:skipped, %{count: 1},
+                        %{reason: :muted, room_id: ^room, meeting_id: ^meeting_id}},
+                       1_000
+      end)
+    end
+
+    test "mute is per meeting — an unmuted sibling keeps classifying" do
+      # The assertion that catches a gate keyed on the wrong id: a
+      # global flag would silence both queues and still pass a
+      # single-meeting test.
+      muted = create_meeting!()
+      live = create_meeting!()
+      live_id = live.id
+      on_exit(fn -> IntentQueue.stop(muted.id) end)
+      on_exit(fn -> IntentQueue.stop(live.id) end)
+
+      {:ok, _} = Meetings.set_intent_muted(muted, true)
+
+      _ = attach_terminal_recorder!(:classified)
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _creds, _messages, _opts ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "schedule_follow_up",
+               "target_role" => "scribe",
+               "confidence" => 0.8
+             })
+         }}
+      end)
+
+      _ = broadcast_mute_chunk("room-mute-sibling-muted", muted.id, "utterance in the muted room")
+      _ = broadcast_mute_chunk("room-mute-sibling-live", live.id, "utterance in the live room")
+
+      # Wait on the LIVE meeting's terminal event by id, not on whatever
+      # arrives first. Matching the bare shape would be satisfied by the
+      # muted meeting's own event if the gate ever stopped working, and
+      # the red would then land on the presence half for a race reason
+      # instead of on the absence half for the real one.
+      #
+      # Once the live event has landed, the muted meeting's chunk —
+      # broadcast FIRST, handled by the same serial GenServer — has
+      # already been through the guard chain.
+      assert_receive {:classified, _measurements, %{meeting_id: ^live_id}}, 1_000
+
+      assert length(IntentQueue.list(live.id)) == 1
+      assert IntentQueue.list(muted.id) == []
+    end
+
+    test "a chunk with a nil meeting_id still walks the classify path" do
+      # `intent_muted?/1` answers false for nil, so the mute guard must
+      # be transparent here. Asserted positively (the model IS called),
+      # not as a refute — a refute would pass on a classifier that had
+      # crashed.
+      room = "room-mute-nil-meeting-#{System.unique_integer([:positive])}"
+      {pid, _name} = start_classifier!()
+      test_pid = self()
+
+      plant_stub_fun(pid, fn _creds, messages, _opts ->
+        send(test_pid, {:model_called, messages})
+        {:ok, %{content: ~s({"intent":"x","target_role":"scribe","confidence":0.5})}}
+      end)
+
+      capture_log(fn ->
+        _ =
+          broadcast_chunk(room,
+            meeting_id: nil,
+            segment: %{id: "seg-nil-meeting", text: "no meeting here", speaker_name: "alice"}
+          )
+
+        assert_receive {:model_called, _}, 1_000
+      end)
+
+      assert Process.alive?(pid)
+    end
+  end
+
+  # ── Mute helpers ───────────────────────────────────────────────────────────
+
+  # A REAL meetings row — the mute lives in a column, so the fabricated
+  # `"meeting-" <> room` ids the rest of this file uses would answer
+  # `intent_muted?/1` with a permanent `false`.
+  defp create_meeting! do
+    {:ok, project} =
+      Platform.Tasks.create_project(%{
+        name: "Intent Mute #{System.unique_integer([:positive])}"
+      })
+
+    {:ok, space} =
+      Platform.Chat.create_space(%{
+        name: "Intent Mute Space #{System.unique_integer([:positive])}",
+        slug: "intent-mute-#{System.unique_integer([:positive])}",
+        kind: "meeting"
+      })
+
+    %Platform.Meetings.Meeting{}
+    |> Platform.Meetings.Meeting.changeset(%{
+      project_id: project.id,
+      chat_space_id: space.id,
+      slug: "intent-mute-#{System.unique_integer([:positive])}",
+      name: "Intent Mute Meeting",
+      livekit_room_name: "meeting-#{Ecto.UUID.generate()}"
+    })
+    |> Repo.insert!()
+  end
+
+  # Distinct chunk text per call so the dedupe key differs — otherwise a
+  # post-unmute chunk would collapse against the pre-mute one and the
+  # resumed classification would be invisible in the queue.
+  defp broadcast_mute_chunk(room_id, meeting_id, text) do
+    broadcast_chunk(room_id,
+      meeting_id: meeting_id,
+      segment: %{
+        id: "seg-#{System.unique_integer([:positive])}",
+        text: text,
+        speaker_name: "alice"
+      }
+    )
   end
 end

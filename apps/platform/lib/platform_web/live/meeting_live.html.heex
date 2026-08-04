@@ -247,6 +247,83 @@
            lives there (see meeting_hooks.ex), no client-side state
            here. --%>
         <div class="flex flex-shrink-0 items-center gap-1" data-role="meeting-controls">
+          <%!-- Agents-muted badge (task 019fbaac stage 3). State is
+             VISIBLE, not merely settable.
+
+             It lives here in the top bar rather than in the intents
+             collapse because that bar is gated on `@intents_visible?`
+             and leaves the DOM entirely when the `meeting_producer`
+             role is unassigned — so a mute indicator inside it would be
+             invisible to exactly the person waiting on an agent that a
+             since-departed participant silenced. This cluster renders
+             for every viewer of the meeting shell (it is NOT `@shell?`-
+             gated; only the breadcrumb and the guest-link controls
+             are), so the guest surface inherits the badge too.
+
+             Colour is never the only signal: the glyph and the word
+             "muted" carry it without the amber.
+
+             The word is `sr-only sm:not-sr-only` — announced to
+             assistive tech at EVERY width, painted from `sm` up.
+             Measured, not guessed: at 375px this top bar already
+             overflows by 16px before the badge exists (scrollWidth 391
+             vs clientWidth 375, which is why `meeting-copy-guest-link`
+             below is `hidden sm:inline-flex`). The full-width badge is
+             112px and took the bar to 507, pushing Screen, Gallery and
+             Whiteboard off the viewport. Glyph-only it is 36px and the
+             bar is 431.
+
+             ATTRIBUTION, CORRECTED (task 019fbaac stage 4; the stage-3
+             version of this comment got it wrong and it is fixed here
+             rather than left to mislead the next reader). The
+             pre-existing 16px is real, but its casualty is
+             `chat-panel-toggle` alone — 12 of its 28px are inside the
+             viewport before any of this. `Whiteboard` was NOT already
+             clipping: unmuted it measures x 309 → right 351, fully
+             visible. It clips only when muted (349 → 391). So the
+             badge's ~40px is the proximate cause of Whiteboard
+             clipping, and of `chat-panel-toggle` going from
+             partly-clipped to entirely off screen. Honest statement:
+             the bar's own debt costs `chat-panel-toggle`; this badge
+             additionally costs `Whiteboard`.
+
+             RESOLVED by the fix the stage-5 e2e review forced (case 1
+             of validation 019fbab7-d432-795c-8f87-312e14985889). The
+             overflow strategy this paragraph asked for exists now, so
+             the badge no longer costs anyone their controls: the
+             stage-mode segmented control below dropped
+             `flex-shrink-0`, making it the bar's single flexible
+             region: it absorbs the squeeze into its own scroll port
+             instead of pushing the row's last item off screen. At 375px
+             the bar is now scrollWidth 375 / clientWidth 375 in BOTH
+             states (was 391 unmuted, 431 muted), `chat-panel-toggle`
+             shows all 28 of its 28px with its centre hit-testable (was
+             12, then −28), and `Whiteboard` is inside the scroll port
+             rather than clipped by the viewport. The cost lands on the
+             segmented control, which shrinks to a ~73px (unmuted) /
+             ~52px (muted) scroll port at 375px and scrolls to the rest
+             — a control that degrades by the mechanism its own markup
+             advertises, not one that disappears.
+
+             So: do not "fix" a future top-bar squeeze by making this
+             badge conditional on width. Hiding the mute indicator on
+             the viewport most likely to be a phone is precisely the
+             reveal-over-persistence pattern Marlowe's 019f340a ruling
+             bans, and it would put the state back out of sight for the
+             viewer waiting on a silenced agent.
+
+             A lone amber eye-slash is still not colour on its own. --%>
+          <.chip
+            :if={@intent_muted?}
+            tone="warning"
+            class="gap-1 font-mono text-[10px]"
+            data-role="meeting-intent-mute-badge"
+            title="Agents are muted for this meeting"
+          >
+            <span class="hero-eye-slash size-3.5" aria-hidden="true"></span>
+            <span class="sr-only sm:not-sr-only">Agents muted</span>
+          </.chip>
+
           <button
             type="button"
             phx-click="meeting_toggle_mic"
@@ -407,10 +484,49 @@
            the LV swaps `@current_stage_mode`. The active button gets the
            daisyui segmented-active treatment (`bg-base-200 text-primary`);
            switching is pure presentation — the other modes' underlying
-           state is untouched. The control wraps/scrolls on narrow
-           viewports so it never overflows the top bar. --%>
+           state is untouched.
+
+           THIS IS THE TOP BAR'S ONLY FLEXIBLE REGION, and that is
+           load-bearing. Until the stage-5 e2e review of task 019fbaac
+           the class list here was `join flex-shrink-0 overflow-x-auto`,
+           alongside a comment
+           claiming "the control wraps/scrolls on narrow viewports so it
+           never overflows the top bar". That claim was false and the
+           `overflow-x-auto` was inert: `flex-shrink-0` pinned the
+           control at its natural 165px, so `clientWidth == scrollWidth`
+           and there was nothing to scroll. The bar overflowed instead —
+           at 375px it measured scrollWidth 391 / clientWidth 375
+           unmuted, and 431 once the agents-muted badge appeared. Every
+           one of those overflow pixels landed on the LAST item in the
+           row, `chat-panel-toggle`, which went from 12 of its 28px
+           visible to −28. That control is the only affordance that
+           opens the drawer holding the mute toggle, so muting became a
+           one-way door on a phone: a fresh 375px load of an
+           already-muted meeting had no route back to unmuting.
+
+           Dropping `flex-shrink-0` (and stating `min-w-0`, which
+           `overflow-x-auto` already implies, so the intent survives a
+           future class edit) makes the control absorb the squeeze into
+           its own scroll port instead of exporting it to its siblings.
+           The four modes stay reachable by scrolling; every other
+           control in the bar — including the drawer toggle — stays
+           where it is. Nothing changes at widths where the bar fits,
+           because flex-shrink only engages on overflow.
+
+           Do NOT re-add `flex-shrink-0`, and do not solve a future
+           top-bar squeeze by hiding the drawer toggle or the mute
+           badge: per Marlowe's `persistent-controls-over-reveal` ruling
+           (task 019f340a) controls stay visible and get disabled at
+           boundaries rather than hidden, and a control that disappears
+           as a direct consequence of being used is the worst case that
+           ruling exists to forbid.
+
+           `scrollbar-width: none` matches the horizontal scroll strips
+           in tasks_live/chat_live: a classic 15px scrollbar inside this
+           48px (`h-12`) bar would eat the row it is scrolling. --%>
         <div
-          class="join flex-shrink-0 overflow-x-auto"
+          class="join min-w-0 overflow-x-auto"
+          style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
           role="group"
           aria-label="Stage mode"
           data-stage-mode-control="active"
@@ -989,6 +1105,7 @@
             pending_cancels={@intent_pending_cancels}
             reason_picker_id={@intent_reason_picker_id}
             error={@intent_error}
+            muted={@intent_muted?}
           />
 
           <%!-- Body wrapper: flex-1/min-h-0 lets the embedded LV consume
