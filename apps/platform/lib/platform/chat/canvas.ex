@@ -34,6 +34,15 @@ defmodule Platform.Chat.Canvas do
     field(:created_by_display_name, :string)
     field(:created_by_participant_type, :string)
 
+    # Weighted full-text vector over `title` only, weight `B` — task
+    # 019fb954-c848. The archive searches canvas TITLES, not document
+    # bodies: `document` is a node tree whose text sits at varying prop keys
+    # per node kind, and the only reliable extractor is
+    # `Platform.Chat.Canvas.MarkdownExporter`, which is application code and
+    # cannot appear in an IMMUTABLE generated expression. A STORED GENERATED
+    # column, hence `read_after_writes` and absent from every cast list.
+    field(:title_search_vector, Platform.Types.TSVector, read_after_writes: true)
+
     timestamps(type: :utc_datetime_usec)
   end
 
