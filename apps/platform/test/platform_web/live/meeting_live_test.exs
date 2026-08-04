@@ -3099,6 +3099,11 @@ defmodule PlatformWeb.MeetingLiveTest do
       %URI{path: path, query: query} = URI.parse(href)
       assert path == "/meetings/#{meeting.id}/invite.ics"
 
+      # Named before it is decoded, so a token-less href fails HERE with a
+      # sentence rather than inside `URI.decode_query/1` with a
+      # FunctionClauseError on nil — a crash proves nothing about the href.
+      assert is_binary(query), "the .ics href carries no query string, so it carries no token"
+
       params = URI.decode_query(query)
       assert Map.keys(params) == ["token"]
       assert CalendarLink.verify(params["token"]) == {:ok, %{meeting_id: meeting.id}}
