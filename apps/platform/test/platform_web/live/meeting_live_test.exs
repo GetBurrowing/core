@@ -3849,6 +3849,14 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> String.trim()
       end
 
+      subtitle = fn surface, invite ->
+        surface
+        |> LazyHTML.query(~s([data-role="meeting-invite-row"][data-entry-id="#{invite.id}"]))
+        |> LazyHTML.query(~s([data-role="meeting-invite-row-subtitle"]))
+        |> LazyHTML.text()
+        |> String.trim()
+      end
+
       for surface <- [detail_panel(doc), detail_sheet(doc)] do
         assert tag.(surface, internal) == "internal"
         assert tag.(surface, external) == "external"
@@ -3858,6 +3866,15 @@ defmodule PlatformWeb.MeetingLiveTest do
         # `=~ "external"` is satisfied by the word appearing anywhere in
         # the row — including in the address the subtitle prints.
         assert tag.(surface, pending) == "external"
+
+        # STATE, one line, never explanation. An internal member's name is
+        # the whole fact, so their row carries no sub-line at all —
+        # asserted as the empty string rather than skipped, because "no
+        # subtitle" is a decision and not an absence of one.
+        assert subtitle.(surface, internal) == ""
+        assert subtitle.(surface, external) == Repo.get!(User, external.user_id).email
+        assert subtitle.(surface, guest) == "expires in 24h"
+        assert subtitle.(surface, pending) == "jess@fairbanksco.example"
       end
     end
 
@@ -4176,6 +4193,42 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     defp in_panel(selector), do: ~s([data-role="meeting-detail-panel"] #{selector})
+  end
+
+  describe "MeetingLive.guest_expiry_label/1" do
+    # Spans chosen OFF the boundaries. `expires_at` is compared against
+    # `DateTime.utc_now()` at call time, so a fixture seeded at exactly
+    # 3600s reads back as 3599 and lands in the neighbouring branch — an
+    # assertion pinned to an edge would be flaky by construction. Each
+    # value here is far enough from its edge that elapsed test time cannot
+    # move it.
+    defp in_seconds(seconds), do: DateTime.add(DateTime.utc_now(), seconds, :second)
+
+    test "a freshly minted 24h link says 24h, not 23h" do
+      # The whole reason this rounds rather than truncates. `invite_guest/2`
+      # stamps `now + 24h`; by the time it renders the span is 23h59m59s,
+      # and truncation would tell the host an hour they still have is gone.
+      assert PlatformWeb.MeetingLive.guest_expiry_label(in_seconds(24 * 3600)) ==
+               "expires in 24h"
+    end
+
+    test "whole hours in between" do
+      assert PlatformWeb.MeetingLive.guest_expiry_label(in_seconds(2 * 3600 + 60)) ==
+               "expires in 2h"
+    end
+
+    test "a sub-hour span never claims an hour" do
+      # Rounding UP is the direction that misleads — a link with four
+      # minutes left must not read as having an hour — so a sub-hour span
+      # does not go through the hours form at all.
+      assert PlatformWeb.MeetingLive.guest_expiry_label(in_seconds(1800)) == "expires in <1h"
+    end
+
+    test "a past-due link says so rather than rendering as live" do
+      # Reachable: `list_invites/2` filters revoked rows and NOT expired
+      # ones, so an aged-out guest still draws a row.
+      assert PlatformWeb.MeetingLive.guest_expiry_label(in_seconds(-60)) == "expired"
+    end
   end
 
   describe "MeetingDetail.when_label/2" do

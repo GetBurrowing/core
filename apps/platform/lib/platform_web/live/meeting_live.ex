@@ -1313,22 +1313,34 @@ defmodule PlatformWeb.MeetingLive do
   defp invite_row_subtitle(%Invite{}, _external?), do: nil
 
   @doc """
-  How long a guest link has left — `expires in 12h`, `expires in <1h`, or
+  How long a guest link has left — `expires in 24h`, `expires in <1h`, or
   `expired`.
 
   Whole hours and no minutes: the window is 24h by default and the reader
-  is deciding whether to re-send, not timing anything. The sub-hour and
-  past-due cases get their own strings because rounding them into the
-  hours form produces `expires in 0h`, which reads as a live link, and
-  `expires in -3h`, which reads as a bug. `list_invites/2` filters revoked
-  rows and not expired ones, so the past-due case is reachable.
+  is deciding whether to re-send, not timing anything.
+
+  ## Rounded, not truncated — and why the sub-hour case is its own string
+
+  `expires_at` is stamped as `now + 24h` and read back a few milliseconds
+  later, so the remaining span is 23h59m59s. TRUNCATING that renders
+  `expires in 23h` for a link minted a moment ago, which reads as though
+  an hour had already been lost. Rounding renders `24h`, which is what the
+  host was told when they minted it.
+
+  Rounding UP is the direction that misleads — it would let a link with
+  four minutes left claim an hour — so the sub-hour span does not go
+  through the hours form at all. `expires in <1h` says the one thing that
+  matters about it without overstating. Past due gets its own string for
+  the same reason in the other direction: `list_invites/2` filters revoked
+  rows and NOT expired ones, so a dead link is reachable here, and
+  `expires in 0h` reads as a live one.
   """
   @spec guest_expiry_label(DateTime.t()) :: String.t()
   def guest_expiry_label(%DateTime{} = expires_at) do
     case DateTime.diff(expires_at, DateTime.utc_now(), :second) do
       seconds when seconds <= 0 -> "expired"
       seconds when seconds < 3600 -> "expires in <1h"
-      seconds -> "expires in #{div(seconds, 3600)}h"
+      seconds -> "expires in #{round(seconds / 3600)}h"
     end
   end
 
