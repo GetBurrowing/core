@@ -160,6 +160,12 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
          here is minted per person. --%>
       <.invite_list mode={:live} entries={@invite_entries} id_prefix={@id_prefix} />
 
+      <%!-- `dropdown={:inline}` is load-bearing here, not stylistic. This
+         body is the surface's single scroll region and this control is at
+         the end of it, so a FLOATING dropdown is clipped by the panel's
+         `overflow-hidden` cap with its second option unreachable at any
+         scroll position — measured at 1440x900. In flow it lengthens the
+         body and the body scrolls to it. --%>
       <div :if={@invite_open} data-role="meeting-detail-invite-expansion">
         <.invite_control
           mode={:live}
@@ -167,6 +173,7 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
           query={@invite_query}
           candidates={@invite_candidates}
           email_option={@invite_email_option}
+          dropdown={:inline}
         />
       </div>
 

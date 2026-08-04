@@ -233,6 +233,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   attr(:email_option, :string, default: nil)
   attr(:target, :any, default: nil)
   attr(:id, :string, default: "meeting-invite-control")
+  attr(:dropdown, :atom, default: :floating, values: [:floating, :inline])
 
   @doc """
   The search box plus its dropdown.
@@ -243,6 +244,25 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   never also offers "invite as external". This template does not re-check
   that: `dropdown/1` dispatches on the candidate list, so there is no
   path that renders both.
+
+  ## `@dropdown` is a geometry decision, and it was measured
+
+  `:floating` is the create sheet's: at `sm` and up the list is absolutely
+  positioned over the content below it, which is what a dropdown should do
+  inside a roomy modal.
+
+  `:inline` is the DETAIL surface's, and it is not a preference. That
+  surface is a capped `overflow-hidden` column whose body is the single
+  scroll region, and the control sits at the END of that body. Measured in
+  a headless browser at 1440x900 with the body scrolled fully down, a
+  FLOATING dropdown was clipped by the panel's cap with its second option —
+  `Invite as an external member` — cut off and unreachable at any scroll
+  position, because absolute positioning takes it out of the flow the
+  scroll height is computed from. Rendered in flow it lengthens the body
+  instead, and the body scrolls to it.
+
+  A dropdown whose second option cannot be reached is a fork with one
+  prong, which is the whole decision this control exists to present.
   """
   def invite_control(assigns) do
     ~H"""
@@ -270,6 +290,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         email_option={@email_option}
         mode={@mode}
         target={@target}
+        dropdown={@dropdown}
       />
     </div>
     """
@@ -282,8 +303,9 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   defp dropdown(%{candidates: [_ | _]} = assigns) do
     ~H"""
     <div
-      class="mt-1 overflow-hidden rounded-lg border border-base-300 bg-base-100 sm:absolute sm:z-20 sm:w-full sm:shadow-lg"
+      class={dropdown_class(@dropdown)}
       data-role="meeting-invite-dropdown"
+      data-dropdown-position={@dropdown}
       data-dropdown-kind="candidates"
     >
       <button
@@ -318,6 +340,17 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
     """
   end
 
+  # `sm:absolute` is the ONLY difference, and it is the one that decides
+  # whether the list is clipped by an ancestor's cap. Everything else is
+  # shared so the two positions cannot drift in any other respect.
+  defp dropdown_class(:inline),
+    do: "mt-1 overflow-hidden rounded-lg border border-base-300 bg-base-100"
+
+  defp dropdown_class(:floating),
+    do:
+      "mt-1 overflow-hidden rounded-lg border border-base-300 bg-base-100 " <>
+        "sm:absolute sm:z-20 sm:w-full sm:shadow-lg"
+
   # Nothing matched and the query is not an address the account schema
   # would accept: no dropdown at all, rather than an empty panel.
   defp dropdown(%{candidates: [], email_option: nil} = assigns) do
@@ -327,8 +360,9 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   defp dropdown(%{candidates: []} = assigns) do
     ~H"""
     <div
-      class="mt-1 overflow-hidden rounded-lg border border-base-300 bg-base-100 sm:absolute sm:z-20 sm:w-full sm:shadow-lg"
+      class={dropdown_class(@dropdown)}
       data-role="meeting-invite-dropdown"
+      data-dropdown-position={@dropdown}
       data-dropdown-kind="options"
     >
       <%!-- Row 1 — the highlighted default. The canvas draws this one

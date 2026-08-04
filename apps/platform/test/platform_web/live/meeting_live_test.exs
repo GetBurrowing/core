@@ -4164,6 +4164,61 @@ defmodule PlatformWeb.MeetingLiveTest do
       end
     end
 
+    test "the detail surface's dropdown is IN FLOW, so its second option is reachable", %{
+      conn: conn,
+      project: project
+    } do
+      # Measured, not guessed. At 1440x900 with the panel's body scrolled
+      # fully down, the create sheet's FLOATING dropdown was clipped by the
+      # panel's `overflow-hidden` cap and its second option — `Invite as an
+      # external member` — could not be reached at any scroll position:
+      # absolute positioning takes it out of the flow the scroll height is
+      # computed from. A fork with one reachable prong is not a fork.
+      #
+      # Pinned on a `data-` attribute rather than on the class list, per
+      # this component's DOM contract — a class reshuffle must not be able
+      # to break a test, and the attribute is what the position MEANS.
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      _ = select_meeting(view, meeting)
+
+      view |> element(in_panel(~s([data-role="meeting-invite-add-people"]))) |> render_click()
+
+      doc =
+        view
+        |> element(in_panel(~s([data-role="meeting-invite-search"])))
+        |> render_keyup(%{"value" => "stranger@fairbanksco.example"})
+        |> LazyHTML.from_fragment()
+
+      dropdowns = LazyHTML.query(doc, ~s([data-role="meeting-invite-dropdown"]))
+
+      # Both options are rendered — the claim is about reaching the second,
+      # so a build that never drew it would pass a position assertion alone.
+      assert dropdowns |> LazyHTML.query(~s([data-role="meeting-invite-option"])) |> Enum.count() ==
+               4
+
+      assert LazyHTML.attribute(dropdowns, "data-dropdown-position") == ["inline", "inline"]
+
+      # …and the create sheet, which has room to float over its own body,
+      # still does. Asserted here so "inline everywhere" — which would be
+      # the same edit with no measurement behind it — fails.
+      {:ok, create_view, _} = live(grid_conn(conn), ~p"/meetings")
+      create_view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+
+      create_doc =
+        create_view
+        |> element(
+          ~s([data-role="meeting-create-invite-section"] [data-role="meeting-invite-search"])
+        )
+        |> render_keyup(%{"value" => "stranger@fairbanksco.example"})
+        |> LazyHTML.from_fragment()
+
+      assert create_doc
+             |> LazyHTML.query(~s([data-role="meeting-invite-dropdown"]))
+             |> LazyHTML.attribute("data-dropdown-position") == ["floating"]
+    end
+
     test "changing the selection closes the invite control", %{conn: conn, project: project} do
       # It is scoped to ONE meeting. Left open across a change of selection
       # it would be a search box under a different meeting's list, and the
