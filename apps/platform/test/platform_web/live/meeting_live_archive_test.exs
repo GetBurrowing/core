@@ -79,10 +79,12 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
 
   defp login(conn, user), do: Plug.Test.init_test_session(conn, current_user_id: user.id)
 
-  defp project! do
+  defp project!, do: project!("Control Center")
+
+  defp project!(name) do
     {:ok, project} =
       Tasks.create_project(%{
-        name: "Control Center",
+        name: name,
         org_id: Platform.TenancyFixtures.fabrikam_org_id()
       })
 
@@ -299,6 +301,25 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       rowan: rowan,
       org_name: Tenancy.get_org_by_slug!("fabrikam").name
     }
+  end
+
+  # An archive that HAS meetings, plus a real second project that has none —
+  # so `?project_id=<empty project>` is a filter a human can produce from the
+  # project dropdown and which excludes every row the viewer owns.
+  defp filtered_out_world! do
+    viewer = viewer!()
+    project = project!()
+    empty_project = project!("Growth")
+
+    project
+    |> meeting!("Quarterly retro")
+    |> ran!(at("2026-07-28T15:00:00Z"), at("2026-07-28T16:00:00Z"))
+
+    project
+    |> meeting!("Pipeline review")
+    |> ran!(at("2026-07-27T15:00:00Z"), at("2026-07-27T15:40:00Z"))
+
+    %{viewer: viewer, project: project, empty_project: empty_project}
   end
 
   defp chip_count(view, meeting_id) do
@@ -664,6 +685,56 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       # collapsed the two cards into one shared component with one heading
       # would keep both literals satisfiable only by breaking here.
       refute no_meetings == no_matches
+    end
+
+    # ── The FILTER path, with a blank query ──────────────────────────────
+    #
+    # This is the branch `:unfiltered_total` exists for, and the one the
+    # obvious predicate gets wrong. `result.total` already has the person and
+    # project filters applied, so a filter that excludes every row drives it
+    # to zero exactly as an empty archive does — and an archive full of
+    # meetings then reports "No meetings yet", which is the same conflation
+    # this pair was built to remove, arriving by a different door.
+    #
+    # Blank query on purpose: with a query, `matched == 0` would reach the
+    # no-matches state anyway and the filter's contribution would be invisible.
+    # Split into two tests for the same reason as the query pair above —
+    # ExUnit halts at the first failure, so one test can only report one side.
+
+    test "a filter that excludes every meeting renders no-matches, on a blank query", %{
+      conn: conn
+    } do
+      world = filtered_out_world!()
+      conn = login(conn, world.viewer)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/meetings?view=archive&project_id=#{world.empty_project.id}")
+
+      assert has_element?(view, "[data-empty-state='archive-no-matches']")
+
+      # And the way back out, since the filter is what the reader has to undo.
+      assert has_element?(view, "[data-action='archive-clear-filters']")
+    end
+
+    test "a filter that excludes every meeting does NOT render no-meetings", %{conn: conn} do
+      world = filtered_out_world!()
+      conn = login(conn, world.viewer)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/meetings?view=archive&project_id=#{world.empty_project.id}")
+
+      # The viewer HAS archived meetings — they are one filter away. Telling
+      # them they have none is a false statement about their own data.
+      refute has_element?(view, "[data-empty-state='archive-no-meetings']")
+
+      # Both directions on the fixture itself, in the same run: without this
+      # the pair above is satisfiable by a fixture that seeded no meetings at
+      # all, which would make "the archive is not empty" the untested premise
+      # the whole claim rests on.
+      {:ok, unfiltered, _html} = live(conn, ~p"/meetings?view=archive")
+
+      refute has_element?(unfiltered, "[data-empty-state='archive-no-meetings']")
+      assert has_element?(unfiltered, "[data-archive-section='others']")
     end
 
     test "a blank query over a populated archive is NEITHER empty state", %{conn: conn} do
