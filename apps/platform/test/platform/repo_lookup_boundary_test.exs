@@ -297,6 +297,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "019fb955 stage 4 — `ensure_delivery_invitee/2`'s get-or-insert guard ahead of `Chat.add_participant/2`, which has no such branch of its own and would hit `chat_participants_unique` on a re-delivery. `space_id` is `%Chat.Space{}.id` off the row `Chat.get_space/1` or `Chat.create_space/1` just returned in the same function. `participant_id` is `invite.user_id`, a `meeting_invites.user_id` FK column, and is checked with Platform.UUID.valid?/1 anyway before the lookup — because `deliver/2` accepts a STRUCT rather than an id, so a hand-built %Invite{} can carry anything, and because `Repo.get_by(_, participant_id: nil)` raises ArgumentError rather than returning nil (the nil case has its own head returning {:error, :no_invitee_user})"},
     {"platform/meetings.ex", :get_by, "Room", 3, :safe_internal,
      "keyed `livekit_room_name:` (string) and `space_id:`; the `space_id` callers pass a `%Space{}` id already resolved by `Chat.get_space/1`"},
+    {"platform/meetings.ex", :get_by, "User", 1, :safe_internal,
+     "019fb955-1d7b stage 2 — `invite_external_user/3` resolving the address a host TYPED into an account, which is the whole three-way branch. The value IS a boundary value, and it is safe for a reason this inventory should state precisely: the lookup is keyed `email:` only, a `:string` column, and casting a binary to `:string` cannot fail — `Ecto.Query.CastError`, the defect this test exists to catch, is only reachable when a boundary value is cast to `:binary_id`. No `Platform.UUID.valid?/1` guard applies because no UUID is pinned. `users.email` also carries a unique index, so `get_by/3` cannot raise `Ecto.MultipleResultsError` here either"},
     {"platform/meetings/archive.ex", :platform_uuid_guard, "-", 3, :safe_internal,
      "019fb954-c848 stage 2 — `maybe_filter_project/2` and `maybe_filter_person/2` each guard with Platform.UUID.valid?/1 before their id reaches a `where:`. Both come straight off the archive LiveView's `params` map (`?project=` / `?person=`), and `where: m.project_id == ^value` raises the same Ecto.Query.CastError as Repo.get/2 would. A malformed id narrows the query to nothing rather than dropping the filter — failing open on a scoping filter would turn a no-results page into a listing of every project the viewer can see. Stage 3 adds the third: `meeting_ids/1` filters the page's ids with the same guard before they reach `where: m.id in ^ids`, for the same reason and with the same failure mode — the ids reach `artifacts_for/2` by way of the page that rendered them, so one stale or hand-edited value would otherwise raise on a read that is supposed to degrade to 'that row has no artifacts'. Classification is unchanged: every one of the three narrows a query that is already org-scoped by `scoped_query/2`"},
     {"platform/meetings/intent_classifier.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
@@ -628,7 +630,20 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/federation/tool_surface.ex" => 2,
     "platform/files.ex" => 1,
     "platform/inbox.ex" => 1,
-    "platform/meetings.ex" => 9,
+    # 9 → 10 for task 019fb955-1d7b stage 2's `upsert_external_invite/3`.
+    # Triaged by hand as this map asks: the `where:` clause is
+    # `i.meeting_id == ^meeting.id and i.email == ^address and
+    # is_nil(i.user_id)`. `meeting.id` is destructured off the `%Meeting{}`
+    # the caller passed, so it is a persisted `meetings.id` column value,
+    # not a boundary input. `address` is a boundary value (the host typed
+    # it) but is pinned against `meeting_invites.email`, a `:string`
+    # column — casting a binary to `:string` cannot fail. No `x.id ==
+    # ^value` against a `:binary_id` on the path, so no
+    # `Ecto.Query.CastError` is reachable and no `Platform.UUID.valid?/1`
+    # guard applies. The call exists because no unique index covers
+    # `[meeting_id, email]` for `user_id`-NULL rows (the one on the table
+    # is partial on `user_id IS NOT NULL`), so dedupe must be a lookup.
+    "platform/meetings.ex" => 10,
     # Task 019fb954-c848 stage 2 — `Archive.counts/3`, the single aggregate
     # pass behind `search/2`. Triaged by hand as this map asks: its `where:`
     # clauses come from `scoped_query/2`, and TWO of them pin ids that arrive
@@ -687,7 +702,17 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/tasks/review_requests.ex" => 1,
     "platform/tasks/rollup_webhook_processor.ex" => 1,
     "platform/tasks/stacks.ex" => 4,
-    "platform/tenancy/external_grants.ex" => 1,
+    # 1 → 2 for task 019fb955-1d7b stage 2's `get_grant_by_email/1`.
+    # Triaged by hand as this map asks: the `where:` clause is
+    # `g.email == ^addr` — a boundary-supplied address pinned against a
+    # `:string` column, where casting a binary to `:string` cannot fail.
+    # No id is pinned, so no `Ecto.Query.CastError` is reachable and no
+    # `Platform.UUID.valid?/1` guard applies. It is deliberately NOT the
+    # existing `lookup_by_email_or_sub/1`: that one filters
+    # `applied_at IS NULL` and is therefore blind to applied rows, which
+    # still occupy the `email` unique index (it is not partial on
+    # `applied_at`). Branching on the blind one is fail-open.
+    "platform/tenancy/external_grants.ex" => 2,
     "platform/tenancy/lifecycle.ex" => 2,
     "platform/vault.ex" => 4,
     "platform/webhooks/github_signature.ex" => 1,
