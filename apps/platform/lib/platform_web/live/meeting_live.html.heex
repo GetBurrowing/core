@@ -2334,14 +2334,37 @@
          Deliberately NOT naming that offset as a literal class string here:
          Tailwind scans this directory as plain text, so a class written in
          a COMMENT is still a build candidate and would emit the rule this
-         change exists to retire. --%>
+         change exists to retire.
+
+         `min-h-11 min-w-11` is the 44px touch-target floor, and it is NOT
+         redundant with `btn-circle`. Read out of the BUILT stylesheet
+         rather than guessed from the class name: `.btn-circle` resolves to
+         `width: var(--size); height: var(--size)`, `.btn` sets
+         `--size: calc(var(--size-field, 0.25rem) * 10)`, and this app's
+         theme sets `--size-field: 0.21875rem` — so the button was 35px,
+         which is exactly what two reviewers measured. Nothing was
+         overriding `btn-circle`; it was faithfully rendering a 35px token.
+
+         The floor therefore has to be local. Raising `--size-field` would
+         resize every button and input in the app to fix one button, and
+         that token is a deliberate Fabrikam-spec value. And the floor is
+         expressed as `min-*` rather than `size-11` on purpose: min-width
+         and min-height beat width and height in the box model whatever
+         order the two utility rules land in, so this does not depend on
+         winning a cascade race with daisyUI.
+
+         Safe here in a way a pixel floor was NOT safe on the calendar
+         block: this button is `position: fixed`, so growing it consumes no
+         sibling's slot. Its bottom offset is unchanged and still clears
+         the nav — the offset is measured from the button's own bottom
+         edge, so a taller button grows upward into empty space. --%>
       <button
         type="button"
         phx-click="open_start_meeting_sheet"
         aria-label="New meeting"
         title="New meeting"
         data-role="start-meeting-fab"
-        class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg lg:hidden"
+        class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 min-h-11 min-w-11 shadow-lg lg:hidden"
       >
         <span class="hero-video-camera size-6"></span>
       </button>

@@ -2384,6 +2384,73 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute "hidden" in sheet_classes
     end
 
+    # The task's mobile floor. Named as a number rather than as a class so
+    # the assertion below can be wrong about the class and still right about
+    # the requirement.
+    @touch_target_px 44
+
+    # Tailwind's spacing scale, `--spacing: 0.25rem` in the built stylesheet,
+    # so `min-h-11` is 11 × 4px. Resolved arithmetically rather than matched
+    # as a literal: a test that greps for the string `min-h-11` is satisfied
+    # by `min-h-10` being swapped in for it only if someone remembers to
+    # update the grep, and it cannot say WHY 11 is the right number.
+    defp tailwind_spacing_px(token, prefix) do
+      case Float.parse(String.replace_prefix(token, prefix, "")) do
+        {steps, ""} -> steps * 4
+        _ -> nil
+      end
+    end
+
+    test "the FAB meets the 44px touch-target floor", %{conn: conn} do
+      # The defect this pins: the FAB measured 35.00 × 35.00px, computed
+      # `min-height: 0px` / `min-width: 0px`, on the ONLY create path a
+      # phone has. `btn-circle` was not broken and nothing was overriding
+      # it — read out of the built stylesheet, `.btn-circle` resolves to
+      # `width: var(--size); height: var(--size)`, `.btn` sets
+      # `--size: calc(var(--size-field, 0.25rem) * 10)`, and this app's
+      # theme sets `--size-field: 0.21875rem`. 0.21875 × 10 = 2.1875rem =
+      # 35px, exactly the measurement. The class was faithfully rendering a
+      # token that is under the floor.
+      #
+      # So the floor has to be asserted as a floor. What is checked is the
+      # NUMBER the rendered constraint resolves to, not that a constraint is
+      # present: the element was present at 35px the entire time, and so was
+      # `btn-circle`.
+      {:ok, _html, html} = live(grid_conn(conn), ~p"/meetings")
+
+      fab_classes =
+        html |> attrs_of(~s([data-role="start-meeting-fab"]), "class") |> List.first()
+
+      assert is_binary(fab_classes)
+      fab_classes = String.split(fab_classes)
+
+      # Exactly one of each. Two `min-h-*` tokens on one element is a
+      # cascade race whose winner depends on the order Tailwind emitted
+      # them in, which is not a thing this test — or the reader — can see.
+      assert [min_h] = Enum.filter(fab_classes, &String.starts_with?(&1, "min-h-"))
+      assert [min_w] = Enum.filter(fab_classes, &String.starts_with?(&1, "min-w-"))
+
+      assert tailwind_spacing_px(min_h, "min-h-") >= @touch_target_px
+      assert tailwind_spacing_px(min_w, "min-w-") >= @touch_target_px
+
+      # The floor is stated as `min-*` deliberately. `size-*` sets the same
+      # two properties `btn-circle` already sets, so it would win or lose on
+      # emission order; `min-width`/`min-height` beat `width`/`height` in the
+      # box model whatever that order is. A fix that swapped to `size-11`
+      # would measure 44px today and silently stop the day daisyUI's rule
+      # moved below it in the bundle.
+      refute Enum.any?(fab_classes, &String.starts_with?(&1, "size-"))
+
+      # Growing the button must not eat its clearance over the bottom nav.
+      # Re-asserted here, on the same render, because this test is the one
+      # that changes the button's size — and because a browser cannot check
+      # it: headless Chrome resolves `env(safe-area-inset-*)` to 0, so the
+      # inset term contributes nothing to a measured clearance and the
+      # result looks fine while the term is missing.
+      assert Enum.find(fab_classes, &String.starts_with?(&1, "bottom-[")) ==
+               "bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))]"
+    end
+
     test "a meeting lands in the column matching its local date, at its computed offset",
          %{conn: conn, project: project} do
       today = grid_today()
