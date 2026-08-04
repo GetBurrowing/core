@@ -66,6 +66,12 @@ defmodule Platform.Meetings.Meeting do
     # be both started-and-notified and later cancelled-and-notified, and one
     # column cannot carry both stamps.
     field(:cancellation_notified_at, :utc_datetime_usec)
+    # Weighted full-text vector over `name`, weight `A` — the strongest
+    # signal the archive ranks on (task 019fb954-c848). A STORED GENERATED
+    # column: Postgres owns the value, so it is `read_after_writes` and
+    # deliberately absent from every cast list. Casting it would make Ecto
+    # send the column on INSERT and Postgres would reject the write.
+    field(:search_vector, Platform.Types.TSVector, read_after_writes: true)
 
     timestamps(type: :utc_datetime_usec)
   end
