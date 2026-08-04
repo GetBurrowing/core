@@ -1666,11 +1666,10 @@
          frame draws empty day columns for exactly this reason.
 
          The `data-empty-state="meetings-index"` card and the grouped
-         section/row list are NOT deleted — they are scoped `lg:hidden`
-         and survive as the below-`lg` surface until stage 3 lands the
-         mobile week strip and day view that replace them. Deleting
-         them here would leave a phone with no meetings surface at all
-         for the width of one stage. --%>
+         section/row list that stage 2 kept here as the below-`lg`
+         surface are now GONE: the week strip and day view below are
+         what stage 2 was holding the place for. Leaving them would
+         draw both surfaces on a phone, one under the other. --%>
       <div
         :if={@meetings_view == :calendar}
         class="flex-1 overflow-y-auto px-3 py-3 sm:px-6 sm:py-5"
@@ -1743,7 +1742,7 @@
           <div
             :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
             class="flex flex-col items-center gap-1 border-b border-l border-base-300 bg-base-200/40 py-2"
-            data-role="calendar-day-heading"
+            data-role="calendar-week-day-heading"
             data-date={Date.to_iso8601(day.date)}
           >
             <span class="text-[10px] font-semibold uppercase tracking-widest text-base-content/50">
@@ -1849,79 +1848,191 @@
           </div>
         </div>
 
-        <%!-- ── Below `lg`: the pre-calendar surface, until stage 3 ──────
-           Retained rather than deleted. Stage 3 replaces both arms with
-           the mobile week strip and single-column day view. --%>
-        <%= if assigns[:meetings] in [nil, []] do %>
-          <%!-- Empty state. Mirrors the FAB icon + label so the visual
-             vocabulary stays consistent: a video camera glyph plus
-             "Start a meeting" wording. The FAB itself sits at the
-             bottom-right of the page. --%>
-          <div
-            class="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center lg:hidden"
-            data-empty-state="meetings-index"
+        <%!-- ── Below `lg`: week strip over a single-column day view ─────
+           A DIFFERENT INFORMATION ARCHITECTURE, not a narrower grid.
+           Seven columns at 375px leaves ~45px per day — titles are
+           unreadable and blocks untappable — so the phone splits the
+           two jobs the grid does at once: the strip keeps the WEEK
+           legible for navigation, one column carries the DETAIL of the
+           selected day.
+
+           Every one of the three elements below carries its own
+           `lg:hidden` rather than sitting inside one hidden wrapper.
+           That is deliberate: a wrapper would make each element's own
+           breakpoint class decorative, and a test pinning a class that
+           does nothing is worse than no test. --%>
+        <div
+          data-role="calendar-week-strip"
+          class="grid grid-cols-7 overflow-hidden rounded-t-lg border border-base-300 bg-base-200 lg:hidden"
+        >
+          <button
+            :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
+            type="button"
+            phx-click="select_calendar_day"
+            phx-value-date={Date.to_iso8601(day.date)}
+            aria-current={Date.compare(day.date, @calendar_selected_date) == :eq && "date"}
+            class="flex min-h-11 flex-col items-center justify-center gap-0.5 px-0 py-1.5 transition hover:bg-base-300/60"
+            data-role="calendar-strip-day"
+            data-date={Date.to_iso8601(day.date)}
+            data-selected={Date.compare(day.date, @calendar_selected_date) == :eq && "true"}
+            data-today={day.today? && "true"}
           >
-            <span class="hero-video-camera size-12 text-base-content/30"></span>
-            <h2 class="mt-3 text-lg font-semibold">No meetings yet</h2>
-            <p class="mt-1 max-w-sm text-sm text-base-content/50">
-              Meetings live here once they're scheduled or started. Spin one up to gather your collaborators around shared canvases, screen-shares, and threads.
-            </p>
-            <button
-              type="button"
-              phx-click="open_start_meeting_sheet"
-              class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
-              data-action="open-start-meeting-sheet"
+            <%!-- Today stays identifiable even when another day is
+               selected. The frames only ever draw a day that is both,
+               so they do not answer this; without the tell, selecting
+               Friday leaves a phone with nothing on screen that says
+               which day it actually is. Carried by the accent token on
+               the letter, NOT by a second circle, so the filled circle
+               keeps meaning exactly one thing: selection. --%>
+            <span class={[
+              "text-[10px] font-semibold uppercase leading-none tracking-widest",
+              day.today? && "text-primary",
+              !day.today? && "text-base-content/50"
+            ]}>
+              {calendar_weekday_initial(day.date)}
+            </span>
+            <span
+              class={[
+                "size-6 text-center text-sm font-semibold leading-6",
+                Date.compare(day.date, @calendar_selected_date) == :eq &&
+                  "rounded-full bg-primary text-primary-content"
+              ]}
+              data-role="calendar-strip-day-number"
             >
-              <span class="hero-video-camera size-4"></span>
-              <span>Start a meeting</span>
+              {day.date.day}
+            </span>
+          </button>
+        </div>
+
+        <%!-- The mobile count lives HERE, not in the page header. Both
+           mobile frames strip the header back to icon + `Meetings` +
+           the segmented control and put `Wednesday, Aug 5 · 2
+           meetings` under the strip instead, where it describes the
+           day actually being drawn rather than a week-wide total the
+           single column cannot show. --%>
+        <div
+          class="flex items-baseline gap-1.5 border-x border-b border-base-300 bg-base-200/40 px-3 py-2 text-[11px] font-semibold uppercase tracking-widest text-base-content/50 lg:hidden"
+          data-role="calendar-day-heading"
+          data-date={Date.to_iso8601(@calendar_selected_date)}
+        >
+          <span>{calendar_day_label(@calendar_selected_date)}</span>
+          <span aria-hidden="true">·</span>
+          <span data-role="calendar-day-count">
+            {calendar_day_count_label(
+              calendar_day_meeting_count(
+                @calendar_week_meetings,
+                @calendar_selected_date,
+                @calendar_time_zone,
+                @calendar_hour_window
+              )
+            )}
+          </span>
+        </div>
+
+        <%!-- One day, one column, its own 44px gutter. The hour rows
+           are 3rem here against the desktop grid's 3.25rem, and that
+           costs nothing: `CalendarWindow.place/4` answers in
+           PERCENTAGES of the drawn window, so both halves place the
+           same meeting correctly at different row heights.
+
+           The bottom margin is FAB clearance, not nav clearance —
+           `.bottom-nav` is `position: sticky` inside the shell's flex
+           column (app.css:2226), so it takes flow space and the scroll
+           region already ends above it. The FAB is the thing that
+           overlays: it is fixed 1.5rem above the nav and is ~3rem
+           tall, so without this the last hour sits under it. --%>
+        <div
+          data-role="calendar-day-view"
+          class="mb-20 grid overflow-hidden rounded-b-lg border-x border-b border-base-300 bg-base-100 lg:hidden"
+          style="grid-template-columns: 2.75rem 1fr"
+        >
+          <div class="flex flex-col bg-base-200/20">
+            <div
+              :for={hour <- calendar_hours(@calendar_hour_window)}
+              class="h-12 pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-base-content/40"
+            >
+              {calendar_hour_label(hour)}
+            </div>
+          </div>
+
+          <div
+            class="relative border-l border-base-300"
+            style="background-image: repeating-linear-gradient(to bottom, transparent 0, transparent calc(3rem - 1px), var(--color-base-300) calc(3rem - 1px), var(--color-base-300) 3rem)"
+            data-role="calendar-day-body"
+            data-date={Date.to_iso8601(@calendar_selected_date)}
+          >
+            <%!-- Same two conditions as the desktop column, asked of
+               the SELECTED day rather than of each of seven: the line
+               is a fact about today, so it is absent whenever the day
+               on screen is not today or the zone is unresolved. --%>
+            <div
+              :for={
+                offset <-
+                  calendar_selected_now_line(
+                    @calendar_selected_date,
+                    @calendar_time_zone,
+                    @calendar_hour_window
+                  )
+              }
+              class="pointer-events-none absolute inset-x-0 z-10 h-[1.5px] bg-error"
+              style={"top:#{offset}%"}
+              data-role="calendar-now-line"
+              aria-hidden="true"
+            >
+              <span class="absolute -left-px -top-[3px] size-2 rounded-full bg-error"></span>
+            </div>
+
+            <%!-- The SAME contract as the desktop block — same
+               `data-role`, same id/status/live attributes, same
+               percentage geometry, same event — so one selector reads
+               both halves and neither half can drift from the other.
+               What differs is only what a thumb needs: more vertical
+               padding, and the same `min-h-11` floor, which is what
+               keeps a 30-minute block (24px in a 48px hour row) from
+               clipping its own time line off. --%>
+            <button
+              :for={
+                {meeting, placement} <-
+                  calendar_day_events(
+                    @calendar_week_meetings,
+                    @calendar_selected_date,
+                    @calendar_time_zone,
+                    @calendar_hour_window
+                  )
+              }
+              type="button"
+              phx-click="select_meeting"
+              phx-value-id={meeting.id}
+              class={[
+                "absolute inset-x-1.5 flex min-h-11 flex-col items-start justify-center overflow-hidden rounded-md border-l-[3px] px-2 py-1.5 text-left",
+                meeting.status == "live" && "border-success bg-success/15",
+                meeting.status != "live" && "border-primary bg-primary/15",
+                @selected_meeting_id == meeting.id && "ring-2 ring-primary"
+              ]}
+              style={"top:#{placement.top}%;height:#{placement.height}%"}
+              data-role="calendar-event"
+              data-meeting-id={meeting.id}
+              data-meeting-status={meeting.status}
+              data-live={meeting.status == "live" && "true"}
+              data-selected={@selected_meeting_id == meeting.id && "true"}
+            >
+              <span class="flex w-full items-center gap-1.5">
+                <span
+                  :if={meeting.status == "live"}
+                  class="size-1.5 flex-shrink-0 rounded-full bg-success animate-pulse"
+                  data-role="calendar-event-live-dot"
+                >
+                </span>
+                <span class="truncate text-xs font-medium leading-tight text-base-content">
+                  {meeting.name}
+                </span>
+              </span>
+              <span class="truncate text-[11px] leading-tight text-base-content/60">
+                {calendar_event_time(meeting, @calendar_time_zone)}
+              </span>
             </button>
           </div>
-        <% else %>
-          <div class="mx-auto mt-3 flex max-w-3xl flex-col gap-6 lg:hidden">
-            <%= for section <- meeting_status_sections(),
-                  rows = Map.get(@grouped_meetings, section, []),
-                  rows != [] do %>
-              <section data-section={section}>
-                <header class="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                  <span class={[meeting_section_icon(section), "size-4 text-base-content/60"]}>
-                  </span>
-                  <span>{meeting_section_label(section)}</span>
-                  <span class="text-base-content/30">·</span>
-                  <span class="text-base-content/40">{length(rows)}</span>
-                </header>
-
-                <ul class="flex flex-col gap-1.5" data-section-rows={section}>
-                  <%= for meeting <- rows do %>
-                    <li>
-                      <.link
-                        navigate={~p"/meetings/#{meeting.slug}"}
-                        class="group flex items-center gap-3 rounded-lg border border-base-300 bg-base-100 px-3 py-2.5 transition hover:border-primary/50 hover:bg-base-200/40"
-                        data-role="meeting-row"
-                        data-meeting-id={meeting.id}
-                        data-meeting-status={meeting.status}
-                      >
-                        <span class="hero-video-camera size-5 flex-shrink-0 text-base-content/40 group-hover:text-primary">
-                        </span>
-                        <div class="flex min-w-0 flex-1 flex-col">
-                          <span class="truncate text-sm font-medium text-base-content">
-                            {meeting.name}
-                          </span>
-                          <span class="truncate text-xs text-base-content/50">
-                            {meeting.slug}
-                          </span>
-                        </div>
-                        <span class={meeting_status_pill(section)} data-role="meeting-status-pill">
-                          <span class={[meeting_section_icon(section), "size-3"]}></span>
-                          <span>{meeting_section_label(section)}</span>
-                        </span>
-                      </.link>
-                    </li>
-                  <% end %>
-                </ul>
-              </section>
-            <% end %>
-          </div>
-        <% end %>
+        </div>
       </div>
 
       <%!-- ── Start-meeting FAB ───────────────────────────────────────────

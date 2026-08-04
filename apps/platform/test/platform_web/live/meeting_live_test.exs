@@ -1975,45 +1975,102 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
-  # ── Meetings index (:index action, stage 1 of task 019e2ca8) ─────────────
+  # ── Meetings index (:index action) ───────────────────────────────────────
+  #
+  # Task 019fb954-8ead stage 3 REPLACED the pre-calendar index surface. The
+  # `data-empty-state="meetings-index"` card and the grouped section/row
+  # list were the below-`lg` surface stage 2 kept alive for exactly one
+  # stage; the mobile week strip and day view are what they were being kept
+  # for, so this stage deletes them rather than drawing the new surface
+  # underneath the old one.
+  #
+  # The assertions that pinned them are re-pointed, not dropped:
+  #
+  #   * "an empty index shows the empty-state card" is now "an empty index
+  #     shows the calendar's own empty answer, and the card is gone" — the
+  #     removal is asserted, so a revert goes red.
+  #   * "one section per non-empty status bucket, rows linking to
+  #     /meetings/<slug>" is now "meetings render as day-view event blocks".
+  #     The `<slug>` LINK has no analogue on the calendar and is not faked
+  #     here: stage 4 gives a selected meeting a detail surface, and until
+  #     it lands there is no path from the index to a meeting page at ANY
+  #     width (the desktop half lost the same thing in stage 2).
+  #
+  # Two stage-1 tests were deleted outright rather than re-pointed, because
+  # what they pinned no longer exists in any form: "section ordering is live
+  # → upcoming → ended" and "sections with zero rows are omitted". The
+  # calendar partitions by DATE, and has no sections to order or omit.
+  # `group_meetings_by_status/1` still has its own describe below.
 
-  describe ":index action — empty state" do
-    test "renders the no-meetings empty state when zero meetings exist", %{conn: conn} do
-      {conn, _user} = authenticated_conn(conn)
-
-      # Defensive: drop any meetings other tests in this run might have
-      # seeded, so the empty branch is exercised in isolation.
+  describe ":index action — the pre-calendar surface is gone" do
+    setup %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
       Repo.delete_all(Meeting)
+      project = create_project()
+      {:ok, conn: conn, user: user, project: project}
+    end
 
-      {:ok, _view, html} = live(conn, ~p"/meetings")
+    test "an empty index draws the calendar, not a 'No meetings yet' card", %{conn: conn} do
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
 
-      assert html =~ ~s(data-empty-state="meetings-index")
-      assert html =~ "No meetings yet"
-      # FAB-pair vocabulary (stage 2 will mount the real button — the
-      # empty-state copy + icon must already match).
-      assert html =~ "Start a meeting"
-      assert html =~ "hero-video-camera"
-
-      # MOVED by task 019fb954-8ead stage 2, not deleted. This used to read
-      # `refute html =~ ~s(data-region="meetings-list")`: the region was the
-      # else-arm of "are there any meetings?", so zero meetings meant no
-      # region. The calendar that now lives inside it draws its chrome
-      # regardless — an empty week grid IS a calendar's empty state — so the
-      # region is unconditional on the Calendar pane and the assertion moves
-      # from "absent" to "present, and still empty of rows".
-      assert html =~ ~s(data-region="meetings-list")
+      # The deleted surface, named so a revert is loud rather than merely
+      # duplicated on screen.
+      refute html =~ ~s(data-empty-state="meetings-index")
+      refute html =~ "No meetings yet"
       refute html =~ ~s(data-role="meeting-row")
 
-      # The card itself is now the BELOW-`lg` empty state: above `lg` the
-      # empty grid says it. Stage 3 replaces this arm with the mobile week
-      # strip and day view.
-      assert [class] =
-               html
-               |> LazyHTML.from_fragment()
-               |> LazyHTML.query(~s([data-empty-state="meetings-index"]))
-               |> LazyHTML.attribute("class")
+      # What replaced it: below `lg` the strip and the day view draw their
+      # chrome with nothing in them, exactly as the desktop grid does. An
+      # empty calendar IS a calendar's answer to "what is on this week?".
+      assert length(attrs_of(html, ~s([data-role="calendar-strip-day"]), "data-date")) == 7
 
-      assert "lg:hidden" in String.split(class)
+      assert attrs_of(html, ~s([data-role="calendar-day-view"]), "data-role") ==
+               ["calendar-day-view"]
+
+      assert day_count_text(html) == "No meetings"
+    end
+
+    test "meetings render as calendar blocks, not as grouped status sections",
+         %{conn: conn, project: project} do
+      today = grid_today()
+
+      live_meeting =
+        seed_grid_meeting(project,
+          slug: "live-now",
+          name: "Live Standup",
+          status: "live",
+          scheduled_start_at: zoned_utc(today, 9, 0),
+          scheduled_end_at: zoned_utc(today, 10, 0)
+        )
+
+      upcoming =
+        seed_grid_meeting(project,
+          slug: "next-up",
+          name: "Quarterly Review",
+          status: "scheduled",
+          scheduled_start_at: zoned_utc(today, 11, 0),
+          scheduled_end_at: zoned_utc(today, 12, 0)
+        )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      # The grouped list's markers are gone in every form it had.
+      refute html =~ ~s(data-section="live")
+      refute html =~ ~s(data-section="upcoming")
+      refute html =~ ~s(data-section="ended")
+      refute html =~ ~s(data-role="meeting-status-pill")
+      refute html =~ ~s(href="/meetings/#{live_meeting.slug}")
+
+      # And both meetings are on the day view instead, carrying their own
+      # statuses rather than a section's.
+      assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [live_meeting.id, upcoming.id]
+
+      assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "data-meeting-status") ==
+               ["live", "scheduled"]
+
+      assert html =~ live_meeting.name
+      assert html =~ upcoming.name
     end
 
     test "index renders without forcing a local data-theme override (inherits shell theme)",
@@ -2022,123 +2079,10 @@ defmodule PlatformWeb.MeetingLiveTest do
       # hardcoded `data-theme="light"` as the `:show` shell — both must
       # now inherit the shell's `data-theme` from `<html>` in
       # `root.html.heex`.
-      {conn, _user} = authenticated_conn(conn)
-      Repo.delete_all(Meeting)
-
       {:ok, _view, html} = live(conn, ~p"/meetings")
 
       refute html =~ ~s(data-theme="light")
       refute html =~ ~s(data-theme="dark")
-    end
-  end
-
-  describe ":index action — grouped sections" do
-    setup %{conn: conn} do
-      {conn, user} = authenticated_conn(conn)
-      Repo.delete_all(Meeting)
-      project = create_project()
-      {:ok, conn: conn, user: user, project: project}
-    end
-
-    defp seed_meeting_with_status(project, opts) do
-      slug = Keyword.fetch!(opts, :slug)
-      name = Keyword.get(opts, :name, "Meeting #{slug}")
-      status = Keyword.get(opts, :status, "scheduled")
-
-      space = create_space()
-      meeting_id = Platform.Types.UUIDv7.generate()
-
-      attrs = %{
-        project_id: project.id,
-        chat_space_id: space.id,
-        slug: slug,
-        name: name,
-        livekit_room_name: "meeting-#{meeting_id}",
-        status: status
-      }
-
-      {:ok, meeting} =
-        %Meeting{id: meeting_id}
-        |> Meeting.changeset(attrs)
-        |> Repo.insert()
-
-      meeting
-    end
-
-    test "renders one section per non-empty status bucket with rows linking to /meetings/<slug>",
-         %{conn: conn, project: project} do
-      live_meeting =
-        seed_meeting_with_status(project,
-          slug: "live-now",
-          name: "Live Standup",
-          status: "live"
-        )
-
-      upcoming =
-        seed_meeting_with_status(project,
-          slug: "next-week",
-          name: "Quarterly Review",
-          status: "scheduled"
-        )
-
-      ended =
-        seed_meeting_with_status(project,
-          slug: "yesterday",
-          name: "Closed Postmortem",
-          status: "ended"
-        )
-
-      {:ok, _view, html} = live(conn, ~p"/meetings")
-
-      # Empty state is GONE.
-      refute html =~ ~s(data-empty-state="meetings-index")
-
-      # Three sections render with their data-section markers.
-      assert html =~ ~s(data-section="live")
-      assert html =~ ~s(data-section="upcoming")
-      assert html =~ ~s(data-section="ended")
-
-      # Each meeting's name + slug shows up.
-      assert html =~ live_meeting.name
-      assert html =~ upcoming.name
-      assert html =~ ended.name
-
-      # Each row links to /meetings/<slug>.
-      assert html =~ ~s(href="/meetings/#{live_meeting.slug}")
-      assert html =~ ~s(href="/meetings/#{upcoming.slug}")
-      assert html =~ ~s(href="/meetings/#{ended.slug}")
-
-      # Status pill labels — one per section.
-      assert html =~ "Live now"
-      assert html =~ "Upcoming"
-      assert html =~ "Ended"
-    end
-
-    test "section ordering is live → upcoming → ended", %{conn: conn, project: project} do
-      seed_meeting_with_status(project, slug: "ord-live", status: "live")
-      seed_meeting_with_status(project, slug: "ord-upcoming", status: "scheduled")
-      seed_meeting_with_status(project, slug: "ord-ended", status: "ended")
-
-      {:ok, _view, html} = live(conn, ~p"/meetings")
-
-      live_pos = :binary.match(html, ~s(data-section="live")) |> elem(0)
-      upcoming_pos = :binary.match(html, ~s(data-section="upcoming")) |> elem(0)
-      ended_pos = :binary.match(html, ~s(data-section="ended")) |> elem(0)
-
-      assert live_pos < upcoming_pos
-      assert upcoming_pos < ended_pos
-    end
-
-    test "sections with zero rows are omitted (not rendered as empty headers)",
-         %{conn: conn, project: project} do
-      # Only an upcoming meeting — live and ended sections must NOT render.
-      seed_meeting_with_status(project, slug: "only-upcoming", status: "scheduled")
-
-      {:ok, _view, html} = live(conn, ~p"/meetings")
-
-      assert html =~ ~s(data-section="upcoming")
-      refute html =~ ~s(data-section="live")
-      refute html =~ ~s(data-section="ended")
     end
   end
 
@@ -2150,72 +2094,67 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, project: project}
     end
 
-    test ":meeting_created PubSub message updates the rendered list without remount",
+    test ":meeting_created PubSub message places the new meeting without a remount",
          %{conn: conn, project: project} do
-      {:ok, view, html} = live(conn, ~p"/meetings")
+      today = grid_today()
 
-      # Empty to start.
-      assert html =~ ~s(data-empty-state="meetings-index")
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
 
-      # Create a meeting via the context — broadcasts on the project topic.
-      {:ok, _space} =
-        Chat.create_space(%{
-          name: "Pub Pre-existing",
-          slug: "pub-pre-existing-#{System.unique_integer([:positive])}",
-          kind: "channel"
-        })
+      # Empty to start — asserted on the calendar now that the empty-state
+      # card is gone.
+      assert attrs_of(html, ~s([data-role="calendar-event"]), "data-meeting-id") == []
+      assert day_count_text(html) == "No meetings"
 
       {:ok, meeting} =
         Platform.Meetings.create_meeting(%{
           project_id: project.id,
-          name: "Brand New Meeting"
+          name: "Brand New Meeting",
+          scheduled_start_at: zoned_utc(today, 13, 0),
+          scheduled_end_at: zoned_utc(today, 14, 0)
         })
 
       # Force the LV to flush the inbound :meeting_created broadcast.
       html = render(view)
 
-      refute html =~ ~s(data-empty-state="meetings-index")
+      assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [meeting.id]
+
+      assert day_count_text(html) == "1 meeting"
       assert html =~ "Brand New Meeting"
-      assert html =~ ~s(data-meeting-id="#{meeting.id}")
-      assert html =~ ~s(href="/meetings/#{meeting.slug}")
     end
 
-    test ":meeting_ended PubSub message re-groups the row into the ended section",
+    test ":meeting_ended PubSub message flips the block's status in place",
          %{conn: conn, project: project} do
-      # Seed a live meeting first.
-      {:ok, space} =
-        Chat.create_space(%{
-          name: "End me",
-          slug: "end-me-#{System.unique_integer([:positive])}",
-          kind: "channel"
-        })
+      # The row does not MOVE any more — a meeting occupies the slot it was
+      # scheduled for whether it is live or ended — so what the broadcast
+      # has to change is the block's own status, and the live tell with it.
+      today = grid_today()
 
-      meeting_id = Platform.Types.UUIDv7.generate()
-
-      {:ok, meeting} =
-        %Meeting{id: meeting_id}
-        |> Meeting.changeset(%{
-          project_id: project.id,
-          chat_space_id: space.id,
+      meeting =
+        seed_grid_meeting(project,
           slug: "end-me",
           name: "Ending Meeting",
-          livekit_room_name: "meeting-#{meeting_id}",
-          status: "live"
-        })
-        |> Repo.insert()
+          status: "live",
+          scheduled_start_at: zoned_utc(today, 15, 0),
+          scheduled_end_at: zoned_utc(today, 16, 0)
+        )
 
-      {:ok, view, html} = live(conn, ~p"/meetings")
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
 
-      assert html =~ ~s(data-section="live")
-      refute html =~ ~s(data-section="ended")
+      block = day_view(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"]))
 
-      # End it; broadcast should land on the LV's project subscription.
+      assert attrs_of(html, block, "data-meeting-status") == ["live"]
+      assert attrs_of(html, block, "data-live") == ["true"]
+
       {:ok, _ended} = Platform.Meetings.end_meeting(meeting)
 
       html = render(view)
 
-      refute html =~ ~s(data-section="live")
-      assert html =~ ~s(data-section="ended")
+      assert attrs_of(html, block, "data-meeting-status") == ["ended"]
+      # Both sides named: `attribute/2` skips nodes that lack the attribute,
+      # so "no `true` on the page" and "this block lost its `true`" are
+      # different claims and only the second one is about this block.
+      assert attrs_of(html, block, "data-live") == []
       assert html =~ "Ending Meeting"
     end
   end
@@ -2293,7 +2232,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     # A UTC instant for a wall-clock time in the viewer's zone. Everything
     # persisted is UTC; everything asserted is local; this is the only place
     # the two meet.
-    defp zoned_utc(%Date{} = date, hour, minute \\ 0) do
+    defp zoned_utc(%Date{} = date, hour, minute) do
       date
       |> DateTime.new!(Time.new!(hour, minute, 0), @grid_zone)
       |> DateTime.shift_zone!("Etc/UTC")
@@ -2332,6 +2271,16 @@ defmodule PlatformWeb.MeetingLiveTest do
     defp column_selector(%Date{} = date),
       do: ~s([data-role="calendar-day-column"][data-date="#{Date.to_iso8601(date)}"])
 
+    # Task 019fb954-8ead stage 3 landed the mobile day view, which renders
+    # `data-role="calendar-event"` and `data-role="calendar-now-line"` from
+    # the SAME contract as the grid — deliberately, so one selector reads
+    # both halves. The consequence for these tests is that an unscoped
+    # "exactly one event is on the page" is no longer a claim about the
+    # desktop grid; it is a claim about both halves at once, and it fails
+    # for a reason that has nothing to do with the grid. Every desktop
+    # assertion therefore scopes itself inside the week grid.
+    defp in_grid(selector), do: ~s([data-role="calendar-week-grid"] #{selector})
+
     test "the grid renders its chrome with zero meetings", %{conn: conn} do
       # A calendar's empty state is an empty calendar. This is the assertion
       # that used to read `refute html =~ ~s(data-region="meetings-list")` in
@@ -2342,28 +2291,41 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert attrs_of(html, ~s([data-role="calendar-week-grid"]), "data-role") ==
                ["calendar-week-grid"]
 
-      assert length(attrs_of(html, ~s([data-role="calendar-day-heading"]), "data-date")) == 7
+      assert length(attrs_of(html, ~s([data-role="calendar-week-day-heading"]), "data-date")) == 7
       assert length(attrs_of(html, ~s([data-role="calendar-day-column"]), "data-date")) == 7
-      assert attrs_of(html, ~s([data-role="calendar-event"]), "data-meeting-id") == []
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") == []
     end
 
-    test "the week grid is desktop-only, carrying BOTH `hidden` and `lg:grid`",
+    test "the grid is the `lg` surface and the day view is the surface below it",
          %{conn: conn} do
-      # ONE test, both halves. LiveView renders a single document containing
-      # every breakpoint's markup and there is no viewport at test time, so
-      # asserting only that the grid is PRESENT passes on a breakpoint that
-      # renders it at every width, and asserting only that it is ABSENT
-      # passes on one that renders it nowhere. Only the pair pins the rule.
+      # ONE test, ONE document, BOTH halves — extended by stage 3 rather
+      # than joined by a second test. LiveView renders a single document
+      # containing every breakpoint's markup and there is no viewport at
+      # test time, so each half alone is satisfied by a wrong answer:
+      # "the grid carries hidden lg:grid" passes on a build that also
+      # draws the day view at every width, and "the day view carries
+      # lg:hidden" passes on one that draws neither. Only the pair says
+      # the two halves swap at `lg`.
       {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
 
-      classes =
+      grid_classes =
         html
         |> attrs_of(~s([data-role="calendar-week-grid"]), "class")
         |> List.first()
         |> String.split()
 
-      assert "hidden" in classes
-      assert "lg:grid" in classes
+      day_view_classes =
+        html
+        |> attrs_of(~s([data-role="calendar-day-view"]), "class")
+        |> List.first()
+        |> String.split()
+
+      assert "hidden" in grid_classes
+      assert "lg:grid" in grid_classes
+      assert "lg:hidden" in day_view_classes
+      # …and the day view is not ALSO hidden below `lg`, which is the way
+      # `lg:hidden` can be present and still mean "never drawn".
+      refute "hidden" in day_view_classes
     end
 
     test "a meeting lands in the column matching its local date, at its computed offset",
@@ -2382,7 +2344,8 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       # It is in TODAY's column, and it is the only event on the grid — so a
       # grid that renders every meeting in every column fails here.
-      assert attrs_of(html, ~s([data-role="calendar-event"]), "data-meeting-id") == [meeting.id]
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [meeting.id]
 
       assert attrs_of(
                html,
@@ -2393,14 +2356,15 @@ defmodule PlatformWeb.MeetingLiveTest do
       # Hand-computed against the default {8, 18} window this single 10:00
       # meeting does not widen: the window is 600 minutes, the meeting starts
       # 120 minutes into it (120/600 = 20%) and runs 60 (60/600 = 10%).
-      assert attrs_of(html, ~s([data-role="calendar-event"]), "style") ==
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "style") ==
                ["top:20.0%;height:10.0%"]
 
       # And it carries its own status, not a rendered guess at one.
-      assert attrs_of(html, ~s([data-role="calendar-event"]), "data-meeting-status") ==
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-status") ==
                ["scheduled"]
 
-      assert attrs_of(html, ~s([data-role="calendar-event"]), "phx-value-id") == [meeting.id]
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "phx-value-id") ==
+               [meeting.id]
     end
 
     test "a meeting with no scheduled_start_at renders no event block and does not raise",
@@ -2413,7 +2377,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert attrs_of(html, ~s([data-role="calendar-week-grid"]), "data-role") ==
                ["calendar-week-grid"]
 
-      assert attrs_of(html, ~s([data-role="calendar-event"]), "data-meeting-id") == []
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") == []
     end
 
     test "a cancelled meeting is not placed while a scheduled one at the same instant is",
@@ -2445,7 +2409,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
 
-      assert attrs_of(html, ~s([data-role="calendar-event"]), "data-meeting-id") ==
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") ==
                [scheduled.id]
     end
 
@@ -2475,8 +2439,11 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
 
-      live_selector = ~s([data-role="calendar-event"][data-meeting-id="#{live_meeting.id}"])
-      scheduled_selector = ~s([data-role="calendar-event"][data-meeting-id="#{scheduled.id}"])
+      live_selector =
+        in_grid(~s([data-role="calendar-event"][data-meeting-id="#{live_meeting.id}"]))
+
+      scheduled_selector =
+        in_grid(~s([data-role="calendar-event"][data-meeting-id="#{scheduled.id}"]))
 
       # Both halves named, because `attribute/2` skips nodes without the
       # attribute: asserting only the presence of one `"true"` on the page
@@ -2491,7 +2458,7 @@ defmodule PlatformWeb.MeetingLiveTest do
                "data-role"
              ) == ["calendar-event-live-dot"]
 
-      assert attrs_of(html, ~s([data-role="calendar-event-live-dot"]), "data-role") ==
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event-live-dot"])), "data-role") ==
                ["calendar-event-live-dot"]
     end
 
@@ -2514,7 +2481,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       # Exactly one, and it is in today's column. A now-line drawn in every
       # column would satisfy "it is in today's column" and fail the count.
-      assert attrs_of(html, ~s([data-role="calendar-now-line"]), "data-role") ==
+      assert attrs_of(html, in_grid(~s([data-role="calendar-now-line"])), "data-role") ==
                ["calendar-now-line"]
 
       assert attrs_of(
@@ -2529,8 +2496,11 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
 
       # Exactly one marked day…
-      assert attrs_of(html, ~s([data-role="calendar-day-heading"] [data-today]), "data-today") ==
-               ["true"]
+      assert attrs_of(
+               html,
+               ~s([data-role="calendar-week-day-heading"] [data-today]),
+               "data-today"
+             ) == ["true"]
 
       # …and it is the day the viewer's zone calls today. Walked per-heading
       # rather than with a `:has()` selector so the association between the
@@ -2539,7 +2509,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       marked =
         html
         |> doc()
-        |> LazyHTML.query(~s([data-role="calendar-day-heading"]))
+        |> LazyHTML.query(~s([data-role="calendar-week-day-heading"]))
         |> Enum.filter(
           &(LazyHTML.attribute(LazyHTML.query(&1, "[data-today]"), "data-today") != [])
         )
@@ -2598,6 +2568,349 @@ defmodule PlatformWeb.MeetingLiveTest do
       |> doc()
       |> LazyHTML.text()
       |> String.trim()
+    end
+  end
+
+  # ── Mobile week strip + day view (task 019fb954-8ead stage 3) ────────────
+  #
+  # Below `lg` the calendar is a different information architecture, not a
+  # narrower grid: a week strip for navigation over a single-column day
+  # view for detail. These tests read the same document the desktop ones
+  # do — there is no viewport at test time — so each one names the half it
+  # is about, either by scoping inside `[data-role="calendar-day-view"]` or
+  # by asserting the breakpoint classes directly (see "the grid is the `lg`
+  # surface and the day view is the surface below it", which is the one
+  # test that pins the swap and deliberately stayed a single test).
+  describe ":index action — mobile day view" do
+    setup %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      Repo.delete_all(Meeting)
+      project = create_project()
+      {:ok, conn: conn, user: user, project: project}
+    end
+
+    defp day_view(selector), do: ~s([data-role="calendar-day-view"] #{selector})
+
+    defp day_count_text(html) do
+      html
+      |> doc()
+      |> LazyHTML.query(~s([data-role="calendar-day-count"]))
+      |> LazyHTML.text()
+      |> String.trim()
+    end
+
+    defp day_heading_date(html),
+      do: html |> attrs_of(~s([data-role="calendar-day-heading"]), "data-date") |> List.first()
+
+    defp strip_letters(html) do
+      html
+      |> doc()
+      |> LazyHTML.query(~s([data-role="calendar-strip-day"]))
+      |> Enum.map(fn cell ->
+        cell
+        |> LazyHTML.query(~s([data-role="calendar-strip-day-number"]))
+        |> then(fn number -> String.replace(LazyHTML.text(cell), LazyHTML.text(number), "") end)
+        |> String.trim()
+      end)
+    end
+
+    # The expected week, derived from `Date.beginning_of_week/1`'s stdlib
+    # `:monday` default rather than from anything the template calls.
+    defp monday_first_week(%Date{} = anchor) do
+      monday = Date.beginning_of_week(anchor)
+      Enum.map(0..6, &Date.to_iso8601(Date.add(monday, &1)))
+    end
+
+    defp click_strip_day(view, %Date{} = date) do
+      view
+      |> element(~s([data-role="calendar-strip-day"][data-date="#{Date.to_iso8601(date)}"]))
+      |> render_click()
+    end
+
+    test "the strip is seven cells, Monday first", %{conn: conn} do
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert attrs_of(html, ~s([data-role="calendar-strip-day"]), "data-date") ==
+               monday_first_week(grid_today())
+
+      # The letters are the load-bearing half of "Monday first", and they
+      # are literal rather than derived: a Sunday-first strip renders the
+      # same SEVEN cells over a different span, and the date list alone
+      # leaves a reader checking two week-start conventions against each
+      # other. `S M T W T F S` and `M T W T F S S` cannot be confused.
+      assert strip_letters(html) == ~w(M T W T F S S)
+
+      # Every cell is a 44px touch target — the canvas pins that number
+      # explicitly, and a 7-across strip at 375px is exactly where it bites.
+      for class <- attrs_of(html, ~s([data-role="calendar-strip-day"]), "class") do
+        assert "min-h-11" in String.split(class)
+      end
+    end
+
+    test "the strip opens on the viewer's today, selected and marked", %{conn: conn} do
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      today = Date.to_iso8601(grid_today())
+
+      # Exactly one selected cell, and it is today's. Walked per-cell so
+      # what is asserted is the ASSOCIATION between the cell's date and its
+      # own marker, not that both strings appear somewhere on the page.
+      assert marked_strip_dates(html, "data-selected") == [today]
+      assert marked_strip_dates(html, "data-today") == [today]
+      assert day_heading_date(html) == today
+    end
+
+    defp marked_strip_dates(html, attribute) do
+      html
+      |> doc()
+      |> LazyHTML.query(~s([data-role="calendar-strip-day"]))
+      |> Enum.filter(&(LazyHTML.attribute(&1, attribute) != []))
+      |> Enum.flat_map(&LazyHTML.attribute(&1, "data-date"))
+    end
+
+    test "clicking a strip day moves the heading and the selection to that day",
+         %{conn: conn} do
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      today = grid_today()
+      target = Enum.find(week_dates(today), &(Date.compare(&1, today) != :eq))
+
+      assert day_heading_date(html) == Date.to_iso8601(today)
+
+      html = click_strip_day(view, target)
+
+      assert day_heading_date(html) == Date.to_iso8601(target)
+      assert marked_strip_dates(html, "data-selected") == [Date.to_iso8601(target)]
+
+      # The heading names the day in words, which is the whole reason it
+      # exists: the strip prints one letter and a number.
+      assert html
+             |> doc()
+             |> LazyHTML.query(~s([data-role="calendar-day-heading"]))
+             |> LazyHTML.text() =~ Calendar.strftime(target, "%A, %b %-d")
+
+      # `data-today` does NOT follow the selection — today is still today.
+      assert marked_strip_dates(html, "data-today") == [Date.to_iso8601(today)]
+    end
+
+    defp week_dates(%Date{} = anchor) do
+      monday = Date.beginning_of_week(anchor)
+      Enum.map(0..6, &Date.add(monday, &1))
+    end
+
+    test "a Tuesday meeting is absent from the day view while Wednesday is selected, and its Wednesday sibling is present",
+         %{conn: conn, project: project} do
+      # TWO ROWS, ONE VARIABLE: same status, same wall-clock time, same
+      # duration, same project. Only the date differs, so a failure here
+      # can only be about which day the column is drawing.
+      [_mon, tuesday, wednesday | _] = week_dates(grid_today())
+
+      tue_meeting =
+        seed_grid_meeting(project,
+          slug: "mob-tuesday",
+          name: "Tuesday Meeting",
+          scheduled_start_at: zoned_utc(tuesday, 10, 0),
+          scheduled_end_at: zoned_utc(tuesday, 11, 0)
+        )
+
+      wed_meeting =
+        seed_grid_meeting(project,
+          slug: "mob-wednesday",
+          name: "Wednesday Meeting",
+          scheduled_start_at: zoned_utc(wednesday, 10, 0),
+          scheduled_end_at: zoned_utc(wednesday, 11, 0)
+        )
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+
+      html = click_strip_day(view, wednesday)
+
+      assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [wed_meeting.id]
+
+      # …and the absent one is absent because the DAY VIEW filters it, not
+      # because it was never loaded: the desktop grid, reading the same
+      # week's meetings, still draws both.
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [tue_meeting.id, wed_meeting.id]
+
+      html = click_strip_day(view, tuesday)
+
+      assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [tue_meeting.id]
+    end
+
+    test "the day heading counts the meetings the column DRAWS, not the rows on that date",
+         %{conn: conn, project: project} do
+      [_mon, _tue, wednesday | _] = week_dates(grid_today())
+
+      seed_grid_meeting(project,
+        slug: "mob-count-a",
+        name: "Counted A",
+        scheduled_start_at: zoned_utc(wednesday, 9, 0),
+        scheduled_end_at: zoned_utc(wednesday, 10, 0)
+      )
+
+      seed_grid_meeting(project,
+        slug: "mob-count-b",
+        name: "Counted B",
+        scheduled_start_at: zoned_utc(wednesday, 11, 0),
+        scheduled_end_at: zoned_utc(wednesday, 12, 0)
+      )
+
+      # Same day, same instant as B, differing only in status — so the
+      # count can only move for a status reason.
+      cancelled =
+        seed_grid_meeting(project,
+          slug: "mob-count-cancelled",
+          name: "Cancelled C",
+          status: "cancelled",
+          scheduled_start_at: zoned_utc(wednesday, 11, 0),
+          scheduled_end_at: zoned_utc(wednesday, 12, 0)
+        )
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+
+      html = click_strip_day(view, wednesday)
+
+      assert day_count_text(html) == "2 meetings"
+
+      refute cancelled.id in attrs_of(
+               html,
+               day_view(~s([data-role="calendar-event"])),
+               "data-meeting-id"
+             )
+    end
+
+    test "the count is worded, and singular for one meeting", %{conn: conn, project: project} do
+      [_mon, _tue, wednesday | _] = week_dates(grid_today())
+
+      seed_grid_meeting(project,
+        slug: "mob-singular",
+        name: "Only One",
+        scheduled_start_at: zoned_utc(wednesday, 9, 0),
+        scheduled_end_at: zoned_utc(wednesday, 9, 30)
+      )
+
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      # A day with nothing on it says so in words. `0 meetings` under an
+      # empty column reads like a failed load; this is the only sentence a
+      # phone gets about the selected day.
+      empty_day = Enum.find(week_dates(grid_today()), &(Date.compare(&1, wednesday) != :eq))
+
+      assert day_count_text(click_strip_day(view, empty_day)) == "No meetings"
+      assert day_count_text(click_strip_day(view, wednesday)) == "1 meeting"
+
+      # And the heading is present on the very first render, not only after
+      # a click.
+      assert day_count_text(html) in ["No meetings", "1 meeting"]
+    end
+
+    test "a short meeting still clears the 44px floor in the day column",
+         %{conn: conn, project: project} do
+      # 30 minutes is 24px in a 48px hour row, which clips the second line
+      # off entirely — invisible to every DOM assertion, because the text
+      # is in the document either way. The floor is what keeps it readable
+      # AND what keeps it tappable; both are the same 44px.
+      today = grid_today()
+
+      seed_grid_meeting(project,
+        slug: "mob-short",
+        name: "Short Meeting",
+        scheduled_start_at: zoned_utc(today, 10, 0),
+        scheduled_end_at: zoned_utc(today, 10, 30)
+      )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      [class] = attrs_of(html, day_view(~s([data-role="calendar-event"])), "class")
+      assert "min-h-11" in String.split(class)
+
+      # The percentage geometry is still the truth about WHEN — the floor
+      # is a floor on the drawn box, not a rewrite of the placement.
+      assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "style") ==
+               ["top:20.0%;height:5.0%"]
+    end
+
+    test "the now-line is drawn for today and disappears when another day is selected",
+         %{conn: conn, project: project} do
+      # Anchored at the CURRENT local hour so the drawn window is
+      # guaranteed to contain "now" whatever time this suite runs at.
+      # Without it a 3 AM run draws no line at all and the first assertion
+      # is vacuous in a way that looks green.
+      today = grid_today()
+      now = DateTime.now!(@grid_zone)
+
+      seed_grid_meeting(project,
+        slug: "mob-nowline-anchor",
+        name: "Now Anchor",
+        scheduled_start_at: zoned_utc(today, now.hour, 0),
+        scheduled_end_at: zoned_utc(today, now.hour, 30)
+      )
+
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert attrs_of(html, day_view(~s([data-role="calendar-now-line"])), "data-role") ==
+               ["calendar-now-line"]
+
+      other_day = Enum.find(week_dates(today), &(Date.compare(&1, today) != :eq))
+      html = click_strip_day(view, other_day)
+
+      # Absent from the DAY VIEW, and still present on the desktop grid in
+      # the same document — the line is a fact about today, and the grid
+      # still draws today's column.
+      assert attrs_of(html, day_view(~s([data-role="calendar-now-line"])), "data-role") == []
+
+      assert attrs_of(html, in_grid(~s([data-role="calendar-now-line"])), "data-role") ==
+               ["calendar-now-line"]
+    end
+
+    test "a selection naming a day outside the rendered week is ignored", %{conn: conn} do
+      # The seven strip cells are the only thing that sends this event, so
+      # an eighth date is not a request the UI can make. Honouring it would
+      # select a day whose meetings were never queried — the week is loaded
+      # per week — and draw a confidently empty column.
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      today = Date.to_iso8601(grid_today())
+      assert day_heading_date(html) == today
+
+      next_week = Date.to_iso8601(Date.add(grid_today(), 7))
+      html = render_click(view, "select_calendar_day", %{"date" => next_week})
+      assert day_heading_date(html) == today
+
+      html = render_click(view, "select_calendar_day", %{"date" => "not-a-date"})
+      assert day_heading_date(html) == today
+    end
+
+    test "paging the week carries the selected day's weekday with it", %{conn: conn} do
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      today = grid_today()
+      target = Enum.find(week_dates(today), &(Date.compare(&1, today) != :eq))
+
+      assert day_heading_date(html) == Date.to_iso8601(today)
+
+      click_strip_day(view, target)
+      html = view |> element(~s([phx-click="calendar_next_week"])) |> render_click()
+
+      # A Wednesday stays a Wednesday: the selection keeps its offset in the
+      # week rather than snapping back to Monday, and the strip's selected
+      # cell agrees with the heading.
+      expected = Date.to_iso8601(Date.add(target, 7))
+      assert day_heading_date(html) == expected
+      assert marked_strip_dates(html, "data-selected") == [expected]
+
+      # Which SEVEN days, not in which order. Sorted deliberately: the
+      # strip's ordering is pinned once, in "the strip is seven cells,
+      # Monday first", and a second test reading the same ordered list
+      # would die for that reason too — at which point neither failure
+      # tells you which of the two behaviours broke. Found by detonating
+      # the Sunday-first probe, which killed both tests before this line
+      # was narrowed.
+      assert Enum.sort(attrs_of(html, ~s([data-role="calendar-strip-day"]), "data-date")) ==
+               Enum.sort(monday_first_week(Date.add(today, 7)))
     end
   end
 

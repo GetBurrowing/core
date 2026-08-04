@@ -907,6 +907,76 @@ defmodule PlatformWeb.MeetingLive do
   def calendar_weekday_abbrev(%Date{} = date),
     do: date |> Calendar.strftime("%a") |> String.upcase()
 
+  # ── Mobile week strip + day view (task 019fb954-8ead stage 3) ────────────
+
+  @doc """
+  A week-strip cell's single letter — `M`, `T`, `W`.
+
+  Derived from `calendar_weekday_abbrev/1` rather than from a literal
+  seven-element list, so the strip cannot disagree with the desktop
+  heading about which day a date is.
+  """
+  @spec calendar_weekday_initial(Date.t()) :: String.t()
+  def calendar_weekday_initial(%Date{} = date),
+    do: date |> calendar_weekday_abbrev() |> String.first()
+
+  @doc """
+  The mobile day heading's date half — `Wednesday, Aug 5`.
+
+  The weekday is written out in full here where the strip above prints
+  one letter: the strip is scanned, this is read.
+  """
+  @spec calendar_day_label(Date.t()) :: String.t()
+  def calendar_day_label(%Date{} = date), do: Calendar.strftime(date, "%A, %b %-d")
+
+  @doc """
+  How many meetings the day view will actually DRAW for `date`.
+
+  Delegates to `calendar_day_events/4` rather than counting rows itself,
+  which is the whole point: the number in the heading and the blocks in
+  the column are the same list measured twice, so a cancelled meeting —
+  or one that was never scheduled — cannot be counted into a heading
+  that then names more meetings than the reader can see.
+  """
+  @spec calendar_day_meeting_count(
+          [Meeting.t()],
+          Date.t(),
+          String.t() | nil,
+          {integer(), integer()}
+        ) :: non_neg_integer()
+  def calendar_day_meeting_count(meetings, %Date{} = date, time_zone, window),
+    do: meetings |> calendar_day_events(date, time_zone, window) |> length()
+
+  @doc """
+  The count half of the mobile day heading — `No meetings`, `1 meeting`,
+  `2 meetings`.
+
+  Zero gets words rather than a `0`, because the heading is the only
+  place a phone says anything about the selected day and an empty column
+  under a bare `0 meetings` reads like a failed load.
+  """
+  @spec calendar_day_count_label(non_neg_integer()) :: String.t()
+  def calendar_day_count_label(0), do: "No meetings"
+  def calendar_day_count_label(1), do: "1 meeting"
+
+  def calendar_day_count_label(count) when is_integer(count) and count > 1,
+    do: "#{count} meetings"
+
+  @doc """
+  The now-line offsets for the mobile day column — a single-element list,
+  or `[]`.
+
+  Same two conditions as `calendar_now_line/3` on the desktop grid,
+  asked of the ONE day on screen instead of each of seven: the line is a
+  fact about today, so a day view showing Friday draws none.
+  """
+  @spec calendar_selected_now_line(Date.t(), String.t() | nil, {integer(), integer()}) ::
+          [float()]
+  def calendar_selected_now_line(%Date{} = selected, time_zone, window) do
+    today? = Date.compare(selected, calendar_today_date(time_zone)) == :eq
+    calendar_now_line(today?, time_zone, window)
+  end
+
   defp month_abbrev(%Date{} = date), do: Calendar.strftime(date, "%b")
 
   # ── Archive half of the index (task 019fb954-c848) ───────────────────────
@@ -1533,13 +1603,22 @@ defmodule PlatformWeb.MeetingLive do
   # A `phx-click` payload is a message from a client, so an unparseable
   # date is IGNORED rather than raised on: the only thing that can send
   # one is a stale or hand-edited DOM, and neither deserves a 500.
+  #
+  # A date OUTSIDE the rendered week is ignored for the same reason and
+  # a stronger one: the seven strip cells are the only thing that sends
+  # this event, so an eighth date is not a request the UI can make. The
+  # week's meetings are loaded per week, so honouring it would select a
+  # day whose meetings were never queried and draw a confidently empty
+  # column. This is the invariant the day heading and the now-line both
+  # stand on — the selected date is always one of the seven on screen.
   def handle_event("select_calendar_day", %{"date" => iso8601}, socket) do
-    case Date.from_iso8601(iso8601) do
-      {:ok, date} ->
-        {:noreply, assign(socket, :calendar_selected_date, date)}
+    week = CalendarWindow.week_days(socket.assigns.calendar_anchor_date)
 
-      {:error, _reason} ->
-        {:noreply, socket}
+    with {:ok, date} <- Date.from_iso8601(iso8601),
+         true <- date in week do
+      {:noreply, assign(socket, :calendar_selected_date, date)}
+    else
+      _out_of_week_or_unparseable -> {:noreply, socket}
     end
   end
 
@@ -2523,20 +2602,16 @@ defmodule PlatformWeb.MeetingLive do
 
   # ── Index helpers (`:index` action) ──────────────────────────────────────
   #
-  # The meetings index groups meetings by status so the live ones float to
-  # the top, the upcoming (`scheduled`) sit in the middle, and ended sink
-  # to the bottom. Section order is intentional — a viewer scanning the
-  # page wants "what's happening right now" first.
-
-  @meeting_status_sections [:live, :upcoming, :ended]
-
-  @doc """
-  Sections rendered by the meetings index, in display order.
-
-  Public so tests + the heex template can iterate without hard-coding
-  the order in two places.
-  """
-  def meeting_status_sections, do: @meeting_status_sections
+  # `group_meetings_by_status/1` outlived the grouped section/row list it
+  # was written for: task 019fb954-8ead stage 3 replaced that list with the
+  # mobile week strip and day view, and the calendar buckets by DATE, not
+  # by status. The projection stays because `:grouped_meetings` is still
+  # maintained across the index's PubSub handlers and is the only
+  # status-partitioned view of the index's meetings; the four view helpers
+  # that rendered the sections (`meeting_status_sections/0`,
+  # `meeting_section_label/1`, `meeting_section_icon/1`,
+  # `meeting_status_pill/1`) were deleted with the markup, having had no
+  # other caller.
 
   @doc """
   Group a list of meetings into a `%{live: …, upcoming: …, ended: …}` map.
@@ -2596,20 +2671,13 @@ defmodule PlatformWeb.MeetingLive do
   # produced solely by `Meetings.invite_guest/2`, which does its own trimming
   # and expiry defaulting against a persisted `meeting_invites` row.
 
-  @doc "Human label for a meeting status section."
-  def meeting_section_label(:live), do: "Live now"
-  def meeting_section_label(:upcoming), do: "Upcoming"
-  def meeting_section_label(:ended), do: "Ended"
-
-  @doc "Hero-icon class for a meeting status section."
-  def meeting_section_icon(:live), do: "hero-signal"
-  def meeting_section_icon(:upcoming), do: "hero-calendar"
-  def meeting_section_icon(:ended), do: "hero-archive-box"
-
-  @doc "Status-pill tone class for a meeting status."
-  def meeting_status_pill(:live), do: "badge badge-error gap-1"
-  def meeting_status_pill(:upcoming), do: "badge badge-info gap-1"
-  def meeting_status_pill(:ended), do: "badge badge-ghost gap-1"
+  # `meeting_section_label/1`, `meeting_section_icon/1` and
+  # `meeting_status_pill/1` lived here until task 019fb954-8ead stage 3.
+  # All three took a SECTION atom and existed only to draw the grouped
+  # section/row list that the mobile week strip and day view replaced. A
+  # meeting-status pill on the stage-4 detail surface is a different
+  # function with a different argument (a status string), so keeping
+  # these as a starting point would have been keeping the wrong shape.
 
   @doc "Hero-icon class for a stage-mode segmented-control button."
   def stage_mode_icon(:canvas), do: "hero-rectangle-stack"
