@@ -2902,8 +2902,15 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert day_heading_date(html) == expected
       assert marked_strip_dates(html, "data-selected") == [expected]
 
-      assert attrs_of(html, ~s([data-role="calendar-strip-day"]), "data-date") ==
-               monday_first_week(Date.add(today, 7))
+      # Which SEVEN days, not in which order. Sorted deliberately: the
+      # strip's ordering is pinned once, in "the strip is seven cells,
+      # Monday first", and a second test reading the same ordered list
+      # would die for that reason too — at which point neither failure
+      # tells you which of the two behaviours broke. Found by detonating
+      # the Sunday-first probe, which killed both tests before this line
+      # was narrowed.
+      assert Enum.sort(attrs_of(html, ~s([data-role="calendar-strip-day"]), "data-date")) ==
+               Enum.sort(monday_first_week(Date.add(today, 7)))
     end
   end
 
