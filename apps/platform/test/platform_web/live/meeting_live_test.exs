@@ -3053,17 +3053,15 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
 
-      result =
-        view
-        |> form("#start-meeting-form",
-          start_meeting: %{"name" => "Synthesis Sync", "project_id" => project.id}
-        )
-        |> render_submit()
+      view
+      |> form("#start-meeting-form",
+        start_meeting: %{"name" => "Synthesis Sync", "project_id" => project.id}
+      )
+      |> render_submit()
 
-      # Stage 4 deliberately stopped redirecting into the room. See the
-      # "does not open the room" test below for the assertion that pins it;
-      # this one only cares that the row landed.
-      assert is_binary(result)
+      # Deliberately does NOT look at what render_submit returned. Whether
+      # a success redirects is the next describe's claim, and borrowing its
+      # observable here would make this test die for that reason too.
       assert [%Meeting{name: "Synthesis Sync"}] = Repo.all(Meeting)
     end
 
