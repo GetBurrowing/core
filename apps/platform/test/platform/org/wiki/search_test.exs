@@ -14,6 +14,8 @@ defmodule Platform.Org.Wiki.SearchTest do
 
   use Platform.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Ecto.Adapters.SQL
   alias Platform.Agents.Agent
   alias Platform.Chat
@@ -63,6 +65,13 @@ defmodule Platform.Org.Wiki.SearchTest do
     on_exit(fn -> Application.put_env(:platform, :memory_service, prev) end)
 
     :ok
+  end
+
+  defp count_unknown_tag_warnings(log) do
+    log
+    |> String.split("unrecognised memory_type tag(s)")
+    |> length()
+    |> Kernel.-(1)
   end
 
   defp noop_provider do
@@ -368,6 +377,124 @@ defmodule Platform.Org.Wiki.SearchTest do
       {:ok, %{results: results}} = Search.search("papaya", source: "page", limit: 10)
 
       assert Enum.all?(results, &(&1.id != page.id))
+    end
+  end
+
+  ## ─────────────────────────────────────────────────────────────────────
+  ## 7b. Corpus classification of the semantic tag
+  ##
+  ## Every case here points the stub hit at a REAL row id, so the
+  ## hydration lookup resolves. That disarms the accidental barrier (an
+  ## unresolvable id is dropped by hydration regardless of corpus) and
+  ## makes the assertions attributable to classification. The queries are
+  ## chosen not to match the fixture text, so the lexical channels
+  ## contribute nothing and the semantic channel is the only source.
+  ## ─────────────────────────────────────────────────────────────────────
+
+  describe "semantic corpus classification" do
+    test "document-tagged semantic hits are dropped at classification even when the id resolves to a real page" do
+      page = seed_page("org/page/quince.md", "quince paste pairs with cheese")
+
+      install_provider([
+        %{entry_id: page.id, score: 0.99, memory_type: "document"}
+      ])
+
+      {:ok, %{results: results}} = Search.search("zzyzx", source: "page", limit: 10)
+
+      assert Enum.all?(results, &(&1.id != page.id))
+    end
+
+    test "positive control: the same resolving id tagged page IS returned" do
+      page = seed_page("org/page/quince.md", "quince paste pairs with cheese")
+
+      install_provider([
+        %{entry_id: page.id, score: 0.99, memory_type: "page"}
+      ])
+
+      {:ok, %{results: results}} = Search.search("zzyzx", source: "page", limit: 10)
+
+      assert page.id in Enum.map(results, & &1.id)
+    end
+
+    test "an unrecognised tag is refused even when the id resolves to a real page" do
+      page = seed_page("org/page/quince.md", "quince paste pairs with cheese")
+
+      install_provider([
+        %{entry_id: page.id, score: 0.99, memory_type: "sometag"}
+      ])
+
+      {:ok, %{results: results}} = Search.search("zzyzx", source: "page", limit: 10)
+
+      assert Enum.all?(results, &(&1.id != page.id))
+    end
+
+    test "a legacy untagged hit still resolves as a page" do
+      page = seed_page("org/page/quince.md", "quince paste pairs with cheese")
+
+      install_provider([
+        %{entry_id: page.id, score: 0.99, memory_type: nil}
+      ])
+
+      {:ok, %{results: results}} = Search.search("zzyzx", source: "page", limit: 10)
+
+      assert page.id in Enum.map(results, & &1.id)
+    end
+
+    # `Platform.Memory.normalize/1` defaults untyped entries to "daily", and
+    # journal entries ingested through the direct write path carry no
+    # memory_type field — so this is the tag real journal entries arrive with.
+    test "a daily-tagged hit resolves against the journal corpus" do
+      entry = seed_journal(~D[2026-05-20], "quince harvest notes")
+
+      install_provider([
+        %{entry_id: entry.id, score: 0.99, memory_type: "daily"}
+      ])
+
+      {:ok, %{results: results}} = Search.search("zzyzx", source: "journal", limit: 10)
+
+      assert entry.id in Enum.map(results, & &1.id)
+      assert Enum.find(results, &(&1.id == entry.id)).source == "journal"
+    end
+  end
+
+  describe "unknown corpus tag logging" do
+    test "an unrecognised tag emits exactly one warning naming the tag" do
+      page = seed_page("org/page/quince.md", "quince paste pairs with cheese")
+
+      install_provider([
+        %{entry_id: page.id, score: 0.99, memory_type: "sometag"}
+      ])
+
+      log = capture_log(fn -> Search.search("zzyzx", source: "page", limit: 10) end)
+
+      assert log =~ "sometag"
+      assert count_unknown_tag_warnings(log) == 1
+    end
+
+    test "a document tag emits no warning" do
+      page = seed_page("org/page/quince.md", "quince paste pairs with cheese")
+
+      install_provider([
+        %{entry_id: page.id, score: 0.99, memory_type: "document"}
+      ])
+
+      log = capture_log(fn -> Search.search("zzyzx", source: "page", limit: 10) end)
+
+      assert count_unknown_tag_warnings(log) == 0
+    end
+
+    test "two hits sharing one unknown tag emit a single warning" do
+      page_a = seed_page("org/page/quince.md", "quince paste pairs with cheese")
+      page_b = seed_page("org/page/medlar.md", "medlar is bletted before eating")
+
+      install_provider([
+        %{entry_id: page_a.id, score: 0.99, memory_type: "sometag"},
+        %{entry_id: page_b.id, score: 0.98, memory_type: "sometag"}
+      ])
+
+      log = capture_log(fn -> Search.search("zzyzx", source: "page", limit: 10) end)
+
+      assert count_unknown_tag_warnings(log) == 1
     end
   end
 

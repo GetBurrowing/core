@@ -75,7 +75,7 @@ defmodule Platform.Org.Wiki.Search do
   @channel_timeout_ms 2_000
   @lexical_fallback_meta_key :lexical_fallback
 
-  @type corpus :: :page | :journal | :message | :task
+  @type corpus :: :page | :journal | :message | :task | :excluded | :unknown
 
   @type hit :: %{
           source: String.t(),
@@ -215,10 +215,19 @@ defmodule Platform.Org.Wiki.Search do
   ## ─────────────────────────────────────────────────────────────────────
 
   # Semantic — single call covering every enabled corpus. The provider
-  # tags each hit via `memory_type` on the indexed payload; we honor
-  # that tag when present and fall back to `:page` (the older default)
-  # otherwise. Hits whose tag doesn't match an enabled corpus are
-  # dropped before fusion.
+  # tags each hit via `memory_type` on the indexed payload, and every tag
+  # is classified by a named clause of `semantic_corpus/1`:
+  #
+  #   * nil / "" — legacy entries indexed before the tag existed; these
+  #     are wiki pages and map to `:page`. The only unnamed value that does.
+  #   * "document" — refused. File text is ingested for the Files surface,
+  #     not for wiki memory search.
+  #   * anything else — unknown, and refused rather than reinterpreted.
+  #     A refusal is a no-result we can see; a silent remap to `:page` is
+  #     a wrong result we cannot.
+  #
+  # Hits whose corpus doesn't match an enabled corpus are dropped before
+  # fusion.
   defp run_channel(:semantic, query, opts, cap, corpora) do
     if Memory.enabled?() do
       semantic_opts =
@@ -237,6 +246,8 @@ defmodule Platform.Org.Wiki.Search do
             results
             |> Enum.with_index(1)
             |> Enum.flat_map(fn {hit, rank} -> semantic_hit_to_channel(hit, rank, corpora) end)
+
+          warn_unknown_tags(results)
 
           {{:semantic, :all}, hits}
 
@@ -269,19 +280,50 @@ defmodule Platform.Org.Wiki.Search do
     {{:lexical, :task}, hits}
   end
 
+  # One warning per search call, listing the distinct unrecognised tags.
+  # A provider returning many unknown-tagged hits would otherwise emit a
+  # line per hit. Logs the TAG VALUE ONLY — never an entry id, content,
+  # org id or project id. `:excluded` and the legacy nil/"" cases are
+  # expected refusals, not surprises, so they are not logged.
+  defp warn_unknown_tags(results) do
+    unknown_tags =
+      results
+      |> Enum.map(&raw_memory_type/1)
+      |> Enum.filter(&(semantic_corpus(&1) == :unknown))
+      |> Enum.uniq()
+
+    if unknown_tags != [] do
+      Logger.warning(fn ->
+        "Platform.Org.Wiki.Search: unrecognised memory_type tag(s) " <>
+          "#{inspect(unknown_tags)} — hits were refused. Add a clause to " <>
+          "semantic_corpus/1 to classify them."
+      end)
+    end
+
+    :ok
+  end
+
+  defp raw_memory_type(hit) do
+    Map.get(hit, :memory_type) || Map.get(hit, "memory_type") ||
+      get_in(Map.get(hit, :metadata, %{}), ["memory_type"]) ||
+      get_in(Map.get(hit, "metadata", %{}), ["memory_type"])
+  end
+
   defp semantic_hit_to_channel(hit, rank, corpora) do
     id = Map.get(hit, :entry_id) || Map.get(hit, "entry_id")
     score = Map.get(hit, :score) || Map.get(hit, "score")
 
-    raw_type =
-      Map.get(hit, :memory_type) || Map.get(hit, "memory_type") ||
-        get_in(Map.get(hit, :metadata, %{}), ["memory_type"]) ||
-        get_in(Map.get(hit, "metadata", %{}), ["memory_type"])
-
-    corpus = semantic_corpus(raw_type)
+    corpus = hit |> raw_memory_type() |> semantic_corpus()
 
     cond do
       is_nil(id) ->
+        []
+
+      # Explicit refusal. Both atoms would also fail the corpora-membership
+      # check below, but an exclusion that holds only as a side effect of a
+      # membership miss is not a decision — it evaporates the moment someone
+      # widens the corpora list. This branch is what makes it survive.
+      corpus in [:excluded, :unknown] ->
         []
 
       corpus not in corpora ->
@@ -303,11 +345,26 @@ defmodule Platform.Org.Wiki.Search do
 
   defp semantic_corpus("journal"), do: :journal
   defp semantic_corpus(:journal), do: :journal
+  # `Platform.Memory.normalize/1` defaults untyped entries to "daily", and the
+  # only structs ingested untyped are journal entries.
+  defp semantic_corpus("daily"), do: :journal
+  defp semantic_corpus(:daily), do: :journal
   defp semantic_corpus("page"), do: :page
   defp semantic_corpus(:page), do: :page
   defp semantic_corpus("task"), do: :task
   defp semantic_corpus(:task), do: :task
-  defp semantic_corpus(_), do: :page
+  # File text is ingested for the Files surface, not for wiki memory search.
+  # Refuse it at classification rather than letting it into fusion and losing
+  # it later by accident at the wiki-page hydration lookup.
+  defp semantic_corpus("document"), do: :excluded
+  defp semantic_corpus(:document), do: :excluded
+  # Legacy entries indexed before the corpus tag existed carry no type.
+  # They are wiki pages; this is the only unnamed value that may map to :page.
+  defp semantic_corpus(nil), do: :page
+  defp semantic_corpus(""), do: :page
+  # Any other tag is a value this module has never been taught. Refuse it
+  # rather than silently reinterpreting it as a page.
+  defp semantic_corpus(_other), do: :unknown
 
   ## ─────────────────────────────────────────────────────────────────────
   ## Lexical channels — tsvector first, ilike fallback when empty
