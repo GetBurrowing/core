@@ -185,21 +185,34 @@ defmodule PlatformWeb.MeetingLive do
   import PlatformWeb.Components.Meetings.IntentsCollapse,
     only: [intents_collapse: 1, intents_overlays: 1]
 
+  import PlatformWeb.Components.Meetings.InviteControl,
+    only: [invite_control: 1, invite_list: 1]
+
+  import PlatformWeb.Components.Meetings.MeetingDetail,
+    only: [meeting_detail_body: 1, meeting_detail_actions: 1]
+
   import PlatformWeb.Components.Meetings.ParticipantRail, only: [participant_rail: 1]
 
+  alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Meetings
+  alias Platform.Meetings.Archive
   alias Platform.Meetings.IntentCorrection
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentQueue
+  alias Platform.Meetings.Invite
+  alias Platform.Meetings.Meeting
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
+  alias Platform.Meetings.SenderSeed
   alias Platform.Repo
   alias Platform.Roles
   alias Platform.Tasks
+  alias Platform.Tenancy
   alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.Components.Meetings.IntentsCollapse
+  alias PlatformWeb.MeetingLive.CalendarWindow
 
   # The role that may see and drive the intents-collapse bar. Passed to
   # `Platform.Roles.agent_id_for_role/1` as a STRING — that function is
@@ -243,6 +256,33 @@ defmodule PlatformWeb.MeetingLive do
   @doc "Stage modes the segmented control exposes (ADR 0042)."
   def stage_modes, do: @stage_modes
 
+  # ── New-meeting sheet: duration options and refusal copy ─────────────────
+  #
+  # The durations the sheet offers, in minutes, and the one it opens on.
+  # The submit handler validates against this exact list rather than a
+  # range, so a value the select never rendered is refused instead of
+  # scheduling a meeting nobody asked for.
+  @duration_options [15, 30, 45, 60, 90, 120]
+  @default_duration_minutes 30
+
+  @schedule_pair_error "Date and start time are required together."
+  @no_time_zone_error "Time zone unavailable — reload to pick a time."
+  @invalid_time_error "Date and start time are invalid."
+  @nonexistent_time_error "That time does not exist on that date."
+  @invalid_duration_error "Duration is invalid."
+
+  @doc "Durations, in minutes, the new-meeting sheet offers."
+  def duration_options, do: @duration_options
+
+  @doc "The duration, in minutes, the new-meeting sheet opens on."
+  def default_duration_minutes, do: @default_duration_minutes
+
+  @doc "Human label for one of `duration_options/0`."
+  def duration_label(minutes) when minutes < 60, do: "#{minutes} min"
+  def duration_label(60), do: "1 hr"
+  def duration_label(minutes) when rem(minutes, 60) == 0, do: "#{div(minutes, 60)} hr"
+  def duration_label(minutes), do: "#{div(minutes, 60)} hr #{rem(minutes, 60)} min"
+
   @impl true
   # Guest ingress mount (task 019f498d stage 3, wired to the real route
   # in stage 5). The `:guest_meeting` live_session on the `meet.` host
@@ -278,6 +318,8 @@ defmodule PlatformWeb.MeetingLive do
       |> assign(:chat_panel_collapsed, false)
       |> assign(:captions_visible, false)
       |> seed_intent_assigns()
+      |> assign_calendar_time_zone()
+      |> seed_calendar_now()
       |> assign(:meeting_slug, slug)
       |> assign(:token, token)
 
@@ -290,7 +332,11 @@ defmodule PlatformWeb.MeetingLive do
          |> assign(:meeting, nil)
          |> seed_guest_index_fallback_assigns()}
 
-      {:error, :invalid} ->
+      # `:revoked` (task 019fb954) renders as `:invalid` deliberately —
+      # one rendered outcome, no new template branch. A guest whose link
+      # was revoked is told it does not work; telling them it *used to*
+      # would confirm the meeting exists to someone the host just cut off.
+      {:error, reason} when reason in [:invalid, :revoked] ->
         {:ok,
          socket
          |> assign(:page_title, "Invite link is not valid")
@@ -334,6 +380,8 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:show_start_meeting_sheet, false)
     |> assign(:start_meeting_form, blank_start_meeting_form([]))
     |> assign(:start_meeting_error, nil)
+    |> seed_create_invite_assigns()
+    |> seed_live_invite_assigns()
   end
 
   # Seed the meeting-shell-tree assigns the current (stage-3) heex reads
@@ -364,9 +412,6 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:current_stage_mode, :gallery)
     |> assign(:active_space, meeting.chat_space)
     |> assign(:current_participant, nil)
-    |> assign(:show_guest_invite_sheet, false)
-    |> assign(:guest_invite_form, blank_guest_invite_form())
-    |> assign(:guest_invite_url, nil)
     |> MeetingHooks.attach_guest()
   end
 
@@ -400,7 +445,15 @@ defmodule PlatformWeb.MeetingLive do
      # template compiles under both modes without KeyErrors when the render
      # scans the cond's guard tuples.
      |> assign(:state, nil)
-     |> assign(:display_name, nil)
+     # Task 019fb955-f8b1 stage 5: the `:meet_member` live_session reaches
+     # THIS clause with `chrome_mode: :none` and a real signed-in account,
+     # so `:display_name` has to name that account — the member identity
+     # badge interpolates it. Read off `:current_user_record`, which
+     # `ShellLive.on_mount(:default)` has already assigned (on_mount hooks
+     # run before `mount/3`). Stays nil on the shell surface, which renders
+     # no badge, and nil for the `Ecto.UUID.generate()` anonymous-test
+     # fallback above, where there is no account to name.
+     |> assign(:display_name, member_display_name(socket.assigns[:current_user_record]))
      # Mobile drawer state — defaults CLOSED. Desktop ignores this
      # assign (column is `hidden lg:flex`). See @moduledoc for the
      # reconciliation against the stack-spec's "defaults to true" line.
@@ -432,8 +485,45 @@ defmodule PlatformWeb.MeetingLive do
      # BOTH mount clauses so the `:index` action and the guest surface
      # render without a KeyError even though neither shows the bar.
      # `handle_params/3` resolves the real values for the `:show` action.
-     |> seed_intent_assigns()}
+     |> seed_intent_assigns()
+     |> assign_calendar_time_zone()
+     |> seed_calendar_now()}
   end
+
+  # The viewer's IANA zone, off the LiveSocket connect params (set in
+  # `assets/js/app.js`) and validated at `CalendarWindow`'s single choke
+  # point. Seeded in BOTH mount clauses — same discipline as
+  # `seed_intent_assigns/1` — so no template can KeyError on it even on
+  # the guest surface, which never draws a calendar.
+  #
+  # `get_connect_params/1` is legal ONLY inside `mount/3`, which is why
+  # this lives here rather than in `handle_params/3`. On the disconnected
+  # render it returns nil, which flows through `resolve_time_zone/1` to
+  # nil — the intended dead-render answer, not a failure to handle.
+  defp assign_calendar_time_zone(socket) do
+    time_zone =
+      socket
+      |> get_connect_params()
+      |> case do
+        %{"timezone" => time_zone} -> time_zone
+        _ -> nil
+      end
+      |> CalendarWindow.resolve_time_zone()
+
+    assign(socket, :calendar_time_zone, time_zone)
+  end
+
+  # The instant the now-line is drawn from, seeded at MOUNT and moved by
+  # nothing but `:calendar_tick`. Seeded in both mount clauses — same
+  # discipline as `assign_calendar_time_zone/1` — so no template can
+  # KeyError on it.
+  #
+  # Seeding it here rather than leaving it absent until the first beat is
+  # what keeps the DEAD render exactly as it was: the disconnected render
+  # has no zone, `calendar_now_line/4` answers `[]` on the zone whatever
+  # the instant, and it must reach that clause rather than raise on its
+  # way there.
+  defp seed_calendar_now(socket), do: assign(socket, :calendar_now, DateTime.utc_now())
 
   # Defaults for the intents-collapse bar. `:intents_visible?` is false
   # here on purpose: absent-until-proven-assigned is the safe direction
@@ -493,7 +583,31 @@ defmodule PlatformWeb.MeetingLive do
   # MeetingHooks, and sends `:auto_join`, which mints a LiveKit token. A denied
   # mount must reach none of that.
   def handle_params(%{"slug" => slug} = params, _url, socket) do
+    chrome_mode = socket.assigns[:chrome_mode]
+
     case Meetings.fetch_meeting_for_user(socket.assigns[:current_user_record], slug) do
+      # A DENIED MOUNT MUST NOT BOUNCE OFF THE CHROME-LESS SURFACE (task
+      # 019fb955-f8b1 stage 5). The shell branches below `push_navigate` to
+      # `/meetings`, which is right for an internal viewer and wrong for a
+      # member on the `meet.` host: that route is not in the meet surface's
+      # allowlist, so `ExternalUserScope` answers it with a 403 and the
+      # denial reads as a broken app rather than a closed door. Render the
+      # SAME terminal invalid-invite card a bad guest link produces, so the
+      # two denials are one outcome and the meeting name never reaches the
+      # DOM. Matched first so the `chrome_mode == :shell` clauses below
+      # stay byte-identical.
+      #
+      # `:ambiguous` is included deliberately. It is not a security signal,
+      # but it `push_navigate`s to the same denied route, so leaving it out
+      # would leave the bounce live on half the denial paths.
+      {:error, reason} when reason in [:not_found, :ambiguous] and chrome_mode == :none ->
+        {:noreply,
+         socket
+         |> assign(:page_title, "Invite link is not valid")
+         |> assign(:state, :invalid)
+         |> assign(:meeting, nil)
+         |> seed_guest_index_fallback_assigns()}
+
       {:error, :not_found} ->
         # Clean not-found path — no MatchError / Ecto.NoResultsError
         # bubbles. Also clear the client's saved `route_resume:meetings`
@@ -590,15 +704,6 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:current_stage_mode, :gallery)
           |> assign(:active_space, meeting.chat_space)
           |> assign(:current_participant, current_participant)
-          # ── Guest-invite sheet (stage 4 of task 019f2483) ─────────────
-          # `:show_guest_invite_sheet` — bottom-sheet visibility flag.
-          # `:guest_invite_form` — mirror of the sheet's fields so
-          #   phx-change re-renders don't wipe user input.
-          # `:guest_invite_url` — nil until the host clicks Generate,
-          #   then holds the signed guest URL for the copy affordance.
-          |> assign(:show_guest_invite_sheet, false)
-          |> assign(:guest_invite_form, blank_guest_invite_form())
-          |> assign(:guest_invite_url, nil)
           # ── Intents-collapse bar (task 019f70b8 stage 7) ──────────────
           # Seeded from the LIVE queue keyed by this meeting's id — the
           # same id the classifier enqueues under. `IntentQueue.list/1`
@@ -626,7 +731,7 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
-  def handle_params(_params, _url, socket) do
+  def handle_params(params, _url, socket) do
     # `:index` action — grouped meetings list (live / upcoming / ended)
     # plus an empty-state when no meetings exist. Pre-project-routing
     # the index lists every meeting; per-project subscription keeps
@@ -647,18 +752,1189 @@ defmodule PlatformWeb.MeetingLive do
     meetings = Meetings.list_all_meetings()
     grouped = group_meetings_by_status(meetings)
 
+    # The now-line has to move on its own. Arming the tick here (only when
+    # connected — a dead render has no later beat) rather than at mount
+    # keeps it scoped to the `:index` action. A now-line frozen at mount
+    # time is a wrong answer that looks like a right one.
+    if connected?(socket), do: schedule_calendar_tick()
+
     {:noreply,
      socket
      |> assign(:page_title, "Meetings")
      |> assign(:meeting, nil)
+     # `:meetings` and `:grouped_meetings` keep their exact prior meaning:
+     # `data-role="meetings-count"` and the archive sibling both read them,
+     # and the calendar is an additional projection, not a replacement.
      |> assign(:meetings, meetings)
      |> assign(:grouped_meetings, grouped)
      |> assign(:meeting_subscribed_project_ids, project_ids)
      |> assign_new(:projects, fn -> projects end)
      |> assign_new(:show_start_meeting_sheet, fn -> false end)
      |> assign_new(:start_meeting_form, fn -> blank_start_meeting_form(projects) end)
-     |> assign_new(:start_meeting_error, fn -> nil end)}
+     |> assign_new(:start_meeting_error, fn -> nil end)
+     |> assign_new(:meeting_create_invites, fn -> [] end)
+     |> assign_new(:meeting_create_invite_query, fn -> "" end)
+     |> assign_new(:meeting_create_invite_candidates, fn -> [] end)
+     |> assign_new(:meeting_create_invite_email, fn -> nil end)
+     |> assign_new(:selected_meeting_id, fn -> nil end)
+     |> assign_new(:meeting_invite_open, fn -> false end)
+     |> assign_new(:meeting_invite_query, fn -> "" end)
+     |> assign_new(:meeting_invite_candidates, fn -> [] end)
+     |> assign_new(:meeting_invite_email, fn -> nil end)
+     |> assign_calendar_week(calendar_today(socket))
+     |> assign_archive(params)}
   end
+
+  # ── Calendar window (task 019fb954-8ead) ─────────────────────────────────
+
+  @typedoc """
+  Which of the two calendar halves is asking.
+
+  Not a breakpoint and not a device: the two halves are different
+  information architectures that happen to draw the same meetings, and the
+  only thing the geometry helpers need from the distinction is how tall
+  that half draws an hour.
+  """
+  @type calendar_view :: :week | :day
+
+  @typedoc "A placement plus the one question only the view can answer."
+  @type calendar_block :: %{
+          top: float(),
+          height: float(),
+          lane: non_neg_integer(),
+          lanes: pos_integer(),
+          left: float(),
+          width: float(),
+          compact?: boolean()
+        }
+
+  # `rem` is resolved against the root font size, which the shell does not
+  # override; converting here rather than emitting a px threshold keeps the
+  # comparison in the same units the template lays out in.
+  @root_font_px 16
+
+  # Recompute every calendar assign from one anchor date. The SINGLE path
+  # by which the week's meetings are loaded: `handle_params/3` and all four
+  # navigation events funnel through here, so there is exactly one range
+  # query in the module and no way for a handler to drift from it.
+  #
+  # One query per WEEK, not seven per day: `list_meetings_in_range/3` is
+  # already half-open over the same bounds `week_bounds/2` produces, and
+  # the day columns are a partition of that result in memory.
+  defp assign_calendar_week(socket, %Date{} = anchor, selected \\ nil) do
+    time_zone = socket.assigns.calendar_time_zone
+    selected = selected || anchor
+    meetings = list_calendar_week_meetings(anchor, time_zone)
+
+    socket
+    |> assign(:calendar_anchor_date, anchor)
+    |> assign(:calendar_selected_date, selected)
+    |> assign(:calendar_week_meetings, meetings)
+    |> assign(:calendar_hour_window, calendar_hour_window(meetings, time_zone))
+  end
+
+  # No zone means no query. The dead render places NOTHING rather than
+  # placing everything in UTC: a row that visibly jumps between day
+  # columns one beat after connect is a worse answer than one beat of
+  # empty grid, and the extra range query would be work done to be undone.
+  defp list_calendar_week_meetings(_anchor, nil), do: []
+
+  defp list_calendar_week_meetings(%Date{} = anchor, time_zone) do
+    {from, to} = CalendarWindow.week_bounds(anchor, time_zone)
+    Meetings.list_meetings_in_range(from, to)
+  end
+
+  defp calendar_hour_window(_meetings, nil), do: CalendarWindow.hour_window([], "Etc/UTC")
+
+  defp calendar_hour_window(meetings, time_zone),
+    do: CalendarWindow.hour_window(meetings, time_zone)
+
+  defp schedule_calendar_tick, do: Process.send_after(self(), :calendar_tick, 60_000)
+
+  # "Today" is the viewer's today, not the server's. Near midnight those
+  # are different DATES, and opening the calendar to the wrong week is
+  # exactly the class of error the connect-param zone exists to prevent.
+  # With no zone we have nothing better than UTC, and the grid is empty
+  # anyway on that render.
+  defp calendar_today(socket), do: calendar_today_date(socket.assigns.calendar_time_zone)
+
+  @doc """
+  The viewer's current date in `time_zone`, or the server's when the zone
+  is unknown.
+
+  The `nil` clause is NOT a second guess: it returns exactly the date
+  `assign_calendar_week/3` already anchored the rendered week on, so the
+  day the grid highlights and the week the grid draws can never disagree.
+  Both correct themselves on the same beat, when the connect params land.
+  """
+  @spec calendar_today_date(String.t() | nil) :: Date.t()
+  def calendar_today_date(time_zone), do: calendar_today_date(time_zone, DateTime.utc_now())
+
+  @doc """
+  `calendar_today_date/1` against a GIVEN instant rather than the clock.
+
+  The arity-1 form reads the clock and is the one navigation calls; this
+  is the form the render path uses, so "today" on screen is derived from
+  the same `@calendar_now` the now-line's offset is, and the two cannot
+  disagree about which day it is across a midnight beat.
+  """
+  @spec calendar_today_date(String.t() | nil, DateTime.t()) :: Date.t()
+  def calendar_today_date(nil, %DateTime{} = now), do: DateTime.to_date(now)
+
+  def calendar_today_date(time_zone, %DateTime{} = now) when is_binary(time_zone),
+    do: now |> DateTime.shift_zone!(time_zone) |> DateTime.to_date()
+
+  # ── Calendar rendering helpers (task 019fb954-8ead stage 2) ──────────────
+  #
+  # Every one of these is a total function of its arguments so the grid
+  # template does no arithmetic of its own. `CalendarWindow` owns the
+  # date maths; these own the FORMATTING and the assign-shaped plumbing
+  # between it and the markup.
+
+  @doc """
+  The rendered week's label — `Aug 3 – 9, 2026`.
+
+  The year is printed ONCE for a week that stays inside a year, which is
+  every week but one. The three clauses widen only as far as they must:
+  the month repeats only when the week straddles two, and the year only
+  when it straddles two. The separator is an en dash (U+2013), the
+  typographic range mark, not a hyphen.
+  """
+  @spec calendar_week_label(Date.t()) :: String.t()
+  def calendar_week_label(%Date{} = anchor) do
+    days = CalendarWindow.week_days(anchor)
+    first = List.first(days)
+    last = List.last(days)
+
+    cond do
+      first.year != last.year ->
+        "#{month_abbrev(first)} #{first.day}, #{first.year} – " <>
+          "#{month_abbrev(last)} #{last.day}, #{last.year}"
+
+      first.month != last.month ->
+        "#{month_abbrev(first)} #{first.day} – #{month_abbrev(last)} #{last.day}, #{last.year}"
+
+      true ->
+        "#{month_abbrev(first)} #{first.day} – #{last.day}, #{last.year}"
+    end
+  end
+
+  @doc """
+  The seven days of the rendered week, Monday first, each already tagged
+  with whether it is the viewer's today.
+
+  The tag is computed here rather than per-cell in the template so the
+  clock is read ONCE for the whole grid. Two reads either side of
+  midnight would let the header circle and the now-line disagree about
+  which day it is, in the one render where that is most visible.
+  """
+  @spec calendar_week_days(Date.t(), String.t() | nil) :: [
+          %{date: Date.t(), today?: boolean()}
+        ]
+  def calendar_week_days(%Date{} = anchor, time_zone) do
+    today = calendar_today_date(time_zone)
+
+    anchor
+    |> CalendarWindow.week_days()
+    |> Enum.map(&%{date: &1, today?: Date.compare(&1, today) == :eq})
+  end
+
+  @doc """
+  The hours the gutter draws a label for, one per rendered row.
+
+  The window is half-open — `{8, 18}` is eight AM through the END of the
+  five PM row — so the last hour gets no label of its own.
+  """
+  @spec calendar_hours({integer(), integer()}) :: [integer()]
+  def calendar_hours({first_hour, last_hour}) when last_hour > first_hour,
+    do: Enum.to_list(first_hour..(last_hour - 1))
+
+  @doc """
+  A gutter label for a 24-hour clock hour — `8 AM`, `12 PM`, `11 PM`.
+  """
+  @spec calendar_hour_label(integer()) :: String.t()
+  def calendar_hour_label(0), do: "12 AM"
+  def calendar_hour_label(12), do: "12 PM"
+  def calendar_hour_label(hour) when hour > 0 and hour < 12, do: "#{hour} AM"
+  def calendar_hour_label(hour) when hour > 12 and hour < 24, do: "#{hour - 12} PM"
+
+  @doc """
+  The `{meeting, placement}` pairs that belong in `date`'s column.
+
+  Filtering happens in `CalendarWindow.place/4`, which answers `:skip`
+  both for a meeting that cannot be drawn at all (cancelled, or never
+  scheduled) and for one that simply belongs to another day. The template
+  therefore never asks "should this be here?" — it renders what it is
+  handed.
+
+  With no resolved zone there is no local date to compare against, so
+  NOTHING is placed. That is the contract `resolve_time_zone/1` sets up:
+  one beat of empty grid rather than seven columns of meetings that jump
+  sideways the moment the browser tells us where it is.
+
+  The returned placement is everything the template needs to draw the
+  block and nothing it has to derive: vertical position from
+  `CalendarWindow.place/4`, horizontal position from
+  `CalendarWindow.assign_lanes/1`, and `:compact?` from the one piece the
+  arithmetic module cannot know — how tall this particular view draws an
+  hour. `view` is therefore load-bearing rather than cosmetic: the same
+  meeting is compact in the week grid's 3.25rem rows and roomy in the day
+  view's 5.5rem ones.
+  """
+  @spec calendar_day_events(
+          [Meeting.t()],
+          Date.t(),
+          String.t() | nil,
+          {integer(), integer()},
+          calendar_view()
+        ) :: [{Meeting.t(), calendar_block()}]
+  def calendar_day_events(_meetings, %Date{}, nil, _window, _view), do: []
+
+  def calendar_day_events(meetings, %Date{} = date, time_zone, window, view)
+      when is_list(meetings) and is_binary(time_zone) and view in [:week, :day] do
+    meetings
+    |> Enum.flat_map(fn meeting ->
+      case CalendarWindow.place(meeting, date, time_zone, window) do
+        {:ok, placement} -> [{meeting, placement}]
+        :skip -> []
+      end
+    end)
+    |> CalendarWindow.assign_lanes()
+    |> Enum.map(fn {meeting, placement} ->
+      {meeting, Map.put(placement, :compact?, calendar_compact_block?(placement, window, view))}
+    end)
+  end
+
+  @doc """
+  How tall one hour is drawn, in `rem`, for each of the two calendar halves.
+
+  The single source of truth for the vertical rhythm: the gutter row, the
+  hour rules painted behind the column, and the compact-block threshold all
+  read it, so none of them can drift from the others.
+
+  `:week` keeps the design frame's 3.25rem — ten hours over a 520px body,
+  a working day visible without scrolling. `:day` is 5.5rem, and that number
+  is derived rather than chosen: `CalendarWindow`'s half-hour floor times
+  5.5rem is exactly 44px, so the shortest block a phone can draw IS the
+  touch target. Meeting the 44px floor by geometry is what lets the block
+  carry no CSS minimum at all — a pixel minimum inside a proportional
+  column is what put two meetings' text on top of each other.
+  """
+  @spec calendar_hour_row_rem(calendar_view()) :: float()
+  def calendar_hour_row_rem(:week), do: 3.25
+  def calendar_hour_row_rem(:day), do: 5.5
+
+  @doc """
+  The height a two-line block needs, in px, before its second line clips.
+
+  Title line plus time line at each half's own font sizes and leading, plus
+  that half's vertical padding. A block shorter than this renders compact —
+  one line — rather than drawing a time label the viewer only sees the top
+  half of.
+  """
+  @spec calendar_two_line_px(calendar_view()) :: number()
+  # 11px + 10px at leading-tight, plus `py-1`.
+  def calendar_two_line_px(:week), do: 35
+  # 12px + 11px at leading-tight, plus `py-1.5`.
+  def calendar_two_line_px(:day), do: 41
+
+  @doc """
+  How tall `placement` actually renders, in px, in `view`.
+
+  Note the window cancels out — a percentage of a window that is itself
+  `hours * row` px tall is just the block's own duration in rows — which is
+  the property that makes the compact threshold stable no matter how far
+  `hour_window/2` has widened the grid.
+  """
+  @spec calendar_block_height_px(
+          %{height: float()},
+          {integer(), integer()},
+          calendar_view()
+        ) :: float()
+  def calendar_block_height_px(%{height: height}, {first_hour, last_hour}, view) do
+    height / 100 * (last_hour - first_hour) * calendar_hour_row_rem(view) * @root_font_px
+  end
+
+  @doc """
+  Whether this block must drop to a single line to stay legible.
+  """
+  @spec calendar_compact_block?(%{height: float()}, {integer(), integer()}, calendar_view()) ::
+          boolean()
+  def calendar_compact_block?(placement, window, view),
+    do: calendar_block_height_px(placement, window, view) < calendar_two_line_px(view)
+
+  @doc """
+  The gutter, in `rem`, between an event block and its column's edges — and
+  between two blocks that had to share the column's width.
+  """
+  @spec calendar_block_gutter_rem(calendar_view()) :: float()
+  def calendar_block_gutter_rem(:week), do: 0.25
+  def calendar_block_gutter_rem(:day), do: 0.375
+
+  @doc """
+  The whole geometry of one event block as an inline `style`.
+
+  All four edges in one string, because they are one decision: `top` /
+  `height` say WHEN, `left` / `width` say which lane, and a block whose
+  lane came from a stale copy of its placement would be drawn over its
+  neighbour. The `calc` keeps the gutter in `rem` while the lane split
+  stays in percent, so a two-lane pair gets one gutter between them and
+  half a column each without either unit having to know the other.
+  """
+  @spec calendar_block_style(
+          %{top: float(), height: float(), left: float(), width: float()},
+          calendar_view()
+        ) :: String.t()
+  def calendar_block_style(%{top: top, height: height, left: left, width: width}, view) do
+    gutter = calendar_block_gutter_rem(view)
+
+    "top:#{top}%;height:#{height}%;" <>
+      "left:calc(#{left}% + #{gutter}rem);width:calc(#{width}% - #{gutter * 2}rem)"
+  end
+
+  @doc """
+  One hour row's height, as an inline `style` for the gutter column.
+  """
+  @spec calendar_hour_row_style(calendar_view()) :: String.t()
+  def calendar_hour_row_style(view), do: "height:#{calendar_hour_row_rem(view)}rem"
+
+  @doc """
+  The hour rules painted behind a day column, as an inline `style`.
+
+  A repeating gradient rather than one element per hour: the rules are
+  decoration, and the column's only children should be the things a reader
+  can click. Driven off the same `rem` as the gutter rows, so the lines
+  cannot land anywhere but on the hour.
+  """
+  @spec calendar_hour_rules_style(calendar_view()) :: String.t()
+  def calendar_hour_rules_style(view) do
+    row = calendar_hour_row_rem(view)
+
+    "background-image: repeating-linear-gradient(to bottom, transparent 0, " <>
+      "transparent calc(#{row}rem - 1px), var(--color-base-300) calc(#{row}rem - 1px), " <>
+      "var(--color-base-300) #{row}rem)"
+  end
+
+  @doc """
+  A placed meeting's local start time as `HH:MM`.
+
+  Rendered SERVER-SIDE in the resolved zone rather than by a client hook,
+  so the string inside a block and the column the block sits in can never
+  disagree about what day it is.
+  """
+  @spec calendar_event_time(Meeting.t(), String.t()) :: String.t()
+  def calendar_event_time(%Meeting{scheduled_start_at: start_at}, time_zone)
+      when is_binary(time_zone) do
+    start_at
+    |> DateTime.shift_zone!(time_zone)
+    |> Calendar.strftime("%H:%M")
+  end
+
+  @doc """
+  How far down the rendered hour window a GIVEN instant sits, as a
+  percentage, or `nil` when there is no honest answer.
+
+  The instant is an ARGUMENT, never the clock. Two reasons, and the
+  first is a correctness one: LiveView diffs on assigns, so a helper
+  that reads the clock inside the render is only ever re-evaluated when
+  something else on the page changes, and the line it draws is the one
+  from whenever that last happened. Taking `now` in means the offset
+  moves exactly when `@calendar_now` does — every beat, and only then.
+  The second is that it makes the value testable at an arbitrary time of
+  day without sleeping through one.
+
+  `nil` for an unresolved zone — the caller draws no line rather than a
+  line in server time, which is the same call `resolve_time_zone/1`
+  makes. `nil` too when the instant's hour falls OUTSIDE the drawn
+  window: a now-line pinned to the top edge at 3 AM is not a smaller
+  error than no line, it is a confident wrong one.
+  """
+  @spec calendar_now_offset(String.t() | nil, {integer(), integer()}, DateTime.t()) ::
+          float() | nil
+  def calendar_now_offset(nil, _window, %DateTime{}), do: nil
+
+  def calendar_now_offset(time_zone, {first_hour, last_hour}, %DateTime{} = now)
+      when is_binary(time_zone) and last_hour > first_hour do
+    now = DateTime.shift_zone!(now, time_zone)
+    window_minutes = (last_hour - first_hour) * 60
+    offset_minutes = (now.hour - first_hour) * 60 + now.minute
+
+    if offset_minutes >= 0 and offset_minutes <= window_minutes do
+      offset_minutes / window_minutes * 100
+    end
+  end
+
+  @doc """
+  The now-line's offset for one day column, as a single-element list, or
+  `[]` when that column must not draw one.
+
+  A list rather than a `nil`-able value so the template renders it with
+  the same `:for` it renders everything else with, and never places a
+  line on a path where the guard said no.
+
+  Two independent reasons to draw nothing, and they are different
+  reasons: this is not today's column (the line is a fact about ONE day
+  — drawn across all seven it claims it is also 2:14 PM on Sunday), or
+  there is no honest offset at all (see `calendar_now_offset/3`).
+  """
+  @spec calendar_now_line(boolean(), String.t() | nil, {integer(), integer()}, DateTime.t()) ::
+          [float()]
+  def calendar_now_line(false, _time_zone, _window, %DateTime{}), do: []
+
+  def calendar_now_line(true, time_zone, window, %DateTime{} = now) do
+    case calendar_now_offset(time_zone, window, now) do
+      nil -> []
+      offset -> [offset]
+    end
+  end
+
+  @doc """
+  A day column's heading abbreviation — `MON`, `TUE`.
+  """
+  @spec calendar_weekday_abbrev(Date.t()) :: String.t()
+  def calendar_weekday_abbrev(%Date{} = date),
+    do: date |> Calendar.strftime("%a") |> String.upcase()
+
+  # ── Mobile week strip + day view (task 019fb954-8ead stage 3) ────────────
+
+  @doc """
+  A week-strip cell's single letter — `M`, `T`, `W`.
+
+  Derived from `calendar_weekday_abbrev/1` rather than from a literal
+  seven-element list, so the strip cannot disagree with the desktop
+  heading about which day a date is.
+  """
+  @spec calendar_weekday_initial(Date.t()) :: String.t()
+  def calendar_weekday_initial(%Date{} = date),
+    do: date |> calendar_weekday_abbrev() |> String.first()
+
+  @doc """
+  The mobile day heading's date half — `Wednesday, Aug 5`.
+
+  The weekday is written out in full here where the strip above prints
+  one letter: the strip is scanned, this is read.
+  """
+  @spec calendar_day_label(Date.t()) :: String.t()
+  def calendar_day_label(%Date{} = date), do: Calendar.strftime(date, "%A, %b %-d")
+
+  @doc """
+  How many meetings the day view will actually DRAW for `date`.
+
+  Delegates to `calendar_day_events/4` rather than counting rows itself,
+  which is the whole point: the number in the heading and the blocks in
+  the column are the same list measured twice, so a cancelled meeting —
+  or one that was never scheduled — cannot be counted into a heading
+  that then names more meetings than the reader can see.
+  """
+  @spec calendar_day_meeting_count(
+          [Meeting.t()],
+          Date.t(),
+          String.t() | nil,
+          {integer(), integer()}
+        ) :: non_neg_integer()
+  def calendar_day_meeting_count(meetings, %Date{} = date, time_zone, window),
+    do: meetings |> calendar_day_events(date, time_zone, window, :day) |> length()
+
+  @doc """
+  The count half of the mobile day heading — `No meetings`, `1 meeting`,
+  `2 meetings`.
+
+  Zero gets words rather than a `0`, because the heading is the only
+  place a phone says anything about the selected day and an empty column
+  under a bare `0 meetings` reads like a failed load.
+  """
+  @spec calendar_day_count_label(non_neg_integer()) :: String.t()
+  def calendar_day_count_label(0), do: "No meetings"
+  def calendar_day_count_label(1), do: "1 meeting"
+
+  def calendar_day_count_label(count) when is_integer(count) and count > 1,
+    do: "#{count} meetings"
+
+  @doc """
+  How many meetings the rendered WEEK actually draws.
+
+  The seven day columns summed through `calendar_day_meeting_count/4`,
+  so this counts placed BLOCKS and not rows: `place/4` answers `:skip`
+  for a meeting that is cancelled, for one that was never scheduled, and
+  for one whose local start date is not the column's — and it matches
+  exactly one of the seven columns for every meeting it does place, so
+  nothing is counted twice.
+
+  Derived from the same function the grid draws with, deliberately. The
+  header chip this feeds read `7 total` beside a grid holding 5 blocks,
+  because it was `length(@meetings)` — every meeting row the LiveView had
+  loaded, including the two the grid refuses to place. A count next to a
+  grid is read as a count OF the grid.
+  """
+  @spec calendar_week_meeting_count(
+          [Meeting.t()],
+          Date.t(),
+          String.t() | nil,
+          {integer(), integer()}
+        ) :: non_neg_integer()
+  def calendar_week_meeting_count(meetings, %Date{} = anchor, time_zone, window) do
+    anchor
+    |> CalendarWindow.week_days()
+    |> Enum.map(&calendar_day_meeting_count(meetings, &1, time_zone, window))
+    |> Enum.sum()
+  end
+
+  @doc """
+  The header chip beside the Calendar/Archive tabs — `No meetings this
+  week`, `1 meeting this week`, `5 meetings this week`.
+
+  It says "this week" because the number is about the rendered week, and
+  the string it replaced (`7 total`) named no scope at all. Unlabelled
+  was the other half of the defect: `total` invites the reader to take it
+  as a fact about the whole surface, so a reader who counts the grid and
+  gets a different number has no way to tell which of the two is lying.
+
+  Pluralisation is borrowed from `calendar_day_count_label/1` rather than
+  rewritten, so the chip and the day heading cannot disagree about how to
+  say one.
+  """
+  @spec calendar_week_count_label(non_neg_integer()) :: String.t()
+  def calendar_week_count_label(count) when is_integer(count) and count >= 0,
+    do: "#{calendar_day_count_label(count)} this week"
+
+  @doc """
+  The now-line offsets for the mobile day column — a single-element list,
+  or `[]`.
+
+  Same two conditions as `calendar_now_line/4` on the desktop grid,
+  asked of the ONE day on screen instead of each of seven: the line is a
+  fact about today, so a day view showing Friday draws none.
+
+  Both conditions are answered from the SAME injected instant — "is this
+  today" and "where in the day" cannot come from two different readings
+  of the clock without a beat existing on which they disagree.
+  """
+  @spec calendar_selected_now_line(
+          Date.t(),
+          String.t() | nil,
+          {integer(), integer()},
+          DateTime.t()
+        ) :: [float()]
+  def calendar_selected_now_line(%Date{} = selected, time_zone, window, %DateTime{} = now) do
+    today? = Date.compare(selected, calendar_today_date(time_zone, now)) == :eq
+    calendar_now_line(today?, time_zone, window, now)
+  end
+
+  defp month_abbrev(%Date{} = date), do: Calendar.strftime(date, "%b")
+
+  # ── Meeting detail selection (task 019fb954-8ead stage 4) ────────────────
+
+  @doc """
+  The meeting the detail panel/sheet is open on, or `nil`.
+
+  Resolved out of `@calendar_week_meetings` rather than re-queried, and
+  that is the whole point: the panel can only ever describe a meeting the
+  RENDERED WEEK contains. `select_meeting` carries an id from a block the
+  grid drew, so the row is already loaded, and paging away from the week
+  a selection was made in closes the panel rather than leaving it
+  describing a meeting no longer on screen.
+
+  It also means a `phx-value-id` naming any other row — the event is
+  attacker-supplied by definition — resolves to `nil` and renders
+  nothing, with no query issued for it.
+  """
+  @spec selected_meeting(map()) :: Meeting.t() | nil
+  def selected_meeting(%{selected_meeting_id: nil}), do: nil
+
+  def selected_meeting(%{selected_meeting_id: id, calendar_week_meetings: meetings})
+      when is_binary(id) and is_list(meetings),
+      do: Enum.find(meetings, &(&1.id == id))
+
+  # ── The detail surface's invitee rows (task 019fb955-1d7b stage 5) ───────
+  #
+  # `invited_count/1` lived here until this stage. It answered `length(
+  # list_invites(id))` for a chip beside the status tag; the rows now carry
+  # their own `Invited · N` header, so the chip and the function behind it
+  # were deleted rather than left to disagree with the list beneath them.
+
+  @doc """
+  The rows the detail surface's invitee list draws for `meeting`.
+
+  `Meetings.list_invites/2` defaults to `include_revoked: false`, and that
+  default is the whole reason no filtering happens here: a revoked invitee
+  is precisely someone who is NOT invited, so drawing them would overstate
+  the room to the one person looking at this panel to decide whether to
+  chase anybody. Order is that function's — `inserted_at` ascending, `id`
+  as a total tiebreak — so the list does not reshuffle between renders.
+
+  ## Three queries, not three per row
+
+  A rendered list asks three questions of every account-holding invitee:
+  what is their name, what is their address, and are they external. All
+  three are per-USER facts, and asking them a row at a time is a query per
+  row on a surface that re-renders on every calendar event. So the users
+  are preloaded in one round trip and
+  `Platform.Tenancy.external_user_ids/1` answers the membership question
+  for the whole list in a second.
+
+  ## The producer agent row is not an invite and cannot be one
+
+  `meeting_invites` carries `user_id` and `email` and no `agent_id`, so
+  the agent that produces meetings has no row to be listed from. It is
+  rendered from `Platform.Meetings.SenderSeed.get/0` instead, appended
+  after the invites, and OMITTED ENTIRELY when that returns `nil` — which
+  is the expected state wherever the meetings subsystem was never enabled.
+  A synthesised placeholder would name an agent that cannot be messaged.
+
+  It is also not the agent currently sitting in a meeting's chat space:
+  `Chat.create_space/1` attaches the HISTORIAN to any space slugged
+  `meeting-<uuid>`, which is a different agent doing a different job and
+  is deliberately not drawn here.
+  """
+  @spec detail_invite_rows(Meeting.t()) :: [map()]
+  def detail_invite_rows(%Meeting{} = meeting) do
+    invites = Repo.preload(Meetings.list_invites(meeting.id), :user)
+
+    external_ids =
+      invites
+      |> Enum.map(& &1.user_id)
+      |> Enum.reject(&is_nil/1)
+      |> Tenancy.external_user_ids()
+
+    Enum.map(invites, &invite_row(&1, meeting, external_ids)) ++ producer_rows()
+  end
+
+  defp invite_row(%Invite{} = invite, %Meeting{} = meeting, external_ids) do
+    external? = is_binary(invite.user_id) and MapSet.member?(external_ids, invite.user_id)
+
+    %{
+      id: invite.id,
+      name: invite_row_name(invite),
+      subtitle: invite_row_subtitle(invite, external?),
+      user_id: invite.user_id,
+      email: invite_row_email(invite),
+      expires_at: invite.expires_at,
+      external: external?,
+      agent: false,
+      avatar_url: nil,
+      removable: false,
+      copy_url: invite_row_copy_url(meeting, invite)
+    }
+  end
+
+  # The user's own record wins over `display_name`, which is only ever
+  # what the host happened to type — `invite_user/3` says as much. A row
+  # that can name nobody RAISES: `meeting_invites_identity_check` forbids
+  # it at the database level, so reaching here means the check was dropped,
+  # and a row rendered as a blank line is a person nobody notices is
+  # missing.
+  defp invite_row_name(%Invite{user: %User{} = user} = invite),
+    do: user.name || user.email || invite.display_name || raise_nameless(invite)
+
+  defp invite_row_name(%Invite{} = invite),
+    do: invite.display_name || invite.email || raise_nameless(invite)
+
+  defp raise_nameless(%Invite{} = invite) do
+    raise ArgumentError,
+          "meeting invite #{invite.id} names nobody: user_id, display_name and email are all nil"
+  end
+
+  # STATE, never explanation — the one line under a name says what is true
+  # of this invitee right now:
+  #
+  #   * an external account-holder — their address, because "external" on
+  #     its own does not say which org they came from;
+  #   * an internal member — nothing. Their name is the whole fact.
+  #   * a guest — how long their link has left, which is the only thing
+  #     about a guest that changes on its own;
+  #   * an external invite awaiting a grant — the address it was sent to,
+  #     since there is no account to name yet.
+  defp invite_row_subtitle(%Invite{user: %User{} = user}, true), do: user.email
+  defp invite_row_subtitle(%Invite{user: %User{}}, false), do: nil
+
+  defp invite_row_subtitle(%Invite{expires_at: %DateTime{} = expires_at}, _external?),
+    do: guest_expiry_label(expires_at)
+
+  defp invite_row_subtitle(%Invite{email: email}, _external?) when is_binary(email), do: email
+  defp invite_row_subtitle(%Invite{}, _external?), do: nil
+
+  @doc """
+  How long a guest link has left — `expires in 24h`, `expires in <1h`, or
+  `expired`.
+
+  Whole hours and no minutes: the window is 24h by default and the reader
+  is deciding whether to re-send, not timing anything.
+
+  ## Rounded, not truncated — and why the sub-hour case is its own string
+
+  `expires_at` is stamped as `now + 24h` and read back a few milliseconds
+  later, so the remaining span is 23h59m59s. TRUNCATING that renders
+  `expires in 23h` for a link minted a moment ago, which reads as though
+  an hour had already been lost. Rounding renders `24h`, which is what the
+  host was told when they minted it.
+
+  Rounding UP is the direction that misleads — it would let a link with
+  four minutes left claim an hour — so the sub-hour span does not go
+  through the hours form at all. `expires in <1h` says the one thing that
+  matters about it without overstating. Past due gets its own string for
+  the same reason in the other direction: `list_invites/2` filters revoked
+  rows and NOT expired ones, so a dead link is reachable here, and
+  `expires in 0h` reads as a live one.
+  """
+  @spec guest_expiry_label(DateTime.t()) :: String.t()
+  def guest_expiry_label(%DateTime{} = expires_at) do
+    case DateTime.diff(expires_at, DateTime.utc_now(), :second) do
+      seconds when seconds <= 0 -> "expired"
+      seconds when seconds < 3600 -> "expires in <1h"
+      seconds -> "expires in #{round(seconds / 3600)}h"
+    end
+  end
+
+  # `email` on an account-holding row is whatever the host typed, and the
+  # account is authoritative. Only the tag derivation reads this key, and
+  # only for rows with no `user_id`.
+  defp invite_row_email(%Invite{user: %User{} = user}), do: user.email
+  defp invite_row_email(%Invite{email: email}), do: email
+
+  # ONLY a guest row has a link to copy. An account-holder signs in as
+  # themselves and an external invite awaiting a grant has no token at
+  # all, so both get no control rather than one that copies something
+  # that cannot admit anyone.
+  defp invite_row_copy_url(
+         %Meeting{} = meeting,
+         %Invite{user_id: nil, expires_at: %DateTime{}} = i
+       ),
+       do: Meetings.guest_invite_link(meeting, i)
+
+  defp invite_row_copy_url(%Meeting{}, %Invite{}), do: nil
+
+  # Display-only, no remove control, and absent when the seed is absent.
+  defp producer_rows do
+    case SenderSeed.get() do
+      %Agent{} = agent ->
+        [
+          %{
+            id: "agent:" <> agent.id,
+            name: agent.name,
+            subtitle: "meeting producer",
+            user_id: nil,
+            email: nil,
+            expires_at: nil,
+            external: nil,
+            agent: true,
+            avatar_url: nil,
+            removable: false,
+            copy_url: nil
+          }
+        ]
+
+      nil ->
+        []
+    end
+  end
+
+  # ── Archive half of the index (task 019fb954-c848) ───────────────────────
+  #
+  # The index has two halves — the calendar ("what is coming up?") and the
+  # archive ("what came out of what already happened?"). Which one is showing
+  # is URL state (`?view=archive`), not a bare assign, so a reload, a shared
+  # link and the browser's back button all land on the same half the reader
+  # was looking at. Every filter (`q`, `types`, `person_id`, `project_id`)
+  # rides the same URL for the same reason: an archive search that cannot be
+  # pasted to someone else is half a feature.
+  #
+  # `Meetings.list_all_meetings/0` is deliberately NOT the source here. It is
+  # unscoped (it carries its own `TODO(scope)`), and the archive is a
+  # viewer-facing search — `Archive.search/2` does the org narrowing.
+  defp assign_archive(socket, params) do
+    view = archive_view(params)
+    query = archive_param(params, "q") || ""
+    types = archive_param_types(params)
+    person_id = archive_param(params, "person_id")
+    project_id = archive_param(params, "project_id")
+
+    socket
+    |> assign(:meetings_view, view)
+    |> assign(:archive_query, query)
+    |> assign(:archive_types, types)
+    |> assign(:archive_person_id, person_id)
+    |> assign(:archive_project_id, project_id)
+    |> assign(:archive_time_zone, socket.assigns[:calendar_time_zone] || "Etc/UTC")
+    |> assign_archive_result(view, query, types, person_id, project_id)
+  end
+
+  # The calendar half pays for nothing the archive needs. `nil` rather than an
+  # empty result map so a template that reads `@archive_result` on the
+  # calendar half fails loudly instead of rendering a confident "0 of 0".
+  defp assign_archive_result(socket, :calendar, _query, _types, _person_id, _project_id) do
+    socket
+    |> assign(:archive_result, nil)
+    |> assign(:archive_artifacts, %{})
+  end
+
+  defp assign_archive_result(socket, :archive, query, types, person_id, project_id) do
+    # The viewer is the USER RECORD, not `:current_user` — that assign holds a
+    # display STRING (see `PlatformWeb.ShellLive.on_mount/4`), and handing a
+    # string to `Archive.search/2` would land in its `viewer_org_ids(_)`
+    # fallback and silently return an empty archive to everyone.
+    viewer = socket.assigns[:current_user_record]
+
+    result =
+      Archive.search(viewer,
+        query: query,
+        types: types,
+        person_id: person_id,
+        project_id: project_id
+      )
+
+    socket
+    |> assign(:archive_result, result)
+    |> assign(:archive_artifacts, Archive.artifacts_for(viewer, result.matches ++ result.others))
+  end
+
+  defp archive_view(%{"view" => "archive"}), do: :archive
+  defp archive_view(_params), do: :calendar
+
+  defp archive_param(params, key) do
+    case Map.get(params, key) do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  # A comma list of `Archive.types/0` names. Unknown names are dropped rather
+  # than raised on: this is a URL a human can hand-edit, and the empty list
+  # already means "search everything", so a typo degrades to the default view
+  # rather than to a 500.
+  defp archive_param_types(params) do
+    known = Map.new(Archive.types(), &{Atom.to_string(&1), &1})
+
+    case archive_param(params, "types") do
+      nil ->
+        []
+
+      types ->
+        types
+        |> String.split(",", trim: true)
+        |> Enum.map(&String.trim/1)
+        |> Enum.flat_map(&List.wrap(Map.get(known, &1)))
+        |> Enum.uniq()
+    end
+  end
+
+  # ── Archive URL building ─────────────────────────────────────────────────
+  #
+  # One builder for every archive link and for the filter form's `push_patch`,
+  # so a control can never drop a filter another control set. `overrides` is a
+  # string-keyed map; an explicit `nil` CLEARS the parameter (the reject below
+  # strips it), which is how "deselect this chip" is expressed.
+  defp archive_path(assigns, overrides \\ %{}) do
+    params =
+      %{
+        "view" => "archive",
+        "q" => Map.get(overrides, "q", assigns.archive_query),
+        "types" => Map.get(overrides, "types", archive_types_param(assigns.archive_types)),
+        "person_id" => Map.get(overrides, "person_id", assigns.archive_person_id),
+        "project_id" => Map.get(overrides, "project_id", assigns.archive_project_id)
+      }
+      |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+      |> Map.new()
+
+    ~p"/meetings?#{params}"
+  end
+
+  # A key the form did not send is left alone; a key it sent EMPTY is cleared
+  # (`archive_param/2` normalises blank to `nil`, and `archive_path/2` strips
+  # nils out of the query string).
+  defp archive_override(overrides, params, key) do
+    case Map.get(params, key) do
+      value when is_binary(value) -> Map.put(overrides, key, archive_param(params, key))
+      _ -> overrides
+    end
+  end
+
+  defp archive_types_param([]), do: nil
+  defp archive_types_param(types), do: types |> Enum.map(&Atom.to_string/1) |> Enum.join(",")
+
+  # Toggling a type chip. Selecting none is the same query as selecting all
+  # (`Archive.search/2` normalises `[]` to every type), so the "all off" state
+  # is represented by dropping the parameter entirely rather than by an empty
+  # `types=` that would have to be special-cased on the way back in.
+  defp archive_toggle_types_path(assigns, type) do
+    next =
+      if type in assigns.archive_types do
+        List.delete(assigns.archive_types, type)
+      else
+        assigns.archive_types ++ [type]
+      end
+
+    archive_path(assigns, %{"types" => archive_types_param(next)})
+  end
+
+  # The person filter is a two-state toggle (Anyone / Just me) rather than a
+  # picker: `person_id` is honoured from the URL for any user id, so a link
+  # naming someone else still works, but this codebase has no viewer-scoped
+  # people list to populate a dropdown from, and inventing one here would be
+  # a second, unaudited answer to "who may this viewer see?".
+  defp archive_person_path(assigns) do
+    next = if assigns.archive_person_id, do: nil, else: assigns[:current_user_id]
+
+    archive_path(assigns, %{"person_id" => next})
+  end
+
+  # The no-matches state's one control: back to the whole archive. It clears
+  # the QUERY AND every filter, because the state it exits is reachable from
+  # any combination of them and a control that cleared only the query would
+  # leave the reader in the same place it just told them was empty.
+  defp archive_clear_path(assigns) do
+    archive_path(assigns, %{
+      "q" => nil,
+      "types" => nil,
+      "person_id" => nil,
+      "project_id" => nil
+    })
+  end
+
+  # ── The archive's two empty states ───────────────────────────────────────
+  #
+  # They are two ANSWERS, not two renderings of one answer, and the whole
+  # point of this pair is that they never both hold:
+  #
+  #   * nothing archived AT ALL — `unfiltered_total` is what says so, not
+  #     `total`, which already has the person and project filters applied and
+  #     so reads zero for a filter that excluded everything.
+  #   * archived meetings exist, this query/filter set reached none of them.
+  #     With a query that is `matched == 0`; with a blank query there is no
+  #     matched partition at all (see `Archive`'s moduledoc) and the filters
+  #     having emptied the in-scope set is the same statement.
+  #
+  # A blank query over an unfiltered archive with meetings in it is NEITHER:
+  # the full list under "Also in this range, no match" is the answer.
+  defp archive_no_meetings?(%{unfiltered_total: 0}), do: true
+  defp archive_no_meetings?(_result), do: false
+
+  defp archive_no_matches?(%{unfiltered_total: 0}), do: false
+  defp archive_no_matches?(%{query: "", total: total}), do: total == 0
+  defp archive_no_matches?(%{matched: matched}), do: matched == 0
+
+  # ── Archive labels ───────────────────────────────────────────────────────
+
+  # "2 of 47 · filtered" — MATCHED of total. A bare total answers a question
+  # nobody asked: the reader already knows the archive is big, what they want
+  # to know is how much of it their query reached. The un-queried archive has
+  # no matched partition at all (see `Archive`'s moduledoc on why blank is a
+  # different state from zero matches), so it reads as a plain total.
+  defp archive_count_label(%{query: "", total: total}, _suffix), do: "#{total} archived"
+
+  defp archive_count_label(%{matched: matched, total: total}, suffix),
+    do: "#{matched} of #{total} · #{suffix}"
+
+  defp archive_sort_label(%{query: ""}), do: "sorted by date"
+  defp archive_sort_label(_result), do: "sorted by relevance"
+
+  defp archive_type_label(:canvases), do: "Canvases"
+  defp archive_type_label(:summaries), do: "Summaries"
+  defp archive_type_label(:action_items), do: "Action items"
+  defp archive_type_label(:transcripts), do: "Transcripts"
+
+  # Mobile truncates the longest label rather than letting CSS clip it —
+  # `Act…` is the design's own abbreviation, and an ellipsis the browser
+  # chose would land in a different place at every text size.
+  defp archive_type_short_label(:action_items), do: "Act…"
+  defp archive_type_short_label(type), do: archive_type_label(type)
+
+  defp archive_type_icon(:canvases), do: "hero-squares-2x2"
+  defp archive_type_icon(:summaries), do: "hero-document-text"
+  defp archive_type_icon(:action_items), do: "hero-check-circle"
+  defp archive_type_icon(:transcripts), do: "hero-chat-bubble-left-ellipsis"
+
+  defp archive_chip_icon(:canvas), do: "hero-squares-2x2"
+  defp archive_chip_icon(:summary), do: "hero-document-text"
+  defp archive_chip_icon(:action_items), do: "hero-check-circle"
+  defp archive_chip_icon(:transcript), do: "hero-chat-bubble-left-ellipsis"
+
+  # Colour is TYPE, expressed in semantic token slots. The mock's hex values
+  # are scaffolding — a canvas chip is "the accent thing", not "#8b5cf6".
+  defp archive_chip_class(:canvas), do: "border-secondary/40 bg-secondary/10 text-secondary"
+  defp archive_chip_class(:summary), do: "border-primary/30 bg-primary/10 text-primary"
+  defp archive_chip_class(:action_items), do: "border-warning/30 bg-warning/10 text-warning"
+  defp archive_chip_class(:transcript), do: "border-base-300 bg-base-200 text-base-content/60"
+
+  # Mobile shortens the chips that CARRY a short form — `artifacts_for/2`
+  # ships `:short_label` on the action-item chip precisely so the phone does
+  # not have to guess at one. A canvas chip has none, and it should not: its
+  # label is the canvas's own title plus its revision span, and trimming a
+  # word off a title the user chose is mangling their data, not abbreviating.
+  # `nil` means "the full label is already the short one".
+  defp archive_chip_short_label(%{short_label: short_label}), do: short_label
+  defp archive_chip_short_label(_chip), do: nil
+
+  # The two result sections. A BLANK query has no matched partition at all
+  # (`Archive`'s moduledoc: blank is a different state from zero matches), so
+  # it renders as one undivided list rather than as an empty "Matches" plus
+  # everything under a heading that would be claiming they failed to match.
+  defp archive_sections(%{total: 0}), do: []
+
+  defp archive_sections(%{query: ""} = result) do
+    [%{key: "others", heading: nil, rows: result.others, dim?: false}]
+  end
+
+  # A section with no rows is DROPPED rather than rendered as a bare heading.
+  # "Matches" over nothing, sitting directly above an empty state that says
+  # "No matches", is the same fact told twice in two registers — and the one
+  # in the smaller type is the one that reads as a bug.
+  defp archive_sections(result) do
+    [
+      %{key: "matches", heading: "Matches", rows: result.matches, dim?: false},
+      %{
+        key: "others",
+        heading: "Also in this range, no match",
+        rows: result.others,
+        dim?: true
+      }
+    ]
+    |> Enum.reject(&(&1.rows == []))
+  end
+
+  defp archive_person_label(%{archive_person_id: nil}), do: "Anyone"
+  defp archive_person_label(%{archive_person_id: id, current_user_id: id}), do: "Just me"
+  defp archive_person_label(_assigns), do: "One person"
+
+  # A meeting the viewer may not see is ABSENT from `artifacts_for/2`'s map —
+  # that is the function's contract, not an error. The correct render for an
+  # absent key is a row with no artifacts, so the default is a real empty
+  # payload rather than a `Map.fetch!` that would 500 on a stale URL.
+  defp archive_artifacts(artifacts, %{id: id}) do
+    Map.get(artifacts, id, %{
+      chips: [],
+      duration_minutes: nil,
+      host_name: nil,
+      attendee_count: 0,
+      project_path: "",
+      cancelled_by_name: nil,
+      cancellation_notified_at: nil
+    })
+  end
+
+  # The row's date is when it LEFT the calendar: ended, or — for a meeting
+  # that never ran — cancelled. Same `coalesce` the archive's `:others`
+  # partition orders by, so the gutter cannot disagree with the sort.
+  defp archive_row_at(%{ended_at: %DateTime{} = at}), do: at
+  defp archive_row_at(%{cancelled_at: %DateTime{} = at}), do: at
+  defp archive_row_at(%{scheduled_start_at: %DateTime{} = at}), do: at
+  defp archive_row_at(_entry), do: nil
+
+  defp archive_row_month(entry, time_zone), do: archive_strftime(entry, time_zone, "%b")
+  defp archive_row_day(entry, time_zone), do: archive_strftime(entry, time_zone, "%-d")
+  defp archive_row_date(entry, time_zone), do: archive_strftime(entry, time_zone, "%b %-d")
+
+  defp archive_strftime(entry, time_zone, format) do
+    case archive_row_at(entry) do
+      nil ->
+        ""
+
+      %DateTime{} = at ->
+        case DateTime.shift_zone(at, time_zone) do
+          {:ok, shifted} -> Calendar.strftime(shifted, format)
+          {:error, _reason} -> Calendar.strftime(at, format)
+        end
+    end
+  end
+
+  # "52 min · hosted by Rowan · 5 attended · Suite / Control Center". A
+  # cancelled meeting has no duration (it never ran), and saying so is the
+  # first thing the subtitle owes the reader.
+  defp archive_row_subtitle(entry, artifacts) do
+    (archive_cancelled_parts(entry, artifacts) ++
+       [
+         archive_duration_part(entry, artifacts),
+         archive_host_part(artifacts),
+         archive_attended_part(artifacts),
+         archive_project_part(artifacts)
+       ])
+    |> archive_join_parts()
+  end
+
+  # Mobile drops host and project — the two parts a phone-width row cannot
+  # show without wrapping — and folds the date gutter in at the front.
+  defp archive_row_mobile_subtitle(entry, artifacts, time_zone) do
+    ([archive_row_date(entry, time_zone)] ++
+       archive_cancelled_parts(entry, artifacts) ++
+       [
+         archive_duration_part(entry, artifacts),
+         archive_attended_part(artifacts)
+       ])
+    |> archive_join_parts()
+  end
+
+  defp archive_join_parts(parts) do
+    parts |> Enum.reject(&(&1 in [nil, ""])) |> Enum.join(" · ")
+  end
+
+  # "Cancelled by Rowan · attendees notified" — the design's third row.
+  #
+  # THE MISSING NUMBER IS DELIBERATE. The mock reads "4 notified in chat", and
+  # nothing on this branch can answer that 4 as a FACT about this
+  # cancellation. `meetings.cancellation_notified_at` is a bare timestamp with
+  # no recipient list beside it, and the only public function that resolves
+  # recipients — `Platform.Meetings.recipients_for_meeting/1` — answers who
+  # would be notified NOW, not who was notified THEN, and falls back to every
+  # human in the chat space when the invite list comes back empty. Revoking
+  # the last invitee therefore WIDENS its count, which is the one case the
+  # sponsor has not ruled on. A number that is right in the ordinary case and
+  # silently wrong in the contested one is worse here than no number: the
+  # reader cannot tell which they are looking at. So the count is omitted and
+  # the fact that a notification happened is not.
+  #
+  # A `nil` `cancellation_notified_at` renders WITHOUT the notified clause —
+  # claiming a fan-out that never ran is the same lie in the other direction.
+  # A `nil` `cancelled_by_name` renders a bare "Cancelled": the FK nilifies
+  # rather than cascades, so an absent canceller is a real state.
+  defp archive_cancelled_parts(%{status: "cancelled"}, artifacts) do
+    [archive_cancelled_by_part(artifacts), archive_notified_part(artifacts)]
+  end
+
+  defp archive_cancelled_parts(_entry, _artifacts), do: []
+
+  defp archive_cancelled_by_part(%{cancelled_by_name: name}) when is_binary(name) and name != "",
+    do: "Cancelled by #{name}"
+
+  defp archive_cancelled_by_part(_artifacts), do: "Cancelled"
+
+  defp archive_notified_part(%{cancellation_notified_at: %DateTime{}}), do: "attendees notified"
+  defp archive_notified_part(_artifacts), do: nil
+
+  defp archive_duration_part(%{status: "cancelled"}, _artifacts), do: nil
+  defp archive_duration_part(_entry, %{duration_minutes: nil}), do: nil
+  defp archive_duration_part(_entry, %{duration_minutes: minutes}), do: "#{minutes} min"
+
+  defp archive_host_part(%{host_name: nil}), do: nil
+  defp archive_host_part(%{host_name: ""}), do: nil
+  defp archive_host_part(%{host_name: host_name}), do: "hosted by #{host_name}"
+
+  defp archive_attended_part(%{attendee_count: count}) when is_integer(count) and count > 0,
+    do: "#{count} attended"
+
+  defp archive_attended_part(_artifacts), do: nil
+
+  defp archive_project_part(%{project_path: path}) when is_binary(path) and path != "", do: path
+  defp archive_project_part(_artifacts), do: nil
+
+  # The design's overlapping stack, one ring per attendee up to four. The
+  # rings carry a generic person glyph rather than initials: `artifacts_for/2`
+  # returns a COUNT, not identities, and initials derived from anything else
+  # would be a second answer to "who was in this meeting" that nobody
+  # authorised.
+  defp archive_attendee_rings(%{attendee_count: count}) when is_integer(count) and count > 0,
+    do: Enum.to_list(1..min(count, 4))
+
+  defp archive_attendee_rings(_artifacts), do: []
+
+  defp archive_attendee_overflow(%{attendee_count: count}) when is_integer(count) and count > 4,
+    do: count - 4
+
+  defp archive_attendee_overflow(_artifacts), do: 0
 
   # ── Events ───────────────────────────────────────────────────────────────
 
@@ -873,105 +2149,6 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, socket}
   end
 
-  # ── Guest-invite sheet (stage 4 of task 019f2483) ───────────────────────
-  #
-  # The host clicks "Copy guest link", the sheet slides up, they type a name
-  # (optional) + pick an expiry, and the LV mints:
-  #   1. a dedicated guest chat_space (`Meetings.create_guest_chat_space/2`)
-  #      so guest-authored messages don't leak into the meeting's real
-  #      space; the space id is threaded through the signed token so the
-  #      guest-ingress path can bind writes.
-  #   2. a signed HMAC token (`Platform.Meetings.GuestInvite.sign/4`)
-  #      carrying
-  #      `{meeting_slug, expires_at, display_name, guest_space_id, meeting_id}`.
-  #   3. a URL of the form
-  #      `https://<meeting_guest_host>/<meeting_slug>/<token>` that maps
-  #      back into `MeetingLive` under the `meet.` host scope (with
-  #      `chrome_mode: :none`; see `PlatformWeb.Router`).
-  #
-  # Sheet visibility is host-gated in the template on `host?/2`; the events
-  # themselves stay safe if a non-host somehow triggers them (a `Meetings`
-  # write-side check would be the real guard, out of scope here).
-
-  def handle_event("open_guest_invite_sheet", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:show_guest_invite_sheet, true)
-     |> assign(:guest_invite_url, nil)
-     |> assign(:guest_invite_form, blank_guest_invite_form())}
-  end
-
-  def handle_event("close_guest_invite_sheet", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:show_guest_invite_sheet, false)
-     |> assign(:guest_invite_url, nil)}
-  end
-
-  def handle_event("guest_invite_form_change", %{"guest_invite" => attrs}, socket) do
-    {:noreply,
-     assign(socket, :guest_invite_form, %{
-       "display_name" => Map.get(attrs, "display_name", ""),
-       "expires_in_hours" => Map.get(attrs, "expires_in_hours", "24")
-     })}
-  end
-
-  def handle_event("generate_guest_invite", %{"guest_invite" => attrs}, socket) do
-    %{meeting: meeting, user_id: user_id} = socket.assigns
-
-    display_name = attrs |> Map.get("display_name", "") |> to_string() |> trim_or_nil()
-    hours = attrs |> Map.get("expires_in_hours", "24") |> parse_expires_hours()
-
-    # Persist the form values back into the assign so the sheet re-renders
-    # with what the host typed (and the newly-generated URL underneath).
-    form_state = %{
-      "display_name" => attrs |> Map.get("display_name", "") |> to_string(),
-      "expires_in_hours" => attrs |> Map.get("expires_in_hours", "24") |> to_string()
-    }
-
-    case Meetings.create_guest_chat_space(meeting, user_id) do
-      {:ok, guest_space} ->
-        expires_at = :os.system_time(:second) + hours * 3600
-
-        token =
-          Platform.Meetings.GuestInvite.sign(
-            meeting.slug,
-            expires_at,
-            display_name,
-            guest_space_id: guest_space.id,
-            # `meeting_id` (task 019f9b14 stage 3) pins the token's
-            # subject. Slug alone is unique only per project, so without
-            # this a signed token for one org's `standup` is
-            # indistinguishable from another org's. This is the only
-            # mint site in the codebase, so every newly-issued token is
-            # unambiguous from here on.
-            meeting_id: meeting.id
-          )
-
-        host = Application.get_env(:platform, :meeting_guest_host, "meet.example.com")
-        url = "https://#{host}/#{meeting.slug}/#{token}"
-
-        {:noreply,
-         socket
-         |> assign(:guest_invite_form, form_state)
-         |> assign(:guest_invite_url, url)}
-
-      {:error, _reason} ->
-        {:noreply,
-         socket
-         |> assign(:guest_invite_form, form_state)
-         |> put_flash(:error, "Could not generate a guest link.")}
-    end
-  end
-
-  def handle_event("copy_guest_invite", _params, socket) do
-    # The visible Copy button is wrapped by the `CopyToClipboard` JS hook
-    # (which reads `data-clipboard-text` and writes to the clipboard on
-    # click), but we also emit a browser event so a top-level toast hook
-    # can confirm the copy. Both paths coexist harmlessly.
-    {:noreply, push_event(socket, "guest_invite_copied", %{})}
-  end
-
   # ── Guest name-entry form submit (task 019f498d stage 3) ────────────────
   #
   # Trim + length gates the submitted name, then calls
@@ -1025,25 +2202,167 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, assign(socket, :name_error, "Please enter your name.")}
   end
 
-  # ── Start-meeting FAB + bottom-sheet (`:index` action only) ──────────────
+  # ── Calendar navigation (`:index` action only, task 019fb954-8ead) ───────
+  #
+  # Every one of these recomputes through `assign_calendar_week/3`, so the
+  # week query and the hour window can never drift between the arrows, the
+  # Today button and the initial render.
+
+  def handle_event("calendar_prev_week", _params, socket) do
+    {:noreply, shift_calendar_week(socket, -7)}
+  end
+
+  def handle_event("calendar_next_week", _params, socket) do
+    {:noreply, shift_calendar_week(socket, 7)}
+  end
+
+  def handle_event("calendar_today", _params, socket) do
+    today = calendar_today(socket)
+    {:noreply, assign_calendar_week(socket, today, today)}
+  end
+
+  # A `phx-click` payload is a message from a client, so an unparseable
+  # date is IGNORED rather than raised on: the only thing that can send
+  # one is a stale or hand-edited DOM, and neither deserves a 500.
+  #
+  # A date OUTSIDE the rendered week is ignored for the same reason and
+  # a stronger one: the seven strip cells are the only thing that sends
+  # this event, so an eighth date is not a request the UI can make. The
+  # week's meetings are loaded per week, so honouring it would select a
+  # day whose meetings were never queried and draw a confidently empty
+  # column. This is the invariant the day heading and the now-line both
+  # stand on — the selected date is always one of the seven on screen.
+  def handle_event("select_calendar_day", %{"date" => iso8601}, socket) do
+    week = CalendarWindow.week_days(socket.assigns.calendar_anchor_date)
+
+    with {:ok, date} <- Date.from_iso8601(iso8601),
+         true <- date in week do
+      {:noreply, assign(socket, :calendar_selected_date, date)}
+    else
+      _out_of_week_or_unparseable -> {:noreply, socket}
+    end
+  end
+
+  # Both of these reset the invite control, and for the same reason: it is
+  # scoped to ONE meeting. Left open across a change of selection it would
+  # be a search box sitting under a different meeting's invitee list, and
+  # the next thing staged in it would be written to that meeting instead.
+  def handle_event("select_meeting", %{"id" => meeting_id}, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected_meeting_id, meeting_id)
+     |> seed_live_invite_assigns()}
+  end
+
+  def handle_event("close_meeting_detail", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected_meeting_id, nil)
+     |> seed_live_invite_assigns()}
+  end
+
+  # ── Live invites (detail panel + sheet, task 019fb955-1d7b stage 5) ──────
+  #
+  # `:live` mode of `PlatformWeb.Components.Meetings.InviteControl`. The
+  # difference from the create sheet's `:draft` set is not cosmetic: there
+  # IS a meeting row here, so choosing someone WRITES a `meeting_invites`
+  # row and delivers the invite in the same call. Nothing is staged and
+  # there is no submit to lose it at.
+
+  def handle_event("meeting_invite_add_people", _params, socket) do
+    {:noreply, socket |> seed_live_invite_assigns() |> assign(:meeting_invite_open, true)}
+  end
+
+  def handle_event("meeting_invite_search", %{"value" => query}, socket) do
+    {:noreply, assign_live_invite_candidates(socket, to_string(query))}
+  end
+
+  def handle_event("meeting_invite_stage", %{"kind" => kind} = params, socket) do
+    meeting = selected_live_invite_meeting!(socket)
+
+    socket =
+      case deliver_live_invite(meeting, kind, params, socket) do
+        {:ok, _result} ->
+          socket
+
+        {:error, _reason} ->
+          # A failure here is a real runtime outcome — a changeset error, a
+          # grant that could not be staged — not a caller bug, so it is
+          # reported rather than raised. What it must never be is silent:
+          # the row simply not appearing looks identical to a click that
+          # missed.
+          put_flash(socket, :error, "That invite could not be sent.")
+      end
+
+    {:noreply, clear_live_invite_search(socket)}
+  end
+
+  # ── Archive filters (`:index` action only, task 019fb954-c848) ──────────
+  #
+  # The search box and the project select are ONE form, and it pushes into
+  # the URL rather than into an assign. Results are then linkable, survive a
+  # reload, and the back button steps through searches — which is the whole
+  # reason the archive's state lives in `handle_params/3`.
+  def handle_event("archive_filter", params, socket) do
+    overrides =
+      %{}
+      |> archive_override(params, "q")
+      |> archive_override(params, "project_id")
+
+    {:noreply, push_patch(socket, to: archive_path(socket.assigns, overrides))}
+  end
+
+  # Paging keeps the selected day's OFFSET within the week (a Wednesday
+  # stays a Wednesday) rather than snapping back to Monday, so stepping
+  # through weeks does not silently move which day is highlighted.
+  defp shift_calendar_week(socket, days) do
+    anchor = Date.add(socket.assigns.calendar_anchor_date, days)
+    selected = Date.add(socket.assigns.calendar_selected_date, days)
+    assign_calendar_week(socket, anchor, selected)
+  end
+
+  # ── New-meeting FAB + create sheet (`:index` action only) ────────────────
   #
   # The FAB lives only on the meetings index. Clicking it flips
-  # `:show_start_meeting_sheet` so the bottom-sheet wrapper renders. The
-  # sheet collects { name, project_id, description } and submits to
-  # `Platform.Meetings.create_meeting/1`. On success, we close the sheet,
-  # flash, and `push_navigate` to `/meetings/<slug>` so the user lands
-  # straight inside the new meeting.
+  # `:show_start_meeting_sheet` so the sheet wrapper renders. The sheet
+  # collects { name, project, date, start, duration } plus a list of
+  # STAGED invites, and submits to `Meetings.create_meeting/1`.
+  #
+  # ## It does not drop you into the room any more (stage 4)
+  #
+  # This handler used to `push_navigate` into `/meetings/<slug>` on
+  # success. That was defensible when every meeting was ad-hoc and
+  # "create" meant "start". With a date and a start time on the form it is
+  # wrong: a meeting scheduled for next Wednesday must not open its room
+  # now. The sheet closes, the flash confirms, and the index stays put —
+  # `create_meeting/1` broadcasts `{:meeting_created, meeting}` on the
+  # project topic and this LiveView is subscribed to every project's, so
+  # the calendar redraws itself. Joining is still one click, from the
+  # meeting.
+  #
+  # ## Staged invites are replayed AFTER the commit, and their failures
+  #    are reported
+  #
+  # Nothing touches `meeting_invites` until submit, because at create time
+  # there is no meeting row to hang an invite off. Once the meeting is
+  # committed the staged entries are replayed one call each; a failure
+  # does NOT roll the meeting back — but it is not swallowed either. The
+  # count comes back as a second flash. An invite that silently evaporates
+  # is a bug that files no report.
 
   def handle_event("open_start_meeting_sheet", _params, socket) do
-    projects = socket.assigns[:projects] || []
-
     {:noreply,
      socket
      |> assign(:show_start_meeting_sheet, true)
-     |> assign(:start_meeting_form, blank_start_meeting_form(projects))
-     |> assign(:start_meeting_error, nil)}
+     |> reset_create_sheet()}
   end
 
+  # Dismissal only HIDES. The reset lives on the open path, and duplicating
+  # it here was measurably unfalsifiable: a mutant that deleted the
+  # close-side reset left every test green, because the staged list is only
+  # observable through a rendered sheet and rendering one requires an open,
+  # which resets. Belt-and-braces no test can constrain is a claim nobody
+  # is checking.
   def handle_event("close_start_meeting_sheet", _params, socket) do
     {:noreply,
      socket
@@ -1054,66 +2373,61 @@ defmodule PlatformWeb.MeetingLive do
   # Live-update form state on input change so re-render keeps the user's
   # input in the sheet (otherwise an inline-validation render wipes it).
   def handle_event("start_meeting_form_change", %{"start_meeting" => attrs}, socket) do
+    {:noreply, assign(socket, :start_meeting_form, start_meeting_form(attrs))}
+  end
+
+  # ── Draft invite staging (create sheet only) ─────────────────────────────
+  #
+  # `:draft` mode of `PlatformWeb.Components.Meetings.InviteControl`. The
+  # event names are the component's `event(:draft, _)` set, which is
+  # disjoint from the `:live` set the detail panel uses — both surfaces are
+  # this same LiveView, so the name is the only thing that tells a
+  # create-sheet click apart from a detail-panel one.
+
+  def handle_event("meeting_create_invite_search", %{"value" => query}, socket) do
+    {:noreply, assign_create_invite_candidates(socket, to_string(query))}
+  end
+
+  def handle_event("meeting_create_invite_stage", %{"kind" => kind} = params, socket) do
+    entry = build_draft_invite(kind, params, socket)
+    staged = socket.assigns.meeting_create_invites
+
+    staged =
+      if Enum.any?(staged, &(&1.id == entry.id)), do: staged, else: staged ++ [entry]
+
     {:noreply,
-     assign(socket, :start_meeting_form, %{
-       "name" => Map.get(attrs, "name", ""),
-       "project_id" => Map.get(attrs, "project_id", ""),
-       "description" => Map.get(attrs, "description", "")
-     })}
+     socket
+     |> assign(:meeting_create_invites, staged)
+     |> clear_create_invite_search()}
+  end
+
+  def handle_event("meeting_create_invite_unstage", %{"id" => id}, socket) do
+    staged = Enum.reject(socket.assigns.meeting_create_invites, &(&1.id == id))
+
+    {:noreply, assign(socket, :meeting_create_invites, staged)}
   end
 
   def handle_event("start_meeting", %{"start_meeting" => attrs}, socket) do
     name = attrs |> Map.get("name", "") |> to_string() |> String.trim()
     project_id = attrs |> Map.get("project_id", "") |> to_string() |> String.trim()
-    description = attrs |> Map.get("description", "") |> to_string()
 
     cond do
       name == "" ->
-        {:noreply,
-         socket
-         |> assign(:start_meeting_form, %{
-           "name" => name,
-           "project_id" => project_id,
-           "description" => description
-         })
-         |> assign(:start_meeting_error, "Name is required.")}
+        refuse_create(socket, attrs, "Name is required.")
 
+      # `meetings.project_id` is NOT NULL and the slug is unique per
+      # project, so the `required` attribute on the select is a hint, not a
+      # gate. This clause is the gate.
       project_id == "" ->
-        {:noreply,
-         socket
-         |> assign(:start_meeting_form, %{
-           "name" => name,
-           "project_id" => project_id,
-           "description" => description
-         })
-         |> assign(:start_meeting_error, "Project is required.")}
+        refuse_create(socket, attrs, "Project is required.")
 
       true ->
-        case Meetings.create_meeting(%{
-               project_id: project_id,
-               name: name
-             }) do
-          {:ok, meeting} ->
-            {:noreply,
-             socket
-             |> assign(:show_start_meeting_sheet, false)
-             |> assign(:start_meeting_error, nil)
-             |> assign(
-               :start_meeting_form,
-               blank_start_meeting_form(socket.assigns[:projects] || [])
-             )
-             |> put_flash(:info, "Meeting started.")
-             |> push_navigate(to: ~p"/meetings/#{meeting.slug}")}
+        case scheduled_window(attrs, socket.assigns.calendar_time_zone) do
+          {:error, message} ->
+            refuse_create(socket, attrs, message)
 
-          {:error, _reason} ->
-            {:noreply,
-             socket
-             |> assign(:start_meeting_form, %{
-               "name" => name,
-               "project_id" => project_id,
-               "description" => description
-             })
-             |> assign(:start_meeting_error, "Could not start meeting.")}
+          {:ok, starts_at, ends_at} ->
+            create_from_sheet(socket, attrs, name, project_id, starts_at, ends_at)
         end
     end
   end
@@ -1322,11 +2636,22 @@ defmodule PlatformWeb.MeetingLive do
       socket.assigns[:in_meeting] ->
         {:noreply, socket}
 
-      socket.assigns[:chrome_mode] == :none ->
+      not is_binary(socket.assigns[:user_id]) ->
         # Guest ingress (task 019f498d stage 3): mount already minted the
         # bundle and pushed `join-meeting`. MeetingHooks.join/1 assumes a
         # binary `:user_id` (see `do_join/1`), which the guest surface
         # doesn't have — so auto-join is a no-op on the guest path.
+        #
+        # NARROWED from `chrome_mode == :none` (task 019fb955-f8b1 stage
+        # 5). That test conflated "chrome-less" with "guest", which held
+        # only while the `meet.` host served guests exclusively. The
+        # `:meet_member` live_session is chrome-less AND carries a real
+        # binary `:user_id`, and it must auto-join like any other signed-in
+        # viewer — under the old test it loaded the room and never entered
+        # the call. The stated reason for the skip was always the missing
+        # user_id, so this asks that question directly. `MeetingHooks`
+        # carries its own invite gate (stage 4), so widening the auto-join
+        # path does not widen who may join.
         {:noreply, socket}
 
       true ->
@@ -1421,17 +2746,63 @@ defmodule PlatformWeb.MeetingLive do
   # assigns — the dataset is small (one row per meeting per project) and
   # simplicity beats cleverness here. Subscribe-once-per-project ensures
   # the broadcast lands on a process that owns these assigns.
+  #
+  # `:meeting_cancelled` is on the list because the calendar must UNDRAW a
+  # cancelled meeting: `CalendarWindow.placeable?/1` excludes the status,
+  # but only if the assigns are refreshed to notice the change. Without it
+  # the grid would keep showing a meeting that is off until a navigation.
   def handle_info({tag, %Meetings.Meeting{}}, socket)
-      when tag in [:meeting_created, :meeting_started, :meeting_ended] do
+      when tag in [:meeting_created, :meeting_started, :meeting_ended, :meeting_cancelled] do
     if Map.has_key?(socket.assigns, :meetings) do
       meetings = Meetings.list_all_meetings()
 
       {:noreply,
        socket
        |> assign(:meetings, meetings)
-       |> assign(:grouped_meetings, group_meetings_by_status(meetings))}
+       |> assign(:grouped_meetings, group_meetings_by_status(meetings))
+       |> refresh_calendar_week()}
     else
       {:noreply, socket}
+    end
+  end
+
+  # The minute tick that keeps the now-line honest. Re-arms itself so the
+  # cadence survives as long as the index is mounted.
+  #
+  # It MUST re-assign the instant, and this clause used to claim the
+  # opposite ("re-assigns nothing: the render reads the clock, this only
+  # forces the beat"). That premise is false and it shipped a now-line
+  # frozen at mount for the life of the session. LiveView diffs on
+  # ASSIGNS: a beat that changes no assign produces no diff, the
+  # template's offset expression is never re-evaluated, and it does not
+  # matter what that expression would have read had it run. Observed
+  # directly — an unrelated broadcast that re-rendered the page left the
+  # line's `top` byte-identical two minutes on, because the broadcast
+  # dirtied the meetings list and nothing the line depends on.
+  #
+  # The timer itself was never the fault: traced on the LiveView process,
+  # `:calendar_tick` lands 60s after mount and again 60s after that.
+  def handle_info(:calendar_tick, socket),
+    do: handle_info({:calendar_tick, DateTime.utc_now()}, socket)
+
+  # The instant arrives as an argument on this clause so the beat is
+  # drivable at a chosen time without sleeping through a real minute —
+  # which is the only way to assert that the rendered offset MOVED,
+  # rather than that a now-line element exists (it always did).
+  def handle_info({:calendar_tick, %DateTime{} = now}, socket) do
+    schedule_calendar_tick()
+    {:noreply, assign(socket, :calendar_now, now)}
+  end
+
+  # Only the `:index` action holds calendar assigns; the `:show` and guest
+  # surfaces share this PubSub clause and must not be re-queried.
+  defp refresh_calendar_week(socket) do
+    case socket.assigns do
+      %{calendar_anchor_date: %Date{} = anchor, calendar_selected_date: selected} ->
+        assign_calendar_week(socket, anchor, selected)
+
+      _ ->
+        socket
     end
   end
 
@@ -2043,22 +3414,31 @@ defmodule PlatformWeb.MeetingLive do
   defp normalize_chrome_mode(:none), do: :none
   defp normalize_chrome_mode(_), do: :shell
 
+  # The name to show for a signed-in ACCOUNT on the chrome-less member
+  # surface (task 019fb955-f8b1 stage 5). Same `name || email` precedence
+  # `ShellLive.on_mount/4` uses for `:current_user`, so the member badge
+  # and the shell header never disagree about what to call someone.
+  #
+  # No fallback string. A nil here renders NO member badge, which is the
+  # honest outcome for a mount with no account behind it (the anonymous
+  # `Ecto.UUID.generate()` test path); inventing "User" would put a name
+  # on the surface that names nobody.
+  defp member_display_name(%{name: name}) when is_binary(name) and name != "", do: name
+  defp member_display_name(%{email: email}) when is_binary(email) and email != "", do: email
+  defp member_display_name(_), do: nil
+
   # ── Index helpers (`:index` action) ──────────────────────────────────────
   #
-  # The meetings index groups meetings by status so the live ones float to
-  # the top, the upcoming (`scheduled`) sit in the middle, and ended sink
-  # to the bottom. Section order is intentional — a viewer scanning the
-  # page wants "what's happening right now" first.
-
-  @meeting_status_sections [:live, :upcoming, :ended]
-
-  @doc """
-  Sections rendered by the meetings index, in display order.
-
-  Public so tests + the heex template can iterate without hard-coding
-  the order in two places.
-  """
-  def meeting_status_sections, do: @meeting_status_sections
+  # `group_meetings_by_status/1` outlived the grouped section/row list it
+  # was written for: task 019fb954-8ead stage 3 replaced that list with the
+  # mobile week strip and day view, and the calendar buckets by DATE, not
+  # by status. The projection stays because `:grouped_meetings` is still
+  # maintained across the index's PubSub handlers and is the only
+  # status-partitioned view of the index's meetings; the four view helpers
+  # that rendered the sections (`meeting_status_sections/0`,
+  # `meeting_section_label/1`, `meeting_section_icon/1`,
+  # `meeting_status_pill/1`) were deleted with the markup, having had no
+  # other caller.
 
   @doc """
   Group a list of meetings into a `%{live: …, upcoming: …, ended: …}` map.
@@ -2096,9 +3476,14 @@ defmodule PlatformWeb.MeetingLive do
   defp status_bucket("ended"), do: :ended
   defp status_bucket(_), do: :upcoming
 
-  # Default start-meeting form values. When exactly one project exists we
+  # Default create-sheet form values. When exactly one project exists we
   # pre-fill it so a single-project workspace doesn't show a useless
   # one-option select.
+  #
+  # `date` and `start_time` default to BLANK, which is the ad-hoc meeting:
+  # `create_meeting/1` takes the intended-time pair as both-or-neither, and
+  # both nil is the supported "started but never scheduled" state. Nothing
+  # here invents a start time the user did not choose.
   defp blank_start_meeting_form(projects) when is_list(projects) do
     project_id =
       case projects do
@@ -2106,57 +3491,398 @@ defmodule PlatformWeb.MeetingLive do
         _ -> ""
       end
 
-    %{"name" => "", "project_id" => project_id, "description" => ""}
+    %{
+      "name" => "",
+      "project_id" => project_id,
+      "date" => "",
+      "start_time" => "",
+      "duration_minutes" => to_string(@default_duration_minutes)
+    }
   end
 
-  defp blank_start_meeting_form(_), do: %{"name" => "", "project_id" => "", "description" => ""}
+  defp blank_start_meeting_form(_), do: blank_start_meeting_form([])
 
-  # Default values for the guest-invite sheet form (stage 4 of task
-  # 019f2483). 24h expiry is the default because that matches the
-  # `sign_with_default_expiry/2` window; hosts can dial down (1h) or up
-  # (72h) via the select in the sheet.
-  defp blank_guest_invite_form,
-    do: %{"display_name" => "", "expires_in_hours" => "24"}
+  # Echo the submitted params back into the form assign so a refusal
+  # re-render keeps what the user typed. Raw, not trimmed: trimming here
+  # would edit the field under the cursor.
+  defp start_meeting_form(attrs) do
+    %{
+      "name" => attrs |> Map.get("name", "") |> to_string(),
+      "project_id" => attrs |> Map.get("project_id", "") |> to_string(),
+      "date" => attrs |> Map.get("date", "") |> to_string(),
+      "start_time" => attrs |> Map.get("start_time", "") |> to_string(),
+      "duration_minutes" =>
+        attrs
+        |> Map.get("duration_minutes", @default_duration_minutes)
+        |> to_string()
+    }
+  end
 
-  # `""` → `nil` (self-entry flow), any non-empty string → trimmed value.
-  # Keeps `GuestInvite.sign/4`'s payload contract clean (display_name is
-  # either a non-empty binary or `nil`, never a whitespace string).
-  defp trim_or_nil(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> trimmed
+  defp refuse_create(socket, attrs, message) do
+    {:noreply,
+     socket
+     |> assign(:start_meeting_form, start_meeting_form(attrs))
+     |> assign(:start_meeting_error, message)}
+  end
+
+  defp create_from_sheet(socket, attrs, name, project_id, starts_at, ends_at) do
+    case Meetings.create_meeting(%{
+           project_id: project_id,
+           name: name,
+           scheduled_start_at: starts_at,
+           scheduled_end_at: ends_at
+         }) do
+      {:ok, meeting} ->
+        undelivered = replay_draft_invites(meeting, socket.assigns.meeting_create_invites)
+
+        {:noreply,
+         socket
+         |> assign(:show_start_meeting_sheet, false)
+         |> reset_create_sheet()
+         |> put_flash(:info, "Meeting created.")
+         |> flash_undelivered_invites(undelivered)}
+
+      {:error, _reason} ->
+        refuse_create(socket, attrs, "Could not create meeting.")
     end
   end
 
-  defp trim_or_nil(_), do: nil
+  # ── The intended-time pair ───────────────────────────────────────────────
+  #
+  # `Meeting.changeset/2` validates `scheduled_start_at` and
+  # `scheduled_end_at` as a pair, so this returns both or neither. It never
+  # synthesises one endpoint from the other beyond the duration the user
+  # picked.
 
-  # Clamp the sheet's expiry select to the three sanctioned windows
-  # (1h/24h/72h). Anything else — including a hand-crafted phx-value —
-  # falls back to 24h so a malicious client can't mint a 10-year token.
-  defp parse_expires_hours(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {hours, ""} when hours in [1, 24, 72] -> hours
-      _ -> 24
+  defp scheduled_window(attrs, time_zone) do
+    date = attrs |> Map.get("date", "") |> to_string() |> String.trim()
+    start_time = attrs |> Map.get("start_time", "") |> to_string() |> String.trim()
+
+    case {date, start_time} do
+      {"", ""} -> {:ok, nil, nil}
+      {"", _} -> {:error, @schedule_pair_error}
+      {_, ""} -> {:error, @schedule_pair_error}
+      {date, start_time} -> resolve_window(date, start_time, attrs, time_zone)
     end
   end
 
-  defp parse_expires_hours(value) when is_integer(value) and value in [1, 24, 72], do: value
-  defp parse_expires_hours(_), do: 24
+  # A nil zone is the DEAD RENDER's answer: `resolve_time_zone/1` returns
+  # nil when the browser sent no usable IANA name, which on the index means
+  # the LiveSocket has not connected yet. A submit cannot arrive over a
+  # dead render, so reaching here with nil means the browser genuinely
+  # could not name its zone — and there is no honest way to turn "9:00" into
+  # an instant without one. Refuse rather than quietly reading it as UTC:
+  # a meeting silently placed hours off is worse than one not created.
+  # Unscheduled creates are unaffected, because they never reach this
+  # clause.
+  defp resolve_window(_date, _start_time, _attrs, nil), do: {:error, @no_time_zone_error}
 
-  @doc "Human label for a meeting status section."
-  def meeting_section_label(:live), do: "Live now"
-  def meeting_section_label(:upcoming), do: "Upcoming"
-  def meeting_section_label(:ended), do: "Ended"
+  defp resolve_window(date, start_time, attrs, time_zone) do
+    with {:ok, date} <- Date.from_iso8601(date),
+         {:ok, time} <- Time.from_iso8601(with_seconds(start_time)),
+         {:ok, minutes} <- duration_minutes(attrs),
+         {:ok, starts_at} <- local_datetime(date, time, time_zone) do
+      {:ok, starts_at, DateTime.add(starts_at, minutes * 60, :second)}
+    else
+      {:error, message} when is_binary(message) -> {:error, message}
+      {:error, _reason} -> {:error, @invalid_time_error}
+    end
+  end
 
-  @doc "Hero-icon class for a meeting status section."
-  def meeting_section_icon(:live), do: "hero-signal"
-  def meeting_section_icon(:upcoming), do: "hero-calendar"
-  def meeting_section_icon(:ended), do: "hero-archive-box"
+  # `<input type="time">` submits `HH:MM` when the step is a minute and
+  # `HH:MM:SS` when it is finer. `Time.from_iso8601/1` requires seconds.
+  defp with_seconds(<<_h::binary-2, ?:, _m::binary-2>> = value), do: value <> ":00"
+  defp with_seconds(value), do: value
 
-  @doc "Status-pill tone class for a meeting status."
-  def meeting_status_pill(:live), do: "badge badge-error gap-1"
-  def meeting_status_pill(:upcoming), do: "badge badge-info gap-1"
-  def meeting_status_pill(:ended), do: "badge badge-ghost gap-1"
+  # An allowlist, not a range check. The select offers exactly these, so a
+  # value outside them did not come from this form.
+  defp duration_minutes(attrs) do
+    raw = attrs |> Map.get("duration_minutes", "") |> to_string() |> String.trim()
+
+    case Integer.parse(raw) do
+      {minutes, ""} when minutes in @duration_options -> {:ok, minutes}
+      _ -> {:error, @invalid_duration_error}
+    end
+  end
+
+  # `{:ambiguous, …}` is the autumn DST repeat: the wall clock reads this
+  # time twice and both instants are real. The FIRST is chosen because it
+  # is the one still on the pre-transition offset, which is what someone
+  # reading a clock that day means. `{:gap, …}` is the spring skip — that
+  # wall time does not occur, so there is nothing to choose and it is
+  # refused rather than nudged to a neighbour.
+  defp local_datetime(date, time, time_zone) do
+    case DateTime.new(date, time, time_zone) do
+      {:ok, datetime} -> {:ok, datetime}
+      {:ambiguous, first, _second} -> {:ok, first}
+      {:gap, _before, _after} -> {:error, @nonexistent_time_error}
+      {:error, _reason} -> {:error, @invalid_time_error}
+    end
+  end
+
+  # ── Draft invites ────────────────────────────────────────────────────────
+
+  defp reset_create_sheet(socket) do
+    socket
+    |> assign(:start_meeting_form, blank_start_meeting_form(socket.assigns[:projects] || []))
+    |> assign(:start_meeting_error, nil)
+    |> seed_create_invite_assigns()
+  end
+
+  defp seed_create_invite_assigns(socket) do
+    socket
+    |> assign(:meeting_create_invites, [])
+    |> clear_create_invite_search()
+  end
+
+  # Staging closes the dropdown by emptying what it dispatches on, rather
+  # than by a separate "open?" flag that could disagree with the list.
+  defp clear_create_invite_search(socket) do
+    socket
+    |> assign(:meeting_create_invite_query, "")
+    |> assign(:meeting_create_invite_candidates, [])
+    |> assign(:meeting_create_invite_email, nil)
+  end
+
+  defp assign_create_invite_candidates(socket, query) do
+    staged = socket.assigns.meeting_create_invites
+
+    %{users: users, email: email} =
+      Meetings.resolve_invite_candidates(query,
+        exclude_user_ids: for(%{kind: :user, user_id: id} <- staged, do: id),
+        exclude_emails: for(%{email: address} <- staged, is_binary(address), do: address)
+      )
+
+    socket
+    |> assign(:meeting_create_invite_query, query)
+    |> assign(:meeting_create_invite_candidates, users)
+    |> assign(:meeting_create_invite_email, email)
+  end
+
+  # The staged shapes. `:user` resolves against the RENDERED candidate
+  # list, not the database: the only legal source of that id is a row this
+  # socket just drew, so an id from anywhere else is a forged event and
+  # raises instead of quietly staging a stranger.
+  defp build_draft_invite("user", %{"id" => user_id}, socket) do
+    case Enum.find(socket.assigns.meeting_create_invite_candidates, &(&1.id == user_id)) do
+      nil ->
+        raise ArgumentError,
+              "cannot stage invite: no candidate is currently offered for that id"
+
+      user ->
+        %{
+          id: "user:" <> user.id,
+          kind: :user,
+          user_id: user.id,
+          email: user.email,
+          display_name: user.name || user.email,
+          subtitle: user.name && user.email,
+          avatar_url: nil
+        }
+    end
+  end
+
+  defp build_draft_invite("guest", %{"email" => email}, _socket) do
+    address = email |> to_string() |> String.trim()
+
+    %{
+      id: "guest:" <> address,
+      kind: :guest,
+      user_id: nil,
+      email: address,
+      display_name: address,
+      subtitle: "expires in #{Meetings.guest_invite_default_expiry_hours()}h",
+      avatar_url: nil
+    }
+  end
+
+  defp build_draft_invite("external", %{"email" => email}, _socket) do
+    address = email |> to_string() |> String.trim()
+
+    %{
+      id: "external:" <> address,
+      kind: :external,
+      user_id: nil,
+      email: address,
+      display_name: address,
+      subtitle: nil,
+      avatar_url: nil
+    }
+  end
+
+  defp build_draft_invite(kind, _params, _socket) do
+    raise ArgumentError, "no draft invite kind #{inspect(kind)}"
+  end
+
+  @doc """
+  Map staged create-sheet entries onto `InviteControl.invite_list/1`'s
+  entry contract.
+
+  `:expires_at` on a guest row is a PROJECTION, not a record: no token has
+  been minted, so this is the expiry `invite_guest/2` would mint if the
+  sheet were submitted now. It exists because `InviteControl.tag/1` reads
+  a `%DateTime{}` expiry as the thing that distinguishes a guest from an
+  external address awaiting a grant — the two differ in nothing else at
+  draft time.
+  """
+  def draft_invite_rows(entries) when is_list(entries), do: Enum.map(entries, &draft_invite_row/1)
+
+  defp draft_invite_row(entry) do
+    %{
+      id: entry.id,
+      name: entry.display_name,
+      subtitle: entry.subtitle,
+      user_id: entry.user_id,
+      email: entry.email,
+      expires_at: projected_expiry(entry.kind),
+      # External-ness of an ACCOUNT is an org-membership property that the
+      # candidate list does not carry, so a staged member is tagged by what
+      # is known: they hold an account.
+      external: false,
+      agent: false,
+      avatar_url: entry.avatar_url,
+      removable: true,
+      copy_url: nil
+    }
+  end
+
+  defp projected_expiry(:guest) do
+    DateTime.add(
+      DateTime.utc_now(),
+      Meetings.guest_invite_default_expiry_hours() * 3600,
+      :second
+    )
+  end
+
+  defp projected_expiry(_kind), do: nil
+
+  # One call per staged entry, after the meeting is committed. Returns the
+  # entries that did NOT produce a row.
+  defp replay_draft_invites(meeting, entries) do
+    Enum.reject(entries, &match?({:ok, _}, deliver_draft_invite(meeting, &1)))
+  end
+
+  defp deliver_draft_invite(meeting, %{kind: :user} = entry),
+    do: Meetings.invite_user(meeting, entry.user_id, display_name: entry.display_name)
+
+  defp deliver_draft_invite(meeting, %{kind: :guest} = entry),
+    do: Meetings.invite_guest(meeting, %{display_name: entry.display_name, email: entry.email})
+
+  defp deliver_draft_invite(meeting, %{kind: :external} = entry),
+    do: Meetings.invite_external_user(meeting, entry.email, display_name: entry.display_name)
+
+  # ── Live invites (private) ───────────────────────────────────────────────
+
+  # Closed, empty, and no candidates. Called on open as well as on close so
+  # the control never re-appears carrying the previous meeting's query.
+  defp seed_live_invite_assigns(socket) do
+    socket
+    |> assign(:meeting_invite_open, false)
+    |> clear_live_invite_search()
+  end
+
+  defp clear_live_invite_search(socket) do
+    socket
+    |> assign(:meeting_invite_query, "")
+    |> assign(:meeting_invite_candidates, [])
+    |> assign(:meeting_invite_email, nil)
+  end
+
+  # The exclusions come from the WRITTEN rows, not from a staging list:
+  # in live mode the invite exists the moment it is chosen, so "already
+  # invited" is a fact about the database. Without them the picker keeps
+  # offering someone who is already on the list one row above it.
+  defp assign_live_invite_candidates(socket, query) do
+    invites =
+      case selected_meeting(socket.assigns) do
+        %Meeting{} = meeting -> Meetings.list_invites(meeting.id)
+        nil -> []
+      end
+
+    %{users: users, email: email} =
+      Meetings.resolve_invite_candidates(query,
+        exclude_user_ids: for(%Invite{user_id: id} <- invites, is_binary(id), do: id),
+        exclude_emails: for(%Invite{email: address} <- invites, is_binary(address), do: address)
+      )
+
+    socket
+    |> assign(:meeting_invite_query, query)
+    |> assign(:meeting_invite_candidates, users)
+    |> assign(:meeting_invite_email, email)
+  end
+
+  # The control only renders inside a rendered detail surface, and that
+  # surface only renders for a meeting in the loaded week — so an invite
+  # event arriving with no selection did not come from this UI. Raise
+  # rather than no-op: a silently-dropped invite is the failure mode this
+  # whole surface exists to remove.
+  defp selected_live_invite_meeting!(socket) do
+    case selected_meeting(socket.assigns) do
+      %Meeting{} = meeting ->
+        meeting
+
+      nil ->
+        raise ArgumentError, "cannot invite: no meeting is selected in the detail surface"
+    end
+  end
+
+  # `:user` resolves against the RENDERED candidate list rather than the
+  # database, the same rule the draft path follows: the only legal source
+  # of that id is a row this socket just drew.
+  defp deliver_live_invite(meeting, "user", %{"id" => user_id}, socket) do
+    case Enum.find(socket.assigns.meeting_invite_candidates, &(&1.id == user_id)) do
+      nil ->
+        raise ArgumentError,
+              "cannot invite: no candidate is currently offered for that id"
+
+      user ->
+        Meetings.invite_user(meeting, user.id, display_name: user.name || user.email)
+    end
+  end
+
+  defp deliver_live_invite(meeting, "guest", %{"email" => email}, socket) do
+    address = email |> to_string() |> String.trim()
+
+    Meetings.invite_guest(meeting, %{
+      display_name: address,
+      email: address,
+      host_user_id: socket.assigns.user_id
+    })
+  end
+
+  defp deliver_live_invite(meeting, "external", %{"email" => email}, _socket) do
+    address = email |> to_string() |> String.trim()
+
+    Meetings.invite_external_user(meeting, address, display_name: address)
+  end
+
+  defp deliver_live_invite(_meeting, kind, _params, _socket) do
+    raise ArgumentError, "no live invite kind #{inspect(kind)}"
+  end
+
+  defp flash_undelivered_invites(socket, []), do: socket
+
+  defp flash_undelivered_invites(socket, undelivered) do
+    count = length(undelivered)
+    noun = if count == 1, do: "invite", else: "invites"
+
+    put_flash(socket, :error, "#{count} #{noun} could not be sent.")
+  end
+
+  # `blank_guest_invite_form/0`, `trim_or_nil/1` and `parse_expires_hours/1`
+  # lived here until task 019fb955-1d7b stage 1. They existed only to feed the
+  # meeting-wide guest-invite sheet, which minted an unattributable forwardable
+  # link; with that sheet gone they had no other caller. Guest tokens are now
+  # produced solely by `Meetings.invite_guest/2`, which does its own trimming
+  # and expiry defaulting against a persisted `meeting_invites` row.
+
+  # `meeting_section_label/1`, `meeting_section_icon/1` and
+  # `meeting_status_pill/1` lived here until task 019fb954-8ead stage 3.
+  # All three took a SECTION atom and existed only to draw the grouped
+  # section/row list that the mobile week strip and day view replaced. A
+  # meeting-status pill on the stage-4 detail surface is a different
+  # function with a different argument (a status string), so keeping
+  # these as a starting point would have been keeping the wrong shape.
 
   @doc "Hero-icon class for a stage-mode segmented-control button."
   def stage_mode_icon(:canvas), do: "hero-rectangle-stack"

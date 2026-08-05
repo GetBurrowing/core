@@ -76,6 +76,92 @@ defmodule Platform.Meetings.MeetingTest do
     end
   end
 
+  describe "changeset/2 intended times" do
+    @intended_start ~U[2026-09-01 15:00:00.123456Z]
+    @intended_end ~U[2026-09-01 16:00:00.654321Z]
+
+    test "both intended times round-trip through the database with microseconds intact" do
+      attrs =
+        valid_attrs()
+        |> Map.put(:scheduled_start_at, @intended_start)
+        |> Map.put(:scheduled_end_at, @intended_end)
+
+      assert {:ok, meeting} = %Meeting{} |> Meeting.changeset(attrs) |> Repo.insert()
+
+      # Re-fetch rather than trusting the returned struct: the returned struct
+      # carries whatever the changeset applied, so it would look correct even
+      # if the columns were never written.
+      refetched = Repo.get!(Meeting, meeting.id)
+      assert refetched.scheduled_start_at == @intended_start
+      assert refetched.scheduled_end_at == @intended_end
+      assert refetched.scheduled_start_at.microsecond == {123_456, 6}
+      assert refetched.scheduled_end_at.microsecond == {654_321, 6}
+    end
+
+    test "neither intended time is still valid and insertable (the ad-hoc path)" do
+      cs = Meeting.changeset(%Meeting{}, valid_attrs())
+      assert cs.valid?
+
+      assert {:ok, meeting} = Repo.insert(cs)
+      refetched = Repo.get!(Meeting, meeting.id)
+      assert is_nil(refetched.scheduled_start_at)
+      assert is_nil(refetched.scheduled_end_at)
+    end
+
+    test "an end with no start is invalid, keyed on scheduled_end_at" do
+      attrs = Map.put(valid_attrs(), :scheduled_end_at, @intended_end)
+      cs = Meeting.changeset(%Meeting{}, attrs)
+
+      refute cs.valid?
+      assert %{scheduled_end_at: [msg]} = errors_on(cs)
+      assert msg =~ "scheduled_start_at"
+    end
+
+    test "a start with no end is invalid, keyed on scheduled_end_at" do
+      attrs = Map.put(valid_attrs(), :scheduled_start_at, @intended_start)
+      cs = Meeting.changeset(%Meeting{}, attrs)
+
+      refute cs.valid?
+      assert %{scheduled_end_at: [msg]} = errors_on(cs)
+      assert msg =~ "required"
+    end
+
+    test "an end exactly equal to the start is invalid" do
+      attrs =
+        valid_attrs()
+        |> Map.put(:scheduled_start_at, @intended_start)
+        |> Map.put(:scheduled_end_at, @intended_start)
+
+      cs = Meeting.changeset(%Meeting{}, attrs)
+      refute cs.valid?
+      assert %{scheduled_end_at: ["must be after scheduled_start_at"]} = errors_on(cs)
+    end
+
+    test "an end one microsecond before the start is invalid" do
+      one_micro_earlier = DateTime.add(@intended_start, -1, :microsecond)
+
+      attrs =
+        valid_attrs()
+        |> Map.put(:scheduled_start_at, @intended_start)
+        |> Map.put(:scheduled_end_at, one_micro_earlier)
+
+      cs = Meeting.changeset(%Meeting{}, attrs)
+      refute cs.valid?
+      assert %{scheduled_end_at: ["must be after scheduled_start_at"]} = errors_on(cs)
+    end
+
+    test "an end one microsecond after the start is valid" do
+      one_micro_later = DateTime.add(@intended_start, 1, :microsecond)
+
+      attrs =
+        valid_attrs()
+        |> Map.put(:scheduled_start_at, @intended_start)
+        |> Map.put(:scheduled_end_at, one_micro_later)
+
+      assert Meeting.changeset(%Meeting{}, attrs).valid?
+    end
+  end
+
   describe "unique constraints" do
     test "slug is unique per project" do
       project = create_project()
@@ -139,6 +225,21 @@ defmodule Platform.Meetings.MeetingTest do
       refute cs.valid?
       assert %{status: [msg]} = errors_on(cs)
       assert msg =~ "illegal transition"
+    end
+
+    test "cannot smuggle an intended-time edit through a status transition" do
+      existing = ~U[2026-09-01 15:00:00.123456Z]
+      meeting = %Meeting{status: "scheduled", scheduled_start_at: existing}
+
+      cs =
+        Meeting.status_changeset(meeting, "live", %{
+          started_at: DateTime.utc_now(),
+          scheduled_start_at: ~U[2026-12-25 09:00:00.000000Z]
+        })
+
+      assert cs.valid?
+      assert is_nil(Ecto.Changeset.get_change(cs, :scheduled_start_at))
+      assert Ecto.Changeset.get_field(cs, :scheduled_start_at) == existing
     end
 
     test "ended → live is rejected (no resurrection)" do

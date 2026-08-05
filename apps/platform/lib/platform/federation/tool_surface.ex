@@ -2221,12 +2221,24 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "chat_participants id of the meeting host/owner. When omitted, defaults to the calling agent — it is added to the meeting's backing chat space as the principal participant and set as host."
+          },
+          scheduled_start_at: %{
+            type: "string",
+            required: false,
+            description:
+              "Optional. The meeting's INTENDED start as an ISO8601 UTC timestamp (e.g. \"2026-08-01T15:00:00Z\") — distinct from `started_at`, which is stamped when the meeting actually begins. Omit both scheduled_* parameters for an ad-hoc meeting starting now."
+          },
+          scheduled_end_at: %{
+            type: "string",
+            required: false,
+            description:
+              "Optional. The meeting's INTENDED end as an ISO8601 UTC timestamp, strictly after scheduled_start_at. Required whenever scheduled_start_at is given — there is no default duration to synthesise one from, so pick an explicit end. Omit both scheduled_* parameters for an ad-hoc meeting starting now."
           }
         },
         returns:
-          "The created meeting map: id, project_id, name, slug, status, chat_space_id, livekit_room_name, host_participant_id, started_at, ended_at.",
+          "The created meeting map: id, project_id, name, slug, status, chat_space_id, livekit_room_name, host_participant_id, started_at, ended_at, scheduled_start_at, scheduled_end_at. The two scheduled_* keys are always present, and are null for an ad-hoc meeting.",
         limitations:
-          "Requires a valid project_id and name. If an explicit slug collides with an existing meeting in the project, a clean changeset error is returned (auto-generated slugs are de-duplicated instead).",
+          "Requires a valid project_id and name. If an explicit slug collides with an existing meeting in the project, a clean changeset error is returned (auto-generated slugs are de-duplicated instead). The intended-time pair is all-or-nothing: supply both scheduled_start_at and scheduled_end_at or neither, with the end strictly after the start; a malformed or half-supplied pair is refused rather than dropped, and creates no meeting.",
         when_to_use:
           "When you need to spin up a persistent meeting surface for a project — a kickoff, sync, design review, or retro."
       }
@@ -3844,31 +3856,40 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("meeting_create", args, context) do
-    attrs =
-      %{
-        project_id: Map.get(args, "project_id"),
-        name: Map.get(args, "name"),
-        slug: Map.get(args, "slug"),
-        host_participant_id: Map.get(args, "host_participant_id")
-      }
-      |> Map.reject(fn {_k, v} -> is_nil(v) end)
+    # Both intended-time endpoints are parsed BEFORE anything is written. A
+    # malformed one short-circuits with an error envelope naming the offending
+    # parameter and no meeting row — see `parse_optional_datetime/2` for why
+    # neither coercing to nil nor raising is an acceptable alternative.
+    with {:ok, scheduled_start_at} <- parse_optional_datetime(args, "scheduled_start_at"),
+         {:ok, scheduled_end_at} <- parse_optional_datetime(args, "scheduled_end_at") do
+      attrs =
+        %{
+          project_id: Map.get(args, "project_id"),
+          name: Map.get(args, "name"),
+          slug: Map.get(args, "slug"),
+          host_participant_id: Map.get(args, "host_participant_id"),
+          scheduled_start_at: scheduled_start_at,
+          scheduled_end_at: scheduled_end_at
+        }
+        |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
-    case Meetings.create_meeting(attrs) do
-      {:ok, meeting} ->
-        meeting = maybe_default_host_participant(meeting, args, context)
-        {:ok, serialize_meeting(meeting)}
+      case Meetings.create_meeting(attrs) do
+        {:ok, meeting} ->
+          meeting = maybe_default_host_participant(meeting, args, context)
+          {:ok, serialize_meeting(meeting)}
 
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:error,
-         %{
-           error: "Failed to create meeting: #{inspect_errors(changeset)}",
-           recoverable: true,
-           suggestion:
-             "Check that project_id is valid; if you passed an explicit slug it must be unique within the project."
-         }}
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:error,
+           %{
+             error: "Failed to create meeting: #{inspect_errors(changeset)}",
+             recoverable: true,
+             suggestion:
+               "Check that project_id is valid; if you passed an explicit slug it must be unique within the project. scheduled_start_at and scheduled_end_at must be supplied together, with the end strictly after the start."
+           }}
 
-      {:error, reason} ->
-        {:error, %{error: "Failed to create meeting: #{inspect(reason)}", recoverable: true}}
+        {:error, reason} ->
+          {:error, %{error: "Failed to create meeting: #{inspect(reason)}", recoverable: true}}
+      end
     end
   end
 
@@ -9400,7 +9421,16 @@ defmodule Platform.Federation.ToolSurface do
       livekit_room_name: meeting.livekit_room_name,
       host_participant_id: meeting.host_participant_id,
       started_at: format_datetime(meeting.started_at),
-      ended_at: format_datetime(meeting.ended_at)
+      ended_at: format_datetime(meeting.ended_at),
+      # The INTENDED time, alongside the actuals above. Both keys are always
+      # emitted — nil for an ad-hoc meeting — because an absent key and a key
+      # with a nil value read identically to a JSON caller only if it never
+      # has to distinguish "this meeting is unscheduled" from "this tool
+      # doesn't report scheduling". Dropping them when nil would make the
+      # write half unreadable: an agent that scheduled a meeting could not
+      # confirm what it set.
+      scheduled_start_at: format_datetime(meeting.scheduled_start_at),
+      scheduled_end_at: format_datetime(meeting.scheduled_end_at)
     }
   end
 
@@ -9444,6 +9474,50 @@ defmodule Platform.Federation.ToolSurface do
       end)
     end)
     |> inspect()
+  end
+
+  # Parse an optional ISO8601 timestamp argument by name.
+  #
+  # Returns `{:ok, nil}` for an absent parameter and `{:error, envelope}` —
+  # not nil, and not a raise — for one that is present but unparseable. Both
+  # of the obvious shortcuts are wrong for the same reason, in opposite
+  # directions:
+  #
+  #   * Coercing to nil silently downgrades a scheduled meeting to an ad-hoc
+  #     one. `Map.reject/2` in the caller drops nils, so the parse failure
+  #     becomes indistinguishable from never having passed the parameter: the
+  #     row is created, the caller is told `{:ok, ...}`, and the meeting never
+  #     appears on the calendar it was scheduled for. Nobody is told why.
+  #   * Raising turns a caller's typo into a tool-surface crash rather than a
+  #     recoverable answer the agent can act on — the federation contract is
+  #     that a bad argument comes back as an error envelope naming the
+  #     argument.
+  #
+  # The offending parameter is named in the message so an agent that passed
+  # both endpoints knows which one to fix.
+  defp parse_optional_datetime(args, key) do
+    case Map.get(args, key) do
+      nil ->
+        {:ok, nil}
+
+      value when is_binary(value) ->
+        case DateTime.from_iso8601(value) do
+          {:ok, datetime, _utc_offset} -> {:ok, datetime}
+          {:error, _reason} -> {:error, invalid_datetime_error(key, value)}
+        end
+
+      value ->
+        {:error, invalid_datetime_error(key, value)}
+    end
+  end
+
+  defp invalid_datetime_error(key, value) do
+    %{
+      error: "Invalid #{key}: #{inspect(value)} is not an ISO8601 timestamp",
+      recoverable: true,
+      suggestion:
+        "Pass #{key} as an ISO8601 timestamp with an offset, e.g. \"2026-08-01T15:00:00Z\". No meeting was created."
+    }
   end
 
   defp parse_date(date_str) when is_binary(date_str) do

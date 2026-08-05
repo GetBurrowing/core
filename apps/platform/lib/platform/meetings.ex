@@ -16,13 +16,20 @@ defmodule Platform.Meetings do
 
   import Ecto.Query
 
+  alias Platform.Accounts
+  alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.ExternalScope
   alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript}
+  alias Platform.Meetings.CalendarLink
   alias Platform.Meetings.GuestInvite
+  alias Platform.Meetings.Invite
+  alias Platform.Meetings.InviteDelivery
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
+  alias Platform.Tenancy.ExternalGrants
+  alias Platform.Tenancy.PendingExternalGrant
 
   require Logger
 
@@ -258,7 +265,19 @@ defmodule Platform.Meetings do
   Required attrs: `:project_id`, `:name`.
   Optional: `:slug` (auto-generated from `:name` when omitted, with a
   numeric suffix appended if it collides within the project),
-  `:host_participant_id`.
+  `:host_participant_id`, `:scheduled_start_at`, `:scheduled_end_at`.
+
+  `:scheduled_start_at` / `:scheduled_end_at` are the meeting's INTENDED
+  time, as opposed to the `started_at` / `ended_at` actuals that
+  `start_meeting/1` and `end_meeting/1` stamp. They are validated as a pair
+  by `Meeting.changeset/2` — both nil or both present with the end strictly
+  after the start — and a violation comes back as `{:error, changeset}`,
+  rolling back the backing chat space with it.
+
+  Omitting them is a supported state, not a defect: an ad-hoc meeting is one
+  that was started but never scheduled, so both columns stay nil for its
+  whole life. Nothing here synthesises a missing endpoint from the other —
+  a caller that has only a start must choose an explicit end itself.
 
   Wraps the backing chat-space creation and the meeting insert in a single
   `Repo.transaction/1` — if either fails, neither is persisted. The
@@ -313,7 +332,14 @@ defmodule Platform.Meetings do
             slug: slug,
             name: name,
             status: "scheduled",
-            livekit_room_name: "meeting-#{meeting_id}"
+            livekit_room_name: "meeting-#{meeting_id}",
+            # The intended-time pair has to be listed here explicitly: this map
+            # is a whitelist, not `attrs`, so any key missing from it is
+            # silently dropped before the changeset ever sees it. Passing nil
+            # for both leaves the ad-hoc path byte-for-byte unchanged, since
+            # `cast/3` treats nil for an already-nil field as no change.
+            scheduled_start_at: attrs[:scheduled_start_at],
+            scheduled_end_at: attrs[:scheduled_end_at]
           }
 
           changeset =
@@ -414,6 +440,143 @@ defmodule Platform.Meetings do
   def list_all_meetings do
     Meeting
     |> order_by([m], desc: m.inserted_at)
+    |> Repo.all()
+  end
+
+  @doc """
+  List the meetings *intended* to happen inside a time window, in intended
+  order. This is the query a calendar grid places rows with, so its edges are
+  part of its contract:
+
+    * The window is HALF-OPEN — `[from, to)`. A meeting is returned when
+      `scheduled_start_at >= from` and `scheduled_start_at < to`. Closed on
+      both ends, a meeting sitting exactly on a day boundary would come back
+      in BOTH adjacent day columns of a grid rendered by calling this once
+      per day.
+
+    * Only `scheduled_start_at` is compared. A meeting is placed by when it
+      is meant to START; a long meeting overlapping the window but starting
+      before `from` is NOT returned.
+
+    * Rows with `scheduled_start_at IS NULL` — the ad-hoc "started, never
+      scheduled" meetings — are excluded by construction, because a `>=`
+      comparison against NULL is never true in SQL. That exclusion is
+      INTENDED, not an oversight: a meeting with no intended time has no
+      cell to sit in. Do not "fix" it with an `or is_nil(m.scheduled_start_at)`;
+      `list_all_meetings/0` is the query that still sees those rows.
+
+    * Ordering is `asc: scheduled_start_at` — intended time first — with
+      `asc: inserted_at` only as a deterministic tiebreak between two
+      meetings intended at the same instant. `inserted_at` is never the
+      primary sort here; it answers "when was this created", not "when is
+      this".
+
+  Options:
+
+    * `:project_id` — when given, narrows to that project. When absent the
+      query deliberately spans projects, matching the unscoped
+      `meetings(scheduled_start_at)` index.
+  """
+  @spec list_meetings_in_range(DateTime.t(), DateTime.t(), keyword()) :: [Meeting.t()]
+  def list_meetings_in_range(%DateTime{} = from, %DateTime{} = to, opts \\ []) do
+    Meeting
+    |> where([m], m.scheduled_start_at >= ^from and m.scheduled_start_at < ^to)
+    |> scope_range_to_project(Keyword.get(opts, :project_id))
+    |> order_by([m], asc: m.scheduled_start_at, asc: m.inserted_at)
+    |> Repo.all()
+  end
+
+  defp scope_range_to_project(query, nil), do: query
+
+  defp scope_range_to_project(query, project_id),
+    do: where(query, [m], m.project_id == ^project_id)
+
+  @doc """
+  Was this meeting *meant* to have happened by `now`, and never started?
+
+  This is a REPORT over the `(status, scheduled_start_at, started_at)`
+  triple — NOT a state. Nothing writes a `"missed"` status; `@statuses` in
+  `Platform.Meetings.Meeting` stays `~w(scheduled live ended)` and
+  `Meeting.status_changeset/3` remains its sole writer. "Missed" is a
+  question you ask a row, not a thing that happens to it.
+
+  Deriving `status` from the clock instead was considered and rejected: a
+  meeting would flip to `"live"` at its scheduled minute with nobody in the
+  room, and `MeetingLive.maybe_start_meeting/1` — which pattern-matches
+  `%{status: "scheduled"}` to decide whether to start — would never fire
+  again. A fourth `"missed"` status was rejected for the same family of
+  reasons: it would need a transition rule, a writer and a sweeper, and
+  every existing three-way `status_bucket/1` clause would silently funnel it
+  into `:upcoming`.
+
+  All four clauses are load-bearing and each excludes a different row:
+
+    * `status == "scheduled"` — a live or ended meeting is never missed.
+    * `scheduled_start_at` non-nil — an ad-hoc meeting (no intended time)
+      can't be missed, because nothing was ever intended.
+    * `scheduled_start_at < now` — a meeting intended for the future is not
+      missed yet, it is merely upcoming.
+    * `started_at` is nil — a meeting that started is not missed, whatever
+      its status column says.
+
+  Clauses 1 and 4 overlap in practice: `start_meeting/1` flips the status
+  and stamps `started_at` in a single update, so no row the application
+  writes distinguishes them. They are kept separate deliberately, so the
+  predicate stays correct against a row that acquired a `started_at` by any
+  other path.
+
+  `now` is injectable so callers (and tests) never have to sleep.
+  """
+  @spec missed?(Meeting.t(), DateTime.t()) :: boolean()
+  def missed?(meeting, now \\ DateTime.utc_now())
+
+  def missed?(%Meeting{} = meeting, %DateTime{} = now) do
+    meeting.status == "scheduled" and
+      not is_nil(meeting.scheduled_start_at) and
+      DateTime.compare(meeting.scheduled_start_at, now) == :lt and
+      is_nil(meeting.started_at)
+  end
+
+  @doc """
+  The query counterpart of `missed?/2`: every meeting intended before `now`
+  that never started, in intended order.
+
+  Same caveat as `missed?/2` — this is a report, not a state transition. It
+  reads rows; it writes nothing, and no row is marked as having been
+  reported.
+
+  The `where` clauses mirror `missed?/2` one-for-one so the two cannot drift.
+  Note that `not is_nil(m.scheduled_start_at)` is *redundant in SQL*: under
+  three-valued logic `NULL < now` is NULL, never true, so the ad-hoc rows are
+  already excluded by the comparison alone. It is kept because deleting it
+  from the Elixir predicate is a real bug (`DateTime.compare(nil, now)`
+  raises), and a reader comparing the two implementations should see the same
+  four clauses in the same order rather than having to re-derive the NULL
+  semantics.
+
+  Ordering is `asc: scheduled_start_at` — oldest missed intent first, which
+  is the order a "you missed these" report wants to read in. Unlike
+  `list_meetings_in_range/3` there is no `inserted_at` tiebreak, so two
+  meetings intended at the same instant come back in an unspecified order.
+
+  Options:
+
+    * `:project_id` — when given, narrows to that project. When absent the
+      query spans projects.
+    * `:now` — the instant to compare against, defaulting to
+      `DateTime.utc_now/0`. Injectable so tests never sleep.
+  """
+  @spec list_missed_meetings(keyword()) :: [Meeting.t()]
+  def list_missed_meetings(opts \\ []) do
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+
+    Meeting
+    |> where([m], m.status == "scheduled")
+    |> where([m], not is_nil(m.scheduled_start_at))
+    |> where([m], m.scheduled_start_at < ^now)
+    |> where([m], is_nil(m.started_at))
+    |> scope_range_to_project(Keyword.get(opts, :project_id))
+    |> order_by([m], asc: m.scheduled_start_at)
     |> Repo.all()
   end
 
@@ -618,6 +781,86 @@ defmodule Platform.Meetings do
     end
   end
 
+  @doc """
+  Call a meeting off, stamping `cancelled_at` and who did it.
+
+  Legal from `scheduled` and from `live`. `ended → cancelled` returns
+  `{:error, changeset}` with an error on `:status` — a meeting that already
+  happened cannot be un-happened; see `Meeting.status_changeset/3`.
+
+  On success broadcasts `{:meeting_cancelled, meeting}` on the project's
+  PubSub topic, same shape as `end_meeting/1`. That broadcast is the ONLY
+  thing that reaches `Platform.Meetings.MeetingNotifier`, which is what
+  turns a cancellation into a notice to the people who were expecting to
+  attend — so it is load-bearing, not telemetry.
+
+  `cancelled_by_participant_id` is a `chat_participants` row id.
+  """
+  @spec cancel_meeting(Meeting.t(), binary() | nil) ::
+          {:ok, Meeting.t()} | {:error, Ecto.Changeset.t()}
+  def cancel_meeting(%Meeting{} = meeting, cancelled_by_participant_id) do
+    attrs = %{
+      cancelled_at: DateTime.utc_now(),
+      cancelled_by_participant_id: cancelled_by_participant_id
+    }
+
+    case meeting
+         |> Meeting.status_changeset("cancelled", attrs)
+         |> Repo.update() do
+      {:ok, updated} = ok ->
+        Phoenix.PubSub.broadcast(
+          Platform.PubSub,
+          project_meetings_topic(updated.project_id),
+          {:meeting_cancelled, updated}
+        )
+
+        ok
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Atomically claim the right to notify subscribers that this meeting is off.
+
+  The exact analogue of `mark_notified/1`, against
+  `meetings.cancellation_notified_at` instead of `meetings.notified_at`:
+  a compare-and-swap via `UPDATE ... WHERE id = ? AND
+  cancellation_notified_at IS NULL`, so concurrent callers race the SQL and
+  exactly one sees `{1, _}`.
+
+  A separate column from `notified_at` on purpose — a meeting that went live
+  and was then called off has legitimately been notified about twice, for two
+  different facts, and one column cannot carry both stamps.
+
+  Returns:
+
+    * `{:ok, meeting}` — caller WON; `meeting.cancellation_notified_at` is
+      stamped and the caller must fan out.
+    * `{:already_notified, meeting}` — somebody else won; do NOT fan out, and
+      the stored stamp is the winner's, left untouched.
+  """
+  @spec mark_cancellation_notified(Meeting.t()) ::
+          {:ok, Meeting.t()} | {:already_notified, Meeting.t()}
+  def mark_cancellation_notified(%Meeting{cancellation_notified_at: nil} = meeting) do
+    now = DateTime.utc_now()
+
+    {count, _} =
+      from(m in Meeting,
+        where: m.id == ^meeting.id and is_nil(m.cancellation_notified_at),
+        update: [set: [cancellation_notified_at: ^now]]
+      )
+      |> Repo.update_all([])
+
+    case count do
+      1 -> {:ok, %{meeting | cancellation_notified_at: now}}
+      0 -> {:already_notified, meeting}
+    end
+  end
+
+  def mark_cancellation_notified(%Meeting{} = meeting), do: {:already_notified, meeting}
+
   # ── Guest ingress (per-invite chat_space) ────────────────────────────────
   #
   # See `guest_livekit_token/2` (below) for the mint side. The per-invite
@@ -677,6 +920,137 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  Resolve — or mint — the chat space an EXTERNAL invitee can actually be
+  reached in, and make sure both ends of the conversation are in it.
+
+  Task `019fb955-6577-7fb0-8c97-c70d233bba23` stage 4. This is the
+  collaborator behind `Platform.Meetings.InviteDelivery`'s external
+  carrier; see that moduledoc for why chat is the only surface this
+  audience has.
+
+  ## The ticket's premise is only half true, and the other half is this function
+
+  The ticket says the invitee "is scoped to that space by construction"
+  because `guest_space_id` is already in the invite token. That holds for
+  GUEST invites only. `invite_guest/2` mints a `kind: "guest_meeting"`
+  space per link and signs its id into the token. An external QUALIFIED
+  USER invite comes from `invite_user/3`, which mints no token and no
+  space — so for that audience there is no pre-existing space to point at
+  and one has to be resolved or created here.
+
+  ## Why `create_guest_chat_space/2` and not a second constructor
+
+  The space this audience needs has exactly the shape that function
+  already builds: `kind: "guest_meeting"` (so the eventual 24h reaper
+  targets it without sweeping real meeting spaces), org-scoped to the
+  MEETING's project, and carrying `meeting_id` in `metadata` for
+  forensics. A parallel constructor would be the same row with a second
+  set of bugs.
+
+  ## Order, and what each step buys
+
+    1. `invite.delivery_space_id` set → load and return that space. A
+       re-delivery reuses it and never mints a second, so a host who
+       re-invites does not scatter one conversation across two rooms. A
+       `delivery_space_id` naming a row that no longer exists answers
+       `{:error, :delivery_space_missing}` rather than quietly minting a
+       replacement — a space that was deleted out from under a recorded
+       receipt is an operator event, and inventing a new one would hide
+       it while splitting the thread.
+    2. Otherwise mint via `create_guest_chat_space/2` and persist the id
+       onto the invite. Persisting is what makes step 1 reachable.
+    3. Ensure the SENDER's agent participant row.
+       `Chat.add_agent_participant/3` is already get-or-insert
+       (`chat.ex`'s `do_add_agent_participant/3`), so calling it on every
+       delivery is safe and no guard is owed.
+    4. Ensure the INVITEE's `participant_type: "user"` row. This is the
+       step that makes the space reachable at all:
+       `PlatformWeb.Plugs.ExternalUserScope` admits an external user to
+       `/chat/:slug` only when `Chat.participant?/2` is true, and
+       `Platform.Chat.ExternalScope` narrows every external read to
+       `chat_participants` membership — so without this row the message
+       is written and unreachable, which is the exact failure the whole
+       stage exists to avoid.
+
+  `Chat.add_participant/2` has NO get-or-insert branch and
+  `chat_participants_unique` rejects a second insert, so step 4 is
+  guarded by a `Repo.get_by/2` mirroring `do_add_agent_participant/3`.
+  The `user_id` is checked with `Platform.UUID.valid?/1` first —
+  `participant_id` is a `:binary_id`, and `Repo.get_by(_, participant_id:
+  nil)` raises `ArgumentError` besides.
+
+  Returns `{:ok, %Platform.Chat.Space{}}`, or `{:error, term}` for a
+  missing space, a changeset failure, an archived space
+  (`{:error, :space_archived}` out of `Chat.add_participant/2`) or an
+  invite with no `user_id` — a guest never routes here.
+  """
+  @spec delivery_space_for_invite(Invite.t(), Meeting.t()) ::
+          {:ok, Platform.Chat.Space.t()} | {:error, term()}
+  def delivery_space_for_invite(%Invite{} = invite, %Meeting{} = meeting) do
+    with {:ok, space} <- resolve_delivery_space(invite, meeting),
+         {:ok, _sender} <- ensure_delivery_sender(space),
+         {:ok, _invitee} <- ensure_delivery_invitee(space, invite.user_id) do
+      {:ok, space}
+    end
+  end
+
+  defp resolve_delivery_space(%Invite{delivery_space_id: space_id}, _meeting)
+       when is_binary(space_id) do
+    case Chat.get_space(space_id) do
+      %Platform.Chat.Space{} = space -> {:ok, space}
+      nil -> {:error, :delivery_space_missing}
+    end
+  end
+
+  defp resolve_delivery_space(%Invite{} = invite, %Meeting{} = meeting) do
+    with {:ok, space} <- create_guest_chat_space(meeting, invite.user_id),
+         {:ok, _invite} <- persist_delivery_space(invite, space) do
+      {:ok, space}
+    end
+  end
+
+  defp persist_delivery_space(%Invite{} = invite, %Platform.Chat.Space{id: space_id}) do
+    invite
+    |> Invite.changeset(%{delivery_space_id: space_id})
+    |> Repo.update()
+  end
+
+  # The seeded agent is an AUTHORSHIP IDENTITY and nothing more — no role
+  # lookup, no runtime, no model. `SenderSeed.ensure!/0` is idempotent and
+  # is called here rather than assumed, so a boot that has not seeded yet
+  # (the flag flipped on after start-up) still delivers.
+  defp ensure_delivery_sender(%Platform.Chat.Space{id: space_id}) do
+    {:ok, agent} = Platform.Meetings.SenderSeed.ensure!()
+
+    Chat.add_agent_participant(space_id, agent, display_name: agent.name)
+  end
+
+  defp ensure_delivery_invitee(%Platform.Chat.Space{}, nil), do: {:error, :no_invitee_user}
+
+  defp ensure_delivery_invitee(%Platform.Chat.Space{id: space_id}, user_id)
+       when is_binary(user_id) do
+    if Platform.UUID.valid?(user_id) do
+      case Repo.get_by(Platform.Chat.Participant,
+             space_id: space_id,
+             participant_type: "user",
+             participant_id: user_id
+           ) do
+        %Platform.Chat.Participant{} = existing ->
+          {:ok, existing}
+
+        nil ->
+          Chat.add_participant(space_id, %{
+            participant_type: "user",
+            participant_id: user_id,
+            joined_at: DateTime.utc_now()
+          })
+      end
+    else
+      {:error, :invalid_user_id}
+    end
+  end
+
+  @doc """
   Resolve a guest-invite URL (URL `slug` + signed `token`) into the
   state a guest ingress LiveView needs to render.
 
@@ -685,6 +1059,8 @@ defmodule Platform.Meetings do
     * `GuestInvite.verify/1` — signature + expiry check.
     * URL-vs-payload `meeting_slug` tampering guard — payload slug must
       equal the URL slug (else `{:error, :invalid}`).
+    * The `meeting_invites` row check — revocation and the row's own
+      expiry (see the section below).
     * Meeting resolution + `:chat_space` preload (a deleted meeting whose
       token was signed pre-deletion resolves to `{:error, :invalid}`).
     * Display-name branching — `nil` in the payload signals the
@@ -721,9 +1097,47 @@ defmodule Platform.Meetings do
       on a project, and the lookup never raises. With the 24h default
       expiry these age out within a day.
 
+  ## Revocation lives here, not in the token module (task 019fb954)
+
+  An HMAC is stateless: once signed it verifies until its embedded
+  expiry passes, and nothing can un-issue it. `GuestInvite.verify/2` is
+  a pure function with no `Repo` access and must stay that way, so
+  revocation cannot live there. This function is already the
+  `Repo`-backed resolver, so the gate goes here — after the signature
+  clears, before the meeting is resolved.
+
+  A token minted by `invite_guest/2` names a `meeting_invites` row via
+  `:invite_id`. That row is the authority on whether the link still
+  works:
+
+    * row missing — `{:error, :invalid}`. A token naming an invite that
+      no longer exists is not a capability.
+    * `revoked_at` set — `{:error, :revoked}`.
+    * row's `expires_at` in the past — `{:error, :expired}`. The row is
+      authoritative and the token carries only a copy, so tampering with
+      neither alone extends access: the token's expiry is checked by
+      `verify/2` and the row's is checked here.
+    * row's `meeting_id` disagrees with the payload's — `{:error,
+      :invalid}`. `nil` disagrees with a uuid, so a payload carrying an
+      `invite_id` but no `meeting_id` (a shape `invite_guest/2` never
+      produces) is refused too.
+
+  Because the token names a ROW, revoking one guest is a single-row
+  `UPDATE` and touches no shared secret. Do NOT ever implement guest
+  revocation by rotating `:meeting_guest_signing_key` or by stamping
+  anything on the meeting — either kills every outstanding guest link at
+  once, which is the opposite of what this exists to do.
+
+  `invite_id: nil` (every token minted before this task, including
+  everything the guest-link mint site in `MeetingLive` still produces)
+  skips the lookup entirely and behaves exactly as it did before. That
+  compatibility branch is load-bearing until those tokens age out.
+
   `PlatformWeb.MeetingLive` (with `chrome_mode: :none` on the `meet.`
   host scope) mounts against this resolver so guest-surface behavior
-  can't drift from what `Meetings` intends to return.
+  can't drift from what `Meetings` intends to return. It maps `:revoked`
+  onto the same rendered outcome as `:invalid` — a revoked guest is told
+  the link does not work, not that it *used* to.
 
   Return shape:
 
@@ -735,14 +1149,17 @@ defmodule Platform.Meetings do
       display_name: binary()}}` — token verified, payload carried a
       pre-provisioned display name. Caller should call
       `mint_guest_join_bundle/2` next.
-    * `{:error, :expired}` — token past its `expires_at`.
+    * `{:error, :expired}` — token past its own `expires_at`, or the
+      named invite row past the row's.
+    * `{:error, :revoked}` — the named invite row carries a `revoked_at`.
     * `{:error, :invalid}` — signature/shape check failed, slug mismatch,
-      or the meeting slug no longer resolves.
+      the meeting slug no longer resolves, the named invite row is gone,
+      or the row and the payload name different meetings.
   """
   @spec resolve_guest_invite(String.t(), String.t()) ::
           {:ok, %{state: :name_entry, meeting: Meeting.t()}}
           | {:ok, %{state: :in_meeting, meeting: Meeting.t(), display_name: String.t()}}
-          | {:error, :invalid | :expired}
+          | {:error, :invalid | :expired | :revoked}
   def resolve_guest_invite(slug, token) when is_binary(slug) and is_binary(token) do
     case GuestInvite.verify(token) do
       {:error, :expired} ->
@@ -758,21 +1175,72 @@ defmodule Platform.Meetings do
         {:error, :invalid}
 
       {:ok, %{meeting_slug: ^slug, display_name: display_name} = payload} ->
-        case resolve_invited_meeting(payload, slug) do
-          {:error, :invalid} ->
-            # Signature checked out but the target meeting has been
-            # deleted, never existed, or (legacy slug-only token) the
-            # slug matches more than one meeting and we refuse to guess.
-            {:error, :invalid}
+        # The row gate runs BEFORE the meeting is resolved: a revoked
+        # link should not so much as read the meeting it used to admit to.
+        with :ok <- check_invite_row(payload) do
+          case resolve_invited_meeting(payload, slug) do
+            {:error, :invalid} ->
+              # Signature checked out but the target meeting has been
+              # deleted, never existed, or (legacy slug-only token) the
+              # slug matches more than one meeting and we refuse to guess.
+              {:error, :invalid}
 
-          {:ok, meeting} when is_binary(display_name) ->
-            {:ok, %{state: :in_meeting, meeting: meeting, display_name: display_name}}
+            {:ok, meeting} when is_binary(display_name) ->
+              {:ok, %{state: :in_meeting, meeting: meeting, display_name: display_name}}
 
-          {:ok, meeting} ->
-            {:ok, %{state: :name_entry, meeting: meeting}}
+            {:ok, meeting} ->
+              {:ok, %{state: :name_entry, meeting: meeting}}
+          end
         end
     end
   end
+
+  # Legacy token (anything minted before task 019fb954, which is every
+  # token in the wild plus everything the `MeetingLive` guest-link mint
+  # site still produces): it names no row, so there is nothing to check
+  # and the answer must be exactly what it was before this stage. No
+  # lookup, no new error. `verify/2` normalises the key in, so this is
+  # `nil`-valued rather than absent by the time it reaches here.
+  defp check_invite_row(%{invite_id: nil}), do: :ok
+
+  # Row-bound token. The row — not the signature, and not the copy of
+  # `expires_at` baked into the payload — decides whether this link still
+  # works. See the `## Revocation lives here` section on
+  # `resolve_guest_invite/2` for why each branch answers what it does.
+  defp check_invite_row(%{invite_id: invite_id} = payload) when is_binary(invite_id) do
+    case get_invite(invite_id) do
+      nil ->
+        {:error, :invalid}
+
+      %Invite{revoked_at: %DateTime{}} ->
+        {:error, :revoked}
+
+      %Invite{} = invite ->
+        cond do
+          invite_row_expired?(invite) -> {:error, :expired}
+          invite.meeting_id != Map.get(payload, :meeting_id) -> {:error, :invalid}
+          true -> :ok
+        end
+    end
+  end
+
+  # Boundary lookup. `invite_id` comes out of a token payload: the HMAC
+  # proves the payload was minted by a holder of the signing key, it does
+  # NOT prove the value is a uuid. `Platform.UUID.valid?/1` and NOT
+  # `Ecto.UUID.cast/1` — a bare cast hex-encodes any 16-byte binary into a
+  # well-formed but INVENTED uuid, and a fabricated id is the last thing
+  # you want deciding whether a capability was revoked. A malformed id
+  # answers nil here, which the caller folds to `{:error, :invalid}`,
+  # rather than raising `Ecto.Query.CastError` out of a public,
+  # unauthenticated ingress.
+  defp get_invite(invite_id) do
+    if Platform.UUID.valid?(invite_id), do: Repo.get(Invite, invite_id), else: nil
+  end
+
+  defp invite_row_expired?(%Invite{expires_at: nil}), do: false
+
+  defp invite_row_expired?(%Invite{expires_at: %DateTime{} = expires_at}),
+    do: DateTime.compare(expires_at, DateTime.utc_now()) == :lt
 
   # Id-bearing token: the payload names its subject exactly. Still require
   # the row's slug to match the URL slug the host actually shared.
@@ -872,6 +1340,902 @@ defmodule Platform.Meetings do
       %Platform.Tasks.Project{org_id: org_id} -> org_id
       _ -> nil
     end
+  end
+
+  # ── Invites (task 019fb954) ──────────────────────────────────────────────
+  #
+  # "Invited" used to be an inference: `MeetingNotifier` derived recipients
+  # from the human participants of the meeting's backing chat space. You could
+  # therefore not invite anyone who was not already in that space, nor invite
+  # anyone *before* that membership existed. `meeting_invites` is the
+  # declaration; these four functions are the whole public surface over it.
+  #
+  # THE GUEST TOKEN BINDS TO THE ROW, NOT TO THE MEETING. `invite_guest/2`
+  # mints exactly one token per `meeting_invites` row, and there is
+  # deliberately NO meeting-wide invite-link function on this module. A single
+  # forwardable link is unattributable: whoever walks through it cannot be told
+  # apart from anyone else who was handed the same string, so their speech has
+  # no speaker in the transcript and any action item extracted from it has no
+  # principal to land on. Per-row tokens also make revocation granular — an
+  # issued HMAC cannot be un-issued, so `revoke_invite/1` stamping one row is
+  # the only way to kill one guest's link without invalidating every other
+  # guest's at the same time. Do not add a `meeting_invite_link/1`.
+
+  # Guest links expire in 24h unless the caller says otherwise, matching
+  # `GuestInvite`'s own `@default_expiry_seconds` so the row's `expires_at`
+  # (authoritative) and the token payload's copy agree by construction.
+  @guest_invite_default_expiry_hours 24
+
+  @doc """
+  The expiry, in hours, `invite_guest/2` mints a link with when the caller
+  names none.
+
+  Exposed so a UI that PROMISES an expiry before the row exists — the
+  create sheet stages guests and mints nothing until submit — reads the
+  number it will actually get instead of restating it. Two copies of a
+  policy number drift, and the drifting copy is the one a user reads.
+  """
+  @spec guest_invite_default_expiry_hours() :: pos_integer()
+  def guest_invite_default_expiry_hours, do: @guest_invite_default_expiry_hours
+
+  @doc """
+  Declare a user as an invitee of `meeting`.
+
+  Serves BOTH account-holding kinds. An internal user and an external
+  qualified user produce the same row — external-ness is not stored here, it
+  is a property of the user's org membership (`org_memberships.external`),
+  which `Platform.Accounts.ExternalAdmission.admit/2` already wrote. This
+  function deliberately does not re-check that membership: an invite is a
+  *declaration*, admission is a separate gate, and conflating them would mean
+  a host could not name someone before their access was provisioned — the
+  exact limitation this table exists to remove.
+
+  Idempotent on the partial `unique_index(:meeting_invites, [:meeting_id,
+  :user_id])`: re-inviting returns the EXISTING row as `{:ok, invite}` rather
+  than an error, so a double-submit does not 500 a caller. The insert is still
+  attempted and its constraint error still handled, so two concurrent callers
+  race to the same row instead of one of them blowing up.
+
+  Options: `:display_name`, `:email` — both optional, both pass-through. The
+  user's own record is authoritative for their name, so these are only useful
+  when the host wants to record what they typed.
+
+  A `user_id` that is not a well-formed UUID answers `{:error, changeset}` with
+  the error on `:user_id`. It is checked with `Platform.UUID.valid?/1` before
+  any query: `Repo.get_by/2` RAISES `Ecto.Query.CastError` on a malformed id
+  rather than returning nil, and the host-facing UI downstream of this
+  function will hand it a value straight out of a LiveView `params` map. An
+  `Ecto.UUID.cast/1` guard would NOT do — it hex-encodes any 16-byte binary
+  into a well-formed but invented UUID (see `RepoLookupBoundaryTest`).
+  """
+  @spec invite_user(Meeting.t(), binary(), keyword()) ::
+          {:ok, Invite.t()} | {:error, Ecto.Changeset.t()}
+  def invite_user(%Meeting{} = meeting, user_id, opts \\ []) when is_binary(user_id) do
+    attrs = %{
+      meeting_id: meeting.id,
+      user_id: user_id,
+      display_name: Keyword.get(opts, :display_name),
+      email: Keyword.get(opts, :email)
+    }
+
+    if Platform.UUID.valid?(user_id) do
+      case upsert_user_invite(meeting, user_id, attrs) do
+        {:ok, %Invite{} = invite} ->
+          deliver_invite(invite, meeting)
+          {:ok, invite}
+
+        {:error, _changeset} = error ->
+          error
+      end
+    else
+      {:error,
+       %Invite{}
+       |> Invite.changeset(Map.delete(attrs, :user_id))
+       |> Ecto.Changeset.add_error(:user_id, "is invalid")}
+    end
+  end
+
+  defp upsert_user_invite(%Meeting{} = meeting, user_id, attrs) do
+    case Repo.get_by(Invite, meeting_id: meeting.id, user_id: user_id) do
+      %Invite{} = existing ->
+        {:ok, existing}
+
+      nil ->
+        %Invite{}
+        |> Invite.changeset(attrs)
+        |> Repo.insert()
+        |> case do
+          {:ok, invite} ->
+            {:ok, invite}
+
+          {:error, changeset} ->
+            # Lost a race with a concurrent invite of the same user: the
+            # unique index fired between our lookup and our insert. The row
+            # the other caller wrote is the answer, not an error.
+            case Repo.get_by(Invite, meeting_id: meeting.id, user_id: user_id) do
+              %Invite{} = existing -> {:ok, existing}
+              nil -> {:error, changeset}
+            end
+        end
+    end
+  end
+
+  @doc """
+  Declare a guest — someone with no account — as an invitee, and mint the
+  signed link that lets them in.
+
+  Returns `{:ok, %{invite: %Invite{}, token: binary, url: binary}}`.
+
+  `display_name` is required. The database's `meeting_invites_identity_check`
+  enforces it (a row with neither `user_id` nor `display_name` is an
+  unattributable invite), but it is validated in the changeset too so the
+  caller gets `{:error, changeset}` instead of a raised `Postgrex.Error`.
+
+  Optional `email` — the only address a guest can be reached at, since they
+  have no account. Optional `expires_in_hours`, defaulting to
+  #{@guest_invite_default_expiry_hours}.
+
+  ## Order of operations, and why
+
+  The row is inserted FIRST so its id exists to sign into the token. Then a
+  per-invite guest chat space (`create_guest_chat_space/2` — identity
+  bookkeeping, NOT the LiveKit routing space) and finally the token, carrying
+  `invite_id`. That ordering is what makes the token revocable: the id it
+  names is already durable when the signature is computed, so
+  `revoke_invite/1` has a row to stamp and the resolver has a row to check.
+
+  `expires_at` is written to the row AND copied into the token payload. The
+  row is authoritative — a token's expiry cannot be shortened after issue,
+  the row's can.
+
+  One call, one row, one token. Calling this twice for two guests on one
+  meeting yields two distinct tokens; there is no shared meeting-wide link
+  (see the section comment above for why that matters).
+  """
+  @spec invite_guest(Meeting.t(), map() | keyword()) ::
+          {:ok, %{invite: Invite.t(), token: binary(), url: binary()}}
+          | {:error, Ecto.Changeset.t() | atom() | term()}
+  def invite_guest(%Meeting{} = meeting, attrs) do
+    attrs = normalize_attrs(attrs)
+
+    hours = Map.get(attrs, :expires_in_hours) || @guest_invite_default_expiry_hours
+    expires_at = DateTime.add(DateTime.utc_now(), trunc(hours * 3600), :second)
+    display_name = Map.get(attrs, :display_name)
+
+    changeset =
+      %Invite{}
+      |> Invite.changeset(%{
+        meeting_id: meeting.id,
+        display_name: display_name,
+        email: Map.get(attrs, :email),
+        expires_at: expires_at
+      })
+      |> Ecto.Changeset.validate_required([:display_name])
+
+    with {:ok, invite} <- Repo.insert(changeset),
+         {:ok, guest_space} <-
+           create_guest_chat_space(meeting, Map.get(attrs, :host_user_id)) do
+      token =
+        GuestInvite.sign(
+          meeting.slug,
+          DateTime.to_unix(expires_at),
+          invite.display_name,
+          guest_space_id: guest_space.id,
+          meeting_id: meeting.id,
+          # The whole point: this token names ONE row, so it can be revoked
+          # on its own.
+          invite_id: invite.id
+        )
+
+      deliver_invite(invite, meeting)
+
+      {:ok, %{invite: invite, token: token, url: guest_invite_url(meeting, token)}}
+    end
+  end
+
+  @doc """
+  The personal join URL for a guest invite ROW that already exists.
+
+  `invite_guest/2` returns a token once, at mint time, and nothing stores
+  it — a signed token is a capability, not a record. The detail panel has
+  to answer "what link do I send this person?" long after that call
+  returned, so the answer is re-derived from the row rather than looked
+  up.
+
+  ## Re-minting is not re-issuing
+
+  The new token carries a fresh `signed_at` and is therefore a different
+  STRING from the one the host got at mint time, but it names the same
+  `meeting_invites` row and the same expiry. Both links live and die
+  together: `resolve_guest_invite/2` gates on the ROW's `revoked_at` and
+  the ROW's `expires_at`, so revoking the invite kills every token ever
+  minted for it. There is no way for this function to widen access — it
+  can only restate a capability the row already grants.
+
+  Two guests therefore still get two links that cannot be swapped: each
+  token verifies back to its OWN `invite_id`, which is exactly the
+  property a meeting-wide link destroys.
+
+  ## `guest_space_id` is deliberately absent
+
+  `invite_guest/2` signs the id of the per-link guest chat space it mints.
+  Nothing in the codebase READS that key back out — `verify/2` normalises
+  it and every consumer ignores it — and the invite row does not record
+  which space it was, so there is nothing to re-sign here and no observable
+  difference from omitting it. Recorded rather than papered over: if a
+  reader for it ever lands, this function needs a persisted id first.
+
+  ## Guest rows only
+
+  There is no clause for an account-holding invitee (`user_id` set) or for
+  an external row awaiting a grant (`expires_at` nil): neither has a signed
+  link, so asking for one is a caller bug. It raises `FunctionClauseError`
+  naming the shape rather than returning a URL that cannot admit anyone.
+  """
+  @spec guest_invite_link(Meeting.t(), Invite.t()) :: String.t()
+  def guest_invite_link(
+        %Meeting{id: meeting_id} = meeting,
+        %Invite{
+          meeting_id: meeting_id,
+          user_id: nil,
+          expires_at: %DateTime{} = expires_at
+        } = invite
+      ) do
+    token =
+      GuestInvite.sign(
+        meeting.slug,
+        DateTime.to_unix(expires_at),
+        invite.display_name,
+        meeting_id: meeting.id,
+        invite_id: invite.id
+      )
+
+    guest_invite_url(meeting, token)
+  end
+
+  # ── External invites (task 019fb955-1d7b, stage 2) ───────────────────────
+  #
+  # One input from the host's picker has to answer three questions — is this
+  # a member, an external account-holder, or a stranger — and the stranger
+  # branch has to survive a unique index that bites on the SECOND meeting,
+  # not the first. `resolve_invite_candidates/2` answers the first question;
+  # `invite_external_user/3` acts on the other two.
+
+  # Deliberately the SAME predicate `Platform.Accounts.User.changeset/2`
+  # validates `:email` with. The picker must not offer an address the
+  # account schema would later refuse — that would be an invite that can
+  # never resolve to a login.
+  @invite_email_format ~r/^[^\s]+@[^\s]+$/
+
+  @doc """
+  Resolve one picker query into the two things a host may act on: the
+  account-holders it matches, and — **only when it matches none** — the
+  external address it could be.
+
+  Returns `%{users: [User.t()], email: binary() | nil}`.
+
+  ## The two are mutually exclusive by construction
+
+  A query that matches a member must never also offer "invite as external
+  guest": the host picks the wrong one, and a colleague who already has an
+  account gets a staged external grant instead of the membership they
+  have. Making that impossible in a template `:if` is one edit away from
+  regressing, so it is enforced structurally here — `guest_option/3`
+  dispatches on the users list and the non-empty head returns `nil` before
+  the address is ever examined. There is no code path that populates both.
+
+  ## Search is not re-implemented
+
+  `users` comes from `Platform.Accounts.list_users/1`, which already ilikes
+  name OR email and already drops `archived_at` rows. This mirrors
+  `PlatformWeb.Live.Chat.NewConversationComponent`'s picker: the same
+  server-side filter runs on open and on every keystroke, so a second
+  search with its own drift is neither needed nor wanted.
+
+  ## Options
+
+    * `:exclude_user_ids` — user ids already invited or staged in this
+      picker session. Dropped from `users`.
+    * `:exclude_emails` — addresses already invited or staged. Dropped from
+      `users` (matching on `User.email`) **and** suppressed as the `:email`
+      option, so the same person cannot be added twice from either side of
+      the fork.
+  """
+  @spec resolve_invite_candidates(binary() | nil, keyword()) ::
+          %{users: [User.t()], email: binary() | nil}
+  def resolve_invite_candidates(query, opts \\ []) do
+    trimmed = query |> to_string() |> String.trim()
+
+    excluded_ids = opts |> Keyword.get(:exclude_user_ids, []) |> MapSet.new()
+
+    excluded_emails =
+      opts
+      |> Keyword.get(:exclude_emails, [])
+      |> Enum.map(&String.trim(to_string(&1)))
+      |> MapSet.new()
+
+    matched = Accounts.list_users(query: trimmed)
+
+    users =
+      Enum.reject(matched, fn user ->
+        MapSet.member?(excluded_ids, user.id) or MapSet.member?(excluded_emails, user.email)
+      end)
+
+    # The guest option is decided against the UNFILTERED match set, not the
+    # post-exclusion one. Otherwise excluding an already-invited member
+    # empties `users` and the fork re-opens on their own address — offering
+    # to stage an external grant for a colleague who has an account. The
+    # invariant is "this query matches a member", which exclusion does not
+    # change.
+    %{users: users, email: guest_option(trimmed, matched, excluded_emails)}
+  end
+
+  # A match on a member forecloses the external option. This head is the
+  # enforcement — not a caller-side check.
+  defp guest_option(_trimmed, [_ | _], _excluded), do: nil
+
+  defp guest_option(trimmed, [], excluded) do
+    if Regex.match?(@invite_email_format, trimmed) and
+         not MapSet.member?(excluded, trimmed) do
+      trimmed
+    else
+      nil
+    end
+  end
+
+  @doc """
+  Invite an email address that the host typed rather than picked, staging
+  whatever access the invitee will need to actually arrive.
+
+  Returns `{:ok, %Invite{}}` or `{:error, changeset | reason}`.
+
+  ## Why a real grant row, not a note-to-self
+
+  `PlatformWeb.Plugs.ExternalUserScope` is a fail-closed allowlist. An
+  external user who signs in carrying no grant lands in the external
+  holding view and can never reach `/meetings/:slug` — so an invite that
+  merely *records intent* is an invite guaranteed to fail at the door.
+  A staged `pending_external_grants` row is the least privilege this
+  system can express (one space, role `member`, empty DM allowlist), and
+  `Platform.Tenancy.ExternalGrants.apply_grant/2` materializes it on first
+  login with no admin step in between. That is what lets the dropdown stay
+  open to every host instead of routing through an operator.
+
+  ## Three branches, one address
+
+    1. **The address already has a `users` row.** Delegate to
+       `invite_user/3` (idempotent on `[:meeting_id, :user_id]`) and seat
+       them in this meeting's chat space with
+       `ExternalGrants.add_space_participants/2`. That helper exists
+       precisely so an already-provisioned external user does not get a
+       second grant row — see its docstring; do not re-derive it.
+
+    2. **No user, but a grant row exists for the address.** Widen the grant
+       on file via `ExternalGrants.add_pending_space_grant/2` rather than
+       inserting a second one.
+
+    3. **Neither.** `ExternalGrants.create_grant/1` at the least-privileged
+       shape, `target_org_id` resolved meeting -> project -> org.
+
+  ## The index that forces branches 2 and 3 apart
+
+  `pending_external_grants` carries `unique_index([:email]) WHERE email IS
+  NOT NULL`, and it is **not** partial on `applied_at`. An applied grant
+  still occupies the slot. So a naive `create_grant/1` for the same address
+  on a SECOND meeting violates the index — and keeps violating it forever
+  once the first grant has been applied.
+
+  The branch is taken on `ExternalGrants.get_grant_by_email/1`, NOT on
+  `lookup_by_email_or_sub/1`. The latter filters `applied_at IS NULL` and
+  is therefore blind to exactly the rows that would kill the insert;
+  branching on it is fail-open.
+
+  ## The invite row
+
+  Written in all three branches, because an invitee who does not render is
+  not invited. Branch 1 sets `user_id`. Branches 2 and 3 write `email`
+  with `user_id` NULL, `expires_at` NULL and no token — this is an
+  external invite awaiting a login, NOT a guest with a signed link.
+
+  Two consequences worth naming:
+
+    * `display_name` is set (defaulting to the address) because
+      `meeting_invites_identity_check` requires `user_id IS NOT NULL OR
+      display_name IS NOT NULL`. An email-only row with a NULL
+      `display_name` raises `Postgrex.Error`; it is not a legal row.
+    * `Invite.kind/1` returns `:guest` for this row, since it dispatches on
+      `user_id: nil`. Any UI tag distinguishing external-invite from guest
+      must therefore NOT be derived from `kind/1` alone.
+
+  Idempotent per `[meeting_id, email]`: there is no unique index covering
+  that pair (the one on the table is partial on `user_id IS NOT NULL`, so
+  it does not constrain these rows), so re-invites are deduped by lookup
+  before insert.
+
+  ## Options
+
+    * `:display_name` — what the host typed, if anything. Defaults to the
+      address.
+  """
+  @spec invite_external_user(Meeting.t(), binary(), keyword()) ::
+          {:ok, Invite.t()} | {:error, Ecto.Changeset.t() | term()}
+  def invite_external_user(%Meeting{} = meeting, email, opts \\ []) when is_binary(email) do
+    address = String.trim(email)
+    space_grant = %{"space_id" => meeting.chat_space_id, "role" => "member"}
+
+    case Repo.get_by(User, email: address) do
+      %User{} = user ->
+        # Branch 1. Seat them BEFORE the invite row so the delivery that
+        # `invite_user/3` runs in-line has a space the recipient is in.
+        with :ok <- ExternalGrants.add_space_participants(user, [space_grant]) do
+          invite_user(meeting, user.id, Keyword.put(opts, :email, address))
+        end
+
+      nil ->
+        with {:ok, _grant} <- stage_external_grant(meeting, address, space_grant) do
+          upsert_external_invite(meeting, address, opts)
+        end
+    end
+  end
+
+  # Branches 2 and 3. Reads through `get_grant_by_email/1` — the
+  # applied-blind `lookup_by_email_or_sub/1` would return nil for a row
+  # that still owns the unique-index slot.
+  defp stage_external_grant(%Meeting{} = meeting, address, space_grant) do
+    case ExternalGrants.get_grant_by_email(address) do
+      %PendingExternalGrant{} = grant ->
+        ExternalGrants.add_pending_space_grant(grant, space_grant)
+
+      nil ->
+        ExternalGrants.create_grant(%{
+          email: address,
+          target_org_id: external_grant_org_id!(meeting),
+          space_grants: [space_grant],
+          dm_allowlist_org_ids: [],
+          applied_at: nil
+        })
+    end
+  end
+
+  # `target_org_id` is NOT NULL and a grant staged into the wrong org is a
+  # silent privilege error, so an unresolvable org RAISES rather than
+  # defaulting. `meetings.project_id` is NOT NULL with an FK, so reaching
+  # here means the project carries no `org_id` — a broken row, not a case
+  # to paper over.
+  defp external_grant_org_id!(%Meeting{} = meeting) do
+    case resolve_meeting_org_id(meeting) do
+      org_id when is_binary(org_id) ->
+        org_id
+
+      nil ->
+        raise ArgumentError,
+              "cannot stage an external grant for meeting #{meeting.id}: " <>
+                "its project resolves to no org_id"
+    end
+  end
+
+  # No unique index covers [meeting_id, email] for user_id-NULL rows, so
+  # dedupe is a lookup. Scoped to `is_nil(user_id)` on purpose: branch 1
+  # writes a row carrying BOTH a user_id and this address, and that row is
+  # a different invite with a different owner.
+  defp upsert_external_invite(%Meeting{} = meeting, address, opts) do
+    result =
+      Invite
+      |> where([i], i.meeting_id == ^meeting.id and i.email == ^address and is_nil(i.user_id))
+      |> order_by([i], asc: i.inserted_at)
+      |> limit(1)
+      |> Repo.one()
+      |> case do
+        %Invite{} = existing ->
+          {:ok, existing}
+
+        nil ->
+          %Invite{}
+          |> Invite.changeset(%{
+            meeting_id: meeting.id,
+            email: address,
+            display_name: Keyword.get(opts, :display_name) || address
+          })
+          |> Repo.insert()
+      end
+
+    with {:ok, invite} <- result do
+      deliver_invite(invite, meeting)
+      {:ok, invite}
+    end
+  end
+
+  @doc """
+  Build the calendar-link path for `meeting`.
+
+  Returns a PATH, not a URL — no scheme, no host. `core` is a public
+  repository and nothing here hardcodes or threads a hostname; the caller
+  that renders this into a UI or a message is responsible for absolutising
+  it against its own endpoint.
+
+  The token is a per-MEETING bearer capability minted by
+  `Platform.Meetings.CalendarLink` — one meeting, one link, no expiry.
+  Contrast `invite_guest/2`, whose token is per-invite and admits to a
+  room; this one discloses calendar metadata only.
+  """
+  @spec calendar_link_path(Meeting.t()) :: String.t()
+  def calendar_link_path(%Meeting{id: id}) when is_binary(id) do
+    "/meetings/#{id}/invite.ics?token=#{CalendarLink.sign(id)}"
+  end
+
+  # Delivery runs SYNCHRONOUSLY AND IN-LINE on the success path of both
+  # invite functions — not as a PubSub broadcast consumed by a GenServer.
+  # "Cannot fail for want of a role" means the send sits in the same call
+  # stack as the insert, with no runtime, no dispatcher and no role lookup
+  # in between; a dropped subscription is invisible.
+  #
+  # It is a side effect and stays one: it never changes either function's
+  # return shape, and a raise inside it never turns a committed invite row
+  # into an error for the caller. Same posture as
+  # `MeetingNotifier.emit_inbox_row/4`.
+  defp deliver_invite(%Invite{} = invite, %Meeting{} = meeting) do
+    InviteDelivery.deliver(invite, meeting)
+  rescue
+    error ->
+      Logger.warning(
+        "[Meetings] invite delivery raised — invite=#{invite.id} " <>
+          "meeting=#{meeting.id}: #{inspect(error)}"
+      )
+
+      {:error, :delivery_raised}
+  end
+
+  @doc """
+  List a meeting's declared invitees, oldest first.
+
+  `include_revoked: false` by default — a revoked invitee is not an invitee,
+  and every reader in v1 (the notifier above all) wants the live set. Pass
+  `include_revoked: true` for an audit view.
+
+  Ordered by `inserted_at`, with `id` as a tiebreak so the order is total
+  rather than merely usually-stable; ids are UUIDv7, so the tiebreak sorts the
+  same direction as the timestamp.
+
+  A malformed `meeting_id` answers `[]`. `where: i.meeting_id == ^meeting_id`
+  pins a UUID column, so it raises `Ecto.Query.CastError` on a bad id exactly
+  as `Repo.get/2` would — an empty invitee list is the same answer the query
+  would give for any id that names no meeting.
+  """
+  @spec list_invites(binary(), keyword()) :: [Invite.t()]
+  def list_invites(meeting_id, opts \\ [])
+
+  def list_invites(meeting_id, opts) when is_binary(meeting_id) do
+    if Platform.UUID.valid?(meeting_id) do
+      do_list_invites(meeting_id, opts)
+    else
+      []
+    end
+  end
+
+  defp do_list_invites(meeting_id, opts) do
+    query =
+      from(i in Invite,
+        where: i.meeting_id == ^meeting_id,
+        order_by: [asc: i.inserted_at, asc: i.id]
+      )
+
+    query =
+      if Keyword.get(opts, :include_revoked, false) do
+        query
+      else
+        exclude_revoked(query)
+      end
+
+    Repo.all(query)
+  end
+
+  # The single definition of "not revoked" on this module. `do_list_invites/2`
+  # and `active_invite_query/1` both compose it, so a change to what revocation
+  # means cannot land in the listing and miss the access gate.
+  defp exclude_revoked(query), do: from(i in query, where: is_nil(i.revoked_at))
+
+  @doc """
+  Does `user` hold a live invite to a meeting with this `slug`?
+
+  The route-level half of external meeting access. `invited_to_space?/2` below
+  answers the same question keyed on the meeting's backing chat space.
+
+  ## Why this keys on the INVITE ROW and not on space membership
+
+  `invite_external_user/3` already seats the invitee in `meeting.chat_space_id`,
+  and `fetch_meeting_for_user/2` already authorises external users through
+  `Chat.ExternalScope.visible_space_id?/2` against that participant row. So
+  membership is the SECOND layer and it runs AFTER this one — the two are ANDed
+  by being in series, and this function supplies the part membership cannot
+  express.
+
+  The direction that matters is revocation. `revoke_invite/1` stamps
+  `revoked_at` and deliberately does NOT delete the participant row (the row is
+  evidence, and tearing down space membership is a separate decision with its
+  own blast radius). A membership-keyed gate would therefore keep admitting a
+  revoked invitee forever. Keying on the row makes revocation effective at the
+  route.
+
+  The opposite divergence — an invite whose space grant never applied — fails
+  safe: this function admits, `fetch_meeting_for_user/2` denies, nothing leaks.
+
+  Do NOT relax this into `invited? or member?`. An OR reinstates exactly the
+  revoked invitee the row check exists to exclude.
+
+  ## Why the email disjunct is load-bearing rather than defensive
+
+  `invite_external_user/3` writes `user_id: nil` plus `email` for an invitee who
+  has no account yet, and stages a pending grant.
+  `Platform.Accounts.ExternalAdmission` applies that grant at first login —
+  minting the user, the external org membership and the chat participant row —
+  but NOTHING backfills `meeting_invites.user_id`. A gate keyed on `user_id`
+  alone would deny precisely the flow this stack was built for: invite an
+  address, they log in, they attend. Hence the `is_nil(i.user_id) and
+  lower(email) = lower(email)` branch, matched case-insensitively because
+  neither column is normalised on write.
+
+  Backfilling `user_id` at admission is NOT the fix: that is a shared login path
+  owned by another stack, and it puts a write on a read gate.
+
+  ## No slug resolution happens here
+
+  `meetings.slug` is unique per PROJECT only (`unique_index(:meetings,
+  [:project_id, :slug])`), so there is no such thing as "the meeting with this
+  slug" — a slug-only `Repo.get_by/2` raises `Ecto.MultipleResultsError` the
+  moment two projects pick the same one. The whole question is therefore asked
+  as a single `Repo.exists?` over a join: does ANY live invite addressed to this
+  user hang off ANY meeting carrying this slug? Existence is well-defined where
+  identity is not.
+
+  ## Totality
+
+  Callers pass values straight off a session assign and a URL segment, so this
+  answers `false` rather than raising for a nil or non-binary slug, a nil user,
+  a user without a binary `:id`, and a user whose `:email` is nil — the last by
+  building the query WITHOUT the email disjunct rather than letting `lower(NULL)`
+  into SQL. `slug` is a plain string column, so no UUID cast is reachable.
+  """
+  @spec invited_to_slug?(term(), term()) :: boolean()
+  def invited_to_slug?(slug, %{id: user_id} = user)
+      when is_binary(slug) and is_binary(user_id) do
+    user
+    |> active_invite_query()
+    |> where([_i, m], m.slug == ^slug)
+    |> Repo.exists?()
+  end
+
+  def invited_to_slug?(_slug, _user), do: false
+
+  @doc """
+  Does `user` hold a live invite to the meeting backed by this chat space?
+
+  Same predicate as `invited_to_slug?/2` — same rows, same liveness conditions,
+  same email disjunct — asked with the meeting identified by
+  `meetings.chat_space_id` instead of by slug. The join seam that consumes it
+  has a space id in hand and no slug.
+
+  `chat_space_id` is a uuid column, so a malformed id is filtered with
+  `Platform.UUID.valid?/1` before it reaches `Repo` — the same guard
+  `list_invites/2` uses — because a cast failure inside the query raises
+  `Ecto.Query.CastError` instead of answering the boolean the caller asked for.
+
+  A space that backs no meeting answers `false`: the join finds no meeting row,
+  so there is nothing for the invite to hang off.
+  """
+  @spec invited_to_space?(term(), term()) :: boolean()
+  def invited_to_space?(space_id, %{id: user_id} = user)
+      when is_binary(space_id) and is_binary(user_id) do
+    if Platform.UUID.valid?(space_id) do
+      user
+      |> active_invite_query()
+      |> where([_i, m], m.chat_space_id == ^space_id)
+      |> Repo.exists?()
+    else
+      false
+    end
+  end
+
+  def invited_to_space?(_space_id, _user), do: false
+
+  # The conditions shared by both entry points: a live invite row, joined to
+  # its meeting, addressed to this user. The caller adds the clause that picks
+  # the meeting out.
+  #
+  # The email disjunct is omitted entirely when the account carries no address,
+  # rather than being compared against a nil parameter — `lower(NULL) =
+  # lower(NULL)` is NULL, not true, but a nil binding also has no inferrable
+  # type for the parameter, which is a raise rather than a `false`.
+  defp active_invite_query(user) do
+    user_id = user.id
+
+    query =
+      from(i in Invite,
+        join: m in Meeting,
+        on: m.id == i.meeting_id,
+        where: is_nil(i.expires_at) or i.expires_at > ^DateTime.utc_now()
+      )
+      |> exclude_revoked()
+
+    case Map.get(user, :email) do
+      email when is_binary(email) ->
+        where(
+          query,
+          [i, _m],
+          i.user_id == ^user_id or
+            (is_nil(i.user_id) and fragment("lower(?) = lower(?)", i.email, ^email))
+        )
+
+      _ ->
+        where(query, [i, _m], i.user_id == ^user_id)
+    end
+  end
+
+  @doc """
+  Revoke an invite, by struct or by id. Returns `{:ok, invite}` with
+  `revoked_at` stamped, or `{:error, :not_found}` for an unknown id.
+
+  Idempotent, and idempotent against the ROW rather than against the struct
+  the caller happens to be holding: the update is guarded by `is_nil(
+  revoked_at)` in SQL, so a second revoke — even one passing a stale struct
+  loaded before the first — returns the row with its ORIGINAL `revoked_at`
+  rather than re-stamping it. That matters because `revoked_at` is evidence of
+  when access was cut; silently moving it forward would rewrite that record.
+
+  A malformed id answers `{:error, :not_found}` — the site's existing miss
+  return — rather than raising. Both the guarded `UPDATE ... WHERE id = $1`
+  and the `Repo.get/2` behind it pin a UUID column and so raise
+  `Ecto.Query.CastError` on a bad id, and the revoke control that will call
+  this is a `phx-value-` attribute: attacker-supplied by definition.
+  """
+  @spec revoke_invite(Invite.t() | binary()) :: {:ok, Invite.t()} | {:error, :not_found}
+  def revoke_invite(%Invite{id: id}), do: revoke_invite(id)
+
+  def revoke_invite(invite_id) when is_binary(invite_id) do
+    if Platform.UUID.valid?(invite_id) do
+      do_revoke_invite(invite_id)
+    else
+      {:error, :not_found}
+    end
+  end
+
+  defp do_revoke_invite(invite_id) do
+    now = DateTime.utc_now()
+
+    query =
+      from(i in Invite,
+        where: i.id == ^invite_id and is_nil(i.revoked_at),
+        select: i
+      )
+
+    case Repo.update_all(query, set: [revoked_at: now, updated_at: now]) do
+      {1, [invite]} ->
+        {:ok, invite}
+
+      {0, _} ->
+        case Repo.get(Invite, invite_id) do
+          %Invite{} = already_revoked -> {:ok, already_revoked}
+          nil -> {:error, :not_found}
+        end
+    end
+  end
+
+  @doc """
+  Resolve who should be notified about `meeting`, and say which rule answered.
+
+  Returns
+
+      %{
+        source: :invites | :chat_participants,
+        user_ids: [binary()],
+        chat_participants: [Platform.Chat.Participant.t()],
+        invitee_count: non_neg_integer()
+      }
+
+  ## Why this is a context function and not private to `MeetingNotifier`
+
+  The notifier is a supervised GenServer, so a rule living inside it can only
+  be tested by booting it under `start_supervised/1` inside the Ecto sandbox
+  and inferring the rule from its side effects. A plain context function is
+  callable directly, which is what lets the fallback below be pinned on its
+  own terms rather than through an inbox emit.
+
+  ## The empty-invite fallback is the production path, not an edge case
+
+  Every meeting that existed before `meeting_invites` has zero invite rows, and
+  will keep having zero until a host declares one. So the `[]` branch has to
+  reproduce the previous behaviour EXACTLY — `Chat.list_participants(
+  chat_space_id, participant_type: "user")`, host dropped by chat-participant
+  ROW id. If it does not, every pre-existing meeting silently stops notifying:
+  an empty recipient list raises nothing, logs no error, and returns `:ok`.
+
+  That is why `user_ids` on this branch is a bare `Enum.map/2` over
+  `participant_id` with no `uniq/1` and no nil rejection. Both would look like
+  tidying and neither is: they would change what the only path production
+  currently takes does. Filtering belongs on the `:invites` branch, which is
+  new and has no behaviour to preserve.
+
+  ## `:invites` deliberately carries no chat participants
+
+  `chat_participants: []` on the invite branch is not an omission. The point of
+  a declared invitee set is that an invitee need not be in the meeting's chat
+  space at all, so a caller reaching for a chat-participant row here would be
+  reintroducing the bug this table exists to fix. There is nothing to hand it.
+
+  `user_ids` excludes the host, resolved from `host_participant_id` — for a
+  `participant_type: "user"` chat row, `participant_id` holds the `users.id`.
+  A host does not need to be told about their own meeting.
+
+  `invitee_count` counts every non-revoked invite except a host self-invite,
+  **guests included**. A guest is an invitee even though they get no push and
+  no inbox row (they have no account; their channel is the per-invite link), so
+  the "N invited" a recipient reads has to match the list the host typed. It is
+  therefore NOT `length(user_ids)`, and the two genuinely differ whenever a
+  guest is invited.
+  """
+  @spec recipients_for_meeting(Meeting.t()) :: %{
+          source: :invites | :chat_participants,
+          user_ids: [binary()],
+          chat_participants: [Chat.Participant.t()],
+          invitee_count: non_neg_integer()
+        }
+  def recipients_for_meeting(%Meeting{} = meeting) do
+    case list_invites(meeting.id) do
+      [] -> recipients_from_chat_participants(meeting)
+      invites -> recipients_from_invites(meeting, invites)
+    end
+  end
+
+  defp recipients_from_chat_participants(%Meeting{} = meeting) do
+    chat_participants = Chat.list_participants(meeting.chat_space_id, participant_type: "user")
+
+    non_host = Enum.reject(chat_participants, &(&1.id == meeting.host_participant_id))
+
+    %{
+      source: :chat_participants,
+      user_ids: Enum.map(non_host, & &1.participant_id),
+      chat_participants: chat_participants,
+      invitee_count: length(non_host)
+    }
+  end
+
+  defp recipients_from_invites(%Meeting{} = meeting, invites) do
+    host_user_id = host_user_id(meeting)
+
+    non_host_invites =
+      Enum.reject(invites, fn invite ->
+        not is_nil(host_user_id) and invite.user_id == host_user_id
+      end)
+
+    user_ids =
+      non_host_invites
+      |> Enum.map(& &1.user_id)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    %{
+      source: :invites,
+      user_ids: user_ids,
+      chat_participants: [],
+      invitee_count: length(non_host_invites)
+    }
+  end
+
+  # Resolved by query rather than off a preload: callers hand us whatever
+  # `%Meeting{}` they are holding, and a `%Ecto.Association.NotLoaded{}` here
+  # would silently read as "no host" — which quietly re-invites the host.
+  defp host_user_id(%Meeting{host_participant_id: nil}), do: nil
+
+  defp host_user_id(%Meeting{host_participant_id: participant_id}) do
+    case Chat.get_participant(participant_id) do
+      %Chat.Participant{participant_type: "user", participant_id: user_id} -> user_id
+      _ -> nil
+    end
+  end
+
+  defp guest_invite_url(%Meeting{} = meeting, token) do
+    host = Application.get_env(:platform, :meeting_guest_host)
+
+    "https://#{host}/#{meeting.slug}/#{token}"
   end
 
   # ── Meeting helpers (private) ────────────────────────────────────────────

@@ -161,6 +161,75 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
     end
   end
 
+  # ── task 019fb955-f8b1 stage 5: the composer's "Meet" button ────────────────
+  #
+  # COSMETICS OVER A SERVER REFUSAL, not a gate. `MeetingHooks.do_join/1` has
+  # refused an uninvited external user since stage 4, and the LiveKit room is
+  # keyed off the SPACE — so this button was offering an external user seated
+  # in a meeting's bound chat space a join the server already declines. The
+  # button is removed because a control that does nothing when clicked is quiet
+  # degradation, not because the template is what stops them.
+  #
+  # BOTH SIDES, in one block. The absence on its own passes on a build where
+  # the button never renders for anyone — which is exactly what an unset
+  # LiveKit config produces, and why `meetings_enabled` is forced true here.
+  describe "the Meet button is hidden from external users (task 019fb955-f8b1)" do
+    setup do
+      original = Application.get_env(:platform, :livekit, [])
+
+      Application.put_env(:platform, :livekit,
+        api_key: "test-livekit-key",
+        api_secret: "test-livekit-secret-0123456789abcdef",
+        url: "wss://livekit.test"
+      )
+
+      on_exit(fn -> Application.put_env(:platform, :livekit, original) end)
+
+      org = tenant_org!()
+      ext = external_user!(org)
+      internal = create_user!("Ivan Internal")
+
+      shared = channel!("Shared Room", org_id: org.id) |> join!(ext) |> join!(internal)
+
+      %{ext: ext, internal: internal, shared: shared}
+    end
+
+    test "absent for an external user and present for an internal user in the SAME space",
+         %{conn: conn, ext: ext, internal: internal, shared: shared} do
+      assert Platform.Meetings.enabled?(),
+             "the internal side of this test is vacuous unless meetings are enabled"
+
+      {:ok, ext_view, _} =
+        conn
+        |> with_chat_host()
+        |> authed(ext)
+        |> live("/chat/#{shared.slug}")
+
+      refute has_element?(ext_view, "button[phx-click=meeting_join]")
+
+      {:ok, int_view, _} =
+        conn
+        |> authed(internal)
+        |> live("/chat/#{shared.slug}")
+
+      assert has_element?(int_view, "button[phx-click=meeting_join]")
+    end
+
+    test "also absent for an external user on the SUITE host, where scope is identity-derived",
+         %{conn: conn, ext: ext, shared: shared} do
+      # `@external?` comes from the user's identity, not from the host or the
+      # `chat_mode` session key (task 019f9257 stage 1) — so the button must
+      # be gone on the default host too. Without this case the hiding could be
+      # a side effect of the `chat.` host's external branch.
+      {:ok, view, _} =
+        conn
+        |> authed(ext)
+        |> live("/chat/#{shared.slug}")
+
+      refute has_element?(view, "button[phx-click=meeting_join]")
+    end
+  end
+
   # ── task 019f9257: the suite-host cross-tenant leak regression ──────────────
   #
   # The reported defect: an external user served on the SUITE (default) host

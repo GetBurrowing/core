@@ -163,6 +163,19 @@ if config_env() == :prod do
         raise("MEETING_GUEST_SIGNING_KEY must be set for guest meeting invites")
 end
 
+# :meeting_calendar_signing_key is used by Platform.Meetings.CalendarLink
+# to sign the per-meeting calendar link token. It is deliberately a
+# SEPARATE key from :meeting_guest_signing_key: a calendar link never
+# expires and rotating this key is its only revocation lever, so it must
+# be rotatable without invalidating guest invites. Dev/test set stable
+# local values; prod must read it from an env var and fail fast if unset.
+if config_env() == :prod do
+  config :platform,
+    meeting_calendar_signing_key:
+      System.get_env("MEETING_CALENDAR_SIGNING_KEY") ||
+        raise("MEETING_CALENDAR_SIGNING_KEY must be set for meeting calendar links")
+end
+
 # :meeting_guest_host is the public hostname where guest meeting links
 # resolve — used by MeetingLive's Copy-guest-link sheet to build the
 # outbound URL. Defaults to prod; override with MEETING_GUEST_HOST for
@@ -170,6 +183,30 @@ end
 # `docs/runbooks/meet-ellis-traefik.md`.
 config :platform,
   meeting_guest_host: System.get_env("MEETING_GUEST_HOST") || "meet.example.com"
+
+# Request-time meet host. Read here rather than only inside the prod
+# block so a dev/CI process can set it; unset means the meet surface
+# does not exist and every external request on any host is denied the
+# meeting route. Deliberately NO `||` default — a guessed host is an
+# authorization decision made from missing information.
+config :platform, :meet_host, System.get_env("MEET_HOST")
+
+# Request-time chat host, read here for the SAME reason `:meet_host` is, and
+# moved out of the `config_env() == :prod` block by task 019fb955-f8b1 rework.
+# Inside that block, exporting CHAT_HOST in dev or CI had NO effect on
+# `PlatformWeb.ExternalRedirect.chat_host_configured?/0`, so the external-chat
+# fence was silently inert everywhere but prod — and any dev/CI exercise of it
+# was VACUOUS: it passed an unarmed fence. A reviewer following the setup
+# instructions literally hit exactly that and had to inject the value as an OTP
+# app env to arm it.
+#
+# `check_origin` still reads its own `chat_host` binding inside the prod block;
+# that is deliberately untouched.
+#
+# Deliberately NO `||` default, matching `:meet_host` — a guessed host is an
+# authorization decision made from missing information. Unset means the fence
+# does not fire and `chat_url/1` stays host-relative.
+config :platform, :chat_host, System.get_env("CHAT_HOST")
 
 config :platform, :execution,
   proof_repo_path: proof_repo_path,
@@ -253,13 +290,11 @@ if config_env() == :prod do
     |> Enum.map(&String.trim/1)
     |> Enum.reject(&(&1 == ""))
 
-  # Expose CHAT_HOST to request-time code (not just check_origin). External
-  # users must be PINNED to this host: `PlatformWeb.ExternalRedirect.chat_url/1`
-  # reads `:chat_host` to build absolute `https://<chat_host>/chat` redirects
-  # (task 019f9257 — admission, grant-recovery, and the internal-/chat fence).
-  # Unset (dev/test/CI) → the helper falls back to host-relative `/chat`.
-  config :platform, :chat_host, chat_host
-
+  # NOTE: `config :platform, :chat_host` used to be set here, inside the prod
+  # block. It now lives at the top level (see the `:chat_host` config above)
+  # because reading it only in prod left the external-chat fence inert in
+  # dev/CI — any test of it was vacuous. The `chat_host` binding above is
+  # still used by `check_origin`, which is prod-only by nature.
   config :platform, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :platform, PlatformWeb.Endpoint,

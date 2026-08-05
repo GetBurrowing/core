@@ -124,6 +124,148 @@ defmodule Platform.Meetings.GuestInviteTest do
       end
     end
 
+    # ── invite_id (task 019fb954 stage 2) ────────────────────────────────
+    #
+    # The token binds to a `meeting_invites` ROW so a single guest can be
+    # revoked without invalidating the others — an issued HMAC cannot be
+    # un-issued, so the row is the only revocation surface available.
+    # `verify/2` stays pure: it never checks `revoked_at` (that is
+    # `Meetings.resolve_guest_invite/2`'s job), it only carries the id.
+    # Optional in verify because every token minted in production today —
+    # and until the create+invite UI ships — has no `invite_id`.
+
+    test "roundtrips an invite_id when provided" do
+      expires_at = future_ts(3600)
+      invite_id = Ecto.UUID.generate()
+
+      token =
+        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", invite_id: invite_id)
+
+      assert {:ok, payload} = GuestInvite.verify(token)
+      assert payload.invite_id == invite_id
+    end
+
+    test "omitting the invite_id opt yields invite_id: nil" do
+      expires_at = future_ts(3600)
+      space_id = Ecto.UUID.generate()
+      meeting_id = Ecto.UUID.generate()
+
+      token =
+        GuestInvite.sign("standup-2026-07", expires_at, nil,
+          guest_space_id: space_id,
+          meeting_id: meeting_id
+        )
+
+      assert {:ok, payload} = GuestInvite.verify(token)
+      assert is_nil(payload.invite_id)
+      # And the rest of the payload is untouched by the new key.
+      assert payload.meeting_slug == "standup-2026-07"
+      assert payload.guest_space_id == space_id
+      assert payload.meeting_id == meeting_id
+      assert is_nil(payload.display_name)
+    end
+
+    test "a genuinely legacy token whose payload OMITS the key verifies and normalises to nil" do
+      # This must be hand-signed, and that is the whole point. Every token
+      # `sign/4` produces now carries `invite_id:` explicitly (nil when the
+      # opt is omitted), so a token minted through the module can never
+      # exercise the `Map.put/3` normalisation in `verify/2` — the key is
+      # already there. Only a token minted by the PREVIOUS version of this
+      # module has a payload map lacking the key, and that is exactly the
+      # shape sitting in every guest invite URL in the wild right now.
+      #
+      # Measured, not assumed: with the sign/4-minted "legacy" test above
+      # as the only coverage, deleting the `Map.put(:invite_id, ...)` line
+      # left the suite green. Same held for the pre-existing
+      # `Map.put(:meeting_id, ...)`, whose legacy test has the identical
+      # blind spot. This test is what makes both lines load-bearing.
+      token =
+        raw_sign(%{
+          meeting_slug: "standup-2026-07",
+          expires_at: future_ts(3600),
+          display_name: "Juno Fairbanks",
+          guest_space_id: nil
+          # no :meeting_id, no :invite_id — pre-019f9b14 / pre-019fb954
+        })
+
+      assert {:ok, payload} = GuestInvite.verify(token)
+      assert Map.has_key?(payload, :invite_id)
+      assert is_nil(payload.invite_id)
+      assert Map.has_key?(payload, :meeting_id)
+      assert is_nil(payload.meeting_id)
+      assert payload.meeting_slug == "standup-2026-07"
+      assert payload.display_name == "Juno Fairbanks"
+    end
+
+    test "invite_id: nil roundtrips as nil" do
+      expires_at = future_ts(3600)
+      token = GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", invite_id: nil)
+
+      assert {:ok, payload} = GuestInvite.verify(token)
+      assert is_nil(payload.invite_id)
+    end
+
+    test "invite_id, meeting_id and guest_space_id roundtrip together" do
+      expires_at = future_ts(3600)
+      invite_id = Ecto.UUID.generate()
+      meeting_id = Ecto.UUID.generate()
+      space_id = Ecto.UUID.generate()
+
+      token =
+        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks",
+          guest_space_id: space_id,
+          meeting_id: meeting_id,
+          invite_id: invite_id
+        )
+
+      assert {:ok, payload} = GuestInvite.verify(token)
+      assert payload.invite_id == invite_id
+      assert payload.meeting_id == meeting_id
+      assert payload.guest_space_id == space_id
+    end
+
+    test "two invites on the same meeting yield distinct tokens carrying distinct invite_ids" do
+      expires_at = future_ts(3600)
+      meeting_id = Ecto.UUID.generate()
+      invite_a = Ecto.UUID.generate()
+      invite_b = Ecto.UUID.generate()
+
+      token_a =
+        GuestInvite.sign("standup-2026-07", expires_at, "Guest A",
+          meeting_id: meeting_id,
+          invite_id: invite_a
+        )
+
+      token_b =
+        GuestInvite.sign("standup-2026-07", expires_at, "Guest B",
+          meeting_id: meeting_id,
+          invite_id: invite_b
+        )
+
+      refute token_a == token_b
+
+      assert {:ok, payload_a} = GuestInvite.verify(token_a)
+      assert {:ok, payload_b} = GuestInvite.verify(token_b)
+      assert payload_a.invite_id == invite_a
+      assert payload_b.invite_id == invite_b
+    end
+
+    test "sign_with_default_expiry passes invite_id through" do
+      invite_id = Ecto.UUID.generate()
+      token = GuestInvite.sign_with_default_expiry("weekly-sync", nil, invite_id: invite_id)
+
+      assert {:ok, payload} = GuestInvite.verify(token)
+      assert payload.invite_id == invite_id
+    end
+
+    test "a non-binary invite_id raises ArgumentError at sign" do
+      expires_at = future_ts(3600)
+
+      assert_raise ArgumentError, ~r/invite_id must be a binary or nil/, fn ->
+        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", invite_id: 42)
+      end
+    end
+
     test "roundtrips self-entry (display_name = nil)" do
       expires_at = future_ts(3600)
       token = GuestInvite.sign("open-mic", expires_at, nil)
@@ -201,10 +343,39 @@ defmodule Platform.Meetings.GuestInviteTest do
     test "returns :invalid for outright garbage" do
       assert {:error, :invalid} = GuestInvite.verify("not-a-token")
     end
+
+    test "returns :invalid for a validly-signed token whose invite_id is not a binary" do
+      # `sign/4` refuses a non-binary invite_id, so this shape can only be
+      # produced by something holding the signing key directly. The verify
+      # guard exists for that case: a valid HMAC is not a valid payload.
+      token =
+        raw_sign(%{
+          meeting_slug: "standup-2026-07",
+          expires_at: future_ts(3600),
+          display_name: "Juno Fairbanks",
+          guest_space_id: nil,
+          meeting_id: nil,
+          invite_id: 42
+        })
+
+      assert {:error, :invalid} = GuestInvite.verify(token)
+    end
   end
 
   # ---------------------------------------------------------------------
   # Helpers
+
+  # Sign an ARBITRARY payload map with the module's key and salt, bypassing
+  # `sign/4`'s shape guarantees. Needed for two things `sign/4` structurally
+  # cannot produce: a payload that OMITS an optional key (i.e. a token minted
+  # by an older version of the module), and a payload carrying a value the
+  # signer refuses (non-binary ids). Key and salt are duplicated here on
+  # purpose — they are the token's wire format, and reaching through the
+  # module would defeat the point.
+  defp raw_sign(payload) do
+    key = Application.get_env(:platform, :meeting_guest_signing_key)
+    Plug.Crypto.sign(key, "meeting_guest_invite", payload)
+  end
 
   # Plug.Crypto tokens are `header.body.signature` (three base64url
   # segments separated by `.`). We flip a character in either the body or

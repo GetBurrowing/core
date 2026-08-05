@@ -64,7 +64,10 @@ defmodule PlatformWeb.Components.InboxItem do
 
         <span class="min-w-0 flex-1">
           <span class="flex flex-wrap items-center gap-2">
-            <span class="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-base-content/60">
+            <span
+              class="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-base-content/60"
+              data-role="inbox-item-kind"
+            >
               <.icon name={kind_icon(@item.kind)} class="size-3.5" />
               {kind_label(@item.kind)}
             </span>
@@ -119,6 +122,9 @@ defmodule PlatformWeb.Components.InboxItem do
   def kind_label("task_plan_review"), do: "Plan needs review"
   def kind_label("chat_mention"), do: "Mention"
   def kind_label("meeting_starting"), do: "Meeting starting"
+  # MUST sit above the humanizing catch-all: it would render "Meeting invited"
+  # — a one-character difference that reads as correct at a glance.
+  def kind_label("meeting_invited"), do: "Meeting invite"
   def kind_label(other) when is_binary(other), do: Phoenix.Naming.humanize(other)
   def kind_label(_), do: "Notification"
 
@@ -127,6 +133,9 @@ defmodule PlatformWeb.Components.InboxItem do
   def kind_icon("task_plan_review"), do: "hero-clipboard-document-list"
   def kind_icon("chat_mention"), do: "hero-at-symbol"
   def kind_icon("meeting_starting"), do: "hero-video-camera"
+  # An envelope (a message you were sent), not a camera (a call in progress).
+  # MUST sit above the `hero-bell` catch-all.
+  def kind_icon("meeting_invited"), do: "hero-envelope"
   def kind_icon(_), do: "hero-bell"
 
   # ── Helpers ────────────────────────────────────────────────────────────

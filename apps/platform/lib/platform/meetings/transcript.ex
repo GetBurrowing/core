@@ -26,6 +26,13 @@ defmodule Platform.Meetings.Transcript do
     field(:started_at, :utc_datetime_usec)
     field(:completed_at, :utc_datetime_usec)
     field(:router_dispatched_at, :utc_datetime_usec)
+    # Weighted full-text vector over `summary` (weight `C`) concatenated with
+    # the text of `segments` (weight `D`) — task 019fb954-c848. Generated
+    # speech ranks below a human-chosen meeting name or canvas title, and raw
+    # segment text ranks below the summary. A STORED GENERATED column, so it
+    # is `read_after_writes` and appears in no cast list: Postgres rejects any
+    # value supplied for it.
+    field(:search_vector, Platform.Types.TSVector, read_after_writes: true)
 
     timestamps(type: :utc_datetime_usec)
   end

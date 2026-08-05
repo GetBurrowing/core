@@ -271,10 +271,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/files.ex", :get!, "~q:File", 1, :safe_internal,
      "Files.get_file!/2 checks Platform.UUID.valid?/1 and raises Ecto.NoResultsError — its documented miss exception — rather than Ecto.Query.CastError"},
     # ── Meetings ───────────────────────────────────────────────────────
-    {"platform/meetings.ex", :platform_uuid_guard, "-", 10, :safe_internal,
-     "cast_identity/2 now uses Platform.UUID.cast/1, so a 16-byte LiveKit webhook identity suffix yields :unknown instead of a fabricated user_id/agent_id FK; the remaining guards cover get_meeting/1, get_room/1, get_transcript/1, get_transcript_with_segments/1, the two recording lookups, resolve_agent/1, claim_router_dispatch/1 (019fa56b-c81f stage 2), whose transcript_id arrives inside a meeting:finished PubSub payload and must answer {:error, :no_such_transcript} rather than raise on the Router's dispatch path, and intent_muted?/1 (019fbaac stage 1), whose meeting_id arrives inside a meeting:transcript_chunk PubSub payload and is legitimately nil whenever the chunk's space has no meeting — it is read per transcript chunk from the singleton IntentClassifier GenServer, so a raise there stops classification for every room on the node at once"},
+    {"platform/meetings.ex", :platform_uuid_guard, "-", 16, :safe_internal,
+     "cast_identity/2 now uses Platform.UUID.cast/1, so a 16-byte LiveKit webhook identity suffix yields :unknown instead of a fabricated user_id/agent_id FK; the remaining guards cover get_meeting/1, get_room/1, get_transcript/1, get_transcript_with_segments/1, the two recording lookups, resolve_agent/1, claim_router_dispatch/1 (019fa56b-c81f stage 2), whose transcript_id arrives inside a meeting:finished PubSub payload and must answer {:error, :no_such_transcript} rather than raise on the Router's dispatch path, and get_invite/1 (019fb954 stage 4), whose invite_id arrives inside a SIGNED GUEST TOKEN PAYLOAD — a signature proves who minted the payload, not that its ids are uuids, and a fabricated id must never be what decides whether a capability was revoked. Count 13 -> 14 with 019fb955 stage 4: `ensure_delivery_invitee/2` guards `invite.user_id` before the `Repo.get_by(Platform.Chat.Participant, ...)` recorded below. The classification is unchanged because the guard, not the caller, is what makes the lookup safe — `InviteDelivery.deliver/2` takes an %Invite{} STRUCT, so nothing upstream of the guard proves the field came out of the column. Count 14 -> 15 with 019fb955 stage 2: `invited_to_space?/2` guards its `space_id` before the `Repo.exists?` join, because that argument arrives off a session assign / a join-seam caller and the column is uuid — an unguarded bad value raises Ecto.Query.CastError out of an access predicate whose contract is a boolean, which fails the gate OPEN by crashing the caller instead of denying. Count 15 -> 16 at this stack's rollup merge, for `intent_muted?/1` (019fbaac stage 1, landed on main independently), whose meeting_id arrives inside a meeting:transcript_chunk PubSub payload and is legitimately nil whenever the chunk's space has no meeting — it is read per transcript chunk from the singleton IntentClassifier GenServer, so a raise there stops classification for every room on the node at once"},
     {"platform/meetings.ex", :get, "Agent", 1, :safe_internal,
      "the one remaining call is inside resolve_agent/1, which checks Platform.UUID.valid?/1 and falls back to Repo.get_by(Agent, slug:). generate_agent_token/3, dispatch_meeting_join/3 and dismiss_agent/2 all route through it"},
+    {"platform/meetings.ex", :get, "Invite", 2, :safe_internal,
+     "two, both behind Platform.UUID.valid?/1. (1) the miss branch of Meetings.revoke_invite/1: a malformed invite_id from the host's phx-value- revoke control returns {:error, :not_found} before either this Repo.get or the guarded UPDATE ... WHERE id = $1 ahead of it can raise (019fb954 stage 3). (2) get_invite/1, the revocation gate in resolve_guest_invite/2, whose invite_id is read out of a guest token payload on a public unauthenticated ingress; nil folds to {:error, :invalid} (019fb954 stage 4)"},
     {"platform/meetings.ex", :get, "Meeting", 1, :safe_internal,
      "Meetings.get_meeting/1 checks Platform.UUID.valid?/1 first; resolve_invited_meeting/2 was switched onto that guarded getter, so its rescue Ecto.Query.CastError is now belt-and-braces rather than the actual defence"},
     {"platform/meetings.ex", :get, "Platform.Tasks.Project", 1, :safe_internal,
@@ -287,10 +289,18 @@ defmodule Platform.RepoLookupBoundaryTest do
      "get_transcript/1 and get_transcript_with_segments/1 both check Platform.UUID.valid?/1; the URL path segment at transcript_controller.ex:23 now 404s instead of raising"},
     {"platform/meetings.ex", :get!, "Room", 1, :safe_internal,
      "`start_recording/1` uses the `room_id` off the `%Room{}` `find_or_create_room/1` returned earlier in the same flow"},
+    {"platform/meetings.ex", :get_by, "Invite", 2, :safe_internal,
+     "keyed `meeting_id:` + `user_id:` inside Meetings.invite_user/3's idempotency path (the pre-check and the lost-race re-read). `meeting_id` is read off the `%Meeting{}` struct the caller passed; `user_id` is the boundary value and is checked with Platform.UUID.valid?/1 before either call, so an id from the invite UI's params map answers {:error, changeset} keyed :user_id rather than raising (019fb954 stage 3)"},
     {"platform/meetings.ex", :get_by, "Meeting", 1, :safe_internal,
      "keyed `project_id:` + `slug:`; the deliberate slug-scoped lookup documented at meetings.ex:34 as the authorization-safe path"},
+    {"platform/meetings.ex", :get_by, "Platform.Chat.Participant", 1, :safe_internal,
+     "019fb955 stage 4 — `ensure_delivery_invitee/2`'s get-or-insert guard ahead of `Chat.add_participant/2`, which has no such branch of its own and would hit `chat_participants_unique` on a re-delivery. `space_id` is `%Chat.Space{}.id` off the row `Chat.get_space/1` or `Chat.create_space/1` just returned in the same function. `participant_id` is `invite.user_id`, a `meeting_invites.user_id` FK column, and is checked with Platform.UUID.valid?/1 anyway before the lookup — because `deliver/2` accepts a STRUCT rather than an id, so a hand-built %Invite{} can carry anything, and because `Repo.get_by(_, participant_id: nil)` raises ArgumentError rather than returning nil (the nil case has its own head returning {:error, :no_invitee_user})"},
     {"platform/meetings.ex", :get_by, "Room", 3, :safe_internal,
      "keyed `livekit_room_name:` (string) and `space_id:`; the `space_id` callers pass a `%Space{}` id already resolved by `Chat.get_space/1`"},
+    {"platform/meetings.ex", :get_by, "User", 1, :safe_internal,
+     "019fb955-1d7b stage 2 — `invite_external_user/3` resolving the address a host TYPED into an account, which is the whole three-way branch. The value IS a boundary value, and it is safe for a reason this inventory should state precisely: the lookup is keyed `email:` only, a `:string` column, and casting a binary to `:string` cannot fail — `Ecto.Query.CastError`, the defect this test exists to catch, is only reachable when a boundary value is cast to `:binary_id`. No `Platform.UUID.valid?/1` guard applies because no UUID is pinned. `users.email` also carries a unique index, so `get_by/3` cannot raise `Ecto.MultipleResultsError` here either"},
+    {"platform/meetings/archive.ex", :platform_uuid_guard, "-", 3, :safe_internal,
+     "019fb954-c848 stage 2 — `maybe_filter_project/2` and `maybe_filter_person/2` each guard with Platform.UUID.valid?/1 before their id reaches a `where:`. Both come straight off the archive LiveView's `params` map (`?project=` / `?person=`), and `where: m.project_id == ^value` raises the same Ecto.Query.CastError as Repo.get/2 would. A malformed id narrows the query to nothing rather than dropping the filter — failing open on a scoping filter would turn a no-results page into a listing of every project the viewer can see. Stage 3 adds the third: `meeting_ids/1` filters the page's ids with the same guard before they reach `where: m.id in ^ids`, for the same reason and with the same failure mode — the ids reach `artifacts_for/2` by way of the page that rendered them, so one stale or hand-edited value would otherwise raise on a read that is supposed to degrade to 'that row has no artifacts'. Classification is unchanged: every one of the three narrows a query that is already org-scoped by `scoped_query/2`"},
     {"platform/meetings/intent_classifier.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
      "`agent_slug/1` receives an `agent_id` the classifier read off a `%Participant{}` row in the same pipeline"},
     {"platform/meetings/intent_dispatcher.ex", :get, "Agent", 1, :safe_internal,
@@ -620,19 +630,53 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/federation/tool_surface.ex" => 2,
     "platform/files.ex" => 1,
     "platform/inbox.ex" => 1,
-    # Task 019fbaac stage 1 — `intent_muted?/1`. Triaged by hand as this
-    # map asks: its `where:` clause DOES pin `m.id == ^meeting_id`, and
-    # the id DOES arrive from a boundary — the `meeting:transcript_chunk`
-    # PubSub payload, where it is nil whenever the chunk's space has no
-    # meeting. So this one needs the guard and has it: the call sits
-    # inside `if Platform.UUID.valid?(meeting_id)`, which is why the
-    # `:platform_uuid_guard` count for this file moved 9 → 10 in the same
-    # change. Without it the nil case raises ArgumentError out of the
-    # query builder and a 16-byte binary raises Ecto.Query.CastError,
-    # both from the singleton IntentClassifier GenServer that classifies
-    # for every room on the node.
-    "platform/meetings.ex" => 10,
+    # 9 → 11 across two independent additions, both triaged by hand as this
+    # map asks. The count is the SUM of both sides of this stack's rollup
+    # merge, not either side's number.
+    #
+    # (a) task 019fb955-1d7b stage 2's `upsert_external_invite/3`.
+    # Triaged by hand as this map asks: the `where:` clause is
+    # `i.meeting_id == ^meeting.id and i.email == ^address and
+    # is_nil(i.user_id)`. `meeting.id` is destructured off the `%Meeting{}`
+    # the caller passed, so it is a persisted `meetings.id` column value,
+    # not a boundary input. `address` is a boundary value (the host typed
+    # it) but is pinned against `meeting_invites.email`, a `:string`
+    # column — casting a binary to `:string` cannot fail. No `x.id ==
+    # ^value` against a `:binary_id` on the path, so no
+    # `Ecto.Query.CastError` is reachable and no `Platform.UUID.valid?/1`
+    # guard applies. The call exists because no unique index covers
+    # `[meeting_id, email]` for `user_id`-NULL rows (the one on the table
+    # is partial on `user_id IS NOT NULL`), so dedupe must be a lookup.
+    #
+    # (b) task 019fbaac stage 1 — `intent_muted?/1`. Its `where:` clause DOES
+    # pin `m.id == ^meeting_id`, and the id DOES arrive from a boundary — the
+    # `meeting:transcript_chunk` PubSub payload, where it is nil whenever the
+    # chunk's space has no meeting. So this one needs the guard and has it:
+    # the call sits inside `if Platform.UUID.valid?(meeting_id)`, which is why
+    # the `:platform_uuid_guard` count for this file moved by one in the same
+    # change. Without it the nil case raises ArgumentError out of the query
+    # builder and a 16-byte binary raises Ecto.Query.CastError, both from the
+    # singleton IntentClassifier GenServer that classifies for every room on
+    # the node.
+    "platform/meetings.ex" => 11,
+    # Task 019fb954-c848 stage 2 — `Archive.counts/3`, the single aggregate
+    # pass behind `search/2`. Triaged by hand as this map asks: its `where:`
+    # clauses come from `scoped_query/2`, and TWO of them pin ids that arrive
+    # from a boundary — `:project_id` and `:person_id` are read off a LiveView
+    # `params` map. Both are therefore guarded by `Platform.UUID.valid?/1`
+    # before they reach a `where:`, and a malformed one narrows the query to
+    # nothing rather than dropping the filter. The remaining clauses pin no id
+    # (`m.status in`) or a value read from a persisted row.
+    "platform/meetings/archive.ex" => 1,
     "platform/meetings/intent_corrections.ex" => 1,
+    # Task 019fb955 stage 2 — `SenderSeed.get/0`. Triaged by hand as this map
+    # asks: the `where:` clause is `a.slug == ^@slug and is_nil(a.workspace_id)`,
+    # where `@slug` is the compile-time constant `"meetings"`. No id is pinned
+    # and no value on the clause originates at a boundary, so no
+    # `Ecto.Query.CastError` is reachable and no `Platform.UUID.valid?/1` guard
+    # applies. Nil-tolerant on purpose: "not seeded yet" is the expected state
+    # whenever `MEETINGS_ENABLED` is unset.
+    "platform/meetings/sender_seed.ex" => 1,
     "platform/memory_feedback.ex" => 1,
     "platform/orchestration/context_assembler.ex" => 1,
     "platform/orchestration/execution_space.ex" => 3,
@@ -673,7 +717,17 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/tasks/review_requests.ex" => 1,
     "platform/tasks/rollup_webhook_processor.ex" => 1,
     "platform/tasks/stacks.ex" => 4,
-    "platform/tenancy/external_grants.ex" => 1,
+    # 1 → 2 for task 019fb955-1d7b stage 2's `get_grant_by_email/1`.
+    # Triaged by hand as this map asks: the `where:` clause is
+    # `g.email == ^addr` — a boundary-supplied address pinned against a
+    # `:string` column, where casting a binary to `:string` cannot fail.
+    # No id is pinned, so no `Ecto.Query.CastError` is reachable and no
+    # `Platform.UUID.valid?/1` guard applies. It is deliberately NOT the
+    # existing `lookup_by_email_or_sub/1`: that one filters
+    # `applied_at IS NULL` and is therefore blind to applied rows, which
+    # still occupy the `email` unique index (it is not partial on
+    # `applied_at`). Branching on the blind one is fail-open.
+    "platform/tenancy/external_grants.ex" => 2,
     "platform/tenancy/lifecycle.ex" => 2,
     "platform/vault.ex" => 4,
     "platform/webhooks/github_signature.ex" => 1,

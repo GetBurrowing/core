@@ -61,6 +61,46 @@ defmodule Platform.InboxTest do
     end
   end
 
+  # An invite gets its own typed row so it can be grouped and counted as an
+  # invite; `meeting_starting` means something else (starting NOW) and a
+  # `chat_mention` cannot be counted as an invite at all.
+  describe "the meeting_invited kind" do
+    test "emit/1 accepts meeting_invited, and STILL rejects a bogus kind" do
+      user = insert_user()
+
+      invite_attrs =
+        valid_attrs(user, %{
+          kind: "meeting_invited",
+          source_type: "meeting",
+          source_id: Ecto.UUID.generate(),
+          title: "Rowan invited you to Weekly sync",
+          url: "/meetings/weekly-sync"
+        })
+
+      assert {:ok, %Item{} = item} = Inbox.emit(invite_attrs)
+      assert item.kind == "meeting_invited"
+      assert item.source_type == "meeting"
+
+      # Both sides. Asserting only the positive passes just as well against an
+      # implementation that deleted `validate_inclusion(:kind, @kinds)` outright
+      # — which would accept every typo as a new kind forever.
+      assert {:error, changeset} = Inbox.emit(valid_attrs(user, %{kind: "not_a_kind"}))
+      refute changeset.valid?
+      assert Keyword.has_key?(changeset.errors, :kind)
+
+      # Exactly the one invite row landed.
+      assert Repo.aggregate(from(i in Item, where: i.user_id == ^user.id), :count) == 1
+    end
+
+    test "meeting_invited is a member of kinds/0 and distinct from meeting_starting" do
+      kinds = Item.kinds()
+
+      assert "meeting_invited" in kinds
+      assert "meeting_starting" in kinds
+      refute "not_a_kind" in kinds
+    end
+  end
+
   describe "list_unread_for_user/2" do
     test "excludes dismissed, includes read-but-not-dismissed, honors :kind and desc order" do
       user = insert_user()

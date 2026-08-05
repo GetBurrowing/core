@@ -83,7 +83,14 @@ defmodule Platform.MixProject do
       # tzdata: IANA time-zone database backing `DateTime.shift_zone!/2`
       # for timezone-aware cron triggers (task 019f70e9 stage 6 — 03:00
       # America/Chicago dreaming firing survives DST transitions).
-      {:tzdata, "~> 1.1"}
+      {:tzdata, "~> 1.1"},
+      # icalendar: TEST-ONLY. `Platform.Meetings.CalendarFeed` is our own
+      # renderer — we do not use this library's serializer. It is here so
+      # the feed tests assert against a real RFC 5545 parser
+      # (`ICalendar.from_ics/1`, which performs line-unfolding and value
+      # unescaping) instead of a regex over the payload. A regex passes on
+      # output no calendar client would accept.
+      {:icalendar, "~> 1.1", only: :test}
     ]
   end
 

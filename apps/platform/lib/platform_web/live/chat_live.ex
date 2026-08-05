@@ -2531,7 +2531,10 @@ defmodule PlatformWeb.ChatLive do
   # partial unique indexes (`chat_spaces_unique_org_slug WHERE org_id IS NOT NULL`
   # and `chat_spaces_unique_slug ON (workspace_id, slug)`) because both
   # workspace_id and org_id are NULL on bootstrap inserts.
-  @reserved_slug_prefixes ~w(meeting- task-exec- dm- group-)
+  # The list itself now lives on `Platform.Chat.reserved_slug_prefix?/1` —
+  # `ExternalUserScope` needs the SAME answer this LiveView uses, and a second
+  # private copy is how the plug came to deny an invited member the very
+  # meeting space this LiveView would have rendered them.
 
   # Gate on the deep-link param (task 019fabe8 stage 4). Present => refuse to
   # auto-create; the caller's `is_nil(space)` branch then clears the stale
@@ -2549,7 +2552,7 @@ defmodule PlatformWeb.ChatLive do
         nil
 
       # Refuse system-managed slug prefixes regardless of pattern match
-      Enum.any?(@reserved_slug_prefixes, &String.starts_with?(slug, &1)) ->
+      Chat.reserved_slug_prefix?(slug) ->
         nil
 
       # Only bootstrap slugs that look like real channel slugs
@@ -2586,7 +2589,7 @@ defmodule PlatformWeb.ChatLive do
   # per-org channel-slug scoping ("#general" in Fabrikam vs "#general" in SXI)
   # is NEVER weakened for user-created channel slugs.
   defp system_prefix_fallback(slug) when is_binary(slug) do
-    if Enum.any?(@reserved_slug_prefixes, &String.starts_with?(slug, &1)) do
+    if Chat.reserved_slug_prefix?(slug) do
       Chat.get_space_by_slug(slug, [])
     end
   end

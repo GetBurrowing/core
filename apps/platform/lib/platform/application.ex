@@ -124,6 +124,7 @@ defmodule Platform.Application do
       |> maybe_add_wiki_indexer()
       |> maybe_add_meeting_historian_handler()
       |> maybe_add_meeting_notifier()
+      |> maybe_add_meetings_sender_seed()
       |> maybe_add_meeting_intent_classifier()
       |> maybe_add_meeting_intent_dispatcher()
       |> maybe_add_stall_registry()
@@ -206,6 +207,31 @@ defmodule Platform.Application do
   defp maybe_add_node_client(children) do
     if System.get_env("OPENCLAW_NODE_ENABLED") == "true" do
       children ++ [Platform.Federation.NodeClient]
+    else
+      children
+    end
+  end
+
+  # Meetings sender agent seed (task 019fb955 stage 2). Modelled on
+  # `maybe_add_node_client/1` above, but gated on
+  # `Platform.Meetings.Config.enabled?/0` rather than reading
+  # `MEETINGS_ENABLED` a second time — the flag is read in exactly one
+  # place so the injected-config short-circuit works everywhere.
+  #
+  # A one-shot `Task`, not a GenServer: it inserts a row and exits.
+  # `restart: :transient` so a transient DB hiccup at boot retries but a
+  # normal exit does not. Appended, so it runs after `Platform.Repo`.
+  #
+  # This seeds; it never un-seeds. See `Platform.Meetings.SenderSeed`.
+  defp maybe_add_meetings_sender_seed(children) do
+    if Platform.Meetings.Config.enabled?() do
+      children ++
+        [
+          Supervisor.child_spec({Task, fn -> Platform.Meetings.SenderSeed.ensure!() end},
+            id: :meetings_sender_seed,
+            restart: :transient
+          )
+        ]
     else
       children
     end

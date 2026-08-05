@@ -430,6 +430,34 @@ defmodule Platform.Tenancy do
 
   def external_user?(_), do: false
 
+  @doc """
+  The subset of `user_ids` that are external users, as a `MapSet`.
+
+  `external_user?/1` asked once per row is a query per row, and the
+  callers that need this — a rendered invitee list, a participant rail —
+  ask about every row they draw on every render. This is the same
+  predicate answered for a whole list in one round trip.
+
+  Ids are not validated: `m.user_id in ^user_ids` pins a UUID column, so a
+  malformed id raises `Ecto.Query.CastError` exactly as `external_user?/1`
+  would. Callers pass ids they read off rows they already loaded.
+
+  An empty list short-circuits — a `WHERE ... IN ()` query to learn
+  nothing is still a round trip.
+  """
+  @spec external_user_ids([binary()]) :: MapSet.t(binary())
+  def external_user_ids([]), do: MapSet.new()
+
+  def external_user_ids(user_ids) when is_list(user_ids) do
+    from(m in OrgMembership,
+      where: m.user_id in ^user_ids and m.external == true,
+      select: m.user_id,
+      distinct: true
+    )
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
   # ── Per-org DM allowlist (stack member 1, rbac-external-users) ─────────
   #
   # One `external_dm_allowlist_entries` row means "this user may DM anyone

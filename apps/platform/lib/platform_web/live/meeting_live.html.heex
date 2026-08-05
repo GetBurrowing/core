@@ -216,27 +216,105 @@
       />
 
       <%!-- ── Top bar ──────────────────────────────────────────────────────── --%>
-      <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
-        <%!-- Meeting name --%>
-        <div class="flex min-w-0 items-center gap-2">
+      <%!-- TOP-BAR WIDTH BUDGET (task 019fb955-f8b1 rework). Everything in this
+         header competes for one 390px-wide line on a phone, and before this
+         rework the competition had no rules: the meeting title was the ONLY
+         shrinkable item, so it absorbed the entire deficit and rendered at
+         width ZERO while the bar still overflowed to 457px inside a 390px
+         viewport, pushing two stage-mode buttons off-screen entirely.
+
+         Two things caused that, and both are fixed here:
+
+           1. The title sat next to a `flex-1` SPACER. A spacer with
+              `flex-basis: 0` contributes nothing to shrinking, so under
+              overflow it collapsed to 0 and handed the whole deficit to the
+              only `min-w-0` item — the title. The spacer is gone; the title
+              itself now grows (`grow basis-[50%]`), which right-aligns the
+              rest exactly as the spacer did while giving the title a real
+              proportional share to shrink FROM.
+
+           2. The stage-mode control claimed in its own comment to "scroll on
+              narrow viewports so it never overflows the top bar", but carried
+              `flex-shrink-0`, which made that impossible. It was the single
+              largest fixed block in the bar. It may now shrink and actually
+              use its `overflow-x-auto`.
+
+         Constraints are expressed in the LAYOUT'S OWN CURRENCY (percentages of
+         this flex line), NOT in pixels: a px floor inside a proportional
+         layout is how an earlier defect in this stack happened — the floor
+         cannot see the container it is overflowing.
+
+         The identity badges are INFORMATIONAL, the media buttons are
+         CONTROLS, so the badges yield first: capped at 25% and truncating,
+         while `[data-role="meeting-controls"]` keeps `flex-shrink-0` and its
+         44px touch targets. Acceptance bar: no horizontal PAGE scroll at
+         390px, every control reachable, and no element at width 0. --%>
+      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-base-300 bg-base-200/60 px-3 sm:gap-3">
+        <%!-- Meeting name. `grow basis-[50%] min-w-0` replaces the old
+           auto-width box + `flex-1` spacer pair: same right-alignment for
+           everything after it, but the title now has a proportional share of
+           the line instead of being the residue of everyone else's. --%>
+        <div
+          class="flex min-w-0 shrink grow basis-[50%] items-center gap-2"
+          data-role="meeting-title"
+        >
           <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
           <h1 class="truncate text-sm font-semibold">{@meeting.name}</h1>
         </div>
-
-        <div class="flex-1"></div>
 
         <%!-- Guest identity badge (task 019f498d stage 4). Only rendered on
            the guest surface (`chrome_mode == :none`) so the guest can see
            which name others in the meeting see. Mirrors the badge in
            guest_meeting_live.html.heex:117-119 verbatim so stage 5's
-           router flip is a byte-identical visual delta. --%>
+           router flip is a byte-identical visual delta.
+
+           NARROWED to `and @state == :in_meeting` (task 019fb955-f8b1
+           stage 5). `chrome_mode == :none` alone used to mean "guest",
+           because the chrome-less layout only ever served the token guest
+           flow. The `:meet_member` live_session is chrome-less too, and
+           for an invited ACCOUNT this badge rendered a blank name and the
+           wrong noun — literally " (guest)" after an empty interpolation.
+           `:state` is what actually distinguishes the two: the guest mount
+           clause sets it, the account mount leaves it nil. --%>
+        <%!-- WIDTH: `max-w-[25%] min-w-0` + an inner `truncate`. This badge is
+           byte-identical markup to the member badge below, and it had the
+           SAME defect first: a `badge` sets `white-space: nowrap`, so as a
+           flex item its min-content width IS its full text width and it could
+           not shrink at all — it took its 126px off the top and the title
+           paid. A guest on a phone has never been able to read the meeting
+           name either; the member badge did not introduce this, it merely
+           carried it to account holders. Fixed on BOTH surfaces. --%>
         <span
-          :if={@chrome_mode == :none}
-          class="badge badge-ghost gap-1 text-xs"
+          :if={@chrome_mode == :none and @state == :in_meeting}
+          class="badge badge-ghost min-w-0 max-w-[25%] shrink gap-1 overflow-hidden text-xs"
           data-role="guest-identity-badge"
         >
-          <span class="hero-user size-3.5" aria-hidden="true"></span>
-          {@display_name} (guest)
+          <span class="hero-user size-3.5 flex-shrink-0" aria-hidden="true"></span>
+          <span class="truncate">{@display_name} (guest)</span>
+        </span>
+
+        <%!-- Member identity badge (task 019fb955-f8b1 stage 5). Sibling of
+           the guest badge for the OTHER chrome-less surface: an invited
+           external account on the `meet.` host, which reaches the general
+           `mount/3` and so carries `@state == nil`. Same visual treatment,
+           the account's own name, and NO "(guest)" suffix — this viewer is
+           a Suite account, and labelling them a guest would misstate both
+           who they are and how they got in. Rendered only when the name
+           resolves; `member_display_name/1` returns nil when there is no
+           account behind the mount, and a badge naming nobody is worse
+           than no badge. --%>
+        <%!-- WIDTH: identical treatment to the guest badge above — see the
+           note there. Measured at 390x844 before this rework: this badge was
+           125.9px and collapsed the meeting-title element to width 0 (390 →
+           0/31, 430 → 0/71, 768 → 0/87.7 with the badge shown vs hidden;
+           innocent at 1280, where 214.9/214.9 is unchanged). --%>
+        <span
+          :if={@chrome_mode == :none and is_nil(@state) and @display_name}
+          class="badge badge-ghost min-w-0 max-w-[25%] shrink gap-1 overflow-hidden text-xs"
+          data-role="member-identity-badge"
+        >
+          <span class="hero-user size-3.5 flex-shrink-0" aria-hidden="true"></span>
+          <span class="truncate">{@display_name}</span>
         </span>
 
         <%!-- Local-media controls + Join/Leave CTA. Visual treatment
@@ -370,29 +448,16 @@
             </span>
           </button>
 
-          <%!-- Copy guest link (stage 4 of task 019f2483). TEMPORARY:
-             host-participant gate removed because MeetingLive's
-             "Start a meeting" handler does not currently provision
-             `host_participant_id` (only the MCP `meeting_create` path
-             does, via `maybe_default_host_participant/3` at
-             `tool_surface.ex:6471`). Until that gap closes, expose the
-             button to any current participant so testing is unblocked.
-             Follow-up: extract `maybe_default_host_participant` into the
-             `Meetings` context + call from `start_meeting` handler, then
-             restore the host-only gate. Hidden on very narrow viewports
-             to keep the top-bar from wrapping. --%>
-          <button
-            :if={@shell? and @current_participant}
-            type="button"
-            phx-click="open_guest_invite_sheet"
-            aria-label="Copy guest link"
-            title="Copy guest link"
-            data-role="meeting-copy-guest-link"
-            class="btn btn-sm btn-ghost min-h-11 gap-1.5 text-base-content/70 hidden sm:inline-flex"
-          >
-            <span class="hero-link size-4"></span>
-            <span class="hidden md:inline">Copy guest link</span>
-          </button>
+          <%!-- The meeting-wide "Copy guest link" button lived here until
+             task 019fb955-1d7b stage 1 removed it. It minted ONE
+             forwardable URL per meeting from an OPTIONAL display name, so
+             whoever opened it was unidentifiable: transcript speech could
+             not be attributed and action items had no principal. Guest
+             admission is now per-invite only — `Meetings.invite_guest/2`
+             mints a token naming a single `meeting_invites` row, which is
+             what makes a join attributable and one guest revocable
+             without invalidating the others. Do not reintroduce a
+             meeting-wide link here. --%>
 
           <%!-- task 019e420f stage 2: client-side hook keeps the click
              gesture alive across the call into getDisplayMedia(). --%>
@@ -486,7 +551,27 @@
            switching is pure presentation — the other modes' underlying
            state is untouched.
 
-           THIS IS THE TOP BAR'S ONLY FLEXIBLE REGION, and that is
+           The control scrolls on narrow viewports so it never overflows the
+           top bar — that was ALWAYS the claim here, and `flex-shrink-0` made
+           it false. A shrink-0 flex item cannot be squeezed, so
+           `overflow-x-auto` never engaged and the four buttons simply ran off
+           the right edge (measured at 390px: Gallery ending at 415.9,
+           Whiteboard at 456.9 — both outside the viewport and UNREACHABLE,
+           with no page scroll to recover them). `min-w-0 shrink` is what
+           makes the documented behaviour actually happen: the control gives
+           up width under pressure and its own scroller keeps every mode
+           reachable.
+
+           The same defect was found independently on `main` during the
+           stage-5 e2e review of task 019fbaac, with its own measurements;
+           that account is kept below verbatim because it names a second
+           casualty (the chat-panel drawer toggle) this one does not. NOTE
+           that the "only flexible region" claim it makes is no longer true
+           after this rollup: the meeting title and the identity badge are
+           shrinkable too (see the header comments above). The conclusion —
+           do not re-add `flex-shrink-0` — is unchanged and holds for both.
+
+           THIS WAS THE TOP BAR'S ONLY FLEXIBLE REGION, and that is
            load-bearing. Until the stage-5 e2e review of task 019fbaac
            the class list here was `join flex-shrink-0 overflow-x-auto`,
            alongside a comment
@@ -525,7 +610,7 @@
            in tasks_live/chat_live: a classic 15px scrollbar inside this
            48px (`h-12`) bar would eat the row it is scrolling. --%>
         <div
-          class="join min-w-0 overflow-x-auto"
+          class="join min-w-0 shrink overflow-x-auto"
           style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
           role="group"
           aria-label="Stage mode"
@@ -1330,179 +1415,6 @@
       agent_options={@intent_agent_options}
     />
 
-    <div
-      :if={@shell? and @show_guest_invite_sheet}
-      class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
-      data-role="guest-invite-sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="guest-invite-sheet-title"
-    >
-      <%!-- Backdrop (click to dismiss) --%>
-      <div
-        class="absolute inset-0 bg-black/40"
-        phx-click="close_guest_invite_sheet"
-        aria-hidden="true"
-        data-role="guest-invite-sheet-backdrop"
-      >
-      </div>
-
-      <%!-- Sheet panel --%>
-      <div class="relative w-full max-w-lg mx-auto rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[75vh] overflow-y-auto">
-        <%!-- Header --%>
-        <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
-          <div class="flex items-center gap-2 min-w-0">
-            <span class="hero-link size-5 flex-shrink-0 text-primary"></span>
-            <h2 id="guest-invite-sheet-title" class="text-base font-semibold">
-              Copy guest link
-            </h2>
-          </div>
-          <button
-            type="button"
-            phx-click="close_guest_invite_sheet"
-            class="btn btn-sm btn-ghost btn-square"
-            aria-label="Close"
-            data-role="guest-invite-sheet-close"
-          >
-            <span class="hero-x-mark size-4"></span>
-          </button>
-        </div>
-
-        <%!-- Form --%>
-        <form
-          id="guest-invite-form"
-          phx-submit="generate_guest_invite"
-          phx-change="guest_invite_form_change"
-          class="flex flex-col gap-3 px-4 py-4"
-        >
-          <%!-- Guest name (optional) --%>
-          <div class="flex flex-col gap-1">
-            <label
-              for="guest-invite-display-name"
-              class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-            >
-              Guest name <span class="text-base-content/40 normal-case">(optional)</span>
-            </label>
-            <input
-              id="guest-invite-display-name"
-              type="text"
-              name="guest_invite[display_name]"
-              value={@guest_invite_form["display_name"]}
-              autocomplete="off"
-              placeholder="e.g. Juno Fairbanks"
-              class="input input-bordered w-full text-sm"
-              data-role="guest-invite-display-name"
-            />
-          </div>
-
-          <%!-- Expiry (required) --%>
-          <div class="flex flex-col gap-1">
-            <label
-              for="guest-invite-expires-in-hours"
-              class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-            >
-              Link expires in
-            </label>
-            <select
-              id="guest-invite-expires-in-hours"
-              name="guest_invite[expires_in_hours]"
-              class="select select-bordered w-full text-sm"
-              data-role="guest-invite-expires-in-hours"
-            >
-              <option value="1" selected={@guest_invite_form["expires_in_hours"] == "1"}>
-                1 hour
-              </option>
-              <option value="24" selected={@guest_invite_form["expires_in_hours"] == "24"}>
-                24 hours
-              </option>
-              <option value="72" selected={@guest_invite_form["expires_in_hours"] == "72"}>
-                72 hours
-              </option>
-            </select>
-          </div>
-
-          <%!-- Footer actions (pre-generation) --%>
-          <div :if={is_nil(@guest_invite_url)} class="flex items-center justify-end gap-2 pt-1">
-            <button
-              type="button"
-              phx-click="close_guest_invite_sheet"
-              class="btn btn-ghost btn-sm"
-              data-role="guest-invite-cancel"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              class="btn btn-primary btn-sm gap-1.5"
-              data-role="guest-invite-submit"
-            >
-              <span class="hero-link size-4"></span>
-              <span>Generate link</span>
-            </button>
-          </div>
-        </form>
-
-        <%!-- Post-generation section: read-only URL + copy button + hint --%>
-        <div
-          :if={@guest_invite_url}
-          class="flex flex-col gap-2 border-t border-base-300 px-4 py-4"
-          data-role="guest-invite-generated"
-        >
-          <label
-            for="guest-invite-url"
-            class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-          >
-            Guest link
-          </label>
-          <div class="flex items-stretch gap-2">
-            <input
-              id="guest-invite-url"
-              type="text"
-              readonly
-              value={@guest_invite_url}
-              class="input input-bordered w-full text-xs font-mono"
-              data-role="guest-invite-url"
-            />
-            <button
-              id="guest-invite-copy-btn"
-              type="button"
-              phx-hook="CopyToClipboard"
-              phx-click="copy_guest_invite"
-              data-clipboard-text={@guest_invite_url}
-              data-role="guest-invite-copy"
-              class="btn btn-primary btn-sm gap-1.5 flex-shrink-0"
-            >
-              <span class="hero-clipboard size-4"></span>
-              <span>Copy</span>
-            </button>
-          </div>
-          <p class="text-xs text-base-content/60">
-            When they open this, they'll join as guest.
-          </p>
-          <p
-            :if={
-              @guest_invite_form["display_name"] &&
-                String.trim(@guest_invite_form["display_name"]) != ""
-            }
-            class="text-xs text-base-content/50"
-            data-role="guest-invite-display-name-mode"
-          >
-            {String.trim(@guest_invite_form["display_name"])} will land directly.
-          </p>
-          <p
-            :if={
-              is_nil(@guest_invite_form["display_name"]) ||
-                String.trim(@guest_invite_form["display_name"]) == ""
-            }
-            class="text-xs text-base-content/50"
-            data-role="guest-invite-display-name-mode"
-          >
-            They'll enter their name before joining.
-          </p>
-        </div>
-      </div>
-    </div>
-
     <%!-- ── Closed-captions overlay (task 019f3f17 stage 1 + stage 2) ────
        The MeetingCaptions JS hook binds here, listens for `meeting:caption`
        CustomEvents dispatched by MeetingRoom, and renders up to
@@ -1570,98 +1482,1061 @@
        meeting linking to `/meetings/<slug>`. The "Start meeting" FAB
        is owned by stage 2 and lands later — the empty-state CTA below
        is the only action surface in this stage. --%>
+    <%!-- Resolved ONCE for the whole arm (task 019fb954-8ead stage 4).
+       The desktop panel and the mobile sheet render the same meeting and
+       the same invitee rows; deriving each of them where it is used would
+       issue the invite queries twice per render and let the two surfaces
+       disagree if one call ever picked up different options. --%>
+    <% detail_meeting = selected_meeting(assigns) %>
+    <% detail_invites = (detail_meeting && detail_invite_rows(detail_meeting)) || [] %>
     <div
       class="flex h-full min-h-0 flex-col bg-base-100 text-base-content"
       data-page="meetings-index"
     >
-      <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
+      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-base-300 bg-base-200/60 px-3 sm:gap-3">
         <div class="flex min-w-0 items-center gap-2">
           <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
           <h1 class="truncate text-sm font-semibold">Meetings</h1>
         </div>
 
+        <%!-- ── Calendar · Archive toggle (task 019fb954-c848) ────────────
+           URL state, not an assign: `?view=archive` survives a reload, a
+           pasted link and the back button. The calendar half is the
+           default, so its segment drops every archive parameter rather
+           than carrying a dead `view=calendar` around. Labels shorten to
+           `Cal` on phones per the mobile frame; both segments are 44px
+           tall at every width. --%>
+        <div
+          class="flex flex-shrink-0 items-center gap-0.5 rounded-lg border border-base-300 bg-base-100 p-0.5"
+          data-role="meetings-view-toggle"
+          role="group"
+          aria-label="Meetings view"
+        >
+          <.link
+            patch={~p"/meetings"}
+            data-view="calendar"
+            aria-current={@meetings_view == :calendar && "page"}
+            class={[
+              "flex min-h-11 items-center rounded-md px-3 text-xs font-medium transition sm:min-h-9",
+              @meetings_view == :calendar &&
+                "bg-base-200 text-base-content shadow-sm",
+              @meetings_view != :calendar && "text-base-content/60 hover:text-base-content"
+            ]}
+          >
+            <span class="sm:hidden">Cal</span>
+            <span class="hidden sm:inline">Calendar</span>
+          </.link>
+          <.link
+            patch={archive_path(assigns)}
+            data-view="archive"
+            aria-current={@meetings_view == :archive && "page"}
+            class={[
+              "flex min-h-11 items-center rounded-md px-3 text-xs font-medium transition sm:min-h-9",
+              @meetings_view == :archive &&
+                "bg-base-200 text-base-content shadow-sm",
+              @meetings_view != :archive && "text-base-content/60 hover:text-base-content"
+            ]}
+          >
+            Archive
+          </.link>
+        </div>
+
         <div class="flex-1"></div>
 
-        <span class="text-xs text-base-content/50" data-role="meetings-count">
-          {length(assigns[:meetings] || [])} total
+        <%!-- Counts what the GRID DRAWS, not what the LiveView loaded.
+           This read `length(@meetings) total` — a binding left over from
+           the meetings LIST this surface used to be, where `@meetings`
+           was the thing on screen and the count was honest. The calendar
+           replaced the list and the chip kept pointing at the old
+           collection, so it counted rows the grid deliberately refuses to
+           place (cancelled, and never-scheduled) and reported 7 beside 5
+           blocks. Worse than stale: `@meetings` is
+           `Meetings.list_all_meetings/0`, which is unscoped and unbounded
+           in time — the archive half already refuses to source from it
+           for that reason. --%>
+        <span
+          :if={@meetings_view == :calendar}
+          class="text-xs text-base-content/50"
+          data-role="meetings-count"
+        >
+          {calendar_week_count_label(
+            calendar_week_meeting_count(
+              @calendar_week_meetings,
+              @calendar_anchor_date,
+              @calendar_time_zone,
+              @calendar_hour_window
+            )
+          )}
         </span>
+
+        <%!-- MATCHED of total, not a bare total — see `archive_count_label/2`.
+           Desktop only: the mobile frame moves this string onto the results
+           section heading, so on a phone it renders there instead. --%>
+        <span
+          :if={@meetings_view == :archive}
+          class="hidden text-xs text-base-content/50 sm:inline"
+          data-role="archive-count"
+        >
+          {archive_count_label(@archive_result, "filtered")}
+        </span>
+
+        <%!-- ── Desktop `New meeting` button (task 019fb954-8ead stage 5) ──
+           The create path the frames put in the toolbar at `lg`, where a
+           corner FAB is the wrong affordance for a pointer surface. It
+           REUSES `open_start_meeting_sheet` — the same event the FAB
+           pushes, the same sheet — so there is one create flow with two
+           entry points rather than two flows that can drift.
+
+           `hidden lg:inline-flex` is the exact inverse of the FAB's
+           `lg:hidden`: below `lg` this is not drawn and the FAB is the
+           only create path; at `lg` and above they swap. --%>
+        <button
+          type="button"
+          phx-click="open_start_meeting_sheet"
+          data-role="new-meeting-button"
+          class="btn btn-primary btn-sm hidden lg:inline-flex gap-1.5"
+        >
+          <span class="hero-plus size-4"></span> New meeting
+        </button>
       </header>
 
-      <%= if assigns[:meetings] in [nil, []] do %>
-        <%!-- Empty state. Mirrors the FAB icon + label so the visual
-           vocabulary stays consistent: a video camera glyph plus
-           "Start a meeting" wording. The FAB itself sits at the
-           bottom-right of the page. --%>
-        <div
-          class="flex flex-1 flex-col items-center justify-center px-6 text-center"
-          data-empty-state="meetings-index"
-        >
-          <span class="hero-video-camera size-12 text-base-content/30"></span>
-          <h2 class="mt-3 text-lg font-semibold">No meetings yet</h2>
-          <p class="mt-1 max-w-sm text-sm text-base-content/50">
-            Meetings live here once they're scheduled or started. Spin one up to gather your collaborators around shared canvases, screen-shares, and threads.
-          </p>
-          <button
-            type="button"
-            phx-click="open_start_meeting_sheet"
-            class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
-            data-action="open-start-meeting-sheet"
-          >
-            <span class="hero-video-camera size-4"></span>
-            <span>Start a meeting</span>
-          </button>
-        </div>
-      <% else %>
-        <div
-          class="flex-1 overflow-y-auto px-3 py-3 sm:px-6 sm:py-5"
-          data-region="meetings-list"
-        >
-          <div class="mx-auto flex max-w-3xl flex-col gap-6">
-            <%= for section <- meeting_status_sections(),
-                  rows = Map.get(@grouped_meetings, section, []),
-                  rows != [] do %>
-              <section data-section={section}>
-                <header class="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                  <span class={[meeting_section_icon(section), "size-4 text-base-content/60"]}>
-                  </span>
-                  <span>{meeting_section_label(section)}</span>
-                  <span class="text-base-content/30">·</span>
-                  <span class="text-base-content/40">{length(rows)}</span>
-                </header>
+      <%!-- ── Archive pane (task 019fb954-c848) ───────────────────────────
+         The index's second half. The `:if={@meetings_view == :calendar}`
+         guards on the empty-state and `data-region="meetings-list"` blocks
+         below are the ONLY edit this task makes to the calendar side — the
+         two panes are mutually exclusive, expressed as a guard on each
+         root rather than as a wrapper so the calendar half's markup keeps
+         its exact shape and indentation for the sibling that owns it.
 
-                <ul class="flex flex-col gap-1.5" data-section-rows={section}>
-                  <%= for meeting <- rows do %>
-                    <li>
-                      <.link
-                        navigate={~p"/meetings/#{meeting.slug}"}
-                        class="group flex items-center gap-3 rounded-lg border border-base-300 bg-base-100 px-3 py-2.5 transition hover:border-primary/50 hover:bg-base-200/40"
-                        data-role="meeting-row"
-                        data-meeting-id={meeting.id}
-                        data-meeting-status={meeting.status}
+         "Also in this range, no match" is the canvas's own heading, and it
+         presupposes a date range that frame 4's filter bar does not
+         contain (search, four artifact chips, person, project — no date
+         picker). That is a real gap in the design, resolved deliberately
+         rather than silently: "this range" here IS the full in-scope
+         archive — every ended or cancelled meeting the viewer can see. A
+         bounded range would be an additive control in the same bar and
+         would not change this heading. --%>
+      <div
+        :if={@meetings_view == :archive}
+        class="flex min-h-0 flex-1 flex-col"
+        data-region="meetings-archive"
+      >
+        <%!-- Filter bar. Search and project are one form so a change to
+           either carries the other into the URL; the chips are links for
+           the same reason. Everything lands in `handle_params/3`, so a
+           result set is a URL somebody else can open. --%>
+        <form
+          class="flex flex-shrink-0 flex-col gap-2 border-b border-base-300 bg-base-200/40 px-3 py-2 sm:flex-row sm:items-center sm:px-4"
+          phx-change="archive_filter"
+          phx-submit="archive_filter"
+        >
+          <label class="flex min-h-11 flex-shrink-0 items-center gap-2 rounded-lg border border-base-300 bg-base-100 px-3 sm:w-72">
+            <span class="hero-magnifying-glass size-4 flex-shrink-0 text-base-content/40"></span>
+            <input
+              type="search"
+              name="q"
+              value={@archive_query}
+              placeholder="Search meetings"
+              autocomplete="off"
+              aria-label="Search the meetings archive"
+              phx-debounce="300"
+              data-role="archive-search"
+              class="w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-base-content/40"
+            />
+          </label>
+
+          <%!-- One row on every viewport; the phone SCROLLS it sideways
+             rather than wrapping, so the results start at the same place
+             regardless of how many chips there are. --%>
+          <div
+            class="-mx-3 flex items-center gap-1.5 overflow-x-auto px-3 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0"
+            data-role="archive-filter-chips"
+          >
+            <.link
+              :for={type <- Archive.types()}
+              patch={archive_toggle_types_path(assigns, type)}
+              data-role="archive-type-chip"
+              data-type={type}
+              data-active={to_string(type in @archive_types)}
+              class={[
+                "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
+                type in @archive_types && "border-primary bg-primary text-primary-content",
+                type not in @archive_types &&
+                  "border-base-300 bg-base-100 text-base-content/60 hover:text-base-content"
+              ]}
+            >
+              <span class={[archive_type_icon(type), "size-3.5 flex-shrink-0"]}></span>
+              <span class="sm:hidden">{archive_type_short_label(type)}</span>
+              <span class="hidden sm:inline">{archive_type_label(type)}</span>
+              <span
+                :if={type in @archive_types}
+                class="font-mono text-[10px] opacity-75"
+                data-role="archive-type-count"
+              >
+                {Map.get(@archive_result.type_counts, type, 0)}
+              </span>
+            </.link>
+
+            <.link
+              patch={archive_person_path(assigns)}
+              data-role="archive-person-chip"
+              data-active={to_string(@archive_person_id != nil)}
+              class={[
+                "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
+                @archive_person_id && "border-primary bg-primary text-primary-content",
+                is_nil(@archive_person_id) &&
+                  "border-base-300 bg-base-100 text-base-content/60 hover:text-base-content"
+              ]}
+            >
+              <span class="hero-user size-3.5 flex-shrink-0"></span>
+              <span>{archive_person_label(assigns)}</span>
+            </.link>
+
+            <label class={[
+              "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
+              @archive_project_id && "border-primary bg-primary text-primary-content",
+              is_nil(@archive_project_id) && "border-base-300 bg-base-100 text-base-content/60"
+            ]}>
+              <span class="hero-folder size-3.5 flex-shrink-0"></span>
+              <select
+                name="project_id"
+                aria-label="Filter the archive by project"
+                data-role="archive-project-filter"
+                class="max-w-36 truncate bg-transparent text-xs outline-none"
+              >
+                <option value="" selected={is_nil(@archive_project_id)}>Any project</option>
+                <option
+                  :for={project <- assigns[:projects] || []}
+                  value={project.id}
+                  selected={project.id == @archive_project_id}
+                >
+                  {project.name}
+                </option>
+              </select>
+            </label>
+          </div>
+
+          <div class="hidden flex-1 sm:block"></div>
+
+          <span
+            class="hidden flex-shrink-0 text-[10px] text-base-content/40 sm:inline"
+            data-role="archive-sort-label"
+          >
+            {archive_sort_label(@archive_result)}
+          </span>
+        </form>
+
+        <%!-- Results. The bottom padding clears the safe area AND the mobile
+           bottom nav, matching the FAB offset below — nothing in the
+           archive may come to rest under the nav row. --%>
+        <div
+          class="flex-1 overflow-y-auto px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+5rem)] sm:px-6 sm:py-5"
+          data-role="archive-results"
+        >
+          <div class="mx-auto flex max-w-[840px] flex-col gap-5">
+            <%!-- ── The two empty states ──────────────────────────────────
+               Deliberately NOT one card with a swapped noun. "You have
+               nothing archived" and "your search reached nothing" are
+               different facts with different next actions, and a shared
+               component would let a future edit collapse them back into the
+               single ambiguous card this surface started with. They carry
+               different `data-empty-state` values, different glyphs,
+               different headings, and only one of them offers a control —
+               there is nothing to clear when there is nothing to find.
+
+               Their bottom padding clears the safe area and the mobile
+               bottom nav on its own, because a centred card in a short
+               archive is exactly the element that comes to rest under the
+               nav row. --%>
+            <div
+              :if={archive_no_meetings?(@archive_result)}
+              class="flex flex-col items-center justify-center py-16 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+4rem)] text-center sm:pb-16"
+              data-empty-state="archive-no-meetings"
+            >
+              <span class="hero-video-camera size-12 text-base-content/30"></span>
+              <h2 class="mt-3 text-lg font-semibold" data-role="archive-no-meetings-heading">
+                No meetings yet
+              </h2>
+            </div>
+
+            <%!-- The matched partition is empty, but the archive is not — so
+               this state renders ABOVE the "Also in this range, no match"
+               section rather than instead of it. Showing the meetings that
+               exist is precisely what distinguishes it from the state above,
+               and hiding them would make the two indistinguishable to a
+               reader no matter what the markup says. --%>
+            <div
+              :if={archive_no_matches?(@archive_result)}
+              class="flex flex-col items-center justify-center py-16 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+4rem)] text-center sm:pb-16"
+              data-empty-state="archive-no-matches"
+            >
+              <span class="hero-magnifying-glass size-12 text-base-content/30"></span>
+              <h2 class="mt-3 text-lg font-semibold" data-role="archive-no-matches-heading">
+                No matches
+              </h2>
+              <.link
+                patch={archive_clear_path(assigns)}
+                data-action="archive-clear-filters"
+                class="mt-4 inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-base-300 bg-base-100 px-4 text-sm font-medium hover:border-primary hover:text-primary"
+              >
+                <span class="hero-arrow-uturn-left size-4 flex-shrink-0"></span>
+                <span>Clear search and filters</span>
+              </.link>
+            </div>
+
+            <%= for {section, index} <- Enum.with_index(archive_sections(@archive_result)) do %>
+              <section data-archive-section={section.key}>
+                <h2 class="mb-2 flex items-baseline gap-2 text-[10px] font-semibold uppercase tracking-widest text-base-content/40">
+                  <%!-- The count lives in the header on desktop and HERE on a
+                     phone, which has no room for it up top. --%>
+                  <span :if={index == 0} class="sm:hidden" data-role="archive-count-mobile">
+                    {archive_count_label(@archive_result, "by relevance")}
+                  </span>
+                  <span
+                    :if={section.heading}
+                    class={index == 0 && "hidden sm:inline"}
+                    data-role={"archive-#{section.key}-heading"}
+                  >
+                    {section.heading}
+                  </span>
+                </h2>
+
+                <div class="flex flex-col gap-2">
+                  <%= for entry <- section.rows,
+                        artifacts = archive_artifacts(@archive_artifacts, entry) do %>
+                    <article
+                      class={[
+                        "flex gap-3 rounded-lg border border-base-300 bg-base-100 p-2.5",
+                        section.dim? && "opacity-60"
+                      ]}
+                      data-role="archive-row"
+                      data-meeting-id={entry.id}
+                      data-meeting-status={entry.status}
+                    >
+                      <%!-- Date gutter — desktop only. The phone folds the
+                         date into the subtitle instead. --%>
+                      <div
+                        class="hidden w-11 flex-shrink-0 border-r border-base-300 pr-2.5 text-center sm:block"
+                        data-role="archive-row-date"
                       >
-                        <span class="hero-video-camera size-5 flex-shrink-0 text-base-content/40 group-hover:text-primary">
+                        <div class="text-[9px] uppercase tracking-wide text-base-content/40">
+                          {archive_row_month(entry, @archive_time_zone)}
+                        </div>
+                        <div class="text-lg font-semibold leading-tight text-base-content/70">
+                          {archive_row_day(entry, @archive_time_zone)}
+                        </div>
+                      </div>
+
+                      <div class="flex min-w-0 flex-1 flex-col">
+                        <.link
+                          navigate={~p"/meetings/#{entry.slug}"}
+                          class="flex min-h-11 items-center text-sm font-semibold hover:text-primary sm:min-h-0"
+                          data-role="archive-row-title"
+                        >
+                          <span class="truncate">{entry.name}</span>
+                        </.link>
+
+                        <span
+                          class={[
+                            "truncate text-xs sm:hidden",
+                            entry.status == "cancelled" && "text-error",
+                            entry.status != "cancelled" && "text-base-content/50"
+                          ]}
+                          data-role="archive-row-subtitle-mobile"
+                        >
+                          {archive_row_mobile_subtitle(entry, artifacts, @archive_time_zone)}
                         </span>
-                        <div class="flex min-w-0 flex-1 flex-col">
-                          <span class="truncate text-sm font-medium text-base-content">
-                            {meeting.name}
+                        <span
+                          class={[
+                            "hidden truncate text-xs sm:block",
+                            entry.status == "cancelled" && "text-error",
+                            entry.status != "cancelled" && "text-base-content/50"
+                          ]}
+                          data-role="archive-row-subtitle"
+                        >
+                          {archive_row_subtitle(entry, artifacts)}
+                        </span>
+
+                        <%!-- Artifact chips WRAP at every width — they are the
+                           row's content, not its chrome. --%>
+                        <div class="mt-1.5 flex flex-wrap gap-1.5" data-role="archive-row-chips">
+                          <span
+                            :for={chip <- artifacts.chips}
+                            class={[
+                              "inline-flex min-h-11 items-center gap-1.5 rounded border px-2 text-[10px] sm:min-h-0 sm:py-0.5",
+                              archive_chip_class(chip.type)
+                            ]}
+                            data-role="archive-chip"
+                            data-chip-type={chip.type}
+                          >
+                            <span class={[archive_chip_icon(chip.type), "size-3 flex-shrink-0"]}>
+                            </span>
+                            <span
+                              class={archive_chip_short_label(chip) && "hidden sm:inline"}
+                              data-role="archive-chip-label"
+                            >
+                              {chip.label}
+                            </span>
+                            <span
+                              :if={archive_chip_short_label(chip)}
+                              class="sm:hidden"
+                              data-role="archive-chip-label-short"
+                            >
+                              {archive_chip_short_label(chip)}
+                            </span>
                           </span>
-                          <span class="truncate text-xs text-base-content/50">
-                            {meeting.slug}
+
+                          <span
+                            :if={artifacts.chips == []}
+                            class="inline-flex min-h-11 items-center rounded border border-base-300 bg-base-200 px-2 font-mono text-[10px] text-base-content/40 sm:min-h-0 sm:py-0.5"
+                            data-role="archive-no-artifacts"
+                          >
+                            no artifacts
                           </span>
                         </div>
-                        <span class={meeting_status_pill(section)} data-role="meeting-status-pill">
-                          <span class={[meeting_section_icon(section), "size-3"]}></span>
-                          <span>{meeting_section_label(section)}</span>
+
+                        <%!-- The phone drops the stack BELOW the chips; the
+                           desktop column keeps it to the right. --%>
+                        <div
+                          class="mt-2 flex items-center sm:hidden"
+                          data-role="archive-attendees-mobile"
+                          data-attendee-count={artifacts.attendee_count}
+                        >
+                          <span
+                            :for={_ring <- archive_attendee_rings(artifacts)}
+                            class="-ml-1.5 flex size-5 items-center justify-center rounded-full bg-base-300 text-base-content/60 ring-2 ring-base-100 first:ml-0"
+                          >
+                            <span class="hero-user size-3"></span>
+                          </span>
+                          <span
+                            :if={archive_attendee_overflow(artifacts) > 0}
+                            class="ml-1.5 text-[10px] text-base-content/40"
+                          >
+                            +{archive_attendee_overflow(artifacts)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div
+                        class="hidden flex-shrink-0 items-start pl-1.5 sm:flex"
+                        data-role="archive-attendees"
+                        data-attendee-count={artifacts.attendee_count}
+                      >
+                        <span
+                          :for={_ring <- archive_attendee_rings(artifacts)}
+                          class="-ml-1.5 flex size-5 items-center justify-center rounded-full bg-base-300 text-base-content/60 ring-2 ring-base-100 first:ml-0"
+                        >
+                          <span class="hero-user size-3"></span>
                         </span>
-                      </.link>
-                    </li>
+                        <span
+                          :if={archive_attendee_overflow(artifacts) > 0}
+                          class="ml-1.5 text-[10px] text-base-content/40"
+                        >
+                          +{archive_attendee_overflow(artifacts)}
+                        </span>
+                      </div>
+                    </article>
                   <% end %>
-                </ul>
+                </div>
               </section>
             <% end %>
           </div>
         </div>
-      <% end %>
+      </div>
+
+      <%!-- ── Calendar pane (task 019fb954-8ead) ──────────────────────────
+         The region element and its `data-region` attribute are the
+         archive sibling's pin and are reproduced verbatim; only its
+         CHILDREN belong to this task.
+
+         It has moved OUT of the else-arm of `if assigns[:meetings] in
+         [nil, []]` and now renders whenever the calendar pane is
+         showing. A calendar draws its chrome regardless of how many
+         meetings it has: an empty week grid IS the answer to "what is
+         on this week?", where a centred "no meetings yet" card is an
+         answer to a question nobody asked of a calendar. The design
+         frame draws empty day columns for exactly this reason.
+
+         The `data-empty-state="meetings-index"` card and the grouped
+         section/row list that stage 2 kept here as the below-`lg`
+         surface are now GONE: the week strip and day view below are
+         what stage 2 was holding the place for. Leaving them would
+         draw both surfaces on a phone, one under the other. --%>
+      <%!-- Stage 4 wraps the calendar region and the detail panel in one
+         ROW so the panel can be frame 1's right rail. The region element
+         below keeps its own `:if` even though this wrapper now carries the
+         same guard: it and its `data-region` are the archive sibling's
+         pin, reproduced byte-identically so a rollup merge has nothing to
+         resolve on that line. The redundancy is the cheaper of the two. --%>
+      <div :if={@meetings_view == :calendar} class="flex min-h-0 flex-1">
+        <div
+          :if={@meetings_view == :calendar}
+          class="flex-1 overflow-y-auto px-3 py-3 sm:px-6 sm:py-5"
+          data-region="meetings-list"
+        >
+          <%!-- Week nav. Renders at every width — paging the week and
+           naming the zone are not desktop concerns, and stage 3's
+           mobile strip sits under this rather than replacing it. --%>
+          <div class="mb-3 flex items-center gap-1" data-role="calendar-week-nav">
+            <button
+              type="button"
+              phx-click="calendar_prev_week"
+              aria-label="Previous week"
+              class="btn btn-ghost btn-sm btn-square min-h-11"
+            >
+              <span class="hero-chevron-left size-4"></span>
+            </button>
+
+            <span class="px-1 text-sm font-semibold" data-role="calendar-week-label">
+              {calendar_week_label(@calendar_anchor_date)}
+            </span>
+
+            <button
+              type="button"
+              phx-click="calendar_next_week"
+              aria-label="Next week"
+              class="btn btn-ghost btn-sm btn-square min-h-11"
+            >
+              <span class="hero-chevron-right size-4"></span>
+            </button>
+
+            <button
+              type="button"
+              phx-click="calendar_today"
+              class="btn btn-outline btn-sm ml-1 min-h-11"
+            >
+              Today
+            </button>
+
+            <div class="flex-1"></div>
+
+            <%!-- Only when the zone is KNOWN. On the dead render there is
+             no resolved zone, and printing `UTC` there would be a
+             confident wrong answer — a calendar silently drawn in
+             server time is wrong in a way nobody notices until they
+             miss a call. --%>
+            <span
+              :if={@calendar_time_zone}
+              class="truncate font-mono text-[10px] text-base-content/40"
+              data-role="calendar-timezone"
+            >
+              {@calendar_time_zone}
+            </span>
+          </div>
+
+          <%!-- ── Desktop week grid (`lg` and up) ──────────────────────────
+           `hidden lg:grid` is one decision in two classes and both are
+           load-bearing: `grid` alone would draw seven ~45px columns on
+           a phone, `hidden` alone would draw nothing anywhere. The
+           gutter is 3.25rem (52px) and each hour row is the same, so
+           the seven day columns inherit their height from the gutter
+           and no pixel arithmetic reaches the day cells. --%>
+          <div
+            data-role="calendar-week-grid"
+            class="hidden overflow-hidden rounded-lg border border-base-300 bg-base-100 lg:grid"
+            style="grid-template-columns: 3.25rem repeat(7, minmax(0, 1fr))"
+          >
+            <%!-- Header row: the gutter's corner, then seven day headings. --%>
+            <div class="border-b border-base-300 bg-base-200/40"></div>
+            <div
+              :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
+              class="flex flex-col items-center gap-1 border-b border-l border-base-300 bg-base-200/40 py-2"
+              data-role="calendar-week-day-heading"
+              data-date={Date.to_iso8601(day.date)}
+            >
+              <span class="text-[10px] font-semibold uppercase tracking-widest text-base-content/50">
+                {calendar_weekday_abbrev(day.date)}
+              </span>
+              <span
+                class={[
+                  "size-6 text-center text-sm font-semibold leading-6",
+                  day.today? && "rounded-full bg-primary text-primary-content"
+                ]}
+                data-today={day.today? && "true"}
+              >
+                {day.date.day}
+              </span>
+            </div>
+
+            <%!-- Body row: the hour gutter, then seven day columns. --%>
+            <div class="flex flex-col bg-base-200/20">
+              <div
+                :for={hour <- calendar_hours(@calendar_hour_window)}
+                class="pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-base-content/40"
+                style={calendar_hour_row_style(:week)}
+              >
+                {calendar_hour_label(hour)}
+              </div>
+            </div>
+
+            <div
+              :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
+              class="relative border-l border-base-300"
+              style={calendar_hour_rules_style(:week)}
+              data-role="calendar-day-column"
+              data-date={Date.to_iso8601(day.date)}
+            >
+              <%!-- The now-line lives INSIDE today's column, never spanning
+               the grid: "now" is a fact about one day, and a rule drawn
+               across all seven says it is 2:14 PM on Sunday too. It is
+               absent entirely when the zone is unresolved or the current
+               hour falls outside the drawn window.
+
+               `@calendar_now` is passed IN rather than read inside the
+               helper. That assign is what makes the line move: LiveView
+               re-evaluates this expression when one of the assigns it
+               names changes, and only then, so a helper reading the
+               clock on its own draws whatever time the last unrelated
+               re-render happened at. --%>
+              <div
+                :for={
+                  offset <-
+                    calendar_now_line(
+                      day.today?,
+                      @calendar_time_zone,
+                      @calendar_hour_window,
+                      @calendar_now
+                    )
+                }
+                class="pointer-events-none absolute inset-x-0 z-10 h-[1.5px] bg-error"
+                style={"top:#{offset}%"}
+                data-role="calendar-now-line"
+                aria-hidden="true"
+              >
+                <span class="absolute -left-px -top-[3px] size-2 rounded-full bg-error"></span>
+              </div>
+
+              <%!-- The block carries NO pixel minimum height. It used to,
+               and that is the defect the sponsor caught: a 44px floor in a
+               52px hour row makes a half-hour block 18px taller than its
+               own slot, so the next block starts inside it and the two
+               labels overprint. The box is now exactly its share of the
+               window, `CalendarWindow`'s half-hour floor keeps the
+               smallest one from being a hairline, and blocks that
+               genuinely coincide are separated sideways by lanes rather
+               than stacked. --%>
+              <button
+                :for={
+                  {meeting, placement} <-
+                    calendar_day_events(
+                      @calendar_week_meetings,
+                      day.date,
+                      @calendar_time_zone,
+                      @calendar_hour_window,
+                      :week
+                    )
+                }
+                type="button"
+                phx-click="select_meeting"
+                phx-value-id={meeting.id}
+                class={
+                  [
+                    "absolute flex overflow-hidden rounded-md border-l-[3px] px-1.5 py-1 text-left",
+                    # A half-hour block is 26px here, which two lines do not
+                    # fit in. Dropping to one line is the honest answer —
+                    # growing the box instead is what collided.
+                    placement.compact? && "flex-row items-center gap-1.5",
+                    !placement.compact? && "flex-col items-start",
+                    meeting.status == "live" && "border-success bg-success/15 hover:bg-success/25",
+                    meeting.status != "live" && "border-primary bg-primary/15 hover:bg-primary/25",
+                    @selected_meeting_id == meeting.id && "ring-2 ring-primary"
+                  ]
+                }
+                style={calendar_block_style(placement, :week)}
+                data-role="calendar-event"
+                data-meeting-id={meeting.id}
+                data-meeting-status={meeting.status}
+                data-lane={placement.lane}
+                data-lanes={placement.lanes}
+                data-compact={placement.compact? && "true"}
+                data-live={meeting.status == "live" && "true"}
+                data-selected={@selected_meeting_id == meeting.id && "true"}
+              >
+                <%!-- On one line the two labels compete for the same
+                 width, and in a three-lane column there is not enough for
+                 both. The NAME wins: where a block sits already says when
+                 it is, so a block showing only `14:15` identifies nothing,
+                 while `Bud…` at quarter past still does. `flex-auto` (not
+                 `flex-1`) is what makes that real — a zero basis cannot
+                 claim space back off a shrinking sibling. --%>
+                <span class={[
+                  "flex min-w-0 items-center gap-1",
+                  placement.compact? && "flex-auto",
+                  !placement.compact? && "w-full"
+                ]}>
+                  <%!-- A shape, not a glyph: "live" is carried by motion
+                   and by the accent token, so it survives both a
+                   missing icon font and a monochrome reading. --%>
+                  <span
+                    :if={meeting.status == "live"}
+                    class="size-1.5 flex-shrink-0 rounded-full bg-success animate-pulse"
+                    data-role="calendar-event-live-dot"
+                  >
+                  </span>
+                  <span class="truncate text-[11px] font-medium leading-tight text-base-content">
+                    {meeting.name}
+                  </span>
+                </span>
+                <span class={[
+                  "truncate text-[10px] leading-tight text-base-content/60",
+                  placement.compact? && "min-w-0 shrink-[10]"
+                ]}>
+                  {calendar_event_time(meeting, @calendar_time_zone)}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <%!-- ── Below `lg`: week strip over a single-column day view ─────
+           A DIFFERENT INFORMATION ARCHITECTURE, not a narrower grid.
+           Seven columns at 375px leaves ~45px per day — titles are
+           unreadable and blocks untappable — so the phone splits the
+           two jobs the grid does at once: the strip keeps the WEEK
+           legible for navigation, one column carries the DETAIL of the
+           selected day.
+
+           Every one of the three elements below carries its own
+           `lg:hidden` rather than sitting inside one hidden wrapper.
+           That is deliberate: a wrapper would make each element's own
+           breakpoint class decorative, and a test pinning a class that
+           does nothing is worse than no test. --%>
+          <div
+            data-role="calendar-week-strip"
+            class="grid grid-cols-7 overflow-hidden rounded-t-lg border border-base-300 bg-base-200 lg:hidden"
+          >
+            <button
+              :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
+              type="button"
+              phx-click="select_calendar_day"
+              phx-value-date={Date.to_iso8601(day.date)}
+              aria-current={Date.compare(day.date, @calendar_selected_date) == :eq && "date"}
+              class="flex min-h-11 flex-col items-center justify-center gap-0.5 px-0 py-1.5 transition hover:bg-base-300/60"
+              data-role="calendar-strip-day"
+              data-date={Date.to_iso8601(day.date)}
+              data-selected={Date.compare(day.date, @calendar_selected_date) == :eq && "true"}
+              data-today={day.today? && "true"}
+            >
+              <%!-- Today stays identifiable even when another day is
+               selected. The frames only ever draw a day that is both,
+               so they do not answer this; without the tell, selecting
+               Friday leaves a phone with nothing on screen that says
+               which day it actually is. Carried by the accent token on
+               the letter, NOT by a second circle, so the filled circle
+               keeps meaning exactly one thing: selection. --%>
+              <span class={[
+                "text-[10px] font-semibold uppercase leading-none tracking-widest",
+                day.today? && "text-primary",
+                !day.today? && "text-base-content/50"
+              ]}>
+                {calendar_weekday_initial(day.date)}
+              </span>
+              <span
+                class={[
+                  "size-6 text-center text-sm font-semibold leading-6",
+                  Date.compare(day.date, @calendar_selected_date) == :eq &&
+                    "rounded-full bg-primary text-primary-content"
+                ]}
+                data-role="calendar-strip-day-number"
+              >
+                {day.date.day}
+              </span>
+            </button>
+          </div>
+
+          <%!-- The mobile count lives HERE, not in the page header. Both
+           mobile frames strip the header back to icon + `Meetings` +
+           the segmented control and put `Wednesday, Aug 5 · 2
+           meetings` under the strip instead, where it describes the
+           day actually being drawn rather than a week-wide total the
+           single column cannot show. --%>
+          <div
+            class="flex items-baseline gap-1.5 border-x border-b border-base-300 bg-base-200/40 px-3 py-2 text-[11px] font-semibold uppercase tracking-widest text-base-content/50 lg:hidden"
+            data-role="calendar-day-heading"
+            data-date={Date.to_iso8601(@calendar_selected_date)}
+          >
+            <span>{calendar_day_label(@calendar_selected_date)}</span>
+            <span aria-hidden="true">·</span>
+            <span data-role="calendar-day-count">
+              {calendar_day_count_label(
+                calendar_day_meeting_count(
+                  @calendar_week_meetings,
+                  @calendar_selected_date,
+                  @calendar_time_zone,
+                  @calendar_hour_window
+                )
+              )}
+            </span>
+          </div>
+
+          <%!-- One day, one column, its own 44px gutter. The hour rows
+           are 5.5rem here against the desktop grid's 3.25rem, and that
+           costs nothing: `CalendarWindow.place/4` answers in
+           PERCENTAGES of the drawn window, so both halves place the
+           same meeting correctly at different row heights.
+
+           5.5rem is DERIVED, not picked. The shortest block the placement
+           maths will draw is half an hour, and half of 5.5rem is exactly
+           the 44px touch target — so on a phone the smallest block is
+           tappable because of its geometry, and needs no CSS minimum
+           reaching down into the block below it. A shorter row would put
+           the two constraints back in conflict, which is what the
+           geometric test on this file pins.
+
+           The bottom margin is FAB clearance, not nav clearance —
+           `.bottom-nav` is `position: sticky` inside the shell's flex
+           column (app.css:2226), so it takes flow space and the scroll
+           region already ends above it. The FAB is the thing that
+           overlays: it is fixed 1.5rem above the nav and is ~3rem
+           tall, so without this the last hour sits under it. --%>
+          <div
+            data-role="calendar-day-view"
+            class="mb-20 grid overflow-hidden rounded-b-lg border-x border-b border-base-300 bg-base-100 lg:hidden"
+            style="grid-template-columns: 2.75rem 1fr"
+          >
+            <div class="flex flex-col bg-base-200/20">
+              <div
+                :for={hour <- calendar_hours(@calendar_hour_window)}
+                class="pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-base-content/40"
+                style={calendar_hour_row_style(:day)}
+              >
+                {calendar_hour_label(hour)}
+              </div>
+            </div>
+
+            <div
+              class="relative border-l border-base-300"
+              style={calendar_hour_rules_style(:day)}
+              data-role="calendar-day-body"
+              data-date={Date.to_iso8601(@calendar_selected_date)}
+            >
+              <%!-- Same two conditions as the desktop column, asked of
+               the SELECTED day rather than of each of seven: the line
+               is a fact about today, so it is absent whenever the day
+               on screen is not today or the zone is unresolved. --%>
+              <div
+                :for={
+                  offset <-
+                    calendar_selected_now_line(
+                      @calendar_selected_date,
+                      @calendar_time_zone,
+                      @calendar_hour_window,
+                      @calendar_now
+                    )
+                }
+                class="pointer-events-none absolute inset-x-0 z-10 h-[1.5px] bg-error"
+                style={"top:#{offset}%"}
+                data-role="calendar-now-line"
+                aria-hidden="true"
+              >
+                <span class="absolute -left-px -top-[3px] size-2 rounded-full bg-error"></span>
+              </div>
+
+              <%!-- The SAME contract as the desktop block — same
+               `data-role`, same id/status/live attributes, same
+               percentage geometry, same lanes, same event — so one
+               selector reads both halves and neither half can drift from
+               the other. What differs is only what a thumb needs: more
+               vertical padding, and taller hour rows, which is where the
+               44px floor comes from now. There is no `min-h-` here for
+               the same reason there is none on the desktop block: a pixel
+               minimum inside a proportional column steals the next
+               block's space and the labels collide.
+
+               Lanes cannot arise from a narrower screen — this half has
+               one day, not seven — but they arise from the same
+               double-booking the week grid draws, so the phone splits the
+               column too rather than stacking two meetings' text. --%>
+              <button
+                :for={
+                  {meeting, placement} <-
+                    calendar_day_events(
+                      @calendar_week_meetings,
+                      @calendar_selected_date,
+                      @calendar_time_zone,
+                      @calendar_hour_window,
+                      :day
+                    )
+                }
+                type="button"
+                phx-click="select_meeting"
+                phx-value-id={meeting.id}
+                class={[
+                  "absolute flex flex-col items-start justify-center overflow-hidden rounded-md border-l-[3px] px-2 py-1.5 text-left",
+                  meeting.status == "live" && "border-success bg-success/15",
+                  meeting.status != "live" && "border-primary bg-primary/15",
+                  @selected_meeting_id == meeting.id && "ring-2 ring-primary"
+                ]}
+                style={calendar_block_style(placement, :day)}
+                data-role="calendar-event"
+                data-meeting-id={meeting.id}
+                data-meeting-status={meeting.status}
+                data-lane={placement.lane}
+                data-lanes={placement.lanes}
+                data-live={meeting.status == "live" && "true"}
+                data-selected={@selected_meeting_id == meeting.id && "true"}
+              >
+                <span class="flex w-full min-w-0 items-center gap-1.5">
+                  <span
+                    :if={meeting.status == "live"}
+                    class="size-1.5 flex-shrink-0 rounded-full bg-success animate-pulse"
+                    data-role="calendar-event-live-dot"
+                  >
+                  </span>
+                  <span class="truncate text-xs font-medium leading-tight text-base-content">
+                    {meeting.name}
+                  </span>
+                </span>
+                <span class="truncate text-[11px] leading-tight text-base-content/60">
+                  {calendar_event_time(meeting, @calendar_time_zone)}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <%!-- ── Meeting detail panel — desktop right rail (frame 1) ───────
+           `hidden lg:flex` is one decision in two classes: the mobile
+           surface for the same selection is the sheet below, and drawing
+           both at 375px would stack a 322px rail under the day view.
+
+           GEOMETRY — the panel CLIPS, the body SCROLLS, the footer is a
+           SIBLING of the body. Making the panel itself the scroll region
+           is the shape the sponsor rejected on the create sheet: with
+           enough content the footer scrolls away with it. `min-h-0` on
+           the body is what makes this real — a flex child defaults to
+           `min-height: auto` and will not shrink below its content, so
+           without it the body never scrolls and the footer is pushed out
+           of the panel anyway. The per-invitee rows the create+invite
+           member's next stage puts in this body are exactly the content
+           that grows without bound. --%>
+        <aside
+          :if={detail_meeting}
+          class="hidden w-[20.125rem] flex-none flex-col overflow-hidden border-l border-base-300 bg-base-100 lg:flex"
+          data-role="meeting-detail-panel"
+          aria-label="Meeting detail"
+        >
+          <div class="flex flex-none items-center gap-2 border-b border-base-300 px-4 py-3">
+            <h2 class="min-w-0 flex-1 truncate text-sm font-semibold">Meeting detail</h2>
+            <button
+              type="button"
+              phx-click="close_meeting_detail"
+              aria-label="Close meeting detail"
+              title="Close"
+              class="btn btn-ghost btn-sm btn-square min-h-11"
+              data-role="meeting-detail-panel-close"
+            >
+              <span class="hero-x-mark size-4"></span>
+            </button>
+          </div>
+
+          <div
+            class="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4"
+            data-role="meeting-detail-panel-body"
+          >
+            <.meeting_detail_body
+              meeting={detail_meeting}
+              time_zone={@calendar_time_zone}
+              invite_entries={detail_invites}
+              id_prefix="meeting-detail-panel-invite"
+              invite_open={@meeting_invite_open}
+              invite_query={@meeting_invite_query}
+              invite_candidates={@meeting_invite_candidates}
+              invite_email_option={@meeting_invite_email}
+            />
+          </div>
+
+          <div
+            class="flex-none border-t border-base-300 px-4 py-3"
+            data-role="meeting-detail-panel-footer"
+          >
+            <.meeting_detail_actions meeting={detail_meeting} />
+          </div>
+        </aside>
+      </div>
+
+      <%!-- ── Meeting detail sheet — below `lg` (mobile frame 2) ──────────
+         The same selection, the same two shared components, a different
+         presentation: a bottom sheet over the day view rather than a rail
+         beside it. Shape is the create sheet's — `bg-black/40` backdrop
+         that click-dismisses, `items-end` so it rises from the bottom
+         edge a thumb starts at — plus the frames' drag handle.
+
+         Out of flow, so `pb-[env(safe-area-inset-bottom)]` is the right
+         clearance and `--bottom-nav-height` is NOT: the in-flow bottom
+         nav reservation does not apply to an overlay that paints over it.
+
+         Geometry is the panel's, for the same reason — see the panel's
+         comment above. Here the cap is explicit (`max-h-[75vh]`) because
+         a fixed overlay has no parent to inherit a height from. --%>
+      <div
+        :if={detail_meeting}
+        class="lg:hidden fixed inset-0 z-50 flex items-end justify-center"
+        data-role="meeting-detail-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="meeting-detail-sheet-title"
+      >
+        <div
+          class="absolute inset-0 bg-black/40"
+          phx-click="close_meeting_detail"
+          aria-hidden="true"
+          data-role="meeting-detail-sheet-backdrop"
+        >
+        </div>
+
+        <div class="relative flex max-h-[75vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl bg-base-100 pb-[env(safe-area-inset-bottom)] shadow-2xl">
+          <div class="flex flex-none justify-center pt-2">
+            <span
+              class="h-1 w-8 rounded-full bg-base-300"
+              data-role="meeting-detail-sheet-handle"
+              aria-hidden="true"
+            >
+            </span>
+          </div>
+
+          <div class="flex flex-none items-center gap-2 border-b border-base-300 px-4 py-3">
+            <h2
+              id="meeting-detail-sheet-title"
+              class="min-w-0 flex-1 truncate text-sm font-semibold"
+            >
+              Meeting detail
+            </h2>
+            <button
+              type="button"
+              phx-click="close_meeting_detail"
+              aria-label="Close meeting detail"
+              title="Close"
+              class="btn btn-ghost btn-sm btn-square min-h-11"
+              data-role="meeting-detail-sheet-close"
+            >
+              <span class="hero-x-mark size-4"></span>
+            </button>
+          </div>
+
+          <div
+            class="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4"
+            data-role="meeting-detail-sheet-body"
+          >
+            <.meeting_detail_body
+              meeting={detail_meeting}
+              time_zone={@calendar_time_zone}
+              invite_entries={detail_invites}
+              id_prefix="meeting-detail-sheet-invite"
+              invite_open={@meeting_invite_open}
+              invite_query={@meeting_invite_query}
+              invite_candidates={@meeting_invite_candidates}
+              invite_email_option={@meeting_invite_email}
+            />
+          </div>
+
+          <div
+            class="flex-none border-t border-base-300 px-4 py-3"
+            data-role="meeting-detail-sheet-footer"
+          >
+            <.meeting_detail_actions meeting={detail_meeting} />
+          </div>
+        </div>
+      </div>
 
       <%!-- ── Start-meeting FAB ───────────────────────────────────────────
          Mobile-first reachability fix: anchored bottom-right with a
@@ -1671,22 +2546,77 @@
          the tasks_live FAB pattern (apps/platform/lib/platform_web/
          live/tasks_live.html.heex:2391). Only renders on `:index`
          (this branch is inside the `<%= if @meeting do … else …%>`
-         else arm). --%>
+         else arm).
+
+         `lg:hidden` (stage 5) makes this the MOBILE create path only; at
+         `lg` and above the header's `new-meeting-button` takes over and
+         pushes the same event. The bottom offset stays because a FAB is
+         `position: fixed` — out of flow — which is exactly the case where
+         reserving the in-flow nav height is correct.
+
+         Stage 4 had carried an `lg:`-scoped horizontal offset — the panel's
+         width plus a gutter — applied while the detail panel was open, so
+         the FAB would not paint over the panel's action row. `lg:hidden`
+         DELETES that state: the panel is `hidden lg:flex`, so it exists
+         only at `lg` and above, which is precisely where the FAB no longer
+         renders. The offset was therefore unreachable in every state and is
+         gone rather than left behind as a guard that cannot fire. Below
+         `lg` nothing overlaps either — the detail SHEET is a z-50 overlay
+         above the FAB's z-30.
+
+         Deliberately NOT naming that offset as a literal class string here:
+         Tailwind scans this directory as plain text, so a class written in
+         a COMMENT is still a build candidate and would emit the rule this
+         change exists to retire.
+
+         `min-h-11 min-w-11` is the 44px touch-target floor, and it is NOT
+         redundant with `btn-circle`. Read out of the BUILT stylesheet
+         rather than guessed from the class name: `.btn-circle` resolves to
+         `width: var(--size); height: var(--size)`, `.btn` sets
+         `--size: calc(var(--size-field, 0.25rem) * 10)`, and this app's
+         theme sets `--size-field: 0.21875rem` — so the button was 35px,
+         which is exactly what two reviewers measured. Nothing was
+         overriding `btn-circle`; it was faithfully rendering a 35px token.
+
+         The floor therefore has to be local. Raising `--size-field` would
+         resize every button and input in the app to fix one button, and
+         that token is a deliberate Fabrikam-spec value. And the floor is
+         expressed as `min-*` rather than `size-11` on purpose: min-width
+         and min-height beat width and height in the box model whatever
+         order the two utility rules land in, so this does not depend on
+         winning a cascade race with daisyUI.
+
+         Safe here in a way a pixel floor was NOT safe on the calendar
+         block: this button is `position: fixed`, so growing it consumes no
+         sibling's slot. Its bottom offset is unchanged and still clears
+         the nav — the offset is measured from the button's own bottom
+         edge, so a taller button grows upward into empty space. --%>
       <button
         type="button"
         phx-click="open_start_meeting_sheet"
-        aria-label="Start a meeting"
-        title="Start a meeting"
+        aria-label="New meeting"
+        title="New meeting"
         data-role="start-meeting-fab"
-        class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg"
+        class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 min-h-11 min-w-11 shadow-lg lg:hidden"
       >
         <span class="hero-video-camera size-6"></span>
       </button>
 
-      <%!-- ── Start-meeting bottom-sheet ──────────────────────────────────
-         Mobile-first wrapper: full-bleed slide-up from the bottom on
-         small viewports, centered card on >=sm. Backdrop is
-         `bg-black/40` and click-dismisses. Pairs with the FAB above. --%>
+      <%!-- ── New-meeting create sheet ────────────────────────────────────
+         Task 019fb955-1d7b stage 4. The sheet CHROME is unchanged from
+         the stage-2 start-meeting sheet — full-bleed slide-up below
+         `sm`, centred card above, `bg-black/40` backdrop that
+         click-dismisses — because that is already the geometry the
+         canvas draws. What changed is what the panel holds: a
+         schedulable time, a required project, and a staged invite list.
+
+         `data-role` values from the old sheet are KEPT even where the
+         copy moved on (`start-meeting-*`); tests and sibling members key
+         on them. New controls take `meeting-create-*`.
+
+         Out of flow, so `pb-[env(safe-area-inset-bottom)]` is the right
+         clearance here — the in-flow bottom-nav reservation does not
+         apply to an overlay. --%>
       <div
         :if={@show_start_meeting_sheet}
         class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
@@ -1704,25 +2634,47 @@
         >
         </div>
 
-        <%!-- Sheet panel --%>
-        <div class="relative w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[75vh] overflow-y-auto">
-          <%!-- Header --%>
-          <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+        <%!-- Sheet panel. A flex COLUMN whose height is capped, not a single
+             scroll region: the cap belongs to the panel and the scrolling
+             belongs to the body alone, so the footer bar stays pinned no
+             matter how many invites are staged. Scrolling the whole panel
+             instead (`max-h-[75vh] overflow-y-auto` here) pushes the footer
+             — and with it `start-meeting-submit` — off the bottom of the
+             modal once the staged list is long enough, which is the defect
+             the sponsor rejected stage 4 for.
+
+             `overflow-hidden` keeps the body's scroll from painting over
+             the rounded corners. --%>
+        <div class="relative flex flex-col w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[75vh] overflow-hidden">
+          <%!-- Header. Below `sm` the primary action lives HERE (mobile
+               frame 3): the footer bar is the first thing a soft keyboard
+               covers, so the commit control has to be reachable above it. --%>
+          <div class="flex-none flex items-center justify-between gap-2 border-b border-base-300 px-4 py-3">
             <div class="flex items-center gap-2 min-w-0">
               <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
               <h2 id="start-meeting-sheet-title" class="text-base font-semibold">
-                Start a meeting
+                New meeting
               </h2>
             </div>
-            <button
-              type="button"
-              phx-click="close_start_meeting_sheet"
-              class="btn btn-sm btn-ghost btn-square"
-              aria-label="Close"
-              data-role="start-meeting-sheet-close"
-            >
-              <span class="hero-x-mark size-4"></span>
-            </button>
+            <div class="flex items-center gap-1">
+              <button
+                type="submit"
+                form="start-meeting-form"
+                class="btn btn-ghost btn-sm px-3 font-semibold text-primary min-h-11 sm:hidden"
+                data-role="meeting-create-submit-mobile"
+              >
+                Create
+              </button>
+              <button
+                type="button"
+                phx-click="close_start_meeting_sheet"
+                class="btn btn-sm btn-ghost btn-square"
+                aria-label="Close"
+                data-role="start-meeting-sheet-close"
+              >
+                <span class="hero-x-mark size-4"></span>
+              </button>
+            </div>
           </div>
 
           <%!-- Form --%>
@@ -1730,101 +2682,187 @@
             id="start-meeting-form"
             phx-submit="start_meeting"
             phx-change="start_meeting_form_change"
-            class="flex flex-col gap-3 px-4 py-4"
+            class="flex flex-1 flex-col min-h-0"
           >
-            <%!-- Inline error (server-side validation feedback) --%>
+            <%!-- Scrolling body. `min-h-0` is load-bearing: a flex child
+                 defaults to `min-height: auto` and refuses to shrink below
+                 its content, so without it this never scrolls and the
+                 footer is pushed out of the panel again. --%>
             <div
-              :if={@start_meeting_error}
-              class="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs text-error"
-              data-role="start-meeting-error"
+              class="flex flex-1 flex-col gap-3 min-h-0 overflow-y-auto px-4 py-4"
+              data-role="meeting-create-body"
             >
-              {@start_meeting_error}
-            </div>
+              <%!-- Inline error (server-side validation feedback) --%>
+              <div
+                :if={@start_meeting_error}
+                class="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs text-error"
+                data-role="start-meeting-error"
+              >
+                {@start_meeting_error}
+              </div>
 
-            <%!-- Name (required) --%>
-            <div class="flex flex-col gap-1">
-              <label
-                for="start-meeting-name"
-                class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-              >
-                Name <span class="text-error">*</span>
-              </label>
-              <input
-                id="start-meeting-name"
-                type="text"
-                name="start_meeting[name]"
-                value={@start_meeting_form["name"]}
-                required
-                autocomplete="off"
-                placeholder="What's the meeting about?"
-                class="input input-bordered w-full text-sm"
-                data-role="start-meeting-name"
-              />
-            </div>
-
-            <%!-- Project (required) --%>
-            <div class="flex flex-col gap-1">
-              <label
-                for="start-meeting-project"
-                class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-              >
-                Project <span class="text-error">*</span>
-              </label>
-              <select
-                id="start-meeting-project"
-                name="start_meeting[project_id]"
-                required
-                class="select select-bordered w-full text-sm"
-                data-role="start-meeting-project"
-              >
-                <option value="" disabled selected={@start_meeting_form["project_id"] == ""}>
-                  Select a project…
-                </option>
-                <option
-                  :for={project <- assigns[:projects] || []}
-                  value={project.id}
-                  selected={@start_meeting_form["project_id"] == project.id}
+              <%!-- Name (required) --%>
+              <div class="flex flex-col gap-1">
+                <label
+                  for="start-meeting-name"
+                  class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
                 >
-                  {project.name}
-                </option>
-              </select>
+                  Name <span class="text-error">*</span>
+                </label>
+                <input
+                  id="start-meeting-name"
+                  type="text"
+                  name="start_meeting[name]"
+                  value={@start_meeting_form["name"]}
+                  required
+                  autocomplete="off"
+                  placeholder="What's the meeting about?"
+                  class="input input-bordered w-full text-sm font-semibold min-h-11"
+                  data-role="start-meeting-name"
+                />
+              </div>
+
+              <%!-- Date / Start / Duration. Three across from `sm` up; below
+                 it, Date takes its own row and Start + Duration pair, so
+                 no control is narrower than its own content at 375px.
+                 Leaving Date and Start blank creates an AD-HOC meeting —
+                 `create_meeting/1` takes the intended-time pair as
+                 both-or-neither and both nil is a supported state. --%>
+              <div class="grid grid-cols-2 sm:grid-cols-[1.4fr_1fr_1fr] gap-2">
+                <div class="col-span-2 flex flex-col gap-1 sm:col-span-1">
+                  <label
+                    for="meeting-create-date"
+                    class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                  >
+                    Date
+                  </label>
+                  <input
+                    id="meeting-create-date"
+                    type="date"
+                    name="start_meeting[date]"
+                    value={@start_meeting_form["date"]}
+                    class="input input-bordered w-full text-sm min-h-11"
+                    data-role="meeting-create-date"
+                  />
+                </div>
+
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="meeting-create-start-time"
+                    class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                  >
+                    Start
+                  </label>
+                  <input
+                    id="meeting-create-start-time"
+                    type="time"
+                    name="start_meeting[start_time]"
+                    value={@start_meeting_form["start_time"]}
+                    class="input input-bordered w-full text-sm min-h-11"
+                    data-role="meeting-create-start-time"
+                  />
+                </div>
+
+                <div class="flex flex-col gap-1">
+                  <label
+                    for="meeting-create-duration"
+                    class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                  >
+                    Duration
+                  </label>
+                  <select
+                    id="meeting-create-duration"
+                    name="start_meeting[duration_minutes]"
+                    class="select select-bordered w-full text-sm min-h-11"
+                    data-role="meeting-create-duration"
+                  >
+                    <option
+                      :for={minutes <- PlatformWeb.MeetingLive.duration_options()}
+                      value={minutes}
+                      selected={@start_meeting_form["duration_minutes"] == to_string(minutes)}
+                    >
+                      {PlatformWeb.MeetingLive.duration_label(minutes)}
+                    </option>
+                  </select>
+                </div>
+              </div>
+
+              <%!-- Project (required). The `required` attribute is a hint;
+                 the server-side guard in `handle_event("start_meeting", …)`
+                 is the gate, because `meetings.project_id` is NOT NULL and
+                 the slug is unique per project. --%>
+              <div class="flex flex-col gap-1">
+                <label
+                  for="start-meeting-project"
+                  class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                >
+                  Project <span class="text-error">*</span>
+                </label>
+                <select
+                  id="start-meeting-project"
+                  name="start_meeting[project_id]"
+                  required
+                  class="select select-bordered w-full text-sm min-h-11"
+                  data-role="start-meeting-project"
+                >
+                  <option value="" disabled selected={@start_meeting_form["project_id"] == ""}>
+                    Select a project…
+                  </option>
+                  <option
+                    :for={project <- assigns[:projects] || []}
+                    value={project.id}
+                    selected={@start_meeting_form["project_id"] == project.id}
+                  >
+                    {project.name}
+                  </option>
+                </select>
+              </div>
+
+              <%!-- Invite. `:draft` mode — nothing is written until submit,
+                 and the row `X` unstages rather than revoking. --%>
+              <div class="flex flex-col gap-2" data-role="meeting-create-invite-section">
+                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+                  Invite
+                </span>
+
+                <.invite_control
+                  mode={:draft}
+                  id="meeting-create-invite"
+                  query={@meeting_create_invite_query}
+                  candidates={@meeting_create_invite_candidates}
+                  email_option={@meeting_create_invite_email}
+                />
+
+                <.invite_list
+                  mode={:draft}
+                  entries={PlatformWeb.MeetingLive.draft_invite_rows(@meeting_create_invites)}
+                />
+              </div>
             </div>
 
-            <%!-- Description (optional) --%>
-            <div class="flex flex-col gap-1">
-              <label
-                for="start-meeting-description"
-                class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-              >
-                Description <span class="text-base-content/40 normal-case">(optional)</span>
-              </label>
-              <textarea
-                id="start-meeting-description"
-                name="start_meeting[description]"
-                rows="3"
-                placeholder="Optional context for who's joining."
-                class="textarea textarea-bordered w-full text-sm"
-                data-role="start-meeting-description"
-              >{@start_meeting_form["description"]}</textarea>
-            </div>
-
-            <%!-- Footer actions --%>
-            <div class="flex items-center justify-end gap-2 pt-1">
+            <%!-- Footer actions. Hidden below `sm`, where the header's
+                 `Create` carries the same submit. OUTSIDE the scrolling
+                 body and `flex-none`, so a long staged-invite list scrolls
+                 under it instead of pushing it off the panel. --%>
+            <div
+              class="hidden flex-none items-center justify-end gap-2 border-t border-base-300 px-4 py-3 min-h-11 sm:flex"
+              data-role="meeting-create-footer"
+            >
               <button
                 type="button"
                 phx-click="close_start_meeting_sheet"
-                class="btn btn-ghost btn-sm"
+                class="btn btn-ghost btn-sm min-h-11"
                 data-role="start-meeting-cancel"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                class="btn btn-primary btn-sm gap-1.5"
+                class="btn btn-primary btn-sm gap-1.5 min-h-11"
                 data-role="start-meeting-submit"
               >
-                <span class="hero-video-camera size-4"></span>
-                <span>Start meeting</span>
+                <span class="hero-paper-airplane size-4"></span>
+                <span>Create &amp; send invites</span>
               </button>
             </div>
           </form>

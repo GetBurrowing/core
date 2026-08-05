@@ -492,6 +492,167 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.recoverable == true
     end
 
+    # ── meeting_create: the intended-time pair ───────────────────────────
+    #
+    # `Meetings.create_meeting/1` builds an explicit whitelist map, so a key
+    # the tool forwards can still be dropped before the changeset sees it.
+    # Every test below that claims a value was accepted re-reads the row —
+    # asserting the response alone would stay green for a handler that echoed
+    # its own arguments back without persisting anything.
+
+    test "meeting_create persists both intended-time endpoints and returns them as ISO8601" do
+      project = create_project()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "meeting_create",
+          %{
+            "project_id" => project.id,
+            "name" => "Design Review",
+            "scheduled_start_at" => "2026-08-04T15:00:00Z",
+            "scheduled_end_at" => "2026-08-04T16:30:00Z"
+          },
+          %{}
+        )
+
+      assert result.scheduled_start_at == "2026-08-04T15:00:00.000000Z"
+      assert result.scheduled_end_at == "2026-08-04T16:30:00.000000Z"
+
+      meeting = Platform.Meetings.get_meeting(result.id)
+      assert meeting.scheduled_start_at == ~U[2026-08-04 15:00:00.000000Z]
+      assert meeting.scheduled_end_at == ~U[2026-08-04 16:30:00.000000Z]
+
+      # The actuals are untouched by scheduling — the whole point of a second
+      # pair of columns is that intent and what happened are separate facts.
+      assert is_nil(meeting.started_at)
+      assert is_nil(meeting.ended_at)
+    end
+
+    test "meeting_create without either endpoint still succeeds and returns both keys as nil" do
+      project = create_project()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "meeting_create",
+          %{"project_id" => project.id, "name" => "Ad Hoc"},
+          %{}
+        )
+
+      # Key PRESENCE is asserted separately from the value: a serializer that
+      # dropped the keys entirely would satisfy `result[:scheduled_start_at]
+      # == nil` on a plain map lookup and pass a value-only test.
+      assert Map.has_key?(result, :scheduled_start_at)
+      assert Map.has_key?(result, :scheduled_end_at)
+      assert is_nil(result.scheduled_start_at)
+      assert is_nil(result.scheduled_end_at)
+
+      meeting = Platform.Meetings.get_meeting(result.id)
+      assert is_nil(meeting.scheduled_start_at)
+      assert is_nil(meeting.scheduled_end_at)
+    end
+
+    test "meeting_create with a malformed scheduled_start_at is refused by name and creates no row" do
+      project = create_project()
+      before_count = Repo.aggregate(Platform.Meetings.Meeting, :count)
+
+      # Presence half of the pair: the same shape of call, with a parseable
+      # start, does create a row. Without this the count assertion below could
+      # pass against a handler that never creates meetings at all.
+      {:ok, _ok} =
+        ToolSurface.execute(
+          "meeting_create",
+          %{
+            "project_id" => project.id,
+            "name" => "Parseable",
+            "scheduled_start_at" => "2026-08-04T15:00:00Z",
+            "scheduled_end_at" => "2026-08-04T16:00:00Z"
+          },
+          %{}
+        )
+
+      assert Repo.aggregate(Platform.Meetings.Meeting, :count) == before_count + 1
+
+      # Deliberately the lone-parameter shape: an agent that typo'd the only
+      # timestamp it passed. A handler that coerced the unparseable value to
+      # nil would leave attrs with NEITHER endpoint, sail past the pair
+      # validation, and return {:ok, ad-hoc meeting} — so this shape is what
+      # makes the row count able to move, and it is the failure that is
+      # hardest to notice in production.
+      {:error, error} =
+        ToolSurface.execute(
+          "meeting_create",
+          %{
+            "project_id" => project.id,
+            "name" => "Vague",
+            "scheduled_start_at" => "next tuesday"
+          },
+          %{}
+        )
+
+      assert error.recoverable == true
+      assert error.error =~ "scheduled_start_at"
+      refute error.error =~ "scheduled_end_at"
+      assert Repo.aggregate(Platform.Meetings.Meeting, :count) == before_count + 1
+    end
+
+    # Mirror image of the test above. Naming scheduled_start_at correctly does
+    # not prove the handler reads the key it was given — an implementation that
+    # hard-coded "scheduled_start_at" into every parse failure would pass that
+    # test and fail this one.
+    test "meeting_create with a malformed scheduled_end_at is refused by name and creates no row" do
+      project = create_project()
+      before_count = Repo.aggregate(Platform.Meetings.Meeting, :count)
+
+      {:error, error} =
+        ToolSurface.execute(
+          "meeting_create",
+          %{
+            "project_id" => project.id,
+            "name" => "Vague End",
+            "scheduled_start_at" => "2026-08-04T15:00:00Z",
+            "scheduled_end_at" => "sometime after lunch"
+          },
+          %{}
+        )
+
+      assert error.recoverable == true
+      assert error.error =~ "scheduled_end_at"
+
+      # Reported as a malformed VALUE, not as a missing one. A handler that
+      # coerced the unparseable end to nil would come back through the pair
+      # validation as "is required when scheduled_start_at is set" — which
+      # tells a caller that did supply an end to supply one, and is how a
+      # silent coercion looks from the outside.
+      refute error.error =~ "is required"
+      assert Repo.aggregate(Platform.Meetings.Meeting, :count) == before_count
+    end
+
+    test "meeting_create with an end before the start returns an error and creates no row" do
+      project = create_project()
+      before_count = Repo.aggregate(Platform.Meetings.Meeting, :count)
+
+      {:error, error} =
+        ToolSurface.execute(
+          "meeting_create",
+          %{
+            "project_id" => project.id,
+            "name" => "Backwards",
+            "scheduled_start_at" => "2026-08-04T16:00:00Z",
+            "scheduled_end_at" => "2026-08-04T15:00:00Z"
+          },
+          %{}
+        )
+
+      # This one comes back through the changeset, not the parse guard — both
+      # endpoints are valid timestamps. The message has to stay intelligible
+      # to an agent, hence the assertion on the field and the reason rather
+      # than merely on `recoverable`.
+      assert error.recoverable == true
+      assert error.error =~ "scheduled_end_at"
+      assert error.error =~ "must be after scheduled_start_at"
+      assert Repo.aggregate(Platform.Meetings.Meeting, :count) == before_count
+    end
+
     test "meeting_create with a colliding explicit slug returns a changeset error, not a crash" do
       project = create_project()
 

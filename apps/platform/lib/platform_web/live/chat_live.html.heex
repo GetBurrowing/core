@@ -1898,9 +1898,18 @@
           </form>
         </div>
 
-        <%!-- Join Meeting button --%>
+        <%!-- Join Meeting button.
+
+           `!@external?` (task 019fb955-f8b1 stage 5): the LiveKit room is
+           keyed off the space, so this button offered an external user in
+           a meeting's bound chat space the very join `MeetingHooks`
+           refuses server-side as of stage 4 — "chat is chat only". THE
+           SERVER REFUSAL IS THE GATE; this is cosmetics over it. Removing
+           the condition here re-exposes a dead button, not a hole. A
+           button that does nothing when clicked is quiet degradation, and
+           that is the whole reason this line exists. --%>
         <button
-          :if={@meetings_enabled && !@in_meeting}
+          :if={@meetings_enabled && !@in_meeting && !@external?}
           phx-click="meeting_join"
           class="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-base-content/60 hover:text-primary hover:bg-primary/10 transition-colors"
           title="Start or join a meeting in this space"

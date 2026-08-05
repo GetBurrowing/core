@@ -554,9 +554,23 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
   describe "shell render (chrome_mode: :shell) regression check" do
     # Sanity: authenticated /meetings/:slug still surfaces ALL shell chrome
     # after the stage 4 gates. Prevents an accidental widening of a
-    # `@shell?` guard from silently disappearing chat + copy-link + rail
-    # toggles from the auth surface.
-    test "authenticated /meetings/:slug renders chat panel + copy-link + rail toggles",
+    # `@shell?` guard from silently disappearing chat + rail toggles from the
+    # auth surface.
+    #
+    # Task 019fb955-1d7b stage 1 flipped the copy-guest-link assertion in this
+    # test to a REFUTE. The meeting-wide "Copy guest link" button is gone: it
+    # minted one forwardable URL per meeting from an optional display name, so
+    # the joiner was unidentifiable and their speech unattributable. Guest
+    # admission is per-invite only now.
+    #
+    # ANTI-VACUITY: a bare refute would pass identically if the top bar failed
+    # to render at all, if this mount 500'd, or if the attribute string were
+    # mistyped. The assertions below it are the positive control — they read
+    # the SAME rendered string and cover the same top bar
+    # (`data-role="meeting-controls"` is the button's own parent container,
+    # `data-role="meeting-screen-share"` is its immediate sibling). Refute and
+    # control must stay in this test together; splitting them re-opens the hole.
+    test "authenticated /meetings/:slug renders chat panel + rail toggles, and no meeting-wide guest link",
          %{conn: conn} do
       # Reach the shell via the standard app host (no `meet.` prefix).
       user =
@@ -580,8 +594,10 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
 
       meeting = create_meeting()
 
-      # Seed a chat participant row for the viewer so the host-only
-      # "Copy guest link" button (gated on `@current_participant`) renders.
+      # Seed a chat participant row for the viewer. This is the assign the
+      # removed "Copy guest link" button was gated on (`@current_participant`),
+      # so seeding it keeps the refute below meaningful: the button would be
+      # rendering under exactly these conditions if it still existed.
       {:ok, _participant} =
         Chat.add_participant(meeting.chat_space_id, %{
           participant_type: "user",
@@ -595,21 +611,98 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
         |> Phoenix.ConnTest.init_test_session(current_user_id: user.id)
         |> live("/meetings/#{meeting.slug}")
 
-      # All chat-panel + copy-link + rail-toggle markers present under :shell.
+      # All chat-panel + rail-toggle markers present under :shell.
       assert html =~ ~s(data-pane="chat-panel")
       assert html =~ ~s(data-role="chat-panel-toggle")
-      assert html =~ ~s(data-role="meeting-copy-guest-link")
       assert html =~ ~s(data-role="chat-pane-toggle")
       assert html =~ ~s(id="meeting-participant-rail-collapse-hook")
       assert html =~ ~s(id="meeting-chat-pane-collapse-hook")
       assert html =~ ~s(id="meeting-chat-drawer")
       # Guest identity badge is NOT rendered on the shell surface.
       refute html =~ ~s(data-role="guest-identity-badge")
-      # Standard meeting controls are still present.
+
+      # ── The deletion, with its positive control ──────────────────────────
+      # The meeting-wide guest link is gone from the in-room top bar…
+      refute html =~ ~s(data-role="meeting-copy-guest-link")
+      # …and the sheet it opened is gone with it.
+      refute html =~ ~s(data-role="guest-invite-sheet")
+      # …but the top bar that CONTAINED it still rendered in this same
+      # string, so the two refutes above are reading a live surface rather
+      # than an empty page. `meeting-controls` was the button's parent
+      # container; `meeting-screen-share` was the sibling immediately after
+      # it in the markup.
       assert html =~ ~s(data-role="meeting-controls")
+      assert html =~ ~s(data-role="meeting-screen-share")
       assert html =~ ~s(data-role="meeting-mic")
       assert html =~ ~s(data-pane="left-rail")
       assert html =~ ~s(data-pane="center-stage")
+    end
+
+    # The button refute above defends the SURFACE. This defends the WIRE.
+    # Removing the markup while leaving `generate_guest_invite` reachable
+    # would leave the unattributable mint one hand-crafted `phx-click`
+    # payload away — the LiveView event surface is public to anyone holding
+    # a socket, not just to whoever can see a button.
+    test "the LiveView answers no guest-invite mint event", %{conn: conn} do
+      user =
+        Repo.insert!(%Platform.Accounts.User{
+          email: "no_mint_#{System.unique_integer([:positive])}@example.com",
+          name: "No Mint User",
+          oidc_sub: "oidc-no-mint-#{System.unique_integer([:positive])}"
+        })
+
+      Repo.insert!(
+        Platform.Tenancy.OrgMembership.changeset(%Platform.Tenancy.OrgMembership{}, %{
+          user_id: user.id,
+          org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+          role: "member"
+        })
+      )
+
+      meeting = create_meeting()
+
+      {:ok, _participant} =
+        Chat.add_participant(meeting.chat_space_id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: user.name,
+          joined_at: DateTime.utc_now()
+        })
+
+      conn = Phoenix.ConnTest.init_test_session(conn, current_user_id: user.id)
+
+      # POSITIVE CONTROL, and it has to come first: pushing an unhandled
+      # event crashes the LiveView, so a dead socket would make every
+      # subsequent push "fail" for the wrong reason and the test would pass
+      # against a LiveView that never mounted at all. Prove the event surface
+      # is live by pushing an event that IS still handled.
+      {:ok, control_view, _html} = live(conn, "/meetings/#{meeting.slug}")
+      assert render_click(control_view, "meeting_screen_share_state", %{}) =~ "meeting-controls"
+
+      # An unhandled event raises inside the LiveView, and the test process is
+      # LINKED to it, so without trapping the exit signal kills this test
+      # instead of being caught. Set after the control push so the control
+      # still runs under normal linking.
+      Process.flag(:trap_exit, true)
+
+      for event <- [
+            "open_guest_invite_sheet",
+            "close_guest_invite_sheet",
+            "guest_invite_form_change",
+            "generate_guest_invite",
+            "copy_guest_invite"
+          ] do
+        {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}")
+
+        # Each event gets a fresh socket: the first unhandled push kills the
+        # LiveView, so reusing one view would make events 2..5 vacuous.
+        assert catch_exit(
+                 render_click(view, event, %{
+                   "guest_invite" => %{"display_name" => "Mallory", "expires_in_hours" => "72"}
+                 })
+               ),
+               "#{event} was still handled by MeetingLive — the meeting-wide guest mint is reachable over the wire"
+      end
     end
   end
 

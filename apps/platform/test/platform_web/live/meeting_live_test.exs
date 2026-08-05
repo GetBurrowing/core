@@ -21,14 +21,18 @@ defmodule PlatformWeb.MeetingLiveTest do
   alias Platform.{Chat, Meetings, Repo}
   alias Platform.Accounts.User
   alias Platform.Chat.PubSub, as: ChatPubSub
+  alias Platform.Meetings.CalendarLink
   alias Platform.Meetings.GuestInvite
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentQueue
+  alias Platform.Meetings.Invite
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
+  alias Platform.Meetings.SenderSeed
   alias Platform.Tasks.Project
   alias Platform.Tenancy.OrgMembership
   alias PlatformWeb.Components.Meetings.IntentsCollapse
+  alias PlatformWeb.Components.Meetings.MeetingDetail
 
   # Org plumbing (task 019f9b14 stage 2): `/meetings/:slug` now resolves
   # through `Meetings.fetch_meeting_for_user/2`, which requires the viewer to
@@ -1975,27 +1979,102 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
-  # ── Meetings index (:index action, stage 1 of task 019e2ca8) ─────────────
+  # ── Meetings index (:index action) ───────────────────────────────────────
+  #
+  # Task 019fb954-8ead stage 3 REPLACED the pre-calendar index surface. The
+  # `data-empty-state="meetings-index"` card and the grouped section/row
+  # list were the below-`lg` surface stage 2 kept alive for exactly one
+  # stage; the mobile week strip and day view are what they were being kept
+  # for, so this stage deletes them rather than drawing the new surface
+  # underneath the old one.
+  #
+  # The assertions that pinned them are re-pointed, not dropped:
+  #
+  #   * "an empty index shows the empty-state card" is now "an empty index
+  #     shows the calendar's own empty answer, and the card is gone" — the
+  #     removal is asserted, so a revert goes red.
+  #   * "one section per non-empty status bucket, rows linking to
+  #     /meetings/<slug>" is now "meetings render as day-view event blocks".
+  #     The `<slug>` LINK has no analogue on the calendar and is not faked
+  #     here: stage 4 gives a selected meeting a detail surface, and until
+  #     it lands there is no path from the index to a meeting page at ANY
+  #     width (the desktop half lost the same thing in stage 2).
+  #
+  # Two stage-1 tests were deleted outright rather than re-pointed, because
+  # what they pinned no longer exists in any form: "section ordering is live
+  # → upcoming → ended" and "sections with zero rows are omitted". The
+  # calendar partitions by DATE, and has no sections to order or omit.
+  # `group_meetings_by_status/1` still has its own describe below.
 
-  describe ":index action — empty state" do
-    test "renders the no-meetings empty state when zero meetings exist", %{conn: conn} do
-      {conn, _user} = authenticated_conn(conn)
-
-      # Defensive: drop any meetings other tests in this run might have
-      # seeded, so the empty branch is exercised in isolation.
+  describe ":index action — the pre-calendar surface is gone" do
+    setup %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
       Repo.delete_all(Meeting)
+      project = create_project()
+      {:ok, conn: conn, user: user, project: project}
+    end
 
-      {:ok, _view, html} = live(conn, ~p"/meetings")
+    test "an empty index draws the calendar, not a 'No meetings yet' card", %{conn: conn} do
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
 
-      assert html =~ ~s(data-empty-state="meetings-index")
-      assert html =~ "No meetings yet"
-      # FAB-pair vocabulary (stage 2 will mount the real button — the
-      # empty-state copy + icon must already match).
-      assert html =~ "Start a meeting"
-      assert html =~ "hero-video-camera"
-      # And no rows section at all.
-      refute html =~ ~s(data-region="meetings-list")
+      # The deleted surface, named so a revert is loud rather than merely
+      # duplicated on screen.
+      refute html =~ ~s(data-empty-state="meetings-index")
+      refute html =~ "No meetings yet"
       refute html =~ ~s(data-role="meeting-row")
+
+      # What replaced it: below `lg` the strip and the day view draw their
+      # chrome with nothing in them, exactly as the desktop grid does. An
+      # empty calendar IS a calendar's answer to "what is on this week?".
+      assert length(attrs_of(html, ~s([data-role="calendar-strip-day"]), "data-date")) == 7
+
+      assert attrs_of(html, ~s([data-role="calendar-day-view"]), "data-role") ==
+               ["calendar-day-view"]
+
+      assert day_count_text(html) == "No meetings"
+    end
+
+    test "meetings render as calendar blocks, not as grouped status sections",
+         %{conn: conn, project: project} do
+      today = grid_today()
+
+      live_meeting =
+        seed_grid_meeting(project,
+          slug: "live-now",
+          name: "Live Standup",
+          status: "live",
+          scheduled_start_at: zoned_utc(today, 9, 0),
+          scheduled_end_at: zoned_utc(today, 10, 0)
+        )
+
+      upcoming =
+        seed_grid_meeting(project,
+          slug: "next-up",
+          name: "Quarterly Review",
+          status: "scheduled",
+          scheduled_start_at: zoned_utc(today, 11, 0),
+          scheduled_end_at: zoned_utc(today, 12, 0)
+        )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      # The grouped list's markers are gone in every form it had.
+      refute html =~ ~s(data-section="live")
+      refute html =~ ~s(data-section="upcoming")
+      refute html =~ ~s(data-section="ended")
+      refute html =~ ~s(data-role="meeting-status-pill")
+      refute html =~ ~s(href="/meetings/#{live_meeting.slug}")
+
+      # And both meetings are on the day view instead, carrying their own
+      # statuses rather than a section's.
+      assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [live_meeting.id, upcoming.id]
+
+      assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "data-meeting-status") ==
+               ["live", "scheduled"]
+
+      assert html =~ live_meeting.name
+      assert html =~ upcoming.name
     end
 
     test "index renders without forcing a local data-theme override (inherits shell theme)",
@@ -2004,123 +2083,10 @@ defmodule PlatformWeb.MeetingLiveTest do
       # hardcoded `data-theme="light"` as the `:show` shell — both must
       # now inherit the shell's `data-theme` from `<html>` in
       # `root.html.heex`.
-      {conn, _user} = authenticated_conn(conn)
-      Repo.delete_all(Meeting)
-
       {:ok, _view, html} = live(conn, ~p"/meetings")
 
       refute html =~ ~s(data-theme="light")
       refute html =~ ~s(data-theme="dark")
-    end
-  end
-
-  describe ":index action — grouped sections" do
-    setup %{conn: conn} do
-      {conn, user} = authenticated_conn(conn)
-      Repo.delete_all(Meeting)
-      project = create_project()
-      {:ok, conn: conn, user: user, project: project}
-    end
-
-    defp seed_meeting_with_status(project, opts) do
-      slug = Keyword.fetch!(opts, :slug)
-      name = Keyword.get(opts, :name, "Meeting #{slug}")
-      status = Keyword.get(opts, :status, "scheduled")
-
-      space = create_space()
-      meeting_id = Platform.Types.UUIDv7.generate()
-
-      attrs = %{
-        project_id: project.id,
-        chat_space_id: space.id,
-        slug: slug,
-        name: name,
-        livekit_room_name: "meeting-#{meeting_id}",
-        status: status
-      }
-
-      {:ok, meeting} =
-        %Meeting{id: meeting_id}
-        |> Meeting.changeset(attrs)
-        |> Repo.insert()
-
-      meeting
-    end
-
-    test "renders one section per non-empty status bucket with rows linking to /meetings/<slug>",
-         %{conn: conn, project: project} do
-      live_meeting =
-        seed_meeting_with_status(project,
-          slug: "live-now",
-          name: "Live Standup",
-          status: "live"
-        )
-
-      upcoming =
-        seed_meeting_with_status(project,
-          slug: "next-week",
-          name: "Quarterly Review",
-          status: "scheduled"
-        )
-
-      ended =
-        seed_meeting_with_status(project,
-          slug: "yesterday",
-          name: "Closed Postmortem",
-          status: "ended"
-        )
-
-      {:ok, _view, html} = live(conn, ~p"/meetings")
-
-      # Empty state is GONE.
-      refute html =~ ~s(data-empty-state="meetings-index")
-
-      # Three sections render with their data-section markers.
-      assert html =~ ~s(data-section="live")
-      assert html =~ ~s(data-section="upcoming")
-      assert html =~ ~s(data-section="ended")
-
-      # Each meeting's name + slug shows up.
-      assert html =~ live_meeting.name
-      assert html =~ upcoming.name
-      assert html =~ ended.name
-
-      # Each row links to /meetings/<slug>.
-      assert html =~ ~s(href="/meetings/#{live_meeting.slug}")
-      assert html =~ ~s(href="/meetings/#{upcoming.slug}")
-      assert html =~ ~s(href="/meetings/#{ended.slug}")
-
-      # Status pill labels — one per section.
-      assert html =~ "Live now"
-      assert html =~ "Upcoming"
-      assert html =~ "Ended"
-    end
-
-    test "section ordering is live → upcoming → ended", %{conn: conn, project: project} do
-      seed_meeting_with_status(project, slug: "ord-live", status: "live")
-      seed_meeting_with_status(project, slug: "ord-upcoming", status: "scheduled")
-      seed_meeting_with_status(project, slug: "ord-ended", status: "ended")
-
-      {:ok, _view, html} = live(conn, ~p"/meetings")
-
-      live_pos = :binary.match(html, ~s(data-section="live")) |> elem(0)
-      upcoming_pos = :binary.match(html, ~s(data-section="upcoming")) |> elem(0)
-      ended_pos = :binary.match(html, ~s(data-section="ended")) |> elem(0)
-
-      assert live_pos < upcoming_pos
-      assert upcoming_pos < ended_pos
-    end
-
-    test "sections with zero rows are omitted (not rendered as empty headers)",
-         %{conn: conn, project: project} do
-      # Only an upcoming meeting — live and ended sections must NOT render.
-      seed_meeting_with_status(project, slug: "only-upcoming", status: "scheduled")
-
-      {:ok, _view, html} = live(conn, ~p"/meetings")
-
-      assert html =~ ~s(data-section="upcoming")
-      refute html =~ ~s(data-section="live")
-      refute html =~ ~s(data-section="ended")
     end
   end
 
@@ -2132,72 +2098,67 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, project: project}
     end
 
-    test ":meeting_created PubSub message updates the rendered list without remount",
+    test ":meeting_created PubSub message places the new meeting without a remount",
          %{conn: conn, project: project} do
-      {:ok, view, html} = live(conn, ~p"/meetings")
+      today = grid_today()
 
-      # Empty to start.
-      assert html =~ ~s(data-empty-state="meetings-index")
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
 
-      # Create a meeting via the context — broadcasts on the project topic.
-      {:ok, _space} =
-        Chat.create_space(%{
-          name: "Pub Pre-existing",
-          slug: "pub-pre-existing-#{System.unique_integer([:positive])}",
-          kind: "channel"
-        })
+      # Empty to start — asserted on the calendar now that the empty-state
+      # card is gone.
+      assert attrs_of(html, ~s([data-role="calendar-event"]), "data-meeting-id") == []
+      assert day_count_text(html) == "No meetings"
 
       {:ok, meeting} =
         Platform.Meetings.create_meeting(%{
           project_id: project.id,
-          name: "Brand New Meeting"
+          name: "Brand New Meeting",
+          scheduled_start_at: zoned_utc(today, 13, 0),
+          scheduled_end_at: zoned_utc(today, 14, 0)
         })
 
       # Force the LV to flush the inbound :meeting_created broadcast.
       html = render(view)
 
-      refute html =~ ~s(data-empty-state="meetings-index")
+      assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [meeting.id]
+
+      assert day_count_text(html) == "1 meeting"
       assert html =~ "Brand New Meeting"
-      assert html =~ ~s(data-meeting-id="#{meeting.id}")
-      assert html =~ ~s(href="/meetings/#{meeting.slug}")
     end
 
-    test ":meeting_ended PubSub message re-groups the row into the ended section",
+    test ":meeting_ended PubSub message flips the block's status in place",
          %{conn: conn, project: project} do
-      # Seed a live meeting first.
-      {:ok, space} =
-        Chat.create_space(%{
-          name: "End me",
-          slug: "end-me-#{System.unique_integer([:positive])}",
-          kind: "channel"
-        })
+      # The row does not MOVE any more — a meeting occupies the slot it was
+      # scheduled for whether it is live or ended — so what the broadcast
+      # has to change is the block's own status, and the live tell with it.
+      today = grid_today()
 
-      meeting_id = Platform.Types.UUIDv7.generate()
-
-      {:ok, meeting} =
-        %Meeting{id: meeting_id}
-        |> Meeting.changeset(%{
-          project_id: project.id,
-          chat_space_id: space.id,
+      meeting =
+        seed_grid_meeting(project,
           slug: "end-me",
           name: "Ending Meeting",
-          livekit_room_name: "meeting-#{meeting_id}",
-          status: "live"
-        })
-        |> Repo.insert()
+          status: "live",
+          scheduled_start_at: zoned_utc(today, 15, 0),
+          scheduled_end_at: zoned_utc(today, 16, 0)
+        )
 
-      {:ok, view, html} = live(conn, ~p"/meetings")
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
 
-      assert html =~ ~s(data-section="live")
-      refute html =~ ~s(data-section="ended")
+      block = day_view(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"]))
 
-      # End it; broadcast should land on the LV's project subscription.
+      assert attrs_of(html, block, "data-meeting-status") == ["live"]
+      assert attrs_of(html, block, "data-live") == ["true"]
+
       {:ok, _ended} = Platform.Meetings.end_meeting(meeting)
 
       html = render(view)
 
-      refute html =~ ~s(data-section="live")
-      assert html =~ ~s(data-section="ended")
+      assert attrs_of(html, block, "data-meeting-status") == ["ended"]
+      # Both sides named: `attribute/2` skips nodes that lack the attribute,
+      # so "no `true` on the page" and "this block lost its `true`" are
+      # different claims and only the second one is about this block.
+      assert attrs_of(html, block, "data-live") == []
       assert html =~ "Ending Meeting"
     end
   end
@@ -2236,6 +2197,2346 @@ defmodule PlatformWeb.MeetingLiveTest do
       m = %Meeting{id: "x", status: "weird"}
       grouped = MeetingLive.group_meetings_by_status([m])
       assert [%{id: "x"}] = grouped.upcoming
+    end
+  end
+
+  # ── Desktop week grid (task 019fb954-8ead stage 2) ───────────────────────
+  #
+  # Parsed with `LazyHTML`, not with `=~` against the raw document. Two
+  # reasons, both of which a substring assertion gets wrong:
+  #
+  #   * "the event is in Wednesday's column" is a CONTAINMENT fact. `html =~
+  #     ~s(data-date="2026-08-05")` is satisfied by a grid that renders the
+  #     right column and puts every event in Monday's.
+  #   * `attribute/2` returns one entry per match in document order and skips
+  #     nodes that lack the attribute, which is exactly the shape an ordering
+  #     or a one-of-two assertion needs.
+  #
+  # `Floki` is deliberately not used — it is not a dependency of this
+  # umbrella, and a test written against it compiles and then fails at
+  # runtime on every assertion at once, which reads like a real regression.
+  describe ":index action — desktop week grid" do
+    # A real IANA zone with a UTC offset, so a test that confused local and
+    # UTC clock readings cannot accidentally pass. Fixed rather than derived
+    # from the machine: the grid's whole contract is "the VIEWER's zone", and
+    # a fixture that inherits the server's cannot tell the two apart.
+    @grid_zone "America/Chicago"
+
+    setup %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      Repo.delete_all(Meeting)
+      project = create_project()
+      {:ok, conn: conn, user: user, project: project}
+    end
+
+    defp grid_conn(conn), do: put_connect_params(conn, %{"timezone" => @grid_zone})
+
+    defp grid_today, do: PlatformWeb.MeetingLive.calendar_today_date(@grid_zone)
+
+    # A UTC instant for a wall-clock time in the viewer's zone. Everything
+    # persisted is UTC; everything asserted is local; this is the only place
+    # the two meet.
+    defp zoned_utc(%Date{} = date, hour, minute) do
+      date
+      |> DateTime.new!(Time.new!(hour, minute, 0), @grid_zone)
+      |> DateTime.shift_zone!("Etc/UTC")
+    end
+
+    defp seed_grid_meeting(project, opts) do
+      space = create_space()
+      meeting_id = Platform.Types.UUIDv7.generate()
+
+      attrs =
+        %{
+          project_id: project.id,
+          chat_space_id: space.id,
+          slug: Keyword.fetch!(opts, :slug),
+          name: Keyword.get(opts, :name, "Meeting #{Keyword.fetch!(opts, :slug)}"),
+          livekit_room_name: "meeting-#{meeting_id}",
+          status: Keyword.get(opts, :status, "scheduled"),
+          scheduled_start_at: Keyword.get(opts, :scheduled_start_at),
+          scheduled_end_at: Keyword.get(opts, :scheduled_end_at)
+        }
+
+      {:ok, meeting} =
+        %Meeting{id: meeting_id}
+        |> Meeting.changeset(attrs)
+        |> Repo.insert()
+
+      meeting
+    end
+
+    defp doc(html), do: LazyHTML.from_fragment(html)
+
+    defp attrs_of(html, selector, attribute) do
+      html |> doc() |> LazyHTML.query(selector) |> LazyHTML.attribute(attribute)
+    end
+
+    defp column_selector(%Date{} = date),
+      do: ~s([data-role="calendar-day-column"][data-date="#{Date.to_iso8601(date)}"])
+
+    # Task 019fb954-8ead stage 3 landed the mobile day view, which renders
+    # `data-role="calendar-event"` and `data-role="calendar-now-line"` from
+    # the SAME contract as the grid — deliberately, so one selector reads
+    # both halves. The consequence for these tests is that an unscoped
+    # "exactly one event is on the page" is no longer a claim about the
+    # desktop grid; it is a claim about both halves at once, and it fails
+    # for a reason that has nothing to do with the grid. Every desktop
+    # assertion therefore scopes itself inside the week grid.
+    defp in_grid(selector), do: ~s([data-role="calendar-week-grid"] #{selector})
+
+    test "the grid renders its chrome with zero meetings", %{conn: conn} do
+      # A calendar's empty state is an empty calendar. This is the assertion
+      # that used to read `refute html =~ ~s(data-region="meetings-list")` in
+      # the empty-state describe above: the region is no longer conditional
+      # on there being meetings to put in it.
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert attrs_of(html, ~s([data-role="calendar-week-grid"]), "data-role") ==
+               ["calendar-week-grid"]
+
+      assert length(attrs_of(html, ~s([data-role="calendar-week-day-heading"]), "data-date")) == 7
+      assert length(attrs_of(html, ~s([data-role="calendar-day-column"]), "data-date")) == 7
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") == []
+    end
+
+    test "the grid is the `lg` surface and the day view is the surface below it",
+         %{conn: conn, project: project} do
+      # ONE test, ONE document, BOTH halves — extended by stage 3 rather
+      # than joined by a second test. LiveView renders a single document
+      # containing every breakpoint's markup and there is no viewport at
+      # test time, so each half alone is satisfied by a wrong answer:
+      # "the grid carries hidden lg:grid" passes on a build that also
+      # draws the day view at every width, and "the day view carries
+      # lg:hidden" passes on one that draws neither. Only the pair says
+      # the two halves swap at `lg`.
+      #
+      # Stage 4 extends the SAME test rather than adding a second one, for
+      # the same reason: the detail PANEL and the detail SHEET are one more
+      # pair that has to swap at exactly this breakpoint, and asserting
+      # each alone admits a build that draws both at 375px.
+      #
+      # Stage 5 adds the third pair: the header's `new-meeting-button` and
+      # the corner FAB are two entry points to ONE create flow, and exactly
+      # one of them may be drawn at any width. Asserting the button alone
+      # passes on a build that shows both at 1440px (a redundant, competing
+      # create affordance); asserting the FAB alone passes on a build that
+      # shows NEITHER at 1024px — a surface with no way to create a meeting.
+      meeting =
+        seed_grid_meeting(project,
+          slug: "grid-responsive",
+          name: "Responsive Meeting",
+          scheduled_start_at: zoned_utc(grid_today(), 10, 0),
+          scheduled_end_at: zoned_utc(grid_today(), 11, 0)
+        )
+
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      classes = fn html, selector ->
+        html |> attrs_of(selector, "class") |> List.first() |> String.split()
+      end
+
+      grid_classes = classes.(html, ~s([data-role="calendar-week-grid"]))
+      day_view_classes = classes.(html, ~s([data-role="calendar-day-view"]))
+
+      assert "hidden" in grid_classes
+      assert "lg:grid" in grid_classes
+      assert "lg:hidden" in day_view_classes
+      # …and the day view is not ALSO hidden below `lg`, which is the way
+      # `lg:hidden` can be present and still mean "never drawn".
+      refute "hidden" in day_view_classes
+
+      # ── The create pair (stage 5) ──────────────────────────────────────
+      button_classes = classes.(html, ~s([data-role="new-meeting-button"]))
+      fab_classes = classes.(html, ~s([data-role="start-meeting-fab"]))
+
+      assert "hidden" in button_classes
+      assert "lg:inline-flex" in button_classes
+      assert "lg:hidden" in fab_classes
+      # The same trap as the day view: a FAB carrying both `hidden` and
+      # `lg:hidden` is never drawn at any width, and the mobile surface
+      # loses its only create path while this pin stays green.
+      refute "hidden" in fab_classes
+
+      # The FAB is `position: fixed`, so it is out of flow and the in-flow
+      # bottom nav does NOT push it up — the offset has to reserve that
+      # height itself or the FAB sits behind the nav on a phone. Asserted by
+      # EQUALITY on the whole token, not by substring: the token is a literal
+      # class string with no clock and no entropy, so it is stable, and a
+      # substring assertion cannot see a LONGER token that silently changed
+      # the arithmetic. (Equality would be the wrong tool on a generated
+      # value; it is the right one here.)
+      assert Enum.find(fab_classes, &String.starts_with?(&1, "bottom-[")) ==
+               "bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))]"
+
+      # The detail pair, in the same document, on the same render.
+      html =
+        view
+        |> element(in_grid(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"])))
+        |> render_click()
+
+      panel_classes = classes.(html, ~s([data-role="meeting-detail-panel"]))
+      sheet_classes = classes.(html, ~s([data-role="meeting-detail-sheet"]))
+
+      assert "hidden" in panel_classes
+      assert "lg:flex" in panel_classes
+      assert "lg:hidden" in sheet_classes
+      refute "hidden" in sheet_classes
+    end
+
+    # The task's mobile floor. Named as a number rather than as a class so
+    # the assertion below can be wrong about the class and still right about
+    # the requirement.
+    @touch_target_px 44
+
+    # Tailwind's spacing scale, `--spacing: 0.25rem` in the built stylesheet,
+    # so `min-h-11` is 11 × 4px. Resolved arithmetically rather than matched
+    # as a literal: a test that greps for the string `min-h-11` is satisfied
+    # by `min-h-10` being swapped in for it only if someone remembers to
+    # update the grep, and it cannot say WHY 11 is the right number.
+    defp tailwind_spacing_px(token, prefix) do
+      case Float.parse(String.replace_prefix(token, prefix, "")) do
+        {steps, ""} -> steps * 4
+        _ -> nil
+      end
+    end
+
+    test "the header count chip counts the blocks the grid drew, not the rows it loaded",
+         %{conn: conn, project: project} do
+      # The defect this pins: the chip read `7 total` beside a grid holding
+      # 5 blocks. It was `length(@meetings)` — a binding left over from the
+      # meetings LIST this surface used to be, where `@meetings` WAS what
+      # was on screen. The calendar replaced the list; the chip kept
+      # pointing at the old collection.
+      #
+      # The fixture is sized so that three different wrong answers are three
+      # different numbers, because a fixture where the wrong answer happens
+      # to equal the right one cannot fail:
+      #
+      #   5 — every row loaded (the defect)
+      #   3 — every PLACEABLE row, ignoring the rendered week
+      #   2 — the blocks actually drawn (correct)
+      today = grid_today()
+
+      for {slug, hour} <- [{"chip-placed-a", 10}, {"chip-placed-b", 14}] do
+        seed_grid_meeting(project,
+          slug: slug,
+          scheduled_start_at: zoned_utc(today, hour, 0),
+          scheduled_end_at: zoned_utc(today, hour + 1, 0)
+        )
+      end
+
+      # Excluded by the status conjunct of `placeable?/1`…
+      seed_grid_meeting(project,
+        slug: "chip-cancelled",
+        status: "cancelled",
+        scheduled_start_at: zoned_utc(today, 11, 0),
+        scheduled_end_at: zoned_utc(today, 12, 0)
+      )
+
+      # …and by the `scheduled_start_at` conjunct. Both are rows the grid
+      # deliberately refuses to place, and both were counted.
+      seed_grid_meeting(project, slug: "chip-unscheduled", status: "scheduled")
+
+      # Placeable, but three weeks out — so it is not in the rendered week
+      # and must not be in the rendered week's count. This is the half of
+      # the defect that a `total` label made invisible: the old source was
+      # unscoped in time as well as unfiltered by status.
+      far = Date.add(today, 21)
+
+      seed_grid_meeting(project,
+        slug: "chip-next-month",
+        scheduled_start_at: zoned_utc(far, 10, 0),
+        scheduled_end_at: zoned_utc(far, 11, 0)
+      )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      chip =
+        html |> doc() |> LazyHTML.query(~s([data-role="meetings-count"])) |> LazyHTML.text()
+
+      # Equality on the whole string, not `=~ "2"`. A substring assertion
+      # for the digit is satisfied by `2 total` — which is the un-scoped
+      # label the fix exists to retire — and by `12 meetings this week`.
+      assert String.trim(chip) == "2 meetings this week"
+
+      # And it agrees with the grid it sits beside, counted independently
+      # off the rendered document rather than restated from the fixture.
+      # This is the claim the chip makes and the one it broke; if a future
+      # change makes the two disagree, the number above being right about
+      # the fixture would not save it.
+      assert length(attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id")) ==
+               2
+    end
+
+    test "the FAB meets the 44px touch-target floor", %{conn: conn} do
+      # The defect this pins: the FAB measured 35.00 × 35.00px, computed
+      # `min-height: 0px` / `min-width: 0px`, on the ONLY create path a
+      # phone has. `btn-circle` was not broken and nothing was overriding
+      # it — read out of the built stylesheet, `.btn-circle` resolves to
+      # `width: var(--size); height: var(--size)`, `.btn` sets
+      # `--size: calc(var(--size-field, 0.25rem) * 10)`, and this app's
+      # theme sets `--size-field: 0.21875rem`. 0.21875 × 10 = 2.1875rem =
+      # 35px, exactly the measurement. The class was faithfully rendering a
+      # token that is under the floor.
+      #
+      # So the floor has to be asserted as a floor. What is checked is the
+      # NUMBER the rendered constraint resolves to, not that a constraint is
+      # present: the element was present at 35px the entire time, and so was
+      # `btn-circle`.
+      {:ok, _html, html} = live(grid_conn(conn), ~p"/meetings")
+
+      fab_classes =
+        html |> attrs_of(~s([data-role="start-meeting-fab"]), "class") |> List.first()
+
+      assert is_binary(fab_classes)
+      fab_classes = String.split(fab_classes)
+
+      # Exactly one of each. Two `min-h-*` tokens on one element is a
+      # cascade race whose winner depends on the order Tailwind emitted
+      # them in, which is not a thing this test — or the reader — can see.
+      assert [min_h] = Enum.filter(fab_classes, &String.starts_with?(&1, "min-h-"))
+      assert [min_w] = Enum.filter(fab_classes, &String.starts_with?(&1, "min-w-"))
+
+      assert tailwind_spacing_px(min_h, "min-h-") >= @touch_target_px
+      assert tailwind_spacing_px(min_w, "min-w-") >= @touch_target_px
+
+      # The floor is stated as `min-*` deliberately. `size-*` sets the same
+      # two properties `btn-circle` already sets, so it would win or lose on
+      # emission order; `min-width`/`min-height` beat `width`/`height` in the
+      # box model whatever that order is. A fix that swapped to `size-11`
+      # would measure 44px today and silently stop the day daisyUI's rule
+      # moved below it in the bundle.
+      refute Enum.any?(fab_classes, &String.starts_with?(&1, "size-"))
+
+      # Growing the button must not eat its clearance over the bottom nav.
+      # Re-asserted here, on the same render, because this test is the one
+      # that changes the button's size — and because a browser cannot check
+      # it: headless Chrome resolves `env(safe-area-inset-*)` to 0, so the
+      # inset term contributes nothing to a measured clearance and the
+      # result looks fine while the term is missing.
+      assert Enum.find(fab_classes, &String.starts_with?(&1, "bottom-[")) ==
+               "bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))]"
+    end
+
+    test "a meeting lands in the column matching its local date, at its computed offset",
+         %{conn: conn, project: project} do
+      today = grid_today()
+
+      meeting =
+        seed_grid_meeting(project,
+          slug: "grid-placed",
+          name: "Placed Meeting",
+          scheduled_start_at: zoned_utc(today, 10, 0),
+          scheduled_end_at: zoned_utc(today, 11, 0)
+        )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      # It is in TODAY's column, and it is the only event on the grid — so a
+      # grid that renders every meeting in every column fails here.
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [meeting.id]
+
+      assert attrs_of(
+               html,
+               ~s(#{column_selector(today)} [data-role="calendar-event"]),
+               "data-meeting-id"
+             ) == [meeting.id]
+
+      # Hand-computed against the default {8, 18} window this single 10:00
+      # meeting does not widen: the window is 600 minutes, the meeting starts
+      # 120 minutes into it (120/600 = 20%) and runs 60 (60/600 = 10%). With
+      # nothing to share the column with it takes the whole width, less the
+      # 0.25rem gutter on each side.
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "style") ==
+               ["top:20.0%;height:10.0%;left:calc(0.0% + 0.25rem);width:calc(100.0% - 0.5rem)"]
+
+      # And it carries its own status, not a rendered guess at one.
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-status") ==
+               ["scheduled"]
+
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "phx-value-id") ==
+               [meeting.id]
+    end
+
+    test "a meeting with no scheduled_start_at renders no event block and does not raise",
+         %{conn: conn, project: project} do
+      seed_grid_meeting(project, slug: "grid-adhoc", name: "Ad-hoc Meeting")
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      # The grid still draws — an unplaceable meeting is not an error state.
+      assert attrs_of(html, ~s([data-role="calendar-week-grid"]), "data-role") ==
+               ["calendar-week-grid"]
+
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") == []
+    end
+
+    test "a cancelled meeting is not placed while a scheduled one at the same instant is",
+         %{conn: conn, project: project} do
+      # Two rows, ONE variable: same day, same instant, same duration, same
+      # project. Status is the only thing that differs, so a failure here can
+      # only be about status.
+      today = grid_today()
+      start_at = zoned_utc(today, 14, 0)
+      end_at = zoned_utc(today, 15, 0)
+
+      _cancelled =
+        seed_grid_meeting(project,
+          slug: "grid-cancelled",
+          name: "Cancelled Meeting",
+          status: "cancelled",
+          scheduled_start_at: start_at,
+          scheduled_end_at: end_at
+        )
+
+      scheduled =
+        seed_grid_meeting(project,
+          slug: "grid-scheduled",
+          name: "Scheduled Meeting",
+          status: "scheduled",
+          scheduled_start_at: start_at,
+          scheduled_end_at: end_at
+        )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [scheduled.id]
+    end
+
+    test "a live meeting carries data-live while a scheduled one at the same instant does not",
+         %{conn: conn, project: project} do
+      today = grid_today()
+      start_at = zoned_utc(today, 9, 0)
+      end_at = zoned_utc(today, 10, 0)
+
+      live_meeting =
+        seed_grid_meeting(project,
+          slug: "grid-live",
+          name: "Live Meeting",
+          status: "live",
+          scheduled_start_at: start_at,
+          scheduled_end_at: end_at
+        )
+
+      scheduled =
+        seed_grid_meeting(project,
+          slug: "grid-not-live",
+          name: "Scheduled Meeting",
+          status: "scheduled",
+          scheduled_start_at: start_at,
+          scheduled_end_at: end_at
+        )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      live_selector =
+        in_grid(~s([data-role="calendar-event"][data-meeting-id="#{live_meeting.id}"]))
+
+      scheduled_selector =
+        in_grid(~s([data-role="calendar-event"][data-meeting-id="#{scheduled.id}"]))
+
+      # Both halves named, because `attribute/2` skips nodes without the
+      # attribute: asserting only the presence of one `"true"` on the page
+      # cannot tell which of the two blocks carries it.
+      assert attrs_of(html, live_selector, "data-live") == ["true"]
+      assert attrs_of(html, scheduled_selector, "data-live") == []
+
+      # The live variant is a SHAPE, and it is inside the live block only.
+      assert attrs_of(
+               html,
+               ~s(#{live_selector} [data-role="calendar-event-live-dot"]),
+               "data-role"
+             ) == ["calendar-event-live-dot"]
+
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event-live-dot"])), "data-role") ==
+               ["calendar-event-live-dot"]
+    end
+
+    test "concurrent meetings take separate lanes in the week grid and sequential ones do not",
+         %{conn: conn, project: project} do
+      # The sponsor's defect, pinned. Two 30-minute meetings at the same
+      # time and two 30-minute meetings back to back, in the same column, on
+      # the same day: one variable across two rows. Nothing about "both
+      # render" would have failed before the fix.
+      today = grid_today()
+
+      concurrent_a =
+        seed_grid_meeting(project,
+          slug: "grid-lane-same-a",
+          name: "Same Time A",
+          scheduled_start_at: zoned_utc(today, 10, 0),
+          scheduled_end_at: zoned_utc(today, 10, 30)
+        )
+
+      concurrent_b =
+        seed_grid_meeting(project,
+          slug: "grid-lane-same-b",
+          name: "Same Time B",
+          scheduled_start_at: zoned_utc(today, 10, 0),
+          scheduled_end_at: zoned_utc(today, 10, 30)
+        )
+
+      sequential_a =
+        seed_grid_meeting(project,
+          slug: "grid-lane-seq-a",
+          name: "Sequential A",
+          scheduled_start_at: zoned_utc(today, 14, 0),
+          scheduled_end_at: zoned_utc(today, 14, 30)
+        )
+
+      sequential_b =
+        seed_grid_meeting(project,
+          slug: "grid-lane-seq-b",
+          name: "Sequential B",
+          scheduled_start_at: zoned_utc(today, 14, 30),
+          scheduled_end_at: zoned_utc(today, 15, 0)
+        )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert grid_lane_of(html, concurrent_a) == {"0", "2"}
+      assert grid_lane_of(html, concurrent_b) == {"1", "2"}
+
+      assert grid_horizontal_of(html, concurrent_a) ==
+               "left:calc(0.0% + 0.25rem);width:calc(50.0% - 0.5rem)"
+
+      assert grid_horizontal_of(html, concurrent_b) ==
+               "left:calc(50.0% + 0.25rem);width:calc(50.0% - 0.5rem)"
+
+      # Back to back is not a conflict: both keep the full column, and it is
+      # their VERTICAL position that differs.
+      assert grid_lane_of(html, sequential_a) == {"0", "1"}
+      assert grid_lane_of(html, sequential_b) == {"0", "1"}
+
+      assert grid_horizontal_of(html, sequential_a) ==
+               "left:calc(0.0% + 0.25rem);width:calc(100.0% - 0.5rem)"
+
+      assert grid_horizontal_of(html, sequential_a) == grid_horizontal_of(html, sequential_b)
+
+      refute grid_style_of(html, sequential_a) == grid_style_of(html, sequential_b)
+    end
+
+    test "a block too short for two lines drops to one, and a taller one does not",
+         %{conn: conn, project: project} do
+      # The other half of dropping the pixel floor. The floor existed
+      # because a half-hour block in a 3.25rem row is 26px and clips its own
+      # time line; removing it without answering that would re-open the
+      # defect it was added for. The answer is one line, not a taller box —
+      # a taller box is what collided with the block below it.
+      today = grid_today()
+
+      short =
+        seed_grid_meeting(project,
+          slug: "grid-compact-short",
+          name: "Short Meeting",
+          scheduled_start_at: zoned_utc(today, 10, 0),
+          scheduled_end_at: zoned_utc(today, 10, 30)
+        )
+
+      tall =
+        seed_grid_meeting(project,
+          slug: "grid-compact-tall",
+          name: "Long Meeting",
+          scheduled_start_at: zoned_utc(today, 14, 0),
+          scheduled_end_at: zoned_utc(today, 16, 0)
+        )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert attrs_of(html, grid_selector(short), "data-compact") == ["true"]
+      assert attrs_of(html, grid_selector(tall), "data-compact") == []
+
+      # And the threshold is a real measurement of the two halves, not a
+      # duration guess: 26px of a 35px requirement against 104px of it.
+      window = {8, 18}
+      assert PlatformWeb.MeetingLive.calendar_compact_block?(%{height: 5.0}, window, :week)
+      refute PlatformWeb.MeetingLive.calendar_compact_block?(%{height: 20.0}, window, :week)
+    end
+
+    defp grid_selector(meeting),
+      do: in_grid(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"]))
+
+    defp grid_style_of(html, meeting),
+      do: html |> attrs_of(grid_selector(meeting), "style") |> List.first()
+
+    defp grid_horizontal_of(html, meeting),
+      do: html |> grid_style_of(meeting) |> String.split(";") |> Enum.drop(2) |> Enum.join(";")
+
+    defp grid_lane_of(html, meeting) do
+      {
+        html |> attrs_of(grid_selector(meeting), "data-lane") |> List.first(),
+        html |> attrs_of(grid_selector(meeting), "data-lanes") |> List.first()
+      }
+    end
+
+    test "the now-line renders inside today's column only", %{conn: conn, project: project} do
+      # Seeded at the CURRENT local hour so `hour_window/2` is guaranteed to
+      # contain "now" whatever time this suite runs at. Without it, a 3 AM
+      # run would draw no now-line at all and the assertion would be vacuous
+      # in a way that looks green.
+      today = grid_today()
+      now = DateTime.now!(@grid_zone)
+
+      seed_grid_meeting(project,
+        slug: "grid-nowline-anchor",
+        name: "Now Anchor",
+        scheduled_start_at: zoned_utc(today, now.hour, 0),
+        scheduled_end_at: zoned_utc(today, now.hour, 30)
+      )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      # Exactly one, and it is in today's column. A now-line drawn in every
+      # column would satisfy "it is in today's column" and fail the count.
+      assert attrs_of(html, in_grid(~s([data-role="calendar-now-line"])), "data-role") ==
+               ["calendar-now-line"]
+
+      assert attrs_of(
+               html,
+               ~s(#{column_selector(today)} [data-role="calendar-now-line"]),
+               "data-role"
+             ) == ["calendar-now-line"]
+    end
+
+    test "the now-line MOVES on the beat", %{conn: conn} do
+      # The defect this pins: the line rendered at the right place on the
+      # first paint and then never moved again for the life of the session.
+      # A now-line frozen at mount is a confidently wrong answer that looks
+      # exactly like a right one, and it survived review because the only
+      # thing asserted about it was that the ELEMENT existed — which it did,
+      # the whole time. So the assertion here is on the rendered `top`, and
+      # it is that two beats produce two DIFFERENT values.
+      #
+      # The instants are injected via the tick's arity-2 message rather than
+      # slept for: the offset is minute-granular, so a test driving the bare
+      # `:calendar_tick` twice inside one wall-clock minute reads the same
+      # percentage both times and cannot tell a working line from a frozen
+      # one. No meetings are seeded, so `hour_window/2` stays at its default
+      # {8, 18} — 600 minutes — and the arithmetic below is exact.
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+
+      today = grid_today()
+
+      beat = fn hour, minute ->
+        send(view.pid, {:calendar_tick, zoned_utc(today, hour, minute)})
+        attrs_of(render(view), in_grid(~s([data-role="calendar-now-line"])), "style")
+      end
+
+      # 09:00 is 60 minutes into a 600-minute window.
+      first = beat.(9, 0)
+      # 09:06 is 66. Six minutes on rather than one so the expected values
+      # are exact decimals and the assertion pins a number instead of a
+      # float repr.
+      second = beat.(9, 6)
+
+      assert first == ["top:10.0%"]
+      assert second == ["top:11.0%"]
+
+      # Stated separately and on purpose. The two equalities above would
+      # both hold against a lucky clock; this is the claim the defect
+      # violated, and it cannot hold for a line that is not recomputed.
+      assert first != second
+    end
+
+    test "today's day heading is the only one marked, and it is the viewer's today",
+         %{conn: conn} do
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      # Exactly one marked day…
+      assert attrs_of(
+               html,
+               ~s([data-role="calendar-week-day-heading"] [data-today]),
+               "data-today"
+             ) == ["true"]
+
+      # …and it is the day the viewer's zone calls today. Walked per-heading
+      # rather than with a `:has()` selector so the association between the
+      # heading's `data-date` and the marker inside it is the thing asserted,
+      # not the coincidence that both strings appear on the page.
+      marked =
+        html
+        |> doc()
+        |> LazyHTML.query(~s([data-role="calendar-week-day-heading"]))
+        |> Enum.filter(
+          &(LazyHTML.attribute(LazyHTML.query(&1, "[data-today]"), "data-today") != [])
+        )
+        |> Enum.flat_map(&LazyHTML.attribute(&1, "data-date"))
+
+      assert marked == [Date.to_iso8601(grid_today())]
+    end
+
+    test "the zone label renders the resolved zone when connected", %{conn: conn} do
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert html
+             |> doc()
+             |> LazyHTML.query(~s([data-role="calendar-timezone"]))
+             |> LazyHTML.text()
+             |> String.trim() == @grid_zone
+    end
+
+    test "the dead render names no zone rather than guessing UTC", %{conn: conn} do
+      # The static render carries no connect params, so there is no resolved
+      # zone. Printing `UTC` there would be a confident wrong answer that
+      # nobody notices until they miss a call, so the label is ABSENT.
+      html = conn |> get(~p"/meetings") |> html_response(200)
+
+      assert attrs_of(html, ~s([data-role="calendar-week-grid"]), "data-role") ==
+               ["calendar-week-grid"]
+
+      assert attrs_of(html, ~s([data-role="calendar-timezone"]), "data-role") == []
+      refute html =~ "Etc/UTC"
+    end
+
+    test "the week nav pages the label and Today returns to it", %{conn: conn} do
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+
+      this_week = PlatformWeb.MeetingLive.calendar_week_label(grid_today())
+      next_week = PlatformWeb.MeetingLive.calendar_week_label(Date.add(grid_today(), 7))
+      previous_week = PlatformWeb.MeetingLive.calendar_week_label(Date.add(grid_today(), -7))
+
+      assert week_label(view) == this_week
+
+      view |> element(~s([phx-click="calendar_next_week"])) |> render_click()
+      assert week_label(view) == next_week
+
+      view |> element(~s([phx-click="calendar_prev_week"])) |> render_click()
+      view |> element(~s([phx-click="calendar_prev_week"])) |> render_click()
+      assert week_label(view) == previous_week
+
+      view |> element(~s([phx-click="calendar_today"])) |> render_click()
+      assert week_label(view) == this_week
+    end
+
+    defp week_label(view) do
+      view
+      |> element(~s([data-role="calendar-week-label"]))
+      |> render()
+      |> doc()
+      |> LazyHTML.text()
+      |> String.trim()
+    end
+  end
+
+  # ── Mobile week strip + day view (task 019fb954-8ead stage 3) ────────────
+  #
+  # Below `lg` the calendar is a different information architecture, not a
+  # narrower grid: a week strip for navigation over a single-column day
+  # view for detail. These tests read the same document the desktop ones
+  # do — there is no viewport at test time — so each one names the half it
+  # is about, either by scoping inside `[data-role="calendar-day-view"]` or
+  # by asserting the breakpoint classes directly (see "the grid is the `lg`
+  # surface and the day view is the surface below it", which is the one
+  # test that pins the swap and deliberately stayed a single test).
+  describe ":index action — mobile day view" do
+    setup %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      Repo.delete_all(Meeting)
+      project = create_project()
+      {:ok, conn: conn, user: user, project: project}
+    end
+
+    defp day_view(selector), do: ~s([data-role="calendar-day-view"] #{selector})
+
+    defp day_count_text(html) do
+      html
+      |> doc()
+      |> LazyHTML.query(~s([data-role="calendar-day-count"]))
+      |> LazyHTML.text()
+      |> String.trim()
+    end
+
+    defp day_heading_date(html),
+      do: html |> attrs_of(~s([data-role="calendar-day-heading"]), "data-date") |> List.first()
+
+    defp strip_letters(html) do
+      html
+      |> doc()
+      |> LazyHTML.query(~s([data-role="calendar-strip-day"]))
+      |> Enum.map(fn cell ->
+        cell
+        |> LazyHTML.query(~s([data-role="calendar-strip-day-number"]))
+        |> then(fn number -> String.replace(LazyHTML.text(cell), LazyHTML.text(number), "") end)
+        |> String.trim()
+      end)
+    end
+
+    # The expected week, derived from `Date.beginning_of_week/1`'s stdlib
+    # `:monday` default rather than from anything the template calls.
+    defp monday_first_week(%Date{} = anchor) do
+      monday = Date.beginning_of_week(anchor)
+      Enum.map(0..6, &Date.to_iso8601(Date.add(monday, &1)))
+    end
+
+    defp click_strip_day(view, %Date{} = date) do
+      view
+      |> element(~s([data-role="calendar-strip-day"][data-date="#{Date.to_iso8601(date)}"]))
+      |> render_click()
+    end
+
+    test "the strip is seven cells, Monday first", %{conn: conn} do
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert attrs_of(html, ~s([data-role="calendar-strip-day"]), "data-date") ==
+               monday_first_week(grid_today())
+
+      # The letters are the load-bearing half of "Monday first", and they
+      # are literal rather than derived: a Sunday-first strip renders the
+      # same SEVEN cells over a different span, and the date list alone
+      # leaves a reader checking two week-start conventions against each
+      # other. `S M T W T F S` and `M T W T F S S` cannot be confused.
+      assert strip_letters(html) == ~w(M T W T F S S)
+
+      # Every cell is a 44px touch target — the canvas pins that number
+      # explicitly, and a 7-across strip at 375px is exactly where it bites.
+      for class <- attrs_of(html, ~s([data-role="calendar-strip-day"]), "class") do
+        assert "min-h-11" in String.split(class)
+      end
+    end
+
+    test "the strip opens on the viewer's today, selected and marked", %{conn: conn} do
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      today = Date.to_iso8601(grid_today())
+
+      # Exactly one selected cell, and it is today's. Walked per-cell so
+      # what is asserted is the ASSOCIATION between the cell's date and its
+      # own marker, not that both strings appear somewhere on the page.
+      assert marked_strip_dates(html, "data-selected") == [today]
+      assert marked_strip_dates(html, "data-today") == [today]
+      assert day_heading_date(html) == today
+    end
+
+    defp marked_strip_dates(html, attribute) do
+      html
+      |> doc()
+      |> LazyHTML.query(~s([data-role="calendar-strip-day"]))
+      |> Enum.filter(&(LazyHTML.attribute(&1, attribute) != []))
+      |> Enum.flat_map(&LazyHTML.attribute(&1, "data-date"))
+    end
+
+    test "clicking a strip day moves the heading and the selection to that day",
+         %{conn: conn} do
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      today = grid_today()
+      target = Enum.find(week_dates(today), &(Date.compare(&1, today) != :eq))
+
+      assert day_heading_date(html) == Date.to_iso8601(today)
+
+      html = click_strip_day(view, target)
+
+      assert day_heading_date(html) == Date.to_iso8601(target)
+      assert marked_strip_dates(html, "data-selected") == [Date.to_iso8601(target)]
+
+      # The heading names the day in words, which is the whole reason it
+      # exists: the strip prints one letter and a number.
+      assert html
+             |> doc()
+             |> LazyHTML.query(~s([data-role="calendar-day-heading"]))
+             |> LazyHTML.text() =~ Calendar.strftime(target, "%A, %b %-d")
+
+      # `data-today` does NOT follow the selection — today is still today.
+      assert marked_strip_dates(html, "data-today") == [Date.to_iso8601(today)]
+    end
+
+    defp week_dates(%Date{} = anchor) do
+      monday = Date.beginning_of_week(anchor)
+      Enum.map(0..6, &Date.add(monday, &1))
+    end
+
+    test "a Tuesday meeting is absent from the day view while Wednesday is selected, and its Wednesday sibling is present",
+         %{conn: conn, project: project} do
+      # TWO ROWS, ONE VARIABLE: same status, same wall-clock time, same
+      # duration, same project. Only the date differs, so a failure here
+      # can only be about which day the column is drawing.
+      [_mon, tuesday, wednesday | _] = week_dates(grid_today())
+
+      tue_meeting =
+        seed_grid_meeting(project,
+          slug: "mob-tuesday",
+          name: "Tuesday Meeting",
+          scheduled_start_at: zoned_utc(tuesday, 10, 0),
+          scheduled_end_at: zoned_utc(tuesday, 11, 0)
+        )
+
+      wed_meeting =
+        seed_grid_meeting(project,
+          slug: "mob-wednesday",
+          name: "Wednesday Meeting",
+          scheduled_start_at: zoned_utc(wednesday, 10, 0),
+          scheduled_end_at: zoned_utc(wednesday, 11, 0)
+        )
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+
+      html = click_strip_day(view, wednesday)
+
+      assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [wed_meeting.id]
+
+      # …and the absent one is absent because the DAY VIEW filters it, not
+      # because it was never loaded: the desktop grid, reading the same
+      # week's meetings, still draws both.
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [tue_meeting.id, wed_meeting.id]
+
+      html = click_strip_day(view, tuesday)
+
+      assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [tue_meeting.id]
+    end
+
+    test "the day heading counts the meetings the column DRAWS, not the rows on that date",
+         %{conn: conn, project: project} do
+      [_mon, _tue, wednesday | _] = week_dates(grid_today())
+
+      seed_grid_meeting(project,
+        slug: "mob-count-a",
+        name: "Counted A",
+        scheduled_start_at: zoned_utc(wednesday, 9, 0),
+        scheduled_end_at: zoned_utc(wednesday, 10, 0)
+      )
+
+      seed_grid_meeting(project,
+        slug: "mob-count-b",
+        name: "Counted B",
+        scheduled_start_at: zoned_utc(wednesday, 11, 0),
+        scheduled_end_at: zoned_utc(wednesday, 12, 0)
+      )
+
+      # Same day, same instant as B, differing only in status — so the
+      # count can only move for a status reason.
+      cancelled =
+        seed_grid_meeting(project,
+          slug: "mob-count-cancelled",
+          name: "Cancelled C",
+          status: "cancelled",
+          scheduled_start_at: zoned_utc(wednesday, 11, 0),
+          scheduled_end_at: zoned_utc(wednesday, 12, 0)
+        )
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+
+      html = click_strip_day(view, wednesday)
+
+      assert day_count_text(html) == "2 meetings"
+
+      refute cancelled.id in attrs_of(
+               html,
+               day_view(~s([data-role="calendar-event"])),
+               "data-meeting-id"
+             )
+    end
+
+    test "the count is worded, and singular for one meeting", %{conn: conn, project: project} do
+      [_mon, _tue, wednesday | _] = week_dates(grid_today())
+
+      seed_grid_meeting(project,
+        slug: "mob-singular",
+        name: "Only One",
+        scheduled_start_at: zoned_utc(wednesday, 9, 0),
+        scheduled_end_at: zoned_utc(wednesday, 9, 30)
+      )
+
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      # A day with nothing on it says so in words. `0 meetings` under an
+      # empty column reads like a failed load; this is the only sentence a
+      # phone gets about the selected day.
+      empty_day = Enum.find(week_dates(grid_today()), &(Date.compare(&1, wednesday) != :eq))
+
+      assert day_count_text(click_strip_day(view, empty_day)) == "No meetings"
+      assert day_count_text(click_strip_day(view, wednesday)) == "1 meeting"
+
+      # And the heading is present on the very first render, not only after
+      # a click.
+      assert day_count_text(html) in ["No meetings", "1 meeting"]
+    end
+
+    # The mobile touch-target floor, named once. It is the same 44px the
+    # strip cells and every control on this page are asserted against.
+    @mobile_touch_target_px 44
+
+    test "the shortest block a phone can draw is a 44px touch target by GEOMETRY, with no CSS floor",
+         %{conn: conn, project: project} do
+      # The two constraints that were in direct conflict, asserted together
+      # so they cannot silently diverge again.
+      #
+      # A CSS `min-height` of 44px is what the day view used to carry, and
+      # it is what the sponsor saw: in a 48px hour row a half-hour block's
+      # own slot is 24px, so a 44px floor drew it 20px into the block below
+      # and the two labels overprinted. No DOM assertion could see that —
+      # both elements are present and individually correct — so it survived
+      # every green run until someone looked at a screenshot.
+      #
+      # The fix is to meet 44px with the ROW HEIGHT instead of overriding
+      # the box: at 5.5rem an hour, the half-hour floor in
+      # `CalendarWindow.place/4` lands on exactly 44px. Both bounds are
+      # asserted because either one alone is satisfiable by the bug — "at
+      # least 44px" passes with the CSS floor back, and "no more than its
+      # slot" passes with rows too short to touch.
+      today = grid_today()
+
+      seed_grid_meeting(project,
+        slug: "mob-short",
+        name: "Short Meeting",
+        scheduled_start_at: zoned_utc(today, 10, 0),
+        scheduled_end_at: zoned_utc(today, 10, 30)
+      )
+
+      # A five-minute meeting too: the floor that the row height is sized
+      # against is the placement's, so the smallest block a phone can draw
+      # has to clear the target as well.
+      seed_grid_meeting(project,
+        slug: "mob-tiny",
+        name: "Tiny Meeting",
+        scheduled_start_at: zoned_utc(today, 14, 0),
+        scheduled_end_at: zoned_utc(today, 14, 5)
+      )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      window = {8, 18}
+
+      for {height, minutes} <- [{5.0, 30}, {5.0, 5}] do
+        drawn = PlatformWeb.MeetingLive.calendar_block_height_px(%{height: height}, window, :day)
+
+        assert drawn >= @mobile_touch_target_px,
+               "a #{minutes}-minute block draws #{drawn}px, under the #{@mobile_touch_target_px}px target"
+
+        # And it is met by the slot, not by spilling out of it: the drawn
+        # box is never taller than the share of the hour the placement gave
+        # it. `place/4` floors a 5-minute meeting to a half hour, so its
+        # share IS half an hour — the floor lives in the geometry, where a
+        # lane split can see it, rather than in CSS, where nothing can.
+        slot_px =
+          max(minutes, 30) / 60 * PlatformWeb.MeetingLive.calendar_hour_row_rem(:day) * 16
+
+        assert drawn <= slot_px,
+               "a #{minutes}-minute block draws #{drawn}px into a #{slot_px}px slot"
+      end
+
+      # Structural half of the same claim: nothing may put the pixel floor
+      # back on the box. The comparison above is arithmetic and cannot see
+      # a CSS class.
+      for class <- attrs_of(html, day_view(~s([data-role="calendar-event"])), "class") do
+        refute Enum.any?(String.split(class), &String.starts_with?(&1, "min-h-")),
+               "the day-view block carries a pixel height floor again: #{class}"
+      end
+
+      # Two lines fit at this row height, which is why the phone half needs
+      # no compact variant where the week grid does.
+      refute PlatformWeb.MeetingLive.calendar_compact_block?(%{height: 5.0}, window, :day)
+
+      # The percentage geometry is still the truth about WHEN, and with
+      # nothing to share the column with, the block spans it.
+      assert "top:20.0%;height:5.0%;left:calc(0.0% + 0.375rem);width:calc(100.0% - 0.75rem)" in attrs_of(
+               html,
+               day_view(~s([data-role="calendar-event"])),
+               "style"
+             )
+    end
+
+    test "concurrent meetings take separate lanes in the day column and sequential ones do not",
+         %{conn: conn, project: project} do
+      # Two rows, one variable. Both pairs are two 30-minute meetings in the
+      # same column; the only difference is whether their times coincide.
+      # A test asserting merely that all four render would have passed
+      # before this fix too — that is exactly the shape that let the defect
+      # through.
+      today = grid_today()
+
+      concurrent_a =
+        seed_grid_meeting(project,
+          slug: "mob-lane-same-a",
+          name: "Same Time A",
+          scheduled_start_at: zoned_utc(today, 10, 0),
+          scheduled_end_at: zoned_utc(today, 10, 30)
+        )
+
+      concurrent_b =
+        seed_grid_meeting(project,
+          slug: "mob-lane-same-b",
+          name: "Same Time B",
+          scheduled_start_at: zoned_utc(today, 10, 0),
+          scheduled_end_at: zoned_utc(today, 10, 30)
+        )
+
+      sequential_a =
+        seed_grid_meeting(project,
+          slug: "mob-lane-seq-a",
+          name: "Sequential A",
+          scheduled_start_at: zoned_utc(today, 14, 0),
+          scheduled_end_at: zoned_utc(today, 14, 30)
+        )
+
+      sequential_b =
+        seed_grid_meeting(project,
+          slug: "mob-lane-seq-b",
+          name: "Sequential B",
+          scheduled_start_at: zoned_utc(today, 14, 30),
+          scheduled_end_at: zoned_utc(today, 15, 0)
+        )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      # The concurrent pair: same vertical box, DIFFERENT horizontal one.
+      assert lane_of(html, concurrent_a) == {"0", "2"}
+      assert lane_of(html, concurrent_b) == {"1", "2"}
+      refute block_style(html, concurrent_a) == block_style(html, concurrent_b)
+
+      # The sequential pair: different vertical box, SAME horizontal one —
+      # both full width, because 10:30 following 10:00 is not a conflict.
+      assert lane_of(html, sequential_a) == {"0", "1"}
+      assert lane_of(html, sequential_b) == {"0", "1"}
+
+      assert horizontal_of(block_style(html, sequential_a)) ==
+               horizontal_of(block_style(html, sequential_b))
+
+      refute vertical_of(block_style(html, sequential_a)) ==
+               vertical_of(block_style(html, sequential_b))
+
+      # And the split really is a split: the two lanes are half a column
+      # each, not two full-width boxes with different `left`s.
+      assert horizontal_of(block_style(html, concurrent_a)) ==
+               "left:calc(0.0% + 0.375rem);width:calc(50.0% - 0.75rem)"
+
+      assert horizontal_of(block_style(html, concurrent_b)) ==
+               "left:calc(50.0% + 0.375rem);width:calc(50.0% - 0.75rem)"
+    end
+
+    defp lane_of(html, meeting) do
+      selector = day_view(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"]))
+
+      {
+        html |> attrs_of(selector, "data-lane") |> List.first(),
+        html |> attrs_of(selector, "data-lanes") |> List.first()
+      }
+    end
+
+    defp block_style(html, meeting) do
+      html
+      |> attrs_of(
+        day_view(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"])),
+        "style"
+      )
+      |> List.first()
+    end
+
+    defp vertical_of(style),
+      do: style |> String.split(";") |> Enum.take(2) |> Enum.join(";")
+
+    defp horizontal_of(style),
+      do: style |> String.split(";") |> Enum.drop(2) |> Enum.join(";")
+
+    test "the now-line is drawn for today and disappears when another day is selected",
+         %{conn: conn, project: project} do
+      # Anchored at the CURRENT local hour so the drawn window is
+      # guaranteed to contain "now" whatever time this suite runs at.
+      # Without it a 3 AM run draws no line at all and the first assertion
+      # is vacuous in a way that looks green.
+      today = grid_today()
+      now = DateTime.now!(@grid_zone)
+
+      seed_grid_meeting(project,
+        slug: "mob-nowline-anchor",
+        name: "Now Anchor",
+        scheduled_start_at: zoned_utc(today, now.hour, 0),
+        scheduled_end_at: zoned_utc(today, now.hour, 30)
+      )
+
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert attrs_of(html, day_view(~s([data-role="calendar-now-line"])), "data-role") ==
+               ["calendar-now-line"]
+
+      other_day = Enum.find(week_dates(today), &(Date.compare(&1, today) != :eq))
+      html = click_strip_day(view, other_day)
+
+      # Absent from the DAY VIEW, and still present on the desktop grid in
+      # the same document — the line is a fact about today, and the grid
+      # still draws today's column.
+      assert attrs_of(html, day_view(~s([data-role="calendar-now-line"])), "data-role") == []
+
+      assert attrs_of(html, in_grid(~s([data-role="calendar-now-line"])), "data-role") ==
+               ["calendar-now-line"]
+    end
+
+    test "a selection naming a day outside the rendered week is ignored", %{conn: conn} do
+      # The seven strip cells are the only thing that sends this event, so
+      # an eighth date is not a request the UI can make. Honouring it would
+      # select a day whose meetings were never queried — the week is loaded
+      # per week — and draw a confidently empty column.
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      today = Date.to_iso8601(grid_today())
+      assert day_heading_date(html) == today
+
+      next_week = Date.to_iso8601(Date.add(grid_today(), 7))
+      html = render_click(view, "select_calendar_day", %{"date" => next_week})
+      assert day_heading_date(html) == today
+
+      html = render_click(view, "select_calendar_day", %{"date" => "not-a-date"})
+      assert day_heading_date(html) == today
+    end
+
+    test "paging the week carries the selected day's weekday with it", %{conn: conn} do
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      today = grid_today()
+      target = Enum.find(week_dates(today), &(Date.compare(&1, today) != :eq))
+
+      assert day_heading_date(html) == Date.to_iso8601(today)
+
+      click_strip_day(view, target)
+      html = view |> element(~s([phx-click="calendar_next_week"])) |> render_click()
+
+      # A Wednesday stays a Wednesday: the selection keeps its offset in the
+      # week rather than snapping back to Monday, and the strip's selected
+      # cell agrees with the heading.
+      expected = Date.to_iso8601(Date.add(target, 7))
+      assert day_heading_date(html) == expected
+      assert marked_strip_dates(html, "data-selected") == [expected]
+
+      # Which SEVEN days, not in which order. Sorted deliberately: the
+      # strip's ordering is pinned once, in "the strip is seven cells,
+      # Monday first", and a second test reading the same ordered list
+      # would die for that reason too — at which point neither failure
+      # tells you which of the two behaviours broke. Found by detonating
+      # the Sunday-first probe, which killed both tests before this line
+      # was narrowed.
+      assert Enum.sort(attrs_of(html, ~s([data-role="calendar-strip-day"]), "data-date")) ==
+               Enum.sort(monday_first_week(Date.add(today, 7)))
+    end
+  end
+
+  # ── Meeting detail panel + sheet (task 019fb954-8ead stage 4) ────────────
+  #
+  # The selection made in the grid or the day view has to become something
+  # a reader can act on, and until this stage there was NO path from the
+  # index to a meeting page at any width: the old grouped rows linked to
+  # `/meetings/<slug>` and both calendar halves now select instead.
+  # `data-role="meeting-detail-open"` is what restores it, which is why the
+  # tests below care so much about whether it can scroll out of view.
+  describe ":index action — meeting detail" do
+    setup %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      Repo.delete_all(Meeting)
+      project = create_project()
+      {:ok, conn: conn, user: user, project: project}
+    end
+
+    # 2:00–3:00 PM local on the viewer's today, so the meeting is inside the
+    # rendered week AND inside the default {8, 18} hour window whatever time
+    # the suite runs at.
+    defp seed_detail_meeting(project, opts \\ []) do
+      today = grid_today()
+
+      seed_grid_meeting(project,
+        slug: Keyword.get(opts, :slug, "detail-meeting"),
+        name: Keyword.get(opts, :name, "Detail Meeting"),
+        status: Keyword.get(opts, :status, "scheduled"),
+        scheduled_start_at: zoned_utc(today, Keyword.get(opts, :start_hour, 14), 0),
+        scheduled_end_at: zoned_utc(today, Keyword.get(opts, :end_hour, 15), 0)
+      )
+    end
+
+    # Both calendar halves render `data-role="calendar-event"` for the same
+    # meeting — one contract, two surfaces — so an unscoped selector matches
+    # two nodes and `element/2` refuses it. The grid's copy is the one
+    # clicked here; the day view's carries the identical `phx-click`.
+    defp select_meeting(view, meeting) do
+      view
+      |> element(in_grid(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"])))
+      |> render_click()
+    end
+
+    defp detail_panel(doc), do: LazyHTML.query(doc, ~s([data-role="meeting-detail-panel"]))
+    defp detail_sheet(doc), do: LazyHTML.query(doc, ~s([data-role="meeting-detail-sheet"]))
+
+    defp detail_text(node, selector),
+      do: node |> LazyHTML.query(selector) |> LazyHTML.text() |> String.trim()
+
+    @guest_window_seconds 24 * 60 * 60
+
+    # A GUEST invite row written directly rather than through
+    # `invite_guest/2`: that function also mints a token, creates a guest
+    # chat space and runs delivery, and none of that is what these tests
+    # are about. `revoked_at` is the one variable they vary.
+    #
+    # `expires_at` is not decoration. Until stage 5 of task 019fb955-1d7b
+    # this fixture wrote `display_name` alone, which is a row shape NO
+    # writer in the codebase produces — `invite_guest/2` always stamps an
+    # expiry and `invite_external_user/3` always writes an email — and the
+    # rendered surface refuses it by raising rather than guessing a tag.
+    # The fixture was the thing that was wrong, so the fixture moved.
+    defp seed_invite!(meeting, display_name, revoked_at \\ nil) do
+      %Invite{}
+      |> Invite.changeset(%{
+        meeting_id: meeting.id,
+        display_name: display_name,
+        expires_at: DateTime.add(DateTime.utc_now(), @guest_window_seconds, :second),
+        revoked_at: revoked_at
+      })
+      |> Repo.insert!()
+    end
+
+    test "neither the panel nor the sheet renders before a selection", %{
+      conn: conn,
+      project: project
+    } do
+      # The meeting EXISTS and is drawn — so this is "nothing is selected",
+      # not "there was nothing to select", which would pass on a build that
+      # never renders the detail surface at all.
+      meeting = seed_detail_meeting(project)
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [meeting.id]
+
+      assert attrs_of(html, ~s([data-role="meeting-detail-panel"]), "data-role") == []
+      assert attrs_of(html, ~s([data-role="meeting-detail-sheet"]), "data-role") == []
+    end
+
+    test "clicking a calendar event opens both surfaces on that meeting", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project, name: "Quarterly Planning")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      # Both surfaces, both naming the meeting. Asserted per-surface rather
+      # than against the whole document: "Quarterly Planning" is also the
+      # text of the grid block that was clicked, so a page-level `=~` is
+      # satisfied by a build that renders neither.
+      assert detail_text(detail_panel(doc), ~s([data-role="meeting-detail-name"])) ==
+               "Quarterly Planning"
+
+      assert detail_text(detail_sheet(doc), ~s([data-role="meeting-detail-name"])) ==
+               "Quarterly Planning"
+
+      # The same local time range on both, rendered server-side in the
+      # VIEWER's zone — the one property that makes this string agree with
+      # the column the block was clicked in.
+      expected_when = MeetingDetail.when_label(meeting, @grid_zone)
+      assert expected_when == "#{Calendar.strftime(grid_today(), "%a %b %-d")} · 2:00–3:00 PM"
+
+      assert detail_text(detail_panel(doc), ~s([data-role="meeting-detail-when"])) ==
+               expected_when
+
+      assert detail_text(detail_sheet(doc), ~s([data-role="meeting-detail-when"])) ==
+               expected_when
+
+      # Status is carried, not guessed.
+      assert detail_panel(doc)
+             |> LazyHTML.query(~s([data-role="meeting-detail-status"]))
+             |> LazyHTML.attribute("data-status") == ["scheduled"]
+
+      # And the escape hatch back to the meeting page exists on both.
+      assert detail_panel(doc)
+             |> LazyHTML.query(~s([data-role="meeting-detail-open"]))
+             |> LazyHTML.attribute("href") == ["/meetings/#{meeting.slug}"]
+
+      assert detail_sheet(doc)
+             |> LazyHTML.query(~s([data-role="meeting-detail-open"]))
+             |> LazyHTML.attribute("href") == ["/meetings/#{meeting.slug}"]
+    end
+
+    # The stage text asks for the `.ics` href to be pinned by EQUALITY
+    # against a second `CalendarLink.sign/1` call. That premise is false and
+    # was checked rather than obeyed: `Plug.Crypto.sign/4` encodes a
+    # `signed_at` MILLISECOND stamp into the payload, so two calls a
+    # millisecond apart produce different tokens and the equality would be
+    # flaky-by-construction.
+    #
+    # What replaces it is strictly stronger than the substring the stage
+    # text was guarding against: the path is pinned by equality, `token` is
+    # the ONLY query parameter (so a longer wrong query string fails), and
+    # the token is required to VERIFY back to this meeting's id — which a
+    # token for a different meeting, or a truncated one, does not.
+    test "the calendar link names the meeting id and carries a token that verifies to it", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      [href] =
+        detail_panel(doc)
+        |> LazyHTML.query(~s([data-role="meeting-detail-ics"]))
+        |> LazyHTML.attribute("href")
+
+      # The sheet's link is the same link — one component, so it cannot drift.
+      assert detail_sheet(doc)
+             |> LazyHTML.query(~s([data-role="meeting-detail-ics"]))
+             |> LazyHTML.attribute("href")
+             |> length() == 1
+
+      %URI{path: path, query: query} = URI.parse(href)
+      assert path == "/meetings/#{meeting.id}/invite.ics"
+
+      # Named before it is decoded, so a token-less href fails HERE with a
+      # sentence rather than inside `URI.decode_query/1` with a
+      # FunctionClauseError on nil — a crash proves nothing about the href.
+      assert is_binary(query), "the .ics href carries no query string, so it carries no token"
+
+      params = URI.decode_query(query)
+      assert Map.keys(params) == ["token"]
+      assert CalendarLink.verify(params["token"]) == {:ok, %{meeting_id: meeting.id}}
+    end
+
+    test "the rendered calendar link is fetchable and the same path without the token is not",
+         %{conn: conn, project: project} do
+      # The end-to-end version of the assertion above, and the one that says
+      # the token is load-bearing rather than decorative: `show/2` answers a
+      # uniform 404 for an absent token, so dropping `?token=` from the href
+      # ships a link that is dead on arrival.
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      [href] =
+        detail_panel(doc)
+        |> LazyHTML.query(~s([data-role="meeting-detail-ics"]))
+        |> LazyHTML.attribute("href")
+
+      assert build_conn() |> get(href) |> response(200) =~ "BEGIN:VCALENDAR"
+      assert build_conn() |> get("/meetings/#{meeting.id}/invite.ics") |> response(404)
+    end
+
+    # Stage 5 of task 019fb955-1d7b deleted the count CHIP this test used to
+    # read. The chip counted `list_invites/2` while the list beneath it drew
+    # the rendered rows, and the two legitimately differ — the producer agent
+    # is a rendered row and is not a `meeting_invites` row — so one of the
+    # two numbers had to go, and the canvas draws one. Re-pointed at the
+    # surviving observable rather than deleted: the claim (a revoked invitee
+    # is not an invitee) is unchanged and still worth pinning.
+    defp invite_rows(surface),
+      do: LazyHTML.query(surface, ~s([data-role="meeting-invite-row"]))
+
+    defp list_header(surface) do
+      surface
+      |> LazyHTML.query(~s([data-role="meeting-invite-list-header"]))
+      |> LazyHTML.text()
+      |> String.trim()
+    end
+
+    test "a revoked invitee is neither counted nor drawn", %{
+      conn: conn,
+      project: project
+    } do
+      # Two rows, ONE variable. Both name the same meeting, both carry a
+      # display name, and only `revoked_at` differs — so a failure here can
+      # only be about whether a revoked invite is counted as invited.
+      meeting = seed_detail_meeting(project)
+      live_invite = seed_invite!(meeting, "Still Invited")
+      revoked = seed_invite!(meeting, "Revoked Invitee", DateTime.utc_now())
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert list_header(surface) == "Invited · 1"
+
+        # Both sides asserted: the live row is drawn AND the revoked one is
+        # not. A bare count of 1 is also satisfied by drawing the wrong row.
+        assert surface |> invite_rows() |> LazyHTML.attribute("data-entry-id") ==
+                 [live_invite.id]
+
+        refute revoked.id in (surface |> invite_rows() |> LazyHTML.attribute("data-entry-id"))
+      end
+    end
+
+    test "closing the detail removes both surfaces and leaves the anchor week alone", %{
+      conn: conn,
+      project: project
+    } do
+      # Deliberately NOT on the anchor the page opens at. "Leaves the week
+      # alone" is unfalsifiable while the week IS this week: a handler that
+      # snapped the anchor back to today would be indistinguishable from one
+      # that touched nothing. Paging forward first makes the reset visible,
+      # and the meeting is seeded a week out so there is something to select
+      # once we are there.
+      meeting =
+        seed_grid_meeting(project,
+          slug: "detail-next-week",
+          name: "Next Week Meeting",
+          scheduled_start_at: zoned_utc(Date.add(grid_today(), 7), 14, 0),
+          scheduled_end_at: zoned_utc(Date.add(grid_today(), 7), 15, 0)
+        )
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      html = view |> element(~s([phx-click="calendar_next_week"])) |> render_click()
+
+      week_before = week_label(view)
+      day_before = day_heading_date(html)
+      refute week_before == PlatformWeb.MeetingLive.calendar_week_label(grid_today())
+
+      html = select_meeting(view, meeting)
+
+      assert attrs_of(html, ~s([data-role="meeting-detail-panel"]), "data-role") ==
+               ["meeting-detail-panel"]
+
+      # Selecting is not navigation: it must not page the week or move the
+      # selected day out from under the reader.
+      assert week_label(view) == week_before
+      assert day_heading_date(html) == day_before
+
+      html =
+        view
+        |> element(~s([data-role="meeting-detail-panel-close"]))
+        |> render_click()
+
+      assert attrs_of(html, ~s([data-role="meeting-detail-panel"]), "data-role") == []
+      assert attrs_of(html, ~s([data-role="meeting-detail-sheet"]), "data-role") == []
+
+      # …and closing is not navigation either.
+      assert week_label(view) == week_before
+      assert day_heading_date(html) == day_before
+    end
+
+    test "the FAB cannot collide with the desktop panel, because it is not drawn there", %{
+      conn: conn,
+      project: project
+    } do
+      # HISTORY, because the shape of this test changed with the defect it
+      # guards. Stage 4 measured a real collision at 1440x900: the FAB is
+      # anchored to the VIEWPORT's bottom-right, the panel is an opaque
+      # 322px rail pinned to the same edge with its action row in that
+      # corner, so the FAB painted over `meeting-detail-open`. Stage 4 fixed
+      # it by sliding the FAB left by the panel's width while the panel was
+      # open.
+      #
+      # Stage 5 makes the FAB `lg:hidden`. The panel is `hidden lg:flex`, so
+      # it exists ONLY at `lg` and above — precisely where the FAB now
+      # renders nothing. The two can no longer occupy a viewport together at
+      # any width, so the offset was deleted rather than left in place: a
+      # `lg:right-…` class on a `lg:hidden` element is a rule that can never
+      # apply, and asserting its presence would have read as protection
+      # while guarding a state that cannot be reached.
+      #
+      # So what is pinned here is the REPLACEMENT invariant, on the same
+      # observable (the FAB's class list with the panel open): the FAB is
+      # absent at the panel's breakpoint, and it carries NO horizontal
+      # displacement — which is only safe BECAUSE it is absent. Re-adding
+      # the offset without re-adding a reason fails here.
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+
+      html = select_meeting(view, meeting)
+
+      assert attrs_of(html, ~s([data-role="meeting-detail-panel"]), "data-role") ==
+               ["meeting-detail-panel"]
+
+      fab_classes =
+        html |> attrs_of(~s([data-role="start-meeting-fab"]), "class") |> List.first()
+
+      assert "lg:hidden" in String.split(fab_classes)
+      refute fab_classes =~ ~r/(^| )(lg:)?right-\[calc\(20\.125rem/
+
+      # Its horizontal anchor is the plain edge offset at EVERY width — no
+      # panel-conditional variant survives.
+      assert Enum.filter(String.split(fab_classes), &(&1 =~ ~r/right-/)) == ["right-6"]
+    end
+
+    test "the sheet's backdrop closes it", %{conn: conn, project: project} do
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      _ = select_meeting(view, meeting)
+
+      html =
+        view
+        |> element(~s([data-role="meeting-detail-sheet-backdrop"]))
+        |> render_click()
+
+      assert attrs_of(html, ~s([data-role="meeting-detail-sheet"]), "data-role") == []
+    end
+
+    test "the sheet rises from the bottom edge and carries the frames' drag handle", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      sheet_classes = doc |> detail_sheet() |> class_of() |> String.split()
+
+      # `items-end` is what makes this a bottom SHEET rather than a centred
+      # modal: a thumb starts at the bottom edge of a phone, and the frames
+      # draw it there. Both halves named — `items-center` present alongside
+      # `items-end` would be the same defect with the pin still green.
+      assert "items-end" in sheet_classes
+      refute "items-center" in sheet_classes
+      assert "fixed" in sheet_classes
+      assert "inset-0" in sheet_classes
+
+      assert doc
+             |> detail_sheet()
+             |> LazyHTML.query(~s([data-role="meeting-detail-sheet-handle"]))
+             |> Enum.count() == 1
+
+      # Out of flow, so the safe-area inset is the right clearance and the
+      # in-flow bottom-nav reservation is not.
+      panel_class =
+        doc |> LazyHTML.query(~s([data-role="meeting-detail-sheet"] > div.relative)) |> class_of()
+
+      assert panel_class =~ "pb-[env(safe-area-inset-bottom)]"
+      refute panel_class =~ "--bottom-nav-height"
+    end
+
+    # ── The rejected geometry, in a second place ──────────────────────────
+    #
+    # The sponsor rejected the create sheet for exactly this: the panel was
+    # one scroll region, so a long staged-invite list carried the primary
+    # action off the bottom of the modal. This surface is the SAME shape and
+    # the create+invite member's next stage fills its body with per-invitee
+    # rows, so the content grows without bound here too.
+    #
+    # Asserting the action row is PRESENT cannot see the defect — it was
+    # present the whole time, just out of view — so what is asserted is the
+    # structure that makes it impossible: the surface caps and CLIPS,
+    # exactly one descendant scrolls, and the action row is not inside it.
+    # That property holds at any content length, which is why it is
+    # preferable to any assertion about a particular one.
+    defp detail_scrollers(node),
+      do: node |> LazyHTML.query("*") |> Enum.filter(&(&1 |> class_of() |> scrolls?()))
+
+    test "each detail surface clips, scrolls in one place, and pins its action row", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      # The panel is the element itself; the sheet's cap lives on the panel
+      # INSIDE the fixed backdrop wrapper, so each names its own host.
+      surfaces = [
+        {"panel", detail_panel(doc), "meeting-detail-panel-body"},
+        {"sheet", LazyHTML.query(doc, ~s([data-role="meeting-detail-sheet"] > div.relative)),
+         "meeting-detail-sheet-body"}
+      ]
+
+      for {name, surface, body_role} <- surfaces do
+        surface_class = class_of(surface)
+
+        assert surface_class =~ "flex", "the #{name} is not a flex container"
+        assert surface_class =~ "flex-col", "the #{name} is not a flex COLUMN"
+
+        refute scrolls?(surface_class),
+               "the #{name} itself scrolls (#{surface_class}) — its action row scrolls away " <>
+                 "with the body, which is the geometry the sponsor rejected"
+
+        # `LazyHTML.query(node, "*")` INCLUDES the node it is rooted at, so a
+        # surface that scrolled would be counted here rather than skipped.
+        assert [body] = detail_scrollers(surface),
+               "expected exactly one scrolling region in the #{name}, found " <>
+                 "#{length(detail_scrollers(surface))}"
+
+        assert LazyHTML.attribute(body, "data-role") == [body_role]
+
+        # `min-h-0` is the load-bearing bit: a flex child defaults to
+        # `min-height: auto` and refuses to shrink below its content, so
+        # without it the body never scrolls and the action row is pushed out
+        # of the surface even though the surface is a flex column.
+        body_class = class_of(body)
+        assert body_class =~ "min-h-0", "the #{name}'s body can grow past the surface's cap"
+        assert body_class =~ "flex-1", "the #{name}'s body does not take the free space"
+
+        # The action row renders exactly once per surface …
+        assert surface |> LazyHTML.query(~s([data-role="meeting-detail-open"])) |> Enum.count() ==
+                 1
+
+        # … and NOT from inside the region that scrolls away.
+        assert body |> LazyHTML.query(~s([data-role="meeting-detail-open"])) |> Enum.count() == 0,
+               "meeting-detail-open is inside the #{name}'s scrolling body — enough invitee " <>
+                 "rows push it out of view"
+
+        # …while the content that GROWS is inside it, without which the two
+        # assertions above hold trivially on a surface whose body is empty.
+        assert body
+               |> LazyHTML.query(~s([data-role="meeting-detail-body-content"]))
+               |> Enum.count() == 1
+      end
+    end
+
+    test "a long invite list does not move the action row into the scrolling region", %{
+      conn: conn,
+      project: project
+    } do
+      # The COUNT is the variable, not the kind — that is the specification
+      # error that let the rejected defect through the first time. Twelve
+      # live invitees is well past the point where the per-invitee rows the
+      # next stage adds would overflow a 75vh sheet.
+      meeting = seed_detail_meeting(project)
+      for index <- 1..12, do: seed_invite!(meeting, "Invitee #{index}")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [
+            detail_panel(doc),
+            LazyHTML.query(doc, ~s([data-role="meeting-detail-sheet"] > div.relative))
+          ] do
+        assert [body] = detail_scrollers(surface)
+
+        # The twelve rows are the growing content, and they are INSIDE the
+        # region that scrolls. Counted on the body rather than the surface:
+        # rows rendered between the body and the action row would satisfy a
+        # surface-level count while re-creating the exact defect.
+        assert body |> invite_rows() |> Enum.count() == 12
+
+        assert surface |> LazyHTML.query(~s([data-role="meeting-detail-open"])) |> Enum.count() ==
+                 1
+
+        assert body |> LazyHTML.query(~s([data-role="meeting-detail-open"])) |> Enum.count() == 0
+      end
+    end
+
+    # ── The invitee list (task 019fb955-1d7b stage 5) ────────────────────
+    #
+    # Rows are written directly rather than through `invite_guest/2` /
+    # `invite_user/3` for the same reason the count fixtures above are:
+    # those functions also mint tokens, create guest chat spaces and run
+    # delivery, and none of that is what the RENDERING is about. What the
+    # panel reads off a row is `user_id`, `email`, `expires_at` and the
+    # invitee's org membership, so those are what the fixtures vary — one
+    # variable per kind.
+    #
+    # The guest link is derived from the row rather than stored on it, so
+    # seeding the row directly is also the only way to assert the derivation
+    # rather than re-reading whatever `invite_guest/2` happened to return.
+
+    defp seed_user_invite!(meeting, user) do
+      %Invite{}
+      |> Invite.changeset(%{meeting_id: meeting.id, user_id: user.id})
+      |> Repo.insert!()
+    end
+
+    # `user_id` NULL, an `email`, and NO expiry — the interim row
+    # `invite_external_user/3` writes for an address with no account yet.
+    # `Invite.kind/1` calls this `:guest`; the panel must not.
+    defp seed_external_pending_invite!(meeting, email) do
+      %Invite{}
+      |> Invite.changeset(%{meeting_id: meeting.id, display_name: email, email: email})
+      |> Repo.insert!()
+    end
+
+    defp seed_invitee_user!(name, opts \\ []) do
+      user =
+        Repo.insert!(%User{
+          email: "invitee_#{System.unique_integer([:positive])}@example.com",
+          name: name,
+          oidc_sub: "oidc-invitee-#{System.unique_integer([:positive])}"
+        })
+
+      %OrgMembership{}
+      |> OrgMembership.changeset(%{
+        user_id: user.id,
+        org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+        role: "member",
+        external: Keyword.get(opts, :external, false)
+      })
+      |> Repo.insert!()
+
+      user
+    end
+
+    defp copy_controls(surface),
+      do: LazyHTML.query(surface, ~s([data-role="meeting-invite-copy"]))
+
+    # The token is the last path segment of the guest URL. Written to
+    # survive a URL that is not a guest URL at all — the prescribed mutant
+    # emits `meeting.slug` here — so that a mutation fails on the token
+    # COMPARISON below rather than crashing in this helper, which would
+    # prove nothing about distinctness.
+    defp guest_token(url) do
+      %URI{path: path} = URI.parse(url)
+
+      path |> to_string() |> String.split("/") |> List.last()
+    end
+
+    test "the list draws one row per live invite, in `list_invites/2`'s order", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project)
+
+      # Seeded in a deliberate order and asserted against the CONTEXT's
+      # ordering rather than against the literal insertion sequence: the
+      # claim is that the panel does not re-sort, and re-deriving the
+      # expectation here would let both drift together.
+      seed_invite!(meeting, "Sam Ortiz")
+      seed_user_invite!(meeting, seed_invitee_user!("Dalton Reyes"))
+      seed_external_pending_invite!(meeting, "juno@fairbanksco.example")
+      seed_invite!(meeting, "Jess Tran")
+
+      expected = Enum.map(Meetings.list_invites(meeting.id), & &1.id)
+      assert length(expected) == 4
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert surface |> invite_rows() |> LazyHTML.attribute("data-entry-id") == expected
+        assert list_header(surface) == "Invited · 4"
+      end
+    end
+
+    test "each kind gets the tag the canvas draws, not `Invite.kind/1`'s two", %{
+      conn: conn,
+      project: project
+    } do
+      # The one place the stored model and the rendered model disagree.
+      # `Invite.kind/1` answers `:guest` for BOTH rows with a NULL
+      # `user_id` — the guest and the external-pending — and `:user` for
+      # both rows with one, so it cannot tell any of these four apart.
+      meeting = seed_detail_meeting(project)
+
+      internal = seed_user_invite!(meeting, seed_invitee_user!("Dalton Reyes"))
+      external = seed_user_invite!(meeting, seed_invitee_user!("Juno Fairbanks", external: true))
+      guest = seed_invite!(meeting, "Sam Ortiz")
+      pending = seed_external_pending_invite!(meeting, "jess@fairbanksco.example")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      tag = fn surface, invite ->
+        surface
+        |> LazyHTML.query(~s([data-role="meeting-invite-row"][data-entry-id="#{invite.id}"]))
+        |> LazyHTML.query(~s([data-role="meeting-invite-tag"]))
+        |> LazyHTML.text()
+        |> String.trim()
+      end
+
+      subtitle = fn surface, invite ->
+        surface
+        |> LazyHTML.query(~s([data-role="meeting-invite-row"][data-entry-id="#{invite.id}"]))
+        |> LazyHTML.query(~s([data-role="meeting-invite-row-subtitle"]))
+        |> LazyHTML.text()
+        |> String.trim()
+      end
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert tag.(surface, internal) == "internal"
+        assert tag.(surface, external) == "external"
+        assert tag.(surface, guest) == "guest"
+
+        # The row `kind/1` gets wrong. Pinned by equality, because
+        # `=~ "external"` is satisfied by the word appearing anywhere in
+        # the row — including in the address the subtitle prints.
+        assert tag.(surface, pending) == "external"
+
+        # STATE, one line, never explanation. An internal member's name is
+        # the whole fact, so their row carries no sub-line at all —
+        # asserted as the empty string rather than skipped, because "no
+        # subtitle" is a decision and not an absence of one.
+        assert subtitle.(surface, internal) == ""
+        assert subtitle.(surface, external) == Repo.get!(User, external.user_id).email
+        assert subtitle.(surface, guest) == "expires in 24h"
+        assert subtitle.(surface, pending) == "jess@fairbanksco.example"
+      end
+    end
+
+    test "two guests get two rows carrying two DISTINCT personal links", %{
+      conn: conn,
+      project: project
+    } do
+      # The regression this whole task exists for. A meeting-wide link
+      # handed out twice renders two copy controls too, so "two controls
+      # exist" is not the claim — "the two admit different people" is.
+      meeting = seed_detail_meeting(project)
+      sam = seed_invite!(meeting, "Sam Ortiz")
+      jess = seed_invite!(meeting, "Jess Tran")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert [sam_url, jess_url] =
+                 surface |> copy_controls() |> LazyHTML.attribute("data-clipboard-text")
+
+        # Which control belongs to whom, before anything is decoded — so a
+        # build that rendered both links on one row fails here rather than
+        # further down with a confusing message.
+        assert surface |> copy_controls() |> LazyHTML.attribute("data-entry-id") ==
+                 [sam.id, jess.id]
+
+        sam_token = guest_token(sam_url)
+        jess_token = guest_token(jess_url)
+
+        # THE assertion. Not "both are present" — different.
+        refute sam_token == jess_token,
+               "both guests were handed the same token, which is a meeting-wide link"
+
+        # And each token is not merely different, it is THEIRS.
+        # `verify/1` rather than equality against a freshly signed token:
+        # `Plug.Crypto.sign/4` stamps a millisecond `signed_at`, so two
+        # signatures of the same payload differ and an equality assertion
+        # would be flaky by construction. The round trip is deterministic
+        # and strictly stronger — it pins what the token MEANS.
+        assert {:ok, sam_payload} = GuestInvite.verify(sam_token)
+        assert {:ok, jess_payload} = GuestInvite.verify(jess_token)
+
+        assert sam_payload.invite_id == sam.id
+        assert jess_payload.invite_id == jess.id
+        refute sam_payload.invite_id == jess_payload.invite_id
+
+        # The token names its meeting exactly — a slug alone is unique per
+        # project only, which is why `meeting_id` is on the payload.
+        assert sam_payload.meeting_id == meeting.id
+        assert sam_payload.meeting_slug == meeting.slug
+        assert sam_payload.display_name == "Sam Ortiz"
+
+        # Path shape pinned by equality, and the whole path: a link with the
+        # right token under the wrong route admits nobody.
+        assert %URI{path: path, query: nil} = URI.parse(sam_url)
+        assert path == "/#{meeting.slug}/#{sam_token}"
+      end
+    end
+
+    test "a re-minted link still dies with the row it names", %{conn: conn, project: project} do
+      # The panel derives the link from the row rather than reading a stored
+      # token, so the string a host copies today is not byte-identical to the
+      # one `invite_guest/2` returned. This is what makes that safe: the row
+      # is the revocation surface, and revoking it kills the derived link
+      # too. Without this, re-minting would be a way to hand out a
+      # capability that was deliberately withdrawn.
+      meeting = seed_detail_meeting(project)
+      sam = seed_invite!(meeting, "Sam Ortiz")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      [url] =
+        doc |> detail_panel() |> copy_controls() |> LazyHTML.attribute("data-clipboard-text")
+
+      token = guest_token(url)
+
+      # Live before, dead after — one variable, and the link is the same
+      # string on both sides of it.
+      assert {:ok, %{state: :in_meeting, display_name: "Sam Ortiz"}} =
+               Meetings.resolve_guest_invite(meeting.slug, token)
+
+      {:ok, _revoked} = Meetings.revoke_invite(sam)
+
+      assert Meetings.resolve_guest_invite(meeting.slug, token) == {:error, :revoked}
+    end
+
+    test "only guest rows carry a copy control, and it is a 44px target", %{
+      conn: conn,
+      project: project
+    } do
+      # An account-holder signs in as themselves and an external invite
+      # awaiting a grant has no token at all, so a copy control on either
+      # would copy something that cannot admit anyone.
+      meeting = seed_detail_meeting(project)
+      seed_user_invite!(meeting, seed_invitee_user!("Dalton Reyes"))
+      seed_external_pending_invite!(meeting, "juno@fairbanksco.example")
+      guest = seed_invite!(meeting, "Sam Ortiz")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert surface |> invite_rows() |> Enum.count() == 3
+        assert surface |> copy_controls() |> LazyHTML.attribute("data-entry-id") == [guest.id]
+
+        # A real BUTTON at 375px, not a chip: both axes, because the label
+        # makes the horizontal one look satisfied while a shorter label
+        # would not be.
+        control = copy_controls(surface)
+        assert LazyHTML.attribute(control, "type") == ["button"]
+
+        control_class = class_of(control)
+        assert control_class =~ "min-h-11"
+        assert control_class =~ "min-w-11"
+
+        # Wired to the ONE clipboard hook that already exists, reading the
+        # attribute that hook reads.
+        assert LazyHTML.attribute(control, "phx-hook") == ["CopyToClipboard"]
+      end
+    end
+
+    test "the panel and the sheet do not share the copy control's DOM id", %{
+      conn: conn,
+      project: project
+    } do
+      # Both surfaces render simultaneously — one is hidden by CSS, not by
+      # absence — and LiveView keys `phx-hook` by DOM id. Two elements
+      # sharing one id means one hook never mounts, and that button then
+      # copies nothing while looking identical to the working one.
+      meeting = seed_detail_meeting(project)
+      seed_invite!(meeting, "Sam Ortiz")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      ids = doc |> copy_controls() |> LazyHTML.attribute("id")
+
+      assert length(ids) == 2, "expected one copy control per surface"
+      assert ids == Enum.uniq(ids)
+    end
+
+    test "the producer agent row renders when the sender agent is seeded", %{
+      conn: conn,
+      project: project
+    } do
+      # `config/test.exs` sets `meetings_enabled: false`, so the boot-time
+      # seed does not run and `SenderSeed.get/0` is nil for the whole suite
+      # unless a test asks for it. That makes the two states genuinely
+      # independent rather than a flag flipped in one direction.
+      meeting = seed_detail_meeting(project)
+      seed_invite!(meeting, "Sam Ortiz")
+
+      {:ok, agent} = SenderSeed.ensure!()
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        row =
+          LazyHTML.query(
+            surface,
+            ~s([data-role="meeting-invite-row"][data-entry-id="agent:#{agent.id}"])
+          )
+
+        assert LazyHTML.attribute(row, "data-tag") == ["agent"]
+
+        assert row
+               |> LazyHTML.query(~s([data-role="meeting-invite-row-subtitle"]))
+               |> LazyHTML.text()
+               |> String.trim() == "meeting producer"
+
+        # Display-only: no remove control and no copy control, and it is
+        # counted in the header alongside the invite it sits under.
+        assert row |> LazyHTML.query(~s([data-role="meeting-invite-copy"])) |> Enum.count() == 0
+
+        assert row |> LazyHTML.query(~s([data-role="meeting-invite-unstage"])) |> Enum.count() ==
+                 0
+
+        assert list_header(surface) == "Invited · 2"
+      end
+    end
+
+    test "the producer agent row is OMITTED when the sender agent is not seeded", %{
+      conn: conn,
+      project: project
+    } do
+      # The expected state wherever the meetings subsystem was never
+      # enabled. No placeholder: a synthesised row would name an agent that
+      # does not exist and cannot be messaged.
+      meeting = seed_detail_meeting(project)
+      seed_invite!(meeting, "Sam Ortiz")
+
+      assert SenderSeed.get() == nil
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert surface |> invite_rows() |> Enum.count() == 1
+        assert surface |> invite_rows() |> LazyHTML.attribute("data-tag") == ["guest"]
+        assert list_header(surface) == "Invited · 1"
+      end
+    end
+
+    test "there is no revoke control on any row, at either width", %{
+      conn: conn,
+      project: project
+    } do
+      # Not an omission. `recipients_for_meeting/1` falls back to the chat
+      # space's participants when the live invite list is EMPTY, so revoking
+      # the last invitee WIDENS the notified audience instead of narrowing
+      # it; and guests carry no `user_id`, so a guest-only list silences
+      # every human. Both need a sponsor ruling, and shipping the control
+      # first ships the widening.
+      meeting = seed_detail_meeting(project)
+      seed_invite!(meeting, "Sam Ortiz")
+      seed_user_invite!(meeting, seed_invitee_user!("Dalton Reyes"))
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert surface |> invite_rows() |> Enum.count() == 2
+
+        assert surface |> LazyHTML.query(~s([data-role="meeting-invite-unstage"])) |> Enum.count() ==
+                 0
+
+        assert surface |> LazyHTML.query("[phx-click='meeting_invite_revoke']") |> Enum.count() ==
+                 0
+      end
+    end
+
+    test "`Add people` is the only invite affordance, and it writes a real row", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      # There is deliberately no invite button in any toolbar: the row at
+      # the end of the list is the whole affordance.
+      assert doc |> LazyHTML.query(~s([data-role="meeting-invite-add-people"])) |> Enum.count() ==
+               2
+
+      # Closed until asked for.
+      assert doc
+             |> LazyHTML.query(~s([data-role="meeting-detail-invite-expansion"]))
+             |> Enum.count() == 0
+
+      doc =
+        view
+        |> element(in_panel(~s([data-role="meeting-invite-add-people"])))
+        |> render_click()
+        |> LazyHTML.from_fragment()
+
+      assert doc
+             |> LazyHTML.query(~s([data-role="meeting-detail-invite-expansion"]))
+             |> Enum.count() == 2
+
+      view
+      |> element(in_panel(~s([data-role="meeting-invite-search"])))
+      |> render_keyup(%{"value" => "newguest@fairbanksco.example"})
+
+      doc =
+        view
+        |> element(in_panel(~s([data-role="meeting-invite-option"][data-option="guest"])))
+        |> render_click()
+        |> LazyHTML.from_fragment()
+
+      # `:live` means WRITTEN, not staged — there is no submit to lose it
+      # at, so the assertion is against the database as well as the DOM.
+      assert [%Invite{} = invite] = Meetings.list_invites(meeting.id)
+      assert invite.display_name == "newguest@fairbanksco.example"
+
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        assert surface |> invite_rows() |> LazyHTML.attribute("data-entry-id") == [invite.id]
+        assert surface |> invite_rows() |> LazyHTML.attribute("data-tag") == ["guest"]
+
+        # …with its own link, minted for the row that was just written.
+        assert [url] = surface |> copy_controls() |> LazyHTML.attribute("data-clipboard-text")
+        assert {:ok, payload} = GuestInvite.verify(guest_token(url))
+        assert payload.invite_id == invite.id
+      end
+    end
+
+    test "the detail surface's dropdown is IN FLOW, so its second option is reachable", %{
+      conn: conn,
+      project: project
+    } do
+      # Measured, not guessed. At 1440x900 with the panel's body scrolled
+      # fully down, the create sheet's FLOATING dropdown was clipped by the
+      # panel's `overflow-hidden` cap and its second option — `Invite as an
+      # external member` — could not be reached at any scroll position:
+      # absolute positioning takes it out of the flow the scroll height is
+      # computed from. A fork with one reachable prong is not a fork.
+      #
+      # Pinned on a `data-` attribute rather than on the class list, per
+      # this component's DOM contract — a class reshuffle must not be able
+      # to break a test, and the attribute is what the position MEANS.
+      meeting = seed_detail_meeting(project)
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      _ = select_meeting(view, meeting)
+
+      view |> element(in_panel(~s([data-role="meeting-invite-add-people"]))) |> render_click()
+
+      doc =
+        view
+        |> element(in_panel(~s([data-role="meeting-invite-search"])))
+        |> render_keyup(%{"value" => "stranger@fairbanksco.example"})
+        |> LazyHTML.from_fragment()
+
+      dropdowns = LazyHTML.query(doc, ~s([data-role="meeting-invite-dropdown"]))
+
+      # Both options are rendered — the claim is about reaching the second,
+      # so a build that never drew it would pass a position assertion alone.
+      assert dropdowns |> LazyHTML.query(~s([data-role="meeting-invite-option"])) |> Enum.count() ==
+               4
+
+      assert LazyHTML.attribute(dropdowns, "data-dropdown-position") == ["inline", "inline"]
+
+      # …and the create sheet, which has room to float over its own body,
+      # still does. Asserted here so "inline everywhere" — which would be
+      # the same edit with no measurement behind it — fails.
+      {:ok, create_view, _} = live(grid_conn(conn), ~p"/meetings")
+      create_view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+
+      create_doc =
+        create_view
+        |> element(
+          ~s([data-role="meeting-create-invite-section"] [data-role="meeting-invite-search"])
+        )
+        |> render_keyup(%{"value" => "stranger@fairbanksco.example"})
+        |> LazyHTML.from_fragment()
+
+      assert create_doc
+             |> LazyHTML.query(~s([data-role="meeting-invite-dropdown"]))
+             |> LazyHTML.attribute("data-dropdown-position") == ["floating"]
+    end
+
+    test "changing the selection closes the invite control", %{conn: conn, project: project} do
+      # It is scoped to ONE meeting. Left open across a change of selection
+      # it would be a search box under a different meeting's list, and the
+      # next thing chosen in it would be written to that meeting.
+      first = seed_detail_meeting(project, slug: "detail-first", name: "First")
+
+      second =
+        seed_detail_meeting(project,
+          slug: "detail-second",
+          name: "Second",
+          start_hour: 16,
+          end_hour: 17
+        )
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      _ = select_meeting(view, first)
+
+      html =
+        view |> element(in_panel(~s([data-role="meeting-invite-add-people"]))) |> render_click()
+
+      assert attrs_of(html, ~s([data-role="meeting-detail-invite-expansion"]), "data-role") ==
+               ["meeting-detail-invite-expansion", "meeting-detail-invite-expansion"]
+
+      html = select_meeting(view, second)
+
+      assert attrs_of(html, ~s([data-role="meeting-detail-invite-expansion"]), "data-role") == []
+    end
+
+    defp in_panel(selector), do: ~s([data-role="meeting-detail-panel"] #{selector})
+  end
+
+  describe "MeetingLive.guest_expiry_label/1" do
+    # Spans chosen OFF the boundaries. `expires_at` is compared against
+    # `DateTime.utc_now()` at call time, so a fixture seeded at exactly
+    # 3600s reads back as 3599 and lands in the neighbouring branch — an
+    # assertion pinned to an edge would be flaky by construction. Each
+    # value here is far enough from its edge that elapsed test time cannot
+    # move it.
+    defp in_seconds(seconds), do: DateTime.add(DateTime.utc_now(), seconds, :second)
+
+    test "a freshly minted 24h link says 24h, not 23h" do
+      # The whole reason this rounds rather than truncates. `invite_guest/2`
+      # stamps `now + 24h`; by the time it renders the span is 23h59m59s,
+      # and truncation would tell the host an hour they still have is gone.
+      assert PlatformWeb.MeetingLive.guest_expiry_label(in_seconds(24 * 3600)) ==
+               "expires in 24h"
+    end
+
+    test "whole hours in between" do
+      assert PlatformWeb.MeetingLive.guest_expiry_label(in_seconds(2 * 3600 + 60)) ==
+               "expires in 2h"
+    end
+
+    test "a sub-hour span never claims an hour" do
+      # Rounding UP is the direction that misleads — a link with four
+      # minutes left must not read as having an hour — so a sub-hour span
+      # does not go through the hours form at all.
+      assert PlatformWeb.MeetingLive.guest_expiry_label(in_seconds(1800)) == "expires in <1h"
+    end
+
+    test "a past-due link says so rather than rendering as live" do
+      # Reachable: `list_invites/2` filters revoked rows and NOT expired
+      # ones, so an aged-out guest still draws a row.
+      assert PlatformWeb.MeetingLive.guest_expiry_label(in_seconds(-60)) == "expired"
+    end
+  end
+
+  describe "MeetingDetail.when_label/2" do
+    # Pinned with `==` rather than `=~` throughout: `=~ "2:00"` is satisfied
+    # by "12:00", by "2:001" and by a string that merely contains it.
+    test "a range inside one meridiem prints the meridiem once" do
+      meeting = %Meeting{
+        scheduled_start_at: ~U[2026-08-05 19:00:00.000000Z],
+        scheduled_end_at: ~U[2026-08-05 20:00:00.000000Z]
+      }
+
+      assert MeetingDetail.when_label(meeting, "America/Chicago") == "Wed Aug 5 · 2:00–3:00 PM"
+    end
+
+    test "a range crossing noon prints both meridiems" do
+      meeting = %Meeting{
+        scheduled_start_at: ~U[2026-08-05 16:30:00.000000Z],
+        scheduled_end_at: ~U[2026-08-05 17:30:00.000000Z]
+      }
+
+      assert MeetingDetail.when_label(meeting, "America/Chicago") ==
+               "Wed Aug 5 · 11:30 AM–12:30 PM"
+    end
+
+    test "the label is the VIEWER's local day, not the stored UTC one" do
+      # 01:30 UTC on the 6th is 8:30 PM on the 5th in Chicago. A label built
+      # from the stored instant would name Thu Aug 6 while the block sits in
+      # Wednesday's column.
+      meeting = %Meeting{
+        scheduled_start_at: ~U[2026-08-06 01:30:00.000000Z],
+        scheduled_end_at: ~U[2026-08-06 02:30:00.000000Z]
+      }
+
+      assert MeetingDetail.when_label(meeting, "America/Chicago") == "Wed Aug 5 · 8:30–9:30 PM"
+      assert MeetingDetail.when_label(meeting, "Etc/UTC") == "Thu Aug 6 · 1:30–2:30 AM"
+    end
+
+    test "an unresolved zone raises rather than rendering server time as the viewer's" do
+      meeting = %Meeting{
+        scheduled_start_at: ~U[2026-08-05 19:00:00.000000Z],
+        scheduled_end_at: ~U[2026-08-05 20:00:00.000000Z]
+      }
+
+      assert_raise FunctionClauseError, fn -> MeetingDetail.when_label(meeting, nil) end
+    end
+  end
+
+  describe "calendar_week_label/1" do
+    # An en dash (U+2013), the typographic range mark, and the year printed
+    # exactly once for every week that stays inside one. Pinned with `==`
+    # rather than `=~`: `=~ "Aug 3"` is satisfied by "Aug 3 - 9, 2026" with a
+    # hyphen, by "Aug 3, 2026 - Aug 9, 2026", and by a longer string that
+    # merely contains the short one.
+    test "a week inside one month names the month and the year once" do
+      assert PlatformWeb.MeetingLive.calendar_week_label(~D[2026-08-05]) == "Aug 3 – 9, 2026"
+    end
+
+    test "a week straddling two months names both months and the year once" do
+      assert PlatformWeb.MeetingLive.calendar_week_label(~D[2026-09-02]) ==
+               "Aug 31 – Sep 6, 2026"
+    end
+
+    test "a week straddling two years names both years" do
+      assert PlatformWeb.MeetingLive.calendar_week_label(~D[2025-12-31]) ==
+               "Dec 29, 2025 – Jan 4, 2026"
+    end
+  end
+
+  describe "calendar_hour_label/1" do
+    test "noon and midnight read as 12, not as 0" do
+      assert PlatformWeb.MeetingLive.calendar_hour_label(0) == "12 AM"
+      assert PlatformWeb.MeetingLive.calendar_hour_label(12) == "12 PM"
+    end
+
+    test "morning and afternoon hours carry their meridiem" do
+      assert PlatformWeb.MeetingLive.calendar_hour_label(8) == "8 AM"
+      assert PlatformWeb.MeetingLive.calendar_hour_label(13) == "1 PM"
+      assert PlatformWeb.MeetingLive.calendar_hour_label(23) == "11 PM"
     end
   end
 
@@ -2294,11 +4595,55 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> render_click()
 
       assert open_html =~ ~s(data-role="start-meeting-sheet")
-      # Sheet header + form fields are rendered.
-      assert open_html =~ "Start a meeting"
+
+      # The TITLE ELEMENT, not the document. `assert open_html =~ "New
+      # meeting"` would also be satisfied by the FAB's own label, which is
+      # rendered on the same page and is not what this asserts.
+      assert open_html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("#start-meeting-sheet-title")
+             |> LazyHTML.text()
+             |> String.trim() == "New meeting"
+
       assert open_html =~ ~s(name="start_meeting[name]")
       assert open_html =~ ~s(name="start_meeting[project_id]")
-      assert open_html =~ ~s(name="start_meeting[description]")
+    end
+
+    test "the desktop New meeting button renders and opens the SAME sheet", %{conn: conn} do
+      {:ok, view, html} = live(conn, ~p"/meetings")
+
+      doc = LazyHTML.from_fragment(html)
+      button = LazyHTML.query(doc, ~s([data-role="new-meeting-button"]))
+
+      assert Enum.count(button) == 1
+
+      # The glyph the toolbar frame draws — a hero icon, not a typographic
+      # `+`, so it inherits the icon sizing the rest of the header uses.
+      assert button |> LazyHTML.query("span") |> class_of() =~ "hero-plus"
+      assert button |> LazyHTML.text() |> String.trim() == "New meeting"
+
+      refute html =~ ~s(data-role="start-meeting-sheet")
+
+      open_html =
+        view
+        |> element(~s([data-role="new-meeting-button"]))
+        |> render_click()
+
+      # The point of this test: ONE sheet, reached from a second entry
+      # point. A button wired to its own handler and its own duplicate sheet
+      # would satisfy "a sheet opened" — so this asserts the sheet the FAB
+      # opens, by the id the FAB's own test keys on, and asserts there is
+      # exactly one of it.
+      assert open_html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(~s([data-role="start-meeting-sheet"]))
+             |> Enum.count() == 1
+
+      assert open_html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("#start-meeting-sheet-title")
+             |> LazyHTML.text()
+             |> String.trim() == "New meeting"
     end
 
     test "close button + backdrop dismiss the sheet", %{conn: conn} do
@@ -2328,34 +4673,24 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute backdrop_closed =~ ~s(data-role="start-meeting-sheet")
     end
 
-    test "submitting valid params creates a meeting and navigates to its slug", %{
+    test "submitting a name and a project creates a meeting", %{
       conn: conn,
       project: project
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings")
 
-      # Open the sheet first.
       _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
 
-      # Submit the form. push_navigate should redirect us to the new
-      # meeting's /meetings/<slug>.
-      result =
-        view
-        |> form("#start-meeting-form",
-          start_meeting: %{
-            "name" => "Synthesis Sync",
-            "project_id" => project.id,
-            "description" => "Quick check-in"
-          }
-        )
-        |> render_submit()
+      view
+      |> form("#start-meeting-form",
+        start_meeting: %{"name" => "Synthesis Sync", "project_id" => project.id}
+      )
+      |> render_submit()
 
-      assert {:error, {:live_redirect, %{to: to}}} = result
-      assert to =~ ~r{^/meetings/}
-
-      # The meeting now exists in the DB with the submitted name.
-      assert [%Meeting{name: "Synthesis Sync"} = created] = Repo.all(Meeting)
-      assert to == "/meetings/#{created.slug}"
+      # Deliberately does NOT look at what render_submit returned. Whether
+      # a success redirects is the next describe's claim, and borrowing its
+      # observable here would make this test die for that reason too.
+      assert [%Meeting{name: "Synthesis Sync"}] = Repo.all(Meeting)
     end
 
     test "submitting with a blank name shows an inline error and keeps the sheet open", %{
@@ -2369,11 +4704,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       html =
         view
         |> form("#start-meeting-form",
-          start_meeting: %{
-            "name" => "",
-            "project_id" => project.id,
-            "description" => ""
-          }
+          start_meeting: %{"name" => "", "project_id" => project.id}
         )
         |> render_submit()
 
@@ -2385,31 +4716,754 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ ~s(data-role="start-meeting-error")
       assert html =~ "Name is required"
     end
+  end
 
-    test "submitting with no project_id shows an inline error and keeps the sheet open", %{
-      conn: conn
-    } do
-      # Drop all projects so the form has nothing to pre-fill with.
-      Repo.delete_all(Platform.Tasks.Project)
+  # ── New-meeting create sheet (task 019fb955-1d7b stage 4) ────────────────
+  #
+  # The sheet the stage-2 FAB opens is now the canvas's CREATE sheet: a
+  # schedulable time, a required project, and a list of invites staged
+  # client-side and replayed after the meeting commits.
+  #
+  # ## Every absence assertion here has a positive control
+  #
+  # `refute Repo.exists?(Meeting)` passes on a fixture that could never
+  # have written a row — a broken `create_project/0`, a form that never
+  # reached the handler, an authenticated_conn that 302s. So the refusal
+  # tests submit AGAIN with the missing field supplied and assert the row
+  # appears. The control runs against the same view, the same form and the
+  # same session, which is the only way it constrains the same code path.
+  #
+  # ## And each side of a present/absent pair is its own test
+  #
+  # ExUnit halts a test at its first failed assertion, so an `assert
+  # rendered / refute written` pair can only ever report one of the two.
 
+  describe ":index action — new-meeting create sheet" do
+    # A real IANA zone with a non-zero UTC offset. Fixed rather than
+    # inherited from the machine: the whole contract is "the wall clock the
+    # VIEWER typed", and a fixture running in the server's zone cannot tell
+    # a correct conversion from no conversion at all.
+    @create_zone "America/Chicago"
+
+    setup %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      Repo.delete_all(Meeting)
+      project = create_project()
+
+      {:ok,
+       conn: put_connect_params(conn, %{"timezone" => @create_zone}), user: user, project: project}
+    end
+
+    defp open_create_sheet(conn) do
       {:ok, view, _html} = live(conn, ~p"/meetings")
+      _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+      view
+    end
 
+    defp create_params(overrides) do
+      Map.merge(
+        %{
+          "name" => "Design review",
+          "project_id" => "",
+          "date" => "",
+          "start_time" => "",
+          "duration_minutes" => "30"
+        },
+        overrides
+      )
+    end
+
+    defp submit_create(view, overrides) do
+      view
+      |> form("#start-meeting-form", start_meeting: create_params(overrides))
+      |> render_submit()
+    end
+
+    # A UTC instant for a wall-clock reading in @create_zone. Everything
+    # persisted is UTC; everything typed is local; this is where they meet.
+    defp create_zone_utc(%Date{} = date, hour, minute) do
+      date
+      |> DateTime.new!(Time.new!(hour, minute, 0), @create_zone)
+      |> DateTime.shift_zone!("Etc/UTC")
+    end
+
+    defp seed_invitee(name, email) do
+      user =
+        Repo.insert!(%User{
+          email: email,
+          name: name,
+          oidc_sub: "oidc-invitee-#{System.unique_integer([:positive])}"
+        })
+
+      member!(user, Platform.TenancyFixtures.fabrikam_org_id())
+    end
+
+    defp search_invites(view, query) do
+      view
+      |> element(~s([data-role="meeting-invite-search"]))
+      |> render_keyup(%{"value" => query})
+    end
+
+    defp staged_ids(view) do
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-role="meeting-invite-row"]))
+      |> LazyHTML.attribute("data-entry-id")
+    end
+
+    # ── the schedule ───────────────────────────────────────────────────────
+
+    test "a date and a start time persist both endpoints, converted from the viewer's zone",
+         %{conn: conn, project: project} do
+      view = open_create_sheet(conn)
+
+      submit_create(view, %{
+        "name" => "Design review",
+        "project_id" => project.id,
+        "date" => "2026-09-16",
+        "start_time" => "09:30",
+        "duration_minutes" => "45"
+      })
+
+      assert [%Meeting{} = created] = Repo.all(Meeting)
+
+      # 09:30 CDT is 14:30 UTC. A handler that read the wall clock as UTC
+      # would store 09:30Z and this fails by five hours.
+      assert DateTime.compare(
+               created.scheduled_start_at,
+               create_zone_utc(~D[2026-09-16], 9, 30)
+             ) == :eq
+
+      assert DateTime.compare(
+               created.scheduled_end_at,
+               create_zone_utc(~D[2026-09-16], 10, 15)
+             ) == :eq
+    end
+
+    test "leaving the date and start blank creates an ad-hoc meeting with neither endpoint",
+         %{conn: conn, project: project} do
+      view = open_create_sheet(conn)
+
+      submit_create(view, %{"project_id" => project.id})
+
+      assert [%Meeting{scheduled_start_at: nil, scheduled_end_at: nil}] = Repo.all(Meeting)
+    end
+
+    test "a date without a start time is refused", %{conn: conn, project: project} do
+      view = open_create_sheet(conn)
+
+      html = submit_create(view, %{"project_id" => project.id, "date" => "2026-09-16"})
+
+      assert html =~ "Date and start time are required together."
+    end
+
+    test "a date without a start time writes no row, and the same form then does", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+
+      submit_create(view, %{"project_id" => project.id, "date" => "2026-09-16"})
+      refute Repo.exists?(Meeting)
+
+      # Positive control on the SAME view and form: supplying the missing
+      # field writes a row, so the refute above constrained the guard rather
+      # than a fixture that could never have written anything.
+      submit_create(view, %{
+        "project_id" => project.id,
+        "date" => "2026-09-16",
+        "start_time" => "09:30"
+      })
+
+      assert Repo.exists?(Meeting)
+    end
+
+    test "a duration the select never offered is refused", %{conn: conn, project: project} do
+      view = open_create_sheet(conn)
+
+      # Sent as a raw event: `form/3` cannot select an option the sheet does
+      # not render, and the point is precisely a value that did not come
+      # from this form.
+      html =
+        render_submit(view, "start_meeting", %{
+          "start_meeting" =>
+            create_params(%{
+              "project_id" => project.id,
+              "date" => "2026-09-16",
+              "start_time" => "09:30",
+              "duration_minutes" => "37"
+            })
+        })
+
+      assert html =~ "Duration is invalid."
+    end
+
+    test "a duration the select never offered writes no row, and an offered one does", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+
+      base = %{"project_id" => project.id, "date" => "2026-09-16", "start_time" => "09:30"}
+
+      render_submit(view, "start_meeting", %{
+        "start_meeting" => create_params(Map.put(base, "duration_minutes", "37"))
+      })
+
+      refute Repo.exists?(Meeting)
+
+      submit_create(view, Map.put(base, "duration_minutes", "60"))
+      assert Repo.exists?(Meeting)
+    end
+
+    test "an hour the wall clock reads twice resolves to the earlier instant", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+
+      # 2026-11-01 01:30 occurs twice in America/Chicago: once on CDT
+      # (06:30Z) and again an hour later on CST (07:30Z).
+      submit_create(view, %{
+        "project_id" => project.id,
+        "date" => "2026-11-01",
+        "start_time" => "01:30"
+      })
+
+      assert [%Meeting{} = created] = Repo.all(Meeting)
+
+      assert DateTime.to_iso8601(DateTime.shift_zone!(created.scheduled_start_at, "Etc/UTC")) =~
+               "2026-11-01T06:30:00"
+    end
+
+    test "an hour that does not exist is refused rather than nudged", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+
+      # 2026-03-08 02:30 is skipped by the spring transition in
+      # America/Chicago — the clock goes 01:59:59 to 03:00:00.
+      html =
+        submit_create(view, %{
+          "project_id" => project.id,
+          "date" => "2026-03-08",
+          "start_time" => "02:30"
+        })
+
+      assert html =~ "That time does not exist on that date."
+    end
+
+    test "an hour that does not exist writes no row, and a real one does", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+      base = %{"project_id" => project.id, "date" => "2026-03-08"}
+
+      submit_create(view, Map.put(base, "start_time", "02:30"))
+      refute Repo.exists?(Meeting)
+
+      submit_create(view, Map.put(base, "start_time", "03:30"))
+      assert Repo.exists?(Meeting)
+    end
+
+    # ── the time zone the calendar member already plumbed ──────────────────
+
+    test "a browser that named no zone cannot schedule a time", %{
+      conn: conn,
+      project: project
+    } do
+      # No `put_connect_params`, so `resolve_time_zone/1` answers nil — the
+      # same answer the dead render gives. There is no honest conversion of
+      # "09:30" without a zone, so it is refused rather than read as UTC.
+      {:ok, view, _html} = live(build_conn() |> authenticated_conn() |> elem(0), ~p"/meetings")
       _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
 
       html =
-        view
-        |> form("#start-meeting-form",
-          start_meeting: %{
-            "name" => "Project-less Meeting",
-            "project_id" => "",
-            "description" => ""
-          }
-        )
-        |> render_submit()
+        submit_create(view, %{
+          "project_id" => project.id,
+          "date" => "2026-09-16",
+          "start_time" => "09:30"
+        })
 
-      assert Repo.all(Meeting) == []
+      assert html =~ "Time zone unavailable"
+      refute Repo.exists?(Meeting)
+    end
+
+    test "a browser that named no zone can still create an ad-hoc meeting", %{
+      conn: conn,
+      project: project
+    } do
+      # The refusal above is scoped to a SCHEDULED create. Without this
+      # control it would be indistinguishable from a zone-less mount that
+      # cannot create anything at all.
+      {:ok, view, _html} = live(build_conn() |> authenticated_conn() |> elem(0), ~p"/meetings")
+      _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+
+      submit_create(view, %{"project_id" => project.id})
+
+      assert [%Meeting{scheduled_start_at: nil}] = Repo.all(Meeting)
+      assert is_map(conn)
+    end
+
+    # ── the project gate ───────────────────────────────────────────────────
+
+    test "submitting with no project renders the server-side refusal", %{conn: conn} do
+      Repo.delete_all(Project)
+      view = open_create_sheet(conn)
+
+      html = submit_create(view, %{"name" => "Project-less meeting", "project_id" => ""})
+
       assert html =~ ~s(data-role="start-meeting-sheet")
-      assert html =~ "Project is required"
+      assert html =~ ~s(data-role="start-meeting-error")
+      assert html =~ "Project is required."
+    end
+
+    test "submitting with no project writes no row, and supplying one then does", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+
+      submit_create(view, %{"name" => "Project-less meeting", "project_id" => ""})
+      refute Repo.exists?(Meeting)
+
+      # Positive control: same view, same form, project supplied.
+      submit_create(view, %{"name" => "Project-less meeting", "project_id" => project.id})
+      assert Repo.exists?(Meeting)
+    end
+
+    # ── the behaviour change: create does not open the room ────────────────
+
+    test "a successful create keeps the viewer on the index", %{conn: conn, project: project} do
+      view = open_create_sheet(conn)
+
+      result = submit_create(view, %{"project_id" => project.id})
+
+      # A `push_navigate` comes back as `{:error, {:live_redirect, …}}`. A
+      # meeting scheduled for next week must not open its room now.
+      assert is_binary(result)
+      refute result =~ ~s(data-role="start-meeting-sheet")
+    end
+
+    test "a successful create flashes that the meeting was created", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+
+      assert submit_create(view, %{"project_id" => project.id}) =~ "Meeting created."
+    end
+
+    # ── staged invites ─────────────────────────────────────────────────────
+
+    test "staging a member then submitting writes an invite carrying their user_id", %{
+      conn: conn,
+      project: project
+    } do
+      invitee = seed_invitee("Dalton Reeve", "dalton.reeve@example.com")
+
+      view = open_create_sheet(conn)
+      search_invites(view, "Dalton Reeve")
+
+      view
+      |> element(~s([data-role="meeting-invite-candidate"][data-user-id="#{invitee.id}"]))
+      |> render_click()
+
+      assert staged_ids(view) == ["user:#{invitee.id}"]
+
+      submit_create(view, %{"project_id" => project.id})
+
+      assert [%Meeting{} = meeting] = Repo.all(Meeting)
+      assert [%Invite{} = invite] = Repo.all(Invite)
+      assert invite.meeting_id == meeting.id
+      assert invite.user_id == invitee.id
+    end
+
+    test "staging then unstaging a member writes no invite", %{conn: conn, project: project} do
+      invitee = seed_invitee("Marlowe Sun", "marlowe.sun@example.com")
+
+      view = open_create_sheet(conn)
+      search_invites(view, "Marlowe Sun")
+
+      view
+      |> element(~s([data-role="meeting-invite-candidate"][data-user-id="#{invitee.id}"]))
+      |> render_click()
+
+      view
+      |> element(~s([data-role="meeting-invite-unstage"][data-entry-id="user:#{invitee.id}"]))
+      |> render_click()
+
+      assert staged_ids(view) == []
+
+      submit_create(view, %{"project_id" => project.id})
+
+      # The meeting IS written — the positive control for the refute below
+      # is in the same submit, so a create that silently failed could not
+      # masquerade as an unstage that worked.
+      assert Repo.exists?(Meeting)
+      assert Repo.all(Invite) == []
+    end
+
+    test "staging a guest writes a row with an expiry and no user", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+      search_invites(view, "outsider@example.test")
+
+      view
+      |> element(~s([data-role="meeting-invite-option"][data-option="guest"]))
+      |> render_click()
+
+      assert staged_ids(view) == ["guest:outsider@example.test"]
+
+      submit_create(view, %{"project_id" => project.id})
+
+      assert [%Invite{} = invite] = Repo.all(Invite)
+      assert invite.user_id == nil
+      assert %DateTime{} = invite.expires_at
+    end
+
+    test "staging an external address writes a row with the address and no expiry", %{
+      conn: conn,
+      project: project
+    } do
+      view = open_create_sheet(conn)
+      search_invites(view, "contractor@example.test")
+
+      view
+      |> element(~s([data-role="meeting-invite-option"][data-option="external"]))
+      |> render_click()
+
+      assert staged_ids(view) == ["external:contractor@example.test"]
+
+      submit_create(view, %{"project_id" => project.id})
+
+      assert [%Invite{} = invite] = Repo.all(Invite)
+      assert invite.user_id == nil
+      assert invite.email == "contractor@example.test"
+      assert invite.expires_at == nil
+    end
+
+    # Named for what it can actually detect. An earlier version of this
+    # said "dismissing the sheet drops the staged invites" and could not:
+    # the list is only observable through a rendered sheet, rendering one
+    # requires an open, and the open resets. A mutant deleting the
+    # close-side reset left it green, so the close-side reset went away and
+    # this asserts the guarantee that survives — a reopened sheet is clean.
+    test "reopening the sheet starts with no staged invites", %{conn: conn} do
+      invitee = seed_invitee("Rae Molina", "rae.molina@example.com")
+
+      view = open_create_sheet(conn)
+      search_invites(view, "Rae Molina")
+
+      view
+      |> element(~s([data-role="meeting-invite-candidate"][data-user-id="#{invitee.id}"]))
+      |> render_click()
+
+      assert staged_ids(view) == ["user:#{invitee.id}"]
+
+      _ = view |> element(~s([data-role="start-meeting-sheet-close"])) |> render_click()
+      _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+
+      assert staged_ids(view) == []
+    end
+
+    test "an invite that cannot be written is reported rather than swallowed", %{
+      conn: conn,
+      project: project
+    } do
+      invitee = seed_invitee("Vanishing Vic", "vanishing.vic@example.com")
+
+      view = open_create_sheet(conn)
+      search_invites(view, "Vanishing Vic")
+
+      view
+      |> element(~s([data-role="meeting-invite-candidate"][data-user-id="#{invitee.id}"]))
+      |> render_click()
+
+      # The invitee stops existing between staging and submit, so the
+      # invite's foreign key fails while the meeting itself is fine.
+      Repo.delete!(invitee)
+
+      html = submit_create(view, %{"project_id" => project.id})
+
+      assert html =~ "1 invite could not be sent."
+    end
+
+    test "an invite that cannot be written does not roll the meeting back", %{
+      conn: conn,
+      project: project
+    } do
+      invitee = seed_invitee("Vanishing Val", "vanishing.val@example.com")
+
+      view = open_create_sheet(conn)
+      search_invites(view, "Vanishing Val")
+
+      view
+      |> element(~s([data-role="meeting-invite-candidate"][data-user-id="#{invitee.id}"]))
+      |> render_click()
+
+      Repo.delete!(invitee)
+      submit_create(view, %{"project_id" => project.id})
+
+      assert Repo.exists?(Meeting)
+      assert Repo.all(Invite) == []
+    end
+
+    test "an id no candidate row offered crashes rather than staging a stranger", %{conn: conn} do
+      Process.flag(:trap_exit, true)
+      view = open_create_sheet(conn)
+
+      # The only legal source of that id is a candidate row this socket
+      # just drew. Anything else is a forged event, and staging it would
+      # invite someone the host never saw offered.
+      reason =
+        catch_exit(
+          render_click(view, "meeting_create_invite_stage", %{
+            "kind" => "user",
+            "id" => Ecto.UUID.generate()
+          })
+        )
+
+      assert {{%ArgumentError{message: message}, _stacktrace}, _from} = reason
+      assert message =~ "no candidate is currently offered"
+    end
+
+    # ── the rendered frame ─────────────────────────────────────────────────
+
+    test "the description textarea is gone and the schedule fields took its place", %{
+      conn: conn
+    } do
+      html = conn |> open_create_sheet() |> render()
+
+      # `create_meeting/1` never persisted a description, so the field
+      # silently discarded whatever was typed into it.
+      refute html =~ ~s(name="start_meeting[description]")
+
+      # The positive side, so the refute above cannot pass off a sheet that
+      # failed to render at all.
+      assert html =~ ~s(name="start_meeting[date]")
+      assert html =~ ~s(name="start_meeting[start_time]")
+      assert html =~ ~s(name="start_meeting[duration_minutes]")
+    end
+
+    test "the mobile Create button is hidden from sm up and submits the sheet's form", %{
+      conn: conn
+    } do
+      doc = conn |> open_create_sheet() |> render() |> LazyHTML.from_fragment()
+      mobile = LazyHTML.query(doc, ~s([data-role="meeting-create-submit-mobile"]))
+
+      # Exactly one, and its `form` attribute is what lets a control OUTSIDE
+      # the `<form>` element submit it — the canvas puts it in the header.
+      assert LazyHTML.attribute(mobile, "form") == ["start-meeting-form"]
+      assert LazyHTML.attribute(mobile, "type") == ["submit"]
+      assert [class] = LazyHTML.attribute(mobile, "class")
+      assert class =~ "sm:hidden"
+    end
+
+    test "the desktop footer bar is hidden below sm and holds Cancel plus the primary", %{
+      conn: conn
+    } do
+      doc = conn |> open_create_sheet() |> render() |> LazyHTML.from_fragment()
+
+      assert [class] =
+               doc
+               |> LazyHTML.query(~s([data-role="meeting-create-footer"]))
+               |> LazyHTML.attribute("class")
+
+      assert class =~ "hidden"
+      assert class =~ "sm:flex"
+
+      # Both live INSIDE the footer, so the two breakpoints cannot end up
+      # offering the same control twice.
+      assert doc
+             |> LazyHTML.query(
+               ~s([data-role="meeting-create-footer"] [data-role="start-meeting-cancel"])
+             )
+             |> Enum.count() == 1
+
+      assert doc
+             |> LazyHTML.query(
+               ~s([data-role="meeting-create-footer"] [data-role="start-meeting-submit"])
+             )
+             |> Enum.count() == 1
+    end
+
+    # The sponsor rejected stage 4 at the UI gate: "having too many meeting
+    # invites pushes the button off the modal on desktop". The panel was one
+    # scroll region (`max-h-[75vh] overflow-y-auto` on the panel itself), so
+    # the footer bar scrolled WITH the staged-invite list instead of staying
+    # pinned, and past a few staged rows `start-meeting-submit` sat below the
+    # visible edge of the modal.
+    #
+    # Asserting the button is PRESENT cannot see this — it was present the
+    # whole time, just out of view. So assert the structure that makes the
+    # defect impossible: the panel caps height but does not scroll, exactly
+    # one descendant scrolls, and the primary action is NOT inside it.
+    defp create_sheet_panel(doc) do
+      LazyHTML.query(doc, ~s([data-role="start-meeting-sheet"] > div.relative))
+    end
+
+    defp class_of(lazy), do: lazy |> LazyHTML.attribute("class") |> List.first("")
+
+    # A class list that establishes a scroll container on the block axis.
+    # `overflow-hidden` is deliberately NOT one of these — it clips, it does
+    # not scroll, and it is what the panel is supposed to carry.
+    defp scrolls?(class) do
+      Enum.any?(
+        ~w(overflow-y-auto overflow-y-scroll overflow-auto overflow-scroll),
+        &String.contains?(class, &1)
+      )
+    end
+
+    test "the panel caps height without scrolling, so the footer cannot be pushed off", %{
+      conn: conn
+    } do
+      doc = conn |> open_create_sheet() |> render() |> LazyHTML.from_fragment()
+      panel_class = doc |> create_sheet_panel() |> class_of()
+
+      # Positive side first: the panel rendered at all.
+      assert panel_class =~ "max-h-[75vh]", "the panel no longer caps its height"
+
+      # A capped-height flex column. Without `flex-col` the body cannot be
+      # the only thing that grows, and the cap goes back to clipping or
+      # scrolling the footer along with the list.
+      assert panel_class =~ "flex", "the panel is not a flex container"
+      assert panel_class =~ "flex-col", "the panel is not a flex COLUMN"
+
+      refute scrolls?(panel_class),
+             "the panel itself scrolls (#{panel_class}) — the footer bar scrolls with the " <>
+               "staged-invite list and leaves the modal, which is the rejected defect"
+    end
+
+    test "the primary action lives outside the sheet's one scrolling region", %{conn: conn} do
+      doc = conn |> open_create_sheet() |> render() |> LazyHTML.from_fragment()
+      panel = create_sheet_panel(doc)
+
+      # Per-node walk, not a `class*=` selector: read each node's own class
+      # list and decide, so a scroll container introduced anywhere in the
+      # panel is counted rather than matched by luck of the selector.
+      # `LazyHTML.query(node, "*")` includes the node it is rooted at, so
+      # the panel is in this walk too — a panel that scrolls shows up here
+      # as a region that contains the footer.
+      scrollers =
+        panel
+        |> LazyHTML.query("*")
+        |> Enum.filter(&(&1 |> class_of() |> scrolls?()))
+
+      assert [body] = scrollers,
+             "expected exactly one scrolling region inside the panel, found #{length(scrollers)}"
+
+      # `min-h-0` is the load-bearing bit: a flex child defaults to
+      # `min-height: auto` and refuses to shrink below its content, so
+      # without it the body never scrolls and the footer is pushed off
+      # again even though the panel is a flex column.
+      body_class = class_of(body)
+      assert body_class =~ "min-h-0", "the scrolling body can grow past the panel's cap"
+      assert body_class =~ "flex-1", "the scrolling body does not take the free space"
+
+      # The submit renders exactly once in the panel …
+      assert panel |> LazyHTML.query(~s([data-role="start-meeting-submit"])) |> Enum.count() == 1
+
+      # … and not from inside the region that scrolls away.
+      assert body |> LazyHTML.query(~s([data-role="start-meeting-submit"])) |> Enum.count() == 0,
+             "start-meeting-submit is inside the scrolling body — enough staged invites push " <>
+               "it out of the visible modal"
+
+      assert body |> LazyHTML.query(~s([data-role="start-meeting-cancel"])) |> Enum.count() == 0,
+             "start-meeting-cancel is inside the scrolling body"
+
+      # The staged invites are what grows, so they MUST be inside it —
+      # otherwise the assertions above hold trivially on a sheet whose body
+      # scrolls nothing.
+      assert body
+             |> LazyHTML.query(~s([data-role="meeting-create-invite-section"]))
+             |> Enum.count() == 1
+    end
+
+    test "a long staged-invite list does not move the primary action into the scroll region", %{
+      conn: conn
+    } do
+      view = open_create_sheet(conn)
+
+      # Ten staged externals — well past the point where the old markup had
+      # already carried the footer below the panel's visible edge.
+      for index <- 1..10 do
+        _ = search_invites(view, "overflow#{index}@example.com")
+
+        view
+        |> element(~s([data-role="meeting-invite-option"][data-option="guest"]))
+        |> render_click()
+      end
+
+      doc = view |> render() |> LazyHTML.from_fragment()
+      assert doc |> LazyHTML.query(~s([data-role="meeting-invite-row"])) |> Enum.count() == 10
+
+      panel = create_sheet_panel(doc)
+
+      assert [body] =
+               panel
+               |> LazyHTML.query("*")
+               |> Enum.filter(&(&1 |> class_of() |> scrolls?()))
+
+      assert body |> LazyHTML.query(~s([data-role="meeting-invite-row"])) |> Enum.count() == 10
+
+      assert body |> LazyHTML.query(~s([data-role="start-meeting-submit"])) |> Enum.count() == 0,
+             "with ten invites staged the primary action sits inside the scrolling body"
+    end
+
+    test "every control in the sheet clears a 44px tap target", %{conn: conn} do
+      doc = conn |> open_create_sheet() |> render() |> LazyHTML.from_fragment()
+
+      roles = [
+        "start-meeting-name",
+        "start-meeting-project",
+        "meeting-create-date",
+        "meeting-create-start-time",
+        "meeting-create-duration",
+        "start-meeting-cancel",
+        "start-meeting-submit",
+        "meeting-create-submit-mobile"
+      ]
+
+      # `Enum.each` with an explicit one-element match, NOT a comprehension:
+      # `for {role, [class]} <- …` silently SKIPS a role that rendered zero
+      # elements, which is exactly the failure this is looking for.
+      Enum.each(roles, fn role ->
+        assert [class] =
+                 doc
+                 |> LazyHTML.query(~s([data-role="#{role}"]))
+                 |> LazyHTML.attribute("class"),
+               "#{role} did not render exactly once"
+
+        assert class =~ "min-h-11", "#{role} does not clear 44px"
+      end)
+    end
+
+    test "the sheet stays an overlay with safe-area padding, not a second bottom sheet", %{
+      conn: conn
+    } do
+      doc = conn |> open_create_sheet() |> render() |> LazyHTML.from_fragment()
+
+      assert [wrapper] =
+               doc
+               |> LazyHTML.query(~s([data-role="start-meeting-sheet"]))
+               |> LazyHTML.attribute("class")
+
+      assert wrapper =~ "fixed inset-0"
+      assert wrapper =~ "items-end sm:items-center"
+
+      # Out of flow, so the safe-area inset is the whole clearance — the
+      # bottom-nav reservation applies to in-flow scroll regions, which
+      # already end above a sticky nav.
+      assert doc
+             |> LazyHTML.query(~s([data-role="start-meeting-sheet"] > div.relative))
+             |> LazyHTML.attribute("class")
+             |> List.first() =~ "pb-[env(safe-area-inset-bottom)]"
     end
   end
 

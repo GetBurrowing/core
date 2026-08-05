@@ -19,7 +19,8 @@ defmodule Platform.Meetings.GuestInvite do
         expires_at: 1_764_849_600, # unix seconds
         display_name: "Juno Fairbanks", # or nil for self-entry
         guest_space_id: "...",       # or nil when no dedicated guest space
-        meeting_id: "..."            # or nil for tokens minted pre-019f9b14
+        meeting_id: "...",           # or nil for tokens minted pre-019f9b14
+        invite_id: "..."             # or nil for tokens minted pre-019fb954
       }
 
   `:guest_space_id` was added in stage 4 of task 019f2483 to thread the
@@ -44,6 +45,19 @@ defmodule Platform.Meetings.GuestInvite do
   and resolve to `meeting_id: nil`, and `Platform.Meetings`'s resolver
   falls back to a safe-failing unambiguous slug lookup for those. With
   the 24h default expiry, legacy tokens age out within a day.
+
+  `:invite_id` was added in stage 2 of task 019fb954, again by the same
+  mechanism. It binds the token to a `meeting_invites` ROW so a single
+  guest can be revoked without invalidating the others — an issued HMAC
+  cannot be un-issued, so the row (via its `revoked_at`) is the only
+  revocation surface a stateless token can have. `verify/2` deliberately
+  does NOT perform that check: it stays pure (signature, shape, expiry
+  only). Revocation needs a `Platform.Repo` lookup and lives in
+  `Platform.Meetings.resolve_guest_invite/2`.
+
+  It is optional in the verify path for the same backwards-compatibility
+  reason as the two keys above — every token in the wild today was minted
+  without an `invite_id` and must keep verifying.
   """
 
   @salt "meeting_guest_invite"
@@ -57,7 +71,8 @@ defmodule Platform.Meetings.GuestInvite do
           required(:expires_at) => integer(),
           required(:display_name) => String.t() | nil,
           required(:guest_space_id) => String.t() | nil,
-          required(:meeting_id) => String.t() | nil
+          required(:meeting_id) => String.t() | nil,
+          required(:invite_id) => String.t() | nil
         }
 
   @doc """
@@ -77,6 +92,10 @@ defmodule Platform.Meetings.GuestInvite do
     a meeting (slug is unique per project only), so a token without an
     id can only be resolved by a slug lookup that must refuse ambiguous
     matches. Omit only to simulate a legacy, pre-019f9b14 token.
+  * `invite_id` (optional, keyword) — id of the `meeting_invites` row
+    this token was issued against. Binding the token to a row is what
+    makes a single guest revocable without invalidating the others.
+    Omit only to simulate a legacy, pre-019fb954 token.
   """
   @spec sign(String.t(), integer(), String.t() | nil, keyword()) :: String.t()
   def sign(meeting_slug, expires_at, display_name \\ nil, opts \\ [])
@@ -84,6 +103,7 @@ defmodule Platform.Meetings.GuestInvite do
              (is_binary(display_name) or is_nil(display_name)) and is_list(opts) do
     guest_space_id = Keyword.get(opts, :guest_space_id)
     meeting_id = Keyword.get(opts, :meeting_id)
+    invite_id = Keyword.get(opts, :invite_id)
 
     unless is_nil(guest_space_id) or is_binary(guest_space_id) do
       raise ArgumentError,
@@ -95,12 +115,18 @@ defmodule Platform.Meetings.GuestInvite do
             "meeting_id must be a binary or nil, got: #{inspect(meeting_id)}"
     end
 
+    unless is_nil(invite_id) or is_binary(invite_id) do
+      raise ArgumentError,
+            "invite_id must be a binary or nil, got: #{inspect(invite_id)}"
+    end
+
     payload = %{
       meeting_slug: meeting_slug,
       expires_at: expires_at,
       display_name: display_name,
       guest_space_id: guest_space_id,
-      meeting_id: meeting_id
+      meeting_id: meeting_id,
+      invite_id: invite_id
     }
 
     Plug.Crypto.sign(signing_key(), @salt, payload)
@@ -109,8 +135,8 @@ defmodule Platform.Meetings.GuestInvite do
   @doc """
   Sign a guest invite token with the default expiry window (24h from now).
   Convenience wrapper around `sign/3` for callers that want the standard
-  expiry policy. `opts` is passed through verbatim, so `:guest_space_id`
-  and `:meeting_id` behave exactly as they do on `sign/4`.
+  expiry policy. `opts` is passed through verbatim, so `:guest_space_id`,
+  `:meeting_id` and `:invite_id` behave exactly as they do on `sign/4`.
   """
   @spec sign_with_default_expiry(String.t(), String.t() | nil, keyword()) :: String.t()
   def sign_with_default_expiry(meeting_slug, display_name \\ nil, opts \\ [])
@@ -131,6 +157,11 @@ defmodule Platform.Meetings.GuestInvite do
   matches, and `expires_at` is in the future. Returns `{:error, :expired}`
   when the token has passed its `expires_at`, or `{:error, :invalid}` for
   anything else (wrong signature, tampered payload, wrong shape).
+
+  This function is PURE — signature, shape and expiry only. It does not
+  touch `Platform.Repo`, so it does not and cannot check whether the
+  bound `:invite_id` row has been revoked. That check lives in
+  `Platform.Meetings.resolve_guest_invite/2`.
   """
   @spec verify(String.t(), keyword()) ::
           {:ok, payload} | {:error, :invalid | :expired}
@@ -148,6 +179,7 @@ defmodule Platform.Meetings.GuestInvite do
              (is_binary(display_name) or is_nil(display_name)) ->
         guest_space_id = Map.get(payload, :guest_space_id)
         meeting_id = Map.get(payload, :meeting_id)
+        invite_id = Map.get(payload, :invite_id)
 
         cond do
           not (is_nil(guest_space_id) or is_binary(guest_space_id)) ->
@@ -156,18 +188,23 @@ defmodule Platform.Meetings.GuestInvite do
           not (is_nil(meeting_id) or is_binary(meeting_id)) ->
             {:error, :invalid}
 
+          not (is_nil(invite_id) or is_binary(invite_id)) ->
+            {:error, :invalid}
+
           DateTime.utc_now() |> DateTime.to_unix() > expires_at ->
             {:error, :expired}
 
           true ->
-            # Normalise: always surface `:guest_space_id` and `:meeting_id`
-            # in the returned payload so callers can pattern-match
-            # uniformly across old (pre-stage-4 / pre-019f9b14) and new
-            # tokens rather than reaching for `Map.get/2` themselves.
+            # Normalise: always surface `:guest_space_id`, `:meeting_id`
+            # and `:invite_id` in the returned payload so callers can
+            # pattern-match uniformly across old (pre-stage-4 /
+            # pre-019f9b14 / pre-019fb954) and new tokens rather than
+            # reaching for `Map.get/2` themselves.
             {:ok,
              payload
              |> Map.put(:guest_space_id, guest_space_id)
-             |> Map.put(:meeting_id, meeting_id)}
+             |> Map.put(:meeting_id, meeting_id)
+             |> Map.put(:invite_id, invite_id)}
         end
 
       {:ok, _malformed} ->
