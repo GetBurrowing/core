@@ -229,14 +229,42 @@
            the guest surface (`chrome_mode == :none`) so the guest can see
            which name others in the meeting see. Mirrors the badge in
            guest_meeting_live.html.heex:117-119 verbatim so stage 5's
-           router flip is a byte-identical visual delta. --%>
+           router flip is a byte-identical visual delta.
+
+           NARROWED to `and @state == :in_meeting` (task 019fb955-f8b1
+           stage 5). `chrome_mode == :none` alone used to mean "guest",
+           because the chrome-less layout only ever served the token guest
+           flow. The `:meet_member` live_session is chrome-less too, and
+           for an invited ACCOUNT this badge rendered a blank name and the
+           wrong noun — literally " (guest)" after an empty interpolation.
+           `:state` is what actually distinguishes the two: the guest mount
+           clause sets it, the account mount leaves it nil. --%>
         <span
-          :if={@chrome_mode == :none}
+          :if={@chrome_mode == :none and @state == :in_meeting}
           class="badge badge-ghost gap-1 text-xs"
           data-role="guest-identity-badge"
         >
           <span class="hero-user size-3.5" aria-hidden="true"></span>
           {@display_name} (guest)
+        </span>
+
+        <%!-- Member identity badge (task 019fb955-f8b1 stage 5). Sibling of
+           the guest badge for the OTHER chrome-less surface: an invited
+           external account on the `meet.` host, which reaches the general
+           `mount/3` and so carries `@state == nil`. Same visual treatment,
+           the account's own name, and NO "(guest)" suffix — this viewer is
+           a Suite account, and labelling them a guest would misstate both
+           who they are and how they got in. Rendered only when the name
+           resolves; `member_display_name/1` returns nil when there is no
+           account behind the mount, and a badge naming nobody is worse
+           than no badge. --%>
+        <span
+          :if={@chrome_mode == :none and is_nil(@state) and @display_name}
+          class="badge badge-ghost gap-1 text-xs"
+          data-role="member-identity-badge"
+        >
+          <span class="hero-user size-3.5" aria-hidden="true"></span>
+          {@display_name}
         </span>
 
         <%!-- Local-media controls + Join/Leave CTA. Visual treatment

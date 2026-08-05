@@ -438,7 +438,15 @@ defmodule PlatformWeb.MeetingLive do
      # template compiles under both modes without KeyErrors when the render
      # scans the cond's guard tuples.
      |> assign(:state, nil)
-     |> assign(:display_name, nil)
+     # Task 019fb955-f8b1 stage 5: the `:meet_member` live_session reaches
+     # THIS clause with `chrome_mode: :none` and a real signed-in account,
+     # so `:display_name` has to name that account — the member identity
+     # badge interpolates it. Read off `:current_user_record`, which
+     # `ShellLive.on_mount(:default)` has already assigned (on_mount hooks
+     # run before `mount/3`). Stays nil on the shell surface, which renders
+     # no badge, and nil for the `Ecto.UUID.generate()` anonymous-test
+     # fallback above, where there is no account to name.
+     |> assign(:display_name, member_display_name(socket.assigns[:current_user_record]))
      # Mobile drawer state — defaults CLOSED. Desktop ignores this
      # assign (column is `hidden lg:flex`). See @moduledoc for the
      # reconciliation against the stack-spec's "defaults to true" line.
@@ -561,7 +569,31 @@ defmodule PlatformWeb.MeetingLive do
   # MeetingHooks, and sends `:auto_join`, which mints a LiveKit token. A denied
   # mount must reach none of that.
   def handle_params(%{"slug" => slug} = params, _url, socket) do
+    chrome_mode = socket.assigns[:chrome_mode]
+
     case Meetings.fetch_meeting_for_user(socket.assigns[:current_user_record], slug) do
+      # A DENIED MOUNT MUST NOT BOUNCE OFF THE CHROME-LESS SURFACE (task
+      # 019fb955-f8b1 stage 5). The shell branches below `push_navigate` to
+      # `/meetings`, which is right for an internal viewer and wrong for a
+      # member on the `meet.` host: that route is not in the meet surface's
+      # allowlist, so `ExternalUserScope` answers it with a 403 and the
+      # denial reads as a broken app rather than a closed door. Render the
+      # SAME terminal invalid-invite card a bad guest link produces, so the
+      # two denials are one outcome and the meeting name never reaches the
+      # DOM. Matched first so the `chrome_mode == :shell` clauses below
+      # stay byte-identical.
+      #
+      # `:ambiguous` is included deliberately. It is not a security signal,
+      # but it `push_navigate`s to the same denied route, so leaving it out
+      # would leave the bounce live on half the denial paths.
+      {:error, reason} when reason in [:not_found, :ambiguous] and chrome_mode == :none ->
+        {:noreply,
+         socket
+         |> assign(:page_title, "Invite link is not valid")
+         |> assign(:state, :invalid)
+         |> assign(:meeting, nil)
+         |> seed_guest_index_fallback_assigns()}
+
       {:error, :not_found} ->
         # Clean not-found path — no MatchError / Ecto.NoResultsError
         # bubbles. Also clear the client's saved `route_resume:meetings`
@@ -2529,11 +2561,22 @@ defmodule PlatformWeb.MeetingLive do
       socket.assigns[:in_meeting] ->
         {:noreply, socket}
 
-      socket.assigns[:chrome_mode] == :none ->
+      not is_binary(socket.assigns[:user_id]) ->
         # Guest ingress (task 019f498d stage 3): mount already minted the
         # bundle and pushed `join-meeting`. MeetingHooks.join/1 assumes a
         # binary `:user_id` (see `do_join/1`), which the guest surface
         # doesn't have — so auto-join is a no-op on the guest path.
+        #
+        # NARROWED from `chrome_mode == :none` (task 019fb955-f8b1 stage
+        # 5). That test conflated "chrome-less" with "guest", which held
+        # only while the `meet.` host served guests exclusively. The
+        # `:meet_member` live_session is chrome-less AND carries a real
+        # binary `:user_id`, and it must auto-join like any other signed-in
+        # viewer — under the old test it loaded the room and never entered
+        # the call. The stated reason for the skip was always the missing
+        # user_id, so this asks that question directly. `MeetingHooks`
+        # carries its own invite gate (stage 4), so widening the auto-join
+        # path does not widen who may join.
         {:noreply, socket}
 
       true ->
@@ -3254,6 +3297,19 @@ defmodule PlatformWeb.MeetingLive do
   defp normalize_chrome_mode("none"), do: :none
   defp normalize_chrome_mode(:none), do: :none
   defp normalize_chrome_mode(_), do: :shell
+
+  # The name to show for a signed-in ACCOUNT on the chrome-less member
+  # surface (task 019fb955-f8b1 stage 5). Same `name || email` precedence
+  # `ShellLive.on_mount/4` uses for `:current_user`, so the member badge
+  # and the shell header never disagree about what to call someone.
+  #
+  # No fallback string. A nil here renders NO member badge, which is the
+  # honest outcome for a mount with no account behind it (the anonymous
+  # `Ecto.UUID.generate()` test path); inventing "User" would put a name
+  # on the surface that names nobody.
+  defp member_display_name(%{name: name}) when is_binary(name) and name != "", do: name
+  defp member_display_name(%{email: email}) when is_binary(email) and email != "", do: email
+  defp member_display_name(_), do: nil
 
   # ── Index helpers (`:index` action) ──────────────────────────────────────
   #

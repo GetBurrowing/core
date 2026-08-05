@@ -243,6 +243,75 @@ defmodule PlatformWeb.Router do
     end
   end
 
+  # Invited-member meeting surface on the `meet.` host (task 019fb955-f8b1
+  # stage 5). An account-holding external user who holds a live invite row
+  # opens the meeting room here; the token-bearing GUEST surface stays at
+  # the `/:slug/:token` scope near the bottom of this file.
+  #
+  # ── (a) PLACEMENT, characterized before the change, not assumed.
+  # `Phoenix.Router.route_info(Router, "GET", "/meetings/some-slug", <host>)`
+  # on the unmodified router answered `MeetingLive` in the `:authenticated`
+  # live_session for EVERY host tried — `localhost`, `meet.localhost` and
+  # `meet.example.com` alike. Phoenix emits one `__match_route__/3` clause
+  # per route in definition order and the first match wins; the default
+  # `scope "/"` below declares `/meetings/:slug` with a match-any-host
+  # pattern, so a `meet.`-hosted copy appended NEXT TO the guest scope at
+  # the bottom of this file would be unreachable dead code. Hence this
+  # scope sits above the default scope, exactly like the `chat.` scope and
+  # for exactly the reason its own note gives.
+  #
+  # ── (b) PIPELINE: `[:browser, :require_auth, :enforce_external_scope]`,
+  # NOT `:guest_browser`. An external member is an authenticated OIDC
+  # account, not an anonymous guest, so it needs the real session and
+  # `:require_auth`; and `:enforce_external_scope` is the plug that carries
+  # the invite-row gate (`ExternalUserScope` -> `Meetings.invited_to_slug?/2`).
+  # Routing here without that pipeline would put the room behind no gate.
+  #
+  # ── (c) TWO DIFFERENT HOST MECHANISMS NOW EXIST AND MUST NOT BE
+  # CONFLATED. This scope matches Phoenix's `"meet."` PREFIX and decides
+  # WHICH LIVE_SESSION RENDERS. `PlatformWeb.ExternalSurface` matches the
+  # CONFIGURED `:meet_host` EXACTLY and decides WHETHER AN EXTERNAL USER IS
+  # ADMITTED. They are not the same test and they do not answer the same
+  # question. A `meet.`-prefixed host that is not the configured meet host
+  # routes HERE and is then denied by the plug — fail-closed, and the
+  # pairing `router_meet_member_host_test.exs` pins.
+  #
+  # ── (d) CONSEQUENCE FOR INTERNAL USERS: on a `meet.`-prefixed host an
+  # internal user now gets the chrome-less member surface instead of the
+  # shell. Intended under the sponsor's "chat is chat only, meet is meet
+  # only" — it is a RENDERING change, not an authorization one. Internal
+  # users remain a complete no-op through `ExternalUserScope` on every
+  # host, and `/meetings/:slug` on the default host is untouched.
+  #
+  # ── (e) THE GUEST ROUTE AND THIS ROUTE COLLIDE ON A SHARED HOST.
+  # The deployment that motivated this stage points the guest host and the
+  # meet host at the SAME hostname, so both scopes are live on one host and
+  # both patterns are two segments: `/meetings/:slug` here and
+  # `/:slug/:token` in the guest scope. First-declared wins, so on that
+  # shared host `/meetings/<x>` resolves HERE. The edge case that buys:
+  # a meeting whose slug is literally "meetings" has guest links of the
+  # form `/meetings/<token>`, and those do not reach the guest scope.
+  # NOTE this is NOT a regression introduced here — the default scope's
+  # `/meetings/:slug` already shadowed them from above, as the
+  # characterization above shows. Placing this scope higher keeps the
+  # status quo for that slug rather than changing it. If that slug ever
+  # needs to work, the fix is a guest-route prefix, not a reordering:
+  # reordering would make every member URL resolve to the guest route with
+  # `slug: "meetings"`, silently deleting this whole surface. The
+  # shared-host case is pinned by a test that gives BOTH routes the same
+  # host string, because a test using two different fixture hosts cannot
+  # detect that class of bug.
+  scope "/", PlatformWeb, host: "meet." do
+    pipe_through([:browser, :require_auth, :enforce_external_scope])
+
+    live_session :meet_member,
+      on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
+      layout: {PlatformWeb.Layouts, :guest},
+      session: %{"chrome_mode" => "none"} do
+      live("/meetings/:slug", MeetingLive, :show)
+    end
+  end
+
   scope "/", PlatformWeb do
     pipe_through([:browser, :require_auth, :enforce_external_scope])
 
