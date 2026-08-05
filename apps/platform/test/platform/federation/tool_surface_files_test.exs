@@ -1239,16 +1239,28 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
   #
   # `memory_search` runs through `Platform.Org.Wiki.Search.search/2`,
   # which is a DIFFERENT dispatch from `file_search` and carries no
-  # human_only gate. It is not a leak today, but not because anything
-  # decided so: `semantic_corpus/1` ends in a catch-all that maps any
-  # unrecognised memory_type (including "document") to `:page`, and the
-  # hit is then dropped because a file id never resolves in the wiki-page
-  # map. A lookup miss, not a decision. Measured here rather than
-  # inferred, so a future schema change that makes file ids resolvable
-  # turns this test red instead of shipping a leak. Fixing wiki search is
-  # owned elsewhere and deliberately out of scope here.
+  # human_only gate. It is nevertheless not a leak, and by decision: the
+  # semantic channel classifies each hit by its `memory_type` tag, and a
+  # "document" tag — what the file ingester writes — classifies as
+  # `:excluded` and is refused in `semantic_hit_to_channel/3` before
+  # fusion. The refusal happens at classification, ahead of any id
+  # lookup, so no file body can enter the result set. Measured here so
+  # the refusal stays a refusal.
+  #
+  # A related fact, so nobody re-derives it: messages are never
+  # semantically indexed, so the absence of a `semantic_corpus("message")`
+  # clause is not a regression. Every ingest caller under
+  # `lib/platform/` writes "page" or "journal" (the wiki indexer
+  # payload), "task" (the task indexer), "document" (the file ingester),
+  # or falls through the "daily" default in `Platform.Memory.normalize/1`
+  # that untyped journal-entry structs take. Nothing under
+  # `lib/platform/chat/` ingests at all. Semantic message search returned
+  # nothing before the classification change and returns nothing after;
+  # adding a clause for it would accomplish nothing without a message
+  # indexer to feed it. `:message` in `@type corpus` is real, but it is
+  # produced by the LEXICAL message channel, not this one.
   describe "memory_search (Wiki.Search) does not carry file bodies" do
-    test "a document-typed hit for a file is dropped at hydration",
+    test "a document-typed hit for a file never reaches memory_search results",
          %{project_a: project} do
       file =
         create_file(project,

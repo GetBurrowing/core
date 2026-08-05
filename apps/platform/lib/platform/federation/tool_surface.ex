@@ -7920,13 +7920,15 @@ defmodule Platform.Federation.ToolSurface do
     score = Map.get(memory_result, :score) || Map.get(memory_result, "score")
 
     case entry_id && Platform.Files.get_file(entry_id) do
-      # The generic `memory_search` tool was checked and is deliberately
-      # NOT gated here: it runs through Platform.Org.Wiki.Search, whose
-      # hydration only resolves page / journal / message / task ids, so a
-      # document-tagged hit for a file id is dropped before any body is
-      # read (measured in tool_surface_files_test.exs). That is a lookup
-      # miss rather than a decision, and is owned by a separate ticket —
-      # don't re-derive it.
+      # The generic `memory_search` tool is deliberately NOT gated here.
+      # It runs through Platform.Org.Wiki.Search, which classifies every
+      # semantic hit by its `memory_type` tag before fusion: a "document"
+      # tag — the tag the file ingester writes — classifies as `:excluded`
+      # and the hit is discarded on the spot. No file id is ever looked
+      # up, so no file body can reach a `memory_search` result whether or
+      # not that id would resolve anywhere. The exclusion is a decision
+      # taken at classification, not a side effect of a later miss;
+      # tool_surface_files_test.exs holds it in place.
       #
       # human_only clause FIRST — a withdrawn file must drop out of the
       # hit list even when it is still present in the index (the scrub is
