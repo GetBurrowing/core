@@ -25,6 +25,47 @@ defmodule Platform.Meetings.SummarizerTest do
     transcript
   end
 
+  # A real meeting room (participants key off the room UUID, while a
+  # transcript keys off the LiveKit room NAME).
+  defp presence_room! do
+    {:ok, space} = Platform.Chat.create_space(%{kind: "execution"})
+
+    {:ok, room} =
+      %Platform.Meetings.Room{}
+      |> Platform.Meetings.Room.changeset(%{
+        space_id: space.id,
+        livekit_room_name: "space-#{space.id}"
+      })
+      |> Platform.Repo.insert()
+
+    {space, room}
+  end
+
+  defp transcriber_joined!(room, seconds_ago, opts \\ []),
+    do: join!(room, "meeting-transcriber", seconds_ago, opts)
+
+  defp human_joined!(room, name, seconds_ago, opts \\ []),
+    do: join!(room, name, seconds_ago, opts)
+
+  defp join!(room, display_name, seconds_ago, opts) do
+    joined_at = DateTime.add(DateTime.utc_now(), -seconds_ago, :second)
+
+    left_at =
+      case Keyword.get(opts, :present_for) do
+        nil -> nil
+        secs -> DateTime.add(joined_at, secs, :second)
+      end
+
+    {:ok, participant} =
+      Meetings.participant_joined(room, %{
+        display_name: display_name,
+        joined_at: joined_at,
+        left_at: left_at
+      })
+
+    participant
+  end
+
   defp sample_segments do
     [
       %{
@@ -149,6 +190,88 @@ defmodule Platform.Meetings.SummarizerTest do
       updated = Meetings.get_transcript(transcript.id)
       assert updated.status == "complete"
       assert updated.summary == "This meeting had no transcribed content."
+    end
+
+    test "FAILURE CASE: zero segments with a transcriber present is marked failed" do
+      {space, room} = presence_room!()
+      transcript = create_transcript!(%{room_id: room.livekit_room_name, space_id: space.id})
+      transcriber_joined!(room, 1800)
+
+      {:ok, finalized} = Meetings.finalize_transcript(transcript.id)
+
+      assert {:ok, :failed} = Summarizer.summarize_async(finalized)
+
+      # Assert on the stored row, never on a log line — a log assertion
+      # passes while the row still reads "complete".
+      reloaded = Meetings.get_transcript(transcript.id)
+      assert reloaded.status == "failed"
+      assert reloaded.summary != "This meeting had no transcribed content."
+      assert is_binary(reloaded.summary)
+
+      # The humans in the space see it, not just a status column.
+      notice =
+        space.id
+        |> Platform.Chat.list_messages(limit: 50)
+        |> Enum.find(&(&1.metadata["source"] == "meeting_transcription_failure"))
+
+      assert notice
+      assert notice.content_type == "system"
+      assert notice.metadata["transcript_id"] == transcript.id
+    end
+
+    test "GENUINE-SILENCE CONTROL: zero segments with only humans stays complete" do
+      {space, room} = presence_room!()
+      transcript = create_transcript!(%{room_id: room.livekit_room_name, space_id: space.id})
+      human_joined!(room, "Harper", 3600)
+      human_joined!(room, "Alex", 3600)
+
+      {:ok, finalized} = Meetings.finalize_transcript(transcript.id)
+
+      assert {:ok, :empty} = Summarizer.summarize_async(finalized)
+
+      reloaded = Meetings.get_transcript(transcript.id)
+      assert reloaded.status == "complete"
+      assert reloaded.summary == "This meeting had no transcribed content."
+
+      refute space.id
+             |> Platform.Chat.list_messages(limit: 50)
+             |> Enum.any?(&(&1.metadata["source"] == "meeting_transcription_failure"))
+    end
+
+    test "a transcriber present below the threshold is still genuine silence" do
+      {space, room} = presence_room!()
+      transcript = create_transcript!(%{room_id: room.livekit_room_name, space_id: space.id})
+      transcriber_joined!(room, 5, present_for: 5)
+
+      {:ok, finalized} = Meetings.finalize_transcript(transcript.id)
+
+      assert {:ok, :empty} = Summarizer.summarize_async(finalized)
+
+      reloaded = Meetings.get_transcript(transcript.id)
+      assert reloaded.status == "complete"
+      assert reloaded.summary == "This meeting had no transcribed content."
+    end
+
+    test "SUCCESS CONTROL: a transcript WITH segments is not marked failed" do
+      {space, room} = presence_room!()
+
+      transcript =
+        create_transcript!(%{
+          room_id: room.livekit_room_name,
+          space_id: space.id,
+          segments: sample_segments()
+        })
+
+      transcriber_joined!(room, 3600)
+
+      {:ok, finalized} = Meetings.finalize_transcript(transcript.id)
+
+      assert {:ok, pid} = Summarizer.summarize_async(finalized)
+      assert is_pid(pid)
+
+      reloaded = Meetings.get_transcript(transcript.id)
+      refute reloaded.status == "failed"
+      refute reloaded.summary == "This meeting had no transcribed content."
     end
 
     test "rejects nil transcript" do

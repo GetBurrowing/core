@@ -1903,6 +1903,222 @@ defmodule Platform.MeetingsTest do
     end
   end
 
+  describe "transcriber presence" do
+    defp presence_room! do
+      {:ok, space} = Chat.create_space(%{kind: "execution"})
+      room_name = "space-#{space.id}"
+
+      {:ok, room} =
+        %Platform.Meetings.Room{}
+        |> Platform.Meetings.Room.changeset(%{
+          space_id: space.id,
+          livekit_room_name: room_name
+        })
+        |> Repo.insert()
+
+      {space, room}
+    end
+
+    defp presence_transcript!(space_id, room_name) do
+      {:ok, transcript} =
+        Meetings.create_transcript(%{room_id: room_name, space_id: space_id})
+
+      transcript
+    end
+
+    defp join!(room, display_name, seconds_ago, opts \\ []) do
+      joined_at = DateTime.add(DateTime.utc_now(), -seconds_ago, :second)
+
+      left_at =
+        case Keyword.get(opts, :present_for) do
+          nil -> nil
+          secs -> DateTime.add(joined_at, secs, :second)
+        end
+
+      {:ok, participant} =
+        Meetings.participant_joined(room, %{
+          display_name: display_name,
+          joined_at: joined_at,
+          left_at: left_at,
+          metadata: Keyword.get(opts, :metadata, %{})
+        })
+
+      participant
+    end
+
+    test "transcript room_id is a NAME, not the participants' UUID FK" do
+      # The bug this guards: `meeting_transcripts.room_id` holds the LiveKit
+      # room name while `meeting_participants.room_id` holds the meeting_rooms
+      # UUID. A direct join between them silently matches nothing.
+      {space, room} = presence_room!()
+      room_name = room.livekit_room_name
+      transcript = presence_transcript!(space.id, room_name)
+
+      refute transcript.room_id == room.id
+      assert transcript.room_id == room.livekit_room_name
+    end
+
+    test "returns the longest window when a marker participant was present" do
+      {space, room} = presence_room!()
+      room_name = room.livekit_room_name
+      transcript = presence_transcript!(space.id, room_name)
+
+      join!(room, "meeting-transcriber", 600, present_for: 600)
+
+      assert Meetings.transcriber_presence_seconds(transcript) >= 600
+      assert Meetings.transcriber_present_for_threshold?(transcript)
+    end
+
+    test "a marker participant present only briefly is below threshold" do
+      {space, room} = presence_room!()
+      room_name = room.livekit_room_name
+      transcript = presence_transcript!(space.id, room_name)
+
+      join!(room, "meeting-transcriber", 5, present_for: 5)
+
+      assert Meetings.transcriber_presence_seconds(transcript) == 5
+      refute Meetings.transcriber_present_for_threshold?(transcript)
+    end
+
+    test "human participants alone never count as transcriber presence" do
+      {space, room} = presence_room!()
+      room_name = room.livekit_room_name
+      transcript = presence_transcript!(space.id, room_name)
+
+      join!(room, "Harper", 3600)
+      join!(room, "Alex", 3600)
+
+      assert Meetings.transcriber_presence_seconds(transcript) == 0
+      refute Meetings.transcriber_present_for_threshold?(transcript)
+    end
+
+    test "a nil left_at is measured to now rather than skipped" do
+      {space, room} = presence_room!()
+      room_name = room.livekit_room_name
+      transcript = presence_transcript!(space.id, room_name)
+
+      # room_finished can fire before the transcriber's leave webhook lands.
+      join!(room, "meeting-transcriber", 1800)
+
+      assert Meetings.transcriber_presence_seconds(transcript) >= 1800
+      assert Meetings.transcriber_present_for_threshold?(transcript)
+    end
+
+    test "matches the marker in metadata identity as well as display_name" do
+      {space, room} = presence_room!()
+      room_name = room.livekit_room_name
+      transcript = presence_transcript!(space.id, room_name)
+
+      join!(room, "Transcription Bot", 600,
+        metadata: %{"identity" => "meeting-transcriber-#{Ecto.UUID.generate()}"}
+      )
+
+      assert Meetings.transcriber_present_for_threshold?(transcript)
+    end
+
+    test "an unresolvable room name returns 0 without raising" do
+      {:ok, space} = Chat.create_space(%{kind: "execution"})
+      transcript = presence_transcript!(space.id, "space-#{Ecto.UUID.generate()}")
+
+      assert Meetings.transcriber_presence_seconds(transcript) == 0
+      refute Meetings.transcriber_present_for_threshold?(transcript)
+      assert Meetings.transcriber_presence_seconds(nil) == 0
+    end
+
+    test "there is no transcriber: identity prefix — parse_identity returns :unknown" do
+      # Pins the corrected premise: parse_identity/1 accepts only
+      # user:/agent:/guest:, so a transcriber lands as a nil-FK row and must
+      # be matched by name/metadata, not by identity kind.
+      assert Meetings.parse_identity("transcriber:" <> Ecto.UUID.generate()) == :unknown
+    end
+  end
+
+  describe "fail_transcript/1,2" do
+    defp failing_transcript! do
+      {:ok, space} = Chat.create_space(%{kind: "execution"})
+
+      {:ok, transcript} =
+        Meetings.create_transcript(%{
+          room_id: "space-#{Ecto.UUID.generate()}",
+          space_id: space.id
+        })
+
+      transcript
+    end
+
+    test "arity-2 stores the failed status and the given reason" do
+      transcript = failing_transcript!()
+
+      assert {:ok, failed} = Meetings.fail_transcript(transcript.id, "no transcript arrived")
+
+      reloaded = Meetings.get_transcript(failed.id)
+      assert reloaded.status == "failed"
+      assert reloaded.summary == "no transcript arrived"
+      assert reloaded.completed_at
+    end
+
+    test "arity-1 still marks failed and leaves the summary untouched" do
+      transcript = failing_transcript!()
+      {:ok, _} = Meetings.update_transcript_summary(transcript.id, "partial work")
+
+      assert {:ok, _} = Meetings.fail_transcript(transcript.id)
+
+      reloaded = Meetings.get_transcript(transcript.id)
+      assert reloaded.status == "failed"
+      assert reloaded.summary == "partial work"
+    end
+
+    test "emits transcription_failed telemetry carrying the transcript id" do
+      transcript = failing_transcript!()
+      handler_id = "transcription-failed-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :meetings, :transcription_failed],
+        fn event, measurements, metadata, _ ->
+          send(test_pid, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      # Scoped handler id + targeted detach: a global detach here would
+      # silently disarm telemetry for unrelated tests in the same run.
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, _} = Meetings.fail_transcript(transcript.id, "no transcript arrived")
+
+      assert_receive {:telemetry, [:platform, :meetings, :transcription_failed], measurements,
+                      metadata}
+
+      assert metadata.transcript_id == transcript.id
+      assert metadata.room_id == transcript.room_id
+      assert is_integer(measurements.presence_seconds)
+    end
+
+    test "post_transcription_failure_to_space/2 posts a system notice naming no host" do
+      {:ok, space} = Chat.create_space(%{kind: "execution"})
+      transcript_id = Ecto.UUID.generate()
+
+      assert :ok = Meetings.post_transcription_failure_to_space(space.id, transcript_id)
+
+      message =
+        space.id
+        |> Chat.list_messages(limit: 50)
+        |> Enum.find(&(&1.metadata["source"] == "meeting_transcription_failure"))
+
+      assert message
+      assert message.content_type == "system"
+      assert message.metadata["transcript_id"] == transcript_id
+      refute message.content =~ "http"
+      refute message.content =~ "://"
+    end
+
+    test "returns :not_found for an unknown transcript" do
+      assert {:error, :not_found} = Meetings.fail_transcript(Ecto.UUID.generate(), "reason")
+    end
+  end
+
   describe "UUID boundary: Meetings getters are total over their input" do
     @slug_16 "higginshigginsxx"
 

@@ -2797,6 +2797,115 @@ defmodule Platform.Meetings do
     |> Repo.all()
   end
 
+  # ── Transcriber presence ─────────────────────────────────────────────────
+
+  # Lowercase substrings matched against BOTH `display_name` and
+  # `metadata["identity"]` of a `meeting_participants` row.
+  #
+  # There is no `transcriber:` identity prefix in this codebase today —
+  # `parse_identity/1` accepts exactly `user:`, `agent:` and `guest:` and
+  # returns `:unknown` for anything else, so a LiveKit-dispatched
+  # transcriber lands as a nil-FK row carrying the webhook `name` and the
+  # raw identity in `metadata`. The agent name below is the same literal
+  # the token/room-creation path dispatches. The `transcriber:` entry is
+  # forward-compat for a future identity scheme, not a description of
+  # today's behaviour.
+  @transcriber_identity_markers ["meeting-transcriber", "transcriber:"]
+
+  # A transcriber emits its first segment within seconds of the first
+  # speech, so a session that ran two minutes with a live transcriber and
+  # produced literally nothing is a delivery failure, not silence. Below
+  # this window an agent that connects and drops is indistinguishable
+  # from a room nobody used, and a sub-two-minute meeting with no speech
+  # is genuinely plausible.
+  @transcriber_presence_threshold_seconds 120
+
+  @doc """
+  Longest presence window, in seconds, among transcriber-marker
+  participants of the room a transcript belongs to.
+
+  IMPORTANT: `meeting_transcripts.room_id` is a LiveKit room NAME
+  (a string), while `meeting_participants.room_id` is the
+  `meeting_rooms` UUID FK. They are not the same key — joining them
+  directly returns `[]` silently. This resolves through
+  `get_room_by_name/1` first and only then queries participants by
+  `room.id`.
+
+  A nil `left_at` is read as "still present, measure to now": at
+  finalisation time `room_finished` can fire before every leave webhook
+  lands, so nil is the normal case, not a bug.
+
+  Returns `0` when the room does not resolve or no marker row matches.
+  """
+  @spec transcriber_presence_seconds(Transcript.t() | String.t() | nil) :: non_neg_integer()
+  def transcriber_presence_seconds(%Transcript{room_id: room_name}),
+    do: transcriber_presence_seconds(room_name)
+
+  def transcriber_presence_seconds(room_name) when is_binary(room_name) do
+    case get_room_by_name(room_name) do
+      nil ->
+        0
+
+      room ->
+        now = DateTime.utc_now()
+
+        from(p in Participant, where: p.room_id == ^room.id)
+        |> Repo.all()
+        |> Enum.filter(&transcriber_marker?/1)
+        |> Enum.map(fn p ->
+          case p.joined_at do
+            nil -> 0
+            joined_at -> max(DateTime.diff(p.left_at || now, joined_at), 0)
+          end
+        end)
+        |> Enum.max(fn -> 0 end)
+    end
+  end
+
+  def transcriber_presence_seconds(_), do: 0
+
+  @doc """
+  Whether a transcriber was present in the transcript's room for at
+  least the configured threshold (default
+  #{@transcriber_presence_threshold_seconds} seconds).
+
+  This is the discriminator between "nobody spoke" and "the transcriber
+  was there and delivered nothing".
+  """
+  @spec transcriber_present_for_threshold?(Transcript.t() | String.t() | nil) :: boolean()
+  def transcriber_present_for_threshold?(transcript) do
+    transcriber_presence_seconds(transcript) >= transcriber_presence_threshold_seconds()
+  end
+
+  defp transcriber_marker?(%Participant{} = participant) do
+    identity =
+      case participant.metadata do
+        %{"identity" => value} when is_binary(value) -> value
+        _ -> nil
+      end
+
+    haystacks =
+      [participant.display_name, identity]
+      |> Enum.filter(&is_binary/1)
+      |> Enum.map(&String.downcase/1)
+
+    Enum.any?(transcriber_identity_markers(), fn marker ->
+      Enum.any?(haystacks, &String.contains?(&1, marker))
+    end)
+  end
+
+  defp transcriber_identity_markers do
+    Application.get_env(:platform, :transcriber_identity_markers, @transcriber_identity_markers)
+  end
+
+  defp transcriber_presence_threshold_seconds do
+    Application.get_env(
+      :platform,
+      :transcriber_presence_threshold_seconds,
+      @transcriber_presence_threshold_seconds
+    )
+  end
+
   # ── Space-level presence queries ─────────────────────────────────────────
 
   @doc """
@@ -3754,18 +3863,50 @@ defmodule Platform.Meetings do
   end
 
   @doc """
-  Mark a transcript as failed.
+  Mark a transcript as failed, optionally recording a human-readable
+  reason in the summary column.
+
+  Uses the existing terminal `"failed"` status — `Transcript` already
+  declares it and every consumer that switches on status already has a
+  non-success branch, so no new state and no migration are needed. What
+  was missing is not a state but a REASON: the arity-1 clause writes
+  status + `completed_at` and no summary at all, leaving a failed row as
+  mute as a cheerful one.
+
+  Emits `[:platform, :meetings, :transcription_failed]` telemetry so a
+  delivery outage shows up on a dashboard instead of in a log nobody
+  greps. The arity-1 clause is preserved verbatim in behaviour for the
+  existing error paths that call it.
   """
   @spec fail_transcript(String.t()) :: {:ok, Transcript.t()} | {:error, term()}
-  def fail_transcript(transcript_id) do
+  def fail_transcript(transcript_id), do: fail_transcript(transcript_id, nil)
+
+  @spec fail_transcript(String.t(), String.t() | nil) ::
+          {:ok, Transcript.t()} | {:error, term()}
+  def fail_transcript(transcript_id, summary) do
     case get_transcript(transcript_id) do
       nil ->
         {:error, :not_found}
 
       transcript ->
-        transcript
-        |> Transcript.changeset(%{status: "failed", completed_at: DateTime.utc_now()})
-        |> Repo.update()
+        attrs = %{status: "failed", completed_at: DateTime.utc_now()}
+        attrs = if is_binary(summary), do: Map.put(attrs, :summary, summary), else: attrs
+
+        case transcript |> Transcript.changeset(attrs) |> Repo.update() do
+          {:ok, failed} ->
+            Logger.error("[Meetings] Transcript #{failed.id} marked failed")
+
+            :telemetry.execute(
+              [:platform, :meetings, :transcription_failed],
+              %{presence_seconds: transcriber_presence_seconds(failed)},
+              %{transcript_id: failed.id, room_id: failed.room_id}
+            )
+
+            {:ok, failed}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
   end
 
@@ -3796,6 +3937,44 @@ defmodule Platform.Meetings do
         content_type: "system",
         content: String.trim(content),
         metadata: %{"source" => "meeting_summarizer", "transcript_id" => transcript_id}
+      }
+
+      case Platform.Chat.post_message(attrs) do
+        {:ok, _message} -> :ok
+        {:error, reason} -> {:error, {:post_failed, reason}}
+      end
+    end
+  end
+
+  @doc """
+  Post a transcription-failure notice as a system message to the space.
+
+  Mirrors `post_summary_to_space/3` — same system-participant
+  resolution, same `content_type: "system"` message shape — so the
+  notice renders through the existing message renderer with no markup
+  change. Without it a failed transcription is invisible: the only
+  human-reachable signal is a status column nobody reads.
+  """
+  @spec post_transcription_failure_to_space(String.t(), String.t()) :: :ok | {:error, term()}
+  def post_transcription_failure_to_space(space_id, transcript_id)
+      when is_binary(space_id) and is_binary(transcript_id) do
+    content = """
+    **Meeting transcript unavailable**
+
+    This meeting was recorded, but no transcript content arrived. No summary could be produced.
+    """
+
+    with {:ok, participant} <-
+           Platform.Orchestration.ExecutionSpace.ensure_system_participant(space_id) do
+      attrs = %{
+        space_id: space_id,
+        participant_id: participant.id,
+        content_type: "system",
+        content: String.trim(content),
+        metadata: %{
+          "source" => "meeting_transcription_failure",
+          "transcript_id" => transcript_id
+        }
       }
 
       case Platform.Chat.post_message(attrs) do

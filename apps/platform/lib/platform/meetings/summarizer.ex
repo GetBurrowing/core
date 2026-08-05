@@ -31,12 +31,25 @@ defmodule Platform.Meetings.Summarizer do
   # module transitively for `complete_transcript/2`).
   @meetings_summarize_key "meetings.summarize"
 
+  # Genuine silence. Byte-identical to the pre-change string — anything
+  # reading for it must keep matching.
+  @empty_transcript_summary "This meeting had no transcribed content."
+
+  # A transcriber was present and delivered nothing. Deliberately reads
+  # as a failure, not as an empty meeting.
+  @undelivered_transcript_summary "Transcription did not arrive for this meeting. The meeting was recorded as having a transcriber present, but no transcript content was received."
+
   @doc """
   Spawns an async task to summarize the given transcript.
 
   The transcript must have status "processing" and a non-empty segments list.
   Returns `{:ok, pid}` on successful spawn, or `{:error, reason}` if the
   transcript is not ready for summarization.
+
+  A zero-segment transcript returns `{:ok, :empty}` when the meeting was
+  genuinely silent, and `{:ok, :failed}` when a transcriber was present
+  past the presence threshold and still delivered nothing — the latter
+  is a delivery failure and the row is marked `"failed"`.
   """
   def summarize_async(%{id: id, segments: segments, status: status} = transcript)
       when is_list(segments) do
@@ -51,7 +64,6 @@ defmodule Platform.Meetings.Summarizer do
         )
 
         handle_empty_transcript(transcript)
-        {:ok, :empty}
 
       true ->
         {:ok, pid} =
@@ -381,13 +393,26 @@ defmodule Platform.Meetings.Summarizer do
 
   # -- Private ---------------------------------------------------------------
 
-  defp handle_empty_transcript(%{id: id}) do
-    summary = "This meeting had no transcribed content."
+  # A zero-segment transcript has two very different causes. If no
+  # transcriber was ever present for a meaningful window, nobody spoke
+  # and the meeting is genuinely silent — unchanged behaviour, down to
+  # the summary string. If a transcriber WAS present past the threshold
+  # and still delivered nothing, that is a delivery failure, and
+  # reporting it as a cheerful "complete" is how a multi-day outage
+  # hides behind a success status on every surface.
+  defp handle_empty_transcript(%{id: id} = transcript) do
+    if Meetings.transcriber_present_for_threshold?(transcript) do
+      handle_undelivered_transcript(transcript)
+    else
+      complete_silent_transcript(id)
+    end
+  end
 
-    case Meetings.complete_transcript(id, summary) do
+  defp complete_silent_transcript(id) do
+    case Meetings.complete_transcript(id, @empty_transcript_summary) do
       {:ok, _} ->
         Logger.info("[Summarizer] Empty transcript #{id} marked complete (no summary posted)")
-        :ok
+        {:ok, :empty}
 
       {:error, reason} ->
         Logger.error("[Summarizer] Failed to complete empty transcript #{id}: #{inspect(reason)}")
@@ -395,6 +420,49 @@ defmodule Platform.Meetings.Summarizer do
         {:error, reason}
     end
   end
+
+  defp handle_undelivered_transcript(%{id: id} = transcript) do
+    case Meetings.fail_transcript(id, @undelivered_transcript_summary) do
+      {:ok, _} ->
+        Logger.error(
+          "[Summarizer] Transcript #{id} has no segments despite transcriber presence — " <>
+            "marked failed"
+        )
+
+        notify_space_of_failure(transcript)
+        {:ok, :failed}
+
+      {:error, reason} ->
+        Logger.error("[Summarizer] Failed to mark transcript #{id} failed: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  # Best-effort, exactly like `maybe_dispatch_scribe_attention/1`: the row
+  # is already terminal, and a chat post that fails must not flip it back
+  # or raise. Swallow and log.
+  defp notify_space_of_failure(%{id: id, space_id: space_id}) when is_binary(space_id) do
+    case Meetings.post_transcription_failure_to_space(space_id, id) do
+      :ok ->
+        :ok
+
+      other ->
+        Logger.warning(
+          "[Summarizer] Could not post transcription-failure notice for #{id}: #{inspect(other)}"
+        )
+
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[Summarizer] Transcription-failure notice raised for #{id}: #{inspect(error)}"
+      )
+
+      :ok
+  end
+
+  defp notify_space_of_failure(_transcript), do: :ok
 
   defp call_llm(%{provider: :none}, _messages, _opts) do
     {:error, :no_summary_provider_configured}

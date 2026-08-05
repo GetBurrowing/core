@@ -169,10 +169,21 @@ defmodule PlatformWeb.LivekitWebhookController do
                   # Trigger async LLM summary generation
                   maybe_trigger_summary(finalized)
 
+                  # Report the transcript's RESULTING status: the summary
+                  # path can mark a zero-segment transcript failed when a
+                  # transcriber was present, and a flat "finalized" here
+                  # would report that delivery failure as a clean run.
+                  transcript_status =
+                    case Meetings.get_transcript(finalized.id) do
+                      nil -> finalized.status
+                      current -> current.status
+                    end
+
                   conn
                   |> put_status(:ok)
                   |> json(%{
                     status: "finalized",
+                    transcript_status: transcript_status,
                     transcript_id: finalized.id,
                     segment_count: length(finalized.segments)
                   })

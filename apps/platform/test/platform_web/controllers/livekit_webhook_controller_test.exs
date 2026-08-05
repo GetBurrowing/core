@@ -458,6 +458,7 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
 
       assert %{
                "status" => "finalized",
+               "transcript_status" => "complete",
                "transcript_id" => ^transcript_id,
                "segment_count" => 0
              } = json_response(conn, 200)
