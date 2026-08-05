@@ -129,6 +129,10 @@ defmodule Platform.Files.File do
       name: :platform_files_ingest_intent_check,
       message: "is invalid"
     )
+    |> check_constraint(:ingest_status,
+      name: :platform_files_not_attempted_requires_human_only_check,
+      message: "cannot be not_attempted unless ingest_intent is human_only"
+    )
   end
 
   # Mirrors the DB-level check constraint added in the Stage 3 migration:

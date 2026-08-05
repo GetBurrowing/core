@@ -1855,4 +1855,98 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
       assert Files.get_file(file.id), "row must survive a delete against an archived project"
     end
   end
+
+  # ── Exhaustiveness guard (task 019fd318) ───────────────────────────────
+
+  describe "agent_content_availability/1 is total over every storable pair" do
+    # `agent_content_availability/1` deliberately has NO catch-all clause: an
+    # unrecognised intent/status pair must raise rather than default to
+    # readable, because a silent default would advertise content that was
+    # deliberately withheld. That omission is only SAFE if the one pair it
+    # does not match — `attempt` + `not_attempted` — is a pair the database
+    # refuses to store. This guard ties the two together.
+    #
+    # Written as a cartesian-product enumeration rather than a hand-listed
+    # set of pairs, so that adding a fifth `ingest_status` or a third
+    # `ingest_intent` fails HERE, loudly, instead of quietly opening a new
+    # unhandled hole in the helper.
+    test "every pair the DB accepts has a clause; every pair it rejects names the coupling check",
+         %{agent_sxi: agent, project_a: project} do
+      pairs =
+        for intent <- Files.File.valid_ingest_intents(),
+            status <- Files.File.valid_ingest_statuses(),
+            do: {intent, status}
+
+      # POSITIVE CONTROL on the enumeration itself — a product that came
+      # back empty would make every assertion below vacuous.
+      assert length(pairs) == 8
+
+      {accepted, rejected} =
+        Enum.split_with(pairs, fn {intent, status} ->
+          match?({:ok, _}, insert_pair(project, intent, status))
+        end)
+
+      # Exactly one pair is unstorable, and it is the one the helper has no
+      # clause for.
+      assert rejected == [{"attempt", "not_attempted"}]
+      assert length(accepted) == 7
+
+      for {intent, status} <- rejected do
+        assert {:error, %Ecto.Changeset{} = changeset} = insert_pair(project, intent, status)
+
+        # Same discipline as the stage-3 probe: a rejection from ANY other
+        # constraint would make this guard vacuous. Assert the name.
+        assert [{:ingest_status, {_msg, opts}}] = changeset.errors
+
+        assert Keyword.get(opts, :constraint_name) ==
+                 "platform_files_not_attempted_requires_human_only_check"
+      end
+
+      for {intent, status} <- accepted do
+        {:ok, file} = insert_pair(project, intent, status)
+
+        result =
+          ToolSurface.execute(
+            "file_get_metadata",
+            %{"file_id" => file.id},
+            context_for(agent)
+          )
+
+        assert {:ok, row} = result,
+               "file_get_metadata refused the storable pair #{intent}/#{status}: " <>
+                 inspect(result)
+
+        # The `{available, note}` shape, surfaced through the public entry
+        # point. A FunctionClauseError inside the helper would have blown up
+        # the execute/3 call above rather than reaching here.
+        assert is_boolean(row.agent_content_available)
+        assert is_nil(row.agent_content_note) or is_binary(row.agent_content_note)
+        assert row.ingest_intent == intent
+        assert row.ingest_status == status
+      end
+    end
+  end
+
+  # Persists a file row carrying exactly this intent/status pair through
+  # `File.changeset/2`, returning the raw `{:ok, file} | {:error, changeset}`
+  # so callers can classify the pair as storable or not.
+  defp insert_pair(project, intent, status) do
+    n = u()
+    body = "pair-#{intent}-#{status}-#{n}"
+
+    %Files.File{}
+    |> Files.File.changeset(%{
+      project_id: project.id,
+      org_id: project.org_id,
+      name: "pair-#{n}.txt",
+      original_filename: "pair-#{n}.txt",
+      content_type: "text/plain",
+      byte_size: byte_size(body),
+      storage_key: "files/#{project.id}/#{Ecto.UUID.generate()}/pair-#{n}.txt",
+      content_hash: :crypto.hash(:sha256, body) |> Base.encode16(case: :lower),
+      ingest_intent: intent,
+      ingest_status: status
+    })
+    |> Repo.insert()
+  end
 end

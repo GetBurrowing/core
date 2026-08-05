@@ -630,9 +630,15 @@ defmodule Platform.FilesTest do
           content_type: "text/plain",
           byte_size: 1,
           storage_key: "files/#{project.id}/na/s.txt",
-          content_hash: String.duplicate("d", 64)
+          content_hash: String.duplicate("d", 64),
+          ingest_intent: "human_only"
         })
 
+      # `not_attempted` is only reachable alongside `human_only` intent — the
+      # DB check constraint `platform_files_not_attempted_requires_human_only_check`
+      # refuses the pair `attempt` + `not_attempted`, so the fixture above sets
+      # the intent first. This mirrors `withdraw_from_agent_context/1`, which
+      # writes intent before status for the same reason.
       assert {:ok, %{ingest_status: "not_attempted"}} =
                Files.update_ingest_status(file, "not_attempted")
 
@@ -686,6 +692,28 @@ defmodule Platform.FilesTest do
       assert {:ok, flipped_back} = Files.set_ingest_intent(flipped, "attempt")
       assert flipped_back.ingest_status == before_status
       assert Files.get_file(file.id).ingest_status == before_status
+    end
+
+    test "refuses to flip a withdrawn row back to attempt", %{target: file} do
+      # A withdrawn row is `human_only` + `not_attempted`. Writing the intent
+      # alone would leave `attempt` + `not_attempted` — a row claiming we
+      # meant to ingest it while recording that ingestion was never
+      # attempted. The DB check constraint refuses the pair; this asserts the
+      # refusal reaches the caller as a changeset error rather than a raw
+      # Postgrex error, and that the row on disk is untouched.
+      assert {:ok, withdrawn} = Files.withdraw_from_agent_context(file)
+      assert withdrawn.ingest_intent == "human_only"
+      assert withdrawn.ingest_status == "not_attempted"
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Files.set_ingest_intent(withdrawn, "attempt")
+
+      assert %{ingest_status: [message]} = errors_on(changeset)
+      assert message =~ "not_attempted"
+
+      unchanged = Files.get_file(file.id)
+      assert unchanged.ingest_intent == "human_only"
+      assert unchanged.ingest_status == "not_attempted"
     end
 
     test "raises on an unknown intent rather than defaulting", %{target: file} do

@@ -344,6 +344,21 @@ defmodule Platform.Files do
   An unrecognised intent raises `FunctionClauseError` rather than
   degrading to a default: a typo'd intent is a bug, and a silent fallback
   would file no report.
+
+  ## Flipping a withdrawn row back is now refused, by the database
+
+  Because this function writes intent alone, calling it with `"attempt"`
+  on an already-withdrawn row (`"human_only"` + `"not_attempted"`) would
+  produce the incoherent pair `"attempt"` + `"not_attempted"` — a row
+  claiming we meant to ingest it while recording that ingestion was never
+  attempted. The check constraint
+  `platform_files_not_attempted_requires_human_only_check` refuses that
+  pair outright, so the call returns `{:error, changeset}` with the error
+  on `:ingest_status` and the row on disk is left untouched.
+
+  `request_ingest/1` is the correct call for that transition: it resets
+  the status to `"pending"` in the same write and re-enqueues, so the row
+  never passes through the forbidden pair.
   """
   @spec set_ingest_intent(File.t(), String.t()) ::
           {:ok, File.t()} | {:error, Ecto.Changeset.t()}
