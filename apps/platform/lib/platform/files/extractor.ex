@@ -20,6 +20,11 @@ defmodule Platform.Files.Extractor do
   Dispatch is on `file.content_type`. Unknown MIME types return
   `{:error, {:unsupported_content_type, ct}}`.
 
+  `supported_content_type?/1` is the canonical predicate for "will this
+  MIME extract?" — it asks the same private `dispatch/1` clauses the
+  extractor itself routes through, so the two cannot drift. The
+  default-ingestion-intent logic in `Platform.Files` keys off it.
+
     * `application/pdf` → `Platform.Files.Extractor.PDF`
     * `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
       → `Platform.Files.Extractor.DOCX`
@@ -89,6 +94,24 @@ defmodule Platform.Files.Extractor do
         {:error, {:unsupported_content_type, content_type}}
     end
   end
+
+  @doc """
+  True when `content_type` has an extractor, i.e. when ingestion has any
+  chance of producing text. Conservative: an unknown or nil MIME answers
+  `false` rather than optimistically `true`.
+
+  Implemented by asking `dispatch/1` — the SAME clauses `extract/1` and
+  `extract/2` route through. There is deliberately no
+  `@supported_content_types` module attribute mirroring the dispatch
+  table: a second hand-typed list drifts from the real one and the drift
+  is silent. If a caller ever genuinely needs to *enumerate* supported
+  types, generate that list from the clauses (e.g. via
+  `__MODULE__.__info__/1` on a public dispatcher) rather than typing it
+  a second time.
+  """
+  @spec supported_content_type?(String.t() | nil) :: boolean()
+  def supported_content_type?(nil), do: false
+  def supported_content_type?(content_type), do: match?({:ok, _}, dispatch(content_type))
 
   defp dispatch("application/pdf"), do: {:ok, __MODULE__.PDF}
 

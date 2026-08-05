@@ -9,7 +9,12 @@ defmodule Platform.Files.Ingester do
   ## Pipeline
 
       ingest_async(file)
-        └─ TaskSupervisor.start_child
+        ├─ ingest_intent == "human_only"
+        │     └─ ingest_status := :not_attempted, no telemetry, no task
+        │        spawned, no Extractor call. TERMINAL until
+        │        `Platform.Files.request_ingest/1` flips the intent back.
+        └─ ingest_intent == "attempt"
+           └─ TaskSupervisor.start_child
               ├─ dedup check: same content_hash already :ingested in this project?
               │     ├─ yes → copy chunk_external_id rows from prior file, mark
               │     │       :ingested, skip extract + embed. Saves the API $.
@@ -61,9 +66,34 @@ defmodule Platform.Files.Ingester do
   When `Platform.TaskSupervisor` isn't running (rare; only some narrow
   test paths) the task runs inline so unit tests don't have to plumb a
   supervisor stub.
+
+  ## The human_only gate
+
+  This function is the system's **single enqueue choke point** — both
+  production callers (the upload LiveView and the MCP file-upload tool)
+  route through it — so the intent gate lives here and is not duplicated
+  per caller.
+
+  A `ingest_intent: "human_only"` file short-circuits *before* the
+  supervisor branch: its `ingest_status` is set to `"not_attempted"`, no
+  `:start` telemetry is emitted, no task is spawned and
+  `Platform.Files.Extractor.extract/1` is never called. `"not_attempted"`
+  is **terminal**: nothing re-enqueues the row until
+  `Platform.Files.request_ingest/1` flips the intent back to `"attempt"`.
+
+  The two intents are matched explicitly with no catch-all clause. A row
+  carrying an unrecognised intent raises `FunctionClauseError` rather
+  than defaulting into extraction — feeding a file to a third-party
+  extractor because of an unrecognised enum value is exactly the failure
+  this split exists to prevent.
   """
   @spec ingest_async(Platform.Files.File.t()) :: :ok
-  def ingest_async(%Platform.Files.File{} = file) do
+  def ingest_async(%Platform.Files.File{ingest_intent: "human_only"} = file) do
+    {:ok, _file} = Files.update_ingest_status(file, "not_attempted")
+    :ok
+  end
+
+  def ingest_async(%Platform.Files.File{ingest_intent: "attempt"} = file) do
     fun = fn -> run(file) end
 
     case Process.whereis(Platform.TaskSupervisor) do

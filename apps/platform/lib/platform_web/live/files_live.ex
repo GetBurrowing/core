@@ -117,6 +117,11 @@ defmodule PlatformWeb.FilesLive do
      |> assign(:undo_toast, nil)
      |> assign(:subscribed_project_id, nil)
      |> assign(:upload_batch, empty_upload_batch())
+     # Default CHECKED: most uploads are working material an agent should
+     # be able to read. Checked does not force "attempt" — it just means
+     # "no opinion", leaving the content-type default to decide, so a
+     # video does not get queued for extraction it cannot survive.
+     |> assign(:upload_include_for_agents, true)
      |> allow_upload(:files,
        accept: :any,
        auto_upload: true,
@@ -278,8 +283,41 @@ defmodule PlatformWeb.FilesLive do
   # files) begins a new upload session — reset the running batch counter so
   # the success flash reflects THIS selection, not the cumulative tally
   # across sessions in the same mounted LV.
-  def handle_event("validate_upload", _params, socket) do
-    {:noreply, assign(socket, :upload_batch, empty_upload_batch())}
+  def handle_event("validate_upload", params, socket) do
+    {:noreply,
+     socket
+     |> assign(:upload_batch, empty_upload_batch())
+     |> assign(:upload_include_for_agents, params["include_for_agents"] != "false")}
+  end
+
+  # Flip an existing file between the two audiences, in either direction,
+  # WITHOUT a re-upload — the whole reason the schema carries intent
+  # separately from status.
+  #
+  # Two explicit branches, no catch-all: an intent outside the vocabulary
+  # is a data bug, and guessing a direction for it would either destroy
+  # extracted text nobody asked to lose or silently re-expose a withdrawn
+  # file. Crashing is the honest outcome.
+  def handle_event("toggle_agent_context", %{"id" => file_id}, socket) do
+    case Files.get_file(file_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "File no longer exists.")}
+
+      file ->
+        result =
+          case file.ingest_intent do
+            "attempt" -> Files.withdraw_from_agent_context(file)
+            "human_only" -> Files.restore_to_agent_context(file)
+          end
+
+        case result do
+          {:ok, updated} ->
+            {:noreply, put_file_row(socket, updated)}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Could not change this file's audience.")}
+        end
+    end
   end
 
   def handle_event("cancel_upload", %{"ref" => ref}, socket) do
@@ -294,6 +332,13 @@ defmodule PlatformWeb.FilesLive do
   end
 
   def handle_info({:file_ingest_failed, file_id, _reason}, socket) do
+    {:noreply, refresh_file(socket, file_id)}
+  end
+
+  # Another session withdrew this file from agent context. The broadcast
+  # lands on the project topic we already subscribe to; re-fetch the row
+  # so its badge and toggle reflect the new intent without a refresh.
+  def handle_info({:file_withdrawn_from_agent_context, file_id}, socket) do
     {:noreply, refresh_file(socket, file_id)}
   end
 
@@ -381,7 +426,15 @@ defmodule PlatformWeb.FilesLive do
       # match on the inner tuple shape below.
       result =
         consume_uploaded_entry(socket, entry, fn %{path: path} ->
-          {:ok, handle_one_consumed(path, entry, project_id, org_id, uploaded_by)}
+          {:ok,
+           handle_one_consumed(
+             path,
+             entry,
+             project_id,
+             org_id,
+             uploaded_by,
+             socket.assigns.upload_include_for_agents
+           )}
         end)
 
       # Successful results are `{:created, file}` (freshly written) or
@@ -408,7 +461,7 @@ defmodule PlatformWeb.FilesLive do
   # `{:error, reason}` — that the caller wraps in the LV-mandated
   # `{:ok, term}` envelope. See `consume_one_upload/1` for the wrap +
   # subsequent split_with contract.
-  defp handle_one_consumed(path, entry, project_id, org_id, uploaded_by) do
+  defp handle_one_consumed(path, entry, project_id, org_id, uploaded_by, include_for_agents?) do
     filename = entry.client_name || "upload"
     content_type = entry.client_type || "application/octet-stream"
 
@@ -429,7 +482,7 @@ defmodule PlatformWeb.FilesLive do
           {:dedup, file}
 
         {:new, create_attrs} ->
-          case Files.create_file(create_attrs) do
+          case Files.create_file(put_upload_intent(create_attrs, include_for_agents?)) do
             {:ok, file} ->
               Files.Ingester.ingest_async(file)
               {:created, file}
@@ -443,6 +496,13 @@ defmodule PlatformWeb.FilesLive do
         {:error, reason}
     end
   end
+
+  # The upload checkbox is a one-way override. Unchecked means "hold this
+  # back", which is an explicit intent the context honours over the
+  # content-type default. Checked supplies NOTHING — forcing "attempt"
+  # would queue extraction for formats the extractor cannot read.
+  defp put_upload_intent(attrs, true), do: attrs
+  defp put_upload_intent(attrs, false), do: Map.put(attrs, :ingest_intent, "human_only")
 
   # Compute the sha256 first so we can short-circuit dedup before we
   # round-trip bytes through the storage adapter (cheaper on every
@@ -612,6 +672,23 @@ defmodule PlatformWeb.FilesLive do
   end
 
   defp list_files(project_id), do: Files.list_files_for_project(project_id, limit: 200)
+
+  # Write a file we already hold into both places the page renders it —
+  # the list row and the detail pane — without a re-fetch. Used by the
+  # agent-context toggle, whose context call already returned the updated
+  # struct; going back to the DB for it would just add a race.
+  defp put_file_row(socket, %Files.File{} = file) do
+    files =
+      Enum.map(socket.assigns.files, fn f -> if f.id == file.id, do: file, else: f end)
+
+    selected =
+      case socket.assigns.selected_file do
+        %Files.File{id: id} when id == file.id -> file
+        other -> other
+      end
+
+    assign(socket, files: files, selected_file: selected)
+  end
 
   defp refresh_file(%{assigns: %{selected_project_id: nil}} = socket, _file_id), do: socket
 
@@ -904,12 +981,42 @@ defmodule PlatformWeb.FilesLive do
   @doc false
   def status_badge_class("ingested"), do: "badge badge-success badge-sm"
   def status_badge_class("failed"), do: "badge badge-error badge-sm"
+  # A human_only file is never enqueued, so "not_attempted" is a terminal
+  # resting state, not a step on the way to "ingested". Without this head
+  # it fell through to the warning pill and read as perpetually ingesting.
+  # whitespace-nowrap because this is the only two-word status label: at a
+  # 375px viewport the words wrapped inside a badge whose pill did not grow
+  # with them, so the text rendered outside its own lozenge (measured).
+  def status_badge_class("not_attempted"), do: "badge badge-ghost badge-sm whitespace-nowrap"
   def status_badge_class(_), do: "badge badge-warning badge-sm"
 
   @doc false
   def status_label("ingested"), do: "Ready"
   def status_label("failed"), do: "Failed"
+  def status_label("not_attempted"), do: "People only"
   def status_label(_), do: "Ingesting…"
+
+  @doc false
+  def agent_toggle_label("attempt"), do: "Included for agents"
+  def agent_toggle_label("human_only"), do: "People only"
+
+  @doc false
+  def agent_toggle_icon("attempt"), do: "hero-sparkles"
+  def agent_toggle_icon("human_only"), do: "hero-user"
+
+  @doc """
+  Confirmation copy for the agent-context toggle, or `nil` when the flip
+  needs none.
+
+  Only the attempt → human_only direction destroys derived data (the
+  cached extracted text and the index entry), so only that direction
+  confirms. Prompting on the way back would train the user to click
+  through the prompt that matters.
+  """
+  def agent_toggle_confirm("attempt"),
+    do: "Removes this file's extracted text from agent search."
+
+  def agent_toggle_confirm("human_only"), do: nil
 
   @doc false
   def humanize_bytes(nil), do: "—"

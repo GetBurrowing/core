@@ -129,6 +129,23 @@
             upload={@uploads.files}
             class="file-input file-input-bordered file-input-sm"
           />
+          <%!-- Audience choice at upload time. The hidden "false" pairs
+               with the checkbox so phx-change always carries a value —
+               an unchecked box sends no param of its own, and an absent
+               key is indistinguishable from a form that never had the
+               field. --%>
+          <input type="hidden" name="include_for_agents" value="false" />
+          <label class="ml-3 flex cursor-pointer items-center gap-2 text-sm text-base-content">
+            <input
+              type="checkbox"
+              name="include_for_agents"
+              value="true"
+              checked={@upload_include_for_agents}
+              class="checkbox checkbox-sm"
+              data-role="files-upload-include-for-agents"
+            />
+            <span>Include for agents</span>
+          </label>
         </form>
       </div>
     </div>
@@ -260,6 +277,7 @@
             data-role="files-row"
             data-file-id={file.id}
             data-ingest-status={file.ingest_status}
+            data-ingest-intent={file.ingest_intent}
           >
             <td class="font-medium">{file.name || file.original_filename}</td>
             <td class="text-xs text-base-content/60">{file.content_type}</td>
@@ -334,7 +352,12 @@
            shareable URL. These sit ABOVE the metadata dl so the
            primary verbs are reachable without scrolling past the
            preview, even on a short viewport. --%>
-      <div class="mb-3 flex items-center gap-2" data-role="files-detail-actions">
+      <%!-- Wraps: four verbs plus a right-aligned Delete overflow the
+           detail pane at 1280px once the audience toggle is present
+           (measured: the toggle's right edge landed past the viewport
+           before this). Wrapping keeps every action reachable instead
+           of pushing one off the edge. --%>
+      <div class="mb-3 flex flex-wrap items-center gap-2" data-role="files-detail-actions">
         <a
           href={file_download_url(@selected_file)}
           class="btn btn-primary btn-sm"
@@ -352,6 +375,22 @@
           data-role="files-detail-copy-link"
         >
           <span class="hero-link size-4"></span> Copy link
+        </button>
+        <%!-- Audience toggle. Renders STATE, not an explanation: the
+             label says which audience the file is in right now. The
+             confirm fires on the withdrawing direction only — that one
+             deletes extracted text. --%>
+        <button
+          type="button"
+          phx-click="toggle_agent_context"
+          phx-value-id={@selected_file.id}
+          data-confirm={agent_toggle_confirm(@selected_file.ingest_intent)}
+          class="btn btn-ghost btn-sm"
+          data-role="files-detail-agent-toggle"
+          data-ingest-intent={@selected_file.ingest_intent}
+        >
+          <.icon name={agent_toggle_icon(@selected_file.ingest_intent)} class="size-4" />
+          {agent_toggle_label(@selected_file.ingest_intent)}
         </button>
         <%!-- Flex spacer: destructive separation — Delete is right-
              aligned, never glued to the constructive verbs. --%>
@@ -482,7 +521,10 @@
       </button>
     </div>
     <div class="flex-1 overflow-y-auto p-4">
-      <div class="mb-3 flex items-center gap-2">
+      <%!-- Wraps for the same reason as the desktop row, and it bites
+           harder here: Download + Copy link + the toggle measure wider
+           than a 375px viewport on their own. --%>
+      <div class="mb-3 flex flex-wrap items-center gap-2">
         <a
           href={file_download_url(@selected_file)}
           class="btn btn-primary btn-sm"
@@ -498,6 +540,18 @@
           class="btn btn-ghost btn-sm"
         >
           <span class="hero-link size-4"></span> Copy link
+        </button>
+        <button
+          type="button"
+          phx-click="toggle_agent_context"
+          phx-value-id={@selected_file.id}
+          data-confirm={agent_toggle_confirm(@selected_file.ingest_intent)}
+          class="btn btn-ghost btn-sm min-h-11"
+          data-role="files-detail-agent-toggle-mobile"
+          data-ingest-intent={@selected_file.ingest_intent}
+        >
+          <.icon name={agent_toggle_icon(@selected_file.ingest_intent)} class="size-4" />
+          {agent_toggle_label(@selected_file.ingest_intent)}
         </button>
         <span class="flex-1" aria-hidden="true"></span>
         <.delete_file_button
@@ -640,6 +694,21 @@
               Up to 50&nbsp;MB per file, {@uploads.files.max_entries} files per batch.
             </p>
           </div>
+          <%!-- Same control as the desktop form, distinct data-role so a
+               test selector resolves to exactly one node (the page renders
+               both viewports' markup). Mirrors files-detail-delete-mobile. --%>
+          <input type="hidden" name="include_for_agents" value="false" />
+          <label class="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-base-content">
+            <input
+              type="checkbox"
+              name="include_for_agents"
+              value="true"
+              checked={@upload_include_for_agents}
+              class="checkbox checkbox-sm"
+              data-role="files-upload-include-for-agents-mobile"
+            />
+            <span>Include for agents</span>
+          </label>
         </form>
       </div>
     </div>

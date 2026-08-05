@@ -32,7 +32,8 @@ defmodule Platform.Files.File do
 
   @type t :: %__MODULE__{}
 
-  @valid_ingest_statuses ~w(pending ingested failed)
+  @valid_ingest_statuses ~w(pending ingested failed not_attempted)
+  @valid_ingest_intents ~w(attempt human_only)
 
   schema "platform_files" do
     belongs_to(:project, Platform.Tasks.Project)
@@ -47,6 +48,11 @@ defmodule Platform.Files.File do
     field(:storage_key, :string)
     field(:content_hash, :string)
     field(:ingest_status, :string, default: "pending")
+
+    # What we *meant* to do with the bytes, as opposed to what happened
+    # (`ingest_status`). `"human_only"` files are stored for people and
+    # deliberately never indexed for agents (task 019fd02d).
+    field(:ingest_intent, :string, default: "attempt")
 
     # Soft-delete marker (task 019f7cb0 stage 2). Set/cleared exclusively by
     # `Platform.Files.delete_file/2` and `restore_file/2` via a dedicated
@@ -68,6 +74,7 @@ defmodule Platform.Files.File do
     storage_key
     content_hash
     ingest_status
+    ingest_intent
   )a
 
   @required_fields ~w(project_id content_type byte_size storage_key)a
@@ -75,6 +82,10 @@ defmodule Platform.Files.File do
   @doc "Valid `ingest_status` values, kept in sync with the DB check constraint."
   @spec valid_ingest_statuses() :: [String.t()]
   def valid_ingest_statuses, do: @valid_ingest_statuses
+
+  @doc "Valid `ingest_intent` values, kept in sync with the DB check constraint."
+  @spec valid_ingest_intents() :: [String.t()]
+  def valid_ingest_intents, do: @valid_ingest_intents
 
   @doc """
   Changeset for inserting or updating a `Platform.Files.File`.
@@ -101,6 +112,7 @@ defmodule Platform.Files.File do
     |> validate_content_hash_when_finalized()
     |> validate_number(:byte_size, greater_than_or_equal_to: 0)
     |> validate_inclusion(:ingest_status, @valid_ingest_statuses)
+    |> validate_inclusion(:ingest_intent, @valid_ingest_intents)
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:org_id)
     |> foreign_key_constraint(:uploaded_by_user_id)
@@ -112,6 +124,10 @@ defmodule Platform.Files.File do
     |> check_constraint(:content_hash,
       name: :platform_files_content_hash_required_when_finalized_check,
       message: "is required once ingest_status is not pending"
+    )
+    |> check_constraint(:ingest_intent,
+      name: :platform_files_ingest_intent_check,
+      message: "is invalid"
     )
   end
 

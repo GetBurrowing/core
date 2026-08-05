@@ -382,6 +382,153 @@ defmodule Platform.Files.IngesterTest do
     end
   end
 
+  describe "ingest_intent gate in ingest_async/1" do
+    test "attempt file extracts, human_only file does not (positive control + refutation)",
+         %{project: project, root: root} do
+      attach_telemetry([[:platform, :files, :ingested, :start]])
+
+      attempt_file = create_text_file(project, root, "attempt body worth indexing")
+
+      human_file =
+        create_text_file(project, root, "human only body",
+          filename: "handbook.txt",
+          content_hash: fake_hash("human only body", project.id)
+        )
+
+      {:ok, human_file} = Files.set_ingest_intent(human_file, "human_only")
+
+      # ── Positive control: the attempt file DOES reach the pipeline.
+      # Without this half, the refutation below would pass in a build
+      # where nothing is ever enqueued for any file at all.
+      assert :ok = Ingester.ingest_async(attempt_file)
+      assert_receive {:provider_ingest, %{id: extracted_id}}, 2_000
+      assert extracted_id == attempt_file.id
+
+      assert_receive {:telemetry, [:platform, :files, :ingested, :start], _, start_meta}, 2_000
+      assert start_meta.file_id == attempt_file.id
+      assert wait_for_status(attempt_file.id, "ingested")
+
+      drain_provider_messages()
+      drain_telemetry_messages()
+
+      # ── Refutation: the human_only file does not.
+      assert :ok = Ingester.ingest_async(human_file)
+
+      # Give a spawned task every chance to report before we conclude
+      # absence — the attempt half above completed in well under this.
+      refute_receive {:provider_ingest, _}, 300
+      refute_received {:telemetry, [:platform, :files, :ingested, :start], _, _}
+      assert Files.get_file(human_file.id).ingest_status == "not_attempted"
+    end
+
+    test "human_only file lands in the terminal not_attempted status",
+         %{project: project, root: root} do
+      file = create_text_file(project, root, "printed for a person")
+      {:ok, file} = Files.set_ingest_intent(file, "human_only")
+
+      assert :ok = Ingester.ingest_async(file)
+
+      refreshed = Files.get_file(file.id)
+      assert refreshed.ingest_status == "not_attempted"
+      assert refreshed.ingest_intent == "human_only"
+      assert Files.list_chunks_for_file(file.id) == []
+    end
+
+    test "an unrecognised intent raises rather than silently extracting",
+         %{project: project, root: root} do
+      file = create_text_file(project, root, "who knows")
+      bogus = %{file | ingest_intent: "sideways"}
+
+      assert_raise FunctionClauseError, fn -> Ingester.ingest_async(bogus) end
+      refute_received {:provider_ingest, _}
+    end
+  end
+
+  describe "Files.request_ingest/1" do
+    test "flips a human_only + not_attempted row to attempt + pending and extracts",
+         %{project: project, root: root} do
+      file = create_text_file(project, root, "held back then released")
+      {:ok, file} = Files.set_ingest_intent(file, "human_only")
+
+      assert :ok = Ingester.ingest_async(file)
+      assert Files.get_file(file.id).ingest_status == "not_attempted"
+      refute_receive {:provider_ingest, _}, 200
+
+      {:ok, requested} = Files.request_ingest(Files.get_file(file.id))
+
+      assert requested.ingest_intent == "attempt"
+      assert requested.ingest_status == "pending"
+
+      assert_receive {:provider_ingest, %{id: id}}, 2_000
+      assert id == file.id
+      assert wait_for_status(file.id, "ingested")
+    end
+
+    # ── COLLAPSE DETECTOR ────────────────────────────────────────────────
+    #
+    # The entire reason `ingest_intent` exists as a second field is that
+    # `ingest_status` alone cannot answer "should this file ever have
+    # been ingested?". These two rows are built to be indistinguishable
+    # under any single-field design that folds intent into status:
+    #
+    #   * retryable: intent=attempt,     status=failed        (tried, broke)
+    #   * terminal:  intent=human_only,  status=not_attempted (never tried)
+    #
+    # Every assertion below keys on `ingest_intent`, not on status. If a
+    # future refactor collapses the two fields back into one, the
+    # human_only row can no longer carry "deliberately withheld" through
+    # a status reset and this test fails.
+    test "distinguishes a retryable failure from a deliberate human_only hold",
+         %{project: project, root: root} do
+      retryable =
+        create_text_file(project, root, "broke on the way through", filename: "retryable.txt")
+
+      {:ok, _} = Files.update_ingest_status(retryable, "failed")
+      retryable = Files.get_file(retryable.id)
+
+      terminal =
+        create_text_file(project, root, "never meant for the index", filename: "terminal.txt")
+
+      {:ok, terminal} = Files.set_ingest_intent(terminal, "human_only")
+      assert :ok = Ingester.ingest_async(terminal)
+      terminal = Files.get_file(terminal.id)
+
+      # Preconditions: the two rows differ ONLY on intent + status, and
+      # the statuses alone do not encode "deliberate".
+      assert retryable.ingest_intent == "attempt"
+      assert retryable.ingest_status == "failed"
+      assert terminal.ingest_intent == "human_only"
+      assert terminal.ingest_status == "not_attempted"
+
+      # The terminal row got there without any extraction attempt.
+      refute_receive {:provider_ingest, _}, 300
+      assert Files.list_chunks_for_file(terminal.id) == []
+
+      # Re-enqueueing the terminal row changes nothing: intent, not
+      # status, is what holds it back. A single-field design has no
+      # value left to hold it here.
+      assert :ok = Ingester.ingest_async(terminal)
+      refute_receive {:provider_ingest, _}, 300
+      assert Files.get_file(terminal.id).ingest_intent == "human_only"
+
+      # The retryable row, by contrast, is meaningfully retryable.
+      {:ok, retried} = Files.request_ingest(retryable)
+      assert retried.ingest_intent == "attempt"
+      assert_receive {:provider_ingest, %{id: retried_id}}, 2_000
+      assert retried_id == retryable.id
+      assert wait_for_status(retryable.id, "ingested")
+
+      # And request_ingest/1 is the ONLY thing that lifts the hold — the
+      # assertion is on intent, which is the field a collapse deletes.
+      drain_provider_messages()
+      {:ok, released} = Files.request_ingest(Files.get_file(terminal.id))
+      assert released.ingest_intent == "attempt"
+      assert released.ingest_status == "pending"
+      assert_receive {:provider_ingest, %{id: released_id}}, 2_000
+      assert released_id == terminal.id
+    end
+  end
+
   # ── Local helpers ──────────────────────────────────────────────────────
 
   defp wait_for_status(file_id, status, attempts \\ 20) do
@@ -391,6 +538,14 @@ defmodule Platform.Files.IngesterTest do
         _ -> Process.sleep(25) && {:cont, false}
       end
     end)
+  end
+
+  defp drain_telemetry_messages do
+    receive do
+      {:telemetry, _, _, _} -> drain_telemetry_messages()
+    after
+      0 -> :ok
+    end
   end
 
   defp drain_provider_messages do

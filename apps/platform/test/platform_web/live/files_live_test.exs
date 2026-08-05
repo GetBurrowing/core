@@ -896,7 +896,276 @@ defmodule PlatformWeb.FilesLiveTest do
     end
   end
 
+  describe "agent-context toggle (stage 4)" do
+    # The audience control has to work in BOTH directions and AFTER the
+    # upload — a user changing their mind must not re-upload. Every
+    # fixture here seeds MORE THAN ONE file per intent so an assertion
+    # that happens to match some other row cannot pass by accident.
+
+    defp seed_audience_fixture(project) do
+      attempt_a = seed_file(project, %{name: "attempt-a.txt", ingest_intent: "attempt"})
+      attempt_b = seed_file(project, %{name: "attempt-b.txt", ingest_intent: "attempt"})
+
+      human_a =
+        seed_file(project, %{
+          name: "human-a.txt",
+          ingest_intent: "human_only",
+          ingest_status: "not_attempted"
+        })
+
+      human_b =
+        seed_file(project, %{
+          name: "human-b.txt",
+          ingest_intent: "human_only",
+          ingest_status: "not_attempted"
+        })
+
+      {attempt_a, attempt_b, human_a, human_b}
+    end
+
+    defp select_row(view, file_id) do
+      view
+      |> element(~s([data-role="files-row"][data-file-id="#{file_id}"]))
+      |> render_click()
+    end
+
+    defp toggle_intent(html) do
+      case Regex.run(
+             ~r/<button[^>]*data-role="files-detail-agent-toggle"[^>]*>/,
+             html
+           ) do
+        [tag] ->
+          [_, intent] = Regex.run(~r/data-ingest-intent="([^"]+)"/, tag)
+          intent
+
+        _ ->
+          flunk("no desktop agent-context toggle rendered")
+      end
+    end
+
+    defp row_intent(html, file_id) do
+      case Regex.run(
+             ~r/<tr[^>]*data-file-id="#{Regex.escape(file_id)}"[^>]*>/,
+             html
+           ) do
+        [tag] ->
+          [_, intent] = Regex.run(~r/data-ingest-intent="([^"]+)"/, tag)
+          intent
+
+        _ ->
+          flunk("no row matched data-file-id=#{file_id}")
+      end
+    end
+
+    test "toggle reflects the selected file's intent, per selection", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Audience Toggle Project")
+      {attempt_a, attempt_b, human_a, human_b} = seed_audience_fixture(project)
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      for file <- [attempt_a, attempt_b] do
+        html = select_row(view, file.id)
+        assert toggle_intent(html) == "attempt"
+        assert html =~ "Included for agents"
+      end
+
+      for file <- [human_a, human_b] do
+        html = select_row(view, file.id)
+        assert toggle_intent(html) == "human_only"
+
+        assert has_element?(
+                 view,
+                 ~s([data-role="files-detail-agent-toggle"][data-ingest-intent="human_only"])
+               )
+      end
+    end
+
+    test "the withdrawing direction confirms, the restoring direction does not", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Audience Confirm Project")
+      {attempt_a, _attempt_b, human_a, _human_b} = seed_audience_fixture(project)
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      html = select_row(view, attempt_a.id)
+      assert html =~ "Removes this file&#39;s extracted text from agent search."
+
+      html = select_row(view, human_a.id)
+      refute html =~ "Removes this file"
+    end
+
+    test "clicking the toggle flips the row's intent both ways, no reload", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Audience Flip Project")
+      {attempt_a, attempt_b, _human_a, _human_b} = seed_audience_fixture(project)
+
+      {:ok, view, html} = live(conn, ~p"/files/#{project.id}")
+      assert row_intent(html, attempt_a.id) == "attempt"
+
+      _ = select_row(view, attempt_a.id)
+
+      html =
+        view
+        |> element(~s([data-role="files-detail-agent-toggle"]))
+        |> render_click()
+
+      assert row_intent(html, attempt_a.id) == "human_only"
+      assert Files.get_file(attempt_a.id).ingest_intent == "human_only"
+      # The sibling in the same starting state must not have moved —
+      # the click acts on the selection, not on every attempt row.
+      assert row_intent(html, attempt_b.id) == "attempt"
+
+      html =
+        view
+        |> element(~s([data-role="files-detail-agent-toggle"]))
+        |> render_click()
+
+      assert row_intent(html, attempt_a.id) == "attempt"
+      assert Files.get_file(attempt_a.id).ingest_intent == "attempt"
+    end
+
+    test "a not_attempted file renders People only, not Ingesting", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Audience Badge Project")
+      {_attempt_a, _attempt_b, human_a, human_b} = seed_audience_fixture(project)
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      # The page as a whole DOES contain "Ingesting" — the two attempt
+      # rows are still pending — so the absence has to be asserted on
+      # the specific rows, never on the body.
+      for file <- [human_a, human_b] do
+        assert_in_row(html, file.id, "People only")
+        refute_in_row(html, file.id, "Ingesting")
+      end
+    end
+  end
+
+  describe "upload audience checkbox (stage 4)" do
+    setup do
+      root =
+        Path.join(
+          System.tmp_dir!(),
+          "files-live-audience-test-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(root)
+      previous = Application.get_env(:platform, :chat_attachments_root)
+      Application.put_env(:platform, :chat_attachments_root, root)
+
+      on_exit(fn ->
+        File.rm_rf!(root)
+
+        if previous do
+          Application.put_env(:platform, :chat_attachments_root, previous)
+        else
+          Application.delete_env(:platform, :chat_attachments_root)
+        end
+      end)
+
+      :ok
+    end
+
+    test "unchecking the box uploads the file as human_only", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Upload Audience Off")
+
+      {:ok, view, html} = live(conn, ~p"/files/#{project.id}")
+
+      # Default is CHECKED — assert on the checkbox's own tag, not on the
+      # presence of the word "checked" anywhere in the document.
+      [checkbox_tag] =
+        Regex.run(
+          ~r/<input[^>]*data-role="files-upload-include-for-agents"[^>]*>/,
+          html
+        )
+
+      assert checkbox_tag =~ "checked"
+
+      view
+      |> element("#files-upload-form")
+      |> render_change(%{"include_for_agents" => "false"})
+
+      upload =
+        file_input(view, "#files-upload-form", :files, [
+          %{
+            name: "held-back.txt",
+            content: "plain body #{System.unique_integer([:positive])}",
+            type: "text/plain"
+          }
+        ])
+
+      render_upload(upload, "held-back.txt")
+
+      [file] = Files.list_files_for_project(project.id)
+      # text/plain is a SUPPORTED type, so the content-type default would
+      # have been "attempt" — the override is what produced this.
+      assert Files.default_ingest_intent("text/plain") == "attempt"
+      assert file.ingest_intent == "human_only"
+      assert file.ingest_status == "not_attempted"
+    end
+
+    test "leaving the box checked does not force attempt on an unsupported type", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Upload Audience On")
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      upload =
+        file_input(view, "#files-upload-form", :files, [
+          %{
+            name: "clip.mp4",
+            content: "not really a video #{System.unique_integer([:positive])}",
+            type: "video/mp4"
+          }
+        ])
+
+      render_upload(upload, "clip.mp4")
+
+      [file] = Files.list_files_for_project(project.id)
+      assert file.ingest_intent == "human_only"
+    end
+
+    test "checked box leaves a supported type on the attempt default", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Upload Audience Default")
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      upload =
+        file_input(view, "#files-upload-form", :files, [
+          %{
+            name: "notes.txt",
+            content: "plain body #{System.unique_integer([:positive])}",
+            type: "text/plain"
+          }
+        ])
+
+      render_upload(upload, "notes.txt")
+
+      [file] = Files.list_files_for_project(project.id)
+      assert file.ingest_intent == "attempt"
+    end
+  end
+
   # ── Local helpers ──────────────────────────────────────────────────────
+
+  # Row-scoped presence assertion. Sibling of `refute_in_row/3` — a
+  # whole-body `=~` would pass on a string another row supplied.
+  defp assert_in_row(html, file_id, needle) do
+    case Regex.run(
+           ~r/<tr[^>]*data-file-id="#{Regex.escape(file_id)}"[^>]*>(.*?)<\/tr>/s,
+           html
+         ) do
+      [_, row_body] ->
+        assert row_body =~ needle,
+               "expected row #{file_id} to contain #{inspect(needle)}; got: #{row_body}"
+
+      _ ->
+        flunk("no row matched data-file-id=#{file_id}")
+    end
+  end
 
   # Scan the rendered HTML for a `<tr data-file-id="...">…</tr>` block and
   # assert it does NOT contain the given needle. Helps the live-refresh

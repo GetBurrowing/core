@@ -37,6 +37,24 @@ defmodule Platform.Files do
   Wraps `File.changeset/2` so callers (the eventual upload pipeline and
   Stage 6 backfill) hit the same validation surface. Returns
   `{:ok, file}` or `{:error, changeset}`.
+
+  ## Default ingestion intent
+
+  This function is the single choke point for file creation, so the
+  content-type-derived default lives here rather than at each caller.
+  When the attrs carry no `:ingest_intent` (atom or string key), the
+  intent is derived by `default_ingest_intent/1`: `"attempt"` for a
+  content type the extractor's dispatch table can actually handle,
+  `"human_only"` for everything else (including a nil content type).
+
+  An explicit caller-supplied `ingest_intent` always wins — that is what
+  lets the upload UI hold back a PDF it knows is human reading material,
+  or push a format the extractor would otherwise skip.
+
+  A resolved `"human_only"` intent also seeds `ingest_status` with
+  `"not_attempted"`. Nothing enqueues a human_only file, so leaving the
+  schema's `"pending"` default in place would strand the row rendering
+  as "Ingesting…" forever.
   """
   @spec create_file(map()) ::
           {:ok, File.t()} | {:error, Ecto.Changeset.t() | :project_archived}
@@ -45,8 +63,67 @@ defmodule Platform.Files do
 
     with :ok <- Lifecycle.ensure_project_writable(project_id) do
       %File{}
-      |> File.changeset(attrs)
+      |> File.changeset(put_default_ingest_intent(attrs))
       |> Repo.insert()
+    end
+  end
+
+  @doc """
+  The ingestion intent a file of this content type gets when the caller
+  does not specify one.
+
+  Derived from `Platform.Files.Extractor.supported_content_type?/1` — the
+  extractor's dispatch table is the single source of truth for "can this
+  be turned into text?", so there is no second format list here to drift
+  from it. A nil content type is unsupported and therefore `"human_only"`.
+  """
+  @spec default_ingest_intent(String.t() | nil) :: String.t()
+  def default_ingest_intent(content_type) do
+    if Platform.Files.Extractor.supported_content_type?(content_type) do
+      "attempt"
+    else
+      "human_only"
+    end
+  end
+
+  defp put_default_ingest_intent(attrs) do
+    case {Map.fetch(attrs, :ingest_intent), Map.fetch(attrs, "ingest_intent")} do
+      {:error, :error} ->
+        attrs
+        |> put_attr(
+          :ingest_intent,
+          default_ingest_intent(attrs[:content_type] || attrs["content_type"])
+        )
+        |> seed_status_for_human_only()
+
+      _ ->
+        seed_status_for_human_only(attrs)
+    end
+  end
+
+  # A human_only row is never enqueued, so its status starts (and stays)
+  # at "not_attempted" until `request_ingest/1` flips the intent. Applies
+  # to an explicitly-supplied human_only just as much as a derived one —
+  # the upload UI holding back a PDF hits the same stranding otherwise.
+  # An explicit ingest_status still wins (backfill replays real outcomes).
+  defp seed_status_for_human_only(attrs) do
+    explicit_status? =
+      Map.has_key?(attrs, :ingest_status) or Map.has_key?(attrs, "ingest_status")
+
+    if not explicit_status? and (attrs[:ingest_intent] || attrs["ingest_intent"]) == "human_only" do
+      put_attr(attrs, :ingest_status, "not_attempted")
+    else
+      attrs
+    end
+  end
+
+  # Keeps the key style of the map the caller handed us: a string-key
+  # attrs map stays entirely string-keyed (Ecto rejects mixed maps).
+  defp put_attr(attrs, key, value) do
+    if Enum.any?(attrs, fn {k, _} -> is_binary(k) end) do
+      Map.put(attrs, Atom.to_string(key), value)
+    else
+      Map.put(attrs, key, value)
     end
   end
 
@@ -112,18 +189,27 @@ defmodule Platform.Files do
     * `:limit` — caps the result count (default 50; nil disables the cap).
     * `:content_type` — exact-match filter on `content_type`. Useful for
       "only images" / "only PDFs" admin views (Stage 5).
+    * `:ingest_intent` — exact-match filter on `ingest_intent`
+      (`"attempt"` / `"human_only"`). `nil` means no filter.
+    * `:ingest_status` — exact-match filter on `ingest_status`
+      (`"pending"` / `"ingested"` / `"failed"` / `"not_attempted"`).
+      `nil` means no filter.
     * `:preload` — Ecto preload spec applied after the query (e.g. `:project`).
   """
   @spec list_files_for_project(binary(), keyword()) :: [File.t()]
   def list_files_for_project(project_id, opts \\ []) when is_binary(project_id) do
     limit = Keyword.get(opts, :limit, 50)
     content_type = Keyword.get(opts, :content_type)
+    ingest_intent = Keyword.get(opts, :ingest_intent)
+    ingest_status = Keyword.get(opts, :ingest_status)
     preload = Keyword.get(opts, :preload, [])
 
     File
     |> not_deleted()
     |> where([f], f.project_id == ^project_id)
     |> maybe_filter_content_type(content_type)
+    |> maybe_filter_ingest_intent(ingest_intent)
+    |> maybe_filter_ingest_status(ingest_status)
     |> order_by([f], desc: f.inserted_at)
     |> maybe_limit(limit)
     |> Repo.all()
@@ -231,11 +317,157 @@ defmodule Platform.Files do
   @spec update_ingest_status(File.t(), String.t()) ::
           {:ok, File.t()} | {:error, Ecto.Changeset.t()}
   def update_ingest_status(%File{} = file, status)
-      when status in ~w(pending ingested failed) do
+      when status in ~w(pending ingested failed not_attempted) do
     file
     |> File.changeset(%{ingest_status: status})
     |> Repo.update()
   end
+
+  @doc """
+  Sets the `:ingest_intent` field on a `Platform.Files.File`.
+
+  Intent is the operator's *decision* about whether a file should ever be
+  fed to the ingest pipeline (`"attempt"`) or held back as human-only
+  reading material (`"human_only"`). It is deliberately a separate field
+  from `:ingest_status`, which records the *outcome* of that decision.
+
+  ## Contract: this function ONLY writes the intent
+
+  It does **not** enqueue ingest work, and it does **not** touch
+  `:ingest_status`. Flipping `"human_only"` → `"attempt"` here leaves the
+  status byte-identical; the decision to enqueue on that flip lives at a
+  single seam in the ingester gate, so the system has exactly **one**
+  enqueue choke point. Adding an enqueue call here — however convenient
+  it looks — creates the second choke point this split exists to avoid,
+  and the two will drift.
+
+  An unrecognised intent raises `FunctionClauseError` rather than
+  degrading to a default: a typo'd intent is a bug, and a silent fallback
+  would file no report.
+  """
+  @spec set_ingest_intent(File.t(), String.t()) ::
+          {:ok, File.t()} | {:error, Ecto.Changeset.t()}
+  def set_ingest_intent(%File{} = file, intent)
+      when intent in ~w(attempt human_only) do
+    file
+    |> File.changeset(%{ingest_intent: intent})
+    |> Repo.update()
+  end
+
+  @doc """
+  Post-hoc override: asks for a file to be ingested after all.
+
+  This is the **single** retry / override entry point. It does three
+  things, in order: sets `:ingest_intent` to `"attempt"`, resets
+  `:ingest_status` to `"pending"`, and hands the refreshed row to
+  `Platform.Files.Ingester.ingest_async/1`.
+
+  Callers — a "Send to search" button, an MCP tool, an operator script —
+  must call this rather than reimplementing the sequence. Setting the
+  intent without resetting the status leaves a `"human_only"` row stuck
+  in its terminal `"not_attempted"` state, which is precisely the bug
+  this helper exists to make unrepresentable.
+
+  Works from any prior state: a `"human_only"` + `"not_attempted"` row
+  (terminal, never tried) and an `"attempt"` + `"failed"` row (tried,
+  broke) both become `"attempt"` + `"pending"` and get re-enqueued.
+  """
+  @spec request_ingest(File.t()) :: {:ok, File.t()} | {:error, Ecto.Changeset.t()}
+  def request_ingest(%File{} = file) do
+    with {:ok, updated} <-
+           file
+           |> File.changeset(%{ingest_intent: "attempt", ingest_status: "pending"})
+           |> Repo.update() do
+      :ok = Platform.Files.Ingester.ingest_async(updated)
+      {:ok, updated}
+    end
+  end
+
+  @doc """
+  Withdraws an ALREADY-EXTRACTED file from every agent-visible reader.
+
+  Flipping intent alone is cosmetic: the extraction already happened, so
+  the text is sitting in two independent places an agent can read.
+  Scrubbing only one of them leaves the body fully legible, which is
+  worse than shipping no control at all — the operator believes the file
+  is withdrawn and it is not. So this function removes both:
+
+    1. `platform_file_texts` — the cached extracted body. Read DIRECTLY
+       (bypassing the vector index entirely) by the `file_get_text` MCP
+       tool and by `file_search` snippet rendering. This is the reader
+       that makes an index-only scrub cosmetic.
+    2. the vector index entry, keyed on the file id
+       (`scrub_search_index/1`, shared with `delete_file/2`).
+
+  `platform_file_chunks` rows go too. They hold no text — only opaque
+  external ids for dedup linkage — but a later byte-identical upload
+  would otherwise dedup-copy that linkage and resurrect a pointer to a
+  withdrawn body.
+
+  Ordering: intent → status → text row → chunk rows all commit in ONE
+  transaction, so there is no window where the row reads as withdrawn
+  while its text is still queryable (or vice versa). The index scrub and
+  the broadcast run AFTER commit, best-effort — a memory-service outage
+  must not make the control unusable. A stale index entry surviving an
+  outage is covered by the `file_get_text` / `file_search` refusals in
+  `Platform.Federation.ToolSurface`, which read the DB intent, not the
+  index.
+
+  Raw bytes are deliberately untouched: `file_get_text` with
+  `binary: true` still serves this file. Withdrawing EXTRACTED TEXT from
+  agent context is the contract; withholding the document from its
+  human audience is not.
+  """
+  @spec withdraw_from_agent_context(File.t()) :: {:ok, File.t()} | {:error, Ecto.Changeset.t()}
+  def withdraw_from_agent_context(%File{} = file) do
+    txn =
+      Repo.transaction(fn ->
+        with {:ok, intended} <- set_ingest_intent(file, "human_only"),
+             {:ok, updated} <- update_ingest_status(intended, "not_attempted") do
+          {_, _} = Repo.delete_all(from(t in Text, where: t.file_id == ^file.id))
+          {_, _} = Repo.delete_all(from(c in Chunk, where: c.file_id == ^file.id))
+          updated
+        else
+          {:error, %Ecto.Changeset{} = changeset} -> Repo.rollback(changeset)
+        end
+      end)
+
+    case txn do
+      {:ok, %File{} = withdrawn} ->
+        scrub_search_index(withdrawn)
+
+        _ =
+          broadcast_project(
+            withdrawn.project_id,
+            {:file_withdrawn_from_agent_context, withdrawn.id}
+          )
+
+        {:ok, withdrawn}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  @doc """
+  The inverse of `withdraw_from_agent_context/1`: puts a withdrawn file
+  back in front of agents. Delegates to `request_ingest/1`.
+
+  ## Why this is NOT symmetric with `restore_file/2`
+
+  `restore_file/2` (the soft-delete inverse) re-indexes from the cached
+  extracted text via `reindex_from_cached_text/1` — cheap, no
+  re-extraction, because soft-delete never touched
+  `platform_file_texts`. Withdrawal DID: it deleted that row, on purpose.
+  There is no cache left to re-index from, so the flip back must
+  RE-EXTRACT, which is exactly what `request_ingest/1` enqueues.
+
+  Do not "optimise" this into a `reindex_from_cached_text/1` call. It
+  would find nothing, log a skip, and quietly leave the file
+  unsearchable while reporting success.
+  """
+  @spec restore_to_agent_context(File.t()) :: {:ok, File.t()} | {:error, Ecto.Changeset.t()}
+  def restore_to_agent_context(%File{} = file), do: request_ingest(file)
 
   # ── PubSub helpers ─────────────────────────────────────────────────────
 
@@ -387,6 +619,18 @@ defmodule Platform.Files do
     where(query, [f], f.content_type == ^content_type)
   end
 
+  defp maybe_filter_ingest_intent(query, nil), do: query
+
+  defp maybe_filter_ingest_intent(query, intent) when is_binary(intent) do
+    where(query, [f], f.ingest_intent == ^intent)
+  end
+
+  defp maybe_filter_ingest_status(query, nil), do: query
+
+  defp maybe_filter_ingest_status(query, status) when is_binary(status) do
+    where(query, [f], f.ingest_status == ^status)
+  end
+
   defp maybe_limit(query, nil), do: query
   defp maybe_limit(query, n) when is_integer(n) and n > 0, do: limit(query, ^n)
 
@@ -413,6 +657,12 @@ defmodule Platform.Files do
   # indexes each file under its own row id (`Platform.Files.Ingester`
   # builds the memory entry with `id: file.id`), so that id is the scrub
   # key. Best-effort after commit — see `delete_file/2` doc.
+  #
+  # Shared by TWO callers with the same semantics: `delete_file/2` (the
+  # whole row goes away) and `withdraw_from_agent_context/1` (the row
+  # stays, its extracted text does not). Deliberately one copy — a second
+  # scrub implementation is a second place for the "which id do we scrub
+  # by?" reasoning below to drift out of date.
   #
   # Scrubbing by this file's id ALONE is safe only because the strict
   # UNIQUE (content_hash, project_id) index guarantees no byte-identical

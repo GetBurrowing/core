@@ -160,7 +160,8 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
         byte_size: byte_size(body),
         storage_key: "files/#{project.id}/#{Ecto.UUID.generate()}/#{filename}",
         content_hash: hash,
-        ingest_status: Keyword.get(opts, :ingest_status, "ingested")
+        ingest_status: Keyword.get(opts, :ingest_status, "ingested"),
+        ingest_intent: Keyword.get(opts, :ingest_intent, "attempt")
       })
 
     if text = Keyword.get(opts, :text) do
@@ -292,6 +293,76 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
                ToolSurface.execute("file_list", %{}, context_for(agent))
 
       assert msg =~ "project_id"
+    end
+
+    test "lists human-only files alongside readable ones, each carrying its own availability",
+         %{agent_sxi: agent, project_a: project} do
+      readable = create_file(project, filename: "readable.txt", ingest_status: "ingested")
+
+      withheld =
+        create_file(project,
+          filename: "human-only.mov",
+          ingest_intent: "human_only",
+          ingest_status: "not_attempted"
+        )
+
+      assert {:ok, %{count: 2, files: files}} =
+               ToolSurface.execute("file_list", %{"project_id" => project.id}, context_for(agent))
+
+      by_id = Map.new(files, &{&1.id, &1})
+
+      # The human-only row is LISTED, not hidden. Hiding it is the rejected
+      # design: an agent that cannot see the row tells the human no such
+      # file exists moments after they uploaded it.
+      assert Map.has_key?(by_id, withheld.id)
+      assert Map.has_key?(by_id, readable.id)
+
+      withheld_row = by_id[withheld.id]
+      assert withheld_row.ingest_intent == "human_only"
+      assert withheld_row.agent_content_available == false
+      assert is_binary(withheld_row.agent_content_note)
+      assert withheld_row.agent_content_note =~ "human-only"
+
+      readable_row = by_id[readable.id]
+      assert readable_row.ingest_intent == "attempt"
+      assert readable_row.agent_content_available == true
+      assert readable_row.agent_content_note == nil
+
+      # Both booleans appear in one response, so a serialiser that
+      # hardcodes either value fails this test rather than half-passing.
+      assert MapSet.new(files, & &1.agent_content_available) ==
+               MapSet.new([true, false])
+    end
+
+    test "pending, failed and human_only carry three DISTINCT notes",
+         %{agent_sxi: agent, project_a: project} do
+      pending = create_file(project, filename: "pending.txt", ingest_status: "pending")
+      failed = create_file(project, filename: "failed.txt", ingest_status: "failed")
+
+      human_only =
+        create_file(project,
+          filename: "private.pdf",
+          ingest_intent: "human_only",
+          ingest_status: "not_attempted"
+        )
+
+      assert {:ok, %{count: 3, files: files}} =
+               ToolSurface.execute("file_list", %{"project_id" => project.id}, context_for(agent))
+
+      by_id = Map.new(files, &{&1.id, &1})
+
+      for id <- [pending.id, failed.id, human_only.id] do
+        assert by_id[id].agent_content_available == false
+      end
+
+      notes = Enum.map([pending.id, failed.id, human_only.id], &by_id[&1].agent_content_note)
+
+      # Distinctness is the assertion that matters. A single generic
+      # "content unavailable" note would satisfy every non-nil check above
+      # while collapsing exactly the distinction this feature draws:
+      # "wait a moment", "it broke", and "a person decided this".
+      assert Enum.all?(notes, &is_binary/1)
+      assert length(Enum.uniq(notes)) == 3
     end
   end
 
@@ -512,10 +583,176 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
         byte_size: Keyword.get(opts, :byte_size_override, real_size),
         storage_key: storage_key,
         content_hash: hash,
-        ingest_status: Keyword.get(opts, :ingest_status, "ingested")
+        ingest_status: Keyword.get(opts, :ingest_status, "ingested"),
+        ingest_intent: Keyword.get(opts, :ingest_intent, "attempt")
       })
 
     file
+  end
+
+  # ── human_only gate (task 019fd033 stage 3) ───────────────────────────
+  #
+  # These fixtures deliberately KEEP a `platform_file_texts` row on a
+  # human_only file. `Files.withdraw_from_agent_context/1` deletes that
+  # row, so a fixture without one would exercise the delete, not the
+  # gate — and the gate would pass whether or not it exists. The two
+  # barriers are independent and each needs its own proof.
+
+  describe "execute/3 file_get_text — human_only gate" do
+    test "refuses the extracted text of a human_only file that still HAS a text row",
+         %{agent_sxi: agent, project_a: project} do
+      body = "confidential settlement terms paragraph"
+
+      file =
+        create_file(project, filename: "hr-note.txt", text: body, ingest_intent: "human_only")
+
+      # Positive control: the body IS in the store the tool reads from,
+      # so the refusal below is the gate refusing, not an empty table.
+      assert %Platform.Files.Text{text: ^body} = Files.fetch_extracted_text(file.id)
+
+      assert {:error, %{code: :human_only, recoverable: false} = err} =
+               ToolSurface.execute("file_get_text", %{"file_id" => file.id}, context_for(agent))
+
+      # Assert the specific fields, not `=~` over the whole envelope —
+      # a substring can match from an unrelated field.
+      refute err.error =~ body
+      refute err.suggestion =~ body
+      refute Map.has_key?(err, :text)
+    end
+
+    test "an otherwise-identical attempt-intent file DOES return the body",
+         %{agent_sxi: agent, project_a: project} do
+      # Control for the test above: same shape, intent flipped. Without
+      # this, a refusal could come from any unrelated fixture defect.
+      body = "confidential settlement terms paragraph"
+      file = create_file(project, filename: "hr-note-ok.txt", text: body)
+
+      assert {:ok, %{text: ^body}} =
+               ToolSurface.execute("file_get_text", %{"file_id" => file.id}, context_for(agent))
+    end
+
+    test "the page branch is gated too", %{agent_sxi: agent, project_a: project} do
+      pages = ["page one secret", "page two secret"]
+
+      file =
+        create_file(project,
+          filename: "paged.pdf",
+          content_type: "application/pdf",
+          text: Enum.join(pages, "\n\n"),
+          pages: pages,
+          ingest_intent: "human_only"
+        )
+
+      assert {:error, %{code: :human_only}} =
+               ToolSurface.execute(
+                 "file_get_text",
+                 %{"file_id" => file.id, "page" => 2},
+                 context_for(agent)
+               )
+    end
+
+    # NOT TESTED HERE, deliberately: "an unrecognised intent raises
+    # rather than serving the body". The gate has no catch-all clause,
+    # so it would — but the state is unrepresentable. A
+    # `Repo.update_all` setting `ingest_intent: "sideways"` is rejected
+    # by the `platform_files_ingest_intent_check` DB constraint, so any
+    # such test would be killed by the constraint before reaching an
+    # assertion, and would pass for a reason that has nothing to do with
+    # the code under test. The DB is the stronger barrier; the missing
+    # catch-all is belt-and-braces behind it.
+  end
+
+  # ── binary: true is gated too (task 019fd033 stage 2, member 3) ───────
+  #
+  # An earlier revision left `binary: true` OPEN, reasoning that raw
+  # bytes are the "human audience" path. They are not: file_get_text is
+  # the AGENT surface — a human downloads through the Files UI. Serving
+  # byte-identical content to the same caller we just refused the
+  # extracted text is a one-argument bypass, not a policy. Both branches
+  # gate.
+  describe "execute/3 file_get_text — human_only gates the binary branch" do
+    setup :with_tmp_storage_root
+
+    test "binary: true refuses a human_only row AND returns no bytes at all",
+         %{agent_sxi: agent, project_a: project} do
+      body = "human-audience-bytes"
+
+      file =
+        create_file_with_bytes(project, body,
+          filename: "human-only.txt",
+          ingest_intent: "human_only"
+        )
+
+      {:ok, _} = Files.upsert_extracted_text(file.id, "extracted body", nil)
+
+      # Same fixture, same agent, both branches: neither yields content.
+      assert {:error, %{code: :human_only, recoverable: false}} =
+               ToolSurface.execute("file_get_text", %{"file_id" => file.id}, context_for(agent))
+
+      assert {:error, %{code: :human_only, recoverable: false} = err} =
+               ToolSurface.execute(
+                 "file_get_text",
+                 %{"file_id" => file.id, "binary" => true},
+                 context_for(agent)
+               )
+
+      # Key ABSENCE, not just an error tuple: a payload that both errors
+      # and carries the bytes is the exact bug, and `{:error, _}` alone
+      # cannot see it.
+      refute Map.has_key?(err, :data_base64)
+      refute err.error =~ body
+      refute err.suggestion =~ body
+      # And the bytes are not smuggled under some other key.
+      refute inspect(err) =~ Base.encode64(body)
+    end
+
+    test "positive control: an attempt-intent file still serves BOTH text and bytes",
+         %{agent_sxi: agent, project_a: project} do
+      # Without this, a gate that broke every read would pass every
+      # refutation above.
+      body = "readable-both-ways"
+
+      file =
+        create_file_with_bytes(project, body,
+          filename: "readable.txt",
+          ingest_intent: "attempt"
+        )
+
+      {:ok, _} = Files.upsert_extracted_text(file.id, "extracted readable body", nil)
+
+      assert {:ok, %{text: "extracted readable body"}} =
+               ToolSurface.execute("file_get_text", %{"file_id" => file.id}, context_for(agent))
+
+      assert {:ok, %{data_base64: data_b64}} =
+               ToolSurface.execute(
+                 "file_get_text",
+                 %{"file_id" => file.id, "binary" => true},
+                 context_for(agent)
+               )
+
+      assert Base.decode64!(data_b64) == body
+    end
+
+    # Gate placement, not gate existence. If the intent check ran BEFORE
+    # authorize_file_access/2, a sibling-org caller could tell
+    # `:human_only` (file exists) from `unauthorized` (nothing said) and
+    # use file_get_text as an existence oracle. Both branches pinned.
+    test "a sibling-org caller gets unauthorized, never :human_only",
+         %{agent_sxi: agent, project_b: project} do
+      file =
+        create_file_with_bytes(project, "sibling-org-secret",
+          filename: "sibling-human-only.txt",
+          ingest_intent: "human_only"
+        )
+
+      for args <- [%{"file_id" => file.id}, %{"file_id" => file.id, "binary" => true}] do
+        assert {:error, %{error: msg} = err} =
+                 ToolSurface.execute("file_get_text", args, context_for(agent))
+
+        assert msg =~ "unauthorized"
+        refute Map.get(err, :code) == :human_only
+      end
+    end
   end
 
   # ── file_get_metadata ─────────────────────────────────────────────────
@@ -565,6 +802,58 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
       assert row.content_type == "application/pdf"
       assert row.byte_size == byte_size("pdf-body")
       assert row.ingest_status == "ingested"
+      assert row.ingest_intent == "attempt"
+      assert row.agent_content_available == true
+      assert row.agent_content_note == nil
+    end
+
+    test "a human-only file still returns metadata, marked unreadable with an explanation",
+         %{agent_sxi: agent, project_a: project} do
+      file =
+        create_file(project,
+          filename: "board-deck.key",
+          ingest_intent: "human_only",
+          ingest_status: "not_attempted"
+        )
+
+      assert {:ok, row} =
+               ToolSurface.execute(
+                 "file_get_metadata",
+                 %{"file_id" => file.id},
+                 context_for(agent)
+               )
+
+      assert row.file_id == file.id
+      assert row.original_filename == "board-deck.key"
+      assert row.ingest_intent == "human_only"
+      assert row.ingest_status == "not_attempted"
+      assert row.agent_content_available == false
+      assert row.agent_content_note =~ "human-only"
+      assert row.agent_content_note =~ "ask them"
+    end
+
+    test "pending and failed metadata rows report distinct unavailability notes",
+         %{agent_sxi: agent, project_a: project} do
+      pending = create_file(project, filename: "wip.txt", ingest_status: "pending")
+      failed = create_file(project, filename: "broken.txt", ingest_status: "failed")
+
+      assert {:ok, pending_row} =
+               ToolSurface.execute(
+                 "file_get_metadata",
+                 %{"file_id" => pending.id},
+                 context_for(agent)
+               )
+
+      assert {:ok, failed_row} =
+               ToolSurface.execute(
+                 "file_get_metadata",
+                 %{"file_id" => failed.id},
+                 context_for(agent)
+               )
+
+      assert pending_row.agent_content_available == false
+      assert failed_row.agent_content_available == false
+      assert pending_row.agent_content_note != failed_row.agent_content_note
     end
 
     test "unknown file_id returns :not_found", %{agent_root: agent} do
@@ -632,6 +921,99 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
   # ── file_search ───────────────────────────────────────────────────────
 
   describe "execute/3 file_search" do
+    test "drops a human_only file that IS still present in the index",
+         %{agent_sxi: agent, project_a: project} do
+      visible =
+        create_file(project, filename: "public.txt", text: "public rate-limit cap is 100 rps")
+
+      withheld =
+        create_file(project,
+          filename: "private.txt",
+          text: "private rate-limit cap is 5 rps",
+          ingest_intent: "human_only"
+        )
+
+      # The stub returns BOTH — i.e. the vector-index scrub is modelled
+      # as having failed / not yet run. Without that the exclusion below
+      # would be true by construction.
+      install_memory_stub([
+        %{entry_id: visible.id, score: 0.91},
+        %{entry_id: withheld.id, score: 0.99}
+      ])
+
+      assert {:ok, %{count: 1, hits: hits}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => project.id, "query" => "rate-limit cap"},
+                 context_for(agent)
+               )
+
+      assert Enum.map(hits, & &1.file_id) == [visible.id]
+      # Both sides: the hit is gone AND its body did not leak as a
+      # snippet on some other hit.
+      refute Enum.any?(hits, fn h -> h.snippet =~ "5 rps" end)
+      # Positive control — the withheld row's text really is still there
+      # for the snippet renderer to have found, had it not been gated.
+      assert %Platform.Files.Text{} = Files.fetch_extracted_text(withheld.id)
+    end
+
+    # The steady state (created human_only, never extracted) is covered
+    # above. THIS test covers the TRANSITION, which is where the leak
+    # lives: a file ingested as "attempt" has a `platform_file_texts`
+    # row and an index entry, and flipping it to human_only later must
+    # take both away AND stop being returned.
+    test "an ingested file flipped to human_only drops out and loses its cached text",
+         %{agent_sxi: agent, project_a: project} do
+      kept =
+        create_file(project, filename: "kept.txt", text: "kept rate-limit cap is 100 rps")
+
+      flipped =
+        create_file(project, filename: "flipped.txt", text: "secret rate-limit cap is 5 rps")
+
+      # Pre-flip: the body really was cached and readable.
+      assert %Platform.Files.Text{} = Files.fetch_extracted_text(flipped.id)
+
+      assert {:ok, flipped} = Files.withdraw_from_agent_context(flipped)
+      assert flipped.ingest_intent == "human_only"
+
+      # Scrub-on-flip: the cached row went with the transaction.
+      assert is_nil(Files.fetch_extracted_text(flipped.id))
+
+      # Model the index scrub as having failed — the stub still returns
+      # the withdrawn id. Without this the exclusion is true by
+      # construction.
+      install_memory_stub([
+        %{entry_id: kept.id, score: 0.91},
+        %{entry_id: flipped.id, score: 0.99}
+      ])
+
+      # Measured, not assumed: the withdrawn id IS in what the Memory
+      # layer hands the dispatch, so a passing refutation below is the
+      # read-time gate firing, not an empty corpus.
+      assert {:ok, raw} =
+               Platform.Memory.search("rate-limit cap",
+                 project_id: project.id,
+                 org_id: project.org_id,
+                 memory_type: "document",
+                 limit: 20
+               )
+
+      assert flipped.id in Enum.map(raw, & &1.entry_id)
+
+      assert {:ok, %{count: 1, hits: hits}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => project.id, "query" => "rate-limit cap"},
+                 context_for(agent)
+               )
+
+      # Positive control in the same test: the un-flipped sibling still
+      # hits, so zero hits for the flipped file is a decision.
+      assert Enum.map(hits, & &1.file_id) == [kept.id]
+      assert hd(hits).snippet =~ "100 rps"
+      refute Enum.any?(hits, fn h -> h.snippet && h.snippet =~ "5 rps" end)
+    end
+
     test "returns hits with snippets sourced from cached extracted text",
          %{agent_sxi: agent, project_a: project} do
       f1 = create_file(project, filename: "alpha.txt", text: "alpha rate-limit cap is 100 rps")
@@ -850,6 +1232,43 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
                )
 
       assert String.length(hit.snippet) == 240
+    end
+  end
+
+  # ── the fourth path: the generic memory_search tool ───────────────────
+  #
+  # `memory_search` runs through `Platform.Org.Wiki.Search.search/2`,
+  # which is a DIFFERENT dispatch from `file_search` and carries no
+  # human_only gate. It is not a leak today, but not because anything
+  # decided so: `semantic_corpus/1` ends in a catch-all that maps any
+  # unrecognised memory_type (including "document") to `:page`, and the
+  # hit is then dropped because a file id never resolves in the wiki-page
+  # map. A lookup miss, not a decision. Measured here rather than
+  # inferred, so a future schema change that makes file ids resolvable
+  # turns this test red instead of shipping a leak. Fixing wiki search is
+  # owned elsewhere and deliberately out of scope here.
+  describe "memory_search (Wiki.Search) does not carry file bodies" do
+    test "a document-typed hit for a file is dropped at hydration",
+         %{project_a: project} do
+      file =
+        create_file(project,
+          filename: "leaky.txt",
+          text: "canary body only reachable through the files surface"
+        )
+
+      install_memory_stub([
+        %{entry_id: file.id, score: 0.99, memory_type: "document"}
+      ])
+
+      assert {:ok, %{results: results}} =
+               Platform.Org.Wiki.Search.search("canary body",
+                 project_id: project.id,
+                 org_id: project.org_id,
+                 limit: 20
+               )
+
+      refute Enum.any?(results, &(&1.id == file.id))
+      refute Enum.any?(results, &(&1.content =~ "canary body"))
     end
   end
 

@@ -172,4 +172,56 @@ defmodule Platform.Files.ExtractorTest do
                Extractor.extract(file_row("application/pdf", "files/p/f/sample.pdf"))
     end
   end
+
+  describe "supported_content_type?/1" do
+    # This list IS the contract: every MIME with a `dispatch/1` clause.
+    # Assert all of them, not a sample — a dropped clause must fail here.
+    @supported [
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "text/csv",
+      "text/plain",
+      "text/markdown",
+      "image/png",
+      "image/jpeg",
+      "image/jpg",
+      "image/webp",
+      "application/vnd.google-apps.document"
+    ]
+
+    test "true for every content type with a dispatch clause" do
+      for ct <- @supported do
+        assert Extractor.supported_content_type?(ct), "expected #{ct} to be supported"
+      end
+    end
+
+    test "false for nil, empty, and unextractable MIME" do
+      refute Extractor.supported_content_type?(nil)
+      refute Extractor.supported_content_type?("")
+      refute Extractor.supported_content_type?("video/mp4")
+      refute Extractor.supported_content_type?("audio/mpeg")
+      refute Extractor.supported_content_type?("application/octet-stream")
+      refute Extractor.supported_content_type?("application/zip")
+      # Pinned deliberately: the feature ticket claimed application/json was
+      # extractable. It has no dispatch clause, so it is not.
+      refute Extractor.supported_content_type?("application/json")
+    end
+
+    # Coupling test: proves the predicate agrees with the real dispatcher
+    # rather than with a copy of it. If someone reintroduces a hand-typed
+    # list that drifts, a type answers `true` here while the dispatcher
+    # still rejects it, and this fails.
+    #
+    # GDoc is excluded because it is not in `@bytes_overload_modules` —
+    # it accepts a FileRow only, so `extract/2` legitimately answers
+    # `:unsupported_content_type` for it regardless of the predicate.
+    test "no supported content type is rejected by the real dispatcher" do
+      Application.delete_env(:platform, :files_service)
+
+      for ct <- @supported -- ["application/vnd.google-apps.document"] do
+        refute match?({:error, {:unsupported_content_type, ^ct}}, Extractor.extract(<<0>>, ct)),
+               "predicate says #{ct} is supported but extract/2 rejected it as unsupported"
+      end
+    end
+  end
 end

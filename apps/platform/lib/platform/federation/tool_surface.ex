@@ -302,16 +302,16 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{files: [%{id, name, original_filename, content_type, byte_size, inserted_at, ingest_status}], project_id, count}",
+          "%{files: [%{id, name, original_filename, content_type, byte_size, inserted_at, ingest_status, ingest_intent, agent_content_available, agent_content_note}], project_id, count}",
         limitations:
-          "Tenant-pinned agents calling with a sibling-org project return an `unauthorized: …` envelope (NOT an empty list, so existence can't be probed). Unknown project_id returns `:not_found`. Files still ingesting carry `ingest_status: \"pending\"` — call file_get_text only on \"ingested\" rows.",
+          "Tenant-pinned agents calling with a sibling-org project return an `unauthorized: …` envelope (NOT an empty list, so existence can't be probed). Unknown project_id returns `:not_found`. Files still ingesting carry `ingest_status: \"pending\"` — call file_get_text only on \"ingested\" rows. Files marked human-only (`ingest_intent: \"human_only\"`) ARE listed here, deliberately: their content is never retrievable by an agent (`agent_content_available: false`, and `file_get_text` returns `:human_only`), but the file exists and a person can read it. Surface such a file to the human by name and quote `agent_content_note` — do NOT tell them no such file exists.",
         when_to_use:
           "When you need to enumerate the documents in a project — e.g. before calling file_get_text to read one, or to surface the right file to the user."
       },
       %{
         name: "file_get_text",
         description:
-          "Fetch the extracted text body for a single file (ADR 0042). Returns the full body or — when `page` is supplied and the file has a per-page split (PDF, gdoc) — that page only. Reads from the `platform_file_texts` cache populated at ingest time; no re-extraction. Set `binary: true` to skip the text cache and return the raw bytes base64-encoded — agents almost always want text, so reach for `binary: true` only when handing the file off to another tool that needs the actual bytes (zip, image, raw blob the extractor can't read).",
+          "Fetch the extracted text body for a single file (ADR 0042). Returns the full body or — when `page` is supplied and the file has a per-page split (PDF, gdoc) — that page only. Reads from the `platform_file_texts` cache populated at ingest time; no re-extraction. Set `binary: true` to skip the text cache and return the raw bytes base64-encoded — agents almost always want text, so reach for `binary: true` only when handing the file off to another tool that needs the actual bytes (zip, image, raw blob the extractor can't read). Files marked human-only (`ingest_intent: \"human_only\"`) ARE listed by file_list and file_get_metadata, but are never readable here — neither as text nor as bytes; both branches return `:human_only`.",
         parameters: %{
           file_id: %{
             type: "string",
@@ -328,13 +328,13 @@ defmodule Platform.Federation.ToolSurface do
             type: "boolean",
             required: false,
             description:
-              "Default `false`. When `true`, skip the extracted-text lookup and return the raw bytes as base64 in `data_base64`. Capped at 25 MB — larger files return `:too_large`. Use sparingly: agents nearly always want text."
+              "Default `false`. When `true`, skip the extracted-text lookup and return the raw bytes as base64 in `data_base64`. Capped at 25 MB — larger files return `:too_large`. Use sparingly: agents nearly always want text. Does NOT bypass the human-only audience gate — a `human_only` file returns `:human_only` here too."
           }
         },
         returns:
           "Default: %{file_id, content_type, text, page?, total_pages?, original_filename}. With `binary: true`: %{file_id, content_type, byte_size, data_base64, original_filename}.",
         limitations:
-          "Authorization mirrors file_list. Unknown `file_id` → `:not_found`. File not yet ingested / extraction failed → `:no_text_available` (consider retrying with `binary: true` if you just need the raw bytes). `page` out of range → `:page_out_of_range`. Tenant-pinned agents reading a sibling-org file → `unauthorized: …`. `binary: true` over 25 MB → `:too_large` (a presigned-download path is planned but not yet shipped).",
+          "Authorization mirrors file_list. Unknown `file_id` → `:not_found`. File not yet ingested / extraction failed → `:no_text_available` (consider retrying with `binary: true` if you just need the raw bytes). A file marked human-only → `:human_only` from BOTH branches: its contents are deliberately withheld from agents, and it is also absent from file_search hits. That is a decision, not a fault, and `binary: true` is not a way around it — the file is still listed by file_list, so tell the human it exists and ask them to describe it. `page` out of range → `:page_out_of_range`. Tenant-pinned agents reading a sibling-org file → `unauthorized: …`. `binary: true` over 25 MB → `:too_large` (a presigned-download path is planned but not yet shipped).",
         when_to_use:
           "When you have a file_id (e.g. from file_list or a memory_search hit with `memory_type=document`) and want to read its extracted text — either the whole body or one specific page. Pass `binary: true` for the rare case of needing the raw bytes (e.g. handing a zip off to another tool) — agents nearly always want text."
       },
@@ -350,9 +350,9 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{file_id, project_id, org_id, name, original_filename, content_type, byte_size, content_hash, ingest_status, uploaded_by_user_id, inserted_at, updated_at}",
+          "%{file_id, project_id, org_id, name, original_filename, content_type, byte_size, content_hash, ingest_status, ingest_intent, agent_content_available, agent_content_note, uploaded_by_user_id, inserted_at, updated_at}",
         limitations:
-          "Authorization mirrors file_list / file_get_text. Unknown `file_id` → `:not_found`. Tenant-pinned agents reading a sibling-org file → `unauthorized: …`. `storage_key` is intentionally omitted — it's an internal handle into the object store, not a stable public identifier.",
+          "Authorization mirrors file_list / file_get_text. Unknown `file_id` → `:not_found`. Tenant-pinned agents reading a sibling-org file → `unauthorized: …`. `storage_key` is intentionally omitted — it's an internal handle into the object store, not a stable public identifier. Metadata is returned for human-only files too (`ingest_intent: \"human_only\"`, `agent_content_available: false`): the row is never hidden, only its content is withheld, so tell the human about the file and quote `agent_content_note` rather than denying it exists.",
         when_to_use:
           "When you have a file_id and want to know the row's properties (uploader, size, MIME-type, ingest status) without pulling the extracted text body."
       },
@@ -7160,6 +7160,7 @@ defmodule Platform.Federation.ToolSurface do
          file when not is_nil(file) <- Platform.Files.get_file(file_id),
          {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_text"),
          :ok <- authorize_file_access(context, project),
+         :ok <- ensure_content_readable_by_agents(file),
          text_row when not is_nil(text_row) <- Platform.Files.fetch_extracted_text(file.id) do
       page = Map.get(args, "page")
       respond_with_text(file, text_row, page)
@@ -7180,7 +7181,7 @@ defmodule Platform.Federation.ToolSurface do
                code: :no_text_available,
                recoverable: true,
                suggestion:
-                 "The file may still be ingesting (ingest_status=\"pending\") or extraction may have failed. Re-check ingest_status via file_list before retrying, or pass `binary: true` to fetch the raw bytes instead."
+                 "The file may still be ingesting (ingest_status=\"pending\") or extraction may have failed. Re-check ingest_status via file_list before retrying. `binary: true` is NOT a way around this for a human-only file — both branches apply the same audience gate."
              }}
         end
 
@@ -7189,15 +7190,59 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # Second, independent barrier over `ingest_intent` (task 019fd033).
+  # `Platform.Files.withdraw_from_agent_context/1` already DELETES the
+  # cached text, so this looks redundant — it is not. Two cases it and
+  # only it covers: a file marked human_only at upload, which never had
+  # a text row for the delete to remove; and a text row arriving LATER
+  # for a human_only file (a dedup copy from a byte-identical sibling).
+  # Both barriers are required; neither subsumes the other.
+  #
+  # Applied by BOTH branches of file_get_text — see file_get_text_binary/2.
+  #
+  # No catch-all clause: an unrecognised intent raises rather than
+  # falling through to "readable". Serving a body because of an
+  # unrecognised enum value is exactly the failure being guarded.
+  defp ensure_content_readable_by_agents(%Platform.Files.File{ingest_intent: "attempt"}), do: :ok
+
+  defp ensure_content_readable_by_agents(%Platform.Files.File{
+         ingest_intent: "human_only",
+         id: _file_id
+       }) do
+    {:error,
+     %{
+       error:
+         "file_get_text: file is marked human-only; its contents are not available to agents",
+       code: :human_only,
+       recoverable: false,
+       suggestion:
+         "The file exists and is visible to people. Tell the user you can see it (name, type, size, uploader) but cannot read it, and ask them to describe or summarise it for you."
+     }}
+  end
+
   # `binary: true` branch — skip the extracted-text cache and stream the
   # bytes back base64-encoded. Capped at 25 MB to mirror
   # `attachment.get_inline`; bigger files will need a presigned download
   # path (deferred follow-up).
+  #
+  # GATED on `ingest_intent`, using the SAME barrier as the text branch.
+  # An earlier revision left this branch open on the reasoning that raw
+  # bytes are the "human audience" path. They are not: this whole module
+  # IS the agent surface. A human downloads through the Files UI, never
+  # through file_get_text — so every caller here is an agent, and
+  # withholding the extracted text while serving byte-identical content
+  # to that same caller is not a policy, it is a one-argument bypass.
+  # Both branches gate, or neither does anything.
+  #
+  # Gate placement is load-bearing: it sits AFTER authorize_file_access/2.
+  # Before it, an out-of-org caller could distinguish :human_only from
+  # `unauthorized` and use it as an existence oracle.
   defp file_get_text_binary(args, context) do
     with {:ok, file_id} <- require_string(args, "file_id", "file_get_text"),
          %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
          {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_text"),
          :ok <- authorize_file_access(context, project),
+         :ok <- ensure_content_readable_by_agents(file),
          :ok <- check_inline_file_read_size(file.byte_size),
          {:ok, bytes} <- read_file_bytes(file) do
       {:ok,
@@ -7780,6 +7825,8 @@ defmodule Platform.Federation.ToolSurface do
   defp normalize_limit(_value, default, _max), do: default
 
   defp file_summary(%Platform.Files.File{} = file) do
+    {available, note} = agent_content_availability(file)
+
     %{
       id: file.id,
       name: file.name || file.original_filename,
@@ -7787,14 +7834,57 @@ defmodule Platform.Federation.ToolSurface do
       content_type: file.content_type,
       byte_size: file.byte_size,
       ingest_status: file.ingest_status,
+      ingest_intent: file.ingest_intent,
+      agent_content_available: available,
+      agent_content_note: note,
       inserted_at: format_datetime(file.inserted_at)
     }
   end
+
+  # Derives the agent-facing readability of a file row from the
+  # intent/status pair. ONE helper, shared by `file_summary/1` and
+  # `file_metadata/1` — two copies of this table would drift, and the
+  # drift would be invisible (both surfaces keep returning a boolean).
+  #
+  # The note is the point. A human-only row surfaced as a bare
+  # `false` reads to an agent like a broken file; with the note it reads
+  # like a decision, and the agent tells the human about the file rather
+  # than denying it exists.
+  #
+  # No catch-all clause. An unrecognised intent/status pair raises
+  # `FunctionClauseError` rather than defaulting to readable — a silent
+  # default here would advertise content that is deliberately withheld,
+  # and file no bug report about the enum value that caused it.
+  @spec agent_content_availability(Platform.Files.File.t()) :: {boolean(), String.t() | nil}
+  defp agent_content_availability(%Platform.Files.File{ingest_intent: "human_only"}) do
+    {false,
+     "This file is marked human-only: its contents are not extracted and are not readable by agents. The file exists and a person can see it — ask them about it rather than assuming it is absent."}
+  end
+
+  defp agent_content_availability(%Platform.Files.File{
+         ingest_intent: "attempt",
+         ingest_status: "ingested"
+       }),
+       do: {true, nil}
+
+  defp agent_content_availability(%Platform.Files.File{
+         ingest_intent: "attempt",
+         ingest_status: "pending"
+       }),
+       do: {false, "Extraction has not finished yet; retry shortly."}
+
+  defp agent_content_availability(%Platform.Files.File{
+         ingest_intent: "attempt",
+         ingest_status: "failed"
+       }),
+       do: {false, "Extraction failed for this file; its text is unavailable."}
 
   # Richer single-row view returned by `file_get_metadata`. Intentionally
   # omits `storage_key` (internal handle into the object-store adapter) and
   # the extracted text body (use `file_get_text` for that).
   defp file_metadata(%Platform.Files.File{} = file) do
+    {available, note} = agent_content_availability(file)
+
     %{
       file_id: file.id,
       project_id: file.project_id,
@@ -7805,6 +7895,9 @@ defmodule Platform.Federation.ToolSurface do
       byte_size: file.byte_size,
       content_hash: file.content_hash,
       ingest_status: file.ingest_status,
+      ingest_intent: file.ingest_intent,
+      agent_content_available: available,
+      agent_content_note: note,
       uploaded_by_user_id: file.uploaded_by_user_id,
       inserted_at: format_datetime(file.inserted_at),
       updated_at: format_datetime(file.updated_at)
@@ -7827,6 +7920,22 @@ defmodule Platform.Federation.ToolSurface do
     score = Map.get(memory_result, :score) || Map.get(memory_result, "score")
 
     case entry_id && Platform.Files.get_file(entry_id) do
+      # The generic `memory_search` tool was checked and is deliberately
+      # NOT gated here: it runs through Platform.Org.Wiki.Search, whose
+      # hydration only resolves page / journal / message / task ids, so a
+      # document-tagged hit for a file id is dropped before any body is
+      # read (measured in tool_surface_files_test.exs). That is a lookup
+      # miss rather than a decision, and is owned by a separate ticket —
+      # don't re-derive it.
+      #
+      # human_only clause FIRST — a withdrawn file must drop out of the
+      # hit list even when it is still present in the index (the scrub is
+      # best-effort after commit, so a memory-service outage leaves the
+      # entry there). Dropping it here also suppresses the snippet, which
+      # would otherwise re-serve the very body being withheld.
+      %Platform.Files.File{project_id: ^project_id, ingest_intent: "human_only"} ->
+        nil
+
       %Platform.Files.File{project_id: ^project_id} = file ->
         %{
           file_id: file.id,

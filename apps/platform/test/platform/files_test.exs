@@ -3,8 +3,11 @@ defmodule Platform.FilesTest do
 
   import Platform.TenancyFixtures
 
+  import ExUnit.CaptureLog
+
   alias Platform.Files
   alias Platform.Files.File, as: PlatformFile
+  alias Platform.Files.Ingester
   alias Platform.Tasks
 
   describe "create_file/1" do
@@ -303,6 +306,296 @@ defmodule Platform.FilesTest do
   # are covered in `Platform.Files.SoftDeleteTest`; permanent removal in
   # `Platform.Files.PurgerTest`.
 
+  describe "default ingest intent at create time (task 019fd033 stage 2)" do
+    setup do
+      root =
+        Path.join(
+          System.tmp_dir!(),
+          "platform-files-default-intent-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(root)
+      previous_root = Application.get_env(:platform, :chat_attachments_root)
+      Application.put_env(:platform, :chat_attachments_root, root)
+
+      on_exit(fn ->
+        File.rm_rf!(root)
+
+        if previous_root,
+          do: Application.put_env(:platform, :chat_attachments_root, previous_root),
+          else: Application.delete_env(:platform, :chat_attachments_root)
+      end)
+
+      {:ok, project} = Tasks.create_project(%{name: "Default Intent #{System.unique_integer()}"})
+      {:ok, project: project, root: root}
+    end
+
+    test "round trip: an extractable file reaches the ingester, an unextractable one does not",
+         %{project: project, root: root} do
+      attach_telemetry([
+        [:platform, :files, :ingested, :start],
+        [:platform, :files, :ingested, :stop],
+        [:platform, :files, :ingested, :exception]
+      ])
+
+      pdf = create_stored_file(project, root, "application/pdf", "doc.pdf", "%PDF-1.4 body")
+      video = create_stored_file(project, root, "video/mp4", "clip.mp4", "not really mp4")
+
+      # The derived defaults, read back off the persisted rows.
+      assert pdf.ingest_intent == "attempt"
+      assert video.ingest_intent == "human_only"
+      assert video.ingest_status == "not_attempted"
+
+      capture_log(fn ->
+        assert :ok = Ingester.ingest_async(pdf)
+        assert :ok = Ingester.ingest_async(video)
+
+        # POSITIVE CONTROL: the PDF really was handed to the pipeline.
+        # Without this, "no event for the video" would pass even if the
+        # ingester were never wired up at all.
+        assert_receive {:telemetry, [:platform, :files, :ingested, :start], _, %{file_id: id}},
+                       2_000
+
+        assert id == pdf.id
+
+        # Drain the PDF's terminal event so its task is done before the
+        # sandbox connection goes away. Extraction of a fake PDF fails;
+        # either resolution is fine, we only care that it finished.
+        assert_receive {:telemetry, [:platform, :files, :ingested, terminal], _, %{file_id: ^id}},
+                       5_000
+
+        assert terminal in [:stop, :exception]
+
+        # REFUTATION: no ingest event ever carried the video's id.
+        video_id = video.id
+        refute_received {:telemetry, [:platform, :files, :ingested, _], _, %{file_id: ^video_id}}
+      end)
+
+      assert Files.get_file(video.id).ingest_status == "not_attempted"
+    end
+
+    test "image/png defaults to attempt, application/json defaults to human_only",
+         %{project: project} do
+      assert Files.default_ingest_intent("image/png") == "attempt"
+      assert Files.default_ingest_intent("application/json") == "human_only"
+
+      assert create_file!(project, %{content_type: "image/png"}).ingest_intent == "attempt"
+
+      json = create_file!(project, %{content_type: "application/json"})
+      assert json.ingest_intent == "human_only"
+      assert json.ingest_status == "not_attempted"
+    end
+
+    test "a nil content type defaults to human_only", %{project: project} do
+      assert Files.default_ingest_intent(nil) == "human_only"
+
+      # A row with no content_type is unrepresentable — `content_type` is
+      # required by File.changeset/2 — so the nil case only ever fires
+      # through the derivation itself. Pinned here so a future relaxation
+      # of that validation does not silently start creating "attempt"
+      # rows for typeless uploads: the derived intent is computed and
+      # carried into the changeset either way.
+      assert {:error, changeset} = Files.create_file(default_attrs(project, %{content_type: nil}))
+      assert %{content_type: ["can't be blank"]} = errors_on(changeset)
+      assert changeset.changes.ingest_intent == "human_only"
+      assert changeset.changes.ingest_status == "not_attempted"
+    end
+
+    test "an explicit intent beats the derived one (atom keys)", %{project: project} do
+      file =
+        create_file!(project, %{content_type: "application/pdf", ingest_intent: "human_only"})
+
+      assert file.ingest_intent == "human_only"
+      assert file.ingest_status == "not_attempted"
+    end
+
+    test "an explicit intent beats the derived one (string keys)", %{project: project} do
+      assert {:ok, file} =
+               Files.create_file(%{
+                 "project_id" => project.id,
+                 "content_type" => "application/pdf",
+                 "byte_size" => 3,
+                 "storage_key" => "files/#{project.id}/s/explicit.pdf",
+                 "content_hash" => String.duplicate("7", 64),
+                 "ingest_intent" => "human_only"
+               })
+
+      assert file.ingest_intent == "human_only"
+      assert file.ingest_status == "not_attempted"
+
+      # ...and the string-key path still derives when nothing is given.
+      assert {:ok, derived} =
+               Files.create_file(%{
+                 "project_id" => project.id,
+                 "content_type" => "application/pdf",
+                 "byte_size" => 3,
+                 "storage_key" => "files/#{project.id}/s/derived.pdf",
+                 "content_hash" => String.duplicate("8", 64)
+               })
+
+      assert derived.ingest_intent == "attempt"
+    end
+
+    defp create_file!(project, overrides) do
+      {:ok, file} = Files.create_file(default_attrs(project, overrides))
+      file
+    end
+
+    defp default_attrs(project, overrides) do
+      Map.merge(
+        %{
+          project_id: project.id,
+          content_type: "text/plain",
+          byte_size: 4,
+          storage_key: "files/#{project.id}/d/#{System.unique_integer([:positive])}.bin",
+          content_hash:
+            :crypto.hash(:sha256, "#{System.unique_integer([:positive])}")
+            |> Base.encode16(case: :lower)
+        },
+        overrides
+      )
+    end
+
+    defp create_stored_file(project, root, content_type, filename, body) do
+      storage_key = "files/#{project.id}/#{Ecto.UUID.generate()}/#{filename}"
+      abs_path = Path.join(root, storage_key)
+      File.mkdir_p!(Path.dirname(abs_path))
+      File.write!(abs_path, body)
+
+      create_file!(project, %{
+        content_type: content_type,
+        name: filename,
+        original_filename: filename,
+        byte_size: byte_size(body),
+        storage_key: storage_key,
+        content_hash: :crypto.hash(:sha256, storage_key <> body) |> Base.encode16(case: :lower)
+      })
+    end
+
+    defp attach_telemetry(events) do
+      handler_id = "files-default-intent-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach_many(
+        handler_id,
+        events,
+        fn name, measurements, metadata, _config ->
+          send(test_pid, {:telemetry, name, measurements, metadata})
+        end,
+        %{}
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+      :ok
+    end
+  end
+
+  describe "ingest_intent (task 019fd02d stage 1)" do
+    test "a changeset with an unknown intent is invalid" do
+      {:ok, project} = Tasks.create_project(%{name: "Intent Unknown"})
+
+      assert {:error, changeset} =
+               Files.create_file(%{
+                 project_id: project.id,
+                 content_type: "text/plain",
+                 byte_size: 1,
+                 storage_key: "files/#{project.id}/i/unknown.txt",
+                 content_hash: String.duplicate("d", 64),
+                 ingest_intent: "definitely_not_an_intent"
+               })
+
+      assert %{ingest_intent: ["is invalid"]} = errors_on(changeset)
+    end
+
+    test "the DB check constraint rejects a forged intent inserted via raw SQL" do
+      {:ok, project} = Tasks.create_project(%{name: "Intent Forged"})
+
+      {:ok, file} =
+        Files.create_file(%{
+          project_id: project.id,
+          content_type: "text/plain",
+          byte_size: 1,
+          storage_key: "files/#{project.id}/i/forged.txt",
+          content_hash: String.duplicate("e", 64)
+        })
+
+      # Bypasses the changeset entirely: if the Elixir list were the only
+      # guard, this UPDATE would succeed and the test would fail.
+      assert_raise Postgrex.Error, ~r/platform_files_ingest_intent_check/, fn ->
+        Repo.query!(
+          "UPDATE platform_files SET ingest_intent = $1 WHERE id = $2",
+          ["definitely_not_an_intent", Ecto.UUID.dump!(file.id)]
+        )
+      end
+    end
+
+    test "a row inserted without an intent reads back as \"attempt\"" do
+      {:ok, project} = Tasks.create_project(%{name: "Intent Default"})
+
+      {:ok, file} =
+        Files.create_file(%{
+          project_id: project.id,
+          content_type: "text/plain",
+          byte_size: 1,
+          storage_key: "files/#{project.id}/i/default.txt",
+          content_hash: String.duplicate("f", 64)
+        })
+
+      assert Files.get_file(file.id).ingest_intent == "attempt"
+    end
+
+    test "human_only intent round-trips" do
+      {:ok, project} = Tasks.create_project(%{name: "Intent Human Only"})
+
+      {:ok, file} =
+        Files.create_file(%{
+          project_id: project.id,
+          content_type: "text/plain",
+          byte_size: 1,
+          storage_key: "files/#{project.id}/i/human.txt",
+          content_hash: String.duplicate("a", 64),
+          ingest_intent: "human_only",
+          ingest_status: "not_attempted"
+        })
+
+      reloaded = Files.get_file(file.id)
+      assert reloaded.ingest_intent == "human_only"
+      assert reloaded.ingest_status == "not_attempted"
+    end
+
+    test "not_attempted still requires a content_hash" do
+      # `not_attempted` is a finalized status: the bytes are stored for
+      # humans, so the hash IS known. Pinning the existing
+      # `validate_content_hash_when_finalized/1` rule rather than loosening it.
+      {:ok, project} = Tasks.create_project(%{name: "Intent No Hash"})
+
+      assert {:error, changeset} =
+               Files.create_file(%{
+                 project_id: project.id,
+                 content_type: "text/plain",
+                 byte_size: 1,
+                 storage_key: "files/#{project.id}/i/nohash.txt",
+                 content_hash: nil,
+                 ingest_intent: "human_only",
+                 ingest_status: "not_attempted"
+               })
+
+      assert %{content_hash: ["is required once ingest_status is not pending"]} =
+               errors_on(changeset)
+    end
+
+    test "valid_ingest_intents/0 and valid_ingest_statuses/0 pin the vocabulary" do
+      assert PlatformFile.valid_ingest_intents() == ["attempt", "human_only"]
+
+      assert PlatformFile.valid_ingest_statuses() == [
+               "pending",
+               "ingested",
+               "failed",
+               "not_attempted"
+             ]
+    end
+  end
+
   describe "update_ingest_status/2" do
     test "flips a file row through the lifecycle" do
       {:ok, project} = Tasks.create_project(%{name: "Status Lifecycle"})
@@ -326,6 +619,159 @@ defmodule Platform.FilesTest do
 
       assert {:ok, %{ingest_status: "failed"}} =
                Files.update_ingest_status(reloaded, "failed")
+    end
+
+    test "accepts not_attempted — the human_only terminal state" do
+      {:ok, project} = Tasks.create_project(%{name: "Status Not Attempted"})
+
+      {:ok, file} =
+        Files.create_file(%{
+          project_id: project.id,
+          content_type: "text/plain",
+          byte_size: 1,
+          storage_key: "files/#{project.id}/na/s.txt",
+          content_hash: String.duplicate("d", 64)
+        })
+
+      assert {:ok, %{ingest_status: "not_attempted"}} =
+               Files.update_ingest_status(file, "not_attempted")
+
+      assert Files.get_file(file.id).ingest_status == "not_attempted"
+    end
+  end
+
+  describe "set_ingest_intent/2" do
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Intent Writes"})
+
+      {:ok, file} =
+        Files.create_file(%{
+          project_id: project.id,
+          content_type: "text/plain",
+          byte_size: 1,
+          storage_key: "files/#{project.id}/in/i.txt",
+          content_hash: String.duplicate("e", 64)
+        })
+
+      %{project: project, target: file}
+    end
+
+    test "flips human_only -> attempt and back", %{target: file} do
+      file = file
+      assert file.ingest_intent == "attempt"
+
+      assert {:ok, %{ingest_intent: "human_only"}} =
+               Files.set_ingest_intent(file, "human_only")
+
+      reloaded = Files.get_file(file.id)
+      assert reloaded.ingest_intent == "human_only"
+
+      assert {:ok, %{ingest_intent: "attempt"}} =
+               Files.set_ingest_intent(reloaded, "attempt")
+
+      assert Files.get_file(file.id).ingest_intent == "attempt"
+    end
+
+    test "leaves ingest_status byte-identical across the call", %{target: file} do
+      # Intent and status are two fields on purpose. If writing the intent
+      # moves the status, they have collapsed into one and the enqueue
+      # choke point has silently migrated into this function.
+      {:ok, file} = Files.update_ingest_status(file, "ingested")
+      before_status = file.ingest_status
+
+      assert {:ok, flipped} = Files.set_ingest_intent(file, "human_only")
+      assert flipped.ingest_status == before_status
+      assert Files.get_file(file.id).ingest_status == before_status
+
+      assert {:ok, flipped_back} = Files.set_ingest_intent(flipped, "attempt")
+      assert flipped_back.ingest_status == before_status
+      assert Files.get_file(file.id).ingest_status == before_status
+    end
+
+    test "raises on an unknown intent rather than defaulting", %{target: file} do
+      assert_raise FunctionClauseError, fn ->
+        Files.set_ingest_intent(file, "maybe_later")
+      end
+    end
+  end
+
+  describe "list_files_for_project/2 ingest filters" do
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Ingest Filters"})
+
+      # Four rows, so that neither a filter returning EVERYTHING (4) nor a
+      # filter returning one arbitrary row (1) can pass an assertion that
+      # demands exactly the two human_only ids. The two rows on each side
+      # carry different statuses, so an implementation that filters on
+      # status while claiming to filter on intent also fails.
+      make = fn slug, intent, status ->
+        {:ok, f} =
+          Files.create_file(%{
+            project_id: project.id,
+            original_filename: "#{slug}.txt",
+            content_type: "text/plain",
+            byte_size: 1,
+            storage_key: "files/#{project.id}/#{slug}/#{slug}.txt",
+            content_hash: String.duplicate(String.first(slug), 64)
+          })
+
+        {:ok, f} = Files.set_ingest_intent(f, intent)
+        {:ok, f} = Files.update_ingest_status(f, status)
+        Process.sleep(2)
+        f
+      end
+
+      attempt_pending = make.("1attempt", "attempt", "pending")
+      attempt_ingested = make.("2attempt", "attempt", "ingested")
+      human_not_attempted = make.("3human", "human_only", "not_attempted")
+      human_failed = make.("4human", "human_only", "failed")
+
+      %{
+        project: project,
+        attempt_pending: attempt_pending,
+        attempt_ingested: attempt_ingested,
+        human_not_attempted: human_not_attempted,
+        human_failed: human_failed
+      }
+    end
+
+    test "ingest_intent: human_only returns only the human_only rows", ctx do
+      ids =
+        ctx.project.id
+        |> Files.list_files_for_project(ingest_intent: "human_only")
+        |> Enum.map(& &1.id)
+        |> Enum.sort()
+
+      assert ids == Enum.sort([ctx.human_not_attempted.id, ctx.human_failed.id])
+    end
+
+    test "ingest_intent: attempt returns only the attempt rows", ctx do
+      ids =
+        ctx.project.id
+        |> Files.list_files_for_project(ingest_intent: "attempt")
+        |> Enum.map(& &1.id)
+        |> Enum.sort()
+
+      assert ids == Enum.sort([ctx.attempt_pending.id, ctx.attempt_ingested.id])
+    end
+
+    test "ingest_status filters independently of intent", ctx do
+      assert [%{id: id}] =
+               Files.list_files_for_project(ctx.project.id, ingest_status: "not_attempted")
+
+      assert id == ctx.human_not_attempted.id
+
+      assert [%{id: ingested_id}] =
+               Files.list_files_for_project(ctx.project.id, ingest_status: "ingested")
+
+      assert ingested_id == ctx.attempt_ingested.id
+    end
+
+    test "nil options apply no filter", ctx do
+      all =
+        Files.list_files_for_project(ctx.project.id, ingest_intent: nil, ingest_status: nil)
+
+      assert length(all) == 4
     end
   end
 
