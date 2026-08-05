@@ -576,6 +576,167 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
     end
   end
 
+  # ── task 019fb955-f8b1 rework: the meeting's own chat space ─────────────
+  #
+  # THE RULE THIS BLOCK EXISTS FOR: if you are invited to the meeting, you have
+  # access to the chat for that meeting.
+  #
+  # It did not hold. `Meetings.create_meeting/1` mints the bound chat space
+  # with no `:org_id`, so `org_id IS NULL`; `resolve_space/2` looked the slug up
+  # ORG-SCOPED, and `where s.org_id == ^org_id` cannot match NULL; and the slug
+  # is `meeting-<uuid>`, not a bare UUID, so the UUID fallback missed too. The
+  # plug answered nil and denied — while `Chat.participant?/2` was true the
+  # whole time and was NEVER CONSULTED, because resolution had already
+  # answered. That is resolution doing authorization, and doing it wrong.
+  #
+  # The fix does not widen the gate: `authorized_space?/2` still decides, and
+  # it still requires a real `chat_participants` row or the DM allowlist. What
+  # changed is that resolution now FINDS the row so the authorizer gets to run.
+  describe "external users — the chat space bound to a meeting" do
+    setup do
+      meeting = meeting!()
+      space = Chat.get_space(meeting.chat_space_id)
+
+      # ANTI-VACUITY, both halves. If either of these stops holding, this block
+      # is exercising some other resolution path and proves nothing about the
+      # bug: the org-scoped lookup has to MISS (org_id is NULL) and the
+      # bare-UUID fallback has to MISS (the slug is not a UUID).
+      assert is_nil(space.org_id),
+             "meeting spaces are minted org-less; a non-nil org_id here means " <>
+               "the root fix landed and this test now proves nothing"
+
+      refute Platform.UUID.valid?(space.slug)
+      assert String.starts_with?(space.slug, "meeting-")
+
+      %{meeting: meeting, meeting_space: space}
+    end
+
+    test "an INVITED member reaches their own meeting's chat space", ctx do
+      invite!(ctx.meeting, ctx.ext_user)
+      join!(ctx.meeting_space, ctx.ext_user.id)
+
+      # The three predicates the reviewer measured true on this exact row while
+      # the plug denied it. Assert them, so a failure downstream of resolution
+      # cannot be mistaken for the resolution bug.
+      assert Chat.participant?(ctx.meeting_space.id, ctx.ext_user.id)
+
+      conn =
+        run_on_host(
+          "/chat/" <> ctx.meeting_space.slug,
+          "chat.example.com",
+          ctx.ext_user,
+          ctx.ext_membership
+        )
+
+      refute conn.halted, "an invited member was denied their own meeting's chat"
+    end
+
+    # THE GATE IS NOT WIDENED. Resolution finding the row is not admission:
+    # without a participant row the same request is still 403, so what the
+    # fallback restored is the authorizer's turn, not access.
+    test "a NON-participant is still 403 on a meeting space that now resolves", ctx do
+      refute Chat.participant?(ctx.meeting_space.id, ctx.ext_user.id)
+
+      conn =
+        run_on_host(
+          "/chat/" <> ctx.meeting_space.slug,
+          "chat.example.com",
+          ctx.ext_user,
+          ctx.ext_membership
+        )
+
+      assert conn.halted
+      assert conn.status == 403
+    end
+
+    # ADR-0042 per-org channel-slug scoping is untouched. The unscoped retry is
+    # guarded by the reserved-prefix list, and a USER-CREATED channel slug can
+    # never carry one — so an org-less CHANNEL stays unresolvable even for a
+    # participant. This is the assertion that reds if someone "simplifies" the
+    # fallback by dropping the prefix guard.
+    test "the unscoped retry does NOT extend to non-reserved slugs", ctx do
+      n = System.unique_integer([:positive])
+
+      {:ok, orgless_channel} =
+        Chat.create_space(%{name: "Orgless #{n}", slug: "orgless-chan-#{n}", kind: "channel"})
+
+      join!(orgless_channel, ctx.ext_user.id)
+
+      refute Chat.reserved_slug_prefix?(orgless_channel.slug)
+      assert Chat.participant?(orgless_channel.id, ctx.ext_user.id)
+
+      conn =
+        run_on_host(
+          "/chat/" <> orgless_channel.slug,
+          "chat.example.com",
+          ctx.ext_user,
+          ctx.ext_membership
+        )
+
+      assert conn.halted,
+             "the reserved-prefix guard is gone — every org-less slug now resolves unscoped"
+
+      assert conn.status == 403
+    end
+
+    # NO EXISTENCE ORACLE ON THE NEW PATH. Validation 019fcefa-d885-7b59 pins
+    # the two 403s as byte-identical; the fallback adds a third way to reach a
+    # 403 (a meeting slug that resolves but is not yours) and a fourth (a
+    # meeting slug naming nothing), and both have to be indistinguishable from
+    # the existing pair in status, body, headers AND telemetry reason.
+    test "resolvable-but-unauthorized and no-such-meeting-slug are indistinguishable", ctx do
+      ref = attach_telemetry()
+
+      unauthorized =
+        run_on_host(
+          "/chat/" <> ctx.meeting_space.slug,
+          "chat.example.com",
+          ctx.ext_user,
+          ctx.ext_membership
+        )
+
+      assert_receive {:access_blocked, unauthorized_meta}
+
+      # A well-formed meeting slug that names no row at all — same prefix, so
+      # it takes the SAME fallback branch and misses there.
+      missing_slug = "meeting-" <> Ecto.UUID.generate()
+      refute Chat.get_space_by_slug(missing_slug, [])
+
+      missing =
+        run_on_host(
+          "/chat/" <> missing_slug,
+          "chat.example.com",
+          ctx.ext_user,
+          ctx.ext_membership
+        )
+
+      assert_receive {:access_blocked, missing_meta}
+
+      # And against the PRE-EXISTING pair the byte-identity validation pinned:
+      # an out-of-scope ordinary space.
+      out_of_scope =
+        run_on_host(
+          "/chat/" <> ctx.space_b.slug,
+          "chat.example.com",
+          ctx.ext_user,
+          ctx.ext_membership
+        )
+
+      assert_receive {:access_blocked, out_of_scope_meta}
+      detach_telemetry(ref)
+
+      for other <- [missing, out_of_scope] do
+        assert unauthorized.status == other.status
+        assert unauthorized.resp_body == other.resp_body
+        assert Enum.sort(unauthorized.resp_headers) == Enum.sort(other.resp_headers)
+      end
+
+      assert unauthorized_meta.reason == "external_out_of_scope"
+      assert missing_meta.reason == "external_out_of_scope"
+      assert out_of_scope_meta.reason == "external_out_of_scope"
+    end
+  end
+
   describe "defensive no-op" do
     test "no current_user assign → conn unchanged", _ctx do
       conn =

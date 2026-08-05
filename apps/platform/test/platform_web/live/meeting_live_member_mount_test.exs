@@ -365,4 +365,130 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
       refute has_element?(view, "[data-role=guest-identity-badge]")
     end
   end
+
+  # ── Top-bar width budget (task 019fb955-f8b1 rework) ───────────────────
+  #
+  # MEASURED DEFECT, not a style preference. At 390x844 the member badge
+  # rendered 125.9px wide and collapsed the meeting-title element to width
+  # ZERO, while the top bar's content still ran 457px inside a 390px viewport
+  # — clipping the Gallery (right edge 415.9) and Whiteboard (456.9)
+  # stage-mode buttons off-screen with no page scroll to recover them.
+  # Causally isolated by toggling the badge: title width with badge shown vs
+  # hidden was 390 -> 0/31, 430 -> 0/71, 768 -> 0/87.7, and 1280 ->
+  # 214.9/214.9. The badge is responsible below 1280 and innocent at 1280.
+  #
+  # WHY THESE ASSERTIONS AND NOT `has_element?`. A test asserting the title
+  # element EXISTS cannot fail here — it existed the whole time, at width 0.
+  # ExUnit cannot measure pixels, so what is pinned is the RENDERED CONSTRAINT
+  # that produces the width: which items may shrink, which may not, and the
+  # proportional cap on the badge. Those classes are the mechanism; delete any
+  # one of them and the geometry regresses to the measured defect.
+  #
+  # The constraints are PERCENTAGES, deliberately. A px floor inside a
+  # proportional layout is how an earlier defect in this stack happened: the
+  # floor cannot see the container it overflows.
+  describe "top-bar width budget" do
+    setup do
+      org = tenant_org!()
+      ext = create_user!("width")
+      {:ok, _} = Tenancy.mark_membership_external(%{user_id: ext.id, org_id: org.id})
+
+      meeting = meeting!(org)
+      {:ok, _invite} = Meetings.invite_external_user(meeting, ext.email)
+
+      %{org: org, ext: ext, meeting: meeting}
+    end
+
+    defp class_of(view, selector) do
+      view
+      |> element(selector)
+      |> render()
+      |> then(&Regex.run(~r/class="([^"]*)"/, &1))
+      |> case do
+        [_, class] -> class
+        _ -> flunk("no class attribute on #{selector}")
+      end
+    end
+
+    test "the title may shrink but owns a proportional share of the line",
+         %{conn: conn, ext: ext, meeting: meeting} do
+      {:ok, view, _html} =
+        conn |> login(ext) |> on_meet_host() |> live("/meetings/#{meeting.slug}")
+
+      class = class_of(view, "[data-role=meeting-title]")
+
+      # `min-w-0` alone is what MADE it collapsible to 0; the basis is what
+      # stops it being the residue of everyone else's fixed widths. Both, or
+      # the title is back to absorbing the entire deficit.
+      assert class =~ "min-w-0"
+      assert class =~ "basis-[50%]"
+      assert class =~ "grow"
+    end
+
+    test "the identity badge is capped proportionally and truncates",
+         %{conn: conn, ext: ext, meeting: meeting} do
+      {:ok, view, _html} =
+        conn |> login(ext) |> on_meet_host() |> live("/meetings/#{meeting.slug}")
+
+      class = class_of(view, "[data-role=member-identity-badge]")
+
+      # A `badge` is `white-space: nowrap`, so as a flex item its min-content
+      # width IS its full text width: without `min-w-0` it cannot shrink AT
+      # ALL, and the cap never binds.
+      assert class =~ "max-w-[25%]"
+      assert class =~ "min-w-0"
+      assert class =~ "overflow-hidden"
+
+      # And the cap has to actually clip rather than overflow the badge box.
+      assert view
+             |> element("[data-role=member-identity-badge] .truncate")
+             |> render() =~ ext.name
+    end
+
+    test "the stage-mode control may shrink, so its own scroller engages",
+         %{conn: conn, ext: ext, meeting: meeting} do
+      {:ok, view, _html} =
+        conn |> login(ext) |> on_meet_host() |> live("/meetings/#{meeting.slug}")
+
+      class = class_of(view, "[data-stage-mode-control]")
+
+      # This control always CLAIMED to scroll rather than overflow the bar.
+      # `flex-shrink-0` made that impossible — a shrink-0 item is never
+      # squeezed, so `overflow-x-auto` never engaged and Gallery/Whiteboard
+      # simply left the viewport. It is the largest block in the bar and the
+      # only real slack at 390px.
+      assert class =~ "overflow-x-auto"
+      assert class =~ "min-w-0"
+      assert class =~ "shrink"
+      refute class =~ "flex-shrink-0"
+      refute class =~ "shrink-0"
+    end
+
+    # BOTH SURFACES, one assertion. The guest badge is byte-identical markup
+    # in the same bar, so a guest on a phone could never read the meeting name
+    # either — this is a PRE-EXISTING defect the member badge merely carried
+    # to account holders, not a regression stage 5 introduced. Fixing only the
+    # member badge would leave the guest surface broken and this test red.
+    #
+    # Asserted against the template source because the two badges never render
+    # on the same mount (`@state == :in_meeting` vs `is_nil(@state)`), so no
+    # single DOM can compare them.
+    test "the guest badge carries the identical width treatment" do
+      source = File.read!("lib/platform_web/live/meeting_live.html.heex")
+
+      width_classes = ["min-w-0", "max-w-[25%]", "shrink", "overflow-hidden"]
+
+      for role <- ["guest-identity-badge", "member-identity-badge"],
+          klass <- width_classes do
+        [_, class_attr] =
+          Regex.run(
+            ~r/class="([^"]*)"\s*\n\s*data-role="#{role}"/,
+            source
+          ) || flunk("no class attribute found for #{role}")
+
+        assert class_attr =~ klass,
+               "#{role} is missing #{klass} — the width fix was applied to only one surface"
+      end
+    end
+  end
 end

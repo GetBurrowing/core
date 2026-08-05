@@ -191,6 +191,23 @@ config :platform,
 # authorization decision made from missing information.
 config :platform, :meet_host, System.get_env("MEET_HOST")
 
+# Request-time chat host, read here for the SAME reason `:meet_host` is, and
+# moved out of the `config_env() == :prod` block by task 019fb955-f8b1 rework.
+# Inside that block, exporting CHAT_HOST in dev or CI had NO effect on
+# `PlatformWeb.ExternalRedirect.chat_host_configured?/0`, so the external-chat
+# fence was silently inert everywhere but prod — and any dev/CI exercise of it
+# was VACUOUS: it passed an unarmed fence. A reviewer following the setup
+# instructions literally hit exactly that and had to inject the value as an OTP
+# app env to arm it.
+#
+# `check_origin` still reads its own `chat_host` binding inside the prod block;
+# that is deliberately untouched.
+#
+# Deliberately NO `||` default, matching `:meet_host` — a guessed host is an
+# authorization decision made from missing information. Unset means the fence
+# does not fire and `chat_url/1` stays host-relative.
+config :platform, :chat_host, System.get_env("CHAT_HOST")
+
 config :platform, :execution,
   proof_repo_path: proof_repo_path,
   local_run_root: proof_run_root,
@@ -255,13 +272,6 @@ if config_env() == :prod do
   # Phoenix.Socket.Transport.check_origin/2. Unset → no chat-host origin
   # allowlisted; external ChatLive socket connects fail 403.
   chat_host = System.get_env("CHAT_HOST")
-
-  # Expose CHAT_HOST to request-time code (not just check_origin). External
-  # users must be PINNED to this host: `PlatformWeb.ExternalRedirect.chat_url/1`
-  # reads `:chat_host` to build absolute `https://<chat_host>/chat` redirects
-  # (task 019f9257 — admission, grant-recovery, and the internal-/chat fence).
-  # Unset (dev/test/CI) → the helper falls back to host-relative `/chat`.
-  config :platform, :chat_host, chat_host
 
   config :platform, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 

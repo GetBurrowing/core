@@ -216,14 +216,51 @@
       />
 
       <%!-- ── Top bar ──────────────────────────────────────────────────────── --%>
-      <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
-        <%!-- Meeting name --%>
-        <div class="flex min-w-0 items-center gap-2">
+      <%!-- TOP-BAR WIDTH BUDGET (task 019fb955-f8b1 rework). Everything in this
+         header competes for one 390px-wide line on a phone, and before this
+         rework the competition had no rules: the meeting title was the ONLY
+         shrinkable item, so it absorbed the entire deficit and rendered at
+         width ZERO while the bar still overflowed to 457px inside a 390px
+         viewport, pushing two stage-mode buttons off-screen entirely.
+
+         Two things caused that, and both are fixed here:
+
+           1. The title sat next to a `flex-1` SPACER. A spacer with
+              `flex-basis: 0` contributes nothing to shrinking, so under
+              overflow it collapsed to 0 and handed the whole deficit to the
+              only `min-w-0` item — the title. The spacer is gone; the title
+              itself now grows (`grow basis-[50%]`), which right-aligns the
+              rest exactly as the spacer did while giving the title a real
+              proportional share to shrink FROM.
+
+           2. The stage-mode control claimed in its own comment to "scroll on
+              narrow viewports so it never overflows the top bar", but carried
+              `flex-shrink-0`, which made that impossible. It was the single
+              largest fixed block in the bar. It may now shrink and actually
+              use its `overflow-x-auto`.
+
+         Constraints are expressed in the LAYOUT'S OWN CURRENCY (percentages of
+         this flex line), NOT in pixels: a px floor inside a proportional
+         layout is how an earlier defect in this stack happened — the floor
+         cannot see the container it is overflowing.
+
+         The identity badges are INFORMATIONAL, the media buttons are
+         CONTROLS, so the badges yield first: capped at 25% and truncating,
+         while `[data-role="meeting-controls"]` keeps `flex-shrink-0` and its
+         44px touch targets. Acceptance bar: no horizontal PAGE scroll at
+         390px, every control reachable, and no element at width 0. --%>
+      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-base-300 bg-base-200/60 px-3 sm:gap-3">
+        <%!-- Meeting name. `grow basis-[50%] min-w-0` replaces the old
+           auto-width box + `flex-1` spacer pair: same right-alignment for
+           everything after it, but the title now has a proportional share of
+           the line instead of being the residue of everyone else's. --%>
+        <div
+          class="flex min-w-0 shrink grow basis-[50%] items-center gap-2"
+          data-role="meeting-title"
+        >
           <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
           <h1 class="truncate text-sm font-semibold">{@meeting.name}</h1>
         </div>
-
-        <div class="flex-1"></div>
 
         <%!-- Guest identity badge (task 019f498d stage 4). Only rendered on
            the guest surface (`chrome_mode == :none`) so the guest can see
@@ -239,13 +276,21 @@
            wrong noun — literally " (guest)" after an empty interpolation.
            `:state` is what actually distinguishes the two: the guest mount
            clause sets it, the account mount leaves it nil. --%>
+        <%!-- WIDTH: `max-w-[25%] min-w-0` + an inner `truncate`. This badge is
+           byte-identical markup to the member badge below, and it had the
+           SAME defect first: a `badge` sets `white-space: nowrap`, so as a
+           flex item its min-content width IS its full text width and it could
+           not shrink at all — it took its 126px off the top and the title
+           paid. A guest on a phone has never been able to read the meeting
+           name either; the member badge did not introduce this, it merely
+           carried it to account holders. Fixed on BOTH surfaces. --%>
         <span
           :if={@chrome_mode == :none and @state == :in_meeting}
-          class="badge badge-ghost gap-1 text-xs"
+          class="badge badge-ghost min-w-0 max-w-[25%] shrink gap-1 overflow-hidden text-xs"
           data-role="guest-identity-badge"
         >
-          <span class="hero-user size-3.5" aria-hidden="true"></span>
-          {@display_name} (guest)
+          <span class="hero-user size-3.5 flex-shrink-0" aria-hidden="true"></span>
+          <span class="truncate">{@display_name} (guest)</span>
         </span>
 
         <%!-- Member identity badge (task 019fb955-f8b1 stage 5). Sibling of
@@ -258,13 +303,18 @@
            resolves; `member_display_name/1` returns nil when there is no
            account behind the mount, and a badge naming nobody is worse
            than no badge. --%>
+        <%!-- WIDTH: identical treatment to the guest badge above — see the
+           note there. Measured at 390x844 before this rework: this badge was
+           125.9px and collapsed the meeting-title element to width 0 (390 →
+           0/31, 430 → 0/71, 768 → 0/87.7 with the badge shown vs hidden;
+           innocent at 1280, where 214.9/214.9 is unchanged). --%>
         <span
           :if={@chrome_mode == :none and is_nil(@state) and @display_name}
-          class="badge badge-ghost gap-1 text-xs"
+          class="badge badge-ghost min-w-0 max-w-[25%] shrink gap-1 overflow-hidden text-xs"
           data-role="member-identity-badge"
         >
-          <span class="hero-user size-3.5" aria-hidden="true"></span>
-          {@display_name}
+          <span class="hero-user size-3.5 flex-shrink-0" aria-hidden="true"></span>
+          <span class="truncate">{@display_name}</span>
         </span>
 
         <%!-- Local-media controls + Join/Leave CTA. Visual treatment
@@ -422,10 +472,20 @@
            the LV swaps `@current_stage_mode`. The active button gets the
            daisyui segmented-active treatment (`bg-base-200 text-primary`);
            switching is pure presentation — the other modes' underlying
-           state is untouched. The control wraps/scrolls on narrow
-           viewports so it never overflows the top bar. --%>
+           state is untouched.
+
+           The control scrolls on narrow viewports so it never overflows the
+           top bar — that was ALWAYS the claim here, and `flex-shrink-0` made
+           it false. A shrink-0 flex item cannot be squeezed, so
+           `overflow-x-auto` never engaged and the four buttons simply ran off
+           the right edge (measured at 390px: Gallery ending at 415.9,
+           Whiteboard at 456.9 — both outside the viewport and UNREACHABLE,
+           with no page scroll to recover them). `min-w-0 shrink` is what
+           makes the documented behaviour actually happen: the control gives
+           up width under pressure and its own scroller keeps every mode
+           reachable. --%>
         <div
-          class="join flex-shrink-0 overflow-x-auto"
+          class="join min-w-0 shrink overflow-x-auto"
           role="group"
           aria-label="Stage mode"
           data-stage-mode-control="active"

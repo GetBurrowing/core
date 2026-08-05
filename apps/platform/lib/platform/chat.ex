@@ -150,6 +150,40 @@ defmodule Platform.Chat do
     end
   end
 
+  # System-minted slug prefixes. Spaces behind these are created by
+  # orchestration code paths (meetings, task execution, DM/group creation) and
+  # MAY carry `org_id = NULL` — meeting and DM spaces are cross-org BY DESIGN,
+  # and exec spaces predate the org_id backfill. Any org-scoped slug lookup
+  # therefore CANNOT match them: `where s.org_id == ^org_id` never matches
+  # NULL.
+  #
+  # This list is the guard on every unscoped slug fallback, and it is the
+  # reason those fallbacks do not weaken ADR-0042 per-org channel scoping
+  # ("#general" in one tenant vs another): a USER-CREATED channel slug can
+  # never carry one of these prefixes, so it never reaches an unscoped lookup.
+  #
+  # Lives here, not in a caller, because two independent call sites need the
+  # SAME list — `ChatLive.system_prefix_fallback/1` (which renders the space)
+  # and `ExternalUserScope.resolve_space/2` (which admits the request to it).
+  # They drifted once already: the LiveView gained the fallback and the plug
+  # did not, so the plug denied an invited member their own meeting's chat
+  # before the authorizer ever ran. Do not re-inline a private copy.
+  @reserved_slug_prefixes ~w(meeting- task-exec- dm- group-)
+
+  @doc """
+  True when `slug` names a system-minted space (meeting, task-exec, DM, group).
+
+  Callers use this to decide whether an org-scoped slug miss may retry
+  unscoped. It answers a question about the SLUG only — it is not an
+  authorization check and grants nothing on its own.
+  """
+  @spec reserved_slug_prefix?(term()) :: boolean()
+  def reserved_slug_prefix?(slug) when is_binary(slug) do
+    Enum.any?(@reserved_slug_prefixes, &String.starts_with?(slug, &1))
+  end
+
+  def reserved_slug_prefix?(_slug), do: false
+
   @doc """
   Fetch a space by primary key. Returns `nil` if not found.
 

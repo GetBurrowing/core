@@ -150,8 +150,38 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
     end
   end
 
-  # Same resolution ChatLive `handle_params/3` uses: org-scoped slug lookup
-  # against the external user's SXI org, falling back to a bare-UUID get.
+  # RESOLUTION, NOT AUTHORIZATION. This function's only job is to turn a URL
+  # segment into the row the request names; `authorized_space?/2` below decides
+  # whether this user may have it. Keeping the two apart is load-bearing —
+  # org-scoping inside resolution silently fails CLOSED on rows the authorizer
+  # would have admitted, and gives a denial that no grant can lift.
+  #
+  # Same resolution ChatLive `handle_params/3` uses, all three steps of it:
+  #
+  #   1. org-scoped slug lookup against the external user's SXI org — this is
+  #      the ADR-0042 disambiguator ("#general" in one tenant vs another) and
+  #      stays FIRST so an ambiguous user-created slug still resolves to the
+  #      caller's own tenant;
+  #   2. a bare-UUID `get_space/1` — already unscoped, and already the
+  #      precedent that unscoped resolution followed by authorization is this
+  #      module's shape;
+  #   3. `system_prefix_fallback/1` — added here by task 019fb955-f8b1 rework.
+  #
+  # Step 3 is what was missing, and the bug it caused: `Meetings.create_meeting/1`
+  # mints the meeting's chat space with NO `:org_id`, so `org_id IS NULL`;
+  # `get_space_by_slug/2`'s `where s.org_id == ^org_id` cannot match NULL; and
+  # the slug is `meeting-<uuid>`, not a bare UUID, so step 2 misses too. The
+  # plug therefore 403'd an external user on the chat space of a meeting they
+  # HELD A LIVE INVITE TO — `Chat.participant?/2` was true the whole time and
+  # was never consulted, because resolution had already answered nil. That
+  # contradicts the rule this stack exists to implement: if you are invited to
+  # the meeting, you have access to the chat for that meeting.
+  #
+  # ChatLive grew step 3 for exactly this class of row and this plug did not,
+  # so the gate denied requests for spaces the LiveView behind it would have
+  # rendered. The fix is to re-converge them, NOT to give meeting spaces an
+  # org_id — that is the root fix (migration + backfill + nullability), filed
+  # separately, and a migration does not belong in this member.
   defp resolve_space(conn, slug) do
     org_id =
       case conn.assigns[:current_user_org_membership] do
@@ -160,7 +190,23 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
       end
 
     Chat.get_space_by_slug(slug, org_id: org_id) ||
-      (valid_uuid?(slug) && Chat.get_space(slug)) || nil
+      (valid_uuid?(slug) && Chat.get_space(slug)) ||
+      system_prefix_fallback(slug) || nil
+  end
+
+  # Unscoped slug lookup, admitted ONLY for system-minted slug prefixes
+  # (`Chat.reserved_slug_prefix?/1`: meeting-, task-exec-, dm-, group-). Those
+  # spaces are minted by orchestration paths and carry `org_id = NULL` by
+  # design or by history, so the org-scoped lookup structurally cannot find
+  # them. A USER-CREATED channel slug can never carry one of these prefixes, so
+  # ADR-0042 per-org channel-slug scoping is untouched.
+  #
+  # Mirrors `ChatLive.system_prefix_fallback/1` and shares its prefix list.
+  # This RESOLVES; it does not admit. Everything it returns still has to clear
+  # `authorized_space?/2`, which requires a real `chat_participants` row or the
+  # DM allowlist.
+  defp system_prefix_fallback(slug) do
+    if Chat.reserved_slug_prefix?(slug), do: Chat.get_space_by_slug(slug, [])
   end
 
   # A uniform 403 for BOTH a nonexistent space (`nil`) and an out-of-scope
