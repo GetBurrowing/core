@@ -6,12 +6,35 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
   so `conn.assigns.current_user` (a `%User{}` with `:org_memberships`
   preloaded) and `conn.assigns.current_user_org_membership` are already set.
 
-  Enforcement is fail-closed and ALLOWLIST-based: an external user reaches
-  ONLY the chat surface, and within `/chat/:slug` only a space they are
-  scoped to. Anything else halts with a uniform `403` BEFORE the controller
-  or LiveView mounts. Internal users are a complete no-op — the plug returns
-  the conn unchanged (this is the load-bearing "internal user unaffected"
-  invariant).
+  Enforcement is fail-closed and ALLOWLIST-based, and the allowlist is a
+  function of `(host, route, grant)` — not of `(route, grant)` alone. Three
+  surfaces share one endpoint and `PlatformWeb.ExternalSurface.for_conn/1` is
+  the single answer to which one a request is on:
+
+    * `:meet` — the guest MEET host. An external user reaches ONLY
+      `/meetings/:slug`, and only a meeting they hold a live invite to
+      (`Platform.Meetings.invited_to_slug?/2`). `/chat` on this host is off
+      surface.
+    * `:chat` — the external CHAT host (task 019f9257). UNCHANGED: `/`,
+      `/chat`, and a `/chat/:slug` they are scoped to.
+    * `:app` — the primary Suite host. UNCHANGED, byte for byte: same
+      clauses, same order, same reason strings as before the meet surface
+      existed.
+
+  Each surface's clause set is an allowlist TERMINATED BY A DENY, so a new
+  app route added later is `403` for external users on every host with no
+  per-route wiring. Do not convert this into a denylist.
+
+  Anything denied halts with a uniform `403` BEFORE the controller or
+  LiveView mounts. Internal users are a complete no-op — `call/2` returns the
+  conn unchanged without ever consulting the surface (this is the
+  load-bearing "internal user unaffected" invariant, and host branching is
+  the easiest way to break it).
+
+  FAIL-CLOSED ON AN UNCONFIGURED HOST: with `:meet_host` unset, `for_conn/1`
+  never answers `:meet`, so `/meetings/:slug` is `403` for external users
+  everywhere. The meet surface ships DARK until `MEET_HOST` is provisioned.
+  That is deliberate and is not to be papered over with a fallback.
 
   See canvas §4 (`/chat/<other space>` via direct URL -> 403 always) and §9
   (no existence oracle for off-limits resources).
@@ -20,6 +43,7 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
   import Plug.Conn
 
   alias Platform.Chat
+  alias Platform.Meetings
   alias Platform.Tenancy
   alias PlatformWeb.ExternalRedirect
   alias PlatformWeb.ExternalSurface
@@ -44,21 +68,42 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
     end
   end
 
-  # Allowlist the external chat surface; every other route falls through to
-  # deny, so a NEW app route added later is automatically 403 for external
-  # users without per-route wiring (canvas §8 "zero everything else").
+  # Allowlist per SURFACE; every surface's clause set ends in a deny, so a NEW
+  # app route added later is automatically 403 for external users on ALL THREE
+  # hosts without per-route wiring (canvas §8 "zero everything else"). This is
+  # an allowlist — do not invert it into a denylist.
   defp gate_external(conn, user) do
-    case conn.path_info do
+    case {ExternalSurface.for_conn(conn), conn.path_info} do
+      # MEET surface: the guest host exists to serve exactly one route. Note
+      # `fence_to_chat_host/1` is NOT reachable from here — that is the point.
+      # Bouncing an invited member off the meet host to /chat would defeat the
+      # invite. Everything else on this host is off surface.
+      {:meet, ["meetings", slug]} ->
+        gate_meeting(conn, user, slug)
+
+      {:meet, _} ->
+        deny(conn, user, "external_off_surface")
+
+      # CHAT and APP surfaces: byte-identical to the pre-meet behaviour —
+      # same clauses, same order, same reason strings.
+      #
       # Root redirects into /chat; the index list is filtered by M5/M7. But an
       # external user reaching the internal /chat index on the SUITE host must
       # be PINNED to the chat host (task 019f9257) — otherwise they mount the
-      # internal :authenticated live_session. Fence them to the chat-host
-      # external surface; fall through when already on the chat host (no loop)
-      # or when CHAT_HOST is unset (dev/test).
-      [] -> fence_to_chat_host(conn) || conn
-      ["chat"] -> fence_to_chat_host(conn) || conn
-      ["chat", slug] -> gate_space(conn, user, slug)
-      _ -> deny(conn, user, "external_non_chat_route")
+      # internal :authenticated live_session. That fence still does exactly
+      # that job here. Fall through when already on the chat host (no loop) or
+      # when CHAT_HOST is unset (dev/test).
+      {_, []} ->
+        fence_to_chat_host(conn) || conn
+
+      {_, ["chat"]} ->
+        fence_to_chat_host(conn) || conn
+
+      {_, ["chat", slug]} ->
+        gate_space(conn, user, slug)
+
+      {_, _} ->
+        deny(conn, user, "external_non_chat_route")
     end
   end
 
@@ -69,11 +114,31 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
   #     — dev/test leave it unset and keep today's pass-through;
   #   * never when the request is ALREADY on the chat host (avoid a redirect loop).
   # Internal users never reach here (the caller gates on `Tenancy.external_user?/1`).
+  #
+  # UNCHANGED by the meet surface, and deliberately NOT reachable from the
+  # `:meet` clauses of `gate_external/2`: the fence still pins an external user
+  # off the internal /chat index on the app host, but firing it on the meet host
+  # would bounce an INVITED member away from their meeting.
   defp fence_to_chat_host(conn) do
     if ExternalRedirect.chat_host_configured?() and not ExternalSurface.on_chat_host?(conn) do
       conn
       |> Phoenix.Controller.redirect(external: ExternalRedirect.chat_url("/chat"))
       |> halt()
+    end
+  end
+
+  # NO EXISTENCE ORACLE, by the same mechanism the chat branch uses rather than
+  # a new one: ONE deny call site with ONE reason string covers both "this slug
+  # names no meeting" and "you are not invited". `invited_to_slug?/2` answers a
+  # single `Repo.exists?` over invite-joined-meeting, so it cannot separate the
+  # two either, and `deny/3` renders the fixed :"403" template independent of
+  # the resource — so even the `[:platform, :auth, :access_blocked]` telemetry
+  # is identical. Never redirect and never 500 on the no-such-meeting path.
+  defp gate_meeting(conn, user, slug) do
+    if Meetings.invited_to_slug?(slug, user) do
+      conn
+    else
+      deny(conn, user, "external_meeting_not_invited")
     end
   end
 
