@@ -133,8 +133,24 @@ const MeetingClient = {
   // moves only the element into the (possibly freshly-rendered) dock — the
   // live MediaStreamTrack is never touched, mirroring `_dockLocalVideo`'s
   // reparent-not-reattach discipline. No-op when there's no local video.
+  //
+  // Camera-off correction: in
+  // livekit-client v2 turning the camera off MUTES the publication instead
+  // of unpublishing it, so `LocalTrackUnpublished` (our only suspend
+  // trigger) never fires and the still-attached <video> keeps getting
+  // re-docked here — painting a BLACK rectangle over the avatar fallback.
+  // Ask the room whether the camera is actually live before re-docking, and
+  // park it (revealing the avatar) when it positively is not. Teardown is
+  // deliberately asymmetric: with
+  // no room to ask (pre-join, mid-reconnect) we keep the old re-dock
+  // behaviour rather than blanking a feed that may well be live.
   updated() {
-    if (this._localVideoEl) this._dockLocalVideo(this._currentStageMode())
+    if (!this._localVideoEl) return
+    if (this._localCameraOff(this._room)) {
+      this._suspendLocalVideo()
+      return
+    }
+    this._dockLocalVideo(this._currentStageMode())
   },
 
   // Adopt an already-connected Room object (reconnect/remount path). Wires
@@ -167,16 +183,10 @@ const MeetingClient = {
 
     // Re-attach an already-published local camera into the persistent
     // self-view + dock for the current mode.
-    for (const pub of room.localParticipant.trackPublications.values()) {
-      if (
-        pub.track &&
-        pub.kind === Track.Kind.Video &&
-        !isScreenShareSource(pub.track.source)
-      ) {
-        this._attachLocalVideo(pub.track)
-        break
-      }
-    }
+    // Routed through the reconcile so a camera that is published-but-MUTED
+    // (joined / re-joined with the camera off) parks instead of attaching a
+    // black frame over the avatar.
+    this._reconcileLocalVideo(room)
 
     for (const participant of room.remoteParticipants.values()) {
       this._ensureTile(participant)
@@ -304,9 +314,56 @@ const MeetingClient = {
     this._localVideoTrack = null
     const el = this._localVideoEl
     if (el) {
+      // Belt-and-suspenders with the parking move: if anything re-docks a
+      // suspended element before `_attachLocalVideo` runs, it must not
+      // paint a black rectangle over the avatar. `_attachLocalVideo`
+      // clears this on the way back up.
+      el.style.display = "none"
       const parking = this._localParkingSlot()
       if (parking && el.parentElement !== parking) parking.appendChild(el)
     }
+  },
+
+  // The local CAMERA publication (never screen-share), or null. LiveKit
+  // exposes local publications on `localParticipant.trackPublications`.
+  _localCameraPublication(room) {
+    const lp = room && room.localParticipant
+    const pubs = lp && (lp.trackPublications || lp.tracks)
+    if (!pubs || typeof pubs.values !== "function") return null
+    for (const pub of pubs.values()) {
+      if (!pub || pub.kind !== Track.Kind.Video) continue
+      const source = (pub.track && pub.track.source) || pub.source
+      if (isScreenShareSource(source)) continue
+      return pub
+    }
+    return null
+  },
+
+  // True only when the room POSITIVELY reports the local camera as not
+  // painting: a muted publication, or one whose MediaStreamTrack ended.
+  // Unknown shapes and
+  // an absent room read as "not off" — never blank a live feed on a guess.
+  _localCameraOff(room) {
+    const pub = this._localCameraPublication(room)
+    if (!pub) return false
+    if (pub.isMuted === true) return true
+    if (pub.track && pub.track.isMuted === true) return true
+    const mst = pub.track && pub.track.mediaStreamTrack
+    if (mst && mst.readyState === "ended") return true
+    return false
+  },
+
+  // Single decision point for "should the local self-view be painting?".
+  // Live → attach (idempotent; re-uses the SAME element) and dock. Off →
+  // suspend, which parks + detaches so the dock is empty and the server
+  // rendered avatar fallback beneath it shows through.
+  _reconcileLocalVideo(room) {
+    const pub = this._localCameraPublication(room)
+    if (pub && pub.track && !this._localCameraOff(room)) {
+      this._attachLocalVideo(pub.track)
+      return
+    }
+    if (pub && this._localCameraOff(room)) this._suspendLocalVideo()
   },
 
   _teardownLocalVideo() {
@@ -408,6 +465,24 @@ const MeetingClient = {
       }
       if (pub.track) this._detachTrack(pub.track, room.localParticipant)
     })
+    // Camera-off in livekit-client v2 MUTES the local publication (see
+    // LocalParticipant.setTrackEnabled: only screen-share unpublishes), so
+    // LocalTrackUnpublished above never fires for a camera toggle. These are
+    // the transitions that actually flip the local tile between live video
+    // and the avatar fallback. Remote identities are ignored here — this
+    // handler is strictly about the local self-view and must not disturb
+    // remote tiles.
+    const onLocalMuteChanged = (pub, participant) => {
+      const lp = room.localParticipant
+      if (!lp || !participant || participant.identity !== lp.identity) return
+      if (pub && pub.kind && pub.kind !== Track.Kind.Video) return
+      const source = (pub && pub.track && pub.track.source) || (pub && pub.source)
+      if (isScreenShareSource(source)) return
+      this._reconcileLocalVideo(room)
+    }
+    bind(RoomEvent.TrackMuted, onLocalMuteChanged)
+    bind(RoomEvent.TrackUnmuted, onLocalMuteChanged)
+
     bind(RoomEvent.ActiveSpeakersChanged, (speakers) => {
       const identities = speakers.map((p) => p.identity)
       this._markSpeakers(identities)
@@ -508,16 +583,10 @@ const MeetingClient = {
     // v2: if a local camera track is already published (e.g. fast re-join),
     // adopt it into the persistent self-view + dock into the current mode so
     // a fresh join lands the video in the right place without a switch.
-    for (const pub of room.localParticipant.trackPublications.values()) {
-      if (
-        pub.track &&
-        pub.kind === Track.Kind.Video &&
-        !isScreenShareSource(pub.track.source)
-      ) {
-        this._attachLocalVideo(pub.track)
-        break
-      }
-    }
+    // Routed through the reconcile so a camera that is published-but-MUTED
+    // (joined / re-joined with the camera off) parks instead of attaching a
+    // black frame over the avatar.
+    this._reconcileLocalVideo(room)
 
     for (const participant of room.remoteParticipants.values()) {
       this._ensureTile(participant)

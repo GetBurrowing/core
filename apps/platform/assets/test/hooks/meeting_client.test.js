@@ -1037,3 +1037,240 @@ describe("MeetingClient — quick-meet screen-share routing", () => {
     expect(globalThis.document._slot.dataset.screenShareActive).toBe("false")
   })
 })
+
+
+/**
+ * Camera-off must show the avatar backdrop on the LOCAL tile
+ * ("when I mute my video, it just shows a black video track, and it
+ * doesn't show the user thumbnail backdrop").
+ *
+ * Mechanism: in livekit-client v2 `setCameraEnabled(false)` MUTES the
+ * publication (LocalParticipant.setTrackEnabled only unpublishes for
+ * screen-share) and merely flips `mediaStreamTrack.enabled = false`. The
+ * publication stays, so `LocalTrackUnpublished` -- the hook's only
+ * `_suspendLocalVideo` trigger -- never fires. The persistent local
+ * <video> stays attached and docked over the local gallery cell, and a
+ * disabled MediaStreamTrack paints BLACK, hiding the server-rendered
+ * `[data-avatar-fallback]` underneath.
+ *
+ * The fix mirrors `MeetingVideoTile._reconcile` (remote tiles) rather than
+ * inventing a second policy: trackMuted/trackUnmuted listeners plus a
+ * `_localCameraOff` predicate consulted before every re-dock.
+ */
+
+// A local camera publication that can be muted/unmuted like LiveKit's.
+function fakeCameraPub(track, { muted = false, source = "camera" } = {}) {
+  return {
+    kind: "video",
+    source,
+    isMuted: muted,
+    track,
+  }
+}
+
+function buildBoundHook(room, doc) {
+  globalThis.document = doc
+  const hook = buildHook()
+  hook.el = fakeNode()
+  hook._tiles = new Map()
+  hook._boundRoom = null
+  hook._roomListeners = []
+  hook._room = room
+  hook._bindRoomEvents(room)
+  return hook
+}
+
+describe("MeetingClient -- local camera mute shows the avatar backdrop", () => {
+  beforeEach(() => {
+    globalThis.requestAnimationFrame = (cb) => cb()
+  })
+
+  afterEach(() => {
+    delete globalThis.document
+    delete globalThis.requestAnimationFrame
+  })
+
+  function setup({ stageMode = "gallery" } = {}) {
+    const doc = buildDocument({ stageMode })
+    const room = fakeRoom({ camera: true })
+    const track = fakeTrack()
+    track.mediaStreamTrack = { readyState: "live" }
+    const pub = fakeCameraPub(track)
+    room.localParticipant.trackPublications.set("camera", pub)
+    const hook = buildBoundHook(room, doc)
+    hook._attachLocalVideo(track)
+    return { doc, room, track, pub, hook, el: hook._localVideoEl }
+  }
+
+  it("POSITIVE: camera on -> the video element is docked over the local cell and painting", () => {
+    const { doc, track, el } = setup()
+    expect(el.parentElement).toBe(doc._gallery)
+    expect(el.style.display).toBe("")
+    expect(track.detachCalls).toEqual([])
+  })
+
+  it("THE BUG: trackMuted parks + detaches the local video so the avatar shows", () => {
+    const { doc, room, track, pub, hook, el } = setup()
+
+    pub.isMuted = true
+    room.emit("trackMuted", pub, room.localParticipant)
+
+    // No video left in the dock -> the server-rendered avatar fallback in the
+    // tile underneath is what the user sees. No black rectangle over it.
+    expect(doc._gallery.children).not.toContain(el)
+    expect(el.parentElement).toBe(doc._parking)
+    expect(el.style.display).toBe("none")
+    expect(track.detachCalls).toEqual([el])
+    expect(hook._localVideoTrack).toBeNull()
+    // Same element kept for the re-engage.
+    expect(hook._localVideoEl).toBe(el)
+  })
+
+  it("trackUnmuted re-attaches the SAME element and re-docks it", () => {
+    const { doc, room, track, pub, hook, el } = setup()
+
+    pub.isMuted = true
+    room.emit("trackMuted", pub, room.localParticipant)
+    pub.isMuted = false
+    room.emit("trackUnmuted", pub, room.localParticipant)
+
+    expect(hook._localVideoEl).toBe(el)
+    expect(el.parentElement).toBe(doc._gallery)
+    expect(el.style.display).toBe("")
+    expect(track.attachCalls).toEqual([el, el])
+  })
+
+  it("ROUND-TRIP: off -> on -> off -> on with NO re-render in between", () => {
+    const { doc, room, pub, hook, el } = setup()
+
+    for (let i = 0; i < 2; i++) {
+      pub.isMuted = true
+      room.emit("trackMuted", pub, room.localParticipant)
+      expect(el.parentElement).toBe(doc._parking)
+      expect(el.style.display).toBe("none")
+
+      pub.isMuted = false
+      room.emit("trackUnmuted", pub, room.localParticipant)
+      expect(el.parentElement).toBe(doc._gallery)
+      expect(el.style.display).toBe("")
+    }
+    // Exactly one element the whole way through.
+    expect(hook._localVideoEl).toBe(el)
+  })
+
+  it("updated() does NOT re-dock a muted camera (the black-rectangle re-entry)", () => {
+    const { doc, room, pub, hook, el } = setup()
+    pub.isMuted = true
+    room.emit("trackMuted", pub, room.localParticipant)
+
+    // An unrelated LiveView patch lands.
+    hook.updated()
+
+    expect(el.parentElement).toBe(doc._parking)
+    expect(doc._gallery.children).not.toContain(el)
+  })
+
+  it("updated() still re-docks when the camera is live (no regression)", () => {
+    const { doc, hook, el } = setup()
+    el.remove()
+    hook.updated()
+    expect(el.parentElement).toBe(doc._gallery)
+  })
+
+  it("ignores a REMOTE mute", () => {
+    const { doc, room, el } = setup()
+    const remote = { identity: "user:remote", trackPublications: new Map() }
+    const remotePub = fakeCameraPub(fakeTrack(), { muted: true })
+
+    room.emit("trackMuted", remotePub, remote)
+
+    expect(el.parentElement).toBe(doc._gallery)
+    expect(el.style.display).toBe("")
+  })
+
+  it("ignores a screen-share mute and leaves the camera docked", () => {
+    const { doc, room, el } = setup()
+    const ssPub = fakeCameraPub(fakeTrack("screen_share"), {
+      muted: true,
+      source: "screen_share",
+    })
+
+    room.emit("trackMuted", ssPub, room.localParticipant)
+
+    expect(el.parentElement).toBe(doc._gallery)
+    expect(el.style.display).toBe("")
+  })
+
+  it("ignores an audio (mic) mute", () => {
+    const { doc, room, el } = setup()
+    const micPub = { kind: "audio", isMuted: true, track: { kind: "audio" } }
+
+    room.emit("trackMuted", micPub, room.localParticipant)
+
+    expect(el.parentElement).toBe(doc._gallery)
+    expect(el.style.display).toBe("")
+  })
+
+  it("_adoptRoom does not attach a published-but-MUTED camera", () => {
+    const doc = buildDocument({ stageMode: "gallery" })
+    doc.dispatchEvent = () => true
+    doc.querySelectorAll = () => []
+    doc.getElementById = () => null
+    globalThis.document = doc
+    const priorWindow = globalThis.window
+    globalThis.window = {
+      __livekit_room: null,
+      __livekitRoom: null,
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent() {
+        return true
+      },
+      matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
+    }
+    globalThis.CustomEvent =
+      globalThis.CustomEvent ||
+      class {
+        constructor(type, init) {
+          this.type = type
+          Object.assign(this, init)
+        }
+      }
+    const room = fakeRoom({ camera: false })
+    const track = fakeTrack()
+    room.localParticipant.trackPublications.set(
+      "camera",
+      fakeCameraPub(track, { muted: true }),
+    )
+    const hook = buildHook()
+    hook.el = fakeNode()
+    hook._tiles = new Map()
+    hook._boundRoom = null
+    hook._roomListeners = []
+
+    hook._adoptRoom(room)
+
+    expect(track.attachCalls).toEqual([])
+    expect(hook._localVideoEl).toBeNull()
+
+    globalThis.window = priorWindow
+  })
+
+  it("_localCameraOff reads 'not off' when the room cannot be asked", () => {
+    globalThis.document = buildDocument()
+    const hook = buildHook()
+    expect(hook._localCameraOff(null)).toBe(false)
+    expect(hook._localCameraOff({})).toBe(false)
+    expect(hook._localCameraOff({ localParticipant: {} })).toBe(false)
+  })
+
+  it("_localCameraOff treats an ended MediaStreamTrack as off", () => {
+    globalThis.document = buildDocument()
+    const hook = buildHook()
+    const room = fakeRoom()
+    const track = fakeTrack()
+    track.mediaStreamTrack = { readyState: "ended" }
+    room.localParticipant.trackPublications.set("camera", fakeCameraPub(track))
+    expect(hook._localCameraOff(room)).toBe(true)
+  })
+})
