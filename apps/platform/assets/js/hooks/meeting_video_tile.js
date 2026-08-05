@@ -189,6 +189,7 @@ const MeetingVideoTile = {
     this._boundTrackUnsubscribed = this._onTrackUnsubscribed.bind(this)
     this._boundLocalPublished = this._onLocalPublished.bind(this)
     this._boundLocalUnpublished = this._onLocalUnpublished.bind(this)
+    this._boundMuteChanged = this._onMuteChanged.bind(this)
 
     this._tryBind()
   },
@@ -199,7 +200,9 @@ const MeetingVideoTile = {
     this._identity = this.el.dataset.participant
     this._localDock = this.el.dataset.localDock === "true"
     this._tryBind()
-    this._syncExistingTrack()
+    // Reconcile against the LiveKit room, NOT against the server-rendered
+    // `data-has-video` attribute. See `_reconcile` for why.
+    this._reconcile()
   },
 
   destroyed() {
@@ -239,6 +242,15 @@ const MeetingVideoTile = {
       room.on("trackUnsubscribed", this._boundTrackUnsubscribed)
       room.on("localTrackPublished", this._boundLocalPublished)
       room.on("localTrackUnpublished", this._boundLocalUnpublished)
+      // Camera-off does NOT unpublish in livekit-client v2 — it MUTES the
+      // publication and stops the underlying MediaStreamTrack, leaving the
+      // RemoteTrackPublication subscribed with `isMuted === true`. Since the
+      // tile now decides visibility from publication state (`_findLiveVideo`)
+      // rather than from the server attribute, it must hear mute transitions
+      // or a remote who turns their camera back on would stay on the avatar
+      // until the next unrelated re-render.
+      room.on("trackMuted", this._boundMuteChanged)
+      room.on("trackUnmuted", this._boundMuteChanged)
     } catch (e) {
       console.warn("[MeetingVideoTile] failed to subscribe to room events:", e)
       return
@@ -254,6 +266,8 @@ const MeetingVideoTile = {
         this._room.off("trackUnsubscribed", this._boundTrackUnsubscribed)
         this._room.off("localTrackPublished", this._boundLocalPublished)
         this._room.off("localTrackUnpublished", this._boundLocalUnpublished)
+        this._room.off("trackMuted", this._boundMuteChanged)
+        this._room.off("trackUnmuted", this._boundMuteChanged)
       } catch (_) {
         /* room may already be disconnected */
       }
@@ -267,26 +281,163 @@ const MeetingVideoTile = {
    * existed before this tile mounted.
    */
   _syncExistingTrack() {
+    if (!this._room || this._attachedTrack) return
+    const live = this._findLiveVideo()
+    if (live) this._attach(live.track, live.participant)
+  },
+
+  /**
+   * The single source of truth for "does this participant have a video the
+   * tile should be showing right now?" — read off the LiveKit Room, never off
+   * the server-rendered `data-has-video` attribute.
+   *
+   * Returns `{ track, participant }` for the first publication that is:
+   *   - owned by THIS tile's identity,
+   *   - a video track that is actually subscribed (`pub.track` is present),
+   *   - not muted (camera-off mutes the publication in livekit-client v2 —
+   *     the subscription survives, so `pub.track` alone would wrongly read as
+   *     "has video" for a participant sitting with their camera off), and
+   *   - backed by a MediaStreamTrack that has not ended.
+   *
+   * Returns `null` otherwise — which is what keeps the avatar fallback correct
+   * for audio-only and camera-off participants.
+   */
+  _findLiveVideo() {
+    const participant = this._findParticipant()
+    return participant ? this._liveVideoOf(participant) : null
+  },
+
+  /** The Room's participant object for this tile's identity, or null. */
+  _findParticipant() {
     const room = this._room
-    if (!room || this._attachedTrack) return
+    if (!room) return null
 
-    const participants = []
-    if (room.localParticipant) participants.push(room.localParticipant)
-    if (room.remoteParticipants) {
-      for (const p of room.remoteParticipants.values()) participants.push(p)
+    if (room.localParticipant && room.localParticipant.identity === this._identity) {
+      return room.localParticipant
     }
-
-    for (const participant of participants) {
-      if (participant.identity !== this._identity) continue
-      const pubs = participant.trackPublications || participant.tracks
-      if (!pubs) continue
-      for (const pub of pubs.values()) {
-        if (pub.track && this._isVideo(pub.track)) {
-          this._attach(pub.track, participant)
-          return
-        }
+    if (room.remoteParticipants) {
+      for (const p of room.remoteParticipants.values()) {
+        if (p && p.identity === this._identity) return p
       }
     }
+    return null
+  },
+
+  _liveVideoOf(participant) {
+    const pubs = participant.trackPublications || participant.tracks
+    if (!pubs || typeof pubs.values !== "function") return null
+    for (const pub of pubs.values()) {
+      if (!pub || !pub.track || !this._isVideo(pub.track)) continue
+      if (this._isMuted(pub)) continue
+      if (this._hasEndedMedia(pub.track)) continue
+      return { track: pub.track, participant }
+    }
+    return null
+  },
+
+  _isMuted(pub) {
+    // `pub.isMuted` is the publication-level flag LiveKit flips on
+    // TrackMuted/TrackUnmuted. Fall back to the track's own flag; treat
+    // "undefined" as not muted so an unexpected publication shape can never
+    // black out a tile that really is publishing.
+    if (pub.isMuted === true) return true
+    if (pub.track && pub.track.isMuted === true) return true
+    return false
+  },
+
+  _hasEndedMedia(track) {
+    const mst = track.mediaStreamTrack
+    return !!mst && mst.readyState === "ended"
+  },
+
+  /**
+   * Reconcile the tile's DOM against `_findLiveVideo()`.
+   *
+   * Why this exists (the bug): a LiveView re-render triggered by ANY meeting
+   * control (captions toggle, mic toggle, a new joiner) re-renders the tile
+   * carrying the server's `has_video` verdict. When that verdict is stale
+   * `false` while the remote is genuinely publishing, morphdom stamps the
+   * `hidden` class back onto `[data-video-slot]`, un-hides
+   * `[data-avatar-fallback]` over the live picture, and drops the injected
+   * `<video>` — and NOTHING puts it back, because from LiveKit's side nothing
+   * happened: no TrackUnsubscribed, no reconnect, no new subscription event to
+   * re-trigger `_attach`. Confirmed with client-side instrumentation on an
+   * experimental branch: a captions click produced hook `updated` →
+   * `has_video` flip true→false → avatar covering video → video element
+   * removed → no replacement, with no LiveKit event anywhere in the window.
+   *
+   * The LOCAL tile never showed this because `MeetingClient.updated()`
+   * explicitly re-docks its single persistent local `<video>` after every
+   * patch. This is the remote tiles' equivalent self-repair: same idea, same
+   * seam (`updated()`), reusing `_attach`/`_detach` so the
+   * StableTileElementInfo lifecycle stays intact.
+   *
+   * Deliberately NOT "never hide the slot": when the room CONFIRMS the
+   * participant has no live video, this tears down and lets the avatar
+   * fallback stand, so audio-only and camera-off participants keep rendering
+   * their avatar.
+   */
+  _reconcile() {
+    // The local dock's `<video>` is owned and repaired by MeetingClient — a
+    // local-dock tile must never mint its own element (see `_attach`).
+    if (this._localDock) return
+
+    // Asymmetric on purpose. The RESTORATIVE direction runs off whatever the
+    // room can tell us; the DESTRUCTIVE direction only runs when the room
+    // positively reports this participant with no live video. If we cannot
+    // even see the participant (room not bound yet, mid-reconnect, an
+    // unexpected SDK shape) we leave an existing attachment strictly alone —
+    // authoritative teardown belongs to `trackUnsubscribed` /
+    // `localTrackUnpublished`, not to a re-render.
+    const participant = this._findParticipant()
+    const live = participant ? this._liveVideoOf(participant) : null
+
+    if (!live) {
+      // Genuinely no video: audio-only participant, camera off (muted
+      // publication), or the media track ended. Drop anything we still hold
+      // and leave the server's avatar fallback exactly where it is. This
+      // branch is what stops the fix from degenerating into "always show the
+      // video slot".
+      if (participant && (this._attachedTrack || this._videoEl)) this._detach()
+      return
+    }
+
+    const slot = this._slot()
+    if (!slot) return
+
+    // Re-attach when the track changed, when our element was never created,
+    // or when the patch removed/moved it out of the slot.
+    const mounted = !!this._videoEl && this._videoEl.parentNode === slot
+    if (this._attachedTrack !== live.track || !mounted) {
+      this._detach()
+      this._attach(live.track, live.participant)
+      return
+    }
+
+    // Element survived the patch but the server's stale `has_video` re-hid it
+    // behind the avatar. Re-assert the visible state and nudge playback — a
+    // node that gets detached/re-inserted by morphdom can come back paused.
+    this._revealVideo()
+    if (this._videoEl.paused === true) {
+      try {
+        const p = this._videoEl.play?.()
+        if (p && typeof p.catch === "function") p.catch(() => {})
+      } catch (_) {
+        /* autoplay policy / element not ready */
+      }
+    }
+  },
+
+  /**
+   * Show the video slot and hide the avatar fallback. Shared by `_attach` and
+   * `_reconcile` so there is exactly one definition of "video is showing".
+   */
+  _revealVideo() {
+    const slot = this._slot()
+    if (slot) slot.classList.remove("hidden")
+    const fallback = this.el.querySelector("[data-avatar-fallback]")
+    if (fallback) fallback.classList.add("hidden")
+    this.el.dataset.hasVideo = "true"
   },
 
   _isVideo(track) {
@@ -295,10 +446,27 @@ const MeetingVideoTile = {
     return track && track.kind === "video"
   },
 
-  _onTrackSubscribed(track, _pub, participant) {
+  _onTrackSubscribed(track, pub, participant) {
     if (participant?.identity !== this._identity) return
     if (!this._isVideo(track)) return
+    // A participant who joins with their camera off still delivers a
+    // subscribed-but-muted video publication. Route that through `_reconcile`
+    // so the avatar stays up instead of attaching an empty <video>.
+    if (pub && this._isMuted(pub)) {
+      this._reconcile()
+      return
+    }
     this._attach(track, participant)
+  },
+
+  // trackMuted / trackUnmuted for OUR identity's camera. Muting is how
+  // livekit-client v2 expresses "camera off", so these are the transitions
+  // that flip a remote tile between live video and avatar.
+  _onMuteChanged(pub, participant) {
+    if (participant?.identity !== this._identity) return
+    if (pub && pub.kind && pub.kind !== "video") return
+    if (pub && pub.track && !this._isVideo(pub.track)) return
+    this._reconcile()
   },
 
   _onTrackUnsubscribed(track, _pub, participant) {
@@ -396,11 +564,10 @@ const MeetingVideoTile = {
 
     // Reveal the video slot, hide the avatar fallback. The server also toggles
     // these via data-has-video on the next render; this keeps the UI in sync
-    // immediately without waiting for a round-trip.
-    slot.classList.remove("hidden")
-    const fallback = this.el.querySelector("[data-avatar-fallback]")
-    if (fallback) fallback.classList.add("hidden")
-    this.el.dataset.hasVideo = "true"
+    // immediately without waiting for a round-trip. When that server render
+    // disagrees (stale `has_video="false"`), `_reconcile` re-asserts this same
+    // state after the patch.
+    this._revealVideo()
   },
 
   _detach() {

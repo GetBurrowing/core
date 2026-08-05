@@ -42,6 +42,10 @@ function fakeVideoEl() {
     style: {},
     _removed: false,
     _parent: null,
+    // Mirrors the real DOM property `_reconcile` reads to decide whether the
+    // element is still mounted in its slot.
+    parentNode: null,
+    paused: false,
     remove() {
       this._removed = true
       if (this._parent) {
@@ -49,6 +53,11 @@ function fakeVideoEl() {
         if (i >= 0) this._parent.children.splice(i, 1)
         this._parent = null
       }
+      this.parentNode = null
+    },
+    play() {
+      this.paused = false
+      return Promise.resolve()
     },
   }
 }
@@ -89,6 +98,7 @@ function buildTile(identity) {
     children: [],
     appendChild(child) {
       child._parent = this
+      child.parentNode = this
       this.children.push(child)
     },
     querySelectorAll(sel) {
@@ -294,6 +304,220 @@ describe("MeetingVideoTile attach/detach lifecycle", () => {
     expect(tile._videoEl).toBeNull()
     expect(tile._slotRef.children.length).toBe(0)
     expect(track._attachedEls.length).toBe(0)
+  })
+
+  // ── Reconcile against LiveKit on updated() ────────────────────────────
+  //
+  // The bug: a meeting control (captions, mic) re-renders the tile with a
+  // stale server `has_video="false"`; morphdom hides the slot, raises the
+  // avatar over the live picture and drops the <video>, and NOTHING restores
+  // it because LiveKit emitted no event. These cover the tile repairing
+  // itself from real room state — and, critically, NOT repairing a tile whose
+  // participant genuinely has no video.
+
+  // Build a fake Room whose remote participant publishes `pubs`.
+  function fakeRoom(identity, pubs) {
+    const participant = { identity, isLocal: false }
+    participant.trackPublications = new Map(
+      pubs.map((p, i) => [String(i), p]),
+    )
+    return {
+      localParticipant: { identity: "user:me", isLocal: true, trackPublications: new Map() },
+      remoteParticipants: new Map([[identity, participant]]),
+      _participant: participant,
+    }
+  }
+
+  function livePub(track) {
+    return { kind: "video", isMuted: false, track }
+  }
+
+  it("re-attaches when a re-render drops the <video> while LiveKit still has the track", () => {
+    const tile = buildTile("user:remote")
+    const track = fakeTrack()
+    const room = fakeRoom("user:remote", [livePub(track)])
+    tile._room = room
+
+    tile._attach(track, room._participant)
+    const firstEl = tile._videoEl
+    expect(tile._slotRef.children.length).toBe(1)
+
+    // Simulate the morphdom patch: <video> removed, slot hidden, avatar
+    // raised over it, data-has-video stamped back to "false" — all WITHOUT
+    // any LiveKit event.
+    firstEl.remove()
+    tile._slotRef.classList.add("hidden")
+    tile._fallbackRef.classList.remove("hidden")
+    tile.el.dataset.hasVideo = "false"
+
+    tile._reconcile()
+
+    // A live <video> is back in the slot and visible again.
+    expect(tile._slotRef.children.length).toBe(1)
+    expect(tile._videoEl).not.toBeNull()
+    expect(tile._videoEl).not.toBe(firstEl)
+    expect(tile._attachedTrack).toBe(track)
+    expect(track._attachedEls).toContain(tile._videoEl)
+    expect(tile._slotRef.classList.has("hidden")).toBe(false)
+    expect(tile._fallbackRef.classList.has("hidden")).toBe(true)
+    expect(tile.el.dataset.hasVideo).toBe("true")
+  })
+
+  it("re-reveals a surviving <video> that the stale render merely hid behind the avatar", () => {
+    const tile = buildTile("user:remote")
+    const track = fakeTrack()
+    const room = fakeRoom("user:remote", [livePub(track)])
+    tile._room = room
+
+    tile._attach(track, room._participant)
+    const el = tile._videoEl
+    el.paused = true
+
+    // phx-update="ignore" kept the node, but LiveView still merges the
+    // server's class/attrs onto the ignored slot.
+    tile._slotRef.classList.add("hidden")
+    tile._fallbackRef.classList.remove("hidden")
+    tile.el.dataset.hasVideo = "false"
+
+    tile._reconcile()
+
+    // Same element, no churn — just made visible and playing again.
+    expect(tile._videoEl).toBe(el)
+    expect(track.detachCalls).toEqual([])
+    expect(tile._slotRef.classList.has("hidden")).toBe(false)
+    expect(tile._fallbackRef.classList.has("hidden")).toBe(true)
+    expect(tile.el.dataset.hasVideo).toBe("true")
+    expect(el.paused).toBe(false)
+  })
+
+  // ── NEGATIVE CONTROL ──────────────────────────────────────────────────
+  // The trivial wrong fix is "never hide the video slot". These two prove
+  // the tile still falls back to the avatar when there really is no video.
+
+  it("NEGATIVE CONTROL: an audio-only participant keeps the avatar fallback", () => {
+    const tile = buildTile("user:remote")
+    const audioTrack = fakeTrack("audio")
+    const room = fakeRoom("user:remote", [
+      { kind: "audio", isMuted: false, track: audioTrack },
+    ])
+    tile._room = room
+
+    // Server rendered the avatar. Reconcile must leave it alone.
+    expect(tile._slotRef.classList.has("hidden")).toBe(true)
+    expect(tile._fallbackRef.classList.has("hidden")).toBe(false)
+
+    tile._reconcile()
+
+    expect(tile._findLiveVideo()).toBeNull()
+    expect(tile._attachedTrack).toBeNull()
+    expect(tile._videoEl).toBeNull()
+    expect(tile._slotRef.children.length).toBe(0)
+    expect(tile._slotRef.classList.has("hidden")).toBe(true)
+    expect(tile._fallbackRef.classList.has("hidden")).toBe(false)
+    expect(tile.el.dataset.hasVideo).toBe("false")
+  })
+
+  it("NEGATIVE CONTROL: a camera-off participant (muted publication) shows the avatar, not an empty video", () => {
+    const tile = buildTile("user:remote")
+    const track = fakeTrack()
+    // livekit-client v2 camera-off = publication MUTED and still subscribed,
+    // so `pub.track` is present. Reading `pub.track` alone would wrongly show
+    // an empty <video>; the mute check is what keeps the avatar up.
+    const pub = { kind: "video", isMuted: true, track }
+    const room = fakeRoom("user:remote", [pub])
+    tile._room = room
+
+    // Nothing attaches on mount…
+    tile._syncExistingTrack()
+    expect(tile._attachedTrack).toBeNull()
+
+    // …and reconcile agrees.
+    tile._reconcile()
+    expect(tile._findLiveVideo()).toBeNull()
+    expect(tile._videoEl).toBeNull()
+    expect(tile._slotRef.classList.has("hidden")).toBe(true)
+    expect(tile._fallbackRef.classList.has("hidden")).toBe(false)
+    expect(tile.el.dataset.hasVideo).toBe("false")
+
+    // Camera comes back on → trackUnmuted → video appears.
+    pub.isMuted = false
+    tile._onMuteChanged(pub, room._participant)
+    expect(tile._attachedTrack).toBe(track)
+    expect(tile._slotRef.classList.has("hidden")).toBe(false)
+    expect(tile._fallbackRef.classList.has("hidden")).toBe(true)
+
+    // …and off again → back to the avatar, with a single-element detach.
+    pub.isMuted = true
+    tile._onMuteChanged(pub, room._participant)
+    expect(tile._attachedTrack).toBeNull()
+    expect(tile._videoEl).toBeNull()
+    expect(track.detachCalls).not.toContain(null)
+    expect(tile._slotRef.classList.has("hidden")).toBe(true)
+    expect(tile._fallbackRef.classList.has("hidden")).toBe(false)
+  })
+
+  it("NEGATIVE CONTROL: a participant whose MediaStreamTrack has ended shows the avatar", () => {
+    const tile = buildTile("user:remote")
+    const track = fakeTrack()
+    track.mediaStreamTrack = { readyState: "ended" }
+    const room = fakeRoom("user:remote", [livePub(track)])
+    tile._room = room
+
+    tile._reconcile()
+
+    expect(tile._findLiveVideo()).toBeNull()
+    expect(tile._videoEl).toBeNull()
+    expect(tile._fallbackRef.classList.has("hidden")).toBe(false)
+  })
+
+  it("does NOT tear down a live attachment when the room cannot see the participant", () => {
+    // Mid-reconnect / not-yet-populated room. Reconcile must not be the thing
+    // that kills a working video — teardown belongs to trackUnsubscribed.
+    const tile = buildTile("user:remote")
+    const track = fakeTrack()
+    const room = fakeRoom("user:remote", [livePub(track)])
+    tile._room = room
+    tile._attach(track, room._participant)
+    const el = tile._videoEl
+
+    room.remoteParticipants = new Map()
+    tile._reconcile()
+
+    expect(tile._attachedTrack).toBe(track)
+    expect(tile._videoEl).toBe(el)
+    expect(track.detachCalls).toEqual([])
+  })
+
+  it("reconcile is a no-op on a local-dock tile (MeetingClient owns that <video>)", () => {
+    const tile = buildTile("user:me")
+    tile._localDock = true
+    const track = fakeTrack()
+    tile._room = fakeRoom("user:me", [livePub(track)])
+
+    tile._reconcile()
+
+    expect(tile._attachedTrack).toBeNull()
+    expect(tile._videoEl).toBeNull()
+    expect(tile._slotRef.children.length).toBe(0)
+    expect(track._attachedEls.length).toBe(0)
+  })
+
+  it("swaps to a NEW track object when LiveKit republished under the same identity", () => {
+    const tile = buildTile("user:remote")
+    const oldTrack = fakeTrack()
+    const newTrack = fakeTrack()
+    const room = fakeRoom("user:remote", [livePub(oldTrack)])
+    tile._room = room
+
+    tile._attach(oldTrack, room._participant)
+    const oldEl = tile._videoEl
+
+    room._participant.trackPublications = new Map([["0", livePub(newTrack)]])
+    tile._reconcile()
+
+    expect(tile._attachedTrack).toBe(newTrack)
+    expect(oldTrack.detachCalls).toEqual([oldEl])
+    expect(newTrack._attachedEls).toContain(tile._videoEl)
   })
 
   // NOTE: the adaptive-stream resize-kick (`_resizeKick` and friends, PR #519)
