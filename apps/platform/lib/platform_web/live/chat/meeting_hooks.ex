@@ -66,6 +66,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   alias Platform.Meetings.Membership, as: MeetingsMembership
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Meetings.State, as: MeetingState
+  alias Platform.Tenancy
 
   @doc """
   Attach Meeting handlers. Call from `ChatLive.mount/3`.
@@ -673,6 +674,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     # hook.
     with space when not is_nil(space) <- socket.assigns[:active_space],
          user_id when is_binary(user_id) <- socket.assigns[:user_id],
+         :ok <- authorize_join(space.id, user_id),
          display_name = resolve_display_name(socket),
          {:ok, participant} <-
            MeetingsMembership.ensure_chat_space_participant(space.id, user_id, display_name),
@@ -737,6 +739,16 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
       socket
     else
+      # Refusal, not failure. `authorize_join/2` already emitted the
+      # access_blocked telemetry; this arm exists so the refusal does not
+      # land in the "meeting_join failed" warning stream below, and so the
+      # socket comes back byte-identical to the one that went in — no
+      # participant row, no room, no token, no push_event, no broadcast.
+      # A partial join (row written, token withheld) would be worse than
+      # none: the roster would show a person who is not in the call.
+      {:error, :join_not_permitted} ->
+        socket
+
       {:error, reason} ->
         Logger.warning("[ChatLive] meeting_join failed: #{inspect(reason)}")
         socket
@@ -747,6 +759,65 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       _ ->
         socket
     end
+  end
+
+  # ── The join gate ────────────────────────────────────────────────────────
+  #
+  # Loading a meeting page and joining its call are DIFFERENT gates, and
+  # until task 019fb955-f8b1 stage 4 only the first one existed.
+  # `Meetings.generate_token/2` performs no membership check of its own, and
+  # this seam is reached from more than the meeting page: `chat_live.html.heex`
+  # renders a "Meet" button gated on `@meetings_enabled && !@in_meeting` — NOT
+  # on `!@external?` — and `ChatLive` attaches these same hooks. The LiveKit
+  # room is keyed off the space (`room_name_for_space/1`), so both surfaces
+  # land in the SAME room. An external user seated in a meeting's bound chat
+  # space could therefore join the call from the chat host without ever
+  # touching the meet host.
+  #
+  # So the gate lives HERE, once, where every surface passes through it,
+  # rather than being duplicated per caller. Hiding the button (stage 5) is
+  # cosmetics; this is the fence.
+  defp authorize_join(space_id, user_id) do
+    if join_permitted?(space_id, user_id) do
+      :ok
+    else
+      emit_join_blocked(space_id, user_id)
+      {:error, :join_not_permitted}
+    end
+  end
+
+  # An external user may join only a call whose space they hold a live invite
+  # to. Internal users are unaffected — and pay no query for the privilege:
+  # the account is loaded only inside the external branch, so the internal
+  # path is behaviourally identical to the one before this gate existed.
+  #
+  # `Tenancy.external_user?/1` is the same predicate the request-path plug and
+  # `Chat.ExternalScope` already use. Do not grow a second one.
+  defp join_permitted?(space_id, user_id) do
+    if Tenancy.external_user?(%{id: user_id}) do
+      Meetings.invited_to_space?(space_id, Accounts.get_user(user_id))
+    else
+      true
+    end
+  end
+
+  # The refusal is silent to the user by design — no distinguishing flash, so
+  # the socket cannot be used to probe which spaces back a meeting. It is not
+  # silent to the operator: this feeds `Platform.Audit` through the same
+  # `[:platform, :auth, :access_blocked]` event the request-path denials use.
+  defp emit_join_blocked(space_id, user_id) do
+    :telemetry.execute(
+      [:platform, :auth, :access_blocked],
+      %{system_time: System.system_time()},
+      %{
+        action: "blocked",
+        actor_id: user_id,
+        actor_type: "user",
+        resource_type: "chat_space",
+        resource_id: space_id,
+        reason: "external_meeting_join_denied"
+      }
+    )
   end
 
   # Pick the best available display name without depending on a
