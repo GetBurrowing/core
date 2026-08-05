@@ -101,6 +101,29 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
   live status chip, with the row's controls disabled so a double-tap
   cannot double-fire. `MeetingLive` owns the pending set; this module
   only renders it.
+
+  ## Why the mute toggle lives in THIS header (task 019fbaac stage 3)
+
+  The per-meeting mute is a decision about the queue this bar renders —
+  "stop the agents diving in for the rest of this meeting" — so it
+  belongs next to the thing it governs, not in a settings screen a
+  producer would have to leave the meeting to reach. It sits between the
+  `Producer` chip and the expand toggle: last in the reading order of
+  the header's affordances, because it is the least-used and the most
+  consequential.
+
+  The toggle is only HALF the surface. `MeetingLive` also renders a
+  `meeting-intent-mute-badge` in the meeting top bar, outside this
+  component, because this whole bar is gated on the `meeting_producer`
+  role being assigned and vanishes when it is not. A mute indicator that
+  lived only here would be invisible to exactly the person waiting on an
+  agent that a since-departed participant silenced.
+
+  Muted takes the WARNING slot, not the error slot: a hold is attention,
+  not a fault. The amber/red split documented above reserves red for
+  "something is broken", and a deliberate mute is neither. Colour is not
+  the only signal — the glyph swaps `hero-eye` to `hero-eye-slash` and
+  the label states both the state and what a click will do.
   """
   use Phoenix.Component
 
@@ -295,6 +318,17 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
 
   defp normalize(_), do: :queued
 
+  # The mute toggle's accessible name states the STATE and the ACTION,
+  # in that order. "Mute" alone would leave a screen-reader user unable
+  # to tell whether they are about to mute or have already muted, and
+  # `aria-pressed` is carried on the same element precisely because the
+  # two together are what make a toggle legible.
+  defp mute_toggle_label(true),
+    do: "Agents are muted for this meeting — click to let them act on intent"
+
+  defp mute_toggle_label(false),
+    do: "Agents are acting on classified intent — click to mute for this meeting"
+
   # ── Components ─────────────────────────────────────────────────────────────
 
   @doc """
@@ -311,6 +345,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
   attr(:pending_cancels, :any, default: nil)
   attr(:reason_picker_id, :string, default: nil)
   attr(:error, :string, default: nil)
+  attr(:muted, :boolean, default: false)
 
   def intents_collapse(assigns) do
     assigns =
@@ -388,6 +423,37 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
         <.chip tone="primary" class="min-w-0 shrink truncate font-mono text-[10px]">
           Producer
         </.chip>
+
+        <%!-- Per-meeting intent mute (task 019fbaac stage 3).
+
+           BOTH `hero-*` classes are written out in full, and so are both
+           colour class strings. Tailwind v4 scans this file as plain
+           text, so a class assembled at render time — `"hero-eye" <>
+           suffix`, or a tone interpolated into `text-#{tone}` — never
+           reaches the bundle and ships an empty box. Same trap as the
+           status-presentation table above; see the comment there. --%>
+        <button
+          type="button"
+          phx-click="toggle_intent_mute"
+          data-role="meeting-intent-mute-toggle"
+          data-muted={to_string(@muted)}
+          aria-pressed={to_string(@muted)}
+          aria-label={mute_toggle_label(@muted)}
+          title={mute_toggle_label(@muted)}
+          class={[
+            "btn btn-ghost btn-square min-h-11 min-w-11",
+            if(@muted,
+              do: "text-warning bg-warning/10 hover:bg-warning/20",
+              else: "text-base-content/50 hover:text-base-content"
+            )
+          ]}
+        >
+          <span
+            class={["size-4", if(@muted, do: "hero-eye-slash", else: "hero-eye")]}
+            aria-hidden="true"
+          >
+          </span>
+        </button>
 
         <button
           type="button"

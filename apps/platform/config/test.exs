@@ -167,6 +167,13 @@ config :platform, :start_meeting_notifier, false
 # IntentClassifier per case for DataCase sandbox ownership.
 config :platform, :start_meeting_intent_classifier, false
 
+# Same-speaker utterance debounce. `0` = deliver every chunk
+# synchronously inside `handle_info/2`, which is what keeps the
+# broadcast-then-`assert_receive` tests deterministic. The merge itself
+# is covered by cases that pass an explicit `debounce_ms:` to
+# `start_link/1`.
+config :platform, :intent_classifier_debounce_ms, 0
+
 # IntentDispatcher (task 019f2452 stage 4): tests start their own
 # per-case instance for DataCase sandbox ownership. The
 # `sweep_stalled/0` callback is safe to call even without a running

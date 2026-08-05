@@ -51,6 +51,7 @@ defmodule Platform.Meetings.IntentDispatcherTest do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Federation
+  alias Platform.Meetings
   alias Platform.Meetings.IntentCorrection
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentDispatcher
@@ -1847,6 +1848,71 @@ defmodule Platform.Meetings.IntentDispatcherTest do
       # Since stage 4 this counts rows a meeting cursor is holding, not
       # this process's outstanding dispatch tasks (there are none).
       assert is_integer(meta.in_flight)
+    end
+  end
+
+  # ── Per-meeting mute hold (task 019fbaac stage 2) ──────────────────────────
+  describe "per-meeting mute" do
+    test "a muted meeting claims nothing and drains after unmute" do
+      # Both halves in one body, deliberately. The "still :queued"
+      # assertions are satisfiable by a dispatcher that is simply
+      # broken, so the SAME fixture has to go on and dispatch once the
+      # mute lifts before the held half means anything.
+      {meeting, _org_id} = new_real_meeting!()
+      {_agent, _runtime} = seed_target!("designer")
+      {_pid, name} = start_dispatcher!()
+
+      {:ok, _} = Meetings.set_intent_muted(meeting, true)
+
+      # Enqueued AFTER the mute is on, so the queue's own
+      # `:intent_enqueued` notify drains into the hold too — not just
+      # the explicit call below.
+      first = enqueue!(meeting.id, %{})
+      second = enqueue!(meeting.id, %{})
+
+      assert IntentDispatcher.drain(meeting.id, name) == :muted
+
+      assert status_of(meeting.id, first.id) == :queued
+      assert status_of(meeting.id, second.id) == :queued
+      assert IntentQueue.cursor(meeting.id) == nil
+
+      {:ok, _} = Meetings.set_intent_muted(meeting, false)
+
+      assert IntentDispatcher.drain(meeting.id, name) == :dispatched
+      await_status(meeting.id, first.id, :dispatched)
+
+      # Serial cursor semantics are unchanged by the mute: exactly one
+      # row goes out, the other waits its turn.
+      assert status_of(meeting.id, second.id) == :queued
+      assert IntentQueue.cursor(meeting.id) == first.id
+    end
+
+    test "the tick sweep does not count a muted meeting as dispatched" do
+      {meeting, _org_id} = new_real_meeting!()
+      {_agent, _runtime} = seed_target!("designer")
+      attach_telemetry!([[:platform, :meetings, :intent_dispatcher, :tick]])
+
+      # `:tick` reduces over EVERY live queue on the node, and queue
+      # owners are application-global — a sibling test's leftover queue
+      # would contribute its own `:dispatched` to `claimed` and make a
+      # `== 0` assertion mean nothing about mute. Narrow the tick's
+      # universe to this meeting, then assert that is what it is.
+      Enum.each(IntentQueue.live_meeting_ids(), fn id ->
+        if id != meeting.id, do: IntentQueue.stop(id)
+      end)
+
+      assert IntentQueue.live_meeting_ids() == [meeting.id]
+
+      {:ok, _} = Meetings.set_intent_muted(meeting, true)
+      _row = enqueue!(meeting.id, %{})
+
+      start_dispatcher!(tick_interval_ms: 50)
+
+      assert_receive {:telemetry, [:platform, :meetings, :intent_dispatcher, :tick],
+                      %{claimed: claimed}, _meta},
+                     2_000
+
+      assert claimed == 0
     end
   end
 end

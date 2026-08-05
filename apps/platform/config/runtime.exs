@@ -273,6 +273,28 @@ if config_env() == :prod do
   # allowlisted; external ChatLive socket connects fail 403.
   chat_host = System.get_env("CHAT_HOST")
 
+  # EXTRA_ORIGIN_APEXES is an optional comma-separated list of ADDITIONAL apex
+  # domains (e.g. "example.com") that resolve to this same Phoenix endpoint.
+  # Suite is being served on a second apex in parallel with the PHX_HOST apex
+  # ahead of a later cutover: Traefik already routes suite./chat./meet.<apex>
+  # there with a valid wildcard cert, but check_origin only allowlists the
+  # PHX_HOST apex, so LiveView WebSocket handshakes from the second apex are
+  # rejected — static pages render while LiveView never connects. Each entry
+  # gets the same three-entry treatment as the primary apex; the "//*.<apex>"
+  # wildcard is what covers the suite./chat./meet. subdomains there, so no
+  # per-subdomain vars are needed. Unset or empty → nothing extra is
+  # allowlisted and check_origin is identical to the single-apex behaviour.
+  extra_origin_apexes =
+    System.get_env("EXTRA_ORIGIN_APEXES", "")
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+
+  # NOTE: `config :platform, :chat_host` used to be set here, inside the prod
+  # block. It now lives at the top level (see the `:chat_host` config above)
+  # because reading it only in prod left the external-chat fence inert in
+  # dev/CI — any test of it was vacuous. The `chat_host` binding above is
+  # still used by `check_origin`, which is prod-only by nature.
   config :platform, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :platform, PlatformWeb.Endpoint,
@@ -287,7 +309,10 @@ if config_env() == :prod do
         "//*.#{host}"
       ] ++
         if(meet_host, do: ["https://#{meet_host}"], else: []) ++
-        if(chat_host, do: ["https://#{chat_host}"], else: []),
+        if(chat_host, do: ["https://#{chat_host}"], else: []) ++
+        Enum.flat_map(extra_origin_apexes, fn apex ->
+          ["https://#{apex}", "https://www.#{apex}", "//*.#{apex}"]
+        end),
     secret_key_base: secret_key_base
 end
 

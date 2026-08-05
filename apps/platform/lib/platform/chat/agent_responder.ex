@@ -452,6 +452,7 @@ defmodule Platform.Chat.AgentResponder do
   defp broadcast_system_event(runtime, %Agent{} = agent, context) do
     topic = AttentionDispatch.topic(runtime.runtime_id)
     responsibility_key = context[:responsibility_key]
+    space_id = dispatch_space_id(context)
 
     # Built ONCE, before the presence branch, so what the dead-letter ledger
     # stores is byte-identical to what we would have put on the wire. Building
@@ -465,18 +466,30 @@ defmodule Platform.Chat.AgentResponder do
           "responsibility=#{inspect(responsibility_key)} agent=#{agent.slug}"
       )
 
-      # `space_id: nil` is a DECISION, not an omission, and it must stay nil.
-      # A system_event fire names no space: `build_system_event_signal/2`
-      # deliberately keeps `space_id` off the wire because
-      # `claude-code-suite-channel`'s `attention.ts` pins a pending permission
-      # prompt's answer space to the top-level `signal.space_id`, so a
-      # background responsibility fire that carried one would relocate a live
-      # approval prompt to a space nobody is watching. The funnel taking the
-      # space as an OPTION is what lets this path route through it without
-      # inventing one — the invite is a clean `:no_space_named` skip and the
-      # signal still goes out unchanged.
+      # THE OPTION IS NOT THE WIRE, and that distinction is the whole
+      # design here. `space_id:` feeds `DispatchMembership.ensure_writable/3`
+      # and NOTHING else — the wire payload is a separate argument the
+      # option never touches — so a dispatch can invite its agent into a
+      # space without the signal claiming the top-level `signal.space_id`
+      # slot, which `claude-code-suite-channel`'s `attention.ts` reserves for
+      # pinning where a pending permission prompt gets answered. A background
+      # fire that claimed that slot would relocate a live approval prompt to
+      # a space nobody is watching. `build_system_event_signal/2` therefore
+      # still keeps `space_id` off the top level (see `@correlation_id_keys`),
+      # and the space travels as an option resolved from `metadata.space_id`.
+      #
+      # `nil` REMAINS the answer for most fires, and stays first-class. It
+      # is what a cron sweep and a webhook fire pass — they name no space —
+      # and it resolves to a clean `:no_space_named` skip with the signal
+      # going out unchanged. What was wrong before was the GENERALISATION
+      # that "a system_event fire names no space": true for those two, false
+      # for a meeting-intent fire, which names exactly one. Six such intents
+      # dispatched to a native assignee on the 2026-08-01 production meeting
+      # `019fb8ec-8644-75a4-b764-cc859d082dce` and produced zero invites;
+      # the agent was told to create a canvas "in this meeting's space" and
+      # was not a participant of it. See `dispatch_space_id/1`.
       case AttentionDispatch.broadcast(runtime.runtime_id, payload,
-             space_id: nil,
+             space_id: space_id,
              agent_id: agent,
              source: :agent_responder
            ) do
@@ -514,7 +527,13 @@ defmodule Platform.Chat.AgentResponder do
           runtime_pk: runtime.id,
           agent_id: agent.id,
           agent_slug: agent.slug,
-          space_id: nil,
+          # The same space the live fire would have invited into. A row
+          # that recorded `nil` here while the fire named a space would
+          # replay through `DeadLetterReplay.broadcast/4` — which passes
+          # `row.space_id` to the funnel — as a delivery WITHOUT the
+          # invite, i.e. the exact dead-on-arrival dispatch this closes,
+          # reintroduced at replay time and only there.
+          space_id: space_id,
           source: "system_event",
           responsibility_key: responsibility_key,
           feature: Map.get(metadata, :feature),
@@ -540,6 +559,37 @@ defmodule Platform.Chat.AgentResponder do
       {:error, :runtime_offline}
     end
   end
+
+  # The space a system_event dispatch NAMES, for the invite only.
+  #
+  # Read from `metadata`, which is the carrier the client contract
+  # permits. `claude-code-suite-channel`'s `attention.ts` pins a pending
+  # permission prompt's answer space from the TOP-LEVEL `signal.space_id`
+  # and from nowhere else, while resolving a mere reply target more
+  # permissively — its `METADATA_SCALAR_KEYS` list carries `space_id`
+  # with the comment *"rides this list as a reply target only"*. Replying
+  # is safe; re-pinning is not. So `metadata.space_id` names the space
+  # without claiming the prompt slot, and the recipient's `<channel>` tag
+  # gets a repliable space into the bargain.
+  #
+  # Nil for every fire whose producer named no space — cron, webhook, and
+  # any responsibility whose provider does not set `:dispatch_space_id`
+  # (see `Platform.Responsibilities.Router.put_dispatch_space/2`). `nil`
+  # is a first-class value at the funnel: `:no_space_named`, skip, deliver
+  # anyway.
+  #
+  # Blank strings are normalised to nil rather than forwarded. The funnel
+  # would report `:invalid_space_id` for `""` — a resolution failure
+  # reported as a malformed input, which is the reason collapse
+  # `DispatchMembership`'s eight distinct refusal atoms exist to prevent.
+  defp dispatch_space_id(%{metadata: metadata}) when is_map(metadata) do
+    case Map.get(metadata, :space_id) do
+      space_id when is_binary(space_id) and space_id != "" -> space_id
+      _ -> nil
+    end
+  end
+
+  defp dispatch_space_id(_context), do: nil
 
   # ENVELOPE-RECORD 2/3 — system_event attention envelope
   # DECIDED: the native system_event envelope is BARE — `%{signal: signal}`, in
@@ -679,6 +729,18 @@ defmodule Platform.Chat.AgentResponder do
   # lifted its own `space_id` here would silently move a live approval prompt
   # to a space nobody is watching. Adding `space_id` to this list would defeat
   # a client-side guard the client cannot defend itself against.
+  # THIS STAYS TRUE NOW THAT A DISPATCH CAN NAME A SPACE. As of
+  # 2026-08-01 a meeting-intent fire carries `metadata.space_id`, and
+  # `broadcast_system_event/3` reads it there to pass the funnel's
+  # `space_id:` OPTION so the recipient is invited. Metadata is the
+  # legitimate carrier and the top level is not: the same client resolves a
+  # reply target from `signal.metadata` — its `METADATA_SCALAR_KEYS` list
+  # carries `space_id` under the comment *"rides this list as a reply target
+  # only"* — while the permission pin reads the root and nothing else.
+  # Replying is safe; re-pinning is not. Promoting `space_id` from metadata
+  # to this list would convert a repliable dispatch into a hijacked approval
+  # prompt, and `agent_responder_attention_funnel_test.exs` asserts the
+  # top-level key is ABSENT on both the space-naming and the space-less fire.
   # `:intent_id` added 2026-07-31. A meeting intent dispatched down the
   # responsibility path holds the meeting's SERIAL cursor until the
   # recipient calls `intent_ack`, and the recipient cannot ack a handle
@@ -808,6 +870,29 @@ defmodule Platform.Chat.AgentResponder do
     |> maybe_put(:task_status, task_status)
     |> maybe_put(:agent_id, Map.get(agent || %{}, :id))
     |> maybe_put(:agent_slug, Map.get(agent || %{}, :slug))
+    # Forwarded for federated runtimes that isolate each dispatch into its own
+    # session. `message_id` is the only stable per-firing identifier we can
+    # offer; without it a runtime must key on arrival time, so a reconnect
+    # redelivery spawns a duplicate session for the same dispatch.
+    |> maybe_put(:message_id, Map.get(signal, :message_id))
+    # Same flattened shape as `build_system_event_signal/2` so a runtime sees
+    # one contract on both external paths. A `:chat_pattern` responsibility
+    # arrives here (it has a chat message) rather than via the system_event
+    # path, and without these it is indistinguishable from a human mention.
+    #
+    # Deliberately NOT forwarding the raw `:metadata` map: `dispatch_parallel/3`
+    # stores the frozen history snapshot there, which is already delivered under
+    # `payload.history` and can be arbitrarily large.
+    |> maybe_put(:responsibility_key, responsibility_field(signal, :responsibility_key))
+    |> maybe_put(:feature, responsibility_field(signal, :feature))
+    |> maybe_put(:trigger_kind, responsibility_field(signal, :trigger_kind))
+  end
+
+  defp responsibility_field(signal, key) do
+    case Map.get(signal, :metadata) do
+      meta when is_map(meta) -> Map.get(meta, key)
+      _ -> nil
+    end
   end
 
   defp execution_task_context(space_id) do

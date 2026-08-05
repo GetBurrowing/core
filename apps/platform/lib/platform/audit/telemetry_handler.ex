@@ -89,13 +89,37 @@ defmodule Platform.Audit.TelemetryHandler do
     [:platform, :chat, :space_purged],
     # Task 019e2c4b stage 1 — canvas read by a NON-member. Emitted by
     # `Platform.Chat.CanvasAccess.fetch_for_viewer/3` only when the grant is
-    # `:task_reader` or `:org_reader`; `:member` reads are in-space and are
-    # deliberately not audited (they would bury the signal). Metadata carries
-    # actor_id (viewer), actor_type "user", resource_type "canvas",
-    # resource_id (canvas id), action "read", plus grant + space_id. Sync
-    # (default handle_event clause) so tests can assert the row immediately
-    # after the call returns.
+    # `:task_agent`, `:task_reader` or `:org_reader`; `:member` reads are
+    # in-space and are deliberately not audited (they would bury the signal).
+    # Metadata carries actor_id (viewer), actor_type "user" OR "agent" —
+    # `:task_agent` (task 019fb01b stage 2) is the agent-shaped level, and
+    # `Platform.Audit.Event` allows that value (event.ex:39) — resource_type
+    # "canvas", resource_id (canvas id), action "read", plus grant + space_id.
+    # Sync (default handle_event clause) so tests can assert the row
+    # immediately after the call returns.
     [:platform, :chat, :canvas_read],
+    # Task 019fb01b stage 5 — the DENIAL half of the line above. Emitted by
+    # `Platform.Chat.Canvas.ToolAccess.fetch_for_read/2` on the `:forbidden`
+    # branch only, i.e. the MCP canvas tool surface. Metadata carries actor_id +
+    # actor_type ("agent"; "user" for the user-shaped context that surface
+    # accepts; "anonymous" for a runtime with a nil agent_id), resource_type
+    # "canvas", resource_id (canvas id), action "read_denied", surface
+    # "mcp_tool", and runtime_id when the context carries one — the last is what
+    # makes a run of denials attributable to one caller rather than unrelated
+    # mistakes. It is omitted rather than set to nil, because `ensure_json_safe/1`
+    # below stringifies atoms and would persist nil as the string "nil".
+    #
+    # This is the detection control for the existence oracle stage 3 kept on
+    # purpose: `:not_found` and `:forbidden` stay distinct, so a forbidden
+    # answer confirms an id is real. `:not_found` answers deliberately do NOT
+    # emit — a stale task attachment produces one on an honest call — and nor do
+    # write denials. Sync (default handle_event clause) so tests can assert the
+    # row immediately after the call returns.
+    #
+    # `[:platform, :federation, :tool_call_denied]` (runtime_channel.ex) does
+    # not cover this: it fires when a runtime asks for a tool outside its
+    # capability bundle, one level earlier and on a different question.
+    [:platform, :chat, :canvas_read_denied],
     # Task 019f5bc4 — historian dispatch pipeline audit trail. Emitters at
     # HistorianDispatcher.do_dispatch_windowed/5 + dispatch_one_window/12
     # (landed stage 1). These are the ONLY events routed async (via

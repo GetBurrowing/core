@@ -48,6 +48,16 @@ defmodule Platform.Meetings.IntentDispatcher do
       dispatcher that was down when one fired. It claims nothing on its
       own that the notify path wouldn't have.
 
+  ## Per-meeting mute hold (task 019fbaac)
+
+  `do_drain/2` answers `:muted` — without claiming — while
+  `Platform.Meetings.intent_muted?/1` is true for the meeting. Every
+  wake-up path funnels through that one function, so the hold covers
+  the notify, the tick and the explicit `drain/2` call alike. The
+  classifier is where mute actually stops work (no model call, no row);
+  this hold only stops a backlog classified in the seconds BEFORE the
+  toggle from firing afterwards. It cancels nothing.
+
   `sweep_stalled/0` (the `Platform.Responsibilities.StallRegistry`
   callback) is now the same re-drive. Stall DETECTION moved into the
   queue: a row that goes out and never comes back is resolved by the
@@ -259,13 +269,19 @@ defmodule Platform.Meetings.IntentDispatcher do
   Drain one meeting: claim its next queued intent, if the cursor is
   free, and dispatch it.
 
-  Returns `:dispatched`, `:busy`, or `:empty`. `server` defaults to the
-  singleton's registered name; tests boot per-case instances under
-  unique names and pass them here. A call to a dispatcher that isn't
-  running answers `:empty` rather than exiting — callers use this as a
-  nudge, not as a source of truth.
+  Returns `:dispatched`, `:busy`, `:empty`, or `:muted`. `server`
+  defaults to the singleton's registered name; tests boot per-case
+  instances under unique names and pass them here. A call to a
+  dispatcher that isn't running answers `:empty` rather than exiting —
+  callers use this as a nudge, not as a source of truth.
+
+  `:muted` means the meeting's per-meeting intent mute is on (task
+  019fbaac): nothing was claimed, every queued row is still `:queued`,
+  and the next drain after an unmute picks up where this one stopped.
+  It is deliberately distinct from `:empty` — "held" and "nothing to
+  do" are different facts.
   """
-  @spec drain(binary(), GenServer.server()) :: :dispatched | :busy | :empty
+  @spec drain(binary(), GenServer.server()) :: :dispatched | :busy | :empty | :muted
   def drain(meeting_id, server \\ __MODULE__) when is_binary(meeting_id) do
     GenServer.call(server, {:drain, meeting_id})
   catch
@@ -340,7 +356,33 @@ defmodule Platform.Meetings.IntentDispatcher do
 
   # ── Drain pipeline ─────────────────────────────────────────────────────────
 
+  # Per-meeting mute hold (task 019fbaac stage 2). Checked BEFORE
+  # `claim_next/1` so a muted meeting never takes a row off its queue:
+  # rows stay `:queued`, the serial cursor stays free, and nothing is
+  # cancelled. This is not a second product — it is the completion of
+  # "stop now" for rows the classifier had already banked in the seconds
+  # before the click. Without it, muting mid-sentence still lets the
+  # backlog fire, which is exactly what the toggle exists to prevent.
+  #
+  # No extra wake-up is needed after an unmute: the `:tick` reduce above
+  # re-visits every live meeting, and the queue's own `:intent_enqueued`
+  # notify covers the hot path.
+  #
+  # Rows already `:dispatched` or `:acked` are untouched — muting does
+  # not cancel in flight work. The producer's per-row X already runs
+  # `IntentQueue.cancel/3` under the `intent_cancelled` -> `cancel_honored`
+  # contract, and auto-firing N cancels nobody asked for would race the
+  # 90s ack window and manufacture `:cancelled_late` rows for work that
+  # had already landed.
   defp do_drain(meeting_id, state) do
+    if Meetings.intent_muted?(meeting_id) do
+      {:muted, state}
+    else
+      claim_and_dispatch(meeting_id, state)
+    end
+  end
+
+  defp claim_and_dispatch(meeting_id, state) do
     case IntentQueue.claim_next(meeting_id) do
       {:ok, row} ->
         {:dispatched, dispatch_row(meeting_id, row, state)}

@@ -1,14 +1,20 @@
 defmodule Platform.Chat.CanvasAccessTest do
   @moduledoc """
-  Stage 1 of task 019e2c4b — canvas read authorization.
+  Canvas read authorization — task 019e2c4b stage 1, extended by task 019fb01b
+  stage 2 (`:task_agent`).
 
-  This module decides who may read a canvas through the forthcoming standalone
-  `/canvases/:id` page, so every grant path and every denial is asserted
-  explicitly rather than inferred from a happy path.
+  This module decides who may read a canvas through the standalone
+  `/canvases/:id` page and the MCP canvas surface, so every grant path and
+  every denial is asserted explicitly rather than inferred from a happy path.
 
   Covers:
 
     * `:member` — space participation, including in an execution space
+    * `:task_agent` — an AGENT named in an attached live task's
+      `phase_assignees`, including a non-current phase slot and survival across
+      a phase rotation, plus the denials that keep the grant narrow
+      (attribution-only, `"user"`-typed slot, untyped slot, foreign task,
+      soft-deleted task, detached canvas)
     * `:task_reader` — attachment to a live task in an org the viewer belongs
       to, including the incident shape (canvas in an EXECUTION space)
     * `:org_reader` — accessible non-archived CHANNEL with a non-nil org, for
@@ -18,7 +24,9 @@ defmodule Platform.Chat.CanvasAccessTest do
     * execution and archived spaces are excluded from `:org_reader`
     * `:not_found` and `:forbidden` are distinct return values
     * soft-deleted canvases: `:not_found` without a grant, `{:ok, …}` with one
-    * audit rows for `:task_reader` / `:org_reader`, none for `:member`
+    * audit rows for `:task_agent` / `:task_reader` / `:org_reader`, none for
+      `:member`
+    * no read grant confers write
   """
 
   use Platform.DataCase, async: true
@@ -100,6 +108,40 @@ defmodule Platform.Chat.CanvasAccessTest do
       )
 
     attachment
+  end
+
+  # Attribution, not authorization. Used only to prove that the agent named on
+  # the attachment row gets nothing from having put the row there.
+  defp attach_as_agent!(task, canvas, agent_id) do
+    {:ok, attachment} =
+      CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+        attached_by: %{kind: "agent", id: agent_id}
+      )
+
+    attachment
+  end
+
+  # Bind an agent to one phase slot through the canonical writer
+  # (`Tasks.set_phase_assignees/2`, ADR-0044) rather than a raw changeset, so
+  # the fixture cannot drift from the shape the column actually holds.
+  defp bind_agent!(task, phase, agent_id) do
+    {:ok, updated} =
+      Tasks.set_phase_assignees(task, %{
+        phase => %{"assignee_id" => agent_id, "assignee_type" => "agent"}
+      })
+
+    updated
+  end
+
+  # Write one phase slot verbatim, bypassing the canonical writer, so the
+  # malformed-slot denials can construct shapes `set_phase_assignees/2` would
+  # never emit.
+  defp put_phase_slot!(task, phase, slot) do
+    task
+    |> Ecto.Changeset.change(%{
+      phase_assignees: Map.put(task.phase_assignees || %{}, phase, slot)
+    })
+    |> Repo.update!()
   end
 
   defp soft_delete_canvas!(canvas) do
@@ -250,6 +292,319 @@ defmodule Platform.Chat.CanvasAccessTest do
       assert event.resource_id == canvas.id
       assert event.metadata["grant"] == "task_reader"
       assert event.metadata["space_id"] == space.id
+    end
+  end
+
+  # ── 2b. :task_agent ───────────────────────────────────────────────────────
+  #
+  # Task 019fb01b stage 2. The agent analogue of `:task_reader`: an agent bound
+  # to a task by `phase_assignees` may read the canvases attached to that task.
+
+  describe "fetch_for_viewer/3 — :task_agent" do
+    test "an agent bound to a phase of an attached task reads the canvas", %{org_a: org_a} do
+      # The designer's own space, which the bound agent does not participate in
+      # — the ADR-0046 native path that `:member` cannot reach.
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      agent_id = UUID.generate()
+      bind_agent!(task, "execution", agent_id)
+
+      assert {:ok, %Canvas{id: id}, :task_agent} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
+
+      assert id == canvas.id
+    end
+
+    test "reaches a canvas in an EXECUTION space the agent is not rostered in", %{org_a: org_a} do
+      space = space!(%{kind: "execution", org_id: nil})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      agent_id = UUID.generate()
+      bind_agent!(task, "planning", agent_id)
+
+      assert {:ok, _canvas, :task_agent} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
+    end
+
+    test "a NON-current phase slot is enough — every slot is read", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      agent_id = UUID.generate()
+      # A freshly created task is `backlog`, whose phase is "planning". Binding
+      # "review" leaves the flat current-phase pointer untouched, so this agent
+      # is reachable ONLY through the map.
+      updated = bind_agent!(task, "review", agent_id)
+      assert updated.assignee_id == nil
+      assert updated.assignee_type == nil
+
+      assert {:ok, _canvas, :task_agent} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
+    end
+
+    test "the grant survives a phase rotation", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      planner = UUID.generate()
+      executor = UUID.generate()
+      task = bind_agent!(task, "planning", planner)
+      task = bind_agent!(task, "execution", executor)
+      assert task.assignee_id == planner
+
+      assert {:ok, _canvas, :task_agent} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, planner})
+
+      # backlog → in_progress moves the current phase to "execution", and the
+      # flat pointer is re-derived off the execution slot. This is the exact
+      # rotation that would have revoked a grant keyed on `assignee_id`.
+      {:ok, rotated} = Tasks.transition_task_status(task, "in_progress")
+      assert Tasks.current_phase(rotated) == "execution"
+      assert rotated.assignee_id == executor
+
+      assert {:ok, _canvas, :task_agent} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, planner})
+    end
+
+    test "both agents on a two-phase task resolve", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      planner = UUID.generate()
+      executor = UUID.generate()
+      task = bind_agent!(task, "planning", planner)
+      bind_agent!(task, "execution", executor)
+
+      assert {:ok, _canvas, :task_agent} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, planner})
+
+      assert {:ok, _canvas, :task_agent} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, executor})
+    end
+
+    test ":member outranks :task_agent when the agent is also in the space", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      agent_id = UUID.generate()
+      add_agent!(space.id, agent_id)
+      bind_agent!(task, "execution", agent_id)
+
+      assert {:ok, _canvas, :member} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
+    end
+
+    test "the resolution is audited as an AGENT read", %{org_a: org_a} do
+      space = space!(%{kind: "execution", org_id: nil})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      agent_id = UUID.generate()
+      bind_agent!(task, "execution", agent_id)
+
+      assert {:ok, _canvas, :task_agent} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
+
+      assert [event] = canvas_audit_rows(canvas)
+      assert event.event_type == "platform.chat.canvas_read"
+      assert event.actor_id == agent_id
+      assert event.actor_type == "agent"
+      assert event.action == "read"
+      assert event.resource_id == canvas.id
+      assert event.metadata["grant"] == "task_agent"
+      assert event.metadata["space_id"] == space.id
+    end
+
+    test "a soft-deleted canvas still resolves for a bound agent", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      agent_id = UUID.generate()
+      bind_agent!(task, "execution", agent_id)
+      soft_delete_canvas!(canvas)
+
+      assert {:ok, %Canvas{deleted_at: %DateTime{}}, :task_agent} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
+    end
+  end
+
+  describe "fetch_for_viewer/3 — :task_agent denials" do
+    test "attaching the canvas grants the ATTACHER nothing", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+
+      designer_id = UUID.generate()
+      attach_as_agent!(task, canvas, designer_id)
+
+      # `attached_by_id` is attribution. The designer appears in no phase slot.
+      assert {:error, :forbidden} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, designer_id})
+    end
+
+    test "a phase slot typed \"user\" denies an agent of the same id", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      id = UUID.generate()
+      put_phase_slot!(task, "execution", %{"assignee_id" => id, "assignee_type" => "user"})
+
+      assert {:error, :forbidden} = CanvasAccess.fetch_for_viewer(canvas.id, {:agent, id})
+    end
+
+    test "a phase slot with no assignee_type denies — the type must be stated", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      id = UUID.generate()
+      put_phase_slot!(task, "execution", %{"assignee_id" => id})
+
+      # `Tasks.per_phase_assignee/2` defaults a type-less slot to "agent". This
+      # grant deliberately does not: an untyped id could be a user id, and
+      # handing an agent a grant off an ambiguous row is the wrong direction to
+      # fail in.
+      assert {:error, :forbidden} = CanvasAccess.fetch_for_viewer(canvas.id, {:agent, id})
+    end
+
+    test "a flat-pair-only assignment does NOT confer the grant", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{project: project} = task_in!(org_a)
+
+      agent_id = UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Flat pair only",
+          assignee_type: "agent",
+          assignee_id: agent_id
+        })
+
+      attach!(task, canvas)
+      assert task.phase_assignees == %{}
+
+      # ADR-0044 routes flat writes into the current-phase slot at the MCP and
+      # LiveView boundaries, which is what keeps `phase_assignees` a superset in
+      # practice. A raw `create_task/1` skips that routing, and `task_start` is
+      # named in ADR-0044's Deferred section as still writing flat directly. The
+      # grant reads the map only, so those bindings deny. Fail-closed and
+      # deliberate; widening it means fixing the writers, not the reader.
+      assert {:error, :forbidden} = CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
+    end
+
+    test "a bound agent is denied a canvas attached to a DIFFERENT task", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: attached_task} = task_in!(org_a)
+      attach!(attached_task, canvas)
+
+      %{task: other_task} = task_in!(org_a)
+      agent_id = UUID.generate()
+      bind_agent!(other_task, "execution", agent_id)
+
+      assert {:error, :forbidden} = CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
+    end
+
+    test "a soft-deleted task no longer confers the grant", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      agent_id = UUID.generate()
+      task = bind_agent!(task, "execution", agent_id)
+
+      assert {:ok, _canvas, :task_agent} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
+
+      {:ok, _deleted} = Tasks.soft_delete_task(task)
+
+      assert {:error, :forbidden} = CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
+    end
+
+    test "detaching the canvas revokes the grant", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      agent_id = UUID.generate()
+      bind_agent!(task, "execution", agent_id)
+
+      assert {:ok, _canvas, :task_agent} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
+
+      :ok = CanvasAttachments.detach_canvas(task.id, canvas.id)
+
+      assert {:error, :forbidden} = CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
+    end
+
+    test "a USER viewer gets nothing from an agent phase slot carrying their id", %{
+      org_a: org_a,
+      org_b: org_b
+    } do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      # Org B membership so `:task_reader` (org A's project) cannot answer for
+      # them, and `:org_reader` cannot either.
+      user = create_user!()
+      plain_member!(user, org_b)
+      bind_agent!(task, "execution", user.id)
+
+      assert {:error, :forbidden} = CanvasAccess.fetch_for_viewer(canvas.id, user)
+      assert {:error, :forbidden} = CanvasAccess.fetch_for_viewer(canvas.id, {:user, user.id})
+    end
+
+    test "a soft-deleted canvas is :not_found for an UNBOUND agent", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+      soft_delete_canvas!(canvas)
+
+      assert {:error, :not_found} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, UUID.generate()})
+    end
+  end
+
+  describe "fetch_for_writer/2 — :task_agent does not confer write" do
+    test "a bound agent that reads the canvas may not write it", %{org_a: org_a} do
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      %{task: task} = task_in!(org_a)
+      attach!(task, canvas)
+
+      agent_id = UUID.generate()
+      bind_agent!(task, "execution", agent_id)
+
+      assert {:ok, _canvas, :task_agent} =
+               CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
+
+      assert {:error, :forbidden} = CanvasAccess.fetch_for_writer(canvas.id, {:agent, agent_id})
     end
   end
 

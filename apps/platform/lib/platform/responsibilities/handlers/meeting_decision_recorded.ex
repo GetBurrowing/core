@@ -112,6 +112,10 @@ defmodule Platform.Responsibilities.Handlers.MeetingDecisionRecorded do
 
   {{org_identity}}
 
+  ## Where the room can see you
+
+  This meeting's own chat space is `{{meeting_space_id}}`. Your artifact is the journal, not a canvas, so you will usually not write here at all — it is named so that the cross-reference below is addressable and so anything you do post lands where the room is looking. If that line says the meeting names no chat space, say so in your ack `note` rather than guessing at another one.
+
   ## What is already in the meeting's space
 
   {{meeting_canvases}}
@@ -191,6 +195,13 @@ defmodule Platform.Responsibilities.Handlers.MeetingDecisionRecorded do
     workspace_id = Map.get(payload, :workspace_id) || Map.get(payload, "workspace_id")
     base_opts = if workspace_id, do: [workspace_id: workspace_id], else: []
 
+    # Resolved ONCE and used twice. The canvas inventory is read FROM
+    # this space and `dispatch_space_id` is what gets the recipient
+    # invited INTO it, so resolving it twice would let the two disagree
+    # — an agent shown one space's canvases and made writable in
+    # another is a worse dispatch than the dead one this closes.
+    space_id = IntentContext.space_id(payload)
+
     with {:ok, %{org_identity: identity}} <-
            ContextProviders.gather_context(:org_identity, base_opts) do
       {:ok,
@@ -198,7 +209,14 @@ defmodule Platform.Responsibilities.Handlers.MeetingDecisionRecorded do
          org_identity: identity,
          meeting_intent: IntentContext.meeting_intent(payload),
          transcript_window: IntentContext.transcript_window(payload),
-         meeting_canvases: IntentContext.space_canvases(IntentContext.space_id(payload))
+         meeting_canvases: IntentContext.space_canvases(space_id),
+         # NOT a prompt slot. This is the provider OPTING IN to the
+         # dispatch invite: `Router.build_native_signal/5` lifts it to
+         # the native signal's `metadata.space_id`, which is the only
+         # input `Platform.Chat.DispatchMembership.ensure_writable/3`
+         # has. A provider that names none keeps the `:no_space_named`
+         # skip. See `Platform.Responsibilities.Provider`.
+         dispatch_space_id: space_id
        }}
     end
   end
@@ -296,6 +314,10 @@ defmodule Platform.Responsibilities.Handlers.MeetingDecisionRecorded do
       meeting_intent: IntentContext.format_intent(Map.get(context, :meeting_intent) || %{}),
       transcript_window: IntentContext.format_window(Map.get(context, :transcript_window) || %{}),
       meeting_canvases: IntentContext.format_canvases(Map.get(context, :meeting_canvases) || %{}),
+      # Read off the INVENTORY slot, not re-derived from the payload:
+      # the space the prompt names is by construction the space the
+      # canvas list was read from.
+      meeting_space_id: IntentContext.format_space(Map.get(context, :meeting_canvases) || %{}),
       org_identity: IntentContext.format_identity(Map.get(context, :org_identity))
     }
   end

@@ -1681,7 +1681,7 @@ defmodule Platform.Responsibilities.Router do
     log_native_prompt_fidelity(responsibility, agent, outcome)
     emit_prompt_absent_telemetry(responsibility, outcome)
 
-    signal = build_native_signal(responsibility, agent, trigger_meta, outcome)
+    signal = build_native_signal(responsibility, agent, trigger_meta, outcome, context)
 
     Logger.info(
       "[ResponsibilityRouter] #{kind} dispatch key=#{responsibility.key} " <>
@@ -1722,7 +1722,18 @@ defmodule Platform.Responsibilities.Router do
   # than replacing the omission with an empty string. See
   # `prompt_disposition/1` for why an empty body must never become an empty
   # `prompt`.
-  defp build_native_signal(%Responsibility{} = responsibility, agent, trigger_meta, outcome) do
+  #
+  # Takes the gathered CONTEXT as well, for one reason only: a provider
+  # may name the space this dispatch writes into, and that space has to
+  # reach the invite. See `put_dispatch_space/2` — it lands in
+  # `metadata.space_id`, never at the top level of the signal.
+  defp build_native_signal(
+         %Responsibility{} = responsibility,
+         agent,
+         trigger_meta,
+         outcome,
+         context
+       ) do
     reason = native_reason_for(Map.get(trigger_meta, :kind))
 
     metadata =
@@ -1734,6 +1745,7 @@ defmodule Platform.Responsibilities.Router do
         agent_slug: agent_slug(agent)
       }
       |> put_trigger_scalars(trigger_meta)
+      |> put_dispatch_space(context)
       |> maybe_put(:prompt, prompt_body(outcome))
       |> put_prompt_status(outcome)
 
@@ -1819,6 +1831,53 @@ defmodule Platform.Responsibilities.Router do
       end
     end)
   end
+
+  # THE SPACE A DISPATCH NAMES — read from the PROVIDER'S GATHERED
+  # CONTEXT, written to `metadata.space_id`, and deliberately never to
+  # the top level of the signal.
+  #
+  # `Platform.Chat.AgentResponder.broadcast_system_event/3` passes
+  # `metadata[:space_id]` to `Federation.AttentionDispatch.broadcast/3`
+  # as the `space_id:` OPTION, and that option is the only input
+  # `Platform.Chat.DispatchMembership.ensure_writable/3` has. Without a
+  # space there, the invite is a clean `:no_space_named` skip and the
+  # dispatched agent is not a participant of the space it was just told
+  # to write into — which is dead on arrival for anything holding
+  # `canvas_create` / `canvas_patch`. Measured on the 2026-08-01
+  # production meeting `019fb8ec-8644-75a4-b764-cc859d082dce`: six
+  # meeting intents dispatched to a native assignee, zero invites.
+  #
+  # OPTION IS NOT WIRE. The option feeds the invite and nothing else;
+  # the wire payload is a separate argument it never touches. So the
+  # space can invite the agent WITHOUT the signal claiming the
+  # top-level `space_id` slot, which `claude-code-suite-channel`'s
+  # `attention.ts` reserves for pinning where a pending permission
+  # prompt is answered. That is why this writes `metadata.space_id` and
+  # why `space_id` is still absent from
+  # `AgentResponder.@correlation_id_keys`. Read the paragraph above
+  # that list before changing either half.
+  #
+  # OPT-IN, NOT AMBIENT. The key is the provider's `:dispatch_space_id`
+  # — a context key a gatherer sets deliberately (today: the six
+  # `meetings.*` intent handlers, from
+  # `Platform.Meetings.IntentContext.space_id/1`). It is deliberately
+  # NOT sniffed from `trigger_meta`, and deliberately not a plain
+  # `:space_id` context key: a cron sweep or a webhook fire whose
+  # context happens to mention a space must keep taking the
+  # `:no_space_named` skip rather than quietly inviting its agent into
+  # somewhere. A responsibility starts inviting only when its provider
+  # says so.
+  defp put_dispatch_space(metadata, context) when is_map(context) do
+    case Map.get(context, :dispatch_space_id) do
+      space_id when is_binary(space_id) and space_id != "" ->
+        Map.put(metadata, :space_id, space_id)
+
+      _ ->
+        metadata
+    end
+  end
+
+  defp put_dispatch_space(metadata, _context), do: metadata
 
   @typedoc """
   The named outcome of asking a provider for a prompt body.

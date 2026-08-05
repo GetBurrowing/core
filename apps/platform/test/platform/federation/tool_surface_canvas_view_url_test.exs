@@ -156,15 +156,54 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
       assert Enum.find(defs, &(&1.name == "canvas_list")).returns =~ "view_url"
     end
 
-    test "canvas.describe no longer claims a participation gate it does not have" do
+    # Inverted by task 019fb01b stage 3, which gated the read. Between 019e2c4b
+    # and this stage the string honestly advertised the hole; leaving it in
+    # place now would be the same defect pointing the other way.
+    test "canvas.describe states the gate it now actually has" do
       describe = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "canvas.describe"))
 
-      # `ToolHandlers.describe/2` ignores its context. The old string said the
-      # opposite, in front of a paragraph sold as precise.
-      refute describe.limitations =~
-               "Only works for canvases in spaces the agent is a participant"
+      refute describe.limitations =~ "not gated on space participation"
+      assert describe.limitations =~ "participant"
+      assert describe.limitations =~ "task"
+    end
 
-      assert describe.limitations =~ "not gated on space participation"
+    # Task 019fb01b stage 4 WIDENED this tool: it used to answer "are you in
+    # this canvas's space", and now also resolves an agent bound to a live task
+    # the canvas is attached to. The old string named only the space clause, so
+    # after the widening it described a narrower tool than the one that ships.
+    test "canvas_get states the task grant its limitations used to omit" do
+      canvas_get = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "canvas_get"))
+
+      assert canvas_get.limitations =~ "participant"
+      assert canvas_get.limitations =~ "task"
+    end
+
+    # The gate has to be in `description`, not only in `limitations`.
+    # `MCPController.to_mcp_tool/1` forwards name, description and inputSchema
+    # and nothing else, so a gate stated only in `limitations` is read by
+    # maintainers and by no caller. A denied agent needs to know from the
+    # description whether to ask for roster or to drop a stale attachment.
+    test "every gated read carries the read gate in its description" do
+      gate = Tools.read_gate()
+      defs = ToolSurface.tool_definitions()
+
+      for name <- ["canvas.describe", "canvas.versions", "canvas_get"] do
+        defn = Enum.find(defs, &(&1.name == name))
+        assert defn, "#{name} missing from the federation tool surface"
+
+        assert defn.description =~ gate,
+               "#{name} does not state the read gate in its description"
+      end
+    end
+
+    # `:task_agent` (task 019fb01b stage 2) is a grant path a human-only
+    # sentence would omit, and the omission would read as "an agent cannot get
+    # in", which is now false.
+    test "the sharing boundary names the agent task path" do
+      boundary = Tools.sharing_boundary()
+
+      assert boundary =~ "AGENT"
+      assert boundary =~ "task"
     end
   end
 

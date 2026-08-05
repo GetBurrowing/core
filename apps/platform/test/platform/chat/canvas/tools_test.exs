@@ -41,8 +41,21 @@ defmodule Platform.Chat.Canvas.ToolsTest do
       boundary = Tools.sharing_boundary()
 
       assert boundary =~ "participant of its space"
-      assert boundary =~ "org that owns a LIVE task the canvas is attached to"
+      assert boundary =~ "AGENT assigned to a LIVE task the canvas is attached to"
+      assert boundary =~ "member of the org that owns such a task"
       assert boundary =~ "when the canvas lives in a NON-ARCHIVED channel"
+    end
+
+    # `:task_agent` (task 019fb01b stage 2) is keyed on a different column from
+    # the three human grants — `phase_assignees` rather than
+    # `org_memberships.user_id` — so it needs its own clause. Without it the
+    # sentence reads as "no agent gets in from outside its own spaces", which
+    # is now false and would have an agent conclude a working link is broken.
+    test "names the agent task path separately from the human org paths" do
+      boundary = Tools.sharing_boundary()
+
+      assert boundary =~ "AGENT"
+      refute boundary =~ "phase_assignees"
     end
 
     # Both qualifiers are enforced, not hedging: `:task_reader` drops

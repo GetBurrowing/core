@@ -37,6 +37,14 @@ defmodule Platform.Meetings.PubSub do
       kinds cover the nine row statuses (`:cancelled` and
       `:cancelled_late` share `:intent_cancelled` — the payload's
       `:status` field disambiguates).
+    * `"meeting:{meeting_id}"` — the per-meeting SHELL topic (task
+      019fbaac stage 1). Distinct from `"meeting:{meeting_id}:intents"`
+      above, which carries queue-row transitions: this one carries
+      state changes to the meeting itself. `PlatformWeb.MeetingLive`
+      has subscribed to this exact string since the intents panel
+      landed; before task 019fbaac nothing published on it. The mute
+      event below is its first publisher, which is why muting reaches
+      every connected client with no new subscription and no rejoin.
 
   ## Events
 
@@ -61,6 +69,7 @@ defmodule Platform.Meetings.PubSub do
   | `meeting:{meeting_id}:intents`            | `{:intent_timed_out, row}`               | intent-queue row map                                                        |
   | `meeting:{meeting_id}:intents`            | `{:intent_dispatch_failed, row}`         | intent-queue row map                                                        |
   | `meeting:{meeting_id}:intents`            | `{:intent_no_ack_spawn_failed, row}`     | intent-queue row map                                                        |
+  | `meeting:{meeting_id}`                    | `{:intent_mute_changed, payload}`        | `%{meeting_id: id, muted_at: DateTime.t() \\| nil}`                         |
   """
 
   alias Platform.Meetings.IntentRouting
@@ -177,6 +186,23 @@ defmodule Platform.Meetings.PubSub do
   @spec intent_topic(String.t()) :: String.t() | nil
   def intent_topic(intent) when is_binary(intent), do: IntentRouting.topic(intent)
 
+  @doc """
+  Returns the per-meeting SHELL topic (task 019fbaac stage 1) — state
+  changes to the meeting itself, as opposed to `intents_topic/1`'s
+  queue-row transitions.
+
+  The string is `"meeting:{meeting_id}"` and that is not a free choice:
+  `PlatformWeb.MeetingLive` already subscribes to exactly this string
+  (via a local `meeting_topic/1` helper) for every connected
+  authenticated viewer. Until this task nothing broadcast on it — it
+  was a live subscription with no publisher. Defining the canonical
+  helper here means new publishers land next to the topic table every
+  other meeting consumer reads, instead of re-deriving the string.
+  """
+  @spec meeting_topic(binary()) :: String.t()
+  def meeting_topic(meeting_id) when is_binary(meeting_id),
+    do: "meeting:#{meeting_id}"
+
   # ── Subscribe ────────────────────────────────────────────────────────────────
 
   @doc "Subscribe the calling process to a user's meeting events."
@@ -259,6 +285,23 @@ defmodule Platform.Meetings.PubSub do
   @spec unsubscribe_intents(binary()) :: :ok
   def unsubscribe_intents(meeting_id) when is_binary(meeting_id) do
     Phoenix.PubSub.unsubscribe(@pubsub, intents_topic(meeting_id))
+  end
+
+  @doc """
+  Subscribe to a single meeting's shell topic (task 019fbaac stage 1).
+
+  The authenticated `MeetingLive` already subscribes to this topic on
+  its own; the guest surface does not, and calls this helper.
+  """
+  @spec subscribe_meeting(binary()) :: :ok | {:error, term()}
+  def subscribe_meeting(meeting_id) when is_binary(meeting_id) do
+    Phoenix.PubSub.subscribe(@pubsub, meeting_topic(meeting_id))
+  end
+
+  @doc "Unsubscribe from a meeting's shell topic."
+  @spec unsubscribe_meeting(binary()) :: :ok
+  def unsubscribe_meeting(meeting_id) when is_binary(meeting_id) do
+    Phoenix.PubSub.unsubscribe(@pubsub, meeting_topic(meeting_id))
   end
 
   @doc "Unsubscribe from a user's meeting events."
@@ -485,6 +528,31 @@ defmodule Platform.Meetings.PubSub do
       nil ->
         {:error, :unroutable_intent}
     end
+  end
+
+  @doc """
+  Broadcast an `:intent_mute_changed` event on a meeting's shell topic
+  (task 019fbaac stage 1).
+
+  `muted_at` is a `DateTime` when the meeting is muted and `nil` when
+  it is not — subscribers derive the boolean with `not is_nil/1` rather
+  than being handed one, so the "when was this placed" answer travels
+  with the event and a late-joining client that missed the toggle still
+  gets the full state on the next broadcast.
+
+  Fired by `Platform.Meetings.set_intent_muted/2` on EVERY call,
+  including a no-op re-mute: a second client that missed the first
+  event still needs it, and suppressing the duplicate would trade a
+  cheap message for a permanently wrong badge.
+  """
+  @spec broadcast_intent_mute_changed(binary(), DateTime.t() | nil) :: :ok
+  def broadcast_intent_mute_changed(meeting_id, muted_at)
+      when is_binary(meeting_id) and (is_nil(muted_at) or is_struct(muted_at, DateTime)) do
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      meeting_topic(meeting_id),
+      {:intent_mute_changed, %{meeting_id: meeting_id, muted_at: muted_at}}
+    )
   end
 
   # ── Per-meeting intent-queue transitions (task 019f70b8 stage 2) ─────────────

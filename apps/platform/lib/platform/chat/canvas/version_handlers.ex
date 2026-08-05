@@ -2,42 +2,69 @@ defmodule Platform.Chat.Canvas.VersionHandlers do
   @moduledoc """
   Tool handlers for `canvas.versions` and `canvas.restore` (task 019e0ac0).
 
-  Authorization mirrors the existing canvas surface:
+  Both tools resolve their canvas through `Platform.Chat.Canvas.ToolAccess`,
+  which is the one authorization seam for the canvas MCP surface (task 019fb01b
+  stage 1). They ask it different questions:
 
-    * `canvas.versions` — same gate as `canvas_get` (read membership in the
-      canvas's space, asserted via `Platform.Federation.ToolSurface`'s
-      `assert_agent_in_space/2`-equivalent here).
-    * `canvas.restore` — same gate as `canvas.patch`, literally: both call
-      `Platform.Chat.CanvasAccess.fetch_for_writer/2` (task 019e2c4b stage 2).
-      A restore is a full-document overwrite, so it is the most destructive
-      write on the canvas surface, not the least.
+    * `canvas.versions` — `fetch_for_read/2`, the same call `canvas.describe`
+      makes, so "same auth gate as canvas.describe" in the tool description is
+      a fact rather than an aspiration.
+    * `canvas.restore` — `fetch_for_write/3`, the same call `canvas.patch`
+      makes. A restore is a full-document overwrite, so it is the most
+      destructive write on the canvas surface, not the least.
 
-  Until stage 2 that second bullet was aspirational: `canvas.restore` used a
-  local `assert_member/2` that fell through to `:ok` whenever `context.agent_id`
-  was nil. `agent_id` is not required on `Platform.Agents.AgentRuntime`, so an
-  authenticated runtime with no linked agent is a reachable state — and it
-  could restore any canvas in any space. Read authorization is unchanged and
-  still uses `assert_member/2`.
+  ## The fail-open both of these replaced
+
+  Each tool used to run through a local `assert_member/2` that returned `:ok`
+  whenever `context.agent_id` was nil, on the theory that such a caller had to
+  be the in-app LiveView. Nothing enforced that theory: these handlers are only
+  ever reached from `Platform.Federation.ToolSurface`, i.e. from a remote
+  runtime, and `agent_id` is a nullable `:binary_id` on
+  `Platform.Agents.AgentRuntime`, so a nil is reachable for an authenticated
+  caller. Task 019e2c4b stage 2 took `canvas.restore` off it; task 019fb01b
+  stage 3 took `canvas.versions` off it and DELETED the function, so nothing
+  added here later can reach it by reflex.
+
+  ## The circular-dependency constraint, still in force
+
+  `assert_member/2` was local rather than a call into
+  `Platform.Federation.ToolSurface.assert_agent_in_space/2` because the
+  federation surface dispatches to this module, so pointing back at it would
+  close a cycle. `ToolAccess` keeps that property: its dependency direction is
+  `ToolAccess -> CanvasAccess -> Chat`, and nothing in it refers to the
+  federation surface.
   """
 
   alias Platform.Chat
   alias Platform.Chat.Canvas.Server, as: CanvasServer
+  alias Platform.Chat.Canvas.ToolAccess
   alias Platform.Chat.Canvas.Versions
-  alias Platform.Chat.CanvasAccess
+
+  @restore_denial "Access denied: canvas.restore overwrites the whole document, so it requires " <>
+                    "participation in the canvas's space. Read access does not confer it."
+
+  @restore_suggestion "Ask a human to add you to the space that owns this canvas."
 
   @doc """
-  canvas.versions — paginated newest-first version metadata.
+  canvas.versions — paginated newest-first version metadata, for a caller
+  authorized to read the canvas.
 
   Args: `%{"canvas_id" => string, "limit"? => integer, "before_revision"? =>
   integer}`. Returns `%{canvas_id, versions: [%{revision, written_at,
   written_by, op_summary}], next_cursor}`. `next_cursor` is the
   `before_revision` value to pass on the next page (nil when exhausted).
+
+  Authorization resolves the canvas and the grant in one call
+  (`ToolAccess.fetch_for_read/2`) rather than fetching first and asking after,
+  which is what let the old `assert_member/2` be handed a canvas it then failed
+  to protect. Revision numbers, write timestamps and `written_by` attribution
+  are the payload here, so a fail-open on this tool leaks who worked on what
+  and when across every tenant, without ever touching a document.
   """
   @spec versions(map(), map()) :: {:ok, map()} | {:error, map()}
   def versions(args, context) do
     with {:ok, canvas_id} <- require_string(args, "canvas_id"),
-         {:ok, canvas} <- fetch_canvas(canvas_id),
-         :ok <- assert_member(canvas.space_id, context) do
+         {:ok, canvas} <- ToolAccess.fetch_for_read(canvas_id, context) do
       limit = clamp_limit(Map.get(args, "limit", 20))
       before_revision = parse_optional_integer(Map.get(args, "before_revision"))
 
@@ -149,77 +176,18 @@ defmodule Platform.Chat.Canvas.VersionHandlers do
     end
   end
 
-  # The WRITE gate for `canvas.restore` (task 019e2c4b stage 2), replacing the
-  # fail-open `assert_member/2` below.
-  #
-  # Deliberately NOT `assert_member/2`: that returns `:ok` when `agent_id` is
-  # nil on the theory that the caller must be the in-app LiveView. Nothing
-  # enforces that theory on this handler — it is only ever reached from
-  # `Platform.Federation.ToolSurface`, i.e. from a remote runtime — and
-  # `agent_id` is not required on an `AgentRuntime`, so nil is reachable for an
-  # authenticated caller. Here an unidentified actor denies.
+  # The WRITE gate for `canvas.restore` (task 019e2c4b stage 2). Resolution
+  # lives in `ToolAccess` (task 019fb01b stage 1); only the denial sentence is
+  # this handler's, because only the sentence differs between the canvas write
+  # tools. An unidentified actor denies — see the moduledoc for the fail-open
+  # this replaced and why nil is a reachable caller shape.
   defp assert_writer(canvas_id, context) do
-    case CanvasAccess.fetch_for_writer(canvas_id, actor_from_context(context)) do
-      {:ok, _canvas} ->
-        :ok
-
-      {:error, :not_found} ->
-        {:error, %{error: "canvas #{canvas_id} not found", recoverable: false}}
-
-      {:error, :forbidden} ->
-        {:error,
-         %{
-           error:
-             "Access denied: canvas.restore overwrites the whole document, so it requires " <>
-               "participation in the canvas's space. Read access does not confer it.",
-           recoverable: false,
-           canvas_id: canvas_id,
-           suggestion: "Ask a human to add you to the space that owns this canvas."
-         }}
-    end
-  end
-
-  defp actor_from_context(context) when is_map(context) do
-    cond do
-      is_binary(Map.get(context, :agent_id)) -> {:agent, Map.get(context, :agent_id)}
-      is_binary(Map.get(context, :user_id)) -> {:user, Map.get(context, :user_id)}
-      true -> nil
-    end
-  end
-
-  defp actor_from_context(_context), do: nil
-
-  # Mirrors Platform.Federation.ToolSurface.assert_agent_in_space/2 but local
-  # so this module doesn't take a circular dep on the federation surface.
-  # Same contract: agent must be a participant in the space; user-driven calls
-  # without an agent context fall through (the caller is the LiveView, which
-  # checks membership at navigation time).
-  defp assert_member(space_id, context) do
-    cond do
-      is_nil(space_id) ->
-        {:error, %{error: "space_id is required", recoverable: true}}
-
-      Map.get(context, :agent_id) == nil ->
-        # No agent — treat as an in-app caller; the LiveView path is its own
-        # auth gate. Still reject if there's no canvas in scope at all (caught
-        # earlier by fetch_canvas/1).
-        :ok
-
-      true ->
-        agent_id = Map.get(context, :agent_id)
-
-        case Chat.get_agent_participant(space_id, agent_id) do
-          %Chat.Participant{} ->
-            :ok
-
-          _ ->
-            {:error,
-             %{
-               error: "Access denied: agent is not a participant in space #{space_id}",
-               recoverable: false,
-               suggestion: "Use space_list to find spaces the agent has access to"
-             }}
-        end
+    case ToolAccess.fetch_for_write(canvas_id, context,
+           denial: @restore_denial,
+           suggestion: @restore_suggestion
+         ) do
+      {:ok, _canvas} -> :ok
+      {:error, payload} -> {:error, payload}
     end
   end
 

@@ -257,6 +257,10 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
     end
   end
 
+  # Task 019fb01b stage 3 gated this read. Every case below used to pass a `%{}`
+  # context and succeed, because `describe/2` ignored its context entirely and
+  # read through `Chat.get_canvas/1`. They now carry the creating agent's id,
+  # which is the identity the MCP controller actually puts in the context.
   describe "canvas.describe" do
     test "returns the current document and revision" do
       %{space: space, participant: participant} = setup_space()
@@ -270,7 +274,10 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
       on_exit(fn -> CanvasServer.stop(canvas_id) end)
 
       assert {:ok, payload} =
-               ToolHandlers.describe(%{"canvas_id" => canvas_id}, %{})
+               ToolHandlers.describe(
+                 %{"canvas_id" => canvas_id},
+                 %{agent_id: participant.participant_id}
+               )
 
       assert payload.canvas_id == canvas_id
       assert payload.revision == 1
@@ -292,7 +299,10 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
       on_exit(fn -> CanvasServer.stop(created.canvas_id) end)
 
       assert {:ok, payload} =
-               ToolHandlers.describe(%{"canvas_id" => created.canvas_id}, %{})
+               ToolHandlers.describe(
+                 %{"canvas_id" => created.canvas_id},
+                 %{agent_id: participant.participant_id}
+               )
 
       assert payload.view_url == created.view_url
       assert payload.view_url == Links.view_url(created.canvas_id)
@@ -300,10 +310,83 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
 
     test "returns error for missing canvas" do
       assert {:error, payload} =
-               ToolHandlers.describe(%{"canvas_id" => Ecto.UUID.generate()}, %{})
+               ToolHandlers.describe(
+                 %{"canvas_id" => Ecto.UUID.generate()},
+                 %{agent_id: Ecto.UUID.generate()}
+               )
 
       assert payload.error =~ "not found"
       assert payload.recoverable == false
+    end
+
+    # The inversion, stated as its own case rather than left implicit in the
+    # rewritten ones above: an existing canvas plus an identity-less context
+    # used to return the whole document.
+    test "denies a caller carrying no identity at all" do
+      %{space: space, participant: participant} = setup_space()
+
+      {:ok, %{canvas_id: canvas_id}} =
+        ToolHandlers.create(
+          %{"space_id" => space.id, "document" => valid_document()},
+          %{agent_participant_id: participant.id}
+        )
+
+      on_exit(fn -> CanvasServer.stop(canvas_id) end)
+
+      assert {:error, payload} = ToolHandlers.describe(%{"canvas_id" => canvas_id}, %{})
+
+      assert payload.error =~ "Access denied"
+      assert payload.recoverable == false
+      refute Map.has_key?(payload, :document)
+      refute Map.has_key?(payload, :space_id)
+    end
+
+    test "denies an agent that does not participate in the canvas's space" do
+      %{space: space, participant: participant} = setup_space()
+
+      {:ok, %{canvas_id: canvas_id}} =
+        ToolHandlers.create(
+          %{"space_id" => space.id, "document" => valid_document()},
+          %{agent_participant_id: participant.id}
+        )
+
+      on_exit(fn -> CanvasServer.stop(canvas_id) end)
+
+      assert {:error, payload} =
+               ToolHandlers.describe(
+                 %{"canvas_id" => canvas_id},
+                 %{agent_id: Ecto.UUID.generate()}
+               )
+
+      assert payload.error =~ "Access denied"
+      assert payload.recoverable == false
+    end
+
+    # Forbidden and not-found stay apart. Collapsing read to not-found while
+    # `canvas.patch` keeps them distinct just moves the oracle to the write
+    # door; the distinction is also what tells a model whether to re-roster or
+    # to detach a stale attachment.
+    test "forbidden and not-found remain textually distinguishable" do
+      %{space: space, participant: participant} = setup_space()
+
+      {:ok, %{canvas_id: canvas_id}} =
+        ToolHandlers.create(
+          %{"space_id" => space.id, "document" => valid_document()},
+          %{agent_participant_id: participant.id}
+        )
+
+      on_exit(fn -> CanvasServer.stop(canvas_id) end)
+
+      stranger = %{agent_id: Ecto.UUID.generate()}
+
+      assert {:error, forbidden} = ToolHandlers.describe(%{"canvas_id" => canvas_id}, stranger)
+
+      assert {:error, missing} =
+               ToolHandlers.describe(%{"canvas_id" => Ecto.UUID.generate()}, stranger)
+
+      refute forbidden.error == missing.error
+      assert missing.error =~ "not found"
+      refute forbidden.error =~ "not found"
     end
   end
 

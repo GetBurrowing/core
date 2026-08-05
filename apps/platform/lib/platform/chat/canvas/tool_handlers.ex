@@ -1,12 +1,44 @@
 defmodule Platform.Chat.Canvas.ToolHandlers do
   @moduledoc """
-  Implementations of the `canvas.create` / `canvas.patch` / `canvas.describe`
-  agent tools (ADR 0036, Phase 4).
+  Implementations of the `canvas.create` / `canvas.patch` / `canvas.describe` /
+  `canvas.list_kinds` / `canvas.template` agent tools (ADR 0036, Phase 4).
 
   Each handler returns `{:ok, payload}` or `{:error, payload}` so callers in
   `tool_runner.ex` / `tool_surface.ex` can uniformly format responses.
   Rejections from `Canvas.Server.apply_patches/3` surface as structured
   `{:error, %{recoverable: true, ...}}` payloads the model can self-correct on.
+
+  ## Authorization: `Platform.Chat.Canvas.ToolAccess`, for both doors
+
+  Neither gated handler decides access itself. `describe/2` resolves its canvas
+  through `ToolAccess.fetch_for_read/2` and `patch/2` through
+  `ToolAccess.fetch_for_write/3` — the same two calls `canvas.versions` and
+  `canvas.restore` make in `Platform.Chat.Canvas.VersionHandlers`, so the four
+  canvas-id-keyed tools on this surface cannot answer one question four ways.
+  Handlers keep argument parsing and payload building; they do not keep their
+  own authorization.
+
+  `describe/2` was the exception until task 019fb01b stage 3. It ignored its
+  `context` entirely and read through `Chat.get_canvas/1`, the deliberately
+  unauthorized primitive, so any caller holding the `canvas` tool bundle could
+  hand it any canvas id in any org and receive the whole document. That was zero
+  authorization rather than weak authorization. It is gated now, and
+  `test/platform/federation/canvas_read_enumeration_test.exs` is what stops the
+  next tool from arriving the same way: every tool on the federation surface
+  that reaches canvas code must be classified there in writing, and any
+  classification claiming a gate is driven against a real outsider rather than
+  taken at its word.
+
+  `canvas.create` is the one tool here with no canvas to gate. It writes a NEW
+  canvas and requires an `agent_participant_id`, which a caller can only hold by
+  already being a participant of the target space. `canvas.list_kinds` and
+  `canvas.template` return the static kind registry and the starter templates
+  and touch no canvas row at all.
+
+  A forbidden READ additionally emits `[:platform, :chat, :canvas_read_denied]`
+  from `ToolAccess` (stage 5). `:not_found` and `:forbidden` stay distinct here,
+  which leaves a per-id existence oracle in place on purpose; that event is the
+  control that makes someone using it visible.
   """
 
   require Logger
@@ -16,9 +48,16 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   alias Platform.Chat.Canvas.Links
   alias Platform.Chat.Canvas.Server, as: CanvasServer
   alias Platform.Chat.Canvas.Templates
-  alias Platform.Chat.CanvasAccess
+  alias Platform.Chat.Canvas.ToolAccess
   alias Platform.Chat.CanvasDocument
   alias Platform.Chat.PubSub, as: ChatPubSub
+
+  @patch_denial "Access denied: canvas.patch requires participation in the canvas's space. " <>
+                  "Being able to read a canvas (via a task it is attached to, or via your org) " <>
+                  "does not confer write access."
+
+  @patch_suggestion "Ask a human to add you to the space that owns this canvas, " <>
+                      "or create your own canvas with canvas.create."
 
   @doc "canvas.create — validates the document, inserts a canvas."
   @spec create(map(), map()) :: {:ok, map()} | {:error, map()}
@@ -147,43 +186,55 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
     end
   end
 
-  @doc "canvas.describe — current document, revision, and presence."
+  @doc """
+  canvas.describe — current document, revision, and presence, for a caller
+  authorized to read the canvas.
+
+  The read gate is task 019fb01b stage 3. Before it, this handler ignored its
+  `context` and resolved through `Chat.get_canvas/1`, the deliberately
+  unauthorized primitive: any caller holding the `canvas` tool bundle could
+  hand it any canvas id, in any space, in any org, and receive the whole
+  document. That was zero authorization, not weak authorization —
+  `ExternalScope.visible_space_id?/2` returns true for a nil scope, so even the
+  scoped reader would have waved it through.
+
+  Resolution lives in `ToolAccess.fetch_for_read/2`, which is also what
+  `canvas.versions` calls, so the two reads on this surface cannot drift into
+  two different answers to one question. `:not_found` and `:forbidden` stay
+  distinct; see that module for why collapsing them relocates the oracle rather
+  than removing it.
+  """
   @spec describe(map(), map()) :: {:ok, map()} | {:error, map()}
-  def describe(args, _context) do
-    with {:ok, canvas_id} <- require_string(args, "canvas_id") do
-      case Chat.get_canvas(canvas_id) do
-        nil ->
-          {:error, %{error: "canvas #{canvas_id} not found", recoverable: false}}
+  def describe(args, context) do
+    with {:ok, canvas_id} <- require_string(args, "canvas_id"),
+         {:ok, canvas} <- ToolAccess.fetch_for_read(canvas_id, context) do
+      case CanvasServer.describe(canvas.id) do
+        {:ok, %{document: doc, revision: rev}} ->
+          maybe_subscribe(canvas.id)
 
-        canvas ->
-          case CanvasServer.describe(canvas_id) do
-            {:ok, %{document: doc, revision: rev}} ->
-              maybe_subscribe(canvas_id)
+          {:ok,
+           %{
+             canvas_id: canvas_id,
+             title: canvas.title,
+             space_id: canvas.space_id,
+             kind: CanvasDocument.root_kind(doc),
+             revision: rev,
+             document: doc,
+             # From `canvas.id`, not from the argument: `Platform.UUID`
+             # accepts an uppercase id and the query downcases it, so
+             # building from the raw argument would emit two different
+             # strings for one canvas.
+             view_url: Links.view_url(canvas.id),
+             presence: presence_for_canvas(canvas),
+             recent_events: []
+           }}
 
-              {:ok,
-               %{
-                 canvas_id: canvas_id,
-                 title: canvas.title,
-                 space_id: canvas.space_id,
-                 kind: CanvasDocument.root_kind(doc),
-                 revision: rev,
-                 document: doc,
-                 # From `canvas.id`, not from the argument: `Platform.UUID`
-                 # accepts an uppercase id and the query downcases it, so
-                 # building from the raw argument would emit two different
-                 # strings for one canvas.
-                 view_url: Links.view_url(canvas.id),
-                 presence: presence_for_canvas(canvas),
-                 recent_events: []
-               }}
-
-            {:error, reason} ->
-              {:error,
-               %{
-                 error: "canvas.describe failed: #{inspect(reason)}",
-                 recoverable: true
-               }}
-          end
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "canvas.describe failed: #{inspect(reason)}",
+             recoverable: true
+           }}
       end
     end
   end
@@ -241,44 +292,19 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   # `:system` the way `VersionHandlers.assert_member/2` falls through on a nil
   # `agent_id` — that shape fails open, and this is the tool an untrusted
   # remote runtime calls.
+  #
+  # Resolution lives in `ToolAccess` (task 019fb01b stage 1); only the denial
+  # sentence is this handler's, because only the sentence differs between the
+  # canvas write tools.
   defp authorize_write(canvas_id, context) do
-    case CanvasAccess.fetch_for_writer(canvas_id, actor_from_context(context)) do
-      {:ok, _canvas} ->
-        :ok
-
-      {:error, :not_found} ->
-        {:error,
-         %{
-           error: "canvas #{canvas_id} not found",
-           recoverable: false
-         }}
-
-      {:error, :forbidden} ->
-        {:error,
-         %{
-           error:
-             "Access denied: canvas.patch requires participation in the canvas's space. " <>
-               "Being able to read a canvas (via a task it is attached to, or via your org) " <>
-               "does not confer write access.",
-           recoverable: false,
-           canvas_id: canvas_id,
-           suggestion:
-             "Ask a human to add you to the space that owns this canvas, or create your own canvas with canvas.create."
-         }}
+    case ToolAccess.fetch_for_write(canvas_id, context,
+           denial: @patch_denial,
+           suggestion: @patch_suggestion
+         ) do
+      {:ok, _canvas} -> :ok
+      {:error, payload} -> {:error, payload}
     end
   end
-
-  # MCP callers are agents by default; `:user_id` covers user-driven calls.
-  # Neither present → `nil`, which `CanvasAccess` treats as no principal.
-  defp actor_from_context(context) when is_map(context) do
-    cond do
-      is_binary(Map.get(context, :agent_id)) -> {:agent, Map.get(context, :agent_id)}
-      is_binary(Map.get(context, :user_id)) -> {:user, Map.get(context, :user_id)}
-      true -> nil
-    end
-  end
-
-  defp actor_from_context(_context), do: nil
 
   # ── Helpers ─────────────────────────────────────────────────────────────
 

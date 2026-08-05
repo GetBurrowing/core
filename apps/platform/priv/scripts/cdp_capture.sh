@@ -2,8 +2,8 @@
 #
 # cdp_capture.sh — single-shot screenshot helper for the dispatch evidence flow.
 #
-# Drives a local headless Chrome via the Chrome DevTools Protocol (CDP) at
-# 127.0.0.1:9222, navigates to a URL, optionally applies an
+# Drives a local headless Chrome via the Chrome DevTools Protocol (CDP),
+# navigates to a URL, optionally applies an
 # Emulation.setDeviceMetricsOverride for mobile viewports, and writes a JPEG
 # (Page.captureScreenshot, quality 80) to the requested path.
 #
@@ -16,10 +16,13 @@
 #   cdp_capture.sh http://localhost:4000 /tmp/dev.jpg --cdp 127.0.0.1:9222
 #
 # Prerequisites (per host, NOT enforced by this script):
-#   - A headless Chrome must be running with --remote-debugging-port=<PORT> on
-#     127.0.0.1 (default 9222). On hive this is the dedicated CDP profile under
-#     ~/.openclaw/chrome-cdp-profile. If 127.0.0.1:9222 is unreachable the
-#     script exits non-zero with a clear message — start Chrome and retry.
+#   - A headless Chrome must be running with --remote-debugging-port=<PORT>
+#     (default 9222). On hive this is the dedicated CDP profile under
+#     ~/.openclaw/chrome-cdp-profile. The endpoint is auto-detected across
+#     both loopback families — 127.0.0.1 first, then [::1] — because Chrome
+#     >=150 on macOS binds the DevTools listener to [::1] even when given
+#     --remote-debugging-address=127.0.0.1. Pass --cdp to pin one explicitly.
+#     If no candidate answers, the script exits non-zero with a clear message.
 #   - Python 3.10+ with the `websockets` package (Ubuntu's python3-websockets
 #     is fine; Suite's container image already has it).
 #
@@ -41,12 +44,15 @@ USAGE
 OPTIONS
   --width N         Viewport width (used together with --height)
   --height N        Viewport height (used together with --width)
-  --cdp HOST:PORT   Override CDP endpoint (default: 127.0.0.1:9222)
+  --cdp HOST:PORT   Pin the CDP endpoint. Omit to auto-detect, which probes
+                    127.0.0.1:PORT then [::1]:PORT (PORT from \$CDP_PORT,
+                    default 9222).
   -h, --help        Show this message
 
 PREREQUISITES
-  Headless Chrome must be running with --remote-debugging-port=<PORT> on the
-  configured host (default 127.0.0.1:9222). If absent, this script exits 3.
+  Headless Chrome must be running with --remote-debugging-port=<PORT>. Both
+  loopback families are probed, so a Chrome that binds only [::1] (macOS,
+  Chrome >=150) is found without extra flags. If none answer, this exits 3.
 EOF
 }
 
@@ -61,7 +67,8 @@ shift 2
 
 WIDTH=""
 HEIGHT=""
-CDP_HOSTPORT="127.0.0.1:9222"
+CDP_HOSTPORT=""
+CDP_PORT="${CDP_PORT:-9222}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -81,17 +88,42 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+probe_cdp() {
+  curl -sf "http://${1}/json/version" >/dev/null 2>&1
+}
+
 # Sanity check the CDP endpoint up front so the Python helper can assume it
 # works. This is also the documented "is Chrome up?" probe.
-if ! curl -sf "http://${CDP_HOSTPORT}/json/version" >/dev/null 2>&1; then
+#
+# When the caller pins --cdp we probe exactly that and nothing else. Otherwise
+# we try both loopback families: Chrome >=150 on macOS binds the DevTools
+# listener to [::1] even when launched with --remote-debugging-address=127.0.0.1,
+# so an IPv4-only probe reports a perfectly healthy browser as unreachable.
+if [[ -n "$CDP_HOSTPORT" ]]; then
+  CDP_CANDIDATES=("$CDP_HOSTPORT")
+else
+  CDP_CANDIDATES=("127.0.0.1:${CDP_PORT}" "[::1]:${CDP_PORT}")
+fi
+
+CDP_FOUND=""
+for candidate in "${CDP_CANDIDATES[@]}"; do
+  if probe_cdp "$candidate"; then
+    CDP_FOUND="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$CDP_FOUND" ]]; then
   cat <<EOF >&2
-cdp_capture.sh: CDP endpoint http://${CDP_HOSTPORT} is unreachable.
+cdp_capture.sh: no CDP endpoint reachable (tried: ${CDP_CANDIDATES[*]}).
                 Start a headless Chrome with --remote-debugging-port (on hive,
                 this is the chrome-cdp-profile process; see ~/.openclaw skills)
                 and retry. Exit code 3.
 EOF
   exit 3
 fi
+
+CDP_HOSTPORT="$CDP_FOUND"
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
