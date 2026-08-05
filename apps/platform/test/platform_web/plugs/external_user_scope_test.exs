@@ -453,9 +453,21 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
     # ── The oracle assertion ─────────────────────────────────────────────
     #
     # Status alone is not the property. "This meeting exists but you are not
-    # invited" and "no meeting has this slug" must be INDISTINGUISHABLE to the
-    # external user, or the meet surface leaks a membership directory.
-    test "not-invited and no-such-meeting are byte-identical responses", ctx do
+    # invited" and "no meeting has this slug" must be INDISTINGUISHABLE, or the
+    # meet surface leaks a meeting directory.
+    #
+    # THE TELEMETRY ASSERTION IS NOT DECORATION. Mutation-tested at stage 3:
+    # splitting the no-such-meeting path onto its own reason string leaves
+    # status, body and headers BYTE-IDENTICAL — `deny/3` renders the same fixed
+    # :"403" template either way — so the response half of this test cannot see
+    # it and the mutant survived the whole file. The divergence is observable
+    # only on `[:platform, :auth, :access_blocked]`, which feeds the audit log,
+    # and there it is a working existence oracle for anyone reading that stream.
+    # One reason string is the property; assert it exactly, since a second one
+    # is exactly what gets added later "for debuggability".
+    test "not-invited and no-such-meeting are indistinguishable, telemetry included", ctx do
+      ref = attach_telemetry()
+
       not_invited =
         run_on_host(
           "/meetings/" <> ctx.other_meeting.slug,
@@ -464,12 +476,20 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
           ctx.ext_membership
         )
 
+      assert_receive {:access_blocked, not_invited_meta}
+
       missing =
         run_on_host("/meetings/no-such-meeting-zzz", @meet_host, ctx.ext_user, ctx.ext_membership)
+
+      assert_receive {:access_blocked, missing_meta}
+      detach_telemetry(ref)
 
       assert not_invited.status == missing.status
       assert not_invited.resp_body == missing.resp_body
       assert Enum.sort(not_invited.resp_headers) == Enum.sort(missing.resp_headers)
+
+      assert not_invited_meta.reason == missing_meta.reason
+      assert not_invited_meta.reason == "external_meeting_not_invited"
     end
 
     # ── Positive control on the same principal ───────────────────────────
