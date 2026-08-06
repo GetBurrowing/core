@@ -500,17 +500,70 @@ defmodule PlatformWeb.MeetingLive do
   # this lives here rather than in `handle_params/3`. On the disconnected
   # render it returns nil, which flows through `resolve_time_zone/1` to
   # nil — the intended dead-render answer, not a failure to handle.
+  #
+  # Three assigns, not one, because "no zone" has TWO causes that a
+  # viewer needs told apart. `resolve_time_zone/1` collapses them both to
+  # nil, so the raw param is kept BEFORE it is validated away:
+  #
+  #   * nothing was sent — the dead render, where nil is the right answer
+  #   * something was sent and did not resolve — a connected client whose
+  #     browser named a zone Tzdata does not know. Nothing re-attempts:
+  #     `get_connect_params/1` is mount-only and no tick or param change
+  #     re-derives it, so this is PERMANENT for the life of the LiveView
+  #     and re-derives the same nil on every remount.
+  #
+  # `connected?/1` is the discriminator, and it is load-bearing. On the
+  # DISCONNECTED render nil is intended rather than a failure, so
+  # `:calendar_zone_unresolved?` is false there and the static HTML is
+  # byte-identical to what it was before this existed — the dead-render
+  # contract documented at `CalendarWindow.resolve_time_zone/1` and at
+  # `list_calendar_week_meetings/2` below.
+  #
+  # `:calendar_time_zone_raw` is CLIENT-CONTROLLED data. It is truncated
+  # to a label's worth of bytes and relies on HEEx escaping at the point
+  # of render; it is never used to look anything up.
   defp assign_calendar_time_zone(socket) do
-    time_zone =
+    raw =
       socket
       |> get_connect_params()
       |> case do
-        %{"timezone" => time_zone} -> time_zone
+        %{"timezone" => time_zone} when is_binary(time_zone) -> time_zone
         _ -> nil
       end
-      |> CalendarWindow.resolve_time_zone()
 
-    assign(socket, :calendar_time_zone, time_zone)
+    time_zone = CalendarWindow.resolve_time_zone(raw)
+
+    socket
+    |> assign(:calendar_time_zone, time_zone)
+    |> assign(:calendar_time_zone_raw, if(is_nil(time_zone), do: truncate_zone_label(raw)))
+    |> assign(:calendar_zone_unresolved?, connected?(socket) and is_nil(time_zone))
+    |> assign(:calendar_zone_assumed?, false)
+  end
+
+  @zone_label_max_bytes 64
+
+  defp truncate_zone_label(nil), do: nil
+  defp truncate_zone_label(""), do: nil
+
+  # Byte-bounded, not grapheme-bounded: the cap exists to bound what a
+  # client can make us carry, and 64 GRAPHEMES is an unbounded number of
+  # bytes. Cutting at a byte offset can land mid-codepoint, so the tail
+  # is trimmed back to the last valid boundary rather than shipping an
+  # invalid binary into the template.
+  defp truncate_zone_label(raw) when is_binary(raw) do
+    raw
+    |> binary_part(0, min(byte_size(raw), @zone_label_max_bytes))
+    |> trim_to_valid_utf8()
+  end
+
+  defp trim_to_valid_utf8(""), do: nil
+
+  defp trim_to_valid_utf8(binary) do
+    if String.valid?(binary) do
+      binary
+    else
+      trim_to_valid_utf8(binary_part(binary, 0, byte_size(binary) - 1))
+    end
   end
 
   # The instant the now-line is drawn from, seeded at MOUNT and moved by
@@ -2214,6 +2267,35 @@ defmodule PlatformWeb.MeetingLive do
 
   def handle_event("calendar_next_week", _params, socket) do
     {:noreply, shift_calendar_week(socket, 7)}
+  end
+
+  # The viewer's escape hatch when their browser named a zone we cannot
+  # resolve. UTC is never ASSUMED — it is only ever CHOSEN, here, by
+  # someone who has been told their zone is unknown. Defaulting to it
+  # would be quiet degradation: every time would be wrong by an unstated
+  # offset and nothing on screen would say so. `:calendar_zone_assumed?`
+  # stays true for the life of the LiveView so the choice keeps saying so.
+  #
+  # Guarded on `:calendar_zone_unresolved?` so the event cannot be pushed
+  # from a console to relabel a viewer whose zone resolved correctly:
+  # accepting it there would silently move every block on their calendar.
+  def handle_event("calendar_assume_utc", _params, socket) do
+    if socket.assigns.calendar_zone_unresolved? do
+      socket =
+        socket
+        |> assign(:calendar_time_zone, "Etc/UTC")
+        |> assign(:calendar_zone_assumed?, true)
+        |> assign(:calendar_zone_unresolved?, false)
+
+      {:noreply,
+       assign_calendar_week(
+         socket,
+         socket.assigns.calendar_anchor_date,
+         socket.assigns.calendar_selected_date
+       )}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_event("calendar_today", _params, socket) do

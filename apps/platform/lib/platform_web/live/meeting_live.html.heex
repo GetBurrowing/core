@@ -1554,8 +1554,24 @@
            `Meetings.list_all_meetings/0`, which is unscoped and unbounded
            in time — the archive half already refuses to source from it
            for that reason. --%>
+        <%!-- The header count makes the SAME false assertion the day count
+           does — "No meetings this week" while the week was never
+           queried — and it is the one a viewer reads first. Suppressing
+           the day count and leaving this one would fix the smaller
+           instance of the bug and leave the larger. Not in the stage
+           brief; found in a measured screenshot of the brief's own
+           output. --%>
         <span
-          :if={@meetings_view == :calendar}
+          :if={@meetings_view == :calendar and @calendar_zone_unresolved?}
+          class="text-xs text-base-content/50"
+          data-role="meetings-count"
+          data-count-state="unknown"
+        >
+          Week not placed
+        </span>
+
+        <span
+          :if={@meetings_view == :calendar and !@calendar_zone_unresolved?}
           class="text-xs text-base-content/50"
           data-role="meetings-count"
         >
@@ -2019,9 +2035,76 @@
               :if={@calendar_time_zone}
               class="truncate font-mono text-[10px] text-base-content/40"
               data-role="calendar-timezone"
+              data-zone-assumed={@calendar_zone_assumed? && "true"}
             >
               {@calendar_time_zone}
             </span>
+
+            <%!-- The qualifier is a SIBLING of the chip, not a child. An
+             assumed zone must never read as a resolved one, but the
+             resolved chip's text is pinned character-for-character by a
+             test, and text inside the chip would change it for every
+             viewer. So the attribute rides the chip and the words ride
+             beside it. --%>
+            <span
+              :if={@calendar_zone_assumed?}
+              class="ml-1 whitespace-nowrap text-[10px] font-medium text-warning"
+              data-role="calendar-timezone-assumed-note"
+            >
+              assumed, not detected
+            </span>
+          </div>
+
+          <%!-- ── The browser reported no usable zone ───────────────────────
+           Modelled on the archive's PAIR of empty states (~1751 above),
+           and for the archive's stated reason: this is a different fact
+           from "the week is empty", with a different next action, and one
+           card with a swapped noun would let a future edit collapse them
+           back together. So this block is separate, carries its own
+           `data-empty-state`, its own glyph, its own heading, and the
+           only control on either state — a genuinely empty week has
+           nothing to offer and renders no element here at all.
+
+           It sits between the week nav and BOTH halves of the calendar so
+           it appears at every width, and it is connected-only by
+           construction: `:calendar_zone_unresolved?` is false on the dead
+           render, which therefore stays byte-identical.
+
+           Bottom padding mirrors the archive cards. `.bottom-nav` is
+           `position: sticky` and takes flow space, so this clears the
+           FAB, not the nav. --%>
+          <div
+            :if={@calendar_zone_unresolved?}
+            class="mb-3 flex flex-col items-center justify-center rounded-lg border border-warning/40 bg-warning/5 px-4 py-6 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+4rem)] text-center sm:pb-16"
+            data-empty-state="calendar-no-timezone"
+          >
+            <span class="hero-globe-alt size-12 text-warning/60"></span>
+            <h2 class="mt-3 text-lg font-semibold" data-role="calendar-no-timezone-heading">
+              Your browser did not report a usable time zone
+            </h2>
+            <p class="mt-1 max-w-md text-sm text-base-content/60">
+              Meetings cannot be placed on a calendar without one, so none are drawn below. This
+              is not a claim that your week is empty.
+            </p>
+
+            <%!-- Client-controlled data. Interpolated, never `raw/1`. --%>
+            <p
+              :if={@calendar_time_zone_raw}
+              class="mt-2 break-all font-mono text-[11px] text-base-content/50"
+              data-role="calendar-no-timezone-raw"
+            >
+              {@calendar_time_zone_raw}
+            </p>
+
+            <button
+              type="button"
+              phx-click="calendar_assume_utc"
+              data-action="calendar-assume-utc"
+              class="btn btn-outline btn-sm mt-4 min-h-11"
+            >
+              <span class="hero-clock size-4 flex-shrink-0"></span>
+              <span>Show this week in UTC</span>
+            </button>
           </div>
 
           <%!-- ── Desktop week grid (`lg` and up) ──────────────────────────
@@ -2256,7 +2339,23 @@
           >
             <span>{calendar_day_label(@calendar_selected_date)}</span>
             <span aria-hidden="true">·</span>
-            <span data-role="calendar-day-count">
+            <%!-- With no zone the week was never queried, so the count is
+             zero for a reason that has nothing to do with the day. Running
+             it through `calendar_day_count_label/1` would print "No
+             meetings" — the single most misleading string on this surface,
+             and a confident false statement about the viewer's day. An
+             em-dash says the count is unknown, which is the truth. --%>
+            <span
+              :if={@calendar_zone_unresolved?}
+              data-role="calendar-day-count"
+              data-count-state="unknown"
+            >
+              —
+            </span>
+            <%!-- The resolved arm carries NO `data-count-state`. Adding one
+             would have changed the dead render's bytes, which stage 1
+             pinned; absence is the second value. --%>
+            <span :if={!@calendar_zone_unresolved?} data-role="calendar-day-count">
               {calendar_day_count_label(
                 calendar_day_meeting_count(
                   @calendar_week_meetings,

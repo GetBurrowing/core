@@ -2919,6 +2919,345 @@ defmodule PlatformWeb.MeetingLiveTest do
       |> LazyHTML.text()
       |> String.trim()
     end
+
+    # ── An unresolvable zone is not an empty week (task 019fd220 stage 1) ──
+    #
+    # `resolve_time_zone/1` answers nil for BOTH "nothing was sent" and
+    # "something was sent and Tzdata does not know it", and the week query
+    # is skipped on nil either way. On the connected client the second
+    # cause is permanent — connect params are read once, in `mount/3`, and
+    # nothing re-attempts — so the viewer sits in front of a calendar that
+    # says "No meetings" forever while meetings exist. These tests pin the
+    # SERVER state that tells the two causes apart; the markup that says so
+    # is stage 2's.
+    defp calendar_assigns(view), do: :sys.get_state(view.pid).socket.assigns
+
+    test "a connected mount with no zone param records the nil arm as unresolved",
+         %{conn: conn} do
+      # ANTI-VACUITY: this is a CONNECTED mount (`live/2`, no
+      # `put_connect_params`) whose zone is nil, which is the hazard
+      # itself. Asserting the connected-side assigns rather than the empty
+      # page is what records that the nil arm was entered — an empty page
+      # is what a genuinely empty week looks like too.
+      {:ok, view, _html} = live(conn, ~p"/meetings")
+
+      assigns = calendar_assigns(view)
+
+      assert assigns.calendar_time_zone == nil
+      assert assigns.calendar_zone_unresolved?
+      assert assigns.calendar_zone_assumed? == false
+      # No param was sent, so there is no browser string to show back.
+      assert assigns.calendar_time_zone_raw == nil
+    end
+
+    test "an unknown zone keeps the raw browser string, distinguishing it from no param",
+         %{conn: conn} do
+      {:ok, view, _html} =
+        live(put_connect_params(conn, %{"timezone" => "Mars/Olympus"}), ~p"/meetings")
+
+      assigns = calendar_assigns(view)
+
+      assert assigns.calendar_time_zone == nil
+      assert assigns.calendar_zone_unresolved?
+      # The whole point of keeping the raw value: the two nil-zone causes
+      # are different situations and must not read the same.
+      assert assigns.calendar_time_zone_raw == "Mars/Olympus"
+    end
+
+    test "a resolvable zone is not unresolved (positive control)", %{conn: conn} do
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+
+      assigns = calendar_assigns(view)
+
+      assert assigns.calendar_time_zone == @grid_zone
+      refute assigns.calendar_zone_unresolved?
+      assert assigns.calendar_time_zone_raw == nil
+    end
+
+    test "the dead render is unchanged — nil there is the intended answer", %{conn: conn} do
+      # `connected?/1` is the discriminator precisely so the STATIC render
+      # keeps saying nothing. There is no process to read assigns from on a
+      # plain GET, so the claim is made where it is observable: the bytes.
+      # This must stay true after stage 2 adds the connected-only affordance.
+      html = conn |> get(~p"/meetings") |> html_response(200)
+
+      assert attrs_of(html, ~s([data-role="calendar-week-grid"]), "data-role") ==
+               ["calendar-week-grid"]
+
+      refute html =~ "calendar_assume_utc"
+      refute html =~ "Etc/UTC"
+    end
+
+    # ── The markup that tells the two nil-zone causes apart (stage 2) ──────
+    #
+    # Stage 1 pinned the SERVER state. These pin the RENDER, and they pin it
+    # by reading named elements out of the parsed document rather than
+    # matching substrings against the whole body: `html =~
+    # ~s(data-empty-state="calendar-no-timezone")` is satisfied by the string
+    # appearing anywhere, including inside a comment or an unrelated branch.
+
+    test "an unresolved zone and a genuinely empty week render differently", %{conn: conn} do
+      # THE distinguishing assertion, both halves in one test — because the
+      # claim is a DIFFERENCE, and two tests that each assert one side pass
+      # independently even if the two renders are identical.
+      {:ok, _resolved, resolved_html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _unresolved, unresolved_html} = live(conn, ~p"/meetings")
+
+      notice = ~s([data-empty-state="calendar-no-timezone"])
+      count = ~s([data-role="calendar-day-count"])
+      control = ~s([data-action="calendar-assume-utc"])
+
+      # 1. The notice element exists on exactly one of them. A real empty
+      #    week carries no such element at all.
+      assert attrs_of(resolved_html, notice, "data-empty-state") == []
+      assert attrs_of(unresolved_html, notice, "data-empty-state") == ["calendar-no-timezone"]
+
+      # 2. The day count does not assert "No meetings" when nothing was
+      #    counted. Asserted on the specific element, both sides.
+      assert attrs_of(resolved_html, count, "data-count-state") == []
+      assert attrs_of(unresolved_html, count, "data-count-state") == ["unknown"]
+
+      assert day_count_text(resolved_html) == "No meetings"
+      assert day_count_text(unresolved_html) == "—"
+
+      # The header count is the same assertion at week scale and it is the
+      # one read first. Found in a measured screenshot, not in the brief.
+      week_count = ~s([data-role="meetings-count"])
+
+      assert attrs_of(resolved_html, week_count, "data-count-state") == []
+      assert attrs_of(unresolved_html, week_count, "data-count-state") == ["unknown"]
+
+      refute unresolved_html
+             |> doc()
+             |> LazyHTML.query(week_count)
+             |> LazyHTML.text() =~ "No meetings"
+
+      # 3. The control count is the third difference: one offers a next
+      #    action, the other has none to offer.
+      assert length(attrs_of(unresolved_html, control, "data-action")) == 1
+      assert length(attrs_of(resolved_html, control, "data-action")) == 0
+    end
+
+    test "the notice is absent from a resolved week that actually has meetings", %{
+      conn: conn,
+      project: project
+    } do
+      # ANTI-VACUITY control for the test above: "the notice is absent" must
+      # not be satisfiable by a page that failed to render at all. Three
+      # meetings drawn in three named columns prove the calendar is alive.
+      monday = Date.beginning_of_week(grid_today())
+
+      seeded =
+        for {slug, offset, hour} <- [{"tz-mon", 0, 9}, {"tz-wed", 2, 13}, {"tz-fri", 4, 17}] do
+          date = Date.add(monday, offset)
+          start_at = zoned_utc(date, hour, 0)
+
+          meeting =
+            seed_grid_meeting(project,
+              slug: slug,
+              scheduled_start_at: start_at,
+              scheduled_end_at: DateTime.add(start_at, 3600, :second)
+            )
+
+          {meeting, date}
+        end
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      for {meeting, date} <- seeded do
+        assert attrs_of(
+                 html,
+                 in_grid(~s(#{column_selector(date)} [data-role="calendar-event"])),
+                 "data-meeting-id"
+               ) == [meeting.id]
+      end
+
+      assert attrs_of(html, ~s([data-empty-state="calendar-no-timezone"]), "data-empty-state") ==
+               []
+
+      assert attrs_of(html, ~s([data-action="calendar-assume-utc"]), "data-action") == []
+    end
+
+    test "the rejected browser string is shown back, escaped, and only when one was sent", %{
+      conn: conn
+    } do
+      {:ok, _view, with_raw} =
+        live(put_connect_params(conn, %{"timezone" => "Mars/Olympus"}), ~p"/meetings")
+
+      assert with_raw
+             |> doc()
+             |> LazyHTML.query(~s([data-role="calendar-no-timezone-raw"]))
+             |> LazyHTML.text()
+             |> String.trim() == "Mars/Olympus"
+
+      # No param sent — there is no browser string to quote, and inventing
+      # one would make the two nil-zone causes read the same again.
+      {:ok, _view, no_param} = live(conn, ~p"/meetings")
+
+      assert attrs_of(no_param, ~s([data-role="calendar-no-timezone-raw"]), "data-role") == []
+
+      # The notice itself is present in BOTH — only the quoted string differs.
+      assert attrs_of(no_param, ~s([data-empty-state="calendar-no-timezone"]), "data-empty-state") ==
+               ["calendar-no-timezone"]
+    end
+
+    test "the raw browser string is escaped rather than interpolated as markup", %{conn: conn} do
+      # It is client-controlled. `raw/1` here would be stored XSS reachable
+      # by anyone who can set a connect param.
+      injected = "</p><script>alert(1)</script>"
+
+      {:ok, _view, html} =
+        live(put_connect_params(conn, %{"timezone" => injected}), ~p"/meetings")
+
+      refute html =~ "<script>alert(1)</script>"
+
+      assert html
+             |> doc()
+             |> LazyHTML.query(~s([data-role="calendar-no-timezone-raw"]))
+             |> LazyHTML.text()
+             |> String.trim() =~ "alert(1)"
+    end
+
+    test "clicking the control marks the zone assumed and draws the week", %{
+      conn: conn,
+      project: project
+    } do
+      today = Date.utc_today()
+      monday = Date.beginning_of_week(today)
+
+      seeded =
+        for {slug, offset, hour} <- [{"btn-mon", 0, 9}, {"btn-wed", 2, 13}, {"btn-fri", 4, 17}] do
+          date = Date.add(monday, offset)
+          start_at = DateTime.new!(date, Time.new!(hour, 0, 0), "Etc/UTC")
+
+          meeting =
+            seed_grid_meeting(project,
+              slug: slug,
+              scheduled_start_at: start_at,
+              scheduled_end_at: DateTime.add(start_at, 3600, :second)
+            )
+
+          {meeting, date}
+        end
+
+      {:ok, view, _html} = live(conn, ~p"/meetings")
+
+      # Through the rendered control, not by pushing the event name — the
+      # button being wired is part of the claim.
+      html = view |> element(~s([data-action="calendar-assume-utc"])) |> render_click()
+
+      # An assumed zone must not present itself as a detected one.
+      assert attrs_of(html, ~s([data-role="calendar-timezone"]), "data-zone-assumed") == ["true"]
+
+      assert html
+             |> doc()
+             |> LazyHTML.query(~s([data-role="calendar-timezone-assumed-note"]))
+             |> LazyHTML.text()
+             |> String.trim() != ""
+
+      assert attrs_of(html, ~s([data-empty-state="calendar-no-timezone"]), "data-empty-state") ==
+               []
+
+      for {meeting, date} <- seeded do
+        assert attrs_of(
+                 html,
+                 in_grid(~s(#{column_selector(date)} [data-role="calendar-event"])),
+                 "data-meeting-id"
+               ) == [meeting.id]
+      end
+    end
+
+    test "a zone that resolved normally carries no assumed marker", %{conn: conn} do
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert attrs_of(html, ~s([data-role="calendar-timezone"]), "data-zone-assumed") == []
+
+      assert attrs_of(html, ~s([data-role="calendar-timezone-assumed-note"]), "data-role") == []
+    end
+
+    defp day_count_text(html) do
+      html
+      |> doc()
+      |> LazyHTML.query(~s([data-role="calendar-day-count"]))
+      |> LazyHTML.text()
+      |> String.trim()
+    end
+
+    test "assuming UTC queries the week and places every meeting in it", %{
+      conn: conn,
+      project: project
+    } do
+      # With no zone the anchor week is the UTC week containing UTC today
+      # (`calendar_today_date(nil, now)` is `DateTime.to_date(now)`), so the
+      # fixture is built in UTC — the zone the viewer is about to assume.
+      today = Date.utc_today()
+      monday = Date.beginning_of_week(today)
+
+      # THREE meetings on three different days at three different times.
+      # One would let "place any arbitrary row" pass; three in named
+      # columns will not.
+      placements = [
+        {"utc-mon", Date.add(monday, 0), 9},
+        {"utc-wed", Date.add(monday, 2), 13},
+        {"utc-fri", Date.add(monday, 4), 17}
+      ]
+
+      seeded =
+        Enum.map(placements, fn {slug, date, hour} ->
+          start_at = DateTime.new!(date, Time.new!(hour, 0, 0), "Etc/UTC")
+
+          meeting =
+            seed_grid_meeting(project,
+              slug: slug,
+              status: "scheduled",
+              scheduled_start_at: start_at,
+              scheduled_end_at: DateTime.add(start_at, 3600, :second)
+            )
+
+          {meeting, date}
+        end)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings")
+
+      # The hazard first: the week is EMPTY while the zone is unresolved,
+      # even though all three rows exist.
+      assert attrs_of(render(view), in_grid(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               []
+
+      html = render_click(view, "calendar_assume_utc", %{})
+
+      assigns = calendar_assigns(view)
+      assert assigns.calendar_time_zone == "Etc/UTC"
+      assert assigns.calendar_zone_assumed?
+      refute assigns.calendar_zone_unresolved?
+
+      # BY ID, per column — not by count and not by non-emptiness.
+      for {meeting, date} <- seeded do
+        assert attrs_of(
+                 html,
+                 in_grid(~s(#{column_selector(date)} [data-role="calendar-event"])),
+                 "data-meeting-id"
+               ) == [meeting.id]
+      end
+
+      assert Enum.sort(
+               attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id")
+             ) == Enum.sort(Enum.map(seeded, fn {meeting, _date} -> meeting.id end))
+    end
+
+    test "assuming UTC is a no-op for a viewer whose zone resolved", %{conn: conn} do
+      # The event can be pushed from a console. Honouring it for a viewer
+      # who already has a zone would silently move every block on their
+      # calendar by an unstated offset.
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+
+      render_click(view, "calendar_assume_utc", %{})
+
+      assigns = calendar_assigns(view)
+      assert assigns.calendar_time_zone == @grid_zone
+      refute assigns.calendar_zone_assumed?
+      refute assigns.calendar_zone_unresolved?
+    end
   end
 
   # ── Mobile week strip + day view (task 019fb954-8ead stage 3) ────────────
