@@ -1187,6 +1187,38 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
       on_exit(fn -> Application.delete_env(:platform, :adr_dir) end)
 
       assert {:error, :adr_dir_unreachable} = ContextProviders.adr_dir()
+
+      # Anti-vacuity: the walk this branch refuses to run WOULD succeed.
+      # Without that, `{:error, :adr_dir_unreachable}` could just mean the
+      # repo has no docs/decisions at all and the test proves nothing about
+      # the no-fallback branch that makes the runtime.exs key provable.
+      Application.delete_env(:platform, :adr_dir)
+      assert {:ok, _walked} = ContextProviders.adr_dir()
+    end
+
+    test "a configured override resolves to exactly that directory" do
+      # Equality, not `=~`. A substring assertion passes when the walk
+      # returns the repo's own docs/decisions and the fixture path merely
+      # happens to be a suffix of nothing — it cannot distinguish "used the
+      # override" from "found something else that contains these bytes".
+      Application.put_env(:platform, :adr_dir, fixture_adr_dir())
+      on_exit(fn -> Application.delete_env(:platform, :adr_dir) end)
+
+      assert {:ok, dir} = ContextProviders.adr_dir()
+      assert dir == fixture_adr_dir()
+      refute dir == Path.expand("../../../docs/decisions", __DIR__)
+    end
+
+    test "adr_priv_subdir/0 is the single definition of the packaged path" do
+      # The Dockerfile's COPY target, the runtime.exs config block and the
+      # regression tests all read this. If it stops being a plain relative
+      # segment, `Path.join("priv", subdir)` stops meaning what they assume.
+      subdir = ContextProviders.adr_priv_subdir()
+
+      assert is_binary(subdir)
+      assert subdir != ""
+      refute String.starts_with?(subdir, "/")
+      refute String.contains?(subdir, "..")
     end
 
     test "a resolvable but empty directory reports :adr_dir_empty, not :adr_dir_unreachable" do

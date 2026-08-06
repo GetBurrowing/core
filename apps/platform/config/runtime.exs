@@ -37,6 +37,42 @@ case System.get_env("SESSION_COOKIE_DOMAIN") do
     :ok
 end
 
+# ── ADR corpus location (release images have no `docs/decisions/`) ────────────
+# ContextProviders.adr_dir/0 resolves by walking ancestors for a literal
+# `docs/decisions` directory. A release image has no such ancestor, so the
+# architect's ADR index resolves `:adr_dir_unreachable` and the drift check
+# reports "no architectural decisions" instead of failing. The Dockerfile
+# copies the corpus to the app's `priv/`; this points the provider at it.
+#
+# The existence check is load-bearing, not defensive. `adr_dir/0` deliberately
+# does NOT fall back when the key is set — a configured-but-missing path is an
+# error, which is what makes the key provable. So an unconditional key would
+# break every dev and test run, where nothing was ever copied into `priv/` and
+# the ancestor walk is the correct resolution. When nothing resolves we write
+# NO key at all and leave that walk (and the suite's own put_env overrides)
+# exactly as they were.
+packaged_adr_dir =
+  try do
+    if Code.ensure_loaded?(Platform.Responsibilities.ContextProviders) do
+      subdir = Platform.Responsibilities.ContextProviders.adr_priv_subdir()
+      Application.app_dir(:platform, Path.join("priv", subdir))
+    end
+  rescue
+    # app_dir/2 raises when :platform is not loaded (plain `iex` reading this
+    # file, tooling that evaluates config outside a release).
+    ArgumentError -> nil
+  end
+
+resolved_adr_dir =
+  case System.get_env("ADR_DIR") do
+    dir when is_binary(dir) and dir != "" -> dir
+    _ -> packaged_adr_dir
+  end
+
+if is_binary(resolved_adr_dir) and File.dir?(resolved_adr_dir) do
+  config :platform, :adr_dir, resolved_adr_dir
+end
+
 vault_key =
   case {config_env(), System.get_env("VAULT_MASTER_KEY")} do
     {:prod, nil} ->

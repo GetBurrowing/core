@@ -14,6 +14,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
 
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Orchestration.PromptTemplates
+  alias Platform.Responsibilities.ContextProviders
   alias Platform.Responsibilities.Handlers.ArchitectureReviewPlan
   alias Platform.Repo
   alias Platform.Responsibilities.Responsibility
@@ -696,19 +697,47 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
                "0003-fixture-attention-routing.md — Fixture Attention Routing [Accepted]"
     end
 
-    test "the untruncated header counts the real `docs/decisions/`", %{plan: plan} do
+    test "the untruncated header names the directory the walk actually resolved", %{plan: plan} do
       # No env overrides — this is the production walk against the real
       # repo, and it is the only assertion left that exercises it. The
       # count is deliberately unpinned: pinning it is the defect this
       # stage removed. What can still fail is the walk itself. Point
       # `:adr_dir` at an empty directory and the rendered block becomes
       # "(ADR index unavailable — ...)", which this regex does not match.
+      #
+      # The header renders the RESOLVED dir, not the literal
+      # `docs/decisions/`. In a release the corpus lives under the app's
+      # priv/, and a prompt that names a path the image does not have
+      # teaches the model a false fact about where these decisions are.
+      {:ok, dir} = ContextProviders.adr_dir()
+
       rendered =
         %{plan: plan}
         |> ArchitectureReviewPlan.gather_context()
         |> ArchitectureReviewPlan.render_instruction()
 
-      assert rendered =~ ~r/All \d+ ADRs in `docs\/decisions\/`\./
+      assert rendered =~ ~r/All \d+ ADRs in `#{Regex.escape(dir)}`\./
+    end
+
+    test "the header names the configured directory, not the repo default", %{plan: plan} do
+      # The whole point of rendering payload.dir: with :adr_dir pointing
+      # somewhere else, a header still claiming `docs/decisions/` would be
+      # stating a path these ADRs did not come from.
+      fixture = write_adr_fixture!(@adr_fixture_files)
+      Application.put_env(:platform, :adr_dir, fixture)
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :adr_dir)
+        File.rm_rf!(fixture)
+      end)
+
+      rendered =
+        %{plan: plan}
+        |> ArchitectureReviewPlan.gather_context()
+        |> ArchitectureReviewPlan.render_instruction()
+
+      assert rendered =~ "ADRs in `#{fixture}`."
+      refute rendered =~ "ADRs in `docs/decisions/`."
     end
 
     test "an unavailable index renders an instruction, not silence", %{plan: plan} do

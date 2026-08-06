@@ -115,15 +115,17 @@ defmodule Platform.Responsibilities.ContextProviders do
   their own instead of leaving a stale list behind.
 
   Also on the optional side of the refusal line, and for a reason that
-  is a property of the deployment rather than of the trigger: **prod
-  release images do not ship `docs/`.** An unreachable ADR directory is
-  the steady state there, so refusing would stop the architect from
-  running at all in production — the definitive false positive. Two
+  is a property of the deployment rather than of the trigger: **a
+  release image has no `docs/decisions/` ancestor to walk to.** The
+  corpus is packaged into the app's `priv/` and pointed at by
+  `config/runtime.exs`, but that chain fails silently if any link
+  breaks, so refusing would stop the architect from running at all in
+  production on a packaging slip — the definitive false positive. Two
   distinct non-refusing failures are reported instead, because
   "unreadable" and "genuinely empty" are different facts:
 
-    * `:adr_dir_unreachable` — no directory resolved (release image,
-      or the ancestor walk ran out of parents).
+    * `:adr_dir_unreachable` — no directory resolved (the configured
+      `:adr_dir` is missing, or the ancestor walk ran out of parents).
     * `:adr_dir_empty` — a directory resolved and holds zero `.md`
       files. Somebody deleted the ADRs; that is not the same event as
       "we are running from a release tarball".
@@ -232,6 +234,13 @@ defmodule Platform.Responsibilities.ContextProviders do
   # ── :adr_index budgets and parse surface ──────────────────────────────────
 
   @adr_dir_from_repo_root "docs/decisions"
+
+  # Where the release image parks the corpus, under the app's `priv/`.
+  # THE ONE definition of this name: the Dockerfile's COPY target, the
+  # `config/runtime.exs` block that points `:adr_dir` at it, and the
+  # tests that pin both derive it from here. A second hand-typed copy
+  # is how the two halves drift apart and the index silently empties.
+  @adr_priv_subdir "adr_decisions"
 
   # Header window. Every field this slot extracts (title, status,
   # supersedes) lives in the first few lines of an ADR; a full read of
@@ -521,8 +530,26 @@ defmodule Platform.Responsibilities.ContextProviders do
   end
 
   @doc """
-  The `docs/decisions/` directory this slot reads, or the reason it
-  could not be resolved.
+  The subdirectory of the app's `priv/` that the release image copies
+  `docs/decisions/` into.
+
+  Public so `config/runtime.exs`, the Dockerfile-pinning regression
+  test and anything else that needs the name read it from one place
+  instead of retyping it.
+  """
+  @spec adr_priv_subdir() :: String.t()
+  def adr_priv_subdir, do: @adr_priv_subdir
+
+  @doc """
+  The directory of ADRs this slot reads, or the reason it could not be
+  resolved.
+
+  Resolution order: a configured `:platform, :adr_dir` (used verbatim,
+  with NO fallback), then a `docs/decisions` directory in an ancestor
+  of this source file, then one in an ancestor of the working
+  directory. A release image has no such ancestor, which is why
+  `config/runtime.exs` points the config key at the packaged
+  `priv/#{@adr_priv_subdir}` when that directory exists.
 
   Public so tests can compute expectations (collisions, entry counts)
   from the live directory instead of hardcoding a snapshot of it — a

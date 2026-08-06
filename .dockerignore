@@ -1,0 +1,32 @@
+# Docker reads ONLY the ignore file at the build context root, and the image
+# is built with `context: .` (see .github/workflows/ci.yml) so the ADR corpus
+# at docs/decisions/ is in scope for apps/platform/Dockerfile.
+#
+# DO NOT add `docs` here. The Dockerfile copies `docs/decisions` into the
+# app's priv/ so the ADR index is reachable inside the release image. An
+# exclusion here makes that COPY copy nothing — silently, with a green build.
+
+# Build artefacts
+**/_build
+**/deps
+**/.elixir_ls
+**/.fetch
+**/*.beam
+erl_crash.dump
+
+# VCS
+.git
+
+# App-specific
+apps/platform/priv/static/cache_manifest.json
+apps/platform/test
+apps/platform/doc
+
+# Siblings that are in context now that the context is the repo root, and
+# that the platform image has no use for.
+audit
+e2e
+frontends
+packages
+node_modules
+**/node_modules

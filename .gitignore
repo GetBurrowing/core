@@ -48,3 +48,8 @@ apps/platform/priv/meetings.yml
 .githooks/pre-commit-user
 .githooks/post-checkout
 .githooks/post-checkout-user
+
+# The ADR corpus is copied into the platform app's priv/ by the Dockerfile so
+# it ships inside the release image. It exists ONLY inside the image — never
+# commit a second copy of docs/decisions/ here, two copies drift.
+apps/platform/priv/adr_decisions/

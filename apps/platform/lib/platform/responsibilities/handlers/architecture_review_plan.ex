@@ -87,6 +87,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
+  alias Platform.Responsibilities.ADRIndexRenderer
   alias Platform.Responsibilities.ContextProviders
   alias Platform.Responsibilities.Responsibility
   alias Platform.Tasks
@@ -749,7 +750,8 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
       plan_summary: format_plan_summary(Map.get(context, :plan_payload)),
       sibling_tasks: format_sibling_tasks(Map.get(context, :sibling_tasks, @empty_siblings)),
       open_prs: format_open_prs(Map.get(context, :open_prs, [])),
-      adr_index: format_adr_index(Map.get(context, :adr_index, @unavailable_adr_index))
+      adr_index:
+        ADRIndexRenderer.format_adr_index(Map.get(context, :adr_index, @unavailable_adr_index))
     }
   end
 
@@ -933,105 +935,9 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
     end)
   end
 
-  # An unreadable index must arrive as an INSTRUCTION, not as silence.
-  # A model handed an empty ADR block reads it as "this codebase has no
-  # architectural decisions" and reasons from that; handed this line it
-  # knows the walk failed and that any ADR it names would be invented.
-  defp format_adr_index(%{available?: false} = payload) do
-    "(ADR index unavailable — #{adr_unavailable_reason(Map.get(payload, :reason))}. " <>
-      "Do not cite ADRs by number or filename in this pass; say the index was unavailable " <>
-      "instead of naming a decision you cannot see.)"
-  end
-
-  defp format_adr_index(%{entries: entries} = payload) when is_list(entries) do
-    Enum.join([format_adr_index_header(payload) | Enum.map(entries, &format_adr_entry/1)], "\n")
-  end
-
-  defp format_adr_index(_payload),
-    do: "(ADR index unavailable — the slot returned an unrecognised shape)"
-
-  defp adr_unavailable_reason(:adr_dir_empty),
-    do: "`docs/decisions/` resolved but holds no `.md` files"
-
-  defp adr_unavailable_reason(:adr_dir_unreadable),
-    do: "`docs/decisions/` exists but could not be listed"
-
-  defp adr_unavailable_reason(_reason),
-    do: "`docs/decisions/` was not found — release images do not ship `docs/`"
-
-  # The header carries the one instruction that makes the block usable:
-  # cite by filename. `docs/decisions/` holds four numbers that name two
-  # different ADRs each, so "ADR-0044" is not a reference — it is a
-  # coin flip the model has no way of knowing it is making.
-  defp format_adr_index_header(payload) do
-    collisions = map_size(Map.get(payload, :number_collisions) || %{})
-    total = Map.get(payload, :total, 0)
-    shown = Map.get(payload, :shown, total)
-
-    counts =
-      if Map.get(payload, :truncated?) do
-        "Showing the #{shown} highest-numbered of #{total} ADRs in `docs/decisions/` " <>
-          "(#{Map.get(payload, :dropped, 0)} older ADR(s) omitted: " <>
-          "#{Enum.join(Map.get(payload, :dropped_files) || [], ", ")})."
-      else
-        "All #{total} ADRs in `docs/decisions/`."
-      end
-
-    ambiguity =
-      if collisions > 0 do
-        " CITE ADRs BY FILENAME, NOT BY NUMBER — #{collisions} number(s) in this directory " <>
-          "are each shared by more than one ADR, and the shared entries are flagged below."
-      else
-        " Cite ADRs by filename."
-      end
-
-    counts <> ambiguity
-  end
-
-  defp format_adr_entry(entry) do
-    title = Map.get(entry, :title) || "(title not recorded)"
-    status = Map.get(entry, :status) || "(status not recorded)"
-
-    header = "- #{Map.get(entry, :file, "(unknown)")} — #{title} [#{status}]"
-
-    Enum.join([header | adr_entry_flags(entry)], "\n")
-  end
-
-  defp adr_entry_flags(entry) do
-    number_flag =
-      if Map.get(entry, :number_ambiguous) do
-        ["  ⚠ number #{Map.get(entry, :number)} is shared by another ADR — cite by filename"]
-      else
-        []
-      end
-
-    title_flag =
-      if Map.get(entry, :title_ambiguous) do
-        ["  ⚠ another ADR carries this same title — cite by filename"]
-      else
-        []
-      end
-
-    number_flag ++
-      title_flag ++ Enum.map(Map.get(entry, :superseded_by) || [], &adr_supersession/1)
-  end
-
-  # A partial supersession is rendered as one, with the superseding
-  # document's own words attached. ADR-0013 retired the attention-routing
-  # SECTIONS of ADR-0008; reporting 0008 as dead would retire a live
-  # decision, which is the same lie in the opposite direction.
-  defp adr_supersession(%{partial?: true} = ref) do
-    "  ⚠ partially superseded by #{Map.get(ref, :file)} — #{Map.get(ref, :note)}"
-  end
-
-  defp adr_supersession(ref) do
-    "  ⚠ superseded by #{Map.get(ref, :file)}" <> adr_supersession_source(ref)
-  end
-
-  defp adr_supersession_source(%{source: :manual, note: note}) when is_binary(note),
-    do: " (#{note})"
-
-  defp adr_supersession_source(_ref), do: ""
+  # The ADR block is rendered by `ADRIndexRenderer`, shared with the
+  # `architecture.cron_sweep` handler so both paths show status,
+  # ambiguity flags and supersessions from the one provider parse.
 
   # Fallback interpolation when the DB row is missing — the hardcoded
   # default body carries the same `{{variable}}` placeholders, so we

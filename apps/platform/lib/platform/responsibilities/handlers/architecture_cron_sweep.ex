@@ -40,8 +40,12 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
       marked `missing?: true` with a note.
     * `recent_closed_tasks` — tasks that transitioned to `done` in the
       past 7 days across all projects, ordered by `updated_at` desc.
-    * `adr_index` — filesystem listing of `docs/decisions/*.md`, same
-      shape the sibling `ArchitectureReviewPlan` handler produces.
+    * `adr_index` — the `:adr_index` slot on `ContextProviders`, rendered
+      by `Platform.Responsibilities.ADRIndexRenderer`. Same provider and
+      same rendering as the sibling `ArchitectureReviewPlan` handler, so
+      the sweep sees each ADR's status and supersessions rather than a
+      bare list of filenames. Never refuses: an unreachable directory
+      arrives as an explicit reason, not as an empty list.
 
   ## `handle_output/3`
 
@@ -57,6 +61,8 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
 
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
+  alias Platform.Responsibilities.ADRIndexRenderer
+  alias Platform.Responsibilities.ContextProviders
   alias Platform.Responsibilities.Responsibility
   alias Platform.Tasks
   alias Platform.Tasks.Task, as: TaskSchema
@@ -70,10 +76,10 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
   # in, so both sides agree.
   @max_followups 3
 
-  # ADR index lives at `docs/decisions/` relative to the repo root. In
-  # test / sandboxed builds the path may not resolve; we fall back to an
-  # empty list rather than crashing.
-  @adr_dir_from_repo_root "docs/decisions"
+  # Shape of the `:adr_index` slot when the directory can't be read.
+  # Mirrors the sibling `architecture.review_plan` handler; kept in sync
+  # with `ContextProviders.unavailable_index/2` via `ADRIndexRenderer`.
+  @unavailable_adr_index ADRIndexRenderer.unavailable_index()
 
   # Recent-closed window for the closed-tasks slot. One week matches the
   # weekly cron cadence.
@@ -309,41 +315,30 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
       []
   end
 
+  # The ADR walk is NOT materialised here. It is the `:adr_index` slot
+  # on `ContextProviders`, which owns directory resolution, the header
+  # parse, and the collision / supersession flags. What used to be here
+  # emitted `%{file: name}` and nothing else, so the sweep could not see
+  # whether a decision it was asked to check for drift was still live —
+  # and every failure path collapsed to `[]`, which reads as "this
+  # codebase has no architectural decisions".
+  #
+  # Like the sibling review_plan handler, this slot NEVER refuses: prod
+  # release images ship no `docs/`, so an unreachable index is the
+  # steady state there. It comes back `available?: false` with a reason,
+  # and the renderer turns that into an explicit instruction.
   defp adr_index do
-    with root when is_binary(root) <- repo_root(),
-         adr_dir <- Path.join(root, @adr_dir_from_repo_root),
-         true <- File.dir?(adr_dir),
-         entries when is_list(entries) <- File.ls(adr_dir) |> unwrap_ls() do
-      entries
-      |> Enum.filter(&String.ends_with?(&1, ".md"))
-      |> Enum.sort()
-      |> Enum.map(&%{file: &1})
-    else
-      _ -> []
-    end
-  rescue
-    _ -> []
-  end
+    case ContextProviders.gather_context(:adr_index, %{}) do
+      {:ok, %{adr_index: index}} ->
+        index
 
-  defp unwrap_ls({:ok, entries}), do: entries
-  defp unwrap_ls({:error, _}), do: []
-  defp unwrap_ls(list) when is_list(list), do: list
+      other ->
+        Logger.warning(
+          "[architecture.cron_sweep] adr_index slot returned an unexpected shape: " <>
+            "#{inspect(other)} — rendering the unavailable block"
+        )
 
-  defp repo_root do
-    __ENV__.file
-    |> Path.expand()
-    |> find_ancestor_with_dir(@adr_dir_from_repo_root, 8)
-  end
-
-  defp find_ancestor_with_dir(_path, _dir, 0), do: nil
-
-  defp find_ancestor_with_dir(path, dir, depth) do
-    parent = Path.dirname(path)
-
-    cond do
-      parent == path -> nil
-      File.dir?(Path.join(parent, dir)) -> parent
-      true -> find_ancestor_with_dir(parent, dir, depth - 1)
+        @unavailable_adr_index
     end
   end
 
@@ -353,7 +348,8 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
     %{
       open_prs: format_open_prs(Map.get(context, :open_prs)),
       recent_closed_tasks: format_closed_tasks(Map.get(context, :recent_closed_tasks, [])),
-      adr_index: format_adr_index(Map.get(context, :adr_index, []))
+      adr_index:
+        ADRIndexRenderer.format_adr_index(Map.get(context, :adr_index, @unavailable_adr_index))
     }
   end
 
@@ -377,14 +373,6 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
     Enum.map_join(tasks, "\n", fn task ->
       "- #{Map.get(task, :title) || "(untitled)"} " <>
         "(task_id: #{Map.get(task, :task_id)}, closed_at: #{Map.get(task, :updated_at)})"
-    end)
-  end
-
-  defp format_adr_index([]), do: "(ADR index unavailable — `docs/decisions/` not found)"
-
-  defp format_adr_index(entries) when is_list(entries) do
-    Enum.map_join(entries, "\n", fn entry ->
-      "- #{Map.get(entry, :file, "(unknown)")}"
     end)
   end
 

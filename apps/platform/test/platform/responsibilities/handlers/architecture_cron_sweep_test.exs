@@ -110,6 +110,96 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweepTest do
     end
   end
 
+  # ── ADR index block ───────────────────────────────────────────────────────
+  #
+  # The sweep used to walk `docs/decisions/` itself and emit a bare
+  # `- <filename>` list with no status and no supersession, collapsing to
+  # `[]` on every failure path. That made the drift check unrunnable from
+  # this path: a bare filename cannot tell the model whether a decision is
+  # still live, and an empty list reads as "there are no decisions".
+  #
+  # These assertions name the specific superseded entry and its
+  # superseding document. A "the list is non-empty" assertion passes in
+  # every environment where this bug is absent, which is to say it tests
+  # nothing.
+  describe "build_prompt/1 — ADR index block" do
+    setup do
+      # `ContextProviders.adr_dir/0` consults `:adr_dir` first, so the
+      # fixture corpus stands in for the real directory. The fixtures
+      # carry the collision / supersession shapes the real one has.
+      dir = Path.expand("../../../support/fixtures/adr_decisions", __DIR__)
+      Application.put_env(:platform, :adr_dir, dir)
+      on_exit(fn -> Application.delete_env(:platform, :adr_dir) end)
+      :ok
+    end
+
+    defp rendered_prompt do
+      {:ok, ctx} = ArchitectureCronSweep.gather_context(responsibility(), %{})
+      {:ok, %{user: user}} = ArchitectureCronSweep.build_prompt(ctx)
+      user
+    end
+
+    test "renders each ADR with its title and status, not a bare filename" do
+      rendered = rendered_prompt()
+
+      # The fixture's own Status header says Accepted — the supersession
+      # is asserted separately, from the reverse map the provider builds
+      # out of 0100's `**Supersedes:**` header. Those are two different
+      # facts and the block must carry both.
+      assert rendered =~ "0098-old-decision.md — Old Decision [Accepted]"
+    end
+
+    test "names the superseding document on the superseded entry" do
+      # THE detector for this stage. Drop the supersession lines from the
+      # renderer and this is the assertion that goes red.
+      rendered = rendered_prompt()
+
+      assert rendered =~ "⚠ superseded by 0100-supersedes-ninety-eight.md"
+    end
+
+    test "flags a partial supersession as partial rather than retiring the ADR" do
+      rendered = rendered_prompt()
+
+      assert rendered =~ "⚠ partially superseded by 0103-partially-supersedes-one-oh-four.md"
+    end
+
+    test "flags colliding numbers inline next to the entry" do
+      rendered = rendered_prompt()
+
+      assert rendered =~ "⚠ number 0099 is shared by another ADR — cite by filename"
+    end
+  end
+
+  describe "build_prompt/1 — unavailable ADR index" do
+    test "renders the unreachable-directory reason, never an empty block" do
+      Application.put_env(:platform, :adr_dir, "/nonexistent/docs/decisions")
+      on_exit(fn -> Application.delete_env(:platform, :adr_dir) end)
+
+      {:ok, ctx} = ArchitectureCronSweep.gather_context(responsibility(), %{})
+      {:ok, %{user: user}} = ArchitectureCronSweep.build_prompt(ctx)
+
+      assert user =~ "the ADR corpus could not be resolved"
+      assert user =~ "`:platform, :adr_dir`"
+
+      assert user =~ "Do not cite ADRs by number or filename in this pass"
+    end
+
+    test "no longer claims release images do not ship the corpus" do
+      # They do: the Dockerfile copies docs/decisions into the app's priv/
+      # and config/runtime.exs points :adr_dir at it when present. A reason
+      # string naming a cause that has been fixed sends whoever reads this
+      # prompt output to the wrong half of the system.
+      Application.put_env(:platform, :adr_dir, "/nonexistent/docs/decisions")
+      on_exit(fn -> Application.delete_env(:platform, :adr_dir) end)
+
+      {:ok, ctx} = ArchitectureCronSweep.gather_context(responsibility(), %{})
+      {:ok, %{user: user}} = ArchitectureCronSweep.build_prompt(ctx)
+
+      refute user =~ "release images do not ship"
+      refute user =~ "do not ship `docs/`"
+    end
+  end
+
   describe "handle_output/3 — files follow-ups" do
     setup do
       # Per-project scope: seed a project the handler files follow-ups

@@ -13,14 +13,23 @@ RUN mix local.hex --force && mix local.rebar --force
 
 ENV MIX_ENV=prod
 
-COPY mix.exs mix.lock ./
+COPY apps/platform/mix.exs apps/platform/mix.lock ./
 RUN mix deps.get --only $MIX_ENV
 RUN mix deps.compile
 
-COPY config config
-COPY assets assets
-COPY priv priv
-COPY lib lib
+COPY apps/platform/config config
+COPY apps/platform/assets assets
+COPY apps/platform/priv priv
+COPY apps/platform/lib lib
+
+# The ADR corpus lives at the repo root, outside this app. It is copied into
+# the app's `priv/` so it ships inside the release: the running image has no
+# `docs/decisions/` to walk to, so without this the ADR index resolves as
+# unreachable and the drift check silently reports "no decisions".
+#
+# This COPY must stay ABOVE `mix release` — the release snapshots `priv/` as
+# it runs, so a copy landing afterwards ships nothing.
+COPY docs/decisions priv/adr_decisions
 
 RUN cd assets && npm ci
 RUN mix assets.deploy
