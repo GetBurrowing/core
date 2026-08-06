@@ -4241,6 +4241,30 @@ defmodule Platform.Tasks do
   #     a single reflow (cheaper than N sequential :task_deleted refreshes
   #     at any batch size ≥ 2). No sibling `:task_deleted` broadcasts fire
   #     for the same ids — batch is the SOLE signal for that path.
+  #
+  # Scope-narrowed topics (additive, see `topic_for_scope/1`): every event
+  # above is ALSO broadcast to zero or more narrower topics derived from ids
+  # already present on the payload (no database access). A subscriber that
+  # only cares about one task/project/plan/stack can subscribe to just that
+  # topic and stop receiving the firehose — which is what keeps `async: true`
+  # test modules from observing each other's board traffic. The global topic
+  # keeps receiving everything, so no production subscriber has to change.
+  #
+  #   * `{_evt, %Task{}}`               → `{:task, id}`, `{:project, project_id}`
+  #   * `{_evt, %Plan{}}`               → `{:task, task_id}`
+  #   * `{_evt, %Epic{}}`               → `{:project, project_id}`
+  #   * `{:stage_transitioned, %Stage{}}` → `{:plan, plan_id}` — `Stage` has
+  #     only `belongs_to(:plan, ...)`, and this fires on the plan-engine hot
+  #     path, so no `Repo` lookup is done to reach the task.
+  #   * `{:stack_gate_opened, stack_id, _ids}` → `{:stack, stack_id}`
+  #   * `{_evt, %Stack{}}`              → `{:stack, id}`
+  #   * `{:runtime_event, %{task_id: id}}` → `{:task, id}`
+  #   * anything else                   → no scopes, global only. This
+  #     deliberately includes `{:tasks_batch_deleted, ids, meta}`, which is a
+  #     board-level reflow signal rather than a per-row event.
+  #
+  # Broadcast order is global-topic-first, then one broadcast per derived
+  # scope; a process holding both subscriptions sees the global copy first.
   @board_topic "tasks:board"
 
   @doc "List all tasks with preloaded project and epic, ordered by insertion."
@@ -5293,10 +5317,78 @@ defmodule Platform.Tasks do
     Phoenix.PubSub.subscribe(Platform.PubSub, @board_topic)
   end
 
-  @doc "Broadcast a board event."
-  def broadcast_board(message) do
-    Phoenix.PubSub.broadcast(Platform.PubSub, @board_topic, message)
+  @doc "The global kanban board topic — receives every board event."
+  @spec board_topic() :: String.t()
+  def board_topic, do: @board_topic
+
+  @doc """
+  Build a scope-narrowed board topic.
+
+  Named to mirror `Platform.Tasks.ReviewRequests.topic_for_task/1`. Accepts
+  `{:task, id}` / `{:project, id}` / `{:plan, id}` / `{:stack, id}`.
+  """
+  @spec topic_for_scope({:task | :project | :plan | :stack, String.t()}) :: String.t()
+  def topic_for_scope({kind, id}) when kind in [:task, :project, :plan, :stack] do
+    @board_topic <> ":" <> Atom.to_string(kind) <> ":" <> to_string(id)
   end
+
+  @doc """
+  Subscribe the calling process to a scope-narrowed board topic.
+
+  `subscribe_board(task: id)`, `subscribe_board(project: id)`,
+  `subscribe_board(plan: id)` or `subscribe_board(stack: id)`. Unlike
+  `subscribe_board/0` this delivers only the events whose payload carries
+  that id.
+  """
+  @spec subscribe_board(keyword()) :: :ok | {:error, term()}
+  def subscribe_board([{kind, id}]) when kind in [:task, :project, :plan, :stack] do
+    Phoenix.PubSub.subscribe(Platform.PubSub, topic_for_scope({kind, id}))
+  end
+
+  @doc "Unsubscribe the calling process from a scope-narrowed board topic."
+  @spec unsubscribe_board(keyword()) :: :ok
+  def unsubscribe_board([{kind, id}]) when kind in [:task, :project, :plan, :stack] do
+    Phoenix.PubSub.unsubscribe(Platform.PubSub, topic_for_scope({kind, id}))
+  end
+
+  @doc """
+  Broadcast a board event.
+
+  Goes to the global `@board_topic` first, then once per scope derived from
+  the payload (see the `@board_topic` comment above). Order matters to a
+  process holding both subscriptions and is asserted in
+  `test/platform/tasks/board_topic_scope_test.exs`.
+  """
+  def broadcast_board(message) do
+    :ok = Phoenix.PubSub.broadcast(Platform.PubSub, @board_topic, message)
+
+    Enum.each(board_scopes(message), fn scope ->
+      Phoenix.PubSub.broadcast(Platform.PubSub, topic_for_scope(scope), message)
+    end)
+  end
+
+  # Derive narrower topics from ids ALREADY on the payload. Zero database
+  # access — this runs on the plan-engine hot path.
+  defp board_scopes({_evt, %Task{} = task}) do
+    Enum.reject([{:task, task.id}, {:project, task.project_id}], &is_nil(elem(&1, 1)))
+  end
+
+  defp board_scopes({_evt, %Plan{} = plan}), do: scope_or_none(:task, plan.task_id)
+  defp board_scopes({_evt, %Epic{} = epic}), do: scope_or_none(:project, epic.project_id)
+  defp board_scopes({_evt, %Stack{} = stack}), do: scope_or_none(:stack, stack.id)
+
+  defp board_scopes({:stage_transitioned, %Stage{} = stage}),
+    do: scope_or_none(:plan, stage.plan_id)
+
+  defp board_scopes({:stack_gate_opened, stack_id, _ids}), do: scope_or_none(:stack, stack_id)
+
+  defp board_scopes({:runtime_event, %{task_id: task_id}}) when is_binary(task_id),
+    do: [{:task, task_id}]
+
+  defp board_scopes(_other), do: []
+
+  defp scope_or_none(_kind, nil), do: []
+  defp scope_or_none(kind, id), do: [{kind, id}]
 
   # ── memory_search hit hydration helpers (stage 3, 019f3dbb) ─────────────
   #

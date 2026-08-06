@@ -60,6 +60,12 @@ defmodule Platform.TasksPhasePointerTest do
   so a stale payload is still captured and still fails the assertion.
   """
 
+  # BOARD-SCOPE-EXEMPT: the four `Tasks.subscribe_board()` calls below stay on
+  # the global topic deliberately. This module is `async: false`, so no
+  # concurrent module can race it, and the `board_updates/2` drain above is
+  # built to observe arrival ORDER across every board payload — narrowing to
+  # `subscribe_board(task: id)` would pre-filter the very stream whose ordering
+  # is the subject under test.
   use Platform.DataCase, async: false
 
   alias Platform.Agents.Agent

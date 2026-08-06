@@ -19,6 +19,10 @@ defmodule Platform.Tasks.SubmitPlanForReviewArchitectHookTest do
   actual AgentResponder dispatch that would otherwise crash on a bare
   system-event signal.
   """
+  # BOARD-SCOPE-EXEMPT: the four `Tasks.subscribe_board()` calls below stay on
+  # the global topic deliberately. This module is `async: false`, so no
+  # concurrent module can race it. Every assertion here is already pinned to a
+  # bound id (`^submitted_id` / `^task_id`), so the global topic costs nothing.
   use Platform.DataCase, async: false
 
   import ExUnit.CaptureLog

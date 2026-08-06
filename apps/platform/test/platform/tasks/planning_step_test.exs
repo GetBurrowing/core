@@ -9,6 +9,12 @@ defmodule Platform.Tasks.PlanningStepTest do
   # A sync module puts the sandbox in shared mode, so the watcher can use
   # the connection legally. The broadcast is the subject here (member 8
   # depends on it), so it cannot be avoided the way stage 1 avoided it.
+  #
+  # BOARD-SCOPE-EXEMPT: the `Tasks.subscribe_board()` call below stays on the
+  # global topic deliberately. `use Platform.DataCase` with no `async:` option
+  # is sync (see `data_case.ex` — `shared: not tags[:async]`), so no concurrent
+  # module can race it. The global topic is also the subject: this test proves
+  # the board broadcast fires at all, which is what member 8's card consumes.
   use Platform.DataCase
 
   alias Platform.Repo

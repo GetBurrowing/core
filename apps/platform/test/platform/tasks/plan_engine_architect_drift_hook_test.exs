@@ -20,6 +20,10 @@ defmodule Platform.Tasks.PlanEngineArchitectDriftHookTest do
   actual AgentResponder dispatch (or in the crash-isolation case, to
   substitute a dispatcher that raises).
   """
+  # BOARD-SCOPE-EXEMPT: the two `Tasks.subscribe_board()` calls below stay on
+  # the global topic deliberately. This module is `async: false`, so no
+  # concurrent module can race it, and both assertions are already pinned to a
+  # bound `^stage_id`.
   use Platform.DataCase, async: false
 
   import ExUnit.CaptureLog

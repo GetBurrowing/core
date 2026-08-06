@@ -398,19 +398,27 @@ defmodule Platform.Tasks.PlanTest do
     test "broadcasts {:plan_updated, supersedee} BEFORE {:plan_updated, new_plan}", %{task: task} do
       v1 = approve_v1(task)
 
-      :ok = Tasks.subscribe_board()
+      # Scope-narrowed on purpose. This module is `async: true`, and on the
+      # GLOBAL board topic `%Plan{status: "approved"}` matches a concurrent
+      # sibling's broadcast about a completely unrelated plan — the id check
+      # then fails on a foreign id. Both halves below matter: the scoped
+      # subscription keeps other modules' events out of the mailbox, and
+      # pinning the ids INTO the patterns makes each assertion true on its
+      # own terms rather than only after a follow-up ==.
+      :ok = Tasks.subscribe_board(task: task.id)
 
       v2_pending = draft_and_review(task)
       {:ok, v2} = Tasks.approve_plan(v2_pending, "system")
 
+      v1_id = v1.id
+      v2_id = v2.id
+
       # The supersedee (v1 → rejected) is broadcast first…
-      assert_receive {:plan_updated, %Plan{id: id1, status: "rejected"} = sup}
-      assert id1 == v1.id
+      assert_receive {:plan_updated, %Plan{id: ^v1_id, status: "rejected"} = sup}
       assert sup.superseded_by_plan_id == v2.id
 
       # …then the newly-approved v2.
-      assert_receive {:plan_updated, %Plan{id: id2, status: "approved"}}
-      assert id2 == v2.id
+      assert_receive {:plan_updated, %Plan{id: ^v2_id, status: "approved"}}
     end
 
     test "atomicity: a DB-level constraint violation on supersession rolls back the new plan",
@@ -476,7 +484,7 @@ defmodule Platform.Tasks.PlanTest do
 
     test "happy path: task done → planning, plan rejected with reason, broadcast received",
          %{task: task} do
-      :ok = Tasks.subscribe_board()
+      :ok = Tasks.subscribe_board(task: task.id)
 
       assert {:ok, reopened} =
                Tasks.reopen_with_feedback(task.id, "Missed the spec", "reviewer-1")
@@ -502,9 +510,16 @@ defmodule Platform.Tasks.PlanTest do
       # `{:task_updated, %Task{status: "planning"}}` broadcasts (planning-step
       # cursor + outcome), and this assertion started picking them up.
       # Pinning is strictly stronger — it never passed on a foreign message.
+      # The subscription above is ALSO scope-narrowed to this task, which is
+      # what keeps sibling modules' events out of the mailbox in the first
+      # place; pinning then makes each assertion self-evidently about the
+      # right row.
       task_id = task.id
+      latest_id = latest.id
       assert_receive {:task_updated, %{id: ^task_id, status: "planning"}}
-      assert_receive {:plan_updated, %{status: "rejected", rejection_reason: "Missed the spec"}}
+
+      assert_receive {:plan_updated,
+                      %{id: ^latest_id, status: "rejected", rejection_reason: "Missed the spec"}}
     end
 
     test "refuses when task is not in done", %{task: task} do
@@ -592,7 +607,7 @@ defmodule Platform.Tasks.PlanTest do
            %{project: project} do
         %{task: task, plan: plan} = seed_in_flight(project, unquote(target_status))
 
-        :ok = Tasks.subscribe_board()
+        :ok = Tasks.subscribe_board(task: task.id)
 
         assert {:ok, superseded} =
                  Tasks.supersede_current_plan(task.id, "wrong scope", "reviewer-1")
@@ -606,10 +621,14 @@ defmodule Platform.Tasks.PlanTest do
         assert latest.rejection_reason == "wrong scope"
 
         # Pinned into the pattern for the same reason as the
-        # `reopen_with_feedback/3` sibling above — see the note there.
+        # `reopen_with_feedback/3` sibling above — see the note there. The
+        # subscription is scope-narrowed to this task for the same reason.
         task_id = task.id
+        plan_id = plan.id
         assert_receive {:task_updated, %{id: ^task_id, status: "planning"}}
-        assert_receive {:plan_updated, %{status: "superseded", rejection_reason: "wrong scope"}}
+
+        assert_receive {:plan_updated,
+                        %{id: ^plan_id, status: "superseded", rejection_reason: "wrong scope"}}
       end
     end
 

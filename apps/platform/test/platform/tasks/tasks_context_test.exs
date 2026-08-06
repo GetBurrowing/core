@@ -124,7 +124,10 @@ defmodule Platform.Tasks.TasksContextTest do
   describe "epic broadcasts + changeset (task 019d60ca stage 1)" do
     setup do
       {:ok, project} = Tasks.create_project(%{name: "Epic Broadcast Project"})
-      :ok = Tasks.subscribe_board()
+      # Scope-narrowed to this project. Each test in this block creates its
+      # own project inside the Ecto sandbox, so no other module can reach
+      # this id — the mailbox therefore holds only this test's events.
+      :ok = Tasks.subscribe_board(project: project.id)
       %{project: project}
     end
 
@@ -148,6 +151,13 @@ defmodule Platform.Tasks.TasksContextTest do
       assert {:error, %Ecto.Changeset{}} =
                Tasks.create_epic(%{project_id: project.id})
 
+      # This refute is why the subscription in `setup` had to be SCOPED and
+      # why pinning an id into the pattern could not have fixed it instead:
+      # the epic is never inserted, so there is no id in existence to pin.
+      # On the global board topic, any concurrent `async: true` module that
+      # calls `create_epic/1` inside this 50ms window satisfies the pattern
+      # and fails the refute, and no rewrite of the assertion can prevent
+      # that. Only narrowing the topic to this test's own project can.
       refute_receive {:epic_created, _}, 50
     end
 

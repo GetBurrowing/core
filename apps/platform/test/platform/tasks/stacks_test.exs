@@ -5,6 +5,13 @@ defmodule Platform.Tasks.StacksTest do
   # `recompute_stack_status piggy-back` describe block swaps in a FakeRunner
   # via `Application.put_env`, which is not safe to share across async
   # processes.
+  #
+  # BOARD-SCOPE-EXEMPT: the four `Tasks.subscribe_board()` calls in the
+  # ":stack_gate_opened broadcast" describe block stay on the global topic
+  # deliberately. `async: false` means no concurrent module can race them, and
+  # two of the four are `refute_receive {:stack_gate_opened, _, _}` on a stack
+  # id that must NOT exist — a negative that cannot be pinned to a scope
+  # without assuming the answer. See the site comment at the non-stack case.
   use Platform.DataCase, async: false
 
   alias Platform.Repo
@@ -5571,6 +5578,11 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, draft} = Tasks.create_plan(%{task_id: standalone.id})
       {:ok, pending} = Tasks.submit_plan_for_review(draft)
 
+      # BOARD-SCOPE-EXEMPT (durable — survives any future `async: true` move):
+      # this case has NO stack, so there is no `stack: id` to subscribe to. The
+      # assertion is that no gate signal fires for ANY stack; scoping it to a
+      # stack id would assume the very thing under test. Global is the only
+      # subscription that can observe this negative.
       :ok = Tasks.subscribe_board()
 
       assert {:ok, _} = Tasks.approve_plan(pending, "system")

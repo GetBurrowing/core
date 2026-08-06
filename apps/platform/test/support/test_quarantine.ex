@@ -248,31 +248,6 @@ defmodule Platform.TestQuarantine do
     },
     %{
       tag: nil,
-      test:
-        "test/platform/tasks/plan_test.exs: " <>
-          "broadcasts {:plan_updated, supersedee} BEFORE {:plan_updated, new_plan}",
-      class: :intermittent,
-      ticket: nil,
-      reason: """
-      PROVENANCE: inherited from 019f9d80 stage 2. Not re-measured here; it did
-      not surface in any run this stage took.
-
-      Cross-test PubSub leak on the single global `Tasks.subscribe_board()`
-      topic. The case is `async: true` and its second `assert_receive` matches
-      on `status: "approved"` alone, while 13 other `async: true` files approve
-      plans and `broadcast_board/1` is unfiltered by task. Two sibling
-      assertions in the same file share the shape.
-
-      Contended resource: the `"tasks:board"` PubSub topic, which does not
-      respect the Ecto sandbox. Genuinely nondeterministic — it depends on
-      whether a sibling case approves a plan inside the receive window.
-
-      Fix is to pin the `assert_receive` pattern to this task's id.
-      """,
-      added_on: ~D[2026-07-26]
-    },
-    %{
-      tag: nil,
       test: "test/platform/orchestration/task_router_test.exs: (whole file)",
       class: :intermittent,
       ticket: "019fa121",
