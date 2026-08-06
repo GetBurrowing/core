@@ -478,12 +478,17 @@ defmodule Platform.MeetingsTest do
     end
 
     test "returns {:error, :not_found} for a missing transcript and does NOT broadcast" do
+      missing_id = Ecto.UUID.generate()
+
       assert :ok = MeetingsPubSub.subscribe_transcript_chunk()
 
-      assert {:error, :not_found} =
-               Meetings.append_segment(Ecto.UUID.generate(), make_segment())
+      assert {:error, :not_found} = Meetings.append_segment(missing_id, make_segment())
 
-      refute_receive {:transcript_chunk, _}, 100
+      # Scoped to `missing_id` on purpose. `meeting:transcript_chunk` is the
+      # process-global topic, so every append in every other async test in the
+      # run lands in this mailbox too; a bare `{:transcript_chunk, _}` refutes
+      # on their traffic and fails this test for reasons it does not assert.
+      refute_receive {:transcript_chunk, %{transcript_id: ^missing_id}}, 100
 
       MeetingsPubSub.unsubscribe_transcript_chunk()
     end
