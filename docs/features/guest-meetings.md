@@ -1,7 +1,9 @@
 # Guest meetings — enabling the feature
 
-Guest join links land on a distinct public hostname (default `meet.example.com`,
-override via `MEETING_GUEST_HOST` env var). Requirements:
+Guest join links land on a distinct public hostname, supplied entirely by the
+`MEETING_GUEST_HOST` env var (e.g. `meet.example.com`). There is **no default**: if
+`MEETING_GUEST_HOST` is unset or blank, guest-link generation is disabled rather than
+falling back to a guessed hostname. Requirements:
 
 - **DNS**: `<your-guest-host>` resolves to your Suite server's public IP
 - **TLS**: your certificate covers `<your-guest-host>`

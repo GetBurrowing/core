@@ -218,6 +218,36 @@ defmodule Platform.Meetings.GuestInvite do
     end
   end
 
+  @doc """
+  The public hostname guest invite links are minted against.
+
+  Reads `:meeting_guest_host` with NO default. A caller that needs a
+  default is a caller that can mint a link pointing at the wrong host,
+  which is precisely the failure this two-argument read exists to make
+  impossible. Returns `nil` when the key is unset.
+  """
+  @spec guest_host() :: String.t() | nil
+  def guest_host do
+    Application.get_env(:platform, :meeting_guest_host)
+  end
+
+  @doc """
+  Whether a usable guest hostname is configured.
+
+  True only for a binary with non-whitespace content. Unset, `nil`, `""`
+  and whitespace-only values all return false, and each means the same
+  thing: the guest-invite surface does not exist in this environment.
+  Callers MUST fail closed on false — hide or refuse the guest-invite
+  action — and must never substitute a default hostname.
+  """
+  @spec guest_host_configured?() :: boolean()
+  def guest_host_configured? do
+    case guest_host() do
+      host when is_binary(host) -> String.trim(host) != ""
+      _ -> false
+    end
+  end
+
   defp signing_key do
     Application.get_env(:platform, :meeting_guest_signing_key) ||
       raise """

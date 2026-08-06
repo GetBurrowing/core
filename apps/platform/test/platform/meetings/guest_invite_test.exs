@@ -1,5 +1,8 @@
 defmodule Platform.Meetings.GuestInviteTest do
-  use ExUnit.Case, async: true
+  # Not async: the `:meeting_guest_host` describe block mutates
+  # application env, which is global state shared with every other
+  # concurrently-running test.
+  use ExUnit.Case, async: false
 
   alias Platform.Meetings.GuestInvite
 
@@ -304,18 +307,49 @@ defmodule Platform.Meetings.GuestInviteTest do
     end
   end
 
-  describe ":meeting_guest_host application env" do
-    # Stage 5 (task 019f2483): MeetingLive's copy-link builder resolves the
-    # public guest hostname via `Application.get_env(:platform,
-    # :meeting_guest_host)`. Each Mix env sets a stable value in its
-    # config; runtime.exs falls back to the prod default so the key is
-    # always resolvable. This test asserts the env is populated so a
-    # missing config in a future env swap surfaces immediately instead
-    # of silently rendering a URL against the fallback.
-    test "resolves to a non-empty string in the current Mix env" do
-      host = Application.get_env(:platform, :meeting_guest_host)
-      assert is_binary(host)
-      assert host != ""
+  describe "guest_host_configured?/0" do
+    setup do
+      prior =
+        case Application.fetch_env(:platform, :meeting_guest_host) do
+          {:ok, value} -> {:set, value}
+          :error -> :unset
+        end
+
+      on_exit(fn ->
+        case prior do
+          {:set, value} -> Application.put_env(:platform, :meeting_guest_host, value)
+          :unset -> Application.delete_env(:platform, :meeting_guest_host)
+        end
+      end)
+
+      :ok
+    end
+
+    test "false when the key is absent entirely" do
+      Application.delete_env(:platform, :meeting_guest_host)
+      refute GuestInvite.guest_host_configured?()
+      assert is_nil(GuestInvite.guest_host())
+    end
+
+    test "false when the key is set to nil" do
+      Application.put_env(:platform, :meeting_guest_host, nil)
+      refute GuestInvite.guest_host_configured?()
+    end
+
+    test "false when the key is an empty string" do
+      Application.put_env(:platform, :meeting_guest_host, "")
+      refute GuestInvite.guest_host_configured?()
+    end
+
+    test "false when the key is whitespace only" do
+      Application.put_env(:platform, :meeting_guest_host, "   ")
+      refute GuestInvite.guest_host_configured?()
+    end
+
+    test "true for a real host, and guest_host/0 returns it verbatim" do
+      Application.put_env(:platform, :meeting_guest_host, "meet.example.com")
+      assert GuestInvite.guest_host_configured?()
+      assert GuestInvite.guest_host() == "meet.example.com"
     end
   end
 

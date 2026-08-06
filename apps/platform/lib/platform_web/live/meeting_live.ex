@@ -2285,6 +2285,18 @@ defmodule PlatformWeb.MeetingLive do
         {:ok, _result} ->
           socket
 
+        {:error, :guest_host_not_configured} ->
+          # A missing guest host is an OPERATOR fault, not a caller one, and
+          # the only person who can fix it is reading this flash. Folding it
+          # into the generic message below would make a deployment mistake
+          # indistinguishable from a bad email address. `invite_guest/2`
+          # already logged the same fact; this is its user-visible half.
+          put_flash(
+            socket,
+            :error,
+            "Guest links are not available: MEETING_GUEST_HOST is not configured."
+          )
+
         {:error, _reason} ->
           # A failure here is a real runtime outcome — a changeset error, a
           # grant that could not be staged — not a caller bug, so it is

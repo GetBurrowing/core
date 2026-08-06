@@ -177,12 +177,21 @@ if config_env() == :prod do
 end
 
 # :meeting_guest_host is the public hostname where guest meeting links
-# resolve — used by MeetingLive's Copy-guest-link sheet to build the
-# outbound URL. Defaults to prod; override with MEETING_GUEST_HOST for
-# staging / preview envs. Ingress wiring lives in
-# `docs/runbooks/meet-ellis-traefik.md`.
-config :platform,
-  meeting_guest_host: System.get_env("MEETING_GUEST_HOST") || "meet.example.com"
+# resolve — read by the copy-guest-link surface to build the outbound
+# URL. Deliberately NO `||` default, for the same reason `:meet_host`
+# below has none: a guessed hostname mints links pointing at somebody
+# else's environment. UNSET OR BLANK DISABLES guest-link generation
+# (see `Platform.Meetings.GuestInvite.guest_host_configured?/0`) rather
+# than falling back to anything. Background: `docs/features/guest-meetings.md`.
+#
+# Only WRITTEN when the env var is present: an unconditional write of `nil`
+# here would clobber the dev/test values set in `config/dev.exs` and
+# `config/test.exs`, since runtime config is applied last. Absent key and
+# `nil` value mean the same thing to `guest_host_configured?/0`, so not
+# writing loses nothing.
+if guest_host = System.get_env("MEETING_GUEST_HOST") do
+  config :platform, meeting_guest_host: guest_host
+end
 
 # Request-time meet host. Read here rather than only inside the prod
 # block so a dev/CI process can set it; unset means the meet surface

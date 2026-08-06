@@ -1496,6 +1496,22 @@ defmodule Platform.Meetings do
           {:ok, %{invite: Invite.t(), token: binary(), url: binary()}}
           | {:error, Ecto.Changeset.t() | atom() | term()}
   def invite_guest(%Meeting{} = meeting, attrs) do
+    if GuestInvite.guest_host_configured?() do
+      do_invite_guest(meeting, attrs)
+    else
+      # Gate BEFORE any write. A row inserted here, or a guest chat space
+      # minted here, would be an orphan: nothing can ever hand out a link
+      # to it. Failing closed means no invite, no space, no token.
+      Logger.warning(
+        "refusing to mint a guest invite for meeting #{meeting.id}: " <>
+          ":meeting_guest_host is not configured (set MEETING_GUEST_HOST)"
+      )
+
+      {:error, :guest_host_not_configured}
+    end
+  end
+
+  defp do_invite_guest(%Meeting{} = meeting, attrs) do
     attrs = normalize_attrs(attrs)
 
     hours = Map.get(attrs, :expires_in_hours) || @guest_invite_default_expiry_hours
@@ -1571,8 +1587,17 @@ defmodule Platform.Meetings do
   an external row awaiting a grant (`expires_at` nil): neither has a signed
   link, so asking for one is a caller bug. It raises `FunctionClauseError`
   naming the shape rather than returning a URL that cannot admit anyone.
+
+  ## No host, no link
+
+  Returns `nil` when `:meeting_guest_host` is unset or blank. The caller
+  (`MeetingLive`'s copy control) already treats `nil` as "this row has no
+  link to copy", which is the truth in an environment where guest links
+  do not resolve anywhere. Interpolating a `nil` host would yield
+  `https:///slug/token` — malformed but still minted, which is not
+  failing closed.
   """
-  @spec guest_invite_link(Meeting.t(), Invite.t()) :: String.t()
+  @spec guest_invite_link(Meeting.t(), Invite.t()) :: String.t() | nil
   def guest_invite_link(
         %Meeting{id: meeting_id} = meeting,
         %Invite{
@@ -2232,10 +2257,21 @@ defmodule Platform.Meetings do
     end
   end
 
+  # Single choke point for guest URLs. `nil` out means "no such link in
+  # this environment"; it never interpolates an absent host, because
+  # "https://#{nil}/..." is `https:///slug/token` — malformed but still
+  # minted, and still handed to a human as if it worked.
   defp guest_invite_url(%Meeting{} = meeting, token) do
-    host = Application.get_env(:platform, :meeting_guest_host)
+    if GuestInvite.guest_host_configured?() do
+      "https://#{GuestInvite.guest_host()}/#{meeting.slug}/#{token}"
+    else
+      Logger.warning(
+        "no guest invite URL for meeting #{meeting.id}: " <>
+          ":meeting_guest_host is not configured (set MEETING_GUEST_HOST)"
+      )
 
-    "https://#{host}/#{meeting.slug}/#{token}"
+      nil
+    end
   end
 
   # ── Meeting helpers (private) ────────────────────────────────────────────
