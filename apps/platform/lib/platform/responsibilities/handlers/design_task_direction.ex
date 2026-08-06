@@ -286,9 +286,58 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirection do
     %{
       task_payload: task_payload(task),
       brand_context: brand_context(task),
-      attached_canvases: attached_canvases(task)
+      attached_canvases: attached_canvases(task),
+      # NOT a prompt slot. This is the provider OPTING IN to the dispatch
+      # invite: `Router.put_dispatch_space/2` lifts it to the native signal's
+      # `metadata.space_id`, which `Platform.Chat.AgentResponder.dispatch_space_id/1`
+      # passes to `Platform.Chat.DispatchMembership.ensure_writable/3` as the
+      # only input it has. A provider that names none keeps the
+      # `:no_space_named` skip. See `Platform.Responsibilities.Provider`.
+      #
+      # WHY THIS RESPONSIBILITY OPTS IN. The pre-plan designer is fired
+      # against one specific task and has no database-expressible binding to
+      # it: she is not `tasks.assignee_id`, she is not in `phase_assignees`,
+      # and `responsibilities` is a registry rather than a dispatch log, so
+      # there is no per-fire row either. Her binding exists only inside the
+      # prompt text she was handed, and `Platform.Tasks.TaskAccess` is built
+      # from assignee + phase_assignees + space participation, so without the
+      # participant row this mints it DENIES the flagship consumer of
+      # `task_attach_canvas`. The step fires once, holds 30 minutes and never
+      # redelivers (ADR-0046), so that denial is unrecoverable within it.
+      dispatch_space_id: dispatch_space_id(task)
     }
   end
+
+  # Resolved through `ExecutionSpace.find_by_task_id/1` — the SAME resolver
+  # `TaskAccess.space_member?/2` reads the grant back through, and the same one
+  # `resolve_space/1` delivers into on the external path. A second resolution
+  # path is how a row gets written into a space the gate does not look in.
+  #
+  # Derived from the RESOLVED task rather than from `trigger_meta.space_id`.
+  # `Router.put_dispatch_space/2` deliberately refuses to sniff trigger meta,
+  # and the reason applies here too: the chat_pattern producer puts an
+  # arbitrary human channel in that key, and honouring it would auto-invite a
+  # responsibility holder into whatever channel a regex matched.
+  #
+  # Rescued for the same reason `PreplanStep.execution_space_id/1` is: every
+  # slot in `do_gather/1` degrades rather than raising, and a nil here is a
+  # clean `:no_space_named` skip with the dispatch still going out.
+  defp dispatch_space_id(%TaskSchema{id: task_id}) when is_binary(task_id) do
+    case ExecutionSpace.find_by_task_id(task_id) do
+      %{id: id} when is_binary(id) -> id
+      _other -> nil
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[design.task_direction] execution space for task #{task_id} unresolvable " <>
+          "(#{inspect(error.__struct__)}); dispatching without an invite"
+      )
+
+      nil
+  end
+
+  defp dispatch_space_id(_task), do: nil
 
   defp fetch_task(ctx) do
     case extract_task_id(ctx) do

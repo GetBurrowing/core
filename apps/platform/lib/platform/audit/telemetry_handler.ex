@@ -120,6 +120,16 @@ defmodule Platform.Audit.TelemetryHandler do
     # not cover this: it fires when a runtime asks for a tool outside its
     # capability bundle, one level earlier and on a different question.
     [:platform, :chat, :canvas_read_denied],
+    # Task 019fb581 stage 1 — task access DENIED. Emitted by
+    # `Platform.Tasks.TaskAccess.fetch_for_actor/3` on the `{:error, :forbidden}`
+    # arm only; grants are deliberately not audited (they are the common path
+    # and would bury the signal), and a `{:error, :not_found}` emits nothing so
+    # the audit stream is not an existence oracle. Metadata carries actor_id,
+    # actor_type ("user" | "agent" | "anonymous"), resource_type "task",
+    # resource_id (task id), action "denied", plus project_id and the attempted
+    # tool name. Sync (default handle_event clause) so tests can assert the row
+    # immediately after the call returns.
+    [:platform, :tasks, :access_denied],
     # Task 019f5bc4 — historian dispatch pipeline audit trail. Emitters at
     # HistorianDispatcher.do_dispatch_windowed/5 + dispatch_one_window/12
     # (landed stage 1). These are the ONLY events routed async (via

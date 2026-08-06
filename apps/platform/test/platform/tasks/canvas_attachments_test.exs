@@ -13,18 +13,32 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
     * list surfaces a soft-deleted canvas as `canvas: nil`
     * attach against a nonexistent canvas → `:canvas_not_found`
     * attach against a nonexistent task → `:task_not_found`
+
+  Task 019fb581 stage 3 added the second conjunct — the caller must also be
+  able to TOUCH THE TASK — so this file now covers:
+
+    * the task gate on both writes, and its precedence over the canvas checks
+    * each of the six `Platform.Tasks.TaskAccess` grants producing an attach
+    * a soft-deleted task, which used to attach fine and now reports
+      `:task_not_found`
+    * denial telemetry, once per denial
+    * the ADR-0046 design step left OPEN by a denied attach
   """
 
   use Platform.DataCase, async: true
 
   import Ecto.Query, only: [from: 2]
+  import Platform.ExternalUserFixtures
 
   alias Ecto.UUID
+  alias Platform.Audit
   alias Platform.Chat
+  alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.CanvasAttachment
   alias Platform.Tasks.CanvasAttachments
+  alias Platform.Tenancy
 
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
@@ -79,6 +93,40 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
   defp attached_by(%{participant: participant}) do
     %{kind: "user", id: participant.id}
   end
+
+  # ── Task-gate helpers (task 019fb581 stage 3) ────────────────────────────
+  #
+  # Both writes now carry TWO independent conjuncts. A test whose subject is
+  # the canvas half has to satisfy the task half explicitly, or it stops
+  # testing what its name says: every actor would be denied at the first
+  # door and the canvas assertions would pass vacuously.
+  #
+  # `:assignee` is the cheapest of the six grants to mint, and which grant
+  # resolved is irrelevant to the canvas half — `TaskAccess` proves the six
+  # paths in `task_access_test.exs`, and the block below proves this call
+  # site passes each of them through.
+  defp grant_task_access(task, {kind, id}) do
+    task
+    |> Ecto.Changeset.change(assignee_id: id, assignee_type: Atom.to_string(kind))
+    |> Repo.update!()
+  end
+
+  defp org!(slug), do: Tenancy.get_org_by_slug!(slug)
+
+  defp task_in!(org, attrs \\ %{}) do
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: "CA Project #{System.unique_integer([:positive])}",
+        org_id: org.id
+      })
+
+    {:ok, task} =
+      Tasks.create_task(Map.merge(%{project_id: project.id, title: "CA Task"}, attrs))
+
+    %{project: project, task: task}
+  end
+
+  defp denial_rows(task), do: Audit.list(resource_type: "task", resource_id: task.id)
 
   describe "attach_canvas/4" do
     test "inserts a row and returns {:ok, %CanvasAttachment{}}", ctx do
@@ -209,7 +257,7 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
     end
   end
 
-  describe "detach_canvas/2" do
+  describe "detach_canvas/3" do
     test "removes the row and returns :ok", ctx do
       canvas = create_canvas(ctx.space, ctx.participant)
 
@@ -218,13 +266,13 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
           attached_by: attached_by(ctx)
         )
 
-      assert :ok = CanvasAttachments.detach_canvas(ctx.task.id, canvas.id)
+      assert :ok = CanvasAttachments.detach_canvas(:system, ctx.task.id, canvas.id)
       assert Repo.aggregate(CanvasAttachment, :count) == 0
     end
 
     test "returns {:error, :not_found} when the pair doesn't exist", ctx do
       assert {:error, :not_found} =
-               CanvasAttachments.detach_canvas(ctx.task.id, UUID.generate())
+               CanvasAttachments.detach_canvas(:system, ctx.task.id, UUID.generate())
     end
 
     test "only removes the matching pair, not other attachments on the task", ctx do
@@ -241,7 +289,99 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
           attached_by: attached_by(ctx)
         )
 
-      assert :ok = CanvasAttachments.detach_canvas(ctx.task.id, canvas_a.id)
+      assert :ok = CanvasAttachments.detach_canvas(:system, ctx.task.id, canvas_a.id)
+      assert Repo.aggregate(CanvasAttachment, :count) == 1
+    end
+  end
+
+  # ── The detach gate (task 019fb581 stage 3) ──────────────────────────────
+  #
+  # Detach is the second write that mutates the grant graph. It was reachable
+  # by any runtime that knew two ids: `execute("task_detach_canvas", …)`
+  # ignored its context entirely.
+  describe "detach_canvas/3 authorizes the detacher against the task" do
+    test "an agent with no binding to the task is denied and the row survives", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      {:ok, _} =
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
+          attached_by: attached_by(ctx)
+        )
+
+      assert {:error, :task_forbidden} =
+               CanvasAttachments.detach_canvas({:agent, UUID.generate()}, ctx.task.id, canvas.id)
+
+      assert Repo.aggregate(CanvasAttachment, :count) == 1
+    end
+
+    # The shape the LiveView strip's × button takes: a human who participates
+    # in the task's execution space. `PlatformWeb.TasksLive` passes
+    # `{:user, current_user_id}` and this is the grant it lands on.
+    test "a user participating in the task's execution space may detach", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+      user = create_user!()
+      {:ok, exec_space} = ExecutionSpace.find_or_create(ctx.task.id)
+      add_user!(exec_space.id, user.id)
+
+      {:ok, _} =
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
+          attached_by: attached_by(ctx)
+        )
+
+      assert :ok = CanvasAttachments.detach_canvas({:user, user.id}, ctx.task.id, canvas.id)
+      assert Repo.aggregate(CanvasAttachment, :count) == 0
+    end
+
+    # Detach has NO canvas conjunct: it revokes a read grant rather than
+    # conferring one. A task-bound agent that could never read this canvas
+    # may still unstaple it.
+    test "a canvas the detacher cannot read is still detachable from a task they own", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+      agent_id = UUID.generate()
+      grant_task_access(ctx.task, {:agent, agent_id})
+
+      {:ok, _} =
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
+          attached_by: attached_by(ctx)
+        )
+
+      # Positive control: this actor genuinely fails the canvas door.
+      assert {:error, :canvas_forbidden} =
+               CanvasAttachments.attach_canvas(
+                 {:agent, agent_id},
+                 ctx.task.id,
+                 create_canvas(ctx.space, ctx.participant).id,
+                 attached_by: attached_by(ctx)
+               )
+
+      assert :ok = CanvasAttachments.detach_canvas({:agent, agent_id}, ctx.task.id, canvas.id)
+    end
+
+    test "a nonexistent task reports :task_not_found, not :not_found", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      assert {:error, :task_not_found} =
+               CanvasAttachments.detach_canvas(:system, UUID.generate(), canvas.id)
+    end
+
+    test "a malformed task id reports :task_not_found rather than raising", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      assert {:error, :task_not_found} =
+               CanvasAttachments.detach_canvas(:system, "higginshigginsxx", canvas.id)
+    end
+
+    test "an unidentified actor is denied, not treated as :system", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      {:ok, _} =
+        CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
+          attached_by: attached_by(ctx)
+        )
+
+      assert {:error, :task_forbidden} =
+               CanvasAttachments.detach_canvas(nil, ctx.task.id, canvas.id)
+
       assert Repo.aggregate(CanvasAttachment, :count) == 1
     end
   end
@@ -436,11 +576,16 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
   # unauthorized attach is a self-service grant — staple a stranger's canvas
   # onto a task in your own org and your whole org can read it. Attaching
   # therefore requires already holding a read grant on the canvas.
+  # Every actor in this block holds a task grant, minted by
+  # `grant_task_access/2`. Task 019fb581 stage 3 put the task door FIRST, so
+  # without it each of these would be denied before the canvas is ever
+  # loaded and the block would assert nothing about the canvas at all.
   describe "attach_canvas/4 authorizes the attacher against the canvas" do
     test "a user who participates in the canvas's space may attach", ctx do
       canvas = create_canvas(ctx.space, ctx.participant)
       user_id = UUID.generate()
       create_participant(ctx.space.id, %{participant_id: user_id})
+      grant_task_access(ctx.task, {:user, user_id})
 
       assert {:ok, %CanvasAttachment{}} =
                CanvasAttachments.attach_canvas({:user, user_id}, ctx.task.id, canvas.id,
@@ -457,6 +602,8 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
         participant_id: agent_id
       })
 
+      grant_task_access(ctx.task, {:agent, agent_id})
+
       assert {:ok, %CanvasAttachment{}} =
                CanvasAttachments.attach_canvas({:agent, agent_id}, ctx.task.id, canvas.id,
                  attached_by: attached_by(ctx)
@@ -465,9 +612,11 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
 
     test "a user with no grant on the canvas is rejected and no row is written", ctx do
       canvas = create_canvas(ctx.space, ctx.participant)
+      user_id = UUID.generate()
+      grant_task_access(ctx.task, {:user, user_id})
 
       assert {:error, :canvas_forbidden} =
-               CanvasAttachments.attach_canvas({:user, UUID.generate()}, ctx.task.id, canvas.id,
+               CanvasAttachments.attach_canvas({:user, user_id}, ctx.task.id, canvas.id,
                  attached_by: attached_by(ctx)
                )
 
@@ -484,17 +633,10 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
         participant_id: agent_id
       })
 
+      grant_task_access(ctx.task, {:agent, agent_id})
+
       assert {:error, :canvas_forbidden} =
                CanvasAttachments.attach_canvas({:agent, agent_id}, ctx.task.id, canvas.id,
-                 attached_by: attached_by(ctx)
-               )
-    end
-
-    test "an unidentified actor is rejected, not treated as :system", ctx do
-      canvas = create_canvas(ctx.space, ctx.participant)
-
-      assert {:error, :canvas_forbidden} =
-               CanvasAttachments.attach_canvas(nil, ctx.task.id, canvas.id,
                  attached_by: attached_by(ctx)
                )
     end
@@ -514,11 +656,13 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
     # never be readable as authorization.
     test "attribution is not the authorization subject", ctx do
       canvas = create_canvas(ctx.space, ctx.participant)
+      user_id = UUID.generate()
+      grant_task_access(ctx.task, {:user, user_id})
 
       # Attributing the attach to a genuine participant does NOT let a
       # non-participant through.
       assert {:error, :canvas_forbidden} =
-               CanvasAttachments.attach_canvas({:user, UUID.generate()}, ctx.task.id, canvas.id,
+               CanvasAttachments.attach_canvas({:user, user_id}, ctx.task.id, canvas.id,
                  attached_by: %{kind: "user", id: ctx.participant.id}
                )
     end
@@ -526,13 +670,277 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
     # Ordering: a canvas that does not exist reports absence, so the denial
     # does not become a richer existence oracle than the read door already is.
     test "a nonexistent canvas reports :canvas_not_found ahead of :canvas_forbidden", ctx do
+      user_id = UUID.generate()
+      grant_task_access(ctx.task, {:user, user_id})
+
       assert {:error, :canvas_not_found} =
                CanvasAttachments.attach_canvas(
-                 {:user, UUID.generate()},
+                 {:user, user_id},
                  ctx.task.id,
                  UUID.generate(),
                  attached_by: attached_by(ctx)
                )
+    end
+  end
+
+  # ── The attach gate (task 019fb581 stage 3) ──────────────────────────────
+  #
+  # The reported hole. Before this stage `attach_canvas/4` checked only that
+  # the task EXISTED, so any principal holding a canvas could staple it onto
+  # any task in the system — a different project, a different org — and mint
+  # the `:task_reader` grant that comes with it for everyone who can read
+  # that task.
+  describe "attach_canvas/4 authorizes the attacher against the task" do
+    setup do
+      %{org_a: org!("sxi"), org_b: org!("soylent")}
+    end
+
+    test "an agent with no binding to the task is denied and no row is written", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+      agent_id = UUID.generate()
+      create_participant(ctx.space.id, %{participant_type: "agent", participant_id: agent_id})
+
+      assert {:error, :task_forbidden} =
+               CanvasAttachments.attach_canvas({:agent, agent_id}, ctx.task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+
+      assert CanvasAttachments.list_task_canvases(ctx.task.id) == []
+    end
+
+    # CROSS-PROJECT. The agent is genuinely bound to a task — just not this
+    # one. Without the second task the denial could be explained by "this
+    # agent has no grants at all" rather than by the grant being scoped.
+    test "a binding on one task does not carry to another task in the same org", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+      agent_id = UUID.generate()
+      create_participant(ctx.space.id, %{participant_type: "agent", participant_id: agent_id})
+
+      %{task: mine} = task_in!(ctx.org_a, %{assignee_type: "agent", assignee_id: agent_id})
+      %{task: theirs} = task_in!(ctx.org_a)
+
+      assert {:ok, %CanvasAttachment{}} =
+               CanvasAttachments.attach_canvas({:agent, agent_id}, mine.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+
+      assert {:error, :task_forbidden} =
+               CanvasAttachments.attach_canvas({:agent, agent_id}, theirs.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+    end
+
+    # CROSS-ORG. Same shape one tenancy boundary out.
+    test "a binding in one org does not carry into another org", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+      agent_id = UUID.generate()
+      create_participant(ctx.space.id, %{participant_type: "agent", participant_id: agent_id})
+
+      %{task: mine} = task_in!(ctx.org_a, %{assignee_type: "agent", assignee_id: agent_id})
+      %{task: theirs} = task_in!(ctx.org_b)
+
+      assert {:ok, %CanvasAttachment{}} =
+               CanvasAttachments.attach_canvas({:agent, agent_id}, mine.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+
+      assert {:error, :task_forbidden} =
+               CanvasAttachments.attach_canvas({:agent, agent_id}, theirs.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+    end
+
+    # All six `TaskAccess` grants reach the insert. `task_access_test.exs`
+    # proves the resolver; this proves THIS call site does not filter the
+    # resolver's answer down to a subset — e.g. by accepting only `{:ok, _,
+    # :system}` and denying the rest.
+    test "each of the six grants produces a successful attach", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+      opts = [attached_by: attached_by(ctx)]
+
+      # 1. :system
+      %{task: t_system} = task_in!(ctx.org_a)
+      assert {:ok, _} = CanvasAttachments.attach_canvas(:system, t_system.id, canvas.id, opts)
+
+      # 2. :assignee
+      assignee = UUID.generate()
+      create_participant(ctx.space.id, %{participant_type: "agent", participant_id: assignee})
+
+      %{task: t_assignee} =
+        task_in!(ctx.org_a, %{assignee_type: "agent", assignee_id: assignee})
+
+      assert {:ok, _} =
+               CanvasAttachments.attach_canvas({:agent, assignee}, t_assignee.id, canvas.id, opts)
+
+      # 3. :phase_assignee
+      phase_agent = UUID.generate()
+      create_participant(ctx.space.id, %{participant_type: "agent", participant_id: phase_agent})
+      %{task: t_phase} = task_in!(ctx.org_a)
+
+      {:ok, t_phase} =
+        Tasks.set_phase_assignees(t_phase, %{
+          "review" => %{"assignee_id" => phase_agent, "assignee_type" => "agent"}
+        })
+
+      assert {:ok, _} =
+               CanvasAttachments.attach_canvas({:agent, phase_agent}, t_phase.id, canvas.id, opts)
+
+      # 4. :space_member — the grant stage 2 mints for the pre-plan designer.
+      space_agent = UUID.generate()
+      create_participant(ctx.space.id, %{participant_type: "agent", participant_id: space_agent})
+      %{task: t_space} = task_in!(ctx.org_a)
+      {:ok, exec_space} = ExecutionSpace.find_or_create(t_space.id)
+      add_agent!(exec_space.id, space_agent)
+
+      assert {:ok, _} =
+               CanvasAttachments.attach_canvas({:agent, space_agent}, t_space.id, canvas.id, opts)
+
+      # 5. :sponsor
+      sponsor = create_user!()
+      create_participant(ctx.space.id, %{participant_id: sponsor.id})
+      %{task: t_sponsor} = task_in!(ctx.org_a, %{sponsor_user_id: sponsor.id})
+
+      assert {:ok, _} =
+               CanvasAttachments.attach_canvas(
+                 {:user, sponsor.id},
+                 t_sponsor.id,
+                 canvas.id,
+                 opts
+               )
+
+      # 6. :project_member
+      member = create_user!()
+      plain_member!(member, ctx.org_a)
+      create_participant(ctx.space.id, %{participant_id: member.id})
+      %{task: t_member} = task_in!(ctx.org_a)
+
+      assert {:ok, _} =
+               CanvasAttachments.attach_canvas({:user, member.id}, t_member.id, canvas.id, opts)
+    end
+
+    test "an unidentified actor is denied at the task door, not treated as :system", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      assert {:error, :task_forbidden} =
+               CanvasAttachments.attach_canvas(nil, ctx.task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+    end
+
+    # ORDERING. The task door runs first, so a caller who may not touch the
+    # task learns nothing about the canvas — not even whether it exists.
+    test "a task denial precedes the canvas checks", ctx do
+      user_id = UUID.generate()
+
+      assert {:error, :task_forbidden} =
+               CanvasAttachments.attach_canvas(
+                 {:user, user_id},
+                 ctx.task.id,
+                 UUID.generate(),
+                 attached_by: attached_by(ctx)
+               )
+    end
+
+    # BEHAVIOUR CHANGE INHERITED FROM STAGE 1, pinned rather than left for a
+    # later stage to trip over. `ensure_task_exists/1` did not filter
+    # `deleted_at`; `TaskAccess.load/1` does, so this used to attach fine.
+    test "a soft-deleted task reports :task_not_found even for a grant holder", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+      %{task: task} = task_in!(ctx.org_a)
+
+      task
+      |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+      |> Repo.update!()
+
+      assert {:error, :task_not_found} =
+               CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+    end
+
+    test "a denied attach writes exactly one audit row naming the tool", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+      agent_id = UUID.generate()
+
+      assert {:error, :task_forbidden} =
+               CanvasAttachments.attach_canvas({:agent, agent_id}, ctx.task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+
+      assert [event] = denial_rows(ctx.task)
+      assert event.event_type == "platform.tasks.access_denied"
+      assert event.actor_type == "agent"
+      assert event.actor_id == agent_id
+      assert event.resource_id == ctx.task.id
+      assert event.metadata["tool"] == "task_attach_canvas"
+    end
+
+    test "a denied detach is attributed to task_detach_canvas, not to attach", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      assert {:error, :task_forbidden} =
+               CanvasAttachments.detach_canvas({:agent, UUID.generate()}, ctx.task.id, canvas.id)
+
+      assert [event] = denial_rows(ctx.task)
+      assert event.metadata["tool"] == "task_detach_canvas"
+    end
+
+    test "a granted attach emits no denial", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      assert {:ok, _} =
+               CanvasAttachments.attach_canvas(:system, ctx.task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+
+      assert denial_rows(ctx.task) == []
+    end
+  end
+
+  # ── The design step stays coherent under denial (ADR-0046 member 7) ──────
+  #
+  # `tap_settle_design_step/1` runs on the `{:ok, %CanvasAttachment{}}` arm
+  # only. A denial returns before the insert, so the settler is never
+  # reached and the step is left OPEN for its normal deadline to expire it
+  # to `failed`. It is not half-settled and not stranded ambiguously.
+  describe "a denied attach leaves the pre-plan design step OPEN" do
+    test "planning_step is still designing and no design outcome was recorded", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      task =
+        ctx.task
+        |> Ecto.Changeset.change(planning_step: "designing", planning_step_outcomes: %{})
+        |> Repo.update!()
+
+      assert {:error, :task_forbidden} =
+               CanvasAttachments.attach_canvas({:agent, UUID.generate()}, task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+
+      reloaded = Repo.get!(Platform.Tasks.Task, task.id)
+      assert reloaded.planning_step == "designing"
+      refute Map.has_key?(reloaded.planning_step_outcomes, "design")
+    end
+
+    # Positive control for the assertion above: the SAME setup with a granted
+    # actor does settle, so "still designing" cannot pass because the settler
+    # is inert in this fixture.
+    test "the same attach from a granted actor does settle the step", ctx do
+      canvas = create_canvas(ctx.space, ctx.participant)
+
+      task =
+        ctx.task
+        |> Ecto.Changeset.change(planning_step: "designing", planning_step_outcomes: %{})
+        |> Repo.update!()
+
+      assert {:ok, _} =
+               CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+                 attached_by: attached_by(ctx)
+               )
+
+      reloaded = Repo.get!(Platform.Tasks.Task, task.id)
+      refute reloaded.planning_step == "designing"
+      assert Map.has_key?(reloaded.planning_step_outcomes, "design")
     end
   end
 end

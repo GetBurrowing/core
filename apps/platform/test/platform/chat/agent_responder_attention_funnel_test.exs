@@ -5,10 +5,11 @@ defmodule Platform.Chat.AgentResponderAttentionFunnelTest do
 
   ## The point is the invariant, so the no-op has to be asserted BY NAME
 
-  Both sites are expected to change no behaviour. `load_context/1` already
-  refuses to build a chat context unless `Chat.get_agent_participant/2`
-  resolves, so the chat path only ever reaches the funnel for an agent that is
-  already a member; and a `system_event` fire names no space at all.
+  As of 019fb90f both sites were expected to change no behaviour.
+  `load_context/1` already refuses to build a chat context unless
+  `Chat.get_agent_participant/2` resolves, so the chat path only ever reaches
+  the funnel for an agent that is already a member; and a `system_event` fire
+  named no space at all.
 
   A test that asserted "the broadcast still arrives" and left it there would be
   satisfied by a responder that never called the funnel — which is exactly the
@@ -18,16 +19,24 @@ defmodule Platform.Chat.AgentResponderAttentionFunnelTest do
   `:no_space_named`) AND that the roster did not move. Naming the outcome is
   what makes "nothing happened" evidence rather than absence of evidence.
 
-  ## `space_id: nil` on the system_event path is a decision, not an omission
+  ## The wire is space-less; the INVITE is not (PR #659)
 
-  `build_system_event_signal/2` deliberately keeps `space_id` off the wire:
-  `claude-code-suite-channel`'s `attention.ts` pins a pending permission
-  prompt's answer space to the top-level `signal.space_id`, so a background
-  responsibility fire carrying one would relocate a live approval prompt to a
-  space nobody is watching. The funnel taking the space as an OPTION is what
-  lets this path route through it without inventing one. The system_event test
-  therefore asserts BOTH halves: the funnel reported `:no_space_named`, and the
-  delivered payload still has no `space_id` key.
+  These were one decision and are now two, so read them apart.
+
+  The wire half is unchanged and permanent. `build_system_event_signal/2`
+  rebuilds the signal from `metadata` and never carries `space_id` at the top
+  level, because `claude-code-suite-channel`'s `attention.ts` pins a pending
+  permission prompt's answer space to the top-level `signal.space_id`, so a
+  background responsibility fire carrying one would relocate a live approval
+  prompt to a space nobody is watching. Every test here that reaches the
+  system_event path re-asserts `refute Map.has_key?(payload.signal, :space_id)`.
+
+  The invite half moved. `broadcast_system_event/3` no longer passes a
+  hardcoded `space_id: nil`; it passes `dispatch_space_id/1`, which reads
+  `metadata.space_id` — the key `Router.put_dispatch_space/2` writes for a
+  provider that OPTED IN with `:dispatch_space_id`. That the funnel takes the
+  space as an OPTION rather than sniffing the payload is what lets these two
+  facts differ at all.
   """
 
   use Platform.DataCase, async: false

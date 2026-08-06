@@ -31,6 +31,46 @@ defmodule Platform.Tasks.CanvasAttachments do
   tool will be invoked when an agent attaches the same evidence canvas
   multiple times across a multi-stage task — re-attach is a no-op rather
   than a duplicate row or a unique-constraint surface.
+
+  ## Both writes are gated on the TASK as well as on the canvas
+
+  `attach_canvas/4` and `detach_canvas/3` are the two functions that mutate
+  the grant graph, so each runs `Platform.Tasks.TaskAccess.fetch_for_actor/3`
+  before it touches a row (task 019fb581 stage 3). Two INDEPENDENT conjuncts:
+  attaching requires the caller to be able to read the canvas AND to be able
+  to touch the task. Neither implies the other, which is why the denials are
+  named separately — `:task_forbidden` and `:canvas_forbidden`.
+
+  The task check runs FIRST. A caller who may not touch the task learns that
+  before learning anything about the canvas, so the attach surface is not an
+  existence oracle for canvases belonging to spaces the caller is nowhere
+  near.
+
+  `actor` is the shared `{:user, id} | {:agent, id} | :system` triple. It is
+  narrower than `t:Platform.Chat.CanvasAccess.actor/0`, which also accepts a
+  bare `%{id: _}` map: `TaskAccess` deliberately does not, so a caller holding
+  a `%Platform.Accounts.User{}` tags it `{:user, user.id}` rather than passing
+  the struct.
+
+  ## `list_task_canvases/1` takes no actor, and the read gate lives upstream
+
+  Four of its five callers are in-process platform code with no principal to
+  authorize: `Platform.Tasks.ContextHydrator` and
+  `Platform.Orchestration.ContextAssembler` assemble dispatch payloads,
+  `Platform.Responsibilities.Handlers.DesignTaskDirection` assembles a
+  responsibility's context, and `PlatformWeb.TasksLive` renders a board whose
+  session is already authorized. Giving this function a required actor would
+  mint four `:system` call sites, which is four places for a later edit to
+  write `:system` where a real principal belonged. The gate would read as
+  enforcement while enforcing nothing.
+
+  The fifth caller is the MCP `task_list_canvases` tool, the only one holding
+  a principal, and that is where the read gate sits (task 019fb581 stage 4).
+  It goes through `ensure_task_touchable/3` below, so the read uses the same
+  door and the same denial taxonomy as the two writes. The rationale for
+  denying rather than returning an empty list is recorded in
+  `Platform.Tasks.TaskAccess`'s moduledoc, next to the `task_get` /
+  `task_list` non-scope note it depends on.
   """
 
   import Ecto.Query
@@ -38,7 +78,7 @@ defmodule Platform.Tasks.CanvasAttachments do
   alias Platform.Chat.Canvas
   alias Platform.Chat.CanvasAccess
   alias Platform.Repo
-  alias Platform.Tasks.{CanvasAttachment, Task}
+  alias Platform.Tasks.{CanvasAttachment, Task, TaskAccess}
 
   @type attached_by :: %{kind: String.t(), id: binary()}
   @type attach_opts :: [{:note, String.t() | nil} | {:attached_by, attached_by()}]
@@ -67,10 +107,20 @@ defmodule Platform.Tasks.CanvasAttachments do
   @doc """
   Attach a canvas to a task, on behalf of `actor`.
 
-  Validates that both the task and the canvas exist (and that the canvas is
-  not soft-deleted), and that `actor` may READ the canvas, before insert.
+  Validates that `actor` may TOUCH the task, that the canvas exists and is
+  not soft-deleted, and that `actor` may READ the canvas, before insert.
   Idempotent on `(task_id, canvas_id)` via upsert — a second call updates
   `note` + attribution + bumps `updated_at` and returns the same row id.
+
+  ## Why the attacher is authorized against the task
+
+  Attaching is a WRITE to the task, and it is the write that mints the
+  `:task_reader` grant described below. Before task 019fb581 stage 3 this
+  function checked only that the task existed, so any principal holding a
+  canvas could staple it to any task in the system — including one in another
+  project or another org. `Platform.Tasks.TaskAccess.fetch_for_actor/3` is now
+  the first step of the chain, which also collapses the old existence check
+  and the authorization check into a single load.
 
   ## Why the attacher is authorized against the canvas
 
@@ -101,22 +151,25 @@ defmodule Platform.Tasks.CanvasAttachments do
   ## Returns
 
     * `{:ok, %CanvasAttachment{}}` on success (insert or upsert).
-    * `{:error, :task_not_found}` if the task id doesn't resolve.
+    * `{:error, :task_not_found}` if the task id is malformed, doesn't
+      resolve, or resolves to a soft-deleted row.
+    * `{:error, :task_forbidden}` if `actor` may not touch the task.
     * `{:error, :canvas_not_found}` if the canvas id doesn't resolve, or the
       canvas is soft-deleted.
     * `{:error, :canvas_forbidden}` if `actor` may not read the canvas.
     * `{:error, %Ecto.Changeset{}}` if the inputs fail changeset validation
       (missing `attached_by`, bad `kind`, etc.).
   """
-  @spec attach_canvas(CanvasAccess.actor(), binary(), binary(), attach_opts()) ::
+  @spec attach_canvas(TaskAccess.actor() | nil, binary(), binary(), attach_opts()) ::
           {:ok, %CanvasAttachment{}}
           | {:error, Ecto.Changeset.t()}
           | {:error, :task_not_found}
+          | {:error, :task_forbidden}
           | {:error, :canvas_not_found}
           | {:error, :canvas_forbidden}
   def attach_canvas(actor, task_id, canvas_id, opts \\ [])
       when is_binary(task_id) and is_binary(canvas_id) and is_list(opts) do
-    with :ok <- ensure_task_exists(task_id),
+    with :ok <- ensure_task_touchable(task_id, actor, "task_attach_canvas"),
          :ok <- ensure_canvas_attachable(canvas_id),
          :ok <- ensure_canvas_readable(canvas_id, actor) do
       attached_by = Keyword.get(opts, :attached_by, %{})
@@ -197,23 +250,48 @@ defmodule Platform.Tasks.CanvasAttachments do
   # ── detach ────────────────────────────────────────────────────────────────
 
   @doc """
-  Detach a canvas from a task.
+  Detach a canvas from a task, on behalf of `actor`.
 
   Returns `:ok` if exactly one row was deleted; `{:error, :not_found}` if
   no matching pair existed. Safe to call on a pair whose canvas was
   soft-deleted upstream — the attachment row is keyed independently.
-  """
-  @spec detach_canvas(binary(), binary()) :: :ok | {:error, :not_found}
-  def detach_canvas(task_id, canvas_id)
-      when is_binary(task_id) and is_binary(canvas_id) do
-    query =
-      from(a in CanvasAttachment,
-        where: a.task_id == ^task_id and a.canvas_id == ^canvas_id
-      )
 
-    case Repo.delete_all(query) do
-      {0, _} -> {:error, :not_found}
-      {n, _} when n >= 1 -> :ok
+  Gated on the TASK only. Detaching removes a `:task_reader` grant rather
+  than conferring one, so there is no canvas-side conjunct to satisfy: a
+  caller who may touch the task may clean up its stale rows even for a
+  canvas they cannot read. That asymmetry with `attach_canvas/4` is the
+  point — you cannot confer a read you do not hold, but you may always
+  revoke one you handed out.
+
+  As with `attach_canvas/4` there is deliberately no defaulting arity: a
+  caller that forgets the actor should fail to compile, not silently
+  bypass the gate.
+
+  ## Returns
+
+    * `:ok` when a row was deleted.
+    * `{:error, :not_found}` when no `(task_id, canvas_id)` pair existed.
+    * `{:error, :task_not_found}` when the task id is malformed, absent, or
+      soft-deleted.
+    * `{:error, :task_forbidden}` when `actor` may not touch the task.
+  """
+  @spec detach_canvas(TaskAccess.actor() | nil, binary(), binary()) ::
+          :ok
+          | {:error, :not_found}
+          | {:error, :task_not_found}
+          | {:error, :task_forbidden}
+  def detach_canvas(actor, task_id, canvas_id)
+      when is_binary(task_id) and is_binary(canvas_id) do
+    with :ok <- ensure_task_touchable(task_id, actor, "task_detach_canvas") do
+      query =
+        from(a in CanvasAttachment,
+          where: a.task_id == ^task_id and a.canvas_id == ^canvas_id
+        )
+
+      case Repo.delete_all(query) do
+        {0, _} -> {:error, :not_found}
+        {n, _} when n >= 1 -> :ok
+      end
     end
   end
 
@@ -307,22 +385,60 @@ defmodule Platform.Tasks.CanvasAttachments do
     end
   end
 
-  # ── internals ─────────────────────────────────────────────────────────────
+  # ── the task door ─────────────────────────────────────────────────────────
 
-  # `task_id` / `canvas_id` are raw `canvas_attach` MCP tool arguments.
-  # Malformed folds into the existing not-found error. Platform.UUID.valid?/1,
-  # not a bare Ecto.UUID.cast/1 — a bare cast accepts any 16-byte binary.
-  defp ensure_task_exists(task_id) do
-    if not Platform.UUID.valid?(task_id) do
-      {:error, :task_not_found}
-    else
-      case Repo.get(Task, task_id) do
-        nil -> {:error, :task_not_found}
-        %Task{} -> :ok
-      end
+  @doc """
+  The task door for canvas-attachment surfaces, in this module's taxonomy.
+
+  `Platform.Tasks.TaskAccess.fetch_for_actor/3` decides; this function only
+  renames its result. `:forbidden` becomes `:task_forbidden` and `:not_found`
+  becomes `:task_not_found`, so a caller can tell a task refusal apart from
+  the `:canvas_forbidden` / `:canvas_not_found` pair `attach_canvas/4` can
+  also return. A single `:forbidden` would collapse two independent conjuncts
+  into an error a designer cannot act on.
+
+  Public because three surfaces need the same rename (task 019fb581 stages 3
+  and 4): both writes here, and the MCP `task_list_canvases` clause in
+  `Platform.Federation.ToolSurface`, whose read gate is the only place a
+  principal reaches `list_task_canvases/1`. A third hand-written copy of the
+  rename is how the two halves drift apart.
+
+  Call `TaskAccess` directly if you are NOT on the canvas-attachment
+  boundary. This taxonomy exists to sit beside the canvas errors, and it
+  means nothing anywhere else.
+
+  ## Behaviour inherited from `TaskAccess`
+
+  It replaced an `ensure_task_exists/1` that loaded the row and checked
+  nothing else. `fetch_for_actor/3` answers existence AND authorization from
+  ONE load, so the two answers cannot disagree, and the
+  `Platform.UUID.valid?/1` guard on the raw MCP `task_id` argument moved
+  inside it with the lookup.
+
+  DELIBERATE BEHAVIOUR CHANGE: `TaskAccess` filters `deleted_at` and
+  `ensure_task_exists/1` did not, so attaching to a SOFT-DELETED task used to
+  succeed and now reports `:task_not_found`. Pinned by
+  `canvas_attachments_test.exs` rather than left for a downstream stage to
+  rediscover.
+
+  `tool` is a telemetry label on the denial event, never an input to the
+  decision.
+  """
+  @spec ensure_task_touchable(binary(), TaskAccess.actor() | nil, String.t()) ::
+          :ok | {:error, :task_forbidden} | {:error, :task_not_found}
+  def ensure_task_touchable(task_id, actor, tool) do
+    case TaskAccess.fetch_for_actor(task_id, actor, tool: tool) do
+      {:ok, %Task{}, _grant} -> :ok
+      {:error, :forbidden} -> {:error, :task_forbidden}
+      {:error, :not_found} -> {:error, :task_not_found}
     end
   end
 
+  # ── internals ─────────────────────────────────────────────────────────────
+
+  # `canvas_id` is a raw `task_attach_canvas` MCP tool argument. Malformed
+  # folds into the existing not-found error. Platform.UUID.valid?/1, not a
+  # bare Ecto.UUID.cast/1 — a bare cast accepts any 16-byte binary.
   defp ensure_canvas_attachable(canvas_id) do
     if not Platform.UUID.valid?(canvas_id) do
       {:error, :canvas_not_found}

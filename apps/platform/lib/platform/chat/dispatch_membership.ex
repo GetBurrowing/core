@@ -194,8 +194,8 @@ defmodule Platform.Chat.DispatchMembership do
 
   ## Options
 
-    * `:source` — which dispatch surface asked, one of `:meeting_intent`,
-      `:task_router`, `:meeting_scribe`, `:meeting_triage`, `:agent_responder`.
+    * `:source` — which dispatch surface asked. The vocabulary is
+      `t:Platform.Federation.AttentionDispatch.source/0`; keep the two in step.
       Carried through to telemetry so a resurrection or a refusal can be traced
       back to the dispatcher that caused it. Defaults to `nil`.
     * `:display_name` — override the participant's display name. Defaults to the

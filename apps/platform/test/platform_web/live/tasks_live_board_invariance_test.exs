@@ -539,10 +539,31 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # `git show --stat` over each. Both line-count moves this file has seen came
   # from OUTSIDE this task: a sibling member shrank it, then main grew it.
   #
+  # RE-PINNED 5,883 -> 5,889 by task `019fb581` stage 3 ("Gate the writes:
+  # task_attach_canvas and task_detach_canvas"). THIS ONE IS THE SHELL ITSELF
+  # GROWING, not a sibling or main moving underneath it — the first re-pin of
+  # that kind, so it is recorded as such rather than folded into the identity
+  # above.
+  #
+  #     merged base       = 5,883
+  #     019fb581 stage 3  = 5,889   (+6)
+  #
+  # The +6 is entirely inside `handle_event("detach_canvas", …)`.
+  # `Platform.Tasks.CanvasAttachments.detach_canvas/2` became `/3` with the
+  # actor as an explicit first argument and NO defaulting arity, so every
+  # caller has to name its principal or fail to compile: one line binding
+  # `{:user, current_user_id}`, plus five lines of comment recording what a
+  # `:task_forbidden` does to the strip. An authorization change on a
+  # `handle_event` is exactly the kind of edit this guard exists to put in
+  # front of a reviewer, so it is re-pinned rather than worked around.
+  #
+  # The guard's promise is untouched: `refute source =~ "planning_step"` still
+  # holds, and stage 3 touched no planning-step code.
+  #
   # Strictness is deliberately still `==`. Softening to `<=` would let the
   # shell absorb the very accretion this guard exists to make visible; a
   # re-pin that has to be justified in a commit message is the whole point.
-  @shell_line_count 5_883
+  @shell_line_count 5_889
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

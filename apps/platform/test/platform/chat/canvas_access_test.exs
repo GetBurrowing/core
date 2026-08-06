@@ -555,7 +555,12 @@ defmodule Platform.Chat.CanvasAccessTest do
       assert {:ok, _canvas, :task_agent} =
                CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
 
-      :ok = CanvasAttachments.detach_canvas(task.id, canvas.id)
+      # `:system` because the subject here is CanvasAccess.fetch_for_viewer/3,
+      # not the detach gate. Task 019fb581 gave detach_canvas an actor as its
+      # FIRST argument; driving that gate is the job of
+      # task_canvas_attachment_authorization_test.exs, so this setup step opts
+      # out of it rather than restating it.
+      :ok = CanvasAttachments.detach_canvas(:system, task.id, canvas.id)
 
       assert {:error, :forbidden} = CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
     end

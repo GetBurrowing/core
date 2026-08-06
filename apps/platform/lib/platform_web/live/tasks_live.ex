@@ -1369,10 +1369,16 @@ defmodule PlatformWeb.TasksLive do
   # (multi-tab, multi-user) re-renders its strip within the 2s budget.
   # Idempotent — `{:error, :not_found}` from a duplicate click is a
   # no-op (the strip is already in the correct state).
+  #
+  # `detach_canvas/3` takes the actor explicitly (task 019fb581 stage 3);
+  # a `{:error, :task_forbidden}` from a session that can see the task but
+  # may not write it lands in the same no-op arm the duplicate click does,
+  # and the re-read below puts the chip straight back.
   def handle_event("detach_canvas", %{"canvas-id" => canvas_id}, socket) do
     case socket.assigns[:selected_task] do
       %Task{id: task_id} = task ->
-        _ = CanvasAttachments.detach_canvas(task_id, canvas_id)
+        actor = {:user, socket.assigns[:current_user_id]}
+        _ = CanvasAttachments.detach_canvas(actor, task_id, canvas_id)
         Tasks.broadcast_board({:task_updated, task})
 
         {:noreply, assign(socket, :selected_task_canvases, load_attached_canvases(task_id))}

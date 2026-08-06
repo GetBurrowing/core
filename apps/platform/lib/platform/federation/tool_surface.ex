@@ -1782,7 +1782,26 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns: "%{attachment_id, task_id, canvas_id, note}",
         limitations:
-          "Soft-reference contract: the canvas is checked at attach time but not FK-enforced. If the canvas is soft-deleted later, `task_list_canvases` will surface it with `canvas_present: false` so callers can detach. Idempotent re-attach updates the note + attribution but never produces a duplicate row.",
+          "Two independent authorization conjuncts, checked in this order: you must be able to " <>
+            "TOUCH THE TASK (assignee or phase assignee, participant in its execution space, " <>
+            "sponsor, or member of its project's org) and you must be able to READ THE CANVAS. " <>
+            "Neither implies the other, so the four refusals are named separately. " <>
+            "`task_forbidden` names `task_design_decline` as the exit for a design dispatch you " <>
+            "cannot deliver. `canvas_forbidden` means you cannot read the canvas. " <>
+            "`canvas_not_found` means the canvas is unknown or was soft-deleted upstream. " <>
+            "`task_not_found` (\"Task not found\") covers a task that is unknown, malformed or " <>
+            "soft-deleted, for everyone including grant-holders. Of the four only " <>
+            "`task_forbidden` arrives as a machine-readable `code` key; the other three are " <>
+            "prose in `error`, so branch on `code` for the task gate and read `error` for the " <>
+            "rest. Over the hosted /mcp transport the refusal envelope is exactly `error`, " <>
+            "`code`, `recoverable` and `suggestion` — the `task_id` and `canvas_id` keys the " <>
+            "handler sets do NOT survive it, so read the id out of `error`. The runtime " <>
+            "WebSocket channel keeps them. None of this paragraph is delivered over /mcp at " <>
+            "all — it ships only on the capabilities push. " <>
+            "Soft-reference contract: the canvas is checked at attach time but not FK-enforced. " <>
+            "If the canvas is soft-deleted later, `task_list_canvases` will surface it with " <>
+            "`canvas_present: false` so callers can detach. Idempotent re-attach updates the " <>
+            "note + attribution but never produces a duplicate row.",
         when_to_use:
           "When you (or an upstream planner) want a canvas to ride along in the next dispatch payload for a task, without copy-pasting it into a chat message."
       },
@@ -1862,10 +1881,32 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns: "%{detached: true}",
         limitations:
-          "Returns `not_found` if no matching `(task_id, canvas_id)` pair exists. Does not delete the canvas itself — only the attachment row.",
+          "Gated on the TASK: you must be able to touch it (assignee or phase assignee, " <>
+            "participant in its execution space, sponsor, or member of its project's org), and " <>
+            "a denial is `task_forbidden`, delivered as a machine-readable `code` key. There is " <>
+            "no canvas-side check — detaching revokes a read grant rather than conferring one, " <>
+            "so a canvas you cannot read is still yours to unstaple from a task you own. The " <>
+            "other two refusals are prose in `error` with no `code`: `not_found` if no matching " <>
+            "`(task_id, canvas_id)` pair exists, and `task_not_found` (\"Task not found\") if " <>
+            "the task is unknown, malformed or soft-deleted. Over the hosted /mcp transport " <>
+            "none of this paragraph is delivered at all — it ships only on the capabilities " <>
+            "push. Does not delete the canvas itself — only the attachment row.",
         when_to_use:
           "When a canvas should no longer ride along with a task's dispatch payload, or to clean up a stale attachment whose underlying canvas was soft-deleted."
       },
+      # REACHABILITY CAVEAT for all three canvas-attachment tools, recorded
+      # once here (task 019fb581 stage 4). `limitations` ships verbatim on the
+      # capabilities push, but `PlatformWeb.MCPController.to_mcp_tool/1`
+      # forwards only `name`, `description` and `inputSchema`, so a refusal
+      # taxonomy stated only in this field never reaches an agent on the
+      # hosted `/mcp` transport. `canvas.create` routes its own boundary
+      # through `description` for exactly this reason (see :1097).
+      #
+      # Deliberately NOT mirrored into `description` here: it would have to be
+      # done for attach, detach and list together to be worth anything, and
+      # the whole map IS the attention-broadcast payload, so a duplicated
+      # paragraph costs bytes on every push. Raised as a decision rather than
+      # absorbed as a silent scope expansion.
       %{
         name: "task_list_canvases",
         description:
@@ -1880,7 +1921,17 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "%{canvases: [%{attachment_id, canvas_id, title, note, attached_at, canvas_present: bool}]}. `canvas_present: false` means the underlying canvas was soft-deleted upstream — call `task_detach_canvas` to clean up the stale row.",
         limitations:
-          "Returns an empty list (not an error) for tasks with no attachments. Does not return the full canvas document — call `canvas.describe` with the `canvas_id` to fetch it.",
+          "Gated on the TASK, same standing as the two writes: you must be its assignee or " <>
+            "phase assignee, a participant in its execution space, its sponsor, or a member of " <>
+            "its project's org. A denial is `task_forbidden`, delivered as a machine-readable " <>
+            "`code` key, and it is a REFUSAL. It is never disguised as an empty list, so an " <>
+            "empty list always means the task has no attachments. `task_not_found` " <>
+            "(\"Task not found\", prose in `error` with no `code`) covers a task that is " <>
+            "unknown, malformed or soft-deleted, for everyone including grant-holders. Over the " <>
+            "hosted /mcp transport none of this paragraph is delivered at all — it ships only " <>
+            "on the capabilities push. Metadata only: rows carry the canvas title " <>
+            "and your note, never the document. Call `canvas.describe` with the `canvas_id` " <>
+            "for that, and it gates separately.",
         when_to_use:
           "When you need to see which canvases will ride along in the next dispatch for a task, or to find stale attachments whose underlying canvas was soft-deleted."
       },
@@ -4243,6 +4294,28 @@ defmodule Platform.Federation.ToolSurface do
                suggestion: "Use task_list to find available tasks"
              }}
 
+          # THE DENIAL IS A RECOVERY MECHANISM, not just a refusal (task
+          # 019fb581 stage 3). A designer dispatched to a task she has no
+          # binding to would otherwise sit on an open pre-plan design step
+          # until its 30-minute hold expires and records `failed`. Naming
+          # `task_design_decline` in the suggestion turns that into a
+          # one-call exit she can take from the error message itself,
+          # without any grant changing hands.
+          {:error, :task_forbidden} ->
+            {:error,
+             %{
+               error: "Access denied: you cannot attach a canvas to task #{task_id}.",
+               code: :task_forbidden,
+               recoverable: false,
+               task_id: task_id,
+               suggestion:
+                 "Attaching a canvas to a task is a write to that task, so you must already be " <>
+                   "working on it: its assignee or phase assignee, a participant in its " <>
+                   "execution space, its sponsor, or a member of its project's org. If you were " <>
+                   "dispatched to give this task design direction and cannot deliver, close " <>
+                   "your step with task_design_decline instead of waiting out the design hold."
+             }}
+
           {:error, :canvas_not_found} ->
             {:error,
              %{
@@ -4288,7 +4361,11 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  def execute("task_detach_canvas", args, _context) do
+  # `context` was ignored here until task 019fb581 stage 3: detach is a WRITE
+  # to the task's grant graph and was reachable by any runtime that knew two
+  # ids. It now resolves its subject through the same
+  # `canvas_authorization_actor/1` seam `task_attach_canvas` uses.
+  def execute("task_detach_canvas", args, context) do
     task_id = Map.get(args, "task_id")
     canvas_id = Map.get(args, "canvas_id")
 
@@ -4310,7 +4387,11 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       true ->
-        case CanvasAttachments.detach_canvas(task_id, canvas_id) do
+        case CanvasAttachments.detach_canvas(
+               canvas_authorization_actor(context),
+               task_id,
+               canvas_id
+             ) do
           :ok ->
             {:ok, %{detached: true}}
 
@@ -4321,11 +4402,45 @@ defmodule Platform.Federation.ToolSurface do
                recoverable: false,
                suggestion: "Use task_list_canvases to see what is currently attached to the task."
              }}
+
+          {:error, :task_not_found} ->
+            {:error,
+             %{
+               error: "Task not found: #{task_id}",
+               recoverable: false,
+               suggestion: "Use task_list to find available tasks"
+             }}
+
+          {:error, :task_forbidden} ->
+            {:error,
+             %{
+               error: "Access denied: you cannot detach a canvas from task #{task_id}.",
+               code: :task_forbidden,
+               recoverable: false,
+               task_id: task_id,
+               suggestion:
+                 "Detaching is a write to the task, so you must already be working on it: its " <>
+                   "assignee or phase assignee, a participant in its execution space, its " <>
+                   "sponsor, or a member of its project's org."
+             }}
         end
     end
   end
 
-  def execute("task_list_canvases", args, _context) do
+  # `context` was ignored here until task 019fb581 stage 4. Same door as the
+  # two writes above, through `CanvasAttachments.ensure_task_touchable/3`.
+  #
+  # DEFENCE IN DEPTH, stated honestly rather than oversold: this tool returns
+  # attachment METADATA (`attachment_id`, `canvas_id`, `title`, `note`,
+  # `attached_at`, `canvas_present`), never a canvas document. Bodies go
+  # through `canvas.describe`, which is a different surface with its own gate.
+  # What the gate closes is the cheap enumeration of which canvases hang off a
+  # task the caller has nothing to do with, and the titles that come with it.
+  #
+  # A DENIAL, NOT AN EMPTY LIST. The reasoning, and the `task_get` coupling it
+  # rests on, are recorded in `Platform.Tasks.TaskAccess`'s moduledoc; the
+  # coupling is pinned by a test rather than left to prose.
+  def execute("task_list_canvases", args, context) do
     task_id = Map.get(args, "task_id")
 
     cond do
@@ -4338,21 +4453,53 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       true ->
-        entries = CanvasAttachments.list_task_canvases(task_id)
+        case CanvasAttachments.ensure_task_touchable(
+               task_id,
+               canvas_authorization_actor(context),
+               "task_list_canvases"
+             ) do
+          :ok ->
+            entries = CanvasAttachments.list_task_canvases(task_id)
 
-        canvases =
-          Enum.map(entries, fn %{attachment: attachment, canvas: canvas_env} ->
-            %{
-              attachment_id: attachment.id,
-              canvas_id: attachment.canvas_id,
-              title: canvas_env && canvas_env.title,
-              note: attachment.note,
-              attached_at: format_datetime(attachment.inserted_at),
-              canvas_present: not is_nil(canvas_env)
-            }
-          end)
+            canvases =
+              Enum.map(entries, fn %{attachment: attachment, canvas: canvas_env} ->
+                %{
+                  attachment_id: attachment.id,
+                  canvas_id: attachment.canvas_id,
+                  title: canvas_env && canvas_env.title,
+                  note: attachment.note,
+                  attached_at: format_datetime(attachment.inserted_at),
+                  canvas_present: not is_nil(canvas_env)
+                }
+              end)
 
-        {:ok, %{canvases: canvases}}
+            {:ok, %{canvases: canvases}}
+
+          # Previously `{:ok, %{canvases: []}}`: an unknown task id read as
+          # "no attachments". Now it matches its two siblings.
+          {:error, :task_not_found} ->
+            {:error,
+             %{
+               error: "Task not found: #{task_id}",
+               recoverable: false,
+               suggestion: "Use task_list to find available tasks"
+             }}
+
+          {:error, :task_forbidden} ->
+            {:error,
+             %{
+               error: "Access denied: you cannot list the canvases attached to task #{task_id}.",
+               code: :task_forbidden,
+               recoverable: false,
+               task_id: task_id,
+               suggestion:
+                 "Attachments name canvases that may live in spaces you are nowhere near, so " <>
+                   "reading the list requires the same standing the writes do: the task's " <>
+                   "assignee or phase assignee, a participant in its execution space, its " <>
+                   "sponsor, or a member of its project's org. This is a refusal, not an empty " <>
+                   "list. An empty list means the task has no attachments."
+             }}
+        end
     end
   end
 
@@ -4392,6 +4539,67 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   defp canvas_authorization_actor(_), do: nil
+
+  # ── The canvas-attachment refusal taxonomy (task 019fb581 stage 5) ───────
+
+  # The CLOSED set of refusal atoms each canvas-attachment clause must handle,
+  # keyed by tool. These are `Platform.Tasks.CanvasAttachments`' return atoms,
+  # which is the boundary the three clauses actually pattern-match on — so a
+  # fifth atom added there with no clause here is a `CaseClauseError` at
+  # runtime, i.e. a 500 rather than a refusal.
+  #
+  # Declared rather than inferred so a test can drive every atom for real and
+  # compare the driven set against this one, the same way
+  # `@design_decline_error_codes` above is compared against
+  # `task_design_decline`'s emissions. Restating the taxonomy in a test would
+  # only pin the test against itself.
+  #
+  # `attach_canvas/4` can also return `{:error, %Ecto.Changeset{}}`, which is
+  # a struct rather than an atom and is deliberately NOT in this set: it is a
+  # validation failure on `attached_by`, not an authorization outcome, and it
+  # has no place in a taxonomy an agent branches on.
+  @canvas_attachment_error_codes %{
+    "task_attach_canvas" => [
+      :task_forbidden,
+      :task_not_found,
+      :canvas_forbidden,
+      :canvas_not_found
+    ],
+    "task_detach_canvas" => [:task_forbidden, :task_not_found, :not_found],
+    "task_list_canvases" => [:task_forbidden, :task_not_found]
+  }
+
+  # THE ASYMMETRY, DECLARED RATHER THAN DISCOVERED. Only `:task_forbidden`
+  # reaches the caller as a machine-readable `code` key. The other four are
+  # prose-only: the caller has to string-match `error` to tell them apart.
+  #
+  # Stage 5 did NOT widen this. Adding `code:` to the other four envelopes is
+  # additive on the wire (`MCPController.error_content/1` drops nil keys, so
+  # nothing currently branches on their absence) and would make the taxonomy
+  # usable, but it is a wire-behaviour change and this is the stage that
+  # catches wrongness rather than the stage that introduces it. Recorded here
+  # and pinned by a test so the next person decides it deliberately instead of
+  # inheriting it. Raised to the review stage of task 019fb581.
+  @canvas_attachment_coded_errors [:task_forbidden]
+
+  @doc """
+  The closed set of refusal atoms each canvas-attachment tool must handle.
+
+  Public so the guard that keeps the three tools' `limitations` prose honest
+  can compare the documented taxonomy against the emitted one instead of
+  restating either. Keyed by tool name; see `@canvas_attachment_error_codes`
+  for why the set is the `Platform.Tasks.CanvasAttachments` boundary atoms
+  rather than the envelope `code` values.
+  """
+  @spec canvas_attachment_error_codes() :: %{String.t() => [atom()]}
+  def canvas_attachment_error_codes, do: @canvas_attachment_error_codes
+
+  @doc """
+  The subset of `canvas_attachment_error_codes/0` that reaches the caller as a
+  machine-readable `code` key rather than as prose in `error`.
+  """
+  @spec canvas_attachment_coded_errors() :: [atom()]
+  def canvas_attachment_coded_errors, do: @canvas_attachment_coded_errors
 
   # ── ADR-0046 member 7 stage 2: task_design_decline internals ─────────────
 

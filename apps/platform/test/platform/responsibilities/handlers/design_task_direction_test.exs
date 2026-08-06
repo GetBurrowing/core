@@ -424,6 +424,86 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
       assert user =~ "Existing direction"
       assert user =~ "Do NOT re-issue direction"
     end
+
+    # ── The dispatch invite's opt-in ────────────────────────────────────────
+    #
+    # `:dispatch_space_id` is the ONE key here that is not a prompt slot.
+    # `Router.put_dispatch_space/2` lifts it into the native signal's
+    # `metadata.space_id`, `AgentResponder.dispatch_space_id/1` reads it back,
+    # and `DispatchMembership.ensure_writable/3` mints the participant row from
+    # it. Without the key the funnel takes the `:no_space_named` skip and the
+    # designer is not a participant of the space her own prompt tells her to
+    # write into — and `Platform.Tasks.TaskAccess` then denies the
+    # `task_attach_canvas` call that is this step's only way to deliver.
+    #
+    # The mechanism is OPT-IN, so a test that only asserted the funnel behaves
+    # correctly would stay green with this handler silently not opting in.
+    test "names the task's execution space for the dispatch invite" do
+      project = project!()
+      task = task!(project.id)
+      space = execution_space!(task)
+
+      assert {:ok, context} =
+               DesignTaskDirection.gather_context(responsibility(), %{task_id: task.id})
+
+      assert context.dispatch_space_id == space.id
+
+      # Resolved through the SAME resolver `TaskAccess.space_member?/2` reads
+      # the grant back through. A row written via a second resolution path is
+      # how a grant lands in a space the gate does not look in.
+      assert %{id: gate_space_id} =
+               Platform.Orchestration.ExecutionSpace.find_by_task_id(task.id)
+
+      assert gate_space_id == space.id
+    end
+
+    test "names no space when the task has no execution space yet" do
+      project = project!()
+      task = task!(project.id)
+
+      assert {:ok, context} =
+               DesignTaskDirection.gather_context(responsibility(), %{task_id: task.id})
+
+      # `nil` is first-class at the funnel: a clean `:no_space_named` skip with
+      # the dispatch still going out. Inventing a space here would be worse
+      # than not inviting.
+      assert is_nil(context.dispatch_space_id)
+    end
+
+    test "names no space when the task itself does not resolve" do
+      assert {:ok, context} =
+               DesignTaskDirection.gather_context(responsibility(), %{
+                 task_id: Ecto.UUID.generate()
+               })
+
+      assert is_nil(context.dispatch_space_id)
+    end
+
+    # The boundary `Router.put_dispatch_space/2` refuses to cross, restated at
+    # the producer. `trigger_meta.space_id` is NOT always an execution space —
+    # the chat_pattern producer puts an arbitrary human channel there — so the
+    # invite is derived from the RESOLVED task, never trusted from the trigger.
+    test "ignores a space_id on the trigger that is not the task's execution space" do
+      project = project!()
+      task = task!(project.id)
+      space = execution_space!(task)
+
+      {:ok, impostor} =
+        Chat.create_space(%{
+          name: "humans-#{System.unique_integer([:positive])}",
+          slug: "humans-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      assert {:ok, context} =
+               DesignTaskDirection.gather_context(responsibility(), %{
+                 task_id: task.id,
+                 space_id: impostor.id
+               })
+
+      assert context.dispatch_space_id == space.id
+      refute context.dispatch_space_id == impostor.id
+    end
   end
 
   # ── handle_output/3 ───────────────────────────────────────────────────────

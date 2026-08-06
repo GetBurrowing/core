@@ -3044,6 +3044,51 @@ defmodule Platform.Responsibilities.RouterTest do
       assert signal.space_id == space_id
     end
 
+    # A task-scoped native fire carries two keys that arrive by two different
+    # mechanisms — `build_native_signal/4`'s `maybe_put/3` for the top-level
+    # `space_id`, and the `@native_trigger_scalar_keys` whitelist for
+    # `metadata.task_id` — so either can be dropped without the other noticing.
+    # `PreplanStep.trigger_meta/1` is the producer that sets both.
+    #
+    # NEITHER is the dispatch invite's carrier. That is `metadata.space_id`,
+    # written by `put_dispatch_space/2` from the provider's `:dispatch_space_id`
+    # and read by `AgentResponder.dispatch_space_id/1`;
+    # `native_dispatch_space_test.exs` pins that path. The top-level `space_id`
+    # here is the suite-channel reply target, and `metadata.task_id` is what
+    # `DesignTaskDirection.handle_output/3` resolves the task from.
+    test "a task-scoped native fire carries space_id on the signal and task_id in metadata" do
+      key = "routertest.fed_taskscoped_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "event_topic",
+          trigger_config: %{"topic" => "routertest.taskscoped"}
+        })
+
+      _agent = wire_native_assignee(key)
+
+      task_id = Ecto.UUID.generate()
+      space_id = Ecto.UUID.generate()
+
+      capture_log([level: :info], fn ->
+        assert {:ok, :dispatched} =
+                 Router.fire_trigger(
+                   row,
+                   %{kind: :event_topic, task_id: task_id, space_id: space_id},
+                   %{}
+                 )
+      end)
+
+      assert_receive {:captured_signal, signal}
+
+      # `:system_event` is load-bearing too: it is what makes `load_context/1`
+      # take the clause that reaches `broadcast_system_event/3` at all.
+      assert signal.reason == :system_event
+      assert signal.space_id == space_id
+      assert signal.metadata.task_id == task_id
+    end
+
     test "native dispatch stamps last_successful_fire_at even for the federated path" do
       key = "routertest.fed_stamp_#{System.unique_integer([:positive])}"
 

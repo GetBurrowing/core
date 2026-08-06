@@ -52,7 +52,7 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
      outsider agent, and `ToolSurface.execute/3` itself. Adding a tool to
      `@canvas_reach` with the wrong classification fails just as loudly as
      omitting it. Driven: `:tool_access_read`, `:tool_access_write`,
-     `:space_gated`, `:task_authz_gap`, and `:unreachable_legacy` (whose claim
+     `:space_gated`, `:task_gated`, and `:unreachable_legacy` (whose claim
      is a declaration check, since the tool cannot be called at all).
      `:creates_only` and `:no_canvas_row` are structural claims about tools that
      take no canvas id, and are asserted rather than driven.
@@ -129,7 +129,7 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
     :creates_only,
     :no_canvas_row,
     :unreachable_legacy,
-    :task_authz_gap
+    :task_gated
   ]
 
   # THE LIST. Every canvas-reaching tool, what gate it has, and why that is the
@@ -202,21 +202,24 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
          "is not a live defect, which is why the unreachability is asserted " <>
          "rather than trusted."},
     "task_attach_canvas" =>
-      {:task_authz_gap,
-       "Authorizes the attacher against the CANVAS (CanvasAttachments." <>
-         "attach_canvas/4 calls fetch_for_viewer/3 before writing the row) and " <>
-         "not against the TASK, because no task-side primitive exists yet. " <>
-         "Knowingly accepted; filed as task 019fb581-8a1f-7c49-ba42-72f4ab29e758."},
+      {:task_gated,
+       "Authorizes BOTH halves now. The canvas half is CanvasAttachments." <>
+         "attach_canvas/4 calling fetch_for_viewer/3 before writing the row; " <>
+         "the task half is ensure_task_touchable/3, which task 019fb581 added " <>
+         "over Platform.Tasks.TaskAccess.fetch_for_actor/3. An outsider can no " <>
+         "longer staple a canvas it CAN read onto someone else's task."},
     "task_detach_canvas" =>
-      {:task_authz_gap,
-       "Takes _context and performs no authorization at all. Removes an " <>
-         "attachment from any task by id. Same open task, 019fb581."},
+      {:task_gated,
+       "Was _context and no authorization at all; task 019fb581 put it behind " <>
+         "CanvasAttachments.ensure_task_touchable/3, so removing an attachment " <>
+         "now needs standing on the TASK, not merely its id."},
     "task_list_canvases" =>
-      {:task_authz_gap,
-       "Takes _context and performs no authorization at all. Returns the title " <>
-         "of every canvas attached to any task by id. Titles are not documents, " <>
-         "but they are the strongest hint this surface leaks. Same open task, " <>
-         "019fb581, and pinned behaviourally below so closing it lands here."}
+      {:task_gated,
+       "Was _context and no authorization at all, which handed the title of " <>
+         "every attached canvas to anyone holding a task id. Task 019fb581 " <>
+         "gated it on ensure_task_touchable/3. Titles are not documents, but " <>
+         "they were the strongest hint this surface leaked, so the denial is " <>
+         "driven below rather than trusted."}
   }
 
   setup do
@@ -512,19 +515,56 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
     end
   end
 
-  describe "tools classified as a known authorization gap still have it" do
+  describe "tools classified :task_gated actually deny a caller with no standing" do
+    test "every :task_gated tool refuses a stranger holding only the task id", %{org_a: org_a} do
+      # This block used to PIN THE GAP: task_attach_canvas / task_detach_canvas /
+      # task_list_canvases took `_context` and authorized nothing against the
+      # TASK, so anyone holding a task id could staple, unstaple, or read the
+      # titles of its attachments. Task 019fb581 closed it with
+      # `CanvasAttachments.ensure_task_touchable/3` over
+      # `Platform.Tasks.TaskAccess.fetch_for_actor/3`, so the pin is inverted
+      # here rather than deleted: the @canvas_reach claim stays DRIVEN, and a
+      # reclassification that outran the code fails here instead of reading as
+      # coverage.
+      space = space!(%{org_id: org_a.id})
+      canvas = canvas!(space)
+      task = task_in!(org_a)
+      attach!(task, canvas)
+
+      names = classified(:task_gated)
+      refute names == [], "no tool is classified :task_gated, so nothing is being driven"
+
+      # No binding to the task, its execution space, its sponsor slot, or its
+      # project's org — none of the six TaskAccess grant paths can answer.
+      stranger = federation_context(UUID.generate())
+
+      for name <- names do
+        assert {:error, payload} =
+                 ToolSurface.execute(
+                   name,
+                   %{"task_id" => task.id, "canvas_id" => canvas.id},
+                   stranger
+                 ),
+               "#{name} is classified :task_gated but answered a caller with no standing on the task"
+
+        assert payload.recoverable == false, "#{name}: a denial is not recoverable by retrying"
+        refute_leaks(payload, canvas, name)
+      end
+    end
+
     test "task_attach_canvas refuses a canvas the caller cannot read", %{
       org_a: org_a,
       org_b: org_b
     } do
-      # The half of task_attach_canvas that IS gated. Its @canvas_reach entry
-      # claims `CanvasAttachments.attach_canvas/4` authorizes the attacher
-      # against the canvas before writing the row; without this the claim is
-      # taken on trust, which is the thing this file exists to stop.
+      # The CANVAS half of task_attach_canvas, which predates 019fb581:
+      # `CanvasAttachments.attach_canvas/4` resolves the attacher through
+      # fetch_for_viewer/3 before writing the row.
       #
-      # The unauthorized TASK half is the 019fb581 gap and is deliberately not
-      # asserted here: an outsider can still staple a canvas it CAN read onto
-      # someone else's task.
+      # Since 019fb581 this particular denial is OVER-DETERMINED — the task
+      # gate runs first and this outsider fails that too — so the assertion is
+      # deliberately left at `{:error, _}`. The isolated canvas half, driven by
+      # a caller that HAS task standing and lacks only canvas standing, lives in
+      # test/security/task_canvas_attachment_authorization_test.exs.
       canvas = canvas!(space!(%{org_id: org_a.id}))
       task = task_in!(org_a)
       context = federation_context(outsider_agent!(org_b))
@@ -535,33 +575,6 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
                  %{"task_id" => task.id, "canvas_id" => canvas.id},
                  context
                )
-    end
-
-    test "task_list_canvases returns attached canvas titles to any caller", %{org_a: org_a} do
-      # This PINS A GAP, it does not endorse one. task_list_canvases takes
-      # `_context` and authorizes nothing, so an agent with no relationship to
-      # the task learns the titles of every canvas attached to it. That is
-      # knowingly accepted and filed as 019fb581.
-      #
-      # When 019fb581 closes it this test fails. That is the intended outcome:
-      # reclassify the entry in @canvas_reach and delete this test. A gap that
-      # can be closed without anyone editing the list of gaps is a gap that
-      # stays on the list forever.
-      space = space!(%{org_id: org_a.id})
-      canvas = canvas!(space)
-      task = task_in!(org_a)
-      attach!(task, canvas)
-
-      stranger = federation_context(UUID.generate())
-
-      assert {:ok, %{canvases: [row]}} =
-               ToolSurface.execute("task_list_canvases", %{"task_id" => task.id}, stranger)
-
-      assert row.title == canvas.title, """
-      task_list_canvases no longer hands canvas titles to an unrelated caller.
-      If that is because 019fb581 landed, reclassify "task_list_canvases" in
-      @canvas_reach and remove this test.
-      """
     end
   end
 

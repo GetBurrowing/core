@@ -428,8 +428,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     # ── Tasks: not sibling-owned ───────────────────────────────────────
     {"platform/tasks/canvas_attachments.ex", :get, "Canvas", 1, :safe_internal,
      "ensure_canvas_attachable/1 checks Platform.UUID.valid?/1 on the canvas_attach tool argument, folding a malformed id into {:error, :canvas_not_found}"},
-    {"platform/tasks/canvas_attachments.ex", :get, "Task", 1, :safe_internal,
-     "ensure_task_exists/1 checks Platform.UUID.valid?/1 on the same MCP payload, folding a malformed id into {:error, :task_not_found}"},
+    # NOTE: `canvas_attachments.ex :get "Task"` is deliberately absent. Task
+    # 019fb581 stage 3 deleted `ensure_task_exists/1` — the task load moved
+    # into `Platform.Tasks.TaskAccess.load/1`, which is recorded below and
+    # carries the same Platform.UUID.valid?/1 guard on the same MCP payload.
     {"platform/tasks/chat_pins.ex", :get_by, "ChatPin", 1, :safe_internal,
      "keyed `task_id:` + `participant_kind:` + `participant_id:`; `get_pin/3` is only reached from `pin/3`, whose ids the mention resolver already matched to rows"},
     {"platform/tasks/context_hydrator.ex", :get, "Task", 1, :safe_internal,
@@ -468,6 +470,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "get_stack!/1 checks Platform.UUID.valid?/1 and raises Ecto.NoResultsError — its documented miss exception — rather than Ecto.Query.CastError"},
     {"platform/tasks/stacks/commencement_gate.ex", :get, "Stack", 1, :safe_internal,
      "`open?/1` is only called with a `stack_id` `Stacks` already resolved to a `%Stack{}`"},
+    {"platform/tasks/task_access.ex", :get, "Task", 1, :safe_internal,
+     "TaskAccess.load/1 checks Platform.UUID.valid?/1 on the task_id before the lookup — a raw task_attach_canvas / task_detach_canvas / task_list_canvases MCP tool argument — folding a malformed id into the same {:error, :not_found} an absent row returns"},
     # ── Tenancy ────────────────────────────────────────────────────────
     {"platform/tenancy.ex", :platform_uuid_guard, "-", 3, :safe_internal,
      "uuid?/1 in member_of?/2 is now Platform.UUID.valid?/1, so a 16-character org slug takes the slug branch instead of being pinned as ^org_id against Org's strict UUIDv7 key; plus the get_org/1 and get_org!/1 guards"},
@@ -561,8 +565,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "get_file_by_id/1's guard on a page id supplied by a caller of the memory MCP tools"},
     {"platform/skills.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "get_skill/1 and resolve_skills/1. get_skill/1's nil is what routes a slug to the get_by(Skill, slug:) branch, which is designed traffic for skill_get"},
-    {"platform/tasks/canvas_attachments.ex", :platform_uuid_guard, "-", 3, :safe_internal,
-     "ensure_task_exists/1 and ensure_canvas_attachable/1, both on canvas_attach MCP payload ids, plus list_canvas_tasks/1 (task 019e2c4b stage 1). The third is the same class: its canvas_id reaches the reverse lookup from the /canvases/:id URL segment via Platform.Chat.CanvasAccess, and `where: a.canvas_id == ^id` raises the SAME CastError a bare Repo.get would, so the guard folds a malformed id into an empty list"},
+    {"platform/tasks/canvas_attachments.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "ensure_canvas_attachable/1 on the canvas_attach MCP payload's canvas_id, plus list_canvas_tasks/1 (task 019e2c4b stage 1). The second is the same class: its canvas_id reaches the reverse lookup from the /canvases/:id URL segment via Platform.Chat.CanvasAccess, and `where: a.canvas_id == ^id` raises the SAME CastError a bare Repo.get would, so the guard folds a malformed id into an empty list. Was 3 until task 019fb581 stage 3: `ensure_task_exists/1` held the third guard on the task_id and was replaced by `ensure_task_touchable/3`, which delegates to Platform.Tasks.TaskAccess — so the guard did not disappear, it moved one module over and is recorded there"},
     {"platform/tasks/context_hydrator.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "load_task/1's guard on the task_id carried by the run-dispatch payload into hydrate_for_run/2"},
     {"platform/tasks/plan_engine.ex", :platform_uuid_guard, "-", 3, :safe_internal,
@@ -571,6 +575,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "get_review_request/1, fetch_item/1, maybe_reopen_manual_approval/1 (stage 4) plus fetch_agent_for_display/1 (stage 5). The fourth guard is what let stage 5 DELETE the bare `rescue _` that used to end requester_display_name/1: with both arms total the function cannot raise, so the rescue had nothing left to absorb"},
     {"platform/tasks/stacks.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "get_stack/1 and get_stack!/1, behind seven raw stack_id tool arguments"},
+    {"platform/tasks/task_access.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "TaskAccess.load/1's guard on the task_id carried by the canvas-attachment MCP tool payloads — the authorization gate's only untrusted input, and the one place a 16-character slug must not be hex-encoded into a well-formed id and pinned against the tasks UUIDv7 key"},
     {"platform_web/controllers/message_controller.ex", :platform_uuid_guard, "-", 1,
      :safe_internal,
      "fetch_message/1's guard on the message id taken straight off the URL path segment"},
