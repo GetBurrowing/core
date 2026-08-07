@@ -33,4 +33,29 @@ defmodule Platform.TenancyFixtures do
   """
   @spec tenant_org_id(String.t()) :: binary()
   def tenant_org_id(slug) when is_binary(slug), do: Tenancy.get_org_by_slug!(slug).id
+
+  @doc """
+  Give `user` a plain `"member"` `org_memberships` row in every seeded org.
+
+  For tests whose subject is NOT tenancy. Viewer-scoped reads —
+  `Tasks.list_projects_for_user/2` and friends — return `[]` for a user with
+  no memberships, so a fixture user built with a bare `Repo.insert!(%User{})`
+  now renders an empty project sidebar and every unrelated assertion about
+  project names fails for a reason that has nothing to do with the test.
+
+  Deliberately `"member"`, not `"admin"`: an admin bypasses org scoping
+  wholesale, which would silently mask a real scoping regression in any test
+  that used this helper. Scoping itself is pinned by dedicated tests that
+  build their own single-org viewer.
+  """
+  @spec member_of_all_orgs!(struct()) :: struct()
+  def member_of_all_orgs!(user) do
+    Enum.each(Tenancy.list_orgs(), fn org ->
+      %Tenancy.OrgMembership{}
+      |> Tenancy.OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: "member"})
+      |> Platform.Repo.insert!()
+    end)
+
+    user
+  end
 end

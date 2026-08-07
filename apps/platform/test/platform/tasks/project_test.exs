@@ -125,11 +125,11 @@ defmodule Platform.Tasks.ProjectTest do
     end
   end
 
-  describe "list_projects/0" do
+  describe "list_projects_unscoped/1" do
     test "returns all projects ordered by name" do
       {:ok, _} = Tasks.create_project(%{name: "Bravo"})
       {:ok, _} = Tasks.create_project(%{name: "Alpha"})
-      projects = Tasks.list_projects()
+      projects = Tasks.list_projects_unscoped()
       names = Enum.map(projects, & &1.name)
       assert ["Alpha", "Bravo"] == names
     end

@@ -153,11 +153,7 @@ defmodule Platform.Meetings do
   end
 
   defp viewer_meeting_query(slug, user_id, false = _root_admin?) do
-    viewer_org_ids =
-      from(om in Platform.Tenancy.OrgMembership,
-        where: om.user_id == ^user_id,
-        select: om.org_id
-      )
+    viewer_org_ids = Platform.Tenancy.viewer_org_ids_query(user_id)
 
     from(m in Meeting,
       join: p in Platform.Tasks.Project,
@@ -364,7 +360,7 @@ defmodule Platform.Meetings do
           # Announce on the meta-topic so long-lived subscribers can
           # subscribe to the project's lifecycle stream dynamically (the
           # MeetingHistorianHandler subscribes to existing-at-boot topics
-          # via `Platform.Tasks.list_projects/0` and uses this signal to
+          # via `Platform.Tasks.list_projects_unscoped/1` and uses this signal to
           # cover projects whose first meeting is created post-boot).
           Phoenix.PubSub.broadcast(
             Platform.PubSub,

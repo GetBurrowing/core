@@ -18,6 +18,8 @@ defmodule PlatformWeb.FilesLiveTest do
   import Platform.TenancyFixtures
 
   alias Platform.Accounts.User
+  alias Platform.Tenancy
+  alias Platform.Tenancy.OrgMembership
   alias Platform.{Files, Repo, Tasks}
 
   # ── Helpers ────────────────────────────────────────────────────────────
@@ -29,6 +31,12 @@ defmodule PlatformWeb.FilesLiveTest do
         name: "Files LV User",
         oidc_sub: "oidc-files-lv-#{System.unique_integer([:positive])}"
       })
+
+    # The sidebar reads `Tasks.list_projects_for_user/2`, so a viewer with no
+    # `org_memberships` sees nothing. These tests are about the Files surface,
+    # not about scoping. Scoping itself is pinned by the "project scoping"
+    # describe block below, with its own single-org viewer.
+    member_of_all_orgs!(user)
 
     init_test_session(conn, current_user_id: user.id)
   end
@@ -86,6 +94,128 @@ defmodule PlatformWeb.FilesLiveTest do
       {:ok, _view, html} = live(conn, ~p"/files")
 
       assert html =~ ~s(data-destination="files")
+    end
+  end
+
+  describe "project scoping" do
+    # Asserted on the RENDERED picker, not on the return value of
+    # `Tasks.list_projects_for_user/2` — the point is that FilesLive.mount/3
+    # actually passes a viewer through. The positive controls are mandatory:
+    # a fix that renders an empty picker for everybody would satisfy the
+    # absence assertion alone while breaking the feature.
+    defp scoped_user!(role, org_id) do
+      user =
+        Repo.insert!(%User{
+          email: "files_scope_#{System.unique_integer([:positive])}@example.com",
+          name: "Files Scope User",
+          oidc_sub: "oidc-files-scope-#{System.unique_integer([:positive])}"
+        })
+
+      %OrgMembership{}
+      |> OrgMembership.changeset(%{user_id: user.id, org_id: org_id, role: role})
+      |> Repo.insert!()
+
+      user
+    end
+
+    defp picker_text(html) do
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("[data-role=files-project-picker]")
+      |> LazyHTML.text()
+    end
+
+    test "a plain member does not see a foreign org's project name", %{conn: conn} do
+      own = seed_project("fabrikam", "Own Files Project #{System.unique_integer([:positive])}")
+      foreign = seed_project("sxi", "Foreign Project #{System.unique_integer([:positive])}")
+
+      user = scoped_user!("member", fabrikam_org_id())
+      refute Tenancy.fabrikam_admin?(user)
+
+      conn = init_test_session(conn, current_user_id: user.id)
+      {:ok, _view, html} = live(conn, ~p"/files")
+
+      picker = picker_text(html)
+
+      assert picker =~ own.name
+      refute picker =~ foreign.name
+    end
+
+    test "a Fabrikam root admin sees both orgs' projects", %{conn: conn} do
+      own = seed_project("fabrikam", "Own Files Project #{System.unique_integer([:positive])}")
+      foreign = seed_project("sxi", "Foreign Project #{System.unique_integer([:positive])}")
+
+      admin = scoped_user!("admin", fabrikam_org_id())
+      assert Tenancy.fabrikam_admin?(admin) == true
+
+      conn = init_test_session(conn, current_user_id: admin.id)
+      {:ok, _view, html} = live(conn, ~p"/files")
+
+      picker = picker_text(html)
+
+      assert picker =~ own.name
+      assert picker =~ foreign.name
+    end
+
+    # Scoping the project list alone still rendered a header for every active
+    # org — a member of two orgs saw five org names, three of them at a `0`
+    # count. An empty header naming an org the viewer isn't in is an existence
+    # leak on its own, so the org read is scoped too.
+    defp files_section_slugs(html) do
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("[data-role=files-project-group]")
+      |> LazyHTML.attribute("data-org-slug")
+      |> Enum.uniq()
+      |> Enum.sort()
+    end
+
+    test "a member of exactly two orgs sees exactly those two sections", %{conn: conn} do
+      own = seed_project("fabrikam", "Own Files Project #{System.unique_integer([:positive])}")
+      gen = seed_project("soylent", "Soylent Files #{System.unique_integer([:positive])}")
+      foreign = seed_project("sxi", "Foreign Project #{System.unique_integer([:positive])}")
+
+      user = scoped_user!("member", fabrikam_org_id())
+
+      %OrgMembership{}
+      |> OrgMembership.changeset(%{
+        user_id: user.id,
+        org_id: tenant_org_id("soylent"),
+        role: "member"
+      })
+      |> Repo.insert!()
+
+      refute Tenancy.fabrikam_admin?(user)
+
+      conn = init_test_session(conn, current_user_id: user.id)
+      {:ok, _view, html} = live(conn, ~p"/files")
+
+      # Positive control — rendering ZERO sections must fail this.
+      assert files_section_slugs(html) == ["soylent", "fabrikam"]
+
+      picker = picker_text(html)
+
+      for absent <- ["wayne_tech", "sxi", "paragon"] do
+        refute picker =~ Tenancy.scope_label(absent)
+      end
+
+      assert picker =~ own.name
+      assert picker =~ gen.name
+      refute picker =~ foreign.name
+    end
+
+    test "a Fabrikam root admin still sees every active org's section", %{conn: conn} do
+      admin = scoped_user!("admin", fabrikam_org_id())
+      assert Tenancy.fabrikam_admin?(admin) == true
+
+      conn = init_test_session(conn, current_user_id: admin.id)
+      {:ok, _view, html} = live(conn, ~p"/files")
+
+      slugs = files_section_slugs(html)
+
+      for expected <- Enum.map(Tenancy.list_active_tenants(), & &1.slug) do
+        assert expected in slugs
+      end
     end
   end
 

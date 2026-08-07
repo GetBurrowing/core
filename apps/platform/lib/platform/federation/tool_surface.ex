@@ -3432,6 +3432,15 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── Task tools ───────────────────────────────────────────────────────────
 
+  # TODO(scope): this handler ignores its `_context` and returns every project
+  # in every org. It cannot be fixed by swapping in
+  # `Tasks.list_projects_for_user/2`: the MCP context built by
+  # `PlatformWeb.MCPController.build_context/2` carries `agent_id` /
+  # `runtime_id` / `space_id` and NO user, while the viewer filter is keyed on
+  # `user_id` via `org_memberships`. Scoping an agent principal to orgs is a
+  # separate design with its own authorization layer
+  # (`Platform.Federation.ToolAuthorization`) — deliberately deferred rather
+  # than papered over with an invented agent-to-org mapping.
   def execute("project_list", args, _context) do
     opts =
       case Map.get(args, "org_id") do
@@ -3441,7 +3450,7 @@ defmodule Platform.Federation.ToolSurface do
 
     projects =
       opts
-      |> Tasks.list_projects()
+      |> Tasks.list_projects_unscoped()
       |> Repo.preload(:org)
       |> Enum.map(fn p ->
         %{

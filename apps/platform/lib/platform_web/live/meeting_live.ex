@@ -790,12 +790,20 @@ defmodule PlatformWeb.MeetingLive do
     # the index lists every meeting; per-project subscription keeps
     # `{:meeting_created, _}` / `{:meeting_ended, _}` / `{:meeting_started, _}`
     # broadcasts flowing in.
-    # TODO(scope): `list_projects/0` + `list_all_meetings/0` are unscoped —
-    # this index renders every meeting in every org to every authenticated
-    # user, a separate name/existence leak from the `:show` one fixed above.
-    # Left out of task 019f9b14 deliberately (fixing it changes rendered
-    # output); filed as its own task.
-    projects = Tasks.list_projects()
+    # TODO(scope): `list_all_meetings/0` is still unscoped — this index
+    # renders every meeting in every org to every authenticated user, a
+    # name/existence leak of the same family as the `:show` one fixed
+    # above. Left out of task 019f9b14 deliberately (fixing it changes
+    # rendered output). The unscoped project-list half of this TODO is
+    # closed: the project picker below is now viewer-scoped. (Spelled out
+    # in prose rather than naming the unscoped function, so the
+    # `Platform.Tasks.ProjectScopeTest` LiveView guard — a plain string
+    # scan over this directory — is not tripped by a comment.)
+    #
+    # `:current_user_record` is assigned by `ShellLive.on_mount/4`, which
+    # runs before `handle_params/3` for every route in the authenticated
+    # live_session — no session re-read or extra lookup needed here.
+    projects = Tasks.list_projects_for_user(socket.assigns[:current_user_record])
     project_ids = Enum.map(projects, & &1.id)
 
     if connected?(socket) do

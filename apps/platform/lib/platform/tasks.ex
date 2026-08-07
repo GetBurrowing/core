@@ -230,7 +230,23 @@ defmodule Platform.Tasks do
   end
 
   @doc """
-  List projects, optionally filtered by org.
+  **WARNING: applies NO viewer scoping.** Returns every project in every
+  org, regardless of who is asking.
+
+  It exists solely for system callers that run with no viewer at all —
+  boot-time PubSub subscription inside a `GenServer.init/1`, where there
+  is no user to scope against:
+
+    * `Platform.Meetings.MeetingNotifier` — subscribes to every project's
+      meetings topic at boot.
+    * `Platform.Agents.MeetingHistorianHandler` — same pattern.
+
+  **Any surface that renders to a human must call
+  `list_projects_for_user/2` instead.** Filters, pickers, sidebars and
+  LiveViews reaching for this function is exactly the defect ADR-0042
+  scoping fixed: foreign-org project names leaked into every one of
+  them. The explicit `_unscoped` suffix is deliberate — a future caller
+  has to say out loud that it wants the unscoped list.
 
   ## Options
 
@@ -240,7 +256,7 @@ defmodule Platform.Tasks do
       Stage 5 of ADR-0042 uses `preload: :org` so the sidebar group-by-org
       template can read `project.org.slug` without a per-row Repo hit.
   """
-  def list_projects(opts \\ []) do
+  def list_projects_unscoped(opts \\ []) do
     org_id = Keyword.get(opts, :org_id)
     preload = Keyword.get(opts, :preload, [])
 
@@ -250,6 +266,70 @@ defmodule Platform.Tasks do
     |> Repo.all()
     |> Repo.preload(preload)
   end
+
+  @doc """
+  List the projects a viewer is allowed to see (ADR-0042).
+
+  The viewer-scoped counterpart to `list_projects_unscoped/1`, which is unscoped
+  and returns every project in every org. Any surface that renders
+  project names to a user — filters, pickers, sidebars — must read
+  through this function, or foreign-org project names leak.
+
+  ## Semantics
+
+    * The org filter is applied **in the query**
+      (`p.org_id in subquery(Tenancy.viewer_org_ids_query/1)`), not after
+      the fetch, so the database is the enforcement point and there is no
+      window in which an unauthorized row exists in memory.
+    * A `nil` user — or anything without a binary `:id` — returns `[]`.
+      An anonymous caller is never authorized. Mirrors
+      `Platform.Meetings.fetch_meeting_for_user/2`.
+    * Root (Fabrikam) admins bypass the membership filter and see every
+      project, matching `Meetings.fetch_meeting_for_user/2`,
+      `Platform.Chat` and `Platform.Chat.Sidebar`. Without it a root
+      operator could open a tenant meeting but not select its project in
+      the start-meeting picker. Admin status is read from the preloaded
+      `:org_memberships` when they are loaded (`fabrikam_admin_preloaded?/1`,
+      zero queries — the live path, since `Accounts.get_user/1`
+      preloads), else via `fabrikam_admin?/1`.
+    * Results stay ordered alphabetically by name, which
+      `Platform.Projects.group_by_org/1` documents that it relies on.
+
+  ## Options
+
+  Same as `list_projects_unscoped/1`:
+
+    * `:org_id` — narrow *further* to a single org. It never widens: a
+      non-admin asking for an org they do not belong to gets `[]`.
+    * `:preload` — Ecto preload spec applied to the result.
+  """
+  @spec list_projects_for_user(map() | nil, keyword()) :: [Project.t()]
+  def list_projects_for_user(user, opts \\ [])
+
+  def list_projects_for_user(%{id: user_id} = user, opts) when is_binary(user_id) do
+    org_id = Keyword.get(opts, :org_id)
+    preload = Keyword.get(opts, :preload, [])
+
+    Project
+    |> maybe_filter_projects_org(org_id)
+    |> maybe_filter_projects_viewer(user_id, root_admin?(user))
+    |> order_by([p], asc: p.name)
+    |> Repo.all()
+    |> Repo.preload(preload)
+  end
+
+  def list_projects_for_user(_user, _opts), do: []
+
+  defp maybe_filter_projects_viewer(query, _user_id, true = _root_admin?), do: query
+
+  defp maybe_filter_projects_viewer(query, user_id, false = _root_admin?) do
+    where(query, [p], p.org_id in subquery(Platform.Tenancy.viewer_org_ids_query(user_id)))
+  end
+
+  defp root_admin?(%{org_memberships: memberships} = user) when is_list(memberships),
+    do: Platform.Tenancy.fabrikam_admin_preloaded?(user)
+
+  defp root_admin?(user), do: Platform.Tenancy.fabrikam_admin?(user)
 
   defp maybe_filter_projects_org(query, nil), do: query
 
@@ -270,7 +350,7 @@ defmodule Platform.Tasks do
   ordered deletion-scheduled-first (soonest deadline first) so the
   recovery LiveView's split into "scheduled" / "archived" buckets keeps
   each bucket in the right order. Read-only companion to
-  `list_projects/1`; the lifecycle mutators live in
+  `list_projects_unscoped/1`; the lifecycle mutators live in
   `Platform.Tenancy.Lifecycle`.
   """
   @spec list_archived_projects() :: [Project.t()]

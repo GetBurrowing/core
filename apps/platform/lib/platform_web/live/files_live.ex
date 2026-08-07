@@ -86,7 +86,7 @@ defmodule PlatformWeb.FilesLive do
 
   @impl true
   def mount(_params, session, socket) do
-    projects = Tasks.list_projects(preload: :org)
+    projects = Tasks.list_projects_for_user(socket.assigns[:current_user_record], preload: :org)
     current_user_id = session["current_user_id"]
 
     {:ok,
@@ -95,13 +95,18 @@ defmodule PlatformWeb.FilesLive do
      |> assign(:current_path, "/files")
      |> assign(:current_user_id, current_user_id)
      |> assign(:projects, projects)
-     # Navigation source: every active org keeps a section (and count) even at
-     # zero projects, so archiving an org's last project can't erase its header
+     # Navigation source: every active org THE VIEWER BELONGS TO keeps a section
+     # (and count) even at zero projects, so archiving an org's last project
+     # can't erase its header. Foreign orgs get no header at all — an empty
+     # header naming an org the viewer isn't in is still an existence leak
      # — matches the Tasks sidebar and Chat. Files has no <select> consuming
      # this grouping, so there's no project-derived variant to keep alongside.
      |> assign(
        :project_sections,
-       Projects.group_by_active_org(projects, Tenancy.list_active_tenants())
+       Projects.group_by_active_org(
+         projects,
+         Tenancy.list_active_tenants_for_user(socket.assigns[:current_user_record])
+       )
      )
      |> assign(:selected_project_id, nil)
      |> assign(:selected_project, nil)
@@ -639,7 +644,7 @@ defmodule PlatformWeb.FilesLive do
     else
       # Preload :org so the breadcrumb can render the scope label/color.
       # `Tasks.get_project/1` doesn't preload by default — the sidebar
-      # already calls `list_projects(preload: :org)` for the same reason.
+      # already calls `list_projects_for_user(user, preload: :org)` for the same reason.
       project = Platform.Repo.preload(project, :org)
 
       socket

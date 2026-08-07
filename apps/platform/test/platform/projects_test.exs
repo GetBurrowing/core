@@ -6,7 +6,7 @@ defmodule Platform.ProjectsTest do
 
   Focus here is the active-only filter added in the lifecycle work
   (task 019f4eaa): archived and deletion-scheduled projects must NOT
-  surface in these listings, while the plain `Tasks.list_projects/0`
+  surface in these listings, while the plain `Tasks.list_projects_unscoped/1`
   (used by meeting subscribers and the federation `project_list` tool)
   still returns every row.
   """
@@ -31,7 +31,7 @@ defmodule Platform.ProjectsTest do
   end
 
   defp grouped_project_names do
-    Tasks.list_projects(preload: :org)
+    Tasks.list_projects_unscoped(preload: :org)
     |> Projects.group_by_org()
     |> Enum.flat_map(fn {_slug, _name, ps} -> Enum.map(ps, & &1.name) end)
   end
@@ -39,7 +39,7 @@ defmodule Platform.ProjectsTest do
   # Navigation-source grouping: every active org, projects nested.
   defp active_sections do
     Projects.group_by_active_org(
-      Tasks.list_projects(preload: :org),
+      Tasks.list_projects_unscoped(preload: :org),
       Tenancy.list_active_tenants()
     )
   end
@@ -54,7 +54,7 @@ defmodule Platform.ProjectsTest do
       {:ok, _} = Tasks.create_project(%{name: "Fabrikam Tool", org_id: fabrikam_org_id()})
 
       slugs =
-        Tasks.list_projects(preload: :org)
+        Tasks.list_projects_unscoped(preload: :org)
         |> Projects.group_by_org()
         |> Enum.map(fn {slug, _name, _ps} -> slug end)
 
@@ -92,18 +92,18 @@ defmodule Platform.ProjectsTest do
       archive_project!(only)
 
       slugs =
-        Tasks.list_projects(preload: :org)
+        Tasks.list_projects_unscoped(preload: :org)
         |> Projects.group_by_org()
         |> Enum.map(fn {slug, _name, _ps} -> slug end)
 
       refute "sxi" in slugs
     end
 
-    test "regression: Tasks.list_projects/0 STILL returns archived projects for all-rows callers" do
+    test "regression: Tasks.list_projects_unscoped/1 STILL returns archived projects for all-rows callers" do
       {:ok, archived} = Tasks.create_project(%{name: "Archived For Subs", org_id: fabrikam_org_id()})
       archive_project!(archived)
 
-      all_names = Tasks.list_projects() |> Enum.map(& &1.name)
+      all_names = Tasks.list_projects_unscoped() |> Enum.map(& &1.name)
       assert "Archived For Subs" in all_names
     end
   end
@@ -143,7 +143,7 @@ defmodule Platform.ProjectsTest do
       # active_orgs omitting sxi is exactly what list_active_tenants/0 returns
       # once sxi is archived; its still-active project must not bring it back.
       {:ok, _stray} = Tasks.create_project(%{name: "Stray", org_id: tenant_org_id("sxi")})
-      projects = Tasks.list_projects(preload: :org)
+      projects = Tasks.list_projects_unscoped(preload: :org)
       active_orgs = Enum.reject(Tenancy.list_active_tenants(), &(&1.slug == "sxi"))
 
       slugs = Projects.group_by_active_org(projects, active_orgs) |> Enum.map(&elem(&1, 0))

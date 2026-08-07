@@ -12,7 +12,7 @@ defmodule Platform.Agents.MeetingHistorianHandler do
 
   On `init/1` the handler:
 
-    1. Lists every project via `Platform.Tasks.list_projects/0` and
+    1. Lists every project via `Platform.Tasks.list_projects_unscoped/1` and
        subscribes to `Platform.Meetings.project_meetings_topic(project.id)`
        for each — covers projects that existed at boot.
     2. Subscribes to the meta-topic
@@ -96,13 +96,13 @@ defmodule Platform.Agents.MeetingHistorianHandler do
   @impl GenServer
   def init(_opts) do
     # Subscribe to the meta-topic FIRST so projects created during the
-    # `list_projects/0` call (or just after) don't slip past — the worst
+    # `list_projects_unscoped/1` call (or just after) don't slip past — the worst
     # case is a duplicate subscribe on a topic, which is idempotent for
     # Phoenix.PubSub.
     :ok = Meetings.subscribe_to_project_meetings_meta()
 
     subscribed =
-      Tasks.list_projects()
+      Tasks.list_projects_unscoped()
       |> Enum.reduce(MapSet.new(), fn project, acc ->
         :ok = Meetings.subscribe_to_project_meetings(project.id)
         MapSet.put(acc, project.id)

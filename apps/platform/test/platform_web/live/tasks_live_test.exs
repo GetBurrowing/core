@@ -45,6 +45,7 @@ defmodule PlatformWeb.TasksLiveTest do
         name: "Tasks Test User",
         oidc_sub: "oidc-tasks-test-#{System.unique_integer([:positive])}"
       })
+      |> Platform.TenancyFixtures.member_of_all_orgs!()
 
     {init_test_session(conn, current_user_id: user.id), user}
   end

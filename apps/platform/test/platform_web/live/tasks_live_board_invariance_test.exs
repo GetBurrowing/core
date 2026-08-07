@@ -563,7 +563,40 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # Strictness is deliberately still `==`. Softening to `<=` would let the
   # shell absorb the very accretion this guard exists to make visible; a
   # re-pin that has to be justified in a commit message is the whole point.
-  @shell_line_count 5_889
+  # RE-PINNED (+1) by the viewer-scoped project sidebar stage. The two re-pins
+  # below were authored against a 5,883 baseline; merging main moved the
+  # baseline to 5,889 first, so the deltas — which are independent of it —
+  # compose to 5,889 + 1 + 15 = 5,905. That total is not arithmetic on trust:
+  # `grep -c '' apps/platform/lib/platform_web/live/tasks_live.ex` on the
+  # merged tree reads 5,905.
+  #
+  # ARITHMETIC: three call sites changed from
+  # `Tasks.list_projects_unscoped(preload: :org)` to
+  # `Tasks.list_projects_for_user(socket.assigns[:current_user_record],
+  # preload: :org)`. Two fit on one line; the third (inside
+  # `handle_event("create_project", ...)`, already two levels of indentation
+  # deep) exceeds 98 columns, so `mix format` wraps it onto a second line.
+  # +1 line, and only that. No new function, no new branch, no new assign —
+  # the shell did not accrete behaviour, an existing expression got longer.
+  # RE-PINNED (+15) by the viewer-scoped org
+  # SECTION HEADERS — the follow-up defect: scoping the project list alone
+  # still rendered a header naming every foreign org at a `0` count).
+  # ARITHMETIC, +15 = 26 insertions - 11 deletions:
+  #   * `project_sections/1` -> `/2` (takes the viewer) and its body wraps to
+  #     three lines under `mix format`: +2.
+  #   * the two `assign(:project_sections, ...)` call sites in `mount/3` and
+  #     `handle_event("create_project", ...)` exceed 98 columns once the
+  #     viewer argument is added, so `mix format` breaks each into a 4-line
+  #     `assign(` call: +3 each = +6. The `refresh_containers/1` site still
+  #     fits on one line: +0.
+  #   * +7 comment lines: a four-line note on `project_sections/2` recording
+  #     WHY the org read is scoped (an empty foreign-org header is an
+  #     existence leak in its own right), plus reflow of two existing
+  #     comments to say "every active org THE VIEWER BELONGS TO".
+  # No new function in the shell, no new branch, no new assign — the scoping
+  # logic itself lives in `Platform.Tenancy.list_active_tenants_for_user/1`,
+  # which is exactly where the guard wants it. The shell only passes a viewer.
+  @shell_line_count 5_905
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

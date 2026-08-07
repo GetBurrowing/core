@@ -22,6 +22,7 @@ defmodule PlatformWeb.TasksLiveProjectCreateTest do
         name: "Create Test User",
         oidc_sub: "oidc-tasks-create-#{System.unique_integer([:positive])}"
       })
+      |> member_of_all_orgs!()
 
     init_test_session(conn, current_user_id: user.id)
   end
@@ -114,7 +115,7 @@ defmodule PlatformWeb.TasksLiveProjectCreateTest do
         |> render_submit()
 
       assert html =~ "can&#39;t be blank" or html =~ "can't be blank"
-      assert Tasks.list_projects() |> Enum.all?(fn p -> p.slug != "no-org" end)
+      assert Tasks.list_projects_unscoped() |> Enum.all?(fn p -> p.slug != "no-org" end)
     end
 
     # Re-skin Phase 2 stage 2 (task 019f51ca): the standalone project FAB

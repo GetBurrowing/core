@@ -224,6 +224,93 @@ defmodule Platform.TenancyTest do
     end
   end
 
+  # ── list_active_tenants_for_user/1 (viewer-scoped section headers) ───
+
+  describe "list_active_tenants_for_user/1" do
+    defp membership!(user, slug, role) do
+      org_id =
+        case slug do
+          "fabrikam" -> Tenancy.get_org_by_slug!("fabrikam").id
+          other -> Tenancy.get_org_by_slug!(other).id
+        end
+
+      %OrgMembership{}
+      |> OrgMembership.changeset(%{user_id: user.id, org_id: org_id, role: role})
+      |> Repo.insert!()
+
+      user
+    end
+
+    defp slugs_for(user), do: Tenancy.list_active_tenants_for_user(user) |> Enum.map(& &1.slug)
+
+    test "returns only the orgs the member belongs to" do
+      user =
+        create_user!(%{email: "tenant_scope_#{System.unique_integer([:positive])}@example.com"})
+        |> membership!("fabrikam", "member")
+        |> membership!("soylent", "member")
+
+      refute Tenancy.fabrikam_admin?(user)
+
+      slugs = slugs_for(user)
+      assert Enum.sort(slugs) == ~w(soylent fabrikam)
+      refute "sxi" in slugs
+      refute "wayne_tech" in slugs
+      refute "paragon" in slugs
+    end
+
+    test "preserves canonical tenant-priority ordering" do
+      user =
+        create_user!(%{email: "tenant_ord_#{System.unique_integer([:positive])}@example.com"})
+        |> membership!("paragon", "member")
+        |> membership!("soylent", "member")
+
+      assert slugs_for(user) == ["soylent", "paragon"]
+    end
+
+    test "a root (Fabrikam) admin bypasses the membership filter" do
+      admin =
+        create_user!(%{email: "tenant_admin_#{System.unique_integer([:positive])}@example.com"})
+        |> membership!("fabrikam", "admin")
+
+      assert Tenancy.fabrikam_admin?(admin) == true
+      assert Enum.sort(slugs_for(admin)) == ~w(paragon soylent fabrikam wayne_tech sxi)
+    end
+
+    test "the admin bypass also works off preloaded memberships (zero-query path)" do
+      admin =
+        create_user!(%{email: "tenant_pre_#{System.unique_integer([:positive])}@example.com"})
+        |> membership!("fabrikam", "admin")
+
+      preloaded = Repo.preload(admin, org_memberships: :org)
+      assert Tenancy.fabrikam_admin_preloaded?(preloaded) == true
+      assert Enum.sort(slugs_for(preloaded)) == ~w(paragon soylent fabrikam wayne_tech sxi)
+    end
+
+    test "an archived org the member belongs to is still excluded" do
+      user =
+        create_user!(%{email: "tenant_arch_#{System.unique_integer([:positive])}@example.com"})
+        |> membership!("fabrikam", "member")
+        |> membership!("sxi", "member")
+
+      Tenancy.get_org_by_slug!("sxi")
+      |> Org.changeset(%{archived_at: DateTime.utc_now()})
+      |> Repo.update!()
+
+      assert slugs_for(user) == ["fabrikam"]
+    end
+
+    test "a nil user, or anything without a binary id, returns []" do
+      assert Tenancy.list_active_tenants_for_user(nil) == []
+      assert Tenancy.list_active_tenants_for_user(%{}) == []
+      assert Tenancy.list_active_tenants_for_user(%{id: 7}) == []
+    end
+
+    test "list_active_tenants/0 stays unscoped for system callers" do
+      assert Enum.sort(Enum.map(Tenancy.list_active_tenants(), & &1.slug)) ==
+               ~w(paragon soylent fabrikam wayne_tech sxi)
+    end
+  end
+
   # ── ADR-0042 canonical tenant-priority ordering ──────────────────────
 
   describe "tenant_priority/0 + helpers" do

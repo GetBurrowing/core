@@ -27,6 +27,7 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
         name: "Grouping Test User",
         oidc_sub: "oidc-tasks-grp-#{System.unique_integer([:positive])}"
       })
+      |> member_of_all_orgs!()
 
     init_test_session(conn, current_user_id: user.id)
   end

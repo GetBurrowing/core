@@ -34,7 +34,7 @@ defmodule Platform.Projects do
   Order is `Tenancy.tenant_priority/0` (Fabrikam → Soylent → Wayne-Tech →
   SXI → Paragon → unknown tenants alphabetically). Inside each bucket
   projects keep the caller's existing order (typically alphabetical via
-  `Platform.Tasks.list_projects/1`).
+  `Platform.Tasks.list_projects_unscoped/1`).
 
   Projects whose `:org` association didn't preload (legacy data or a
   preload bug) fall into a synthetic `"_unassigned"` bucket sorted last
@@ -46,11 +46,11 @@ defmodule Platform.Projects do
   Deletion-scheduled projects are excluded by the same check: scheduling
   also stamps `archived_at` (see
   `Platform.Tenancy.Lifecycle.schedule_project_deletion/2`). Callers that
-  legitimately need archived rows read `Platform.Tasks.list_projects/1`
+  legitimately need archived rows read `Platform.Tasks.list_projects_unscoped/1`
   directly rather than through this grouping.
 
   Callers MUST pass projects with `:org` preloaded
-  (`Tasks.list_projects(preload: :org)`) — this function is pure and
+  (`Tasks.list_projects_unscoped(preload: :org)`) — this function is pure and
   doesn't reach for the Repo.
   """
   @spec group_by_org([map()]) :: [org_group()]

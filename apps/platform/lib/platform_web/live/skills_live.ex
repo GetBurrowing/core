@@ -47,7 +47,10 @@ defmodule PlatformWeb.SkillsLive do
          |> assign(:confirm_delete, false)
          |> assign(:save_status, nil)
          |> assign(:skill_attachments_grouped, grouped)
-         |> assign(:all_projects, Tasks.list_projects())
+         |> assign(
+           :all_projects,
+           Tasks.list_projects_for_user(socket.assigns[:current_user_record])
+         )
          |> assign(:all_epics, Tasks.list_epics_for_project(nil))
          |> assign(:page_title, "Skills · #{skill.name}")}
     end
@@ -167,6 +170,11 @@ defmodule PlatformWeb.SkillsLive do
 
   # ── Attachment management ────────────────────────────────────────────────
 
+  # TODO(authz): the picker is now viewer-scoped, but this handler still trusts
+  # whatever `project_id` arrives over the wire — a crafted event can attach a
+  # skill to a project outside the viewer's orgs. Server-side authorization of
+  # the mutation is a separate concern from the disclosure fix and needs its
+  # own change.
   def handle_event("attach_skill_to_project", %{"project_id" => project_id}, socket) do
     skill = socket.assigns.selected_skill
 

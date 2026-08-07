@@ -105,7 +105,7 @@ defmodule PlatformWeb.TasksLive do
     # Stage 5 of ADR-0042: preload `:org` so the sidebar can group projects
     # by `project.org.slug` + light up the org color tokens via
     # `Tenancy.scope_label/1` + `scope_color/1` — both pure, DB-free.
-    projects = Tasks.list_projects(preload: :org)
+    projects = Tasks.list_projects_for_user(socket.assigns[:current_user_record], preload: :org)
     all_tasks = Tasks.list_all_tasks()
     # Stage-5 of task 019e2c25: subscribe to per-task ReviewRequests topics
     # so the badge live-updates within 2s when a manual_approval review_request
@@ -160,10 +160,14 @@ defmodule PlatformWeb.TasksLive do
      # the board PubSub doesn't fan that out yet — we recompute inline in
      # the create handler).
      |> assign(:projects_by_org, group_projects_by_org(projects))
-     # Navigation sidebar (desktop + mobile sheet): every active org, even at
-     # zero projects, so an org's header + kebab survive archiving its last
-     # project. The <select>s above stay on the project-derived list.
-     |> assign(:project_sections, project_sections(projects))
+     # Navigation sidebar (desktop + mobile sheet): every active org the viewer
+     # belongs to, even at zero projects, so an org's header + kebab survive
+     # archiving its last project. The <select>s above stay on the
+     # project-derived list.
+     |> assign(
+       :project_sections,
+       project_sections(projects, socket.assigns[:current_user_record])
+     )
      # Org dropdown options for the New-Project form. Stable for the
      # lifetime of the mount (no live org-edit surface exists yet).
      # ADR-0042: surfaced in canonical tenant-priority order so the FAB's
@@ -854,13 +858,17 @@ defmodule PlatformWeb.TasksLive do
         # No board-level pubsub for projects yet — re-fetch the list with
         # the `:org` preload and recompute the grouped buckets inline so
         # the sidebar updates immediately.
-        projects = Tasks.list_projects(preload: :org)
+        projects =
+          Tasks.list_projects_for_user(socket.assigns[:current_user_record], preload: :org)
 
         {:noreply,
          socket
          |> assign(:projects, projects)
          |> assign(:projects_by_org, group_projects_by_org(projects))
-         |> assign(:project_sections, project_sections(projects))
+         |> assign(
+           :project_sections,
+           project_sections(projects, socket.assigns[:current_user_record])
+         )
          |> assign(:show_project_create_sheet, false)
          |> assign(
            :project_form,
@@ -5365,7 +5373,7 @@ defmodule PlatformWeb.TasksLive do
   # `[{org_slug, org_name, [project]}]` tuples. Order matches the
   # canonical `Tenancy.tenant_priority/0` (Fabrikam → Soylent → Wayne-Tech →
   # SXI → Paragon → unknown tenants alphabetically); inside each bucket
-  # projects are already alphabetically sorted by `Tasks.list_projects/1`.
+  # projects are already alphabetically sorted by `Tasks.list_projects_for_user/2`.
   #
   # Implementation lives in `Platform.Projects.group_by_org/1` (extracted
   # in the Files-surface stage so files + tasks share one grouper). Kept
@@ -5373,25 +5381,33 @@ defmodule PlatformWeb.TasksLive do
   # `group_projects_by_org/1` don't churn.
   defp group_projects_by_org(projects), do: Platform.Projects.group_by_org(projects)
 
-  # Navigation-sidebar source (task 019f4eaa follow-up): every ACTIVE org gets
-  # a section, even at zero projects, so archiving an org's last project can't
-  # erase its header — and with it the lifecycle kebab that archives the org
+  # Navigation-sidebar source (task 019f4eaa follow-up): every ACTIVE org the
+  # VIEWER BELONGS TO gets a section, even at zero projects, so archiving an
+  # org's last project can't erase its header — and with it the lifecycle kebab that archives the org
   # itself. `group_projects_by_org/1` stays the SELECTION source for the
   # New-Task / New-Epic <select>s, which must not render empty <optgroup>s.
-  defp project_sections(projects) do
-    Platform.Projects.group_by_active_org(projects, Tenancy.list_active_tenants())
+  #
+  # The org list is VIEWER-SCOPED (`list_active_tenants_for_user/1`). Grouping a
+  # correctly-scoped project list by the unscoped org list still rendered a
+  # header naming every foreign org at a `0` count — an existence leak in its
+  # own right. Every caller must therefore pass the viewer.
+  defp project_sections(projects, viewer) do
+    Platform.Projects.group_by_active_org(
+      projects,
+      Tenancy.list_active_tenants_for_user(viewer)
+    )
   end
 
   # Reload projects + recompute every container-derived assign after an
   # archive / schedule-deletion so the archived row leaves the sidebar and
   # an archived org drops off the scope rail without a page reload.
   defp refresh_containers(socket) do
-    projects = Tasks.list_projects(preload: :org)
+    projects = Tasks.list_projects_for_user(socket.assigns[:current_user_record], preload: :org)
 
     socket
     |> assign(:projects, projects)
     |> assign(:projects_by_org, group_projects_by_org(projects))
-    |> assign(:project_sections, project_sections(projects))
+    |> assign(:project_sections, project_sections(projects, socket.assigns[:current_user_record]))
     |> assign(:active_scope_keys, active_scope_keys())
   end
 

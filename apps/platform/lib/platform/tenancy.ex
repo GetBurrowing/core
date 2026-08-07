@@ -175,6 +175,59 @@ defmodule Platform.Tenancy do
   end
 
   @doc """
+  List the active orgs a viewer is allowed to see (ADR-0042).
+
+  The viewer-scoped counterpart to `list_active_tenants/0`, which is
+  unscoped and returns every non-archived org. Any surface that renders
+  org **names or section headers** to a user must read through this
+  function.
+
+  > #### An empty section header is still a leak {: .warning}
+  >
+  > `list_active_tenants/0` renders every org, so a sidebar grouping a
+  > correctly-scoped project list by it still discloses the *existence*
+  > and *name* of every foreign org as a header with a `0` count. Scoping
+  > only the project read is not enough; the org read has to be scoped
+  > too.
+
+  ## Semantics
+
+    * The membership filter is applied **in the query**
+      (`o.id in subquery(viewer_org_ids_query/1)`), not after the fetch,
+      so the database is the enforcement point.
+    * A `nil` user — or anything without a binary `:id` — returns `[]`.
+      An anonymous caller is never authorized. Mirrors
+      `Platform.Tasks.list_projects_for_user/2`.
+    * Root (Fabrikam) admins bypass the membership filter and see every
+      active org. Admin status is read from the preloaded
+      `:org_memberships` when they are loaded (`fabrikam_admin_preloaded?/1`,
+      zero queries — the live path), else via `fabrikam_admin?/1`.
+    * Archive semantics, ordering and the "slugs are arbitrary user
+      input" warning are all identical to `list_active_tenants/0`.
+  """
+  @spec list_active_tenants_for_user(map() | nil) :: [Org.t()]
+  def list_active_tenants_for_user(%{id: user_id} = user) when is_binary(user_id) do
+    Org
+    |> where([o], is_nil(o.archived_at))
+    |> maybe_filter_orgs_viewer(user_id, root_admin?(user))
+    |> Repo.all()
+    |> sort_by_tenant_priority(& &1.slug)
+  end
+
+  def list_active_tenants_for_user(_user), do: []
+
+  defp maybe_filter_orgs_viewer(query, _user_id, true = _root_admin?), do: query
+
+  defp maybe_filter_orgs_viewer(query, user_id, false = _root_admin?) do
+    where(query, [o], o.id in subquery(viewer_org_ids_query(user_id)))
+  end
+
+  defp root_admin?(%{org_memberships: memberships} = user) when is_list(memberships),
+    do: fabrikam_admin_preloaded?(user)
+
+  defp root_admin?(user), do: fabrikam_admin?(user)
+
+  @doc """
   List the **inactive** tenant orgs for the recovery surface — every
   non-root org with `archived_at` set (both the purely-archived and the
   deletion-scheduled states; scheduling also stamps `archived_at`).
@@ -263,6 +316,28 @@ defmodule Platform.Tenancy do
     |> where([m], m.user_id == ^user_id)
     |> preload(:org)
     |> Repo.all()
+  end
+
+  @doc """
+  Composable query selecting the org ids a viewer belongs to.
+
+  This is the single definition of "orgs this viewer is a member of".
+  It returns an `Ecto.Query` (not rows) so callers can drop it into a
+  `subquery/1` and let the database do the filtering — the enforcement
+  point stays in SQL and no unauthorized row ever lands in memory.
+
+  Unlike `list_user_memberships/1`, which loads full structs, nothing is
+  fetched here until the composing query runs.
+
+      where: p.org_id in subquery(Tenancy.viewer_org_ids_query(user_id))
+
+  Callers that grant root (Fabrikam) admins a bypass must check
+  `fabrikam_admin?/1` (or `fabrikam_admin_preloaded?/1`) themselves — this query
+  is membership only and knows nothing about roles.
+  """
+  @spec viewer_org_ids_query(binary()) :: Ecto.Query.t()
+  def viewer_org_ids_query(user_id) when is_binary(user_id) do
+    from(om in OrgMembership, where: om.user_id == ^user_id, select: om.org_id)
   end
 
   @doc """

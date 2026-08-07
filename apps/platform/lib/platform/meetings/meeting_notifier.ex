@@ -36,11 +36,11 @@ defmodule Platform.Meetings.MeetingNotifier do
   Mirrors `Platform.Agents.MeetingHistorianHandler`:
 
     1. Subscribe to `Platform.Tasks.projects_lifecycle_topic/0` FIRST so
-       projects created during the `list_projects/0` call don't slip past.
+       projects created during the `list_projects_unscoped/1` call don't slip past.
     2. Subscribe to the project-meetings meta-topic
        (`Platform.Meetings.project_meetings_meta_topic/0`) — covers projects
        whose first meeting is created after boot (legacy/back-compat path).
-    3. List every project at boot via `Platform.Tasks.list_projects/0` and
+    3. List every project at boot via `Platform.Tasks.list_projects_unscoped/1` and
        subscribe to each `Platform.Meetings.project_meetings_topic/1`.
 
   Both `{:project_created, project}` and `{:project_meetings_topic_added,
@@ -92,13 +92,13 @@ defmodule Platform.Meetings.MeetingNotifier do
 
   @impl GenServer
   def init(_opts) do
-    # Subscribe to meta-topics FIRST so projects created mid-`list_projects/0`
+    # Subscribe to meta-topics FIRST so projects created mid-`list_projects_unscoped/1`
     # don't slip past. Idempotent re-subscribes are fine.
     :ok = Tasks.subscribe_to_projects_lifecycle()
     :ok = Meetings.subscribe_to_project_meetings_meta()
 
     subscribed =
-      Tasks.list_projects()
+      Tasks.list_projects_unscoped()
       |> Enum.reduce(MapSet.new(), fn project, acc ->
         :ok = Meetings.subscribe_to_project_meetings(project.id)
         MapSet.put(acc, project.id)
