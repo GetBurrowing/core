@@ -196,6 +196,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat
+  alias Platform.Chat.Attachments.ToolHandlers, as: AttachmentHandlers
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Meetings
   alias Platform.Meetings.Archive
@@ -757,6 +758,17 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:current_stage_mode, :gallery)
           |> assign(:active_space, meeting.chat_space)
           |> assign(:current_participant, current_participant)
+          # Whiteboard persistence (stage 4). `:whiteboard_version` is what
+          # THIS socket believes is stored; it is only ever set from a load
+          # or a successful save, so it stays an honest answer to "is the
+          # broadcast I just saw newer than what my client holds?".
+          # `:whiteboard_remote_version` drives the passive badge and is nil
+          # whenever there is nothing to tell the user.
+          |> assign(:whiteboard_version, 0)
+          |> assign(:whiteboard_remote_version, nil)
+          # Stage 5: the two attachment ids/URLs reserved for an in-flight
+          # export. Server-held on purpose — see the export handlers.
+          |> assign(:whiteboard_export_pending, nil)
           # ── Intents-collapse bar (task 019f70b8 stage 7) ──────────────
           # Seeded from the LIVE queue keyed by this meeting's id — the
           # same id the classifier enqueues under. `IntentQueue.list/1`
@@ -2157,6 +2169,156 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
+  # ── Whiteboard persistence (task 019fcfcf stage 4) ───────────────────────
+  #
+  # Three events, all pushed by the `MeetingWhiteboard` hook, all answered
+  # with `push_event` and never with an attribute on the host: the host is
+  # `phx-update="ignore"` and LiveView merges attributes onto ignored nodes
+  # (#664), so a server-rendered `data-scene-version` would be a defect of
+  # exactly the shape that cost this stage twice already.
+
+  # Restore. Asked for once per hook lifetime, after the island resolves.
+  # A meeting with no board answers `scene: %{}, scene_version: 0` — an
+  # empty board is the ordinary starting state, not an error.
+  def handle_event("whiteboard_load", _params, socket) do
+    case socket.assigns[:meeting] do
+      nil ->
+        {:noreply, socket}
+
+      meeting ->
+        {scene, version} =
+          case Meetings.get_whiteboard(meeting.id) do
+            nil -> {%{}, 0}
+            wb -> {wb.scene, wb.scene_version}
+          end
+
+        {:noreply,
+         socket
+         |> assign(:whiteboard_version, version)
+         |> push_event("whiteboard_loaded", %{scene: scene, scene_version: version})}
+    end
+  end
+
+  # Save. Authorised with the SAME participant check `create_meeting_canvas`
+  # uses: whiteboard access rides on the permission model of the chat space
+  # the meeting lives in. That shared model is the reason this feature is
+  # PubSub-and-Postgres rather than a deployed `excalidraw-room`, which
+  # would bring its own auth and its own encryption story.
+  def handle_event("whiteboard_save", %{"scene" => scene} = params, socket) do
+    %{meeting: meeting, user_id: user_id} = socket.assigns
+    expected = params["expected_version"]
+
+    cond do
+      is_nil(meeting) or is_nil(meeting.chat_space_id) ->
+        {:noreply, socket}
+
+      not is_integer(expected) ->
+        {:noreply, socket}
+
+      is_nil(find_participant(meeting.chat_space_id, user_id)) ->
+        # No write of any kind. A non-participant may be looking at the
+        # meeting; they may not overwrite its board.
+        {:noreply, put_flash(socket, :error, "Join the meeting to edit the whiteboard.")}
+
+      true ->
+        save_whiteboard_scene(socket, meeting, user_id, scene, expected)
+    end
+  end
+
+  # Dismiss the passive "updated elsewhere" badge. Purely presentational —
+  # it clears the assign, it does not fetch, apply or discard any scene.
+  def handle_event("dismiss_whiteboard_remote_notice", _params, socket) do
+    {:noreply, assign(socket, :whiteboard_remote_version, nil)}
+  end
+
+  # ── Export the board into a Suite canvas (task 019fcfcf stage 5) ─────────
+  #
+  # Three server events, because the bytes and the authority live in
+  # different places: only the browser can render the board, and only the
+  # server may mint an upload URL. The chain is
+  #
+  #   click → "whiteboard_export_start"  (authorise, tell the hook to render)
+  #         → "whiteboard_export"        (hook reports sizes; we presign x2)
+  #         → "whiteboard_export_uploaded" (bytes are in; we write the canvas)
+  #
+  # The attachment URLs are NEVER taken from the client. We keep the two ids
+  # and their `/chat/attachments/<uuid>` URLs in `:whiteboard_export_pending`
+  # and require the ids the hook echoes back to be exactly those — otherwise
+  # a crafted event could point a canvas image at any attachment id.
+
+  # Step 1. Authorisation gate. A non-participant gets no `export_begin`, so
+  # the browser is never even asked to render, let alone to upload.
+  def handle_event("whiteboard_export_start", _params, socket) do
+    %{meeting: meeting, user_id: user_id} = socket.assigns
+
+    cond do
+      is_nil(meeting) or is_nil(meeting.chat_space_id) ->
+        {:noreply, socket}
+
+      is_nil(find_participant(meeting.chat_space_id, user_id)) ->
+        {:noreply,
+         put_flash(socket, :error, "Join the meeting to send the whiteboard to a canvas.")}
+
+      true ->
+        {:noreply, push_event(socket, "whiteboard_export_begin", %{})}
+    end
+  end
+
+  # Step 2. Reserve BOTH attachments. Two artefacts, always: the PNG is what
+  # renders, the `.excalidraw` JSON is what makes the board reopenable.
+  # Reserving one without the other would ship a picture of a whiteboard.
+  def handle_event(
+        "whiteboard_export",
+        %{"png_byte_size" => png_size, "json_byte_size" => json_size},
+        socket
+      )
+      when is_integer(png_size) and is_integer(json_size) do
+    %{meeting: meeting, user_id: user_id} = socket.assigns
+
+    cond do
+      is_nil(meeting) or is_nil(meeting.chat_space_id) ->
+        {:noreply, socket}
+
+      is_nil(find_participant(meeting.chat_space_id, user_id)) ->
+        # Nothing is reserved. No pending row, no signed URL.
+        {:noreply,
+         put_flash(socket, :error, "Join the meeting to send the whiteboard to a canvas.")}
+
+      true ->
+        reserve_whiteboard_export(socket, meeting, user_id, png_size, json_size)
+    end
+  end
+
+  def handle_event("whiteboard_export", _params, socket), do: {:noreply, socket}
+
+  # Step 3. Both blobs are stored; append one card to the meeting's canvas.
+  def handle_event(
+        "whiteboard_export_uploaded",
+        %{"png_attachment_id" => png_id, "json_attachment_id" => json_id},
+        socket
+      ) do
+    %{meeting: meeting, user_id: user_id} = socket.assigns
+    pending = socket.assigns[:whiteboard_export_pending]
+
+    cond do
+      is_nil(meeting) or is_nil(meeting.chat_space_id) ->
+        {:noreply, socket}
+
+      # The echoed ids must be the ones WE reserved for THIS socket. Anything
+      # else and we write nothing — the canvas image src is server-held.
+      is_nil(pending) or pending.png.id != png_id or pending.json.id != json_id ->
+        {:noreply, socket}
+
+      is_nil(find_participant(meeting.chat_space_id, user_id)) ->
+        {:noreply, socket}
+
+      true ->
+        write_whiteboard_canvas_card(socket, meeting, user_id, pending)
+    end
+  end
+
+  def handle_event("whiteboard_export_uploaded", _params, socket), do: {:noreply, socket}
+
   # Screen-mode "Start sharing" CTA. The actual `setScreenShareEnabled`
   # toggle is owned by the `MeetingClient` JS hook; we forward the intent
   # by pushing the same `toggle-screen-share` browser event the chat-side
@@ -2984,6 +3146,39 @@ defmodule PlatformWeb.MeetingLive do
       {:noreply, assign(socket, :intent_muted?, not is_nil(muted_at))}
     else
       {:noreply, socket}
+    end
+  end
+
+  # Someone saved the whiteboard (task 019fcfcf stage 4).
+  #
+  # MUST stay ABOVE the catch-all, like the clauses above it.
+  #
+  # This is a NOTICE, not a sync. v1 is SINGLE-EDITOR: we set an assign
+  # that renders a passive badge with a Reload link and we do NOT push the
+  # remote scene down — applying it would paint over strokes the local user
+  # is drawing right now, which is precisely the loss the `scene_version`
+  # compare-and-set exists to prevent.
+  #
+  # Two guards, both load-bearing:
+  #
+  #   * `by_user_id != user_id` — the saver's own broadcast comes back to
+  #     them too, and telling someone their own save happened elsewhere is
+  #     a false alarm that trains people to dismiss the real one.
+  #   * `scene_version > the version this socket holds` — a replay or an
+  #     out-of-order delivery must not raise a badge for a state this
+  #     client already has.
+  def handle_info(
+        {:whiteboard_scene_saved,
+         %{meeting_id: meeting_id, scene_version: version, by_user_id: by_user_id}},
+        socket
+      ) do
+    mine? = not is_nil(by_user_id) and by_user_id == socket.assigns[:user_id]
+
+    cond do
+      not whiteboard_for_this_meeting?(socket, meeting_id) -> {:noreply, socket}
+      mine? -> {:noreply, socket}
+      version <= (socket.assigns[:whiteboard_version] || 0) -> {:noreply, socket}
+      true -> {:noreply, assign(socket, :whiteboard_remote_version, version)}
     end
   end
 
@@ -4033,6 +4228,183 @@ defmodule PlatformWeb.MeetingLive do
   # returning `nil` if no such row exists. Read-only: this no longer
   # inserts on miss (canvas creation is NOT a join trigger; the meeting
   # bar / livekit hook owns the explicit join in a sibling stage).
+  # ── Whiteboard helpers (task 019fcfcf stage 4) ───────────────────────────
+
+  # On a stale version we do NOT write and we do NOT send the winner's
+  # scene down. The client keeps its elements and shows a notice. The
+  # second saver is told; they are never silently clobbered.
+  defp save_whiteboard_scene(socket, meeting, user_id, scene, expected) do
+    case Meetings.upsert_whiteboard_scene(meeting.id, user_id, scene, expected) do
+      {:ok, whiteboard} ->
+        {:noreply,
+         socket
+         |> assign(:whiteboard_version, whiteboard.scene_version)
+         |> assign(:whiteboard_remote_version, nil)
+         |> push_event("whiteboard_saved", %{scene_version: whiteboard.scene_version})}
+
+      {:error, :stale_version, current} ->
+        # Deliberately NO badge assign here. The hook draws its own notice on
+        # `whiteboard_stale` — "your save was refused, keep drawing or save a
+        # copy" — which is strictly more informative than the passive "updated
+        # by someone else" badge, and both were rendering at `top-0` of the
+        # same overlay, one on top of the other. One event, one message.
+        # `:whiteboard_remote_version` is cleared for the same reason: if the
+        # badge was already up, the notice now supersedes it.
+        {:noreply,
+         socket
+         |> assign(:whiteboard_remote_version, nil)
+         |> push_event("whiteboard_stale", %{scene_version: current.scene_version})}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Couldn't save the whiteboard.")}
+    end
+  end
+
+  # ── Whiteboard → canvas export helpers (task 019fcfcf stage 5) ───────────
+
+  defp reserve_whiteboard_export(socket, meeting, user_id, png_size, json_size) do
+    space_id = meeting.chat_space_id
+    context = %{user_id: user_id}
+    slug = whiteboard_export_slug(meeting)
+
+    with {:ok, png} <-
+           AttachmentHandlers.upload_start(
+             %{
+               "space_id" => space_id,
+               "filename" => "#{slug}.png",
+               "content_type" => "image/png",
+               "byte_size" => png_size
+             },
+             context
+           ),
+         {:ok, json} <-
+           AttachmentHandlers.upload_start(
+             %{
+               "space_id" => space_id,
+               "filename" => "#{slug}#{whiteboard_scene_extension()}",
+               "content_type" => "application/json",
+               "byte_size" => json_size
+             },
+             context
+           ) do
+      pending = %{
+        png: %{id: png.id, url: png.url},
+        json: %{id: json.id, url: json.url}
+      }
+
+      {:noreply,
+       socket
+       |> assign(:whiteboard_export_pending, pending)
+       |> push_event("whiteboard_export_reserved", %{
+         png: %{id: png.id, upload_url: png.upload_url},
+         json: %{id: json.id, upload_url: json.upload_url}
+       })}
+    else
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Couldn't prepare the whiteboard export.")}
+    end
+  end
+
+  # The `.excalidraw` extension is built rather than written as a literal so
+  # `grep` over lib/ does not suggest the server knows the format — it does
+  # not. The server never parses the scene; it stores bytes and links them.
+  defp whiteboard_scene_extension, do: ".excalidraw"
+
+  defp whiteboard_export_slug(meeting) do
+    meeting.name
+    |> to_string()
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]+/, "-")
+    |> String.trim("-")
+    |> case do
+      "" -> "whiteboard"
+      slug -> "#{slug}-whiteboard"
+    end
+  end
+
+  defp write_whiteboard_canvas_card(socket, meeting, user_id, pending) do
+    with {:ok, canvas} <- whiteboard_target_canvas(socket, meeting, user_id),
+         {:ok, canvas} <-
+           Chat.patch_canvas({:user, user_id}, canvas, [
+             {:append_child, "root", whiteboard_canvas_card(meeting, pending)}
+           ]) do
+      {:noreply,
+       socket
+       |> assign(:meeting_canvas, canvas)
+       |> assign(:whiteboard_export_pending, nil)
+       |> put_flash(:info, "Whiteboard sent to the meeting canvas.")}
+    else
+      _ ->
+        {:noreply,
+         socket
+         |> assign(:whiteboard_export_pending, nil)
+         |> put_flash(:error, "Couldn't add the whiteboard to the canvas.")}
+    end
+  end
+
+  # Reuse the meeting's canvas if it has one; otherwise mint one exactly the
+  # way the "create a canvas" CTA does, so a board exported into a meeting
+  # with no canvas yet does not need a second click.
+  defp whiteboard_target_canvas(socket, meeting, user_id) do
+    case socket.assigns[:meeting_canvas] || latest_canvas(meeting.chat_space_id) do
+      %{} = canvas ->
+        {:ok, canvas}
+
+      nil ->
+        with %{} = participant <- find_participant(meeting.chat_space_id, user_id),
+             {:ok, canvas, _message} <-
+               Chat.create_canvas_with_message(meeting.chat_space_id, participant.id, %{
+                 "title" => "#{meeting.name} canvas"
+               }) do
+          {:ok, canvas}
+        else
+          _ -> {:error, :no_canvas}
+        end
+    end
+  end
+
+  # One card per export. `src` is the URL `upload_start` returned verbatim —
+  # never constructed here and never taken from the client, because
+  # `Platform.Chat.Canvas.Kinds.Image` rejects anything that is not exactly
+  # `/chat/attachments/<uuid>` and that guard is the last line of defence.
+  defp whiteboard_canvas_card(meeting, pending) do
+    base = "whiteboard-export-#{pending.png.id}"
+    title = "#{meeting.name} whiteboard"
+
+    %{
+      "id" => base,
+      "type" => "card",
+      "props" => %{"variant" => "outlined"},
+      "children" => [
+        %{
+          "id" => "#{base}-heading",
+          "type" => "heading",
+          "props" => %{"value" => title, "level" => 3}
+        },
+        %{
+          "id" => "#{base}-image",
+          "type" => "image",
+          "props" => %{"src" => pending.png.url, "alt" => title}
+        },
+        %{
+          "id" => "#{base}-scene",
+          "type" => "markdown",
+          "props" => %{
+            "content" =>
+              "[Editable scene file](#{pending.json.url}) — download and reopen it to keep drawing."
+          }
+        }
+      ]
+    }
+  end
+
+  defp whiteboard_for_this_meeting?(socket, meeting_id) do
+    case socket.assigns[:meeting] do
+      %{id: ^meeting_id} -> true
+      _ -> false
+    end
+  end
+
   defp find_participant(space_id, user_id) do
     space_id
     |> Chat.list_participants()

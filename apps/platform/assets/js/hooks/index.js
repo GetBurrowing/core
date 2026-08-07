@@ -30,6 +30,7 @@ import MeetingSoundboard from "./meeting_soundboard"
 import MeetingTimer from "./meeting_timer"
 import MeetingVideoTile from "./meeting_video_tile"
 import MeetingWatchdog from "./meeting_watchdog"
+import MeetingWhiteboard from "./meeting_whiteboard"
 import MermaidDiagram from "./mermaid_diagram"
 import MessageEditor from "./message_editor"
 import PushSubscribe from "./push_subscribe"
@@ -79,6 +80,7 @@ export default {
   MeetingTimer,
   MeetingVideoTile,
   MeetingWatchdog,
+  MeetingWhiteboard,
   MermaidDiagram,
   MessageEditor,
   MessageLift,

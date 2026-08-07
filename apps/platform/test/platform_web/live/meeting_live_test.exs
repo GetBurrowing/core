@@ -93,6 +93,17 @@ defmodule PlatformWeb.MeetingLiveTest do
     project
   end
 
+  # Returns just the opening tag of `#meeting-whiteboard-host`, so a
+  # `refute ... =~ "data-active"` is scoped to that node instead of matching
+  # any of the several `data-active` attributes elsewhere on the page (the
+  # stage-mode buttons all carry one).
+  defp host_element(html) do
+    case Regex.run(~r/<div[^>]*id="meeting-whiteboard-host"[^>]*>/, html) do
+      [tag] -> tag
+      nil -> flunk("no #meeting-whiteboard-host element in the rendered page")
+    end
+  end
+
   defp create_meeting(attrs) do
     space = Map.get_lazy(attrs, :space, fn -> create_space() end)
     project = Map.get_lazy(attrs, :project, fn -> create_project() end)
@@ -1125,6 +1136,89 @@ defmodule PlatformWeb.MeetingLiveTest do
       end
     end
 
+    # ── Whiteboard host (task 019fcfcf stage 3) ──────────────────────────
+    # The Excalidraw React root holds the ONLY copy of an in-progress
+    # drawing — there is no `window.__livekit_room` equivalent to re-attach
+    # from. So the host div must be rendered for every stage mode and never
+    # removed; if it were inside the mode `cond`, switching to Gallery would
+    # destroy the hook and the strokes with it.
+    test "the whiteboard host is rendered in gallery mode, outside the stage-mode cond", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Default mode is gallery — the host is present anyway.
+      assert html =~ ~s(data-stage-mode="gallery")
+      assert html =~ ~s(id="meeting-whiteboard-host")
+
+      # Negative twin. Without this, "the host is in the DOM" would pass for
+      # a page that renders every mode's markup unconditionally: the
+      # whiteboard-mode-only fallback must NOT be present in gallery, and
+      # must appear once we switch.
+      refute html =~ "data-whiteboard-fallback"
+
+      whiteboard_html =
+        view
+        |> element(~s([data-stage-mode-button="whiteboard"]))
+        |> render_click()
+
+      assert whiteboard_html =~ "data-whiteboard-fallback"
+      assert whiteboard_html =~ ~s(id="meeting-whiteboard-host")
+    end
+
+    test "the whiteboard host survives a walk through every stage mode", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      for mode <- ~w(whiteboard gallery screen whiteboard canvas) do
+        html =
+          view
+          |> element(~s([data-stage-mode-button="#{mode}"]))
+          |> render_click()
+
+        assert html =~ ~s(id="meeting-whiteboard-host"),
+               "whiteboard host disappeared in #{mode} mode — the React root would be destroyed"
+      end
+    end
+
+    test "the whiteboard host does not carry a server-rendered active attribute", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # #664: LiveView merges attributes onto a node even under
+      # `phx-update="ignore"`, so a stale server-rendered flag can be stamped
+      # back over hook-owned state. Visibility here is client-side truth,
+      # toggled from the `meeting_stage_mode_changed` push_event.
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      host = host_element(html)
+      assert host =~ ~s(phx-update="ignore")
+      assert host =~ ~s(phx-hook="MeetingWhiteboard")
+      refute host =~ "data-active"
+
+      whiteboard_html =
+        view
+        |> element(~s([data-stage-mode-button="whiteboard"]))
+        |> render_click()
+
+      refute host_element(whiteboard_html) =~ "data-active"
+    end
+
+    test "whiteboard mode no longer renders the coming-soon placeholder", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html = render_click(view, "set_stage_mode", %{"mode" => "whiteboard"})
+
+      assert html =~ ~s(data-stage-mode="whiteboard")
+      refute html =~ ~s(data-coming-soon="whiteboard")
+    end
+
     # v2 (task 019e42f6): the server must emit a race-free relocation signal
     # so the page-level MeetingClient hook can reparent the persistent local
     # <video> into the now-active mode's dock. The bare assign alone gave JS
@@ -1389,7 +1483,12 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, meeting: meeting, space: space}
     end
 
-    test "renders the 'coming soon' placeholder card with hero-pencil-square", %{
+    # Task 019fcfcf stage 3 replaced the "coming soon" card with a real
+    # Excalidraw surface. What the server renders in whiteboard mode is now
+    # the loading fallback that shows underneath the hook-owned host until
+    # the island bundle resolves — the "coming soon" marker is gone, and its
+    # absence is asserted here so the placeholder cannot creep back.
+    test "renders the loading fallback, not a 'coming soon' card", %{
       conn: conn,
       meeting: meeting
     } do
@@ -1400,13 +1499,279 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> element(~s([data-stage-mode-button="whiteboard"]))
         |> render_click()
 
-      # The center stage swapped to the whiteboard placeholder.
       assert html =~ ~s(data-stage-mode="whiteboard")
-      assert html =~ ~s(data-coming-soon="whiteboard")
+      assert html =~ "data-whiteboard-fallback"
       assert html =~ "hero-pencil-square"
-      assert html =~ "Coming soon"
+      refute html =~ ~s(data-coming-soon="whiteboard")
+      refute html =~ "Coming soon"
       # And the empty-state canvas CTA is NOT visible in whiteboard mode.
       refute html =~ ~s(data-empty-state="canvas")
+    end
+
+    test "mounts the Excalidraw host with a stable id and phx-update=ignore", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="whiteboard"]))
+        |> render_click()
+
+      host = host_element(html)
+      assert host =~ ~s(id="meeting-whiteboard-host")
+      assert host =~ ~s(phx-hook="MeetingWhiteboard")
+      assert host =~ ~s(phx-update="ignore")
+    end
+  end
+
+  describe "whiteboard persistence (task 019fcfcf stage 4)" do
+    setup %{conn: conn} do
+      {meeting, space} =
+        create_meeting(%{slug: "whiteboard-persist", name: "Whiteboard Persist"})
+
+      {conn, user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space, user: user}
+    end
+
+    # The save path authorises with the SAME participant lookup
+    # `create_meeting_canvas` uses — whiteboard access rides on the
+    # permission model of the chat space the meeting lives in.
+    defp wb_join!(space, user, name \\ "Board Editor") do
+      {:ok, participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: name,
+          joined_at: DateTime.utc_now()
+        })
+
+      participant
+    end
+
+    defp scene(n),
+      do: %{"elements" => [%{"id" => "el-#{n}"}], "appState_subset" => %{}, "files" => %{}}
+
+    test "a participant's save writes; a non-participant's save writes nothing", %{
+      conn: conn,
+      meeting: meeting,
+      space: space,
+      user: user
+    } do
+      # ── Negative half: the viewer is NOT a participant of the space. ──
+      # `?no_autojoin=true` matters — a plain mount auto-joins and would
+      # hand the viewer the very participant row this half is testing the
+      # absence of, making the assertion unfalsifiable.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      refute Enum.any?(Chat.list_participants(space.id), fn p ->
+               p.participant_type == "user" and p.participant_id == user.id
+             end)
+
+      render_hook(view, "whiteboard_save", %{
+        "scene" => scene("intruder"),
+        "expected_version" => 0
+      })
+
+      assert Meetings.get_whiteboard(meeting.id) == nil
+      assert render(view) =~ "Join the meeting to edit the whiteboard"
+
+      # ── Positive control, same test run. Without it, this test would pass
+      # for a handler that refuses EVERYONE — including the people the
+      # feature exists for. ──
+      wb_join!(space, user)
+      {:ok, member_view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      render_hook(member_view, "whiteboard_save", %{
+        "scene" => scene("member"),
+        "expected_version" => 0
+      })
+
+      stored = Meetings.get_whiteboard(meeting.id)
+      assert stored.scene_version == 1
+      assert stored.scene["elements"] == [%{"id" => "el-member"}]
+      assert stored.last_edited_by_user_id == user.id
+      assert_push_event(member_view, "whiteboard_saved", %{scene_version: 1})
+    end
+
+    test "a stale expected_version leaves the stored scene byte-identical", %{
+      conn: conn,
+      meeting: meeting,
+      space: space,
+      user: user
+    } do
+      wb_join!(space, user)
+
+      # Someone else got there first: the board is at version 1.
+      {:ok, _wb} =
+        Meetings.upsert_whiteboard_scene(meeting.id, nil, scene("winner"), 0)
+
+      before = Meetings.get_whiteboard(meeting.id)
+      before_bytes = Jason.encode!(before.scene)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      render_hook(view, "whiteboard_save", %{
+        "scene" => scene("loser"),
+        "expected_version" => 0
+      })
+
+      # Re-read the ROW and compare the encoded scene. Asserting only that an
+      # error tuple came back would stay green for a handler that answered
+      # `:stale_version` and wrote anyway.
+      after_row = Meetings.get_whiteboard(meeting.id)
+      assert Jason.encode!(after_row.scene) == before_bytes
+      assert after_row.scene_version == 1
+      assert after_row.updated_at == before.updated_at
+
+      assert_push_event(view, "whiteboard_stale", %{scene_version: 1})
+      refute_push_event(view, "whiteboard_saved", %{})
+
+      # Exactly one message. The hook draws its own notice on
+      # `whiteboard_stale`; the server badge must not ALSO come up, or the two
+      # render on top of each other at the same `top-0` overlay position —
+      # which is what the stage-4 screenshots caught.
+      refute render(view) =~ "data-whiteboard-remote-notice"
+    end
+
+    test "whiteboard_load replies with the stored scene and its version", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Empty board: the ordinary starting state, answered as version 0
+      # rather than as an error.
+      render_hook(view, "whiteboard_load", %{})
+      assert_push_event(view, "whiteboard_loaded", %{scene: %{}, scene_version: 0})
+
+      {:ok, _wb} = Meetings.upsert_whiteboard_scene(meeting.id, nil, scene("stored"), 0)
+
+      {:ok, reloaded, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      render_hook(reloaded, "whiteboard_load", %{})
+
+      assert_push_event(reloaded, "whiteboard_loaded", %{
+        scene: %{"elements" => [%{"id" => "el-stored"}]},
+        scene_version: 1
+      })
+    end
+
+    test "a save by A badges B's view and not A's own", %{
+      conn: conn,
+      meeting: meeting,
+      space: space,
+      user: user_a
+    } do
+      wb_join!(space, user_a, "User A")
+
+      {conn_b, user_b} = authenticated_conn(Phoenix.ConnTest.build_conn())
+      wb_join!(space, user_b, "User B")
+
+      {:ok, view_a, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view_b, _html} = live(conn_b, ~p"/meetings/#{meeting.slug}")
+
+      # Both are looking at the board — the badge is whiteboard-mode only.
+      render_click(view_a, "set_stage_mode", %{"mode" => "whiteboard"})
+      render_click(view_b, "set_stage_mode", %{"mode" => "whiteboard"})
+
+      render_hook(view_a, "whiteboard_save", %{
+        "scene" => scene("from-a"),
+        "expected_version" => 0
+      })
+
+      # Both halves, or a handler that never badges anyone passes the second.
+      assert render(view_b) =~ "data-whiteboard-remote-notice"
+      assert render(view_b) =~ "Whiteboard updated by someone else"
+      refute render(view_a) =~ "data-whiteboard-remote-notice"
+
+      # And it is passive: B is TOLD, never re-scened.
+      refute_push_event(view_b, "whiteboard_loaded", %{})
+      refute_push_event(view_b, "whiteboard_saved", %{})
+
+      # Dismissible.
+      view_b
+      |> element(~s([data-action="whiteboard-dismiss-remote"]))
+      |> render_click()
+
+      refute render(view_b) =~ "data-whiteboard-remote-notice"
+    end
+
+    # Isolates the `by_user_id` half of the badge guard from the version
+    # half. In the test above, A's own socket is ALSO protected by
+    # `version <= whiteboard_version` — deleting the `by_user_id` check
+    # leaves that test green, so on its own it does not test this guard at
+    # all. A second tab of the SAME user holds version 0, so only the
+    # `by_user_id` comparison can suppress the badge there.
+    test "a user's own save does not badge their other session", %{
+      conn: conn,
+      meeting: meeting,
+      space: space,
+      user: user
+    } do
+      wb_join!(space, user)
+
+      {:ok, tab_one, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, tab_two, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      render_click(tab_two, "set_stage_mode", %{"mode" => "whiteboard"})
+
+      render_hook(tab_one, "whiteboard_save", %{
+        "scene" => scene("same-user"),
+        "expected_version" => 0
+      })
+
+      refute render(tab_two) =~ "data-whiteboard-remote-notice"
+    end
+
+    # The version half of the same guard, isolated the other way: the
+    # broadcast comes from a DIFFERENT user, so only `scene_version >
+    # whiteboard_version` can decide. A redelivery of a version this client
+    # already holds is not news; the very next version is.
+    test "a replayed broadcast raises no badge, the next version does", %{
+      conn: conn,
+      meeting: meeting,
+      space: space,
+      user: user
+    } do
+      wb_join!(space, user)
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      render_click(view, "set_stage_mode", %{"mode" => "whiteboard"})
+
+      render_hook(view, "whiteboard_save", %{
+        "scene" => scene("v1"),
+        "expected_version" => 0
+      })
+
+      other_user_id = Ecto.UUID.generate()
+
+      MeetingsPubSub.broadcast_whiteboard_scene_saved(meeting.id, 1, other_user_id)
+      assert render(view) =~ ~s(data-stage-mode="whiteboard")
+      refute render(view) =~ "data-whiteboard-remote-notice"
+
+      # Positive control: without it, this passes for a view that badges
+      # nobody ever.
+      MeetingsPubSub.broadcast_whiteboard_scene_saved(meeting.id, 2, other_user_id)
+      assert render(view) =~ "data-whiteboard-remote-notice"
+    end
+
+    test "the remote badge lives outside the ignored host node", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # Nothing server-rendered may go INSIDE `#meeting-whiteboard-host`
+      # (#664: attributes and content on an ignored node are hazards). The
+      # host's opening tag is immediately followed by its closing tag.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = render_click(view, "set_stage_mode", %{"mode" => "whiteboard"})
+
+      [inner] =
+        Regex.run(
+          ~r/<div[^>]*id="meeting-whiteboard-host"[^>]*>(.*?)<\/div>/s,
+          html,
+          capture: :all_but_first
+        )
+
+      assert String.trim(inner) == ""
     end
   end
 

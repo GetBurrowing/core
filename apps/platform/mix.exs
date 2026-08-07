@@ -106,10 +106,18 @@ defmodule Platform.MixProject do
       "ecto.setup": ["ecto.create", "ecto.migrate"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
-      "assets.build": ["compile", "tailwind platform", "esbuild platform"],
+      "assets.build": [
+        "compile",
+        "tailwind platform",
+        "esbuild platform",
+        "esbuild excalidraw",
+        "cmd --cd assets node scripts/copy_excalidraw_assets.mjs"
+      ],
       "assets.deploy": [
         "tailwind platform --minify",
         "esbuild platform --minify",
+        "esbuild excalidraw --minify",
+        "cmd --cd assets node scripts/copy_excalidraw_assets.mjs",
         "phx.digest"
       ],
       test: [

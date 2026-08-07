@@ -21,7 +21,7 @@ defmodule Platform.Meetings do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.ExternalScope
-  alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript}
+  alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript, Whiteboard}
   alias Platform.Meetings.CalendarLink
   alias Platform.Meetings.GuestInvite
   alias Platform.Meetings.Invite
@@ -721,6 +721,118 @@ defmodule Platform.Meetings do
         error
     end
   end
+
+  # ── Whiteboard (task 019fcfcf stage 1) ────────────────────────────────────
+
+  @doc """
+  Returns the meeting's whiteboard row, or `nil` when it has never been
+  saved. A meeting with no board is the ordinary starting state, not an
+  error — the editor opens on an empty scene.
+  """
+  @spec get_whiteboard(term()) :: Whiteboard.t() | nil
+  def get_whiteboard(meeting_id) do
+    if Platform.UUID.valid?(meeting_id) do
+      Repo.get_by(Whiteboard, meeting_id: meeting_id)
+    else
+      nil
+    end
+  end
+
+  @doc """
+  Save a whiteboard scene under optimistic concurrency.
+
+  Returns `{:ok, whiteboard}` with `scene_version` incremented by one,
+  `{:error, :stale_version, current}` when `expected_version` is behind
+  the stored version, or `{:error, changeset}`.
+
+  ## Why a transaction with a row lock
+
+  v1 is SINGLE-EDITOR — there is no operational transform, no CRDT and
+  no element-level merge — so the counter is the whole of the safety
+  story and it must not be checkable-then-wrong. Reading the version
+  and writing `version + 1` in two statements lets two savers both read
+  N and both write N+1, which is exactly the lost update the counter
+  exists to catch. The compare and the write therefore happen inside
+  one `Repo.transaction/1` with `SELECT ... FOR UPDATE` on the board
+  row, so the second saver blocks until the first commits and then
+  reads N+1 and is correctly rejected.
+
+  The first-ever save has no row to lock. That race is caught instead
+  by `unique_index(:meeting_whiteboards, [:meeting_id])`: the loser
+  gets `{:error, changeset}` and retries against a row that now exists.
+
+  A save whose `expected_version` is AHEAD of the stored one is also
+  rejected as stale — it describes a state this server never produced,
+  and accepting it would let a client dictate the counter.
+  """
+  @spec upsert_whiteboard_scene(binary(), binary() | nil, map(), integer()) ::
+          {:ok, Whiteboard.t()}
+          | {:error, :stale_version, Whiteboard.t()}
+          | {:error, Ecto.Changeset.t() | :not_found}
+  def upsert_whiteboard_scene(meeting_id, user_id, scene, expected_version)
+      when is_binary(meeting_id) and is_map(scene) and is_integer(expected_version) do
+    result =
+      Repo.transaction(fn ->
+        case lock_whiteboard(meeting_id) do
+          nil ->
+            insert_whiteboard(meeting_id, user_id, scene)
+
+          %Whiteboard{scene_version: ^expected_version} = current ->
+            update_whiteboard(current, user_id, scene)
+
+          %Whiteboard{} = current ->
+            Repo.rollback({:stale_version, current})
+        end
+      end)
+
+    case result do
+      {:ok, %Whiteboard{} = whiteboard} ->
+        MeetingsPubSub.broadcast_whiteboard_scene_saved(
+          whiteboard.meeting_id,
+          whiteboard.scene_version,
+          whiteboard.last_edited_by_user_id
+        )
+
+        {:ok, whiteboard}
+
+      {:error, {:stale_version, current}} ->
+        {:error, :stale_version, current}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp lock_whiteboard(meeting_id) do
+    from(w in Whiteboard, where: w.meeting_id == ^meeting_id, lock: "FOR UPDATE")
+    |> Repo.one()
+  end
+
+  defp insert_whiteboard(meeting_id, user_id, scene) do
+    %Whiteboard{}
+    |> Whiteboard.changeset(%{
+      meeting_id: meeting_id,
+      last_edited_by_user_id: user_id,
+      scene: scene,
+      scene_version: 1
+    })
+    |> Repo.insert()
+    |> unwrap_whiteboard()
+  end
+
+  defp update_whiteboard(%Whiteboard{} = current, user_id, scene) do
+    current
+    |> Whiteboard.changeset(%{
+      last_edited_by_user_id: user_id,
+      scene: scene,
+      scene_version: current.scene_version + 1
+    })
+    |> Repo.update()
+    |> unwrap_whiteboard()
+  end
+
+  defp unwrap_whiteboard({:ok, %Whiteboard{} = whiteboard}), do: whiteboard
+  defp unwrap_whiteboard({:error, changeset}), do: Repo.rollback(changeset)
 
   @doc """
   Is the intent classifier muted for this meeting?

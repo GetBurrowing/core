@@ -46,7 +46,11 @@ defmodule PlatformWeb.Endpoint do
   plug(PlatformWeb.Plugs.RewriteRemoteIp)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
 
-  plug(Plug.Parsers,
+  # `RawBodyPaths` delegates to `Plug.Parsers` for everything except the
+  # routes that stream their own request body (the presigned attachment
+  # upload). See the module doc: without it, a JSON upload silently stored
+  # zero bytes while a PNG upload of the same shape worked.
+  plug(PlatformWeb.Plugs.RawBodyPaths,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library(),

@@ -70,6 +70,7 @@ defmodule Platform.Meetings.PubSub do
   | `meeting:{meeting_id}:intents`            | `{:intent_dispatch_failed, row}`         | intent-queue row map                                                        |
   | `meeting:{meeting_id}:intents`            | `{:intent_no_ack_spawn_failed, row}`     | intent-queue row map                                                        |
   | `meeting:{meeting_id}`                    | `{:intent_mute_changed, payload}`        | `%{meeting_id: id, muted_at: DateTime.t() \\| nil}`                         |
+  | `meeting:{meeting_id}`                    | `{:whiteboard_scene_saved, payload}`     | `%{meeting_id: id, scene_version: integer(), by_user_id: id \\| nil}`       |
   """
 
   alias Platform.Meetings.IntentRouting
@@ -552,6 +553,29 @@ defmodule Platform.Meetings.PubSub do
       @pubsub,
       meeting_topic(meeting_id),
       {:intent_mute_changed, %{meeting_id: meeting_id, muted_at: muted_at}}
+    )
+  end
+
+  @doc """
+  Broadcast a `:whiteboard_scene_saved` event on a meeting's shell
+  topic (task 019fcfcf stage 1).
+
+  The payload carries the new `scene_version` and NOT the scene. That
+  is deliberate: a scene is an arbitrarily large blob of elements and
+  embedded image data, and fanning it out to every subscriber on every
+  save would put megabytes through the PubSub mailbox of clients that
+  usually already have it. Subscribers compare the version they hold
+  against the one announced and re-fetch only when they are behind.
+  """
+  @spec broadcast_whiteboard_scene_saved(binary(), non_neg_integer(), binary() | nil) :: :ok
+  def broadcast_whiteboard_scene_saved(meeting_id, scene_version, by_user_id)
+      when is_binary(meeting_id) and is_integer(scene_version) and
+             (is_nil(by_user_id) or is_binary(by_user_id)) do
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      meeting_topic(meeting_id),
+      {:whiteboard_scene_saved,
+       %{meeting_id: meeting_id, scene_version: scene_version, by_user_id: by_user_id}}
     )
   end
 

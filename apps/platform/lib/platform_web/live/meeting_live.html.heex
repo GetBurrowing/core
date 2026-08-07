@@ -787,10 +787,103 @@
            renderer selection and is the e2e/test contract — keep it
            stable. --%>
         <main
-          class="flex min-w-0 flex-1 items-center justify-center bg-base-100 p-4"
+          class="relative flex min-w-0 flex-1 items-center justify-center bg-base-100 p-4"
           data-pane="center-stage"
           data-stage-mode={@current_stage_mode}
         >
+          <%!-- Whiteboard host (task 019fcfcf stage 3). Rendered for EVERY
+             stage mode, unconditionally, and never removed. The Excalidraw
+             React root the `MeetingWhiteboard` hook mounts here holds the
+             only copy of the in-progress drawing: unlike the screen-share
+             and video tiles there is no `window.__livekit_room` to
+             re-attach from, so if this node lived inside the `cond` below,
+             switching to Gallery would fire `destroyed()` and the strokes
+             would be gone.
+
+             `phx-update="ignore"` + a stable id keeps morphdom off the
+             hook-owned subtree. Note that is necessary but NOT sufficient:
+             LiveView still merges ATTRIBUTES onto an ignored node (#664),
+             so visibility must not be server-rendered here. There is
+             deliberately no `data-active` attribute — the hook toggles
+             `hidden` itself from the `meeting_stage_mode_changed`
+             push_event, which is client-side truth. It starts hidden
+             because a meeting always mounts in `:gallery`. --%>
+          <div
+            id="meeting-whiteboard-host"
+            phx-hook="MeetingWhiteboard"
+            phx-update="ignore"
+            data-whiteboard-host
+            class="absolute inset-0 z-10 hidden h-full w-full overflow-hidden rounded-xl bg-base-100"
+          >
+          </div>
+
+          <%!-- "Send to canvas" control (task 019fcfcf stage 5).
+
+             A SIBLING of `#meeting-whiteboard-host`, not a child, for two
+             reasons that both bite: the host is `phx-update="ignore"` so
+             nothing server-rendered may live inside it (#664), and the hook
+             wipes `el.innerHTML` when the island resolves (`_clearHost`), so
+             a button rendered inside would simply be deleted.
+
+             Clicking it IS a LiveView re-render — that is the point of the
+             stage-3/4 invariant, and `meeting_live_test.exs` asserts the
+             React root survives it. --%>
+          <div
+            :if={@current_stage_mode == :whiteboard}
+            class="absolute right-3 top-3 z-20"
+            data-whiteboard-toolbar
+          >
+            <button
+              type="button"
+              phx-click="whiteboard_export_start"
+              class="btn btn-sm min-h-10 gap-2 shadow-lg"
+              data-action="whiteboard-export"
+              aria-label="Send the whiteboard to the meeting canvas"
+            >
+              <span class="hero-arrow-up-tray size-4"></span>
+              <span class="hidden sm:inline">Send to canvas</span>
+            </button>
+          </div>
+
+          <%!-- "Someone else saved" badge (task 019fcfcf stage 4). Passive by
+             design: v1 is SINGLE-EDITOR, so a remote save is announced and
+             NOTHING is applied over what the local user is drawing. Reload is
+             a plain link, so it is a real full page load that re-runs the
+             hook's restore — deliberately the user's choice, never automatic.
+
+             It lives OUTSIDE `#meeting-whiteboard-host`, as a sibling: the
+             host is `phx-update="ignore"` and nothing server-rendered may go
+             inside it. Only shown in whiteboard mode — a badge about a
+             surface you are not looking at is noise. --%>
+          <div
+            :if={@current_stage_mode == :whiteboard and @whiteboard_remote_version}
+            class="absolute inset-x-0 top-20 z-20 mx-3 flex items-start justify-between gap-3 rounded-lg bg-info/95 px-4 py-3 text-sm text-info-content shadow-lg"
+            data-whiteboard-remote-notice
+          >
+            <span class="flex items-center gap-2">
+              <span class="hero-arrow-path size-4 shrink-0"></span>
+              <span>Whiteboard updated by someone else</span>
+            </span>
+            <span class="flex shrink-0 items-center gap-1">
+              <a
+                href={~p"/meetings/#{@meeting.id}"}
+                class="btn btn-ghost btn-xs min-h-8"
+                data-action="whiteboard-reload"
+              >
+                Reload
+              </a>
+              <button
+                type="button"
+                phx-click="dismiss_whiteboard_remote_notice"
+                class="btn btn-ghost btn-xs min-h-8"
+                data-action="whiteboard-dismiss-remote"
+                aria-label="Dismiss whiteboard update notice"
+              >
+                <span class="hero-x-mark size-4"></span>
+              </button>
+            </span>
+          </div>
+
           <%= cond do %>
             <% @current_stage_mode == :canvas and assigns[:meeting_canvas] -> %>
               <%!-- Canvas mode (active canvas). Reuse the chat canvas
@@ -833,18 +926,21 @@
                 </button>
               </div>
             <% @current_stage_mode == :whiteboard -> %>
-              <%!-- Whiteboard mode (placeholder). The drawing surface is
-                 a separate stack and lands later; for now we render a
-                 centered "coming soon" card so the mode is visually
-                 distinguishable and the click target is real. --%>
+              <%!-- Whiteboard mode fallback. The real drawing surface is the
+                 `#meeting-whiteboard-host` overlay above; this branch is what
+                 shows underneath it before the hook has anything to paint
+                 (server-rendered first paint, JS disabled, or the island
+                 fetch still in flight). It is NOT "coming soon" any more —
+                 the `data-coming-soon="whiteboard"` marker is gone on
+                 purpose, and its absence is asserted in meeting_live_test. --%>
               <div
                 class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40"
                 data-placeholder="center-stage"
-                data-coming-soon="whiteboard"
+                data-whiteboard-fallback
               >
                 <span class="hero-pencil-square size-10"></span>
                 <p class="mt-2 text-sm font-medium text-base-content/70">Whiteboard</p>
-                <p class="mt-0.5 text-xs">Coming soon</p>
+                <p class="mt-0.5 text-xs">Loading the drawing surface…</p>
               </div>
             <% @current_stage_mode == :screen -> %>
               <%!-- Screen mode. The active LiveKit screen-share track (any

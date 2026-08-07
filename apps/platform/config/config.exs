@@ -267,6 +267,46 @@ config :esbuild,
       ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
     cd: Path.expand("../assets", __DIR__),
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
+  ],
+  # Second entry point: the Excalidraw whiteboard island, built SEPARATELY from
+  # js/app.js and fetched on demand by js/lib/load_excalidraw.js.
+  #
+  # Why a second profile rather than `await import()` inside app.js: the
+  # `platform` profile above runs without `--splitting` and without
+  # `--format=esm`, and in that configuration esbuild INLINES a dynamic
+  # import() into the single output file. `await import("@excalidraw/excalidraw")`
+  # from app.js would therefore add the whole island to app.js while looking
+  # lazy. Turning on `--splitting --format=esm` would force app.js to become
+  # type="module" (layouts.ex) and change load semantics for every existing
+  # hook. A second entry point is the smaller, verifiable change.
+  #
+  # The three --alias flags drop `mermaid`, `cytoscape` and `katex`, which
+  # Excalidraw depends on statically only for its mermaid-import feature that
+  # Suite does not surface. They cut the island from ~8.0 MB to ~4.7 MB.
+  #
+  # --legal-comments=linked emits excalidraw_island.js.LEGAL.txt next to the
+  # bundle, preserving the upstream MIT notices. See assets/THIRD_PARTY_NOTICES.md.
+  excalidraw: [
+    args: ~w(
+      js/excalidraw_island.js
+      --bundle
+      --target=es2022
+      --outdir=../priv/static/assets/js
+      --conditions=production
+      --define:process.env.NODE_ENV="production"
+      --alias:mermaid=./js/stubs/excalidraw_mermaid_stub.js
+      --alias:cytoscape=./js/stubs/excalidraw_mermaid_stub.js
+      --alias:katex=./js/stubs/excalidraw_mermaid_stub.js
+      --legal-comments=linked
+      --loader:.woff2=file
+      --loader:.woff=file
+      --loader:.ttf=file
+      --loader:.otf=file
+      --loader:.png=file
+      --loader:.svg=file
+    ),
+    cd: Path.expand("../assets", __DIR__),
+    env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
 
 # Configure tailwind (the version is required)
