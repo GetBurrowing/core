@@ -4,6 +4,7 @@
 **Date:** 2026-07-25
 **Author:** Rowan Ellis / Brosnan
 **Related:** ADR-0044 (Architect Responsibility — this supersedes its stage-level dispatch model), ADR-0032 (Design Handoff Action Cards), ADR-0029 (Task Lifecycle Responsibility Split), ADR-0045 (Task Stacks v2)
+**Amended:** [Amendment 1 (2026-08-08)](#amendment-1--lifecycle-hook-pipelines-2026-08-08) generalises the two hard-coded hooks below into configurable **lifecycle hook pipelines**, extending the `complete / not_applicable / failed` outcome vocabulary to them. It also carries a correction to a claim about the architecture gate's expiry path. Read it before acting on the Decision section.
 
 ---
 
@@ -255,6 +256,61 @@ A project's hook configuration **replaces** the org's for that edge. Projects ma
 
 **Cost — stated plainly, because it is real.** A project that wants to add one webhook must restate the **entire** org pipeline. From that moment the two configurations drift independently, and the drift is invisible: an org adding a new gate does not propagate it, and nothing reports that a project is running a stale copy. The failure mode is something silently not running, which is the failure mode this ADR is most concerned with elsewhere. The trade accepted is a legible config surface today against a class of staleness bug later; a `locked` flag would have bought the reverse, and inheritance you cannot see is worse than duplication you can.
 
+### Verified premises (`main` @ `7e85aa7e`)
+
+The eight decisions above were argued partly from figures measured at `c195e7d1`, which have since moved. The following were re-verified against the tree at `7e85aa7e` and are the authoritative versions. Where an earlier discussion note disagrees with one of these, this section wins.
+
+**The pre-plan design step is `Platform.Design.PreplanStep`** — lowercase `p` in "Preplan" — at `apps/platform/lib/platform/design/preplan_step.ex`, 932 lines. Public surface: `start/1`, `settle/2`, `decline/3`, `expire/2`, `audit_ui_prediction/2`, `annotate/3`. `PrePlanStep` with a capital `P` does not compile. Any prose, task brief or module reference naming it must use the lowercase-p spelling; this is noted because the capitalised form reads more natural and has already been written down once.
+
+**The per-step budget in decision 5 extends an existing override point; it does not replace a bare hardcode.** `@design_step_timeout_ms 1_800_000` in `Platform.Orchestration.TaskRouter` is already runtime-overridable: `design_step_timeout_ms/0` wraps `Application.get_env(:platform, :design_step_timeout_ms, @design_step_timeout_ms)`, and `default_design_step_timeout_ms/0` exposes the literal separately so a guard can assert the *shipped* default independently of whatever a running test has injected. The pipeline's per-step budget generalises this pattern across step types. It should keep the two-accessor shape — configured value and shipped default as distinct functions — because collapsing them is what allows a test-only timeout to quietly become the production one.
+
+**Hook outcomes reuse the planning-step vocabulary; they do not parallel it.** `Platform.Tasks.Task` defines three lists, each with a public accessor and a header comment stating that callers must read the accessor rather than keep a copy:
+
+| Attribute | Value |
+| --- | --- |
+| `@planning_steps` | `designing planning architecting` |
+| `@planning_step_keys` | `design architecture` |
+| `@planning_step_outcomes` | `complete not_applicable failed` |
+
+A hook step's outcome is a `@planning_step_outcomes` value, read through `Task.planning_step_outcomes/0`. The header comment states the reason directly and it applies verbatim here: a caller that hardcodes its own copy of the list is exactly how the conflation class comes back. Decision 2's "a phase that never occurs fires nothing" is expressible *because* the vocabulary has three values and no fourth is being added — no-event is the absence of a record, not a new outcome.
+
+**Transition claims must be checked against BOTH tables.** There are two, and they differ:
+
+- `@valid_task_transitions` in `Platform.Tasks` — the automated pipeline.
+- `@valid_drop_transitions` in the same module — the permissive human drag-and-drop path, which deliberately allows moves the pipeline forbids (reopening a `done` task, skipping straight to `in_progress`).
+
+Against the automated table specifically, correcting an earlier two-path framing: `in_progress -> deploying`, `in_review -> done` **and** `in_progress -> done` are **all three** legal. The in-code comment records that `in_review -> done` is the ADR-0041 stack-member path — members ride the rollup-PR merge fan-out and never own a per-task deploy stage. `done -> planning` is the only edge out of `done`. And `blocked` is **not symmetric**: it is enterable from six states but not from `done`, and it exits to six but **not** back to `stack_pending`.
+
+Any hook-pipeline edge is defined over these transitions, so state a transition claim only after checking both tables. A claim that is true in one and false in the other is precisely the silent divergence this ADR exists to prevent — and the asymmetric cases above are the ones where a reader's intuition will supply the wrong answer.
+
+### Correction to a prior claim
+
+**The architect does NOT have a separate expiry path. That claim is false, and any task written around "unify the two expiry paths" describes work that is already done — such a ticket should be CLOSED, not planned.**
+
+`Tasks.resolve_architecture_gate/3` is defined **once**, in `Platform.Tasks`, with the guard:
+
+```elixir
+when resolution in [:pass, :reject, :expired, :dispatch_failed, :human_override]
+```
+
+`:expired` is a **resolution value passed into the one function**, not a second code path alongside it. Five callers share that single definition: the human-override path in `Platform.Tasks`, the architect's own handler, the MCP verdict tool, the watcher's expiry sweep, and the router's deadline handler. Expiry differs from a pass only in the atom it hands over.
+
+There is nothing to unify. The unification was the original design — see the addendum below on the watcher sweep, which exists precisely so the sweep makes *the identical single call* the router's deadline handler makes — and it is intact at `7e85aa7e`. This is recorded as a correction rather than a footnote because the false version is the intuitive one: two triggers (a timer and a sweep) strongly suggest two paths, and a reader who does not open the file will believe it.
+
+### Open question — where org-level defaults live (unresolved)
+
+Decision 8 says configuration is per-project and replaces org defaults. The per-project half needs no schema work: `Platform.Tasks.Project` already carries a generic jsonb `config` column, cast in its changeset. Hook pipelines can live there immediately.
+
+The org half has no home. `Platform.Tenancy.Org` has **no** config column at all, so org-level defaults require a new migration. That migration cannot be written without first answering a question this amendment does not answer, because orgs are hierarchical — `parent_org_id`, with a root org, tenant orgs beneath it, and the possibility of further nesting:
+
+**When a child org and its parent both define a pipeline for the same edge, what happens?** Three candidate answers, stated without preference:
+
+1. The child inherits the parent's pipeline.
+2. The child replaces it, under the same replace-not-merge rule decision 8 applies to projects.
+3. Inheritance is disallowed at the org tier — only one level of org may define pipelines.
+
+Each interacts differently with decision 8's replacement rule and with its stated cost, and each implies a different migration. This is **deliberately unresolved** as of Amendment 1. It is recorded as an open question so that the implementation members treat it as a decision still to be made, and so that whoever writes the org-tier migration knows the question is theirs to answer rather than assuming it was settled here.
+
 ---
 
 ## Implementation order
@@ -271,6 +327,19 @@ A project's hook configuration **replaces** the org's for that edge. Projects ma
 
 Steps 1–3 are unglamorous and carry the feature. Without them the remainder is an interface over a dispatch that discards its output.
 
+### Continuation — Amendment 1 (lifecycle hook pipelines)
+
+These are **amendment work**, not part of the original list above. The nine items are **not renumbered**: other ADRs, tasks and stack members cite those numbers, and renumbering would silently redirect every existing citation. The lettered items below are additive and begin after step 9.
+
+- **A.** Hook-point registry over phase-boundary edges (decision 1), including the `backlog.created` restriction to effects and notifies (decision 6).
+- **B.** Per-step config schema carrying explicit `await` and `can_divert` (decision 3), stored in `Project.config` — no migration needed on the project tier.
+- **C.** Pipeline runner with halt-on-first-divert (decision 4). Must use `Enum.reduce_while/3` or an equivalent that can stop; a plain `reduce` runs every step regardless.
+- **D.** Two-tier budgets (decision 5), generalising the existing `design_step_timeout_ms/0` + `default_design_step_timeout_ms/0` accessor pair rather than introducing a new hardcode.
+- **E.** Allowlisted registry of `{Module, :fun, 1}` deterministic steps, plus host-allowlisted webhook destinations (decision 7).
+- **F.** Org-tier storage and the nesting rule — **blocked on the open question above**, which this amendment deliberately leaves unresolved. Do not start F by picking an answer inside the implementation.
+
+Hook outcomes throughout read `Task.planning_step_outcomes/0` rather than restating the list.
+
 ---
 
 ## Related
@@ -279,6 +348,7 @@ Steps 1–3 are unglamorous and carry the feature. Without them the remainder is
 - ADR-0032 (Design Handoff Action Cards)
 - ADR-0029 (Task Lifecycle Responsibility Split) — note this ADR's use of "responsibility" is unrelated to the `responsibilities/` tree.
 - ADR-0045 (Task Stacks v2) — stack members inherit this lifecycle per-member.
+- The **`lifecycle-hook-pipelines` stack** — Amendment 1 is **member 1 of 5** and **blocks the other four**. The four implementation members are built against this text, so a change to the amendment is a change to their specification: amend here first, then re-read the members, rather than letting an implementation member establish a decision the ADR does not record.
 
 **Numbering note:** `docs/decisions/` currently carries four duplicate-number collisions (0017, 0036, 0042, 0044) plus a byte-identical 0027/0028 pair, and no ADR carries a `Superseded` status. 0046 was verified free before allocation. Repairing the existing collisions is tracked separately.
 
