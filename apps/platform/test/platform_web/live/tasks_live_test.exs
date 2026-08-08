@@ -7664,7 +7664,14 @@ defmodule PlatformWeb.TasksLiveTest do
       # Stage 3 of task 019f487e added `relative` for the expand-button
       # positioning context; assert the semantic classes individually so
       # future harmless class additions don't tickle this assertion.
-      assert html =~ "dag relative rounded bg-base-300 p-2"
+      assert html =~ "dag relative"
+      assert html =~ "rounded bg-base-300 p-2"
+      # The DAG box carries a definite height at every breakpoint. Its SVG
+      # is `h-full`, so without one the box collapses to a sliver now that
+      # the panel scroll region (not a flex row) sizes this column.
+      dag_tag = open_tag_for(html, "stack-detail-dag")
+      assert dag_tag =~ "h-56"
+      assert dag_tag =~ "md:h-64"
     end
 
     test "DAG SVG carries preserveAspectRatio=xMidYMid meet",
@@ -8970,23 +8977,71 @@ defmodule PlatformWeb.TasksLiveTest do
       assert close_tag =~ ~s(phx-click="close_stack_detail")
     end
 
-    test "action bar is sticky to the bottom (mt-auto sticky bottom-0)",
+    test "action bar is pinned to the panel bottom and never shrinks",
          %{conn: conn, stack: stack} do
       html = open_stage5_panel(conn, stack)
 
       tag = open_tag_for(html, "stack-detail-actions")
       refute is_nil(tag), "expected stack-detail-actions bar to render"
 
-      # `mt-auto` so the bar pushes to the bottom of the flex column;
-      # `sticky bottom-0` so it pins to the viewport bottom while the
-      # body scrolls beneath on mobile.
-      assert tag =~ "mt-auto"
-      assert tag =~ "sticky"
-      assert tag =~ "bottom-0"
+      # The bar is the last, non-shrinking child of the panel's flex
+      # column, so it holds the panel's bottom edge while the region
+      # above it scrolls. `shrink-0` is load-bearing: without it a long
+      # description could squeeze the bar itself.
+      assert tag =~ "shrink-0"
       # Opaque background so scrolled content doesn't bleed through.
       assert tag =~ "bg-base-100"
-      # Top border separates it visually from the scrollable body.
+      # Top border separates it visually from the scrollable region.
       assert tag =~ "border-t"
+    end
+
+    test "head, meta grid and body all live inside one panel scroll region",
+         %{conn: conn, stack: stack} do
+      # An unbounded description is the input that broke the height chain,
+      # so the fixture must actually carry one.
+      {:ok, stack} =
+        Stacks.update_stack(stack, %{
+          description: String.duplicate("A long stack description. ", 200)
+        })
+
+      html = open_stage5_panel(conn, stack)
+
+      # Regression guard. The head (title + unbounded description) and the
+      # meta grid used to sit OUTSIDE the scroller as flex items that
+      # cannot shrink below their content. A long description therefore
+      # grew the head past the panel height, collapsed the scroller to
+      # ~0px and pushed it below the panel's bottom edge — the dep graph
+      # and member list became unreachable at every breakpoint. They must
+      # all scroll together.
+      scroll_tag = open_tag_for(html, "stack-detail-scroll")
+      refute is_nil(scroll_tag), "expected a panel-level scroll region"
+      assert scroll_tag =~ "overflow-y-auto"
+      # `min-h-0` lets the region shrink below its content inside the
+      # flex column; `flex-1` gives it the leftover height.
+      assert scroll_tag =~ "min-h-0"
+      assert scroll_tag =~ "flex-1"
+
+      # Bracket every scrolling role between the scroll region's open tag
+      # and the action bar, which is the region's closing sibling. Both
+      # bounds matter: before the fix the head and meta grid sat ABOVE
+      # the scroller, so the lower bound alone would still pass.
+      {scroll_start, _} = :binary.match(html, ~s(data-role="stack-detail-scroll"))
+      {actions_at, _} = :binary.match(html, ~s(data-role="stack-detail-actions"))
+      assert actions_at > scroll_start
+
+      for role <- ~w(stack-detail-title stack-detail-description stack-detail-meta
+                     stack-detail-body stack-detail-members) do
+        {at, _} = :binary.match(html, ~s(data-role="#{role}"))
+
+        assert at > scroll_start and at < actions_at,
+               "expected #{role} to render inside the panel scroll region"
+      end
+
+      # The inner body must NOT carry its own scroller — nesting one
+      # inside the panel region is the shape that broke.
+      body_tag = open_tag_for(html, "stack-detail-body")
+      refute body_tag =~ "overflow-y-auto"
+      refute body_tag =~ "flex-1"
     end
 
     test "Stack tag + title + description still render alongside the new chrome",
