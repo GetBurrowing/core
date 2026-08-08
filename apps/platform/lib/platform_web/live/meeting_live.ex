@@ -802,7 +802,7 @@ defmodule PlatformWeb.MeetingLive do
     # the index lists every meeting; per-project subscription keeps
     # `{:meeting_created, _}` / `{:meeting_ended, _}` / `{:meeting_started, _}`
     # broadcasts flowing in.
-    # TODO(scope): `list_all_meetings/0` is still unscoped — this index
+    # TODO(scope): this index still reads `list_all_meetings_unscoped/0` —
     # renders every meeting in every org to every authenticated user, a
     # name/existence leak of the same family as the `:show` one fixed
     # above. Left out of task 019f9b14 deliberately (fixing it changes
@@ -822,7 +822,7 @@ defmodule PlatformWeb.MeetingLive do
       Enum.each(project_ids, &Meetings.subscribe_to_project_meetings/1)
     end
 
-    meetings = Meetings.list_all_meetings()
+    meetings = Meetings.list_all_meetings_unscoped()
     grouped = group_meetings_by_status(meetings)
 
     # The now-line has to move on its own. Arming the tick here (only when
@@ -1611,7 +1611,7 @@ defmodule PlatformWeb.MeetingLive do
   # rides the same URL for the same reason: an archive search that cannot be
   # pasted to someone else is half a feature.
   #
-  # `Meetings.list_all_meetings/0` is deliberately NOT the source here. It is
+  # `Meetings.list_all_meetings_unscoped/0` is deliberately NOT the source here. It is
   # unscoped (it carries its own `TODO(scope)`), and the archive is a
   # viewer-facing search — `Archive.search/2` does the org narrowing.
   defp assign_archive(socket, params) do
@@ -3018,7 +3018,7 @@ defmodule PlatformWeb.MeetingLive do
   def handle_info({tag, %Meetings.Meeting{}}, socket)
       when tag in [:meeting_created, :meeting_started, :meeting_ended, :meeting_cancelled] do
     if Map.has_key?(socket.assigns, :meetings) do
-      meetings = Meetings.list_all_meetings()
+      meetings = Meetings.list_all_meetings_unscoped()
 
       {:noreply,
        socket

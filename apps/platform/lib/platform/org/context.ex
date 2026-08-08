@@ -36,6 +36,7 @@ defmodule Platform.Org.Context do
   alias Platform.Org.WikiJournalEntry
   alias Platform.Org.WikiPage
   alias Platform.Repo
+  alias Platform.Tenancy
 
   # ── Default templates ─────────────────────────────────────────────────
 
@@ -546,7 +547,7 @@ defmodule Platform.Org.Context do
 
     WikiJournalEntry
     |> filter_workspace(workspace_id)
-    |> filter_org(Keyword.get(opts, :org_id))
+    |> scope_org(Keyword.get(opts, :org_id))
     |> filter_project(Keyword.get(opts, :project_id))
     |> maybe_filter_date_from(Keyword.get(opts, :date_from))
     |> maybe_filter_date_to(Keyword.get(opts, :date_to))
@@ -702,24 +703,28 @@ defmodule Platform.Org.Context do
     where(queryable, [r], r.workspace_id == ^workspace_id)
   end
 
-  # ADR-0042: additive org/project filters. Both default to no-op (nil) so
-  # legacy callers that only pass `:workspace_id` see unchanged behavior.
-  # A list value is treated as an `IN` clause so tenant agents can scope
-  # to their own + inherited-root content without leaking sibling tenants.
-  defp filter_org(queryable, nil), do: queryable
+  # ADR-0042: additive org filter, mapped onto the shared choke point
+  # `Tenancy.scope/3`. A list value is an `IN` clause so tenant agents can
+  # scope to their own + inherited-root content without leaking siblings.
+  #
+  # `nil` and `[]` are NOT the same question:
+  #
+  #   * `nil` is the ABSENCE of a question — the legacy workspace-only
+  #     call path did not ask to filter by org, so we do not filter.
+  #   * `[]` is a RESOLVED answer meaning "no orgs", so it maps to
+  #     `:none` and matches nothing. It used to return the queryable
+  #     untouched. A fail-open default is wrong regardless of how wide
+  #     the intended audience is, because a deliberate wide audience and
+  #     an accidental one are different things and only the first is a
+  #     decision.
+  defp scope_org(queryable, nil), do: queryable
 
-  defp filter_org(queryable, org_id) when is_binary(org_id) do
-    where(queryable, [r], r.org_id == ^org_id)
+  defp scope_org(queryable, org_id) when is_binary(org_id) do
+    Tenancy.scope(queryable, {:orgs, [org_id]})
   end
 
-  defp filter_org(queryable, org_ids) when is_list(org_ids) do
-    ids = Enum.filter(org_ids, &is_binary/1)
-
-    case ids do
-      [] -> queryable
-      [one] -> where(queryable, [r], r.org_id == ^one)
-      many -> where(queryable, [r], r.org_id in ^many)
-    end
+  defp scope_org(queryable, org_ids) when is_list(org_ids) do
+    Tenancy.scope(queryable, {:orgs, Enum.filter(org_ids, &is_binary/1)})
   end
 
   defp filter_project(queryable, nil), do: queryable

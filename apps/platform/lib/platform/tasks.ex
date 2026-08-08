@@ -277,21 +277,22 @@ defmodule Platform.Tasks do
 
   ## Semantics
 
-    * The org filter is applied **in the query**
-      (`p.org_id in subquery(Tenancy.viewer_org_ids_query/1)`), not after
-      the fetch, so the database is the enforcement point and there is no
-      window in which an unauthorized row exists in memory.
-    * A `nil` user — or anything without a binary `:id` — returns `[]`.
-      An anonymous caller is never authorized. Mirrors
+    * The viewer scope is resolved once by `Platform.Tenancy.visibility/1`
+      and applied **in the query** by `Platform.Tenancy.scope/3` — the
+      single choke point every viewer-scoped read goes through. Filtering
+      happens in the database, not after the fetch, so there is no window
+      in which an unauthorized row exists in memory.
+    * A `nil` user — or anything without a binary `:id` — returns `[]`,
+      as does a user with zero memberships (`:none` fails closed). An
+      unidentified caller is never authorized. Mirrors
       `Platform.Meetings.fetch_meeting_for_user/2`.
-    * Root (Fabrikam) admins bypass the membership filter and see every
-      project, matching `Meetings.fetch_meeting_for_user/2`,
-      `Platform.Chat` and `Platform.Chat.Sidebar`. Without it a root
-      operator could open a tenant meeting but not select its project in
-      the start-meeting picker. Admin status is read from the preloaded
-      `:org_memberships` when they are loaded (`fabrikam_admin_preloaded?/1`,
-      zero queries — the live path, since `Accounts.get_user/1`
-      preloads), else via `fabrikam_admin?/1`.
+    * A member of the **root** org at ANY role sees every project
+      (`:root_all`), not just root admins. Rowan's 2026-08-05 ruling:
+      sub-orgs are filtering mechanisms, so a root member sees every
+      tenant's content. This is deliberately wider than the previous
+      `fabrikam_admin?/1`-only bypass. Membership is read from the preloaded
+      `:org_memberships` when loaded (zero queries — the live path, since
+      `Accounts.get_user/1` preloads), else from the `Repo`.
     * Results stay ordered alphabetically by name, which
       `Platform.Projects.group_by_org/1` documents that it relies on.
 
@@ -310,9 +311,11 @@ defmodule Platform.Tasks do
     org_id = Keyword.get(opts, :org_id)
     preload = Keyword.get(opts, :preload, [])
 
+    visibility = Platform.Tenancy.visibility(user)
+
     Project
+    |> Platform.Tenancy.scope(visibility)
     |> maybe_filter_projects_org(org_id)
-    |> maybe_filter_projects_viewer(user_id, root_admin?(user))
     |> order_by([p], asc: p.name)
     |> Repo.all()
     |> Repo.preload(preload)
@@ -320,17 +323,10 @@ defmodule Platform.Tasks do
 
   def list_projects_for_user(_user, _opts), do: []
 
-  defp maybe_filter_projects_viewer(query, _user_id, true = _root_admin?), do: query
-
-  defp maybe_filter_projects_viewer(query, user_id, false = _root_admin?) do
-    where(query, [p], p.org_id in subquery(Platform.Tenancy.viewer_org_ids_query(user_id)))
-  end
-
-  defp root_admin?(%{org_memberships: memberships} = user) when is_list(memberships),
-    do: Platform.Tenancy.fabrikam_admin_preloaded?(user)
-
-  defp root_admin?(user), do: Platform.Tenancy.fabrikam_admin?(user)
-
+  # NOT viewer scoping — a CALLER-supplied narrowing opt, which is why it is
+  # a plain `where` and not `Tenancy.scope/3`. It composes AFTER the choke
+  # point, so it can only ever intersect with what the viewer may already
+  # see; it can never widen. Do not "consolidate" it into `scope/3`.
   defp maybe_filter_projects_org(query, nil), do: query
 
   defp maybe_filter_projects_org(query, org_id) when is_binary(org_id) do

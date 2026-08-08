@@ -88,13 +88,30 @@ defmodule PlatformWeb.SkillsLiveProjectScopeTest do
     %{fabrikam_org_id: fabrikam_org_id, own: own, foreign: foreign, skill: skill!()}
   end
 
+  # The plain member is seeded into a TENANT org, not the root org. Per Rowan's
+  # 2026-08-05 sub-orgs ruling, sub-orgs are filtering mechanisms rather than
+  # walls, so `Tenancy.visibility/1` returns `:root_all` for a root member at
+  # ANY role — a root-org viewer would see every tenant's project and make this
+  # absence assertion unsatisfiable by design. Only a non-root viewer exercises
+  # the org filter.
   test "a plain member is not offered a foreign org's project", %{conn: conn} do
-    %{fabrikam_org_id: fabrikam_org_id, own: own, foreign: foreign, skill: skill} = seed()
-    user = user!("member", fabrikam_org_id)
+    %{skill: skill} = seed()
+    own_org_id = Platform.TenancyFixtures.tenant_org_id("soylent")
+    own = project!(own_org_id, "Own Tenant Project #{System.unique_integer([:positive])}")
 
-    # Precondition: an admin viewer bypasses the scope by design, which would
-    # make a broken filter look correct.
+    foreign =
+      project!(
+        Platform.TenancyFixtures.tenant_org_id("sxi"),
+        "Foreign Project #{System.unique_integer([:positive])}"
+      )
+
+    user = user!("member", own_org_id)
+
+    # Preconditions: an admin viewer bypasses the scope by design, and a
+    # root-org viewer sees everything by design. Either would make a broken
+    # filter look correct.
     refute Tenancy.fabrikam_admin?(user)
+    refute Tenancy.root_member?(user)
 
     conn = init_test_session(conn, current_user_id: user.id)
     {:ok, _view, html} = live(conn, "/skills/#{skill.slug}")

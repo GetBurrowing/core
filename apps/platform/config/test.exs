@@ -290,7 +290,17 @@ config :platform,
        # NOT written to catch. Bumping the constant is the protocol those
        # guards document ("update this constant in the same commit"); T5 still
        # retires the module.
-       "a14939dd869d01e432ce6546d84ceee445820124203b1a10ac0aaf84bcc42b41"
+       #
+       # Bumped again by the viewer-scope choke-point task, stage 2: the
+       # private `filter_org/2` in this module was byte-identical to a
+       # second copy in `Platform.Org.Wiki.Search`, and both defaulted an
+       # empty org allow-list to the UNFILTERED queryable. Both copies are
+       # deleted; the module now maps the `:org_id` opt onto the shared
+       # `Platform.Tenancy.scope/3`, where `[]` fails closed. `nil` is
+       # unchanged on purpose — it is the absence of a question, not a
+       # resolved "no orgs" answer. Net deletion; T5 still retires this
+       # module.
+       "e5074d4cf86bd52a9a517af9c2a247d841cb1f2bdf324b0033111d6cc25f9298"
 
 # Stack v2 (task 019f487d, ADR 0045) — Platform.Tasks.Stacks.DepInference
 # resolves its LLM adapter from application env at call time. Tests

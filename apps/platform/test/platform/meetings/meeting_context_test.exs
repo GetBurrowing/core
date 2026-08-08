@@ -378,7 +378,7 @@ defmodule Platform.Meetings.MeetingContextTest do
       assert slugs_in_range(from, to) == ["project-a-sync", "project-b-sync"]
     end
 
-    test "excludes ad-hoc meetings with no intended time, which list_all_meetings/0 still returns" do
+    test "excludes ad-hoc meetings with no intended time, which list_all_meetings_unscoped/0 still returns" do
       project = create_project()
       from = ~U[2026-10-12 00:00:00.000000Z]
       to = ~U[2026-10-13 00:00:00.000000Z]
@@ -390,7 +390,7 @@ defmodule Platform.Meetings.MeetingContextTest do
 
       # The presence half of the pair. Asserting only the absence below would
       # also pass if the row had never been inserted at all.
-      all_ids = Meetings.list_all_meetings() |> Enum.map(& &1.id)
+      all_ids = Meetings.list_all_meetings_unscoped() |> Enum.map(& &1.id)
       assert ad_hoc.id in all_ids
       assert scheduled.id in all_ids
 
@@ -457,7 +457,7 @@ defmodule Platform.Meetings.MeetingContextTest do
 
       # Presence pair for the exclusion above: the row is still there, it is
       # just no longer missed.
-      assert live.id in Enum.map(Meetings.list_all_meetings(), & &1.id)
+      assert live.id in Enum.map(Meetings.list_all_meetings_unscoped(), & &1.id)
     end
 
     test "an ad-hoc meeting with no intended time is never missed" do
@@ -471,7 +471,7 @@ defmodule Platform.Meetings.MeetingContextTest do
       assert ad_hoc.scheduled_start_at == nil
       assert ad_hoc.status == "scheduled"
       assert is_nil(ad_hoc.started_at)
-      assert ad_hoc.id in Enum.map(Meetings.list_all_meetings(), & &1.id)
+      assert ad_hoc.id in Enum.map(Meetings.list_all_meetings_unscoped(), & &1.id)
 
       # Absence half.
       refute Meetings.missed?(ad_hoc, @now)
@@ -489,7 +489,7 @@ defmodule Platform.Meetings.MeetingContextTest do
       assert future.status == "scheduled"
       assert is_nil(future.started_at)
       assert future.scheduled_start_at == @an_hour_ahead
-      assert future.id in Enum.map(Meetings.list_all_meetings(), & &1.id)
+      assert future.id in Enum.map(Meetings.list_all_meetings_unscoped(), & &1.id)
 
       # Absence half.
       refute Meetings.missed?(future, @now)
@@ -510,7 +510,7 @@ defmodule Platform.Meetings.MeetingContextTest do
 
       assert started.status == "scheduled"
       assert %DateTime{} = started.started_at
-      assert started.id in Enum.map(Meetings.list_all_meetings(), & &1.id)
+      assert started.id in Enum.map(Meetings.list_all_meetings_unscoped(), & &1.id)
 
       refute Meetings.missed?(started, @now)
       assert missed_slugs(project_id: project.id, now: @now) == []
@@ -533,7 +533,7 @@ defmodule Platform.Meetings.MeetingContextTest do
       assert live.status == "live"
       assert is_nil(live.started_at)
       assert live.scheduled_start_at == @an_hour_ago
-      assert live.id in Enum.map(Meetings.list_all_meetings(), & &1.id)
+      assert live.id in Enum.map(Meetings.list_all_meetings_unscoped(), & &1.id)
 
       refute Meetings.missed?(live, @now)
       assert missed_slugs(project_id: project.id, now: @now) == []

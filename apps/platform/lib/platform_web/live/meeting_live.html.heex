@@ -1647,7 +1647,7 @@
            collection, so it counted rows the grid deliberately refuses to
            place (cancelled, and never-scheduled) and reported 7 beside 5
            blocks. Worse than stale: `@meetings` is
-           `Meetings.list_all_meetings/0`, which is unscoped and unbounded
+           `Meetings.list_all_meetings_unscoped/0`, which is unscoped and unbounded
            in time — the archive half already refuses to source from it
            for that reason. --%>
         <%!-- The header count makes the SAME false assertion the day count

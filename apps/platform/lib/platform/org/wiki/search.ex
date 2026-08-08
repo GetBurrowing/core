@@ -68,6 +68,7 @@ defmodule Platform.Org.Wiki.Search do
   alias Platform.Tasks
   alias Platform.Tasks.Project
   alias Platform.Tasks.Task, as: TaskRecord
+  alias Platform.Tenancy
 
   @fusion_constant_k 60
   @default_limit 20
@@ -374,7 +375,7 @@ defmodule Platform.Org.Wiki.Search do
     tsvector_hits =
       WikiPage
       |> filter_workspace(opts.workspace_id)
-      |> filter_org(opts.org_id)
+      |> scope_org(opts.org_id)
       |> filter_project(opts.project_id)
       |> maybe_filter_namespace(opts.namespace)
       |> maybe_filter_since_inserted(opts.since)
@@ -408,7 +409,7 @@ defmodule Platform.Org.Wiki.Search do
     rows =
       WikiPage
       |> filter_workspace(opts.workspace_id)
-      |> filter_org(opts.org_id)
+      |> scope_org(opts.org_id)
       |> filter_project(opts.project_id)
       |> maybe_filter_namespace(opts.namespace)
       |> maybe_filter_since_inserted(opts.since)
@@ -424,7 +425,7 @@ defmodule Platform.Org.Wiki.Search do
     tsvector_hits =
       WikiJournalEntry
       |> filter_workspace(opts.workspace_id)
-      |> filter_org(opts.org_id)
+      |> scope_org(opts.org_id)
       |> filter_project(opts.project_id)
       |> maybe_filter_journal_namespace(opts.namespace)
       |> maybe_filter_since_date(opts.since)
@@ -458,7 +459,7 @@ defmodule Platform.Org.Wiki.Search do
     rows =
       WikiJournalEntry
       |> filter_workspace(opts.workspace_id)
-      |> filter_org(opts.org_id)
+      |> scope_org(opts.org_id)
       |> filter_project(opts.project_id)
       |> maybe_filter_journal_namespace(opts.namespace)
       |> maybe_filter_since_date(opts.since)
@@ -522,7 +523,7 @@ defmodule Platform.Org.Wiki.Search do
       TaskRecord
       |> filter_task_deleted()
       |> filter_task_project(opts.project_id)
-      |> filter_task_org(opts.org_id)
+      |> scope_task_org(opts.org_id)
       |> maybe_filter_since_inserted(opts.since)
       |> where(
         [t],
@@ -555,7 +556,7 @@ defmodule Platform.Org.Wiki.Search do
       TaskRecord
       |> filter_task_deleted()
       |> filter_task_project(opts.project_id)
-      |> filter_task_org(opts.org_id)
+      |> scope_task_org(opts.org_id)
       |> maybe_filter_since_inserted(opts.since)
       |> where([t], ilike(t.title, ^pattern) or ilike(t.description, ^pattern))
       |> order_by([t], desc: t.updated_at)
@@ -854,7 +855,7 @@ defmodule Platform.Org.Wiki.Search do
     else
       WikiPage
       |> filter_workspace(opts.workspace_id)
-      |> filter_org(opts.org_id)
+      |> scope_org(opts.org_id)
       |> filter_project(opts.project_id)
       |> where([p], p.id in ^ids)
       |> Repo.all()
@@ -870,7 +871,7 @@ defmodule Platform.Org.Wiki.Search do
     else
       WikiJournalEntry
       |> filter_workspace(opts.workspace_id)
-      |> filter_org(opts.org_id)
+      |> scope_org(opts.org_id)
       |> filter_project(opts.project_id)
       |> where([e], e.id in ^ids)
       |> Repo.all()
@@ -908,7 +909,7 @@ defmodule Platform.Org.Wiki.Search do
       TaskRecord
       |> filter_task_deleted()
       |> filter_task_project(opts.project_id)
-      |> filter_task_org(opts.org_id)
+      |> scope_task_org(opts.org_id)
       |> where([t], t.id in ^ids)
       |> preload([:project, :stack])
       |> Repo.all()
@@ -943,26 +944,30 @@ defmodule Platform.Org.Wiki.Search do
     where(queryable, [r], r.workspace_id == ^workspace_id)
   end
 
-  # ADR-0042 additive filters. Both default to no-op (nil) so the legacy
-  # workspace-only call path is unchanged. A list value (added by the
-  # federation surface's tenant-default scoping) is treated as an `IN`
-  # clause so tenant agents see their own + inherited-root content
-  # without leaking sibling tenants.
-  defp filter_org(queryable, nil), do: queryable
+  # ADR-0042 additive org filter, mapped onto the shared choke point
+  # `Tenancy.scope/3`. A list value (from the federation surface's
+  # tenant-default scoping) is an `IN` clause so tenant agents see their
+  # own + inherited-root content without leaking sibling tenants.
+  #
+  # `nil` and `[]` are NOT the same question:
+  #
+  #   * `nil` is the ABSENCE of a question — the legacy workspace-only
+  #     call path did not ask to filter by org, so we do not filter.
+  #   * `[]` is a RESOLVED answer meaning "no orgs", so it maps to
+  #     `:none` and matches nothing. It used to return the queryable
+  #     untouched. A fail-open default is wrong regardless of how wide
+  #     the intended audience is, because a deliberate wide audience and
+  #     an accidental one are different things and only the first is a
+  #     decision.
+  defp org_visibility(org_id) when is_binary(org_id), do: {:orgs, [org_id]}
 
-  defp filter_org(queryable, org_id) when is_binary(org_id) do
-    where(queryable, [r], r.org_id == ^org_id)
-  end
+  defp org_visibility(org_ids) when is_list(org_ids),
+    do: {:orgs, Enum.filter(org_ids, &is_binary/1)}
 
-  defp filter_org(queryable, org_ids) when is_list(org_ids) do
-    ids = Enum.filter(org_ids, &is_binary/1)
+  defp scope_org(queryable, nil), do: queryable
 
-    case ids do
-      [] -> queryable
-      [one] -> where(queryable, [r], r.org_id == ^one)
-      many -> where(queryable, [r], r.org_id in ^many)
-    end
-  end
+  defp scope_org(queryable, org_opt),
+    do: Tenancy.scope(queryable, org_visibility(org_opt))
 
   defp filter_project(queryable, nil), do: queryable
 
@@ -987,33 +992,15 @@ defmodule Platform.Org.Wiki.Search do
     where(queryable, [t], t.project_id == ^project_id)
   end
 
-  defp filter_task_org(queryable, nil), do: queryable
+  # Same nil-vs-`[]` reasoning as `scope_org/2` above; the only difference
+  # is the join, because tasks inherit tenancy through their project. The
+  # joined `projects` row is the last binding, so `Tenancy.scope/3` is
+  # pointed at it with `binding: :last`.
+  defp scope_task_org(queryable, nil), do: queryable
 
-  defp filter_task_org(queryable, org_id) when is_binary(org_id) do
-    from(t in queryable,
-      join: p in Project,
-      on: p.id == t.project_id,
-      where: p.org_id == ^org_id
-    )
-  end
-
-  defp filter_task_org(queryable, org_ids) when is_list(org_ids) do
-    ids = Enum.filter(org_ids, &is_binary/1)
-
-    case ids do
-      [] ->
-        queryable
-
-      [one] ->
-        filter_task_org(queryable, one)
-
-      many ->
-        from(t in queryable,
-          join: p in Project,
-          on: p.id == t.project_id,
-          where: p.org_id in ^many
-        )
-    end
+  defp scope_task_org(queryable, org_opt) do
+    from(t in queryable, join: p in Project, on: p.id == t.project_id)
+    |> Tenancy.scope(org_visibility(org_opt), binding: :last)
   end
 
   # Namespace filter for page queries: `file_key LIKE 'namespace/%'`.

@@ -334,10 +334,149 @@ defmodule Platform.Tenancy do
   Callers that grant root (Fabrikam) admins a bypass must check
   `fabrikam_admin?/1` (or `fabrikam_admin_preloaded?/1`) themselves — this query
   is membership only and knows nothing about roles.
+
+  Prefer `scope/3` over calling this directly: `scope/3` layers the
+  root-member bypass and the fail-closed `:none` case on top of this
+  query. Reach for `viewer_org_ids_query/1` only when you genuinely need
+  the raw membership ids.
   """
   @spec viewer_org_ids_query(binary()) :: Ecto.Query.t()
   def viewer_org_ids_query(user_id) when is_binary(user_id) do
     from(om in OrgMembership, where: om.user_id == ^user_id, select: om.org_id)
+  end
+
+  # ── Viewer visibility: one choke point ────────────────────────────────
+
+  @typedoc """
+  The resolved answer to "what is this viewer allowed to see", in org
+  terms. Feed it to `scope/3`.
+  """
+  @type visibility :: :root_all | {:orgs, [binary()]} | :none
+
+  @doc """
+  Resolve a viewer to a `t:visibility/0` — the single answer to "which
+  orgs may this viewer see".
+
+    * A member of the **root** org at ANY role → `:root_all`. Rowan's
+      2026-08-05 ruling: sub-orgs are filtering mechanisms, so a Fabrikam
+      member sees Fabrikam *and* SXI content. This is deliberately wide.
+    * Otherwise, the viewer's memberships → `{:orgs, ids}`, sorted and
+      deduped so the value is directly comparable in tests.
+    * `nil`, anything without a binary `:id`, or a user with zero
+      membership rows → `:none`.
+
+  ## Fail closed, and why
+
+  A fail-open default is wrong regardless of how wide the intended
+  audience is, **because a deliberate wide audience and an accidental
+  one are different things and only the first is a decision.** The
+  historical default answer to "I don't know who you are" was "show
+  them everything" (`filter_org(queryable, [])` returning the queryable
+  untouched). `:none` makes the unknown-viewer case explicit and empty.
+
+  Note the flip side, equally deliberate: `scope/3`'s job is to make
+  visibility EXPLICIT, not to make it NARROW. `:root_all` returns the
+  queryable untouched, on purpose.
+
+  ## Resolution paths
+
+  Resolves from the preloaded `:org_memberships` (with nested `:org`)
+  when they are a loaded list — zero queries, and that is the live path
+  since `Accounts.get_user/1` preloads them. Otherwise falls back to the
+  `Repo` path. Mirrors the `fabrikam_admin_preloaded?/1` vs `fabrikam_admin?/1`
+  split.
+
+  **Resolve once per request and thread the resolved value** through to
+  each `scope/3` call — do not re-call `visibility/1` per query.
+  """
+  @spec visibility(map() | nil) :: visibility()
+  def visibility(%{org_memberships: memberships} = user) when is_list(memberships) do
+    if root_member_preloaded?(user) do
+      :root_all
+    else
+      memberships
+      |> Enum.map(fn
+        %OrgMembership{org_id: org_id} -> org_id
+        %{org_id: org_id} -> org_id
+        _ -> nil
+      end)
+      |> to_visibility()
+    end
+  end
+
+  def visibility(%{id: user_id} = user) when is_binary(user_id) do
+    if root_member?(user) do
+      :root_all
+    else
+      user_id
+      |> viewer_org_ids_query()
+      |> Repo.all()
+      |> to_visibility()
+    end
+  end
+
+  def visibility(_user), do: :none
+
+  defp to_visibility(org_ids) do
+    case org_ids |> Enum.filter(&is_binary/1) |> Enum.uniq() |> Enum.sort() do
+      [] -> :none
+      ids -> {:orgs, ids}
+    end
+  end
+
+  @doc """
+  Apply a resolved `t:visibility/0` to a queryable. The one choke point
+  every viewer-scoped read should go through.
+
+      vis = Tenancy.visibility(current_user)
+      Project |> Tenancy.scope(vis) |> Repo.all()
+
+  Three clauses, no others:
+
+    * `:root_all` — the queryable **unchanged**. Correct and intended.
+    * `{:orgs, ids}` — `r.org_id in ^ids`.
+    * `:none` — a query that can never match a row. **`:none` NEVER
+      returns an unfiltered query.**
+
+  ## Options
+
+    * `:field` — the org column to filter on (default `:org_id`).
+    * `:binding` — which binding to filter against. `nil` (default) is
+      the first binding; `:last` targets the last (`[..., r]`); an atom
+      names an `as:` binding, so a joined `projects` alias can be
+      targeted directly.
+
+  ## Scope boundary
+
+  This answers **which orgs** only. Contexts keep owning "plus which
+  specific rows" — Meetings' live-invite union, Chat's
+  `chat_participants`. Do not add domain clauses here.
+  """
+  @spec scope(Ecto.Queryable.t(), visibility(), keyword()) :: Ecto.Queryable.t()
+  def scope(queryable, visibility, opts \\ [])
+
+  def scope(queryable, :root_all, _opts), do: queryable
+
+  def scope(queryable, {:orgs, ids}, opts) when is_list(ids) do
+    case Enum.filter(ids, &is_binary/1) do
+      # An empty allow-list is "no orgs", not "all orgs".
+      [] -> scope(queryable, :none, opts)
+      ids -> scope_to_org_ids(queryable, ids, opts)
+    end
+  end
+
+  def scope(queryable, :none, _opts) do
+    where(queryable, [_r], fragment("false"))
+  end
+
+  defp scope_to_org_ids(queryable, ids, opts) do
+    field = Keyword.get(opts, :field, :org_id)
+
+    case Keyword.get(opts, :binding) do
+      nil -> where(queryable, [r], field(r, ^field) in ^ids)
+      :last -> where(queryable, [..., r], field(r, ^field) in ^ids)
+      name when is_atom(name) -> where(queryable, [{^name, r}], field(r, ^field) in ^ids)
+    end
   end
 
   @doc """
@@ -356,13 +495,35 @@ defmodule Platform.Tenancy do
   """
   @spec fabrikam_admin_preloaded?(any()) :: boolean()
   def fabrikam_admin_preloaded?(%{org_memberships: memberships}) when is_list(memberships) do
-    Enum.any?(memberships, fn
-      %OrgMembership{role: "admin", org: %Org{parent_org_id: nil}} -> true
-      _ -> false
-    end)
+    Enum.any?(memberships, &root_membership_struct?(&1, "admin"))
   end
 
   def fabrikam_admin_preloaded?(_), do: false
+
+  @doc """
+  Pure-function variant of `root_member?/1` — is the user a member of the
+  root org at ANY role, read from the already-preloaded
+  `org_memberships` (with nested `:org`)?
+
+  Peer of `fabrikam_admin_preloaded?/1`, and deliberately a DIFFERENT
+  question: root membership is the calendar/visibility rule ("any Fabrikam
+  employee sees everything"), root admin is the operator bypass. A
+  `role: "member"` membership on the root org is `true` here and `false`
+  in `fabrikam_admin_preloaded?/1`.
+  """
+  @spec root_member_preloaded?(any()) :: boolean()
+  def root_member_preloaded?(%{org_memberships: memberships}) when is_list(memberships) do
+    Enum.any?(memberships, &root_membership_struct?(&1, :any))
+  end
+
+  def root_member_preloaded?(_), do: false
+
+  # The ONE "is this a membership on the root org" predicate for preloaded
+  # structs. `wanted` is either a role string or `:any`.
+  defp root_membership_struct?(%OrgMembership{org: %Org{parent_org_id: nil}, role: role}, wanted),
+    do: wanted == :any or role == wanted
+
+  defp root_membership_struct?(_membership, _wanted), do: false
 
   @doc """
   Pure function — extracts the user's primary membership from an
@@ -649,18 +810,48 @@ defmodule Platform.Tenancy do
   """
   @spec fabrikam_admin?(any()) :: boolean()
   def fabrikam_admin?(%{id: user_id}) when is_binary(user_id) do
-    query =
-      from(m in OrgMembership,
-        join: o in Org,
-        on: o.id == m.org_id,
-        where: m.user_id == ^user_id and m.role == "admin" and is_nil(o.parent_org_id),
-        select: 1
-      )
-
-    Repo.exists?(query)
+    Repo.exists?(root_membership_query(user_id, "admin"))
   end
 
   def fabrikam_admin?(_), do: false
+
+  @doc """
+  Is the user a member of the root (Fabrikam) org at ANY role?
+
+  Distinct from `fabrikam_admin?/1` and both are legitimate: root membership
+  is the visibility rule ("any Fabrikam employee sees everything" — it is
+  what makes `visibility/1` return `:root_all`), root admin is the
+  operator bypass. A `role: "member"` on the root org answers `true`
+  here and `false` to `fabrikam_admin?/1`.
+
+  Returns `false` for `nil` or any non-user input.
+  """
+  @spec root_member?(any()) :: boolean()
+  def root_member?(%{id: user_id}) when is_binary(user_id) do
+    Repo.exists?(root_membership_query(user_id, :any))
+  end
+
+  def root_member?(_), do: false
+
+  # The ONE "which org is the root org" predicate, in query form. Both
+  # `fabrikam_admin?/1` and `root_member?/1` compose it so the definition of
+  # root is written exactly once.
+  defp root_org_ids_query do
+    from(o in Org, where: is_nil(o.parent_org_id), select: o.id)
+  end
+
+  defp root_membership_query(user_id, wanted_role) do
+    query =
+      from(m in OrgMembership,
+        where: m.user_id == ^user_id and m.org_id in subquery(root_org_ids_query()),
+        select: 1
+      )
+
+    case wanted_role do
+      :any -> query
+      role when is_binary(role) -> where(query, [m], m.role == ^role)
+    end
+  end
 
   @doc """
   Is the user a member of the given org? Accepts either an org id (UUID

@@ -62,6 +62,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
     test "does not return a foreign org's project", ctx do
       user = user!() |> member!(ctx.org_a)
       refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_member?(user)
 
       foreign = project!(ctx.org_b, "Foreign Scope Project")
 
@@ -72,6 +73,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
     test "returns the viewer's own org project (positive control)", ctx do
       user = user!() |> member!(ctx.org_a)
       refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_member?(user)
 
       own = project!(ctx.org_a, "Own Scope Project")
 
@@ -82,6 +84,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
     test "multi-org member sees both their orgs and not a third", ctx do
       user = user!() |> member!(ctx.org_a) |> member!(ctx.org_b)
       refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_member?(user)
 
       a = project!(ctx.org_a, "Multi A Project")
       b = project!(ctx.org_b, "Multi B Project")
@@ -94,7 +97,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
     end
   end
 
-  describe "list_projects_for_user/2 — root admin bypass" do
+  describe "list_projects_for_user/2 — root membership sees everything" do
     test "a Fabrikam root admin sees projects in every org", ctx do
       admin = user!(name: "Root Admin") |> member!(ctx.fabrikam, "admin")
       assert Tenancy.fabrikam_admin?(admin) == true
@@ -105,6 +108,45 @@ defmodule Platform.Tasks.ProjectScopeTest do
       ids = admin |> Tasks.list_projects_for_user() |> Enum.map(& &1.id)
       assert a.id in ids
       assert b.id in ids
+    end
+
+    # Rowan's 2026-08-05 sub-orgs ruling: sub-orgs are filtering mechanisms,
+    # not walls — a root-org member sees every tenant's content regardless
+    # of role. `Tenancy.visibility/1` therefore returns `:root_all` for ANY
+    # root member, which is deliberately wider than the previous
+    # `fabrikam_admin?/1`-only bypass. This test pins the widening on purpose.
+    test "a plain root member (role: member) also sees every org", ctx do
+      member = user!(name: "Root Member") |> member!(ctx.fabrikam, "member")
+      refute Tenancy.fabrikam_admin?(member)
+      assert Tenancy.root_member?(member)
+      assert Tenancy.visibility(member) == :root_all
+
+      a = project!(ctx.org_a, "Root Member Visible A")
+      b = project!(ctx.org_b, "Root Member Visible B")
+
+      ids = member |> Tasks.list_projects_for_user() |> Enum.map(& &1.id)
+      assert a.id in ids
+      assert b.id in ids
+    end
+  end
+
+  describe "list_projects_for_user/2 — zero memberships fail closed" do
+    test "a user with no membership rows gets [] from a non-empty fixture", ctx do
+      user = user!(name: "Orphan Viewer")
+      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_member?(user)
+      assert Tenancy.visibility(user) == :none
+
+      a = project!(ctx.org_a, "Orphan Fixture A")
+      b = project!(ctx.org_b, "Orphan Fixture B")
+
+      # Anti-vacuity: prove in this same run that the table the orphan reads
+      # actually contains projects, so `[]` means "scoped out", not "empty DB".
+      unscoped = Tasks.list_projects_unscoped() |> Enum.map(& &1.id)
+      assert a.id in unscoped
+      assert b.id in unscoped
+
+      assert Tasks.list_projects_for_user(user) == []
     end
   end
 
@@ -131,6 +173,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
     test "list_projects_for_user/2 returns only the member's own org", ctx do
       user = user!() |> member!(ctx.org_a)
       refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_member?(user)
 
       a = project!(ctx.org_a, "Split Scoped A")
       b = project!(ctx.org_b, "Split Scoped B")
@@ -192,6 +235,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
     test ":org_id narrows further and never widens", ctx do
       user = user!() |> member!(ctx.org_a) |> member!(ctx.org_b)
       refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_member?(user)
 
       a = project!(ctx.org_a, "Opt Narrow A")
       b = project!(ctx.org_b, "Opt Narrow B")
@@ -204,6 +248,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
       foreign = project!(ctx.org_c, "Opt Narrow C")
       widened = user |> Tasks.list_projects_for_user(org_id: ctx.org_c) |> Enum.map(& &1.id)
       refute foreign.id in widened
+      assert widened == []
     end
 
     test ":preload loads the org association", ctx do

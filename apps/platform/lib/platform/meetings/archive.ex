@@ -124,7 +124,13 @@ defmodule Platform.Meetings.Archive do
   everything. Like that function this is org isolation, not project isolation
   — there is no `project_members` table in this codebase.
 
-  `Platform.Meetings.list_all_meetings/0` is deliberately not reused here: it
+  It is also hand-rolled rather than routed through `Platform.Tenancy.scope/3`
+  for exactly the reason that function documents: `Tenancy.visibility/1`
+  bypasses on root membership at ANY role, this bypasses on root **admin**,
+  and every OIDC signup holds a plain root membership. See the "Why this is
+  still hand-rolled" section on `Platform.Meetings.fetch_meeting_for_user/2`.
+
+  `Platform.Meetings.list_all_meetings_unscoped/0` is deliberately not reused here: it
   is unscoped (it carries its own `TODO(scope)`) and calling it from a
   viewer-facing search would ship a cross-tenant read.
 
@@ -699,6 +705,10 @@ defmodule Platform.Meetings.Archive do
     |> maybe_filter_person(Keyword.get(opts, :person_id))
   end
 
+  # NOT `Tenancy.scope/3`, deliberately — see "Authorization" in the
+  # moduledoc. This mirrors `Meetings.fetch_meeting_for_user/2`'s
+  # `fabrikam_admin?/1` bypass, which is narrower than `visibility/1`'s
+  # `root_member?/1`. Converting widens who can read the archive.
   defp narrow_to_viewer_orgs(query, viewer) do
     if Tenancy.fabrikam_admin?(viewer) do
       query

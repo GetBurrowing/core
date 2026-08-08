@@ -97,11 +97,33 @@ defmodule Platform.Meetings do
       `Ecto.MultipleResultsError` as soon as two projects pick the same slug.
       Two rows returns `{:error, :ambiguous}`; a slug-only URL genuinely
       cannot disambiguate and this function will not pick one for you.
-    * Root (Fabrikam) admins bypass the org-membership filter — see
+    * Root (Fabrikam) **admins** bypass the org-membership filter — see
       `Platform.Chat` and `Platform.Chat.Sidebar` for the same precedent.
       Without it a root operator who is not an explicit member of a tenant org
       would lose access to that tenant's meetings. The ambiguity handling
       still applies to them.
+
+  ## Why this is still hand-rolled, and not `Tenancy.scope/3`
+
+  This is the one viewer-scoping site the tenancy consolidation left on its
+  own query, on purpose. The two predicates are NOT the same:
+
+    * here, the bypass is `Tenancy.fabrikam_admin?/1` — root membership at
+      **admin** role;
+    * `Tenancy.visibility/1` bypasses on `Tenancy.root_member?/1` — root
+      membership at **any** role, which is strictly wider.
+
+  Every new OIDC signup gets a plain `role: "member"` row in the root org, so
+  routing this through the choke point would grant every signed-up user read
+  access to every tenant's meetings. Four tests here and in
+  `PlatformWeb.MeetingLiveTest` currently assert the opposite, including that
+  a denial is indistinguishable from an absent slug.
+
+  The project surface (`Platform.Tasks.list_projects_for_user/2`) already took
+  the wider rule. The two surfaces therefore disagree today, and that
+  disagreement is a decision someone has to make out loud — reconciling it
+  changes who can read what. Do not "finish the consolidation" here by
+  swapping the predicate silently.
     * External users are additionally narrowed by
       `Platform.Chat.ExternalScope.visible_space_id?/2` against the meeting's
       bound chat space. That helper is pass-through for non-external scopes,
@@ -148,6 +170,10 @@ defmodule Platform.Meetings do
 
   def fetch_meeting_for_user(_user, _slug), do: {:error, :not_found}
 
+  # NOT YET on `Tenancy.scope/3`, and deliberately so — see the "Why this is
+  # still hand-rolled" section of the moduledoc. The bypass predicate here is
+  # `fabrikam_admin?/1`; `visibility/1`'s is `root_member?/1`, which is strictly
+  # wider. Swapping them is an access change, not a refactor.
   defp viewer_meeting_query(slug, _user_id, true = _root_admin?) do
     from(m in Meeting, where: m.slug == ^slug, limit: 2)
   end
@@ -426,14 +452,26 @@ defmodule Platform.Meetings do
   end
 
   @doc """
-  List every meeting across all projects, newest first.
+  List every meeting across all projects, newest first. **Unscoped.**
+
+  The `_unscoped` suffix is the point: this function takes no viewer and
+  applies no org filter, so it returns meetings belonging to every org.
+  Any surface that renders these rows to a human must resolve
+  `Platform.Tenancy.visibility/1` and narrow with
+  `Platform.Tenancy.scope/2` (or read through a scoped function such as
+  `fetch_meeting_for_user/2`) before rendering. Calling this directly
+  from a LiveView leaks foreign-org meeting titles.
+
+  Legitimate unscoped callers exist and are why this is not simply
+  deleted: the boot-time PubSub subscribers have no viewer at all.
 
   Used by the global `/meetings` index LV (no project context in the
-  route). When project-scoped routing arrives the index will narrow to
-  `list_meetings_for_project/1`.
+  route). That caller is a KNOWN, still-open leak — see the
+  `TODO(scope):` marker at its call site. When project-scoped routing
+  arrives the index will narrow to `list_meetings_for_project/1`.
   """
-  @spec list_all_meetings() :: [Meeting.t()]
-  def list_all_meetings do
+  @spec list_all_meetings_unscoped() :: [Meeting.t()]
+  def list_all_meetings_unscoped do
     Meeting
     |> order_by([m], desc: m.inserted_at)
     |> Repo.all()
@@ -459,7 +497,7 @@ defmodule Platform.Meetings do
       comparison against NULL is never true in SQL. That exclusion is
       INTENDED, not an oversight: a meeting with no intended time has no
       cell to sit in. Do not "fix" it with an `or is_nil(m.scheduled_start_at)`;
-      `list_all_meetings/0` is the query that still sees those rows.
+      `list_all_meetings_unscoped/0` is the query that still sees those rows.
 
     * Ordering is `asc: scheduled_start_at` — intended time first — with
       `asc: inserted_at` only as a deterministic tiebreak between two
@@ -472,6 +510,17 @@ defmodule Platform.Meetings do
     * `:project_id` — when given, narrows to that project. When absent the
       query deliberately spans projects, matching the unscoped
       `meetings(scheduled_start_at)` index.
+
+  ## No viewer scoping
+
+  This function takes no viewer. With no `:project_id` it spans every org,
+  so it carries the same hazard as `list_all_meetings_unscoped/0` and its
+  calendar caller shares that function's open `TODO(scope):`. It is not
+  named `*_unscoped` because `:project_id` makes the narrowed call a
+  genuinely bounded read and the suffix would misdescribe it. Any surface
+  rendering these rows to a human must resolve `Platform.Tenancy.visibility/1`
+  and narrow with `Platform.Tenancy.scope/2` (or pass a `:project_id` the
+  viewer is already known to be able to see).
   """
   @spec list_meetings_in_range(DateTime.t(), DateTime.t(), keyword()) :: [Meeting.t()]
   def list_meetings_in_range(%DateTime{} = from, %DateTime{} = to, opts \\ []) do
