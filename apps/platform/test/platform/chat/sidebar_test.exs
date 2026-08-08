@@ -127,7 +127,7 @@ defmodule Platform.Chat.SidebarTest do
 
     test "list_default_sections/0 STILL returns all rows — the data API stays unfiltered" do
       # Curation writes and the admin editor need the full set; only the render
-      # path filters. Mirrors Tenancy.list_tenants/0 vs list_active_tenants/0.
+      # path filters. Mirrors Tenancy.list_tenants/0 vs list_active_tenants_unscoped/0.
       admin = admin_user!()
       paragon = Tenancy.get_org_by_slug!("paragon")
       {:ok, _} = Tenancy.archive_org(admin, paragon)

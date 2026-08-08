@@ -596,7 +596,27 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # No new function in the shell, no new branch, no new assign — the scoping
   # logic itself lives in `Platform.Tenancy.list_active_tenants_for_user/1`,
   # which is exactly where the guard wants it. The shell only passes a viewer.
-  @shell_line_count 5_905
+  #
+  # RE-PINNED (+18) by the viewer-scoped SCOPE RAIL — the third and last
+  # unscoped read in this shell. `active_scope_keys/0` built the filter chips
+  # from `Tenancy.list_active_tenants_unscoped/0`, so a plain member of one org saw a
+  # chip naming every other tenant in the deployment.
+  # ARITHMETIC, +18 = 30 insertions - 12 deletions:
+  #   * `active_scope_keys/0` -> `/1` (takes the viewer) and its two call
+  #     sites in `mount/3` and `refresh_containers/1` gain
+  #     `socket.assigns[:current_user_record]`. All three still fit on one
+  #     line under `mix format`: +0.
+  #   * +18 comment lines, all on the function's existing comment block: a
+  #     note naming the viewer-scoped read and why the arity change is
+  #     load-bearing (no `/0` shim, no call-site `Enum.filter`), plus an
+  #     explicit restatement that the allowlist-first, compare-as-STRINGS
+  #     construction is UNCHANGED and must stay — reverting it to
+  #     `String.to_existing_atom/1` re-opens the task-019fa209 /tasks outage.
+  #     Reflow of two existing comments to name the viewer accounts for the
+  #     rest.
+  # Still no new function, no new branch, no new assign in the shell: the
+  # scoping lives in `Platform.Tenancy.list_active_tenants_for_user/1`.
+  @shell_line_count 5_923
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

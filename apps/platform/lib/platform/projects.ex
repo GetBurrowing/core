@@ -89,7 +89,7 @@ defmodule Platform.Projects do
   it can itself be archived. This is the navigation source; `group_by_org/1`
   stays the selection source (task 019f4eaa).
 
-  `active_orgs` is `Tenancy.list_active_tenants/0`: the root plus every
+  `active_orgs` is `Tenancy.list_active_tenants_unscoped/0`: the root plus every
   non-archived tenant, already in canonical tenant-priority order. Each gets a
   `{slug, name, projects}` tuple carrying its non-archived projects (or `[]`),
   preserving that order. A bucket whose org is NOT in `active_orgs` is dropped

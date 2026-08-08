@@ -430,7 +430,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     # Regression cover for the /tasks outage: `active_scope_keys/0` used to
     # map EVERY active org's slug through `String.to_existing_atom/1`. Org
     # slugs are externally supplied (`Org.changeset/2` accepts any
-    # `^[a-z][a-z0-9_-]*$`) and `list_active_tenants/0` filters only on
+    # `^[a-z][a-z0-9_-]*$`) and `list_active_tenants_unscoped/0` filters only on
     # `archived_at`, so a single runtime-created org 500'd the board for
     # every user in the deployment.
     #
@@ -511,7 +511,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       {conn, _user} = fabrikam_admin_conn(conn)
 
       expected =
-        Tenancy.list_active_tenants()
+        Tenancy.list_active_tenants_unscoped()
         |> Enum.map(& &1.slug)
         |> Enum.filter(&(&1 in Tenancy.tenant_priority()))
 
@@ -550,6 +550,81 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       refute has_element?(view, "[data-scope-chip='soylent']")
       refute has_element?(view, "[data-scope-chip='e2e-target-323']")
       assert has_element?(view, "[data-scope-chip='fabrikam']")
+    end
+  end
+
+  describe "scope rail — viewer scoping" do
+    # The rail used to be built from `Tenancy.list_active_tenants_unscoped/0`, which
+    # filters only on `archived_at`. A plain member of one org therefore saw a
+    # chip — i.e. the NAME — of every other tenant in the deployment. The rail
+    # now reads `Tenancy.list_active_tenants_for_user/1`.
+    #
+    # Assertions here go through `rendered_scope_chips/1` (the RENDERED chip
+    # set), never the return value of `active_scope_keys/1` — the rail is what
+    # leaks, and the private function's shape is not the contract.
+
+    defp member_of_conn(conn, org_slugs) do
+      user = insert_user()
+
+      for slug <- org_slugs do
+        %OrgMembership{}
+        |> OrgMembership.changeset(%{
+          user_id: user.id,
+          org_id: Tenancy.get_org_by_slug!(slug).id,
+          role: "member"
+        })
+        |> Repo.insert!()
+      end
+
+      {init_test_session(conn, current_user_id: user.id), user}
+    end
+
+    test "a plain member sees chips for their orgs and NOT for an org they don't belong to", %{
+      conn: conn
+    } do
+      {conn, user} = member_of_conn(conn, ["fabrikam", "soylent"])
+
+      # Premise, asserted rather than assumed: a Fabrikam admin bypasses the
+      # membership filter BY DESIGN, so an admin viewer would make a broken
+      # fix look correct. This viewer must not be one.
+      refute Tenancy.fabrikam_admin?(user)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      chips = rendered_scope_chips(view)
+
+      # POSITIVE CONTROL FIRST. The "all" reset chip is hardcoded in the
+      # template OUTSIDE the `:for={scope <- @active_scope_keys}` loop, so the
+      # rail is never literally empty and a bare `refute` on a foreign slug
+      # passes vacuously for an implementation that returns [] for everyone.
+      # Prove the org-chip list is non-empty and correct before reading any
+      # absence as evidence.
+      assert "fabrikam" in chips
+      assert "soylent" in chips
+
+      # The leak itself, asserted BEFORE the count so a regression reports the
+      # foreign org by name rather than "left: 5, right: 2".
+      assert Tenancy.get_org_by_slug!("wayne_tech").archived_at == nil
+      refute "wayne_tech" in chips
+
+      assert length(chips) == 2
+    end
+
+    test "a fabrikam admin still sees every active seeded org chip", %{conn: conn} do
+      {conn, _user} = fabrikam_admin_conn(conn)
+
+      # Same expectation the "the seeded scope rail is unchanged" test uses:
+      # admins bypass the membership filter, so the unscoped list is correct
+      # for them.
+      expected =
+        Tenancy.list_active_tenants_unscoped()
+        |> Enum.map(& &1.slug)
+        |> Enum.filter(&(&1 in Tenancy.tenant_priority()))
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      assert rendered_scope_chips(view) == expected
+      assert length(expected) > 2
     end
   end
 end

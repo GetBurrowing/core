@@ -213,7 +213,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
       slugs = files_section_slugs(html)
 
-      for expected <- Enum.map(Tenancy.list_active_tenants(), & &1.slug) do
+      for expected <- Enum.map(Tenancy.list_active_tenants_unscoped(), & &1.slug) do
         assert expected in slugs
       end
     end

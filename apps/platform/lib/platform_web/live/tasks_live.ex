@@ -262,11 +262,11 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:fab_menu_open, false)
      # Container-lifecycle UI state (task 019f4eaa stage 6). `:active_scope_keys`
      # is the data-driven scope-rail source — the seeded slugs of every
-     # non-archived tenant (Fabrikam always included), as atoms, so an archived
-     # org drops off the rail. `:lifecycle_menu_key` is the single open
+     # non-archived tenant THE VIEWER BELONGS TO (Fabrikam admins see all), as
+     # atoms, so an archived org drops off the rail. `:lifecycle_menu_key` is the single open
      # kebab menu (org/project); `:delete_modal` is `nil` or the
      # `%{type:, id:, name:}` the Schedule-deletion confirm dialog targets.
-     |> assign(:active_scope_keys, active_scope_keys())
+     |> assign(:active_scope_keys, active_scope_keys(socket.assigns[:current_user_record]))
      |> assign(:lifecycle_menu_key, nil)
      |> assign(:delete_modal, nil)
      # `:undo_archive` is nil (no toast) or the %{type:, id:, name:, hidden:}
@@ -5408,17 +5408,35 @@ defmodule PlatformWeb.TasksLive do
     |> assign(:projects, projects)
     |> assign(:projects_by_org, group_projects_by_org(projects))
     |> assign(:project_sections, project_sections(projects, socket.assigns[:current_user_record]))
-    |> assign(:active_scope_keys, active_scope_keys())
+    |> assign(:active_scope_keys, active_scope_keys(socket.assigns[:current_user_record]))
   end
 
-  # Scope-rail source (task 019f4eaa stage 6; hardened by task 019fa209): the
-  # scope atoms whose org is currently non-archived, in canonical
-  # tenant-priority order (Fabrikam always present — the root can't be archived).
+  # Scope-rail source (task 019f4eaa stage 6; hardened by task 019fa209;
+  # viewer-scoped since): the scope atoms whose org is currently non-archived
+  # AND VISIBLE TO THIS VIEWER, in canonical tenant-priority order.
+  #
+  # The tenant read is `Tenancy.list_active_tenants_for_user/1` — the
+  # viewer-scoped sibling of `list_active_tenants_unscoped/0`. It filters on
+  # `archived_at` AND the viewer's `org_memberships` in the query (root/Fabrikam
+  # admins bypass the membership filter by design and still see every active
+  # org). `list_active_tenants_unscoped/0` leaked the NAMES of orgs the
+  # viewer has no membership in onto the rail, which is why this function
+  # takes a viewer and has no zero-arity form: a viewer-less call must fail to
+  # COMPILE, mirroring the viewer-taking `Tasks.list_projects_for_user/2` and
+  # `project_sections/2`. Never re-add a `/0` shim, and never filter an
+  # unscoped tenant list at a call site — scope belongs in the viewer-taking
+  # context read.
+  #
+  # The allowlist-first construction below is UNCHANGED and must stay:
+  # `Tasks.scope_keys/0` filtered by active slugs, compared as STRINGS, never
+  # `String.to_atom/1` (nor `String.to_existing_atom/1`). That shape closes the
+  # two crash modes covered by the task-019fa209 regression tests; reverting to
+  # atom conversion re-opens a /tasks outage for every user.
   #
   # Org slugs are EXTERNALLY SUPPLIED — `Org.changeset/2` accepts any
-  # `^[a-z][a-z0-9_-]*$` and `list_active_tenants/0` filters only on
-  # `archived_at`, so an active tenant's slug may never have been compiled as
-  # an atom. This iterates the canonical allowlist and keeps the ones that are
+  # `^[a-z][a-z0-9_-]*$` and the tenant reads filter only on `archived_at`
+  # (plus membership), so an active tenant's slug may never have been compiled
+  # as an atom. This iterates the canonical allowlist and keeps the ones that are
   # active, comparing as STRINGS: no atom is created (`String.to_atom/1` would
   # grow the never-GC'd atom table from user input) and none is looked up
   # (`String.to_existing_atom/1` raises `ArgumentError`, which 500'd /tasks for
@@ -5445,8 +5463,8 @@ defmodule PlatformWeb.TasksLive do
   # sequence as `Tenancy.tenant_priority/0`, so for seeded orgs the output is
   # identical to the old `sort_by_tenant_priority/2` result. Mirrors
   # `parse_scope/1` above — allowlist first, never convert.
-  defp active_scope_keys do
-    active = MapSet.new(Tenancy.list_active_tenants(), & &1.slug)
+  defp active_scope_keys(viewer) do
+    active = MapSet.new(Tenancy.list_active_tenants_for_user(viewer), & &1.slug)
 
     Enum.filter(Tasks.scope_keys(), &MapSet.member?(active, Atom.to_string(&1)))
   end

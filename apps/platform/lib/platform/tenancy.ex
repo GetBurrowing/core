@@ -130,9 +130,20 @@ defmodule Platform.Tenancy do
   end
 
   @doc """
-  List the **active scopes** for the scope rail: the root org (Fabrikam) plus
-  every tenant whose `archived_at` is `nil`, in canonical tenant-priority
-  order (Fabrikam first — see `tenant_priority/0`).
+  List every active org, UNSCOPED: the root org (Fabrikam) plus every tenant
+  whose `archived_at` is `nil`, in canonical tenant-priority order (Fabrikam
+  first — see `tenant_priority/0`).
+
+  > #### This read has no viewer {: .error}
+  >
+  > It returns every non-archived org in the deployment regardless of who
+  > is asking, so it is for lifecycle and data callers only. **Any
+  > user-facing surface that renders org names — chips, section headers,
+  > pickers — must use `list_active_tenants_for_user/1` instead.** An
+  > unscoped read behind a rendered name discloses the existence and name
+  > of orgs the viewer has no membership in. The `_unscoped` suffix is
+  > deliberate and there is no shim under the old bare name: a viewer-less
+  > caller should fail to compile, not quietly leak.
 
   Deletion-scheduled tenants are excluded too: scheduling also stamps
   `archived_at` (see `Platform.Tenancy.Lifecycle.schedule_org_deletion/2`),
@@ -155,19 +166,18 @@ defmodule Platform.Tenancy do
   > `String.to_existing_atom/1` — it raises `ArgumentError` for any slug
   > never compiled as an atom. Filter against the canonical allowlist
   > (`Platform.Tasks.scope_keys/0`) comparing as strings instead; see
-  > `TasksLive.active_scope_keys/0`. An earlier version of this docstring
+  > `TasksLive.active_scope_keys/1`. An earlier version of this docstring
   > asserted the opposite invariant and that false claim took `/tasks` down
   > for every user in the deployment (task 019fa209).
 
   Contrast with `list_tenants/0`, which returns tenants only (no root) and
   every row regardless of archive state — background callers that must see
   archived tenants (org-summary walkers, preamble builder, federation tool
-  surface) keep using that one. `list_active_tenants/0` is the data-driven
-  source for the scope-rail chips; the `.heex` render swap lands in a later
-  stage.
+  surface) keep using that one. `list_active_tenants_for_user/1` is the
+  viewer-scoped source for the scope-rail chips.
   """
-  @spec list_active_tenants() :: [Org.t()]
-  def list_active_tenants do
+  @spec list_active_tenants_unscoped() :: [Org.t()]
+  def list_active_tenants_unscoped do
     Org
     |> where([o], is_nil(o.archived_at))
     |> Repo.all()
@@ -177,14 +187,14 @@ defmodule Platform.Tenancy do
   @doc """
   List the active orgs a viewer is allowed to see (ADR-0042).
 
-  The viewer-scoped counterpart to `list_active_tenants/0`, which is
+  The viewer-scoped counterpart to `list_active_tenants_unscoped/0`, which is
   unscoped and returns every non-archived org. Any surface that renders
   org **names or section headers** to a user must read through this
   function.
 
   > #### An empty section header is still a leak {: .warning}
   >
-  > `list_active_tenants/0` renders every org, so a sidebar grouping a
+  > `list_active_tenants_unscoped/0` renders every org, so a sidebar grouping a
   > correctly-scoped project list by it still discloses the *existence*
   > and *name* of every foreign org as a header with a `0` count. Scoping
   > only the project read is not enough; the org read has to be scoped
@@ -203,7 +213,7 @@ defmodule Platform.Tenancy do
       `:org_memberships` when they are loaded (`fabrikam_admin_preloaded?/1`,
       zero queries — the live path), else via `fabrikam_admin?/1`.
     * Archive semantics, ordering and the "slugs are arbitrary user
-      input" warning are all identical to `list_active_tenants/0`.
+      input" warning are all identical to `list_active_tenants_unscoped/0`.
   """
   @spec list_active_tenants_for_user(map() | nil) :: [Org.t()]
   def list_active_tenants_for_user(%{id: user_id} = user) when is_binary(user_id) do
@@ -239,7 +249,7 @@ defmodule Platform.Tenancy do
   states apart for display; the ordering here means each bucket is already
   in the right order once split.
 
-  Read-only companion to `list_active_tenants/0` — the lifecycle mutators
+  Read-only companion to `list_active_tenants_unscoped/0` — the lifecycle mutators
   (`archive_org/2`, `schedule_org_deletion/2`, …) live in
   `Platform.Tenancy.Lifecycle`.
   """

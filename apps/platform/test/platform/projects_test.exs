@@ -40,7 +40,7 @@ defmodule Platform.ProjectsTest do
   defp active_sections do
     Projects.group_by_active_org(
       Tasks.list_projects_unscoped(preload: :org),
-      Tenancy.list_active_tenants()
+      Tenancy.list_active_tenants_unscoped()
     )
   end
 
@@ -140,11 +140,11 @@ defmodule Platform.ProjectsTest do
     end
 
     test "emits sections only for orgs in active_orgs — a project of an excluded org can't resurrect it" do
-      # active_orgs omitting sxi is exactly what list_active_tenants/0 returns
+      # active_orgs omitting sxi is exactly what list_active_tenants_unscoped/0 returns
       # once sxi is archived; its still-active project must not bring it back.
       {:ok, _stray} = Tasks.create_project(%{name: "Stray", org_id: tenant_org_id("sxi")})
       projects = Tasks.list_projects_unscoped(preload: :org)
-      active_orgs = Enum.reject(Tenancy.list_active_tenants(), &(&1.slug == "sxi"))
+      active_orgs = Enum.reject(Tenancy.list_active_tenants_unscoped(), &(&1.slug == "sxi"))
 
       slugs = Projects.group_by_active_org(projects, active_orgs) |> Enum.map(&elem(&1, 0))
       refute "sxi" in slugs
@@ -165,7 +165,7 @@ defmodule Platform.ProjectsTest do
       orphan = %{id: "orphan-1", name: "Orphan", org: nil, archived_at: nil}
 
       slugs =
-        Projects.group_by_active_org([orphan], Tenancy.list_active_tenants())
+        Projects.group_by_active_org([orphan], Tenancy.list_active_tenants_unscoped())
         |> Enum.map(&elem(&1, 0))
 
       assert List.last(slugs) == "_unassigned"

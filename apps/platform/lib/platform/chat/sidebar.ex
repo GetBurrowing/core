@@ -48,7 +48,7 @@ defmodule Platform.Chat.Sidebar do
   above an empty "No channels yet" placeholder — the org looked half-deleted.
   Marlowe hit this walking the review.
 
-  Mirrors `Tenancy.list_tenants/0` vs `list_active_tenants/0`: the data API
+  Mirrors `Tenancy.list_tenants/0` vs `list_active_tenants_unscoped/0`: the data API
   keeps returning every row; only the render path filters. Restoring the org
   brings the section back with no extra work, because nothing about the
   section row ever changed.
