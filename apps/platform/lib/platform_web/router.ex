@@ -1,4 +1,35 @@
 defmodule PlatformWeb.Router do
+  @moduledoc """
+  THE THREE-BUCKET RULE (task 019fcf22). Every route in this file is exactly
+  one of three things, and adding a route means picking one deliberately:
+
+    1. **App-fenced** — declared in the default `scope "/"`, whose pipeline
+       ends in `:require_app_surface`. Reachable only on the app host. This is
+       the default and the right answer for anything an internal user
+       navigates to.
+    2. **Host-scoped** — declared inside `scope "/", host: "chat."` or
+       `host: "meet."`. Phoenix's `host:` is a compile-time hostname PREFIX
+       match, and these scopes are the exact complement of
+       `PlatformWeb.ExternalSurface.router_surface/1`, which the fence plug
+       consults.
+    3. **Host-agnostic** — deliberately answers on every host. This bucket is
+       small, load-bearing, and the one that breaks silently, so each member
+       carries a comment at its scope saying WHY. Today it is: `/health` and
+       the `/auth/*` login flow (the OIDC callback especially — external
+       sign-in begins on the chat host and the IdP's registered redirect URI
+       is a fixed absolute URL), the `/org-context[/*file_key]` 301s, the
+       HMAC-token attachment routes, the subscribed `invite.ics` calendar
+       feed, and the `/api/*` + `/mcp` machine callers.
+
+  Enforcement of bucket 1 is the `:host_surface_enforcement` config flag, `:on`
+  as of stage 4. The whole point of it being a flag is that the rollback is one
+  line in `config/config.exs` and touches nothing else.
+
+  Placement within this file is itself semantic: Phoenix emits one
+  `__match_route__/3` clause per route in definition order and the first match
+  wins, so a host scope must be declared ABOVE the match-any-host default
+  scope or it is shadowed. See the comments above the `meet.` guest scope.
+  """
   use PlatformWeb, :router
 
   pipeline :browser do
@@ -14,7 +45,7 @@ defmodule PlatformWeb.Router do
   # but installs the stripped `guest_root` layout (no shell chrome, no
   # sidebar, no sign-in CTA) and — critically — does NOT apply
   # `:require_auth`. Mounted under the dedicated `meet.` host scope below
-  # so `/:slug/:token` on `meet.example.com` renders the guest
+  # so `/:slug/:token` on the meet host renders the guest
   # LiveView while the primary hostname remains fully authenticated.
   pipeline :guest_browser do
     plug(:accepts, ["html"])
@@ -75,6 +106,28 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.ExternalUserScope)
   end
 
+  # App-surface fence (task 019fcf22 stage 3). `HostSurface` halts with 404
+  # when the request arrives on a `chat.` or `meet.` prefixed host, so the
+  # match-any-host default scope stops answering for the whole app on the
+  # external hosts. Enforcement is a config flag
+  # (`:host_surface_enforcement`, default `:off`), so wiring this pipeline in
+  # changes NOTHING observable until that flag flips.
+  #
+  # Applied at the SCOPE, not per route: `ExternalUserScope` allowlists routes
+  # and must be edited whenever anyone adds one; a pipeline plug is inherited
+  # by every route added to the scope from then on.
+  #
+  # LIVE_SESSION NOTE: `HostSurface` is an HTTP plug, so a `live_redirect`
+  # WITHIN one `live_session` does not re-enter it. That is acceptable here,
+  # unlike for `:enforce_external_scope`: every `live_session` in the fenced
+  # scope is entered by an HTTP mount that DID pass this plug, so a wrong-host
+  # user never gets inside the session to begin with. Do NOT cargo-cult the
+  # `:canvas_standalone` live_session split below on account of this plug —
+  # that split exists for a different reason and adding more would buy nothing.
+  pipeline :require_app_surface do
+    plug(PlatformWeb.Plugs.HostSurface)
+  end
+
   # JSON-API auth: same session check as :require_auth but returns 401 JSON
   # on failure instead of redirecting. Mounted on /api/* routes that need
   # an authenticated browser session (e.g. PATCH /api/messages/:id).
@@ -93,6 +146,11 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.AttachmentAuth)
   end
 
+  # HOST-AGNOSTIC (deliberate, not an oversight — task 019fcf22 stage 3).
+  # Attachment fetch authenticates off an HMAC token in the URL or a runtime
+  # bearer, never a host. Attachment URLs are minted relative and pasted into
+  # chat messages and canvases, so a URL copied while on the chat host must
+  # keep resolving there. No `:require_app_surface`.
   scope "/", PlatformWeb do
     pipe_through(:attachment_auth)
 
@@ -102,6 +160,10 @@ defmodule PlatformWeb.Router do
   # Presigned upload POST — HMAC token in the URL is the only auth. No
   # session / no bearer. Body parsers are bypassed via the endpoint's
   # body-reader skip-list so the controller can stream raw bytes.
+  #
+  # HOST-AGNOSTIC (deliberate). The upload URL is handed to a client that
+  # POSTs it back from whatever host it was issued on, including the chat
+  # host. No `:require_app_surface`.
   scope "/", PlatformWeb do
     pipe_through(:api)
 
@@ -128,12 +190,37 @@ defmodule PlatformWeb.Router do
   # segments so it cannot collide with `live("/meetings/:slug", ...)`, but
   # the ordering is what keeps it out of reach of the authenticated
   # scope's plugs regardless of what routes are added there later.
+  # HOST-AGNOSTIC (deliberate — task 019fcf22 stage 3). Google / Apple /
+  # Outlook fetch a SUBSCRIBED feed from their own servers against the
+  # absolute URL the user copied. That URL is minted RELATIVE (see
+  # `Platform.Meetings` and `components/meetings/meeting_detail.ex`) and
+  # resolved against whatever host the user happened to be on, so a feed
+  # copied from a chat- or meet-prefixed host would die under a fence — and
+  # would die silently, months later, in a calendar client nobody is looking
+  # at. No `:require_app_surface`.
   scope "/", PlatformWeb do
     pipe_through(:calendar_feed)
 
     get("/meetings/:id/invite.ics", MeetingCalendarController, :show)
   end
 
+  # HOST-AGNOSTIC (deliberate — task 019fcf22 stage 3), and the most
+  # dangerous entry on the list:
+  #
+  #   * `/auth/oidc/callback` — THE ONE THAT MUST NOT BE FENCED. External
+  #     sign-in BEGINS on the chat host, and the redirect URI registered at
+  #     the IdP is a fixed absolute URL. Fencing this route breaks production
+  #     login with an error that reads like an IdP misconfiguration, which is
+  #     the most expensive possible way to be wrong here.
+  #   * `/health` — uptime probes hit whatever host the load balancer aims
+  #     them at.
+  #   * `/auth/login`, `/auth/logout` — same flow as the callback.
+  #   * `/org-context[/*file_key]` — 301s for retired bookmarks; the new path
+  #     applies its own gate, so redirecting is safe on any host.
+  #
+  # Also note this scope is UNAUTHENTICATED. Adding `:require_app_surface`
+  # here is the mutation stage 3 ran to prove the fence bites; it must stay
+  # off. No `:require_app_surface`.
   scope "/", PlatformWeb do
     pipe_through(:browser)
 
@@ -167,6 +254,9 @@ defmodule PlatformWeb.Router do
       plug(:fetch_session)
     end
 
+    # HOST-AGNOSTIC (deliberate). Dev-only — the `Mix.env() == :dev` guard
+    # prevents route registration in prod entirely, so there is no surface to
+    # fence. No `:require_app_surface`.
     scope "/dev", PlatformWeb do
       pipe_through(:dev_session_json)
 
@@ -180,7 +270,7 @@ defmodule PlatformWeb.Router do
   # INERT / DARK scaffold. Mirrors the `meet.` guest scope structurally
   # (see the `meet.` scope near the bottom of this file) but for the
   # authenticated external-chat surface. Phoenix matches on `conn.host`
-  # starting with `chat.`, so `chat.example.com` (prod),
+  # starting with `chat.`, so the chat host (prod),
   # `chat.localhost` (dev via /etc/hosts), and `chat.<any>` route here
   # while the default `app.*` / `localhost` domain does not. No environment
   # declares a `chat.` host until the M14 subdomain go-live, so this route
@@ -312,8 +402,73 @@ defmodule PlatformWeb.Router do
     end
   end
 
+  # Guest meeting ingress (task 019f2483 stage 3, consolidated onto
+  # MeetingLive in task 019f498d stage 5). Bound to the dedicated
+  # `meet.` host prefix — Phoenix matches on `conn.host` starting with
+  # this string, so the prod meet host, `meet.localhost` (dev with
+  # `/etc/hosts`), and `meet.<any>.<tld>` all route here while
+  # the primary `app.*` / `localhost` domain does not. Ships without a
+  # `Mix.env()` guard because the guest flow must work in prod, dev, and
+  # test alike (the test harness sets `conn.host` explicitly per case).
+  #
+  # The `:guest_meeting` live_session pairs the stripped `:guest` layout
+  # with the `chrome_mode: "none"` session key — LiveView layouts are
+  # locked at the `live_session` boundary and cannot be re-chosen at
+  # mount time, so this seam is what lets MeetingLive serve both the
+  # authenticated `/meetings/:slug` shell surface AND the shellless
+  # `meet.` guest surface without a router topology surprise. The mount
+  # branch inside `MeetingLive.mount/3` selects on the injected session
+  # key; the `:show` action lines up with the existing
+  # `MeetingLive.handle_params/3` contract.
+  #
+  # ── PLACEMENT IS LOAD-BEARING AND HAS EXACTLY ONE CORRECT SLOT.
+  # Phoenix emits one `__match_route__/3` clause per route in DEFINITION
+  # order and the first match wins. `host:` narrows a clause, it does not
+  # reorder anything — so a two-segment match-any-host route declared
+  # EARLIER beats this one even on a `meet.` host.
+  #
+  # This block previously sat at the very bottom of the router, below the
+  # default `scope "/"`. Measured with
+  # `Phoenix.Router.route_info(PlatformWeb.Router, "GET", path,
+  # "meet.example.com")` on that arrangement, every one of these swallowed
+  # a guest link whose meeting slug matched the first segment:
+  # `/chat/:space_slug`, `/tasks/:task_id`, `/files/:project_id`,
+  # `/skills/:slug`, `/meetings/:slug`, `/control/:agent_slug`,
+  # `/canvases/:id`, `/admin/{recovery,users,prompts,federation}`,
+  # `/memory/proposals`, `/org_memory/*file_key`. Guest invite URLs are
+  # minted ABSOLUTE, stored, and emailed (`Platform.Meetings`), so those
+  # were dead links against invites already in people's inboxes — not a
+  # hypothetical. Hence: above the default scope.
+  #
+  # But NOT above the `meet.` MEMBER scope directly overhead. That scope
+  # declares `/meetings/:slug`, which is also two segments; hoisting this
+  # block over it would make every member URL match `/:slug/:token` with
+  # `slug: "meetings"` and silently delete the member surface. The trade
+  # is spelled out in (e) above and is unchanged by this move: a meeting
+  # slugged literally "meetings" still cannot be reached by guest link,
+  # and the fix for that would be a guest-route prefix, never a reorder.
+  # Both directions are pinned in
+  # `test/platform_web/router_meet_guest_placement_test.exs`.
+  scope "/", PlatformWeb, host: "meet." do
+    pipe_through(:guest_browser)
+
+    live_session :guest_meeting,
+      layout: {PlatformWeb.Layouts, :guest},
+      session: %{"chrome_mode" => "none"} do
+      live("/:slug/:token", MeetingLive, :show)
+    end
+  end
+
+  # THE FENCED SCOPE. `:require_app_surface` is LAST in the pipeline on
+  # purpose: an unauthenticated request must still redirect to login (via
+  # `:require_auth`) rather than 404, which keeps existing auth behaviour on
+  # the app host exactly as it was.
+  #
+  # Every route in the router is now one of three things — app-fenced (this
+  # scope), host-scoped (`chat.` / `meet.`), or on the documented
+  # host-agnostic list. Adding a route means picking one.
   scope "/", PlatformWeb do
-    pipe_through([:browser, :require_auth, :enforce_external_scope])
+    pipe_through([:browser, :require_auth, :enforce_external_scope, :require_app_surface])
 
     # Root redirects to /chat
     get("/", PageController, :home)
@@ -432,6 +587,14 @@ defmodule PlatformWeb.Router do
     end
   end
 
+  # ── HOST-AGNOSTIC MACHINE-CALLER SCOPES (deliberate — task 019fcf22
+  # stage 3). Everything from here to the end of the file is called by
+  # software, not a browser, and authenticates on a bearer token, a session
+  # cookie, or a request signature — never on a host. Two of them cannot be
+  # re-pointed by us at all: LiveKit and GitHub each POST to a URL configured
+  # in THEIR console, verified by `VerifyLivekitSignature` /
+  # `VerifyGithubSignature`. Fencing those would drop webhooks with no
+  # client-side error anyone here would see. None get `:require_app_surface`.
   scope "/api/internal", PlatformWeb do
     pipe_through(:api)
     post("/usage-events", UsageEventController, :create)
@@ -466,33 +629,5 @@ defmodule PlatformWeb.Router do
     pipe_through(:mcp)
     post("/", MCPController, :handle)
     get("/", MCPController, :stream)
-  end
-
-  # Guest meeting ingress (task 019f2483 stage 3, consolidated onto
-  # MeetingLive in task 019f498d stage 5). Bound to the dedicated
-  # `meet.` host prefix — Phoenix matches on `conn.host` starting with
-  # this string, so `meet.example.com` (prod), `meet.localhost`
-  # (dev with `/etc/hosts`), and `meet.<any>.<tld>` all route here while
-  # the primary `app.*` / `localhost` domain does not. Ships without a
-  # `Mix.env()` guard because the guest flow must work in prod, dev, and
-  # test alike (the test harness sets `conn.host` explicitly per case).
-  #
-  # The `:guest_meeting` live_session pairs the stripped `:guest` layout
-  # with the `chrome_mode: "none"` session key — LiveView layouts are
-  # locked at the `live_session` boundary and cannot be re-chosen at
-  # mount time, so this seam is what lets MeetingLive serve both the
-  # authenticated `/meetings/:slug` shell surface AND the shellless
-  # `meet.` guest surface without a router topology surprise. The mount
-  # branch inside `MeetingLive.mount/3` selects on the injected session
-  # key; the `:show` action lines up with the existing
-  # `MeetingLive.handle_params/3` contract.
-  scope "/", PlatformWeb, host: "meet." do
-    pipe_through(:guest_browser)
-
-    live_session :guest_meeting,
-      layout: {PlatformWeb.Layouts, :guest},
-      session: %{"chrome_mode" => "none"} do
-      live("/:slug/:token", MeetingLive, :show)
-    end
   end
 end

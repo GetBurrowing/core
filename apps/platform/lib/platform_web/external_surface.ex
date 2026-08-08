@@ -14,6 +14,15 @@ defmodule PlatformWeb.ExternalSurface do
   no catch-all that admits — an unset or blank `:meet_host` means the meet
   surface DOES NOT EXIST, so every host resolves `:chat` or `:app`.
 
+  TWO QUESTIONS, TWO FUNCTIONS. `for_conn/1` matches the CONFIGURED
+  `:meet_host` exactly and decides WHETHER AN EXTERNAL USER IS ADMITTED —
+  authorization. `router_surface/1` matches the `chat.` and `meet.` hostname
+  PREFIXES and decides WHICH HOST SCOPE A REQUEST BELONGS TO — routing. It is
+  the exact complement of the two `host:` scopes in `PlatformWeb.Router`.
+  They diverge by design: with `:meet_host` unset, a `meet.` host is `:app`
+  to `for_conn/1` and `:meet` to `router_surface/1`. Pick the one that
+  matches the question being asked.
+
   `MEET_HOST` is exposed to request-time code as `:meet_host` in
   `config/runtime.exs` (unconditionally, so dev/CI can set it), mirroring how
   `CHAT_HOST` is exposed as `:chat_host` for `PlatformWeb.ExternalRedirect`.
@@ -37,6 +46,35 @@ defmodule PlatformWeb.ExternalSurface do
     cond do
       on_chat_host?(conn) -> :chat
       on_meet_host?(conn) -> :meet
+      true -> :app
+    end
+  end
+
+  @doc """
+  Which ROUTER host scope a request belongs to.
+
+  This answers a DIFFERENT question from `for_conn/1` and the two must not be
+  conflated:
+
+    * `for_conn/1` matches the CONFIGURED `:meet_host` EXACTLY and decides
+      WHETHER AN EXTERNAL USER IS ADMITTED. It is an authorization input.
+    * `router_surface/1` matches the `chat.` and `meet.` hostname PREFIXES and
+      decides WHICH HOST SCOPE A REQUEST BELONGS TO. It is the exact
+      complement of the two `host:` scopes in `PlatformWeb.Router`, which
+      Phoenix compiles as string PREFIX matches.
+
+  The prefix, not the configured value, is the correct rule here precisely
+  because `:meet_host` is unset in dev and test — `for_conn/1` therefore
+  answers `:app` for a `meet.` host in those environments. A fence built on
+  `for_conn/1` would be fail-open everywhere except production. A fence that
+  is the complement of the router's mechanism must use the router's
+  mechanism.
+  """
+  @spec router_surface(Plug.Conn.t()) :: surface()
+  def router_surface(%Plug.Conn{} = conn) do
+    cond do
+      on_chat_host?(conn) -> :chat
+      String.starts_with?(to_string(conn.host), "meet.") -> :meet
       true -> :app
     end
   end

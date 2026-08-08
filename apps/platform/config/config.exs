@@ -342,6 +342,19 @@ config :platform, :oidc,
   external_group: "sxi-external",
   external_claim: "groups"
 
+# App-surface host fence (task 019fcf22 stage 4). `:on` makes
+# `PlatformWeb.Plugs.HostSurface` halt with 404 when a request for a route in
+# the default (app) scope arrives on a `chat.` or `meet.` prefixed host.
+#
+# STATED CONSEQUENCE: this breaks an internal-user habit. Before the flip an
+# internal user who landed on a `chat.` URL could navigate the entire app from
+# there without noticing; after it, every non-chat path on that host is a 404.
+# That is the intent of the task.
+#
+# ROLLBACK is this one line — set it back to `:off`. Nothing else in stages
+# 1-3 has to be touched, which is why enforcement is a flag at all.
+config :platform, :host_surface_enforcement, :on
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

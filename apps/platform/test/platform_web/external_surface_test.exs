@@ -141,4 +141,30 @@ defmodule PlatformWeb.ExternalSurfaceTest do
       refute ExternalSurface.chat_host_configured?()
     end
   end
+
+  describe "router_surface/1 (the router's prefix rule)" do
+    test "meet. prefix is :meet even with :meet_host UNSET, where for_conn/1 says :app" do
+      conn = conn_on("meet.example.com")
+
+      # The divergence is the whole point of the second function, so both
+      # sides are asserted in one test: it cannot drift into agreement
+      # unnoticed, and the :meet answer cannot be passing for the wrong
+      # reason (a configured meet host).
+      refute ExternalSurface.meet_host_configured?()
+      assert ExternalSurface.for_conn(conn) == :app
+      assert ExternalSurface.router_surface(conn) == :meet
+    end
+
+    test "chat. prefix is :chat" do
+      assert ExternalSurface.router_surface(conn_on("chat.example.test")) == :chat
+    end
+
+    test "a bare app host is :app" do
+      assert ExternalSurface.router_surface(conn_on("example.com")) == :app
+    end
+
+    test "a host merely CONTAINING meet. is :app — the router matches a prefix" do
+      assert ExternalSurface.router_surface(conn_on("notmeet.example.com")) == :app
+    end
+  end
 end
