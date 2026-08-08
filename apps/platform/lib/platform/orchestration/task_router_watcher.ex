@@ -230,10 +230,10 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
             "[TaskRouterWatcher] reconcile_stack_lifecycle raised: #{Exception.message(e)}"
           )
 
-          %{commenced: 0, pr_reopened: 0}
+          %{commenced: 0, pr_reopened: 0, promoted: 0}
       catch
         :exit, _reason ->
-          %{commenced: 0, pr_reopened: 0}
+          %{commenced: 0, pr_reopened: 0, promoted: 0}
       end
 
     # Task 019fa605 — the same 5-min tick is also the deadline timer for
@@ -281,7 +281,8 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
         "in_review stall sweep: scanned=#{stall_result.scanned}, " <>
         "transitioned=#{stall_result.transitioned}, observed=#{stall_result.observed}; " <>
         "stack lifecycle: commenced=#{lifecycle_result.commenced}, " <>
-        "pr_reopened=#{lifecycle_result.pr_reopened}; " <>
+        "pr_reopened=#{lifecycle_result.pr_reopened}, " <>
+        "promoted=#{lifecycle_result.promoted}; " <>
         "arch gate sweep: scanned=#{gate_result.scanned}, " <>
         "settled=#{gate_result.settled}, observed=#{gate_result.observed}; " <>
         "auto-approval retry sweep: scanned=#{retry_result.scanned}, " <>

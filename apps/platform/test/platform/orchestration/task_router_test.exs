@@ -3738,6 +3738,312 @@ defmodule Platform.Orchestration.TaskRouterTest do
     end
   end
 
+  # Fixture helper for the late-precondition describe block below.
+  defp late_precondition_task(status, stage_specs) do
+    {:ok, project} = Tasks.create_project(%{name: "Late precondition #{unique()}"})
+
+    {:ok, task} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "Late precondition #{unique()}",
+        status: status,
+        deploy_target: "production"
+      })
+
+    {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved", version: 1})
+
+    stages =
+      for {name, position, initial_status} <- stage_specs do
+        {:ok, stage} =
+          Tasks.create_stage(%{
+            plan_id: plan.id,
+            position: position,
+            name: name,
+            status: initial_status
+          })
+
+        stage
+      end
+
+    {task, plan, stages}
+  end
+
+  defp stage_status(stage_id), do: Platform.Repo.get!(Platform.Tasks.Stage, stage_id).status
+
+  # ────────────────────────────────────────────────────────────────────
+  # Late-precondition stage opening (task 019fbe9e stage 3)
+  # ────────────────────────────────────────────────────────────────────
+  #
+  # Every fixture here is built LATE-PRECONDITION: the plan is approved (or
+  # the stage fails) BEFORE the condition that should open a stage becomes
+  # true. That ordering is the whole point. The pre-fix tree wires
+  # `ensure_execution_stage_started/2` to a single edge — plan approval — and
+  # that function early-returns unless the task is ALREADY `in_progress`, so a
+  # fixture that approves the plan while the task is already `in_progress`
+  # passes against the broken code and proves nothing.
+  describe "opening a stage when the precondition arrives late" do
+    test "a plan approved while the task sits at stack_pending still opens stage 1 on promotion",
+         %{assignee: assignee} do
+      {task, _plan, [first, second]} =
+        late_precondition_task("stack_pending", [
+          {"coding", 1, "pending"},
+          {"review", 2, "pending"}
+        ])
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # Precondition arrives here, long after the approval edge already fired.
+      assert {:ok, promoted} = Tasks.transition_task(task, "in_progress")
+      assert promoted.status == "in_progress"
+
+      # Mailbox barrier — the broadcast is dispatched in THIS process, so by
+      # the time this call returns the router has drained `{:task_updated, _}`.
+      _ = TaskRouter.current_status(task.id)
+
+      assert stage_status(first.id) == "running"
+      # Only the lowest-position pending stage is started.
+      assert stage_status(second.id) == "pending"
+    end
+
+    test "a task promoted with a stage already running is not disturbed (idempotency)", %{
+      assignee: assignee
+    } do
+      {task, _plan, [first, second]} =
+        late_precondition_task("stack_pending", [
+          {"coding", 1, "running"},
+          {"review", 2, "pending"}
+        ])
+
+      before = Platform.Repo.get!(Platform.Tasks.Stage, first.id)
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      assert {:ok, _} = Tasks.transition_task(task, "in_progress")
+      _ = TaskRouter.current_status(task.id)
+
+      after_ = Platform.Repo.get!(Platform.Tasks.Stage, first.id)
+
+      assert after_.status == "running"
+      assert after_.updated_at == before.updated_at
+      # The second stage must not be started alongside the running one.
+      assert stage_status(second.id) == "pending"
+    end
+
+    test "a review-stage failure bounce re-opens the next pending stage", %{assignee: assignee} do
+      {task, _plan, [coding, review, followup]} =
+        late_precondition_task("in_review", [
+          {"coding", 1, "passed"},
+          {"Task-level review", 2, "failed"},
+          {"rework", 3, "pending"}
+        ])
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      failed = Platform.Repo.get!(Platform.Tasks.Stage, review.id)
+      Tasks.broadcast_board({:stage_transitioned, failed})
+      _ = TaskRouter.current_status(task.id)
+
+      assert Tasks.get_task_detail(task.id).status == "in_progress"
+      # The disjunct shipped for a bounce that still HAS work: a stage runs.
+      assert stage_status(followup.id) == "running"
+      assert stage_status(coding.id) == "passed"
+    end
+
+    # FALSIFIED PREMISE, recorded here because the next reader will otherwise
+    # try to add the guard again: the stage brief called for a NEW withhold
+    # clause in `handle_info(:dispatch, _)` for "in_progress, no running stage,
+    # no pending stage". That guard already exists — `unresolved_stage_dispatch?/3`
+    # inside `do_dispatch/2` (task 019fa469 stage 4) — with the identical
+    # three-conjunct predicate, the same loud log, the same execution-space
+    # line, and the same suppression telemetry under `reason: :unresolved_stage`.
+    # A second clause was written, and it silently STOLE the case from the
+    # existing one: `task_router_unresolved_stage_test.exs:114` went red because
+    # it saw the new reason atom. The duplicate was removed rather than
+    # reconciled. This test therefore asserts the EXISTING guard covers the
+    # bounce, which is the fact the stage actually needed established.
+    test "a bounce with no startable stage withholds the dispatch instead of prompting", %{
+      assignee: assignee
+    } do
+      {task, _plan, [_coding, review]} =
+        late_precondition_task("in_review", [
+          {"coding", 1, "passed"},
+          {"Task-level review", 2, "failed"}
+        ])
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      handler_ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :orchestration, :dispatch_suppressed]
+        ])
+
+      on_exit(fn -> :telemetry.detach(handler_ref) end)
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      failed = Platform.Repo.get!(Platform.Tasks.Stage, review.id)
+      Tasks.broadcast_board({:stage_transitioned, failed})
+
+      task_id = task.id
+
+      # Barrier FIRST. The router's own `init/1` dispatch already suppresses
+      # for this fixture (it is `in_review` with nothing running), so an
+      # `assert_receive` placed here without a barrier matches THAT event and
+      # then reads the task before the bounce has been handled at all — which
+      # is exactly how this test first went red claiming the bounce never
+      # happened.
+      _ = TaskRouter.current_status(task_id)
+
+      assert Tasks.get_task_detail(task_id).status == "in_progress"
+
+      assert_receive {[:platform, :orchestration, :dispatch_suppressed], ^handler_ref,
+                      %{count: 1}, %{task_id: ^task_id, reason: :unresolved_stage}},
+                     1_000
+
+      # The forbidden outcome: prompting an executor into a state where
+      # `stage_complete` can only answer "Stage must be running".
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     300
+    end
+
+    test "a task at in_progress with every stage pending is never withheld — the stage is started",
+         %{assignee: assignee} do
+      # ANTI-VACUITY CONTROL for the withhold clause. If the guard keyed off
+      # "no running stage" alone it would also match this task, and
+      # suppressing here parks it forever: the dispatch is the only thing that
+      # would ever have moved it.
+      {task, _plan, [first, _second]} =
+        late_precondition_task("in_progress", [{"coding", 1, "pending"}, {"review", 2, "pending"}])
+
+      handler_ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :orchestration, :dispatch_suppressed]
+        ])
+
+      on_exit(fn -> :telemetry.detach(handler_ref) end)
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      {:ok, reloaded} = {:ok, Tasks.get_task_detail(task.id)}
+      Tasks.broadcast_board({:task_updated, reloaded})
+      _ = TaskRouter.current_status(task.id)
+
+      assert stage_status(first.id) == "running"
+      refute_receive {[:platform, :orchestration, :dispatch_suppressed], ^handler_ref, _, _}, 300
+    end
+  end
+
+  # ────────────────────────────────────────────────────────────────────
+  # FALSIFIED: "the dispatch payload carries a stale stage_id" (019fbe9e stage 5)
+  # ────────────────────────────────────────────────────────────────────
+  #
+  # The ticket read: an operator acks WITHOUT a `stage_id` and the ack lands on
+  # stage N+1 relative to the stage the dispatch named, therefore the dispatch
+  # payload's `stage_id` was stale when it was sent. Two explanations fit that
+  # observation and they are not the same defect:
+  #
+  #   (a) the dispatch resolved its stage from the ROUTER'S CACHED
+  #       `state.current_stage_id`, which can lag the DB; or
+  #   (b) the dispatch was correct when sent and the named stage genuinely
+  #       completed before the ack — routine when dispatches arrive duplicated
+  #       and late.
+  #
+  # (a) is FALSE in this tree, and this test is what says so rather than a
+  # comment. `do_dispatch/2` opens with `Tasks.current_plan(state.task_id)` and
+  # `current_running_stage(plan)`; it never consults `state.current_stage_id`.
+  # The cached field is read by the heartbeat, blocker-staleness and diagnostic
+  # paths — none of which build a dispatch payload. `resolve_ack_stage_id/2` on
+  # the tool side reads the same DB predicate (`status == "running"` on
+  # `current_plan/1`). So the two ends agree on a source of truth and can only
+  # disagree about TIME, which is (b). No code was added for this item.
+  #
+  # The fixture is the discriminator, not a smoke test: the router's cached id
+  # is deliberately made stale, and the cached stage it points at is one that
+  # WOULD resolve if the cache were consulted. If a future edit reintroduces
+  # `find_stage(plan, state.current_stage_id) || current_running_stage(plan)`
+  # into the dispatch path — the shape the ticket assumed — that stale stage is
+  # found, the dispatch is no longer unresolved, and this test goes red.
+  describe "the dispatch payload's stage is read fresh, never from cached router state" do
+    test "a cached stage_id that outlived its stage does not resolve a dispatch", %{
+      assignee: assignee
+    } do
+      {task, _plan, [first, second]} =
+        late_precondition_task("in_progress", [{"coding", 1, "running"}, {"review", 2, "pending"}])
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # The router observed stage 1 running and cached it.
+      assert TaskRouter.current_status(task.id).current_stage_id == first.id
+
+      # The DB advances underneath the router with no broadcast — the exact
+      # condition under which a cache could go stale unnoticed. Both stages
+      # land at `passed`, so a FRESH read resolves no stage at all while the
+      # cached id still names a real, findable stage row.
+      {2, _} =
+        Platform.Repo.update_all(
+          from(s in Platform.Tasks.Stage, where: s.id in ^[first.id, second.id]),
+          set: [status: "passed"]
+        )
+
+      # ANTI-VACUITY: the lag is real. Without this the test could pass
+      # because the cache happened to be empty, which proves nothing about
+      # where the dispatch reads from.
+      assert TaskRouter.current_status(task.id).current_stage_id == first.id
+      assert stage_status(first.id) == "passed"
+
+      handler_ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :orchestration, :dispatch_suppressed]
+        ])
+
+      on_exit(fn -> :telemetry.detach(handler_ref) end)
+
+      task_id = task.id
+      send(pid, :dispatch)
+
+      assert_receive {[:platform, :orchestration, :dispatch_suppressed], ^handler_ref,
+                      %{count: 1}, %{task_id: ^task_id, reason: :unresolved_stage}},
+                     1_000
+    end
+
+    test "the ack path resolves the same running-stage predicate the dispatch does" do
+      # The other half of (a): if the ack side read a DIFFERENT source from the
+      # dispatch side, the two could disagree without either being late. It
+      # does not — with no running stage on the current plan, an ack that omits
+      # `stage_id` refuses rather than resolving some other stage.
+      {task, _plan, [first, _second]} =
+        late_precondition_task("in_progress", [{"coding", 1, "passed"}, {"review", 2, "passed"}])
+
+      assert {:error, envelope} =
+               Platform.Federation.ToolSurface.execute(
+                 "task_ack",
+                 %{"task_id" => task.id, "subagent_id" => "probe"},
+                 %{}
+               )
+
+      assert envelope.error =~ "no running stage"
+
+      # Control: with a stage actually running it resolves to THAT stage, so
+      # the refusal above is about state and not about the argument shape.
+      {1, _} =
+        Platform.Repo.update_all(
+          from(s in Platform.Tasks.Stage, where: s.id == ^first.id),
+          set: [status: "running"]
+        )
+
+      assert {:ok, ack} =
+               Platform.Federation.ToolSurface.execute(
+                 "task_ack",
+                 %{"task_id" => task.id, "subagent_id" => "probe"},
+                 %{}
+               )
+
+      assert ack.stage_id == first.id
+    end
+  end
+
   # ────────────────────────────────────────────────────────────────────
   # Zero-sleep guard (task 019fa121 stage 5)
   # ────────────────────────────────────────────────────────────────────

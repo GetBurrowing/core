@@ -752,7 +752,27 @@ defmodule Platform.Orchestration.TaskRouter do
         else
           case LeaseManager.mark_safety_net_fired(task_id) do
             {:ok, :fired} ->
-              fire_safety_net_alert(state, lease)
+              # Task 019fbe9e stage 4. The safety net measures elapsed time
+              # against a lease armed at dispatch; it does not re-read whether
+              # there is still anything to be slow ABOUT. A plan that settled
+              # after the lease was armed — no running stage, no
+              # pending/running validation — has no work an executor could be
+              # stuck on, so the alert can only be a false blocker asking a
+              # human to investigate a finished task.
+              #
+              # `mark_safety_net_fired/1` above has ALREADY run, deliberately:
+              # suppression must consume the one-shot, or the timer would find
+              # the lease unfired and re-evaluate on every subsequent check.
+              if plan_settled_no_open_work?(task_id) do
+                Logger.info(
+                  "[TaskRouter] task #{task_id} stage #{lease.stage_id} — safety-net window " <>
+                    "elapsed but the current plan has no running stage and no open validation; " <>
+                    "suppressing execution.safety_net_fired"
+                )
+              else
+                fire_safety_net_alert(state, lease)
+              end
+
               {:noreply, state}
 
             _ ->
@@ -765,6 +785,9 @@ defmodule Platform.Orchestration.TaskRouter do
   # Board PubSub: task updated for our task
   def handle_info({:task_updated, %{id: task_id} = task}, %State{task_id: task_id} = state) do
     task_status = Map.get(task, :status) || Map.get(task, "status")
+    # Captured BEFORE the overwrite below — the stage-opening guard further
+    # down needs the status the router last observed, not the incoming one.
+    previous_task_status = state.task_status
 
     state =
       state
@@ -787,6 +810,53 @@ defmodule Platform.Orchestration.TaskRouter do
         end
 
         state |> clear_liveness() |> Map.put(:status, :waiting_human)
+      else
+        state
+      end
+
+    # LATE-PRECONDITION STAGE OPEN (task 019fbe9e stage 3). Until this call,
+    # `ensure_execution_stage_started/2` was wired to exactly ONE edge — the
+    # `{:plan_updated, "approved"}` branch — and it early-returns unless the
+    # task is ALREADY `in_progress`. A stack member whose plan is approved
+    # while it sits at `stack_pending` therefore crosses that edge in the one
+    # state where the function declines to act, and when it is promoted to
+    # `in_progress` later NOTHING re-evaluates the precondition: every stage
+    # stays `pending` and the executor is prompted into a dead end where
+    # `stage_complete` refuses the work with "Stage must be running".
+    #
+    # LEVEL, not edge: this reads the task status off the broadcast and
+    # re-derives everything else from the DB, so it fires on whichever
+    # `{:task_updated}` happens to carry `in_progress` — promotion, bounce, or
+    # an unrelated write. Idempotency is `ensure_execution_stage_started/2`'s
+    # own cond: the `current_running_stage(plan)` clause is tried first and
+    # only re-dispatches, so repeat calls against a task with a running stage
+    # start nothing. Deliberately NOT a second stage-start path.
+    #
+    # NARROWED to the case where a stage would actually be OPENED, and the
+    # narrowing is load-bearing rather than tidiness. `{:task_updated}` fires
+    # from many writers, and `ensure_execution_stage_started/2`'s first two
+    # clauses each `send(self(), :dispatch)`. Calling it unconditionally on
+    # every `in_progress` broadcast therefore amplifies dispatches:
+    # `task_router_phase_assignee_test.exs:165` observed 3 attention
+    # broadcasts where it asserts exactly 1, because plan approval already
+    # walks the same path from the `{:plan_updated, "approved"}` branch. The
+    # guard below fires only when there is NO running stage and a pending one
+    # exists — precisely the state the defect strands — so it can never add a
+    # dispatch to a task that already had a stage to be dispatched about.
+    #
+    # And EXCLUDED for `planning -> in_progress`, which is the one promotion
+    # the approval edge already owns: `approve_plan/3` transitions the task
+    # and broadcasts BOTH messages into this mailbox, `{:task_updated}` first.
+    # Opening the stage here would leave `{:plan_updated, "approved"}` to land
+    # on the now-running stage and emit a second, redundant prompt — measured
+    # as 2 attention broadcasts where that test pins exactly 1. Every OTHER
+    # entry into `in_progress` (`stack_pending`, `blocked`, `backlog`, or a
+    # router that booted after the fact and has observed no prior status) is
+    # exactly the set the approval edge cannot reach.
+    state =
+      if task_status == "in_progress" and previous_task_status != "planning" and
+           stage_needs_opening?(task_id) do
+        ensure_execution_stage_started(state, task_id)
       else
         state
       end
@@ -955,6 +1025,22 @@ defmodule Platform.Orchestration.TaskRouter do
                 diagnostic_snapshot(state, task, stage_override: stage)
             )
           end
+
+          # Same defect as the promotion path (task 019fbe9e stage 3). The
+          # bounce puts the task back at `in_progress`, but the stage it
+          # bounced off is `failed` and every execution stage is already
+          # `passed` — so `send(self(), :dispatch)` alone prompts an agent at
+          # a task with no stage it can complete. Re-open one here, AFTER the
+          # transition (so the `!= "in_progress"` early return does not
+          # swallow it) and BEFORE the dispatch. When no pending stage exists
+          # this is a no-op and the withhold clause in `handle_info(:dispatch,
+          # _)` catches the resulting dead end.
+          state =
+            if stage_needs_opening?(state.task_id) do
+              ensure_execution_stage_started(state, state.task_id)
+            else
+              state
+            end
 
           send(self(), :dispatch)
           %{state | status: :running}
@@ -2673,6 +2759,29 @@ defmodule Platform.Orchestration.TaskRouter do
     :exit, _ -> false
   end
 
+  # Task 019fbe9e stage 4 — the safety-net suppression predicate.
+  #
+  # Deliberately NOT `settled_stack_member_no_work?/2` and deliberately not a
+  # second copy of `any_open_validation?/1`. It shares the "nothing open"
+  # half with the dispatch-suppression clause and drops the `stack_id` half:
+  # a false safety-net alert on a settled plan is equally wrong for a solo
+  # task, whereas WITHHOLDING A DISPATCH from a solo task would strand it.
+  # Different blast radius, so the stack guard stays where it is.
+  #
+  # Best-effort in the same shape as its sibling: any lookup failure yields
+  # `false`, i.e. fire the alert. A safety net that goes quiet when it cannot
+  # read the plan is worse than one that cries wolf.
+  defp plan_settled_no_open_work?(task_id) do
+    case Tasks.current_plan(task_id) do
+      nil -> false
+      plan -> current_running_stage(plan) == nil and not any_open_validation?(plan)
+    end
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
   defp any_open_validation?(nil), do: false
 
   defp any_open_validation?(plan) do
@@ -2720,6 +2829,20 @@ defmodule Platform.Orchestration.TaskRouter do
     )
 
     :ok
+  end
+
+  # Task 019fbe9e stage 3. True only for the stranded shape: a current plan
+  # with no running stage and at least one pending stage. Rescues to `false`
+  # like its sibling predicates — a failing lookup must not open a stage.
+  defp stage_needs_opening?(task_id) do
+    case Tasks.current_plan(task_id) do
+      nil -> false
+      plan -> current_running_stage(plan) == nil and first_pending_stage(plan) != nil
+    end
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
   end
 
   defp first_pending_stage(nil), do: nil

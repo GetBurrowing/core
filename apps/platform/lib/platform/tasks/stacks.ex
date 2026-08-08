@@ -512,7 +512,9 @@ defmodule Platform.Tasks.Stacks do
 
     * commences it if it is `forming`-but-ready (`commence_if_ready/1`), and
     * re-fires the rollup-PR open for any stack stuck at `deploying` with no
-      `metadata["rollup_pr"]` (`reconcile_deploying_stacks/0`).
+      `metadata["rollup_pr"]` (`reconcile_deploying_stacks/0`), and
+    * promotes any member still parked at `stack_pending` whose in-stack deps
+      have since cleared (`sweep_stack_pending_members/0`).
 
   Invoked from `TaskRouterWatcher`'s 5-minute reconcile tick. Log-and-swallow
   throughout: a single bad stack never aborts the sweep. Returns a summary
@@ -520,7 +522,8 @@ defmodule Platform.Tasks.Stacks do
   """
   @spec reconcile_stack_lifecycle() :: %{
           commenced: non_neg_integer(),
-          pr_reopened: non_neg_integer()
+          pr_reopened: non_neg_integer(),
+          promoted: non_neg_integer()
         }
   def reconcile_stack_lifecycle do
     commenced =
@@ -536,8 +539,98 @@ defmodule Platform.Tasks.Stacks do
       end)
 
     pr_reopened = reconcile_deploying_stacks()
+    promoted = sweep_stack_pending_members()
 
-    %{commenced: commenced, pr_reopened: pr_reopened}
+    %{commenced: commenced, pr_reopened: pr_reopened, promoted: promoted}
+  end
+
+  # Stack statuses whose members can legitimately be sitting at
+  # `stack_pending` waiting on an in-stack dependency. Terminal and
+  # pre-commencement-failure statuses are excluded deliberately.
+  @promotable_stack_statuses ["in_progress", "gated", "forming"]
+
+  @doc """
+  Late-precondition promotion sweep (task 019fbe9e): promote every member
+  still parked at `stack_pending` whose in-stack dependencies have since
+  cleared the unblock threshold.
+
+  Why a SWEEP and not another cascade: the gate-open event fires exactly
+  once (`detect_gate_open_transition/2` is guarded by
+  `pre_update_plan_already_counted?/1`), so a promotion hung off that event
+  cannot serve a precondition that becomes true LATER. `commence_if_ready/1`
+  only looks at `forming` stacks and `reconcile_deploying_stacks/0` only at
+  `deploying` ones — nothing re-derived `stack_pending` membership of an
+  already-`in_progress` stack. This sweep re-derives it from current state on
+  every tick, so it covers both start-up and mid-life.
+
+  Idempotency mechanism (named, not hand-waved): promotion goes through the
+  EXISTING `try_promote/1`, whose head matches
+  `%Task{status: "stack_pending"}` and whose catch-all clause
+  `def try_promote(%Task{}), do: :noop` leaves any member already at
+  `in_progress`/`in_review`/`done` completely untouched — no write, so no
+  `updated_at` churn. The member query ALSO filters `status == "stack_pending"`
+  so that a concurrent tick cannot widen the candidate set.
+
+  Note for anyone testing this: the query filter and the function-head guard
+  are REDUNDANT with each other AND with a third guard underneath both —
+  `Tasks.transition_task/2` rejects an identity transition, because
+  `@valid_task_transitions["in_progress"]` does not contain `"in_progress"`.
+  Mutating either of the first two guards individually, or both together, is
+  therefore behaviourally invisible: the innermost rejection still refuses the
+  write. Idempotency here is over-determined, not untested — but no
+  behavioural assertion can distinguish the three layers, so do not read a
+  green test as evidence that any ONE of them is load-bearing.
+
+  Each per-member promotion is wrapped so one failure never aborts the sweep,
+  mirroring the reduce-and-drop shape in `sweep_stack_dependents/1`.
+
+  Returns the count of members actually promoted on this pass.
+  """
+  @spec sweep_stack_pending_members() :: non_neg_integer()
+  def sweep_stack_pending_members do
+    stack_ids =
+      Stack
+      |> where([s], s.status in ^@promotable_stack_statuses)
+      |> select([s], s.id)
+      |> Repo.all()
+
+    case stack_ids do
+      [] ->
+        0
+
+      ids ->
+        Task
+        |> where([t], t.stack_id in ^ids)
+        |> where([t], t.status == "stack_pending")
+        |> where([t], is_nil(t.deleted_at))
+        |> Repo.all()
+        |> Enum.reduce(0, fn member, acc ->
+          case safe_try_promote(member) do
+            {:ok, _updated} -> acc + 1
+            _ -> acc
+          end
+        end)
+    end
+  end
+
+  defp safe_try_promote(%Task{} = member) do
+    try_promote(member)
+  rescue
+    e ->
+      Logger.warning(
+        "[Stacks.sweep_stack_pending_members] try_promote raised for task " <>
+          "#{member.id}: #{Exception.message(e)}"
+      )
+
+      :error
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[Stacks.sweep_stack_pending_members] try_promote exited for task " <>
+          "#{member.id}: #{inspect(reason)}"
+      )
+
+      :error
   end
 
   @doc """

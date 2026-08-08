@@ -6818,4 +6818,151 @@ defmodule Platform.Tasks.StacksTest do
       assert_raise Ecto.NoResultsError, fn -> Stacks.get_stack!(@slug_16) end
     end
   end
+
+  # ── Late-precondition promotion sweep (task 019fbe9e) ───────────────────
+  #
+  # Every fixture here is built so the precondition arrives LATE — the stack
+  # is ALREADY past `forming` when the members need promoting. A fixture that
+  # commences the stack after the deps clear passes against the pre-fix tree
+  # and proves nothing.
+  describe "sweep_stack_pending_members/0 (late-precondition promotion)" do
+    defp landed_stamp do
+      %{"sha" => "abc1234", "at" => "2026-08-01T00:00:00Z"}
+    end
+
+    defp set_status!(task, status) do
+      task |> Task.changeset(%{status: status}) |> Repo.update!()
+    end
+
+    defp reload_status(id), do: Repo.get(Task, id).status
+
+    test "promotes stack_pending members of an already-in_progress stack whose deps have cleared" do
+      {:ok, project} = Tasks.create_project(%{name: "Late gate promote"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, parent} = Tasks.create_task(%{project_id: project.id, title: "Parent"})
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child",
+          dependencies: [%{"task_id" => parent.id, "kind" => "blocks"}]
+        })
+
+      {:ok, attached_parent} = Stacks.add_task(stack, parent)
+      {:ok, attached_child} = Stacks.add_task(stack, child)
+
+      {:ok, _} = Tasks.create_plan(%{task_id: attached_parent.id, status: "approved"})
+      {:ok, _} = Tasks.create_plan(%{task_id: attached_child.id, status: "approved"})
+
+      stack |> Ecto.Changeset.change(status: "in_progress") |> Repo.update!()
+
+      set_status!(attached_child, "stack_pending")
+
+      # Dep cleared WITHOUT going through the update-path cascade, so nothing
+      # ever called sweep_stack_dependents/1 for it — the live incident shape.
+      attached_parent
+      |> Task.changeset(%{
+        status: "in_review",
+        metadata: %{"merged_into_rollup_at" => landed_stamp()}
+      })
+      |> Repo.update!()
+
+      assert reload_status(attached_child.id) == "stack_pending"
+
+      assert %{promoted: promoted} = Stacks.reconcile_stack_lifecycle()
+      assert promoted >= 1
+
+      # Assert on the re-fetched MEMBER status, not on a stack summary and not
+      # on CommencementGate.open?/1 — the gate read healthy throughout the
+      # incident, so a gate assertion cannot distinguish fixed from broken.
+      assert reload_status(attached_child.id) == "in_progress"
+    end
+
+    test "leaves a member parked until its dependency clears, then promotes it on a later sweep" do
+      {:ok, project} = Tasks.create_project(%{name: "Dep clears late"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, dep} = Tasks.create_task(%{project_id: project.id, title: "Dep"})
+
+      {:ok, dependent} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Dependent",
+          dependencies: [%{"task_id" => dep.id, "kind" => "blocks"}]
+        })
+
+      {:ok, attached_dep} = Stacks.add_task(stack, dep)
+      {:ok, attached_dependent} = Stacks.add_task(stack, dependent)
+
+      {:ok, _} = Tasks.create_plan(%{task_id: attached_dep.id, status: "approved"})
+      {:ok, _} = Tasks.create_plan(%{task_id: attached_dependent.id, status: "approved"})
+
+      stack |> Ecto.Changeset.change(status: "in_progress") |> Repo.update!()
+
+      set_status!(attached_dependent, "stack_pending")
+      set_status!(attached_dep, "in_progress")
+
+      # Anti-vacuity control: precondition NOT met yet, so the sweep must be
+      # a no-op for this member.
+      assert %{promoted: 0} = Stacks.reconcile_stack_lifecycle()
+      assert reload_status(attached_dependent.id) == "stack_pending"
+
+      # Now the dependency clears the unblock threshold — LATE.
+      attached_dep
+      |> Task.changeset(%{
+        status: "done",
+        metadata: %{"merged_into_rollup_at" => landed_stamp()}
+      })
+      |> Repo.update!()
+
+      assert %{promoted: 1} = Stacks.reconcile_stack_lifecycle()
+      assert reload_status(attached_dependent.id) == "in_progress"
+    end
+
+    test "is idempotent: a second sweep changes no status and does not touch updated_at" do
+      {:ok, project} = Tasks.create_project(%{name: "Sweep idempotent"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, parent} = Tasks.create_task(%{project_id: project.id, title: "Parent"})
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child",
+          dependencies: [%{"task_id" => parent.id, "kind" => "blocks"}]
+        })
+
+      {:ok, attached_parent} = Stacks.add_task(stack, parent)
+      {:ok, attached_child} = Stacks.add_task(stack, child)
+
+      {:ok, _} = Tasks.create_plan(%{task_id: attached_parent.id, status: "approved"})
+      {:ok, _} = Tasks.create_plan(%{task_id: attached_child.id, status: "approved"})
+
+      stack |> Ecto.Changeset.change(status: "in_progress") |> Repo.update!()
+
+      set_status!(attached_child, "stack_pending")
+
+      attached_parent
+      |> Task.changeset(%{
+        status: "in_review",
+        metadata: %{"merged_into_rollup_at" => landed_stamp()}
+      })
+      |> Repo.update!()
+
+      assert %{promoted: 1} = Stacks.reconcile_stack_lifecycle()
+
+      after_first = Repo.get(Task, attached_child.id)
+      assert after_first.status == "in_progress"
+
+      # Second pass: the query filters `status == "stack_pending"` and
+      # try_promote/1's catch-all head refuses anything else, so an
+      # already-running member must not be written at all.
+      assert %{promoted: 0} = Stacks.reconcile_stack_lifecycle()
+
+      after_second = Repo.get(Task, attached_child.id)
+      assert after_second.status == "in_progress"
+      assert after_second.updated_at == after_first.updated_at
+    end
+  end
 end
