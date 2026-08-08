@@ -1,6 +1,6 @@
 # ADR 0046 — Design and Architecture Phases in the Planning Lifecycle
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-25
 **Author:** Rowan Ellis / Brosnan
 **Related:** ADR-0044 (Architect Responsibility — this supersedes its stage-level dispatch model), ADR-0032 (Design Handoff Action Cards), ADR-0029 (Task Lifecycle Responsibility Split), ADR-0045 (Task Stacks v2)
@@ -180,6 +180,80 @@ That is a real inconsistency in the override feature and it is tracked as its ow
 
 - `auto_approve_plan`'s meaning changes. Existing callers keep working; the semantics of what they opted out of narrows from "all review" to "human review."
 - Design's applicability test needs a UI-surface heuristic. The `manual_approval` rule already carries one (`.heex`, `assets/js/`, `assets/css/`, `_web/live/`, `_web/components/`) and should be reused rather than reinvented.
+
+---
+
+## Amendment 1 — Lifecycle hook pipelines (2026-08-08)
+
+0046 introduced two hard-coded lifecycle hooks: design before planning, architecture after plan submission. This amendment generalises that into a configurable **hook pipeline** model, and extends — rather than forks — the `complete / not_applicable / failed` vocabulary defined in `### Per-step outcome` above.
+
+Eight decisions. Each carries its rationale **and** its cost; a decision recorded with only its benefits is an advertisement, and the next reader cannot tell what was traded away.
+
+### 1. Hook points are phase-boundary edges, not stages
+
+A hook point is an edge between lifecycle phases (`backlog → planning`, `planning → in_progress`, and so on), not a position within a plan's stage list.
+
+**Why.** Stages are user-authored and variable — 3 to 9 per plan is typical, and the count and meaning differ per task. Hanging hook points off stages would mint `2N` configuration slots per plan, nearly all of them meaningless, and none of them stable across a replan. Phase boundaries are the only positions that exist identically for every task.
+
+**Cost.** An edge cannot express "after the third stage specifically". Any requirement of that shape has no home in this model and needs a different mechanism.
+
+### 2. A phase that never occurs fires nothing
+
+If a task never reaches a phase boundary, that edge's pipeline does not run and **no** hook event is recorded. It specifically does **not** fire `not_applicable`.
+
+**Why.** `not_applicable` keeps the meaning 0046 gave it: the hook point **ran** and nothing was configured — the progressive-enhancement path. A phase that never occurred is a different fact entirely. Conflating "ran, nothing configured" with "never ran" is the exact defect this ADR was written to kill; see `### Per-step outcome` above — "`not_applicable` and `failed` must never be conflated" — and the same reasoning applies to this third state.
+
+**Cost.** Absence of a hook event is not distinguishable in the log from a phase never reached. Answering "did this edge run?" requires correlating the hook log against the task's transition history; neither source answers it alone.
+
+### 3. Each edge owns an ordered pipeline; `await` and `can_divert` are declared per step, never positional
+
+A step declares its own `await` (does the pipeline block on it) and `can_divert` (may it send the task back) as explicit fields. Neither is inferred from the step's index.
+
+**Why.** State this in full, because the alternative is superficially attractive. If divert authority came from being first in the pipeline, then someone adding a Slack notify at the top of the post-plan pipeline six months from now would silently demote the architect to advisory. There would be no error, no failing test, and no visible change — the pipeline would still run, the architect would still be dispatched, and its verdict would simply stop being able to stop anything. The defect would be discovered when a bad plan ships. That is the same failure shape as a check that still appears present and has quietly stopped discriminating: the most expensive class of bug this codebase produces.
+
+**Cost.** Two extra fields on every step config, including the majority of steps — plain notifies — that will always carry `await: false, can_divert: false`. The configuration is more verbose than it needs to be for the common case, deliberately.
+
+### 4. The first divert halts the remainder of the pipeline
+
+When a step diverts, no subsequent step on that edge runs.
+
+**Why.** A task diverting back to planning must not then fire the "entering execution" webhook. Downstream steps were written on the premise that the transition is happening; once it is not, running them publishes claims that are false.
+
+**Implementation note, because the natural code is wrong.** An `Enum.reduce` over the steps runs every step regardless of what the accumulator says. The halt must be threaded explicitly — `Enum.reduce_while/3` or an equivalent that can stop — otherwise the divert is recorded and ignored.
+
+**Cost.** Later steps are not guaranteed to run. A notify placed after a gate is therefore a **conditional** notify, whether or not its author intended that, and its author has no signal at configuration time that they have written one.
+
+### 5. Two budgets: per-step and per-edge wall clock
+
+Each step carries a timeout, and each edge carries a wall-clock budget for the whole pipeline.
+
+**Why.** Per-step budgets alone do not bound the edge. Three awaited agent steps at the current 30-minute design timeout is a 90-minute silent stall with no single component misbehaving — every step is inside its own limit, and there is nothing to page on. The edge budget is the only thing that can observe the aggregate.
+
+**Cost.** An edge budget can kill a step that was comfortably within its own budget. A step author cannot reason about their own timeout in isolation: the effective limit depends on what else is configured on the same edge, and on how long those steps happened to take on that run.
+
+### 6. No gates on `backlog.created` — effects and notifies only
+
+The `backlog.created` edge accepts steps that produce effects or notifications. It does not accept steps with `can_divert` or `await`.
+
+**Why.** Ticket creation is agent-paced and bursty — triage sweeps, follow-up filing, webhook intake all create tickets in rapid succession and often concurrently. A gate on that edge lets one agent's hook block another agent from filing a ticket, coupling unrelated work through the creation path.
+
+**Cost.** The earliest point at which a task can be blocked is later than the earliest point at which it exists. A policy that wants to refuse a ticket outright cannot be expressed here; it has to run at the next edge and reject something already created.
+
+### 7. Deterministic steps resolve against an allowlisted registry of compiled functions
+
+A deterministic step names a `{Module, :fun, 1}` that is resolved against a compile-time registry. A name is **never** resolved at runtime from task data. Webhook destinations are allowlisted by host.
+
+**Why.** Task descriptions and stage text are agent-authored, and agent-authored text derives from ticket content that can originate outside the org. A step whose target is looked up by name from that data — or any `eval`-shaped equivalent — is an arbitrary-code-execution path with an ordinary-looking configuration field in front of it. Host-allowlisting webhooks closes the same hole on the network side: otherwise the pipeline is an SSRF primitive driven by task text.
+
+**Cost.** Adding a step type requires a deploy, not a configuration change. Operators cannot extend the pipeline vocabulary themselves, and the feedback loop for a new deterministic step is a release cycle.
+
+### 8. Config is per-project and replaces org defaults; there is no `locked` flag
+
+A project's hook configuration **replaces** the org's for that edge. Projects may remove org-configured gates. Nothing at the org level can be marked unremovable.
+
+**Why.** Replacement means what you read in a project's config is exactly what executes. There is no merge order to simulate, no inheritance chain to trace, and no case where a step runs because of a document you were not looking at.
+
+**Cost — stated plainly, because it is real.** A project that wants to add one webhook must restate the **entire** org pipeline. From that moment the two configurations drift independently, and the drift is invisible: an org adding a new gate does not propagate it, and nothing reports that a project is running a stale copy. The failure mode is something silently not running, which is the failure mode this ADR is most concerned with elsewhere. The trade accepted is a legible config surface today against a class of staleness bug later; a `locked` flag would have bought the reverse, and inheritance you cannot see is worse than duplication you can.
 
 ---
 
