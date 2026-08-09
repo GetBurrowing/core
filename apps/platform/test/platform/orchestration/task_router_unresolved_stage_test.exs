@@ -183,7 +183,15 @@ defmodule Platform.Orchestration.TaskRouterUnresolvedStageTest do
       barrier(task)
 
       refute_received {:dispatch_suppressed, _meta}
-      assert_received %Phoenix.Socket.Broadcast{event: "attention"}
+      # `assert_receive`, not `assert_received`, and the change is behavioural
+      # rather than cosmetic. Task 019fe1b7 stage 2 moved the pre-plan design
+      # step onto the lifecycle pipeline, which runs in a SPAWNED process: a
+      # planning task with no plan is held for as long as its designer edge
+      # takes to answer (`not_applicable` on a fixture with no designer wired),
+      # and only then dispatches. The claim under test — that this guard does
+      # not suppress a planning dispatch — is unchanged; what is no longer true
+      # is that the dispatch lands inside the router's own tick.
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 5_000
     end
 
     test "suppression leaves the router status untouched so the next tick re-derives", %{
@@ -220,7 +228,15 @@ defmodule Platform.Orchestration.TaskRouterUnresolvedStageTest do
       barrier(task)
 
       refute_received {:dispatch_suppressed, _meta}
-      assert_received %Phoenix.Socket.Broadcast{event: "attention"}
+      # `assert_receive`, not `assert_received`, and the change is behavioural
+      # rather than cosmetic. Task 019fe1b7 stage 2 moved the pre-plan design
+      # step onto the lifecycle pipeline, which runs in a SPAWNED process: a
+      # planning task with no plan is held for as long as its designer edge
+      # takes to answer (`not_applicable` on a fixture with no designer wired),
+      # and only then dispatches. The claim under test — that this guard does
+      # not suppress a planning dispatch — is unchanged; what is no longer true
+      # is that the dispatch lands inside the router's own tick.
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 5_000
     end
 
     test "an in_progress task whose next stage is PENDING still dispatches", %{project: project} do

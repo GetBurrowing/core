@@ -128,6 +128,7 @@ defmodule Platform.Application do
       |> maybe_add_meeting_intent_classifier()
       |> maybe_add_meeting_intent_dispatcher()
       |> maybe_add_stall_registry()
+      |> maybe_add_lifecycle_step_registry()
       |> maybe_add_summarizer_sweeper()
       |> maybe_add_security_sweeper()
       |> maybe_add_space_purger()
@@ -492,6 +493,22 @@ defmodule Platform.Application do
           length(children)
 
       List.insert_at(children, idx, Platform.Responsibilities.StallRegistry)
+    else
+      children
+    end
+  end
+
+  # Lifecycle StepRegistry (task 019fe1b6 stage 1, ADR-0046): pure
+  # in-memory map of declared hook steps, seeded from its own
+  # `@built_in_steps` attribute in `init/1`. Deliberately NO companion
+  # registration call here — the built-ins list is the single source of
+  # truth, and a second registration site would be free to drift from
+  # it. Boot only starts the process. Disabled in test env; tests start
+  # their own per-case instance with a `:name`.
+  defp maybe_add_lifecycle_step_registry(children) do
+    if Application.get_env(:platform, :start_lifecycle_step_registry, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Lifecycle.StepRegistry)
     else
       children
     end

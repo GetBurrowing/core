@@ -37,6 +37,49 @@ defmodule Platform.Tasks.Project do
     |> unique_constraint(:slug)
     |> foreign_key_constraint(:org_id)
     |> validate_deploy_strategy()
+    |> validate_lifecycle_pipeline()
+  end
+
+  # Lifecycle hook pipelines (ADR-0046 Amendment 1, task 019fe1b6 stage 3).
+  #
+  # Validated at WRITE time, not at fire time. A malformed pipeline
+  # discovered when a phase boundary is crossed is a runtime failure
+  # inside somebody else's task, attributed to that task; discovered on
+  # save it is a form error for the person who just typed it. That is
+  # the same argument `deploy_config` already makes, which is why this
+  # mirrors `validate_deploy_strategy/1` rather than inventing a
+  # parallel path.
+  #
+  # `PipelineConfig.validate/1` resolves step names against
+  # `StepRegistry.server/0` — the boot singleton in prod, a per-case
+  # instance under test. A changeset has nowhere to thread a server
+  # argument through, so that indirection is the thing that makes this
+  # callable from here at all.
+  defp validate_lifecycle_pipeline(changeset) do
+    case get_change(changeset, :config) do
+      nil ->
+        changeset
+
+      config when is_map(config) ->
+        case Map.get(config, "lifecycle_pipeline") do
+          # A project may carry unrelated `config` keys and must still
+          # save. Absence is not a validation failure.
+          nil ->
+            changeset
+
+          pipeline when is_map(pipeline) ->
+            case Platform.Lifecycle.PipelineConfig.validate(pipeline) do
+              :ok -> changeset
+              {:error, reason} -> add_error(changeset, :config, reason)
+            end
+
+          _ ->
+            add_error(changeset, :config, "lifecycle_pipeline must be a map")
+        end
+
+      _ ->
+        changeset
+    end
   end
 
   defp validate_deploy_strategy(changeset) do

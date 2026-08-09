@@ -4432,6 +4432,13 @@ defmodule Platform.Orchestration.TaskRouterTest do
   # half's ten minutes.
   @short_design_window 200
 
+  # Task 019fe1b7 stage 2 — the pipeline's per-step budget, injected in
+  # milliseconds. Short enough to elapse inside a test, long enough that the
+  # step provably opens first; the long one cannot elapse inside any test in
+  # this file, which is what makes the pair discriminating.
+  @short_step_budget 1_000
+  @long_step_budget 600_000
+
   # >= 8 graphemes, or `task_design_decline` refuses with `missing_reason`
   # before it ever reaches `PreplanStep`.
   @decline_reason "This task deletes a deprecated component; the surface it leaves behind already has direction that still holds."
@@ -4529,28 +4536,28 @@ defmodule Platform.Orchestration.TaskRouterTest do
     end)
   end
 
-  defp put_design_timeout(ms) do
-    previous = Application.get_env(:platform, :design_step_timeout_ms)
-    Application.put_env(:platform, :design_step_timeout_ms, ms)
+  # Task 019fe1b7 stage 2. This USED to inject `:design_step_timeout_ms`, the
+  # router's own knob. That knob is gone: the design step is a lifecycle
+  # pipeline step now, so the budget that bounds it is the pipeline's
+  # per-step budget. Same shape, same `Application.get_env/3` read, same
+  # absence of a `config/test.exs` override — and injecting it is what proves
+  # the expiry comes from the pipeline rather than from a router timer, since
+  # the router has no knob left to respond to.
+  defp put_step_budget(ms) do
+    put_lifecycle_env(:lifecycle_step_timeout_ms, ms)
+  end
+
+  defp put_lifecycle_env(key, value) do
+    previous = Application.get_env(:platform, key)
+    Application.put_env(:platform, key, value)
 
     on_exit(fn ->
       if previous do
-        Application.put_env(:platform, :design_step_timeout_ms, previous)
+        Application.put_env(:platform, key, previous)
       else
-        Application.delete_env(:platform, :design_step_timeout_ms)
+        Application.delete_env(:platform, key)
       end
     end)
-  end
-
-  defp backdate!(task, ms) do
-    at = DateTime.add(DateTime.utc_now(), -ms, :millisecond)
-
-    Platform.Repo.update_all(
-      from(t in Platform.Tasks.Task, where: t.id == ^task.id),
-      set: [updated_at: at]
-    )
-
-    task
   end
 
   defp reload_task(task), do: Platform.Repo.get!(Platform.Tasks.Task, task.id)
@@ -4587,7 +4594,37 @@ defmodule Platform.Orchestration.TaskRouterTest do
       [spec] = Platform.Responsibilities.Handlers.DesignTaskDirection.register()
       {:ok, _row} = Platform.Responsibilities.upsert_by_key(spec)
 
-      %{project: project}
+      # Task 019fe1b7 stage 2. The design step resolves through
+      # `Platform.Lifecycle.StepRegistry` now, and its boot singleton is
+      # disabled in `config/test.exs` so cases can hold isolated instances.
+      # Without one the designer edge resolves nothing and the whole describe
+      # would assert against a design step that never fires — passing tests
+      # over a deleted feature.
+      registry = :"router_design_registry_#{unique()}"
+      start_supervised!({Platform.Lifecycle.StepRegistry, name: registry})
+      put_lifecycle_env(:lifecycle_step_registry, registry)
+
+      %{project: project, registry: registry}
+    end
+
+    test "the designer edge resolves to the shipped step through the registry", %{
+      registry: registry
+    } do
+      # ANTI-VACUITY for every test below. They assert that the design step
+      # fires; if the shipped declaration and the registry name ever drift,
+      # the edge resolves to `{:error, :unknown_step}`, the step is recorded
+      # `failed`, the planner is released — and a suite that only watches for
+      # the planner being released cannot tell that from success.
+      edge = Platform.Lifecycle.Edges.designer_edge()
+
+      assert [%{"step" => name, "await" => true, "can_divert" => true}] =
+               Platform.Lifecycle.Edges.default_steps(edge)
+
+      assert {:ok, %{mfa: {mod, _fun, 1}}} = Platform.Lifecycle.StepRegistry.fetch(name, registry)
+
+      Code.ensure_loaded!(mod)
+      assert function_exported?(mod, :start, 2), "the designer step must implement the behaviour"
+      assert mod.kind() == :async
     end
 
     test "a UI task with a designer holds the planner; a non-UI task dispatches immediately",
@@ -4604,7 +4641,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
       refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 600
 
       # The step really did fire and really is open — the cursor IS the state.
-      assert reload_task(held).planning_step == "designing"
+      # A POLL, not a barrier, and the file's own rule is why: the effect is
+      # owned by another process now (the spawned edge runner), so there is a
+      # process to name and `sync_router/1` would prove nothing about it.
+      assert_eventually(fn -> reload_task(held).planning_step == "designing" end)
       assert TaskRouter.current_status(held.id).status == :waiting_design
 
       # PAIRED POSITIVE CONTROL. Same runtime topic, same window, same task
@@ -4631,6 +4671,11 @@ defmodule Platform.Orchestration.TaskRouterTest do
       held = design_task!(project, @design_ui_title)
       {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
       assert TaskRouter.current_status(held.id).status == :waiting_design
+
+      # The hold clears the lease only once the step is genuinely OPEN, so the
+      # cursor has to have landed before the seed — otherwise this races the
+      # runner and the assertion below would be measuring process scheduling.
+      assert_eventually(fn -> reload_task(held).planning_step == "designing" end)
 
       # SEED the lease. Without this the assertion below is vacuous: a planning
       # task with no running stage never arms one, so `nil` would hold against
@@ -4669,6 +4714,13 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       # Let the control router finish booting BEFORE seeding, or its own boot
       # dispatch could clear a lease that was never meant to be under test.
+      # Its designer edge also has to have ANSWERED — a non-UI task resolves
+      # to `not_applicable`, and until it does the router is still nominally
+      # holding.
+      assert_eventually(fn ->
+        reload_task(control).planning_step_outcomes["design"]["outcome"] == "not_applicable"
+      end)
+
       :ok = sync_router(control.id)
 
       :ok =
@@ -4721,45 +4773,78 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert task.planning_step_outcomes["design"]["outcome"] == "complete"
     end
 
-    test "the deadline expires an open step and releases the planner; after a settle it is a no-op",
+    # THE DISCRIMINATING TEST FOR THE MIGRATION ITSELF, and the reason it is
+    # written as a pair over one shared fixture shape.
+    #
+    # The claim is not "the design step still expires" — the router's own
+    # `:design_deadline` timer would satisfy that. The claim is that the
+    # expiry is now the PIPELINE'S, which is only observable by MOVING THE
+    # PIPELINE'S KNOB and watching the expiry move with it. The short-budget
+    # half expires; the long-budget half, identical in every other respect,
+    # does not. Neither half alone discriminates: the first passes against a
+    # router timer that ignores the knob, and the second passes against a tree
+    # with no expiry at all.
+    #
+    # There is no `send(pid, :design_deadline)` here because there is no such
+    # message any more. The old test delivered one by hand to keep the window
+    # long enough that a level check could not race it; the pipeline's budget
+    # starts when the STEP starts, so a short budget is no longer a competing
+    # cause for anything that happens before the step opens.
+    test "the pipeline's per-step budget expires an open step; a longer budget does not",
          %{project: project, assignee: assignee} do
       stub_designer_dispatcher()
       wire_designer!()
 
+      put_step_budget(@short_step_budget)
+
       Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
 
       held = design_task!(project, @design_ui_title)
-      {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
+      {:ok, _pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
       assert TaskRouter.current_status(held.id).status == :waiting_design
 
-      send(pid, :design_deadline)
+      # The step is genuinely open and genuinely held BEFORE the budget can
+      # have elapsed — without this the expiry below could be a step that
+      # never opened.
+      assert_eventually(fn -> reload_task(held).planning_step == "designing" end)
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
 
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 5_000
 
       task = reload_task(held)
       assert task.planning_step == "planning"
       assert task.planning_step_outcomes["design"]["outcome"] == "failed"
 
+      assert task.planning_step_outcomes["design"]["reason"] ==
+               Platform.Design.PreplanStep.reasons().timeout
+
       # ADR-0046 decision 7: the failure falls open, VISIBLY. It reaches merge
       # time through member 4's predicate with no extra work in this stage.
       assert Tasks.planning_gate_failed?(task)
 
-      # PAIRED CONTROL, second fixture: a deadline arriving after a settle must
-      # not re-open the step as a failure and must not re-dispatch.
-      settled = design_task!(project, @design_ui_title)
-      settled_assignee = %{type: :federated, id: "runtime-design-late-#{unique()}"}
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{settled_assignee.id}")
+      # ── PAIRED CONTROL: the same fixture under a budget that cannot elapse
+      # inside this test. If the expiry above came from anywhere other than
+      # the injected budget, this one expires too.
+      put_step_budget(@long_step_budget)
 
-      {:ok, settled_pid} = TaskRouter.start_link(task_id: settled.id, assignee: settled_assignee)
-      assert TaskRouter.current_status(settled.id).status == :waiting_design
+      patient = design_task!(project, @design_ui_title)
+      patient_assignee = %{type: :federated, id: "runtime-design-patient-#{unique()}"}
+      patient_topic = "runtime:#{patient_assignee.id}"
+      Phoenix.PubSub.subscribe(Platform.PubSub, patient_topic)
 
-      {:ok, :complete} = Platform.Design.PreplanStep.settle(settled.id, nil)
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
+      {:ok, _} = TaskRouter.start_link(task_id: patient.id, assignee: patient_assignee)
+      assert_eventually(fn -> reload_task(patient).planning_step == "designing" end)
 
-      send(settled_pid, :design_deadline)
-      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 700
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention", topic: ^patient_topic}, 1_500
 
-      assert reload_task(settled).planning_step_outcomes["design"]["outcome"] == "complete"
+      patient_task = reload_task(patient)
+      assert patient_task.planning_step == "designing"
+      assert patient_task.planning_step_outcomes == %{}
+
+      # And it still closes on the real signal, so "held" is not "wedged".
+      {:ok, :complete} = Platform.Design.PreplanStep.settle(patient.id, nil)
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention", topic: ^patient_topic}, 5_000
+      assert reload_task(patient).planning_step_outcomes["design"]["outcome"] == "complete"
     end
 
     # ── The designer's exit (task 019fa504) ────────────────────────────────
@@ -4808,7 +4893,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
          %{project: project, assignee: assignee} do
       stub_designer_dispatcher()
       designer = wire_designer!()
-      put_design_timeout(@long_design_window)
+      put_step_budget(@long_design_window)
 
       Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
 
@@ -4820,25 +4905,21 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # well on a task that never reached the design step at all, which is the
       # exact shape of vacuity this stage exists to avoid.
       assert TaskRouter.current_status(held.id).status == :waiting_design
-      assert reload_task(held).planning_step == "designing"
+      assert_eventually(fn -> reload_task(held).planning_step == "designing" end)
       refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
 
-      :erlang.trace(pid, true, [:receive, {:tracer, self()}])
+      # The budget the step is running under is genuinely ten minutes, so the
+      # margin measured below rules it out as the releaser. Read from the
+      # accessor the runner reads — a test that asserted its own literal would
+      # agree with itself while the runner used something else.
+      assert Platform.Lifecycle.step_timeout_ms() == @long_design_window
 
-      # The deadline is genuinely ARMED and genuinely ten minutes out. Both
-      # halves matter: an unarmed deadline would make the refutation below
-      # vacuous, and a near one would leave it as a plausible releaser.
-      %{design_deadline_ref: deadline_ref} = :sys.get_state(pid)
-
-      assert is_reference(deadline_ref),
-             "expected the hold to arm a :design_deadline timer — with none armed, " <>
-               "'no deadline was delivered' is true of a tree that never schedules one"
-
-      remaining = Process.read_timer(deadline_ref)
-
-      assert is_integer(remaining) and remaining > div(@long_design_window * 9, 10),
-             "expected the armed design deadline to still have ~#{@long_design_window}ms " <>
-               "to run, got #{inspect(remaining)}"
+      # The hold is carried by a LIVE RUNNER, not by a timer. An unarmed
+      # anything would make the timing claim below vacuous: without a run in
+      # flight, "the decline released the planner" is true of a tree where
+      # nothing was ever holding it.
+      assert %{design_run: {runner_pid, _ref}} = :sys.get_state(pid)
+      assert Process.alive?(runner_pid)
 
       started_at = System.monotonic_time(:millisecond)
 
@@ -4856,10 +4937,11 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert result.reason == Platform.Design.PreplanStep.reasons().declined
       refute result.declined_after_timeout
 
-      # The decline's `{:task_updated, _}` broadcast reaches the router, which
-      # leaves `:waiting_design` through `release_design_hold_if_closed/1` and
-      # dispatches the planner.
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
+      # The decline's `{:task_updated, _}` broadcast reaches the STEP'S
+      # WATCHER, which settles the pipeline's step; the runner reports and the
+      # router dispatches. Task 019fe1b7 stage 2 moved that wake-up out of the
+      # router — the observable is unchanged, which is the point.
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 5_000
       elapsed = System.monotonic_time(:millisecond) - started_at
 
       assert elapsed < div(@long_design_window, 10),
@@ -4867,15 +4949,12 @@ defmodule Platform.Orchestration.TaskRouterTest do
                "injected #{@long_design_window}ms window — that margin is what rules " <>
                "the deadline out as the releaser"
 
-      # THE NEGATIVE THE STAGE IS FOR. Not "the outcome is not failed" (which
-      # the entry assertions below cover) but "the deadline never ran at all".
-      refute_receive {:trace, ^pid, :receive, :design_deadline}, 200
-
       assert TaskRouter.current_status(held.id).status != :waiting_design
 
-      # The hold's timer is cancelled on release rather than left to fire into
-      # a closed step later.
-      assert %{design_deadline_ref: nil} = :sys.get_state(pid)
+      # The run is released rather than left in flight, and the runner is
+      # gone rather than left polling a closed step until its budget lapses.
+      assert %{design_run: nil} = :sys.get_state(pid)
+      refute Process.alive?(runner_pid)
 
       task = reload_task(held)
       entry = task.planning_step_outcomes["design"]
@@ -4895,17 +4974,12 @@ defmodule Platform.Orchestration.TaskRouterTest do
       refute "design" in Enum.map(Tasks.failed_planning_steps(task), & &1.step)
       refute Tasks.planning_gate_failed?(task)
 
-      # A STALE `:design_deadline` — one that outran a `Process.cancel_timer/1`
-      # race, or that a replacement router armed before the decline landed — is
-      # inert. `handle_info(:design_deadline, _)` level-checks `open?/1`, so a
-      # closed step is left exactly as it was.
+      # A STALE settlement — one from a runner this router has already given up
+      # on, or from a previous hold — is inert. The release matches on the
+      # RUNNER PID, so a message naming a dead runner cannot re-dispatch or
+      # rewrite the outcome.
       before_stale = reload_task(held).planning_step_outcomes
-      send(pid, :design_deadline)
-
-      # CONTROL FOR THE REFUTATION ABOVE. The same trace, the same pattern, the
-      # same process — delivered on purpose this time, and observed. If this
-      # does not fire, the `refute_receive` above was never capable of failing.
-      assert_receive {:trace, ^pid, :receive, :design_deadline}, 1_000
+      send(pid, {:design_edge_settled, runner_pid, :failed})
 
       :ok = sync_router(held.id)
       refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 700
@@ -4916,27 +4990,21 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # only difference is which exit is taken. The timeout still records
       # `failed`, still names `design_timeout`, and still reaches merge time
       # through `failed_planning_steps/1`. That is the ruling this stage pins.
-      put_design_timeout(@short_design_window)
+      put_step_budget(@short_design_window)
 
       control = design_task!(project, @design_ui_title)
       control_assignee = %{type: :federated, id: "runtime-design-decline-ctl-#{unique()}"}
       control_topic = "runtime:#{control_assignee.id}"
       Phoenix.PubSub.subscribe(Platform.PubSub, control_topic)
 
-      {:ok, control_pid} =
+      {:ok, _control_pid} =
         TaskRouter.start_link(task_id: control.id, assignee: control_assignee)
 
-      :erlang.trace(control_pid, true, [:receive, {:tracer, self()}])
-
-      # `init/1` queues its own `send(self(), :dispatch)` before `start_link/1`
-      # returns, so this lands strictly behind the boot dispatch that opens the
-      # step — the ordering the deadline needs to find something to expire.
-      send(control_pid, :design_deadline)
-      assert_receive {:trace, ^control_pid, :receive, :design_deadline}, 1_000
-
-      # Bound to the control's own topic: the declined router above shares this
-      # mailbox, and an untopic'd match could be satisfied by one of its ticks.
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention", topic: ^control_topic}, 2_000
+      # No hand-delivered timer any more: the injected budget IS the delivery.
+      # Bound to the control's own topic — the declined router above shares
+      # this mailbox, and an untopic'd match could be satisfied by one of its
+      # ticks.
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention", topic: ^control_topic}, 5_000
 
       control_task = reload_task(control)
       control_entry = control_task.planning_step_outcomes["design"]
@@ -4952,59 +5020,41 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert control_task.planning_step == "planning"
     end
 
-    test "an overdue hold is released by the level check on a tick the armed timer cannot serve",
-         %{project: project, assignee: assignee} do
-      stub_designer_dispatcher()
-      wire_designer!()
-
-      # An hour. Whatever timer the hold arms CANNOT fire inside this test, so
-      # nothing but the level check can release the planner below. That is what
-      # makes this the discriminating case: with `design_hold_expired?/2`
-      # stubbed out, the only remaining releaser is a timer an hour away.
-      put_design_timeout(3_600_000)
-
-      held = design_task!(project, @design_ui_title)
-
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
-      {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
-      assert TaskRouter.current_status(held.id).status == :waiting_design
-      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
-
-      # The row is now two hours old — overdue against the one-hour window — but
-      # the armed timer still believes it has an hour to go.
-      backdate!(held, 7_200_000)
-
-      # Any dispatch tick at all. In production these arrive from
-      # `TaskRouterWatcher.redispatch_for_runtime/1` on every runtime reconnect,
-      # from `force_dispatch/1`, and from `init/1` on boot — which is why the
-      # timer is only ever an optimisation.
-      send(pid, :dispatch)
-
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
-
-      task = reload_task(held)
-      assert task.planning_step == "planning"
-      assert task.planning_step_outcomes["design"]["outcome"] == "failed"
-    end
-
+    # THE HOLD STILL CANNOT OUTLIVE ITS HOLDER. Nothing about it is persisted:
+    # task 019fe1b7 stage 2 replaced the router's timer reference with a
+    # monitor on the process running the edge, and both die with the router.
+    #
+    # This absorbed the old "an overdue hold is released by the level check on
+    # a tick the armed timer cannot serve" test, which is not merely
+    # unnecessary now but UNWRITABLE: it backdated `updated_at` to make
+    # `design_hold_expired?/2` — a level check computed off the row — read
+    # true, and that function is gone with the machinery. The property it
+    # protected is the one asserted here, and it is asserted the way it now
+    # holds: the REPLACEMENT re-derives the hold from the row alone and its
+    # own run carries its own budget.
     test "killing the holder does not strand the task", %{project: project, assignee: assignee} do
       stub_designer_dispatcher()
       wire_designer!()
 
-      put_design_timeout(3_600_000)
+      put_step_budget(@long_step_budget)
 
       held = design_task!(project, @design_ui_title)
       {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
       assert TaskRouter.current_status(held.id).status == :waiting_design
+      assert_eventually(fn -> reload_task(held).planning_step == "designing" end)
 
-      # Kill the holder. The `:design_deadline` timer dies with it, and nothing
-      # persisted the hold — this is the container restart from the journalled
+      # Kill the holder — the container restart from the journalled
       # `deploying -> done` incident, where the transition lived solely in an
-      # edge-triggered PubSub handler and the restart stranded the task forever.
+      # edge-triggered PubSub handler and the restart stranded the task
+      # forever.
       GenServer.stop(pid, :normal, 1_000)
       refute Process.alive?(pid)
 
-      backdate!(held, 7_200_000)
+      # The replacement inherits a row it did not open. A short budget on ITS
+      # run is what proves it re-fired the edge rather than coasting on
+      # anything the dead router left behind — the dead router's run was
+      # started under a ten-minute budget and could not produce this.
+      put_step_budget(@short_step_budget)
 
       replacement_assignee = %{type: :federated, id: "runtime-design-restart-#{unique()}"}
       Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{replacement_assignee.id}")
@@ -5012,8 +5062,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       {:ok, _replacement} =
         TaskRouter.start_link(task_id: held.id, assignee: replacement_assignee)
 
-      # The replacement re-derives the verdict from the row alone.
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 2_000
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 5_000
 
       task = reload_task(held)
       assert task.planning_step == "planning"
@@ -5045,18 +5094,25 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert reload_task(task).planning_step_outcomes == %{}
     end
 
-    test "the shipped default hold window is 30 minutes and the read goes through app env" do
+    # The router's `design_step_timeout_ms/0` and
+    # `default_design_step_timeout_ms/0` were DELETED, not moved: the wait
+    # they bounded happens inside the pipeline now. This is the same guard
+    # over the accessor that replaced them, and it is kept rather than dropped
+    # because the property it protects is the one that matters — the shipped
+    # thirty minutes is still thirty minutes, and a test-only value has not
+    # become the production one.
+    test "the shipped hold window is still 30 minutes, now as the pipeline's step budget" do
       # No `config/test.exs` override exists, so the live read equals the
       # shipped literal.
-      assert TaskRouter.default_design_step_timeout_ms() == 1_800_000
-      assert TaskRouter.design_step_timeout_ms() == 1_800_000
+      assert Platform.Lifecycle.default_step_timeout_ms() == 1_800_000
+      assert Platform.Lifecycle.step_timeout_ms() == 1_800_000
 
       # PAIRED CONTROL: an injected value must be OBSERVED, which is what proves
       # the read is `Application.get_env/3` and not the literal inlined at every
       # call site. The default accessor must NOT move with it.
-      put_design_timeout(1_234)
-      assert TaskRouter.design_step_timeout_ms() == 1_234
-      assert TaskRouter.default_design_step_timeout_ms() == 1_800_000
+      put_step_budget(1_234)
+      assert Platform.Lifecycle.step_timeout_ms() == 1_234
+      assert Platform.Lifecycle.default_step_timeout_ms() == 1_800_000
     end
   end
 

@@ -22,6 +22,13 @@ defmodule Platform.Execution.LocalWorkspace do
 
   Callers are responsible for staging the intended changes before calling
   `push_branch/3`.
+
+  ## Removal
+
+  `remove_git_worktree/2` is the counterpart of `setup_git_worktree/3` and the
+  only removal path (added task 019fe1b7 stage 3 — before it there was none).
+  It derives the directory with `worktree_path/2` and distinguishes "nothing
+  there" from "tried and failed"; see both function docs.
   """
 
   alias Platform.Execution.{CredentialLease, Run}
@@ -305,6 +312,111 @@ defmodule Platform.Execution.LocalWorkspace do
          {:ok, branch} <- git_current_branch(worktree_path, env),
          :ok <- git_push(worktree_path, remote, branch, env) do
       :ok
+    end
+  end
+
+  @doc """
+  The worktree path for `run_id`, DERIVED and checked for containment.
+
+  The path is `<run_root>/<safe_run_segment(run_id)>/git` — the same
+  derivation `ensure_workspace/2` and `setup_git_worktree/3` use, so a
+  remover and a creator cannot disagree about where the directory is. It is
+  computed from the run id and the configured root and from NOTHING else:
+  never from a task field, a branch name, or any other user-supplied string.
+
+  ## `safe_run_segment/1` does not neutralise `..`
+
+  Found while writing the removal path (task 019fe1b7 stage 3). The sanitiser
+  replaces anything outside `[A-Za-z0-9._-]` with `_`, which kills a path
+  SEPARATOR but leaves a bare `".."` intact — so a run id of `".."` derives
+  `<run_root>/../git`, one level ABOVE the run root. That has never mattered
+  while the derivation only ever created directories; it matters a great deal
+  to a function that deletes them.
+
+  So containment is CHECKED here rather than assumed, and a path that escapes
+  the run root is refused with `{:error, {:unsafe_run_id, run_id}}` instead of
+  returned. `safe_run_segment/1` itself is deliberately left alone: changing
+  the sanitiser would move every existing workspace directory.
+  """
+  @spec worktree_path(String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, {:unsafe_run_id, String.t()}}
+  def worktree_path(run_id, opts \\ []) when is_binary(run_id) do
+    root = run_root(opts)
+    path = Path.expand(Path.join([root, safe_run_segment(run_id), "git"]))
+
+    if String.starts_with?(path, root <> "/") do
+      {:ok, path}
+    else
+      {:error, {:unsafe_run_id, run_id}}
+    end
+  end
+
+  @doc """
+  Removes the git worktree allocated for `run_id`, if there is one.
+
+  The counterpart of `setup_git_worktree/3`, and the only removal path. The
+  directory is located with `worktree_path/2`, so nothing outside the run's
+  own workspace can be reached.
+
+  Three outcomes, deliberately distinguishable:
+
+    * `{:ok, :absent}` — nothing is at the derived path. Checked BEFORE
+      acting. This is the common case (no run, a run that never allocated a
+      workspace, an already-removed workspace) and it is NOT an error.
+    * `{:ok, :removed}` — the directory was there and is gone.
+    * `{:error, reason}` — the removal was ATTEMPTED and failed. `git
+      worktree remove` refusing a dirty worktree lands here, and must:
+      surfacing it is the point. There is deliberately NO catch-all rescue
+      collapsing this into `:absent`.
+
+  A path holding a real worktree (a `.git` FILE with a `gitdir:` pointer) is
+  removed through git, which cleans the repo's administrative entry too;
+  `git worktree prune` follows, mirroring `setup_git_worktree/3`. A path that
+  is a plain allocated directory has no git state to clean and is removed
+  directly.
+  """
+  @spec remove_git_worktree(String.t(), keyword()) ::
+          {:ok, :removed | :absent} | {:error, term()}
+  def remove_git_worktree(run_id, opts \\ []) when is_binary(run_id) do
+    with {:ok, path} <- worktree_path(run_id, opts) do
+      if File.exists?(path) do
+        remove_worktree_path(path)
+      else
+        {:ok, :absent}
+      end
+    end
+  end
+
+  defp remove_worktree_path(path) do
+    with {:ok, pointer} <- File.read(Path.join(path, ".git")),
+         gitdir when is_binary(gitdir) <- parse_gitdir(pointer) do
+      repo_path = gitdir |> common_gitdir() |> Path.dirname()
+      git_worktree_remove(path, repo_path)
+    else
+      # No `gitdir:` pointer — a plain allocated workspace directory with no
+      # git administrative state to clean. Contained by `worktree_path/2`.
+      _other -> rm_rf_workspace(path)
+    end
+  end
+
+  defp git_worktree_remove(path, repo_path) do
+    case System.cmd("git", ["worktree", "remove", path],
+           cd: repo_path,
+           stderr_to_stdout: true
+         ) do
+      {_out, 0} ->
+        _ = System.cmd("git", ["worktree", "prune"], cd: repo_path, stderr_to_stdout: true)
+        {:ok, :removed}
+
+      {output, code} ->
+        {:error, {:worktree_remove_failed, code, String.trim(output)}}
+    end
+  end
+
+  defp rm_rf_workspace(path) do
+    case File.rm_rf(path) do
+      {:ok, _removed} -> {:ok, :removed}
+      {:error, reason, file} -> {:error, {:workspace_remove_failed, reason, file}}
     end
   end
 

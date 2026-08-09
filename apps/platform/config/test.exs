@@ -211,6 +211,20 @@ config :platform, :start_summarizer_sweeper, false
 # registered by one test leaks into a sibling case's sweep tick.
 config :platform, :start_stall_registry, false
 
+# Lifecycle StepRegistry (task 019fe1b6 stage 1): tests start their own
+# per-case instance so a step registered by one test cannot leak into a
+# sibling case's lookups.
+#
+# The BOOT gate stays false — every `:start_*` gate must, and the start-flag
+# audit enforces it. `test/test_helper.exs` instead starts one registry under
+# the default name, outside the supervision tree, seeded with the shipped
+# allowlist and nothing else. Needed since task 019fe1b7 stage 3: a shipped
+# default step now exists on every terminal edge, so a case that merely moves
+# a task to `done` resolves a step name and asks the registry for it, and a
+# `GenServer.call` to an unregistered name EXITS rather than raises — which
+# the fire point's `rescue` does not catch.
+config :platform, :start_lifecycle_step_registry, false
+
 # Security Sweeper (task 019f3e8e-4406 stage 2, ADR-0043): tests start
 # their own per-case instance with `respect_cadence: false` so
 # `sweep_now/1` always walks all four scanner keys inside the ExUnit

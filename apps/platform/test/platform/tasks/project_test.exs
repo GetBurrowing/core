@@ -1,5 +1,14 @@
 defmodule Platform.Tasks.ProjectTest do
-  use Platform.DataCase, async: true
+  # NOT async. These cases set application-global lifecycle config keys
+  # (:lifecycle_step_registry, :lifecycle_allowed_webhook_hosts) so that a
+  # changeset validator, which has nowhere to thread a server argument, can
+  # find a per-case registry. Application env is VM-global: run concurrently,
+  # one case's on_exit cleanup lands inside another's assertion and the
+  # registry lookup falls back to the boot singleton, which is disabled in
+  # test env. Measured at 1 failure in 5 runs on a clean tree, with a
+  # ROTATING failing test name. Serialising these files is the fix; making
+  # the key process-local is not possible while the seam is Application env.
+  use Platform.DataCase, async: false
 
   import Platform.TenancyFixtures
 
@@ -132,6 +141,92 @@ defmodule Platform.Tasks.ProjectTest do
       projects = Tasks.list_projects_unscoped()
       names = Enum.map(projects, & &1.name)
       assert ["Alpha", "Bravo"] == names
+    end
+  end
+
+  # ── Lifecycle hook pipelines (task 019fe1b6 stage 3) ──────────────────
+  describe "lifecycle_pipeline validation in the changeset" do
+    setup context do
+      name = :"project_lifecycle_registry_#{:erlang.phash2(context.test)}"
+      start_supervised!({Platform.Lifecycle.StepRegistry, name: name})
+
+      previous = Application.get_env(:platform, :lifecycle_step_registry)
+      Application.put_env(:platform, :lifecycle_step_registry, name)
+
+      on_exit(fn ->
+        case previous do
+          nil -> Application.delete_env(:platform, :lifecycle_step_registry)
+          value -> Application.put_env(:platform, :lifecycle_step_registry, value)
+        end
+      end)
+
+      :ok
+    end
+
+    defp lifecycle_step(overrides \\ %{}) do
+      Map.merge(%{"step" => "notify", "await" => false, "can_divert" => false}, overrides)
+    end
+
+    defp with_pipeline(pipeline), do: %{"lifecycle_pipeline" => pipeline}
+
+    test "a valid pipeline saves and resolves in declared order" do
+      first = lifecycle_step()
+      second = Map.put(lifecycle_step(), "label", "second")
+
+      assert {:ok, project} =
+               Tasks.create_project(%{
+                 name: "Pipeline Project",
+                 config: with_pipeline(%{"planning.entered" => [first, second]})
+               })
+
+      assert Platform.Lifecycle.resolve_steps(project, "planning.entered") == [first, second]
+    end
+
+    test "a step naming a loaded module is rejected on :config and NOT persisted" do
+      assert {:error, changeset} =
+               Tasks.create_project(%{
+                 name: "Module Step",
+                 config:
+                   with_pipeline(%{"planning.entered" => [lifecycle_step(%{"step" => "Enum"})]})
+               })
+
+      assert %{config: [reason]} = errors_on(changeset)
+      assert reason =~ "names a module"
+      assert Tasks.list_projects_unscoped() |> Enum.all?(&(&1.name != "Module Step"))
+    end
+
+    test "a malformed await is rejected on :config and NOT persisted" do
+      assert {:error, changeset} =
+               Tasks.create_project(%{
+                 name: "Bad Await",
+                 config:
+                   with_pipeline(%{"planning.entered" => [lifecycle_step(%{"await" => "true"})]})
+               })
+
+      assert %{config: [reason]} = errors_on(changeset)
+      assert reason =~ "\"await\" must be a boolean"
+      assert Tasks.list_projects_unscoped() |> Enum.all?(&(&1.name != "Bad Await"))
+    end
+
+    test "a non-map lifecycle_pipeline is rejected" do
+      assert {:error, changeset} =
+               Tasks.create_project(%{name: "Not A Map", config: with_pipeline("nope")})
+
+      assert %{config: [reason]} = errors_on(changeset)
+      assert reason =~ "lifecycle_pipeline must be a map"
+    end
+
+    test "a project with unrelated config keys and no pipeline still saves" do
+      # Control: without this, a validator that rejected every :config
+      # change would pass the cases above.
+      assert {:ok, project} =
+               Tasks.create_project(%{
+                 name: "Unrelated Config",
+                 config: %{"some_other_feature" => %{"enabled" => true}}
+               })
+
+      assert project.config == %{"some_other_feature" => %{"enabled" => true}}
+      assert Platform.Lifecycle.resolve_pipeline(project) == %{}
     end
   end
 

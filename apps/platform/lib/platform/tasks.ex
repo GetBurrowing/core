@@ -22,6 +22,10 @@ defmodule Platform.Tasks do
   alias Platform.Agents.Agent
   alias Platform.Context.Session
   alias Platform.Execution.Run
+  # NOTE: `Lifecycle` is already taken by `Platform.Tenancy.Lifecycle` below,
+  # so the lifecycle-hook modules are aliased individually.
+  alias Platform.Lifecycle.EdgeInventory
+  alias Platform.Lifecycle.Executor
 
   alias Platform.Orchestration.{
     ExecutionSpace,
@@ -1411,6 +1415,17 @@ defmodule Platform.Tasks do
   end
 
   @doc """
+  The automated-pipeline transition table itself, `%{from => [to]}`.
+
+  Surfaced so `Platform.Lifecycle.EdgeInventory` can DERIVE the declarable
+  lifecycle edge set from it instead of transcribing a second copy. A
+  transcribed copy would go stale silently: widening this table would leave
+  the new edge undeclarable, with nothing to read and nothing red.
+  """
+  @spec valid_task_transitions() :: %{String.t() => [String.t()]}
+  def valid_task_transitions, do: @valid_task_transitions
+
+  @doc """
   Returns `true` when transitioning `task` to `new_status` is permitted by
   the automated-pipeline transition table (`@valid_task_transitions`).
   Same rules `transition_task_status/2` enforces internally — surfaced as
@@ -2095,38 +2110,48 @@ defmodule Platform.Tasks do
 
         broadcast_board({:plan_updated, updated})
 
-        case architecture_fire_outcome(fire_result) do
-          :complete ->
-            open_architecture_gate_at_submit(updated)
+        result =
+          case architecture_fire_outcome(fire_result) do
+            :complete ->
+              open_architecture_gate_at_submit(updated)
 
-          outcome when outcome in [:not_applicable, :failed] ->
-            # PROGRESSIVE ENHANCEMENT, and it is load-bearing rather than
-            # a nicety: these two branches execute the BYTE-IDENTICAL tail
-            # that ran before the gate existed, in the same order. A repo
-            # with no architect assigned behaves exactly as it does today
-            # (`0044-architect-responsibility.md § Decision`, ADR-0046
-            # decision 3). `:failed` FALLS OPEN
-            # (ADR-0046 decision 7) — the gate never opens and nothing is
-            # blocked. Its visibility is already solved and must not be
-            # re-solved here: `record_architecture_planning_step/2` above
-            # wrote `planning_step_outcomes["architecture"]["outcome"] =
-            # "failed"`, which member 4's merge-time writers surface.
-            settle_ungated_plan_submission(updated)
+            outcome when outcome in [:not_applicable, :failed] ->
+              # PROGRESSIVE ENHANCEMENT, and it is load-bearing rather than
+              # a nicety: these two branches execute the BYTE-IDENTICAL tail
+              # that ran before the gate existed, in the same order. A repo
+              # with no architect assigned behaves exactly as it does today
+              # (`0044-architect-responsibility.md § Decision`, ADR-0046
+              # decision 3). `:failed` FALLS OPEN
+              # (ADR-0046 decision 7) — the gate never opens and nothing is
+              # blocked. Its visibility is already solved and must not be
+              # re-solved here: `record_architecture_planning_step/2` above
+              # wrote `planning_step_outcomes["architecture"]["outcome"] =
+              # "failed"`, which member 4's merge-time writers surface.
+              settle_ungated_plan_submission(updated)
 
-          other ->
-            # `Platform.Responsibilities.outcome/1` deliberately has no
-            # catch-all, so this arm is only reachable if a future value
-            # is ADDED to its union. Fall open and be loud: an outcome
-            # this function has never seen is not evidence the architect
-            # took the slot, and a `CaseClauseError` here would abort a
-            # transition whose row is already committed.
-            Logger.error(
-              "[Tasks] architecture.review_plan unmapped outcome #{inspect(other)} " <>
-                "plan=#{updated.id} task=#{updated.task_id} — gate not opened"
-            )
+            other ->
+              # `Platform.Responsibilities.outcome/1` deliberately has no
+              # catch-all, so this arm is only reachable if a future value
+              # is ADDED to its union. Fall open and be loud: an outcome
+              # this function has never seen is not evidence the architect
+              # took the slot, and a `CaseClauseError` here would abort a
+              # transition whose row is already committed.
+              Logger.error(
+                "[Tasks] architecture.review_plan unmapped outcome #{inspect(other)} " <>
+                  "plan=#{updated.id} task=#{updated.task_id} — gate not opened"
+              )
 
-            settle_ungated_plan_submission(updated)
-        end
+              settle_ungated_plan_submission(updated)
+          end
+
+        # ADR-0046 Amendment 1, task 019fe1b7 stage 3. The plan-submission
+        # boundary is a named lifecycle edge, and this is the ONLY site that
+        # fires it. It runs LAST, after the gate has been opened (or the
+        # submission settled ungated), because the step is an OBSERVER of the
+        # gate — firing it earlier would race the row it reads.
+        _ = run_architect_edge(updated)
+
+        result
 
       error ->
         error
@@ -2134,6 +2159,52 @@ defmodule Platform.Tasks do
   end
 
   def submit_plan_for_review(_plan), do: {:error, :invalid_transition}
+
+  # THE EDGE IS RUN IN A SPAWNED PROCESS, and the choice is forced.
+  # `Platform.Lifecycle.Executor.run_edge/3` awaits an awaited step in a
+  # `receive` in the CALLING process. This caller is synchronous and on a
+  # request path — the MCP `plan_submit` tool reaches it — while an
+  # architecture gate resolves in minutes-to-hours through a human or an
+  # agent. Awaiting inline would hold the request open for the edge budget.
+  #
+  # The synchronous tail above is therefore untouched: the fire, the outcome
+  # record and the gate open all still happen before this function returns, so
+  # every existing caller that reads the gate straight after a submit still
+  # sees it. The spawned run only WATCHES and RECORDS.
+  #
+  # Best-effort by construction: an unlinked spawn whose body cannot raise
+  # into this process. A lifecycle RECORD must never be able to fail a
+  # committed plan submission — the same rule as every other envelope on this
+  # transition.
+  defp run_architect_edge(%Plan{} = plan) do
+    case Repo.get(Task, plan.task_id) do
+      nil ->
+        :ok
+
+      %Task{} = task ->
+        edge = Platform.Lifecycle.Edges.architect_edge()
+
+        spawn(fn ->
+          try do
+            Platform.Lifecycle.Executor.run_edge(task, edge,
+              steps: Platform.Lifecycle.Edges.default_steps(edge)
+            )
+          rescue
+            e ->
+              Logger.warning("[plan.review_requested] edge raised: #{Exception.message(e)}")
+          catch
+            :exit, reason ->
+              Logger.warning("[plan.review_requested] edge exited: #{inspect(reason)}")
+          end
+        end)
+
+        :ok
+    end
+  rescue
+    e ->
+      Logger.warning("[plan.review_requested] edge not started: #{Exception.message(e)}")
+      :ok
+  end
 
   # ── ADR-0046 member 5 stage 2: the gate branch ─────────────────────────
   #
@@ -5150,7 +5221,116 @@ defmodule Platform.Tasks do
 
   defp maybe_prepare_transition(_task, _new_status), do: :ok
 
-  defp maybe_finalize_transition(
+  # THE ONLY CHOKE POINT for task-status lifecycle hooks. Reached from
+  # `transition_task/3` and from the plan-approval finalizer — NOT from
+  # `transition_task_status/2`, which writes the status and returns without
+  # calling any finalizer (see `phase_pointer_attrs/2`'s comment; the MCP
+  # `task_update` path lands there directly).
+  #
+  # FOUR other status writers DO NOT OBSERVE this. Read
+  # `Platform.Lifecycle.EdgeInventory` before adding a hook here — it names
+  # every one of them and what each bypasses.
+  #
+  # The per-status housekeeping lives in `finalize_status_hooks/3`, which is
+  # a MULTI-HEAD function: only one head runs per transition. The edge
+  # dispatch therefore CANNOT hang off any of those heads — a per-head call
+  # is how one status silently gets no hooks — so it hangs here, once,
+  # outside the branch, and applies uniformly to every status.
+  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, new_status) do
+    result = finalize_status_hooks(previous, task, new_status)
+    fire_status_edge(previous, task, new_status)
+    result
+  end
+
+  # Fire the configured pipeline for the `"<from>-><to>"` edge this
+  # transition just traversed.
+  #
+  # `:steps` IS DELIBERATELY OMITTED. `Platform.Lifecycle.Executor.run_edge/3`
+  # resolves the project's configured pipeline lazily when the option is
+  # absent, and until a caller omitted it EVERY production pipeline was a
+  # hardcoded one-element list — which means a gate was always at index 0 and
+  # the stack's declared-not-positional `can_divert` guarantee was protecting
+  # a configuration no shipped caller could produce. Passing `steps:` here
+  # would restore exactly that. Do not "helpfully" add it.
+  #
+  # Only edges IN the transition table fire, so the set of edges that can
+  # fire is the same set `EdgeInventory.status_edges/0` derives — one table,
+  # not two.
+  #
+  # THE OUTCOME IS EMITTED, not discarded (task 019fe1b7 stage 5). Until this
+  # stage `run_edge/3`'s outcome was thrown away here, and that made the
+  # central distinction of ADR-0046 UNOBSERVABLE from outside the executor: a
+  # phase that is never traversed and a phase traversed with an empty
+  # pipeline both produce ZERO `lifecycle_step_runs` rows, so rows alone
+  # cannot tell them apart. `:not_applicable` existed as a return value no
+  # shipped caller could see. `[:platform, :lifecycle, :edge]` is where the
+  # difference becomes readable:
+  #
+  #   * never traversed   → NO event at all (this function is not reached, or
+  #     the `else` branch below returns without emitting)
+  #   * traversed, empty  → exactly one event, `outcome: :not_applicable`
+  #   * traversed, steps  → one event, `outcome: :complete | :diverted |
+  #     :failed | :suppressed`
+  #
+  # Emitted INSIDE the fired branch only. Moving it outside would give a
+  # skipped edge an event and re-collapse the three states into two.
+  defp fire_status_edge(%Task{status: from}, %Task{} = task, to)
+       when is_binary(from) and is_binary(to) do
+    if to in Map.get(@valid_task_transitions, from, []) do
+      edge = EdgeInventory.edge_name(from, to)
+
+      try do
+        # `:project` is omitted too, for the same reason: `task.project` may
+        # be `%Ecto.Association.NotLoaded{}` here, and handing that to the
+        # resolver would resolve to `[]` — a configured pipeline silently
+        # not running is worse than the load.
+        {outcome, summary} = Executor.run_edge(task, edge)
+        emit_lifecycle_edge(task, edge, outcome, summary)
+        :ok
+      rescue
+        error ->
+          # A hook must not be able to roll back the status change that has
+          # already committed. Logged loudly, with the edge named, so this
+          # is a bug report rather than a silent degradation.
+          Logger.error(
+            "lifecycle edge #{edge} raised for task #{task.id}: " <>
+              Exception.format(:error, error, __STACKTRACE__)
+          )
+
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp fire_status_edge(_previous, _task, _new_status), do: :ok
+
+  # The emit sits inside the same `try` as the run for a reason: a handler
+  # cannot roll back a committed status change, and `:telemetry.execute/3`
+  # already catches and detaches a failing handler itself, so the only faults
+  # reachable here are on OUR side of the emit — the shape documented at
+  # `emit_architecture_gate_opened/1`.
+  defp emit_lifecycle_edge(%Task{} = task, edge, outcome, summary) do
+    :telemetry.execute(
+      [:platform, :lifecycle, :edge],
+      %{count: 1},
+      %{
+        task_id: task.id,
+        project_id: task.project_id,
+        edge: edge,
+        outcome: outcome,
+        run_seq: Map.get(summary, :run_seq),
+        step_count: summary |> Map.get(:steps, []) |> length(),
+        resource_type: "task",
+        resource_id: task.id,
+        action: "lifecycle_edge",
+        actor_type: "system"
+      }
+    )
+  end
+
+  defp finalize_status_hooks(
          %Task{status: "in_progress"} = previous,
          %Task{} = task,
          "in_review"
@@ -5164,7 +5344,7 @@ defmodule Platform.Tasks do
     :ok
   end
 
-  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, "done") do
+  defp finalize_status_hooks(%Task{} = previous, %Task{} = task, "done") do
     if current_phase(previous) != current_phase(task) do
       maybe_apply_phase_assignee(task)
     end
@@ -5182,7 +5362,7 @@ defmodule Platform.Tasks do
   # `transition_with_policy2_freeze`) and the MCP `task_update` path
   # (which calls `transition_task_status/2` directly). This head still
   # runs phase/stack/regression housekeeping like any other transition.
-  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, "cancelled") do
+  defp finalize_status_hooks(%Task{} = previous, %Task{} = task, "cancelled") do
     if current_phase(previous) != current_phase(task) do
       maybe_apply_phase_assignee(task)
     end
@@ -5201,7 +5381,7 @@ defmodule Platform.Tasks do
   # stack rollup PR is stamped merged) and log-and-swallows, so a member
   # legitimately awaiting the merge simply stays at `deploying` and the
   # rollup-merge sweep remains the backstop.
-  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, "deploying") do
+  defp finalize_status_hooks(%Task{} = previous, %Task{} = task, "deploying") do
     if current_phase(previous) != current_phase(task) do
       maybe_apply_phase_assignee(task)
     end
@@ -5212,7 +5392,7 @@ defmodule Platform.Tasks do
     :ok
   end
 
-  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, new_status) do
+  defp finalize_status_hooks(%Task{} = previous, %Task{} = task, new_status) do
     if current_phase(previous) != current_phase(task) do
       maybe_apply_phase_assignee(task)
     end
@@ -5222,7 +5402,7 @@ defmodule Platform.Tasks do
     :ok
   end
 
-  defp maybe_finalize_transition(_previous_task, _task, _new_status), do: :ok
+  defp finalize_status_hooks(_previous_task, _task, _new_status), do: :ok
 
   # ADR 0041 §"Status divergence handling": any member status change
   # triggers a stack-level rollup-status recompute. Short-circuits when
