@@ -4100,7 +4100,7 @@ defmodule Platform.Federation.ToolSurface do
                {:ok, updated} <- maybe_update_task(task, non_status_flat, actor),
                {:ok, updated} <- maybe_apply_phase_assignees(updated, phase_attrs),
                :ok <- maybe_check_plan_gate(updated, status_change, actor),
-               {:ok, updated} <- maybe_transition_status(updated, status_change) do
+               {:ok, updated} <- maybe_transition_status(updated, status_change, actor) do
             # `Tasks.update_task/2` and `Tasks.transition_task_status/2`
             # return the un-preloaded struct. Refresh sponsor so
             # `serialize_task` can emit the current shape — otherwise a
@@ -4193,10 +4193,17 @@ defmodule Platform.Federation.ToolSurface do
   defp maybe_update_task(task, attrs, _actor) when map_size(attrs) == 0, do: {:ok, task}
   defp maybe_update_task(task, attrs, actor), do: Tasks.update_task(task, attrs, actor: actor)
 
-  defp maybe_transition_status(task, nil), do: {:ok, task}
+  defp maybe_transition_status(task, nil, _actor), do: {:ok, task}
 
-  defp maybe_transition_status(task, new_status),
-    do: Tasks.transition_task_status(task, new_status)
+  # `transition_task_status/2` deliberately takes no actor (it is called by
+  # the router, Stacks, CommencementGate, ChatPins and more). The MCP
+  # caller's identity is supplied out-of-band so the recorded transition is
+  # attributed to the calling agent instead of `unknown`.
+  defp maybe_transition_status(task, new_status, actor),
+    do:
+      Tasks.TransitionActor.with_actor(actor, "mcp_task_update", fn ->
+        Tasks.transition_task_status(task, new_status)
+      end)
 
   # Task 019f6380 stage 2: consult `Tasks.require_approved_plan_for/3`
   # before an MCP-initiated status transition. When there's no status

@@ -214,6 +214,34 @@ defmodule Platform.Tasks.Task do
   #
   # One narrow changeset buys both properties. Do not "simplify" by
   # merging the two cast lists.
+  #
+  # SECOND PROPERTY, added by task 019fe4a8: because `changeset/2` is the
+  # ONLY changeset that casts `:status`, it is also the sole recorded
+  # status-transition writer. The `prepare_changes/2` hook at the end of
+  # the pipeline writes one `Platform.Tasks.PhaseTransition` row per
+  # executed status change, inside the same transaction as the write.
+  #
+  # ANY NEW CHANGESET THAT CASTS `:status` must either attach the same
+  # hook or route its callers through here. A status write that skips the
+  # hook does not error — it just silently produces no transition row, and
+  # the per-phase cycle-time decomposition quietly under-reports. That is
+  # why the failure mode is caught by a scan-based guard test rather than
+  # left to review.
+  #
+  # Design alternatives considered and rejected (do not re-litigate):
+  #
+  #   * Instrumenting the known call sites — the named failure mode; the
+  #     next writer someone adds goes missing as absent rows.
+  #   * A `Platform.Repo.update/2` override — sees an untyped changeset,
+  #     must re-derive "is this a Task and did status change", and
+  #     `update_all`/`insert_all` bypass it anyway.
+  #   * A wrapper function every writer must call — requires editing every
+  #     existing writer AND voluntary future compliance. `prepare_changes`
+  #     makes compliance automatic.
+  #   * Telemetry — `Platform.Audit.TelemetryHandler` is detached globally
+  #     by its own test's `on_exit`, so telemetry-driven persistence
+  #     silently drops rows in downstream tests, and a handler runs outside
+  #     the write's transaction.
   def changeset(task, attrs) do
     task
     |> cast(attrs, [
@@ -251,6 +279,67 @@ defmodule Platform.Tasks.Task do
     |> foreign_key_constraint(:epic_id)
     |> foreign_key_constraint(:stack_id)
     |> foreign_key_constraint(:sponsor_user_id)
+    # Last in the pipeline on purpose: `prepare_changes/2` only runs when
+    # the changeset is valid AND the operation actually executes, so an
+    # invalid or never-executed changeset records nothing.
+    |> prepare_changes(&record_status_transition/1)
+  end
+
+  # Writes one `task_phase_transitions` row per executed status change.
+  #
+  # Runs inside the same `Repo` transaction as the update it describes:
+  # roll the transaction back and the transition row goes with it, which is
+  # the property that makes this table trustworthy.
+  defp record_status_transition(changeset) do
+    case Ecto.Changeset.get_change(changeset, :status) do
+      # No status change in this write — an ordinary field update records
+      # nothing.
+      nil ->
+        changeset
+
+      to_status ->
+        maybe_record(changeset, to_status)
+    end
+  end
+
+  # LOAD-BEARING: skip inserts. `prepare_changes/2` runs BEFORE the parent
+  # `tasks` row exists, so a transition row written here would violate the
+  # `task_id` foreign key. Do not "fix" this by making the FK deferrable or
+  # by inserting an origin row from `create_task/2` — the first interval is
+  # anchored at `tasks.inserted_at` by the query helper instead.
+  defp maybe_record(%{action: :insert} = changeset, _to_status), do: changeset
+
+  defp maybe_record(changeset, to_status) do
+    actor = Platform.Tasks.TransitionActor.current()
+
+    attrs =
+      Map.merge(actor, %{
+        task_id: changeset.data.id,
+        # Pre-write struct: the status the task is leaving.
+        from_status: changeset.data.status,
+        to_status: to_status,
+        occurred_at: DateTime.utc_now()
+      })
+
+    case Platform.Tasks.PhaseTransitions.record(attrs, changeset.repo) do
+      {:ok, _row} ->
+        changeset
+
+      {:error, reason} ->
+        # Deliberately NOT `Repo.rollback/1`. This instrumentation is
+        # observational: a broken recorder must never be able to fail a
+        # legitimate status change. Log loudly and let the transition
+        # through — a missing row is a measurement gap, a blocked
+        # transition is an outage.
+        require Logger
+
+        Logger.error(
+          "failed to record task phase transition for task #{inspect(changeset.data.id)}: " <>
+            inspect(reason)
+        )
+
+        changeset
+    end
   end
 
   @doc """

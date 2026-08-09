@@ -46,6 +46,7 @@ defmodule Platform.Tasks do
     Stage,
     Task,
     TaskReference,
+    TransitionActor,
     Validation
   }
 
@@ -3916,9 +3917,21 @@ defmodule Platform.Tasks do
                 %Plan{} = plan ->
                   case reject_plan(plan, by_user_id, reason) do
                     {:ok, rejected_plan} ->
-                      case task
-                           |> Task.changeset(%{status: "planning"})
-                           |> Repo.update() do
+                      # `by_user_id` is unambiguously a human here, so the
+                      # reopen is attributed to that user rather than to
+                      # `:system` — this interval was human wait.
+                      reopen_actor =
+                        if is_binary(by_user_id), do: {:user, by_user_id}, else: :system
+
+                      case TransitionActor.with_actor(
+                             reopen_actor,
+                             "architecture_reopen",
+                             fn ->
+                               task
+                               |> Task.changeset(%{status: "planning"})
+                               |> Repo.update()
+                             end
+                           ) do
                         {:ok, updated_task} ->
                           {updated_task, rejected_plan}
 
@@ -4030,10 +4043,15 @@ defmodule Platform.Tasks do
                            rejection_reason: reason
                          })
                          |> Repo.update(),
+                       # `by_actor_id` may be a user OR an agent id with no
+                       # way to tell them apart here, so this records as
+                       # `system` rather than guessing a kind.
                        {:ok, updated_task} <-
-                         task
-                         |> Task.changeset(%{status: "planning"})
-                         |> Repo.update() do
+                         TransitionActor.with_actor(:system, "architecture_supersede", fn ->
+                           task
+                           |> Task.changeset(%{status: "planning"})
+                           |> Repo.update()
+                         end) do
                     {updated_task, superseded_plan}
                   else
                     {:error, changeset} -> Repo.rollback(changeset)
@@ -4951,25 +4969,27 @@ defmodule Platform.Tasks do
   identically to `transition_task/2`.
   """
   def transition_task(%Task{} = task, new_status, actor) do
-    with :ok <- require_deploy_target_for(task, new_status),
-         :ok <- require_approved_plan_for(task, new_status, actor),
-         :ok <- maybe_prepare_transition(task, new_status),
-         {:ok, %{updated: updated, frozen: frozen}} <-
-           transition_with_policy2_freeze(task, new_status) do
-      updated = Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])
-      broadcast_board({:task_updated, updated})
-      maybe_finalize_transition(task, updated, new_status)
+    TransitionActor.with_actor(actor, "transition_task", fn ->
+      with :ok <- require_deploy_target_for(task, new_status),
+           :ok <- require_approved_plan_for(task, new_status, actor),
+           :ok <- maybe_prepare_transition(task, new_status),
+           {:ok, %{updated: updated, frozen: frozen}} <-
+             transition_with_policy2_freeze(task, new_status) do
+        updated = Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])
+        broadcast_board({:task_updated, updated})
+        maybe_finalize_transition(task, updated, new_status)
 
-      Platform.Chat.FreezePolicy.broadcast_frozen(frozen, %{
-        reason: :task_in_progress,
-        task_id: updated.id
-      })
+        Platform.Chat.FreezePolicy.broadcast_frozen(frozen, %{
+          reason: :task_in_progress,
+          task_id: updated.id
+        })
 
-      {:ok, updated}
-    else
-      error ->
-        error
-    end
+        {:ok, updated}
+      else
+        error ->
+          error
+      end
+    end)
   end
 
   # Atomic status flip + Policy 2 task-scoped freeze when entering :in_progress.
@@ -5065,6 +5085,12 @@ defmodule Platform.Tasks do
   `drop_task_to_column/2`.
   """
   def drop_task_to_column(%Task{} = task, column, actor) do
+    TransitionActor.with_actor(actor, "drop_task_to_column", fn ->
+      do_drop_task_to_column(task, column, actor)
+    end)
+  end
+
+  defp do_drop_task_to_column(%Task{} = task, column, actor) do
     case Map.get(@drop_target_status, column) do
       nil ->
         {:error, :unknown_column}
