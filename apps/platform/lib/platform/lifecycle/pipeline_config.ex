@@ -111,6 +111,7 @@ defmodule Platform.Lifecycle.PipelineConfig do
     case check(pipeline, registry) do
       :ok -> :ok
       {:error, {:gates_prohibited, edge}} -> {:error, gates_prohibited_message(edge)}
+      {:error, {:notify_cannot_gate, name}} -> {:error, notify_cannot_gate_message(name)}
       {:error, reason} when is_binary(reason) -> {:error, reason}
     end
   end
@@ -124,11 +125,14 @@ defmodule Platform.Lifecycle.PipelineConfig do
   message substring cannot tell a gate-prohibition from a typo'd edge name
   whose message happens to contain the same words.
 
-  Returns `:ok`, `{:error, {:gates_prohibited, edge}}`, or
-  `{:error, binary}` for every other rule.
+  Returns `:ok`, `{:error, {:gates_prohibited, edge}}`,
+  `{:error, {:notify_cannot_gate, step_name}}`, or `{:error, binary}` for
+  every other rule.
   """
   @spec check(term(), GenServer.server()) ::
-          :ok | {:error, {:gates_prohibited, String.t()} | String.t()}
+          :ok
+          | {:error,
+             {:gates_prohibited, String.t()} | {:notify_cannot_gate, String.t()} | String.t()}
   def check(pipeline, registry \\ StepRegistry.server())
 
   def check(pipeline, registry) when is_map(pipeline) do
@@ -187,7 +191,8 @@ defmodule Platform.Lifecycle.PipelineConfig do
     with :ok <- validate_step_name(step, at(edge, index), registry),
          :ok <- validate_flag(step, "await", at(edge, index)),
          :ok <- validate_flag(step, "can_divert", at(edge, index)),
-         :ok <- validate_no_gate_edge(step, edge, at(edge, index)) do
+         :ok <- validate_no_gate_edge(step, edge, at(edge, index)),
+         :ok <- validate_notify_cannot_gate(step, registry) do
       validate_webhook_url(step, at(edge, index))
     end
   end
@@ -280,6 +285,40 @@ defmodule Platform.Lifecycle.PipelineConfig do
   end
 
   defp validate_no_gate_edge(_step, _edge, _where), do: :ok
+
+  # A NOTIFY CANNOT GATE — task 019fe1b7 stage 4, and the rejection is at
+  # CONFIG LOAD rather than a no-op at run time.
+  #
+  # The alternative the stage offered — accept `await: true` on a notify and
+  # simply have it not block — was rejected because it is the exact silence
+  # this ADR exists against: the author keeps a false belief about their
+  # pipeline, nothing tells them, and the result is indistinguishable from a
+  # `can_divert` that has stopped working. A load-time error is a bug report.
+  #
+  # Notify-ness is read from the REGISTRY ENTRY, never from the step's name
+  # and never from its position, so the rule covers every future notify and
+  # survives reordering. Contrast `validate_no_gate_edge/3` above, which
+  # prohibits gates on one EDGE; this prohibits them on one STEP KIND,
+  # everywhere.
+  defp validate_notify_cannot_gate(step, registry) do
+    name = Map.get(step, "step")
+
+    gate_shaped? = Map.get(step, "await") == true or Map.get(step, "can_divert") == true
+
+    if is_binary(name) and gate_shaped? and StepRegistry.notify_step?(name, registry) do
+      {:error, {:notify_cannot_gate, name}}
+    else
+      :ok
+    end
+  end
+
+  defp notify_cannot_gate_message(name) do
+    "step #{inspect(name)} is a NOTIFY: it reports and cannot hold or divert a " <>
+      "transition, so \"await\" and \"can_divert\" must both be false. This is " <>
+      "rejected here rather than ignored at run time — a flag that is accepted " <>
+      "and silently has no effect leaves you believing your pipeline gates when " <>
+      "it does not (ADR-0046 Amendment 1 decision 3)"
+  end
 
   defp gates_prohibited_message(edge) do
     "the #{inspect(edge)} edge accepts effects and notifies only. " <>

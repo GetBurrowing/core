@@ -36,6 +36,10 @@ defmodule Platform.Lifecycle.TerminalWorktreeCleanupTest do
   alias Platform.Tasks
 
   @cleanup_step "worktree_cleanup"
+  # Stage 4 appended the completion notify AFTER the effect on `->done` edges.
+  # With no URL configured it posts nothing and completes; it is named here so
+  # these ordered assertions stay exact rather than being relaxed to a filter.
+  @webhook_step "completion_webhook"
 
   setup do
     root =
@@ -73,11 +77,16 @@ defmodule Platform.Lifecycle.TerminalWorktreeCleanupTest do
                "stack_pending->cancelled"
              ]
 
+      # The EFFECT is FIRST on every terminal edge, whatever else joined it
+      # later. Task 019fe1b7 stage 4 appended the completion notify to the
+      # `->done` edges only, so this asserts the effect's own position rather
+      # than the whole list — the full ordered declaration for a completion
+      # edge is pinned in `completion_webhook_test.exs`, next to the decision
+      # that produced it.
       for edge <- EdgeInventory.terminal_edges() do
-        assert Edges.default_steps(edge) == [
-                 %{"step" => @cleanup_step, "await" => false, "can_divert" => false}
-               ],
-               "terminal edge #{edge} ships no cleanup effect"
+        assert [%{"step" => @cleanup_step, "await" => false, "can_divert" => false} | _rest] =
+                 Edges.default_steps(edge),
+               "terminal edge #{edge} ships no cleanup effect first"
       end
     end
 
@@ -100,7 +109,12 @@ defmodule Platform.Lifecycle.TerminalWorktreeCleanupTest do
       # shipped path consulted `default_steps/1` at all.
       project = project_fixture()
 
-      assert Platform.Lifecycle.resolve_steps(project, "in_review->done") == [
+      assert [%{"step" => @cleanup_step, "await" => false, "can_divert" => false} | _rest] =
+               Platform.Lifecycle.resolve_steps(project, "in_review->done")
+
+      # `->cancelled` resolves to the effect ALONE — the completion notify is
+      # deliberately absent there (stage 4).
+      assert Platform.Lifecycle.resolve_steps(project, "in_progress->cancelled") == [
                %{"step" => @cleanup_step, "await" => false, "can_divert" => false}
              ]
 
@@ -126,7 +140,7 @@ defmodule Platform.Lifecycle.TerminalWorktreeCleanupTest do
       refute File.exists?(worktree)
 
       assert Enum.map(Runs.for_edge(task.id, "in_review->done"), &{&1.step_name, &1.status}) ==
-               [{@cleanup_step, "completed"}]
+               [{@cleanup_step, "completed"}, {@webhook_step, "completed"}]
     end
 
     test "firing the same terminal edge TWICE does not fail the second time", %{run_root: root} do
@@ -150,9 +164,19 @@ defmodule Platform.Lifecycle.TerminalWorktreeCleanupTest do
       {:ok, task} = Tasks.transition_task(task, "in_review")
       assert {:ok, %{status: "done"}} = Tasks.transition_task(task, "done")
 
-      statuses = Enum.map(Runs.for_edge(task.id, "in_review->done"), & &1.status)
+      # Two firings x two declared steps, all four completed. Named pairs
+      # rather than bare statuses so a row going missing is legible.
+      statuses =
+        Enum.map(Runs.for_edge(task.id, "in_review->done"), &{&1.step_name, &1.status})
 
-      assert statuses == ["completed", "completed"]
+      assert statuses == [
+               {@cleanup_step, "completed"},
+               {@webhook_step, "completed"},
+               {@cleanup_step, "completed"},
+               {@webhook_step, "completed"}
+             ]
+
+      statuses = Enum.map(statuses, &elem(&1, 1))
       refute "failed" in statuses
     end
   end
@@ -174,7 +198,7 @@ defmodule Platform.Lifecycle.TerminalWorktreeCleanupTest do
       # traversed edge with an EMPTY configured pipeline, and this pipeline
       # is not empty.
       assert Enum.map(Runs.for_edge(task.id, "in_review->done"), &{&1.step_name, &1.status}) ==
-               [{@cleanup_step, "completed"}]
+               [{@cleanup_step, "completed"}, {@webhook_step, "completed"}]
     end
 
     test "a live run that never allocated a workspace is also complete", %{run_root: root} do
@@ -192,7 +216,7 @@ defmodule Platform.Lifecycle.TerminalWorktreeCleanupTest do
       assert {:ok, %{status: "done"}} = Tasks.transition_task(task, "done")
 
       assert Enum.map(Runs.for_edge(task.id, "in_review->done"), &{&1.step_name, &1.status}) ==
-               [{@cleanup_step, "completed"}]
+               [{@cleanup_step, "completed"}, {@webhook_step, "completed"}]
     end
 
     test "a cancelled task fires it too — a run CAN exist for one" do
@@ -230,7 +254,7 @@ defmodule Platform.Lifecycle.TerminalWorktreeCleanupTest do
       # Recorded as failed rather than swallowed — and the transition still
       # committed, because an effect cannot hold the task.
       assert Enum.map(Runs.for_edge(task.id, "in_review->done"), &{&1.step_name, &1.status}) ==
-               [{@cleanup_step, "failed"}]
+               [{@cleanup_step, "failed"}, {@webhook_step, "completed"}]
 
       assert File.exists?(dirty)
     end

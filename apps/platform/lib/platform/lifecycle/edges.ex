@@ -112,6 +112,7 @@ defmodule Platform.Lifecycle.Edges do
   @designer_step "design_preplan"
   @architect_step "architect_gate"
   @worktree_cleanup_step "worktree_cleanup"
+  @completion_webhook_step "completion_webhook"
 
   @doc "Edge name for the designer hook, fired from the router's dispatch tick."
   @spec designer_edge() :: binary()
@@ -141,6 +142,10 @@ defmodule Platform.Lifecycle.Edges do
   @doc "The registry name of the terminal worktree-cleanup effect. A NAME."
   @spec worktree_cleanup_step_name() :: binary()
   def worktree_cleanup_step_name, do: @worktree_cleanup_step
+
+  @doc "The registry name of the completion-webhook notify. A NAME."
+  @spec completion_webhook_step_name() :: binary()
+  def completion_webhook_step_name, do: @completion_webhook_step
 
   @doc """
   The steps that run on an edge when the project configures none.
@@ -189,11 +194,42 @@ defmodule Platform.Lifecycle.Edges do
   # transition and cannot send the task back. It is nonetheless a `:sync`
   # step that settles inside `start/2`, so a genuine removal failure is still
   # the edge's own `:failed` outcome rather than a detached settlement.
+  # THE COMPLETION NOTIFY (task 019fe1b7 stage 4). Declared on the strictly
+  # NARROWER `EdgeInventory.completion_edges/0` — inbound edges to `done`
+  # only — and NOT on the `->cancelled` edges the effect above covers. That
+  # divergence is the decision, not an oversight: cleanup asks whether anyone
+  # is coming back to a directory (true of a cancelled task), while this makes
+  # an outbound claim to a third party that a task COMPLETED (false of one).
+  # See `Platform.Lifecycle.Steps.CompletionWebhook`.
+  #
+  # `await: false, can_divert: false` — and for this step those are not merely
+  # the chosen values, they are the ONLY loadable ones:
+  # `Platform.Lifecycle.PipelineConfig` rejects a notify declared with either
+  # flag true. The shipped declaration satisfies the rule rather than being
+  # exempt from it.
+  #
+  # ORDER IS DECLARED, and it is [cleanup, webhook]: neither can divert, so
+  # neither halts the other, but a notify that goes out before the effect has
+  # run would be announcing a state the system has not finished reaching.
+  #
+  # The default carries NO "url" — this repository is public and the endpoint
+  # is per-project configuration. Without one the step posts nothing and
+  # completes. A project that configures the edge REPLACES this list
+  # wholesale (decision 8 semantics), so a project wanting both must declare
+  # both.
   def default_steps(edge) when is_binary(edge) do
-    if edge in EdgeInventory.terminal_edges() do
-      [%{"step" => @worktree_cleanup_step, "await" => false, "can_divert" => false}]
-    else
-      []
+    cond do
+      edge in EdgeInventory.completion_edges() ->
+        [
+          %{"step" => @worktree_cleanup_step, "await" => false, "can_divert" => false},
+          %{"step" => @completion_webhook_step, "await" => false, "can_divert" => false}
+        ]
+
+      edge in EdgeInventory.terminal_edges() ->
+        [%{"step" => @worktree_cleanup_step, "await" => false, "can_divert" => false}]
+
+      true ->
+        []
     end
   end
 

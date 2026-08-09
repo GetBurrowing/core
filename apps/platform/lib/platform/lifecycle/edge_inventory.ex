@@ -149,6 +149,11 @@ defmodule Platform.Lifecycle.EdgeInventory do
   # worktree on disk — can exist for either.
   @terminal_statuses ["done", "cancelled"]
 
+  # The SUCCESS terminal, alone. Kept apart from `@terminal_statuses` because
+  # "the task is over" and "the task succeeded" are different facts and hooks
+  # divide along that line — see `completion_edges/0`.
+  @completion_status "done"
+
   @doc """
   The edge key for one status transition. Member 3's `"<from>-><to>"` shape,
   in ONE place so the fire point and the config validator cannot disagree
@@ -198,6 +203,39 @@ defmodule Platform.Lifecycle.EdgeInventory do
     end)
     |> Enum.sort()
   end
+
+  @doc """
+  Every edge on which a task COMPLETES: the inbound edges to `done` alone,
+  DERIVED from the transition table.
+
+  A strict subset of `terminal_edges/0`, and separate from it on purpose
+  (task 019fe1b7 stage 4). `terminal_edges/0` answers "is this task's life
+  over" — true of `cancelled` too, which is why the worktree-cleanup effect
+  hangs there. This answers the narrower "did this task SUCCEED", which is
+  what an outbound completion notification claims. A cancelled task did not,
+  and a hook that inherited the wider set from a shared helper would announce
+  completion for an abandoned task with nothing in the payload able to
+  contradict it.
+
+  Derived, not transcribed, for the same reason as every other set here: an
+  ADR-0041 stack member reaches `done` from `in_review` or `in_progress` and
+  never enters `deploying`, so anything hung on `deploying->done` alone
+  silently never fires for one.
+  """
+  @spec completion_edges() :: [binary()]
+  def completion_edges do
+    Tasks.valid_task_transitions()
+    |> Enum.flat_map(fn {from, tos} ->
+      tos
+      |> Enum.filter(&(&1 == @completion_status))
+      |> Enum.map(&edge_name(from, &1))
+    end)
+    |> Enum.sort()
+  end
+
+  @doc "The status a task's life ends in SUCCESSFULLY. One, not two."
+  @spec completion_status() :: binary()
+  def completion_status, do: @completion_status
 
   @doc "The statuses a task's life can end in."
   @spec terminal_statuses() :: [binary()]

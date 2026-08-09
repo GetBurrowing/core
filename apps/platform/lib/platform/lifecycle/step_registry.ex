@@ -112,7 +112,13 @@ defmodule Platform.Lifecycle.StepRegistry do
       mfa: {Platform.Lifecycle.Steps.WorktreeCleanup, :start, 1},
       kind: :deterministic
     },
-    %{name: "notify", mfa: {Platform.Lifecycle.Steps, :notify, 1}, kind: :deterministic}
+    %{name: "notify", mfa: {Platform.Lifecycle.Steps, :notify, 1}, kind: :deterministic},
+    %{
+      name: "completion_webhook",
+      mfa: {Platform.Lifecycle.Steps.CompletionWebhook, :start, 1},
+      kind: :deterministic,
+      notify: true
+    }
   ]
 
   # Empty on purpose — public repo, no real hostnames in source. Runtime
@@ -175,6 +181,27 @@ defmodule Platform.Lifecycle.StepRegistry do
   @doc "The compile-time shipped allowlist, sorted by name."
   @spec built_in_steps() :: [entry()]
   def built_in_steps, do: Enum.sort_by(@built_in_steps, & &1.name)
+
+  @doc """
+  Whether `name` is registered as a NOTIFY — a fire-and-report step that may
+  never gate (task 019fe1b7 stage 4).
+
+  The fact lives on the registry ENTRY, not on the step's name and not on its
+  position in a pipeline, so `Platform.Lifecycle.PipelineConfig` can reject a
+  gate-shaped declaration for any notify present or future, and so the rule
+  cannot be defeated by reordering or by renaming.
+
+  Answers `false` for an unregistered name: an unknown step is rejected by
+  `validate_step_name/3` first, with its own message, and this must not
+  produce a second, less informative rejection for the same mistake.
+  """
+  @spec notify_step?(step_name(), GenServer.server()) :: boolean()
+  def notify_step?(name, server \\ __MODULE__) when is_binary(name) do
+    case fetch(name, server) do
+      {:ok, entry} -> Map.get(entry, :notify, false) == true
+      {:error, :unknown_step} -> false
+    end
+  end
 
   @doc """
   Hosts a lifecycle webhook step may target. Runtime config wins;
