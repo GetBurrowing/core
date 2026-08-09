@@ -152,6 +152,8 @@ defmodule PlatformWeb.PipelineLive do
 
   defp segment_fill(%{human: false}), do: "background-color: var(--color-info);"
 
+  defp axis_date(%{date: date}), do: Calendar.strftime(date, "%-d %b")
+
   defp instrumented_label(nil), do: "not yet instrumented"
   defp instrumented_label(dt), do: Calendar.strftime(dt, "%-d %b %Y")
 
@@ -211,10 +213,17 @@ defmodule PlatformWeb.PipelineLive do
 
         <div class="flex flex-col lg:flex-row lg:items-start gap-4">
           <div class="flex-1 min-w-0 space-y-2">
+            <%!-- The sparse banner may only claim what the page then honours.
+                  An earlier wording said the elapsed time could not be split
+                  across phases yet and was immediately followed by a legend
+                  splitting it engine/human and a table splitting it per phase.
+                  What is actually unavailable is the PROPORTIONAL reading, so
+                  that is what this says — and the legend is suppressed below,
+                  rather than the sentence being contradicted twice. --%>
             <p :if={@sparse?} id="sparse-bar-note" class="text-sm text-base-content">
               {@cohort.decomposable} of {@cohort.tasks_in_window} tasks in this window can be
-              decomposed — too few to split the elapsed time across phases yet. The per-phase
-              numbers measured so far are in the table below.
+              decomposed — too few for a proportional split of the elapsed time to mean anything,
+              so no bar is drawn. The per-phase medians measured so far are in the table below.
             </p>
 
             <div :if={not @sparse?} id="phase-bar" class="flex gap-[2px] h-10 w-full">
@@ -244,7 +253,11 @@ defmodule PlatformWeb.PipelineLive do
               </div>
             </div>
 
-            <p id="legend" class="text-xs text-base-content flex flex-wrap items-center gap-x-4">
+            <p
+              :if={not @sparse?}
+              id="legend"
+              class="text-xs text-base-content flex flex-wrap items-center gap-x-4"
+            >
               <span class="flex items-center gap-1">
                 <span
                   class="inline-block size-3 rounded-sm"
@@ -335,34 +348,56 @@ defmodule PlatformWeb.PipelineLive do
           </p>
 
           <div :if={not @sparse?} id="cycle-time-histogram" class="space-y-2">
-            <div class="relative h-32">
+            <%!-- pt-5 reserves a band above the tallest bar for the two rule
+                  labels, so they never sit on top of the bars or of the direct
+                  count labels. --%>
+            <div class="relative h-32 pt-5">
               <div class="flex items-end gap-1 h-full">
                 <div
                   :for={bucket <- @distribution.buckets}
-                  class="flex-1 flex flex-col justify-end h-full"
+                  class="flex-1 flex flex-col justify-end items-center h-full"
                   title={"#{bucket.label}: #{bucket.count} tasks"}
                 >
+                  <%!-- Direct-labelled: you cannot read 11 from 1 by bar
+                        height alone once one bucket dominates. --%>
+                  <span
+                    :if={bucket.count > 0}
+                    class="font-mono text-[10px] text-base-content leading-none pb-0.5"
+                  >
+                    {bucket.count}
+                  </span>
+                  <%!-- min-height floor: the >7d bucket is a single task, and
+                        that task is what drags the mean away from the median.
+                        A 4px sliver made the mark that explains the whole
+                        median/mean gap the least visible thing on the chart. --%>
                   <div
                     class="w-full rounded-t"
-                    style={"height: #{bucket_height(bucket, @distribution.buckets)}; background-color: var(--color-info)"}
+                    style={"height: #{bucket_height(bucket, @distribution.buckets)}; min-height: #{if bucket.count > 0, do: "6px", else: "0"}; background-color: var(--color-info)"}
                   >
                   </div>
                 </div>
               </div>
 
+              <%!-- The two labels sit at different heights and carry the panel
+                    surface behind them: stacked at the same offset they
+                    overlapped the bar they annotate. --%>
               <div
                 :for={
-                  {label, seconds, style} <- [
-                    {"median", @distribution.median_seconds, "border-left-style: solid"},
-                    {"mean", @distribution.mean_seconds, "border-left-style: dashed"}
+                  {label, seconds, style, offset} <- [
+                    {"median", @distribution.median_seconds, "border-left-style: solid", "-top-5"},
+                    {"mean", @distribution.mean_seconds, "border-left-style: dashed", "-top-5"}
                   ]
                 }
                 :if={rule_position(seconds, @distribution.buckets)}
                 id={"cycle-rule-#{label}"}
-                class="absolute top-0 h-full border-l-2 border-base-content"
+                class="absolute top-5 bottom-0 border-l-2 border-base-content"
                 style={"left: #{rule_position(seconds, @distribution.buckets)}%; #{style}"}
               >
-                <span class="absolute -top-1 left-1 whitespace-nowrap font-mono text-[10px] text-base-content">
+                <span class={[
+                  "absolute left-1 whitespace-nowrap font-mono text-[10px]",
+                  "text-base-content bg-base-200 px-1 rounded",
+                  offset
+                ]}>
                   {label} {duration(seconds)}
                 </span>
               </div>
@@ -396,6 +431,17 @@ defmodule PlatformWeb.PipelineLive do
               title={"#{Calendar.strftime(day.date, "%-d %b")}: #{day.count}"}
             >
             </div>
+          </div>
+
+          <%!-- An undated trend line is a shape without a domain: the first
+                and last dates are the minimum that makes it readable. --%>
+          <div
+            :if={@throughput.series != []}
+            id="throughput-axis"
+            class="flex justify-between text-[10px] text-neutral font-mono"
+          >
+            <span>{axis_date(List.first(@throughput.series))}</span>
+            <span>{axis_date(List.last(@throughput.series))}</span>
           </div>
 
           <p :if={@throughput.series == []} class="text-sm text-base-content">

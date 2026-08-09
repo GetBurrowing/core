@@ -187,6 +187,26 @@ defmodule PlatformWeb.PipelineLiveTest do
     end
   end
 
+  describe "human/engine attribution" do
+    test "a build interval closed by an agent reads as engine, not human wait", %{
+      conn: conn,
+      project: project
+    } do
+      # The direction matters and is easy to invert: `human` is derived from
+      # the actor who TERMINATED an interval. Every chain here is closed by
+      # `agent`, so nothing on this page may claim human wait. A fixture that
+      # drove its transitions through a user principal would paint the whole
+      # bar as human wait and misrepresent what production shows.
+      populated_cohort(project)
+
+      {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+
+      assert view |> element("#phase-row-in_progress") |> render() =~ "engine"
+      refute view |> element("#phase-row-in_progress") |> render() =~ "human wait"
+      assert view |> element("#legend") |> render() =~ "human wait — none recorded"
+    end
+  end
+
   describe "a phase nobody visited" do
     test "renders an em-dash and no zero in ITS OWN cell, and draws no segment", %{
       conn: conn,
@@ -230,6 +250,11 @@ defmodule PlatformWeb.PipelineLiveTest do
 
       refute has_element?(view, "#cycle-time-histogram")
       refute has_element?(view, "#phase-bar")
+
+      # The banner says a proportional split is not meaningful yet, so the
+      # page must not then print one: a legend with engine/human percentages
+      # directly under that sentence contradicts it.
+      refute has_element?(view, "#legend")
 
       # Not blank: the throughput panel and the numbers table still render.
       assert has_element?(view, "#throughput-rate")
