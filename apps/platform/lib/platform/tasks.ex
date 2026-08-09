@@ -22,6 +22,10 @@ defmodule Platform.Tasks do
   alias Platform.Agents.Agent
   alias Platform.Context.Session
   alias Platform.Execution.Run
+  # NOTE: `Lifecycle` is already taken by `Platform.Tenancy.Lifecycle` below,
+  # so the lifecycle-hook modules are aliased individually.
+  alias Platform.Lifecycle.EdgeInventory
+  alias Platform.Lifecycle.Executor
 
   alias Platform.Orchestration.{
     ExecutionSpace,
@@ -1408,6 +1412,17 @@ defmodule Platform.Tasks do
     )
     |> Repo.all()
   end
+
+  @doc """
+  The automated-pipeline transition table itself, `%{from => [to]}`.
+
+  Surfaced so `Platform.Lifecycle.EdgeInventory` can DERIVE the declarable
+  lifecycle edge set from it instead of transcribing a second copy. A
+  transcribed copy would go stale silently: widening this table would leave
+  the new edge undeclarable, with nothing to read and nothing red.
+  """
+  @spec valid_task_transitions() :: %{String.t() => [String.t()]}
+  def valid_task_transitions, do: @valid_task_transitions
 
   @doc """
   Returns `true` when transitioning `task` to `new_status` is permitted by
@@ -5180,7 +5195,73 @@ defmodule Platform.Tasks do
 
   defp maybe_prepare_transition(_task, _new_status), do: :ok
 
-  defp maybe_finalize_transition(
+  # THE ONLY CHOKE POINT for task-status lifecycle hooks. Reached from
+  # `transition_task/3` and from the plan-approval finalizer — NOT from
+  # `transition_task_status/2`, which writes the status and returns without
+  # calling any finalizer (see `phase_pointer_attrs/2`'s comment; the MCP
+  # `task_update` path lands there directly).
+  #
+  # FOUR other status writers DO NOT OBSERVE this. Read
+  # `Platform.Lifecycle.EdgeInventory` before adding a hook here — it names
+  # every one of them and what each bypasses.
+  #
+  # The per-status housekeeping lives in `finalize_status_hooks/3`, which is
+  # a MULTI-HEAD function: only one head runs per transition. The edge
+  # dispatch therefore CANNOT hang off any of those heads — a per-head call
+  # is how one status silently gets no hooks — so it hangs here, once,
+  # outside the branch, and applies uniformly to every status.
+  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, new_status) do
+    result = finalize_status_hooks(previous, task, new_status)
+    fire_status_edge(previous, task, new_status)
+    result
+  end
+
+  # Fire the configured pipeline for the `"<from>-><to>"` edge this
+  # transition just traversed.
+  #
+  # `:steps` IS DELIBERATELY OMITTED. `Platform.Lifecycle.Executor.run_edge/3`
+  # resolves the project's configured pipeline lazily when the option is
+  # absent, and until a caller omitted it EVERY production pipeline was a
+  # hardcoded one-element list — which means a gate was always at index 0 and
+  # the stack's declared-not-positional `can_divert` guarantee was protecting
+  # a configuration no shipped caller could produce. Passing `steps:` here
+  # would restore exactly that. Do not "helpfully" add it.
+  #
+  # Only edges IN the transition table fire, so the set of edges that can
+  # fire is the same set `EdgeInventory.status_edges/0` derives — one table,
+  # not two.
+  defp fire_status_edge(%Task{status: from}, %Task{} = task, to)
+       when is_binary(from) and is_binary(to) do
+    if to in Map.get(@valid_task_transitions, from, []) do
+      edge = EdgeInventory.edge_name(from, to)
+
+      try do
+        # `:project` is omitted too, for the same reason: `task.project` may
+        # be `%Ecto.Association.NotLoaded{}` here, and handing that to the
+        # resolver would resolve to `[]` — a configured pipeline silently
+        # not running is worse than the load.
+        _ = Executor.run_edge(task, edge)
+        :ok
+      rescue
+        error ->
+          # A hook must not be able to roll back the status change that has
+          # already committed. Logged loudly, with the edge named, so this
+          # is a bug report rather than a silent degradation.
+          Logger.error(
+            "lifecycle edge #{edge} raised for task #{task.id}: " <>
+              Exception.format(:error, error, __STACKTRACE__)
+          )
+
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp fire_status_edge(_previous, _task, _new_status), do: :ok
+
+  defp finalize_status_hooks(
          %Task{status: "in_progress"} = previous,
          %Task{} = task,
          "in_review"
@@ -5194,7 +5275,7 @@ defmodule Platform.Tasks do
     :ok
   end
 
-  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, "done") do
+  defp finalize_status_hooks(%Task{} = previous, %Task{} = task, "done") do
     if current_phase(previous) != current_phase(task) do
       maybe_apply_phase_assignee(task)
     end
@@ -5212,7 +5293,7 @@ defmodule Platform.Tasks do
   # `transition_with_policy2_freeze`) and the MCP `task_update` path
   # (which calls `transition_task_status/2` directly). This head still
   # runs phase/stack/regression housekeeping like any other transition.
-  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, "cancelled") do
+  defp finalize_status_hooks(%Task{} = previous, %Task{} = task, "cancelled") do
     if current_phase(previous) != current_phase(task) do
       maybe_apply_phase_assignee(task)
     end
@@ -5231,7 +5312,7 @@ defmodule Platform.Tasks do
   # stack rollup PR is stamped merged) and log-and-swallows, so a member
   # legitimately awaiting the merge simply stays at `deploying` and the
   # rollup-merge sweep remains the backstop.
-  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, "deploying") do
+  defp finalize_status_hooks(%Task{} = previous, %Task{} = task, "deploying") do
     if current_phase(previous) != current_phase(task) do
       maybe_apply_phase_assignee(task)
     end
@@ -5242,7 +5323,7 @@ defmodule Platform.Tasks do
     :ok
   end
 
-  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, new_status) do
+  defp finalize_status_hooks(%Task{} = previous, %Task{} = task, new_status) do
     if current_phase(previous) != current_phase(task) do
       maybe_apply_phase_assignee(task)
     end
@@ -5252,7 +5333,7 @@ defmodule Platform.Tasks do
     :ok
   end
 
-  defp maybe_finalize_transition(_previous_task, _task, _new_status), do: :ok
+  defp finalize_status_hooks(_previous_task, _task, _new_status), do: :ok
 
   # ADR 0041 §"Status divergence handling": any member status change
   # triggers a stack-level rollup-status recompute. Short-circuits when

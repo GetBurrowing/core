@@ -10,10 +10,14 @@ defmodule Platform.Lifecycle.PipelineConfigTest do
   # the key process-local is not possible while the seam is Application env.
   use ExUnit.Case, async: false
 
+  alias Platform.Lifecycle.EdgeInventory
+  alias Platform.Lifecycle.Edges
   alias Platform.Lifecycle.PipelineConfig
   alias Platform.Lifecycle.StepRegistry
+  alias Platform.Tasks
 
   @edge "planning.entered"
+  @no_gate_edge "backlog.created"
 
   setup context do
     name = :"pipeline_config_registry_#{:erlang.phash2(context.test)}"
@@ -242,6 +246,117 @@ defmodule Platform.Lifecycle.PipelineConfigTest do
 
         assert reason =~ "effects and notifies only"
       end
+    end
+
+    test "the rejection is a SPECIFIC term, not just an error", %{registry: registry} do
+      # "errored" also matches a typo'd edge name, a missing flag, and an
+      # unknown step. Assert the exact term or this test cannot tell the
+      # prohibition from any other rule in the module.
+      for override <- [%{"await" => true}, %{"can_divert" => true}] do
+        assert PipelineConfig.check(%{@no_gate_edge => [step(override)]}, registry) ==
+                 {:error, {:gates_prohibited, @no_gate_edge}}
+      end
+    end
+
+    test "a gate is defined by its DECLARATION, not its position", %{registry: registry} do
+      # The gate sits LAST. A rule that inspected only the head of the list
+      # would pass this pipeline, and a rule that blacklisted the edge
+      # wholesale would fail the effect-only control below.
+      pipeline = %{
+        @no_gate_edge => [
+          step(),
+          step(),
+          step(%{"can_divert" => true})
+        ]
+      }
+
+      assert PipelineConfig.check(pipeline, registry) ==
+               {:error, {:gates_prohibited, @no_gate_edge}}
+    end
+
+    test "CONTROL: effects and notifies on the same edge load fine", %{registry: registry} do
+      # Proves the rejection discriminates by step KIND rather than
+      # rejecting the edge wholesale. Without this, a validator that
+      # refused every backlog.created pipeline would pass the test above.
+      pipeline = %{
+        @no_gate_edge => [
+          step(),
+          step(%{"step" => "webhook", "url" => "https://hooks.example.com/x"})
+        ]
+      }
+
+      assert PipelineConfig.check(pipeline, registry) == :ok
+      assert PipelineConfig.validate(pipeline, registry) == :ok
+    end
+
+    test "CONTROL: a gate on any OTHER edge still loads", %{registry: registry} do
+      # The prohibition is scoped to one edge. If it had disabled gates
+      # globally, every declared gate in the system would silently stop
+      # loading and the two assertions above would still be green.
+      gate = step(%{"await" => true, "can_divert" => true})
+
+      for edge <- [@edge | Enum.take(EdgeInventory.status_edges(), 5)] do
+        assert PipelineConfig.check(%{edge => [gate]}, registry) == :ok,
+               "a gate on #{edge} was rejected; the prohibition is not scoped"
+      end
+    end
+
+    test "validate/2 keeps its BINARY contract for the changeset", %{registry: registry} do
+      # `Platform.Tasks.Project`'s config validator pipes the
+      # reason straight into `add_error/3`, which requires a binary. If
+      # `check/2`'s tuple leaked through, project creation would raise
+      # rather than return a changeset error.
+      assert {:error, reason} =
+               PipelineConfig.validate(%{@no_gate_edge => [step(%{"await" => true})]}, registry)
+
+      assert is_binary(reason)
+      assert reason =~ "agent-paced and bursty"
+    end
+  end
+
+  describe "the declarable edge set is derived from the transition table" do
+    test "every task-status transition is declarable and resolvable", %{registry: registry} do
+      # DERIVED on both sides: the expectation is computed from
+      # `Platform.Tasks.valid_task_transitions/0`, not transcribed. A
+      # transcribed list would agree with a stale implementation forever.
+      expected =
+        Tasks.valid_task_transitions()
+        |> Enum.flat_map(fn {from, tos} -> Enum.map(tos, &"#{from}->#{&1}") end)
+        |> Enum.sort()
+
+      assert EdgeInventory.status_edges() == expected
+
+      # ANTI-VACUITY: an empty table would make the equality above trivially
+      # true. Pin the shape and two edges the ticket's original framing
+      # omitted.
+      refute expected == []
+      assert "in_progress->done" in expected
+      assert "in_review->done" in expected
+      assert "in_progress->deploying" in expected
+
+      # `blocked` is enterable from SIX states.
+      inbound_blocked = Enum.filter(expected, &String.ends_with?(&1, "->blocked"))
+      assert length(inbound_blocked) == 6
+
+      # `cancelled` is terminal: no outbound edge exists to declare.
+      assert Enum.filter(expected, &String.starts_with?(&1, "cancelled->")) == []
+
+      # Declarable AND resolvable: each edge validates as a config key and
+      # reads back the steps it was given.
+      for edge <- expected do
+        pipeline = %{edge => [step()]}
+        assert PipelineConfig.check(pipeline, registry) == :ok
+        assert PipelineConfig.steps_for(pipeline, edge) == [step()]
+        assert EdgeInventory.declarable?(edge)
+      end
+    end
+
+    test "the non-status edges are declarable too" do
+      assert EdgeInventory.declarable?(@no_gate_edge)
+      assert EdgeInventory.declarable?(Edges.designer_edge())
+      assert EdgeInventory.declarable?(Edges.architect_edge())
+      refute EdgeInventory.declarable?("no.such.edge")
+      refute EdgeInventory.declarable?(:not_a_binary)
     end
   end
 

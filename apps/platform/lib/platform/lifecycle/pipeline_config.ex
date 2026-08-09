@@ -107,9 +107,31 @@ defmodule Platform.Lifecycle.PipelineConfig do
   that hold a registry directly may pass it explicitly.
   """
   @spec validate(term(), GenServer.server()) :: :ok | {:error, String.t()}
-  def validate(pipeline, registry \\ StepRegistry.server())
+  def validate(pipeline, registry \\ StepRegistry.server()) do
+    case check(pipeline, registry) do
+      :ok -> :ok
+      {:error, {:gates_prohibited, edge}} -> {:error, gates_prohibited_message(edge)}
+      {:error, reason} when is_binary(reason) -> {:error, reason}
+    end
+  end
 
-  def validate(pipeline, registry) when is_map(pipeline) do
+  @doc """
+  The config-load check, with STRUCTURED error terms.
+
+  `validate/2` is this function with the structured terms flattened to
+  binaries for the changeset contract. Callers that must DISCRIMINATE
+  between rejections — and tests, always — use this one: asserting on a
+  message substring cannot tell a gate-prohibition from a typo'd edge name
+  whose message happens to contain the same words.
+
+  Returns `:ok`, `{:error, {:gates_prohibited, edge}}`, or
+  `{:error, binary}` for every other rule.
+  """
+  @spec check(term(), GenServer.server()) ::
+          :ok | {:error, {:gates_prohibited, String.t()} | String.t()}
+  def check(pipeline, registry \\ StepRegistry.server())
+
+  def check(pipeline, registry) when is_map(pipeline) do
     Enum.reduce_while(pipeline, :ok, fn {edge, steps}, :ok ->
       case validate_edge(edge, steps, registry) do
         :ok -> {:cont, :ok}
@@ -118,7 +140,7 @@ defmodule Platform.Lifecycle.PipelineConfig do
     end)
   end
 
-  def validate(_pipeline, _registry) do
+  def check(_pipeline, _registry) do
     {:error, "pipeline must be a map of edge name => list of steps"}
   end
 
@@ -239,17 +261,32 @@ defmodule Platform.Lifecycle.PipelineConfig do
     end
   end
 
-  defp validate_no_gate_edge(step, edge, where) when edge in @no_gate_edges do
+  # A GATE IS DEFINED BY ITS DECLARATION, NEVER BY ITS POSITION. `await:
+  # true` and/or `can_divert: true` is what makes a step a gate; being first
+  # in the list makes it nothing. Rejecting "the first step of
+  # backlog.created" would both miss a gate at index 2 and reject a notify
+  # that merely happens to be listed first.
+  #
+  # This is a REJECTION at config load, not a warning and not a silently
+  # dropped step: an effect and a notify on the same edge must still load,
+  # which is the control proving the rule discriminates by step kind rather
+  # than blacklisting the edge wholesale.
+  defp validate_no_gate_edge(step, edge, _where) when edge in @no_gate_edges do
     if Map.get(step, "await") == true or Map.get(step, "can_divert") == true do
-      {:error,
-       "#{where}: the #{inspect(edge)} edge accepts effects and notifies only. " <>
-         "\"await\" and \"can_divert\" must both be false there (ADR-0046 Amendment 1 decision 6)"}
+      {:error, {:gates_prohibited, edge}}
     else
       :ok
     end
   end
 
   defp validate_no_gate_edge(_step, _edge, _where), do: :ok
+
+  defp gates_prohibited_message(edge) do
+    "the #{inspect(edge)} edge accepts effects and notifies only. " <>
+      "\"await\" and \"can_divert\" must both be false there — ticket creation is " <>
+      "agent-paced and bursty, and a gate there lets one agent's hook block another " <>
+      "agent from filing a ticket (ADR-0046 Amendment 1 decision 6)"
+  end
 
   defp validate_webhook_url(step, where) do
     case Map.fetch(step, "url") do

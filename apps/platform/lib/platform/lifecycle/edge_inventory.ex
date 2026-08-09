@@ -9,8 +9,25 @@ defmodule Platform.Lifecycle.EdgeInventory do
   ## Where hooks can hang
 
   `Platform.Tasks.maybe_finalize_transition/3` is the ONLY choke point a
-  task-status hook pipeline can hang on. It is reached from
-  `transition_task_status/2` and from that function's two internal call sites.
+  task-status hook pipeline can hang on.
+
+  ## PREMISE CORRECTION (task 019fe1b7 stage 2, found by test, not by reading)
+
+  Stage 1 recorded that the choke point is reached from
+  `transition_task_status/2`. **It is not.** `transition_task_status/2` never
+  calls it. The two real call sites are `Platform.Tasks.transition_task/3`
+  (reached from `transition_task/2`) and the plan-approval finalizer.
+
+  `transition_task_status/2` is therefore a FIFTH bypassing writer, and the
+  one that matters most in practice: **the MCP `task_update` status path
+  calls it DIRECTLY**, so an agent moving a task by tool call fires no
+  lifecycle hooks at all. `phase_pointer_attrs/2`'s own comment in
+  `tasks.ex` states this in as many words — it exists precisely because that
+  path "bypasses `transition_task/2` + `maybe_finalize_transition/3`".
+
+  This was found by writing a dispatch test against
+  `transition_task_status/2` and watching a correctly-configured pipeline
+  run nothing. Reading agreed with the wrong answer.
 
   ## The transition table (verified at this base)
 
@@ -32,8 +49,8 @@ defmodule Platform.Lifecycle.EdgeInventory do
 
   ## What this frame DOES NOT OBSERVE
 
-  There are FOUR status writers. Only one reaches the choke point. The other
-  three DO NOT OBSERVE the pipeline, and that is a deliberate scope boundary,
+  There are FIVE status writers. Only one reaches the choke point. The other
+  four DO NOT OBSERVE the pipeline, and that is a deliberate scope boundary,
   not a bug to fix in passing — routing them through the choke point would
   change the behaviour of manual board drops, plan approval and supersession.
 
@@ -46,6 +63,13 @@ defmodule Platform.Lifecycle.EdgeInventory do
       `done -> in_progress`, `done -> backlog`) and contains no
       `stack_pending` and no `cancelled`. Manual board drops therefore fire
       NO hooks at all, and that whole second table is outside the pipeline.
+
+    * `Platform.Tasks.transition_task_status/2` — enforces the transition
+      table and writes, but calls no finalizer. The MCP `task_update` status
+      path reaches it directly. **This is the highest-traffic writer that
+      DOES NOT OBSERVE the pipeline**, and closing it is not this stack's
+      scope: `transition_task/3` already calls it inside a transaction, so
+      firing from both would double-fire every LiveView transition.
 
     * `Platform.Tasks.update_task/3` — casts `:status` through
       `Task.changeset/2` with no transition guard of any kind.
@@ -73,5 +97,65 @@ defmodule Platform.Lifecycle.EdgeInventory do
   An edge that is never traversed produces NO run rows and NO recorded
   outcome — emphatically not `not_applicable`, which is reserved for an edge
   that WAS traversed with an empty configured pipeline.
+
+  ## The declarable edge set is DERIVED, never transcribed
+
+  `status_edges/0` computes the task-status half of the set from
+  `Platform.Tasks.valid_task_transitions/0` at call time. It is deliberately
+  not a literal list and not a module attribute: a literal would agree with
+  itself forever, so widening the transition table would leave the new edge
+  quietly undeclarable — configurable in nobody's project, with no error to
+  read. Deriving it means the table is the only place an edge is born.
   """
+
+  alias Platform.Lifecycle.Edges
+  alias Platform.Tasks
+
+  # Edges that are NOT task-status transitions. They cannot be derived from
+  # the transition table because nothing in that table names them: they fire
+  # from a plan-status change, from the router's dispatch tick, and from
+  # ticket creation respectively. Listed rather than derived because there is
+  # no single source to derive them FROM — which is exactly why the two that
+  # have one live in `Platform.Lifecycle.Edges` and are read from there.
+  @backlog_created_edge "backlog.created"
+
+  @doc """
+  The edge key for one status transition. Member 3's `"<from>-><to>"` shape,
+  in ONE place so the fire point and the config validator cannot disagree
+  about a separator.
+  """
+  @spec edge_name(binary(), binary()) :: binary()
+  def edge_name(from, to) when is_binary(from) and is_binary(to), do: "#{from}->#{to}"
+
+  @doc """
+  Every task-status edge, derived from `Platform.Tasks.valid_task_transitions/0`.
+
+  Sorted, so a test can compare an explicit list rather than a set.
+  """
+  @spec status_edges() :: [binary()]
+  def status_edges do
+    Tasks.valid_task_transitions()
+    |> Enum.flat_map(fn {from, tos} -> Enum.map(tos, &edge_name(from, &1)) end)
+    |> Enum.sort()
+  end
+
+  @doc "The edge fired when a ticket is created. Effects and notifies only."
+  @spec backlog_created_edge() :: binary()
+  def backlog_created_edge, do: @backlog_created_edge
+
+  @doc """
+  Edges that exist but are not task-status transitions: the designer and
+  architect edges owned by `Platform.Lifecycle.Edges`, plus `backlog.created`.
+  """
+  @spec non_status_edges() :: [binary()]
+  def non_status_edges, do: Enum.sort([@backlog_created_edge | Edges.all()])
+
+  @doc "Every edge a project may declare a pipeline on."
+  @spec declarable_edges() :: [binary()]
+  def declarable_edges, do: Enum.sort(status_edges() ++ non_status_edges())
+
+  @doc "Whether `edge` is one a project may declare a pipeline on."
+  @spec declarable?(term()) :: boolean()
+  def declarable?(edge) when is_binary(edge), do: edge in declarable_edges()
+  def declarable?(_edge), do: false
 end

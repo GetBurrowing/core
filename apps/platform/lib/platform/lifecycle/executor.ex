@@ -309,6 +309,17 @@ defmodule Platform.Lifecycle.Executor do
 
   # ── the pipeline ──────────────────────────────────────────────────────────
 
+  # THE RECORDING SITE for `:not_applicable`, and the whole distinction:
+  #
+  #   A phase that never occurs fires NOTHING — no `StepRun` rows and no
+  #   recorded outcome of any kind, emphatically not `not_applicable`.
+  #   `not_applicable` is recorded ONLY when an edge IS traversed and its
+  #   configured pipeline is empty.
+  #
+  # Do not soften this by emitting `not_applicable` for a skipped phase. If
+  # a skipped phase emitted it you could no longer distinguish "no cleanup
+  # hook configured" from "this task never deployed" — exactly the
+  # conflation ADR-0046 exists to kill.
   defp run_steps([], state) do
     {:not_applicable, %{edge: state.edge, run_seq: state.run_seq, steps: [], not_run: []}}
   end
