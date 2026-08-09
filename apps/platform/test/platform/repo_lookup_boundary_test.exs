@@ -638,6 +638,19 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/federation/tool_surface.ex" => 2,
     "platform/files.ex" => 1,
     "platform/inbox.ex" => 1,
+    # Task 019fe1b6 stage 1 — `Runs.next_run_seq/2` and `Runs.run_count/2`.
+    # Triaged by hand as this map asks: both `where:` clauses pin
+    # `r.task_id == ^task_id` against a `:binary_id` column, so a malformed
+    # value WOULD raise `Ecto.Query.CastError`. They are unguarded
+    # deliberately. Every caller is the lifecycle pipeline runner, which is
+    # invoked from a status transition on a `%Platform.Tasks.Task{}` it has
+    # already loaded — the id is a persisted `tasks.id` column value, never a
+    # boundary input. Nothing on this member's surface accepts a task id from
+    # a user, a webhook or a PubSub payload. A `Platform.UUID.valid?/1` guard
+    # here would convert a genuine programmer error into a silent `1` from
+    # `next_run_seq/2`, which is worse than a crash: it would reissue a
+    # `run_seq` that already exists and make one firing look like two.
+    "platform/lifecycle/runs.ex" => 2,
     # 9 → 11 across two independent additions, both triaged by hand as this
     # map asks. The count is the SUM of both sides of this stack's rollup
     # merge, not either side's number.
