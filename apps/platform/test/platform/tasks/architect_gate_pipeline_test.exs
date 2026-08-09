@@ -120,16 +120,22 @@ defmodule Platform.Tasks.ArchitectGatePipelineTest do
       {outcome, summary} =
         run(task, [probe("probe_before"), gate(), probe("probe_after")])
 
-      # POSITIVE CONTROL. Without this, "probe_after did not run" is also
-      # true of a pipeline that never started.
-      assert ran() == ["probe_before"],
+      # POSITIVE CONTROL, and DELIBERATELY WEAK — membership, not the order
+      # list. Without it, "probe_after did not run" is also true of a
+      # pipeline that never started. Stated as `in` rather than `==` so that
+      # a mutant which lets probe_after run detonates on the DIVERT
+      # assertion below, which names what actually broke, instead of here.
+      assert "probe_before" in ran(),
              "the probe ahead of the gate must have run — otherwise the " <>
                "halt assertion below is vacuous"
 
-      assert outcome == :diverted
+      assert outcome == :diverted,
+             "the gate at index 1 did not divert — divert authority is being " <>
+               "taken from position rather than from the declaration"
 
       # ORDER, as an explicit list. Set membership would be satisfied by a
       # pipeline that ran the steps in any sequence.
+      assert ran() == ["probe_before"]
       assert Enum.map(summary.steps, & &1.step) == ["probe_before", @architect_step]
       assert summary.not_run == ["probe_after"]
 
@@ -174,7 +180,12 @@ defmodule Platform.Tasks.ArchitectGatePipelineTest do
 
       assert ran() == ["probe_before", "probe_after"]
       assert outcome == :complete
-      assert Enum.map(summary.steps, & &1.step) == ["probe_before", @architect_step, "probe_after"]
+
+      assert Enum.map(summary.steps, & &1.step) == [
+               "probe_before",
+               @architect_step,
+               "probe_after"
+             ]
     end
 
     test "an expired verdict FAILS the run while the plan itself falls open", %{task: task} do
