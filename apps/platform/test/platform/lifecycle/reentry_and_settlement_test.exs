@@ -105,10 +105,17 @@ defmodule Platform.Lifecycle.ReentryAndSettlementTest do
 
   describe "the re-entry bound, exercised by FIRING the edge" do
     test "the first `limit` firings run for real; beyond it, suppressed", %{registry: registry} do
-      register_alias(registry, "r_step")
+      for name <- ~w(r_one r_two r_three), do: register_alias(registry, name)
       limit = Lifecycle.edge_run_limit()
 
-      %{project: project, task: task} = fixture(%{@edge => [step("r_step")]})
+      # THREE steps per firing, deliberately. With a one-step pipeline, rows
+      # and firings are the same number and this test cannot tell a bound
+      # counted from DISTINCT run_seq from one counted from row count — the
+      # same vacuity the stage-1 run_count fixture was built to avoid, one
+      # level up. At three steps a row-count bound would suppress on the
+      # SECOND firing, and the positive control below would go red.
+      %{project: project, task: task} =
+        fixture(%{@edge => [step("r_one"), step("r_two"), step("r_three")]})
 
       outcomes =
         for _ <- 1..(limit + 2) do
@@ -130,7 +137,7 @@ defmodule Platform.Lifecycle.ReentryAndSettlementTest do
 
       # Each allowed firing produced a REAL step row; each refusal produced a
       # step-less suppressed row and no new step rows.
-      assert Enum.count(rows, &(&1.step_name == "r_step")) == limit
+      assert Enum.count(rows, &(&1.step_name in ~w(r_one r_two r_three))) == limit * 3
       assert Enum.count(rows, &(&1.status == "suppressed")) == 2
       assert Enum.all?(rows, &(&1.status != "suppressed" or is_nil(&1.step_name)))
       assert Runs.run_count(task.id, @edge) == limit + 2
