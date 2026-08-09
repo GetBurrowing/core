@@ -109,8 +109,17 @@ defmodule PlatformWeb.PipelineLive do
 
   defp phase_label(phase), do: Map.get(@phase_labels, phase, phase)
 
+  # A phase nobody visited has no actor to attribute either, so the kind column
+  # is an absence too rather than a confident "engine".
+  defp kind(%{p50_seconds: nil}), do: "—"
   defp kind(%{human: true}), do: "human wait"
   defp kind(%{human: false}), do: "engine"
+
+  # The human token is under the 3:1 floor against the light surface, so its
+  # in-segment label pairs with the token's own content colour rather than the
+  # white used on the engine fill.
+  defp segment_text(%{human: true}), do: "color: var(--color-pipeline-human-content)"
+  defp segment_text(%{human: false}), do: "color: var(--color-info-content)"
 
   defp measured(breakdown), do: Enum.reject(breakdown, &is_nil(&1.p50_seconds))
 
@@ -216,7 +225,10 @@ defmodule PlatformWeb.PipelineLive do
                 style={"width: #{segment_width(row, @breakdown)}; border-radius: 4px; #{segment_fill(row)}"}
                 title={"#{phase_label(row.phase)} — #{kind(row)} — median #{duration(row.p50_seconds)}"}
               >
-                <span class="font-mono text-[10px] px-1 truncate text-base-100 mix-blend-normal">
+                <span
+                  class="font-mono text-[10px] font-semibold px-1 truncate"
+                  style={segment_text(row)}
+                >
                   {duration(row.p50_seconds)}
                 </span>
               </div>
@@ -239,7 +251,12 @@ defmodule PlatformWeb.PipelineLive do
                   style="background-color: var(--color-info)"
                 >
                 </span>
-                engine {duration(total_seconds(@breakdown) - human_seconds(@breakdown))}
+                <% engine = total_seconds(@breakdown) - human_seconds(@breakdown) %>
+                <%= if engine > 0 do %>
+                  engine {duration(engine)} ({round1(engine / total_seconds(@breakdown) * 100)}%)
+                <% else %>
+                  engine — none recorded in this cohort
+                <% end %>
               </span>
               <span class="flex items-center gap-1">
                 <span class="inline-block size-3 rounded-sm" style={segment_fill(%{human: true})}>
@@ -272,8 +289,16 @@ defmodule PlatformWeb.PipelineLive do
 
       <%!-- The same numbers as plain text: the human/engine split may never
             rest on colour alone. --%>
-      <section class="bg-base-200 rounded-lg overflow-x-auto">
-        <table class="table table-sm w-full">
+      <%!-- shrink-0 is load-bearing: this is a scroll container inside a
+            flex-col page, and a scroll container's min-height resolves to 0,
+            so without it the table collapses to zero height at narrow
+            viewports and the colour-independent copy of the chart silently
+            disappears. --%>
+      <section class="bg-base-200 rounded-lg overflow-x-auto shrink-0">
+        <%!-- min-w keeps the five columns readable at 390px: the table scrolls
+              horizontally rather than collapsing, because it is the
+              colour-independent copy of the chart and may not disappear. --%>
+        <table class="table table-sm w-full min-w-[34rem]">
           <thead>
             <tr class="text-xs text-neutral uppercase">
               <th>Phase</th>
