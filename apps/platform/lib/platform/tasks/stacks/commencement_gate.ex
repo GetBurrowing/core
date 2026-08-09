@@ -45,9 +45,24 @@ defmodule Platform.Tasks.Stacks.CommencementGate do
 
   A member with no plan at all also does not count as ready.
 
+  ## Which members count
+
+  Soft-deleted members (`deleted_at` set) are not gate members, and
+  neither are members whose status is:
+
+    * `cancelled` — a cancelled member can never acquire an approved
+      plan, so counting it would wedge the stack at `stack_pending`
+      permanently.
+    * `done` — a done member normally holds a `completed` plan and
+      would pass anyway; excluding it also keeps the gate robust to a
+      done member whose plan was later superseded.
+
+  Every other status still counts, `blocked` included: a blocked member
+  is still expected to run and must still hold the gate shut.
+
   ## Empty-stack policy
 
-  A stack with zero (non-deleted) members is vacuously ready — the gate
+  A stack with zero counted members is vacuously ready — the gate
   is `plans_ready?/1 == true` and `waiting_on/1 == []`. Whether
   `Stacks.start_stack/1` should even accept an empty stack is a
   question for the caller; this module is neutral.
@@ -72,6 +87,12 @@ defmodule Platform.Tasks.Stacks.CommencementGate do
   alias Platform.Tasks.{Plan, Stack, Task}
 
   @approved_plan_statuses ~w(approved completed)
+
+  # Member statuses that are NOT counted as gate members. Shared by both
+  # member queries (`load_member_ids/1` and `load_members_ordered/1`) so
+  # `plans_ready?/1` and `waiting_on/1` can never disagree about the
+  # membership set.
+  @excluded_member_statuses ~w(cancelled done)
 
   @doc """
   True when the given task is allowed to be in `in_progress` under the
@@ -187,7 +208,11 @@ defmodule Platform.Tasks.Stacks.CommencementGate do
   defp load_member_ids(stack_id) do
     if Repo.exists?(from(s in Stack, where: s.id == ^stack_id)) do
       Task
-      |> where([t], t.stack_id == ^stack_id and is_nil(t.deleted_at))
+      |> where(
+        [t],
+        t.stack_id == ^stack_id and is_nil(t.deleted_at) and
+          t.status not in ^@excluded_member_statuses
+      )
       |> order_by([t], asc: t.stack_position)
       |> select([t], t.id)
       |> Repo.all()
@@ -201,7 +226,11 @@ defmodule Platform.Tasks.Stacks.CommencementGate do
   # ordering AND `id` in the return.
   defp load_members_ordered(stack_id) do
     Task
-    |> where([t], t.stack_id == ^stack_id and is_nil(t.deleted_at))
+    |> where(
+      [t],
+      t.stack_id == ^stack_id and is_nil(t.deleted_at) and
+        t.status not in ^@excluded_member_statuses
+    )
     |> order_by([t], asc: t.stack_position)
     |> Repo.all()
   end

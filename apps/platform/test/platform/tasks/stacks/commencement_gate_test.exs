@@ -231,6 +231,54 @@ defmodule Platform.Tasks.Stacks.CommencementGateTest do
     end
   end
 
+  describe "member status exclusions" do
+    test "a cancelled member without an approved plan does not hold the gate shut" do
+      {stack, [m1, m2]} = stack_with_members(2)
+      set_plan_status(m1, "approved")
+      cancelled = set_task_status(m2, "cancelled")
+
+      # Precondition: the cancelled member genuinely has no approved plan.
+      assert latest_plan_row(cancelled.id) == nil
+
+      assert CommencementGate.plans_ready?(stack) == true
+      refute cancelled.id in CommencementGate.waiting_on(stack)
+
+      {:ok, stack} = force_stack_status(stack, "in_progress")
+      assert CommencementGate.open?(Repo.get!(Task, m1.id)) == true
+      assert CommencementGate.plans_ready?(stack) == true
+    end
+
+    test "a cancelled member alongside a live unapproved member leaves the gate shut" do
+      {stack, [m1, m2, m3]} = stack_with_members(3)
+      set_plan_status(m1, "approved")
+      cancelled = set_task_status(m2, "cancelled")
+      live = m3
+
+      # Preconditions: neither the cancelled nor the live member holds an
+      # approved plan, so "gate stays shut" can only be about the live one.
+      assert latest_plan_row(cancelled.id) == nil
+      assert latest_plan_row(live.id) == nil
+      assert live.status not in ~w(cancelled done)
+
+      assert CommencementGate.plans_ready?(stack) == false
+      assert CommencementGate.waiting_on(stack) == [live.id]
+
+      {:ok, stack} = force_stack_status(stack, "in_progress")
+      assert CommencementGate.open?(Repo.get!(Task, m1.id)) == false
+      assert CommencementGate.waiting_on(stack) == [live.id]
+    end
+
+    test "a blocked member without an approved plan still holds the gate shut" do
+      {stack, [m1, m2]} = stack_with_members(2)
+      set_plan_status(m1, "approved")
+      blocked = set_task_status(m2, "blocked")
+
+      assert latest_plan_row(blocked.id) == nil
+      assert CommencementGate.plans_ready?(stack) == false
+      assert CommencementGate.waiting_on(stack) == [blocked.id]
+    end
+  end
+
   # ── helpers ──────────────────────────────────────────────────────────────
 
   # Build a stack + `count` members already attached in `stack_position`
@@ -299,6 +347,15 @@ defmodule Platform.Tasks.Stacks.CommencementGateTest do
         |> Plan.changeset(%{status: status})
         |> Repo.update!()
     end
+  end
+
+  # Flip a member's status field directly. The public transition
+  # primitives run dispatch/gate cascades; these are pure predicate
+  # tests, so we write the field.
+  defp set_task_status(%Task{} = task, status) do
+    task
+    |> Ecto.Changeset.change(%{status: status})
+    |> Repo.update!()
   end
 
   defp latest_plan_row(task_id) do
