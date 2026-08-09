@@ -90,6 +90,24 @@ defmodule Platform.Lifecycle do
   @step_timeout_ms 1_800_000
   @edge_budget_ms 3_600_000
 
+  # RE-ENTRY BOUND. Every edge can fire more than once per task: `done ->
+  # planning` is legal and is the only edge out of `done`, and `blocked` is
+  # enterable from six states. Without a bound the first reopen re-fires every
+  # notify configured on the edge, and someone gets four duplicate webhooks
+  # for one ticket.
+  #
+  # Shape generalised from `Platform.Tasks.ArchitectureRejection.reject_limit/0`
+  # — attribute exposed as a function, callers (including tests) read the
+  # accessor and never the literal, because a guard that hardcodes its own copy
+  # of a limit is how the class comes back. The `Application.get_env/3` read
+  # and the separate `default_*` accessor match the two budgets above.
+  #
+  # The count itself comes from PERSISTED ROWS (`Runs.run_count/2`, DISTINCT
+  # `run_seq`), never from a counter column on the task. That is what makes
+  # the bound survive a restart, and what makes it testable by FIRING the edge
+  # rather than by inspecting a field.
+  @edge_run_limit 3
+
   @doc """
   The project's configured pipeline map, or `%{}` when it has none.
 
@@ -163,4 +181,23 @@ defmodule Platform.Lifecycle do
   """
   @spec default_edge_budget_ms() :: pos_integer()
   def default_edge_budget_ms, do: @edge_budget_ms
+
+  @doc """
+  How many times ONE edge may fire for ONE task before further firings are
+  suppressed.
+
+  Counted from persisted `lifecycle_step_runs` rows, not from a field on the
+  task. Callers — including tests — read this accessor and never the literal.
+  """
+  @spec edge_run_limit() :: pos_integer()
+  def edge_run_limit do
+    Application.get_env(:platform, :lifecycle_edge_run_limit, @edge_run_limit)
+  end
+
+  @doc """
+  The SHIPPED re-entry bound, independent of any injected config. Exposed so
+  a guard can prove a test-only value has not become the production one.
+  """
+  @spec default_edge_run_limit() :: pos_integer()
+  def default_edge_run_limit, do: @edge_run_limit
 end

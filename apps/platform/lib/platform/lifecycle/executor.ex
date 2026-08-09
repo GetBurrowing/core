@@ -1,7 +1,8 @@
 defmodule Platform.Lifecycle.Executor do
   @moduledoc """
   Runs the ordered step pipeline configured on one lifecycle edge
-  (ADR-0046 Amendment 1, task 019fe1b6-f1ee-73d4-8e6f-bd9f191c6a95 stage 3).
+  (ADR-0046 Amendment 1, task 019fe1b6-f1ee-73d4-8e6f-bd9f191c6a95, stages 3
+  and 4).
 
   `run_edge/3` resolves the project's steps for an edge, starts each in
   declared order, applies two budgets, halts on the first divert, and writes
@@ -34,6 +35,30 @@ defmodule Platform.Lifecycle.Executor do
   intercepted, tests green — and the summary path will simply never enter
   the pipeline. Member 4 must therefore either intercept `Router.fire/2`
   itself, or move the summarizer onto the facade first and prove it moved.
+
+  ## The re-entry bound is counted from rows, not from a field
+
+  Every edge can fire more than once per task: `done -> planning` is legal and
+  is the only edge out of `done`, and `blocked` is enterable from six states.
+  Unbounded, the first reopen re-fires every notify on the edge and one ticket
+  produces four duplicate webhooks.
+
+  `run_edge/3` therefore asks `Runs.run_count/2` — the DISTINCT `run_seq`
+  count — and at or above `Lifecycle.edge_run_limit/0` returns `:suppressed`
+  having written exactly one row with no `step_name`. Counting persisted rows
+  rather than a counter column is what makes the bound survive a restart, and
+  what makes it testable by FIRING the edge instead of by inspecting a field.
+
+  ## Failure attribution differs by whether the step was awaited
+
+  An AWAITED step's failure is the edge's own outcome, expressed in the
+  `complete / not_applicable / failed` vocabulary that
+  `Platform.Tasks.Task.planning_step_outcomes/0` already owns — reused, not
+  duplicated — and it may divert.
+
+  A NON-AWAITED step fails AFTER the edge has reported and the task has moved
+  on, so it cannot be an edge outcome at all. It has a named destination
+  instead: `settle_detached/2`. See that function.
 
   ## Ordering, and why the halt is `reduce_while`
 
@@ -103,8 +128,7 @@ defmodule Platform.Lifecycle.Executor do
     * `:diverted` — a step with divert authority sent the task back
     * `:failed` — a step ran and errored, or timed out
     * `:not_applicable` — the edge RAN and had NO steps configured
-    * `:suppressed` — reserved for member 4's re-entry bound; this member
-      never returns it
+    * `:suppressed` — the re-entry bound refused this firing; NO step ran
 
   `:not_applicable` is specifically NOT what a never-occurring edge
   produces. An edge that is never reached does not call `run_edge/3` at all,
@@ -113,9 +137,12 @@ defmodule Platform.Lifecycle.Executor do
   to prevent.
   """
 
+  alias Platform.Inbox
   alias Platform.Lifecycle
   alias Platform.Lifecycle.Runs
   alias Platform.Lifecycle.StepRegistry
+  alias Platform.Lifecycle.StepRun
+  alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.Task, as: TaskSchema
 
@@ -139,6 +166,7 @@ defmodule Platform.Lifecycle.Executor do
     project = Keyword.get_lazy(opts, :project, fn -> Tasks.get_project(task.project_id) end)
     steps = if project, do: Lifecycle.resolve_steps(project, edge_name), else: []
 
+    limit = Keyword.get(opts, :edge_run_limit, Lifecycle.edge_run_limit())
     run_seq = Runs.next_run_seq(task.id, edge_name)
 
     state = %{
@@ -151,7 +179,124 @@ defmodule Platform.Lifecycle.Executor do
       deadline: now_ms() + Keyword.get(opts, :edge_budget_ms, Lifecycle.edge_budget_ms())
     }
 
-    run_steps(steps, state)
+    if Runs.run_count(task.id, edge_name) >= limit do
+      suppress(state, limit)
+    else
+      run_steps(steps, state)
+    end
+  end
+
+  # At or above the bound: ONE row, no step, and the outcome is `:suppressed`.
+  # Emphatically NOT `:not_applicable` — that means "the edge ran and nothing
+  # was configured", and a refusal to run is a different fact. Conflating them
+  # is the exact defect ADR-0046 exists to prevent, and the cost of getting it
+  # wrong is that nobody can distinguish a project with no hooks from a task
+  # whose hooks have been silently switched off.
+  defp suppress(state, limit) do
+    {:ok, _run} =
+      Runs.record(%{
+        task_id: state.task.id,
+        edge: state.edge,
+        run_seq: state.run_seq,
+        step_name: nil,
+        position: nil,
+        awaited: false,
+        can_divert: false,
+        status: "suppressed",
+        reason: "edge_run_limit"
+      })
+
+    {:suppressed,
+     %{
+       edge: state.edge,
+       run_seq: state.run_seq,
+       steps: [],
+       not_run: [],
+       reason: "edge_run_limit",
+       limit: limit
+     }}
+  end
+
+  @doc """
+  Settle a NON-AWAITED step that failed (or completed) after its edge had
+  already reported.
+
+  Takes the `lifecycle_step_runs` row id — exposed as `:run_id` on each entry
+  in `run_edge/3`'s summary — or the row itself.
+
+  ## It never diverts, and says so out loud
+
+  The edge is over and the task has moved. A retroactive divert would be a
+  write against a status this function no longer knows, so a `{:diverted, _}`
+  outcome on a non-awaited step is REFUSED with its own reason
+  (`"divert_after_edge"`) rather than quietly dropped. A silent drop would
+  make an ignored gate indistinguishable from a gate that never fired.
+
+  ## Attribution differs by kind, which is the whole point
+
+  An AWAITED step's failure is the edge's own outcome, in the
+  `complete / not_applicable / failed` vocabulary
+  (`Platform.Tasks.Task.planning_step_outcomes/0`). A NON-AWAITED step's
+  failure cannot be — the edge already answered — so it lands here: the run
+  row is updated in place, and when the task has a sponsor a durable
+  `lifecycle_step_failed` inbox row is emitted through `Platform.Inbox.emit/1`,
+  the single write seam.
+
+  A task with NO sponsor gets the row half and skips the inbox half. That is
+  a legitimate absence — there is no one to notify — not a swallowed error,
+  and it is why this returns `{:ok, run, :no_sponsor}` rather than a bare
+  `:ok` that cannot be told apart from a notification that was sent.
+  """
+  @spec settle_detached(binary() | StepRun.t(), Lifecycle.Step.outcome()) ::
+          {:ok, StepRun.t(), :notified | :no_sponsor | :no_notification} | {:error, term()}
+  def settle_detached(%StepRun{id: id}, outcome), do: settle_detached(id, outcome)
+
+  def settle_detached(run_id, outcome) when is_binary(run_id) do
+    {status, reason} = detached_status(outcome)
+
+    case Runs.settle(run_id, %{status: status, reason: reason}) do
+      {:ok, run} -> {:ok, run, maybe_notify(run, status, reason)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp detached_status({:completed, _term}), do: {"completed", nil}
+  defp detached_status({:failed, term}), do: {"failed", inspect(term)}
+
+  # Refused explicitly, with its own reason. NOT ignored.
+  defp detached_status({:diverted, _term}), do: {"failed", "divert_after_edge"}
+
+  defp detached_status(other), do: {"failed", "unexpected step return: #{inspect(other)}"}
+
+  # A non-failure has nothing to notify about. Distinct atom from
+  # `:no_sponsor` so a caller can tell "nobody to tell" from "nothing to tell".
+  defp maybe_notify(_run, status, _reason) when status != "failed", do: :no_notification
+
+  defp maybe_notify(run, _status, reason) do
+    # `Repo.get/2`, NOT `Platform.Tasks.get_task/1` — that name is already
+    # taken by the artifacts-summary reader, which returns
+    # `{:ok, %Detail{}} | {:error, :not_found}` and is a different concept
+    # entirely. The collision compiles and fails at the field access.
+    task = Repo.get(TaskSchema, run.task_id)
+
+    case task && task.sponsor_user_id do
+      nil ->
+        :no_sponsor
+
+      sponsor_user_id ->
+        {:ok, _item} =
+          Inbox.emit(%{
+            user_id: sponsor_user_id,
+            kind: "lifecycle_step_failed",
+            source_type: "task",
+            source_id: task.id,
+            title: "Lifecycle step failed: #{run.step_name}",
+            body: "Edge #{run.edge} — #{reason}",
+            url: "/tasks/#{task.id}"
+          })
+
+        :notified
+    end
   end
 
   # ── the pipeline ──────────────────────────────────────────────────────────
@@ -285,7 +430,7 @@ defmodule Platform.Lifecycle.Executor do
     do: settle(base, status, reason, halts, state, nil, nil)
 
   defp settle(base, status, reason, halts, state, started_at, finished_at) do
-    {:ok, _run} =
+    {:ok, run} =
       Runs.record(%{
         task_id: state.task.id,
         edge: state.edge,
@@ -302,6 +447,11 @@ defmodule Platform.Lifecycle.Executor do
 
     %{base | reason: reason, halts: halts}
     |> Map.put(:status, status)
+    # The row id is the handle `settle_detached/2` takes. It is exposed here
+    # rather than a `reference()` because a ref is VM-local and dies with the
+    # node: a table mapping refs to runs would answer confidently and wrongly
+    # after a restart.
+    |> Map.put(:run_id, run.id)
   end
 
   # ── invoking a step ───────────────────────────────────────────────────────

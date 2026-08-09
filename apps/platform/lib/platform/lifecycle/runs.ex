@@ -29,6 +29,34 @@ defmodule Platform.Lifecycle.Runs do
   end
 
   @doc """
+  Resolve a previously recorded run to its terminal status.
+
+  This is how a NON-AWAITED step's row stops saying `started`. The row was
+  written when the step was dispatched and the edge then reported and moved
+  on; settlement arrives later and updates that row in place rather than
+  writing a second one, so `run_count/2` still sees one firing.
+
+  Returns `{:error, :not_found}` for an unknown id rather than raising or
+  answering `:ok` — a settlement for a run this node never recorded is a real
+  condition (a restart, a stale ref) and the caller must be able to see it.
+  """
+  @spec settle(Ecto.UUID.t(), StepRun.t() | map()) ::
+          {:ok, StepRun.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def settle(run_id, attrs) do
+    case Repo.get(StepRun, run_id) do
+      nil ->
+        {:error, :not_found}
+
+      run ->
+        attrs = Map.put_new(attrs, :finished_at, DateTime.utc_now())
+
+        run
+        |> StepRun.changeset(attrs)
+        |> Repo.update()
+    end
+  end
+
+  @doc """
   The `run_seq` the next firing of this edge should use.
 
   `1` when the edge has never fired.

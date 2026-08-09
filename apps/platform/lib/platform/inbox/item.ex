@@ -27,7 +27,14 @@ defmodule Platform.Inbox.Item do
   # be grouped or counted as an invite. No migration is needed to add a kind:
   # `inbox_items.kind` is a plain string column with no DB CHECK; the enum is
   # guarded solely by `validate_inclusion(:kind, @kinds)` below.
-  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited task_sponsor_assigned)
+  # `lifecycle_step_failed` (task 019fe1b6-f1ee-73d4-8e6f-bd9f191c6a95 stage 4)
+  # is the destination for a NON-AWAITED lifecycle hook step that fails after
+  # the edge has already reported its outcome. It cannot be folded into the
+  # edge's own `complete / not_applicable / failed` result — by the time it
+  # fails the task has moved on and that result is history — so without a
+  # durable row of its own the failure would be a log line nobody reads. See
+  # `Platform.Lifecycle.Executor.settle_detached/2`.
+  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited task_sponsor_assigned lifecycle_step_failed)
   # `task_review` is the per-task rollup source for review-gate attention rows:
   # one durable row per (sponsor, task) regardless of how many review requests
   # the task fans out (see `Platform.Tasks.ReviewRequests`). Kept distinct from
