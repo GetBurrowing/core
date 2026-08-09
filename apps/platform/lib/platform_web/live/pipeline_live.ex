@@ -16,9 +16,14 @@ defmodule PlatformWeb.PipelineLive do
     * cycle time is never a single number. The recorded baseline is a mean of
       161.7 h against a median of 13.1 h, so any hero figure is a lie; the
       distribution is log-binned and both rules are drawn;
-    * under five decomposable tasks the page says so in words where the
-      distribution would be, rather than drawing a confident chart from three
-      points.
+    * under `@distribution_floor` decomposable tasks the page says so in words
+      where the distribution would be — and states the floor, so a reader can
+      tell the chart is withheld deliberately and knows when it will appear. A
+      threshold that fires silently is indistinguishable from a page that has
+      no chart;
+    * a segment too narrow for its label drops the label rather than
+      truncating it, except on a human-wait segment where the label is an
+      accessibility mitigation and its loss is a defect to report.
 
   Human wait is carried by the `--color-pipeline-human` token AND by a 45°
   texture AND by a visible numeric label on every segment AND by the plain
@@ -28,10 +33,26 @@ defmodule PlatformWeb.PipelineLive do
 
   use PlatformWeb, :live_view
 
+  require Logger
+
   alias Platform.Tasks.PipelineHealth
 
   @default_range "30"
-  @sparse_threshold 5
+
+  # The count below which no distribution is drawn. A log-binned distribution
+  # with a `>7d` overflow bucket needs enough mass for shape to mean anything;
+  # twenty is the smallest count where a bucket holding one task reads as a
+  # tail rather than as the whole picture. Five was not a meaningfully
+  # different claim from four. One name, so the floor is one line to change.
+  @distribution_floor 20
+
+  # Rough metrics for the in-segment label: 10px monospace is ~6px per glyph,
+  # plus `px-1` either side. The bar is measured against the narrowest
+  # viewport it must survive (390px less page padding) so a label does not
+  # appear on desktop and vanish on mobile.
+  @label_char_px 6
+  @label_padding_px 8
+  @bar_min_px 358
 
   @phase_labels %{
     "planning" => "plan",
@@ -71,7 +92,7 @@ defmodule PlatformWeb.PipelineLive do
     |> assign(:breakdown, breakdown)
     |> assign(:distribution, PipelineHealth.cycle_time_distribution(window))
     |> assign(:throughput, PipelineHealth.throughput(window))
-    |> assign(:sparse?, cohort.decomposable < @sparse_threshold)
+    |> assign(:sparse?, cohort.decomposable < @distribution_floor)
   end
 
   # "all" still needs a lower bound; instrumentation is the only honest one,
@@ -105,7 +126,7 @@ defmodule PlatformWeb.PipelineLive do
 
   defp round1(x), do: :erlang.float_to_binary(Float.round(x * 1.0, 1), decimals: 1)
 
-  defp sparse_threshold, do: @sparse_threshold
+  defp distribution_floor, do: @distribution_floor
 
   defp phase_label(phase), do: Map.get(@phase_labels, phase, phase)
 
@@ -134,12 +155,49 @@ defmodule PlatformWeb.PipelineLive do
       |> Enum.map(& &1.p50_seconds)
       |> Enum.sum()
 
-  defp segment_width(row, breakdown) do
+  defp segment_percent(row, breakdown) do
     case total_seconds(breakdown) do
-      total when total > 0 -> "#{Float.round(row.p50_seconds / total * 100, 3)}%"
-      _ -> "0%"
+      total when total > 0 -> row.p50_seconds / total * 100
+      _ -> 0.0
     end
   end
+
+  defp segment_width(row, breakdown), do: "#{Float.round(segment_percent(row, breakdown), 3)}%"
+
+  # Below the width that fits a label, drop the label rather than truncate it:
+  # `36.0…` reads as an unfinished number and invites the reader to guess
+  # whether it meant minutes or a decimal, while the numbers table one row
+  # down still carries the exact value, so nothing is lost by dropping it.
+  #
+  # Not so on a human-wait segment. There the in-segment number is one of the
+  # four non-colour carriers of the human/engine split — the human token is
+  # 2.55:1 against the light surface, under the 3:1 floor, and may not be
+  # darkened — so dropping it would silently weaken an accessibility
+  # mitigation. A human-wait segment too narrow for its label is a layout
+  # defect: keep the label, let it overflow visibly, and say so in the log.
+  defp segment_label(row, breakdown) do
+    label = duration(row.p50_seconds)
+
+    cond do
+      segment_percent(row, breakdown) >= label_min_percent(label) ->
+        label
+
+      row.human ->
+        Logger.warning(
+          "pipeline: human-wait segment #{row.phase} is too narrow for its label " <>
+            "(#{Float.round(segment_percent(row, breakdown), 2)}% of the bar); keeping it, " <>
+            "because the in-segment number is a contrast mitigation and may not be dropped"
+        )
+
+        label
+
+      true ->
+        nil
+    end
+  end
+
+  defp label_min_percent(label),
+    do: (String.length(label) * @label_char_px + @label_padding_px) / @bar_min_px * 100
 
   # Engine is a flat token fill; human wait is the same token family plus a 45°
   # texture, so the split survives greyscale, print and forced-colors.
@@ -221,24 +279,29 @@ defmodule PlatformWeb.PipelineLive do
                   that is what this says — and the legend is suppressed below,
                   rather than the sentence being contradicted twice. --%>
             <p :if={@sparse?} id="sparse-bar-note" class="text-sm text-base-content">
-              {@cohort.decomposable} of {@cohort.tasks_in_window} tasks in this window can be
-              decomposed — too few for a proportional split of the elapsed time to mean anything,
-              so no bar is drawn. The per-phase medians measured so far are in the table below.
+              {@cohort.decomposable} of {@cohort.tasks_in_window} tasks decomposable; a
+              proportional split needs {distribution_floor()}. Too few for the shares of elapsed
+              time to mean anything, so no bar is drawn — the per-phase medians measured so far
+              are in the table below.
             </p>
 
             <div :if={not @sparse?} id="phase-bar" class="flex gap-[2px] h-10 w-full">
               <div
                 :for={row <- measured(@breakdown)}
                 id={"phase-segment-#{row.phase}"}
-                class="first:rounded-l flex items-center justify-center overflow-hidden last:rounded-r"
+                class={[
+                  "first:rounded-l flex items-center justify-center last:rounded-r",
+                  if(row.human, do: "overflow-visible", else: "overflow-hidden")
+                ]}
                 style={"width: #{segment_width(row, @breakdown)}; border-radius: 4px; #{segment_fill(row)}"}
                 title={"#{phase_label(row.phase)} — #{kind(row)} — median #{duration(row.p50_seconds)}"}
               >
                 <span
-                  class="font-mono text-[10px] font-semibold px-1 truncate"
+                  :if={segment_label(row, @breakdown)}
+                  class="font-mono text-[10px] font-semibold px-1 whitespace-nowrap"
                   style={segment_text(row)}
                 >
-                  {duration(row.p50_seconds)}
+                  {segment_label(row, @breakdown)}
                 </span>
               </div>
             </div>
@@ -342,9 +405,11 @@ defmodule PlatformWeb.PipelineLive do
           <h2 class="text-sm font-semibold uppercase tracking-wider">Cycle time</h2>
 
           <p :if={@sparse?} id="sparse-distribution-note" class="text-sm text-base-content">
-            {@cohort.decomposable} of {@cohort.tasks_in_window} tasks in this window can be
-            decomposed. A distribution is not meaningful yet — this page will draw one once at
-            least {sparse_threshold()} tasks have been measured end to end.
+            {@cohort.decomposable} of {@cohort.tasks_in_window} tasks decomposable; a distribution
+            needs {distribution_floor()}. The chart is withheld deliberately, not missing: bins
+            are log-spaced with a &gt;7d overflow bucket, and below {distribution_floor()} tasks
+            a bucket holding one task reads as the whole picture rather than as a tail. It
+            appears at {distribution_floor()} tasks measured end to end.
           </p>
 
           <div :if={not @sparse?} id="cycle-time-histogram" class="space-y-2">

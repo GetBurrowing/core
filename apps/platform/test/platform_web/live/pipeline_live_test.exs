@@ -11,8 +11,10 @@ defmodule PlatformWeb.PipelineLiveTest do
       assertion is scoped to the cell the code feeds for that phase — a
       whole-page grep for "0.0" passes or fails for reasons that have nothing
       to do with the phase under test.
-    * Under five decomposable tasks it must say so in words rather than draw a
-      distribution from three points.
+    * Below the distribution floor it must say so in words rather than draw a
+      distribution from three points, and it must state the floor itself — a
+      threshold that fires silently is indistinguishable from a page with no
+      chart, and this page transitions unattended.
 
   Fixtures write transition rows at chosen timestamps rather than driving live
   transitions: cohort membership keys off `inserted_at` (see
@@ -94,8 +96,11 @@ defmodule PlatformWeb.PipelineLiveTest do
     task
   end
 
+  # Twenty decomposable tasks is exactly the floor at which the page draws a
+  # distribution, so a populated cohort is built at the floor and not above it:
+  # a fixture with room to spare cannot tell a raised floor from a removed one.
   defp populated_cohort(project) do
-    Enum.each([2, 3, 4, 5, 6], &decomposable_task(project, &1, 4))
+    Enum.each(1..19, &decomposable_task(project, 2 + rem(&1, 5), 4))
     decomposable_task(project, 7, 200)
 
     # Uninstrumented: in the cohort, out of every aggregate.
@@ -149,7 +154,7 @@ defmodule PlatformWeb.PipelineLiveTest do
 
       line = view |> element("#exclusion-line") |> render()
 
-      assert line =~ "6 of 9 tasks decomposable"
+      assert line =~ "20 of 23 tasks decomposable"
     end
 
     test "renders the phase bar with the phases that were measured", %{
@@ -185,6 +190,44 @@ defmodule PlatformWeb.PipelineLiveTest do
 
       assert html =~ "&gt;7d"
     end
+
+    # The 6px floor exists so the single >7d task — the one that drags the mean
+    # away from the median — is not a 4px sliver. It must not become a floor
+    # under EVERY bucket: a 6px stub over an empty bin draws a task that does
+    # not exist, which is the `0.0 h` mistake in another medium.
+    test "the min-height floor lifts occupied buckets only, never an empty one", %{
+      conn: conn,
+      project: project
+    } do
+      populated_cohort(project)
+
+      {:ok, _view, html} = conn |> authenticated_conn() |> live("/control/pipeline")
+
+      heights = bucket_min_heights(html)
+
+      # Anti-vacuity on both sides: the fixture must actually produce an empty
+      # bucket AND an occupied one, or the assertion below is about nothing.
+      assert Map.fetch!(heights, {"1-4h", 0}) == "0"
+      assert Map.fetch!(heights, {"&gt;7d", 1}) == "6px"
+
+      for {{label, count}, min_height} <- heights do
+        expected = if count > 0, do: "6px", else: "0"
+
+        assert min_height == expected,
+               "bucket #{label} holds #{count} tasks but renders min-height: #{min_height}"
+      end
+    end
+  end
+
+  # Pairs each histogram bucket's `title` (which carries its label and count)
+  # with the `min-height` of the bar the code draws for it, so the floor is
+  # asserted against the bucket it belongs to rather than page-wide.
+  defp bucket_min_heights(html) do
+    ~r/title="([^"]+): (\d+) tasks".*?min-height: ([^;"]+)/s
+    |> Regex.scan(html)
+    |> Map.new(fn [_, label, count, min_height] ->
+      {{label, String.to_integer(count)}, String.trim(min_height)}
+    end)
   end
 
   describe "human/engine attribution" do
@@ -243,10 +286,21 @@ defmodule PlatformWeb.PipelineLiveTest do
 
       {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
 
-      note = view |> element("#sparse-distribution-note") |> render()
+      # Collapsed: HEEx wraps the copy across source lines, so a raw-string
+      # match would assert the formatter's line breaks rather than the wording.
+      note = view |> element("#sparse-distribution-note") |> render() |> squish()
 
       assert note =~ "3 of 3"
-      assert note =~ "not meaningful yet"
+
+      # The floor is stated, not merely applied. Without this the page is
+      # silently withholding a chart and a reader cannot tell whether one is
+      # coming, is broken, or does not exist.
+      assert note =~ "a distribution needs 20"
+      assert note =~ "It appears at 20 tasks measured end to end"
+
+      # And the bar's own note states its floor too, in the same terms.
+      assert view |> element("#sparse-bar-note") |> render() |> squish() =~
+               "a proportional split needs 20"
 
       refute has_element?(view, "#cycle-time-histogram")
       refute has_element?(view, "#phase-bar")
@@ -259,6 +313,89 @@ defmodule PlatformWeb.PipelineLiveTest do
       # Not blank: the throughput panel and the numbers table still render.
       assert has_element?(view, "#throughput-rate")
       assert has_element?(view, "#phase-row-planning")
+    end
+
+    # Both sides, in one test, against the same fixture shape. A test that
+    # only checks the sparse side passes for a floor of 20, 200 or infinity;
+    # one that only checks the populated side passes for a floor of 20, 5 or
+    # zero. Neither alone can detect an off-by-one, and the transition here
+    # happens unattended on real data.
+    test "at one below the floor the sentence renders and the chart does not; at the floor they swap",
+         %{conn: conn, project: project} do
+      Enum.each(1..19, &decomposable_task(project, 2 + rem(&1, 5), 4))
+
+      {:ok, below, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+
+      assert view_states(below) == %{
+               sparse_note: true,
+               bar_note: true,
+               histogram: false,
+               bar: false,
+               legend: false
+             }
+
+      assert below |> element("#sparse-distribution-note") |> render() =~ "19 of 19"
+
+      # The twentieth task, and nothing else about the fixture, changes.
+      decomposable_task(project, 3, 4)
+
+      {:ok, at_floor, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+
+      assert view_states(at_floor) == %{
+               sparse_note: false,
+               bar_note: false,
+               histogram: true,
+               bar: true,
+               legend: true
+             }
+
+      assert at_floor |> element("#exclusion-line") |> render() =~ "20 of 20"
+    end
+  end
+
+  defp squish(html), do: html |> String.replace(~r/\s+/, " ") |> String.trim()
+
+  defp view_states(view) do
+    %{
+      sparse_note: has_element?(view, "#sparse-distribution-note"),
+      bar_note: has_element?(view, "#sparse-bar-note"),
+      histogram: has_element?(view, "#cycle-time-histogram"),
+      bar: has_element?(view, "#phase-bar"),
+      legend: has_element?(view, "#legend")
+    }
+  end
+
+  describe "in-segment labels" do
+    # `36.0…` is worse than no label: it invites the reader to wonder whether
+    # it means 36 minutes or 36-point-something. The rule is drop, not
+    # truncate — the numbers table one row down carries the exact value.
+    test "a segment too narrow for its label drops it rather than truncating", %{
+      conn: conn,
+      project: project
+    } do
+      populated_cohort(project)
+
+      {:ok, view, html} = conn |> authenticated_conn() |> live("/control/pipeline")
+
+      # Anti-vacuity: the assertion below is only meaningful if the narrow
+      # segment is actually rendered and actually narrow.
+      assert has_element?(view, "#phase-segment-deploying")
+      deploying = view |> element("#phase-segment-deploying") |> render()
+
+      # The value is still reachable — in the title, and in the table row.
+      assert deploying =~ "median"
+      assert view |> element("#phase-median-deploying") |> render() =~ "h"
+
+      # No `truncate` class survives on a bar segment: truncation is the
+      # mechanism being removed, so its absence is asserted, not just the
+      # absence of one ellipsis.
+      refute deploying =~ "truncate"
+
+      # The wide segment keeps its label, so a dropped label is a distinction
+      # rather than the page having stopped labelling segments at all.
+      assert view |> element("#phase-segment-in_progress") |> render() =~ "h"
+
+      refute html =~ "…"
     end
   end
 
@@ -289,13 +426,14 @@ defmodule PlatformWeb.PipelineLiveTest do
 
       {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
 
-      assert view |> element("#exclusion-line") |> render() =~ "9 of 12"
+      assert view |> element("#exclusion-line") |> render() =~ "23 of 26"
 
       view |> element("form") |> render_change(%{"range" => "7"})
 
-      # The 7d window drops the three older decomposable tasks AND the three
-      # uninstrumented ones, so BOTH numbers move.
-      assert view |> element("#exclusion-line") |> render() =~ "5 of 5"
+      # The 7d window drops the four older decomposable tasks (three at 20-22d
+      # plus the week-long outlier) AND the three uninstrumented ones, so BOTH
+      # numbers move.
+      assert view |> element("#exclusion-line") |> render() =~ "19 of 19"
     end
   end
 end
