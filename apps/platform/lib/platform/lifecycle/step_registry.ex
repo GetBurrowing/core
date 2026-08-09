@@ -102,6 +102,11 @@ defmodule Platform.Lifecycle.StepRegistry do
       mfa: {Platform.Design.PreplanLifecycleStep, :start, 1},
       kind: :agent
     },
+    %{
+      name: "architect_gate",
+      mfa: {Platform.Tasks.ArchitectGateLifecycleStep, :start, 1},
+      kind: :agent
+    },
     %{name: "notify", mfa: {Platform.Lifecycle.Steps, :notify, 1}, kind: :deterministic}
   ]
 

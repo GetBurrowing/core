@@ -109,6 +109,7 @@ defmodule Platform.Lifecycle.Edges do
   @architect_edge "plan.review_requested"
 
   @designer_step "design_preplan"
+  @architect_step "architect_gate"
 
   @doc "Edge name for the designer hook, fired from the router's dispatch tick."
   @spec designer_edge() :: binary()
@@ -131,6 +132,10 @@ defmodule Platform.Lifecycle.Edges do
   @spec designer_step_name() :: binary()
   def designer_step_name, do: @designer_step
 
+  @doc "The registry name of the architect gate's step. A NAME, never a module."
+  @spec architect_step_name() :: binary()
+  def architect_step_name, do: @architect_step
+
   @doc """
   The steps that run on an edge when the project configures none.
 
@@ -149,12 +154,23 @@ defmodule Platform.Lifecycle.Edges do
   that came out of jsonb — a shipped default that a configured pipeline could
   not have expressed would be a second, hidden step language.
 
-  Returns `[]` for an edge with no shipped default (the architect edge has
-  none — its gate is a single function, see the moduledoc).
+  The architect gate is a shipped step for the SAME reason (task 019fe1b7
+  stage 3): `resolve_steps/2` on an unconfigured project answers `[]`, the
+  edge reports `:not_applicable`, and a green suite records that every plan
+  submission had no architecture hook. `await: true` because the plan
+  genuinely waits at the gate, `can_divert: true` because `:reject` sends the
+  plan back — and BOTH are read from this declaration by
+  `Platform.Lifecycle.Executor`, never from the step's position.
+
+  Returns `[]` for an edge with no shipped default.
   """
   @spec default_steps(binary()) :: [map()]
   def default_steps(@designer_edge) do
     [%{"step" => @designer_step, "await" => true, "can_divert" => true}]
+  end
+
+  def default_steps(@architect_edge) do
+    [%{"step" => @architect_step, "await" => true, "can_divert" => true}]
   end
 
   def default_steps(_edge), do: []

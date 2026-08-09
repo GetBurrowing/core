@@ -2094,38 +2094,48 @@ defmodule Platform.Tasks do
 
         broadcast_board({:plan_updated, updated})
 
-        case architecture_fire_outcome(fire_result) do
-          :complete ->
-            open_architecture_gate_at_submit(updated)
+        result =
+          case architecture_fire_outcome(fire_result) do
+            :complete ->
+              open_architecture_gate_at_submit(updated)
 
-          outcome when outcome in [:not_applicable, :failed] ->
-            # PROGRESSIVE ENHANCEMENT, and it is load-bearing rather than
-            # a nicety: these two branches execute the BYTE-IDENTICAL tail
-            # that ran before the gate existed, in the same order. A repo
-            # with no architect assigned behaves exactly as it does today
-            # (`0044-architect-responsibility.md § Decision`, ADR-0046
-            # decision 3). `:failed` FALLS OPEN
-            # (ADR-0046 decision 7) — the gate never opens and nothing is
-            # blocked. Its visibility is already solved and must not be
-            # re-solved here: `record_architecture_planning_step/2` above
-            # wrote `planning_step_outcomes["architecture"]["outcome"] =
-            # "failed"`, which member 4's merge-time writers surface.
-            settle_ungated_plan_submission(updated)
+            outcome when outcome in [:not_applicable, :failed] ->
+              # PROGRESSIVE ENHANCEMENT, and it is load-bearing rather than
+              # a nicety: these two branches execute the BYTE-IDENTICAL tail
+              # that ran before the gate existed, in the same order. A repo
+              # with no architect assigned behaves exactly as it does today
+              # (`0044-architect-responsibility.md § Decision`, ADR-0046
+              # decision 3). `:failed` FALLS OPEN
+              # (ADR-0046 decision 7) — the gate never opens and nothing is
+              # blocked. Its visibility is already solved and must not be
+              # re-solved here: `record_architecture_planning_step/2` above
+              # wrote `planning_step_outcomes["architecture"]["outcome"] =
+              # "failed"`, which member 4's merge-time writers surface.
+              settle_ungated_plan_submission(updated)
 
-          other ->
-            # `Platform.Responsibilities.outcome/1` deliberately has no
-            # catch-all, so this arm is only reachable if a future value
-            # is ADDED to its union. Fall open and be loud: an outcome
-            # this function has never seen is not evidence the architect
-            # took the slot, and a `CaseClauseError` here would abort a
-            # transition whose row is already committed.
-            Logger.error(
-              "[Tasks] architecture.review_plan unmapped outcome #{inspect(other)} " <>
-                "plan=#{updated.id} task=#{updated.task_id} — gate not opened"
-            )
+            other ->
+              # `Platform.Responsibilities.outcome/1` deliberately has no
+              # catch-all, so this arm is only reachable if a future value
+              # is ADDED to its union. Fall open and be loud: an outcome
+              # this function has never seen is not evidence the architect
+              # took the slot, and a `CaseClauseError` here would abort a
+              # transition whose row is already committed.
+              Logger.error(
+                "[Tasks] architecture.review_plan unmapped outcome #{inspect(other)} " <>
+                  "plan=#{updated.id} task=#{updated.task_id} — gate not opened"
+              )
 
-            settle_ungated_plan_submission(updated)
-        end
+              settle_ungated_plan_submission(updated)
+          end
+
+        # ADR-0046 Amendment 1, task 019fe1b7 stage 3. The plan-submission
+        # boundary is a named lifecycle edge, and this is the ONLY site that
+        # fires it. It runs LAST, after the gate has been opened (or the
+        # submission settled ungated), because the step is an OBSERVER of the
+        # gate — firing it earlier would race the row it reads.
+        _ = run_architect_edge(updated)
+
+        result
 
       error ->
         error
@@ -2133,6 +2143,52 @@ defmodule Platform.Tasks do
   end
 
   def submit_plan_for_review(_plan), do: {:error, :invalid_transition}
+
+  # THE EDGE IS RUN IN A SPAWNED PROCESS, and the choice is forced.
+  # `Platform.Lifecycle.Executor.run_edge/3` awaits an awaited step in a
+  # `receive` in the CALLING process. This caller is synchronous and on a
+  # request path — the MCP `plan_submit` tool reaches it — while an
+  # architecture gate resolves in minutes-to-hours through a human or an
+  # agent. Awaiting inline would hold the request open for the edge budget.
+  #
+  # The synchronous tail above is therefore untouched: the fire, the outcome
+  # record and the gate open all still happen before this function returns, so
+  # every existing caller that reads the gate straight after a submit still
+  # sees it. The spawned run only WATCHES and RECORDS.
+  #
+  # Best-effort by construction: an unlinked spawn whose body cannot raise
+  # into this process. A lifecycle RECORD must never be able to fail a
+  # committed plan submission — the same rule as every other envelope on this
+  # transition.
+  defp run_architect_edge(%Plan{} = plan) do
+    case Repo.get(Task, plan.task_id) do
+      nil ->
+        :ok
+
+      %Task{} = task ->
+        edge = Platform.Lifecycle.Edges.architect_edge()
+
+        spawn(fn ->
+          try do
+            Platform.Lifecycle.Executor.run_edge(task, edge,
+              steps: Platform.Lifecycle.Edges.default_steps(edge)
+            )
+          rescue
+            e ->
+              Logger.warning("[plan.review_requested] edge raised: #{Exception.message(e)}")
+          catch
+            :exit, reason ->
+              Logger.warning("[plan.review_requested] edge exited: #{inspect(reason)}")
+          end
+        end)
+
+        :ok
+    end
+  rescue
+    e ->
+      Logger.warning("[plan.review_requested] edge not started: #{Exception.message(e)}")
+      :ok
+  end
 
   # ── ADR-0046 member 5 stage 2: the gate branch ─────────────────────────
   #
