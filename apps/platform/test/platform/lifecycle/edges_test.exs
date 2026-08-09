@@ -2,6 +2,7 @@ defmodule Platform.Lifecycle.EdgesTest do
   use ExUnit.Case, async: true
 
   alias Platform.Lifecycle.Edges
+  alias Platform.Lifecycle.StepRegistry
   alias Platform.Lifecycle.StepRun
   alias Platform.Tasks.Task, as: TaskSchema
 
@@ -69,6 +70,50 @@ defmodule Platform.Lifecycle.EdgesTest do
 
     test "the executor's :complete outcome and a StepRun's completed status agree" do
       assert Edges.run_outcome(:complete) == Edges.run_outcome(:completed)
+    end
+  end
+
+  describe "default_steps/1" do
+    test "the designer edge ships an awaited, divert-capable step" do
+      assert [step] = Edges.default_steps(Edges.designer_edge())
+
+      assert step["step"] == Edges.designer_step_name()
+
+      # `await` is the whole point of the designer edge: "design runs BEFORE
+      # planning" is only true if the planner actually waits. `can_divert` is
+      # authority, read from the DECLARATION and never from position.
+      assert step["await"] == true
+      assert step["can_divert"] == true
+    end
+
+    test "the declaration is string-keyed, exactly as a configured one would be" do
+      [step] = Edges.default_steps(Edges.designer_edge())
+
+      # A shipped default that a project pipeline could not have expressed
+      # would be a second, hidden step language — and the executor reads
+      # `Map.get(step, "await")`, so an atom-keyed default would silently
+      # resolve to `false` and stop awaiting.
+      assert Enum.all?(Map.keys(step), &is_binary/1)
+    end
+
+    test "the architect edge ships none, and an unknown edge ships none" do
+      # Not an oversight: the architect gate is a single function with a
+      # resolution argument, so there is no bespoke machinery to declare. See
+      # the premise correction in the moduledoc.
+      assert Edges.default_steps(Edges.architect_edge()) == []
+      assert Edges.default_steps("no.such.edge") == []
+    end
+
+    test "the shipped designer step is a name the registry resolves" do
+      # The declaration and the allowlist are separate sources and can drift.
+      # If they do, the edge resolves `{:error, :unknown_step}`, the step is
+      # recorded `failed`, and the planner is released anyway — indistinguishable
+      # from success to anything watching only the planner.
+      registry = :"edges_registry_#{System.unique_integer([:positive])}"
+      start_supervised!({StepRegistry, name: registry})
+
+      assert {:ok, entry} = StepRegistry.fetch(Edges.designer_step_name(), registry)
+      assert entry.kind == :agent
     end
   end
 

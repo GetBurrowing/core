@@ -26,7 +26,11 @@ defmodule Platform.Lifecycle.Edges do
       eager `:design_deadline` timer with arm/cancel, a wake-up
       (`release_design_hold_if_closed/1`) and an expiry writer
       (`expire_design_step/1` calling `Platform.Design.PreplanStep.expire/2`).
-      THIS is the bespoke lifecycle machinery the migration replaces.
+      THIS is the bespoke lifecycle machinery the migration replaces —
+      described in the past tense as of task 019fe1b7 stage 2, which deleted
+      all of it bar the hold predicate and moved the expiry onto the edge's
+      own runner. The step itself is
+      `Platform.Design.PreplanLifecycleStep`, declared by `default_steps/1`.
 
     * `architect_edge/0` — `"plan.review_requested"`. Fires from a
       PLAN-status transition, not a task-status transition:
@@ -104,6 +108,8 @@ defmodule Platform.Lifecycle.Edges do
   @designer_edge "planning.design_requested"
   @architect_edge "plan.review_requested"
 
+  @designer_step "design_preplan"
+
   @doc "Edge name for the designer hook, fired from the router's dispatch tick."
   @spec designer_edge() :: binary()
   def designer_edge, do: @designer_edge
@@ -115,6 +121,43 @@ defmodule Platform.Lifecycle.Edges do
   @doc "Both edges this member owns, in no significant order."
   @spec all() :: [binary()]
   def all, do: [@designer_edge, @architect_edge]
+
+  @doc """
+  The registry name of the designer's step.
+
+  A step NAME, never a module: `Platform.Lifecycle.StepRegistry` is the only
+  thing that turns it into code.
+  """
+  @spec designer_step_name() :: binary()
+  def designer_step_name, do: @designer_step
+
+  @doc """
+  The steps that run on an edge when the project configures none.
+
+  ## Why a shipped default exists at all
+
+  `Platform.Lifecycle.resolve_steps/2` reads the project row and nothing
+  else, so an unconfigured project resolves to `[]` — and `[]` on the
+  designer edge would mean THE DESIGN STEP SIMPLY STOPS FIRING for every
+  project that exists today. A migration whose observable effect is deleting
+  the feature it migrates is not a migration.
+
+  So the designer is a SHIPPED step, not a configured one, exactly as it was
+  before: `await: true` because the planner must actually wait, and
+  `can_divert: true` because a gate that cannot send the task back is
+  advisory. String keys, so the declaration is byte-identical in shape to one
+  that came out of jsonb — a shipped default that a configured pipeline could
+  not have expressed would be a second, hidden step language.
+
+  Returns `[]` for an edge with no shipped default (the architect edge has
+  none — its gate is a single function, see the moduledoc).
+  """
+  @spec default_steps(binary()) :: [map()]
+  def default_steps(@designer_edge) do
+    [%{"step" => @designer_step, "await" => true, "can_divert" => true}]
+  end
+
+  def default_steps(_edge), do: []
 
   @doc """
   Translate an executor edge outcome or a `StepRun` status into the

@@ -78,17 +78,14 @@ defmodule Platform.Orchestration.TaskRouter do
 
   require Logger
 
-  # ADR-0046 member 7 stage 5 — how long a pre-plan design step may hold the
-  # planner before it is expired and planning proceeds anyway.
-  #
-  # The literal lives here and the READ goes through `Application.get_env/3` so
-  # a test can inject a small value per-case. There is deliberately NO override
-  # in `config/test.exs`: a test-only config value that silently becomes the
-  # production one is exactly the amended-safety-net failure this stack is
-  # written against. `default_design_step_timeout_ms/0` exposes the literal so a
-  # guard can assert the shipped default independently of whatever a running
-  # test has injected.
-  @design_step_timeout_ms 1_800_000
+  # Task 019fe1b7 stage 2 — `@design_step_timeout_ms` and its two accessors
+  # USED TO LIVE HERE. Gone, not inlined: the wait they bounded happens inside
+  # the lifecycle pipeline now, so `Lifecycle.step_timeout_ms/0` and
+  # `edge_budget_ms/0` bound it — same 30 minutes, same
+  # attribute-behind-`Application.get_env/3` shape, same absence of a
+  # `config/test.exs` override, same `default_*` accessor for a guard to pin.
+  # A replaced CONFIG LOOKUP, not a deleted magic number, and strictly wider:
+  # one knob became two independent ones.
 
   alias Platform.Design.PreplanStep
   alias Platform.Execution.CredentialLease
@@ -105,6 +102,9 @@ defmodule Platform.Orchestration.TaskRouter do
     RuntimeSupervision
   }
 
+  alias Platform.Lifecycle
+  alias Platform.Lifecycle.Edges
+  alias Platform.Lifecycle.Executor
   alias Platform.Tasks
   alias Platform.Tasks.{DeployResolver, Plan, ReviewRequests, Stage}
 
@@ -125,7 +125,8 @@ defmodule Platform.Orchestration.TaskRouter do
             task_status: String.t() | nil,
             lease_status: String.t() | nil,
             deploy_lease: CredentialLease.t() | nil,
-            design_deadline_ref: reference() | nil,
+            design_run: {pid(), reference()} | nil,
+            design_edge_ran?: boolean(),
             architecture_deadline_ref: reference() | nil,
             status:
               :dispatching | :running | :stalled | :complete | :waiting_human | :waiting_design
@@ -143,17 +144,23 @@ defmodule Platform.Orchestration.TaskRouter do
       :task_status,
       :lease_status,
       :deploy_lease,
-      # ADR-0046 member 7 stage 5. Purely an OPTIMISATION: it exists so a hold
-      # that nothing else pokes still ends on time. It is NOT the correctness
-      # guarantee, and it deliberately holds no information the DB does not
-      # already carry — see `design_hold_expired?/2`.
-      :design_deadline_ref,
+      # The in-flight designer pipeline run: `{runner_pid, monitor_ref}`, or
+      # `nil`. Task 019fe1b7 stage 2 — this REPLACED `:design_deadline_ref`,
+      # and the replacement is the whole shape of the migration. The router
+      # no longer owns a deadline for the design step; it owns a MONITOR on
+      # the process running the edge, and the deadline belongs to the
+      # pipeline's two budgets. Both halves die with this process, so the
+      # hold still cannot outlive its holder.
+      :design_run,
       # ADR-0046 member 5 stage 5. Held only so a re-arm can cancel the
       # previous one-shot instead of stacking duplicates; the timer is an
       # optimisation, never the correctness guarantee (see
       # `handle_info({:architecture_gate_deadline, _}, _)`).
       :architecture_deadline_ref,
       status: :dispatching,
+      # Task 019fe1b7 stage 2 — see `maybe_run_design_edge/2`. One designer
+      # edge run per router process, whatever the run's fate.
+      design_edge_ran?: false,
       # Task 019fb977. Provenance of `:assignee` as of the LAST dispatch:
       # `:resolved` means `PhaseRuntime.resolve/1` answered and the field was
       # overwritten with its answer; `:frozen_fallback` means resolution
@@ -187,25 +194,6 @@ defmodule Platform.Orchestration.TaskRouter do
   def current_status(task_id) do
     GenServer.call(via(task_id), :current_status)
   end
-
-  @doc """
-  How long a pre-plan design step may hold the planner, in milliseconds.
-
-  Read through `Application.get_env/3` on every use so a test can inject a
-  small value for one case without a `config/test.exs` entry.
-  """
-  @spec design_step_timeout_ms() :: pos_integer()
-  def design_step_timeout_ms do
-    Application.get_env(:platform, :design_step_timeout_ms, @design_step_timeout_ms)
-  end
-
-  @doc """
-  The SHIPPED default hold window (30 minutes), independent of any injected
-  config. Exposed so a guard can prove a test-only value has not become the
-  production one.
-  """
-  @spec default_design_step_timeout_ms() :: pos_integer()
-  def default_design_step_timeout_ms, do: @design_step_timeout_ms
 
   defp via(task_id) do
     {:via, Registry, {Platform.Orchestration.Registry, task_id}}
@@ -413,7 +401,8 @@ defmodule Platform.Orchestration.TaskRouter do
 
   @impl true
   def handle_info(:dispatch, state) do
-    # START SITE for the pre-plan design step (ADR-0046 member 7 stage 5).
+    # FIRE SITE for the designer lifecycle edge (ADR-0046 member 7 stage 5;
+    # moved onto the pipeline frame by task 019fe1b7 stage 2).
     # Deliberately here and not on the `backlog -> planning` transition: that
     # transition has FOUR writers with four different gate sets
     # (`Tasks.transition_task/3`, `transition_task_status/2`,
@@ -421,10 +410,8 @@ defmodule Platform.Orchestration.TaskRouter do
     # `Stacks.promote/1` uses), and a fifth the day someone adds one. All five
     # funnel into a router, because `TaskRouterWatcher.should_run?/1` spawns one
     # for any task in `planning`. One chokepoint instead of five.
-    task =
-      state.task_id
-      |> Tasks.get_task_detail()
-      |> maybe_start_design_step(state)
+    task = Tasks.get_task_detail(state.task_id)
+    state = maybe_run_design_edge(state, task)
 
     cond do
       task == nil ->
@@ -544,7 +531,7 @@ defmodule Platform.Orchestration.TaskRouter do
 
         {:noreply, state}
 
-      design_step_open?(task) ->
+      design_hold?(state, task) ->
         # Pre-dispatch guard, DESIGN level (ADR-0046 member 7 stage 5).
         # "Design runs BEFORE planning" is only true if the planner actually
         # waits. Ordered AFTER `pending_review_request?/1` on purpose: a human
@@ -556,7 +543,7 @@ defmodule Platform.Orchestration.TaskRouter do
         # carry a `completed` plan — but if they ever did overlap, parking at
         # `:waiting_design` is the reading that keeps the design contract:
         # suppression would drop the hold on the floor.
-        handle_design_hold(state, task)
+        hold_for_design(state, task)
 
       completed_plan_no_work?(state.task_id) ->
         # Re-dispatch storm guard (task 019fa2fc stage 4). Production on
@@ -698,31 +685,58 @@ defmodule Platform.Orchestration.TaskRouter do
     end
   end
 
-  # `:design_deadline` — armed once per design hold. This is the EAGER path,
-  # not the correctness path: `handle_design_hold/2` re-derives the same
-  # verdict from the DB on every dispatch tick, so losing this message (router
-  # restart, a `Process.cancel_timer/1` race) costs latency and nothing else.
+  # The designer edge finished (task 019fe1b7 stage 2). This is the ONLY
+  # release path for a design hold, and it fires for EVERY edge outcome —
+  # `complete`, `not_applicable`, `failed`, `diverted`, `suppressed`. Design
+  # fails open in every direction, so there is deliberately no branch here
+  # that keeps holding.
   #
-  # Both branches below are LEVEL checks against `PreplanStep.open?/1`, never
-  # against router state. A timer that fires after `settle/2` already closed
-  # the step must not re-open it as a failure and must not re-dispatch — the
-  # settle wake-up in `{:task_updated, _}` already did.
-  def handle_info(:design_deadline, %State{} = state) do
-    state = %{state | design_deadline_ref: nil}
+  # Matched on the RUNNER PID, so a message from a runner this router has
+  # already given up on (a monitor that fired first, a runner belonging to a
+  # previous hold) cannot release a later one.
+  def handle_info({:design_edge_settled, pid, outcome}, %State{design_run: {pid, ref}} = state) do
+    Process.demonitor(ref, [:flush])
 
-    case Tasks.get_task_detail(state.task_id) do
-      nil ->
-        {:noreply, state}
+    Logger.info(
+      "[TaskRouter] designer edge settled for task=#{state.task_id} " <>
+        "outcome=#{outcome} planning_step_outcome=#{Edges.run_outcome(outcome)} — " <>
+        "releasing the planner"
+    )
 
-      task ->
-        if design_step_open?(task) do
-          expire_design_step(task)
-          send(self(), :dispatch)
-          {:noreply, %{state | status: :dispatching}}
-        else
-          {:noreply, state}
-        end
+    send(self(), :dispatch)
+    {:noreply, %{state | design_run: nil, status: :dispatching}}
+  end
+
+  def handle_info({:design_edge_settled, _pid, _outcome}, %State{} = state) do
+    {:noreply, state}
+  end
+
+  # The runner died without reporting — killed, a raise outside the executor's
+  # rescue, a node under memory pressure. FAIL OPEN: release the planner. A
+  # crashed runner holding the planner forever is the one outcome the design
+  # step is not allowed to have, and it is why the runner is monitored rather
+  # than linked (a link would take this router down with it, stranding every
+  # other thing this process dispatches).
+  #
+  # `maybe_run_design_edge/2` will not re-fire this router — `design_edge_ran?`
+  # is already set, and it is set precisely because a crashed runner leaves no
+  # persisted run row for the re-entry bound to count.
+  def handle_info({:DOWN, ref, :process, pid, reason}, %State{design_run: {pid, ref}} = state) do
+    if reason != :normal do
+      Logger.warning(
+        "[TaskRouter] designer edge runner for task=#{state.task_id} went down " <>
+          "(#{inspect(reason)}) — releasing the planner"
+      )
+
+      # The runner may have opened the cursor and died before it could close
+      # it. Closing it here is the same fail-open write `run_design_edge/2`
+      # makes on the normal path; without it the restart half of
+      # `design_hold?/2` would hold every future router on this task.
+      close_open_step(state.task_id)
     end
+
+    send(self(), :dispatch)
+    {:noreply, %{state | design_run: nil, status: :dispatching}}
   end
 
   # `:check_safety_net` — armed on each successful dispatch at the stage-kind's
@@ -861,29 +875,17 @@ defmodule Platform.Orchestration.TaskRouter do
         state
       end
 
-    # DESIGN WAKE-UP (ADR-0046 member 7 stage 5). `PreplanStep.settle/2` closes
-    # the step through `Tasks.set_planning_step/2`, which broadcasts
-    # `{:task_updated, _}` — so no new subscription is needed. But this handler
-    # did NOT previously re-dispatch, so without this the planner would stay
-    # parked until some unrelated tick arrived. The stage brief asserted the
-    # re-dispatch already existed; it did not.
+    # THE DESIGN WAKE-UP USED TO LIVE HERE (ADR-0046 member 7 stage 5): a
+    # `release_design_hold_if_closed/1` call that re-read the row on every
+    # `{:task_updated, _}` and re-dispatched if the cursor had closed.
     #
-    # EDGE-TRIGGERED ON PURPOSE, and this is the one place in the stage where
-    # that is the right shape. `settle/2` emits more than one `{:task_updated}`
-    # (the outcome write, then the cursor write), and `update_task/3` emits more
-    # for reasons that have nothing to do with design. Leaving `:waiting_design`
-    # in the same expression that sends the dispatch makes the status itself the
-    # de-duplication token: exactly one dispatch per hold, asserted by count.
-    # The edge is safe here only because the LEVEL check in
-    # `handle_design_hold/2` is what actually bounds the hold — if this wake-up
-    # never fires at all, the hold still ends.
-    state =
-      if state.status == :waiting_design do
-        release_design_hold_if_closed(state)
-      else
-        state
-      end
-
+    # It is gone because the signal MOVED rather than disappeared.
+    # `Platform.Design.PreplanLifecycleStep`'s watcher subscribes to this same
+    # board topic and level-checks the same cursor, so a close is still seen at
+    # broadcast latency; the release now arrives as `{:design_edge_settled, _,
+    # _}`. Exactly one dispatch per hold still holds, for a stronger reason
+    # than before: the RUN, not a router status flag, is the de-duplication
+    # token.
     {:noreply, state}
   end
 
@@ -2571,43 +2573,21 @@ defmodule Platform.Orchestration.TaskRouter do
     :exit, _ -> false
   end
 
-  # LEVEL CHECK. Pure function of (task row, now) — no router state, no timer.
-  defp design_hold_expired?(task, timeout_ms) do
-    case Map.get(task, :updated_at) do
-      %DateTime{} = at ->
-        DateTime.diff(DateTime.utc_now(), at, :millisecond) >= timeout_ms
+  # THE HOLD PREDICATE, and it is a disjunction for a reason.
+  #
+  #   * A run this router started is still in flight — the authoritative half.
+  #     It covers the window between spawning the runner and the cursor
+  #     reaching `"designing"`, which the cursor alone cannot see: the fire
+  #     happens in another process now, so a cursor-only hold would dispatch
+  #     the planner straight into the step this branch waits for.
+  #   * The cursor says `"designing"` with no run in flight — the RESTART
+  #     half, and the same level check the pre-migration hold used. The hold
+  #     must be re-derivable from the row by a process that was not there when
+  #     it began.
+  defp design_hold?(%State{design_run: {_pid, _ref}}, _task), do: true
+  defp design_hold?(%State{}, task), do: design_step_open?(task)
 
-      %NaiveDateTime{} = at ->
-        NaiveDateTime.diff(NaiveDateTime.utc_now(), at, :millisecond) >= timeout_ms
-
-      _ ->
-        false
-    end
-  end
-
-  defp handle_design_hold(state, task) do
-    timeout_ms = design_step_timeout_ms()
-
-    if design_hold_expired?(task, timeout_ms) do
-      # Overdue reads as expired at the LEVEL check, without waiting for the
-      # timer. Falls straight into `do_dispatch/2` in the same tick rather than
-      # re-sending `:dispatch`: re-sending would loop forever if the expiry
-      # write failed and left the cursor at `"designing"`.
-      Logger.info(
-        "[TaskRouter] design step overdue for task=#{state.task_id} " <>
-          "(timeout=#{timeout_ms}ms) — expiring and releasing the planner"
-      )
-
-      expire_design_step(task)
-
-      state = cancel_design_deadline(state)
-      do_dispatch(state, Tasks.get_task_detail(state.task_id) || task)
-    else
-      hold_for_design(state, task, timeout_ms)
-    end
-  end
-
-  defp hold_for_design(state, task, timeout_ms) do
+  defp hold_for_design(state, task) do
     # Edge-triggered narration only — one line per hold episode, not one per
     # tick. Deliberately a plain `Logger.info` rather than
     # `maybe_log_heartbeat_suppressed/3`: that helper's reason table is the
@@ -2622,118 +2602,131 @@ defmodule Platform.Orchestration.TaskRouter do
     state =
       state
       |> Map.put(:task_status, task.status)
-      # NOT optional. Leaving the ack timer armed would fire
-      # `execution.no_ack_timeout` five minutes into a LEGITIMATELY held design
-      # step — the same liveness-signal miscalibration journalled for
-      # screenshot-driven UI stages, where the router alerted on a stage that
-      # was working exactly as designed.
-      |> clear_liveness()
       |> Map.put(:status, :waiting_design)
-      |> arm_design_deadline(task, timeout_ms)
+
+    # NOT optional, and gated on the CURSOR rather than on the hold. Leaving
+    # the ack timer armed would fire `execution.no_ack_timeout` five minutes
+    # into a LEGITIMATELY held design step — the same liveness-signal
+    # miscalibration journalled for screenshot-driven UI stages, where the
+    # router alerted on a stage that was working exactly as designed.
+    #
+    # The gate is what keeps this specific to a real hold. A task whose design
+    # step will resolve to `not_applicable` passes through `design_hold?/2`
+    # for as long as its runner takes to answer, and clearing the lease of a
+    # task that was never held would make the clear a property of the tick
+    # rather than of the hold.
+    state = if design_step_open?(task), do: clear_liveness(state), else: state
 
     {:noreply, state}
   end
 
-  # Armed once per hold: a live ref is left alone, so repeated ticks against an
-  # open step do not stack timers.
-  defp arm_design_deadline(%State{design_deadline_ref: ref} = state, _task, _timeout_ms)
-       when is_reference(ref),
-       do: state
+  # ── the designer lifecycle edge (task 019fe1b7 stage 2) ────────────────
+  #
+  # The router owns exactly two things now: WHEN the edge fires, and whether
+  # to hold while it runs. Ordering, settlement, both budgets and the run rows
+  # belong to `Platform.Lifecycle.Executor`.
+  #
+  # SPAWNED and MONITORED, never inline: the executor blocks its caller while
+  # awaiting an async step, and this router is the dispatcher for every agent
+  # in flight on this task — a thirty-minute block here would stall acks,
+  # safety nets and stage transitions. Monitored rather than linked so a
+  # runner crash releases the planner instead of killing the dispatcher.
 
-  defp arm_design_deadline(%State{} = state, task, timeout_ms) do
-    # Fire when the DB-derived deadline lapses, not `timeout_ms` from now. A
-    # router that boots into an already-half-elapsed hold inherits the
-    # remaining window instead of restarting the clock, which is what keeps a
-    # crash-loop from extending the hold without bound.
-    remaining =
-      case Map.get(task, :updated_at) do
-        %DateTime{} = at ->
-          timeout_ms - DateTime.diff(DateTime.utc_now(), at, :millisecond)
+  # AT MOST ONE DESIGNER EDGE RUN PER ROUTER PROCESS, and the flag is the
+  # load-bearing half of that — not the window, and not the re-entry bound.
+  #
+  # The bound counts PERSISTED RUN ROWS, so it cannot see a run that died
+  # before the executor wrote one. A runner that crashes early (the registry
+  # is down, the node is out of memory) leaves the window as it found it, and
+  # a window-only guard re-fires on the release the crash itself triggered: an
+  # unbounded dispatch loop at the speed of process spawning. Measured, not
+  # hypothesised — it is what this stage's first router-suite run did.
+  #
+  # A restart is still covered: the flag dies with the process. The
+  # recorded-outcome conjunct in `design_edge_window?/1` is the second,
+  # independent guard, and it is what stops a REPLACEMENT router re-firing an
+  # edge whose outcome is already on the task.
+  defp maybe_run_design_edge(%State{design_run: {_pid, _ref}} = state, _task), do: state
 
-        %NaiveDateTime{} = at ->
-          timeout_ms - NaiveDateTime.diff(NaiveDateTime.utc_now(), at, :millisecond)
+  defp maybe_run_design_edge(%State{design_edge_ran?: true} = state, _task), do: state
 
-        _ ->
-          timeout_ms
-      end
-
-    ref = Process.send_after(self(), :design_deadline, max(remaining, 0))
-    %{state | design_deadline_ref: ref}
-  end
-
-  defp cancel_design_deadline(%State{design_deadline_ref: ref} = state) when is_reference(ref) do
-    _ = Process.cancel_timer(ref)
-    %{state | design_deadline_ref: nil}
-  end
-
-  defp cancel_design_deadline(%State{} = state), do: %{state | design_deadline_ref: nil}
-
-  # Enveloped: `expire/2` already rescues internally, and this belt-and-braces
-  # layer exists so a fault in the seam itself cannot take the dispatch tick
-  # down. The return value is deliberately IGNORED by both callers — design
-  # falls open whatever happens here.
-  defp expire_design_step(task) do
-    PreplanStep.expire(task, design_step_timeout_ms())
-  rescue
-    e ->
-      Logger.warning("[TaskRouter] design expire raised: #{Exception.message(e)}")
-      {:error, :expire_raised}
-  catch
-    :exit, reason ->
-      Logger.warning("[TaskRouter] design expire exited: #{inspect(reason)}")
-      {:error, :expire_exited}
-  end
-
-  # Re-read from the DB rather than trusting the broadcast payload: the wake-up
-  # must observe the same field the hold reads, from the same place.
-  defp release_design_hold_if_closed(%State{} = state) do
-    task = Tasks.get_task_detail(state.task_id)
-
-    if design_step_open?(task) do
-      state
+  defp maybe_run_design_edge(%State{} = state, task) do
+    if design_edge_window?(task) do
+      router = self()
+      {pid, ref} = spawn_monitor(fn -> run_design_edge(router, task) end)
+      %{state | design_run: {pid, ref}, design_edge_ran?: true}
     else
-      Logger.info(
-        "[TaskRouter] design step closed for task=#{state.task_id} — releasing the planner"
+      state
+    end
+  end
+
+  # The pre-plan window: `planning`, no plan of any status yet, and no design
+  # outcome already recorded. A strict subset of the old start-site condition
+  # — `PreplanStep.start/1` is still idempotent on both cursor and outcome, so
+  # the extra conjunct costs nothing and buys the bound above.
+  defp design_edge_window?(nil), do: false
+
+  defp design_edge_window?(task) do
+    Map.get(task, :status) == "planning" and
+      not design_outcome_recorded?(task) and
+      Tasks.latest_plan(task.id) == nil
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  defp design_outcome_recorded?(task) do
+    case Map.get(task, :planning_step_outcomes) do
+      %{"design" => _entry} -> true
+      _ -> false
+    end
+  end
+
+  # Runs in the spawned process. Two jobs, in order.
+  defp run_design_edge(router, task) do
+    edge = Edges.designer_edge()
+
+    {outcome, _summary} =
+      Executor.run_edge(task, edge,
+        steps: Edges.default_steps(edge),
+        step_timeout_ms: Lifecycle.step_timeout_ms(),
+        edge_budget_ms: Lifecycle.edge_budget_ms()
       )
 
-      send(self(), :dispatch)
+    # DESIGN FAILS OPEN IN EVERY DIRECTION — the posture this member inherited
+    # and the one thing that must not change. The executor bounds the WAIT,
+    # but a bounded wait still leaves the cursor at `"designing"`, and a task
+    # stuck there is held forever by the restart half of `design_hold?/2`. So
+    # whatever the edge answered, a step still open when the edge is over is
+    # expired here.
+    #
+    # This is where `expire_design_step/1` went: the same `PreplanStep.expire/2`
+    # call, off the dispatch tick and onto the process that knows the edge is
+    # over, now covering `:suppressed` and `:diverted` as well as the timeout.
+    close_open_step(task.id)
 
-      state
-      |> cancel_design_deadline()
-      |> Map.put(:status, :dispatching)
-    end
+    send(router, {:design_edge_settled, self(), outcome})
   end
 
-  # Idempotent by construction on the `PreplanStep` side (`{:ok, :already_settled}`
-  # / `{:ok, :already_open}` short-circuit before any fire), which is what makes
-  # calling it on EVERY tick free. Gated on the pre-plan window: status
-  # `planning` with no plan of any status yet.
-  #
-  # The re-read is load-bearing. `start/1` can move the cursor to `"designing"`,
-  # and `design_step_open?/1` below reads the cursor — handing it the pre-start
-  # struct would dispatch the planner straight into the step this stage exists
-  # to wait for.
-  defp maybe_start_design_step(nil, _state), do: nil
+  defp close_open_step(task_id) do
+    case Tasks.get_task_detail(task_id) do
+      nil ->
+        :ok
 
-  defp maybe_start_design_step(task, %State{} = state) do
-    if task.status == "planning" and Tasks.latest_plan(task.id) == nil do
-      _ = safe_start_design_step(task)
-      Tasks.get_task_detail(state.task_id) || task
-    else
-      task
+      task ->
+        if PreplanStep.open?(task) do
+          PreplanStep.expire(task, Lifecycle.step_timeout_ms())
+        end
     end
-  end
-
-  defp safe_start_design_step(task) do
-    PreplanStep.start(task)
   rescue
     e ->
-      Logger.warning("[TaskRouter] design step start raised: #{Exception.message(e)}")
-      {:error, :start_raised}
+      Logger.warning("[TaskRouter] design edge close raised: #{Exception.message(e)}")
+      :ok
   catch
     :exit, reason ->
-      Logger.warning("[TaskRouter] design step start exited: #{inspect(reason)}")
-      {:error, :start_exited}
+      Logger.warning("[TaskRouter] design edge close exited: #{inspect(reason)}")
+      :ok
   end
 
   # TAIL-stall fix (2026-07-22), direction (3): a settled stack member has an

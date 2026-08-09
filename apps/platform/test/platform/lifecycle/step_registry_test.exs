@@ -36,12 +36,31 @@ defmodule Platform.Lifecycle.StepRegistryTest do
 
   describe "fetch/2" do
     test "returns {:ok, entry} with an {m, f, 1} mfa for a built-in", %{registry: registry} do
-      %{name: name} = hd(StepRegistry.built_in_steps())
+      # Every shipped entry, not `hd/1`. A single-entry check silently stopped
+      # covering the allowlist the moment a second step landed (task 019fe1b7
+      # stage 2 added the designer), and it would have kept passing while
+      # naming whichever step happened to sort first.
+      for %{name: name, kind: kind} <- StepRegistry.built_in_steps() do
+        assert {:ok, entry} = StepRegistry.fetch(name, registry)
+        assert %{name: ^name, kind: ^kind} = entry
+        assert {mod, fun, 1} = entry.mfa
+        assert is_atom(mod) and is_atom(fun)
+      end
+    end
 
-      assert {:ok, entry} = StepRegistry.fetch(name, registry)
-      assert %{name: ^name, kind: :deterministic} = entry
-      assert {mod, fun, 1} = entry.mfa
-      assert is_atom(mod) and is_atom(fun)
+    test "the shipped kinds are the declared ones, and they are not all the same" do
+      kinds = StepRegistry.built_in_steps() |> Enum.map(& &1.kind) |> Enum.uniq() |> Enum.sort()
+
+      # `:agent` is not decoration. An allowlist whose entries were all
+      # `:deterministic` would pass an implementation that ignored `kind`
+      # entirely, so the discriminating claim is that BOTH appear.
+      assert kinds == [:agent, :deterministic]
+
+      assert %{kind: :agent} =
+               Enum.find(StepRegistry.built_in_steps(), &(&1.name == "design_preplan"))
+
+      assert %{kind: :deterministic} =
+               Enum.find(StepRegistry.built_in_steps(), &(&1.name == "notify"))
     end
 
     test "returns {:error, :unknown_step} for an unregistered name", %{registry: registry} do

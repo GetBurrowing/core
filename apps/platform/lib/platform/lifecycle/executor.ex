@@ -157,14 +157,22 @@ defmodule Platform.Lifecycle.Executor do
       MUST inject these; a test that waits out the shipped 30-minute default
       is a defect, not thoroughness.
     * `:project` — skip the project load (the caller usually holds it).
+    * `:steps` — run THESE step declarations instead of resolving the
+      project's. The one caller is a migrated hook whose step is shipped
+      rather than configured (see `Platform.Lifecycle.Edges.default_steps/1`);
+      it is not a way to smuggle a step name past the registry, because
+      resolution still goes through `StepRegistry.fetch/2` and nowhere else.
     * `:registry` — the `StepRegistry` server to resolve names against.
     * `:reply_to` — where async steps deliver settlement. Defaults to
       `self()`, which is the process doing the awaiting.
   """
   @spec run_edge(TaskSchema.t(), binary(), keyword()) :: {outcome(), map()}
   def run_edge(%TaskSchema{} = task, edge_name, opts \\ []) when is_binary(edge_name) do
-    project = Keyword.get_lazy(opts, :project, fn -> Tasks.get_project(task.project_id) end)
-    steps = if project, do: Lifecycle.resolve_steps(project, edge_name), else: []
+    steps =
+      Keyword.get_lazy(opts, :steps, fn ->
+        project = Keyword.get_lazy(opts, :project, fn -> Tasks.get_project(task.project_id) end)
+        if project, do: Lifecycle.resolve_steps(project, edge_name), else: []
+      end)
 
     limit = Keyword.get(opts, :edge_run_limit, Lifecycle.edge_run_limit())
     run_seq = Runs.next_run_seq(task.id, edge_name)
@@ -459,7 +467,15 @@ defmodule Platform.Lifecycle.Executor do
   defp start_step(step, name, state) do
     case StepRegistry.fetch(name, state.registry) do
       {:ok, %{mfa: {mod, fun, 1}}} ->
-        context = %{task: state.task, edge: state.edge, reply_to: state.reply_to}
+        context = %{
+          task: state.task,
+          edge: state.edge,
+          reply_to: state.reply_to,
+          # A step that spawns its own watcher needs the budget the executor
+          # will actually wait for, or the watcher outlives the run it serves.
+          step_timeout_ms: state.step_timeout_ms
+        }
+
         invoke(mod, fun, step, context)
 
       {:error, :unknown_step} ->

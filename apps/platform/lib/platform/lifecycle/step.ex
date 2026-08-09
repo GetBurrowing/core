@@ -14,11 +14,16 @@ defmodule Platform.Lifecycle.Step do
 
   This is deliberate and is not a "for now" shape. A single synchronous
   `run/2` would force the pipeline executor to hold a caller's process for an
-  agent's wall clock, and there is a worked example of where that leads in
+  agent's wall clock, and there was a worked example of where that leads in
   this repo: `Platform.Orchestration.TaskRouter`'s
-  `@design_step_timeout_ms 1_800_000` — a thirty-minute hold, hardcoded,
-  because the only place the wait could live was inside the caller. Hiding
-  the async case behind a sync signature reintroduces exactly that.
+  `@design_step_timeout_ms 1_800_000` — a thirty-minute hold, with its own
+  timer, arm/cancel pair and expiry path, because the only place the wait
+  could live was inside the caller. Hiding the async case behind a sync
+  signature reintroduces exactly that.
+
+  That example is now historical: task 019fe1b7 stage 2 moved the design step
+  onto this behaviour (`Platform.Design.PreplanLifecycleStep`) and deleted the
+  router's copy of the machinery.
 
   There is consequently NO second behaviour and no separate sync path. A
   `:sync` step is one whose `start/2` happens to always return terminally.

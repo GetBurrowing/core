@@ -65,7 +65,7 @@ defmodule Platform.Lifecycle.StepRegistry do
   runtime through `:lifecycle_allowed_webhook_hosts` application config,
   and tests inject their own with `Application.put_env/3`. The
   attribute-wrapped-in-`Application.get_env/3` shape mirrors
-  `Platform.Orchestration.TaskRouter.design_step_timeout_ms/0`.
+  `Platform.Lifecycle.step_timeout_ms/0`.
 
   With the default empty list, `webhook_host_allowed?/1` denies every
   host — fail-closed.
@@ -82,12 +82,26 @@ defmodule Platform.Lifecycle.StepRegistry do
   use GenServer
 
   @type step_name :: binary()
-  @type kind :: :deterministic
+
+  # `:agent` arrived with the designer (task 019fe1b7 stage 2). It is a
+  # DESCRIPTION, not a dispatch switch — nothing branches on it — and it is
+  # kept distinct from `:deterministic` because an operator reading the
+  # allowlist needs to know which entries hand control to something that can
+  # take minutes and die silently. Compare `Platform.Lifecycle.Step.kind/0`,
+  # which answers the narrower question of whether `start/2` settles inline.
+  @type kind :: :deterministic | :agent
   @type entry :: %{name: step_name(), mfa: {module(), atom(), 1}, kind: kind()}
+
+  @kinds [:deterministic, :agent]
 
   # Shipped allowlist. Single source of truth — seeded in `init/1` and
   # exposed via `built_in_steps/0`. Keep this small; see moduledoc.
   @built_in_steps [
+    %{
+      name: "design_preplan",
+      mfa: {Platform.Design.PreplanLifecycleStep, :start, 1},
+      kind: :agent
+    },
     %{name: "notify", mfa: {Platform.Lifecycle.Steps, :notify, 1}, kind: :deterministic}
   ]
 
@@ -116,7 +130,7 @@ defmodule Platform.Lifecycle.StepRegistry do
   def register(entry, server \\ __MODULE__)
 
   def register(%{name: name, mfa: {mod, fun, 1}, kind: kind} = entry, server)
-      when is_binary(name) and is_atom(mod) and is_atom(fun) and kind in [:deterministic] do
+      when is_binary(name) and is_atom(mod) and is_atom(fun) and kind in @kinds do
     GenServer.call(server, {:register, entry})
   end
 
