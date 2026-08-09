@@ -1,5 +1,14 @@
 defmodule Platform.LifecycleTest do
-  use Platform.DataCase, async: true
+  # NOT async. These cases set application-global lifecycle config keys
+  # (:lifecycle_step_registry, :lifecycle_allowed_webhook_hosts) so that a
+  # changeset validator, which has nowhere to thread a server argument, can
+  # find a per-case registry. Application env is VM-global: run concurrently,
+  # one case's on_exit cleanup lands inside another's assertion and the
+  # registry lookup falls back to the boot singleton, which is disabled in
+  # test env. Measured at 1 failure in 5 runs on a clean tree, with a
+  # ROTATING failing test name. Serialising these files is the fix; making
+  # the key process-local is not possible while the seam is Application env.
+  use Platform.DataCase, async: false
 
   import Platform.TenancyFixtures
 
