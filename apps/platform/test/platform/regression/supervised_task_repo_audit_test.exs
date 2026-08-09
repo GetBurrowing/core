@@ -189,6 +189,10 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     :start_meeting_intent_dispatcher,
     :start_summarizer_sweeper,
     :start_stall_registry,
+    # Task 019fe1b6 — lifecycle hook step registry (ADR-0046). Pure
+    # in-memory, never touches Repo, but tests start per-case instances
+    # so registered steps cannot leak between cases.
+    :start_lifecycle_step_registry,
     :start_security_sweeper,
     :start_space_purger,
     # Task 019f4eaa — container retention purger. Sibling of
