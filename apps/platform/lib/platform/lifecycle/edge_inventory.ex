@@ -224,6 +224,25 @@ defmodule Platform.Lifecycle.EdgeInventory do
   for a stack member. Terminality is read off the table — a status with no
   outbound edges, or `done` — never off the presence of a deploy stage.
 
+  ## PREMISE CORRECTION (task 019fe1b7 stage 6, found by mutation probe)
+
+  Stage 3 recorded that the worktree-cleanup effect "hangs on
+  `terminal_edges/0`". For the `->cancelled` half that is true. For the
+  `->done` half **it is not**: `Platform.Lifecycle.Edges.default_steps/1`
+  tests `completion_edges/0` FIRST, and that branch declares the cleanup step
+  itself. Shrinking `terminal_edges/0` to `["deploying->done"]` therefore
+  leaves a stack member's `in_review -> done` cleanup fully intact — the
+  behavioural test still removes the directory — and only the `->cancelled`
+  edges lose it.
+
+  Consequence for anyone editing either set: `terminal_edges/0` is the sole
+  declaration path for `->cancelled` ONLY. The `->done` edges are declared by
+  `completion_edges/0`, so a change intended to affect a completion edge that
+  touches only `terminal_edges/0` is a no-op with no failing test to say so.
+  Both sets must be read together. Proved by removing the cleanup step from
+  the completion branch, which reddens ten tests including the end-to-end
+  `in_review -> done` removal.
+
   `cancelled` is included because a run can genuinely exist for a cancelled
   task: `in_progress -> cancelled` is legal, runs are started while a task is
   in progress, and the cancellation teardown abandons leases without removing
