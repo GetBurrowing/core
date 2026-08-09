@@ -27,11 +27,26 @@ defmodule Platform.Lifecycle.TestSteps.Sync do
   def kind, do: :sync
 
   @impl true
-  def start(_step_config, _context) do
+  def start(step_config, _context) do
     calls = Process.get({:lifecycle_test_step, :sync_calls}, 0)
     Process.put({:lifecycle_test_step, :sync_calls}, calls + 1)
-    Process.get({:lifecycle_test_step, :sync_outcome}, {:completed, :ok})
+
+    name = Map.get(step_config, "step")
+    ran = Process.get({:lifecycle_test_step, :ran}, [])
+    Process.put({:lifecycle_test_step, :ran}, ran ++ [name])
+
+    # Per-NAME seeding first, so one pipeline can have step 2 divert while
+    # steps 1 and 3 complete. A single global outcome key cannot express the
+    # divert-in-the-middle fixture the halt test needs.
+    Process.get(
+      {:lifecycle_test_step, :sync_outcome, name},
+      Process.get({:lifecycle_test_step, :sync_outcome}, {:completed, :ok})
+    )
   end
+
+  @doc "Step names this process has run, in order. `[]` when nothing ran."
+  @spec ran() :: [String.t() | nil]
+  def ran, do: Process.get({:lifecycle_test_step, :ran}, [])
 end
 
 defmodule Platform.Lifecycle.TestSteps.Async do
@@ -73,13 +88,27 @@ defmodule Platform.Lifecycle.TestSteps.Async do
   def kind, do: :async
 
   @impl true
-  def start(_step_config, context) do
+  def start(step_config, context) do
     ref = make_ref()
+
+    name = Map.get(step_config, "step")
+    ran = Process.get({:lifecycle_test_step, :ran}, [])
+    Process.put({:lifecycle_test_step, :ran}, ran ++ [name])
+
     reply_to = Map.get(context, :reply_to, self())
     Process.put({:lifecycle_test_step, :async_reply_to, ref}, reply_to)
 
     calls = Process.get({:lifecycle_test_step, :async_calls}, 0)
     Process.put({:lifecycle_test_step, :async_calls}, calls + 1)
+
+    # Opt-in auto-settle, for exercising an awaiting caller's receive path
+    # without threading a ref only the caller holds. Absent by default —
+    # NEVER SETTLING remains this module's default behaviour, because that is
+    # the case the budgets exist for.
+    case Process.get({:lifecycle_test_step, :async_autosettle}) do
+      nil -> :noop
+      outcome -> send(reply_to, {:lifecycle_step_settled, ref, outcome})
+    end
 
     {:running, ref}
   end
