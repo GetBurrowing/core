@@ -6,7 +6,19 @@ defmodule Platform.Lifecycle do
   Thin context. `resolve_pipeline/1` and `resolve_steps/2` return
   **data**. Nothing here calls a step, awaits one, honours a divert,
   halts a pipeline or enforces a budget — that is the runner member of
-  this stack.
+  this stack. It also holds the two budget knobs the runner will read.
+
+  ## Two budgets, and one can kill a step inside the other
+
+  `step_timeout_ms/0` bounds ONE step; `edge_budget_ms/0` bounds the WHOLE
+  pipeline on an edge. They are separate knobs with separate env keys and
+  neither is derived from the other.
+
+  The consequence a step author must know (ADR-0046 Amendment 1 decision 5):
+  **an edge budget can kill a step that was comfortably inside its own
+  per-step budget.** You cannot reason about your step's timeout in
+  isolation — the effective limit depends on what else is configured on the
+  same edge, and on how long those steps happened to take on that run.
 
   ## Resolution consults exactly one source
 
@@ -49,6 +61,35 @@ defmodule Platform.Lifecycle do
 
   @config_key "lifecycle_pipeline"
 
+  # ADR-0046 Amendment 1 decision 5 — TWO budgets, and neither is derived from
+  # the other.
+  #
+  # A per-step budget alone does not bound an edge: three awaited agent steps
+  # each comfortably inside a 30-minute step timeout is a 90-minute silent
+  # stall in which no single component is misbehaving and there is nothing to
+  # page on. Only the edge budget can observe the aggregate.
+  #
+  # The COST, stated where the code lives because a step author will not read
+  # the ADR: an edge budget can kill a step that was well inside its own
+  # budget. Nobody can reason about their step's timeout in isolation — the
+  # effective limit depends on what else is configured on the same edge and on
+  # how long those steps happened to take on that run.
+  #
+  # Deriving one from the other (`edge = n * step`, or `step = edge / n`)
+  # collapses that into a single knob and would make the two distinct timeout
+  # behaviours indistinguishable — both of the runner's budget tests would
+  # pass on a one-budget implementation. Hence separate attributes and
+  # separate env keys, asserted independent in `step_test.exs`.
+  #
+  # As in `Platform.Orchestration.TaskRouter`, the literal lives here and the
+  # READ goes through `Application.get_env/3` so a test can inject a small
+  # value per-case, and there is deliberately NO `config/test.exs` override —
+  # a test-only value silently becoming the production one is the failure this
+  # stack is written against. `default_*` exposes the shipped literal so a
+  # guard can assert it independently of whatever a running test injected.
+  @step_timeout_ms 1_800_000
+  @edge_budget_ms 3_600_000
+
   @doc """
   The project's configured pipeline map, or `%{}` when it has none.
 
@@ -81,4 +122,45 @@ defmodule Platform.Lifecycle do
   @doc "The `config` key a project's pipeline lives under."
   @spec config_key() :: binary()
   def config_key, do: @config_key
+
+  @doc """
+  How long ONE awaited step may take before the executor kills it and records
+  `timed_out`, in milliseconds.
+
+  Read through `Application.get_env/3` on every use so a test can inject a
+  small value for one case without a `config/test.exs` entry.
+  """
+  @spec step_timeout_ms() :: pos_integer()
+  def step_timeout_ms do
+    Application.get_env(:platform, :lifecycle_step_timeout_ms, @step_timeout_ms)
+  end
+
+  @doc """
+  The SHIPPED per-step budget (30 minutes), independent of any injected
+  config. Exposed so a guard can prove a test-only value has not become the
+  production one.
+  """
+  @spec default_step_timeout_ms() :: pos_integer()
+  def default_step_timeout_ms, do: @step_timeout_ms
+
+  @doc """
+  How long the WHOLE pipeline on one edge may take before the executor stops
+  it, in milliseconds.
+
+  Independent of `step_timeout_ms/0` — not a multiple of it, not derived from
+  it. This budget can kill a step that was inside its own; see the comment on
+  `@edge_budget_ms`.
+  """
+  @spec edge_budget_ms() :: pos_integer()
+  def edge_budget_ms do
+    Application.get_env(:platform, :lifecycle_edge_budget_ms, @edge_budget_ms)
+  end
+
+  @doc """
+  The SHIPPED per-edge budget (60 minutes), independent of any injected
+  config. Exposed so a guard can prove a test-only value has not become the
+  production one.
+  """
+  @spec default_edge_budget_ms() :: pos_integer()
+  def default_edge_budget_ms, do: @edge_budget_ms
 end
