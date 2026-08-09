@@ -25,6 +25,7 @@ defmodule PlatformWeb.PipelineLiveTest do
   use PlatformWeb.ConnCase, async: false
 
   import Ecto.Query
+  import ExUnit.CaptureLog
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
@@ -373,7 +374,11 @@ defmodule PlatformWeb.PipelineLiveTest do
       conn: conn,
       project: project
     } do
-      populated_cohort(project)
+      # A cohort whose build phase dwarfs the other two: 1h plan, 200h build,
+      # 1h deploy puts `deploy` at about half a percent of the bar. The
+      # ordinary populated cohort has no segment narrow enough to trigger the
+      # rule, so it would pass this test whatever the rule did.
+      Enum.each(1..20, &decomposable_task(project, 12 + rem(&1, 5), 200))
 
       {:ok, view, html} = conn |> authenticated_conn() |> live("/control/pipeline")
 
@@ -382,21 +387,77 @@ defmodule PlatformWeb.PipelineLiveTest do
       assert has_element?(view, "#phase-segment-deploying")
       deploying = view |> element("#phase-segment-deploying") |> render()
 
+      assert [width] = Regex.run(~r/width: ([\d.]+)%/, deploying, capture: :all_but_first)
+      assert String.to_float(width) < 1.0
+
       # The value is still reachable — in the title, and in the table row.
       assert deploying =~ "median"
       assert view |> element("#phase-median-deploying") |> render() =~ "h"
 
-      # No `truncate` class survives on a bar segment: truncation is the
-      # mechanism being removed, so its absence is asserted, not just the
-      # absence of one ellipsis.
+      # The label element is absent, not merely un-ellipsised. Asserting only
+      # the absence of `truncate` or of `…` would stay green if the label were
+      # rendered in full and overflowed out of the segment instead.
+      refute deploying =~ ~r/<span[^>]*font-mono/
+
+      # ...and the mechanism is gone as well as its symptom.
       refute deploying =~ "truncate"
-
-      # The wide segment keeps its label, so a dropped label is a distinction
-      # rather than the page having stopped labelling segments at all.
-      assert view |> element("#phase-segment-in_progress") |> render() =~ "h"
-
       refute html =~ "…"
+
+      # Anti-vacuity for the drop: the wide segment DOES carry a label span,
+      # so a missing one is a width decision rather than the page having
+      # stopped labelling segments at all.
+      wide = view |> element("#phase-segment-in_progress") |> render()
+
+      assert wide =~ ~r/<span[^>]*font-mono/
+      assert wide =~ "h"
     end
+
+    # The drop rule is scoped to engine segments on purpose. On a human-wait
+    # segment the in-segment number is one of the four non-colour carriers of
+    # the split — the human token is 2.55:1 against the light surface, under
+    # the 3:1 floor, and may not be darkened — so dropping it there would
+    # quietly weaken an accessibility mitigation instead of tidying a label.
+    # Too narrow for its label is a defect to report, not to absorb.
+    test "a human-wait segment keeps its label even when too narrow, and says so", %{
+      conn: conn,
+      project: project
+    } do
+      Enum.each(1..20, fn i ->
+        project |> decomposable_task(12 + rem(i, 5), 200) |> close_deploy_as_human()
+      end)
+
+      log =
+        capture_log(fn ->
+          {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+
+          # Anti-vacuity on both preconditions: the segment must actually read
+          # as human wait AND actually be under the label width, or "kept the
+          # label" is what an engine segment would have done anyway.
+          assert view |> element("#phase-row-deploying") |> render() =~ "human wait"
+
+          deploying = view |> element("#phase-segment-deploying") |> render()
+
+          assert [width] = Regex.run(~r/width: ([\d.]+)%/, deploying, capture: :all_but_first)
+          assert String.to_float(width) < 1.0
+
+          assert deploying =~ ~r/<span[^>]*font-mono/
+          assert deploying =~ "h"
+        end)
+
+      assert log =~ "human-wait segment deploying is too narrow for its label"
+    end
+  end
+
+  # The interval's `human` flag comes from whoever CLOSED it, so the deploy
+  # phase is made human by the transition that ends it, not by the one that
+  # starts it.
+  defp close_deploy_as_human(task) do
+    {1, _} =
+      PhaseTransition
+      |> where([t], t.task_id == ^task.id and t.to_status == "done")
+      |> Repo.update_all(set: [actor_kind: "user"])
+
+    task
   end
 
   describe "the instrumentation window" do
