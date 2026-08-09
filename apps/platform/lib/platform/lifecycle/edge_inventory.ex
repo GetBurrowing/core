@@ -98,6 +98,31 @@ defmodule Platform.Lifecycle.EdgeInventory do
   outcome — emphatically not `not_applicable`, which is reserved for an edge
   that WAS traversed with an empty configured pipeline.
 
+  ## PREMISE CORRECTION (task 019fe1b7 stage 3): a run is never persisted
+
+  The stage-3 specification said to "resolve the task's run(s)". There is no
+  durable way to. `Platform.Execution.Run` is a VALUE STRUCT held by a
+  `RunServer` process; no migration creates a runs table, no column anywhere
+  in the schema stores a `run_id`, and the id is randomly generated in
+  `Platform.Execution.start_run/2` rather than derived from the task. The only
+  task->run index that exists is the live process registry, which is what
+  `Platform.Execution.run_ids_for_task/1` reads.
+
+  The consequence for any effect hung on a terminal edge: it reaches the runs
+  whose servers are still ALIVE at the transition, and nothing else. After a
+  node restart, or once a run's server has exited, its workspace is
+  unreachable from the task. Widening that needs a durable index, which is a
+  migration nobody has written.
+
+  ## The shipped default was unreachable until stage 3
+
+  `Platform.Lifecycle.Edges.default_steps/1` documented itself as what keeps a
+  migrated hook firing for an unconfigured project — and NOTHING on a shipped
+  path consulted it: the designer and architect fire points pass `steps:`
+  explicitly, and the status-edge fire point deliberately passes nothing at
+  all. `Platform.Lifecycle.resolve_steps/2` now falls back to it, which is
+  what makes a declared-but-unconfigured effect able to fire.
+
   ## The declarable edge set is DERIVED, never transcribed
 
   `status_edges/0` computes the task-status half of the set from
@@ -119,6 +144,11 @@ defmodule Platform.Lifecycle.EdgeInventory do
   # have one live in `Platform.Lifecycle.Edges` and are read from there.
   @backlog_created_edge "backlog.created"
 
+  # The statuses a task's life ends in. Two, not one: `done` is the success
+  # terminal and `cancelled` is the abandonment terminal, and a run — with a
+  # worktree on disk — can exist for either.
+  @terminal_statuses ["done", "cancelled"]
+
   @doc """
   The edge key for one status transition. Member 3's `"<from>-><to>"` shape,
   in ONE place so the fire point and the config validator cannot disagree
@@ -138,6 +168,40 @@ defmodule Platform.Lifecycle.EdgeInventory do
     |> Enum.flat_map(fn {from, tos} -> Enum.map(tos, &edge_name(from, &1)) end)
     |> Enum.sort()
   end
+
+  @doc """
+  Every edge that ends a task's life: the inbound edges to `done` and to
+  `cancelled`, DERIVED from the transition table.
+
+  ## Terminal means "the last transition", not "after the deploy agent"
+
+  `deploying` is where a task ends TODAY and will not be forever, and it is
+  already not where every task ends: an ADR-0041 stack member rides the
+  rollup-PR merge fan-out, owns no per-task deploy stage, and goes
+  `in_review -> done` (or `in_progress -> done`) without ever entering
+  `deploying`. Anything hung on `deploying->done` alone silently never fires
+  for a stack member. Terminality is read off the table — a status with no
+  outbound edges, or `done` — never off the presence of a deploy stage.
+
+  `cancelled` is included because a run can genuinely exist for a cancelled
+  task: `in_progress -> cancelled` is legal, runs are started while a task is
+  in progress, and the cancellation teardown abandons leases without removing
+  any directory.
+  """
+  @spec terminal_edges() :: [binary()]
+  def terminal_edges do
+    Tasks.valid_task_transitions()
+    |> Enum.flat_map(fn {from, tos} ->
+      tos
+      |> Enum.filter(&(&1 in @terminal_statuses))
+      |> Enum.map(&edge_name(from, &1))
+    end)
+    |> Enum.sort()
+  end
+
+  @doc "The statuses a task's life can end in."
+  @spec terminal_statuses() :: [binary()]
+  def terminal_statuses, do: @terminal_statuses
 
   @doc "The edge fired when a ticket is created. Effects and notifies only."
   @spec backlog_created_edge() :: binary()

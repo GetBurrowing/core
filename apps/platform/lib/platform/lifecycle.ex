@@ -56,6 +56,7 @@ defmodule Platform.Lifecycle do
   consulted the project row only.
   """
 
+  alias Platform.Lifecycle.Edges
   alias Platform.Lifecycle.PipelineConfig
   alias Platform.Tasks.Project
 
@@ -129,12 +130,32 @@ defmodule Platform.Lifecycle do
 
   Order is the declared order — it is the pipeline's semantics, not an
   incidental property of the encoding.
+
+  ## The shipped default is the fallback, and it had to become reachable
+
+  A project that configures nothing for an edge resolves to
+  `Platform.Lifecycle.Edges.default_steps/1` rather than to `[]`.
+
+  Before task 019fe1b7 stage 3 this function consulted the project row only,
+  and NOTHING consulted `default_steps/1` on a path a shipped caller could
+  take: the designer and architect fire points pass `steps:` explicitly, and
+  the status-edge fire point deliberately does not pass `steps:` at all. So a
+  "shipped default" existed, was documented as the thing that keeps a
+  migrated hook firing for unconfigured projects, and could not fire. An
+  effect declared on a terminal edge would have had the same fate.
+
+  A project that DOES configure the edge replaces the default wholesale — no
+  merge, matching decision 8's semantics for org defaults.
   """
   @spec resolve_steps(Project.t() | struct(), binary()) :: [map()]
   def resolve_steps(%Project{} = project, edge) when is_binary(edge) do
     project
     |> resolve_pipeline()
     |> PipelineConfig.steps_for(edge)
+    |> case do
+      [] -> Edges.default_steps(edge)
+      steps -> steps
+    end
   end
 
   @doc "The `config` key a project's pipeline lives under."

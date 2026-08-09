@@ -97,6 +97,45 @@ defmodule Platform.Execution do
     RunServer.transition(run_id, :cancelled)
   end
 
+  @doc """
+  Run ids currently known to the VM for `task_id`.
+
+  ## This is a LIVE index, and it is the only one that exists
+
+  Recorded here because the absence is not obvious and a caller will
+  otherwise assume otherwise (task 019fe1b7 stage 3 assumed it and was
+  wrong): **a run is never persisted.** `Platform.Execution.Run` is a value
+  struct held by a `RunServer` process; no migration creates a runs table,
+  no column anywhere stores a `run_id`, and `run_id` is a random id
+  generated in `start_run/2` rather than derived from the task. So the only
+  way to get from a task to its runs is to ask the processes that are still
+  alive, which is what this does.
+
+  The consequence for callers: an empty list does NOT mean the task never
+  had a run. It means no RunServer for it is alive right now — which, after
+  a node restart or once a run's server has exited, is the usual case.
+
+  Implemented as a registry select plus a `get_run/1` per candidate rather
+  than a registry value match, because the registry key carries only the run
+  id.
+  """
+  @spec run_ids_for_task(String.t()) :: [String.t()]
+  def run_ids_for_task(task_id) when is_binary(task_id) do
+    Platform.Execution.Registry
+    |> Registry.select([{{{:run_server, :"$1"}, :_, :_}, [], [:"$1"]}])
+    |> Enum.filter(&run_belongs_to_task?(&1, task_id))
+  end
+
+  defp run_belongs_to_task?(run_id, task_id) do
+    match?({:ok, %Run{task_id: ^task_id}}, get_run(run_id))
+  catch
+    # NARROW, and only this: the server was in the registry when we selected
+    # and had exited by the time we called it. That race is not a failure of
+    # whatever the caller is doing — the run is simply gone. Nothing else is
+    # caught here; a caller's own errors must still surface.
+    :exit, _reason -> false
+  end
+
   @doc "Returns the current run struct."
   @spec get_run(String.t()) :: {:ok, Run.t()} | {:error, term()}
   def get_run(run_id) do

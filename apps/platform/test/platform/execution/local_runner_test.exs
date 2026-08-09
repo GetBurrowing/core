@@ -370,6 +370,138 @@ defmodule Platform.Execution.LocalRunnerTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Worktree REMOVAL (task 019fe1b7 stage 3). Before this stage the module
+  # that creates worktrees had no removal function at all — verified at the
+  # base commit, not assumed.
+  # ---------------------------------------------------------------------------
+
+  describe "LocalWorkspace.worktree_path/2 containment" do
+    test "a run id of \"..\" is REFUSED, because the sanitiser does not stop it" do
+      root = temp_dir("escape-root")
+
+      # THE HAZARD IS REAL IN THIS FIXTURE, which is the assertion that makes
+      # the refusal below mean something: `safe_run_segment/1` replaces
+      # anything outside [A-Za-z0-9._-] with `_`, and `.` is INSIDE that set.
+      # So ".." survives sanitisation intact and the naive derivation lands
+      # one level ABOVE the run root. Asserting the refusal without asserting
+      # the hazard would be true by construction.
+      naive = Path.expand(Path.join([Path.expand(root), "..", "git"]))
+      refute String.starts_with?(naive, Path.expand(root) <> "/")
+
+      assert {:error, {:unsafe_run_id, ".."}} = LocalWorkspace.worktree_path("..", run_root: root)
+    end
+
+    test "path separators are sanitised INTO the root, not refused" do
+      # A discriminating pair: `/` is outside the allowed set and becomes `_`,
+      # so a separator-bearing id stays contained and is legal. Only the ids
+      # that genuinely escape are refused — a check that refused both would
+      # not distinguish sanitisation from containment.
+      root = temp_dir("escape-root")
+      expanded = Path.expand(root)
+
+      assert {:ok, path} = LocalWorkspace.worktree_path("/etc/passwd", run_root: root)
+      assert path == Path.join([expanded, "_etc_passwd", "git"])
+
+      # `"../.."` too: both separators are replaced, so it collapses to the
+      # single harmless segment `".._.."` rather than climbing twice. The one
+      # id that escapes is a bare `".."` — which is exactly why the refusal is
+      # a containment check on the DERIVED path and not a blacklist of
+      # substrings.
+      assert {:ok, twice} = LocalWorkspace.worktree_path("../..", run_root: root)
+      assert twice == Path.join([expanded, ".._..", "git"])
+
+      assert {:ok, nested} = LocalWorkspace.worktree_path("a/../../b", run_root: root)
+      assert String.starts_with?(nested, expanded <> "/")
+    end
+
+    test "remove_git_worktree/2 refuses an escaping run id INSTEAD of deleting" do
+      root = temp_dir("escape-remove-root")
+      sibling = Path.join(Path.dirname(Path.expand(root)), "git")
+      File.mkdir_p!(sibling)
+      File.write!(Path.join(sibling, "precious.txt"), "someone else's work\n")
+
+      assert {:error, {:unsafe_run_id, ".."}} =
+               LocalWorkspace.remove_git_worktree("..", run_root: root)
+
+      # What the containment check is FOR: the directory the naive derivation
+      # would have pointed at is untouched.
+      assert File.exists?(Path.join(sibling, "precious.txt"))
+    end
+  end
+
+  describe "LocalWorkspace.remove_git_worktree/2" do
+    test "removes a real worktree and prunes the repo's registration" do
+      {repo_path, branch} = setup_temp_git_repo()
+      run_id = unique_run_id()
+      root = temp_dir("wt-remove")
+
+      {:ok, workspace} = LocalWorkspace.ensure_workspace(run_fixture(run_id), run_root: root)
+      {:ok, wt_path} = LocalWorkspace.setup_git_worktree(workspace, repo_path, branch: branch)
+      assert File.dir?(wt_path)
+
+      assert {:ok, :removed} = LocalWorkspace.remove_git_worktree(run_id, run_root: root)
+      refute File.exists?(wt_path)
+
+      {listing, 0} = System.cmd("git", ["worktree", "list"], cd: repo_path)
+      refute listing =~ wt_path
+    end
+
+    test "an absent worktree is {:ok, :absent} — checked BEFORE acting" do
+      root = temp_dir("wt-absent")
+
+      assert {:ok, :absent} =
+               LocalWorkspace.remove_git_worktree(unique_run_id(), run_root: root)
+    end
+
+    test "removing twice is {:ok, :removed} then {:ok, :absent}, never an error" do
+      {repo_path, branch} = setup_temp_git_repo()
+      run_id = unique_run_id()
+      root = temp_dir("wt-remove-twice")
+
+      {:ok, workspace} = LocalWorkspace.ensure_workspace(run_fixture(run_id), run_root: root)
+      {:ok, _wt} = LocalWorkspace.setup_git_worktree(workspace, repo_path, branch: branch)
+
+      assert {:ok, :removed} = LocalWorkspace.remove_git_worktree(run_id, run_root: root)
+      assert {:ok, :absent} = LocalWorkspace.remove_git_worktree(run_id, run_root: root)
+    end
+
+    test "a plain workspace directory with no git state is removed directly" do
+      run_id = unique_run_id()
+      root = temp_dir("wt-plain")
+
+      {:ok, workspace} = LocalWorkspace.ensure_workspace(run_fixture(run_id), run_root: root)
+      plain = Path.join(workspace.path, "git")
+      File.mkdir_p!(plain)
+
+      assert {:ok, :removed} = LocalWorkspace.remove_git_worktree(run_id, run_root: root)
+      refute File.exists?(plain)
+    end
+
+    test "a DIRTY worktree git refuses to remove surfaces as an error, not :absent" do
+      # The failure that must NOT be swallowed. `--force` would make this
+      # green and would be the bug: a worktree holding uncommitted work is
+      # exactly the one a human still needs.
+      {repo_path, branch} = setup_temp_git_repo()
+      run_id = unique_run_id()
+      root = temp_dir("wt-dirty")
+
+      {:ok, workspace} = LocalWorkspace.ensure_workspace(run_fixture(run_id), run_root: root)
+      {:ok, wt_path} = LocalWorkspace.setup_git_worktree(workspace, repo_path, branch: branch)
+      File.write!(Path.join(wt_path, "uncommitted.txt"), "work in progress\n")
+
+      assert {:error, {:worktree_remove_failed, code, output}} =
+               LocalWorkspace.remove_git_worktree(run_id, run_root: root)
+
+      assert code != 0
+      assert is_binary(output)
+
+      # And the work is still there. An error that had deleted anyway would
+      # satisfy the tuple assertion alone.
+      assert File.exists?(Path.join(wt_path, "uncommitted.txt"))
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # GitHub proof-of-life push path (local bare repo)
   # ---------------------------------------------------------------------------
 

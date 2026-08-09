@@ -103,6 +103,7 @@ defmodule Platform.Lifecycle.Edges do
   claim with a silent hole is not.
   """
 
+  alias Platform.Lifecycle.EdgeInventory
   alias Platform.Lifecycle.StepRun
 
   @designer_edge "planning.design_requested"
@@ -110,6 +111,7 @@ defmodule Platform.Lifecycle.Edges do
 
   @designer_step "design_preplan"
   @architect_step "architect_gate"
+  @worktree_cleanup_step "worktree_cleanup"
 
   @doc "Edge name for the designer hook, fired from the router's dispatch tick."
   @spec designer_edge() :: binary()
@@ -135,6 +137,10 @@ defmodule Platform.Lifecycle.Edges do
   @doc "The registry name of the architect gate's step. A NAME, never a module."
   @spec architect_step_name() :: binary()
   def architect_step_name, do: @architect_step
+
+  @doc "The registry name of the terminal worktree-cleanup effect. A NAME."
+  @spec worktree_cleanup_step_name() :: binary()
+  def worktree_cleanup_step_name, do: @worktree_cleanup_step
 
   @doc """
   The steps that run on an edge when the project configures none.
@@ -171,6 +177,24 @@ defmodule Platform.Lifecycle.Edges do
 
   def default_steps(@architect_edge) do
     [%{"step" => @architect_step, "await" => true, "can_divert" => true}]
+  end
+
+  # THE TERMINAL EFFECT (task 019fe1b7 stage 3). Declared on EVERY inbound
+  # edge to `done` or `cancelled`, derived from the transition table by
+  # `EdgeInventory.terminal_edges/0` — never written out here, because a
+  # transcribed list would agree with itself forever while a widened table
+  # left the new terminal edge quietly uncleaned.
+  #
+  # `await: false, can_divert: false`: it is an EFFECT. It cannot hold the
+  # transition and cannot send the task back. It is nonetheless a `:sync`
+  # step that settles inside `start/2`, so a genuine removal failure is still
+  # the edge's own `:failed` outcome rather than a detached settlement.
+  def default_steps(edge) when is_binary(edge) do
+    if edge in EdgeInventory.terminal_edges() do
+      [%{"step" => @worktree_cleanup_step, "await" => false, "can_divert" => false}]
+    else
+      []
+    end
   end
 
   def default_steps(_edge), do: []

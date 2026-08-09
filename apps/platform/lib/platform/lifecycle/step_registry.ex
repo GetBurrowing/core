@@ -107,6 +107,11 @@ defmodule Platform.Lifecycle.StepRegistry do
       mfa: {Platform.Tasks.ArchitectGateLifecycleStep, :start, 1},
       kind: :agent
     },
+    %{
+      name: "worktree_cleanup",
+      mfa: {Platform.Lifecycle.Steps.WorktreeCleanup, :start, 1},
+      kind: :deterministic
+    },
     %{name: "notify", mfa: {Platform.Lifecycle.Steps, :notify, 1}, kind: :deterministic}
   ]
 
