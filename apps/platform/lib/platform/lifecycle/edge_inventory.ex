@@ -86,6 +86,19 @@ defmodule Platform.Lifecycle.EdgeInventory do
   assertion must be made on an edge that genuinely fires, with the
   substitution documented where it is made.
 
+  Stage 5 made that substitution: the re-entry bound is asserted on
+  `backlog -> blocked` (the `backlog <-> blocked` cycle repeats without a
+  gate to route around, and both halves reach the choke point), and the
+  reasoning — including the two bypassing writers by name,
+  `Platform.Tasks.reopen_with_feedback/3` and
+  `Platform.Tasks.supersede_current_plan/3` — is written at the test that
+  makes it, in `Platform.Lifecycle.PhaseDiscriminationTest`.
+
+  The manual-drop bypass is likewise pinned as a DECISION rather than left
+  to be rediscovered: the same test asserts a board drop across a terminal
+  edge fires nothing while the equivalent programmatic transition fires,
+  with both halves in one run.
+
   ## Outcome vocabulary — keep the two tables apart
 
   `Platform.Tasks.Task`'s `@planning_step_outcomes ~w(complete not_applicable
@@ -97,6 +110,29 @@ defmodule Platform.Lifecycle.EdgeInventory do
   An edge that is never traversed produces NO run rows and NO recorded
   outcome — emphatically not `not_applicable`, which is reserved for an edge
   that WAS traversed with an empty configured pipeline.
+
+  ## The outcome is OBSERVABLE — `[:platform, :lifecycle, :edge]`
+
+  ADDED task 019fe1b7 stage 5, because the distinction above was
+  unobservable from outside the executor until then. Both states produce
+  ZERO `lifecycle_step_runs` rows, and `Platform.Tasks`' fire point
+  DISCARDED `Executor.run_edge/3`'s return, so `:not_applicable` was a value
+  no shipped caller could see and no test could assert without calling the
+  executor directly — which is not the path production takes.
+
+  The event is emitted ONCE per FIRED edge, with `outcome`, `edge`,
+  `task_id`, `run_seq` and `step_count` in its metadata. The three states a
+  reader must be able to tell apart:
+
+      never traversed       no rows,  NO EVENT
+      traversed, empty      no rows,  outcome: :not_applicable
+      traversed, populated  rows,     outcome: :complete | :diverted |
+                                               :failed | :suppressed
+
+  Do NOT move the emit outside the fired branch of `fire_status_edge/3`. A
+  skipped edge that emitted an event would collapse the first two rows of
+  that table back into one, which is the conflation ADR-0046 exists to kill.
+  Asserted in `Platform.Lifecycle.PhaseDiscriminationTest`.
 
   ## PREMISE CORRECTION (task 019fe1b7 stage 3): a run is never persisted
 

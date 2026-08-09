@@ -5230,6 +5230,24 @@ defmodule Platform.Tasks do
   # Only edges IN the transition table fire, so the set of edges that can
   # fire is the same set `EdgeInventory.status_edges/0` derives — one table,
   # not two.
+  #
+  # THE OUTCOME IS EMITTED, not discarded (task 019fe1b7 stage 5). Until this
+  # stage `run_edge/3`'s outcome was thrown away here, and that made the
+  # central distinction of ADR-0046 UNOBSERVABLE from outside the executor: a
+  # phase that is never traversed and a phase traversed with an empty
+  # pipeline both produce ZERO `lifecycle_step_runs` rows, so rows alone
+  # cannot tell them apart. `:not_applicable` existed as a return value no
+  # shipped caller could see. `[:platform, :lifecycle, :edge]` is where the
+  # difference becomes readable:
+  #
+  #   * never traversed   → NO event at all (this function is not reached, or
+  #     the `else` branch below returns without emitting)
+  #   * traversed, empty  → exactly one event, `outcome: :not_applicable`
+  #   * traversed, steps  → one event, `outcome: :complete | :diverted |
+  #     :failed | :suppressed`
+  #
+  # Emitted INSIDE the fired branch only. Moving it outside would give a
+  # skipped edge an event and re-collapse the three states into two.
   defp fire_status_edge(%Task{status: from}, %Task{} = task, to)
        when is_binary(from) and is_binary(to) do
     if to in Map.get(@valid_task_transitions, from, []) do
@@ -5240,7 +5258,8 @@ defmodule Platform.Tasks do
         # be `%Ecto.Association.NotLoaded{}` here, and handing that to the
         # resolver would resolve to `[]` — a configured pipeline silently
         # not running is worse than the load.
-        _ = Executor.run_edge(task, edge)
+        {outcome, summary} = Executor.run_edge(task, edge)
+        emit_lifecycle_edge(task, edge, outcome, summary)
         :ok
       rescue
         error ->
@@ -5260,6 +5279,30 @@ defmodule Platform.Tasks do
   end
 
   defp fire_status_edge(_previous, _task, _new_status), do: :ok
+
+  # The emit sits inside the same `try` as the run for a reason: a handler
+  # cannot roll back a committed status change, and `:telemetry.execute/3`
+  # already catches and detaches a failing handler itself, so the only faults
+  # reachable here are on OUR side of the emit — the shape documented at
+  # `emit_architecture_gate_opened/1`.
+  defp emit_lifecycle_edge(%Task{} = task, edge, outcome, summary) do
+    :telemetry.execute(
+      [:platform, :lifecycle, :edge],
+      %{count: 1},
+      %{
+        task_id: task.id,
+        project_id: task.project_id,
+        edge: edge,
+        outcome: outcome,
+        run_seq: Map.get(summary, :run_seq),
+        step_count: summary |> Map.get(:steps, []) |> length(),
+        resource_type: "task",
+        resource_id: task.id,
+        action: "lifecycle_edge",
+        actor_type: "system"
+      }
+    )
+  end
 
   defp finalize_status_hooks(
          %Task{status: "in_progress"} = previous,
