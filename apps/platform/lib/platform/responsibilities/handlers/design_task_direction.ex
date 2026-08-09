@@ -85,6 +85,25 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirection do
   which fails if a slot is declared with neither a resolver nor a stated
   reason.
 
+  ## Why `design.critique` reads `dispatch_space_id` the OPPOSITE way
+
+  `dispatch_space_id/1` below derives the invite space from the resolved
+  task and pointedly refuses `trigger_meta[:space_id]`.
+  `Handlers.DesignCritique` does take the trigger space. The divergence is
+  a decision (task `019fe844` stage 2), recorded in both moduledocs so
+  neither reads as a bug in the other.
+
+  The difference is the trigger. This step fires on
+  `task:planning_started`, which nobody addressed to anybody — the space
+  in its payload is incidental and honouring it would invite the Designer
+  into whatever channel happened to be in scope. `design.critique` fires
+  only when someone named Saru: a human typing `@saru critique …`, or a
+  caller passing an explicit `:space_id` to
+  `Platform.Design.Critique.request/1`. There the space is half the
+  request, not an accident of routing.
+
+  The shared rule both obey: never invite from a space id nobody named.
+
   ## `handle_output/3` is the external-agent path only
 
   The Router calls it for `kind: "external"`. Native/federated agents go

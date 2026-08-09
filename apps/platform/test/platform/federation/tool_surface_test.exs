@@ -70,7 +70,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   describe "tool_definitions/0" do
-    test "returns all 91 tools with required components" do
+    test "returns all 92 tools with required components" do
       tools = ToolSurface.tool_definitions()
       # 88 as of task 019f70b8 stage 3, which added `intent_ack` to the
       # `task` bundle. 89 as of ADR-0046 member 5 stage 4, which added
@@ -79,8 +79,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # to the `task` bundle. 91 as of task 019fa61c stage 3, which added
       # `stage_architecture_audit` to the `plan` bundle — the architect's
       # OTHER surface, which until now asked for a side effect in prose and
-      # named no tool at all.
-      assert length(tools) == 91
+      # named no tool at all. 92 as of task 019fe844 stage 3, which added
+      # `design_critique_request` to the `review` bundle — the same shape of
+      # defect one layer down: the reviewer dispatch template asked for a
+      # design review in prose and named no tool that could obtain one.
+      assert length(tools) == 92
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -6376,5 +6379,272 @@ defmodule Platform.Federation.ToolSurfaceTest do
              Declared-but-unexercised: #{inspect(MapSet.difference(MapSet.new(ToolSurface.stage_list_error_codes()), observed))}
              """
     end
+  end
+
+  # ── design_critique_request (task 019fe844 stage 3) ──────────────────────
+  #
+  # The tool exists because the reviewer dispatch template told agents to
+  # "obtain Saru's design review" with no mechanism that could succeed. A
+  # test asserting only that the tool NAME is registered would pass against
+  # a clause that returns `{:error, :not_implemented}`, so the tests below
+  # assert on the outbound bytes and on the review item's CONTENT.
+
+  describe "design_critique_request — bundle placement" do
+    test "is on the review bundle and only there" do
+      review = ToolSurface.list_tools(["review"]) |> Enum.map(& &1.name)
+      assert "design_critique_request" in review
+
+      for bundle <- ToolSurface.all_bundles(), bundle != "review" do
+        refute "design_critique_request" in Enum.map(ToolSurface.list_tools([bundle]), & &1.name),
+               "design_critique_request leaked into the #{bundle} bundle"
+      end
+    end
+
+    test "declares canvas_id required and documents the synchronous return" do
+      tool =
+        ToolSurface.list_tools(["review"])
+        |> Enum.find(&(&1.name == "design_critique_request"))
+
+      assert tool.parameters.canvas_id.required
+      refute tool.parameters.review_request_id.required
+      assert tool.when_to_use =~ "SYNCHRONOUSLY" or tool.when_to_use =~ "synchronous"
+      assert tool.returns =~ "review_item_id"
+    end
+  end
+
+  describe "design_critique_request — execute/3" do
+    setup do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, :tool_surface_design_critique})
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+      end)
+
+      :ok
+    end
+
+    test "returns the verdict and lands it on the supplied review request" do
+      %{canvas: canvas, task: task} = critique_wiring()
+      request = critique_review_request!(task)
+      critique_stub!(critique_issues_json())
+
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "design_critique_request",
+                 %{
+                   "canvas_id" => canvas.id,
+                   "task_id" => task.id,
+                   "review_request_id" => request.id,
+                   "note" => "look at the submit affordance"
+                 },
+                 %{agent_id: Ecto.UUID.generate()}
+               )
+
+      assert [%{"severity" => "high"} | _] = result.issues
+      refute result.unparseable?
+      assert is_binary(result.review_item_id)
+
+      # Proves the canvas actually reached the model rather than an empty
+      # context being billed.
+      assert_receive {:outbound, body}
+      user = Enum.find(body["messages"], &(&1["role"] == "user"))["content"]
+      assert user =~ "Submit button, grey on grey"
+      assert user =~ "look at the submit affordance"
+
+      reloaded = Platform.Tasks.ReviewRequests.get_review_request(request.id)
+      item = Enum.find(reloaded.items, &(&1.label =~ "Saru"))
+      refute is_nil(item), "no Saru-labelled item landed on the review request"
+      assert item.content =~ "contrast ratio 2.1:1"
+      assert reloaded.status == "pending"
+    end
+
+    test "an unresolvable canvas is a recoverable structured error, not a raise" do
+      critique_wiring()
+      critique_stub!(critique_issues_json())
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "design_critique_request",
+                 %{"canvas_id" => Ecto.UUID.generate()},
+                 %{agent_id: Ecto.UUID.generate()}
+               )
+
+      assert envelope.recoverable == true
+      assert envelope.suggestion =~ "canvas_id"
+      refute_receive {:outbound, _}
+    end
+
+    test "an unfilled Designer role is reported as NOT recoverable" do
+      %{canvas: canvas} = critique_wiring(assign_role?: false)
+      critique_stub!(critique_issues_json())
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "design_critique_request",
+                 %{"canvas_id" => canvas.id},
+                 %{agent_id: Ecto.UUID.generate()}
+               )
+
+      # A caller told `recoverable: true` here retries a call that cannot
+      # ever succeed until a human assigns the role.
+      assert envelope.recoverable == false
+      assert envelope.suggestion =~ "Designer"
+      refute_receive {:outbound, _}
+    end
+  end
+
+  describe "the reviewer dispatch template names a mechanism that exists" do
+    test "dispatch.in_review points at design_critique_request and keeps the escape hatch" do
+      body =
+        Platform.Orchestration.PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "dispatch.in_review"))
+        |> Map.fetch!(:content)
+
+      assert body =~ "design_critique_request"
+      refute body =~ "@vega"
+
+      # The escape hatch is a FALLBACK from a mechanism now, but it must
+      # still be there — an agent that cannot obtain the critique still has
+      # to be able to file the gate and say so.
+      assert body =~ "create the review request anyway and note that design review is missing"
+      assert body =~ "never replaces human approval"
+
+      # The tool must actually be reachable by an agent holding this
+      # template's bundle, or the instruction is the same defect again.
+      assert "design_critique_request" in Enum.map(ToolSurface.list_tools(["review"]), & &1.name)
+    end
+  end
+
+  # ── design_critique_request fixtures ─────────────────────────────────────
+
+  defp critique_wiring(opts \\ []) do
+    [spec] = Platform.Responsibilities.Handlers.DesignCritique.register()
+    {:ok, row} = Platform.Responsibilities.upsert_by_key(spec)
+
+    project = create_project()
+
+    {:ok, task} =
+      Tasks.create_task(%{project_id: project.id, title: "Critique the checkout surface"})
+
+    space = create_space()
+
+    {:ok, participant} =
+      Platform.Orchestration.ExecutionSpace.ensure_system_participant(space.id)
+
+    {:ok, canvas} =
+      Chat.create_canvas(%{
+        space_id: space.id,
+        created_by: participant.id,
+        title: "Checkout screen",
+        document: %{
+          "version" => 1,
+          "revision" => 1,
+          "root" => %{
+            "id" => "root",
+            "type" => "stack",
+            "children" => [
+              %{
+                "id" => "n",
+                "type" => "markdown",
+                "props" => %{"content" => "Submit button, grey on grey"}
+              }
+            ]
+          }
+        }
+      })
+
+    if Keyword.get(opts, :assign_role?, true), do: critique_designer!(row.key)
+
+    %{task: task, space: space, canvas: canvas}
+  end
+
+  defp critique_designer!(responsibility_key) do
+    Repo.insert!(
+      %Platform.Roles.Role{
+        key: "designer",
+        name: "Designer",
+        description: "test",
+        icon: "hero-swatch"
+      },
+      on_conflict: :nothing,
+      conflict_target: :key
+    )
+
+    %Platform.Roles.RoleResponsibility{}
+    |> Platform.Roles.RoleResponsibility.changeset(%{
+      role_key: "designer",
+      responsibility_key: responsibility_key
+    })
+    |> Repo.insert!(on_conflict: :nothing, conflict_target: [:role_key, :responsibility_key])
+
+    agent =
+      %Agent{}
+      |> Agent.changeset(%{
+        slug: "saru-tool-surface-#{System.unique_integer([:positive])}",
+        name: "Saru Tool Surface Test",
+        status: "active",
+        kind: "external",
+        endpoint_kind: "openai_compat",
+        base_url: "https://api.example.test",
+        model: "test-model",
+        workspace_id: nil
+      })
+      |> Repo.insert!()
+
+    :ok = Platform.ExternalAgents.EphemeralCredentials.put(agent.id, "sk-tool-surface-test")
+    on_exit(fn -> Platform.ExternalAgents.EphemeralCredentials.delete(agent.id) end)
+
+    {:ok, _} = Platform.Roles.assign_role("designer", agent.id)
+
+    agent
+  end
+
+  defp critique_review_request!(task) do
+    {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+    {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "UI"})
+    {:ok, validation} = Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+    {:ok, request} =
+      Platform.Tasks.ReviewRequests.create_review_request(%{
+        validation_id: validation.id,
+        task_id: task.id,
+        items: [%{label: "Desktop screenshot", content: "evidence"}]
+      })
+
+    request
+  end
+
+  defp critique_stub!(content) do
+    test_pid = self()
+
+    Req.Test.stub(:tool_surface_design_critique, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:outbound, Jason.decode!(raw)})
+
+      Req.Test.json(conn, %{
+        "choices" => [%{"message" => %{"role" => "assistant", "content" => content}}]
+      })
+    end)
+
+    :ok
+  end
+
+  defp critique_issues_json do
+    Jason.encode!(%{
+      "issues" => [
+        %{
+          "severity" => "high",
+          "location" => "Submit button",
+          "issue" => "The submit button sits at contrast ratio 2.1:1 against its background.",
+          "suggestion" => "Darken the fill to at least 4.5:1."
+        }
+      ]
+    })
   end
 end

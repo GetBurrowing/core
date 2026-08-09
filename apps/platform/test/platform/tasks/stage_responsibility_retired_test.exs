@@ -54,6 +54,16 @@ defmodule Platform.Tasks.StageResponsibilityRetiredTest do
   # The one occurrence in @tool_surface_file that is a different concept.
   @agent_kind_literal "ext_single_responsibility"
 
+  # Two more, added by task 019fe844 stage 3: the `design_critique_request`
+  # clause translates `Platform.Design.Critique`'s error atoms into caller-
+  # facing envelopes. Those atoms name the RESPONSIBILITIES TRIGGER TREE
+  # sense (`design.critique`, keyed `<feature>.<verb>`) — the first bullet in
+  # the moduledoc's boundary list, explicitly SURVIVES. They are exempted as
+  # specific literals rather than by widening the refute, exactly as the
+  # failure message instructs; the surrounding prose in that clause was
+  # written to avoid the word entirely so these are the only two.
+  @trigger_tree_literals ["responsibility_unfilled", "responsibility_not_registered"]
+
   defp app_root, do: Mix.Project.project_file() |> Path.dirname()
 
   defp repo_root, do: app_root() |> Path.join("../..") |> Path.expand()
@@ -121,7 +131,23 @@ defmodule Platform.Tasks.StageResponsibilityRetiredTest do
              carve-out behind.
              """
 
-      residual = String.replace(src, @agent_kind_literal, "")
+      for literal <- @trigger_tree_literals do
+        assert String.contains?(src, literal),
+               """
+               #{@tool_surface_file} no longer names `#{literal}`.
+
+               The residual check below exempts exactly that literal. If the
+               design-critique error translation moved off the MCP surface,
+               drop the exemption rather than leaving a stale carve-out.
+               """
+      end
+
+      residual =
+        Enum.reduce(
+          [@agent_kind_literal | @trigger_tree_literals],
+          src,
+          &String.replace(&2, &1, "")
+        )
 
       refute String.contains?(residual, "responsibility"),
              """

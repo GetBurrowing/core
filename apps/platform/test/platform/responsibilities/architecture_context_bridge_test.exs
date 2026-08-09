@@ -155,9 +155,16 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
       "architecture.audit_diff serves this from its own " <>
         "@canonical_memory_flags constant",
     "canvas_snapshot" =>
-      "design.critique / design.spec_writer / design.brand_check are " <>
-        "placeholder handlers returning `missing?: true` — no runtime yet",
-    "grounding_notes" => "design.critique / design.spec_writer placeholders — no runtime yet",
+      "design.spec_writer / design.brand_check are placeholder handlers " <>
+        "returning `missing?: true` — no runtime yet. design.critique " <>
+        "materialises this itself (task 019fe844) by resolving a canvas and " <>
+        "rendering it through Chat.Canvas.MarkdownExporter, refusing the " <>
+        "dispatch when no canvas resolves — a refusal a shared slot resolver " <>
+        "has no way to express",
+    "grounding_notes" =>
+      "design.spec_writer placeholder — no runtime yet. design.critique " <>
+        "composes this itself from the requester's note plus the trigger's " <>
+        "task row",
     "brand_guidelines" => "design.brand_check placeholder — no runtime yet",
     "task_payload" =>
       "design.task_direction materialises this itself from " <>

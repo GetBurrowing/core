@@ -63,7 +63,17 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # (`stage_not_found` / `missing_summary`), so there is no absence-tolerance
   # for the gate to break. Its third parameter, `findings`, is deliberately
   # `required: false` — a clean audit carries none.
-  @surveyed_required_count 128
+  # 129 as of task 019fe844 stage 3: `design_critique_request`'s `canvas_id`.
+  # Classified HONEST *for this tool*, with the nuance stated rather than
+  # hidden. One layer down, `Handlers.DesignCritique.gather_context/2` does
+  # tolerate an absent canvas id — it falls back to the most recently updated
+  # canvas in the trigger space, which is right for a human typing
+  # `@saru critique` in a channel. It is wrong for a review gate: a reviewer
+  # that guesses which canvas holds its evidence produces a critique of
+  # whatever was posted last. So the tool declares the key required and the
+  # gate refuses before that fallback is ever reached. Enforcing it breaks no
+  # live runtime — the tool ships in this same commit with no callers.
+  @surveyed_required_count 129
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

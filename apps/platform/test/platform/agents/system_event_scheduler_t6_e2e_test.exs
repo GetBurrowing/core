@@ -633,7 +633,13 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # bundle. It is the only way an agent can land the audit that the
     # `architecture.audit_diff` fire has always asked for in prose and never
     # given her a way to perform (+stage_architecture_audit → 91)
-    @t6_baseline_tool_count 91
+    # bumped by task 019fe844 stage 3 — the reviewer's design-review surface,
+    # added to the existing `review` bundle beside `review_request_create`
+    # because its only caller already holds that bundle. Same shape as the
+    # bump above: the reviewer dispatch template asked for Saru's critique in
+    # prose and named no tool that could obtain one
+    # (+design_critique_request → 92)
+    @t6_baseline_tool_count 92
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

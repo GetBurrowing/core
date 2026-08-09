@@ -120,7 +120,9 @@ defmodule Platform.Responsibilities.BuilderlessKeyTemplateCoverageTest do
   # absent for the return-value reason in the moduledoc.
   @builder_less_keys [
     "design.brand_check",
-    "design.critique",
+    # `design.critique` LEFT this set in task `019fe844` stage 1: the
+    # handler grew its own `build_prompt/1` so the Router stops rendering
+    # the seeded `design.critique.v1` body, which names the wrong agent.
     "design.spec_writer",
     "meetings.attendance_followup",
     "meetings.intent_classify",

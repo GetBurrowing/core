@@ -229,14 +229,18 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
     # would convert a routing miss into a DROPPED dispatch, which is worse
     # than the legacy render path it falls back to.
     test "provider build_prompt/1 returns exactly :no_build_prompt for a handler without one" do
-      critique = %Responsibility{
+      # Was `design.critique` until task `019fe844` stage 1 gave that key
+      # a builder of its own. `design.spec_writer` is still builder-less
+      # and is pinned as such in
+      # `builderless_key_template_coverage_test.exs`.
+      spec_writer = %Responsibility{
         id: Ecto.UUID.generate(),
-        key: "design.critique",
+        key: "design.spec_writer",
         feature: "design"
       }
 
       assert {:error, :no_build_prompt} =
-               Providers.Design.build_prompt(%{__responsibility__: critique})
+               Providers.Design.build_prompt(%{__responsibility__: spec_writer})
 
       assert {:error, :no_build_prompt} = Providers.Design.build_prompt(%{})
       assert {:error, :no_build_prompt} = Providers.Design.build_prompt(nil)

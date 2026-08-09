@@ -131,6 +131,80 @@ defmodule Platform.Tasks.ReviewRequests do
     end
   end
 
+  @doc """
+  Append one item to an ALREADY-PENDING review request (task `019fe844`
+  stage 2).
+
+  Until this existed, `create_review_request/1` was the only writer of
+  `review_items`, so a verdict produced after the request was filed had
+  nowhere to land except a chat space nobody re-reads. `design.critique`
+  is the first caller: Saru's findings attach to the same request the
+  human is about to read.
+
+  ## It deliberately does NOT call `maybe_resolve_request/1`
+
+  Every other write path in this module ends there, so the omission
+  looks like a bug and is not. `maybe_resolve_request/1` fires when
+  every item is dispositioned; the item this function inserts is
+  `status: "pending"`, i.e. UNdispositioned, so the resolver could only
+  ever be a no-op — except in the one case where it would be
+  catastrophic: a request whose existing items are all already
+  approved/rejected but which has not yet been settled. Calling it there
+  would clear a human gate as a side effect of attaching advisory
+  evidence to it. Adding evidence must never be able to disposition
+  anything.
+
+  Returns `{:error, :request_not_pending}` for a request in any other
+  status — a resolved gate's item list is the record of what the human
+  saw, and appending to it after the fact rewrites that record.
+  """
+  @spec add_item(binary(), map()) :: {:ok, ReviewItem.t()} | {:error, term()}
+  def add_item(request_id, attrs) when is_binary(request_id) and is_map(attrs) do
+    case get_review_request(request_id) do
+      nil ->
+        {:error, :review_request_not_found}
+
+      %ReviewRequest{status: "pending"} = request ->
+        insert_item(request, attrs)
+
+      %ReviewRequest{} ->
+        {:error, :request_not_pending}
+    end
+  end
+
+  def add_item(_request_id, _attrs), do: {:error, :review_request_not_found}
+
+  defp insert_item(%ReviewRequest{} = request, attrs) do
+    item_attrs =
+      attrs
+      |> normalize_string_keys()
+      |> Map.put(:review_request_id, request.id)
+      |> Map.put(:status, "pending")
+
+    case %ReviewItem{} |> ReviewItem.changeset(item_attrs) |> Repo.insert() do
+      {:ok, item} ->
+        # Same message the create path broadcasts, so the open review
+        # LiveView picks the new item up without a reload. `item_id`
+        # rides along for a subscriber that wants to know WHICH item
+        # arrived; nothing today requires it.
+        broadcast_for_task(request.task_id, {
+          :review_request_pending,
+          %{
+            task_id: request.task_id,
+            validation_id: request.validation_id,
+            request_id: request.id,
+            execution_space_id: request.execution_space_id,
+            item_id: item.id
+          }
+        })
+
+        {:ok, item}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
   # ── Read ────────────────────────────────────────────────────────────────
 
   @doc "Fetch a review request by ID with items preloaded."

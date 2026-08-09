@@ -931,6 +931,43 @@ defmodule Platform.Federation.ToolSurface do
         limitations: "Only for manual_approval validations. Items cannot be empty.",
         when_to_use:
           "When you reach a manual_approval validation gate and need to submit evidence (screenshots, canvases, text) for human review"
+      },
+      %{
+        name: "design_critique_request",
+        description:
+          "Obtain the Designer role's design critique (`design.critique`, held by Saru) of one evidence canvas, synchronously. Returns the verdict to you so you can inline it into your own review request; when `review_request_id` is supplied the verdict is ALSO appended to that pending request as an item the human reads.",
+        parameters: %{
+          canvas_id: %{
+            type: "string",
+            required: true,
+            description:
+              "UUID of the evidence canvas to critique — normally the canvas holding your captured screenshots."
+          },
+          note: %{
+            type: "string",
+            required: false,
+            description:
+              "Free-text grounding for the critique: what changed, what to look at, what you are unsure about."
+          },
+          task_id: %{
+            type: "string",
+            required: false,
+            description:
+              "UUID of the task under review. Adds the task title/description as grounding and logs the critique to the task's execution space as an audit trail."
+          },
+          review_request_id: %{
+            type: "string",
+            required: false,
+            description:
+              "UUID of a PENDING review request. When supplied the verdict is appended to it as an item labelled 'Design review (Saru)'."
+          }
+        },
+        returns:
+          "A map with issues (a list of {severity, location, issue, suggestion} maps, possibly empty), raw (the critique text as returned), unparseable? (true when the reply carried no parseable JSON — the prose is still in raw and still lands), and review_item_id (the id of the appended review item, or null when none was appended).",
+        limitations:
+          "Requires `design.critique` to be assigned to an external agent — an unassigned Designer role returns a non-recoverable error rather than a critique. Critiques exactly one canvas per call. Advisory only: the verdict never disposes of a manual_approval gate, and appending an item does not resolve the request.",
+        when_to_use:
+          "Before creating the human review request on a UI change: it returns the verdict SYNCHRONOUSLY, so you can include Saru's issue list as a labelled item in the same review request rather than waiting on a channel post."
       }
     ]
   end
@@ -2942,6 +2979,95 @@ defmodule Platform.Federation.ToolSurface do
              "Verify the validation_id belongs to an existing manual_approval validation"
          }}
     end
+  end
+
+  def execute("design_critique_request", args, context) do
+    request = %{
+      canvas_id: Map.get(args, "canvas_id"),
+      note: Map.get(args, "note"),
+      task_id: Map.get(args, "task_id"),
+      review_request_id: Map.get(args, "review_request_id"),
+      space_id: Map.get(context, :space_id),
+      requested_by: Map.get(context, :agent_id)
+    }
+
+    case Platform.Design.Critique.request(request) do
+      {:ok, verdict} ->
+        {:ok,
+         %{
+           issues: Map.get(verdict, :issues, []),
+           raw: Map.get(verdict, :raw),
+           unparseable?: Map.get(verdict, :unparseable?, false),
+           review_item_id: Map.get(verdict, :review_item_id)
+         }}
+
+      {:error, reason} ->
+        {:error, design_critique_error(reason)}
+    end
+  end
+
+  # Error translation is deliberately per-term rather than a catch-all
+  # string: a caller that receives a wrong `recoverable` flag retries
+  # something that cannot work, or abandons something that would have.
+  defp design_critique_error(:responsibility_unfilled) do
+    %{
+      error:
+        "No agent holds the Designer role's `design.critique` duty, so no design review can be obtained.",
+      recoverable: false,
+      suggestion:
+        "Assign the Designer role (or a `design.critique` override) to an external agent. Until then, create the review request anyway and note that design review is missing."
+    }
+  end
+
+  defp design_critique_error(:responsibility_not_registered) do
+    %{
+      error: "`design.critique` is not registered on this instance.",
+      recoverable: false,
+      suggestion:
+        "Create the review request anyway and note that design review is unavailable here."
+    }
+  end
+
+  defp design_critique_error({:assignee_not_external, kind}) do
+    %{
+      error:
+        "The `design.critique` assignee is a #{kind} agent; a synchronous critique needs an external one.",
+      recoverable: false,
+      suggestion:
+        "Point the Designer role at an external agent, or proceed without design review and say so."
+    }
+  end
+
+  defp design_critique_error(:no_canvas_resolved) do
+    %{
+      error: "No canvas could be resolved for the critique, so nothing was sent for review.",
+      recoverable: true,
+      suggestion: "Pass an explicit `canvas_id` for the evidence canvas holding your screenshots."
+    }
+  end
+
+  defp design_critique_error({:dispatch_raised, message}) do
+    %{
+      error: "The design critique dispatch failed: #{message}",
+      recoverable: true,
+      suggestion: "Retry once; if it fails again, create the review request noting the failure."
+    }
+  end
+
+  defp design_critique_error({:dispatch_exited, reason}) do
+    %{
+      error: "The design critique dispatch exited: #{inspect(reason)}",
+      recoverable: true,
+      suggestion: "Retry once; if it fails again, create the review request noting the failure."
+    }
+  end
+
+  defp design_critique_error(reason) do
+    %{
+      error: "Could not obtain a design critique: #{inspect(reason)}",
+      recoverable: true,
+      suggestion: "Retry once; if it fails again, create the review request noting the failure."
+    }
   end
 
   # ── Space tools ─────────────────────────────────────────────────────────

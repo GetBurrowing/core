@@ -102,6 +102,94 @@ defmodule Platform.Tasks.ReviewRequestsTest do
     end
   end
 
+  # ── add_item/2 (task 019fe844 stage 2) ──────────────────────────────────
+  #
+  # NEGATIVE CONTROL, ACTUALLY RUN. The "does NOT resolve the gate" test
+  # was checked against two mutations of `add_item/2`:
+  #
+  #   * `maybe_resolve_request/1` called AFTER the insert — the test
+  #     stayed GREEN. That is a real finding, not a weak test: the item
+  #     just inserted is `status: "pending"`, so the resolver can never
+  #     see a fully-dispositioned request and is a no-op by construction
+  #     in that position.
+  #   * `maybe_resolve_request/1` called BEFORE the insert — the test
+  #     FAILED, `status` "resolved" where "pending" was required. That is
+  #     the hazard worth guarding: attaching advisory evidence to a
+  #     request whose items are already settled would clear a gate the
+  #     human never clicked.
+
+  describe "add_item/2" do
+    test "appends a pending item to a pending request and broadcasts it", ctx do
+      {:ok, request} = create_request(ctx, ["Screenshot"])
+      :ok = ReviewRequests.subscribe_for_task(ctx.task.id)
+
+      assert {:ok, item} =
+               ReviewRequests.add_item(request.id, %{
+                 label: "Design review (Saru)",
+                 content: "- **[major] Submit button** — contrast ratio 2.1:1"
+               })
+
+      assert item.status == "pending"
+
+      reloaded = ReviewRequests.get_review_request(request.id)
+      appended = Enum.find(reloaded.items, &(&1.label == "Design review (Saru)"))
+
+      # CONTENT, not count: an item carrying the empty string would
+      # satisfy a count assertion while delivering nothing.
+      assert appended.content =~ "contrast ratio 2.1:1"
+
+      assert_receive {:review_request_pending, %{request_id: id, item_id: item_id}}
+      assert id == request.id
+      assert item_id == item.id
+    end
+
+    test "does NOT resolve the gate, even when every other item is dispositioned", ctx do
+      {:ok, request} = create_request(ctx, ["Screenshot"])
+      [existing] = request.items
+
+      # Dispositioned by direct write rather than through `approve_item/2`,
+      # which would have resolved the request itself. This reproduces the
+      # one genuinely dangerous state: every item settled, the gate NOT
+      # yet resolved. If `add_item/2` called `maybe_resolve_request/1`,
+      # attaching advisory evidence here would clear the human gate.
+      existing
+      |> Ecto.Changeset.change(status: "approved", reviewed_by: "human-1")
+      |> Repo.update!()
+
+      assert ReviewRequests.get_review_request(request.id).status == "pending"
+
+      assert {:ok, _item} =
+               ReviewRequests.add_item(request.id, %{label: "Design review (Saru)"})
+
+      reloaded = ReviewRequests.get_review_request(request.id)
+      assert reloaded.status == "pending"
+      assert reloaded.resolved_at == nil
+
+      validation = Repo.get!(Validation, ctx.validation.id)
+      assert validation.status == "pending"
+    end
+
+    test "refuses a resolved request and inserts nothing", ctx do
+      {:ok, request} = create_request(ctx, ["Screenshot"])
+
+      request
+      |> Ecto.Changeset.change(status: "resolved", resolved_at: DateTime.utc_now())
+      |> Repo.update!()
+
+      before = Repo.aggregate(ReviewItem, :count, :id)
+
+      assert {:error, :request_not_pending} =
+               ReviewRequests.add_item(request.id, %{label: "Design review (Saru)"})
+
+      assert Repo.aggregate(ReviewItem, :count, :id) == before
+    end
+
+    test "returns a not-found error for an unknown request id" do
+      assert {:error, :review_request_not_found} =
+               ReviewRequests.add_item(Ecto.UUID.generate(), %{label: "x"})
+    end
+  end
+
   # ── get_review_request/1 ────────────────────────────────────────────────
 
   describe "get_review_request/1" do
