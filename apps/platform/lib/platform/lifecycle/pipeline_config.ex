@@ -100,11 +100,14 @@ defmodule Platform.Lifecycle.PipelineConfig do
   Validate a decoded pipeline map.
 
   `registry` is the `StepRegistry` server to resolve step names
-  against; it defaults to the boot singleton. Tests pass a per-case
-  instance.
+  against. It defaults to `StepRegistry.server/0`, which is the boot
+  singleton in production and a per-case instance under test — so
+  callers with nowhere to thread an argument (a changeset validator,
+  for instance) can call `validate/1` and still work in both. Tests
+  that hold a registry directly may pass it explicitly.
   """
   @spec validate(term(), GenServer.server()) :: :ok | {:error, String.t()}
-  def validate(pipeline, registry \\ StepRegistry)
+  def validate(pipeline, registry \\ StepRegistry.server())
 
   def validate(pipeline, registry) when is_map(pipeline) do
     Enum.reduce_while(pipeline, :ok, fn {edge, steps}, :ok ->

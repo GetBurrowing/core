@@ -135,6 +135,19 @@ defmodule Platform.Lifecycle.StepRegistry do
   @spec all(GenServer.server()) :: [entry()]
   def all(server \\ __MODULE__), do: GenServer.call(server, :all)
 
+  @doc """
+  The registry server callers should resolve names against.
+
+  In production this is the boot singleton. The boot singleton is
+  disabled in `config/test.exs` so cases can start isolated instances,
+  which means anything reached from a changeset — where there is no
+  place to thread a server argument through — needs a way to find the
+  per-case instance. Tests set `:lifecycle_step_registry` to their own
+  registered name; nothing sets it in prod, so the default holds.
+  """
+  @spec server() :: GenServer.server()
+  def server, do: Application.get_env(:platform, :lifecycle_step_registry, __MODULE__)
+
   @doc "The compile-time shipped allowlist, sorted by name."
   @spec built_in_steps() :: [entry()]
   def built_in_steps, do: Enum.sort_by(@built_in_steps, & &1.name)
