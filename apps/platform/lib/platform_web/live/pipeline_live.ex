@@ -311,7 +311,13 @@ defmodule PlatformWeb.PipelineLive do
                 :for={row <- measured(@breakdown)}
                 class="text-[10px] text-base-content/70 text-center truncate"
                 style={"width: #{segment_width(row, @breakdown)}"}
+                title={phase_label(row.phase)}
               >
+                <%!-- Unlike the in-segment number, a clipped phase NAME is not
+                      ambiguous — "depl…" cannot be misread as a different
+                      value the way "36.0…" can be misread as 36 minutes. It
+                      keeps its truncation and carries a title, and the full
+                      name is in the table below. --%>
                 {phase_label(row.phase)}
               </div>
             </div>

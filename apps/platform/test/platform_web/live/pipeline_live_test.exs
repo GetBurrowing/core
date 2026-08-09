@@ -399,9 +399,16 @@ defmodule PlatformWeb.PipelineLiveTest do
       # rendered in full and overflowed out of the segment instead.
       refute deploying =~ ~r/<span[^>]*font-mono/
 
-      # ...and the mechanism is gone as well as its symptom.
+      # ...and the mechanism is gone as well as its symptom. Note there is no
+      # point refuting a literal "…" anywhere: `truncate` is CSS
+      # text-overflow, so the ellipsis never appears in the markup and such a
+      # refute would be true by construction whatever the page did.
       refute deploying =~ "truncate"
-      refute html =~ "…"
+
+      # The phase-NAME axis below keeps its truncation deliberately — a
+      # clipped word is not ambiguous the way a clipped number is — so the
+      # rule must not have been applied page-wide.
+      assert html =~ ~r/text-\[10px\] text-base-content\/70 text-center truncate/
 
       # Anti-vacuity for the drop: the wide segment DOES carry a label span,
       # so a missing one is a width decision rather than the page having
