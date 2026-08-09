@@ -1901,7 +1901,14 @@ defmodule Platform.Meetings.IntentDispatcherTest do
         if id != meeting.id, do: IntentQueue.stop(id)
       end)
 
-      assert IntentQueue.live_meeting_ids() == [meeting.id]
+      # Membership, not equality. Queue owners are application-global and
+      # sibling ASYNC cases start their own queues at arbitrary moments,
+      # including between the sweep above and this line — so `== [id]` is
+      # a race that fails whenever the suite's scheduling happens to
+      # interleave. It is safe to relax: a foreign queue can only ADD to
+      # `claimed` below, so it can produce a loud failure but never a
+      # false pass. The message on that assertion says so.
+      assert meeting.id in IntentQueue.live_meeting_ids()
 
       {:ok, _} = Meetings.set_intent_muted(meeting, true)
       _row = enqueue!(meeting.id, %{})
@@ -1912,7 +1919,10 @@ defmodule Platform.Meetings.IntentDispatcherTest do
                       %{claimed: claimed}, _meta},
                      2_000
 
-      assert claimed == 0
+      assert claimed == 0,
+             "expected the muted meeting to contribute nothing to the tick, got claimed=#{claimed}. " <>
+               "If this is non-zero, check whether a sibling async case's queue was live during " <>
+               "the tick before concluding that mute is broken."
     end
   end
 end
