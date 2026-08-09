@@ -500,6 +500,10 @@ defmodule PlatformWeb.Router do
       live("/changelog", ChangelogLive, :index)
       live("/control", ControlCenterLive, :index)
       live("/control/usage", UsageLive, :index)
+      # MUST stay above `/control/:agent_slug`, which is a catch-all: below it,
+      # `/control/pipeline` resolves as an agent slug and 404s on a missing
+      # agent. `pipeline_live_test.exs` covers the ordering.
+      live("/control/pipeline", PipelineLive, :index)
       live("/control/:agent_slug", ControlCenterLive, :show)
       live("/org_memory", OrgMemoryLive, :index)
       # Task 019f70e9 stage 4 — direct entry to the proposals tab.
