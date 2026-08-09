@@ -731,6 +731,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # what this map asks the guard to be.
     "platform/tasks/deploy_merge_reconciler.ex" => 1,
     "platform/tasks/context_hydrator.ex" => 1,
+    # 0 → 1 for `PipelineHealth.instrumented_from/0`, which reads the earliest
+    # recorded phase transition so the page can state the date before which
+    # nothing can be decomposed. Triaged by hand as this map asks: the query
+    # has NO `where:` clause at all — it is `select: min(t.occurred_at)` over
+    # the whole table — so no id is pinned, no value crosses a boundary into
+    # it, and `Ecto.Query.CastError` is unreachable. No guard applies.
+    "platform/tasks/pipeline_health.ex" => 1,
     "platform/tasks/plan_engine.ex" => 2,
     "platform/tasks/review_requests.ex" => 1,
     "platform/tasks/rollup_webhook_processor.ex" => 1,
