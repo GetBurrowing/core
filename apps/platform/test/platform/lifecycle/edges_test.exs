@@ -96,12 +96,31 @@ defmodule Platform.Lifecycle.EdgesTest do
       assert Enum.all?(Map.keys(step), &is_binary/1)
     end
 
-    test "the architect edge ships none, and an unknown edge ships none" do
-      # Not an oversight: the architect gate is a single function with a
-      # resolution argument, so there is no bespoke machinery to declare. See
-      # the premise correction in the moduledoc.
-      assert Edges.default_steps(Edges.architect_edge()) == []
+    test "the architect edge ships a step too, and an unknown edge ships none" do
+      # SUPERSEDES stage 1's `== []`, deliberately and with the reason
+      # recorded. That assertion was written when the architect had no
+      # declared step; stage 3 gave it one, for the same reason the designer
+      # has one — `resolve_steps/2` answers `[]` for every unconfigured
+      # project, and an edge that resolves `[]` reports `:not_applicable` and
+      # deletes the feature it migrates. The premise correction in the
+      # moduledoc still stands: the architect has almost no bespoke MACHINERY
+      # to delete. That is a different claim from having no declaration.
+      assert Edges.default_steps(Edges.architect_edge()) == [
+               %{"step" => "architect_gate", "await" => true, "can_divert" => true}
+             ]
+
       assert Edges.default_steps("no.such.edge") == []
+    end
+
+    test "the shipped architect step is a name the registry resolves" do
+      # Same drift hazard as the designer's: a declaration naming a step the
+      # allowlist does not carry resolves `{:error, :unknown_step}`, records
+      # `failed`, and looks like a gate that ran.
+      registry = :"edges_registry_#{System.unique_integer([:positive])}"
+      start_supervised!({StepRegistry, name: registry})
+
+      assert {:ok, entry} = StepRegistry.fetch(Edges.architect_step_name(), registry)
+      assert entry.kind == :agent
     end
 
     test "the shipped designer step is a name the registry resolves" do
