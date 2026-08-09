@@ -4168,6 +4168,12 @@ defmodule Platform.Federation.ToolSurface do
 
             {:error, {:auto_approve_precondition_missing, %{missing_phases: phases}}} ->
               {:error, auto_approve_precondition_envelope(phases)}
+
+            # The commencement gate's 3-tuple. Without this clause the
+            # `with` has no matching `else` branch (every other clause is
+            # a 2-tuple) and raises `WithClauseError` → 500.
+            {:error, :stack_plans_pending, %{stack_id: stack_id, waiting_on: waiting_on}} ->
+              {:error, stack_plans_pending_envelope(stack_id, waiting_on)}
           end
         else
           {:error, {:invalid_phase_keys, keys}} ->
@@ -4246,6 +4252,61 @@ defmodule Platform.Federation.ToolSurface do
   # shape so callers can dispatch on `envelope.code` without checking which
   # tool produced the error. `missing_phases` retains stable
   # `[\"execution\", \"review\"]` ordering from TaskAttrs.
+  # Shared envelope for the Stack-v2 commencement gate's 3-tuple refusal
+  # `{:error, :stack_plans_pending, %{stack_id, waiting_on}}`. BOTH MCP
+  # entry points that can transition a member into `in_progress`
+  # (`task_start` and `task_update`) route here so the wording lives in
+  # exactly one place.
+  #
+  # Two branches, because the atom is overloaded:
+  #
+  #   * `waiting_on != []` — siblings are still missing approved plans.
+  #     Wording is copied from the `stack_start` handler below so an
+  #     agent that has seen one message recognises the other.
+  #
+  #   * `waiting_on == []` — every member IS planned, but
+  #     `CommencementGate.open?/1` still returns false because the stack
+  #     row itself is not `"in_progress"`. Rendering the blocker list
+  #     here would emit a dangling empty enumeration ("waiting on: "),
+  #     so this branch names the real cause instead: nobody has called
+  #     `stack_start` yet.
+  defp stack_plans_pending_envelope(stack_id, []) do
+    %{
+      error:
+        "Cannot start task: stack #{stack_id} has not started yet. Every member holds an approved plan, but the stack itself is not in_progress, so the commencement gate stays closed.",
+      recoverable: true,
+      suggestion: "Call stack_start with stack_id #{stack_id} to open the stack, then retry."
+    }
+  end
+
+  defp stack_plans_pending_envelope(stack_id, waiting_on) when is_list(waiting_on) do
+    %{
+      error:
+        "Stack cannot start yet — the following members are missing an approved plan: " <>
+          Enum.join(describe_waiting_on(stack_id, waiting_on), ", "),
+      recoverable: true,
+      suggestion: "Approve the missing plans (via plan_approve) before starting this task again."
+    }
+  end
+
+  # Resolve blocking member ids to `"<title> (<id>)"` using the existing
+  # `Stacks.members/1` accessor — one query over the stack, no new
+  # context function. An id that isn't in the member list (deleted
+  # mid-flight) degrades to the bare id rather than dropping out.
+  defp describe_waiting_on(stack_id, waiting_on) do
+    titles =
+      stack_id
+      |> Stacks.members()
+      |> Map.new(fn member -> {member.id, member.title} end)
+
+    Enum.map(waiting_on, fn id ->
+      case Map.get(titles, id) do
+        nil -> id
+        title -> "#{title} (#{id})"
+      end
+    end)
+  end
+
   defp auto_approve_precondition_envelope(phases) do
     %{
       error:
@@ -4839,6 +4900,9 @@ defmodule Platform.Federation.ToolSurface do
                suggestion:
                  "Create a plan with plan_create, submit it with plan_submit, and have it approved (plan_approve) before starting the task. Approval transitions the task into in_progress automatically."
              }}
+
+          {:error, :stack_plans_pending, %{stack_id: stack_id, waiting_on: waiting_on}} ->
+            {:error, stack_plans_pending_envelope(stack_id, waiting_on)}
 
           {:error, reason} ->
             {:error, %{error: "Failed to start task: #{inspect(reason)}", recoverable: true}}

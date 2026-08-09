@@ -1012,6 +1012,154 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
     end
   end
 
+  # Task 019fe762: the commencement gate returns a THREE-tuple
+  # `{:error, :stack_plans_pending, %{stack_id, waiting_on}}`. Both MCP
+  # entry points that can move a member into `in_progress` used to have
+  # no clause for that arity — `task_start`'s `case` raised
+  # `CaseClauseError`, `task_update`'s `with/else` raised
+  # `WithClauseError`. Both surfaced as a 500: the one message designed
+  # to name the blockers was the message that crashed.
+  describe "commencement-gate refusal through the MCP surface" do
+    # Gated fixture: `subject` holds an approved plan (so it clears
+    # `require_approved_plan_for/3` and actually reaches the gate) while
+    # `blocker` has none, so `waiting_on` is non-empty.
+    defp gated_stack(opts \\ []) do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-gate"), "Gated")
+
+      {:ok, subject} = Tasks.create_task(%{project_id: project.id, title: "Subject Member"})
+      {:ok, blocker} = Tasks.create_task(%{project_id: project.id, title: "Blocking Member"})
+
+      {:ok, _} = Tasks.create_plan(%{task_id: subject.id, status: "approved"})
+
+      if Keyword.get(opts, :plan_blocker?, false) do
+        {:ok, _} = Tasks.create_plan(%{task_id: blocker.id, status: "approved"})
+      end
+
+      for task <- [subject, blocker] do
+        {:ok, _} =
+          ToolSurface.execute(
+            "stack_add",
+            %{"stack_id" => stack_id, "task_id" => task.id},
+            %{}
+          )
+      end
+
+      %{stack_id: stack_id, subject: Tasks.get_task_record(subject.id), blocker: blocker}
+    end
+
+    test "task_start returns a structured error naming the unplanned sibling" do
+      %{subject: subject, blocker: blocker} = gated_stack()
+
+      {:error, error} = ToolSurface.execute("task_start", %{"task_id" => subject.id}, %{})
+
+      assert error.recoverable == true
+      assert error.error =~ "missing an approved plan"
+      # The blocking member is named by BOTH title and id — a bare uuid
+      # list forces the caller into another round trip.
+      assert error.error =~ blocker.id
+      assert error.error =~ "Blocking Member"
+      assert error.suggestion =~ "plan_approve"
+    end
+
+    test "task_start says the stack has not started when every member IS planned" do
+      # `CommencementGate.open?/1` is false whenever the stack row itself
+      # is not `in_progress`, and `waiting_on/1` is then `[]`. Rendering
+      # the blocker branch here would emit a dangling empty enumeration.
+      %{stack_id: stack_id, subject: subject} = gated_stack(plan_blocker?: true)
+
+      {:error, error} = ToolSurface.execute("task_start", %{"task_id" => subject.id}, %{})
+
+      assert error.recoverable == true
+      assert error.error =~ "has not started yet"
+      assert error.error =~ stack_id
+      assert error.suggestion =~ "stack_start"
+      refute error.error =~ "missing an approved plan"
+      # No dangling enumeration — the blocker phrasing ends in ": " when
+      # the list is empty, and that colon-space must not appear at all.
+      refute error.error =~ "approved plan: "
+    end
+
+    test "task_update(status: in_progress) returns the same envelope, never a raise" do
+      %{subject: subject, blocker: blocker} = gated_stack()
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => subject.id, "status" => "in_progress"},
+          %{}
+        )
+
+      assert error.recoverable == true
+      assert error.error =~ "missing an approved plan"
+      assert error.error =~ blocker.id
+      assert error.error =~ "Blocking Member"
+    end
+
+    # Controls: the new clause must not have swallowed the pre-existing
+    # refusals. Assert the DISTINGUISHING substring of each, not merely
+    # that an error came back.
+    test "task_start still reports :no_approved_plan with its own wording" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Planless"})
+
+      {:error, error} = ToolSurface.execute("task_start", %{"task_id" => task.id}, %{})
+
+      assert error.error =~ "no approved plan exists for task"
+      refute error.error =~ "missing an approved plan"
+      refute error.error =~ "has not started yet"
+    end
+
+    test "task_start still reports :invalid_transition with its own wording" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Finished"})
+      {:ok, _} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, task} = Tasks.update_task(task, %{status: "done"})
+
+      {:error, error} = ToolSurface.execute("task_start", %{"task_id" => task.id}, %{})
+
+      assert error.error =~ "Cannot start task from status done"
+      refute error.error =~ "missing an approved plan"
+      refute error.error =~ "has not started yet"
+    end
+
+    test "task_update still reports :no_approved_plan with its own wording" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Planless Update"})
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "status" => "in_progress"},
+          %{}
+        )
+
+      assert error.error =~ "has no approved plan and is not a sponsor-bypass candidate"
+      refute error.error =~ "missing an approved plan"
+      refute error.error =~ "has not started yet"
+    end
+
+    test "task_update still reports :invalid_transition with its own wording" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Finished Update"})
+      {:ok, _} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, task} = Tasks.update_task(task, %{status: "done"})
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "status" => "in_progress"},
+          %{}
+        )
+
+      assert error.error =~ "Invalid status transition from 'done' to 'in_progress'"
+      refute error.error =~ "missing an approved plan"
+      refute error.error =~ "has not started yet"
+    end
+  end
+
   defp all_phase_attrs(agent_id) do
     entry = %{"assignee_id" => agent_id, "assignee_type" => "agent"}
     %{"planning" => entry, "execution" => entry, "review" => entry}
