@@ -45,16 +45,140 @@ defmodule Platform.Experiments.Promotion do
   event that says only "a prompt changed" is an unreviewable change to how
   every agent behaves; the five fields are what makes a promotion
   auditable after the fact.
+
+  ## The four guardrails, and where they run
+
+  All four run inside THIS function, before the `Ecto.Multi` opens. There
+  is no second, looser path: manual and automatic promotion traverse the
+  identical code, so a guard cannot be true of one and false of the other.
+
+    1. **Stop rule.** An experiment that has not reached its stop rule
+       cannot be promoted, by a human or by automation. Reason
+       `:insufficient_data` — the upstream atom from
+       `Platform.Experiments.Metric`, not a new one.
+    2. **Cooldown.** A template cannot be promoted twice within
+       `@cooldown_days` days. Without it every promotion shifts the
+       baseline before the next experiment can react, and a sequence of
+       individually-significant "wins" compounds into drift that no single
+       experiment could justify.
+    3. **Multi-metric gate.** No promotion proceeds while a secondary
+       metric regresses more than `@max_secondary_regression`, even when
+       the primary metric wins — otherwise plan quality improves by making
+       planning four times slower and it counts as a win because latency
+       was not the metric.
+    4. **Snapshot.** Enforced by the multi above. There is deliberately no
+       second snapshot path here.
+
+  ## Refusals are structs, not prose
+
+  Every refusal is `{:error, %#{inspect(__MODULE__)}.Refusal{}}` with the
+  numbers the caller needs in DISCRETE FIELDS. The UI that renders these
+  must never parse the message string: a renderer that regexes an error
+  sentence breaks the next time somebody improves the wording, and the
+  breakage shows up as a blank panel rather than as a failing test.
+
+  ## The override is narrow on purpose
+
+  Only the stop-rule refusal is overridable, and only by an explicit
+  `override: true` plus an actor. It is recorded AS an override on the
+  audit event, with the acting user and the sample size at the time — not
+  silently permitted because a button existed. `override: true` against a
+  cooldown or metric-gate refusal is IGNORED and the refusal stands.
+  Loosening later is cheap; an escape hatch on every guardrail makes the
+  guardrails decorative on day one.
+
+  ## The metric gate is n-aware, and the small-n regression is still recorded
+
+  A regression measured over fewer than `@min_regression_n` subjects does
+  not block. Below that n a 6% delta sits inside sampling noise, so
+  blocking on it turns the Goodhart defence into a random refusal
+  generator — which is worse than no gate at all, because people learn to
+  route around a gate that fires at random. The ignored regression is NOT
+  discarded: it goes onto the audit event under `ignored_regressions` with
+  metric name, delta and n, so an override-by-small-sample is reviewable
+  after the fact. Both branches read `n` off `%Metric.Result{}`; neither
+  looks at the delta alone.
+
+  ## Promotion is sticky: it changes the default for NEW subjects only
+
+  Nothing on this path updates or deletes an `experiment_assignments` row.
+  A subject already in flight keeps the variant it was given. Retroactively
+  reassigning live subjects would corrupt the very result that justified
+  the promotion (ADR-0048).
   """
+
+  import Ecto.Query, only: [from: 2]
 
   alias Ecto.Multi
   alias Platform.Audit
+  alias Platform.Experiments.Assignment
   alias Platform.Experiments.Experiment
   alias Platform.Experiments.Metric.Result
   alias Platform.Experiments.PromptTemplateHistory
   alias Platform.Experiments.Variant
   alias Platform.Orchestration.PromptTemplate
   alias Platform.Repo
+
+  defmodule Refusal do
+    @moduledoc """
+    A refused promotion, in fields rather than in a sentence.
+
+    The `message` is for a log line and for a human reading a console. It
+    is NOT the interface: every number a caller might want to render —
+    observed and required subject counts, the absolute date a cooldown
+    lifts, the offending metric's name, delta and sample size — is its own
+    field. A UI that re-derives any of them from `message` is one wording
+    change away from silently rendering nothing.
+
+    `available_from` is a `Date`, not a remaining-days duration. A
+    countdown makes the reader compute, and it goes stale the moment the
+    page is left open; a date can go in a calendar and is still correct
+    tomorrow.
+    """
+
+    @type t :: %__MODULE__{
+            reason: atom(),
+            message: String.t(),
+            observed_subjects: non_neg_integer() | nil,
+            required_subjects: pos_integer() | nil,
+            last_promoted_at: DateTime.t() | nil,
+            available_from: Date.t() | nil,
+            cooldown_days: pos_integer() | nil,
+            metric: String.t() | nil,
+            delta: float() | nil,
+            n: non_neg_integer() | nil,
+            threshold: float() | nil
+          }
+
+    @enforce_keys [:reason, :message]
+    defstruct [
+      :reason,
+      :message,
+      :observed_subjects,
+      :required_subjects,
+      :last_promoted_at,
+      :available_from,
+      :cooldown_days,
+      :metric,
+      :delta,
+      :n,
+      :threshold
+    ]
+  end
+
+  # Cooldown window, as ONE named value. Never a literal at a call site:
+  # a policy number spelled twice is a policy number that will one day
+  # disagree with itself.
+  @cooldown_days 14
+
+  # A secondary metric may not lose more than this fraction against
+  # control, however well the primary metric did.
+  @max_secondary_regression 0.05
+
+  # Below this sample size a regression is noise, not a signal, and does
+  # not block. See the moduledoc for why a randomly-firing gate is worse
+  # than an absent one.
+  @min_regression_n 30
 
   @promoted_event_type "platform.experiments.prompt_template_promoted"
   @reverted_event_type "platform.experiments.prompt_template_reverted"
@@ -75,6 +199,18 @@ defmodule Platform.Experiments.Promotion do
   @spec reverted_event_type() :: String.t()
   def reverted_event_type, do: @reverted_event_type
 
+  @doc "Days a template must wait between promotions."
+  @spec cooldown_days() :: pos_integer()
+  def cooldown_days, do: @cooldown_days
+
+  @doc "The largest secondary-metric regression a promotion may carry."
+  @spec max_secondary_regression() :: float()
+  def max_secondary_regression, do: @max_secondary_regression
+
+  @doc "The sample size below which a regression is treated as noise."
+  @spec min_regression_n() :: pos_integer()
+  def min_regression_n, do: @min_regression_n
+
   @doc """
   Promotes a variant of `experiment` into its target prompt template.
 
@@ -91,12 +227,20 @@ defmodule Platform.Experiments.Promotion do
     * `:result` — a `%Platform.Experiments.Metric.Result{}` for the primary
       metric; its `value` becomes the observed effect and its `n` the
       sample size. `:effect` and `:n` may be passed directly instead.
+    * `:secondary_results` — the secondary metrics, as a list of
+      `{metric_name, %Result{}}`. `value` is the SIGNED relative change
+      against control, so a negative value is a regression and `-0.06`
+      means "6% worse". `n` is the sample size the change was measured
+      over, and the gate reads it.
+    * `:override` — `true` promotes despite a stop-rule refusal, and ONLY
+      a stop-rule refusal. Requires `:actor_id`. Recorded on the audit
+      event as an override with the actor and the sample size at the time.
     * `:metadata` — extra map merged UNDER the five required keys, so no
       caller can overwrite them.
 
   Returns `{:ok, %{template:, history:, event:}}`, or `{:error, reason}`
-  where reason is an atom for a caller error or an `%Ecto.Changeset{}` from
-  the failing step.
+  where reason is a `%#{inspect(__MODULE__)}.Refusal{}` for a guardrail, an
+  atom for a caller error, or an `%Ecto.Changeset{}` from the failing step.
   """
   @spec promote(Experiment.t(), keyword()) :: {:ok, promotion()} | {:error, term()}
   def promote(%Experiment{} = experiment, opts \\ []) do
@@ -104,8 +248,12 @@ defmodule Platform.Experiments.Promotion do
 
     with :ok <- check_trigger(experiment, trigger),
          {:ok, template} <- fetch_template(experiment),
-         {:ok, variant} <- fetch_variant(experiment, Keyword.get(opts, :variant)) do
-      run_promotion(experiment, template, variant, trigger, opts)
+         {:ok, variant} <- fetch_variant(experiment, Keyword.get(opts, :variant)),
+         # The guardrails, all of them, before the transaction opens.
+         {:ok, stop_rule} <- check_stop_rule(experiment, opts),
+         :ok <- check_cooldown(template),
+         {:ok, ignored} <- check_secondary_metrics(opts) do
+      run_promotion(experiment, template, variant, trigger, stop_rule, ignored, opts)
     end
   end
 
@@ -155,7 +303,156 @@ defmodule Platform.Experiments.Promotion do
 
   # -- internals --
 
-  defp run_promotion(experiment, template, variant, trigger, opts) do
+  # ── Guard 1: the stop rule ────────────────────────────────────────────
+  #
+  # Returns `{:ok, stop_rule_info}` where the info is nil when the
+  # experiment declares no subject requirement, `{:reached, observed,
+  # required}` when it met it, or `{:overridden, observed, required}` when
+  # a human explicitly took responsibility for promoting early.
+  defp check_stop_rule(%Experiment{} = experiment, opts) do
+    case required_subjects(experiment) do
+      nil ->
+        {:ok, nil}
+
+      required ->
+        observed = observed_subjects(experiment)
+
+        cond do
+          observed >= required ->
+            {:ok, {:reached, observed, required}}
+
+          overriding?(opts) ->
+            {:ok, {:overridden, observed, required}}
+
+          true ->
+            {:error,
+             %Refusal{
+               reason: :insufficient_data,
+               message:
+                 "the experiment has not reached its stop rule: " <>
+                   "#{observed} of #{required} subjects",
+               observed_subjects: observed,
+               required_subjects: required
+             }}
+        end
+    end
+  end
+
+  # An override is explicit or it is not an override. `override: true`
+  # alone is a flag somebody could set by accident in a config; requiring
+  # an actor is what makes the audit row answer "who".
+  defp overriding?(opts) do
+    Keyword.get(opts, :override) == true and not is_nil(Keyword.get(opts, :actor_id))
+  end
+
+  defp required_subjects(%Experiment{stop_rule: stop_rule}) when is_map(stop_rule) do
+    case stop_rule["min_subjects"] || stop_rule[:min_subjects] do
+      n when is_integer(n) and n > 0 -> n
+      _ -> nil
+    end
+  end
+
+  defp required_subjects(_experiment), do: nil
+
+  # Excluded subjects are not counted: the stop rule asks how much usable
+  # data there is, and an excluded row is deliberately not usable. The
+  # rows are only READ here — see the moduledoc on stickiness.
+  defp observed_subjects(%Experiment{id: experiment_id}) do
+    Repo.aggregate(
+      from(a in Assignment,
+        where: a.experiment_id == ^experiment_id and is_nil(a.excluded_reason)
+      ),
+      :count
+    )
+  end
+
+  # ── Guard 2: the cooldown ─────────────────────────────────────────────
+  #
+  # Not overridable. Deliberately reads the promotion history rather than
+  # a column on the template, so a template promoted by any path at all is
+  # subject to the same window.
+  defp check_cooldown(%PromptTemplate{id: template_id}) do
+    case last_promoted_at(template_id) do
+      nil ->
+        :ok
+
+      last_promoted_at ->
+        available_from = last_promoted_at |> DateTime.to_date() |> Date.add(@cooldown_days)
+
+        if Date.compare(Date.utc_today(), available_from) == :lt do
+          {:error,
+           %Refusal{
+             reason: :cooldown_active,
+             message:
+               "this template was promoted on " <>
+                 "#{Date.to_iso8601(DateTime.to_date(last_promoted_at))}; " <>
+                 "the next promotion is available from #{Date.to_iso8601(available_from)}",
+             last_promoted_at: last_promoted_at,
+             available_from: available_from,
+             cooldown_days: @cooldown_days
+           }}
+        else
+          :ok
+        end
+    end
+  end
+
+  defp last_promoted_at(template_id) do
+    Repo.one(
+      from(h in PromptTemplateHistory,
+        where: h.template_id == ^template_id,
+        order_by: [desc: h.captured_at],
+        limit: 1,
+        select: h.captured_at
+      )
+    )
+  end
+
+  # ── Guard 3: the multi-metric gate, n-aware ───────────────────────────
+  #
+  # Returns `{:ok, ignored_regressions}` — the sub-threshold-n regressions
+  # that did NOT block, which the caller records on the audit event.
+  defp check_secondary_metrics(opts) do
+    opts
+    |> Keyword.get(:secondary_results, [])
+    |> Enum.reduce_while({:ok, []}, fn {name, %Result{value: value, n: n}}, {:ok, ignored} ->
+      cond do
+        not regression?(value) ->
+          {:cont, {:ok, ignored}}
+
+        # The n branch, taken before any decision about the delta. A gate
+        # that read the delta alone would refuse on five subjects.
+        n < @min_regression_n ->
+          {:cont,
+           {:ok,
+            ignored ++
+              [%{"metric" => to_string(name), "delta" => value, "n" => n}]}}
+
+        true ->
+          {:halt,
+           {:error,
+            %Refusal{
+              reason: :secondary_metric_regressed,
+              message:
+                "#{name} regressed #{format_percent(value)} over #{n} subjects, " <>
+                  "past the #{format_percent(@max_secondary_regression)} limit",
+              metric: to_string(name),
+              delta: value,
+              n: n,
+              threshold: @max_secondary_regression
+            }}}
+      end
+    end)
+  end
+
+  defp regression?(value) when is_number(value),
+    do: value < 0 and abs(value) > @max_secondary_regression
+
+  defp format_percent(value) do
+    "#{Float.round(abs(value) * 100, 1)}%"
+  end
+
+  defp run_promotion(experiment, template, variant, trigger, stop_rule, ignored, opts) do
     {effect, n} = effect_and_n(opts)
     actor = actor_label(opts)
 
@@ -205,6 +502,8 @@ defmodule Platform.Experiments.Promotion do
             "n" => n,
             "trigger" => to_string(trigger)
           })
+          |> Map.merge(override_metadata(stop_rule, opts))
+          |> Map.merge(ignored_regressions_metadata(ignored))
       })
     end)
     |> Repo.transaction()
@@ -216,6 +515,25 @@ defmodule Platform.Experiments.Promotion do
         {:error, reason}
     end
   end
+
+  # An override that is not visibly an override is indistinguishable from a
+  # promotion that met its stop rule — which is exactly the record somebody
+  # would need six weeks later to explain why a prompt changed on twelve
+  # subjects. The sample size is stamped AT THE TIME, because the
+  # experiment keeps accruing subjects afterwards.
+  defp override_metadata({:overridden, observed, required}, opts) do
+    %{
+      "override" => true,
+      "override_actor_id" => Keyword.get(opts, :actor_id),
+      "override_observed_subjects" => observed,
+      "override_required_subjects" => required
+    }
+  end
+
+  defp override_metadata(_stop_rule, _opts), do: %{}
+
+  defp ignored_regressions_metadata([]), do: %{}
+  defp ignored_regressions_metadata(ignored), do: %{"ignored_regressions" => ignored}
 
   defp check_trigger(_experiment, :manual), do: :ok
   defp check_trigger(%Experiment{auto_promote: true}, :auto), do: :ok

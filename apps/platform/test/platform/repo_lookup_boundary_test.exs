@@ -658,6 +658,17 @@ defmodule Platform.RepoLookupBoundaryTest do
     # :platform_uuid_guard entry for this file in @inventory above. Removing
     # the guard fails there and reintroduces the raise here.
     "platform/experiments/assignments.ex" => 1,
+    # 0 → 1 for task 019fe6ba stage 2's `last_promoted_at/1`, the cooldown
+    # guard's lookup of the most recent `prompt_template_history` row.
+    # Triaged by hand as this map asks: the `where:` clause pins
+    # `h.template_id == ^template_id`, and that id is read off the
+    # `%PromptTemplate{}` struct `fetch_template/1` returned from its own
+    # `Repo.get_by(PromptTemplate, slug:)` earlier in the same `with` — so
+    # it is a `prompt_templates.id` column value the DB itself produced,
+    # not a boundary input. `promote/2` takes an `%Experiment{}` struct and
+    # resolves the template by slug from it; no caller-supplied id reaches
+    # this predicate, so no `Platform.UUID.valid?/1` guard applies.
+    "platform/experiments/promotion.ex" => 1,
     # 0 → 1 for task 019fe6b9's `get_variant/2`, the variant-blob read behind
     # `render_template/2`. Triaged by hand as this map asks: neither side of
     # the `where:` clause can raise a cast error. `v.experiment_id ==
