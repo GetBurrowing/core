@@ -504,6 +504,17 @@ defmodule PlatformWeb.Router do
       # `/control/pipeline` resolves as an agent slug and 404s on a missing
       # agent. `pipeline_live_test.exs` covers the ordering.
       live("/control/pipeline", PipelineLive, :index)
+      # Task 019fe6ba, ADR-0048. Same catch-all hazard as `/control/pipeline`
+      # directly above: both of these MUST stay above `/control/:agent_slug`
+      # or `/control/experiments` resolves as an agent slug and 404s on a
+      # missing agent. `experiments_live_test.exs` covers the ordering.
+      #
+      # These sit in `:authenticated`, not `:admin`: reads are
+      # member-visible on purpose. Writes are gated inside every
+      # `handle_event` in `ExperimentsLive` instead, because neither
+      # live_session expresses "anyone may read, admins may write".
+      live("/control/experiments", ExperimentsLive, :index)
+      live("/control/experiments/:slug", ExperimentsLive, :show)
       live("/control/:agent_slug", ControlCenterLive, :show)
       live("/org_memory", OrgMemoryLive, :index)
       # Task 019f70e9 stage 4 — direct entry to the proposals tab.
