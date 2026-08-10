@@ -53,6 +53,8 @@ defmodule Platform.Chat.Presence do
     otp_app: :platform,
     pubsub_server: Platform.PubSub
 
+  require Logger
+
   alias Platform.Agents.WorkspaceBootstrap
   alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
@@ -103,6 +105,115 @@ defmodule Platform.Chat.Presence do
   @spec online_count(binary()) :: non_neg_integer()
   def online_count(space_id) do
     space_id |> list_space() |> map_size()
+  end
+
+  @doc """
+  Return the OTHER users currently online anywhere the `viewer` may observe.
+
+  There is no platform-wide presence topic — `Phoenix.Presence` here is
+  per-space — so the "platform" answer for a viewer is the UNION of the
+  per-space presences across `Chat.list_viewer_presence_space_ids/1`, deduped
+  by participant id. That union is bounded by the viewer's own memberships,
+  which is what keeps it cheap and what keeps a foreign org's names out.
+
+  Three states, deliberately distinguishable:
+
+    * `{:ok, []}` — nobody else is online. A real answer.
+    * `{:ok, [%{user_id: id, name: name}, …]}` — sorted by name.
+    * `{:error, reason}` — the presence backend or the scoping query raised.
+
+  A failure must never be able to render as a zero: an empty office and a
+  broken read are different facts and callers have to be able to tell them
+  apart.
+
+  Only presences whose meta `participant_type` is `"user"` are included, and
+  the viewer's own id is excluded — the badge means "other people". Names come
+  from the presence meta `display_name`, falling back to the participant row's
+  `display_name` in one of the viewer's OWN spaces, never from a space outside
+  the scoped set.
+
+  Online-ness is membership in the presence map rather than a boolean on a
+  roster row, so there is no code path that can emit an offline entry and the
+  count and the list cannot diverge.
+  """
+  @spec list_online_for_viewer(map() | nil) ::
+          {:ok, [%{user_id: binary(), name: binary()}]} | {:error, term()}
+  def list_online_for_viewer(%{id: viewer_id} = viewer) when is_binary(viewer_id) do
+    space_ids = Chat.list_viewer_presence_space_ids(viewer)
+
+    online =
+      Enum.reduce(space_ids, %{}, fn space_id, acc ->
+        space_id
+        |> list_space()
+        |> Enum.reduce(acc, &merge_online_entry(&1, &2, viewer_id))
+      end)
+
+    fallbacks =
+      online
+      |> Enum.filter(fn {_id, name} -> is_nil(name) end)
+      |> Enum.map(&elem(&1, 0))
+      |> participant_name_fallbacks(space_ids)
+
+    list =
+      online
+      |> Enum.map(fn {id, name} ->
+        %{user_id: id, name: name || Map.get(fallbacks, id) || "Unknown"}
+      end)
+      |> Enum.sort_by(& &1.name)
+
+    {:ok, list}
+  rescue
+    error ->
+      Logger.error(
+        "presence union read failed: #{Exception.format(:error, error, __STACKTRACE__)}"
+      )
+
+      {:error, error}
+  end
+
+  def list_online_for_viewer(_viewer), do: {:ok, []}
+
+  defp merge_online_entry({key, %{metas: metas}}, acc, viewer_id) do
+    user_meta = Enum.find(metas, &(Map.get(&1, :participant_type) == "user"))
+
+    cond do
+      key == viewer_id -> acc
+      is_nil(user_meta) -> acc
+      true -> Map.update(acc, key, presence_name(user_meta), &(&1 || presence_name(user_meta)))
+    end
+  end
+
+  defp merge_online_entry(_entry, acc, _viewer_id), do: acc
+
+  defp presence_name(meta) do
+    case Map.get(meta, :display_name) do
+      name when is_binary(name) ->
+        case String.trim(name) do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp participant_name_fallbacks([], _space_ids), do: %{}
+
+  defp participant_name_fallbacks(missing_ids, space_ids) do
+    wanted = MapSet.new(missing_ids)
+
+    space_ids
+    |> Enum.flat_map(&Chat.list_participants(&1, participant_type: "user"))
+    |> Enum.reduce(%{}, fn participant, acc ->
+      name = presence_name(%{display_name: participant.display_name})
+
+      if not is_nil(name) and MapSet.member?(wanted, participant.participant_id) do
+        Map.put_new(acc, participant.participant_id, name)
+      else
+        acc
+      end
+    end)
   end
 
   @doc """

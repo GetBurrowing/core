@@ -196,7 +196,12 @@
         </.async_result>
 
         <%!-- Human presence indicator --%>
-        <.async_result :let={presence_list} assign={@presence_list}>
+        <%!-- The resolved value is a three-state `{:ok, list} | {:error, reason}`.
+              Every entry in the viewer union is online by construction, so the
+              badge count is literally `length(list)` and cannot disagree with the
+              rows. A failed read is NEVER rendered as a number: an unavailable
+              backend and an empty office must not look the same. --%>
+        <.async_result :let={presence_result} assign={@presence_list}>
           <:loading>
             <span
               class="loading loading-spinner loading-xs text-base-content/40"
@@ -205,17 +210,33 @@
             >
             </span>
           </:loading>
-          <:failed>
-            <%!-- Quietly hide on failure rather than show a broken count --%>
-          </:failed>
           <div class="relative">
             <button
               phx-click="toggle_presence_panel"
+              data-test-id="shell-presence-badge"
               class="flex items-center gap-1 text-xs text-base-content/50 hover:text-base-content transition-colors"
-              title="Online participants"
+              title={
+                case presence_result do
+                  {:ok, _} -> "Online participants"
+                  _ -> "Presence unavailable"
+                end
+              }
             >
               <span class="hero-user-group size-4"></span>
-              <span>{Enum.count(presence_list, & &1.online)}</span>
+              <%= case presence_result do %>
+                <% {:ok, list} -> %>
+                  <span>{length(list)}</span>
+                <% _ -> %>
+                  <span class="inline-block size-2 rounded-full bg-neutral"></span>
+                  <%!-- Below `sm` the label is dropped: the icon plus the neutral
+                        dot carry the state, and the popover keeps the full
+                        sentence. A 20-character label wraps at 375px and doubles
+                        the header row, and chrome must not change page geometry
+                        when it breaks. Truncating is not the fix — an ellipsis on
+                        a status label reads as a rendering fault. Never a number
+                        in this branch, at any width. --%>
+                  <span class="hidden sm:inline">Presence unavailable</span>
+              <% end %>
             </button>
 
             <div
@@ -225,11 +246,31 @@
               <div class="text-[10px] uppercase tracking-widest text-base-content/40 px-2 mb-1">
                 Participants
               </div>
-              <%= for user <- presence_list do %>
-                <div class="flex items-center gap-2 py-1.5 px-2 rounded">
-                  <span class={"inline-block size-2 rounded-full #{if user.online, do: "bg-green-500", else: "bg-zinc-400"}"} />
-                  <span class="text-sm text-base-content/70">{user.name}</span>
-                </div>
+              <%= case presence_result do %>
+                <% {:ok, []} -> %>
+                  <div
+                    data-test-id="shell-presence-empty"
+                    class="py-1.5 px-2 text-sm text-base-content/50"
+                  >
+                    No one else online
+                  </div>
+                <% {:ok, list} -> %>
+                  <div
+                    :for={user <- list}
+                    data-test-id="shell-presence-row"
+                    class="flex items-center gap-2 py-1.5 px-2 rounded"
+                  >
+                    <span class="inline-block size-2 rounded-full bg-success"></span>
+                    <span class="text-sm text-base-content/70">{user.name}</span>
+                  </div>
+                <% _ -> %>
+                  <div
+                    data-test-id="shell-presence-unavailable"
+                    class="flex items-center gap-2 py-1.5 px-2 text-sm text-base-content/50"
+                  >
+                    <span class="inline-block size-2 rounded-full bg-neutral"></span>
+                    <span>Presence unavailable</span>
+                  </div>
               <% end %>
             </div>
           </div>

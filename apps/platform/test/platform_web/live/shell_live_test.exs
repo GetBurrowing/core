@@ -156,7 +156,9 @@ defmodule PlatformWeb.ShellLiveTest do
     assert is_atom(composite)
     assert %AsyncResult{ok?: true, result: name} = assigns.principal_name
     assert name == "LoadingBot"
-    assert %AsyncResult{ok?: true, result: presence} = assigns.presence_list
+    # Task 019fe4b1 stage 3: the presence assign now carries the three-state
+    # `{:ok, list} | {:error, reason}` tuple rather than a bare list.
+    assert %AsyncResult{ok?: true, result: {:ok, presence}} = assigns.presence_list
     assert is_list(presence)
 
     # The PubSub-driven refresh path keeps the AsyncResult shape so the
@@ -190,6 +192,359 @@ defmodule PlatformWeb.ShellLiveTest do
     # After resolve, roster_space_id is the bare binary (not AsyncResult).
     assigns = :sys.get_state(view.pid).socket.assigns
     assert assigns.roster_space_id == space.id
+  end
+
+  # ── viewer-scoped shell presence (task 019fe4b1 stage 3) ──────────────────
+  #
+  # The shell badge used to read `first_space/0` — one arbitrary space, the
+  # oldest non-archived one — so it answered a question nobody asked and could
+  # show a stranger's name. It now resolves the VIEWER's observable set.
+  #
+  # Every absence assertion below shares its run with a positive control: an
+  # `async_load_presence/2` that resolved to `{:ok, []}` unconditionally would
+  # satisfy every refute on its own, so each one sits beside a colleague who
+  # MUST appear.
+  #
+  # Orgs come from the seeded tenants rather than a freshly created one: a new
+  # top-level org has `parent_org_id == nil`, which resolves `:root_all` and
+  # silently disables the very org fence these tests exist to prove.
+  defp presence_user!(name) do
+    n = System.unique_integer([:positive])
+
+    Repo.insert!(%User{
+      email: "shell-presence-#{n}@example.com",
+      name: name,
+      oidc_sub: "oidc-shell-presence-#{n}"
+    })
+  end
+
+  defp presence_org_member!(user, org) do
+    Repo.insert!(%OrgMembership{user_id: user.id, org_id: org.id, role: "member"})
+  end
+
+  defp presence_space!(org) do
+    {:ok, space} =
+      Chat.create_space(%{
+        name: "Presence Chan",
+        slug: "shell-presence-#{System.unique_integer([:positive])}",
+        kind: "channel",
+        org_id: org.id
+      })
+
+    space
+  end
+
+  defp presence_participant!(space, user, display_name) do
+    {:ok, p} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        display_name: display_name,
+        joined_at: DateTime.utc_now()
+      })
+
+    p
+  end
+
+  defp presence_online!(space, user, display_name) do
+    {:ok, _} =
+      Platform.Chat.Presence.track_in_space(self(), space.id, user.id, %{
+        participant_type: "user",
+        display_name: display_name
+      })
+
+    :ok
+  end
+
+  # The error tests break the read for real rather than hand-writing the tuple
+  # into the assign: a non-UUID viewer id makes the scoping query raise on
+  # cast, which is exactly the rescue `list_online_for_viewer/1` wraps as
+  # `{:error, reason}`. Asserting a shape you injected yourself would prove
+  # only that `assign/3` works.
+  defp break_presence_read!(view) do
+    :sys.replace_state(view.pid, fn state ->
+      put_in(state.socket.assigns.current_user_record, %{id: "definitely-not-a-uuid"})
+    end)
+  end
+
+  defp send_presence_diff(view, space_id) do
+    send(view.pid, %Phoenix.Socket.Broadcast{
+      topic: Platform.Chat.PubSub.space_topic(space_id),
+      event: "presence_diff",
+      payload: %{joins: %{}, leaves: %{}}
+    })
+
+    render(view)
+  end
+
+  defp shell_presence_result(view) do
+    assigns = :sys.get_state(view.pid).socket.assigns
+    assert %AsyncResult{ok?: true, result: result} = assigns.presence_list
+    result
+  end
+
+  describe "viewer-scoped shell presence assign" do
+    setup %{conn: conn} do
+      home = Tenancy.get_org_by_slug!("sxi")
+      foreign = Tenancy.get_org_by_slug!("soylent")
+
+      viewer = presence_user!("Vera Viewer")
+      colleague = presence_user!("Cora Colleague")
+      presence_org_member!(viewer, home)
+      presence_org_member!(colleague, home)
+
+      shared = presence_space!(home)
+      presence_participant!(shared, viewer, "Vera Viewer")
+      presence_participant!(shared, colleague, "Cora Colleague")
+
+      %{
+        conn: init_test_session(conn, current_user_id: viewer.id),
+        home: home,
+        foreign: foreign,
+        viewer: viewer,
+        colleague: colleague,
+        shared: shared
+      }
+    end
+
+    test "resolved assign holds the online colleague and excludes offline + foreign users", ctx do
+      offline_user = presence_user!("Otto Offline")
+      presence_org_member!(offline_user, ctx.home)
+      presence_participant!(ctx.shared, offline_user, "Otto Offline")
+
+      stranger = presence_user!("Fiona Foreign")
+      presence_org_member!(stranger, ctx.foreign)
+      foreign_space = presence_space!(ctx.foreign)
+      presence_participant!(foreign_space, stranger, "Fiona Foreign")
+      # The viewer even holds a participant row in the foreign space —
+      # membership alone must not carry a name across the org fence.
+      presence_participant!(foreign_space, ctx.viewer, "Vera Viewer")
+      presence_online!(foreign_space, stranger, "Fiona Foreign")
+
+      presence_online!(ctx.shared, ctx.colleague, "Cora Colleague")
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+
+      assert {:ok, list} = shell_presence_result(view)
+
+      names = Enum.map(list, & &1.name)
+      # Positive control first — without it the refutes below prove nothing.
+      assert "Cora Colleague" in names
+      refute "Otto Offline" in names
+      refute "Fiona Foreign" in names
+      # And the viewer is not in their own badge.
+      refute "Vera Viewer" in names
+    end
+
+    test "the LV subscribes to every viewer space, not one arbitrary space", ctx do
+      second = presence_space!(ctx.home)
+      presence_participant!(second, ctx.viewer, "Vera Viewer")
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+
+      subscribed = :sys.get_state(view.pid).socket.assigns.presence_space_ids
+
+      # Both spaces, not just the oldest — a single-topic subscription shows up
+      # as a permanently stale list, which looks perfectly fine on first load.
+      assert ctx.shared.id in subscribed
+      assert second.id in subscribed
+    end
+
+    test "a presence_diff from a newly online colleague updates the assign", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+
+      # Positive control on the BEFORE state: the colleague is genuinely absent
+      # to start with, so the assertion after the diff proves the update ran.
+      assert {:ok, before_list} = shell_presence_result(view)
+      refute "Cora Colleague" in Enum.map(before_list, & &1.name)
+
+      latecomer = presence_user!("Lena Latecomer")
+      presence_org_member!(latecomer, ctx.home)
+      presence_participant!(ctx.shared, latecomer, "Lena Latecomer")
+
+      presence_online!(ctx.shared, ctx.colleague, "Cora Colleague")
+      presence_online!(ctx.shared, latecomer, "Lena Latecomer")
+
+      # Presence broadcasts its own diff; give it a beat to reach the LV, then
+      # force a render so the assign read below sees the settled state.
+      :timer.sleep(150)
+      _html = render(view)
+
+      assert {:ok, after_list} = shell_presence_result(view)
+      names = Enum.map(after_list, & &1.name)
+      assert "Cora Colleague" in names
+      assert "Lena Latecomer" in names
+    end
+
+    test "an {:error, _} read survives to the assign instead of collapsing to []", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+
+      # Positive control: the read works before we break it, so the assertion
+      # after the break is about the break and not about a dead LV.
+      assert {:ok, _} = shell_presence_result(view)
+
+      break_presence_read!(view)
+      send_presence_diff(view, ctx.shared.id)
+
+      # An empty office and a broken read are different facts.
+      assert {:error, _reason} = shell_presence_result(view)
+      refute shell_presence_result(view) == {:ok, []}
+    end
+
+    test "a failing diff keeps the last good list rather than blanking it", ctx do
+      presence_online!(ctx.shared, ctx.colleague, "Cora Colleague")
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+
+      assert {:ok, good} = shell_presence_result(view)
+      assert "Cora Colleague" in Enum.map(good, & &1.name)
+
+      break_presence_read!(view)
+      send_presence_diff(view, ctx.shared.id)
+
+      # A transient failure must not blank a list we already had.
+      assert {:ok, kept} = shell_presence_result(view)
+      assert "Cora Colleague" in Enum.map(kept, & &1.name)
+    end
+  end
+
+  # ── rendered presence strip (stage 4) ─────────────────────────────────────
+  # The assign tests above prove the DATA is right. These prove the three
+  # states are told apart on screen: a populated list, a genuinely empty one,
+  # and an unavailable read must not render as each other. The empty and
+  # unavailable cases assert on DIFFERENT hooks on purpose — if one selector
+  # satisfied both, the distinction would be decorative.
+  defp presence_hook_count(html, hook) do
+    html
+    |> String.split(~s(data-test-id="#{hook}"))
+    |> length()
+    |> Kernel.-(1)
+  end
+
+  defp open_presence_panel(view) do
+    view |> element(~s([data-test-id="shell-presence-badge"])) |> render_click()
+  end
+
+  describe "rendered shell presence strip" do
+    setup %{conn: conn} do
+      home = Tenancy.get_org_by_slug!("sxi")
+
+      viewer = presence_user!("Vera Viewer")
+      colleague = presence_user!("Cora Colleague")
+      presence_org_member!(viewer, home)
+      presence_org_member!(colleague, home)
+
+      shared = presence_space!(home)
+      presence_participant!(shared, viewer, "Vera Viewer")
+      presence_participant!(shared, colleague, "Cora Colleague")
+
+      %{
+        conn: init_test_session(conn, current_user_id: viewer.id),
+        home: home,
+        viewer: viewer,
+        colleague: colleague,
+        shared: shared
+      }
+    end
+
+    test "populated: one row per online user, badge count equals row count", ctx do
+      offline_user = presence_user!("Otto Offline")
+      presence_org_member!(offline_user, ctx.home)
+      presence_participant!(ctx.shared, offline_user, "Otto Offline")
+
+      latecomer = presence_user!("Lena Latecomer")
+      presence_org_member!(latecomer, ctx.home)
+      presence_participant!(ctx.shared, latecomer, "Lena Latecomer")
+
+      presence_online!(ctx.shared, ctx.colleague, "Cora Colleague")
+      presence_online!(ctx.shared, latecomer, "Lena Latecomer")
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+      html = open_presence_panel(view)
+
+      # Positive control: the online colleague is actually on screen. Without
+      # this the count assertion below is satisfied by total breakage (0 == 0).
+      assert html =~ "Cora Colleague"
+      assert html =~ "Lena Latecomer"
+      refute html =~ "Otto Offline"
+
+      rows = presence_hook_count(html, "shell-presence-row")
+      assert rows == 2
+
+      badge =
+        view
+        |> element(~s([data-test-id="shell-presence-badge"]))
+        |> render()
+
+      # The badge is `length(list)`, so it cannot disagree with the rows.
+      assert badge =~ ">#{rows}<"
+      refute html =~ ~s(data-test-id="shell-presence-empty")
+      refute html =~ ~s(data-test-id="shell-presence-unavailable")
+    end
+
+    test "empty: says 'No one else online' and the badge reads 0", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+      html = open_presence_panel(view)
+
+      assert presence_hook_count(html, "shell-presence-empty") == 1
+      assert html =~ "No one else online"
+      assert presence_hook_count(html, "shell-presence-row") == 0
+      # The empty state is NOT the unavailable state.
+      assert presence_hook_count(html, "shell-presence-unavailable") == 0
+
+      badge = view |> element(~s([data-test-id="shell-presence-badge"])) |> render()
+      assert badge =~ ">0<"
+      refute badge =~ "Presence unavailable"
+    end
+
+    test "unavailable: distinct hook, and the badge never renders a number", ctx do
+      presence_online!(ctx.shared, ctx.colleague, "Cora Colleague")
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+      healthy = open_presence_panel(view)
+
+      # Positive control: the healthy render works before we break the read.
+      assert healthy =~ "Cora Colleague"
+      assert presence_hook_count(healthy, "shell-presence-row") == 1
+
+      # The stage-3 diff handler deliberately keeps the last good NON-EMPTY
+      # list through a transient failure, so the failed read is observed on a
+      # session that has no good list to fall back to: a second viewer in the
+      # same org whose own space has nobody online. Same test, same run as the
+      # positive control above.
+      lonely = presence_user!("Lonnie Lonely")
+      presence_org_member!(lonely, ctx.home)
+      lonely_space = presence_space!(ctx.home)
+      presence_participant!(lonely_space, lonely, "Lonnie Lonely")
+      lonely_conn = init_test_session(build_conn(), current_user_id: lonely.id)
+
+      {:ok, broken_view, _html} = live(lonely_conn, ~p"/tasks")
+      _html = render_async(broken_view, 2_000)
+      break_presence_read!(broken_view)
+      send_presence_diff(broken_view, lonely_space.id)
+
+      assert {:error, _} = shell_presence_result(broken_view)
+      html = open_presence_panel(broken_view)
+
+      assert presence_hook_count(html, "shell-presence-unavailable") == 1
+      assert html =~ "Presence unavailable"
+      # A broken backend and an empty office must not look the same.
+      assert presence_hook_count(html, "shell-presence-empty") == 0
+      assert presence_hook_count(html, "shell-presence-row") == 0
+
+      badge = broken_view |> element(~s([data-test-id="shell-presence-badge"])) |> render()
+      assert badge =~ "Presence unavailable"
+      # A failure is never allowed to render as a count — a zero is a claim.
+      refute badge =~ ">0<"
+    end
   end
 
   test "shell chat nav link relies on RouteResume — no dedicated last-chat hook", %{conn: conn} do

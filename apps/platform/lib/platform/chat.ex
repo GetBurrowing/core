@@ -471,6 +471,43 @@ defmodule Platform.Chat do
     Repo.all(base)
   end
 
+  @doc """
+  List the space ids whose presence a given viewer is allowed to observe.
+
+  Two independent gates, deliberately, because either one alone has already
+  failed elsewhere in this codebase:
+
+    * **membership is the grant** — the viewer must hold a
+      `participant_type: "user"` row on a non-archived space, exactly the
+      query shape `list_member_space_ids/2` uses.
+    * **org visibility is the fence** — the resolved `t:Platform.Tenancy.visibility/0`
+      is applied via `Tenancy.scope/3` with `binding: :last`, so the org
+      narrowing lands on `chat_spaces.org_id` rather than on the participant
+      row. A viewer resolving to `:none` therefore gets `[]`, never everything.
+
+  Takes the loaded user struct (not an id) so `Tenancy.visibility/1` can take
+  its zero-query preloaded-`:org_memberships` clause. Anything that is not a
+  user struct with a binary id returns `[]`.
+  """
+  @spec list_viewer_presence_space_ids(map() | nil) :: [binary()]
+  def list_viewer_presence_space_ids(%{id: user_id} = user) when is_binary(user_id) do
+    vis = Tenancy.visibility(user)
+
+    from(p in Participant,
+      join: s in Space,
+      on: s.id == p.space_id,
+      where:
+        p.participant_type == "user" and
+          p.participant_id == ^user_id and
+          is_nil(s.archived_at),
+      select: p.space_id
+    )
+    |> Tenancy.scope(vis, binding: :last)
+    |> Repo.all()
+  end
+
+  def list_viewer_presence_space_ids(_user), do: []
+
   @doc "Update a space's attributes."
   @spec update_space(Space.t(), map()) :: {:ok, Space.t()} | {:error, Ecto.Changeset.t()}
   def update_space(%Space{} = space, attrs) do

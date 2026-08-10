@@ -61,6 +61,12 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:principal_name, AsyncResult.loading())
       |> assign(:presence_list, AsyncResult.loading())
       |> assign(:roster_space_id, nil)
+      # Task 019fe4b1 stage 3: the presence badge is no longer scoped to one
+      # arbitrary space. The viewer's observable set is a LIST of space ids
+      # (resolved by `Chat.list_viewer_presence_space_ids/1`), and this assign
+      # holds the exact set this LV process holds PubSub subscriptions for, so
+      # a `presence_diff` on any of them can rebuild the union.
+      |> assign(:presence_space_ids, [])
 
     # Schedule async load + PubSub subscribes only on the WS-connected mount.
     # Static/disconnected render skips this entirely (placeholders ship to the
@@ -94,7 +100,7 @@ defmodule PlatformWeb.ShellLive do
           [:roster_items, :composite_status, :principal_name],
           fn -> async_load_roster(lv_pid) end
         )
-        |> assign_async(:presence_list, fn -> async_load_presence(lv_pid) end)
+        |> assign_async(:presence_list, fn -> async_load_presence(lv_pid, user_record) end)
         |> maybe_subscribe_meeting_state(raw_user_id)
       else
         socket
@@ -176,24 +182,39 @@ defmodule PlatformWeb.ShellLive do
         {:roster_changed, space_id}, socket ->
           {:halt, refresh_roster(socket, space_id)}
 
+        # Task 019fe4b1 stage 3: the presence loader runs in a Task, so — same
+        # reason as `{:roster_resolved, sid}` above — it hands the resolved
+        # space-id set back here and the LV process installs the subscriptions
+        # itself. Subscribing from the Task would put the diffs in a mailbox
+        # that dies with it.
+        {:presence_spaces_resolved, space_ids}, socket when is_list(space_ids) ->
+          already = socket.assigns[:presence_space_ids] || []
+
+          Enum.each(space_ids -- already, &ChatPubSub.subscribe/1)
+
+          {:halt, assign(socket, :presence_space_ids, Enum.uniq(already ++ space_ids))}
+
         %Phoenix.Socket.Broadcast{event: "presence_diff"}, socket ->
-          list =
-            try do
-              if sid = socket.assigns[:roster_space_id] do
-                build_presence_list(sid)
-              else
-                []
-              end
-            rescue
-              _ ->
-                case socket.assigns[:presence_list] do
-                  %AsyncResult{result: prev} when is_list(prev) -> prev
-                  prev when is_list(prev) -> prev
-                  _ -> []
-                end
+          # Any diff on ANY subscribed space invalidates the union, so rebuild
+          # the whole thing rather than patching one space's slice — the badge
+          # dedupes a person who is online in two spaces, and a per-space patch
+          # cannot know whether their other space still holds them.
+          result =
+            ChatPresence.list_online_for_viewer(socket.assigns[:current_user_record])
+
+          next =
+            case {result, socket.assigns[:presence_list]} do
+              # A transient failure must not blank a list we already had: keep
+              # the last good answer rather than flashing the error state.
+              # Deliberately only for a NON-EMPTY prior — an empty prior is not
+              # an answer worth preserving, and letting it win would turn the
+              # fallback into the very failure-renders-as-zero bug this task
+              # exists to remove.
+              {{:error, _}, %AsyncResult{result: {:ok, [_ | _]} = prev}} -> prev
+              {other, _} -> other
             end
 
-          {:halt, assign(socket, :presence_list, async_ok(socket.assigns[:presence_list], list))}
+          {:halt, assign(socket, :presence_list, async_ok(socket.assigns[:presence_list], next))}
 
         {:meeting_joined, payload}, socket ->
           path = socket.assigns[:current_path] || "/"
@@ -558,11 +579,22 @@ defmodule PlatformWeb.ShellLive do
     end
   end
 
-  defp async_load_presence(_lv_pid) do
-    case first_space() do
-      nil -> {:ok, %{presence_list: []}}
-      %{id: sid} -> {:ok, %{presence_list: build_presence_list(sid)}}
-    end
+  # Task 019fe4b1 stage 3: the shell presence badge is the VIEWER's answer, not
+  # the oldest space's. The observable set comes from
+  # `Chat.list_viewer_presence_space_ids/1` (membership is the grant, resolved
+  # org visibility is the fence) and the online union from
+  # `Presence.list_online_for_viewer/1`.
+  #
+  # The `{:ok, list}` / `{:error, reason}` tuple is stored AS the assign value
+  # rather than being unwrapped here, because "nobody else is online" and "the
+  # read failed" are different facts and the template has to be able to render
+  # them differently. Unwrapping to `[]` on error is exactly the bug this task
+  # exists to remove.
+  defp async_load_presence(lv_pid, user_record) do
+    space_ids = Chat.list_viewer_presence_space_ids(user_record)
+    send(lv_pid, {:presence_spaces_resolved, space_ids})
+
+    {:ok, %{presence_list: ChatPresence.list_online_for_viewer(user_record)}}
   end
 
   defp maybe_subscribe_meeting_state(socket, raw_user_id) when is_binary(raw_user_id) do
@@ -614,24 +646,6 @@ defmodule PlatformWeb.ShellLive do
   end
 
   defp seed_meeting_state_from_storage(socket, _), do: socket
-
-  defp build_presence_list(space_id) do
-    online_ids =
-      space_id
-      |> ChatPresence.list_space()
-      |> Map.keys()
-      |> MapSet.new()
-
-    space_id
-    |> Chat.list_participants()
-    |> Enum.filter(&(&1.participant_type == "user"))
-    |> Enum.map(fn p ->
-      %{name: p.display_name || "User", online: MapSet.member?(online_ids, p.participant_id)}
-    end)
-    |> Enum.sort_by(& &1.name)
-  rescue
-    _ -> []
-  end
 
   defp first_space do
     from(s in Platform.Chat.Space,
