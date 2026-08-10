@@ -89,7 +89,11 @@ defmodule Platform.Chat.AgentResponder do
     :active_agent,
     :watch,
     :multi_mention,
-    :system_event
+    :system_event,
+    # Role-scoped system dispatch bound to the role holder by AttentionRouter.
+    # Must be routable, or narrowing delivery to the correct recipient would
+    # also silence them.
+    :role_scoped
   ]
 
   @spec respond(map()) :: :ok | {:error, term()}

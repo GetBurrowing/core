@@ -60,6 +60,7 @@ defmodule Platform.Chat.AttentionRouter do
   alias Platform.Chat.{ActiveAgentStore, AgentResponder, Message, Participant, Presence, Space}
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
+  alias Platform.Roles
   alias Platform.Tasks.Task, as: TaskRecord
 
   @handler_id "platform-chat-attention-router"
@@ -342,14 +343,77 @@ defmodule Platform.Chat.AttentionRouter do
 
   # ── Mutex-based agent routing (ADR 0027) ────────────────────────────────────
 
-  defp route_agents(%Space{kind: "dm"}, _message, agent_recipients) do
+  # Role-scoped system dispatches bind to the ROLE HOLDER, never to whoever
+  # happens to be armed in the space. This clause must stay ahead of every
+  # activity-based branch below (DM, mention, mutex) — those all route by who
+  # spoke last, which is the wrong question for a dispatch whose whole
+  # identity is "the agent currently holding role X".
+  #
+  # The sibling MENTION leg of this same leak was closed by `skip_mention_scan`
+  # (see `mention_scan_enabled?/1`); this is the MUTEX leg. A misroute here is
+  # silent — page writes are role-gated at the tool boundary, so a wrong
+  # recipient produces no error, just a dispatch the intended holder never saw.
+  #
+  # Deliberately role-KEY driven, never a per-role branch: the guard has to
+  # hold for every key in `Platform.Roles.Role` (ADR 0043's security guard and
+  # ADR 0044's architect included) the moment they stamp the metadata.
+  defp route_agents(%Space{} = space, %Message{} = message, agent_recipients) do
+    case role_scoped_dispatch_role(message) do
+      nil -> route_agents_by_activity(space, message, agent_recipients)
+      role_key -> route_role_scoped(space, message, agent_recipients, role_key)
+    end
+  end
+
+  defp route_role_scoped(%Space{} = space, %Message{} = message, agent_recipients, role_key) do
+    case Roles.agent_id_for_role(role_key) do
+      nil ->
+        refuse_role_scoped(space, message, role_key, :role_unfilled)
+
+      agent_id ->
+        participant = Chat.get_agent_participant(space.id, agent_id)
+
+        # Deliberately NOT touching `ActiveAgentStore` on any branch here: a
+        # role-scoped system dispatch is not a conversational turn and must
+        # neither arm the role holder nor disarm whoever is already armed.
+        if participant && Enum.any?(agent_recipients, &(&1.id == participant.id)) do
+          [%{participant_id: participant.id, reason: :role_scoped}]
+        else
+          refuse_role_scoped(space, message, role_key, :role_holder_not_in_space)
+        end
+    end
+  end
+
+  # An unfilled (or absent) role holder must refuse by NAME rather than degrade
+  # into an arbitrary recipient. Silence and "delivered to the wrong agent" are
+  # indistinguishable downstream otherwise.
+  defp refuse_role_scoped(%Space{} = space, %Message{} = message, role_key, reason) do
+    Logger.warning(
+      "[AttentionRouter] refusing role-scoped dispatch for role #{inspect(role_key)} " <>
+        "(#{reason}) on message #{message.id}"
+    )
+
+    :telemetry.execute(
+      [:platform, :chat, :role_scoped_dispatch, :refused],
+      %{system_time: System.system_time()},
+      %{
+        role_key: role_key,
+        reason: reason,
+        space_id: space.id,
+        message_id: message.id
+      }
+    )
+
+    []
+  end
+
+  defp route_agents_by_activity(%Space{kind: "dm"}, _message, agent_recipients) do
     # DM spaces: always route to the agent participant directly
     Enum.map(agent_recipients, fn p ->
       %{participant_id: p.id, reason: :directed}
     end)
   end
 
-  defp route_agents(%Space{} = space, %Message{} = message, agent_recipients) do
+  defp route_agents_by_activity(%Space{} = space, %Message{} = message, agent_recipients) do
     # Build roster lookup for role validation
     roster = Chat.list_space_agents(space.id)
     roster_by_agent_id = Map.new(roster, fn sa -> {sa.agent_id, sa} end)
@@ -633,6 +697,34 @@ defmodule Platform.Chat.AttentionRouter do
   end
 
   def mention_scan_enabled?(_), do: true
+
+  @doc """
+  Return the role key a message is scoped to, or `nil` for ordinary messages.
+
+  A system dispatch that only makes sense for the holder of a given role
+  stamps `metadata["role_scoped_dispatch"]` with that role's key. Agent
+  routing binds such a message to the role holder instead of running it
+  through the activity-based (mention / mutex) branches, which would hand it
+  to whoever happened to speak last.
+
+  Blank strings are treated as absent so a stamping bug degrades to ordinary
+  routing rather than to a refusal against the empty role key.
+  """
+  @spec role_scoped_dispatch_role(Message.t()) :: binary() | nil
+  def role_scoped_dispatch_role(%Message{metadata: metadata}) do
+    case Map.get(metadata || %{}, "role_scoped_dispatch") do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> nil
+          role_key -> role_key
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  def role_scoped_dispatch_role(_), do: nil
 
   @doc """
   Extract ADR 0037 `@[Display Name]` bracketed mention tokens from content.

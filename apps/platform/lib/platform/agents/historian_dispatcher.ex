@@ -1176,10 +1176,19 @@ defmodule Platform.Agents.HistorianDispatcher do
               # 2026-07-10 by Rowan noticing Dalton was receiving Historian
               # dispatches meant for Higgins).
               # See `Platform.Chat.AttentionRouter.mention_scan_enabled?/1`.
+              # `role_scoped_dispatch` binds this instruction to the holder of
+              # the `historian` role. Without it the message is routed like any
+              # other chat post — by the ActiveAgentStore mutex — so whichever
+              # agent happened to be armed in the space received a second,
+              # extra copy of a "You are the Historian…" body meant for someone
+              # else. `skip_mention_scan` above closed the mention leg of that
+              # same leak; this closes the mutex leg.
+              # See `Platform.Chat.AttentionRouter.role_scoped_dispatch_role/1`.
               %{
                 "source" => "system_event",
                 "event_type" => event_type,
-                "skip_mention_scan" => true
+                "skip_mention_scan" => true,
+                "role_scoped_dispatch" => "historian"
               },
               stringify_keys(extra_metadata)
             )
