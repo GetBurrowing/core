@@ -10,9 +10,13 @@ defmodule Platform.Responsibilities.Handlers.DesignBrandCheck do
 
     * `key` — `"design.brand_check"`
     * `feature` — `"design"`
-    * `trigger_kind` — `chat_pattern` with `regex: "@vega\\s+brand\\b"`
-      (case-insensitive; designers invoke by mentioning Vega with a
-      "brand" verb)
+    * `trigger_kind` — `chat_pattern` with
+      `regex: "(?i)@designer\\s+brand\\b"`, built by
+      `Platform.Responsibilities.RoleTrigger.chat_regex/3` (case-insensitive;
+      invoked by addressing the Designer ROLE with a "brand" verb). The token
+      names the role rather than whoever currently holds it, because the role
+      outlives its holder — an agent handle baked into a trigger outlives the
+      person exactly once and then lies.
     * `scope` — `per_space`
     * `context_provided` — `["canvas_snapshot", "brand_guidelines"]`
     * `cost_profile` — `low_freq_capable`
@@ -36,8 +40,13 @@ defmodule Platform.Responsibilities.Handlers.DesignBrandCheck do
 
   require Logger
 
+  alias Platform.Responsibilities.RoleTrigger
+
   @key "design.brand_check"
   @feature "design"
+  # Single source for the role key: feeds BOTH the trigger regex and the
+  # metadata map below, so the trigger and the declared role cannot drift.
+  @role "designer"
   @template_slug "design.brand_check.v1"
 
   @doc "Canonical key for this responsibility."
@@ -56,7 +65,7 @@ defmodule Platform.Responsibilities.Handlers.DesignBrandCheck do
         feature: @feature,
         trigger_kind: "chat_pattern",
         trigger_config: %{
-          "regex" => "(?i)@vega\\s+brand\\b"
+          "regex" => RoleTrigger.chat_regex(@role, "brand")
         },
         scope: "per_space",
         context_provided: ["canvas_snapshot", "brand_guidelines"],
@@ -70,7 +79,7 @@ defmodule Platform.Responsibilities.Handlers.DesignBrandCheck do
         metadata: %{
           "owner" => "platform.design",
           "status" => "placeholder",
-          "role" => "designer"
+          "role" => @role
         }
       }
     ]

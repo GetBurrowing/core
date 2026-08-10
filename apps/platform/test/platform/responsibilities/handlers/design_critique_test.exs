@@ -24,7 +24,9 @@ defmodule Platform.Responsibilities.Handlers.DesignCritiqueTest do
       (`UndefinedFunctionError`), which is exactly why the Router fell
       through to the DB template row that also says "Vega".
     * trigger — stub's regex was `(?i)@vega\\s+(critique|review)\\b`, so
-      the `@saru` match fails and the `@vega` refutation fails.
+      the `@designer` match fails. Both the `@vega` AND the `@saru`
+      refutations are kept: together they prove the trigger stopped
+      naming a person at all, rather than swapping one name for another.
     * shim round-trip — the positive control on the feature-level
       indirection. It fails against the stub for the same reason the
       direct call does, and it is here so a handler that is correct but
@@ -66,7 +68,7 @@ defmodule Platform.Responsibilities.Handlers.DesignCritiqueTest do
       ctx = %{
         kind: :chat_pattern,
         space_id: space.id,
-        match: ["@saru critique #{canvas.id}", "critique", canvas.id]
+        match: ["@designer critique #{canvas.id}", "critique", canvas.id]
       }
 
       assert {:ok, context} = DesignCritique.gather_context(responsibility(), ctx)
@@ -159,21 +161,48 @@ defmodule Platform.Responsibilities.Handlers.DesignCritiqueTest do
   end
 
   describe "register/0" do
-    test "the compiled trigger fires on @saru and not on @vega" do
+    test "the compiled trigger fires on the role token and on no agent handle" do
       regex = Regex.compile!(trigger_regex())
 
-      assert Regex.match?(regex, "@saru critique this")
-      assert Regex.match?(regex, "@Saru review the checkout screen")
+      assert Regex.match?(regex, "@designer critique this")
+      assert Regex.match?(regex, "@Designer review the checkout screen")
+
+      # BOTH refutations matter. `@vega` alone would only prove the stale
+      # handle went away; `@saru` proves the trigger names no person at
+      # all, which is the actual rule.
       refute Regex.match?(regex, "@vega critique this")
       refute Regex.match?(regex, "@vega review this")
+      refute Regex.match?(regex, "@saru critique this")
+      refute Regex.match?(regex, "@saru review this")
+    end
+
+    test "the registered regex contains no @ token other than the role key" do
+      tokens =
+        ~r/@([A-Za-z0-9_]+)/
+        |> Regex.scan(trigger_regex())
+        |> Enum.map(fn [_, token] -> String.downcase(token) end)
+
+      assert tokens == ["designer"]
     end
 
     test "the trigger captures a trailing canvas id, bare or in a URL" do
       regex = Regex.compile!(trigger_regex())
       id = Ecto.UUID.generate()
 
-      assert id in Regex.run(regex, "@saru critique #{id}")
-      assert id in Regex.run(regex, "@saru critique /chat/canvas/#{id}")
+      assert id in Regex.run(regex, "@designer critique #{id}")
+      assert id in Regex.run(regex, "@designer critique /chat/canvas/#{id}")
+
+      # The canvas-id group must remain the LAST group: `strip_canvas_id/1`
+      # scans positional captures. `Regex.run/2` returns them in order, so
+      # asserting the id is the final element pins that ordering.
+      assert List.last(Regex.run(regex, "@designer critique #{id}")) == id
+    end
+
+    test "the verb group precedes the canvas-id group in the positional captures" do
+      regex = Regex.compile!(trigger_regex())
+      id = Ecto.UUID.generate()
+
+      assert [_full, "critique", ^id] = Regex.run(regex, "@designer critique #{id}")
     end
 
     test "the row is not declared inert and no longer advertises itself as a placeholder" do

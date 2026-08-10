@@ -17,7 +17,7 @@ defmodule Platform.Responsibilities.Handlers.DesignBrandCheckTest do
       key: DesignBrandCheck.key(),
       feature: "design",
       trigger_kind: "chat_pattern",
-      trigger_config: %{"regex" => "(?i)@vega\\s+brand\\b"},
+      trigger_config: %{"regex" => "(?i)@designer\\s+brand\\b"},
       scope: "per_space",
       context_provided: ["canvas_snapshot", "brand_guidelines"],
       enabled: true
@@ -34,7 +34,7 @@ defmodule Platform.Responsibilities.Handlers.DesignBrandCheckTest do
       assert spec.key == "design.brand_check"
       assert spec.feature == "design"
       assert spec.trigger_kind == "chat_pattern"
-      assert spec.trigger_config == %{"regex" => "(?i)@vega\\s+brand\\b"}
+      assert spec.trigger_config == %{"regex" => "(?i)@designer\\s+brand\\b"}
       assert spec.scope == "per_space"
       assert spec.context_provided == ["canvas_snapshot", "brand_guidelines"]
       assert spec.default_prompt_template == "design.brand_check.v1"

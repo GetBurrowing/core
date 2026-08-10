@@ -37,6 +37,10 @@ defmodule Platform.Responsibilities.DispatchTemplateProviderScanTest do
   runs the same predicate against a synthetic template body naming
   `design.spec_writer` and asserts it reports a violation. If that test
   ever goes green-by-vacuity, so has the real one.
+
+  Sibling guard on a different axis: `chat_trigger_names_a_role_test.exs`
+  asserts no chat trigger regex names an agent handle (naming); this one
+  asserts no dispatch template names a stub-backed key (reachability).
   """
   use Platform.DataCase, async: false
 

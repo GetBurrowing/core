@@ -38,7 +38,7 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirection do
 
   Rejected, for two independent reasons:
 
-    * Its trigger is `chat_pattern` `(?i)@vega\\s+spec\\b` at `per_space`
+    * Its trigger is `chat_pattern` `(?i)@designer\\s+spec\\b` at `per_space`
       scope. Repurposing the row either breaks the live chat invocation or
       leaves two triggers on one row.
     * Its `context_provided` is `["canvas_snapshot", "grounding_notes"]` —
@@ -97,7 +97,8 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirection do
   `task:planning_started`, which nobody addressed to anybody — the space
   in its payload is incidental and honouring it would invite the Designer
   into whatever channel happened to be in scope. `design.critique` fires
-  only when someone named Saru: a human typing `@saru critique …`, or a
+  only when someone addressed the Designer role: a human typing
+  `@designer critique …`, or a
   caller passing an explicit `:space_id` to
   `Platform.Design.Critique.request/1`. There the space is half the
   request, not an accident of routing.

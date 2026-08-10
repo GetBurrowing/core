@@ -17,7 +17,7 @@ defmodule Platform.Responsibilities.Handlers.DesignSpecWriterTest do
       key: DesignSpecWriter.key(),
       feature: "design",
       trigger_kind: "chat_pattern",
-      trigger_config: %{"regex" => "(?i)@vega\\s+spec\\b"},
+      trigger_config: %{"regex" => "(?i)@designer\\s+spec\\b"},
       scope: "per_space",
       context_provided: ["canvas_snapshot", "grounding_notes"],
       enabled: true
@@ -34,7 +34,7 @@ defmodule Platform.Responsibilities.Handlers.DesignSpecWriterTest do
       assert spec.key == "design.spec_writer"
       assert spec.feature == "design"
       assert spec.trigger_kind == "chat_pattern"
-      assert spec.trigger_config == %{"regex" => "(?i)@vega\\s+spec\\b"}
+      assert spec.trigger_config == %{"regex" => "(?i)@designer\\s+spec\\b"}
       assert spec.scope == "per_space"
       assert spec.context_provided == ["canvas_snapshot", "grounding_notes"]
       assert spec.default_prompt_template == "design.spec_writer.v1"

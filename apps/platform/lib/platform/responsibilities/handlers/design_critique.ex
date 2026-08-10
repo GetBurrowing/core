@@ -10,19 +10,30 @@ defmodule Platform.Responsibilities.Handlers.DesignCritique do
 
     * `key` — `"design.critique"`
     * `feature` — `"design"`
-    * `trigger_kind` — `chat_pattern`, `(?i)@saru\\s+(critique|review)\\b`
+    * `trigger_kind` — `chat_pattern`, `(?i)@designer\\s+(critique|review)\\b`
       with an optional trailing canvas id / canvas URL capture
     * `scope` — `per_space`
     * `context_provided` — `["canvas_snapshot", "grounding_notes"]`
     * `default_prompt_template` — `"design.critique.v1"`
     * `cost_profile` — `low_freq_capable`
 
-  ## The handle is `@saru`, and `@vega` is not kept as an alias
+  ## The trigger names the role, and no agent handle is kept as an alias
+
+  The rule this module now encodes: the chat trigger addresses the
+  DESIGNER ROLE, and no agent handle — `@vega`, `@saru`, or any future
+  holder's — is kept as an alias. The history of why is below, and it is
+  the reasoning that generalises.
 
   No dispatch template, doc, seed or runbook ever instructed anyone to
   type `@vega`. The handle existed only in this module's stub trigger —
   the bug being fixed — so keeping it as an alias would preserve a name
   whose sole source is the defect. Dropped outright.
+
+  The generalisation, which is what the trigger now encodes: a handle names
+  a PERSON, a token names the JOB — and the job is what the trigger means.
+  So the trigger addresses `@designer`, and no agent handle appears in it at
+  all; `@saru` was only ever correct by luck, one reassignment from being the
+  same stale name as `@vega`.
 
   ## An unresolvable canvas is a REFUSAL, never an empty dispatch
 
@@ -67,8 +78,8 @@ defmodule Platform.Responsibilities.Handlers.DesignCritique do
   would auto-invite the Designer into whatever channel happened to be in
   scope.
 
-  `design.critique` only ever fires because someone ADDRESSED SARU BY
-  NAME: a human typing `@saru critique …` in a channel, or an agent
+  `design.critique` only ever fires because someone ADDRESSED THE DESIGNER
+  ROLE: a human typing `@designer critique …` in a channel, or an agent
   passing an explicit `:space_id` to `Platform.Design.Critique.request/1`.
   The space is not incidental — it is the second half of "critique this,
   here", which is why the responsibility is `per_space` in the first
@@ -97,11 +108,18 @@ defmodule Platform.Responsibilities.Handlers.DesignCritique do
   alias Platform.Design.Critique
   alias Platform.Design.Critique.Verdict
   alias Platform.Responsibilities.Responsibility
+  alias Platform.Responsibilities.RoleTrigger
   alias Platform.Tasks
   alias Platform.Tasks.Task, as: TaskSchema
 
   @key "design.critique"
   @feature "design"
+
+  # ONE source for the role key: the trigger regex and the metadata map both
+  # read it, so the token a human types and the role we dispatch to cannot
+  # drift apart.
+  @role "designer"
+
   @template_slug "design.critique.v1"
 
   # A canvas of screenshots and long-form markdown is unbounded; the
@@ -132,12 +150,17 @@ defmodule Platform.Responsibilities.Handlers.DesignCritique do
         trigger_kind: "chat_pattern",
         trigger_config: %{
           # Trailing group captures an optional canvas id, with or
-          # without a URL prefix ("@saru critique <id>" and
-          # "@saru critique /chat/canvas/<id>" both land).
+          # without a URL prefix ("@designer critique <id>" and
+          # "@designer critique /chat/canvas/<id>" both land). It is
+          # passed as `:trailing` so it stays the LAST group —
+          # `strip_canvas_id/1` scans positional captures.
           "regex" =>
-            "(?i)@saru\\s+(critique|review)\\b(?:\\s+\\S*?" <>
-              "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-" <>
-              "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))?"
+            RoleTrigger.chat_regex(@role, "(critique|review)",
+              trailing:
+                "(?:\\s+\\S*?" <>
+                  "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-" <>
+                  "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))?"
+            )
         },
         scope: "per_space",
         context_provided: ["canvas_snapshot", "grounding_notes"],
@@ -148,7 +171,7 @@ defmodule Platform.Responsibilities.Handlers.DesignCritique do
         cost_profile: "low_freq_capable",
         metadata: %{
           "owner" => "platform.design",
-          "role" => "designer"
+          "role" => @role
         }
       }
     ]
@@ -250,7 +273,7 @@ defmodule Platform.Responsibilities.Handlers.DesignCritique do
     # (`dispatch_assignee/4` → `safe_dispatch/4`); by the time this runs
     # the model has already answered.
     #
-    # This is the ASYNC arm — a human typed `@saru critique` in a channel
+    # This is the ASYNC arm — a human typed `@designer critique` in a channel
     # — and it shares ONE landing function with the synchronous
     # `Platform.Design.Critique.request/1`, so the two paths cannot
     # deliver differently. There is no return value to hand anyone here,

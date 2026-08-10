@@ -41,7 +41,7 @@ defmodule Platform.Design.Critique do
   An execution space gets `post_log/2` — the audit-trail posture, log-only
   because nobody is sitting in an execution space waiting to be answered.
   An ORDINARY channel gets a visible `post_engagement/3` message instead.
-  A log-only message reads as chrome, and somebody typed `@saru critique`
+  A log-only message reads as chrome, and somebody typed `@designer critique`
   in that channel and is waiting on a reply; answering them invisibly is
   the same failure as not answering. The one outcome ruled out is the
   silent no-op that shipped before: an earlier cut consumed only
@@ -69,7 +69,7 @@ defmodule Platform.Design.Critique do
   to anybody: the space id in its trigger payload is incidental, and
   honouring it would auto-invite the Designer into whatever channel
   happened to be in scope. `design.critique` fires only when someone
-  ADDRESSED SARU BY NAME — a human typing `@saru critique …` in a channel,
+  ADDRESSED THE DESIGNER ROLE — a human typing `@designer critique …`,
   or an agent passing an explicit `:space_id` to `request/1`. The space is
   not incidental there; it is the second half of the request, and the
   responsibility is `per_space` precisely because "critique this, here" is

@@ -10,9 +10,13 @@ defmodule Platform.Responsibilities.Handlers.DesignSpecWriter do
 
     * `key` — `"design.spec_writer"`
     * `feature` — `"design"`
-    * `trigger_kind` — `chat_pattern` with `regex: "@vega\\s+spec\\b"`
-      (case-insensitive; designers invoke by mentioning Vega with a
-      "spec" verb)
+    * `trigger_kind` — `chat_pattern` with
+      `regex: "(?i)@designer\\s+spec\\b"`, built by
+      `Platform.Responsibilities.RoleTrigger.chat_regex/3` (case-insensitive;
+      invoked by addressing the Designer ROLE with a "spec" verb). The token
+      names the role rather than whoever currently holds it, because the role
+      outlives its holder — an agent handle baked into a trigger outlives the
+      person exactly once and then lies.
     * `scope` — `per_space`
     * `context_provided` — `["canvas_snapshot", "grounding_notes"]`
     * `cost_profile` — `low_freq_capable`
@@ -35,8 +39,13 @@ defmodule Platform.Responsibilities.Handlers.DesignSpecWriter do
 
   require Logger
 
+  alias Platform.Responsibilities.RoleTrigger
+
   @key "design.spec_writer"
   @feature "design"
+  # Single source for the role key: feeds BOTH the trigger regex and the
+  # metadata map below, so the trigger and the declared role cannot drift.
+  @role "designer"
   @template_slug "design.spec_writer.v1"
 
   @doc "Canonical key for this responsibility."
@@ -55,7 +64,7 @@ defmodule Platform.Responsibilities.Handlers.DesignSpecWriter do
         feature: @feature,
         trigger_kind: "chat_pattern",
         trigger_config: %{
-          "regex" => "(?i)@vega\\s+spec\\b"
+          "regex" => RoleTrigger.chat_regex(@role, "spec")
         },
         scope: "per_space",
         context_provided: ["canvas_snapshot", "grounding_notes"],
@@ -67,7 +76,7 @@ defmodule Platform.Responsibilities.Handlers.DesignSpecWriter do
         metadata: %{
           "owner" => "platform.design",
           "status" => "placeholder",
-          "role" => "designer"
+          "role" => @role
         }
       }
     ]
