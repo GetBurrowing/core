@@ -102,7 +102,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       meeting = create_meeting()
 
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
       {:ok, view, html} =
         conn
@@ -116,7 +116,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       assert assigns.in_meeting == true
       assert assigns.chrome_mode == :none
       assert assigns.shell? == false
-      assert assigns.display_name == "Juno Fairbanks"
+      assert assigns.display_name == "Jane Doe"
       # LiveKit bundle assigns populated end-to-end.
       assert String.starts_with?(assigns.identity, "guest:")
       assert is_binary(assigns.token) and assigns.token != ""
@@ -132,7 +132,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       meeting = create_meeting()
 
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
       {:ok, view, _html} =
         conn
@@ -153,7 +153,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
 
       # Minted JWT carries the `(guest)` suffix + `guest:` identity prefix.
       assert {:ok, claims} = decode_jwt_claims(pushed_token)
-      assert claims["name"] == "Juno Fairbanks (guest)"
+      assert claims["name"] == "Jane Doe (guest)"
       assert String.starts_with?(claims["sub"], "guest:")
     end
 
@@ -162,7 +162,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       meeting = create_meeting()
 
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
       {:ok, view, _html} =
         conn
@@ -224,17 +224,17 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       # Push the submit_name event directly rather than via the form
       # helper — stage-3 heex does not yet render the guest form (that
       # lands in stage 4). The handler is exercised regardless.
-      render_hook(view, "submit_name", %{"guest" => %{"name" => "Juno Fairbanks"}})
+      render_hook(view, "submit_name", %{"guest" => %{"name" => "Jane Doe"}})
 
       assigns = :sys.get_state(view.pid).socket.assigns
       assert assigns.state == :in_meeting
-      assert assigns.display_name == "Juno Fairbanks"
+      assert assigns.display_name == "Jane Doe"
       assert assigns.in_meeting == true
       assert assigns.name_error == nil
 
       assert_push_event(view, "join-meeting", %{token: pushed_token})
       assert {:ok, claims} = decode_jwt_claims(pushed_token)
-      assert claims["name"] == "Juno Fairbanks (guest)"
+      assert claims["name"] == "Jane Doe (guest)"
     end
 
     test "submitting an empty name records :name_error and stays :name_entry",
@@ -266,7 +266,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       meeting = create_meeting()
       # 60s in the past → GuestInvite.verify returns {:error, :expired}.
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.-(60)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
       {:ok, view, _html} =
         conn
@@ -286,7 +286,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       meeting = create_meeting()
 
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      good_token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      good_token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
       tampered = String.replace(good_token, ~r/./, "X", global: false)
 
       {:ok, view, _html} =
@@ -307,7 +307,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
       # Signed for meeting_a, hit at meeting_b's slug — the resolver treats
       # this as tampering.
-      token = GuestInvite.sign(meeting_a.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting_a.slug, expires_at, "Jane Doe")
 
       {:ok, view, _html} =
         conn
@@ -323,7 +323,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
 
       ghost_slug = "ghost-mount-#{System.unique_integer([:positive])}"
-      token = GuestInvite.sign(ghost_slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(ghost_slug, expires_at, "Jane Doe")
 
       {:ok, view, _html} =
         conn
@@ -348,7 +348,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
          %{conn: conn} do
       meeting = create_meeting()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.-(60)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
       {:ok, _view, html} =
         conn
@@ -366,7 +366,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
     test "renders 'Invite link is not valid' card", %{conn: conn} do
       meeting = create_meeting()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      good = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      good = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
       tampered = String.replace(good, ~r/./, "X", global: false)
 
       {:ok, _view, html} =
@@ -403,7 +403,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
     test "renders meeting shell markers", %{conn: conn} do
       meeting = create_meeting()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
       {:ok, _view, html} =
         conn
@@ -421,7 +421,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       assert html =~ ~s(data-stage-mode=)
       # Guest identity badge shows on right side of top bar.
       assert html =~ ~s(data-role="guest-identity-badge")
-      assert html =~ "Juno Fairbanks (guest)"
+      assert html =~ "Jane Doe (guest)"
     end
 
     test "guest layout wrapper uses definite `h-dvh` (not `min-h-dvh`) so `h-full` propagates to the gallery",
@@ -439,7 +439,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       # Prod incident 2026-07-10 after the guest-consolidation deploy.
       meeting = create_meeting()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
       {:ok, _view, html} =
         conn
@@ -454,7 +454,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
          %{conn: conn} do
       meeting = create_meeting()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
       {:ok, _view, html} =
         conn
@@ -481,7 +481,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
          %{conn: conn} do
       meeting = create_meeting()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
       {:ok, _view, html} =
         conn
@@ -498,7 +498,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
   # only called from the auth-side `meeting_hooks.ex`. The re-dispatch
   # wires the guest ingress mount to upsert its own row on join so the
   # auth-side MeetingLive (subscribed to the same presence + room topics)
-  # renders a `.video_tile` that MeetingVideoTile can bind to Juno's
+  # renders a `.video_tile` that MeetingVideoTile can bind to Jane's
   # LiveKit-published track.
   describe "guest presence upsert (chrome_mode: :none) — Bug B fix" do
     alias Platform.Meetings.Participant
@@ -507,7 +507,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
          %{conn: conn} do
       meeting = create_meeting()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
       {:ok, view, _html} =
         conn
@@ -539,7 +539,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
          %{conn: conn} do
       meeting = create_meeting()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
       {:ok, view, html} =
         conn
@@ -745,7 +745,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
 
       token =
-        GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks",
+        GuestInvite.sign(meeting.slug, expires_at, "Jane Doe",
           guest_space_id: meeting.chat_space_id,
           meeting_id: meeting.id
         )
@@ -758,11 +758,11 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       assigns = :sys.get_state(view.pid).socket.assigns
       assert assigns.state == :in_meeting
       assert assigns.meeting.id == meeting.id
-      assert assigns.display_name == "Juno Fairbanks"
+      assert assigns.display_name == "Jane Doe"
       assert assigns.chrome_mode == :none
       assert %Chat.Space{} = assigns.meeting.chat_space
       assert html =~ ~s(id="meeting-client")
-      assert html =~ "Juno Fairbanks (guest)"
+      assert html =~ "Jane Doe (guest)"
     end
 
     test "id-bearing token with nil display_name lands :name_entry and submits through",
@@ -780,11 +780,11 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       assert %Meeting{} = :sys.get_state(view.pid).socket.assigns.meeting
       assert :sys.get_state(view.pid).socket.assigns.state == :name_entry
 
-      render_hook(view, "submit_name", %{"guest" => %{"name" => "Juno Fairbanks"}})
+      render_hook(view, "submit_name", %{"guest" => %{"name" => "Jane Doe"}})
 
       assigns = :sys.get_state(view.pid).socket.assigns
       assert assigns.state == :in_meeting
-      assert assigns.display_name == "Juno Fairbanks"
+      assert assigns.display_name == "Jane Doe"
       assert_push_event(view, "join-meeting", %{token: pushed})
       assert is_binary(pushed) and pushed != ""
     end
@@ -794,7 +794,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.-(60)
 
       token =
-        GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks", meeting_id: meeting.id)
+        GuestInvite.sign(meeting.slug, expires_at, "Jane Doe", meeting_id: meeting.id)
 
       {:ok, view, html} =
         conn
@@ -809,7 +809,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
     test "tampered id-bearing token still lands :invalid", %{conn: conn} do
       meeting = create_meeting()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      good = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks", meeting_id: meeting.id)
+      good = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe", meeting_id: meeting.id)
       tampered = String.replace(good, ~r/./, "X", global: false)
 
       {:ok, view, html} =
@@ -830,7 +830,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       # Payload slug agrees with the URL, so the pre-existing tamper guard
       # passes; the id disagrees. Both identifiers must line up.
       token =
-        GuestInvite.sign(meeting_a.slug, expires_at, "Juno Fairbanks", meeting_id: meeting_b.id)
+        GuestInvite.sign(meeting_a.slug, expires_at, "Jane Doe", meeting_id: meeting_b.id)
 
       {:ok, view, html} =
         conn
@@ -877,7 +877,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
 
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
       # No meeting_id — a token minted before this stage.
-      token = GuestInvite.sign(slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(slug, expires_at, "Jane Doe")
 
       # Pre-fix this mount raised `Ecto.MultipleResultsError` from
       # `Repo.get_by(Meeting, slug: slug)` — a 500 on the public guest
@@ -896,7 +896,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       # The exact pre-019f9b14 mint shape from MeetingLive: guest_space_id
       # present, meeting_id absent.
       token =
-        GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks",
+        GuestInvite.sign(meeting.slug, expires_at, "Jane Doe",
           guest_space_id: meeting.chat_space_id
         )
 
@@ -905,7 +905,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       assigns = :sys.get_state(view.pid).socket.assigns
       assert assigns.state == :in_meeting
       assert assigns.meeting.id == meeting.id
-      assert assigns.display_name == "Juno Fairbanks"
+      assert assigns.display_name == "Jane Doe"
       assert html =~ ~s(id="meeting-client")
     end
   end
@@ -955,7 +955,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
     |> Phoenix.ConnTest.init_test_session(current_user_id: user.id)
   end
 
-  defp guest_token(meeting, name \\ "Juno Fairbanks") do
+  defp guest_token(meeting, name \\ "Jane Doe") do
     expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
     GuestInvite.sign(meeting.slug, expires_at, name)
   end

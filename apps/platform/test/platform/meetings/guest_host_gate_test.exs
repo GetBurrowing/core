@@ -58,7 +58,7 @@ defmodule Platform.Meetings.GuestHostGateTest do
       meeting = create_meeting!()
 
       assert {:ok, %{invite: %Invite{} = invite, token: token, url: url}} =
-               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+               Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
 
       assert String.starts_with?(url, "https://meet.example.com/")
       assert url =~ meeting.slug
@@ -80,7 +80,7 @@ defmodule Platform.Meetings.GuestHostGateTest do
       log =
         capture_log(fn ->
           assert {:error, :guest_host_not_configured} =
-                   Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+                   Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
         end)
 
       assert log =~ "meeting_guest_host"
@@ -95,7 +95,7 @@ defmodule Platform.Meetings.GuestHostGateTest do
       meeting = create_meeting!()
 
       assert {:error, :guest_host_not_configured} =
-               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+               Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
 
       assert Meetings.list_invites(meeting.id) == []
     end
@@ -107,7 +107,7 @@ defmodule Platform.Meetings.GuestHostGateTest do
       meeting = create_meeting!()
 
       assert {:ok, %{invite: invite}} =
-               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+               Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
 
       Application.put_env(:platform, :meeting_guest_host, "")
 

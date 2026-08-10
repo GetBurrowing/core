@@ -128,7 +128,7 @@ defmodule PlatformWeb.MeetingBreadcrumbTest do
     test "the guest :in_meeting shell tree renders NO breadcrumb", %{conn: conn} do
       meeting = create_meeting()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
       {:ok, view, html} =
         conn

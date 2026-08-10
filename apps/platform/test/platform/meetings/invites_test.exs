@@ -140,13 +140,13 @@ defmodule Platform.Meetings.InvitesTest do
 
       assert {:ok, invite} =
                Meetings.invite_user(meeting, user.id,
-                 display_name: "Juno Fairbanks",
-                 email: "juno@example.com"
+                 display_name: "Jane Doe",
+                 email: "jane@example.com"
                )
 
       persisted = Repo.get!(Invite, invite.id)
-      assert persisted.display_name == "Juno Fairbanks"
-      assert persisted.email == "juno@example.com"
+      assert persisted.display_name == "Jane Doe"
+      assert persisted.email == "jane@example.com"
     end
   end
 
@@ -195,22 +195,22 @@ defmodule Platform.Meetings.InvitesTest do
 
       assert {:ok, %{invite: invite, token: token, url: url}} =
                Meetings.invite_guest(meeting, %{
-                 display_name: "Juno Fairbanks",
-                 email: "juno@example.com"
+                 display_name: "Jane Doe",
+                 email: "jane@example.com"
                })
 
       persisted = Repo.get!(Invite, invite.id)
       assert persisted.meeting_id == meeting.id
       assert is_nil(persisted.user_id)
-      assert persisted.display_name == "Juno Fairbanks"
-      assert persisted.email == "juno@example.com"
+      assert persisted.display_name == "Jane Doe"
+      assert persisted.email == "jane@example.com"
       assert Invite.kind(persisted) == :guest
 
       assert {:ok, payload} = GuestInvite.verify(token)
       assert payload.invite_id == invite.id
       assert payload.meeting_id == meeting.id
       assert payload.meeting_slug == meeting.slug
-      assert payload.display_name == "Juno Fairbanks"
+      assert payload.display_name == "Jane Doe"
       assert is_binary(payload.guest_space_id)
 
       assert url =~ meeting.slug
@@ -298,7 +298,7 @@ defmodule Platform.Meetings.InvitesTest do
       meeting = meeting!()
 
       assert {:ok, %{invite: invite, token: token}} =
-               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+               Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
 
       persisted = Repo.get!(Invite, invite.id)
       assert %DateTime{} = persisted.expires_at
@@ -314,7 +314,7 @@ defmodule Platform.Meetings.InvitesTest do
       meeting = meeting!()
 
       assert {:ok, %{invite: invite}} =
-               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+               Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
 
       persisted = Repo.get!(Invite, invite.id)
       seconds_out = DateTime.diff(persisted.expires_at, DateTime.utc_now())
@@ -326,7 +326,7 @@ defmodule Platform.Meetings.InvitesTest do
       meeting = meeting!()
 
       assert {:ok, %{invite: invite}} =
-               Meetings.invite_guest(meeting, %{display_name: "Juno", expires_in_hours: 2})
+               Meetings.invite_guest(meeting, %{display_name: "Jane", expires_in_hours: 2})
 
       persisted = Repo.get!(Invite, invite.id)
       seconds_out = DateTime.diff(persisted.expires_at, DateTime.utc_now())
@@ -338,9 +338,9 @@ defmodule Platform.Meetings.InvitesTest do
       meeting = meeting!()
 
       assert {:ok, %{invite: invite}} =
-               Meetings.invite_guest(meeting, %{"display_name" => "Juno Fairbanks"})
+               Meetings.invite_guest(meeting, %{"display_name" => "Jane Doe"})
 
-      assert Repo.get!(Invite, invite.id).display_name == "Juno Fairbanks"
+      assert Repo.get!(Invite, invite.id).display_name == "Jane Doe"
     end
   end
 
@@ -349,7 +349,7 @@ defmodule Platform.Meetings.InvitesTest do
   describe "revoke_invite/1" do
     test "stamps revoked_at on the row" do
       meeting = meeting!()
-      {:ok, %{invite: invite}} = Meetings.invite_guest(meeting, %{display_name: "Juno"})
+      {:ok, %{invite: invite}} = Meetings.invite_guest(meeting, %{display_name: "Jane"})
 
       assert is_nil(Repo.get!(Invite, invite.id).revoked_at)
       assert {:ok, revoked} = Meetings.revoke_invite(invite)
@@ -359,7 +359,7 @@ defmodule Platform.Meetings.InvitesTest do
 
     test "is idempotent — a second revoke does NOT re-stamp the timestamp" do
       meeting = meeting!()
-      {:ok, %{invite: invite}} = Meetings.invite_guest(meeting, %{display_name: "Juno"})
+      {:ok, %{invite: invite}} = Meetings.invite_guest(meeting, %{display_name: "Jane"})
 
       assert {:ok, first} = Meetings.revoke_invite(invite)
       assert {:ok, second} = Meetings.revoke_invite(first)
@@ -376,7 +376,7 @@ defmodule Platform.Meetings.InvitesTest do
     # `revoked_at` is still nil while the row's is set.
     test "a STALE struct does not re-stamp either — idempotency is decided on the row" do
       meeting = meeting!()
-      {:ok, %{invite: stale}} = Meetings.invite_guest(meeting, %{display_name: "Juno"})
+      {:ok, %{invite: stale}} = Meetings.invite_guest(meeting, %{display_name: "Jane"})
 
       assert is_nil(stale.revoked_at)
       assert {:ok, first} = Meetings.revoke_invite(stale.id)
@@ -388,7 +388,7 @@ defmodule Platform.Meetings.InvitesTest do
 
     test "accepts an id as well as a struct" do
       meeting = meeting!()
-      {:ok, %{invite: invite}} = Meetings.invite_guest(meeting, %{display_name: "Juno"})
+      {:ok, %{invite: invite}} = Meetings.invite_guest(meeting, %{display_name: "Jane"})
 
       assert {:ok, revoked} = Meetings.revoke_invite(invite.id)
       assert %DateTime{} = revoked.revoked_at

@@ -110,12 +110,12 @@ defmodule Platform.Meetings.GuestTokenTest do
       assert {:ok, p} =
                Meetings.upsert_live_participant(room, %{
                  identity: "guest:#{guest_uuid}",
-                 name: "Juno Fairbanks (guest)"
+                 name: "Jane Doe (guest)"
                })
 
       assert is_nil(p.user_id)
       assert is_nil(p.agent_id)
-      assert p.display_name == "Juno Fairbanks (guest)"
+      assert p.display_name == "Jane Doe (guest)"
       assert is_nil(p.left_at)
     end
 
@@ -128,13 +128,13 @@ defmodule Platform.Meetings.GuestTokenTest do
       assert {:ok, p1} =
                Meetings.upsert_live_participant(room, %{
                  identity: "guest:#{Ecto.UUID.generate()}",
-                 name: "Juno Fairbanks (guest)"
+                 name: "Jane Doe (guest)"
                })
 
       assert {:ok, p2} =
                Meetings.upsert_live_participant(room, %{
                  identity: "guest:#{Ecto.UUID.generate()}",
-                 name: "Juno Fairbanks (guest)"
+                 name: "Jane Doe (guest)"
                })
 
       assert p1.id == p2.id
@@ -144,7 +144,7 @@ defmodule Platform.Meetings.GuestTokenTest do
       assert {:ok, p1} =
                Meetings.upsert_live_participant(room, %{
                  identity: "guest:#{Ecto.UUID.generate()}",
-                 name: "Juno Fairbanks (guest)"
+                 name: "Jane Doe (guest)"
                })
 
       assert {:ok, p2} =
@@ -231,7 +231,7 @@ defmodule Platform.Meetings.GuestTokenTest do
       meeting = create_meeting()
 
       assert {:ok, %{token: token, identity: identity, room_name: room_name, livekit_url: url}} =
-               Meetings.guest_livekit_token(meeting, "Juno Fairbanks")
+               Meetings.guest_livekit_token(meeting, "Jane Doe")
 
       # LiveKit URL is passed through from config, unchanged.
       assert url == "wss://livekit.test"
@@ -250,7 +250,7 @@ defmodule Platform.Meetings.GuestTokenTest do
       assert {:ok, claims} = decode_jwt(token)
       assert claims["iss"] == "test-livekit-key"
       assert claims["sub"] == identity
-      assert claims["name"] == "Juno Fairbanks (guest)"
+      assert claims["name"] == "Jane Doe (guest)"
 
       # 30-min TTL — allow ±5s for wall-clock skew inside the test.
       ttl = claims["exp"] - claims["nbf"]
@@ -276,10 +276,10 @@ defmodule Platform.Meetings.GuestTokenTest do
       meeting = create_meeting()
 
       assert {:ok, %{token: token}} =
-               Meetings.guest_livekit_token(meeting, "  Juno Fairbanks  ")
+               Meetings.guest_livekit_token(meeting, "  Jane Doe  ")
 
       assert {:ok, claims} = decode_jwt(token)
-      assert claims["name"] == "Juno Fairbanks (guest)"
+      assert claims["name"] == "Jane Doe (guest)"
     end
 
     test "distinct calls mint distinct guest identities (randomness regression)" do
@@ -287,7 +287,7 @@ defmodule Platform.Meetings.GuestTokenTest do
 
       identities =
         for _ <- 1..50 do
-          {:ok, %{identity: id}} = Meetings.guest_livekit_token(meeting, "Juno")
+          {:ok, %{identity: id}} = Meetings.guest_livekit_token(meeting, "Jane")
           id
         end
 
@@ -305,7 +305,7 @@ defmodule Platform.Meetings.GuestTokenTest do
       meeting = create_meeting()
 
       assert {:ok, %{identity: identity}} =
-               Meetings.guest_livekit_token(meeting, "Juno Fairbanks")
+               Meetings.guest_livekit_token(meeting, "Jane Doe")
 
       assert :unknown = Meetings.parse_identity(identity)
     end
@@ -329,7 +329,7 @@ defmodule Platform.Meetings.GuestTokenTest do
       meeting = create_meeting()
 
       assert {:error, :livekit_not_configured} =
-               Meetings.guest_livekit_token(meeting, "Juno Fairbanks")
+               Meetings.guest_livekit_token(meeting, "Jane Doe")
     end
 
     test "returns :missing_display_name when nil name is passed on a meeting" do
@@ -355,7 +355,7 @@ defmodule Platform.Meetings.GuestTokenTest do
       meeting = create_meeting()
 
       assert {:ok, %{token: guest_token}} =
-               Meetings.guest_livekit_token(meeting, "Juno Fairbanks")
+               Meetings.guest_livekit_token(meeting, "Jane Doe")
 
       assert 3 = guest_token |> String.split(".") |> length()
 
@@ -394,7 +394,7 @@ defmodule Platform.Meetings.GuestTokenTest do
       broken = %Meeting{chat_space_id: nil, name: "Broken"}
 
       assert {:error, :missing_display_name} =
-               Meetings.guest_livekit_token(broken, "Juno Fairbanks")
+               Meetings.guest_livekit_token(broken, "Jane Doe")
     end
   end
 end

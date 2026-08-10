@@ -815,9 +815,9 @@ defmodule Platform.MeetingsTest do
     test "returns :in_meeting with preloaded chat_space when token carries a display_name" do
       meeting = create_meeting!()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
-      assert {:ok, %{state: :in_meeting, meeting: resolved, display_name: "Juno Fairbanks"}} =
+      assert {:ok, %{state: :in_meeting, meeting: resolved, display_name: "Jane Doe"}} =
                Meetings.resolve_guest_invite(meeting.slug, token)
 
       assert %Meeting{} = resolved
@@ -843,7 +843,7 @@ defmodule Platform.MeetingsTest do
       meeting = create_meeting!()
       # 60s in the past → GuestInvite.verify returns {:error, :expired}.
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.-(60)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
 
       assert {:error, :expired} = Meetings.resolve_guest_invite(meeting.slug, token)
     end
@@ -851,7 +851,7 @@ defmodule Platform.MeetingsTest do
     test "returns {:error, :invalid} when the HMAC signature is tampered" do
       meeting = create_meeting!()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
       # Flip a byte early in the token so the signature check fails.
       tampered = String.replace(token, ~r/./, "X", global: false)
 
@@ -863,7 +863,7 @@ defmodule Platform.MeetingsTest do
       meeting_b = create_meeting!()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
       # Token signed against meeting_a, then hit at meeting_b's URL.
-      token = GuestInvite.sign(meeting_a.slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(meeting_a.slug, expires_at, "Jane Doe")
 
       assert {:error, :invalid} = Meetings.resolve_guest_invite(meeting_b.slug, token)
     end
@@ -872,7 +872,7 @@ defmodule Platform.MeetingsTest do
       # Sign for a slug that has no Meeting row (deleted-after-issue).
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
       slug = "ghost-meeting-#{System.unique_integer([:positive])}"
-      token = GuestInvite.sign(slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(slug, expires_at, "Jane Doe")
 
       assert {:error, :invalid} = Meetings.resolve_guest_invite(slug, token)
     end
@@ -914,10 +914,10 @@ defmodule Platform.MeetingsTest do
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
 
       token_a =
-        GuestInvite.sign(slug, expires_at, "Juno Fairbanks", meeting_id: meeting_a.id)
+        GuestInvite.sign(slug, expires_at, "Jane Doe", meeting_id: meeting_a.id)
 
       token_b =
-        GuestInvite.sign(slug, expires_at, "Juno Fairbanks", meeting_id: meeting_b.id)
+        GuestInvite.sign(slug, expires_at, "Jane Doe", meeting_id: meeting_b.id)
 
       assert {:ok, %{state: :in_meeting, meeting: resolved_a}} =
                Meetings.resolve_guest_invite(slug, token_a)
@@ -937,7 +937,7 @@ defmodule Platform.MeetingsTest do
     test "an id-bearing token whose meeting was deleted resolves to :invalid" do
       meeting = create_meeting!()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks", meeting_id: meeting.id)
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe", meeting_id: meeting.id)
 
       Platform.Repo.delete!(%Meeting{id: meeting.id})
 
@@ -954,7 +954,7 @@ defmodule Platform.MeetingsTest do
       # passes) but the id points at a different meeting. Defence in depth:
       # the two identifiers must agree with each other, not just with the URL.
       token =
-        GuestInvite.sign(meeting_a.slug, expires_at, "Juno Fairbanks", meeting_id: meeting_b.id)
+        GuestInvite.sign(meeting_a.slug, expires_at, "Jane Doe", meeting_id: meeting_b.id)
 
       assert {:error, :invalid} = Meetings.resolve_guest_invite(meeting_a.slug, token)
     end
@@ -962,7 +962,7 @@ defmodule Platform.MeetingsTest do
     test "an id-bearing token carrying a non-UUID meeting_id is :invalid, not a crash" do
       meeting = create_meeting!()
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks", meeting_id: "not-a-uuid")
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe", meeting_id: "not-a-uuid")
 
       assert {:error, :invalid} = Meetings.resolve_guest_invite(meeting.slug, token)
     end
@@ -978,11 +978,11 @@ defmodule Platform.MeetingsTest do
 
       # Exactly the old mint shape — guest_space_id, no meeting_id.
       token =
-        GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks",
+        GuestInvite.sign(meeting.slug, expires_at, "Jane Doe",
           guest_space_id: meeting.chat_space_id
         )
 
-      assert {:ok, %{state: :in_meeting, meeting: resolved, display_name: "Juno Fairbanks"}} =
+      assert {:ok, %{state: :in_meeting, meeting: resolved, display_name: "Jane Doe"}} =
                Meetings.resolve_guest_invite(meeting.slug, token)
 
       assert resolved.id == meeting.id
@@ -1006,7 +1006,7 @@ defmodule Platform.MeetingsTest do
       {_meeting_a, _meeting_b} = create_colliding_meetings!(slug)
 
       expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
-      token = GuestInvite.sign(slug, expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign(slug, expires_at, "Jane Doe")
 
       # The whole point: refuse rather than gamble on a project, and — the
       # bug this stage closes — never raise `Ecto.MultipleResultsError` on
@@ -1118,7 +1118,7 @@ defmodule Platform.MeetingsTest do
       meeting = create_meeting!()
 
       assert {:ok, %{invite: invite, token: token}} =
-               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+               Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
 
       assert {:ok, _} = Meetings.revoke_invite(invite)
       assert {:ok, _} = Meetings.revoke_invite(invite)
@@ -1131,7 +1131,7 @@ defmodule Platform.MeetingsTest do
 
       # 24h default: the token payload's own expiry is comfortably ahead.
       assert {:ok, %{invite: invite, token: token}} =
-               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+               Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
 
       assert {:ok, payload} = GuestInvite.verify(token)
       assert payload.expires_at > DateTime.to_unix(DateTime.utc_now())
@@ -1149,7 +1149,7 @@ defmodule Platform.MeetingsTest do
       meeting = create_meeting!()
 
       assert {:ok, %{invite: invite, token: token}} =
-               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+               Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
 
       invite
       |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), 60, :second))
@@ -1162,7 +1162,7 @@ defmodule Platform.MeetingsTest do
       meeting = create_meeting!()
 
       assert {:ok, %{invite: invite, token: token}} =
-               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+               Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
 
       Repo.delete!(invite)
 
@@ -1209,7 +1209,7 @@ defmodule Platform.MeetingsTest do
       meeting = create_meeting!()
 
       assert {:ok, %{invite: invite}} =
-               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+               Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
 
       # nil disagrees with the row's meeting_id. This shape is not one the
       # public API produces — a row-bound token always names its meeting.
@@ -1217,7 +1217,7 @@ defmodule Platform.MeetingsTest do
         raw_sign(%{
           meeting_slug: meeting.slug,
           expires_at: DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600),
-          display_name: "Juno Fairbanks",
+          display_name: "Jane Doe",
           guest_space_id: nil,
           meeting_id: nil,
           invite_id: invite.id
@@ -1235,7 +1235,7 @@ defmodule Platform.MeetingsTest do
         GuestInvite.sign(
           meeting.slug,
           DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600),
-          "Juno Fairbanks",
+          "Jane Doe",
           meeting_id: meeting.id,
           invite_id: "not-a-uuid"
         )
@@ -1259,7 +1259,7 @@ defmodule Platform.MeetingsTest do
         GuestInvite.sign(
           meeting.slug,
           DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600),
-          "Juno Fairbanks",
+          "Jane Doe",
           meeting_id: meeting.id,
           invite_id: "higginshigginsxx"
         )
@@ -1277,7 +1277,7 @@ defmodule Platform.MeetingsTest do
       meeting = create_meeting!()
 
       assert {:ok, %{token: token}} =
-               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+               Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
 
       {result, sources} =
         capture_repo_sources(fn -> Meetings.resolve_guest_invite(meeting.slug, token) end)
@@ -1306,7 +1306,7 @@ defmodule Platform.MeetingsTest do
         raw_sign(%{
           meeting_slug: meeting.slug,
           expires_at: DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600),
-          display_name: "Juno Fairbanks",
+          display_name: "Jane Doe",
           guest_space_id: nil,
           meeting_id: meeting.id
         })
@@ -1314,7 +1314,7 @@ defmodule Platform.MeetingsTest do
       {result, sources} =
         capture_repo_sources(fn -> Meetings.resolve_guest_invite(meeting.slug, token) end)
 
-      assert {:ok, %{state: :in_meeting, display_name: "Juno Fairbanks"}} = result
+      assert {:ok, %{state: :in_meeting, display_name: "Jane Doe"}} = result
       # No row named, so no row read. The legacy path costs nothing.
       refute "meeting_invites" in sources
     end

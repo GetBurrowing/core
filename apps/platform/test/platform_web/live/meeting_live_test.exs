@@ -4687,7 +4687,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # expectation here would let both drift together.
       seed_invite!(meeting, "Sam Ortiz")
       seed_user_invite!(meeting, seed_invitee_user!("Dalton Reyes"))
-      seed_external_pending_invite!(meeting, "juno@fairbanksco.example")
+      seed_external_pending_invite!(meeting, "jane@doeco.example")
       seed_invite!(meeting, "Jess Tran")
 
       expected = Enum.map(Meetings.list_invites(meeting.id), & &1.id)
@@ -4713,9 +4713,9 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting = seed_detail_meeting(project)
 
       internal = seed_user_invite!(meeting, seed_invitee_user!("Dalton Reyes"))
-      external = seed_user_invite!(meeting, seed_invitee_user!("Juno Fairbanks", external: true))
+      external = seed_user_invite!(meeting, seed_invitee_user!("Jane Doe", external: true))
       guest = seed_invite!(meeting, "Sam Ortiz")
-      pending = seed_external_pending_invite!(meeting, "jess@fairbanksco.example")
+      pending = seed_external_pending_invite!(meeting, "jess@doeco.example")
 
       {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
@@ -4753,7 +4753,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         assert subtitle.(surface, internal) == ""
         assert subtitle.(surface, external) == Repo.get!(User, external.user_id).email
         assert subtitle.(surface, guest) == "expires in 24h"
-        assert subtitle.(surface, pending) == "jess@fairbanksco.example"
+        assert subtitle.(surface, pending) == "jess@doeco.example"
       end
     end
 
@@ -4851,7 +4851,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # would copy something that cannot admit anyone.
       meeting = seed_detail_meeting(project)
       seed_user_invite!(meeting, seed_invitee_user!("Dalton Reyes"))
-      seed_external_pending_invite!(meeting, "juno@fairbanksco.example")
+      seed_external_pending_invite!(meeting, "jane@doeco.example")
       guest = seed_invite!(meeting, "Sam Ortiz")
 
       {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
@@ -5019,7 +5019,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       view
       |> element(in_panel(~s([data-role="meeting-invite-search"])))
-      |> render_keyup(%{"value" => "newguest@fairbanksco.example"})
+      |> render_keyup(%{"value" => "newguest@doeco.example"})
 
       doc =
         view
@@ -5030,7 +5030,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # `:live` means WRITTEN, not staged — there is no submit to lose it
       # at, so the assertion is against the database as well as the DOM.
       assert [%Invite{} = invite] = Meetings.list_invites(meeting.id)
-      assert invite.display_name == "newguest@fairbanksco.example"
+      assert invite.display_name == "newguest@doeco.example"
 
       for surface <- [detail_panel(doc), detail_sheet(doc)] do
         assert surface |> invite_rows() |> LazyHTML.attribute("data-entry-id") == [invite.id]
@@ -5067,7 +5067,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       doc =
         view
         |> element(in_panel(~s([data-role="meeting-invite-search"])))
-        |> render_keyup(%{"value" => "stranger@fairbanksco.example"})
+        |> render_keyup(%{"value" => "stranger@doeco.example"})
         |> LazyHTML.from_fragment()
 
       dropdowns = LazyHTML.query(doc, ~s([data-role="meeting-invite-dropdown"]))
@@ -5090,7 +5090,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> element(
           ~s([data-role="meeting-create-invite-section"] [data-role="meeting-invite-search"])
         )
-        |> render_keyup(%{"value" => "stranger@fairbanksco.example"})
+        |> render_keyup(%{"value" => "stranger@doeco.example"})
         |> LazyHTML.from_fragment()
 
       assert create_doc
@@ -7723,7 +7723,7 @@ defmodule PlatformWeb.MeetingLiveTest do
   # `create_meeting/1` in this file returns `{meeting, space}` but doesn't
   # preload `:chat_space` — the guest-mount path reads `meeting.chat_space.slug`
   # through `mint_guest_join_bundle/2`, so preload here.
-  defp create_guest_meeting(display_name \\ "Juno Fairbanks") do
+  defp create_guest_meeting(display_name \\ "Jane Doe") do
     {meeting, _space} =
       create_meeting(%{slug: "guest-stage6-#{System.unique_integer([:positive])}"})
 
@@ -7832,7 +7832,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "minted JWT `name` claim carries the ` (guest)` suffix", %{conn: conn} do
-      {meeting, token} = create_guest_meeting("Juno Fairbanks")
+      {meeting, token} = create_guest_meeting("Jane Doe")
 
       {:ok, view, _html} =
         conn
@@ -7842,14 +7842,14 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert_push_event(view, "join-meeting", %{token: pushed_token})
       assert {:ok, claims} = decode_jwt_claims(pushed_token)
       assert String.ends_with?(claims["name"], " (guest)")
-      assert claims["name"] == "Juno Fairbanks (guest)"
+      assert claims["name"] == "Jane Doe (guest)"
     end
 
     test "identity carries the `guest:` prefix on the JWT sub claim", %{conn: conn} do
       # The `join-meeting` push_event payload is `%{token, url, room_name,
       # space_slug}` — `identity` isn't in the payload directly, so assert
       # against the decoded JWT's `sub` claim (the LiveKit identity).
-      {meeting, token} = create_guest_meeting("Juno Fairbanks")
+      {meeting, token} = create_guest_meeting("Jane Doe")
 
       {:ok, view, _html} =
         conn

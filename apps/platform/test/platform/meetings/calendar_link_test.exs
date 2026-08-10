@@ -73,7 +73,7 @@ defmodule Platform.Meetings.CalendarLinkTest do
       # satisfy CalendarLink's shape guard, so only the signing namespace
       # can reject it.
       guest_token =
-        GuestInvite.sign_with_default_expiry("some-meeting", "Juno Fairbanks",
+        GuestInvite.sign_with_default_expiry("some-meeting", "Jane Doe",
           meeting_id: Ecto.UUID.generate(),
           invite_id: Ecto.UUID.generate()
         )
