@@ -1,6 +1,45 @@
 defmodule PlatformWeb.AdminPromptsLive do
+  @moduledoc """
+  `/admin/prompts` — the ONE editor over `prompt_templates`, made
+  variant-aware by task 019fe6ba (ADR-0048).
+
+  ## Why the variant editor is here and not in Control Center
+
+  There is no second prompt editor. An experiment's variant blobs are edited
+  through this surface, beside the template they are variants OF, because two
+  editors over one `prompt_templates` row drift — and the drift does not
+  surface as a merge conflict or an error. It surfaces months later as "the
+  experiment ran the wrong text", by which point the results have been acted
+  on. `PlatformWeb.ExperimentsLive`'s Design tab LINKS here; it reimplements
+  nothing.
+
+  ## The diff is against the SNAPSHOT, never the live row
+
+  A variant is diffed against the `control` variant's stored blob — the copy
+  `Platform.Experiments.activate/2` took at activation — and never against
+  `prompt_templates.content` as it stands now.
+
+  This is the specific way this surface would lie. Editing the template moves
+  the live row; the running experiment's control does not move with it. A
+  diff drawn against the live row would show the author a difference that
+  no dispatch will ever render, and it would look completely normal.
+
+  ## The notice states what editing does NOT do
+
+  While an experiment is running on this template, the editor says so, names
+  it, and links to it. The failure it prevents: the first person to edit a
+  template mid-experiment either believes they have corrupted the run — and
+  wastes a day — or believes they have changed it and relies on that change.
+  The second is worse, because nothing contradicts them.
+
+  It is deliberately NOT dismissible. The state in which someone dismisses a
+  warning is exactly the state in which the misunderstanding does its damage.
+  """
+
   use PlatformWeb, :live_view
 
+  alias Platform.Experiments
+  alias Platform.Experiments.Experiment
   alias Platform.Orchestration.{HeartbeatScheduler, PromptTemplate, PromptTemplates}
 
   # A prompt author reads the preview and the variable sidebar to learn what a
@@ -122,7 +161,11 @@ defmodule PlatformWeb.AdminPromptsLive do
      |> assign(:selected_template, nil)
      |> assign(:edit_form, nil)
      |> assign(:preview_content, nil)
-     |> assign(:save_status, nil)}
+     |> assign(:save_status, nil)
+     |> assign(:running_experiment, nil)
+     |> assign(:experiment_variants, [])
+     |> assign(:selected_variant, nil)
+     |> assign(:variant_diff, nil)}
   end
 
   @impl true
@@ -145,7 +188,8 @@ defmodule PlatformWeb.AdminPromptsLive do
          |> assign(:edit_form, edit_form)
          |> assign(:preview_content, preview)
          |> assign(:save_status, nil)
-         |> assign(:page_title, "Admin · #{template.name}")}
+         |> assign(:page_title, "Admin · #{template.name}")
+         |> load_experiment_context(template)}
     end
   end
 
@@ -250,6 +294,81 @@ defmodule PlatformWeb.AdminPromptsLive do
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "Could not reset template.")}
     end
+  end
+
+  # ── Experiment awareness (task 019fe6ba) ────────────────────────────────
+
+  def handle_event("select_variant", %{"variant" => variant_slug}, socket) do
+    {:noreply, assign_variant(socket, variant_slug)}
+  end
+
+  def handle_event("select_variant", _params, socket), do: {:noreply, socket}
+
+  # Finds the RUNNING experiment on this template, if any.
+  #
+  # `list_experiments_for_template/1` deliberately does not filter by status —
+  # the dispatch resolver needs terminal rows too — so the status filter is
+  # applied here rather than assumed. Only a running experiment produces the
+  # notice: a concluded one no longer constrains what an edit does, and a
+  # permanent banner about a finished experiment is the kind of notice people
+  # learn to stop reading.
+  defp load_experiment_context(socket, template) do
+    experiment =
+      template.slug
+      |> Experiments.list_experiments_for_template()
+      |> Enum.find(&(&1.status == "running"))
+
+    variants = if experiment, do: Experiments.list_variants(experiment), else: []
+
+    socket
+    |> assign(:running_experiment, experiment)
+    |> assign(:experiment_variants, variants)
+    |> assign_variant(Experiment.control_slug())
+  end
+
+  defp assign_variant(socket, variant_slug) do
+    socket
+    |> assign(:selected_variant, variant_slug)
+    |> assign(:variant_diff, diff_against_snapshot(socket, variant_slug))
+  end
+
+  # The diff. Both sides come from `experiment_variants` rows: the control
+  # side is the SNAPSHOT taken at activation, never
+  # `@selected_template.content`.
+  #
+  # Reading the live template here would be the whole defect — the author
+  # would be shown a difference the running experiment does not have, and it
+  # would look entirely ordinary. The `selected_template` assign is
+  # deliberately not consulted by this function.
+  defp diff_against_snapshot(socket, variant_slug) do
+    variants = socket.assigns[:experiment_variants] || []
+    control_slug = Experiment.control_slug()
+
+    with %{content: control} <- Enum.find(variants, &(&1.slug == control_slug)),
+         %{content: chosen} <- Enum.find(variants, &(&1.slug == variant_slug)) do
+      line_diff(control, chosen)
+    else
+      _ -> nil
+    end
+  end
+
+  # Line-level diff, kept plain on purpose. `:eq` runs are dropped so an
+  # unchanged variant yields `[]` — which the template renders as an explicit
+  # "identical to the control snapshot" statement rather than as a blank
+  # panel. A blank panel is indistinguishable from a diff that failed to
+  # render, and this is the state an author sees FIRST, before they have
+  # edited anything.
+  defp line_diff(control, chosen) do
+    control_lines = String.split(control || "", "\n")
+    chosen_lines = String.split(chosen || "", "\n")
+
+    control_lines
+    |> List.myers_difference(chosen_lines)
+    |> Enum.flat_map(fn
+      {:eq, _lines} -> []
+      {:del, lines} -> Enum.map(lines, &{:del, &1})
+      {:ins, lines} -> Enum.map(lines, &{:ins, &1})
+    end)
   end
 
   # ── Helpers ──────────────────────────────────────────────────────────────
