@@ -73,6 +73,43 @@ defmodule Platform.Experiments do
   end
 
   @doc """
+  Lists every experiment targeting a prompt template slug, oldest first.
+
+  Filters on the TARGET only, deliberately not on status. The dispatch read
+  point needs the terminal rows too: a subject assigned while an experiment
+  ran keeps its variant after the experiment is stopped, so the resolver has
+  to be able to find a `stopped` experiment in order to find that subject's
+  existing assignment. A status filter here would make a stop silently
+  re-render the live template for a subject mid-flight — which is exactly
+  the re-assignment ADR-0048 forbids, arriving through the back door.
+
+  Oldest first so that a slug carrying more than one experiment resolves
+  deterministically rather than by whatever order the planner happened to
+  return.
+  """
+  @spec list_experiments_for_template(String.t()) :: [Experiment.t()]
+  def list_experiments_for_template(template_slug) when is_binary(template_slug) do
+    Repo.all(
+      from(e in Experiment,
+        where: e.target_template_slug == ^template_slug,
+        order_by: [asc: e.inserted_at]
+      )
+    )
+  end
+
+  @doc """
+  Fetches one variant of an experiment by slug, or nil.
+  """
+  @spec get_variant(Experiment.t(), String.t()) :: Variant.t() | nil
+  def get_variant(%Experiment{id: experiment_id}, variant_slug) when is_binary(variant_slug) do
+    Repo.one(
+      from(v in Variant,
+        where: v.experiment_id == ^experiment_id and v.slug == ^variant_slug
+      )
+    )
+  end
+
+  @doc """
   Creates an experiment in `draft`.
 
   The status is forced rather than taken from `attrs`: a new experiment that
@@ -149,10 +186,19 @@ defmodule Platform.Experiments do
     # caller preloaded :variants before the control existed, that stale list
     # is what the changeset guard would consult, and activation would be
     # refused for a control that was just inserted two steps above.
-    |> Multi.update(:experiment, fn _changes ->
+    |> Multi.update(:experiment, fn %{template: template} ->
       Experiment
       |> Repo.get!(experiment.id)
-      |> Experiment.changeset(%{status: "running"})
+      # The target slug is bound HERE, in the same transaction as the
+      # snapshot, and nowhere else. Activation is the only moment at which
+      # both facts — which template, and what it said — are known together;
+      # binding the target anywhere later would allow a running experiment
+      # whose control is a snapshot of one template and whose target names
+      # another.
+      |> Experiment.changeset(%{
+        status: "running",
+        target_template_slug: template.slug
+      })
     end)
     |> Repo.transaction()
     |> case do

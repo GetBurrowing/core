@@ -54,6 +54,12 @@ defmodule Platform.Experiments.Experiment do
     field(:status, :string, default: "draft")
     field(:stop_rule, :map, default: %{})
 
+    # WHICH prompt template this experiment is an experiment ON. A slug, not
+    # an id and not an FK — see the migration's moduledoc. Nil on a draft
+    # that has not been activated yet; `Platform.Experiments.activate/2` is
+    # what binds it, in the same transaction that snapshots the control.
+    field(:target_template_slug, :string)
+
     has_many(:variants, Variant, foreign_key: :experiment_id)
 
     timestamps(type: :utc_datetime_usec)
@@ -76,7 +82,15 @@ defmodule Platform.Experiments.Experiment do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(experiment, attrs) do
     experiment
-    |> cast(attrs, [:slug, :name, :hypothesis, :primary_metric, :status, :stop_rule])
+    |> cast(attrs, [
+      :slug,
+      :name,
+      :hypothesis,
+      :primary_metric,
+      :status,
+      :stop_rule,
+      :target_template_slug
+    ])
     |> validate_required([:slug, :name, :status])
     |> validate_inclusion(:status, @statuses)
     |> unique_constraint(:slug)

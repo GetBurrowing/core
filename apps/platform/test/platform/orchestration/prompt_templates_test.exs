@@ -5,6 +5,8 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
   """
   use Platform.DataCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Platform.Chat
   alias Platform.Orchestration.ContextAssembler
   alias Platform.Orchestration.HeartbeatScheduler
@@ -4896,4 +4898,276 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
   defp s3_pending_kind("dispatch.in_review"), do: "manual_approval"
   defp s3_pending_kind("dispatch.review_e2e"), do: "e2e_behavior"
   defp s3_pending_kind("dispatch.deploying"), do: "pr_merged"
+  # ==========================================================================
+  # Variant resolution at the read point (task 019fe6b9, ADR-0048)
+  # ==========================================================================
+
+  describe "render_template/2 variant resolution" do
+    @variant_slug "treatment"
+    @live_body "LIVE-TEMPLATE-BODY for {{task_id}} and {{stage_id}}"
+    @edited_live_body "EDITED-LIVE-BODY for {{task_id}} and {{stage_id}}"
+    @variant_body "VARIANT-MARKER-XYZZY body for {{task_id}}"
+
+    setup do
+      slug = "experiments.render_test.v#{System.unique_integer([:positive])}"
+
+      {:ok, template} =
+        PromptTemplates.create_template(%{
+          slug: slug,
+          name: "Render resolution fixture",
+          description: "Fixture for task 019fe6b9.",
+          content: @live_body
+        })
+
+      subject_id = Ecto.UUID.generate()
+
+      %{
+        slug: slug,
+        template: template,
+        subject_id: subject_id,
+        assigns: %{task_id: subject_id, stage_id: "stage-9"}
+      }
+    end
+
+    test "with no experiment the output is byte-identical to the pre-change render",
+         %{slug: slug, subject_id: subject_id, assigns: assigns} do
+      # The expected string is written out by hand rather than computed by
+      # calling the code under test. Deriving it from the same interpolation
+      # this test is meant to police would make the assertion true by
+      # construction: a resolver that returned the wrong blob would still
+      # match, because both sides would have moved together.
+      expected = "LIVE-TEMPLATE-BODY for #{subject_id} and stage-9"
+
+      assert {:ok, rendered} = PromptTemplates.render_template(slug, assigns)
+      assert rendered == expected
+
+      assert Platform.Repo.aggregate(Platform.Experiments.Assignment, :count) == 0
+    end
+
+    test "an active experiment renders the variant's snapshotted blob, not the live row",
+         %{slug: slug, template: template, subject_id: subject_id, assigns: assigns} do
+      experiment = running_experiment_on(template, control_weight: 0, variant_weight: 1)
+
+      assert {:ok, rendered} = PromptTemplates.render_template(slug, assigns)
+
+      assert rendered == "VARIANT-MARKER-XYZZY body for #{subject_id}"
+
+      # Both directions. Asserting only that the marker is present would pass
+      # for an implementation that concatenated the variant onto the live
+      # template; the live body's distinguishing text has to be ABSENT.
+      refute rendered =~ "LIVE-TEMPLATE-BODY"
+
+      assert %Platform.Experiments.Assignment{variant_slug: @variant_slug} =
+               Platform.Experiments.Assignments.get_assignment(experiment, subject(subject_id))
+    end
+
+    test "a second render for the same subject returns the same variant and the same blob",
+         %{slug: slug, template: template, subject_id: subject_id, assigns: assigns} do
+      # Force the stickiness condition rather than trusting the weights to
+      # differ: the first render is steered to the CONTROL, and the weights
+      # are then flipped so that a re-roll would pick the treatment with
+      # overwhelming probability. A recompute is therefore visible in the
+      # OUTPUT, not merely in the row count.
+      experiment = running_experiment_on(template, control_weight: 1, variant_weight: 0)
+
+      assert {:ok, first} = PromptTemplates.render_template(slug, assigns)
+      assert first == "LIVE-TEMPLATE-BODY for #{subject_id} and stage-9"
+
+      assert %{variant_slug: "control"} =
+               Platform.Experiments.Assignments.get_assignment(experiment, subject(subject_id))
+
+      set_weights(experiment, control_weight: 0, variant_weight: 1000)
+
+      # And edit the LIVE template, so "rendered the control snapshot" and
+      # "fell through to the live row" stop being the same string. Without
+      # this the control arm is indistinguishable from no experiment at all,
+      # and a resolver that silently bailed out would still pass.
+      {:ok, _} = PromptTemplates.update_template(template, %{content: @edited_live_body})
+
+      assert {:ok, second} = PromptTemplates.render_template(slug, assigns)
+
+      # THE load-bearing assertion. Not the row count: the DB unique index
+      # would kill a re-resolving mutant on the count alone while leaving the
+      # read-before-write path in Elixir completely untested. What must hold
+      # is that the RETURNED blob is the same one.
+      assert second == first
+      refute second =~ "VARIANT-MARKER-XYZZY"
+      refute second =~ "EDITED-LIVE-BODY"
+
+      assert %{variant_slug: "control"} =
+               Platform.Experiments.Assignments.get_assignment(experiment, subject(subject_id))
+
+      assert Platform.Repo.aggregate(Platform.Experiments.Assignment, :count) == 1
+    end
+
+    test "stopping the experiment does not re-assign an in-flight subject",
+         %{slug: slug, template: template, subject_id: subject_id, assigns: assigns} do
+      experiment = running_experiment_on(template, control_weight: 0, variant_weight: 1)
+
+      assert {:ok, before_stop} = PromptTemplates.render_template(slug, assigns)
+      assert before_stop =~ "VARIANT-MARKER-XYZZY"
+
+      {:ok, _stopped} = Platform.Experiments.stop(experiment)
+
+      assert {:ok, after_stop} = PromptTemplates.render_template(slug, assigns)
+
+      assert after_stop == before_stop
+
+      assert %{variant_slug: @variant_slug} =
+               Platform.Experiments.Assignments.get_assignment(experiment, subject(subject_id))
+
+      assert Platform.Repo.aggregate(Platform.Experiments.Assignment, :count) == 1
+    end
+
+    test "a stopped experiment assigns no NEW subject", %{
+      slug: slug,
+      template: template
+    } do
+      experiment = running_experiment_on(template, control_weight: 0, variant_weight: 1)
+      {:ok, _stopped} = Platform.Experiments.stop(experiment)
+
+      fresh_subject = Ecto.UUID.generate()
+
+      assert {:ok, rendered} =
+               PromptTemplates.render_template(slug, %{
+                 task_id: fresh_subject,
+                 stage_id: "stage-9"
+               })
+
+      assert rendered == "LIVE-TEMPLATE-BODY for #{fresh_subject} and stage-9"
+      assert Platform.Repo.aggregate(Platform.Experiments.Assignment, :count) == 0
+    end
+
+    test "a broken experiment falls through to the live template and logs, and does NOT return :not_found",
+         %{slug: slug, template: template, subject_id: subject_id, assigns: assigns} do
+      experiment = running_experiment_on(template, control_weight: 0, variant_weight: 1)
+
+      # Break the variant AFTER the assignment exists, so the failure happens
+      # at the blob read — the point at which the dispatch is already
+      # committed to an experiment and has the most to lose.
+      assert {:ok, _} = PromptTemplates.render_template(slug, assigns)
+      break_variant!(experiment)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          # The hazard this whole test exists for: `render_template/2` ends in
+          # a blanket `rescue -> {:error, :not_found}`. A resolution failure
+          # reaching it would report the template as missing and break the
+          # dispatch. It must return {:ok, live_render} instead.
+          assert {:ok, rendered} = PromptTemplates.render_template(slug, assigns)
+          assert rendered == "LIVE-TEMPLATE-BODY for #{subject_id} and stage-9"
+          refute rendered =~ "VARIANT-MARKER-XYZZY"
+        end)
+
+      assert log =~ "experiment resolution failed"
+      assert log =~ slug
+    end
+
+    test "a missing variant row also falls through rather than raising",
+         %{slug: slug, template: template, subject_id: subject_id, assigns: assigns} do
+      experiment = running_experiment_on(template, control_weight: 0, variant_weight: 1)
+      assert {:ok, _} = PromptTemplates.render_template(slug, assigns)
+
+      {1, _} =
+        Platform.Repo.delete_all(
+          from(v in Platform.Experiments.Variant,
+            where: v.experiment_id == ^experiment.id and v.slug == ^@variant_slug
+          )
+        )
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, rendered} = PromptTemplates.render_template(slug, assigns)
+          assert rendered == "LIVE-TEMPLATE-BODY for #{subject_id} and stage-9"
+        end)
+
+      assert log =~ "experiment resolution failed"
+    end
+
+    test "a render with no task in scope creates no assignment and gets the live template",
+         %{slug: slug, template: template} do
+      _experiment = running_experiment_on(template, control_weight: 0, variant_weight: 1)
+
+      assert {:ok, no_key} = PromptTemplates.render_template(slug, %{stage_id: "stage-9"})
+      assert no_key == "LIVE-TEMPLATE-BODY for  and stage-9"
+      refute no_key =~ "VARIANT-MARKER-XYZZY"
+
+      # The empty-string trap. Several dispatch sites pass
+      # `contract_id(task, :id) || ""`, so "" is a value that really arrives.
+      # It must be NO subject, not a subject whose id is "".
+      assert {:ok, empty} =
+               PromptTemplates.render_template(slug, %{task_id: "", stage_id: "stage-9"})
+
+      assert empty == "LIVE-TEMPLATE-BODY for  and stage-9"
+      refute empty =~ "VARIANT-MARKER-XYZZY"
+
+      assert Platform.Repo.aggregate(Platform.Experiments.Assignment, :count) == 0
+    end
+  end
+
+  defp subject(subject_id), do: %{subject_type: "task", subject_id: subject_id}
+
+  # Builds a RUNNING experiment targeting the fixture template, with the
+  # control snapshot taken by `activate/2` (never hand-written) plus one
+  # marked treatment variant, at the requested weights.
+  defp running_experiment_on(template, opts) do
+    {:ok, experiment} =
+      Platform.Experiments.create_experiment(%{
+        slug: "exp-#{System.unique_integer([:positive])}",
+        name: "Render resolution experiment",
+        primary_metric: "cycle_time"
+      })
+
+    {:ok, _variant} =
+      Platform.Experiments.add_variant(experiment, %{
+        slug: @variant_slug,
+        content: @variant_body,
+        weight: 1
+      })
+
+    # The control is NOT hand-written here. `activate/2` inserts it itself,
+    # snapshotting the template's content at that instant, and the
+    # `(experiment_id, slug)` unique index means a pre-seeded control would
+    # make activation fail. The snapshot is the thing under test, so it has
+    # to come from the shipped path.
+    {:ok, running} = Platform.Experiments.activate(experiment, template)
+
+    set_weights(running,
+      control_weight: Keyword.fetch!(opts, :control_weight),
+      variant_weight: Keyword.fetch!(opts, :variant_weight)
+    )
+
+    running
+  end
+
+  defp set_weights(experiment, opts) do
+    Platform.Repo.update_all(
+      from(v in Platform.Experiments.Variant,
+        where: v.experiment_id == ^experiment.id and v.slug == "control"
+      ),
+      set: [weight: Keyword.fetch!(opts, :control_weight)]
+    )
+
+    Platform.Repo.update_all(
+      from(v in Platform.Experiments.Variant,
+        where: v.experiment_id == ^experiment.id and v.slug == ^@variant_slug
+      ),
+      set: [weight: Keyword.fetch!(opts, :variant_weight)]
+    )
+  end
+
+  # Empties the treatment variant's blob behind the changeset, which requires
+  # it. A variant row with no usable prompt is a real production shape — a bad
+  # import, a truncated copy — and it is exactly what must not reach an agent.
+  defp break_variant!(experiment) do
+    {1, _} =
+      Platform.Repo.update_all(
+        from(v in Platform.Experiments.Variant,
+          where: v.experiment_id == ^experiment.id and v.slug == ^@variant_slug
+        ),
+        set: [content: ""]
+      )
+
+    :ok
+  end
 end
