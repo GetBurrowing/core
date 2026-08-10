@@ -55,12 +55,13 @@ defmodule PlatformWeb.Components.IconRailTest do
   end
 
   describe "destinations/1" do
-    test "returns 8 destinations for a non-Fabrikam user (Admin + Prompts filtered out)" do
+    test "returns 9 destinations for a non-Fabrikam user (Admin + Prompts filtered out)" do
       # Count bumped from 7 → 8 when ADR-0042 stage 5 added the Files
-      # destination (working cluster, fabrikam_only?: false). Any future
+      # destination (working cluster, fabrikam_only?: false), and 8 → 9 when
+      # task 019fe6ba added Experiments (also fabrikam_only?: false). Any future
       # destination addition should bump the matching guard below.
       list = destinations(is_fabrikam_user: false)
-      assert length(list) == 8
+      assert length(list) == 9
       refute Enum.any?(list, &(&1.key == :admin))
       # Prompts is also fabrikam_only?: true as of 2026-05-20 (admin-only access
       # at the route level; previously rendered for members but redirected
@@ -70,12 +71,28 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert Enum.any?(list, &(&1.key == :files))
     end
 
-    test "returns all 10 destinations for a Fabrikam user (Admin + Prompts included)" do
+    test "returns all 11 destinations for a Fabrikam user (Admin + Prompts included)" do
       list = destinations(is_fabrikam_user: true)
-      assert length(list) == 10
+      assert length(list) == 11
       assert Enum.any?(list, &(&1.key == :admin))
       assert Enum.any?(list, &(&1.key == :prompts))
       assert Enum.any?(list, &(&1.key == :files))
+    end
+
+    test "Experiments is a member-visible destination pointing at /control/experiments" do
+      # Reachability guard for task 019fe6ba: `/control/experiments` sits in
+      # `live_session :authenticated`, so a NON-admin member must see the nav
+      # entry. Asserting against the is_fabrikam_user: false list is the whole
+      # point — a fabrikam_only? regression here restores the original defect
+      # (the page reachable only by typing the URL).
+      dest =
+        destinations(is_fabrikam_user: false)
+        |> Enum.find(&(&1.key == :experiments))
+
+      assert dest, "Experiments must appear for a non-Fabrikam member"
+      assert dest.path == "/control/experiments"
+      assert dest.cluster == :working
+      refute dest.fabrikam_only?
     end
 
     test "every entry has the required keys" do
@@ -178,16 +195,20 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert html =~ "w-56"
     end
 
-    test "renders 10 destination tiles for a Fabrikam user (Chat..Meetings + Files + Admin)" do
-      # Tile count bumped from 9 → 10 when ADR-0042 stage 5 added Files.
+    test "renders 11 destination tiles for a Fabrikam user (Chat..Meetings + Files + Admin)" do
+      # Tile count bumped from 9 → 10 when ADR-0042 stage 5 added Files, and
+      # 10 → 11 when task 019fe6ba added Experiments.
       html = render_icon_rail(%{is_fabrikam_user: true})
-      assert count_data_destination_matches(html) == 10
+      assert count_data_destination_matches(html) == 11
     end
 
-    test "renders 8 destination tiles for a non-Fabrikam user (no Admin, no Prompts)" do
-      # 7 → 8 when Files (visible to all authenticated users) shipped.
+    test "renders 9 destination tiles for a non-Fabrikam user (no Admin, no Prompts)" do
+      # 7 → 8 when Files (visible to all authenticated users) shipped;
+      # 8 → 9 when Experiments shipped (also visible to all).
       html = render_icon_rail(%{is_fabrikam_user: false})
-      assert count_data_destination_matches(html) == 8
+      assert count_data_destination_matches(html) == 9
+      assert html =~ ~s(data-destination="experiments")
+      assert html =~ "/control/experiments"
     end
 
     test "Admin slot pins to the bottom of the rail via the mt-auto spacer" do
