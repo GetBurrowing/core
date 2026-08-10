@@ -561,6 +561,20 @@ defmodule PlatformWeb.Components.IconRail do
         fabrikam_only?: false
       },
       %{
+        # Task 019fea0d / ADR-0048: the pipeline health surface at
+        # `/control/pipeline`. It shipped with routes and tests but no nav
+        # entry anywhere, so it was reachable only by typing the URL — the
+        # same defect the Experiments entry above fixes, found while fixing
+        # that one. Like Experiments it sits in `live_session :authenticated`,
+        # so it is member-visible and NOT fabrikam_only?.
+        key: :pipeline,
+        label: "Pipeline",
+        path: "/control/pipeline",
+        hero_icon: "hero-chart-bar",
+        cluster: :working,
+        fabrikam_only?: false
+      },
+      %{
         key: :meetings,
         label: "Meetings",
         path: "/meetings",
