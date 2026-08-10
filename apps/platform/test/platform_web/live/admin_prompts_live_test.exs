@@ -24,6 +24,7 @@ defmodule PlatformWeb.AdminPromptsLiveTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
+  alias Platform.Experiments
   alias Platform.Orchestration.HeartbeatScheduler
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
@@ -179,6 +180,140 @@ defmodule PlatformWeb.AdminPromptsLiveTest do
       refute "Variable" in descriptions,
              "at least one declared variable fell back to the placeholder description; " <>
                "declared but undescribed variables are the shape the task_slug copy rot took"
+    end
+  end
+
+  # ── Variant awareness (task 019fe6ba, ADR-0048) ─────────────────────────
+  #
+  # Every assertion here goes through `data-role`, not through rendered copy.
+  # The page is long and full of prose; a whole-page `=~` on the notice
+  # wording can be satisfied by an unrelated element and would stay green
+  # through exactly the regression this covers. LazyHTML, not Floki.
+
+  describe "the running-experiment notice" do
+    defp q(html, selector), do: html |> LazyHTML.from_fragment() |> LazyHTML.query(selector)
+
+    defp running_experiment_on(template_slug, name) do
+      {:ok, experiment} =
+        Experiments.create_experiment(%{
+          slug: "exp-#{System.unique_integer([:positive])}",
+          name: name,
+          primary_metric: "validation_failure_rate",
+          stop_rule: %{"min_subjects" => 120}
+        })
+
+      {:ok, experiment} = Experiments.activate(experiment, template_slug)
+      experiment
+    end
+
+    test "renders, names the experiment, and links to it", %{conn: conn} do
+      experiment = running_experiment_on(@slug, "planner-terser-briefs")
+
+      {:ok, _view, html} = live(conn, ~p"/admin/prompts/#{@slug}")
+
+      notice = q(html, ~s([data-role="experiment-snapshot-notice"]))
+      assert Enum.count(notice) == 1
+
+      # It NAMES the experiment — "there is a running experiment" is a fact,
+      # the name is what makes it actionable.
+      assert LazyHTML.text(notice) =~ "planner-terser-briefs"
+
+      link = q(html, ~s([data-role="experiment-snapshot-notice-link"]))
+      assert LazyHTML.attribute(link, "href") == ["/control/experiments/#{experiment.slug}"]
+    end
+
+    test "is absent on a template with no experiment", %{conn: conn} do
+      # The other direction, seeded explicitly. A refute alone stays green
+      # when the writer never fires at all, so this test is only worth
+      # anything next to the one above — and vice versa.
+      {:ok, _view, html} = live(conn, ~p"/admin/prompts/#{@slug}")
+
+      assert q(html, ~s([data-role="experiment-snapshot-notice"])) |> Enum.count() == 0
+      assert q(html, ~s([data-role="variant-editor"])) |> Enum.count() == 0
+    end
+
+    test "is not dismissible and survives a save", %{conn: conn} do
+      running_experiment_on(@slug, "survives-save")
+
+      {:ok, view, html} = live(conn, ~p"/admin/prompts/#{@slug}")
+
+      # No dismiss affordance of any kind inside the notice.
+      assert q(html, ~s([data-role="experiment-snapshot-notice"] button)) |> Enum.count() == 0
+
+      saved =
+        view
+        |> form("form", template: %{content: "Edited mid-experiment.", name: "n"})
+        |> render_submit()
+
+      assert q(saved, ~s([data-role="experiment-snapshot-notice"])) |> Enum.count() == 1
+    end
+
+    test "a concluded experiment produces no notice", %{conn: conn} do
+      experiment = running_experiment_on(@slug, "already-done")
+      {:ok, _} = Experiments.conclude(experiment)
+
+      {:ok, _view, html} = live(conn, ~p"/admin/prompts/#{@slug}")
+
+      assert q(html, ~s([data-role="experiment-snapshot-notice"])) |> Enum.count() == 0
+    end
+  end
+
+  describe "the variant diff" do
+    test "an unchanged variant says so rather than rendering blank", %{conn: conn} do
+      experiment = running_experiment_on(@slug, "empty-diff")
+      control = Experiments.get_variant(experiment, "control")
+
+      {:ok, _} = Experiments.add_variant(experiment, %{slug: "b", content: control.content})
+
+      {:ok, view, _html} = live(conn, ~p"/admin/prompts/#{@slug}")
+      html = view |> element(~s([data-role="variant-option"][data-variant="b"])) |> render_click()
+
+      assert q(html, ~s([data-role="variant-diff-empty"])) |> Enum.count() == 1
+      assert q(html, ~s([data-role="variant-diff"])) |> Enum.count() == 0
+    end
+
+    test "the selector switches which blob is diffed", %{conn: conn} do
+      experiment = running_experiment_on(@slug, "switching")
+
+      {:ok, _} =
+        Experiments.add_variant(experiment, %{slug: "b", content: "WHOLLY DIFFERENT VARIANT"})
+
+      {:ok, view, html} = live(conn, ~p"/admin/prompts/#{@slug}")
+
+      # Control against itself: empty.
+      assert q(html, ~s([data-role="variant-diff-empty"])) |> Enum.count() == 1
+
+      switched =
+        view |> element(~s([data-role="variant-option"][data-variant="b"])) |> render_click()
+
+      assert q(switched, ~s([data-role="variant-diff"])) |> Enum.count() == 1
+
+      assert q(switched, ~s([data-role="variant-diff-ins"])) |> LazyHTML.text() =~
+               "WHOLLY DIFFERENT VARIANT"
+    end
+
+    test "the diff tracks the SNAPSHOT after the live row has moved", %{conn: conn} do
+      experiment = running_experiment_on(@slug, "snapshot-tracking")
+      control = Experiments.get_variant(experiment, "control")
+
+      {:ok, _} = Experiments.add_variant(experiment, %{slug: "b", content: control.content})
+
+      # Move the live template row far away from the snapshot. If the diff
+      # were computed against `prompt_templates.content` — the specific way
+      # this surface would lie — variant `b` would now appear to differ, and
+      # it would look completely ordinary.
+      {:ok, _} =
+        @slug
+        |> PromptTemplates.get_template_by_slug()
+        |> PromptTemplates.update_template(%{content: "LIVE ROW HAS MOVED SINCE ACTIVATION"})
+
+      {:ok, view, _html} = live(conn, ~p"/admin/prompts/#{@slug}")
+      html = view |> element(~s([data-role="variant-option"][data-variant="b"])) |> render_click()
+
+      assert q(html, ~s([data-role="variant-diff-empty"])) |> Enum.count() == 1,
+             "the diff moved with the live template row instead of staying on the snapshot"
+
+      refute q(html, ~s([data-role="variant-diff"])) |> LazyHTML.text() =~ "LIVE ROW HAS MOVED"
     end
   end
 end

@@ -26,8 +26,19 @@ defmodule Platform.Orchestration.PromptTemplates do
 
   import Ecto.Query
 
+  require Logger
+
+  alias Platform.Experiments
+  alias Platform.Experiments.Assignment
+  alias Platform.Experiments.Assignments
+  alias Platform.Experiments.Variant
   alias Platform.Orchestration.PromptTemplate
   alias Platform.Repo
+
+  # Every subject this read point can produce is a task. The column is a
+  # generic `subject_type` so dispatch-level subjects work later without a
+  # migration; this module simply has nothing else in scope to be a subject.
+  @subject_type "task"
 
   @doc "List all prompt templates ordered by slug."
   @spec list_templates() :: [PromptTemplate.t()]
@@ -83,6 +94,21 @@ defmodule Platform.Orchestration.PromptTemplates do
   Fetches the template from the database and interpolates `{{variable_name}}`
   placeholders with values from the assigns map. Returns `{:error, :not_found}`
   if no template exists for the given slug, or if the database is unavailable.
+
+  ## The single variant resolution point (task 019fe6b9, ADR-0048)
+
+  This is the ONLY function in the tree that reads `prompt_templates.content`
+  in order to render it — every dispatch caller funnels through here — which
+  is why variant resolution lives at this one line and not spread across the
+  callers. `PlatformWeb.AdminPromptsLive` also reads the column, but it loads
+  templates into an EDIT FORM and never renders a dispatch, so it is
+  deliberately NOT routed through the resolver: routing it here would make
+  editing a template show the editor somebody else's variant.
+
+  When an experiment applies, what gets interpolated is the variant's
+  SNAPSHOTTED blob, never the live row. Interpolation is unchanged either
+  way — same `interpolate/2`, same assigns, same `{{var}}` semantics — so a
+  variant is a different prompt, not a different templating language.
   """
   @spec render_template(String.t(), map()) :: {:ok, String.t()} | {:error, :not_found}
   def render_template(slug, assigns) do
@@ -91,12 +117,163 @@ defmodule Platform.Orchestration.PromptTemplates do
         {:error, :not_found}
 
       %PromptTemplate{content: content} ->
-        rendered = interpolate(content, assigns)
+        rendered =
+          slug
+          |> resolve_content(content, assigns)
+          |> interpolate(assigns)
+
         {:ok, rendered}
     end
   rescue
     _ ->
       {:error, :not_found}
+  end
+
+  # Returns the content to render: the variant's snapshotted blob when an
+  # experiment applies to this subject, the live template's content otherwise.
+  #
+  # ## This function may not raise, and that is the whole point
+  #
+  # Note what sits directly below the caller: `render_template/2` ends in a
+  # blanket `rescue -> {:error, :not_found}`. If a resolution failure escaped
+  # this function it would land there and a dispatch would be told its
+  # template does not exist — turning an experimentation hiccup into a broken
+  # dispatch, which is the precise failure posture ADR-0048 forbids. So every
+  # exit from here returns a binary: `rescue` and `catch` both fall through to
+  # the live content after logging.
+  #
+  # The reasoning mirrors the transition recorder, which logs and returns the
+  # changeset unchanged rather than rolling back a legitimate status write.
+  # Observational machinery must not hold the lifecycle hostage. An experiment
+  # that quietly loses a subject costs one data point; a dispatch that fails
+  # because the experimentation layer had a bad day costs the task.
+  defp resolve_content(slug, live_content, assigns) do
+    with {:ok, subject_id} <- subject_id(assigns),
+         {:ok, experiment, variant_slug} <- resolve_variant_slug(slug, subject_id),
+         {:ok, blob} <- variant_content(experiment, variant_slug) do
+      blob
+    else
+      # Not failures. No subject and no experiment are the ordinary case —
+      # they cover every dispatch in a system with zero experiments defined,
+      # and they must stay silent or the logs become useless.
+      :no_subject -> live_content
+      :no_experiment -> live_content
+      {:error, reason} -> fall_through(slug, reason, live_content)
+    end
+  rescue
+    error -> fall_through(slug, error, live_content)
+  catch
+    kind, reason -> fall_through(slug, {kind, reason}, live_content)
+  end
+
+  defp fall_through(slug, reason, live_content) do
+    Logger.error(
+      "[PromptTemplates] experiment resolution failed, rendering the live template " <>
+        "(slug=#{inspect(slug)}, reason=#{inspect(reason)})"
+    )
+
+    live_content
+  end
+
+  # The subject is the task the render is for, and it is DERIVED, never
+  # invented. Callers already pass `task_id:` in assigns, so no signature
+  # changes; a render with no task in scope — cron sweeps, chat and meeting
+  # dispatches, the historian — simply has no subject and no experiment
+  # applies to it.
+  #
+  # The empty string is the trap. Several dispatch sites pass
+  # `contract_id(task, :id) || ""`, so `""` arrives as a perfectly ordinary
+  # value. It must count as NO SUBJECT. Treating it as a subject whose id is
+  # `""` would collapse every unattributable render in the system into one
+  # shared pseudo-subject and write assignment rows nobody could ever
+  # interpret — rows that would still be counted by the metric.
+  defp subject_id(assigns) when is_map(assigns) do
+    case Map.get(assigns, :task_id) || Map.get(assigns, "task_id") do
+      value when is_binary(value) and value != "" -> {:ok, value}
+      _ -> :no_subject
+    end
+  end
+
+  defp subject_id(_assigns), do: :no_subject
+
+  # An EXISTING assignment always wins, and it wins regardless of the
+  # experiment's status.
+  #
+  # That status-blindness is deliberate and is the difference between
+  # "stopping an experiment does not re-assign in-flight subjects" holding
+  # and merely appearing to. Looking only at `running` experiments would mean
+  # a stop silently flips every mid-flight subject back to the live template
+  # — no new row written, so the assignment table looks untouched, while the
+  # subject's later dispatches came from a different prompt than its earlier
+  # ones. That is the same undetectable contamination as re-rolling, reached
+  # by a different route.
+  #
+  # Only a `running` experiment may CREATE an assignment. Terminal ones can
+  # be honoured, never joined.
+  defp resolve_variant_slug(slug, subject_id) do
+    subject = %{subject_type: @subject_type, subject_id: subject_id}
+    experiments = Experiments.list_experiments_for_template(slug)
+
+    case existing_assignment(experiments, subject) do
+      {experiment, variant_slug} ->
+        {:ok, experiment, variant_slug}
+
+      nil ->
+        assign_new(experiments, subject)
+    end
+  end
+
+  defp existing_assignment(experiments, subject) do
+    Enum.find_value(experiments, fn experiment ->
+      case Assignments.get_assignment(experiment, subject) do
+        %Assignment{variant_slug: variant_slug} -> {experiment, variant_slug}
+        nil -> nil
+      end
+    end)
+  end
+
+  defp assign_new(experiments, subject) do
+    case Enum.filter(experiments, &(&1.status == "running")) do
+      [] ->
+        :no_experiment
+
+      [experiment | rest] ->
+        # ADR-0048's risk register: the design assumes at most one running
+        # experiment per slug, because with two the assignment row stops
+        # being a unique description of what the subject saw and every
+        # per-subject metric is confounded. Nothing structurally prevents a
+        # second one, so say so loudly rather than resolving it silently.
+        if rest != [] do
+          Logger.warning(
+            "[PromptTemplates] #{length(rest) + 1} running experiments target " <>
+              "#{inspect(experiment.target_template_slug)}; using the oldest. " <>
+              "Overlapping experiments on one slug confound every per-subject metric."
+          )
+        end
+
+        case Assignments.assign_once(experiment, subject) do
+          {:ok, %Assignment{variant_slug: variant_slug}} -> {:ok, experiment, variant_slug}
+          other -> {:error, {:assign_once, other}}
+        end
+    end
+  end
+
+  # A variant row with no usable blob is a broken experiment, not an empty
+  # prompt. Rendering `nil` or `""` would dispatch an agent with no
+  # instructions at all, which fails far downstream and looks like a model
+  # problem; falling through to the live template loses the data point and
+  # nothing else.
+  defp variant_content(experiment, variant_slug) do
+    case Experiments.get_variant(experiment, variant_slug) do
+      %Variant{content: content} when is_binary(content) and content != "" ->
+        {:ok, content}
+
+      %Variant{} ->
+        {:error, {:variant_blob_empty, variant_slug}}
+
+      nil ->
+        {:error, {:variant_missing, variant_slug}}
+    end
   end
 
   @doc """

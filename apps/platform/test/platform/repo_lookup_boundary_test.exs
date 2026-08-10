@@ -233,6 +233,21 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`fetch_project/1`'s predicate, collapsed from a bare Ecto.UUID.cast/1 onto Platform.UUID.cast/1 at the ADR-0046 merge. The site was already total — it passes the cast's OUTPUT to `Tasks.get_project/1` and additionally rescues — so this is the canonical-predicate fix, not a raise fix. Sibling-owned — RECORD, DO NOT EDIT"},
     {"platform/design/preplan_step.ex", :get, "Task", 2, :flagged_sibling_owned,
      "`resolve_task/1`: :705 takes `%Task{}.id` off a loaded struct; :706 takes a raw binary. Every public entry point that can reach :706 with a caller-supplied string — `settle/2`, `expire/2`, `audit_ui_prediction/2`, `annotate/3` — wraps its body in `rescue`/`catch`, and the only lib caller passing a binary (`tool_surface.ex:5954`, `plan_create`) reaches it only AFTER `Tasks.create_plan/1` accepted the same id in the enclosing transaction. `start/1` does not rescue, but TaskRouter calls it with a `%Task{}` struct. Sibling-owned — RECORD, DO NOT EDIT"},
+    # ── Experiments (ADR-0048, task 019fe6b9) ──────────────────────────
+    {"platform/experiments.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "get_experiment/1's predicate. The id reaches this context from an agent or an MCP payload once the later stack members expose experiments, so the guard is what keeps a malformed id returning nil instead of raising Ecto.Query.CastError against Experiment's strict UUIDv7 primary key"},
+    {"platform/experiments.ex", :get, "Experiment", 1, :safe_internal,
+     "the sole Repo.get sits inside get_experiment/1, behind the Platform.UUID.valid?/1 guard counted above; the two entries fail together if either is removed"},
+    {"platform/experiments.ex", :get!, "Experiment", 1, :safe_internal,
+     "activate/2's Multi re-reads the experiment by `experiment.id` destructured off a loaded `%Experiment{}` whose PK was minted by Platform.Types.UUIDv7 autogenerate. It is re-read rather than reused precisely so a caller's stale preloaded :variants cannot decide the control guard — the id never leaves the struct"},
+    {"platform/experiments.ex", :get_by, "Experiment", 1, :safe_internal,
+     "keyed `slug:`, a plain string column on experiments with no UUID type on either side of the comparison; get_experiment_by_slug/1 cannot raise a cast error"},
+    {"platform/experiments.ex", :get_by, "PromptTemplate", 1, :safe_internal,
+     "keyed `slug:`, the same plain string column `Orchestration.PromptTemplates.get_template_by_slug/1` already reads unguarded; activate/2 folds a miss into {:error, changeset} rather than raising"},
+    {"platform/experiments/promotion.ex", :get_by, "PromptTemplate", 1, :safe_internal,
+     "keyed `slug:`, a plain string column — the value is `experiment.target_template_slug` off a loaded `%Experiment{}`, itself written only by Experiments.activate/2 from a template row it had just read. No UUID type on either side, and promote/2 folds a miss into {:error, :template_not_found} rather than raising"},
+    {"platform/experiments/assignments.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "get_assignment/2's predicate. Its Repo.one pins `a.subject_id == ^subject_id` in the where clause, and the subject is caller-supplied — a task id today, a dispatch id once the later ADR-0048 members land — so a malformed binary would raise Ecto.Query.CastError from the where clause exactly as Repo.get/2 does. The guard folds it into the nil this function already returns for an unassigned subject"},
     # ── External agents ────────────────────────────────────────────────
     {"platform/external_agents.ex", :get_by, "Agent", 1, :safe_internal,
      "get_external_agent/1 checks Platform.UUID.valid?/1 before the id:-keyed get_by, which raises exactly like Repo.get/2 does. This is the spelling `git grep \"Repo.get(\"` cannot see"},
@@ -639,6 +654,37 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/chat/canvas_access.ex" => 1,
     "platform/chat/message_versions.ex" => 2,
     "platform/deploy/project_files.ex" => 3,
+    # 0 → 1 for task 019fe6b9 stage 2's `get_assignment/2` (ADR-0048).
+    # Triaged by hand as this map asks: the `where:` clause pins
+    # `a.experiment_id == ^experiment_id`, destructured off a loaded
+    # `%Experiment{}`, AND `a.subject_id == ^subject_id`, which IS
+    # caller-supplied. The second one can arrive malformed, so the call sits
+    # behind a `Platform.UUID.valid?/1` guard — recorded as the
+    # :platform_uuid_guard entry for this file in @inventory above. Removing
+    # the guard fails there and reintroduces the raise here.
+    "platform/experiments/assignments.ex" => 1,
+    # 0 → 1 for task 019fe6ba stage 2's `last_promoted_at/1`, the cooldown
+    # guard's lookup of the most recent `prompt_template_history` row.
+    # Triaged by hand as this map asks: the `where:` clause pins
+    # `h.template_id == ^template_id`, and that id is read off the
+    # `%PromptTemplate{}` struct `fetch_template/1` returned from its own
+    # `Repo.get_by(PromptTemplate, slug:)` earlier in the same `with` — so
+    # it is a `prompt_templates.id` column value the DB itself produced,
+    # not a boundary input. `promote/2` takes an `%Experiment{}` struct and
+    # resolves the template by slug from it; no caller-supplied id reaches
+    # this predicate, so no `Platform.UUID.valid?/1` guard applies.
+    "platform/experiments/promotion.ex" => 1,
+    # 0 → 1 for task 019fe6b9's `get_variant/2`, the variant-blob read behind
+    # `render_template/2`. Triaged by hand as this map asks: neither side of
+    # the `where:` clause can raise a cast error. `v.experiment_id ==
+    # ^experiment_id` is destructured off a loaded `%Experiment{}` — the row
+    # was fetched before the call, so the id is a value the DB itself
+    # produced, not one a boundary supplied. `v.slug == ^variant_slug` is a
+    # plain string column with no UUID type on either side, and the value
+    # comes from an assignment row's `variant_slug`, which is likewise
+    # already in the database. No caller-supplied id reaches this predicate,
+    # so no `Platform.UUID.valid?/1` guard applies.
+    "platform/experiments.ex" => 1,
     "platform/federation.ex" => 1,
     "platform/federation/tool_surface.ex" => 2,
     "platform/files.ex" => 1,
@@ -749,6 +795,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # what this map asks the guard to be.
     "platform/tasks/deploy_merge_reconciler.ex" => 1,
     "platform/tasks/context_hydrator.ex" => 1,
+    # 0 → 1 for `PipelineHealth.instrumented_from/0`, which reads the earliest
+    # recorded phase transition so the page can state the date before which
+    # nothing can be decomposed. Triaged by hand as this map asks: the query
+    # has NO `where:` clause at all — it is `select: min(t.occurred_at)` over
+    # the whole table — so no id is pinned, no value crosses a boundary into
+    # it, and `Ecto.Query.CastError` is unreachable. No guard applies.
+    "platform/tasks/pipeline_health.ex" => 1,
     "platform/tasks/plan_engine.ex" => 2,
     "platform/tasks/review_requests.ex" => 1,
     "platform/tasks/rollup_webhook_processor.ex" => 1,

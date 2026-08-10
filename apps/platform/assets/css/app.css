@@ -63,6 +63,16 @@
   --color-neutral-content: oklch(100% 0 0);
   --color-info: oklch(54% 0.16 255);         /* info-blue — approved palette 2026-07-11; L54 clears AA both as text-on-white AND as fill under white content (≈4.9:1) */
   --color-info-content: oklch(100% 0 0);
+  /* Pipeline health (task 019fe6b8): human wait, paired against --color-info
+     (engine time). Validated CVD separation light ΔE 27.0 protan / 31.6 tritan.
+     This value is 2.55:1 against --color-base-100, under the 3:1 non-text
+     floor, and MUST NOT be darkened — that leaves the validated lightness
+     band. The mitigation is structural instead: every human-wait segment
+     carries a visible numeric label, segments are filled with a 45° texture so
+     the split survives greyscale and forced-colors, and the same numbers
+     appear in a plain table on the page. */
+  --color-pipeline-human: oklch(72% 0.16 50);
+  --color-pipeline-human-content: oklch(0% 0 0);
   --color-success: oklch(70% 0.15 162);       /* #10B981 */
   --color-success-content: oklch(100% 0 0);
   --color-warning: oklch(76% 0.17 70);        /* #F59E0B */
@@ -102,6 +112,10 @@
   --color-neutral-content: oklch(90% 0 0);
   --color-info: oklch(72% 0.12 255);          /* info-blue dark label value — text-info on #171b25 ≈7:1 (design review caught L58 failing AA as dark text) */
   --color-info-content: oklch(0% 0 0);        /* dark fills pair with black content (≈9:1) */
+  /* Pipeline health human wait, re-stepped for dark rather than flipped —
+     dark separation 25.2 protan / 30.0 tritan against the dark surface. */
+  --color-pipeline-human: oklch(66% 0.16 50);
+  --color-pipeline-human-content: oklch(0% 0 0);
   --color-success: oklch(70% 0.15 162);
   --color-success-content: oklch(100% 0 0);
   --color-warning: oklch(76% 0.17 70);

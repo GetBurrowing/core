@@ -456,7 +456,7 @@ defmodule PlatformWeb.Components.IconRail do
 
   defp badge_text(_), do: nil
 
-  # Canonical 10-entry destination list. Order within a cluster determines
+  # Canonical 11-entry destination list. Order within a cluster determines
   # render order in the rail. Paths marked `# TODO` don't have routes yet
   # — Stage 3 wires navigation and will reconcile.
   defp canonical_destinations do
@@ -543,6 +543,22 @@ defmodule PlatformWeb.Components.IconRail do
         hero_icon: "hero-command-line",
         cluster: :working,
         fabrikam_only?: true
+      },
+      %{
+        # Task 019fe6ba / ADR-0048: the experiments surface at
+        # `/control/experiments`. Deliberately NOT fabrikam_only? — the routes
+        # sit in `live_session :authenticated`, so reads are member-visible
+        # and the tile must be too. Writes (start/stop/conclude) stay
+        # admin-gated server-side inside the LiveView, which is where the
+        # asymmetry belongs; hiding the tile would make an approved
+        # member-readable surface unreachable, which is exactly the defect
+        # this entry fixes.
+        key: :experiments,
+        label: "Experiments",
+        path: "/control/experiments",
+        hero_icon: "hero-beaker",
+        cluster: :working,
+        fabrikam_only?: false
       },
       %{
         key: :meetings,
