@@ -17,7 +17,7 @@ defmodule Platform.Meetings.GuestInvite do
       %{
         meeting_slug: "some-meeting",
         expires_at: 1_764_849_600, # unix seconds
-        display_name: "Juno Fairbanks", # or nil for self-entry
+        display_name: "Jane Doe", # or nil for self-entry
         guest_space_id: "...",       # or nil when no dedicated guest space
         meeting_id: "...",           # or nil for tokens minted pre-019f9b14
         invite_id: "..."             # or nil for tokens minted pre-019fb954

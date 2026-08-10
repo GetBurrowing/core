@@ -63,7 +63,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
     do: entry(Keyword.merge([expires_at: DateTime.utc_now()], overrides))
 
   defp pending_external_entry(overrides \\ []),
-    do: entry(Keyword.merge([email: "juno@example.test"], overrides))
+    do: entry(Keyword.merge([email: "jane@example.test"], overrides))
 
   defp agent_entry(overrides \\ []),
     do: entry(Keyword.merge([agent: true, subtitle: "meeting producer"], overrides))

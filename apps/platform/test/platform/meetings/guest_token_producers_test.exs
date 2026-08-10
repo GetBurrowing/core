@@ -56,7 +56,7 @@ defmodule Platform.Meetings.GuestTokenProducersTest do
       # user. If `invite_id` were threaded from optional caller input rather
       # than from the inserted row, this is the call that would drop it.
       assert {:ok, %{invite: %Invite{} = invite, token: token}} =
-               Meetings.invite_guest(meeting, %{display_name: "Juno Fairbanks"})
+               Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
 
       assert {:ok, payload} = GuestInvite.verify(token)
 

@@ -21,12 +21,12 @@ defmodule Platform.Meetings.GuestInviteTest do
   describe "sign/3 + verify/2 — happy paths" do
     test "roundtrips a pre-provisioned display name" do
       expires_at = future_ts(3600)
-      token = GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks")
+      token = GuestInvite.sign("standup-2026-07", expires_at, "Jane Doe")
 
       assert {:ok, payload} = GuestInvite.verify(token)
       assert payload.meeting_slug == "standup-2026-07"
       assert payload.expires_at == expires_at
-      assert payload.display_name == "Juno Fairbanks"
+      assert payload.display_name == "Jane Doe"
       # Legacy call (no guest_space_id opt) normalises to nil on verify.
       assert is_nil(payload.guest_space_id)
     end
@@ -36,7 +36,7 @@ defmodule Platform.Meetings.GuestInviteTest do
       space_id = Ecto.UUID.generate()
 
       token =
-        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", guest_space_id: space_id)
+        GuestInvite.sign("standup-2026-07", expires_at, "Jane Doe", guest_space_id: space_id)
 
       assert {:ok, payload} = GuestInvite.verify(token)
       assert payload.guest_space_id == space_id
@@ -46,7 +46,7 @@ defmodule Platform.Meetings.GuestInviteTest do
       expires_at = future_ts(3600)
 
       token =
-        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", guest_space_id: nil)
+        GuestInvite.sign("standup-2026-07", expires_at, "Jane Doe", guest_space_id: nil)
 
       assert {:ok, payload} = GuestInvite.verify(token)
       assert is_nil(payload.guest_space_id)
@@ -65,7 +65,7 @@ defmodule Platform.Meetings.GuestInviteTest do
       meeting_id = Ecto.UUID.generate()
 
       token =
-        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", meeting_id: meeting_id)
+        GuestInvite.sign("standup-2026-07", expires_at, "Jane Doe", meeting_id: meeting_id)
 
       assert {:ok, payload} = GuestInvite.verify(token)
       assert payload.meeting_id == meeting_id
@@ -89,7 +89,7 @@ defmodule Platform.Meetings.GuestInviteTest do
 
     test "meeting_id: nil roundtrips as nil" do
       expires_at = future_ts(3600)
-      token = GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", meeting_id: nil)
+      token = GuestInvite.sign("standup-2026-07", expires_at, "Jane Doe", meeting_id: nil)
 
       assert {:ok, payload} = GuestInvite.verify(token)
       assert is_nil(payload.meeting_id)
@@ -101,7 +101,7 @@ defmodule Platform.Meetings.GuestInviteTest do
       space_id = Ecto.UUID.generate()
 
       token =
-        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks",
+        GuestInvite.sign("standup-2026-07", expires_at, "Jane Doe",
           guest_space_id: space_id,
           meeting_id: meeting_id
         )
@@ -123,7 +123,7 @@ defmodule Platform.Meetings.GuestInviteTest do
       expires_at = future_ts(3600)
 
       assert_raise ArgumentError, ~r/meeting_id must be a binary or nil/, fn ->
-        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", meeting_id: 42)
+        GuestInvite.sign("standup-2026-07", expires_at, "Jane Doe", meeting_id: 42)
       end
     end
 
@@ -142,7 +142,7 @@ defmodule Platform.Meetings.GuestInviteTest do
       invite_id = Ecto.UUID.generate()
 
       token =
-        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", invite_id: invite_id)
+        GuestInvite.sign("standup-2026-07", expires_at, "Jane Doe", invite_id: invite_id)
 
       assert {:ok, payload} = GuestInvite.verify(token)
       assert payload.invite_id == invite_id
@@ -186,7 +186,7 @@ defmodule Platform.Meetings.GuestInviteTest do
         raw_sign(%{
           meeting_slug: "standup-2026-07",
           expires_at: future_ts(3600),
-          display_name: "Juno Fairbanks",
+          display_name: "Jane Doe",
           guest_space_id: nil
           # no :meeting_id, no :invite_id — pre-019f9b14 / pre-019fb954
         })
@@ -197,12 +197,12 @@ defmodule Platform.Meetings.GuestInviteTest do
       assert Map.has_key?(payload, :meeting_id)
       assert is_nil(payload.meeting_id)
       assert payload.meeting_slug == "standup-2026-07"
-      assert payload.display_name == "Juno Fairbanks"
+      assert payload.display_name == "Jane Doe"
     end
 
     test "invite_id: nil roundtrips as nil" do
       expires_at = future_ts(3600)
-      token = GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", invite_id: nil)
+      token = GuestInvite.sign("standup-2026-07", expires_at, "Jane Doe", invite_id: nil)
 
       assert {:ok, payload} = GuestInvite.verify(token)
       assert is_nil(payload.invite_id)
@@ -215,7 +215,7 @@ defmodule Platform.Meetings.GuestInviteTest do
       space_id = Ecto.UUID.generate()
 
       token =
-        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks",
+        GuestInvite.sign("standup-2026-07", expires_at, "Jane Doe",
           guest_space_id: space_id,
           meeting_id: meeting_id,
           invite_id: invite_id
@@ -265,7 +265,7 @@ defmodule Platform.Meetings.GuestInviteTest do
       expires_at = future_ts(3600)
 
       assert_raise ArgumentError, ~r/invite_id must be a binary or nil/, fn ->
-        GuestInvite.sign("standup-2026-07", expires_at, "Juno Fairbanks", invite_id: 42)
+        GuestInvite.sign("standup-2026-07", expires_at, "Jane Doe", invite_id: 42)
       end
     end
 
@@ -302,7 +302,7 @@ defmodule Platform.Meetings.GuestInviteTest do
     test "returns :expired when expires_at is in the past" do
       # Signed with a past expiry (but within Plug.Crypto max_age so the
       # signature envelope itself is still fresh).
-      token = GuestInvite.sign("stale-invite", past_ts(60), "Juno Fairbanks")
+      token = GuestInvite.sign("stale-invite", past_ts(60), "Jane Doe")
       assert {:error, :expired} = GuestInvite.verify(token)
     end
   end
@@ -355,7 +355,7 @@ defmodule Platform.Meetings.GuestInviteTest do
 
   describe "verify/2 — tampered / invalid tokens" do
     test "returns :invalid for a token with a tampered body" do
-      token = GuestInvite.sign("real-meeting", future_ts(3600), "Juno Fairbanks")
+      token = GuestInvite.sign("real-meeting", future_ts(3600), "Jane Doe")
 
       # `Plug.Crypto.sign` produces a base64.body--base64.signature style
       # token. Tamper by flipping the last character of the body segment.
@@ -366,7 +366,7 @@ defmodule Platform.Meetings.GuestInviteTest do
     end
 
     test "returns :invalid for a token with a wrong signature" do
-      token = GuestInvite.sign("real-meeting", future_ts(3600), "Juno Fairbanks")
+      token = GuestInvite.sign("real-meeting", future_ts(3600), "Jane Doe")
 
       tampered = tamper_signature(token)
       refute tampered == token
@@ -386,7 +386,7 @@ defmodule Platform.Meetings.GuestInviteTest do
         raw_sign(%{
           meeting_slug: "standup-2026-07",
           expires_at: future_ts(3600),
-          display_name: "Juno Fairbanks",
+          display_name: "Jane Doe",
           guest_space_id: nil,
           meeting_id: nil,
           invite_id: 42
