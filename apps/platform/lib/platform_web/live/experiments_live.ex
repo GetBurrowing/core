@@ -243,13 +243,19 @@ defmodule PlatformWeb.ExperimentsLive do
             min-height resolves to `auto` and therefore to 0. Without it the
             whole list renders and parks off-panel at narrow viewports —
             present in the DOM, invisible on the screen. --%>
+      <%!-- The METRIC column drops below `sm`, and only that one. At 390px all
+            four columns need ~44rem, which pushes RESULT — the entire point of
+            this page — off the right edge behind a horizontal scroll. The
+            metric name is the least load-bearing of the four and is repeated
+            on the detail page's Design tab; the result cell is the signature
+            element and may not be the column you cannot see. --%>
       <section :if={@rows != []} class="bg-base-200 rounded-lg overflow-x-auto shrink-0">
-        <table class="table table-sm w-full min-w-[44rem]">
+        <table class="table table-sm w-full min-w-[22rem]">
           <thead>
             <tr class="text-xs text-neutral uppercase">
               <th>Experiment</th>
               <th>Status</th>
-              <th>Metric</th>
+              <th class="hidden sm:table-cell">Metric</th>
               <th>Result</th>
             </tr>
           </thead>
@@ -265,7 +271,7 @@ defmodule PlatformWeb.ExperimentsLive do
                 <div class="text-xs text-neutral">{experiment.slug}</div>
               </td>
               <td class="align-top">{status_badge(%{status: experiment.status})}</td>
-              <td class="align-top text-xs">
+              <td class="align-top text-xs hidden sm:table-cell">
                 {experiment.primary_metric || "—"}
               </td>
               <td class="align-top">
@@ -543,6 +549,19 @@ defmodule PlatformWeb.ExperimentsLive do
 
   defp excluded_count(assignments), do: Enum.count(assignments, &(&1.excluded_reason != nil))
 
+  # The TAIL of the id, not the head.
+  #
+  # Subject ids are UUIDv7 and their leading hex digits are the high bits of a
+  # millisecond timestamp — constant across a ~65-second bucket. Subjects are
+  # assigned to an experiment in bursts, so a head-truncated id renders every
+  # row in an arm as the same string, and the assignments table stops
+  # distinguishing the subjects it exists to list. This repo has already been
+  # bitten by exactly that truncation once, in the `task_slug` prompt sample
+  # (task 019fb949); the tail is the random part.
   defp short(nil), do: "—"
-  defp short(id), do: String.slice(to_string(id), 0, 8)
+
+  defp short(id) do
+    id = to_string(id)
+    if String.length(id) > 12, do: "…" <> String.slice(id, -12, 12), else: id
+  end
 end

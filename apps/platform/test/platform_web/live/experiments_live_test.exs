@@ -255,6 +255,30 @@ defmodule PlatformWeb.ExperimentsLiveTest do
       # assigned, one of them excluded.
       assert q(html, ~s([data-role="assignment-row"])) |> Enum.count() == 3
     end
+
+    test "subjects assigned in one burst render as distinguishable ids", %{conn: conn} do
+      experiment = running_experiment("burst-ids", [])
+      # A burst is the normal case, and it is the case that breaks a
+      # head-truncated UUIDv7: the leading hex digits are timestamp high bits
+      # and are identical for every row inserted in the same ~65-second
+      # bucket, so the table would list four rows under one string.
+      seed_arm(experiment, "control", 4, 1, "passed")
+
+      {:ok, view, _html} = live(member_conn(conn), ~p"/control/experiments/burst-ids")
+
+      html =
+        view
+        |> element(~s([data-role="experiment-tab"][data-tab="assignments"]))
+        |> render_click()
+
+      shown =
+        html
+        |> q(~s([data-role="assignment-row"] td:first-child))
+        |> Enum.map(&LazyHTML.text(LazyHTML.from_fragment(LazyHTML.to_html(&1))))
+
+      assert length(shown) == 4
+      assert length(Enum.uniq(shown)) == 4, "subject ids collapsed onto #{inspect(shown)}"
+    end
   end
 
   describe "stopped and concluded both persist" do
