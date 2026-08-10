@@ -337,4 +337,214 @@ defmodule Platform.Chat.PresenceTest do
       assert log =~ "presence union read failed"
     end
   end
+
+  # ── safe_* helpers ─────────────────────────────────────────────────────────
+  #
+  # The tracker is VM-global, so these cases are `async: false` (module-wide)
+  # and every induction is undone before the test returns. A leaked dead
+  # tracker reds unrelated presence cases in the same run and looks like flake.
+  #
+  # Both failures are induced for REAL against the shipped call path. Nothing
+  # is stubbed and no error tuple is hand-written: an injected shape would only
+  # prove the assertion matches the thing injected.
+
+  defp kill_tracker! do
+    # The shutdown propagates as an exit signal to whatever is linked into the
+    # tracker's tree; trap it so the assertions below actually get to run.
+    Process.flag(:trap_exit, true)
+    on_exit(&restart_tracker!/0)
+    :ok = Supervisor.terminate_child(Platform.Supervisor, ChatPresence)
+    :ok
+  end
+
+  defp restart_tracker! do
+    case Supervisor.restart_child(Platform.Supervisor, ChatPresence) do
+      {:ok, _} -> :ok
+      {:ok, _, _} -> :ok
+      {:error, :running} -> :ok
+      {:error, {:already_started, _}} -> :ok
+    end
+
+    wait_for_tracker!(100)
+  end
+
+  defp wait_for_tracker!(0), do: raise("presence tracker did not come back up")
+
+  defp wait_for_tracker!(attempts) do
+    if is_pid(Process.whereis(ChatPresence)) do
+      :ok
+    else
+      :timer.sleep(20)
+      wait_for_tracker!(attempts - 1)
+    end
+  end
+
+  # Make the shard for `space_id` unreachable BY NAME while leaving the tracker
+  # (and therefore its `pool_size` ETS table) alive, so `GenServer.call/3` is
+  # the thing that dies and the failure arrives as an `:exit`, not a raise.
+  # Deliberately not `Process.exit/2` on the shard: the tracker supervisor
+  # restarts it, so a terminate-based induction races the restart and would be
+  # flaky in exactly the way this module must not be.
+  defp orphan_shard!(space_id) do
+    topic = Platform.Chat.PubSub.space_topic(space_id)
+    [{:pool_size, pool_size}] = :ets.lookup(ChatPresence, :pool_size)
+    shard = Phoenix.Tracker.Shard.name_for_topic(ChatPresence, topic, pool_size)
+    pid = Process.whereis(shard)
+    assert is_pid(pid), "expected a live shard for the topic before orphaning it"
+    true = Process.unregister(shard)
+    on_exit(fn -> if is_nil(Process.whereis(shard)), do: Process.register(pid, shard) end)
+    :ok
+  end
+
+  describe "safe_track_in_space/4" do
+    test "returns {:ok, ref} against a healthy tracker" do
+      space_id = Ecto.UUID.generate()
+
+      assert {:ok, ref} =
+               ChatPresence.safe_track_in_space(self(), space_id, Ecto.UUID.generate(), %{
+                 participant_type: "user"
+               })
+
+      assert is_binary(ref)
+    end
+
+    test "a terminated tracker returns {:error, %ArgumentError{}}, never a bare {:ok, _}" do
+      space_id = Ecto.UUID.generate()
+      participant_id = Ecto.UUID.generate()
+
+      # Positive control on the same ids: the healthy call succeeds, so the
+      # error below is the guard firing rather than the helper being broken.
+      assert {:ok, _} = ChatPresence.safe_track_in_space(self(), space_id, participant_id, %{})
+
+      kill_tracker!()
+
+      {result, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          ChatPresence.safe_track_in_space(self(), space_id, participant_id, %{})
+        end)
+
+      assert {:error, %ArgumentError{}} = result
+      assert log =~ "presence track_in_space failed"
+    end
+
+    test "an unreachable shard returns {:error, {:exit, _}} — the mode rescue cannot catch" do
+      space_id = Ecto.UUID.generate()
+      participant_id = Ecto.UUID.generate()
+
+      assert {:ok, _} = ChatPresence.safe_track_in_space(self(), space_id, participant_id, %{})
+
+      orphan_shard!(space_id)
+
+      {result, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          ChatPresence.safe_track_in_space(self(), space_id, participant_id, %{})
+        end)
+
+      assert {:error, {:exit, reason}} = result,
+             "expected an :exit-shaped error; a rescue-only guard would have crashed the caller"
+
+      assert match?({:noproc, _}, reason), "expected a :noproc exit, got #{inspect(reason)}"
+      assert log =~ "presence track_in_space failed"
+    end
+  end
+
+  describe "safe_untrack_in_space/3" do
+    test "returns :ok against a healthy tracker" do
+      space_id = Ecto.UUID.generate()
+      participant_id = Ecto.UUID.generate()
+
+      {:ok, _} = ChatPresence.safe_track_in_space(self(), space_id, participant_id, %{})
+      assert :ok = ChatPresence.safe_untrack_in_space(self(), space_id, participant_id)
+    end
+
+    test "a terminated tracker returns {:error, %ArgumentError{}} rather than a false :ok" do
+      space_id = Ecto.UUID.generate()
+      participant_id = Ecto.UUID.generate()
+
+      {:ok, _} = ChatPresence.safe_track_in_space(self(), space_id, participant_id, %{})
+      assert :ok = ChatPresence.safe_untrack_in_space(self(), space_id, participant_id)
+
+      kill_tracker!()
+
+      {result, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          ChatPresence.safe_untrack_in_space(self(), space_id, participant_id)
+        end)
+
+      assert {:error, %ArgumentError{}} = result
+      assert log =~ "presence untrack_in_space failed"
+    end
+
+    test "an unreachable shard returns {:error, {:exit, _}}" do
+      space_id = Ecto.UUID.generate()
+      participant_id = Ecto.UUID.generate()
+
+      {:ok, _} = ChatPresence.safe_track_in_space(self(), space_id, participant_id, %{})
+      assert :ok = ChatPresence.safe_untrack_in_space(self(), space_id, participant_id)
+
+      orphan_shard!(space_id)
+
+      {result, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          ChatPresence.safe_untrack_in_space(self(), space_id, participant_id)
+        end)
+
+      assert {:error, {:exit, reason}} = result,
+             "expected an :exit-shaped error; a rescue-only guard would have crashed the caller"
+
+      assert match?({:noproc, _}, reason), "expected a :noproc exit, got #{inspect(reason)}"
+      assert log =~ "presence untrack_in_space failed"
+    end
+  end
+
+  describe "safe_online_count/1" do
+    test "an empty space is {:ok, 0} — a real answer about an empty room" do
+      assert ChatPresence.safe_online_count(Ecto.UUID.generate()) == {:ok, 0}
+    end
+
+    test "a tracked participant is counted" do
+      space_id = Ecto.UUID.generate()
+      {:ok, _} = ChatPresence.safe_track_in_space(self(), space_id, Ecto.UUID.generate(), %{})
+      assert ChatPresence.safe_online_count(space_id) == {:ok, 1}
+    end
+
+    test "a terminated tracker returns {:error, _} and NOT {:ok, 0}" do
+      space_id = Ecto.UUID.generate()
+      {:ok, _} = ChatPresence.safe_track_in_space(self(), space_id, Ecto.UUID.generate(), %{})
+      assert ChatPresence.safe_online_count(space_id) == {:ok, 1}
+
+      kill_tracker!()
+
+      {result, log} =
+        ExUnit.CaptureLog.with_log(fn -> ChatPresence.safe_online_count(space_id) end)
+
+      assert {:error, %ArgumentError{}} = result
+
+      refute result == {:ok, 0},
+             "a broken presence read must not be indistinguishable from an empty room"
+
+      assert log =~ "presence online_count failed"
+    end
+
+    test "an unreachable shard returns {:error, {:exit, _}} and NOT {:ok, 0}" do
+      space_id = Ecto.UUID.generate()
+      {:ok, _} = ChatPresence.safe_track_in_space(self(), space_id, Ecto.UUID.generate(), %{})
+      assert ChatPresence.safe_online_count(space_id) == {:ok, 1}
+
+      orphan_shard!(space_id)
+
+      {result, log} =
+        ExUnit.CaptureLog.with_log(fn -> ChatPresence.safe_online_count(space_id) end)
+
+      assert {:error, {:exit, reason}} = result,
+             "expected an :exit-shaped error; a rescue-only guard would have crashed the caller"
+
+      assert match?({:noproc, _}, reason), "expected a :noproc exit, got #{inspect(reason)}"
+
+      refute result == {:ok, 0},
+             "a broken presence read must not be indistinguishable from an empty room"
+
+      assert log =~ "presence online_count failed"
+    end
+  end
 end

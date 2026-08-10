@@ -17,7 +17,14 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     * `:agent_participant_ids` — MapSet of agent participant ids
     * `:agent_colors_map` — participant id → accent color
     * `:has_agent_participant`
-    * `:online_count`
+    * `:online_count` — count of online participants, or `nil` when presence
+      could not be reached (see `:presence_status`)
+    * `:presence_status` — `:ok` when the tracker answered, `:unavailable` when
+      a guarded read failed. `:unavailable` + a `nil` `:online_count` is the
+      honest "we could not ask"; a `0` count would be the different claim that
+      nobody is here. Same two-fact distinction `Platform.Chat.Presence`'s
+      `safe_*` helpers and `list_online_for_viewer/1` encode, carried one layer
+      up — do not introduce a third vocabulary for it.
     * `:agent_presence` — native agent presence map (bootable, reachable, …)
     * `:agent_status` — :online | :offline | :thinking | …
     * `:agent_typing_pids` — MapSet of currently-typing agent participant ids
@@ -77,6 +84,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     |> assign(:agent_participant_ids, MapSet.new())
     |> assign(:agent_colors_map, %{})
     |> assign(:online_count, 0)
+    |> assign(:presence_status, :ok)
     |> assign(:agent_presence, default_agent_presence())
     |> assign(:has_agent_participant, false)
     |> assign(:agent_status, :offline)
@@ -112,11 +120,25 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   def leave_space(socket, nil), do: socket
 
   def leave_space(socket, prev_space_id) do
+    # Call site 4 of 4: navigate-away. A dead tracker must not take the
+    # LiveView down on the way out of a space either.
     if connected?(socket) do
-      ChatPresence.untrack_in_space(self(), prev_space_id, socket.assigns.user_id)
+      case ChatPresence.safe_untrack_in_space(self(), prev_space_id, socket.assigns.user_id) do
+        :ok -> socket
+        {:error, _reason} -> mark_presence_unavailable(socket)
+      end
+    else
+      socket
     end
+  end
 
+  # The single writer of the `:presence_status` / `:online_count` pair. A
+  # guarded read that failed means we could not ask, which is NOT the same
+  # fact as a count of zero — so the count becomes `nil`, never `0`.
+  defp mark_presence_unavailable(socket) do
     socket
+    |> assign(:presence_status, :unavailable)
+    |> assign(:online_count, nil)
   end
 
   @doc """
@@ -138,14 +160,19 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     # that is not in their allowlisted scope, even if they somehow reached it as
     # active_space. `space_in_external_scope?/2` is `true` for internal (nil
     # scope) sessions, so this only ever narrows external users — no regression.
-    if connected?(socket) && participant && space_in_external_scope?(socket, space.id) do
-      display_name = resolve_display_name(user_id, participant)
+    # Call site 1 of 4: the mount-path track. This is the crash this task is
+    # filed for — an unguarded tracker call here took down every chat route.
+    track_result =
+      if connected?(socket) && participant && space_in_external_scope?(socket, space.id) do
+        display_name = resolve_display_name(user_id, participant)
 
-      ChatPresence.track_in_space(self(), space.id, user_id, %{
-        display_name: display_name,
-        participant_type: "user"
-      })
-    end
+        ChatPresence.safe_track_in_space(self(), space.id, user_id, %{
+          display_name: display_name,
+          participant_type: "user"
+        })
+      else
+        :skipped
+      end
 
     # Explicit archived-user override (task 019f671f Stage 3): the
     # `enter_space` participant map is the identity source for EVERY
@@ -171,8 +198,16 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     agent_colors_map = Chat.agent_color_map_for_participants(participants)
     has_agent_participant = Enum.any?(participants, &(&1.participant_type == "agent"))
 
-    online_count =
-      if connected?(socket), do: ChatPresence.online_count(space.id), else: 0
+    # Call site 2 of 4: the same exposure one line later, hit on every mount.
+    count_result =
+      if connected?(socket), do: ChatPresence.safe_online_count(space.id), else: {:ok, 0}
+
+    {presence_status, online_count} =
+      case {track_result, count_result} do
+        {{:error, _}, _} -> {:unavailable, nil}
+        {_, {:error, _}} -> {:unavailable, nil}
+        {_, {:ok, count}} -> {:ok, count}
+      end
 
     socket
     |> assign(:space_participants, participants)
@@ -181,6 +216,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     |> assign(:agent_colors_map, agent_colors_map)
     |> assign(:has_agent_participant, has_agent_participant)
     |> assign(:online_count, online_count)
+    |> assign(:presence_status, presence_status)
     |> assign(:agent_presence, agent_presence)
     |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
     |> assign(:agent_typing_pids, MapSet.new())
@@ -232,13 +268,22 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       # keep this topic off the process); the count is left untouched.
       {:halt, socket}
     else
-      online_count =
+      # Call site 3 of 4: the same failure after mount rather than during it.
+      # A tracker that dies under an already-mounted LiveView must degrade the
+      # count, not kill the process on the first diff.
+      result =
         case socket.assigns[:active_space] do
-          %{id: space_id} -> ChatPresence.online_count(space_id)
-          _ -> 0
+          %{id: space_id} -> ChatPresence.safe_online_count(space_id)
+          _ -> {:ok, 0}
         end
 
-      {:halt, assign(socket, :online_count, online_count)}
+      socket =
+        case result do
+          {:ok, count} -> socket |> assign(:online_count, count) |> assign(:presence_status, :ok)
+          {:error, _reason} -> mark_presence_unavailable(socket)
+        end
+
+      {:halt, socket}
     end
   end
 

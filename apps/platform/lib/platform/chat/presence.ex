@@ -107,6 +107,88 @@ defmodule Platform.Chat.Presence do
     space_id |> list_space() |> map_size()
   end
 
+  # ── Guarded helpers (a dead tracker must not look like an empty room) ────────
+  #
+  # `Phoenix.Tracker` can fail in TWO distinct ways here, and a guard that
+  # handles only the first is a half-fix that looks complete:
+  #
+  #   1. The tracker is terminated, so its ETS table is gone and
+  #      `[{:pool_size, size}] = :ets.lookup(tracker_name, :pool_size)` raises
+  #      **ArgumentError** — a raise, caught by `rescue`.
+  #   2. The table survives but the shard serving the topic is unreachable, so
+  #      `GenServer.call/3` **exits `:noproc`** — an exit, which `rescue` does
+  #      NOT catch.
+  #
+  # `guarded/2` catches both and returns `{:error, reason}`.
+
+  @doc """
+  Track `pid` in `space_id`, returning `{:error, reason}` instead of crashing
+  the caller when the presence backend is unreachable.
+
+  "Nobody is here" and "we could not ask" are different facts and must stay
+  distinguishable — see `list_online_for_viewer/1`, the prior art for this
+  `{:ok, _} | {:error, reason}` vocabulary, whose `{:error, _}` branch is what
+  renders the shell's "presence unavailable" state rather than an empty roster.
+  """
+  @spec safe_track_in_space(pid(), binary(), binary(), map()) ::
+          {:ok, binary()} | {:error, term()}
+  def safe_track_in_space(pid, space_id, key, meta \\ %{}) do
+    guarded("track_in_space", fn ->
+      case track_in_space(pid, space_id, key, meta) do
+        {:ok, ref} -> {:ok, ref}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  @doc """
+  Untrack `key` from `space_id`, returning `{:error, reason}` instead of
+  crashing the caller when the presence backend is unreachable.
+
+  A failed untrack is not a successful one: callers must be able to tell "the
+  participant is no longer tracked" from "we could not reach presence to ask",
+  the same two-fact distinction `list_online_for_viewer/1` encodes.
+  """
+  @spec safe_untrack_in_space(pid(), binary(), binary()) :: :ok | {:error, term()}
+  def safe_untrack_in_space(pid, space_id, key) do
+    case guarded("untrack_in_space", fn -> {:ok, untrack_in_space(pid, space_id, key)} end) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Return `{:ok, count}` for a space, or `{:error, reason}` when the presence
+  backend is unreachable.
+
+  It must never return `0` for a failed read: a genuinely empty space and a
+  broken presence backend are different facts, and collapsing them into a zero
+  is the exact defect `list_online_for_viewer/1` was written to avoid — its
+  `{:error, _}` branch is load-bearing, not a decorative nicety.
+  """
+  @spec safe_online_count(binary()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def safe_online_count(space_id) do
+    guarded("online_count", fn -> {:ok, online_count(space_id)} end)
+  end
+
+  # Runs `fun`, converting BOTH tracker failure modes (an ArgumentError raise
+  # from the destroyed pool_size table, and a `:noproc` exit from an
+  # unreachable shard) into `{:error, reason}`.
+  @spec guarded(binary(), (-> {:ok, term()} | {:error, term()})) ::
+          {:ok, term()} | {:error, term()}
+  defp guarded(label, fun) do
+    fun.()
+  rescue
+    error ->
+      Logger.error("presence #{label} failed: #{Exception.format(:error, error, __STACKTRACE__)}")
+
+      {:error, error}
+  catch
+    :exit, reason ->
+      Logger.error("presence #{label} failed: exited with #{inspect(reason)}")
+      {:error, {:exit, reason}}
+  end
+
   @doc """
   Return the OTHER users currently online anywhere the `viewer` may observe.
 
