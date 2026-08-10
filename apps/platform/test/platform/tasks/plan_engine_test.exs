@@ -119,6 +119,96 @@ defmodule Platform.Tasks.PlanEngineTest do
 
   # ── advance/1 ─────────────────────────────────────────────────────────
 
+  # ── advance/2 stage scoping (task 019fec3a) ───────────────────────────
+
+  describe "advance/2 :stage_id scoping" do
+    test "no-ops when the asserted stage is not the current stage", %{plan: plan} do
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, s2} = Tasks.create_stage(%{plan_id: plan.id, position: 2, name: "Ship"})
+
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+      {:ok, _} = PlanEngine.advance(plan.id, stage_id: s1.id)
+
+      # s1 passed, s2 auto-started. Asserting s1 again must not touch s2,
+      # which has zero validations and would otherwise sweep to "passed".
+      assert {:ok, updated} = PlanEngine.advance(plan.id, stage_id: s1.id)
+
+      by_position = Enum.sort_by(updated.stages, & &1.position)
+      assert Enum.map(by_position, & &1.status) == ["passed", "running"]
+      assert Enum.find(by_position, &(&1.id == s2.id)).status == "running"
+    end
+
+    test "advances normally when the asserted stage IS the current stage", %{plan: plan} do
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _s2} = Tasks.create_stage(%{plan_id: plan.id, position: 2, name: "Ship"})
+
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      assert {:ok, updated} = PlanEngine.advance(plan.id, stage_id: s1.id)
+
+      by_position = Enum.sort_by(updated.stages, & &1.position)
+      assert Enum.map(by_position, & &1.status) == ["passed", "running"]
+    end
+
+    test "advance/1 stays plan-scoped so existing callers are unchanged", %{plan: plan} do
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _s2} = Tasks.create_stage(%{plan_id: plan.id, position: 2, name: "Ship"})
+
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      assert {:ok, updated} = PlanEngine.advance(plan.id)
+      by_position = Enum.sort_by(updated.stages, & &1.position)
+      assert Enum.map(by_position, & &1.status) == ["passed", "running"]
+    end
+
+    test "passed-transition telemetry carries completed_by when asserted", %{plan: plan} do
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      handler_id = "stage-scope-telemetry-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :tasks, :stage_transitioned],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:stage_transitioned, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, _} = PlanEngine.advance(plan.id, stage_id: s1.id, completed_by: "agent-dalton")
+
+      assert_receive {:stage_transitioned, %{to: "passed", completed_by: "agent-dalton"}}
+    end
+
+    test "swept passed-transitions omit completed_by entirely", %{plan: plan} do
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      handler_id = "stage-scope-telemetry-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :tasks, :stage_transitioned],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:stage_transitioned, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, _} = PlanEngine.advance(plan.id)
+
+      assert_receive {:stage_transitioned, %{to: "passed"} = metadata}
+      refute Map.has_key?(metadata, :completed_by)
+    end
+  end
+
   describe "advance/1" do
     test "advances to next stage when current passes (auto-starts next)", %{plan: plan} do
       {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
@@ -1195,6 +1285,91 @@ defmodule Platform.Tasks.PlanEngineTest do
       ]
 
       assert PlanEngine.check_manual_approval_heuristic(stages) == stages
+    end
+  end
+
+  describe "check_zero_validation_stages/1" do
+    import ExUnit.CaptureLog
+
+    test "warns for a stage carrying an empty validations list" do
+      stages = [
+        %{
+          "name" => "Wire the supervisor",
+          "description" => "add the child spec",
+          "validations" => []
+        }
+      ]
+
+      log = capture_log(fn -> PlanEngine.check_zero_validation_stages(stages) end)
+      assert log =~ "zero-validation stage"
+      assert log =~ "Wire the supervisor"
+    end
+
+    test "warns once per zero-validation stage and names each one" do
+      stages = [
+        %{"name" => "Empty one", "description" => "a", "validations" => []},
+        %{"name" => "Gated", "description" => "b", "validations" => [%{"kind" => "test_pass"}]},
+        %{"name" => "Empty two", "description" => "c", "validations" => []}
+      ]
+
+      log = capture_log(fn -> PlanEngine.check_zero_validation_stages(stages) end)
+
+      assert log =~ "Empty one"
+      assert log =~ "Empty two"
+      refute log =~ "Gated"
+
+      warnings =
+        log |> String.split("\n") |> Enum.count(&String.contains?(&1, "zero-validation stage"))
+
+      assert warnings == 2
+    end
+
+    test "warns for a stage with no validations key at all" do
+      stages = [%{"name" => "No key", "description" => "d"}]
+
+      log = capture_log(fn -> PlanEngine.check_zero_validation_stages(stages) end)
+      assert log =~ "zero-validation stage"
+      assert log =~ "No key"
+    end
+
+    test "handles atom-keyed stage input" do
+      stages = [%{name: "Atom stage", description: "e", validations: []}]
+
+      log = capture_log(fn -> PlanEngine.check_zero_validation_stages(stages) end)
+      assert log =~ "zero-validation stage"
+      assert log =~ "Atom stage"
+    end
+
+    test "is silent when every stage carries at least one validation" do
+      stages = [
+        %{"name" => "A", "description" => "f", "validations" => [%{"kind" => "test_pass"}]},
+        %{"name" => "B", "description" => "g", "validations" => [%{"kind" => "lint_pass"}]}
+      ]
+
+      log = capture_log(fn -> PlanEngine.check_zero_validation_stages(stages) end)
+      refute log =~ "zero-validation stage"
+    end
+
+    test "returns input untouched (planner authority wins)" do
+      # `expected` is an independently constructed literal, NOT anything derived
+      # from the function under test — so this assertion can actually fail.
+      expected = [
+        %{"name" => "Empty", "description" => "h", "validations" => []},
+        %{"name" => "Gated", "description" => "i", "validations" => [%{"kind" => "test_pass"}]}
+      ]
+
+      stages = [
+        %{"name" => "Empty", "description" => "h", "validations" => []},
+        %{"name" => "Gated", "description" => "i", "validations" => [%{"kind" => "test_pass"}]}
+      ]
+
+      result = capture_log(fn -> assert PlanEngine.check_zero_validation_stages(stages) end)
+      assert result =~ "zero-validation stage"
+      assert PlanEngine.check_zero_validation_stages(stages) == expected
+    end
+
+    test "passes non-list input through unchanged" do
+      assert PlanEngine.check_zero_validation_stages(:not_a_list) == :not_a_list
     end
   end
 

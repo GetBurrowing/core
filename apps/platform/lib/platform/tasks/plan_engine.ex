@@ -241,7 +241,36 @@ defmodule Platform.Tasks.PlanEngine do
   Returns `{:ok, plan}` with the updated plan (preloaded with stages).
   """
   @spec advance(Ecto.UUID.t()) :: {:ok, Plan.t()} | {:error, term()}
-  def advance(plan_id) do
+  def advance(plan_id), do: advance(plan_id, [])
+
+  @doc """
+  Advance a plan, optionally scoped to the stage the caller is asserting.
+
+  Options:
+
+    * `:stage_id` — the stage the caller claims to have completed. When given,
+      the call is a NO-OP unless that stage IS the current stage. Without it
+      `advance/1` is PLAN-scoped: it picks its subject via `current_stage/1`
+      ("first running, else first pending"), which is not necessarily the
+      stage the caller named. `stage_complete` admits a call naming an
+      already-`passed` stage so idempotent re-calls succeed, so a late or
+      duplicate completion used to advance whatever stage happened to be
+      running — and since a stage with zero validation rows has verdict
+      `:all_passed`, it was marked `passed` with no executor involvement
+      (task 019fec3a). Scoping here makes `passed` uniformly mean "an actor
+      asserted THIS stage is done".
+
+    * `:completed_by` — identifier of the actor asserting completion, threaded
+      into the `passed` transition's telemetry metadata so the audit trail
+      distinguishes an asserted stage from a swept one.
+
+  Returns `{:ok, plan}` with the updated plan (preloaded with stages).
+  """
+  @spec advance(Ecto.UUID.t(), keyword()) :: {:ok, Plan.t()} | {:error, term()}
+  def advance(plan_id, opts) when is_list(opts) do
+    asserted_stage_id = Keyword.get(opts, :stage_id)
+    completed_by = Keyword.get(opts, :completed_by)
+
     Repo.transaction(fn ->
       plan = Repo.get!(Plan, plan_id)
       stages = ordered_stages(plan_id)
@@ -274,10 +303,15 @@ defmodule Platform.Tasks.PlanEngine do
               Repo.preload(plan, stages_query())
           end
 
+        stage when is_binary(asserted_stage_id) and stage.id != asserted_stage_id ->
+          # The caller asserted a stage other than the one currently in
+          # flight. Do not sweep a stage nobody claimed — no-op.
+          Repo.preload(plan, stages_query())
+
         stage ->
           case stage_verdict(stage) do
             :all_passed ->
-              {:ok, _passed_stage} = transition_stage(stage, "passed")
+              {:ok, _passed_stage} = transition_stage(stage, "passed", completed_by)
               maybe_advance_next(plan, stages, stage.position)
 
             :has_failures ->
@@ -403,6 +437,41 @@ defmodule Platform.Tasks.PlanEngine do
   end
 
   def check_manual_approval_heuristic(other), do: other
+
+  @doc """
+  Log an advisory warning for every stage that carries zero validations.
+
+  A stage with no validations has nothing to gate it — the engine will advance
+  straight through it, so nobody ever confirms the work landed. That is
+  occasionally intentional, so this is purely advisory.
+
+  Always returns the input untouched. Planner authority wins; there are live
+  plans carrying zero-validation stages today and rejecting them at plan time
+  would strand in-flight work. This only surfaces the signal for the human
+  reviewer.
+  """
+  @spec check_zero_validation_stages([map()]) :: [map()]
+  def check_zero_validation_stages(stages_input) when is_list(stages_input) do
+    Enum.each(stages_input, fn stage ->
+      name = stage_field(stage, "name") || "<unnamed stage>"
+
+      case stage_validations_field(stage) do
+        [] ->
+          Logger.warning(
+            "[PlanEngine] zero-validation stage — stage \"#{name}\" carries an empty " <>
+              "validations list, so nothing gates its completion. " <>
+              "Planner authority wins; flagging for human review."
+          )
+
+        _ ->
+          :ok
+      end
+    end)
+
+    stages_input
+  end
+
+  def check_zero_validation_stages(other), do: other
 
   # Pure helper exposed for the heuristic and for tests.
   @spec ui_touching?(String.t() | nil) :: boolean()
@@ -569,7 +638,7 @@ defmodule Platform.Tasks.PlanEngine do
     end
   end
 
-  defp transition_stage(stage, new_status) do
+  defp transition_stage(stage, new_status, completed_by \\ nil) do
     allowed = Map.get(@valid_stage_transitions, stage.status, [])
 
     if new_status in allowed do
@@ -587,7 +656,7 @@ defmodule Platform.Tasks.PlanEngine do
         |> Stage.changeset(Map.put(extra, :status, new_status))
         |> Repo.update()
 
-      emit_stage_telemetry(updated, stage.status)
+      emit_stage_telemetry(updated, stage.status, completed_by)
 
       # ADR-0044 stage 4: post-executor drift hook. Fire the architect's
       # `architecture.audit_diff` responsibility once per successful stage
@@ -1134,16 +1203,28 @@ defmodule Platform.Tasks.PlanEngine do
 
   # ── Telemetry ───────────────────────────────────────────────────────────
 
-  defp emit_stage_telemetry(%Stage{} = stage, from_status) do
+  defp emit_stage_telemetry(%Stage{} = stage, from_status, completed_by \\ nil) do
+    base = %{
+      stage_id: stage.id,
+      plan_id: stage.plan_id,
+      from: from_status,
+      to: stage.status
+    }
+
+    # Only `passed` transitions carry an asserting actor — for every other
+    # transition the key is absent rather than nil, so a consumer can tell
+    # "swept" (no key) from "asserted by X" without a sentinel value.
+    metadata =
+      if stage.status == "passed" and not is_nil(completed_by) do
+        Map.put(base, :completed_by, completed_by)
+      else
+        base
+      end
+
     :telemetry.execute(
       [:platform, :tasks, :stage_transitioned],
       %{system_time: System.system_time()},
-      %{
-        stage_id: stage.id,
-        plan_id: stage.plan_id,
-        from: from_status,
-        to: stage.status
-      }
+      metadata
     )
 
     # Broadcast to the board PubSub topic so TaskRouter can react

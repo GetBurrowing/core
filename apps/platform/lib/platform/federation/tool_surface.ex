@@ -6675,10 +6675,12 @@ defmodule Platform.Federation.ToolSurface do
     # Pre-persistence rewrites:
     # 1. Lift any e2e_behavior validations into a single task-level review stage.
     # 2. Log advisory warnings about manual_approval scoping (planner authority wins).
+    # 3. Log advisory warnings about stages with zero validations (also advisory).
     stages_input =
       raw_stages_input
       |> Platform.Tasks.PlanEngine.route_e2e_behavior_validations()
       |> Platform.Tasks.PlanEngine.check_manual_approval_heuristic()
+      |> Platform.Tasks.PlanEngine.check_zero_validation_stages()
 
     Repo.transaction(fn ->
       case Tasks.create_plan(%{task_id: task_id}) do
@@ -7153,8 +7155,9 @@ defmodule Platform.Federation.ToolSurface do
     )
   end
 
-  def execute("stage_complete", args, _context) do
+  def execute("stage_complete", args, context) do
     stage_id = Map.get(args, "stage_id") || Map.get(args, "id")
+    completed_by = Map.get(context, :agent_id) || Map.get(context, :user_id) || "agent"
 
     # NOTE: superseded-plan guard runs BEFORE :not_running / :pending_validations
     # so an executor whose task was returned-to-planning mid-flight gets a
@@ -7171,7 +7174,15 @@ defmodule Platform.Federation.ToolSurface do
          true <-
            Enum.all?(validations, &(&1.status == "passed")) || validations == [] ||
              {:error, :pending_validations},
-         {:ok, advanced_plan} <- PlanEngine.advance(stage.plan_id) do
+         # Scoped to the asserted stage (task 019fec3a): the admission guard
+         # above deliberately accepts an already-`passed` stage so idempotent
+         # re-calls succeed, but such a call must not advance a stage it does
+         # not name. `advance/2` no-ops unless `stage` IS the current stage.
+         {:ok, advanced_plan} <-
+           PlanEngine.advance(stage.plan_id,
+             stage_id: stage.id,
+             completed_by: completed_by
+           ) do
       fresh_stage = Enum.find(advanced_plan.stages || [], &(&1.id == stage.id))
 
       {:ok,
