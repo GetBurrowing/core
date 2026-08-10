@@ -112,7 +112,13 @@ defmodule PlatformWeb.ShellLiveTest do
     # then contains the "Agents" roster button label. Re-render after a brief
     # wait to give the Task time to complete + the LV to receive the update.
     html = render_async(view, 1_000)
-    assert html =~ "Agents"
+
+    # Task 019fe4b1 replaced the bare "Agents" label with the healthy-over-
+    # total ratio once the roster is non-empty; the word only survives as the
+    # `total == 0` fallback. Assertion rewritten, not dropped: it still proves
+    # the resolved branch rendered.
+    assert html =~ ~s(data-test-id="shell-agents-ratio")
+    assert html =~ "agents"
   end
 
   test "shell shows legacy status dot when no space exists", %{conn: conn} do
@@ -152,8 +158,10 @@ defmodule PlatformWeb.ShellLiveTest do
 
     assert %AsyncResult{ok?: true, result: items} = assigns.roster_items
     assert is_list(items)
+    # Stage 2 replaced the single atom with a healthy-over-total ratio; stage 3
+    # feeds it from the viewer-scoped union rather than one arbitrary space.
     assert %AsyncResult{ok?: true, result: composite} = assigns.composite_status
-    assert is_atom(composite)
+    assert %{healthy: _, total: _, state: _} = composite
     assert %AsyncResult{ok?: true, result: name} = assigns.principal_name
     assert name == "LoadingBot"
     # Task 019fe4b1 stage 3: the presence assign now carries the three-state
@@ -1485,6 +1493,566 @@ defmodule PlatformWeb.ShellLiveTest do
       refute html =~ ~s(aria-label="Hide captions")
       refute html =~ ~s(title="Show captions")
       refute html =~ ~s(title="Hide captions")
+    end
+  end
+
+  # ── Agent roster panel ────────────────────────────────────────────────────
+  #
+  # Regression cover for the reported "clicking the Agents meter crashes the
+  # page". The handler was never missing — all four drawer events are clauses
+  # inside the `attach_hook(:drawer_events, :handle_event, ...)` anonymous fn
+  # in `ShellLive.on_mount/4`, which no `handle_event("toggle_roster"` grep can
+  # find. The click succeeded and flipped `:roster_open`; the RE-RENDER of the
+  # newly-visible panel raised, because the Remove button reads
+  # `sa.space_id` and `Chat.preload_roster_entries/1` never emitted that key.
+  #
+  # The crash needs a NON-principal roster member: the Remove button is gated
+  # on `sa.role != "principal"`, so a space whose only agent is the principal
+  # opens cleanly. That is why this survived review, and why every test below
+  # seeds a member alongside the principal.
+  describe "agent roster panel" do
+    defp seed_roster_space(opts \\ []) do
+      slug_suffix = System.unique_integer([:positive])
+
+      {:ok, space} =
+        Chat.create_space(%{name: "Roster Space", slug: "roster-space-#{slug_suffix}"})
+
+      principal =
+        Repo.insert!(%Agent{
+          name: "PrincipalBot",
+          slug: "principal-bot-#{slug_suffix}",
+          status: "active",
+          runtime_type: "builtin"
+        })
+
+      member =
+        Repo.insert!(%Agent{
+          name: "MemberBot",
+          slug: "member-bot-#{slug_suffix}",
+          status: "active",
+          runtime_type: "builtin"
+        })
+
+      {:ok, _} = Chat.set_principal_agent(space.id, principal.id)
+
+      if Keyword.get(opts, :member, true) do
+        {:ok, _} = Chat.add_space_agent(space.id, member.id, role: "member")
+      end
+
+      %{space: space, principal: principal, member: member}
+    end
+
+    # Three independent assertions, deliberately. A test that only clicks and
+    # asserts "no crash" passes against a build with no button at all, and a
+    # test that only asserts the click returns html passes against a build
+    # that renders an empty panel. So: (1) the button exists, (2) clicking it
+    # does not raise, (3) the panel is actually POPULATED with the member and
+    # carries the real space id on its Remove control.
+    test "roster button opens a populated panel without crashing", %{conn: conn} do
+      %{space: space, member: member} = seed_roster_space()
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_async(view, 2_000)
+
+      # (1) the control under test exists
+      assert html =~ ~s(data-test-id="shell-roster-button")
+
+      # (2) the click + its follow-up render do not raise
+      opened = view |> element(~s([data-test-id="shell-roster-button"])) |> render_click()
+
+      # (3) the panel is populated: the non-principal member is listed and its
+      # Remove button carries the seeded space id, which is the exact key that
+      # used to be absent from the roster entry map.
+      assert opened =~ member.name
+      assert opened =~ ~s(phx-value-agent-id="#{member.id}")
+      assert opened =~ ~s(phx-value-space-id="#{space.id}")
+    end
+
+    # Pin the map contract at the context boundary too, not only through the
+    # template — a future refactor of `preload_roster_entries/1` should fail
+    # here rather than only in a LiveView render.
+    test "list_space_agents/1 entries all carry their space_id" do
+      %{space: space} = seed_roster_space()
+
+      entries = Chat.list_space_agents(space.id)
+
+      assert length(entries) == 2
+      assert Enum.all?(entries, &(&1.space_id == space.id))
+    end
+
+    # `@type roster_entry` already blesses `agent: Agent.t() | nil`, so an
+    # orphaned participant row (agent deleted out from under it) is a
+    # contract-legal value the template must survive. The row must still
+    # RENDER — an orphan should be visible, not silently dropped.
+    test "roster panel renders a fallback label for an orphaned participant", %{conn: conn} do
+      %{member: member} = seed_roster_space()
+
+      Repo.delete!(member)
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_async(view, 2_000)
+
+      opened = view |> element(~s([data-test-id="shell-roster-button"])) |> render_click()
+
+      # Copy changed in task 019fe4b1: "Unknown agent" describes a naming
+      # problem, and the fact is a deleted record. Assertion rewritten rather
+      # than dropped — the behaviour it guards (the orphan row still RENDERS)
+      # is unchanged.
+      assert opened =~ "Deleted agent"
+      refute opened =~ member.name
+    end
+  end
+
+  # ── Viewer-scoped agent roster (stage 3) ──────────────────────────────────
+  #
+  # `first_space/0` returned the oldest non-archived space in the WHOLE
+  # install, so every user in every org saw whichever channel happened to be
+  # created first — including orgs they have no membership in. The roster is
+  # now the distinct set of agents on the rosters of spaces the viewer can
+  # see, scoped through `Tenancy.scope/3`.
+  #
+  # ANTI-VACUITY, and it is the point of this whole block: "the other org's
+  # agent is absent" is ALSO true of a build whose query returns nothing at
+  # all. Every absence assertion below is paired, in the same block, with a
+  # positive control asserting the viewer's OWN org's agent is present.
+  describe "roster is scoped to the viewer's visible spaces" do
+    # Seeded tenant orgs, deliberately. A freshly created top-level org has
+    # `parent_org_id == nil`, which makes its members resolve to `:root_all`
+    # and silently disables the very fence under test.
+    defp tenant_orgs do
+      {Tenancy.get_org_by_slug!("sxi"), Tenancy.get_org_by_slug!("soylent")}
+    end
+
+    defp scoped_conn(conn, org) do
+      user =
+        Repo.insert!(%User{
+          email: "shell_scope_#{System.unique_integer([:positive])}@example.com",
+          name: "Scoped Viewer",
+          oidc_sub: "oidc-shell-scope-#{System.unique_integer([:positive])}"
+        })
+
+      if org do
+        Repo.insert!(%OrgMembership{user_id: user.id, org_id: org.id, role: "member"})
+      end
+
+      {init_test_session(conn, current_user_id: user.id), user}
+    end
+
+    defp seed_org_space(org, label) do
+      n = System.unique_integer([:positive])
+
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "#{label} Space",
+          slug: "#{String.downcase(label)}-space-#{n}",
+          org_id: org.id
+        })
+
+      principal =
+        Repo.insert!(%Agent{
+          name: "#{label}Principal",
+          slug: "#{String.downcase(label)}-principal-#{n}",
+          status: "active",
+          runtime_type: "builtin"
+        })
+
+      member =
+        Repo.insert!(%Agent{
+          name: "#{label}Member",
+          slug: "#{String.downcase(label)}-member-#{n}",
+          status: "active",
+          runtime_type: "builtin"
+        })
+
+      {:ok, _} = Chat.set_principal_agent(space.id, principal.id)
+      {:ok, _} = Chat.add_space_agent(space.id, member.id, role: "member")
+
+      %{space: space, principal: principal, member: member}
+    end
+
+    defp roster_agent_names(view) do
+      :sys.get_state(view.pid).socket.assigns.roster_items
+      |> then(fn %AsyncResult{result: items} -> items || [] end)
+      |> Enum.map(fn {entry, _status} -> entry.agent && entry.agent.name end)
+    end
+
+    test "a foreign org's agents are absent while the viewer's own org's are present",
+         %{conn: conn} do
+      {sxi, soylent} = tenant_orgs()
+      mine = seed_org_space(sxi, "Mine")
+      theirs = seed_org_space(soylent, "Theirs")
+
+      {conn, _user} = scoped_conn(conn, sxi)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      opened_html = render_async(view, 2_000)
+
+      names = roster_agent_names(view)
+
+      # Positive control FIRST — without it the absence below is vacuous.
+      assert mine.principal.name in names
+      assert mine.member.name in names
+      # The fence.
+      refute theirs.principal.name in names
+      refute theirs.member.name in names
+
+      # And through the rendered panel, not only the assigns.
+      opened =
+        if opened_html =~ ~s(data-test-id="shell-roster-button") do
+          view |> element(~s([data-test-id="shell-roster-button"])) |> render_click()
+        else
+          flunk("roster button never rendered — the positive half cannot be checked")
+        end
+
+      assert opened =~ mine.member.name
+      refute opened =~ theirs.member.name
+    end
+
+    # The exact reported defect: the OLDEST space in the install belongs to an
+    # org the viewer is not a member of, which is precisely what the deleted
+    # `first_space/0` would have picked.
+    test "the oldest space in a foreign org no longer supplies the roster", %{conn: conn} do
+      {sxi, soylent} = tenant_orgs()
+
+      # Seeded first, so it is the oldest.
+      theirs = seed_org_space(soylent, "Oldest")
+      mine = seed_org_space(sxi, "Newer")
+
+      assert DateTime.compare(theirs.space.inserted_at, mine.space.inserted_at) in [:lt, :eq]
+
+      {conn, _user} = scoped_conn(conn, sxi)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_async(view, 2_000)
+
+      names = roster_agent_names(view)
+
+      assert mine.principal.name in names
+      refute theirs.principal.name in names
+    end
+
+    test "an agent on two visible spaces is listed once and counted once", %{conn: conn} do
+      {sxi, _soylent} = tenant_orgs()
+      a = seed_org_space(sxi, "First")
+      b = seed_org_space(sxi, "Second")
+
+      # Put A's member on B's roster too — same agent, two visible spaces.
+      {:ok, _} = Chat.add_space_agent(b.space.id, a.member.id, role: "member")
+
+      {conn, _user} = scoped_conn(conn, sxi)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_async(view, 2_000)
+
+      names = roster_agent_names(view)
+
+      # Present (positive control) and present exactly once.
+      assert a.member.name in names
+      assert Enum.count(names, &(&1 == a.member.name)) == 1
+
+      # The denominator counts it once too: unique agent ids == total.
+      assigns = :sys.get_state(view.pid).socket.assigns
+      %AsyncResult{result: composite} = assigns.composite_status
+      %AsyncResult{result: items} = assigns.roster_items
+
+      unique_ids = items |> Enum.map(fn {e, _} -> e.agent_id end) |> Enum.uniq() |> length()
+      assert composite.total == unique_ids
+      assert composite.total == length(items)
+      # Sanity: b's roster really does contain the shared agent, so the
+      # dedupe above removed a duplicate rather than never seeing one.
+      assert Enum.any?(Chat.list_space_agents(b.space.id), &(&1.agent_id == a.member.id))
+    end
+
+    test "a {:roster_changed_any, _} broadcast refreshes the composite without a remount",
+         %{conn: conn} do
+      {sxi, _soylent} = tenant_orgs()
+      mine = seed_org_space(sxi, "Live")
+
+      {conn, _user} = scoped_conn(conn, sxi)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_async(view, 2_000)
+
+      pid_before = view.pid
+
+      %AsyncResult{result: before_composite} =
+        :sys.get_state(view.pid).socket.assigns.composite_status
+
+      assert mine.member.name in roster_agent_names(view)
+
+      # Mutate the roster out-of-band. `Chat.remove_space_agent/2` fans out on
+      # the global topic the shell subscribed to at mount.
+      Chat.remove_space_agent(mine.space.id, mine.member.id)
+      _ = render(view)
+
+      %AsyncResult{result: after_composite} =
+        :sys.get_state(view.pid).socket.assigns.composite_status
+
+      assert view.pid == pid_before, "the LV must not have remounted"
+      assert after_composite.total == before_composite.total - 1
+      refute mine.member.name in roster_agent_names(view)
+    end
+
+    test "a viewer with no org memberships sees an empty roster, not every agent",
+         %{conn: conn} do
+      {sxi, _soylent} = tenant_orgs()
+      mine = seed_org_space(sxi, "Fenced")
+
+      # Positive control: an sxi member DOES see this agent, so the empty
+      # result below is the `:none` fence firing and not an empty database.
+      {member_conn, _} = scoped_conn(conn, sxi)
+      {:ok, member_view, _} = live(member_conn, ~p"/tasks")
+      _ = render_async(member_view, 2_000)
+      assert mine.principal.name in roster_agent_names(member_view)
+
+      # `Tenancy.visibility/1` → `:none` for a user with zero memberships,
+      # and `Tenancy.scope/3`'s `:none` clause is fail-closed.
+      {none_conn, none_user} = scoped_conn(conn, nil)
+      assert Tenancy.visibility(Platform.Accounts.get_user(none_user.id)) == :none
+
+      {:ok, none_view, _} = live(none_conn, ~p"/tasks")
+      _ = render_async(none_view, 2_000)
+
+      assert roster_agent_names(none_view) == []
+
+      %AsyncResult{result: composite} =
+        :sys.get_state(none_view.pid).socket.assigns.composite_status
+
+      assert composite.total == 0
+      assert composite.state == :none
+    end
+  end
+
+  # ── Agents meter renders the ratio (stage 4) ──────────────────────────────
+  #
+  # The dot was decorative before this stage: stage 2 changed `composite/1`
+  # to return a MAP while the template still called `dot_color(composite)`,
+  # which fell through the atom clauses to the catch-all and rendered
+  # `bg-neutral` no matter what the roster was doing. The fix is to pass
+  # `composite.state`, and the guard against it regressing is the paired
+  # transition below — a single-state assertion cannot tell a live indicator
+  # from a hardcoded one.
+  describe "agents meter ratio" do
+    # `agent_status/1` for a builtin agent is `Registry.lookup(...)` →
+    # `Process.alive?/1`. Registering a live process under the agent's slug is
+    # therefore the honest way to make an agent read `:active`; nothing is
+    # stubbed. The process is linked to the test and dies with it.
+    defp make_agent_active(agent) do
+      test = self()
+
+      pid =
+        spawn_link(fn ->
+          {:ok, _} = Registry.register(Platform.Agents.Registry, agent.slug, nil)
+          send(test, :registered)
+
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      assert_receive :registered, 1_000
+      assert Platform.Chat.SpaceAgentPresence.agent_status(agent) == :active
+      pid
+    end
+
+    defp seed_meter_space(org, healthy_count, unhealthy_count) do
+      n = System.unique_integer([:positive])
+
+      {:ok, space} =
+        Chat.create_space(%{name: "Meter Space", slug: "meter-space-#{n}", org_id: org.id})
+
+      agents =
+        for i <- 1..(healthy_count + unhealthy_count) do
+          Repo.insert!(%Agent{
+            name: "MeterBot#{i}",
+            slug: "meter-bot-#{n}-#{i}",
+            status: "active",
+            runtime_type: "builtin"
+          })
+        end
+
+      [principal | members] = agents
+      {:ok, _} = Chat.set_principal_agent(space.id, principal.id)
+      for m <- members, do: {:ok, _} = Chat.add_space_agent(space.id, m.id, role: "member")
+
+      %{space: space, agents: agents}
+    end
+
+    defp dot_class(html) do
+      case Regex.run(~r/class="([^"]*)"[^>]*data-test-id="shell-agents-dot"/, html) do
+        [_, class] -> class
+        nil -> flunk("the agents dot never rendered — nothing to compare across the transition")
+      end
+    end
+
+    # The header strip only. Scoping the brand-token refutation to the whole
+    # page would let unrelated markup decide the result either way.
+    defp header_strip(html) do
+      case Regex.run(~r/(<header[^>]*id="utility-bar".*?<\/header>)/s, html) do
+        [_, strip] -> strip
+        nil -> flunk("the utility bar never rendered")
+      end
+    end
+
+    test "the button renders the seeded roster as a literal n/m ratio", %{conn: conn} do
+      {sxi, _} = tenant_orgs()
+      %{agents: agents} = seed_meter_space(sxi, 2, 1)
+      [a, b, _c] = agents
+      _ = make_agent_active(a)
+      _ = make_agent_active(b)
+
+      {conn, _user} = scoped_conn(conn, sxi)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_async(view, 2_000)
+
+      # The number itself, not the word. A build that still renders the bare
+      # label "Agents" for a populated roster fails here.
+      assert html =~ ~s(data-test-id="shell-agents-ratio")
+      assert html =~ "2/3"
+      refute html =~ "0/0"
+    end
+
+    # PAIRED TRANSITION, in one run. Assert both endpoint values AND that they
+    # differ. If a future refactor makes the dot constant again, the equality
+    # refutation fails even if someone updates both endpoint expectations to
+    # the same class.
+    test "the dot class and the ratio both CHANGE when roster health changes", %{conn: conn} do
+      {sxi, _} = tenant_orgs()
+      %{space: space, agents: agents} = seed_meter_space(sxi, 2, 1)
+      [a, b, c] = agents
+      _ = make_agent_active(a)
+      _ = make_agent_active(b)
+
+      {conn, _user} = scoped_conn(conn, sxi)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      before_html = render_async(view, 2_000)
+
+      before_dot = dot_class(before_html)
+      assert before_dot =~ "bg-warning", "2 of 3 healthy must read degraded, got: #{before_dot}"
+      assert before_html =~ "2/3"
+
+      # Flip the last agent healthy and nudge the shell to recompute over the
+      # SAME roster (no membership change, so any difference below is health,
+      # not arithmetic).
+      _ = make_agent_active(c)
+
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        Chat.global_roster_topic(),
+        {:roster_changed_any, space.id}
+      )
+
+      after_html = render(view)
+      after_dot = dot_class(after_html)
+
+      assert after_dot =~ "bg-success", "3 of 3 healthy must read success, got: #{after_dot}"
+      assert after_html =~ "3/3"
+
+      # The load-bearing assertion.
+      refute before_dot == after_dot,
+             "the dot class did not change across a real health transition — the indicator is decorative"
+
+      refute before_html =~ "3/3" and after_html =~ "2/3",
+             "the ratio did not change across the transition"
+    end
+
+    # Brand tokens only. The design canvas names these five raw Tailwind
+    # classes as the violation; they must not come back in the meter markup
+    # or in the module that supplies its colours.
+    test "no raw Tailwind status colours in the agents meter or its colour module", %{conn: conn} do
+      {sxi, _} = tenant_orgs()
+      %{agents: [a | _]} = seed_meter_space(sxi, 1, 2)
+      _ = make_agent_active(a)
+
+      {conn, _user} = scoped_conn(conn, sxi)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_async(view, 2_000)
+      opened = view |> element(~s([data-test-id="shell-roster-button"])) |> render_click()
+
+      banned = ["bg-red-500", "bg-green-500", "bg-green-400", "bg-blue-500", "bg-zinc-500"]
+
+      # Positive control: the markup under test really does carry status
+      # colours, so the refutations below are about the TOKENS used and not
+      # about an empty panel.
+      assert opened =~ "bg-warning" or opened =~ "bg-success" or opened =~ "bg-error"
+
+      meter_markup = header_strip(opened)
+
+      for klass <- banned do
+        refute meter_markup =~ klass, "raw Tailwind #{klass} is back in the agents meter"
+      end
+
+      source = File.read!("lib/platform/chat/space_agent_presence.ex")
+      assert source =~ "bg-success", "positive control: the module does define dot colours"
+
+      for klass <- banned do
+        refute source =~ klass, "raw Tailwind #{klass} is back in space_agent_presence.ex"
+      end
+    end
+
+    test "an orphaned roster row reads 'Deleted agent' with no dot and no status", %{conn: conn} do
+      {sxi, _} = tenant_orgs()
+      %{agents: agents} = seed_meter_space(sxi, 1, 1)
+      [principal, member] = agents
+      _ = make_agent_active(principal)
+      Repo.delete!(member)
+
+      {conn, _user} = scoped_conn(conn, sxi)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_async(view, 2_000)
+      opened = view |> element(~s([data-test-id="shell-roster-button"])) |> render_click()
+
+      # "Unknown agent" describes a naming problem; the fact is a deleted
+      # record. And an orphan must not claim a status — "offline" is a false
+      # statement about a row that no longer exists.
+      assert opened =~ "Deleted agent"
+      refute opened =~ "Unknown agent"
+
+      orphan_row =
+        opened
+        |> String.split("Deleted agent")
+        |> hd()
+        |> String.split(~s(<div class="flex items-center justify-between))
+        |> List.last()
+
+      refute orphan_row =~ "rounded-full",
+             "the orphan row still renders a status dot: #{orphan_row}"
+
+      # Positive control: a live row DOES carry a dot, so the refutation above
+      # is about the orphan and not about dots having disappeared entirely.
+      assert opened =~ "rounded-full"
+    end
+
+    # The roster panel is anchored to the HEADER's right edge, not to its
+    # trigger button. Anchored to the button (`right-0` on a wrapper with
+    # `relative`) the panel measured left: -60.2px at 375px, clipping every
+    # agent name to its tail. This test pins the anchor; the geometry itself
+    # is measured in the browser with getBoundingClientRect().left >= 0 —
+    # NOT with an overflow check, which cannot see leftward overflow
+    # (no scrollbar, scrollWidth == clientWidth).
+    test "the roster panel anchors to the header, not to the trigger button", %{conn: conn} do
+      {sxi, _} = tenant_orgs()
+      %{agents: [a | _]} = seed_meter_space(sxi, 1, 1)
+      _ = make_agent_active(a)
+
+      {conn, _user} = scoped_conn(conn, sxi)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_async(view, 2_000)
+
+      # The positioning context must be the full-width header.
+      assert html =~ ~r/<header[^>]*id="utility-bar"[^>]*class="relative /
+
+      opened = view |> element(~s([data-test-id="shell-roster-button"])) |> render_click()
+
+      panel_classes =
+        case Regex.run(~r/class="([^"]*)"[^>]*data-test-id="shell-roster-panel"/, opened) do
+          [_, classes] -> classes
+          nil -> flunk("the roster panel never rendered — its anchor cannot be checked")
+        end
+
+      assert panel_classes =~ "right-4",
+             "panel must clear the viewport edge, got: #{panel_classes}"
+
+      refute panel_classes =~ "right-0",
+             "right-0 anchors the panel to a mid-strip button and pushes it off-screen"
     end
   end
 end

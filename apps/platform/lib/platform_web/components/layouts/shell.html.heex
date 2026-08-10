@@ -66,9 +66,14 @@
        nav out of the visible viewport on iOS. --%>
   <div class="flex flex-1 flex-col overflow-hidden min-w-0 min-h-0">
     <%!-- Top bar --%>
+    <%!-- `relative` is load-bearing for the roster dropdown below, not
+         decoration: the dropdown anchors to the HEADER's right edge rather
+         than to its trigger button, so it can never be pushed off the left
+         of the viewport by a trigger that sits mid-strip. See the panel's
+         own comment for the measurement. --%>
     <header
       id="utility-bar"
-      class="flex h-10 items-center justify-between border-b border-base-300 bg-base-200/60 px-4"
+      class="relative flex h-10 items-center justify-between border-b border-base-300 bg-base-200/60 px-4"
     >
       <div class="flex items-center gap-2">
         <%!-- Mobile primary nav is the bottom-nav from #13; the original
@@ -105,7 +110,7 @@
             </span>
           </:failed>
           <%= if principal_name do %>
-            <div class="relative">
+            <div>
               <button
                 phx-click="toggle_roster"
                 class="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-base-content/70 hover:bg-base-300 transition-colors"
@@ -117,22 +122,76 @@
                     <span class="loading loading-spinner loading-xs"></span>
                   </:loading>
                   <:failed>
-                    <span class="inline-block size-2 rounded-full bg-base-content/20" />
+                    <%!-- Never a number here. A zero is a claim, and "the
+                         roster query failed" is not the claim "no agents". --%>
+                    <span
+                      class="inline-block size-2 rounded-full bg-neutral"
+                      data-test-id="shell-composite-failed"
+                    />
+                    <span class="text-base-content/50">Agents unavailable</span>
                   </:failed>
-                  <span class={[
-                    "inline-block size-2 rounded-full",
-                    Platform.Chat.SpaceAgentPresence.dot_color(composite)
-                  ]} />
+                  <%!-- `composite` is the `%{healthy:, total:, state:}` map
+                       from `SpaceAgentPresence.composite/1`. `dot_color/1`
+                       takes the STATE atom — handing it the map falls through
+                       to the catch-all and renders neutral forever, which is
+                       how the dot became decorative. --%>
+                  <span
+                    class={[
+                      "inline-block size-2 rounded-full",
+                      Platform.Chat.SpaceAgentPresence.dot_color(composite.state)
+                    ]}
+                    data-test-id="shell-agents-dot"
+                  />
+                  <%= if composite.total > 0 do %>
+                    <%!-- Tabular mono figures: the ratio updates live, and
+                         proportional digits make it twitch sideways. --%>
+                    <span
+                      class="font-mono tabular-nums font-bold"
+                      data-test-id="shell-agents-ratio"
+                    >
+                      {composite.healthy}/{composite.total}
+                    </span>
+                    <span>agents</span>
+                  <% else %>
+                    <span>Agents</span>
+                  <% end %>
                 </.async_result>
-                <span>Agents</span>
               </button>
 
               <%!-- Roster dropdown panel --%>
+              <%!-- Anchored to the HEADER (`relative` above), not to the
+                   trigger. Anchored to the button this panel measured
+                   `left: -60.2px` at a 375px viewport: `right-0` pinned its
+                   right edge to a button sitting mid-strip at x≈196, so a
+                   256px panel started 60px off-screen and every name was
+                   clipped to its tail. Note the `max-w-` clamp does NOT catch
+                   that — 256px is already under the cap, so the rule never
+                   engages — and neither does an overflow check, because
+                   leftward overflow produces no scrollbar and leaves
+                   `scrollWidth == clientWidth`. The measurement that fails is
+                   `getBoundingClientRect().left >= 0`. Against the header's
+                   right edge, left is `viewport - 1rem - 16rem` = 103px at
+                   375px, and grows from there. --%>
               <div
                 :if={assigns[:roster_open] && @roster_open}
-                class="absolute right-0 top-full mt-1 z-50 w-64 max-w-[calc(100vw-1rem)] rounded-lg border border-base-300 bg-base-200 shadow-lg"
+                class="absolute right-4 top-full mt-1 z-50 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-base-300 bg-base-200 shadow-lg"
+                data-test-id="shell-roster-panel"
               >
                 <div class="p-3 space-y-1">
+                  <.async_result :let={composite} assign={@composite_status}>
+                    <:loading></:loading>
+                    <:failed></:failed>
+                    <div
+                      :if={composite.total > 0}
+                      class="flex items-center gap-2 px-2 pb-1 text-[10px] uppercase tracking-widest text-base-content/40"
+                      data-test-id="shell-roster-panel-header"
+                    >
+                      <span>Agents</span>
+                      <span class="font-mono tabular-nums">
+                        {composite.healthy} of {composite.total} linked
+                      </span>
+                    </div>
+                  </.async_result>
                   <.async_result :let={roster_items} assign={@roster_items}>
                     <:loading>
                       <div class="flex items-center justify-center py-4">
@@ -147,14 +206,29 @@
                     <%= for {sa, status} <- roster_items do %>
                       <div class="flex items-center justify-between py-1.5 px-2 rounded hover:bg-base-300 group">
                         <div class="flex items-center gap-2">
-                          <span class={[
-                            "inline-block size-2 rounded-full",
-                            Platform.Chat.SpaceAgentPresence.dot_color(status)
-                          ]} />
+                          <%!-- No dot for an orphan. A status dot reading
+                               "offline" is a false claim about a record that
+                               no longer exists — there is nothing there to be
+                               offline. --%>
+                          <span
+                            :if={sa.agent}
+                            class={[
+                              "inline-block size-2 rounded-full",
+                              Platform.Chat.SpaceAgentPresence.dot_color(status)
+                            ]}
+                          />
+                          <%!-- `roster_entry.agent` is contract-nullable: a
+                          participant row can outlive its agent row. Render
+                          the orphan rather than dropping it, so it stays
+                          visible and removable. "Deleted agent", not
+                          "Unknown agent": the latter describes a naming
+                          problem, and the fact is a deleted record. --%>
                           <span class="text-sm font-medium">
-                            {if sa.role == "principal",
-                              do: sa.agent.name,
-                              else: "@#{sa.agent.name}"}
+                            {cond do
+                              sa.agent == nil -> "Deleted agent"
+                              sa.role == "principal" -> sa.agent.name
+                              true -> "@#{sa.agent.name}"
+                            end}
                           </span>
                           <span
                             :if={sa.role == "principal"}
@@ -164,7 +238,9 @@
                           </span>
                         </div>
                         <div class="flex items-center gap-2">
-                          <span class="text-xs text-base-content/50">{status}</span>
+                          <span :if={sa.agent} class="text-xs text-base-content/50">
+                            {Platform.Chat.SpaceAgentPresence.status_label(status)}
+                          </span>
                           <button
                             :if={sa.role != "principal"}
                             phx-click="dismiss_agent"

@@ -17,6 +17,7 @@ defmodule PlatformWeb.ShellLive do
   alias Platform.Meetings.State, as: MeetingState
   alias Platform.Repo
   alias Platform.Tasks
+  alias Platform.Tenancy
 
   def on_mount(:default, _params, session, socket) do
     raw_user_id = session["current_user_id"]
@@ -44,6 +45,11 @@ defmodule PlatformWeb.ShellLive do
     # more_sheet) that read `is_fabrikam_user` continue to render correctly
     # while new code adopts `fabrikam_admin?` via the LiveAuth hook.
     is_fabrikam_user = Platform.Tenancy.fabrikam_admin_preloaded?(user_record)
+
+    # Resolve org visibility ONCE and thread it (Tenancy moduledoc). The
+    # preloaded clause costs zero queries because `Accounts.get_user/1`
+    # already preloaded `:org_memberships` with the nested `:org`.
+    roster_visibility = Tenancy.visibility(user_record)
 
     active_module = derive_active_module(socket.view)
 
@@ -95,10 +101,15 @@ defmodule PlatformWeb.ShellLive do
         # subscribe and get their own scoped count.
         if is_binary(raw_user_id), do: Inbox.subscribe(raw_user_id)
 
+        # One global roster topic for the viewer-scoped union (see
+        # `Chat.global_roster_topic/0`). The per-space subscription installed
+        # by `:roster_resolved` stays as-is for the current space.
+        Phoenix.PubSub.subscribe(Platform.PubSub, Chat.global_roster_topic())
+
         socket
         |> assign_async(
           [:roster_items, :composite_status, :principal_name],
-          fn -> async_load_roster(lv_pid) end
+          fn -> async_load_roster(lv_pid, roster_visibility) end
         )
         |> assign_async(:presence_list, fn -> async_load_presence(lv_pid, user_record) end)
         |> maybe_subscribe_meeting_state(raw_user_id)
@@ -110,6 +121,7 @@ defmodule PlatformWeb.ShellLive do
       socket
       |> assign(:current_user, current_user)
       |> assign(:current_user_record, user_record)
+      |> assign(:roster_visibility, roster_visibility)
       |> assign(:current_user_id, raw_user_id)
       |> assign(:current_path, "/")
       |> assign(:agent_status, default_agent_status())
@@ -193,6 +205,12 @@ defmodule PlatformWeb.ShellLive do
           Enum.each(space_ids -- already, &ChatPubSub.subscribe/1)
 
           {:halt, assign(socket, :presence_space_ids, Enum.uniq(already ++ space_ids))}
+
+        # Global fan-out for the viewer-scoped union: any roster mutation
+        # anywhere pings us, and `refresh_roster/2` re-scopes from the
+        # viewer's visibility rather than trusting the space id.
+        {:roster_changed_any, space_id}, socket ->
+          {:halt, refresh_roster(socket, space_id)}
 
         %Phoenix.Socket.Broadcast{event: "presence_diff"}, socket ->
           # Any diff on ANY subscribed space invalidates the union, so rebuild
@@ -488,36 +506,112 @@ defmodule PlatformWeb.ShellLive do
   end
 
   @doc false
-  # Synchronous refresh path used by PubSub (`{:roster_changed, sid}`) and the
-  # `dismiss_agent` event. Wraps each updated assign in `AsyncResult.ok/2` so
-  # the template's `<.async_result>` component continues to see an
-  # `%AsyncResult{ok?: true}` shape after the initial async load resolves.
-  def refresh_roster(socket, space_id) when is_binary(space_id) do
-    roster_items = SpaceAgentPresence.roster_with_status(space_id)
-
-    principal =
-      Enum.find(roster_items, fn {sa, _status} -> sa.role == "principal" end)
-
-    principal_name =
-      case principal do
-        {sa, _} -> sa.agent.name
-        nil -> nil
-      end
-
-    active_statuses =
-      roster_items
-      |> Enum.reject(fn {sa, _} -> sa.role == "dismissed" end)
-      |> Enum.map(fn {_sa, status} -> status end)
-
-    composite = SpaceAgentPresence.composite_status(active_statuses)
+  # Synchronous refresh path used by PubSub (`{:roster_changed, sid}`,
+  # `{:roster_changed_any, sid}`) and the `dismiss_agent` event. Wraps each
+  # updated assign in `AsyncResult.ok/2` so the template's `<.async_result>`
+  # component continues to see an `%AsyncResult{ok?: true}` shape after the
+  # initial async load resolves.
+  #
+  # The incoming space_id is only a *ping*: the meter is the viewer-scoped
+  # union over every visible space, so recomputing from that one space would
+  # overwrite the union with a subset. We always recompute the full set.
+  def refresh_roster(socket, _space_id) do
+    %{roster_items: items, composite: composite, principal_name: principal_name} =
+      visible_roster(socket.assigns[:roster_visibility] || :none)
 
     socket
-    |> assign(:roster_items, async_ok(socket.assigns[:roster_items], roster_items))
+    |> assign(:roster_items, async_ok(socket.assigns[:roster_items], items))
     |> assign(:principal_name, async_ok(socket.assigns[:principal_name], principal_name))
     |> assign(:composite_status, async_ok(socket.assigns[:composite_status], composite))
   end
 
-  def refresh_roster(socket, _), do: socket
+  # ── Viewer-scoped agent roster ────────────────────────────────────────────
+  #
+  # The meter lives in the global shell chrome and renders on `/tasks`,
+  # `/admin`, `/canvases` and every other surface where there is no current
+  # space, so "the current space's roster" is undefined for most of the pages
+  # it appears on. The scope is therefore org-wide but viewer-scoped: the
+  # distinct set of agents on the rosters of spaces the viewer can see. The
+  # previous behaviour (oldest non-archived space in the whole install) leaked
+  # agents from orgs the viewer has no membership in.
+  #
+  # Returns `%{roster_items: [{roster_entry, status}], composite: composite,
+  # principal_name: binary | nil, space_id: binary | nil}`.
+  defp visible_roster(visibility) do
+    rows =
+      from(p in Chat.Participant,
+        join: s in Platform.Chat.Space,
+        as: :space,
+        on: s.id == p.space_id,
+        where: p.participant_type == "agent" and is_nil(s.archived_at),
+        select: %{
+          space_id: p.space_id,
+          agent_id: p.participant_id,
+          role: p.role,
+          inserted_at: p.joined_at,
+          space_updated_at: s.updated_at
+        }
+      )
+      |> Tenancy.scope(visibility, binding: :space, field: :org_id)
+      |> Repo.all()
+
+    agents_by_id =
+      case Enum.map(rows, & &1.agent_id) |> Enum.uniq() do
+        [] -> %{}
+        ids -> Repo.all(from(a in Agent, where: a.id in ^ids)) |> Map.new(&{&1.id, &1})
+      end
+
+    # Distinct on AGENT, not on participant row: an agent sitting on five
+    # visible spaces must count once or the ratio's denominator inflates.
+    # Principal rows sort first so the surviving row is the most meaningful
+    # one for that agent.
+    entries =
+      rows
+      |> Enum.sort_by(fn r -> {r.role != "principal", r.agent_id} end)
+      |> Enum.uniq_by(& &1.agent_id)
+      |> Enum.map(fn r ->
+        %{
+          space_id: r.space_id,
+          agent_id: r.agent_id,
+          role: r.role,
+          agent: Map.get(agents_by_id, r.agent_id),
+          inserted_at: r.inserted_at
+        }
+      end)
+
+    roster_items = Enum.map(entries, fn e -> {e, SpaceAgentPresence.agent_status(e.agent)} end)
+    composite = SpaceAgentPresence.composite(Enum.map(roster_items, fn {_e, s} -> s end))
+
+    # `principal_name`'s MEANING CHANGED with this scope: with a viewer-scoped
+    # union there is no single principal, so this is now the principal of the
+    # viewer's most-recently-active visible space (nil when there is none).
+    # The assign is kept because `shell.html.heex:107` gates the whole Agents
+    # button on it, and its `:186-195` legacy-dot branch still covers nil.
+    newest = rows |> Enum.sort_by(& &1.space_updated_at, {:desc, DateTime}) |> List.first()
+
+    principal_row =
+      case newest do
+        nil ->
+          nil
+
+        %{space_id: sid} ->
+          Enum.find(rows, fn r -> r.space_id == sid and r.role == "principal" end) ||
+            Enum.find(rows, fn r -> r.role == "principal" end)
+      end
+
+    principal_name =
+      case principal_row && Map.get(agents_by_id, principal_row.agent_id) do
+        %Agent{name: name} -> name
+        _ -> nil
+      end
+
+    %{
+      roster_items: roster_items,
+      composite: composite,
+      principal_name: principal_name,
+      space_id: newest && newest.space_id
+    }
+  end
 
   @doc """
   Canonical wrap-or-rewrap helper for the AsyncResult-bound shell assigns
@@ -540,43 +634,25 @@ defmodule PlatformWeb.ShellLive do
   # roster keys. Sends {:roster_resolved, sid} back to the LV so it can install
   # PubSub subscribes on its own process (Tasks can't subscribe on the LV's
   # behalf — messages would land in the wrong mailbox).
-  defp async_load_roster(lv_pid) do
-    case first_space() do
-      nil ->
-        send(lv_pid, {:roster_resolved, nil})
+  defp async_load_roster(lv_pid, visibility) do
+    %{
+      roster_items: items,
+      composite: composite,
+      principal_name: principal_name,
+      space_id: sid
+    } = visible_roster(visibility)
 
-        {:ok,
-         %{
-           roster_items: [],
-           composite_status: :none,
-           principal_name: nil
-         }}
+    # `:roster_resolved` still carries a single space id — it drives the
+    # per-space ChatPubSub subscription, which remains per-space. The
+    # viewer-scoped union is kept fresh by the global topic instead.
+    send(lv_pid, {:roster_resolved, sid})
 
-      %{id: sid} ->
-        items = SpaceAgentPresence.roster_with_status(sid)
-
-        principal_name =
-          case Enum.find(items, fn {sa, _} -> sa.role == "principal" end) do
-            {sa, _} -> sa.agent.name
-            nil -> nil
-          end
-
-        active_statuses =
-          items
-          |> Enum.reject(fn {sa, _} -> sa.role == "dismissed" end)
-          |> Enum.map(fn {_sa, status} -> status end)
-
-        composite = SpaceAgentPresence.composite_status(active_statuses)
-
-        send(lv_pid, {:roster_resolved, sid})
-
-        {:ok,
-         %{
-           roster_items: items,
-           composite_status: composite,
-           principal_name: principal_name
-         }}
-    end
+    {:ok,
+     %{
+       roster_items: items,
+       composite_status: composite,
+       principal_name: principal_name
+     }}
   end
 
   # Task 019fe4b1 stage 3: the shell presence badge is the VIEWER's answer, not
@@ -646,17 +722,6 @@ defmodule PlatformWeb.ShellLive do
   end
 
   defp seed_meeting_state_from_storage(socket, _), do: socket
-
-  defp first_space do
-    from(s in Platform.Chat.Space,
-      where: is_nil(s.archived_at),
-      order_by: [asc: s.inserted_at],
-      limit: 1
-    )
-    |> Repo.one()
-  rescue
-    _ -> nil
-  end
 
   # Derive a human-readable module name from the LiveView module atom.
   defp derive_active_module(view) do

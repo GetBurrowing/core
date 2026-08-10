@@ -14,6 +14,15 @@ defmodule PlatformWeb.ChatLive.PresenceHooksTest do
   The fix lifted `ShellLive.async_ok/2` to public and routed the two
   `presence_hooks` writes through it. These tests pin the shape so the
   regression cannot return.
+
+  Task `019fe4b1` (agents-meter ratio) tightened the contract a second
+  time: the wrapped VALUE is now the `%{healthy:, total:, state:}` map
+  from `SpaceAgentPresence.composite/1`, because the shell template reads
+  `composite.total` and `composite.state`. A bare atom is still wrapped
+  correctly by `async_ok/2` and would still pass the old assertions here,
+  while raising in the template — so the `result: :busy` expectations
+  below were REWRITTEN (not deleted) to assert the map, and to assert
+  that typing overrides only `:state` and preserves the ratio.
   """
 
   use ExUnit.Case, async: true
@@ -24,10 +33,11 @@ defmodule PlatformWeb.ChatLive.PresenceHooksTest do
   alias PlatformWeb.ShellLive
 
   describe "apply_agent_typing/3 — :composite_status stays wrapped in AsyncResult" do
-    test "typing: true assigns %AsyncResult{ok?: true, result: :busy} (not bare atom)" do
+    test "typing: true assigns a wrapped composite MAP with state :busy (not a bare atom)" do
       socket =
         build_socket(%{
-          composite_status: AsyncResult.ok(AsyncResult.loading(), :idle),
+          composite_status:
+            AsyncResult.ok(AsyncResult.loading(), %{healthy: 2, total: 3, state: :degraded}),
           principal_name: AsyncResult.ok(AsyncResult.loading(), "rowan@example.com"),
           active_space: nil,
           agent_typing_pids: MapSet.new()
@@ -35,12 +45,17 @@ defmodule PlatformWeb.ChatLive.PresenceHooksTest do
 
       {:halt, updated} = PresenceHooks.apply_agent_typing(socket, true, "agent-1")
 
-      assert %AsyncResult{ok?: true, result: :busy} = updated.assigns.composite_status,
-             "typing: true must yield wrapped :busy, not a bare atom — bare atoms crash <.async_result>"
+      assert %AsyncResult{ok?: true, result: result} = updated.assigns.composite_status,
+             "must stay wrapped — bare values crash <.async_result>"
+
+      # Task 019fe4b1: the template does `composite.state` / `composite.total`.
+      # A bare `:busy` satisfies the wrapper contract and still raises there.
+      assert result == %{healthy: 2, total: 3, state: :busy},
+             "typing must override only :state and preserve the ratio, got: #{inspect(result)}"
     end
 
     test "typing: false with no active_space leaves :composite_status untouched (still wrapped)" do
-      seed = AsyncResult.ok(AsyncResult.loading(), :busy)
+      seed = AsyncResult.ok(AsyncResult.loading(), %{healthy: 1, total: 3, state: :busy})
 
       socket =
         build_socket(%{
@@ -64,21 +79,26 @@ defmodule PlatformWeb.ChatLive.PresenceHooksTest do
     test "typing toggle on/off/on preserves AsyncResult shape across writes" do
       socket =
         build_socket(%{
-          composite_status: AsyncResult.ok(AsyncResult.loading(), :idle),
+          composite_status:
+            AsyncResult.ok(AsyncResult.loading(), %{healthy: 3, total: 4, state: :degraded}),
           principal_name: AsyncResult.ok(AsyncResult.loading(), "rowan@example.com"),
           active_space: nil,
           agent_typing_pids: MapSet.new()
         })
 
       {:halt, s1} = PresenceHooks.apply_agent_typing(socket, true, "agent-a")
-      assert %AsyncResult{ok?: true, result: :busy} = s1.assigns.composite_status
+
+      assert %AsyncResult{ok?: true, result: %{healthy: 3, total: 4, state: :busy}} =
+               s1.assigns.composite_status
 
       {:halt, s2} = PresenceHooks.apply_agent_typing(s1, false, "agent-a")
-      # No active_space, so :busy carries forward — still wrapped.
-      assert %AsyncResult{} = s2.assigns.composite_status
+      # No active_space, so the busy composite carries forward — still wrapped.
+      assert %AsyncResult{ok?: true, result: %{total: 4}} = s2.assigns.composite_status
 
       {:halt, s3} = PresenceHooks.apply_agent_typing(s2, true, "agent-b")
-      assert %AsyncResult{ok?: true, result: :busy} = s3.assigns.composite_status
+
+      assert %AsyncResult{ok?: true, result: %{healthy: 3, total: 4, state: :busy}} =
+               s3.assigns.composite_status
     end
 
     test "missing principal_name skips the cross-LV write (template not yet bound)" do

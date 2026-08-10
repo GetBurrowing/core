@@ -57,6 +57,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   import Phoenix.LiveView, only: [attach_hook: 4, connected?: 1]
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias Phoenix.LiveView.AsyncResult
   alias Platform.Accounts
   alias Platform.Agents.WorkspaceBootstrap
   alias Platform.Chat
@@ -366,18 +367,27 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     # `ShellLive.async_ok/2` reuses the existing AsyncResult when present
     # (preserves LV diffing) and lazily wraps `AsyncResult.loading/0` when
     # the assign hasn't been seeded yet (e.g. test sockets).
+    #
+    # The wrapped VALUE must also be the `%{healthy:, total:, state:}` map,
+    # not a bare status atom: the shell template reads `composite.total` and
+    # `composite.state`, and an atom raises there. Typing therefore overrides
+    # only the `:state` field and preserves the ratio the roster loader
+    # computed — the count is still true while an agent is thinking.
     socket =
       if socket.assigns[:principal_name] do
         if any_typing do
           assign(
             socket,
             :composite_status,
-            PlatformWeb.ShellLive.async_ok(socket.assigns[:composite_status], :busy)
+            PlatformWeb.ShellLive.async_ok(
+              socket.assigns[:composite_status],
+              composite_with_state(socket.assigns[:composite_status], :busy)
+            )
           )
         else
           case socket.assigns[:active_space] do
             %{id: space_id} ->
-              composite = SpaceAgentPresence.composite_status_for_space(space_id)
+              composite = SpaceAgentPresence.composite_for_space(space_id)
 
               assign(
                 socket,
@@ -395,6 +405,15 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
 
     {:halt, socket}
   end
+
+  # Override the composite's `:state` while keeping its ratio. Falls back to
+  # an empty ratio when the roster hasn't resolved yet (test sockets seeded
+  # with `AsyncResult.loading/0`), which the shell renders as a bare dot with
+  # no number rather than a fabricated `0/0`.
+  defp composite_with_state(%AsyncResult{result: %{healthy: _, total: _} = c}, state),
+    do: %{c | state: state}
+
+  defp composite_with_state(_other, state), do: %{healthy: 0, total: 0, state: state}
 
   # ── Template helpers (used across MessageList, Threads, Mentions) ────
 

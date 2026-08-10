@@ -3771,10 +3771,11 @@ defmodule Platform.Chat do
   # carries `principal | member | admin | observer` for agent rows, and
   # membership is just the presence of the row.
   #
-  # The helpers below return maps shaped `%{agent_id, role, agent}` for
+  # The helpers below return maps shaped `%{space_id, agent_id, role, agent}` for
   # backward compatibility with UI and roster-status callers.
 
   @type roster_entry :: %{
+          required(:space_id) => binary(),
           required(:agent_id) => binary(),
           required(:role) => String.t(),
           required(:agent) => Agent.t() | nil,
@@ -3979,6 +3980,7 @@ defmodule Platform.Chat do
 
     Enum.map(participants, fn p ->
       %{
+        space_id: p.space_id,
         agent_id: p.participant_id,
         role: p.role,
         agent: Map.get(agents_by_id, p.participant_id),
@@ -3989,6 +3991,7 @@ defmodule Platform.Chat do
 
   defp participant_to_roster_entry(%Participant{} = p) do
     %{
+      space_id: p.space_id,
       agent_id: p.participant_id,
       role: p.role,
       agent: Repo.get(Agent, p.participant_id),
@@ -4008,7 +4011,26 @@ defmodule Platform.Chat do
       "space_agents:#{space_id}",
       {:roster_changed, space_id}
     )
+
+    # Additive global fan-out. The shell's agents meter is viewer-scoped
+    # across every visible space, so it cannot subscribe to N per-space
+    # topics without unbounded fan-out; it subscribes to this one topic
+    # instead and recomputes its union on receipt. The per-space topic
+    # above and all of its subscribers are untouched.
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      global_roster_topic(),
+      {:roster_changed_any, space_id}
+    )
   end
+
+  @doc """
+  Single global topic carrying `{:roster_changed_any, space_id}` for every
+  roster mutation in the install. Subscribers must re-scope for themselves —
+  the message is a "something changed" ping, not an authorization.
+  """
+  @spec global_roster_topic() :: String.t()
+  def global_roster_topic, do: "space_agents:*"
 
   # ── Unread counts ──────────────────────────────────────────────────────────
 

@@ -793,7 +793,7 @@ defmodule Platform.RepoLookupBoundaryTest do
     # instead of as an unclassified site with no history attached.
     "platform_web/controllers/github_webhook_controller.ex" => 0,
     "platform_web/controllers/message_controller.ex" => 1,
-    "platform_web/live/shell_live.ex" => 2
+    "platform_web/live/shell_live.ex" => 1
   }
 
   @classifications [:safe_internal, :must_cast, :flagged_sibling_owned]
