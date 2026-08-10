@@ -656,6 +656,17 @@ defmodule Platform.RepoLookupBoundaryTest do
     # :platform_uuid_guard entry for this file in @inventory above. Removing
     # the guard fails there and reintroduces the raise here.
     "platform/experiments/assignments.ex" => 1,
+    # 0 → 1 for task 019fe6b9's `get_variant/2`, the variant-blob read behind
+    # `render_template/2`. Triaged by hand as this map asks: neither side of
+    # the `where:` clause can raise a cast error. `v.experiment_id ==
+    # ^experiment_id` is destructured off a loaded `%Experiment{}` — the row
+    # was fetched before the call, so the id is a value the DB itself
+    # produced, not one a boundary supplied. `v.slug == ^variant_slug` is a
+    # plain string column with no UUID type on either side, and the value
+    # comes from an assignment row's `variant_slug`, which is likewise
+    # already in the database. No caller-supplied id reaches this predicate,
+    # so no `Platform.UUID.valid?/1` guard applies.
+    "platform/experiments.ex" => 1,
     "platform/federation.ex" => 1,
     "platform/federation/tool_surface.ex" => 2,
     "platform/files.ex" => 1,
