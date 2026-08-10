@@ -132,6 +132,18 @@ defmodule Platform.Orchestration.TaskRouterSupervisorTest do
       assert %{stage_id: _} = LeaseManager.get(task.id)
       assert %Platform.Chat.Space{archived_at: nil} = ExecutionSpace.find_by_task_id(task.id)
 
+      # The archive is now gated on the TASK being terminal, not on the
+      # shutdown happening (task 019fe9c5 stage 2): `stop_assignment/1` and a
+      # node teardown both deliver `:shutdown`, so the reason cannot tell
+      # "finished" from "the box went away". This test's subject is that
+      # `terminate/2` RAN, and the archive is only its proxy — so put the task
+      # in the state where archiving is the correct outcome, and the proxy
+      # keeps working. A router stopped on a NON-terminal task must leave the
+      # space live; that is asserted in `task_router_test.exs`.
+      task
+      |> Ecto.Changeset.change(%{status: "done"})
+      |> Platform.Repo.update!()
+
       ref = Process.monitor(pid)
       assert :ok = TaskRouterSupervisor.stop_assignment(task.id)
 

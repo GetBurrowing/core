@@ -307,6 +307,47 @@ defmodule Platform.Tasks.ChatPinsTest do
       assert ChatPins.list_pinned_task_spaces_for(viewer) == []
     end
 
+    # COMPOSED CASE. The user-visible symptom: a router shutdown archived the
+    # execution space of a task that was still running, and the later pin then
+    # succeeded silently against that tombstone — the pin row persisted and the
+    # space could never render, because the read path filters archived rows.
+    #
+    # Pinning to an ACTIVE space is the only path that works today, so a test
+    # that does that passes against unpatched code and proves nothing. This one
+    # starts from the archived state deliberately.
+    test "a pin created after the space was archived still renders (revive on write)",
+         %{task: task} do
+      viewer = %{kind: "user", id: "viewer@example.com"}
+
+      # Materialise the space, then archive it as a premature router shutdown
+      # would have done.
+      {:ok, space} = ExecutionSpace.find_or_create(task.id)
+      {:ok, _archived} = Platform.Chat.archive_space(space)
+      assert Repo.get!(Space, space.id).archived_at != nil
+
+      assert {:ok, %{space: pinned}} = ChatPins.pin(task.id, viewer, viewer.id)
+
+      # The write path revived the row rather than handing back a tombstone —
+      # same id, no duplicate.
+      assert pinned.id == space.id
+      assert pinned.archived_at == nil
+      assert count_chat_spaces_for(task.id) == 1
+
+      assert [listed] = ChatPins.list_pinned_task_spaces_for(viewer)
+      assert listed.id == space.id
+    end
+
+    # HAPPY-PATH GUARD, paired with the case above: pinning to a space that was
+    # never archived must keep working. Expected to pass both before and after.
+    test "a pin created against an active space still renders", %{task: task} do
+      viewer = %{kind: "user", id: "viewer@example.com"}
+
+      assert {:ok, %{space: space}} = ChatPins.pin(task.id, viewer, viewer.id)
+      assert space.archived_at == nil
+      assert [listed] = ChatPins.list_pinned_task_spaces_for(viewer)
+      assert listed.id == space.id
+    end
+
     test "returns [] for a participant with no pins" do
       assert ChatPins.list_pinned_task_spaces_for(%{kind: "user", id: "nobody@example.com"}) ==
                []

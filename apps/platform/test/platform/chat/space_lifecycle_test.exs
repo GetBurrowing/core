@@ -253,6 +253,51 @@ defmodule Platform.Chat.SpaceLifecycleTest do
     end
   end
 
+  describe "unarchive_space/1 (system path)" do
+    test "clears archived_at, deletion_scheduled_at and archived_cascade_org_id" do
+      cascade_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+      now = DateTime.utc_now()
+
+      space =
+        channel!()
+        |> Ecto.Changeset.change(
+          archived_at: now,
+          deletion_scheduled_at: now,
+          archived_cascade_org_id: cascade_org_id
+        )
+        |> Repo.update!()
+
+      assert {:ok, restored} = Chat.unarchive_space(space)
+      assert is_nil(restored.archived_at)
+      assert is_nil(restored.deletion_scheduled_at)
+      assert is_nil(restored.archived_cascade_org_id)
+    end
+
+    test "needs no actor and performs no authorization — orchestration relies on this" do
+      # `ExecutionSpace.find_or_create/1` revives on a write path where there
+      # is no actor at all, so there is nobody to authorize. The arity-2
+      # clause stays the user-initiated, authorized variant.
+      space = archived_channel!(%{created_by: create_user!().id})
+
+      assert {:ok, restored} = Chat.unarchive_space(space)
+      assert is_nil(restored.archived_at)
+    end
+
+    test "emits audit telemetry with actor_type system" do
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :chat, :space_unarchived]
+        ])
+
+      space = archived_channel!()
+      {:ok, _} = Chat.unarchive_space(space)
+
+      assert_receive {[:platform, :chat, :space_unarchived], ^ref, _m, meta}
+      assert meta.actor_id == nil
+      assert meta.actor_type == "system"
+    end
+  end
+
   # ── space_writable?/1 ──────────────────────────────────────────────────
 
   describe "space_writable?/1" do

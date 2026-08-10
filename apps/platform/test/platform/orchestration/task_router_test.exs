@@ -5116,5 +5116,83 @@ defmodule Platform.Orchestration.TaskRouterTest do
     end
   end
 
+  # ── Shutdown archive gate ────────────────────────────────────────────────
+  #
+  # `terminate/2` used to archive the execution space on EVERY shutdown. The
+  # shutdown reason cannot distinguish normal completion from an involuntary
+  # teardown (both deliver `:shutdown`), so the gate is the TASK'S status.
+  #
+  # Both halves below must hold IN THE SAME RUN: half 1 on its own also passes
+  # against a `terminate/2` that archives nothing at all.
+  describe "terminate/2 execution-space archive gate" do
+    setup %{project: project} do
+      make = fn title, status ->
+        {:ok, t} = Tasks.create_task(%{project_id: project.id, title: title})
+
+        t =
+          t
+          |> Ecto.Changeset.change(%{status: status})
+          |> Platform.Repo.update!()
+
+        {:ok, space} = ExecutionSpace.find_or_create(t.id)
+        {t, space}
+      end
+
+      %{make_task_with_space: make}
+    end
+
+    test "a non-terminal task's space survives shutdown, a terminal task's is archived",
+         %{make_task_with_space: make} do
+      {live_task, live_space} = make.("Router still working", "in_progress")
+      {done_task, done_space} = make.("Router finished", "done")
+
+      assert :ok = terminate_router_for(live_task.id, live_space.id)
+      assert :ok = terminate_router_for(done_task.id, done_space.id)
+
+      # Half 1: the work was NOT finished, so the space must stay live.
+      assert reload_space(live_space.id).archived_at == nil
+
+      # Half 2: the work WAS finished, so archive-on-completion still happens.
+      # Without this half, half 1 passes against a terminate/2 that archives
+      # nothing — which would trade a silent-pin bug for unbounded growth.
+      refute reload_space(done_space.id).archived_at == nil
+    end
+
+    test "a cancelled task's space is archived (terminal, not just `done`)",
+         %{make_task_with_space: make} do
+      {task, space} = make.("Router retired", "cancelled")
+
+      assert :ok = terminate_router_for(task.id, space.id)
+      refute reload_space(space.id).archived_at == nil
+    end
+
+    test "a deleted task's space is not archived and terminate/2 does not raise",
+         %{make_task_with_space: make} do
+      {task, space} = make.("Router orphaned", "in_progress")
+
+      # Soft delete: `get_task_detail/1` filters on `deleted_at`, so the row
+      # becomes unloadable exactly as a hard-deleted task would be.
+      task
+      |> Ecto.Changeset.change(%{deleted_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      assert :ok = terminate_router_for(task.id, space.id)
+      assert reload_space(space.id).archived_at == nil
+    end
+  end
+
+  defp terminate_router_for(task_id, space_id) do
+    state = %TaskRouter.State{
+      task_id: task_id,
+      assignee: %{type: :federated, id: "router-archive-gate"},
+      execution_space_id: space_id,
+      status: :running
+    }
+
+    TaskRouter.terminate(:shutdown, state)
+  end
+
+  defp reload_space(space_id), do: Platform.Repo.get!(Platform.Chat.Space, space_id)
+
   defp unique, do: System.unique_integer([:positive]) |> Integer.to_string()
 end

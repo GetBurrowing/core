@@ -563,6 +563,29 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  Reverse an archive by clearing `archived_at`, `deletion_scheduled_at` and
+  `archived_cascade_org_id`.
+
+  System-level variant — performs NO authorization, mirroring `archive_space/1`.
+  Reserved for internal lifecycle callers (e.g.
+  `Platform.Orchestration.ExecutionSpace.find_or_create/1` reviving an
+  execution space a write path is about to attach live state to). There is no
+  actor on that path, so there is nobody to authorize. User-initiated
+  unarchives must go through `unarchive_space/2`, which authorizes the actor.
+  """
+  @spec unarchive_space(Space.t()) :: {:ok, Space.t()} | {:error, Ecto.Changeset.t()}
+  def unarchive_space(%Space{} = space) do
+    space
+    |> Space.changeset(%{
+      archived_at: nil,
+      deletion_scheduled_at: nil,
+      archived_cascade_org_id: nil
+    })
+    |> Repo.update()
+    |> tap_space_lifecycle_telemetry(:space_unarchived, nil)
+  end
+
+  @doc """
   Reverse an archive by clearing `archived_at`. Same authorization as
   `archive_space/2`: Fabrikam admin or space creator.
   """

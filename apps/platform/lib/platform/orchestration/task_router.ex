@@ -1273,8 +1273,15 @@ defmodule Platform.Orchestration.TaskRouter do
   def handle_info({:task_updated, _task}, state), do: {:noreply, state}
   def handle_info(_msg, state), do: {:noreply, state}
 
+  # Terminal task statuses. Source: `Platform.Tasks.Task` `@statuses` and the
+  # comment above it recording that `cancelled` has `[]` outbound transitions
+  # in `@valid_task_transitions`; `done` is likewise a sink. Written out here
+  # rather than derived so that ADDING a status to `Task` is a visible edit
+  # against this list instead of a silent divergence.
+  @terminal_task_statuses ~w(done cancelled)
+
   @impl true
-  def terminate(_reason, state) do
+  def terminate(reason, state) do
     clear_liveness(state)
     revoke_deploy_lease(state)
 
@@ -1286,7 +1293,7 @@ defmodule Platform.Orchestration.TaskRouter do
           "Task router stopped for task #{state.task_id}"
         )
 
-        ExecutionSpace.archive(state.task_id)
+        maybe_archive_execution_space(state, reason)
       rescue
         _ -> :ok
       catch
@@ -1295,6 +1302,39 @@ defmodule Platform.Orchestration.TaskRouter do
     end
 
     :ok
+  end
+
+  # Archiving is gated on the TASK, not on the shutdown. `terminate/2` fires on
+  # normal completion, on `TaskRouterSupervisor.stop_assignment/1`, on a
+  # supervisor restart, on a deploy and on node teardown; every one of those
+  # paths delivers `:shutdown`, so `reason` cannot distinguish "the work
+  # finished" from "the box went away". Archiving unconditionally tombstoned
+  # execution spaces of live tasks, and the pin read path filters archived
+  # spaces out, so the pin then persisted and could never render.
+  #
+  # A task row we cannot load is NOT archived: absence of evidence that the
+  # task finished is not evidence that it did.
+  defp maybe_archive_execution_space(state, reason) do
+    case Tasks.get_task_detail(state.task_id) do
+      %{status: status} when status in @terminal_task_statuses ->
+        ExecutionSpace.archive(state.task_id)
+
+      %{status: status} ->
+        Logger.info(
+          "TaskRouter terminate: skipping execution-space archive for task " <>
+            "#{state.task_id} — status #{status} is not terminal (reason: #{inspect(reason)})"
+        )
+
+        :ok
+
+      nil ->
+        Logger.info(
+          "TaskRouter terminate: skipping execution-space archive for task " <>
+            "#{state.task_id} — no task row (reason: #{inspect(reason)})"
+        )
+
+        :ok
+    end
   end
 
   # ── Dispatch helpers ───────────────────────────────────────────────────

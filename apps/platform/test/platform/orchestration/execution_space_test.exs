@@ -12,6 +12,17 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
 
   @task_id "01234567-89ab-cdef-0123-456789abcdef"
 
+  defp count_exec_spaces_for(task_id) do
+    Repo.aggregate(
+      from(s in Platform.Chat.Space,
+        where:
+          s.kind == "execution" and
+            fragment("?->>'task_id' = ?", s.metadata, ^task_id)
+      ),
+      :count
+    )
+  end
+
   describe "find_or_create/1" do
     test "creates an execution space for a task" do
       assert {:ok, space} = ExecutionSpace.find_or_create(@task_id)
@@ -77,6 +88,34 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
       assert space.metadata["task_id"] == orphan_task_id
       assert log =~ "no org_id resolvable"
       assert log =~ orphan_task_id
+    end
+
+    # The write-path revive. `find_or_create/1` is only ever called by paths
+    # about to attach LIVE state (pinning, dispatch); handing one an archived
+    # row means the write persists against a tombstone the read side filters
+    # out, and the user is told it worked.
+    test "revives an archived execution space rather than returning the tombstone" do
+      {:ok, space} = ExecutionSpace.find_or_create(@task_id)
+      {:ok, archived} = Chat.archive_space(space)
+      refute is_nil(archived.archived_at)
+
+      {result, log} = with_log(fn -> ExecutionSpace.find_or_create(@task_id) end)
+
+      assert {:ok, revived} = result
+      # The behaviour under test: the caller gets a USABLE space.
+      assert revived.archived_at == nil
+      assert revived.deletion_scheduled_at == nil
+      assert revived.archived_cascade_org_id == nil
+
+      # Same row, not a fresh one — a newly created space would also satisfy
+      # `archived_at == nil` while orphaning the original's message history.
+      assert revived.id == space.id
+      assert count_exec_spaces_for(@task_id) == 1
+
+      # The condition must be observable the next time it happens.
+      assert log =~ "reviving archived execution space"
+      assert log =~ @task_id
+      assert log =~ space.id
     end
 
     test "idempotency preserved — second call returns same row without touching org_id" do
@@ -191,6 +230,10 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
       assert found.id == space.id
     end
 
+    # Load-bearing, and NOT collateral damage of the `find_or_create/1`
+    # revive: a completed task must still render its execution log, so the
+    # READ path keeps falling back to the archived row WITH `archived_at`
+    # intact. Only the write path revives.
     test "returns archived space when no active space exists" do
       {:ok, _space} = ExecutionSpace.find_or_create(@task_id)
       {:ok, archived} = ExecutionSpace.archive(@task_id)

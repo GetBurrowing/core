@@ -22,10 +22,37 @@ defmodule Platform.Orchestration.ExecutionSpace do
 
   Idempotent — returns the existing space if one already exists for this task.
   The space is identified by metadata `task_id`.
+
+  If the resolved space is archived it is REVIVED (see the comment on the
+  matching clause) — this function promises a *usable* space, not merely a row.
   """
   @spec find_or_create(String.t()) :: {:ok, Space.t()} | {:error, term()}
   def find_or_create(task_id) do
     case find_by_task_id(task_id) do
+      %Space{archived_at: archived_at} = space when not is_nil(archived_at) ->
+        # `find_by_task_id/1` deliberately falls back to archived spaces so a
+        # completed task still renders its execution log. That read behaviour
+        # is correct and stays. But every caller of `find_or_create/1` is a
+        # WRITE path about to attach live state, and the read side (e.g.
+        # `Platform.Tasks.ChatPins.list_pinned_task_spaces_for/1`) filters on
+        # `is_nil(archived_at)` — so a row written against an archived space
+        # persists and can never render, while the user is told it worked.
+        #
+        # We revive rather than return `{:error, :archived}` ON PURPOSE. This
+        # is not an accidental un-archive: no current caller has a sensible
+        # recovery from an error tuple. `ChatPins.pin/3` would have to either
+        # refuse a pin the user is legitimately entitled to (worse than the
+        # silent success it replaces) or duplicate this unarchive itself,
+        # splitting the single-writer chokepoint its moduledoc relies on.
+        # Reviving keeps the function name honest.
+        Logger.warning(
+          "ExecutionSpace.find_or_create: reviving archived execution space for " <>
+            "task_id=#{inspect(task_id)} space_id=#{inspect(space.id)} " <>
+            "(a write path resolved a tombstone; archived_at=#{inspect(archived_at)})"
+        )
+
+        Chat.unarchive_space(space)
+
       %Space{} = space ->
         {:ok, space}
 
