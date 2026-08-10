@@ -60,6 +60,13 @@ defmodule Platform.Experiments.Experiment do
     # what binds it, in the same transaction that snapshots the control.
     field(:target_template_slug, :string)
 
+    # Opt-in automatic promotion. False by default and never inferred: an
+    # experiment that did not ask for automation must not rewrite a live
+    # prompt template unattended. The flag gates WHO may call
+    # `Platform.Experiments.Promotion.promote/2` with `trigger: :auto`; it
+    # does not change what that call does.
+    field(:auto_promote, :boolean, default: false)
+
     has_many(:variants, Variant, foreign_key: :experiment_id)
 
     timestamps(type: :utc_datetime_usec)
@@ -89,7 +96,8 @@ defmodule Platform.Experiments.Experiment do
       :primary_metric,
       :status,
       :stop_rule,
-      :target_template_slug
+      :target_template_slug,
+      :auto_promote
     ])
     |> validate_required([:slug, :name, :status])
     |> validate_inclusion(:status, @statuses)

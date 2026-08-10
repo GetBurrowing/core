@@ -244,6 +244,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "keyed `slug:`, a plain string column on experiments with no UUID type on either side of the comparison; get_experiment_by_slug/1 cannot raise a cast error"},
     {"platform/experiments.ex", :get_by, "PromptTemplate", 1, :safe_internal,
      "keyed `slug:`, the same plain string column `Orchestration.PromptTemplates.get_template_by_slug/1` already reads unguarded; activate/2 folds a miss into {:error, changeset} rather than raising"},
+    {"platform/experiments/promotion.ex", :get_by, "PromptTemplate", 1, :safe_internal,
+     "keyed `slug:`, a plain string column — the value is `experiment.target_template_slug` off a loaded `%Experiment{}`, itself written only by Experiments.activate/2 from a template row it had just read. No UUID type on either side, and promote/2 folds a miss into {:error, :template_not_found} rather than raising"},
     {"platform/experiments/assignments.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "get_assignment/2's predicate. Its Repo.one pins `a.subject_id == ^subject_id` in the where clause, and the subject is caller-supplied — a task id today, a dispatch id once the later ADR-0048 members land — so a malformed binary would raise Ecto.Query.CastError from the where clause exactly as Repo.get/2 does. The guard folds it into the nil this function already returns for an unassigned subject"},
     # ── External agents ────────────────────────────────────────────────
