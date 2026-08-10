@@ -124,6 +124,27 @@ defmodule Platform.Experiments do
   end
 
   @doc """
+  Deletes an experiment, but only while it is a `draft`.
+
+  Returns `{:error, :not_draft}` for any other status. Once an experiment
+  has been activated its assignments and history ARE the evidence trail, and
+  ADR-0048's posture is that a regression is the most instructive row on the
+  page — `stop/2` and `conclude/2` exist so a finished experiment stays
+  visible rather than disappearing. A draft has measured nothing, so
+  deleting one destroys no evidence.
+
+  The guard lives here rather than only in the view. Hiding a control is an
+  affordance; the refusal has to hold for a caller that never rendered one.
+
+  Takes the struct — the caller looks the experiment up with
+  `get_experiment_by_slug/1`.
+  """
+  @spec delete_experiment(Experiment.t()) ::
+          {:ok, Experiment.t()} | {:error, :not_draft | Ecto.Changeset.t()}
+  def delete_experiment(%Experiment{status: "draft"} = experiment), do: Repo.delete(experiment)
+  def delete_experiment(%Experiment{}), do: {:error, :not_draft}
+
+  @doc """
   Adds a variant carrying the FULL prompt blob.
 
   The blob (rather than a structured overlay) is deliberate and the reason is

@@ -184,6 +184,49 @@ defmodule Platform.ExperimentsContextTest do
     end
   end
 
+  describe "delete_experiment/1 — drafts only" do
+    test "deletes a draft and the row is actually gone" do
+      experiment = create_experiment()
+      assert experiment.status == "draft"
+
+      assert {:ok, _} = Experiments.delete_experiment(experiment)
+
+      # The row, not just the return value: a delete that returned {:ok, _}
+      # while leaving the row would satisfy a return-value assertion.
+      assert Experiments.get_experiment_by_slug(experiment.slug) == nil
+      assert Repo.get(Experiment, experiment.id) == nil
+    end
+
+    test "refuses a running experiment AND leaves the row present" do
+      template = insert_template()
+      {:ok, running} = Experiments.activate(create_experiment(), template)
+      assert running.status == "running"
+
+      assert {:error, :not_draft} = Experiments.delete_experiment(running)
+
+      # The second assertion is the load-bearing one. `{:error, :not_draft}`
+      # alone cannot distinguish "refused" from "deleted, then reported a
+      # refusal" — only the surviving row can.
+      assert %Experiment{status: "running"} = Repo.get(Experiment, running.id)
+      refute is_nil(Experiments.get_experiment_by_slug(running.slug))
+    end
+
+    test "refuses stopped and concluded experiments too" do
+      template = insert_template()
+
+      {:ok, stopped} = Experiments.activate(create_experiment(), template)
+      {:ok, stopped} = Experiments.stop(stopped)
+      {:ok, concluded} = Experiments.activate(create_experiment(), template)
+      {:ok, concluded} = Experiments.conclude(concluded)
+
+      assert {:error, :not_draft} = Experiments.delete_experiment(stopped)
+      assert {:error, :not_draft} = Experiments.delete_experiment(concluded)
+
+      refute is_nil(Repo.get(Experiment, stopped.id))
+      refute is_nil(Repo.get(Experiment, concluded.id))
+    end
+  end
+
   describe "stop/2 and conclude/2 are DIFFERENT terminal statuses" do
     setup do
       template = insert_template()

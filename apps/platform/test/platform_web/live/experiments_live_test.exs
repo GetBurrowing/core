@@ -326,7 +326,7 @@ defmodule PlatformWeb.ExperimentsLiveTest do
       # By NAME, not by clicking — the buttons are not rendered for a member,
       # and a test that could only click them would prove the affordance is
       # hidden rather than that the write is refused.
-      for event <- ["stop", "promote", "activate", "create_experiment"] do
+      for event <- ["stop", "promote", "activate", "create_experiment", "delete_experiment"] do
         render_hook(view, event, %{})
       end
 
@@ -347,6 +347,226 @@ defmodule PlatformWeb.ExperimentsLiveTest do
       # If this fails, the previous test proves nothing: a handler that
       # refused EVERYONE would pass it while the gate did no work.
       assert Experiments.get_experiment_by_slug("admin-write").status == "stopped"
+    end
+  end
+
+  # ── THE TECHNIQUE SPLIT IS THE POINT OF THIS FILE ───────────────────────
+  #
+  # CAPABILITY cases below DRIVE THE RENDERED UI: they locate the form by
+  # its `data-role` and submit it with `form/3 |> render_submit/1`. They
+  # never use `render_hook`. The prior admin positive control fired
+  # `create_experiment` BY NAME and passed while the page had no button at
+  # all — a capability test that can pass on a page with no control is
+  # testing the wrong thing, and that defect is why this work exists.
+  #
+  # REFUSAL cases (the non-admin block above) do the opposite deliberately:
+  # they fire by name, because hiding a button is not a gate and the gate
+  # must hold against a client that never rendered one.
+  describe "creating an experiment through the rendered form" do
+    test "the empty state leads somewhere for an admin, and the member still sees the page",
+         %{conn: conn} do
+      {:ok, _view, html} = live(admin_conn(conn), ~p"/control/experiments")
+
+      assert q(html, ~s([data-role="empty-list"])) |> Enum.count() == 1
+      assert q(html, ~s([data-role="new-experiment-button"])) |> Enum.count() == 1
+      assert q(html, ~s([data-role="empty-create-cta"])) |> Enum.count() == 1
+
+      {:ok, _view, member_html} = live(member_conn(conn), ~p"/control/experiments")
+
+      # The absence assertions are not vacuous: the member reached the page.
+      assert q(member_html, ~s([data-role="empty-list"])) |> Enum.count() == 1
+      assert q(member_html, ~s([data-role="new-experiment-button"])) |> Enum.count() == 0
+      assert q(member_html, ~s([data-role="empty-create-cta"])) |> Enum.count() == 0
+    end
+
+    test "the metric picker's options are exactly the computable metrics", %{conn: conn} do
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/control/experiments")
+
+      html = view |> element(~s([data-role="new-experiment-button"])) |> render_click()
+
+      values =
+        html
+        |> q(~s([data-role="metric-option"]))
+        |> LazyHTML.attribute("value")
+        |> Enum.sort()
+
+      # EQUALS, not "contains" — a hard-coded template list would satisfy a
+      # mere "has options" check and ship an option nothing can compute.
+      assert values == Enum.sort(Platform.Experiments.Metrics.known_metrics())
+
+      neutral = q(html, ~s([data-role="metric-option"][value="stages_per_plan"]))
+      assert LazyHTML.attribute(neutral, "data-direction") == ["neutral"]
+      assert LazyHTML.text(neutral) =~ "neutral"
+    end
+
+    test "no option carries a metric description — a native option cannot wrap", %{conn: conn} do
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/control/experiments")
+
+      html = view |> element(~s([data-role="new-experiment-button"])) |> render_click()
+
+      option_text = html |> q(~s([data-role="metric-option"])) |> LazyHTML.text()
+
+      # The overflow that got this rejected was description text inside
+      # `<option>`: 708px of unwrappable content in a 302px control, and the
+      # popup sized itself to the content. Assert against the catalog rather
+      # than a copied string, so a new metric's description cannot creep back.
+      for metric <- Platform.Experiments.Metrics.catalog() do
+        refute option_text =~ metric.description
+        assert option_text =~ metric.label
+      end
+    end
+
+    test "the description and direction appear under the select once picked", %{conn: conn} do
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/control/experiments")
+
+      html = view |> element(~s([data-role="new-experiment-button"])) |> render_click()
+
+      # Nothing picked yet: no helper line to show, and nothing claiming one.
+      assert q(html, ~s([data-role="metric-description"])) |> Enum.count() == 0
+
+      html =
+        view
+        |> element(~s([data-role="create-experiment-form"]))
+        |> render_change(%{"primary_metric" => "stages_per_plan", "name" => "", "slug" => ""})
+
+      described = q(html, ~s([data-role="metric-description"]))
+      assert Enum.count(described) == 1
+
+      text = LazyHTML.text(described)
+      metric = Enum.find(Platform.Experiments.Metrics.catalog(), &(&1.slug == "stages_per_plan"))
+
+      assert text =~ metric.description
+      assert text =~ "neither direction is a win"
+    end
+
+    test "an admin creates a draft by submitting the rendered form", %{conn: conn} do
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/control/experiments")
+
+      view |> element(~s([data-role="new-experiment-button"])) |> render_click()
+
+      view
+      |> form(~s([data-role="create-experiment-form"]), %{
+        "name" => "Terser planner briefs",
+        "slug" => "planner-terser-briefs",
+        "hypothesis" => "Shorter briefs reduce planning time.",
+        "primary_metric" => "cycle_time",
+        "min_subjects" => "40"
+      })
+      |> render_submit()
+
+      experiment = Experiments.get_experiment_by_slug("planner-terser-briefs")
+      assert experiment.status == "draft"
+      assert experiment.primary_metric == "cycle_time"
+
+      # The exact shape `min_subjects/1` reads: string key, INTEGER value.
+      # The string "40" would fail that guard and read as no stop rule.
+      assert experiment.stop_rule["min_subjects"] == 40
+      assert is_integer(experiment.stop_rule["min_subjects"])
+      assert PlatformWeb.ExperimentResults.min_subjects(experiment) == 40
+
+      # A draft and nothing else — no snapshot, no traffic.
+      assert Experiments.list_variants(experiment) == []
+      assert Assignments.list_assignments(experiment) == []
+    end
+
+    test "the stop rule is pre-filled rather than blank", %{conn: conn} do
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/control/experiments")
+
+      html = view |> element(~s([data-role="empty-create-cta"])) |> render_click()
+
+      assert q(html, ~s([data-role="create-stop-rule"])) |> LazyHTML.attribute("value") == ["40"]
+    end
+  end
+
+  describe "activating through the rendered control" do
+    test "an admin activates and the control variant holds the template text at activation",
+         %{conn: conn} do
+      {:ok, _draft} =
+        Experiments.create_experiment(%{
+          slug: "activate-me",
+          name: "Activate me",
+          hypothesis: "h",
+          primary_metric: "cycle_time",
+          stop_rule: %{"min_subjects" => 40}
+        })
+
+      tmpl = template("tmpl-activate-me", "Original control text.")
+
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/control/experiments/activate-me")
+
+      html =
+        view |> element(~s([data-role="experiment-tab"][data-tab="design"])) |> render_click()
+
+      # The consequence is stated BEFORE the button, not after it.
+      panel = html |> q(~s([data-role="activate-panel"])) |> LazyHTML.to_html()
+      assert panel =~ ~s(data-role="activate-consequence")
+
+      consequence_at = :binary.match(panel, ~s(data-role="activate-consequence")) |> elem(0)
+      button_at = :binary.match(panel, ~s(data-role="activate-button")) |> elem(0)
+      assert consequence_at < button_at
+
+      view
+      |> form(~s([data-role="activate-form"]), %{"template_slug" => tmpl.slug})
+      |> render_submit()
+
+      experiment = Experiments.get_experiment_by_slug("activate-me")
+      assert experiment.status == "running"
+      assert experiment.target_template_slug == tmpl.slug
+
+      control = Experiments.list_variants(experiment) |> Enum.find(&(&1.slug == "control"))
+      assert control.content == "Original control text."
+    end
+  end
+
+  describe "deleting a draft" do
+    test "an admin deletes a draft through the rendered control", %{conn: conn} do
+      {:ok, _draft} =
+        Experiments.create_experiment(%{
+          slug: "delete-me",
+          name: "Delete me",
+          hypothesis: "h",
+          primary_metric: "cycle_time",
+          stop_rule: %{"min_subjects" => 40}
+        })
+
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/control/experiments/delete-me")
+
+      view |> element(~s([data-role="experiment-tab"][data-tab="design"])) |> render_click()
+      view |> element(~s([data-role="delete-draft-button"])) |> render_click()
+
+      assert Experiments.get_experiment_by_slug("delete-me") == nil
+    end
+
+    test "an admin firing delete BY NAME against a running experiment leaves the row",
+         %{conn: conn} do
+      experiment = running_experiment("keep-me", [])
+
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/control/experiments/keep-me")
+
+      # By name, bypassing the affordance — the draft-only rule is the
+      # context's, not the template's.
+      render_hook(view, "delete_experiment", %{"slug" => "keep-me"})
+
+      reloaded = Experiments.get_experiment_by_slug("keep-me")
+      # Existence, not just the flash: "refused" and "refused after
+      # deleting" have the same return value from the caller's seat.
+      assert reloaded.id == experiment.id
+      assert reloaded.status == "running"
+      assert Experiments.list_variants(reloaded) != []
+    end
+
+    test "no delete control is rendered on a running experiment", %{conn: conn} do
+      running_experiment("no-delete-control", [])
+
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/control/experiments/no-delete-control")
+
+      html =
+        view |> element(~s([data-role="experiment-tab"][data-tab="design"])) |> render_click()
+
+      assert q(html, ~s([data-role="delete-draft-button"])) |> Enum.count() == 0
+      assert q(html, ~s([data-role="activate-panel"])) |> Enum.count() == 0
+      # Not vacuous: the Design tab did render.
+      assert q(html, ~s([data-role="design-metric"])) |> Enum.count() == 1
     end
   end
 end

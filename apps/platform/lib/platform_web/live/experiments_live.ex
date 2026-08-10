@@ -59,14 +59,36 @@ defmodule PlatformWeb.ExperimentsLive do
   alias Platform.Experiments
   alias Platform.Experiments.Assignments
   alias Platform.Experiments.Experiment
+  alias Platform.Experiments.Metrics
+  alias Platform.Orchestration.PromptTemplates
   alias PlatformWeb.ExperimentResults
 
   @tabs ~w(results design assignments promotions)
   @default_tab "results"
 
+  # Pre-filled rather than blank, and required. The results layer fails
+  # closed: `ExperimentResults.min_subjects/1` returns nil for an absent or
+  # non-integer rule, and a row with no rule can never earn a figure. An
+  # experiment created without one therefore looks running forever and can
+  # never report — silently inert. A default is cheaper than that failure.
+  @default_min_subjects 40
+
+  @empty_create_form %{
+    "name" => "",
+    "slug" => "",
+    "hypothesis" => "",
+    "primary_metric" => "",
+    "min_subjects" => to_string(@default_min_subjects)
+  }
+
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, assign(socket, :page_title, "Experiments")}
+    {:ok,
+     socket
+     |> assign(:page_title, "Experiments")
+     |> assign(:show_create, false)
+     |> assign(:create_form, @empty_create_form)
+     |> assign(:metric_catalog, Metrics.catalog())}
   end
 
   @impl true
@@ -107,6 +129,7 @@ defmodule PlatformWeb.ExperimentsLive do
     |> assign(:result_rows, ExperimentResults.rows(experiment))
     |> assign(:variants, Experiments.list_variants(experiment))
     |> assign(:assignments, Assignments.list_assignments(experiment))
+    |> assign(:templates, PromptTemplates.list_templates())
   end
 
   @impl true
@@ -124,22 +147,117 @@ defmodule PlatformWeb.ExperimentsLive do
   # where the refusal has to live. Each handler returns an error flash and
   # touches no context function on the way out.
 
+  def handle_event("show_create", _params, socket) do
+    admin_only(socket, fn ->
+      {:noreply, socket |> assign(:show_create, true) |> assign(:create_form, @empty_create_form)}
+    end)
+  end
+
+  def handle_event("hide_create", _params, socket) do
+    {:noreply, assign(socket, :show_create, false)}
+  end
+
+  # Slug follows the name until someone edits the slug themselves, after
+  # which it is left alone — a slug that kept rewriting itself under the
+  # author's cursor would be worse than no auto-fill at all.
+  def handle_event("create_form_change", params, socket) do
+    previous = socket.assigns.create_form
+    name = params["name"] || ""
+    typed_slug = params["slug"] || ""
+
+    slug =
+      if typed_slug == "" or typed_slug == slugify(previous["name"]) do
+        slugify(name)
+      else
+        typed_slug
+      end
+
+    form =
+      previous
+      |> Map.merge(Map.take(params, Map.keys(@empty_create_form)))
+      |> Map.put("slug", slug)
+
+    {:noreply, assign(socket, :create_form, form)}
+  end
+
   def handle_event("create_experiment", params, socket) do
     admin_only(socket, fn ->
-      attrs = %{
-        "slug" => params["slug"],
-        "name" => params["name"],
-        "hypothesis" => params["hypothesis"],
-        "primary_metric" => params["primary_metric"]
-      }
+      # `stop_rule` was DROPPED here before this stage: the field could be
+      # rendered, submitted and silently vanish. The shape is exactly what
+      # `ExperimentResults.min_subjects/1` reads — a string key over an
+      # INTEGER value; the string "40" fails that guard and reads as no rule.
+      case parse_min_subjects(params["min_subjects"]) do
+        :error ->
+          {:noreply,
+           socket
+           |> assign(:create_form, merge_create_form(socket, params))
+           |> put_flash(:error, "Stop rule must be a whole number of subjects, greater than 0.")}
 
-      case Experiments.create_experiment(attrs) do
-        {:ok, _experiment} ->
-          {:noreply, socket |> put_flash(:info, "Experiment created.") |> load_index()}
+        {:ok, min_subjects} ->
+          attrs = %{
+            "slug" => params["slug"],
+            "name" => params["name"],
+            "hypothesis" => params["hypothesis"],
+            "primary_metric" => params["primary_metric"],
+            "stop_rule" => %{"min_subjects" => min_subjects}
+          }
 
-        {:error, changeset} ->
-          {:noreply, put_flash(socket, :error, error_message(changeset))}
+          case Experiments.create_experiment(attrs) do
+            {:ok, _experiment} ->
+              {:noreply,
+               socket
+               |> put_flash(:info, "Experiment created.")
+               |> assign(:show_create, false)
+               |> assign(:create_form, @empty_create_form)
+               |> load_index()}
+
+            {:error, changeset} ->
+              {:noreply,
+               socket
+               |> assign(:create_form, merge_create_form(socket, params))
+               |> put_flash(:error, error_message(changeset))}
+          end
       end
+    end)
+  end
+
+  # Drafts only. The refusal is the context's (`{:error, :not_draft}`); this
+  # handler renders it. Once an experiment has been activated its
+  # assignments ARE the evidence trail.
+  def handle_event("delete_experiment", %{"slug" => slug}, socket) do
+    admin_only(socket, fn ->
+      case Experiments.get_experiment_by_slug(slug) do
+        nil ->
+          {:noreply, put_flash(socket, :error, "No experiment #{slug}.")}
+
+        experiment ->
+          case Experiments.delete_experiment(experiment) do
+            {:ok, _} ->
+              {:noreply,
+               socket
+               |> put_flash(:info, "Draft deleted.")
+               |> assign(:experiment, nil)
+               |> load_index()
+               |> push_patch(to: ~p"/control/experiments")}
+
+            {:error, :not_draft} ->
+              {:noreply,
+               put_flash(
+                 socket,
+                 :error,
+                 "Only a draft can be deleted. An activated experiment's assignments are its record."
+               )}
+
+            {:error, changeset} ->
+              {:noreply, put_flash(socket, :error, error_message(changeset))}
+          end
+      end
+    end)
+  end
+
+  def handle_event("delete_experiment", _params, socket) do
+    admin_only(socket, fn ->
+      {:noreply, put_flash(socket, :error, "Name the experiment to delete.")}
     end)
   end
 
@@ -203,6 +321,50 @@ defmodule PlatformWeb.ExperimentsLive do
     end
   end
 
+  defp merge_create_form(socket, params) do
+    Map.merge(socket.assigns.create_form, Map.take(params, Map.keys(@empty_create_form)))
+  end
+
+  defp slugify(nil), do: ""
+
+  defp slugify(name) do
+    name
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]+/, "-")
+    |> String.trim("-")
+  end
+
+  # Integer, not a string, and strictly positive — `min_subjects/1` rejects
+  # anything else and the experiment would read "no stop rule set" forever.
+  defp parse_min_subjects(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {n, ""} when n > 0 -> {:ok, n}
+      _ -> :error
+    end
+  end
+
+  defp parse_min_subjects(n) when is_integer(n) and n > 0, do: {:ok, n}
+  defp parse_min_subjects(_), do: :error
+
+  # The short form is what an `<option>` carries: a native option cannot wrap,
+  # so every character in it is width the control has to find. The long form
+  # is for the helper line below the select, which is ordinary wrapping text.
+  defp direction_short(:lower_is_better), do: "lower is better"
+  defp direction_short(:higher_is_better), do: "higher is better"
+  defp direction_short(:neutral), do: "neutral"
+  defp direction_short(_), do: "direction not stated"
+
+  # The catalog entry for the currently-picked slug, or nil before a pick.
+  defp selected_metric(_catalog, nil), do: nil
+  defp selected_metric(_catalog, ""), do: nil
+
+  defp selected_metric(catalog, slug), do: Enum.find(catalog, &(&1.slug == slug))
+
+  defp direction_label(:lower_is_better), do: "lower is better"
+  defp direction_label(:higher_is_better), do: "higher is better"
+  defp direction_label(:neutral), do: "neutral — neither direction is a win"
+  defp direction_label(_), do: "direction not stated"
+
   defp error_message(%Ecto.Changeset{} = changeset) do
     changeset
     |> Ecto.Changeset.traverse_errors(fn {message, _opts} -> message end)
@@ -227,6 +389,19 @@ defmodule PlatformWeb.ExperimentsLive do
     <div class="space-y-6">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <h1 class="text-xl font-bold">Experiments</h1>
+        <%!-- Two entry points on purpose: this one persists once the list
+              fills, the in-body call-to-action exists only while it is
+              empty. Both are hidden from non-admins, and that is an
+              affordance only — the refusal lives in `admin_only/2`. --%>
+        <button
+          :if={@fabrikam_admin? and not @show_create}
+          type="button"
+          phx-click="show_create"
+          data-role="new-experiment-button"
+          class="btn btn-sm btn-primary"
+        >
+          <span class="hero-plus size-4" aria-hidden="true"></span> New experiment
+        </button>
       </div>
 
       <p class="text-sm text-base-content max-w-2xl">
@@ -235,9 +410,30 @@ defmodule PlatformWeb.ExperimentsLive do
         and states how far it has got.
       </p>
 
-      <p :if={@rows == []} data-role="empty-list" class="text-sm text-neutral">
-        No experiments yet.
-      </p>
+      {create_panel(assigns)}
+
+      <%!-- With zero experiments the sparse state IS the page, so it leads
+            somewhere rather than apologising. --%>
+      <section
+        :if={@rows == [] and not @show_create}
+        data-role="empty-list"
+        class="bg-base-200 rounded-lg px-6 py-12 text-center space-y-3"
+      >
+        <h2 class="text-sm font-semibold">No experiments yet.</h2>
+        <p class="text-sm text-neutral max-w-md mx-auto">
+          An experiment runs one variant of a prompt against production traffic and reports
+          whether it helped — or says it does not know yet.
+        </p>
+        <button
+          :if={@fabrikam_admin?}
+          type="button"
+          phx-click="show_create"
+          data-role="empty-create-cta"
+          class="btn btn-sm btn-outline btn-primary"
+        >
+          Create the first one
+        </button>
+      </section>
 
       <%!-- shrink-0: this is a scroll container inside a flex-col page, whose
             min-height resolves to `auto` and therefore to 0. Without it the
@@ -282,6 +478,163 @@ defmodule PlatformWeb.ExperimentsLive do
         </table>
       </section>
     </div>
+    """
+  end
+
+  # The create form. Submitting it makes a DRAFT and nothing else — no
+  # assignments, no snapshot, no traffic — because `create_experiment/1`
+  # forces the status. Activation stays a separate, deliberate act.
+  defp create_panel(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :selected_metric,
+        selected_metric(assigns.metric_catalog, assigns.create_form["primary_metric"])
+      )
+
+    ~H"""
+    <section
+      :if={@show_create and @fabrikam_admin?}
+      data-role="create-experiment-panel"
+      class="bg-base-200 rounded-lg p-4 md:p-6 max-w-2xl"
+    >
+      <h2 class="text-sm font-semibold mb-4">New experiment</h2>
+
+      <form
+        data-role="create-experiment-form"
+        phx-submit="create_experiment"
+        phx-change="create_form_change"
+        class="space-y-4"
+      >
+        <div>
+          <label class="text-xs font-semibold uppercase text-neutral" for="create-name">Name</label>
+          <input
+            id="create-name"
+            name="name"
+            value={@create_form["name"]}
+            required
+            data-role="create-name"
+            class="input input-sm input-bordered w-full"
+          />
+        </div>
+
+        <div>
+          <label class="text-xs font-semibold uppercase text-neutral" for="create-slug">Slug</label>
+          <input
+            id="create-slug"
+            name="slug"
+            value={@create_form["slug"]}
+            required
+            data-role="create-slug"
+            class="input input-sm input-bordered w-full font-mono"
+          />
+          <p class="text-xs text-neutral mt-1">Auto-filled from the name, editable.</p>
+        </div>
+
+        <div>
+          <label class="text-xs font-semibold uppercase text-neutral" for="create-hypothesis">
+            Hypothesis
+          </label>
+          <textarea
+            id="create-hypothesis"
+            name="hypothesis"
+            rows="3"
+            required
+            data-role="create-hypothesis"
+            class="textarea textarea-sm textarea-bordered w-full"
+          >{@create_form["hypothesis"]}</textarea>
+          <p class="text-xs text-neutral mt-1">
+            What you expect, in a sentence. Written before the result exists, on purpose.
+          </p>
+        </div>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label class="text-xs font-semibold uppercase text-neutral" for="create-metric">
+              Primary metric
+            </label>
+            <%!-- A PICKER, not free text. An unrecognised string resolves to
+                  `:no_metric`, so a free-text box is a second way to create a
+                  silently inert experiment. Options come from the context
+                  registry, so a metric that exists here can be computed.
+
+                  The option carries LABEL + SHORT DIRECTION only. The
+                  description used to live here too, and a native `<option>`
+                  neither wraps nor truncates: the text measured 708px inside a
+                  302px control, and the popup sized itself to the content and
+                  spilled outside the panel. The description is not dropped —
+                  it moves below the control, where it is ordinary text that
+                  wraps. --%>
+            <select
+              id="create-metric"
+              name="primary_metric"
+              required
+              data-role="create-metric"
+              class="select select-sm select-bordered w-full"
+            >
+              <option value="" disabled selected={@create_form["primary_metric"] == ""}>
+                Choose a metric
+              </option>
+              <option
+                :for={metric <- @metric_catalog}
+                value={metric.slug}
+                data-role="metric-option"
+                data-direction={metric.direction}
+                selected={@create_form["primary_metric"] == metric.slug}
+              >
+                {metric.label} ({direction_short(metric.direction)})
+              </option>
+            </select>
+            <p :if={@selected_metric} class="text-xs text-neutral mt-1" data-role="metric-description">
+              {@selected_metric.description}
+              <span class="whitespace-nowrap">({direction_label(@selected_metric.direction)})</span>
+            </p>
+            <p class="text-xs text-neutral mt-2" data-role="metric-extension-note">
+              This list is every metric the platform can compute. To measure something else, add a
+              metric module under the experiments metrics directory and register it.
+            </p>
+          </div>
+
+          <div>
+            <label class="text-xs font-semibold uppercase text-neutral" for="create-stop-rule">
+              Stop rule
+            </label>
+            <div class="flex items-center gap-2">
+              <input
+                id="create-stop-rule"
+                name="min_subjects"
+                type="number"
+                min="1"
+                step="1"
+                required
+                value={@create_form["min_subjects"]}
+                data-role="create-stop-rule"
+                class="input input-sm input-bordered w-24 tabular-nums"
+              />
+              <span class="text-sm text-neutral">subjects</span>
+            </div>
+            <p class="text-xs text-neutral mt-1">
+              No figure is shown until this many subjects are measured. Required — without a stop
+              rule the results layer fails closed and the experiment can never report.
+            </p>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            phx-click="hide_create"
+            data-role="create-cancel"
+            class="btn btn-sm btn-ghost"
+          >
+            Cancel
+          </button>
+          <button type="submit" data-role="create-submit" class="btn btn-sm btn-primary">
+            Create draft
+          </button>
+        </div>
+      </form>
+    </section>
     """
   end
 
@@ -348,6 +701,68 @@ defmodule PlatformWeb.ExperimentsLive do
             <dd data-role="design-target">{@experiment.target_template_slug || "not bound yet"}</dd>
           </div>
         </dl>
+
+        <%!-- Activation is the consequential step, and the consequence is
+              stated BEFORE the button in the same words the other side of
+              the snapshot already uses on `/admin/prompts/:slug`. --%>
+        <section
+          :if={
+            is_nil(@experiment.target_template_slug) and @experiment.status == "draft" and
+              @fabrikam_admin?
+          }
+          data-role="activate-panel"
+          class="border border-primary/60 rounded-lg p-4 space-y-3 max-w-2xl"
+        >
+          <h2 class="text-sm font-semibold">Activate this experiment</h2>
+
+          <form phx-submit="activate" data-role="activate-form" class="space-y-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <label class="text-xs text-neutral w-20" for="activate-template">Template</label>
+              <select
+                id="activate-template"
+                name="template_slug"
+                required
+                data-role="activate-template"
+                class="select select-sm select-bordered flex-1 max-w-sm font-mono"
+              >
+                <option value="" disabled selected>Choose a template</option>
+                <option :for={tmpl <- @templates} value={tmpl.slug} data-role="template-option">
+                  {tmpl.slug}
+                </option>
+              </select>
+            </div>
+
+            <p class="text-sm text-base-content max-w-xl" data-role="activate-consequence">
+              This experiment will compare against a copy of the template taken when it was
+              activated, not against that row. Editing the template afterwards changes what future
+              dispatches render; it changes nothing this experiment has measured or will measure.
+            </p>
+
+            <button type="submit" data-role="activate-button" class="btn btn-sm btn-primary">
+              Activate
+            </button>
+          </form>
+        </section>
+
+        <%!-- Draft only, and hiding it is an affordance: the refusal is in
+              `Experiments.delete_experiment/1` and reaches a by-name event
+              too. An activated experiment's assignments are its record. --%>
+        <div :if={@experiment.status == "draft" and @fabrikam_admin?} class="pt-2">
+          <button
+            type="button"
+            phx-click="delete_experiment"
+            phx-value-slug={@experiment.slug}
+            data-confirm="Delete this draft? It has measured nothing."
+            data-role="delete-draft-button"
+            class="btn btn-sm btn-outline btn-error"
+          >
+            <span class="hero-trash size-4" aria-hidden="true"></span> Delete draft
+          </button>
+          <p class="text-xs text-neutral mt-1">
+            Only a draft can be deleted. Once activated, an experiment's assignments are evidence
+            and stay on this page.
+          </p>
+        </div>
 
         <%!-- The editor is NOT reimplemented here. One editor over one
               `prompt_templates` row; two would drift, and the drift surfaces

@@ -77,26 +77,17 @@ defmodule PlatformWeb.ExperimentResults do
           reason: :measured | :insufficient_data | :below_stop_rule | :no_stop_rule | :no_metric
         }
 
-  # The registry the context does not have. Keys are the strings
-  # `experiments.primary_metric` is expected to carry; an unrecognised string
-  # resolves to nil and yields `:no_metric` rather than a crash, because a
-  # typo in a slug must not take the whole Control Center page down.
-  @metrics %{
-    "validation_failure_rate" => Platform.Experiments.Metrics.ValidationFailureRate,
-    "stages_per_plan" => Platform.Experiments.Metrics.StagesPerPlan,
-    "cycle_time" => Platform.Experiments.Metrics.CycleTime,
-    "plan_revision_count" => Platform.Experiments.Metrics.PlanRevisionCount,
-    "time_in_phase" => Platform.Experiments.Metrics.TimeInPhase
-  }
-
-  @doc "The metric slugs this UI can compute."
+  # The registry now lives in `Platform.Experiments.Metrics`. These two
+  # functions stay because callers and tests use them by name, but they hold
+  # NO list of their own — a second copy is how you get a metric that can be
+  # selected in the UI and resolves to `:no_metric` when computed.
+  @doc "The metric slugs this UI can compute. Delegates to the context."
   @spec known_metrics() :: [String.t()]
-  def known_metrics, do: @metrics |> Map.keys() |> Enum.sort()
+  defdelegate known_metrics(), to: Platform.Experiments.Metrics
 
   @doc "Resolves `primary_metric` to a module, or nil when unrecognised."
   @spec metric_module(String.t() | nil) :: module() | nil
-  def metric_module(slug) when is_binary(slug), do: Map.get(@metrics, slug)
-  def metric_module(_), do: nil
+  defdelegate metric_module(slug), to: Platform.Experiments.Metrics
 
   @doc """
   The subject count a figure must reach before it may be shown, or nil.
