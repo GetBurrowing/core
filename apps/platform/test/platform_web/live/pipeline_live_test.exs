@@ -1,10 +1,11 @@
 defmodule PlatformWeb.PipelineLiveTest do
   @moduledoc """
-  What `/control/pipeline` must refuse to render.
+  What `/admin/pipeline` must refuse to render.
 
-    * It must resolve as the pipeline page, not as an agent named "pipeline" —
-      the route sits under a catch-all `/control/:agent_slug` and an ordering
-      regression is invisible until someone opens the URL.
+    * It is ADMIN-ONLY (task 019fed1e moved it out of `/control`, where it was
+      member-visible, into `live_session :admin`). The affordance is a cog in
+      the Tasks header; the tests for reaching it through that cog live in
+      `tasks_settings_menu_test.exs`.
     * It must print BOTH cohort numbers. A page showing only the decomposable
       count presents a fraction of the data as the whole of it.
     * A phase nobody visited must render an em-dash, never `0.0`. That
@@ -32,19 +33,33 @@ defmodule PlatformWeb.PipelineLiveTest do
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.PhaseTransition
+  alias Platform.Tenancy
+  alias Platform.Tenancy.OrgMembership
 
   setup do
     {:ok, project} = Tasks.create_project(%{name: "Pipeline Live Project"})
     %{project: project}
   end
 
+  # An ADMIN session: `/admin/pipeline` sits in `live_session :admin`, so a
+  # plain member never mounts the page at all. Refusal for a non-admin is
+  # asserted in `tasks_settings_menu_test.exs`, against a direct request that
+  # bypasses the affordance.
   defp authenticated_conn(conn) do
+    n = System.unique_integer([:positive])
+
     user =
       Repo.insert!(%User{
-        email: "pipeline_live_#{System.unique_integer([:positive])}@example.com",
+        email: "pipeline_live_#{n}@example.com",
         name: "Pipeline Live User",
-        oidc_sub: "oidc-pipeline-live-#{System.unique_integer([:positive])}"
+        oidc_sub: "oidc-pipeline-live-#{n}"
       })
+
+    org = Tenancy.get_org_by_slug!("fabrikam")
+
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: "admin"})
+    |> Repo.insert!()
 
     init_test_session(conn, current_user_id: user.id)
   end
@@ -109,18 +124,31 @@ defmodule PlatformWeb.PipelineLiveTest do
   end
 
   describe "routing" do
-    test "/control/pipeline renders the pipeline page, not a missing-agent 404", %{conn: conn} do
-      {:ok, _view, html} = conn |> authenticated_conn() |> live("/control/pipeline")
+    test "/admin/pipeline renders the pipeline page", %{conn: conn} do
+      {:ok, _view, html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       assert html =~ "Pipeline health"
       assert html =~ "Where the time goes"
     end
 
-    test "resolves to PipelineLive while an arbitrary slug still resolves to the catch-all",
+    test "resolves to PipelineLive while an arbitrary /control slug still hits the catch-all",
          %{conn: conn} do
       # Router resolution, not source order: a grep over router.ex cannot tell
       # a live/3 call from a comment, and the ordering bug is a resolution bug.
+      # The pipeline half no longer tests the `/control/:agent_slug` ordering
+      # hazard — the route left `/control` entirely — but the hazard still
+      # threatens `/control/experiments`, so the catch-all halves stay.
       assert %{plug_opts: :index, phoenix_live_view: {PlatformWeb.PipelineLive, _, _, _}} =
+               Phoenix.Router.route_info(
+                 PlatformWeb.Router,
+                 "GET",
+                 "/admin/pipeline",
+                 "example"
+               )
+
+      # And `/control/pipeline` is gone: it now falls through to the agent
+      # catch-all, which is the correct outcome for a URL nobody should type.
+      assert %{phoenix_live_view: {PlatformWeb.ControlCenterLive, _, _, _}} =
                Phoenix.Router.route_info(
                  PlatformWeb.Router,
                  "GET",
@@ -151,7 +179,7 @@ defmodule PlatformWeb.PipelineLiveTest do
          %{conn: conn, project: project} do
       populated_cohort(project)
 
-      {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, view, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       line = view |> element("#exclusion-line") |> render()
 
@@ -164,7 +192,7 @@ defmodule PlatformWeb.PipelineLiveTest do
     } do
       populated_cohort(project)
 
-      {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, view, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       assert has_element?(view, "#phase-segment-planning")
       assert has_element?(view, "#phase-segment-in_progress")
@@ -177,7 +205,7 @@ defmodule PlatformWeb.PipelineLiveTest do
     } do
       populated_cohort(project)
 
-      {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, view, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       assert has_element?(view, "#cycle-time-histogram")
       assert view |> element("#cycle-rule-median") |> render() =~ "median"
@@ -187,7 +215,7 @@ defmodule PlatformWeb.PipelineLiveTest do
     test "the >7d overflow bucket is labelled on the axis", %{conn: conn, project: project} do
       populated_cohort(project)
 
-      {:ok, _view, html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, _view, html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       assert html =~ "&gt;7d"
     end
@@ -202,7 +230,7 @@ defmodule PlatformWeb.PipelineLiveTest do
     } do
       populated_cohort(project)
 
-      {:ok, _view, html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, _view, html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       heights = bucket_min_heights(html)
 
@@ -243,7 +271,7 @@ defmodule PlatformWeb.PipelineLiveTest do
       # bar as human wait and misrepresent what production shows.
       populated_cohort(project)
 
-      {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, view, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       assert view |> element("#phase-row-in_progress") |> render() =~ "engine"
       refute view |> element("#phase-row-in_progress") |> render() =~ "human wait"
@@ -258,7 +286,7 @@ defmodule PlatformWeb.PipelineLiveTest do
     } do
       populated_cohort(project)
 
-      {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, view, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       median = view |> element("#phase-median-awaiting_manual_approval") |> render()
       p75 = view |> element("#phase-p75-awaiting_manual_approval") |> render()
@@ -285,7 +313,7 @@ defmodule PlatformWeb.PipelineLiveTest do
     } do
       Enum.each([2, 3, 4], &decomposable_task(project, &1, 4))
 
-      {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, view, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       # Collapsed: HEEx wraps the copy across source lines, so a raw-string
       # match would assert the formatter's line breaks rather than the wording.
@@ -325,7 +353,7 @@ defmodule PlatformWeb.PipelineLiveTest do
          %{conn: conn, project: project} do
       Enum.each(1..19, &decomposable_task(project, 2 + rem(&1, 5), 4))
 
-      {:ok, below, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, below, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       assert view_states(below) == %{
                sparse_note: true,
@@ -340,7 +368,7 @@ defmodule PlatformWeb.PipelineLiveTest do
       # The twentieth task, and nothing else about the fixture, changes.
       decomposable_task(project, 3, 4)
 
-      {:ok, at_floor, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, at_floor, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       assert view_states(at_floor) == %{
                sparse_note: false,
@@ -380,7 +408,7 @@ defmodule PlatformWeb.PipelineLiveTest do
       # rule, so it would pass this test whatever the rule did.
       Enum.each(1..20, &decomposable_task(project, 12 + rem(&1, 5), 200))
 
-      {:ok, view, html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, view, html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       # Anti-vacuity: the assertion below is only meaningful if the narrow
       # segment is actually rendered and actually narrow.
@@ -435,7 +463,7 @@ defmodule PlatformWeb.PipelineLiveTest do
 
       log =
         capture_log(fn ->
-          {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+          {:ok, view, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
           # Anti-vacuity on both preconditions: the segment must actually read
           # as human wait AND actually be under the label width, or "kept the
@@ -471,7 +499,7 @@ defmodule PlatformWeb.PipelineLiveTest do
     test "is stated even when the page is fully populated", %{conn: conn, project: project} do
       populated_cohort(project)
 
-      {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, view, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       assert view |> element("#instrumentation-note") |> render() =~
                "Nothing before that date can be decomposed"
@@ -480,7 +508,7 @@ defmodule PlatformWeb.PipelineLiveTest do
     test "is stated in the sparse state too", %{conn: conn, project: project} do
       decomposable_task(project, 2, 4)
 
-      {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, view, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       assert view |> element("#instrumentation-note") |> render() =~ "instrumented from"
     end
@@ -492,7 +520,7 @@ defmodule PlatformWeb.PipelineLiveTest do
       # Well outside 7d, inside 30d.
       Enum.each([20, 21, 22], &decomposable_task(project, &1, 4))
 
-      {:ok, view, _html} = conn |> authenticated_conn() |> live("/control/pipeline")
+      {:ok, view, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       assert view |> element("#exclusion-line") |> render() =~ "23 of 26"
 

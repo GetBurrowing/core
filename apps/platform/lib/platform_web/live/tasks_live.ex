@@ -260,6 +260,11 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:task_search_query, "")
      |> assign(:create_menu_open, false)
      |> assign(:fab_menu_open, false)
+     # Task 019fed1e: the admin-only Tasks settings menu (one row today,
+     # Pipeline). Server-owned open state like the two above; the trigger
+     # itself only renders behind `@fabrikam_admin?`, and the destination is
+     # gated again by `live_session :admin`.
+     |> assign(:settings_menu_open, false)
      # Container-lifecycle UI state (task 019f4eaa stage 6). `:active_scope_keys`
      # is the data-driven scope-rail source — the seeded slugs of every
      # non-archived tenant THE VIEWER BELONGS TO (Fabrikam admins see all), as
@@ -637,7 +642,20 @@ defmodule PlatformWeb.TasksLive do
   # a menu item closes its menu server-side.
 
   def handle_event("toggle_create_menu", _params, socket) do
-    {:noreply, assign(socket, :create_menu_open, !socket.assigns.create_menu_open)}
+    {:noreply,
+     socket
+     |> assign(:create_menu_open, !socket.assigns.create_menu_open)
+     |> assign(:settings_menu_open, false)}
+  end
+
+  # Task 019fed1e — the admin-only settings menu in the Tasks header.
+  # Mirrors `toggle_create_menu` above, and closes the create menu on the
+  # way so the two can never be open at once.
+  def handle_event("toggle_settings_menu", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:settings_menu_open, !socket.assigns.settings_menu_open)
+     |> assign(:create_menu_open, false)}
   end
 
   # ── Container lifecycle (task 019f4eaa stage 6) ───────────────────────

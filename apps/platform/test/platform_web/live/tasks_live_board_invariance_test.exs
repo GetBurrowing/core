@@ -616,7 +616,22 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   #     rest.
   # Still no new function, no new branch, no new assign in the shell: the
   # scoping lives in `Platform.Tenancy.list_active_tenants_for_user/1`.
-  @shell_line_count 5_923
+  #
+  # RE-PINNED (+18) by task 019fed1e, the admin-only Tasks settings cog. This
+  # is the one shape of growth the guard is not trying to prevent: a header
+  # affordance and its open/closed flag, in the same place and the same shape
+  # as the create menu beside it.
+  # ARITHMETIC, +18 = 19 insertions - 1 deletion:
+  #   * `|> assign(:settings_menu_open, false)` in `mount/3`, plus a 4-line
+  #     comment saying what it drives and where the gate actually is: +5.
+  #   * `handle_event("toggle_settings_menu", ...)` — 6 lines including a
+  #     3-line comment — and `toggle_create_menu/2` growing from a one-line
+  #     `assign` to a 4-line pipe so the two menus cannot be open at once
+  #     (4 insertions - 1 deletion): +13.
+  # No new derived state: `@fabrikam_admin?` comes from the `LiveAuth :default`
+  # on_mount that was already assigning it, and the destination's access
+  # control is `live_session :admin`, not this flag.
+  @shell_line_count 5_941
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

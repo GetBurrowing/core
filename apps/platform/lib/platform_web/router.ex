@@ -500,14 +500,10 @@ defmodule PlatformWeb.Router do
       live("/changelog", ChangelogLive, :index)
       live("/control", ControlCenterLive, :index)
       live("/control/usage", UsageLive, :index)
-      # MUST stay above `/control/:agent_slug`, which is a catch-all: below it,
-      # `/control/pipeline` resolves as an agent slug and 404s on a missing
-      # agent. `pipeline_live_test.exs` covers the ordering.
-      live("/control/pipeline", PipelineLive, :index)
-      # Task 019fe6ba, ADR-0048. Same catch-all hazard as `/control/pipeline`
-      # directly above: both of these MUST stay above `/control/:agent_slug`
-      # or `/control/experiments` resolves as an agent slug and 404s on a
-      # missing agent. `experiments_live_test.exs` covers the ordering.
+      # Task 019fe6ba, ADR-0048. `/control/:agent_slug` below is a catch-all:
+      # these MUST stay above it or `/control/experiments` resolves as an
+      # agent slug and 404s on a missing agent. `experiments_live_test.exs`
+      # covers the ordering.
       #
       # These sit in `:authenticated`, not `:admin`: reads are
       # member-visible on purpose. Writes are gated inside every
@@ -599,6 +595,14 @@ defmodule PlatformWeb.Router do
       live("/admin/prompts", AdminPromptsLive, :index)
       live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/admin/federation", AdminFederationLive, :index)
+      # Task 019fed1e: pipeline health MOVED here from `/control/pipeline`.
+      # It is a read-only whole-page admin surface with no write handlers,
+      # so `:ensure_admin` on this live_session is the right gate — a
+      # page-local check under `/control` would invent a second pattern for
+      # a case this one already covers. Reached from the Tasks header cog;
+      # no redirect from the old path, which now falls to the
+      # `/control/:agent_slug` catch-all as a URL that should not be typed.
+      live("/admin/pipeline", PipelineLive, :index)
     end
   end
 

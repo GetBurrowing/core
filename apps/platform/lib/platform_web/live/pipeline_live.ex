@@ -1,7 +1,13 @@
 defmodule PlatformWeb.PipelineLive do
   @moduledoc """
-  `/control/pipeline` — where the time between a task starting and finishing
+  `/admin/pipeline` — where the time between a task starting and finishing
   actually goes, and how much of it is the system waiting on a person.
+
+  ADMIN-ONLY, and reached from the cog in the Tasks module header. The route
+  sits in `live_session :admin`, whose `:ensure_admin` hook halts a non-admin
+  mount; `mount/3` re-checks `:fabrikam_admin?` anyway rather than assuming the
+  hook ran. The figures here are org-wide over a time window — nothing on
+  this page is scoped to a project.
 
   This module reads `Platform.Tasks.PipelineHealth` and nothing else. It does
   no date arithmetic over task rows: a duration presented here was measured by
@@ -64,11 +70,23 @@ defmodule PlatformWeb.PipelineLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok,
-     socket
-     |> assign(:page_title, "Pipeline health")
-     |> assign(:range, @default_range)
-     |> load_data()}
+    # Belt-and-suspenders. `live_session :admin`'s `:ensure_admin` hook has
+    # already halted a non-admin mount by the time this runs; this refuses
+    # again rather than assuming it, so a routing change that moves the page
+    # out of that live_session degrades to a redirect and not to an open
+    # admin surface.
+    if socket.assigns[:fabrikam_admin?] do
+      {:ok,
+       socket
+       |> assign(:page_title, "Pipeline health")
+       |> assign(:range, @default_range)
+       |> load_data()}
+    else
+      {:ok,
+       socket
+       |> put_flash(:error, "You don't have access to that page.")
+       |> push_navigate(to: "/")}
+    end
   end
 
   @impl true
@@ -250,7 +268,10 @@ defmodule PlatformWeb.PipelineLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex flex-col h-full overflow-y-auto p-4 md:p-6 space-y-6">
+    <div
+      data-role="pipeline-page"
+      class="flex flex-col h-full overflow-y-auto p-4 md:p-6 space-y-6"
+    >
       <div class="flex flex-wrap items-center justify-between gap-3">
         <h1 class="text-xl font-bold">Pipeline health</h1>
 
