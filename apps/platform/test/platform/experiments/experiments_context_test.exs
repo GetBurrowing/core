@@ -288,6 +288,62 @@ defmodule Platform.ExperimentsContextTest do
       assert Repo.aggregate(assignments_for(experiment, subject), :count) == 1
     end
 
+    test "a repeat call performs NO insert — it reads", %{
+      experiment: experiment,
+      subject: subject
+    } do
+      # Why this test exists, recorded because it is not obvious.
+      #
+      # Removing the read-before-write lookup from assign_once/2 entirely —
+      # so that every call attempts an insert — does NOT change any
+      # observable return value. The unique index rejects the second insert,
+      # the conflict path re-reads, and the caller gets back the same row
+      # with the same slug. Every other assertion in this file stays green
+      # under that mutation; it was run, and it did not detonate.
+      #
+      # So the read path is indistinguishable through return values alone,
+      # and asserting harder on them would never reach it. The channel that
+      # DOES distinguish the two is whether an INSERT is issued at all.
+      # Without this test the lookup is untested by construction —
+      # dead-looking code a later reader could delete with a green suite,
+      # turning every repeat assignment into a failed write plus a recovery.
+      {:ok, _first} = Assignments.assign_once(experiment, subject)
+
+      test_pid = self()
+      handler_id = "assign-once-insert-probe-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          # Only this process's queries: the suite runs async, and a global
+          # handler would otherwise count a sibling test's inserts.
+          if self() == test_pid and metadata[:source] == "experiment_assignments" do
+            send(test_pid, {:probe_query, String.slice(metadata[:query] || "", 0, 6)})
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, second} = Assignments.assign_once(experiment, subject)
+
+      queries = drain_probe_queries([])
+
+      # Anti-vacuity: the handler really did fire, so "no INSERT" below is a
+      # statement about what ran rather than about a handler that was never
+      # attached or a source name that never matched.
+      assert queries != [], "telemetry captured nothing; this test would prove nothing"
+      assert "SELECT" in queries
+
+      refute "INSERT" in queries,
+             "assign_once/2 attempted an insert for an already-assigned subject; " <>
+               "the existing row must be READ, not re-inserted and recovered by the constraint"
+
+      assert second.variant_slug != nil
+    end
+
     test "a different subject gets its own assignment", %{
       experiment: experiment,
       subject: subject
@@ -312,6 +368,32 @@ defmodule Platform.ExperimentsContextTest do
         Assignments.assign_once(experiment, %{subject_type: "task", subject_id: id})
 
       assert from_map.id == from_tuple.id
+    end
+
+    test "a malformed subject_id returns nil rather than raising", %{experiment: experiment} do
+      # `where: a.subject_id == ^value` raises Ecto.Query.CastError on a
+      # malformed binary exactly as Repo.get/2 does, and the subject is
+      # caller-supplied. Folding it into the nil this function already
+      # returns for an unassigned subject keeps it total.
+      assert Assignments.get_assignment(experiment, {"task", "not-a-uuid"}) == nil
+      assert Assignments.get_assignment(experiment, {"task", ""}) == nil
+
+      # Anti-vacuity: a well-formed id that is genuinely unassigned returns
+      # nil too, so the assertions above must not be read as "this id was
+      # rejected" unless a real lookup would have found something. Confirm
+      # the same function DOES find a row when one exists.
+      subject = %{subject_type: "task", subject_id: Ecto.UUID.generate()}
+      {:ok, assigned} = Assignments.assign_once(experiment, subject)
+      assert Assignments.get_assignment(experiment, subject).id == assigned.id
+    end
+
+    test "assign_once with a malformed subject_id refuses instead of raising", %{
+      experiment: experiment
+    } do
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Assignments.assign_once(experiment, {"task", "not-a-uuid"})
+
+      refute changeset.valid?
     end
 
     test "an experiment with no variants cannot assign" do
@@ -417,6 +499,14 @@ defmodule Platform.ExperimentsContextTest do
 
       refute Enum.any?(names, &(&1 =~ ~r/assignment/ and &1 =~ ~r/delete|remove/))
       assert "list_experiments" in names
+    end
+  end
+
+  defp drain_probe_queries(acc) do
+    receive do
+      {:probe_query, verb} -> drain_probe_queries([verb | acc])
+    after
+      0 -> Enum.reverse(acc)
     end
   end
 

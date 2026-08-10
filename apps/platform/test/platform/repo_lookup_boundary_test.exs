@@ -233,6 +233,19 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`fetch_project/1`'s predicate, collapsed from a bare Ecto.UUID.cast/1 onto Platform.UUID.cast/1 at the ADR-0046 merge. The site was already total — it passes the cast's OUTPUT to `Tasks.get_project/1` and additionally rescues — so this is the canonical-predicate fix, not a raise fix. Sibling-owned — RECORD, DO NOT EDIT"},
     {"platform/design/preplan_step.ex", :get, "Task", 2, :flagged_sibling_owned,
      "`resolve_task/1`: :705 takes `%Task{}.id` off a loaded struct; :706 takes a raw binary. Every public entry point that can reach :706 with a caller-supplied string — `settle/2`, `expire/2`, `audit_ui_prediction/2`, `annotate/3` — wraps its body in `rescue`/`catch`, and the only lib caller passing a binary (`tool_surface.ex:5954`, `plan_create`) reaches it only AFTER `Tasks.create_plan/1` accepted the same id in the enclosing transaction. `start/1` does not rescue, but TaskRouter calls it with a `%Task{}` struct. Sibling-owned — RECORD, DO NOT EDIT"},
+    # ── Experiments (ADR-0048, task 019fe6b9) ──────────────────────────
+    {"platform/experiments.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "get_experiment/1's predicate. The id reaches this context from an agent or an MCP payload once the later stack members expose experiments, so the guard is what keeps a malformed id returning nil instead of raising Ecto.Query.CastError against Experiment's strict UUIDv7 primary key"},
+    {"platform/experiments.ex", :get, "Experiment", 1, :safe_internal,
+     "the sole Repo.get sits inside get_experiment/1, behind the Platform.UUID.valid?/1 guard counted above; the two entries fail together if either is removed"},
+    {"platform/experiments.ex", :get!, "Experiment", 1, :safe_internal,
+     "activate/2's Multi re-reads the experiment by `experiment.id` destructured off a loaded `%Experiment{}` whose PK was minted by Platform.Types.UUIDv7 autogenerate. It is re-read rather than reused precisely so a caller's stale preloaded :variants cannot decide the control guard — the id never leaves the struct"},
+    {"platform/experiments.ex", :get_by, "Experiment", 1, :safe_internal,
+     "keyed `slug:`, a plain string column on experiments with no UUID type on either side of the comparison; get_experiment_by_slug/1 cannot raise a cast error"},
+    {"platform/experiments.ex", :get_by, "PromptTemplate", 1, :safe_internal,
+     "keyed `slug:`, the same plain string column `Orchestration.PromptTemplates.get_template_by_slug/1` already reads unguarded; activate/2 folds a miss into {:error, changeset} rather than raising"},
+    {"platform/experiments/assignments.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "get_assignment/2's predicate. Its Repo.one pins `a.subject_id == ^subject_id` in the where clause, and the subject is caller-supplied — a task id today, a dispatch id once the later ADR-0048 members land — so a malformed binary would raise Ecto.Query.CastError from the where clause exactly as Repo.get/2 does. The guard folds it into the nil this function already returns for an unassigned subject"},
     # ── External agents ────────────────────────────────────────────────
     {"platform/external_agents.ex", :get_by, "Agent", 1, :safe_internal,
      "get_external_agent/1 checks Platform.UUID.valid?/1 before the id:-keyed get_by, which raises exactly like Repo.get/2 does. This is the spelling `git grep \"Repo.get(\"` cannot see"},
@@ -634,6 +647,15 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/chat/canvas_access.ex" => 1,
     "platform/chat/message_versions.ex" => 2,
     "platform/deploy/project_files.ex" => 3,
+    # 0 → 1 for task 019fe6b9 stage 2's `get_assignment/2` (ADR-0048).
+    # Triaged by hand as this map asks: the `where:` clause pins
+    # `a.experiment_id == ^experiment_id`, destructured off a loaded
+    # `%Experiment{}`, AND `a.subject_id == ^subject_id`, which IS
+    # caller-supplied. The second one can arrive malformed, so the call sits
+    # behind a `Platform.UUID.valid?/1` guard — recorded as the
+    # :platform_uuid_guard entry for this file in @inventory above. Removing
+    # the guard fails there and reintroduces the raise here.
+    "platform/experiments/assignments.ex" => 1,
     "platform/federation.ex" => 1,
     "platform/federation/tool_surface.ex" => 2,
     "platform/files.ex" => 1,

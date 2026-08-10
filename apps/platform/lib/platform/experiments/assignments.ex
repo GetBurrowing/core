@@ -75,19 +75,28 @@ defmodule Platform.Experiments.Assignments do
     end
   end
 
-  @doc "Returns the subject's assignment for this experiment, or nil."
+  @doc """
+  Returns the subject's assignment for this experiment, or nil.
+
+  A malformed `subject_id` folds into `nil` rather than raising. The subject
+  is caller-supplied — a task id from a dispatch today, anything the later
+  stack members choose tomorrow — and `where: a.subject_id == ^value` raises
+  `Ecto.Query.CastError` on a malformed binary exactly as `Repo.get/2` does.
+  """
   @spec get_assignment(Experiment.t(), subject()) :: Assignment.t() | nil
   def get_assignment(%Experiment{id: experiment_id}, subject) do
     {subject_type, subject_id} = subject_key(subject)
 
-    Repo.one(
-      from(a in Assignment,
-        where:
-          a.experiment_id == ^experiment_id and
-            a.subject_type == ^subject_type and
-            a.subject_id == ^subject_id
+    if Platform.UUID.valid?(subject_id) do
+      Repo.one(
+        from(a in Assignment,
+          where:
+            a.experiment_id == ^experiment_id and
+              a.subject_type == ^subject_type and
+              a.subject_id == ^subject_id
+        )
       )
-    )
+    end
   end
 
   @doc "Lists every assignment for an experiment, excluded ones included."
