@@ -5,9 +5,9 @@ env:
 
 on:
   push:
-    branches: [main, "feat/**"]
+    branches: [main, "feat/**", "stack/**"]
   pull_request:
-    branches: [main, "feat/**"]
+    branches: [main, "feat/**", "stack/**"]
 
 jobs:
   test:
