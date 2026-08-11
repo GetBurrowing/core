@@ -35,8 +35,8 @@ This module is the **single source of truth** for the federated tool surface —
 
 `AgentRuntime` ([`apps/platform/lib/platform/agents/agent_runtime.ex`](../../apps/platform/lib/platform/agents/agent_runtime.ex)) carries the per-runtime allowlist:
 
-- `@valid_bundles` (line 17): `~w(federation space context_read messaging review canvas task plan org_context skill attachment)`. `skill` is a recognized bundle.
-- `@default_allowed_bundles` (line 19): `~w(federation space context_read messaging attachment)`. **`skill` is not in the default.**
+- `@valid_bundles`: `~w(federation space context_read messaging review canvas task plan memory skill attachment files)` — every bundle a runtime row is *permitted* to hold. This must equal `ToolSurface.all_bundles/0` as a set, and a test in `apps/platform/test/platform/agents/agent_runtime_test.exs` enforces that. **The test is the authority, not this paragraph** — prose restating a list drifts silently, and this one had (it named the retired `org_context`, and omitted `memory` and `files`).
+- `@default_allowed_bundles`: `~w(federation space context_read messaging attachment skill)` — what a *newly registered* runtime actually gets. Deliberately narrower than `@valid_bundles`: `review` and `files` are grantable but not granted, because `file_add` / `file_delete` mutate and the review tools act on gates. Being in the valid list is permission to be granted, not a grant.
 - The `allowed_bundles` field (line 29) defaults to `@default_allowed_bundles`.
 - Changesets validate values are a subset of `@valid_bundles` (line 59).
 

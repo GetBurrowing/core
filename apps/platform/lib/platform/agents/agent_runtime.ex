@@ -14,7 +14,14 @@ defmodule Platform.Agents.AgentRuntime do
   @valid_statuses ~w(pending active suspended revoked)
   @valid_trust_levels ~w(viewer participant collaborator admin)
   @valid_transports ~w(websocket)
-  @valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment)
+  # Must equal `ToolSurface.all_bundles/0` as a set — a bundle the surface
+  # registers but this list rejects cannot be persisted at all, so the full
+  # surface could not be granted even deliberately (019ff110). Guarded by
+  # `test/platform/agents/agent_runtime_test.exs`.
+  #
+  # Being GRANTABLE is not being GRANTED: adding a bundle here does not add it
+  # to `@default_allowed_bundles` below, and must not.
+  @valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files)
 
   @default_allowed_bundles ~w(federation space context_read messaging attachment skill)
 

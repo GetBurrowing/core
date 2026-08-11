@@ -45,9 +45,14 @@ defmodule Platform.Federation.ToolAuthorization do
   ## Deliberate non-dependency
 
   This module reads the per-row `allowed_bundles` array only. It never calls
-  `AgentRuntime.valid_bundles/0`, whose list is known to disagree with
-  `ToolSurface.all_bundles/0` (the `files` bundle). That mismatch is tracked
-  separately and cannot leak in here.
+  `AgentRuntime.valid_bundles/0`.
+
+  That list used to disagree with `ToolSurface.all_bundles/0` — it rejected the
+  `files` bundle the surface registers. The two are reconciled as of task
+  019ff110 and held equal by a set-equality test in
+  `test/platform/agents/agent_runtime_test.exs`. The non-dependency stands on
+  its own merits regardless: what a row *may* hold and what it *does* hold are
+  different questions, and only the second one authorizes a call.
   """
 
   alias Platform.Federation.ToolSurface

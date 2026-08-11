@@ -11,6 +11,7 @@ defmodule Platform.Agents.AgentRuntimeTest do
   alias Platform.Accounts.User
   alias Platform.Agents.AgentRuntime
   alias Platform.Federation
+  alias Platform.Federation.ToolSurface
   alias Platform.Repo
 
   describe "default_allowed_bundles/0 (pure)" do
@@ -22,6 +23,46 @@ defmodule Platform.Agents.AgentRuntimeTest do
       defaults = AgentRuntime.default_allowed_bundles()
       valid = AgentRuntime.valid_bundles()
       assert Enum.all?(defaults, &(&1 in valid))
+    end
+  end
+
+  describe "bundle registry is a single set" do
+    # Task 019ff110. `ToolSurface.all_bundles/0` registered `files` while
+    # `@valid_bundles` rejected it, so the full surface could not be persisted
+    # onto a runtime row even deliberately — `all_bundles/0` did not round-trip
+    # into `allowed_bundles`.
+    #
+    # Both operands are derived from their own module's accessor ON PURPOSE.
+    # A test pinning the names would pass while both lists drifted together in
+    # the wrong direction, and would need editing on every legitimate bundle
+    # addition — which trains people to edit it without reading it.
+    test "ToolSurface.all_bundles/0 and AgentRuntime.valid_bundles/0 agree exactly" do
+      surface = MapSet.new(ToolSurface.all_bundles())
+      valid = MapSet.new(AgentRuntime.valid_bundles())
+
+      registered_but_rejected = surface |> MapSet.difference(valid) |> Enum.sort()
+      permitted_but_unregistered = valid |> MapSet.difference(surface) |> Enum.sort()
+
+      # Both directions are named separately: a bare `assert a == b` on two
+      # long lists says nothing about which side is wrong or which way to fix
+      # it, and the two directions have opposite remedies.
+      message = """
+      The bundle registry has drifted into two different sets.
+
+      Registered by ToolSurface.all_bundles/0 but REJECTED by \
+      AgentRuntime.valid_bundles/0 (a runtime cannot hold these, so the tools \
+      in them can never be granted): #{inspect(registered_but_rejected)}
+
+      Permitted by AgentRuntime.valid_bundles/0 but NEVER REGISTERED by \
+      ToolSurface.all_bundles/0 (a row may hold these and get nothing): \
+      #{inspect(permitted_but_unregistered)}
+
+      Fix the side that is stale. Widening the validator makes a bundle \
+      grantable; it does not grant it, and it must not change \
+      @default_allowed_bundles.
+      """
+
+      assert surface == valid, message
     end
   end
 
