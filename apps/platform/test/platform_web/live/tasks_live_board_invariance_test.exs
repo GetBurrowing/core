@@ -631,7 +631,23 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # No new derived state: `@fabrikam_admin?` comes from the `LiveAuth :default`
   # on_mount that was already assigning it, and the destination's access
   # control is `live_session :admin`, not this flag.
-  @shell_line_count 5_941
+  #
+  # RE-PINNED (+7) by the freeze-changeset hotfix. `handle_event("approve_plan")`
+  # matched `{:error, _}` and flashed a constant string, DISCARDING the reason.
+  # A production outage that blocked every plan approval therefore produced a
+  # generic toast, no server log line and a clean browser console — the cause
+  # was sitting in a variable nobody read. The whole growth is observability
+  # for a failure branch that already existed.
+  # ARITHMETIC, +7 = 7 insertions, 0 deletions:
+  #   * `{:error, _}` -> `{:error, reason}`: +0 (edit in place).
+  #   * `Logger.error(...)` naming plan id, task id and `inspect(reason)`,
+  #     wrapped by `mix format` to 3 lines: +3.
+  #   * a 3-line comment saying why the log exists, so the next person to
+  #     read this branch does not delete it as noise: +3.
+  #   * one blank line separating the log from the `{:noreply, ...}`: +1.
+  # No new function, no new branch, no new assign, no new derived state: the
+  # `{:error, ...}` clause was already there and still returns the same flash.
+  @shell_line_count 5_948
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

@@ -95,6 +95,24 @@ defmodule Platform.Chat.Message do
     |> validate_frozen_both_or_neither()
   end
 
+  @doc """
+  Narrow changeset for stamping freeze metadata on an existing message.
+
+  Casts only `:frozen_at` / `:frozen_by_participant_id` and keeps the
+  `frozen_both_or_neither` invariant. Deliberately does NOT run
+  `validate_required([:space_id, :participant_id, :content_type])`: those
+  are creation-time invariants, and re-asserting them on a metadata stamp
+  makes the freeze fail for rows whose `participant_id` was nulled out by
+  the `ON DELETE SET NULL` FK when a participant was removed from a
+  roster. That failure propagated all the way up to plan approval. (The
+  authorship-destroying FK is tracked separately as `019ff1c1`.)
+  """
+  def freeze_changeset(message, attrs) do
+    message
+    |> cast(attrs, [:frozen_at, :frozen_by_participant_id])
+    |> validate_frozen_both_or_neither()
+  end
+
   # Mirrors the DB-level check constraint `frozen_both_or_neither`. Catching
   # it in the changeset gives a clean validation error before the database
   # raises, and lets callers display a field-level message in the UI.

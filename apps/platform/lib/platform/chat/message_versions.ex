@@ -150,7 +150,7 @@ defmodule Platform.Chat.MessageVersions do
 
   def freeze(%Message{} = message, participant_id) when is_binary(participant_id) do
     message
-    |> Message.changeset(%{
+    |> Message.freeze_changeset(%{
       frozen_at: DateTime.utc_now(),
       frozen_by_participant_id: participant_id
     })

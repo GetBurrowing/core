@@ -2389,7 +2389,14 @@ defmodule PlatformWeb.TasksLive do
            |> refresh_board()
            |> reload_selected_task()}
 
-        {:error, _} ->
+        {:error, reason} ->
+          # Log the reason: an approval failure used to produce a constant
+          # flash and NO server-side output at all, which made a production
+          # outage effectively invisible.
+          Logger.error(
+            "approve_plan failed for plan #{plan.id} (task #{plan.task_id}): #{inspect(reason)}"
+          )
+
           {:noreply, put_flash(socket, :error, "Failed to approve plan.")}
       end
     else
