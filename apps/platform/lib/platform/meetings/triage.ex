@@ -47,6 +47,13 @@ defmodule Platform.Meetings.Triage do
 
   require Logger
 
+  # Triage notes are written by the triage run itself, not on behalf of a
+  # caller — there is no identity in scope at any of these call sites. Stated
+  # explicitly rather than left to `apply_patches/3`'s empty-map default,
+  # which records `unknown`: a write nobody performed and a write whose author
+  # we failed to record must not look the same in version history (019fed8d).
+  @system_attribution %{"type" => "system"}
+
   @type action_item :: %{optional(atom() | binary()) => any()}
 
   @type filing_outcome ::
@@ -389,7 +396,12 @@ defmodule Platform.Meetings.Triage do
             "props" => %{"value" => text_value, "size" => "sm"}
           }
 
-          case CanvasServer.apply_patches(canvas.id, [{:append_child, parent_id, node}], revision) do
+          case CanvasServer.apply_patches(
+                 canvas.id,
+                 [{:append_child, parent_id, node}],
+                 revision,
+                 @system_attribution
+               ) do
             {:ok, _new_revision} ->
               :ok
 
@@ -439,7 +451,12 @@ defmodule Platform.Meetings.Triage do
             }
           }
 
-          case CanvasServer.apply_patches(canvas.id, [{:append_child, parent_id, node}], revision) do
+          case CanvasServer.apply_patches(
+                 canvas.id,
+                 [{:append_child, parent_id, node}],
+                 revision,
+                 @system_attribution
+               ) do
             {:ok, _new_revision} ->
               :ok
 
@@ -634,7 +651,12 @@ defmodule Platform.Meetings.Triage do
             "props" => %{"value" => text_value, "size" => "sm"}
           }
 
-          case CanvasServer.apply_patches(canvas.id, [{:append_child, parent_id, node}], revision) do
+          case CanvasServer.apply_patches(
+                 canvas.id,
+                 [{:append_child, parent_id, node}],
+                 revision,
+                 @system_attribution
+               ) do
             {:ok, _new_revision} ->
               :ok
 
@@ -676,7 +698,12 @@ defmodule Platform.Meetings.Triage do
             "props" => %{"value" => text_value, "size" => "sm"}
           }
 
-          case CanvasServer.apply_patches(canvas.id, [{:append_child, parent_id, node}], revision) do
+          case CanvasServer.apply_patches(
+                 canvas.id,
+                 [{:append_child, parent_id, node}],
+                 revision,
+                 @system_attribution
+               ) do
             {:ok, _new_revision} ->
               :ok
 

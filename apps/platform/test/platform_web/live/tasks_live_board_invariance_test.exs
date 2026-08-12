@@ -672,7 +672,33 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # One new assign and one new branch, both irreducible: an event handler
   # cannot live in a function component, and the panel cannot read derived
   # state it was never assigned.
-  @shell_line_count 5_987
+  #
+  # RE-PINNED (+21) by task 019fed8d stage 3, the superseded review-request
+  # disclosure. Stage 3 first landed +47 here; this pin is what survived the
+  # extraction the guard asked for. The markup and both label helpers —
+  # `earlier_submissions_label/1` (pluralises a count) and
+  # `superseded_timestamps/1` (formats `inserted_at` and the nullable
+  # `superseded_at`) — are pure presentation with no socket dependency, so
+  # they moved to `PlatformWeb.Components.SupersededReviewSubmissions`,
+  # following the `TaskMergeControls` precedent directly above. Rendered
+  # output is unchanged: the component emits the same
+  # `[data-role="superseded-reviews"]` subtree the human review approved.
+  # ARITHMETIC, +21 = 47 stage-3 insertions - 26 extracted:
+  #   * `|> assign(:superseded_reviews, ...)` at all SEVEN call sites — the
+  #     `mount/3` default, the loaded and both empty branches of the mount
+  #     case, the task-deselect reset, and both arms of the refresh: +7.
+  #   * `|> assign(:superseded_reviews_expanded, false)` plus a 3-line
+  #     comment saying why the disclosure is collapsed by default: +4.
+  #   * `superseded_reviews = ReviewRequests.list_superseded_for_task(...)`
+  #     in `mount/3`: +1, and the same read in the refresh path as a
+  #     two-line `if` with its surrounding blank lines: +4.
+  #   * `handle_event("toggle_superseded_reviews", ...)` — 4 lines plus a
+  #     separating blank: +5.
+  #   * REMOVED: the two label helpers and their 7 lines of comment: -26.
+  # One new assign pair and one new event, all three irreducible for the
+  # same reason as the merge cluster above: a function component holds no
+  # LiveView state and receives no events.
+  @shell_line_count 6_008
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

@@ -12,6 +12,7 @@ defmodule Platform.Chat.Canvas.Versions do
   import Ecto.Query
 
   alias Ecto.Multi
+  alias Platform.Chat
   alias Platform.Chat.Canvas
   alias Platform.Chat.Canvas.Version
   alias Platform.Repo
@@ -164,6 +165,56 @@ defmodule Platform.Chat.Canvas.Versions do
       "display_name" => canvas.created_by_display_name
     }
   end
+
+  @doc """
+  Resolve a tool-call `context` into the denormalized author shape, preferring
+  the most specific identity the caller actually carries: agent, then chat
+  participant, then user, then `system`.
+
+  Lives here rather than beside a single handler because both write paths that
+  have a caller identity — `canvas.patch` and `canvas.restore` — need the same
+  answer. Two copies of an attribution resolver is how those paths drifted to
+  two different answers in the first place (task 019fed8d): the restore path
+  resolved the agent, the patch path passed nothing and recorded `unknown`.
+
+  Note the tail is `system`, never `unknown`. `unknown` is what an *absent*
+  attribution decays to, so a deliberate identity-less write recorded as
+  `unknown` is indistinguishable from an attribution bug.
+  """
+  @spec attribution_from_context(map(), binary() | nil) :: map()
+  def attribution_from_context(context, space_id) when is_map(context) do
+    cond do
+      is_binary(Map.get(context, :agent_id)) ->
+        agent_id = Map.get(context, :agent_id)
+        participant = space_id && Chat.get_agent_participant(space_id, agent_id)
+
+        attribution_from_fields(%{
+          type: "agent",
+          id: participant && participant.id,
+          display_name: participant && participant.display_name,
+          slug: agent_id
+        })
+
+      is_binary(Map.get(context, :participant_id)) ->
+        attribution_from_fields(%{
+          type: Map.get(context, :participant_type) || "user",
+          id: Map.get(context, :participant_id),
+          display_name: Map.get(context, :display_name)
+        })
+
+      is_binary(Map.get(context, :user_id)) ->
+        attribution_from_fields(%{
+          type: "user",
+          id: Map.get(context, :user_id),
+          display_name: Map.get(context, :display_name)
+        })
+
+      true ->
+        %{"type" => "system"}
+    end
+  end
+
+  def attribution_from_context(_context, _space_id), do: %{"type" => "system"}
 
   @doc """
   Derive a 1-sentence human-readable summary from the stored ops list.

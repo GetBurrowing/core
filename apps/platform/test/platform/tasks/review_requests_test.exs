@@ -238,6 +238,131 @@ defmodule Platform.Tasks.ReviewRequestsTest do
     end
   end
 
+  # ── supersession (task 019fed8d stage 3, defect 2) ──────────────────────
+
+  describe "create_review_request/1 supersedes the earlier pending request" do
+    test "the earlier request goes superseded, the newer one stays pending", ctx do
+      {:ok, first} = create_request(ctx, ["First evidence"])
+      assert Repo.get!(ReviewRequest, first.id).status == "pending"
+
+      {:ok, second} = create_request(ctx, ["Second evidence"])
+
+      reloaded_first = Repo.get!(ReviewRequest, first.id)
+      assert reloaded_first.status == "superseded"
+      assert %DateTime{} = reloaded_first.superseded_at
+      assert Repo.get!(ReviewRequest, second.id).status == "pending"
+      assert Repo.get!(ReviewRequest, second.id).superseded_at == nil
+    end
+
+    test "the newer request is created, not refused — the verdict has somewhere to land", ctx do
+      {:ok, _first} = create_request(ctx, ["First evidence"])
+      assert {:ok, second} = create_request(ctx, ["Design verdict"])
+
+      # The evidence survives. Refusing the create would have discarded it,
+      # which is the incident this stage fixes with the loss moved earlier.
+      assert Enum.map(second.items, & &1.label) == ["Design verdict"]
+    end
+
+    test "supersession is scoped to the validation, not the task", ctx do
+      {:ok, other_gate} =
+        Tasks.create_validation(%{stage_id: ctx.stage.id, kind: "manual_approval"})
+
+      {:ok, first} = create_request(ctx, ["Gate one evidence"])
+
+      {:ok, _second_gate_request} =
+        ReviewRequests.create_review_request(%{
+          validation_id: other_gate.id,
+          task_id: ctx.task.id,
+          items: [%{label: "Gate two evidence"}]
+        })
+
+      # A request nobody replaced must not be hidden: both gates still owe a
+      # verdict, so both requests are still pending.
+      assert Repo.get!(ReviewRequest, first.id).status == "pending"
+      assert length(ReviewRequests.list_pending_for_task(ctx.task.id)) == 2
+    end
+
+    test "a superseded request cannot be approved or rejected", ctx do
+      {:ok, first} = create_request(ctx, ["Stale evidence"])
+      [stale_item] = first.items
+      {:ok, _second} = create_request(ctx, ["Fresh evidence"])
+
+      assert {:error, :request_superseded} = ReviewRequests.approve_item(stale_item.id, "rowan")
+
+      assert {:error, :request_superseded} =
+               ReviewRequests.reject_item(stale_item.id, "rowan", "nope")
+
+      # Anti-vacuity: the SAME calls against the live request succeed, so the
+      # refusals above are about supersession and not about a broken fixture.
+      {:ok, live} = create_request(ctx, ["Live evidence"])
+      [live_item] = live.items
+      assert {:ok, approved} = ReviewRequests.approve_item(live_item.id, "rowan")
+      assert approved.status == "approved"
+    end
+
+    test "a superseded request cannot drive maybe_resolve_request/1 into settling the gate",
+         ctx do
+      {:ok, first} = create_request(ctx, ["Stale evidence"])
+      [stale_item] = first.items
+
+      # Put the request in the one state that would otherwise make
+      # `maybe_resolve_request/1` fire — every item dispositioned, request
+      # still pending — WITHOUT going through `approve_item/2`, which would
+      # settle the gate before supersession could be tested against it.
+      Repo.get!(ReviewItem, stale_item.id)
+      |> ReviewItem.changeset(%{status: "approved", reviewed_by: "rowan"})
+      |> Repo.update!()
+
+      assert Repo.get!(ReviewRequest, first.id).status == "pending"
+
+      {:ok, _second} = create_request(ctx, ["Fresh evidence"])
+      assert Repo.get!(ReviewRequest, first.id).status == "superseded"
+
+      assert ReviewRequests.maybe_resolve_request(first.id) == :not_yet
+      assert Repo.get!(ReviewRequest, first.id).status == "superseded"
+      assert Repo.get!(Validation, ctx.validation.id).status in ["pending", "running"]
+    end
+  end
+
+  describe "what the list_pending_for_task/1 callers see after supersession" do
+    setup ctx do
+      {:ok, first} = create_request(ctx, ["Stale evidence"])
+      {:ok, second} = create_request(ctx, ["Fresh evidence"])
+      Map.merge(ctx, %{first: first, second: second})
+    end
+
+    test "exactly one pending request remains, and it is the newer one", ctx do
+      assert [only] = ReviewRequests.list_pending_for_task(ctx.task.id)
+      assert only.id == ctx.second.id
+    end
+
+    test "the gate never looks satisfied: the pending list stays non-empty", ctx do
+      # This is the invariant every caller depends on — the router's
+      # `manual_approval_gate_pending?/1` and `pending_review_request?/1`,
+      # `Stacks.member_pending_review_requests?/1`, and
+      # `HeartbeatScheduler.heartbeat_suppressible?/2` all read emptiness.
+      # Supersession removes a row but always in the same transaction that
+      # inserts its replacement, so the list can never empty out.
+      refute ReviewRequests.list_pending_for_task(ctx.task.id) == []
+
+      assert Platform.Tasks.Stacks.member_pending_review_requests?(Repo.get!(Task, ctx.task.id))
+    end
+
+    test "the surviving request still links the gate's validation, so the heartbeat stays suppressible",
+         ctx do
+      pending = ReviewRequests.list_pending_for_task(ctx.task.id)
+      stage = Repo.get!(Stage, ctx.stage.id) |> Repo.preload(:validations)
+
+      assert Platform.Orchestration.HeartbeatScheduler.heartbeat_suppressible?(stage, pending)
+    end
+
+    test "list_superseded_for_task/1 surfaces the replaced request, newest first", ctx do
+      assert [only] = ReviewRequests.list_superseded_for_task(ctx.task.id)
+      assert only.id == ctx.first.id
+      assert Enum.map(only.items, & &1.label) == ["Stale evidence"]
+    end
+  end
+
   # ── approve_item/2 ──────────────────────────────────────────────────────
 
   describe "approve_item/2" do
@@ -303,18 +428,24 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       assert validation.status == "failed"
     end
 
-    test "rejecting an item resolves sibling pending review requests for the same validation",
+    test "rejecting an item clears the gate without relabelling the superseded sibling",
          ctx do
       {:ok, request_a} = create_request(ctx, ["Desktop"])
       {:ok, request_b} = create_request(ctx, ["Mobile"])
 
-      item = hd(request_a.items)
+      # Since task 019fed8d stage 3, filing B supersedes A, so the sibling
+      # this test used to reject through is no longer actionable. Disposition
+      # the LIVE request instead.
+      item = hd(request_b.items)
       {:ok, _} = ReviewRequests.reject_item(item.id, "rowan", "Needs work")
 
       assert ReviewRequests.list_pending_for_task(ctx.task.id) == []
-
-      assert ReviewRequests.get_review_request(request_a.id).status == "resolved"
       assert ReviewRequests.get_review_request(request_b.id).status == "resolved"
+
+      # A stays `superseded`, NOT `resolved`: nobody dispositioned it, and
+      # marking it resolved would make an unreviewed submission read like a
+      # reviewed one in the audit trail.
+      assert ReviewRequests.get_review_request(request_a.id).status == "superseded"
     end
 
     test "rejecting review feedback returns an in-review task to in_progress", ctx do

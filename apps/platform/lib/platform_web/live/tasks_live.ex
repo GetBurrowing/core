@@ -426,6 +426,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:auto_approve_plan_enabled, false)
      |> assign(:merge_method, "squash")
      |> assign(:pending_reviews, [])
+     |> assign(:superseded_reviews, [])
      |> assign(:review_canvases, %{})
      |> assign(:review_output_ids, MapSet.new())
      |> assign(:output_canvases, [])
@@ -437,6 +438,10 @@ defmodule PlatformWeb.TasksLive do
      # `:selected_stack_members`.
      |> assign(:stack_graph_expanded, false)
      |> assign(:review_feedback_open, MapSet.new())
+     # Task 019fed8d stage 3: disclosure state for the "N earlier submissions"
+     # line. Collapsed by default — an earlier submission is history, not
+     # something the reviewer is being asked to read.
+     |> assign(:superseded_reviews_expanded, false)
      |> assign(:review_items_feedback, %{})
      |> assign(:attached_skills, [])
      |> assign(:available_skills, Skills.list_skills())
@@ -489,6 +494,7 @@ defmodule PlatformWeb.TasksLive do
           if space_id, do: Chat.PubSub.subscribe(space_id)
 
           pending_reviews = ReviewRequests.list_pending_for_task(task.id)
+          superseded_reviews = ReviewRequests.list_superseded_for_task(task.id)
           review_canvases = load_review_canvases(pending_reviews)
           review_output_ids = review_canvas_ids(pending_reviews)
           output_canvases = load_output_canvases(space_id)
@@ -514,6 +520,7 @@ defmodule PlatformWeb.TasksLive do
            |> assign(:steering_upload_previews, [])
            |> assign(:steering_attachment_intended, false)
            |> assign(:pending_reviews, pending_reviews)
+           |> assign(:superseded_reviews, superseded_reviews)
            |> assign(:review_canvases, review_canvases)
            |> assign(:review_output_ids, review_output_ids)
            |> assign(:output_canvases, output_canvases)
@@ -540,6 +547,7 @@ defmodule PlatformWeb.TasksLive do
            |> assign(:steering_upload_previews, [])
            |> assign(:steering_attachment_intended, false)
            |> assign(:pending_reviews, [])
+           |> assign(:superseded_reviews, [])
            |> assign(:review_canvases, %{})
            |> assign(:review_output_ids, MapSet.new())
            |> assign(:output_canvases, [])
@@ -564,6 +572,7 @@ defmodule PlatformWeb.TasksLive do
          |> assign(:steering_upload_previews, [])
          |> assign(:steering_attachment_intended, false)
          |> assign(:pending_reviews, [])
+         |> assign(:superseded_reviews, [])
          |> assign(:review_canvases, %{})
          |> assign(:review_output_ids, MapSet.new())
          |> assign(:output_canvases, [])
@@ -1415,6 +1424,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:steering_upload_previews, [])
      |> assign(:steering_attachment_intended, false)
      |> assign(:pending_reviews, [])
+     |> assign(:superseded_reviews, [])
      |> assign(:review_canvases, %{})
      |> assign(:review_output_ids, MapSet.new())
      |> assign(:output_canvases, [])
@@ -2624,6 +2634,11 @@ defmodule PlatformWeb.TasksLive do
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "Failed to submit feedback.")}
     end
+  end
+
+  def handle_event("toggle_superseded_reviews", _params, socket) do
+    {:noreply,
+     assign(socket, :superseded_reviews_expanded, !socket.assigns.superseded_reviews_expanded)}
   end
 
   def handle_event("toggle_review_feedback", %{"item-id" => item_id}, socket) do
@@ -3864,6 +3879,10 @@ defmodule PlatformWeb.TasksLive do
     if task = socket.assigns[:selected_task] do
       updated = Tasks.get_task_detail(task.id)
       pending_reviews = if updated, do: ReviewRequests.list_pending_for_task(updated.id), else: []
+
+      superseded_reviews =
+        if updated, do: ReviewRequests.list_superseded_for_task(updated.id), else: []
+
       review_canvases = load_review_canvases(pending_reviews)
       review_output_ids = review_canvas_ids(pending_reviews)
       output_canvases = load_output_canvases(socket.assigns[:execution_space_id])
@@ -3881,6 +3900,7 @@ defmodule PlatformWeb.TasksLive do
       socket
       |> assign_selected_task(updated)
       |> assign(:pending_reviews, pending_reviews)
+      |> assign(:superseded_reviews, superseded_reviews)
       |> assign(:review_canvases, review_canvases)
       |> assign(:review_output_ids, review_output_ids)
       |> assign(:output_canvases, output_canvases)
@@ -3890,6 +3910,7 @@ defmodule PlatformWeb.TasksLive do
     else
       socket
       |> assign(:pending_reviews, [])
+      |> assign(:superseded_reviews, [])
       |> assign(:review_canvases, %{})
       |> assign(:review_output_ids, MapSet.new())
       |> assign(:output_canvases, [])

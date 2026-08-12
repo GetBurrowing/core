@@ -4028,6 +4028,156 @@ defmodule PlatformWeb.TasksLiveTest do
     refute html =~ "border-warning bg-warning/5"
   end
 
+  # ── Superseded review requests (task 019fed8d stage 3, defect 2) ──────
+  #
+  # The load-bearing claim is that the stale submission is UNACTIONABLE, not
+  # that it is labelled. Every assertion below counts NODES: `LazyHTML.query/2`
+  # returns a struct, so both `== []` and `!= []` are wrong for emptiness.
+  # Each refute is paired with a positive control on the live entry, or a
+  # selector rename would make the refute pass by finding nothing anywhere.
+
+  defp count_nodes(html, selector) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(selector)
+    |> Enum.count()
+  end
+
+  defp seed_superseded_review_pair(conn) do
+    project = create_project()
+    task = create_task(project, %{title: "Gate Task", status: "in_progress"})
+    {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        name: "Manual review",
+        position: 1,
+        status: "running"
+      })
+
+    {:ok, validation} =
+      Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval", status: "pending"})
+
+    {:ok, _stale} =
+      ReviewRequests.create_review_request(%{
+        validation_id: validation.id,
+        task_id: task.id,
+        items: [%{label: "Stale screenshots"}]
+      })
+
+    {:ok, _live} =
+      ReviewRequests.create_review_request(%{
+        validation_id: validation.id,
+        task_id: task.id,
+        items: [%{label: "Fresh screenshots plus design verdict"}]
+      })
+
+    %{task: task, validation: validation, conn: authenticated_conn(conn)}
+  end
+
+  test "the superseded submission renders no approve control while the live one does",
+       %{conn: conn} do
+    %{task: task, conn: conn} = seed_superseded_review_pair(conn)
+
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+    html = render_click(view, "toggle_superseded_reviews", %{})
+
+    # POSITIVE CONTROL FIRST. If this is zero the refute below is vacuous:
+    # a renamed event or button class would empty both queries at once.
+    assert count_nodes(html, ~s([phx-click="approve_review_item"])) == 1
+
+    # The refute, scoped to the superseded container so a matching control
+    # elsewhere on the page cannot satisfy it.
+    assert count_nodes(
+             html,
+             ~s([data-role="superseded-reviews"] [phx-click="approve_review_item"])
+           ) ==
+             0
+
+    assert count_nodes(
+             html,
+             ~s([data-role="superseded-reviews"] [phx-click="toggle_review_feedback"])
+           ) ==
+             0
+
+    # And the superseded entry IS on the page — otherwise the two zeroes
+    # above would only be saying the block failed to render at all.
+    assert count_nodes(html, ~s([data-role="superseded-review"])) == 1
+    assert html =~ "Stale screenshots"
+  end
+
+  test "the disclosure line is collapsed by default and counts the earlier submissions",
+       %{conn: conn} do
+    %{task: task, conn: conn} = seed_superseded_review_pair(conn)
+
+    {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+    assert html =~ "1 earlier submission"
+    refute html =~ "1 earlier submissions"
+    assert count_nodes(html, ~s([data-role="superseded-review"])) == 0
+
+    # No fault colouring: resubmitting is what correction looks like.
+    superseded_block =
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-role="superseded-reviews"]))
+      |> LazyHTML.to_html()
+
+    refute superseded_block =~ "warning"
+    refute superseded_block =~ "error"
+    refute superseded_block =~ "Superseded"
+
+    expanded = render_click(view, "toggle_superseded_reviews", %{})
+    assert count_nodes(expanded, ~s([data-role="superseded-review"])) == 1
+    assert expanded =~ "superseded"
+  end
+
+  test "a second request arriving in another window demotes the first without a reload",
+       %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Live Demote", status: "in_progress"})
+    {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        name: "Manual review",
+        position: 1,
+        status: "running"
+      })
+
+    {:ok, validation} =
+      Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval", status: "pending"})
+
+    {:ok, _first} =
+      ReviewRequests.create_review_request(%{
+        validation_id: validation.id,
+        task_id: task.id,
+        items: [%{label: "First screenshots"}]
+      })
+
+    conn = authenticated_conn(conn)
+    {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+    # One live request, one approve control, no disclosure line yet.
+    assert count_nodes(html, ~s([phx-click="approve_review_item"])) == 1
+    refute html =~ "earlier submission"
+
+    {:ok, _second} =
+      ReviewRequests.create_review_request(%{
+        validation_id: validation.id,
+        task_id: task.id,
+        items: [%{label: "Second screenshots"}]
+      })
+
+    _ = :sys.get_state(view.pid)
+    refreshed = render(view)
+
+    assert refreshed =~ "1 earlier submission"
+    assert count_nodes(refreshed, ~s([phx-click="approve_review_item"])) == 1
+  end
+
   # ── Soft delete tests ─────────────────────────────────────────────────
 
   test "delete button appears in detail panel for deletable task", %{conn: conn} do

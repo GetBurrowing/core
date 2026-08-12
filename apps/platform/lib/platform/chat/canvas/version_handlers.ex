@@ -103,7 +103,7 @@ defmodule Platform.Chat.Canvas.VersionHandlers do
          :ok <- assert_writer(canvas.id, context),
          {:ok, version} <- fetch_version(canvas.id, revision),
          {:ok, %{revision: current_revision}} <- CanvasServer.describe(canvas.id) do
-      attribution = attribution_from_context(context, canvas.space_id)
+      attribution = Versions.attribution_from_context(context, canvas.space_id)
 
       operations = [{:replace_document, version.document}]
 
@@ -188,38 +188,6 @@ defmodule Platform.Chat.Canvas.VersionHandlers do
          ) do
       {:ok, _canvas} -> :ok
       {:error, payload} -> {:error, payload}
-    end
-  end
-
-  defp attribution_from_context(context, space_id) do
-    cond do
-      is_binary(Map.get(context, :agent_id)) ->
-        agent_id = Map.get(context, :agent_id)
-        participant = Chat.get_agent_participant(space_id, agent_id)
-
-        Versions.attribution_from_fields(%{
-          type: "agent",
-          id: participant && participant.id,
-          display_name: participant && participant.display_name,
-          slug: agent_id
-        })
-
-      is_binary(Map.get(context, :participant_id)) ->
-        Versions.attribution_from_fields(%{
-          type: Map.get(context, :participant_type) || "user",
-          id: Map.get(context, :participant_id),
-          display_name: Map.get(context, :display_name)
-        })
-
-      is_binary(Map.get(context, :user_id)) ->
-        Versions.attribution_from_fields(%{
-          type: "user",
-          id: Map.get(context, :user_id),
-          display_name: Map.get(context, :display_name)
-        })
-
-      true ->
-        %{"type" => "system"}
     end
   end
 

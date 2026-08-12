@@ -3195,12 +3195,20 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
     @dispatch_slugs ~w(dispatch.in_progress dispatch.in_review dispatch.deploying)
 
+    # NAME FORM (task 019fed8d stage 1): these pins moved from the bare
+    # `task_ack` / `alarm_silence` to the `suite_`-prefixed form the rest of
+    # every dispatch body already used. A federated client namespaces the
+    # Suite surface under `suite_`, so the bare token resolved to nothing and
+    # runtimes reported the tool absent. The prefix is now enforced
+    # mechanically by `in_review_dispatch_tool_pairing_test.exs`, which
+    # derives both sides rather than pinning a string; these pins stay because
+    # they also guard the SENTENCE, which that test says nothing about.
     test "every dispatch template body starts with the ack-first preamble" do
       for slug <- @dispatch_slugs do
         content = PromptTemplates.default_content_for_slug(slug)
         assert is_binary(content), "#{slug} should have default content"
 
-        assert content =~ "Your first tool call must be `task_ack",
+        assert content =~ "Your first tool call must be `suite_task_ack",
                "#{slug} must carry the task_ack preamble"
 
         assert content =~ "no-ack alert in 5 minutes",
@@ -3228,7 +3236,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         content = PromptTemplates.default_content_for_slug(slug)
         assert is_binary(content), "#{slug} should have default content"
 
-        assert content =~ "If `task_ack` is missing from your MCP tool cache",
+        assert content =~ "If `suite_task_ack` is missing from your MCP tool cache",
                "#{slug} must carry the alarm_silence fallback sentence"
 
         assert content =~
@@ -3254,7 +3262,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       preamble = PromptTemplates.task_ack_preamble()
 
       assert is_binary(preamble)
-      assert preamble =~ "If `task_ack` is missing from your MCP tool cache"
+      assert preamble =~ "If `suite_task_ack` is missing from your MCP tool cache"
       assert preamble =~ "alarm_silence(task_id=\"{{task_id}}\""
       assert preamble =~ "until_seconds=1800"
       assert preamble =~ "Do NOT use `report_blocker(needs_human: false)`"
@@ -3272,7 +3280,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       # audit-trail regression later.
       preamble = PromptTemplates.task_ack_preamble()
 
-      assert preamble =~ "If `task_ack` is missing from your MCP tool cache",
+      assert preamble =~ "If `suite_task_ack` is missing from your MCP tool cache",
              "task_ack_preamble/0 must carry the alarm_silence fallback sentence"
 
       assert preamble =~
@@ -3349,7 +3357,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       preamble = PromptTemplates.task_ack_preamble()
 
       assert is_binary(preamble)
-      assert preamble =~ "Your first tool call must be `task_ack"
+      assert preamble =~ "Your first tool call must be `suite_task_ack"
       assert preamble =~ "{{task_id}}"
       assert preamble =~ "{{stage_id}}"
       assert preamble =~ "no-ack alert in 5 minutes"

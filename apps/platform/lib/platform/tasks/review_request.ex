@@ -5,6 +5,16 @@ defmodule Platform.Tasks.ReviewRequest do
 
   The request stays `pending` until every item is dispositioned, at which point
   `maybe_resolve_request/1` marks it `resolved` and evaluates the validation.
+
+  ## `superseded` is a third terminal status, and it is not `resolved`
+
+  When a newer request is filed against the same validation, the earlier
+  pending one becomes `"superseded"` (task `019fed8d` stage 3). It is spelled
+  differently from `"resolved"` because no human dispositioned it: a
+  `resolved` request is the record of a verdict, a `superseded` one is the
+  record of evidence that was replaced before anyone acted on it. Collapsing
+  the two would make an unreviewed submission indistinguishable from a
+  reviewed one in every audit that reads this column.
   """
 
   use Ecto.Schema
@@ -15,7 +25,7 @@ defmodule Platform.Tasks.ReviewRequest do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @statuses ~w(pending resolved)
+  @statuses ~w(pending resolved superseded)
 
   schema "review_requests" do
     belongs_to(:validation, Validation)
@@ -24,6 +34,7 @@ defmodule Platform.Tasks.ReviewRequest do
     field(:status, :string, default: "pending")
     field(:submitted_by, :string)
     field(:resolved_at, :utc_datetime_usec)
+    field(:superseded_at, :utc_datetime_usec)
 
     has_many(:items, ReviewItem)
 
@@ -40,7 +51,8 @@ defmodule Platform.Tasks.ReviewRequest do
       :execution_space_id,
       :status,
       :submitted_by,
-      :resolved_at
+      :resolved_at,
+      :superseded_at
     ])
     |> validate_required([:validation_id, :task_id])
     |> validate_inclusion(:status, @statuses)

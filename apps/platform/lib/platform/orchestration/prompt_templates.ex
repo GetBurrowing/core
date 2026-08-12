@@ -398,11 +398,11 @@ defmodule Platform.Orchestration.PromptTemplates do
   # one. Do not "fix" this by giving `task_ack` a task-level form — that would
   # be API surface for an alarm that does not exist.
   @task_ack_preamble """
-  **Your first tool call must be `task_ack(task_id="{{task_id}}", stage_id="{{stage_id}}", subagent_id="<the id returned when you spawned the SuiteExecutor / SuiteReviewer via the Agent tool>")`.**
+  **Your first tool call must be `suite_task_ack(task_id="{{task_id}}", stage_id="{{stage_id}}", subagent_id="<the id returned when you spawned the SuiteExecutor / SuiteReviewer via the Agent tool>")`.**
 
   Spawn the subagent FIRST, then include its returned agent id in the ack. Empty or missing subagent_id will fail validation — this ordering makes it structurally impossible to ack a dispatch you never spawned a subagent for. Without a successful ack the router will fire a no-ack alert in 5 minutes.
 
-  **If `task_ack` is missing from your MCP tool cache** (a known cross-version issue where a session's catalog predates a new tool), call `alarm_silence(task_id="{{task_id}}", stage_id="{{stage_id}}", until_seconds=1800, reason="task_ack absent from stale MCP catalog; subagent live")` as the operator escape hatch. Do NOT use `report_blocker(needs_human: false)` — that anti-pattern sets a task-level lease to blocked and leaks across stage boundaries.
+  **If `suite_task_ack` is missing from your MCP tool cache** (a known cross-version issue where a session's catalog predates a new tool), call `suite_alarm_silence(task_id="{{task_id}}", stage_id="{{stage_id}}", until_seconds=1800, reason="task_ack absent from stale MCP catalog; subagent live")` as the operator escape hatch. Do NOT use `report_blocker(needs_human: false)` — that anti-pattern sets a task-level lease to blocked and leaks across stage boundaries.
   """
 
   @doc "Ack-first preamble string interpolated into every stage-scoped dispatch template body."
@@ -977,7 +977,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         - Post screenshots, canvas snapshots, or other concrete evidence into the execution space
 
         ## Design review (Saru) — before the human gate
-        If the task changed UI files (the same token list as the planner's manual_approval rule: `.heex`, `assets/js/`, `assets/css/`, `app.css`, `compose_input`, `chat_live`, `tasks_live.ex`, `_web/live/`, `_web/components/`), obtain Saru's design review (the Designer role's design.critique responsibility) on your captured screenshots BEFORE creating the human review request. Call the `design_critique_request` tool with the `canvas_id` of the evidence canvas holding those screenshots, the `review_request_id` once you have one (the tool then appends the verdict to that pending request itself), and the `task_id`. The tool returns the verdict SYNCHRONOUSLY — include Saru's verdict and issue list as labelled checklist items in the review request. Saru's review is advisory evidence for the human gate — it never replaces human approval, and if the design review cannot be obtained promptly (the tool returns an error, e.g. the Designer role is unfilled), create the review request anyway and note that design review is missing.
+        If the task changed UI files (the same token list as the planner's manual_approval rule: `.heex`, `assets/js/`, `assets/css/`, `app.css`, `compose_input`, `chat_live`, `tasks_live.ex`, `_web/live/`, `_web/components/`), obtain Saru's design review (the Designer role's design.critique responsibility) on your captured screenshots BEFORE creating the human review request. Call the `suite_design_critique_request` tool with the `canvas_id` of the evidence canvas holding those screenshots, the `review_request_id` once you have one (the tool then appends the verdict to that pending request itself), and the `task_id`. The tool returns the verdict SYNCHRONOUSLY — include Saru's verdict and issue list as labelled checklist items in the review request. Saru's review is advisory evidence for the human gate — it never replaces human approval, and if the design review cannot be obtained promptly (the tool returns an error, e.g. the Designer role is unfilled), create the review request anyway and note that design review is missing.
 
         ## First-turn rule (CRITICAL)
         - Do NOT spend your first substantive turn re-discovering broad task/plan state if the dispatch already provides `Current task_id`, `Current stage_id`, `validation_id`, and `execution_space_id`.
@@ -990,9 +990,9 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         ## Review rules
         - Use `suite_review_request_create` for `manual_approval` validations — include labelled checklist items plus screenshots/canvas/evidence links.
-        - Do NOT call `stage_complete` before the required review request and evidence have been created.
+        - Do NOT call `suite_stage_complete` before the required review request and evidence have been created.
         - Do NOT self-approve `manual_approval` validations.
-        - Do NOT call `task_update` for lifecycle status changes — review outcomes flow through validations and review requests.
+        - Do NOT call `suite_task_update` for lifecycle status changes — review outcomes flow through validations and review requests.
 
         The Stage Description block above is the planner's own authored specification for this stage — judge the implementation against it, not against a summary of it. The full task hierarchy (project, epic, task body, whole plan) is NOT in this message; fetch it with suite_task_get / suite_plan_get if something you need is missing.
 

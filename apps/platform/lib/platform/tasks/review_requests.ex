@@ -69,6 +69,15 @@ defmodule Platform.Tasks.ReviewRequests do
   Optional:
     * `:execution_space_id` – the execution space for feedback posting
     * `:submitted_by` – agent or user ID that submitted the request
+
+  ## Filing a second request for a validation supersedes the first
+
+  Any request still `pending` against the same `validation_id` is marked
+  `"superseded"` inside the same transaction (task `019fed8d` stage 3). Before
+  this, both stayed pending and the panel rendered an Approve button for each
+  with nothing distinguishing them; approving the older one passed the gate on
+  evidence the submitter had already replaced, and the newer verdict was lost
+  without a trace.
   """
   @spec create_review_request(map()) :: {:ok, ReviewRequest.t()} | {:error, term()}
   def create_review_request(attrs) do
@@ -89,6 +98,8 @@ defmodule Platform.Tasks.ReviewRequests do
         Repo.transaction(fn ->
           case %ReviewRequest{} |> ReviewRequest.changeset(request_attrs) |> Repo.insert() do
             {:ok, request} ->
+              supersede_earlier_pending_requests(request)
+
               items =
                 Enum.map(items_input, fn item_attrs ->
                   item_attrs =
@@ -230,12 +241,35 @@ defmodule Platform.Tasks.ReviewRequests do
     |> Repo.all()
   end
 
+  @doc """
+  List review requests for a task that a newer submission replaced, newest
+  first (task `019fed8d` stage 3).
+
+  Deliberately a SEPARATE function rather than a `status` option on
+  `list_pending_for_task/1`. Every caller of that function gates real
+  behaviour — the router's `manual_approval_gate_pending?/1`,
+  `Stacks.member_pending_review_requests?/1`,
+  `HeartbeatScheduler.heartbeat_suppressible?/2` — and each asks "is a human
+  still owed a verdict here?". A superseded request is owed nothing, so it
+  must not widen that answer by any route, including a defaulted option
+  someone later flips.
+  """
+  @spec list_superseded_for_task(binary()) :: [ReviewRequest.t()]
+  def list_superseded_for_task(task_id) do
+    ReviewRequest
+    |> where([rr], rr.task_id == ^task_id and rr.status == "superseded")
+    |> order_by([rr], desc: rr.inserted_at)
+    |> preload(:items)
+    |> Repo.all()
+  end
+
   # ── Item disposition ────────────────────────────────────────────────────
 
   @doc "Approve a review item and check if the request can be resolved."
   @spec approve_item(binary(), String.t()) :: {:ok, ReviewItem.t()} | {:error, term()}
   def approve_item(item_id, reviewed_by) do
     with {:ok, item} <- fetch_item(item_id),
+         :ok <- ensure_request_actionable(item),
          {:ok, updated} <- update_item_status(item, "approved", reviewed_by, nil) do
       maybe_resolve_request(updated.review_request_id)
       {:ok, updated}
@@ -247,6 +281,7 @@ defmodule Platform.Tasks.ReviewRequests do
           {:ok, ReviewItem.t()} | {:error, term()}
   def reject_item(item_id, reviewed_by, feedback) do
     with {:ok, item} <- fetch_item(item_id),
+         :ok <- ensure_request_actionable(item),
          {:ok, updated} <- update_item_status(item, "needs_revision", reviewed_by, feedback) do
       maybe_resolve_request(updated.review_request_id)
       {:ok, updated}
@@ -269,7 +304,11 @@ defmodule Platform.Tasks.ReviewRequests do
   def maybe_resolve_request(request_id) do
     request = get_review_request(request_id)
 
-    if request == nil do
+    if request == nil or request.status == "superseded" do
+      # A superseded request must never be able to pass or fail the gate: its
+      # evidence was replaced, and the validation now belongs to the newer
+      # request. Returning `:not_yet` (rather than raising) keeps this a
+      # no-op for any caller that reaches it through stale state.
       :not_yet
     else
       cond do
@@ -294,6 +333,18 @@ defmodule Platform.Tasks.ReviewRequests do
     case item do
       nil -> {:error, :not_found}
       item -> {:ok, item}
+    end
+  end
+
+  # The server-side half of the UI subtraction. The panel stops RENDERING the
+  # Approve / Send-feedback controls for a superseded entry; this stops the
+  # events those controls emit from doing anything if they arrive anyway —
+  # from a stale browser tab, a replayed `phx-click`, or a future caller.
+  # Without it the removal would be cosmetic.
+  defp ensure_request_actionable(%ReviewItem{review_request_id: request_id}) do
+    case Repo.get(ReviewRequest, request_id) do
+      %ReviewRequest{status: "superseded"} -> {:error, :request_superseded}
+      _ -> :ok
     end
   end
 
@@ -412,6 +463,36 @@ defmodule Platform.Tasks.ReviewRequests do
     maybe_dismiss_reviewer_inbox(request)
 
     :resolved
+  end
+
+  # Task `019fed8d` stage 3, defect 2. Runs INSIDE the create transaction, so a
+  # task can never be observed holding two pending requests for one validation
+  # — not even between the insert and a follow-up write.
+  #
+  # ## Why supersede rather than refuse the create
+  #
+  # Refusing the second create is the tidier-looking fix and it is the wrong
+  # one: it strands the newer evidence with nowhere to land, which is the
+  # incident this stage exists to fix with the loss moved one step earlier.
+  # The newest submission is always the one a human should act on, so the
+  # newest wins and the earlier one survives as read-only history.
+  #
+  # Scoped to `validation_id`, NOT `task_id`: a task legitimately holds one
+  # pending request per manual gate, and superseding across gates would hide a
+  # request nobody has replaced.
+  defp supersede_earlier_pending_requests(%ReviewRequest{validation_id: nil}), do: :ok
+
+  defp supersede_earlier_pending_requests(%ReviewRequest{} = request) do
+    now = DateTime.utc_now()
+
+    from(rr in ReviewRequest,
+      where:
+        rr.validation_id == ^request.validation_id and rr.status == "pending" and
+          rr.id != ^request.id
+    )
+    |> Repo.update_all(set: [status: "superseded", superseded_at: now, updated_at: now])
+
+    :ok
   end
 
   defp resolve_sibling_requests(request, now) do

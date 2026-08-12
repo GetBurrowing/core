@@ -49,6 +49,7 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   alias Platform.Chat.Canvas.Server, as: CanvasServer
   alias Platform.Chat.Canvas.Templates
   alias Platform.Chat.Canvas.ToolAccess
+  alias Platform.Chat.Canvas.Versions
   alias Platform.Chat.CanvasDocument
   alias Platform.Chat.PubSub, as: ChatPubSub
 
@@ -164,8 +165,13 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
          {:ok, base_revision} <- require_integer(args, "base_revision"),
          {:ok, ops_list} <- require_list(args, "operations"),
          {:ok, parsed_ops} <- parse_operations(ops_list),
-         :ok <- authorize_write(canvas_id, context) do
-      case CanvasServer.apply_patches(canvas_id, parsed_ops, base_revision) do
+         {:ok, canvas} <- authorize_write(canvas_id, context) do
+      # The space comes from the canvas the authorization gate already
+      # fetched, not from an argument: `canvas.patch` args carry no space_id,
+      # and adding one would let a caller name a space the canvas isn't in.
+      attribution = Versions.attribution_from_context(context, canvas.space_id)
+
+      case CanvasServer.apply_patches(canvas_id, parsed_ops, base_revision, attribution) do
         {:ok, new_revision} ->
           maybe_subscribe(canvas_id)
           {:ok, %{canvas_id: canvas_id, revision: new_revision}}
@@ -296,14 +302,14 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   # Resolution lives in `ToolAccess` (task 019fb01b stage 1); only the denial
   # sentence is this handler's, because only the sentence differs between the
   # canvas write tools.
+  # Returns the fetched canvas rather than `:ok` — the caller needs its
+  # space_id to resolve the writer's attribution, and re-fetching it would be
+  # a second read of a row the gate already has.
   defp authorize_write(canvas_id, context) do
-    case ToolAccess.fetch_for_write(canvas_id, context,
-           denial: @patch_denial,
-           suggestion: @patch_suggestion
-         ) do
-      {:ok, _canvas} -> :ok
-      {:error, payload} -> {:error, payload}
-    end
+    ToolAccess.fetch_for_write(canvas_id, context,
+      denial: @patch_denial,
+      suggestion: @patch_suggestion
+    )
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────────

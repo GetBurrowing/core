@@ -3072,16 +3072,23 @@ defmodule Platform.Chat do
     # Archive check first — see `update_canvas/3`.
     with :ok <- ensure_space_writable(canvas.space_id),
          {:ok, canvas} <- CanvasAccess.fetch_for_writer(canvas.id, actor) do
-      do_patch_canvas(canvas, operations)
+      do_patch_canvas(canvas, operations, actor)
     end
   end
 
-  defp do_patch_canvas(%Canvas{} = canvas, operations) do
+  defp do_patch_canvas(%Canvas{} = canvas, operations, actor) do
     alias Platform.Chat.Canvas.Server, as: CanvasServer
+    alias Platform.Chat.Canvas.Versions
+
+    # The authorized writer is already known here; passing it on is what keeps
+    # the version row from recording `unknown` for a write we can name (task
+    # 019fed8d). `actor` is CanvasAccess's shape, not a tool-call context, so
+    # it is normalized before resolution.
+    attribution = Versions.attribution_from_context(actor_context(actor), canvas.space_id)
 
     case CanvasServer.describe(canvas.id) do
       {:ok, %{revision: current_revision}} ->
-        case CanvasServer.apply_patches(canvas.id, operations, current_revision) do
+        case CanvasServer.apply_patches(canvas.id, operations, current_revision, attribution) do
           {:ok, _new_revision} ->
             # Refetch to return the fresh struct; the server has already
             # triggered an async persist.
@@ -3098,6 +3105,16 @@ defmodule Platform.Chat do
         {:error, reason}
     end
   end
+
+  # CanvasAccess actors are tuples/atoms; `Versions.attribution_from_context/2`
+  # reads the tool-call context map. `:system` and `nil` map to an empty
+  # context, which resolves to an explicit `system` attribution rather than
+  # `unknown` — a write we chose not to attribute should not look like one we
+  # failed to attribute.
+  defp actor_context({:user, id}) when is_binary(id), do: %{user_id: id}
+  defp actor_context({:agent, id}) when is_binary(id), do: %{agent_id: id}
+  defp actor_context(actor) when is_map(actor), do: actor
+  defp actor_context(_), do: %{}
 
   @doc """
   Clone a canvas into another space (ADR 0036, Phase 6).

@@ -2189,6 +2189,16 @@
         </div>
       </div>
 
+      <%!-- Earlier submissions (task 019fed8d stage 3, defect 2). The markup
+           and its two label helpers live in
+           `PlatformWeb.Components.SupersededReviewSubmissions`; the shell keeps
+           only the assigns and the toggle event. --%>
+      <PlatformWeb.Components.SupersededReviewSubmissions.superseded_review_submissions
+        :if={@superseded_reviews != []}
+        reviews={@superseded_reviews}
+        expanded={@superseded_reviews_expanded}
+      />
+
       <%!-- Skills --%>
       <div class="space-y-2">
         <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 flex items-center gap-1">
