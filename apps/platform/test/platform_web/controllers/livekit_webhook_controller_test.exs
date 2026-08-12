@@ -115,6 +115,65 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       assert transcript_id == existing.id
     end
 
+    # ── task 019ff6f3 stage 3 ──
+    test "a populated row still broadcasts meeting_finished", %{conn: conn} do
+      room_id = unique_room_id()
+      {:ok, transcript} = Meetings.create_transcript(%{room_id: room_id})
+
+      {:ok, _} =
+        Meetings.append_segment(transcript.id, %{
+          "participant_identity" => "user-1",
+          "text" => "We shipped it.",
+          "start_time" => 1000,
+          "end_time" => 2000
+        })
+
+      :ok = Meetings.PubSub.subscribe_meeting_finished(room_id)
+
+      conn = post(conn, @livekit_webhook_path, room_finished_payload(room_id))
+      assert %{"status" => "finalized"} = json_response(conn, 200)
+
+      # The suppression guard must not swallow the normal case. Without
+      # this control, a guard that suppressed EVERY broadcast would pass
+      # the selection test below unnoticed.
+      assert_receive {:meeting_finished, %{transcript_id: _}}, 1_000
+    end
+
+    test "a room holding content elsewhere hands the POPULATED row to the summary path", %{
+      conn: conn
+    } do
+      # The empty row is inserted MOST RECENTLY — the shape that a
+      # `desc: inserted_at` lookup gets wrong. Stage 2's selector is what
+      # keeps the empty row away from the summary dispatch here; the
+      # controller's own zero-segment guard is belt-and-braces behind it
+      # and does not fire on this path.
+      room_id = unique_room_id()
+      {:ok, populated} = Meetings.create_transcript(%{room_id: room_id})
+
+      {:ok, _} =
+        Meetings.append_segment(populated.id, %{
+          "participant_identity" => "user-1",
+          "text" => "Real conversation.",
+          "start_time" => 1000,
+          "end_time" => 2000
+        })
+
+      {:ok, empty} = Meetings.create_transcript(%{room_id: room_id, segments: []})
+
+      conn = post(conn, @livekit_webhook_path, room_finished_payload(room_id))
+
+      populated_id = populated.id
+
+      assert %{"transcript_id" => ^populated_id, "segment_count" => 1} =
+               json_response(conn, 200),
+             "the newest row (#{empty.id}) is empty and the room holds content on " <>
+               "#{populated.id} — dispatching the empty row publishes a claim about the " <>
+               "whole room that the populated row contradicts"
+
+      # And the empty row was left alone — no invented summary.
+      assert is_nil(Meetings.get_transcript(empty.id).summary)
+    end
+
     test "ignores event with no room identifier", %{conn: conn} do
       payload = %{"event" => "room_started", "room" => %{}}
 
@@ -279,9 +338,71 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       payload = room_finished_payload(room_id)
       conn = post(conn, @livekit_webhook_path, payload)
 
-      # get_transcript_for_room only finds "recording" status, so this is ignored
-      assert %{"status" => "ignored", "reason" => "no active transcript"} =
+      # Task 019ff6f3 stage 2: the room-wide lookup DOES return a row in
+      # `processing`, so the absorb happens on status rather than on the
+      # lookup coming back nil — same outcome (no re-finalize, no second
+      # summary dispatch), different reason string.
+      assert %{"status" => "ignored", "reason" => "transcript already finalized"} =
                json_response(conn, 200)
+    end
+
+    # ── task 019ff6f3 stage 3 ──
+    test "a populated row still broadcasts meeting_finished", %{conn: conn} do
+      room_id = unique_room_id()
+      {:ok, transcript} = Meetings.create_transcript(%{room_id: room_id})
+
+      {:ok, _} =
+        Meetings.append_segment(transcript.id, %{
+          "participant_identity" => "user-1",
+          "text" => "We shipped it.",
+          "start_time" => 1000,
+          "end_time" => 2000
+        })
+
+      :ok = Meetings.PubSub.subscribe_meeting_finished(room_id)
+
+      conn = post(conn, @livekit_webhook_path, room_finished_payload(room_id))
+      assert %{"status" => "finalized"} = json_response(conn, 200)
+
+      # The suppression guard must not swallow the normal case. Without
+      # this control, a guard that suppressed EVERY broadcast would pass
+      # the selection test below unnoticed.
+      assert_receive {:meeting_finished, %{transcript_id: _}}, 1_000
+    end
+
+    test "a room holding content elsewhere hands the POPULATED row to the summary path", %{
+      conn: conn
+    } do
+      # The empty row is inserted MOST RECENTLY — the shape that a
+      # `desc: inserted_at` lookup gets wrong. Stage 2's selector is what
+      # keeps the empty row away from the summary dispatch here; the
+      # controller's own zero-segment guard is belt-and-braces behind it
+      # and does not fire on this path.
+      room_id = unique_room_id()
+      {:ok, populated} = Meetings.create_transcript(%{room_id: room_id})
+
+      {:ok, _} =
+        Meetings.append_segment(populated.id, %{
+          "participant_identity" => "user-1",
+          "text" => "Real conversation.",
+          "start_time" => 1000,
+          "end_time" => 2000
+        })
+
+      {:ok, empty} = Meetings.create_transcript(%{room_id: room_id, segments: []})
+
+      conn = post(conn, @livekit_webhook_path, room_finished_payload(room_id))
+
+      populated_id = populated.id
+
+      assert %{"transcript_id" => ^populated_id, "segment_count" => 1} =
+               json_response(conn, 200),
+             "the newest row (#{empty.id}) is empty and the room holds content on " <>
+               "#{populated.id} — dispatching the empty row publishes a claim about the " <>
+               "whole room that the populated row contradicts"
+
+      # And the empty row was left alone — no invented summary.
+      assert is_nil(Meetings.get_transcript(empty.id).summary)
     end
 
     test "ignores event with no room identifier", %{conn: conn} do
@@ -692,10 +813,9 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
          %{conn: conn} do
       # First `room_finished` finalizes the recording transcript to
       # "complete" (zero-segment app-room path via the empty summarizer).
-      # A second `room_finished` finds no *active* (recording) transcript
-      # — `get_transcript_for_room/1` filters by `status == "recording"`
-      # — and returns the "no active transcript" ignore without touching
-      # the completed row or crashing.
+      # A second `room_finished` finds the row via the room-wide lookup
+      # (task 019ff6f3 stage 2) and absorbs it on its terminal status,
+      # without touching the completed row or crashing.
       room_name = unique_room_id()
       {:ok, transcript} = Meetings.create_transcript(%{room_id: room_name})
       transcript_id = transcript.id
@@ -713,7 +833,7 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
 
       second_conn = post(conn, @livekit_webhook_path, room_finished_payload(room_name))
 
-      assert %{"status" => "ignored", "reason" => "no active transcript"} =
+      assert %{"status" => "ignored", "reason" => "transcript already finalized"} =
                json_response(second_conn, 200)
 
       # Row unchanged.
@@ -879,6 +999,65 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       conn = post(conn, @livekit_webhook_path, payload)
 
       assert %{"status" => "ignored"} = json_response(conn, 200)
+    end
+
+    # ── task 019ff6f3 stage 3 ──
+    test "a populated row still broadcasts meeting_finished", %{conn: conn} do
+      room_id = unique_room_id()
+      {:ok, transcript} = Meetings.create_transcript(%{room_id: room_id})
+
+      {:ok, _} =
+        Meetings.append_segment(transcript.id, %{
+          "participant_identity" => "user-1",
+          "text" => "We shipped it.",
+          "start_time" => 1000,
+          "end_time" => 2000
+        })
+
+      :ok = Meetings.PubSub.subscribe_meeting_finished(room_id)
+
+      conn = post(conn, @livekit_webhook_path, room_finished_payload(room_id))
+      assert %{"status" => "finalized"} = json_response(conn, 200)
+
+      # The suppression guard must not swallow the normal case. Without
+      # this control, a guard that suppressed EVERY broadcast would pass
+      # the selection test below unnoticed.
+      assert_receive {:meeting_finished, %{transcript_id: _}}, 1_000
+    end
+
+    test "a room holding content elsewhere hands the POPULATED row to the summary path", %{
+      conn: conn
+    } do
+      # The empty row is inserted MOST RECENTLY — the shape that a
+      # `desc: inserted_at` lookup gets wrong. Stage 2's selector is what
+      # keeps the empty row away from the summary dispatch here; the
+      # controller's own zero-segment guard is belt-and-braces behind it
+      # and does not fire on this path.
+      room_id = unique_room_id()
+      {:ok, populated} = Meetings.create_transcript(%{room_id: room_id})
+
+      {:ok, _} =
+        Meetings.append_segment(populated.id, %{
+          "participant_identity" => "user-1",
+          "text" => "Real conversation.",
+          "start_time" => 1000,
+          "end_time" => 2000
+        })
+
+      {:ok, empty} = Meetings.create_transcript(%{room_id: room_id, segments: []})
+
+      conn = post(conn, @livekit_webhook_path, room_finished_payload(room_id))
+
+      populated_id = populated.id
+
+      assert %{"transcript_id" => ^populated_id, "segment_count" => 1} =
+               json_response(conn, 200),
+             "the newest row (#{empty.id}) is empty and the room holds content on " <>
+               "#{populated.id} — dispatching the empty row publishes a claim about the " <>
+               "whole room that the populated row contradicts"
+
+      # And the empty row was left alone — no invented summary.
+      assert is_nil(Meetings.get_transcript(empty.id).summary)
     end
 
     test "ignores event with no room identifier", %{conn: conn} do
@@ -1078,5 +1257,140 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       |> Platform.Repo.insert()
 
     agent
+  end
+
+  # ── shadow-row selection + rejoin reattachment (task 019ff6f3 stage 2) ──
+
+  describe "POST #{@livekit_webhook_path} — shadowed room (populated + empty row)" do
+    test "room_finished finalizes the POPULATED row when the EMPTY row is newest",
+         %{conn: conn} do
+      # The load-bearing fixture. Under the old `desc: inserted_at` +
+      # `status == "recording"` lookup, the newest (empty) row is what
+      # got finalized and summarised — which is how a meeting with a full
+      # transcript produced prose saying no transcript arrived.
+      {room_name, populated, empty} = shadowed_room()
+      populated_id = populated.id
+
+      assert %{
+               "status" => "finalized",
+               "transcript_id" => ^populated_id,
+               "segment_count" => 5
+             } =
+               conn
+               |> post(@livekit_webhook_path, room_finished_payload(room_name))
+               |> json_response(200)
+
+      selected = Meetings.get_transcript(populated_id)
+
+      assert selected.status in ["processing", "complete", "failed"],
+             "populated row #{populated_id} never left recording (status=#{selected.status})"
+
+      # The shadow row is neither finalized nor summarised.
+      shadow = Meetings.get_transcript(empty.id)
+      assert shadow.status == "recording"
+      assert shadow.summary == nil
+      assert shadow.segments == []
+      assert count_transcripts_for_room(room_name) == 2
+    end
+
+    test "direction control: same populated row is selected when it is NEWEST",
+         %{conn: conn} do
+      # If this passed and the test above failed, the selection is keyed on
+      # recency rather than content and the pair cannot detect the bug.
+      room_name = app_room_name()
+      base = ~U[2026-02-02 09:00:00.000000Z]
+
+      empty = transcript_at(room_name, 0, base)
+      populated = transcript_at(room_name, 5, DateTime.add(base, 600, :second))
+      populated_id = populated.id
+
+      assert %{"status" => "finalized", "transcript_id" => ^populated_id, "segment_count" => 5} =
+               conn
+               |> post(@livekit_webhook_path, room_finished_payload(room_name))
+               |> json_response(200)
+
+      assert Meetings.get_transcript(empty.id).status == "recording"
+      assert Meetings.get_transcript(empty.id).summary == nil
+    end
+
+    test "room_started for a room with a non-complete populated row creates NO second row",
+         %{conn: conn} do
+      # A late rejoin after the row already left `recording`. It must
+      # reattach, not open a shadow.
+      room_name = app_room_name()
+      existing = transcript_at(room_name, 4, ~U[2026-02-02 09:00:00.000000Z], "failed")
+      existing_id = existing.id
+
+      assert %{"status" => "created", "transcript_id" => ^existing_id} =
+               conn
+               |> post(@livekit_webhook_path, room_started_payload(room_name))
+               |> json_response(201)
+
+      assert length(Meetings.list_transcripts_for_room(room_name)) == 1
+      assert Meetings.get_transcript(existing_id).status == "recording"
+    end
+
+    test "transcription after a rejoin appends to the existing row, not a shadow",
+         %{conn: conn} do
+      room_name = app_room_name()
+      existing = transcript_at(room_name, 4, ~U[2026-02-02 09:00:00.000000Z], "failed")
+
+      conn
+      |> post(
+        @livekit_webhook_path,
+        transcription_payload(room_name, [sample_segment(%{"text" => "Rejoined and speaking."})])
+      )
+      |> json_response(200)
+
+      assert length(Meetings.list_transcripts_for_room(room_name)) == 1
+      assert length(Meetings.get_transcript(existing.id).segments) == 5
+    end
+  end
+
+  # Two rows for one room: populated first, EMPTY row inserted strictly
+  # later, with explicit timestamps rather than clock resolution.
+  defp shadowed_room do
+    room_name = app_room_name()
+    base = ~U[2026-02-02 09:00:00.000000Z]
+
+    populated = transcript_at(room_name, 5, base)
+    empty = transcript_at(room_name, 0, DateTime.add(base, 600, :second))
+
+    {room_name, populated, empty}
+  end
+
+  defp transcript_at(room_id, segment_count, inserted_at, status \\ "recording") do
+    import Ecto.Query, only: [from: 2]
+
+    {:ok, transcript} =
+      Meetings.create_transcript(%{
+        room_id: room_id,
+        status: status,
+        segments: invented_segments(segment_count)
+      })
+
+    {1, nil} =
+      Platform.Repo.update_all(
+        from(t in Platform.Meetings.Transcript, where: t.id == ^transcript.id),
+        set: [inserted_at: inserted_at]
+      )
+
+    Meetings.get_transcript(transcript.id)
+  end
+
+  defp invented_segments(0), do: []
+
+  defp invented_segments(n) do
+    for i <- 1..n do
+      %{
+        "participant_identity" => "user-#{i}",
+        "speaker_name" => "Speaker #{i}",
+        "text" => "Invented line #{i} of an invented meeting.",
+        "start_time" => i * 1000,
+        "end_time" => i * 1000 + 500,
+        "language" => "en",
+        "final" => true
+      }
+    end
   end
 end

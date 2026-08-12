@@ -118,7 +118,13 @@ defmodule PlatformWeb.LivekitWebhookController do
     end
 
     if room_id do
-      case Meetings.get_transcript_for_room(room_id) do
+      # Room-wide selection, not "the newest recording row": the row that
+      # should be finalized and summarised is the one HOLDING THE CONTENT.
+      # A late rejoin can leave an empty row sitting beside the populated
+      # one, and summarising the empty one is what produced user-visible
+      # prose claiming no transcript arrived while a full transcript for
+      # the same room sat in the database.
+      case Meetings.get_summarizable_transcript_for_room(room_id) do
         nil ->
           Logger.debug("[LiveKit] No active transcript for room #{room_id} on room_finished")
 
@@ -126,9 +132,28 @@ defmodule PlatformWeb.LivekitWebhookController do
           |> put_status(:ok)
           |> json(%{status: "ignored", reason: "no active transcript"})
 
+        %{status: status} = transcript when status in ["processing", "complete"] ->
+          # Already finalized or summarised. `get_summarizable_transcript_for_room/1`
+          # deliberately returns rows in any status (the caller decides), so a
+          # re-delivered `room_finished` is absorbed here rather than pushing a
+          # completed row back into `processing` and dispatching a second
+          # summary. `failed` is NOT absorbed: re-running a failed row is
+          # recovery, which is the outcome this task wants.
+          Logger.debug(
+            "[LiveKit] Transcript #{transcript.id} for room #{room_id} already #{status}"
+          )
+
+          conn
+          |> put_status(:ok)
+          |> json(%{status: "ignored", reason: "transcript already finalized"})
+
         transcript ->
           cond do
-            not Meetings.legit_room?(room) and Enum.empty?(transcript.segments) ->
+            # Whole-room emptiness, not this row's. Deleting an empty row
+            # while a populated sibling exists is fine; deleting on a
+            # per-row check when the ROOM does hold content is the same
+            # class of bug as summarising the empty row.
+            not Meetings.legit_room?(room) and not Meetings.room_has_segments?(room_id) ->
               # Phantom room with no accumulated audio: drop the row entirely
               # rather than finalize + dispatch a summary. This is the
               # sweep half of stage 2's source-filter — anything that got
@@ -228,25 +253,24 @@ defmodule PlatformWeb.LivekitWebhookController do
         conn |> put_status(:ok) |> json(%{status: "ignored", reason: "unregistered room"})
 
       room_id && raw_segments != [] ->
-        case Meetings.get_transcript_for_room(room_id) do
-          nil ->
-            # Auto-create transcript if one doesn't exist yet (race condition safety)
-            case Meetings.ensure_transcript(%{room_id: room_id, space_id: space_id}) do
-              {:ok, transcript} ->
-                append_segments(conn, transcript.id, raw_segments, room_id)
-
-              {:error, reason} ->
-                Logger.warning(
-                  "[LiveKit] Failed to ensure transcript for room #{room_id}: #{inspect(reason)}"
-                )
-
-                conn
-                |> put_status(:unprocessable_entity)
-                |> json(%{status: "error", reason: inspect(reason)})
-            end
-
-          transcript ->
+        # `ensure_transcript/1` now reattaches to the room's existing row
+        # (reopening it when a rejoin arrives after it left `recording`),
+        # so segments land on the room's real transcript instead of on a
+        # freshly created shadow. It covers the create-if-absent case too,
+        # which is why the previous "look up, else ensure" pair collapsed
+        # into a single call.
+        case Meetings.ensure_transcript(%{room_id: room_id, space_id: space_id}) do
+          {:ok, transcript} ->
             append_segments(conn, transcript.id, raw_segments, room_id)
+
+          {:error, reason} ->
+            Logger.warning(
+              "[LiveKit] Failed to ensure transcript for room #{room_id}: #{inspect(reason)}"
+            )
+
+            conn
+            |> put_status(:unprocessable_entity)
+            |> json(%{status: "error", reason: inspect(reason)})
         end
 
       true ->
@@ -403,20 +427,61 @@ defmodule PlatformWeb.LivekitWebhookController do
     _ = Platform.Meetings.Summarizer.summarize_async(transcript)
 
     # M8 stage 3: broadcast the canonical `:meeting_finished` event so
-    # the responsibility router can fire `meetings.summarize`. The
-    # broadcast is UNCONDITIONAL — it's a notification, not a request,
-    # and downstream subscribers (router, LiveViews) decide whether to
-    # act. The legacy `Summarizer.summarize_async/1` call above stays
-    # as the fallback path until the cutover monitor proves the
-    # router-fired path is stable.
-    Platform.Meetings.PubSub.broadcast_meeting_finished(transcript.room_id, %{
-      transcript_id: transcript.id,
-      room_id: transcript.room_id,
-      space_id: Map.get(transcript, :space_id)
-    })
+    # the responsibility router can fire `meetings.summarize`.
+    #
+    # It used to be UNCONDITIONAL, on the reasoning that a broadcast is
+    # a notification and subscribers decide whether to act. Task
+    # 019ff6f3 stage 3: for a ZERO-SEGMENT row in a room that holds
+    # transcribed content on another row, no subscriber has the
+    # information to make that decision. The router fires
+    # `meetings.summarize` for whichever transcript_id it is handed, and
+    # an empty row handed to a summariser produces prose denying the
+    # meeting had content — while the populated sibling goes
+    # unsummarised. `Summarizer.summarize_async/1` above now refuses the
+    # same case; broadcasting anyway would just route around that
+    # refusal through the other dispatch path.
+    #
+    # Why the check is room-scoped and not row-scoped: a negative claim
+    # about a room ("nothing was said here") is only true if it holds
+    # for every row in that room. This row's emptiness is not evidence
+    # about the room.
+    if suppress_meeting_finished?(transcript) do
+      Logger.warning(
+        "[LiveKit] Suppressing meeting_finished broadcast for empty transcript " <>
+          "#{transcript.id}: room #{transcript.room_id} holds transcribed content on " <>
+          "another row, which is the row that should be summarised"
+      )
+    else
+      Platform.Meetings.PubSub.broadcast_meeting_finished(transcript.room_id, %{
+        transcript_id: transcript.id,
+        room_id: transcript.room_id,
+        space_id: Map.get(transcript, :space_id)
+      })
+    end
 
     :ok
   end
+
+  # REACHABILITY, stated honestly: with stage 2's
+  # `Meetings.get_summarizable_transcript_for_room/1` selecting the row
+  # this function is handed, a room that holds content elsewhere hands
+  # us the POPULATED row, so this guard does not fire on the webhook
+  # path today. It is belt-and-braces at a second seam, not the primary
+  # fix — the primary fix is the selector, and `Summarizer` carries the
+  # same refusal for callers that reach it another way. Kept because the
+  # selector is one line away from being changed by somebody who does
+  # not know this, and because an unconditional broadcast is what let a
+  # summary get dispatched for an empty row in the first place.
+  #
+  # Zero segments on THIS row AND content somewhere else in the room.
+  # Either half alone is fine: an empty room broadcasts (genuine
+  # silence is a real outcome), and a populated row always broadcasts.
+  defp suppress_meeting_finished?(%{segments: segments, room_id: room_id})
+       when is_list(segments) and is_binary(room_id) do
+    segments == [] and Platform.Meetings.room_has_segments?(room_id)
+  end
+
+  defp suppress_meeting_finished?(_), do: false
 
   # LiveKit room names in Suite follow `space-<uuid>` — recover the space
   # UUID from the name so transcripts can be linked back to their space.

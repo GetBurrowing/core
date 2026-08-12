@@ -1040,4 +1040,220 @@ defmodule Platform.Meetings.SummarizerTest do
       assert Platform.Meetings.Config.summary().max_tokens == 2048
     end
   end
+
+  # ── task 019ff6f3 stage 3 ────────────────────────────────────────────────
+  #
+  # Three failures that can regress independently:
+  #
+  #   1. A failed transcript that says nothing about why it failed.
+  #   2. A router dispatch invisible to `SummarizerSweeper` because
+  #      nothing stamps `router_dispatched_at` at hand-off.
+  #   3. An empty row publishing a negative claim about a room that
+  #      holds transcribed content on another row.
+  describe "a failed transcript records why it failed" do
+    test "a real LLM failure on a POPULATED row writes a failure_reason" do
+      # A real failure, not a hand-written row: with no summary provider
+      # configured, `call_llm/3` returns
+      # `{:error, :no_summary_provider_configured}` and the legacy body
+      # takes its `{:llm_failed, _}` branch. Writing the row directly
+      # would prove only that Ecto stores strings.
+      transcript = create_transcript!(%{segments: sample_segments()})
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:llm_failed, :no_summary_provider_configured}} =
+                   Summarizer.run_summary(transcript)
+        end)
+
+      _ = log
+      failed = Meetings.get_transcript(transcript.id)
+
+      assert failed.status == "failed"
+      assert failed.failure_reason =~ "llm_failed"
+      assert failed.failure_reason =~ "no_summary_provider_configured"
+    end
+
+    test "INVARIANT: a transcript holding segments never ends failed with a NULL summary AND a NULL reason" do
+      transcript = create_transcript!(%{segments: sample_segments()})
+
+      capture_log(fn ->
+        assert {:error, {:llm_failed, _}} = Summarizer.run_summary(transcript)
+      end)
+
+      failed = Meetings.get_transcript(transcript.id)
+
+      assert failed.segments != [],
+             "fixture defect: this invariant is only about rows that HOLD segments"
+
+      assert failed.status == "failed"
+
+      refute is_nil(failed.summary) and is_nil(failed.failure_reason),
+             "transcript #{failed.id} holds #{length(failed.segments)} segments and ended " <>
+               "at status=failed with summary=nil AND failure_reason=nil — the row is mute " <>
+               "on every surface a human can reach"
+    end
+
+    test "fail_transcript/3 caps a huge reason instead of blowing the column" do
+      transcript = create_transcript!(%{segments: sample_segments()})
+      huge = String.duplicate("a", 5_000)
+
+      capture_log(fn ->
+        assert {:ok, _} = Meetings.fail_transcript(transcript.id, nil, huge)
+      end)
+
+      failed = Meetings.get_transcript(transcript.id)
+      assert byte_size(failed.failure_reason) <= 500
+      assert String.valid?(failed.failure_reason)
+    end
+
+    test "fail_transcript/1 and /2 keep their old behaviour and leave failure_reason nil" do
+      one = create_transcript!(%{segments: sample_segments()})
+      two = create_transcript!(%{segments: sample_segments()})
+
+      capture_log(fn ->
+        assert {:ok, _} = Meetings.fail_transcript(one.id)
+        assert {:ok, _} = Meetings.fail_transcript(two.id, "human readable prose")
+      end)
+
+      assert %{status: "failed", summary: nil, failure_reason: nil} =
+               Meetings.get_transcript(one.id)
+
+      # The arity-2 position is still a SUMMARY, not a reason.
+      assert %{status: "failed", summary: "human readable prose", failure_reason: nil} =
+               Meetings.get_transcript(two.id)
+    end
+  end
+
+  describe "a router dispatch is visible to the sweeper" do
+    setup do
+      previous_dispatcher =
+        Application.get_env(:platform, :responsibility_router_native_dispatcher)
+
+      Application.put_env(
+        :platform,
+        :responsibility_router_native_dispatcher,
+        {NoopNativeDispatcher, :maybe_dispatch}
+      )
+
+      on_exit(fn ->
+        if previous_dispatcher do
+          Application.put_env(
+            :platform,
+            :responsibility_router_native_dispatcher,
+            previous_dispatcher
+          )
+        else
+          Application.delete_env(:platform, :responsibility_router_native_dispatcher)
+        end
+      end)
+
+      :ok
+    end
+
+    test "run_summary/1 taking the router branch stamps router_dispatched_at" do
+      _name = start_registry!()
+      ensure_role_responsibility!("meeting_scribe", "meetings.summarize")
+      agent = create_native_agent!()
+      {:ok, _} = Platform.Roles.assign_role("meeting_scribe", agent.id)
+
+      transcript = create_transcript!(%{segments: sample_segments()})
+
+      # Anti-vacuity: NULL before, so the assertion below is about this
+      # call and not about the fixture.
+      assert is_nil(Platform.Repo.reload!(transcript).router_dispatched_at)
+
+      capture_log(fn -> assert :ok = Summarizer.run_summary(transcript) end)
+
+      refute is_nil(Platform.Repo.reload!(transcript).router_dispatched_at),
+             "the router branch handed the summary off without stamping " <>
+               "router_dispatched_at — `list_stalled_router_dispatches/1` requires the " <>
+               "column to be NOT NULL, so a stall on this dispatch is invisible forever"
+    end
+
+    test "the sweeper picks up such a row once the stall window passes" do
+      _name = start_registry!()
+      ensure_role_responsibility!("meeting_scribe", "meetings.summarize")
+      agent = create_native_agent!()
+      {:ok, _} = Platform.Roles.assign_role("meeting_scribe", agent.id)
+
+      transcript = create_transcript!(%{segments: sample_segments(), status: "processing"})
+
+      capture_log(fn -> assert :ok = Summarizer.run_summary(transcript) end)
+
+      # Nothing has stalled yet — a generous window sees no candidates.
+      # This control is what makes the assertion below about the STALL
+      # and not merely about the row existing.
+      refute transcript.id in Enum.map(Meetings.list_stalled_router_dispatches(60_000), & &1.id)
+
+      # A zero-length window means "anything dispatched before now".
+      assert transcript.id in Enum.map(Meetings.list_stalled_router_dispatches(0), & &1.id)
+    end
+  end
+
+  describe "an empty row cannot make a claim about the whole room" do
+    # The load-bearing fixture: a populated row, and an EMPTY row
+    # inserted MOST RECENTLY. Per-row emptiness is true of the newest
+    # row and says nothing about the room.
+    defp shadowed_room! do
+      room_id = "space-#{Ecto.UUID.generate()}"
+
+      populated =
+        create_transcript!(%{
+          room_id: room_id,
+          segments: sample_segments(),
+          status: "complete"
+        })
+
+      empty = create_transcript!(%{room_id: room_id, segments: [], status: "processing"})
+
+      {room_id, populated, empty}
+    end
+
+    test "summarize_async/1 REFUSES to call an empty row silent when the room holds content" do
+      {_room_id, populated, empty} = shadowed_room!()
+
+      assert empty.segments == [], "fixture defect: the newest row must be the empty one"
+      assert populated.segments != []
+
+      {result, log} =
+        with_log(fn -> Summarizer.summarize_async(empty) end)
+
+      # The refusal leaves the row alone — it does NOT invent a summary
+      # and does NOT mark the row failed. Assert the ROW first, and make
+      # the failure message name both halves of the contradiction: the
+      # prose that got emitted, and the row that contradicts it.
+      reloaded = Meetings.get_transcript(empty.id)
+
+      assert is_nil(reloaded.summary),
+             "empty transcript #{empty.id} was summarised as #{inspect(reloaded.summary)}, " <>
+               "which is a claim about room #{empty.room_id} as a whole — contradicted by " <>
+               "populated transcript #{populated.id}, which holds " <>
+               "#{length(populated.segments)} segments in that same room. A negative claim " <>
+               "about a room is only true if it holds for every row in that room."
+
+      assert reloaded.status == "processing"
+      assert {:error, :room_has_populated_transcript} = result
+
+      assert log =~ "REFUSING"
+      assert log =~ populated.id
+    end
+
+    test "a genuinely silent room still gets the empty summary (the guard is not a blanket refusal)" do
+      # Control for the test above: same code path, room with NO
+      # content anywhere. Without this, deleting the whole empty-summary
+      # branch would still pass the refusal test.
+      empty =
+        create_transcript!(%{
+          room_id: "space-#{Ecto.UUID.generate()}",
+          segments: [],
+          status: "processing"
+        })
+
+      capture_log(fn -> assert {:ok, :empty} = Summarizer.summarize_async(empty) end)
+
+      reloaded = Meetings.get_transcript(empty.id)
+      assert reloaded.status == "complete"
+      assert reloaded.summary == "This meeting had no transcribed content."
+    end
+  end
 end

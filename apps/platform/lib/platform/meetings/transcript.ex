@@ -26,6 +26,9 @@ defmodule Platform.Meetings.Transcript do
     field(:started_at, :utc_datetime_usec)
     field(:completed_at, :utc_datetime_usec)
     field(:router_dispatched_at, :utc_datetime_usec)
+    # Why a `failed` row failed — task 019ff6f3 stage 3. Nullable because
+    # every row written before the column existed has no reason to record.
+    field(:failure_reason, :string)
     # Weighted full-text vector over `summary` (weight `C`) concatenated with
     # the text of `segments` (weight `D`) — task 019fb954-c848. Generated
     # speech ranks below a human-chosen meeting name or canvas title, and raw
@@ -38,7 +41,7 @@ defmodule Platform.Meetings.Transcript do
   end
 
   @required_fields ~w(room_id)a
-  @optional_fields ~w(space_id segments summary status started_at completed_at router_dispatched_at)a
+  @optional_fields ~w(space_id segments summary status started_at completed_at router_dispatched_at failure_reason)a
 
   @doc "Changeset for creating or updating a transcript."
   def changeset(transcript, attrs) do

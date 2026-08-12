@@ -3559,6 +3559,127 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  Return every transcript row for a room, oldest first, with no status filter.
+
+  Deliberately unfiltered. `get_transcript_for_room/1` above answers only
+  with rows still in `"recording"`, which is why a room can end up holding
+  more than one row: once the first row moves to `processing`/`failed`,
+  `ensure_transcript/1` sees nil and inserts a second one. Any question
+  about a ROOM (does it hold content? which row should be summarised?) has
+  to be asked over all of its rows, not over the newest recording one.
+  """
+  @spec list_transcripts_for_room(String.t()) :: [Transcript.t()]
+  def list_transcripts_for_room(room_id) when is_binary(room_id) do
+    from(t in Transcript,
+      where: t.room_id == ^room_id,
+      order_by: [asc: t.inserted_at]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  True when ANY transcript row for the room holds at least one segment.
+
+  This is the whole-room predicate. A negative claim about a room — "no
+  transcript arrived for this meeting" — is only true when it holds for
+  every row of that room; checking a single row is the defect this exists
+  to close.
+
+  Expect `false` for the large majority of rooms. `segments` is
+  `jsonb NOT NULL DEFAULT '[]'` and an empty transcript row is the normal
+  state of the table, not a rare artifact (measured: ~84% of rows carry
+  zero segments). A mostly-false answer here is the table's shape, not a
+  broken query.
+  """
+  @spec room_has_segments?(String.t()) :: boolean()
+  def room_has_segments?(room_id) when is_binary(room_id) do
+    from(t in Transcript,
+      where: t.room_id == ^room_id and fragment("jsonb_array_length(?) > 0", t.segments),
+      select: 1,
+      limit: 1
+    )
+    |> Repo.one()
+    |> is_integer()
+  end
+
+  @doc """
+  Return the transcript row a summary should be generated from for a room.
+
+  Picks the row with the MOST segments; ties break toward the OLDEST
+  `inserted_at`. Returns `nil` when the room has no rows at all.
+
+  Ordering by segment count rather than recency is the point: the newest
+  row for a room is frequently an empty shadow opened by a late rejoin
+  after the real row left `recording`, and summarising it produces prose
+  claiming the meeting had no transcribed content while a populated
+  sibling sits beside it.
+
+  Returns the row even when its status is `failed` or `complete` — whether
+  a terminal row should be re-summarised is the caller's decision, not
+  this query's.
+  """
+  @spec get_summarizable_transcript_for_room(String.t()) :: Transcript.t() | nil
+  def get_summarizable_transcript_for_room(room_id) when is_binary(room_id) do
+    from(t in Transcript,
+      where: t.room_id == ^room_id,
+      order_by: [
+        desc: fragment("jsonb_array_length(?)", t.segments),
+        asc: t.inserted_at
+      ],
+      limit: 1
+    )
+    |> Repo.one()
+  end
+
+  @doc """
+  Diagnostic, read-only: every room holding more than one transcript row.
+
+  Returns `%{room_id: String.t(), count: integer(), populated_count: integer()}`
+  maps, noisiest room first. `populated_count` is how many of that room's rows
+  actually carry segments, so a `count: 2, populated_count: 1` row is the
+  shadow shape described on `get_summarizable_transcript_for_room/1`.
+  """
+  @spec list_rooms_with_multiple_transcripts() :: [
+          %{room_id: String.t(), count: integer(), populated_count: integer()}
+        ]
+  def list_rooms_with_multiple_transcripts do
+    from(t in Transcript,
+      group_by: t.room_id,
+      having: count(t.id) > 1,
+      order_by: [desc: count(t.id), asc: t.room_id],
+      select: %{
+        room_id: t.room_id,
+        count: count(t.id),
+        populated_count: fragment("count(*) FILTER (WHERE jsonb_array_length(?) > 0)", t.segments)
+      }
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Diagnostic, read-only: transcripts that failed silently.
+
+  A row qualifies when it is `status: "failed"`, has a NULL `summary`, and
+  holds at least one segment — i.e. the content arrived, no summary was ever
+  produced, and nothing recorded why. Sizing that population is the point:
+
+      Platform.Meetings.list_silently_failed_transcripts() |> length()
+
+  Shipped as a tested function rather than a console script so the count is
+  reproducible and the definition of "silently failed" lives in one place.
+  """
+  @spec list_silently_failed_transcripts() :: [Transcript.t()]
+  def list_silently_failed_transcripts do
+    from(t in Transcript,
+      where:
+        t.status == "failed" and is_nil(t.summary) and
+          fragment("jsonb_array_length(?) > 0", t.segments),
+      order_by: [asc: t.inserted_at]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Get a transcript with its segments (same as get_transcript since segments
   are stored inline as JSONB, but named explicitly for clarity in the API).
   """
@@ -3669,16 +3790,70 @@ defmodule Platform.Meetings do
   end
 
   @doc """
-  Find the active transcript for a room, or create one if none exists.
+  Reattach to the room's existing transcript, or create one if the room has
+  no reusable row.
 
   Returns `{:ok, transcript}` in both cases.
+
+  Reattachment, not "find the active row": a late rejoin or a reconnect
+  after the call ended makes LiveKit re-emit `room_started` /
+  `transcription` for the SAME room name. The previous implementation
+  asked `get_transcript_for_room/1`, which only answers with rows still in
+  `"recording"`, so once the real row moved to `processing`/`failed` the
+  rejoin opened a fresh row that SHADOWED it — and every later consumer
+  saw only the empty shadow. Rejoining after the end is legitimate;
+  shadowing the row that holds the content is not.
+
+  So: reuse any row for the room that is not `complete`, preferring the
+  one with the most segments (ties toward the oldest), and reopen it to
+  `recording` when it had already left that state. Only a room with no
+  reusable row gets an insert.
+
+  Rejected alternative — a database uniqueness constraint on `room_id`.
+  It cannot be created while duplicates already exist (the existing
+  population is real: rooms holding more than one row are enumerable via
+  `list_rooms_with_multiple_transcripts/0`), and a legitimately separate
+  second session for one room may be a shape we want later. The absence
+  of that index is a decision, not an oversight.
   """
   @spec ensure_transcript(map()) :: {:ok, Transcript.t()} | {:error, Ecto.Changeset.t()}
   def ensure_transcript(%{room_id: room_id} = attrs) do
-    case get_transcript_for_room(room_id) do
+    case get_reattachable_transcript_for_room(room_id) do
       nil -> create_transcript(attrs)
-      transcript -> {:ok, transcript}
+      %Transcript{status: "recording"} = transcript -> {:ok, transcript}
+      %Transcript{} = transcript -> reopen_transcript(transcript)
     end
+  end
+
+  @doc """
+  The row a rejoin should attach to: the room's non-`complete` row holding
+  the most segments, ties toward the oldest `inserted_at`. `nil` when the
+  room has no reusable row.
+
+  Filters in Elixir over `list_transcripts_for_room/1` rather than issuing
+  its own ordered `Repo.one` — a room holds a handful of rows at most, and
+  the reuse decision is then expressed once, in one place.
+  """
+  @spec get_reattachable_transcript_for_room(String.t()) :: Transcript.t() | nil
+  def get_reattachable_transcript_for_room(room_id) when is_binary(room_id) do
+    room_id
+    |> list_transcripts_for_room()
+    |> Enum.reject(&(&1.status == "complete"))
+    |> Enum.min_by(
+      fn t -> {-length(t.segments), DateTime.to_unix(t.inserted_at, :microsecond)} end,
+      fn -> nil end
+    )
+  end
+
+  @doc """
+  Reopen a transcript for recording after a rejoin, clearing the failure /
+  completion timestamp so the reopened row is not read as terminal.
+  """
+  @spec reopen_transcript(Transcript.t()) :: {:ok, Transcript.t()} | {:error, Ecto.Changeset.t()}
+  def reopen_transcript(%Transcript{} = transcript) do
+    transcript
+    |> Transcript.changeset(%{status: "recording", completed_at: nil})
+    |> Repo.update()
   end
 
   @doc """
@@ -4072,11 +4247,40 @@ defmodule Platform.Meetings do
   existing error paths that call it.
   """
   @spec fail_transcript(String.t()) :: {:ok, Transcript.t()} | {:error, term()}
-  def fail_transcript(transcript_id), do: fail_transcript(transcript_id, nil)
+  def fail_transcript(transcript_id), do: fail_transcript(transcript_id, nil, nil)
 
   @spec fail_transcript(String.t(), String.t() | nil) ::
           {:ok, Transcript.t()} | {:error, term()}
-  def fail_transcript(transcript_id, summary) do
+  def fail_transcript(transcript_id, summary), do: fail_transcript(transcript_id, summary, nil)
+
+  @doc """
+  Mark a transcript failed, recording BOTH a human-readable summary and
+  a machine-shaped `failure_reason`. Task 019ff6f3 stage 3.
+
+  ## Why a third argument and not a second
+
+  The arity-2 clause above already means "summary" and has call sites
+  (`Summarizer.handle_undelivered_transcript/1` passes user-facing prose
+  through it). Overloading that same position with a reason term would
+  have silently reclassified those strings, so the reason gets its own
+  position and the two older arities delegate here unchanged.
+
+  ## The invariant this exists to protect
+
+  A transcript that HOLDS SEGMENTS must never end at `status: "failed"`
+  with a NULL summary AND a NULL failure_reason. Before this column, the
+  `{:llm_failed, _}` / `{:complete_failed, _}` / rescue branches all
+  landed exactly there: a row with real content, a terminal failure
+  status, and not one byte anywhere a human could find saying why. The
+  reason is stored, not logged, because a log line is not a surface.
+
+  `reason` is any term; it is `inspect/1`ed to fit the column. Truncated
+  at 500 bytes — a reason is a lead, not a payload, and an unbounded
+  `inspect` of an exception struct can carry the whole transcript.
+  """
+  @spec fail_transcript(String.t(), String.t() | nil, term()) ::
+          {:ok, Transcript.t()} | {:error, term()}
+  def fail_transcript(transcript_id, summary, reason) do
     case get_transcript(transcript_id) do
       nil ->
         {:error, :not_found}
@@ -4085,9 +4289,17 @@ defmodule Platform.Meetings do
         attrs = %{status: "failed", completed_at: DateTime.utc_now()}
         attrs = if is_binary(summary), do: Map.put(attrs, :summary, summary), else: attrs
 
+        attrs =
+          if is_nil(reason),
+            do: attrs,
+            else: Map.put(attrs, :failure_reason, format_failure_reason(reason))
+
         case transcript |> Transcript.changeset(attrs) |> Repo.update() do
           {:ok, failed} ->
-            Logger.error("[Meetings] Transcript #{failed.id} marked failed")
+            Logger.error(
+              "[Meetings] Transcript #{failed.id} marked failed " <>
+                "reason=#{inspect(failed.failure_reason)}"
+            )
 
             :telemetry.execute(
               [:platform, :meetings, :transcription_failed],
@@ -4101,6 +4313,29 @@ defmodule Platform.Meetings do
             {:error, reason}
         end
     end
+  end
+
+  # A reason is a lead for a human, not a payload. `inspect/1` so any term
+  # (tuple, exception struct, atom) lands as something readable, then a hard
+  # byte cap so an exception carrying a whole transcript can't blow the
+  # column. Binary slice, not String.slice/3, so a multibyte cut can't
+  # produce invalid UTF-8 the DB rejects — hence the `valid?` trim.
+  @failure_reason_max_bytes 500
+  defp format_failure_reason(reason) when is_binary(reason), do: truncate_reason(reason)
+  defp format_failure_reason(reason), do: reason |> inspect() |> truncate_reason()
+
+  defp truncate_reason(text) when byte_size(text) <= @failure_reason_max_bytes, do: text
+
+  defp truncate_reason(text) do
+    text
+    |> binary_part(0, @failure_reason_max_bytes)
+    |> trim_to_valid_utf8()
+  end
+
+  defp trim_to_valid_utf8(text) do
+    if String.valid?(text),
+      do: text,
+      else: trim_to_valid_utf8(binary_part(text, 0, byte_size(text) - 1))
   end
 
   # ── Summary Posting ────────────────────────────────────────────────────────

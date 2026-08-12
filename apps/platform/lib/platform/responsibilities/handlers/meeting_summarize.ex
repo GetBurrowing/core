@@ -474,13 +474,19 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
             "transcript_id=#{transcript_id} reason=#{inspect(reason)}"
         )
 
-        _ = safe_fail(transcript_id)
+        _ = safe_fail(transcript_id, {:complete_failed, reason})
         {:error, {:complete_failed, reason}}
     end
   end
 
-  defp safe_fail(transcript_id) when is_binary(transcript_id) do
-    Meetings.fail_transcript(transcript_id)
+  # Task 019ff6f3 stage 3: the reason is recorded ON THE ROW via
+  # `Meetings.fail_transcript/3`, not only in the Logger.warning below.
+  # A failed transcript with a NULL summary and a NULL failure_reason is
+  # unreadable on every surface a human actually visits.
+  defp safe_fail(transcript_id, reason \\ nil)
+
+  defp safe_fail(transcript_id, reason) when is_binary(transcript_id) do
+    Meetings.fail_transcript(transcript_id, nil, reason)
   rescue
     error ->
       Logger.warning(
@@ -491,7 +497,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
       {:error, {:fail_raised, Exception.message(error)}}
   end
 
-  defp safe_fail(_), do: :ok
+  defp safe_fail(_, _), do: :ok
 
   # ── trigger-meta accessors ────────────────────────────────────────────────
 

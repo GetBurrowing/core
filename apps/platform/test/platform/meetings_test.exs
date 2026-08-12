@@ -263,6 +263,197 @@ defmodule Platform.MeetingsTest do
     end
   end
 
+  describe "room-wide transcript lookups (task 019ff6f3 stage 1)" do
+    # Every id and every line of speech below is invented.
+    defp invented_room, do: "space-#{Ecto.UUID.generate()}"
+
+    defp invented_segments(n) do
+      for i <- 1..n do
+        %{
+          "participant_identity" => "participant-#{i}",
+          "speaker_name" => "Speaker #{i}",
+          "text" => "Invented line number #{i} for this fixture.",
+          "start_time" => i * 1000,
+          "end_time" => i * 1000 + 500
+        }
+      end
+    end
+
+    # `inserted_at` is set by `timestamps/0` and is not castable through the
+    # changeset, so the fixture pins it with an explicit update. Relying on
+    # wall-clock ordering between two inserts would make the ordering that
+    # this whole describe block is about depend on clock resolution.
+    defp transcript_at(room_id, segment_count, %DateTime{} = inserted_at, status \\ "recording") do
+      {:ok, transcript} =
+        Meetings.create_transcript(%{
+          room_id: room_id,
+          status: status,
+          segments: invented_segments_or_empty(segment_count)
+        })
+
+      {1, nil} =
+        Repo.update_all(
+          from(t in Transcript, where: t.id == ^transcript.id),
+          set: [inserted_at: inserted_at]
+        )
+
+      Meetings.get_transcript(transcript.id)
+    end
+
+    defp invented_segments_or_empty(0), do: []
+    defp invented_segments_or_empty(n), do: invented_segments(n)
+
+    # The load-bearing fixture: one populated row, then an EMPTY row inserted
+    # strictly later. This is the shape that today's `desc: inserted_at`
+    # lookup gets wrong.
+    defp shadowed_room do
+      room_id = invented_room()
+      base = ~U[2026-01-01 10:00:00.000000Z]
+
+      populated = transcript_at(room_id, 7, base)
+      empty = transcript_at(room_id, 0, DateTime.add(base, 600, :second))
+
+      {room_id, populated, empty}
+    end
+
+    test "list_transcripts_for_room/1 returns every row oldest first, any status" do
+      room_id = invented_room()
+      base = ~U[2026-01-01 10:00:00.000000Z]
+
+      first = transcript_at(room_id, 3, base, "failed")
+      second = transcript_at(room_id, 0, DateTime.add(base, 60, :second), "complete")
+      third = transcript_at(room_id, 1, DateTime.add(base, 120, :second), "recording")
+
+      # A different room's row must not leak in.
+      _other = transcript_at(invented_room(), 5, base)
+
+      assert [first.id, second.id, third.id] ==
+               Enum.map(Meetings.list_transcripts_for_room(room_id), & &1.id)
+    end
+
+    test "list_transcripts_for_room/1 is [] for a room with no rows" do
+      assert Meetings.list_transcripts_for_room(invented_room()) == []
+    end
+
+    test "room_has_segments?/1 is true when only the OLDER row is populated" do
+      {room_id, _populated, empty} = shadowed_room()
+
+      # Anti-vacuity: the newest row really is the empty one, so a per-row
+      # check on the newest row would answer false here.
+      assert empty.segments == []
+      assert Meetings.room_has_segments?(room_id)
+    end
+
+    test "room_has_segments?/1 is false when every row of the room is empty" do
+      room_id = invented_room()
+      base = ~U[2026-01-01 10:00:00.000000Z]
+      transcript_at(room_id, 0, base)
+      transcript_at(room_id, 0, DateTime.add(base, 60, :second))
+
+      refute Meetings.room_has_segments?(room_id)
+    end
+
+    test "room_has_segments?/1 is false for an unknown room and ignores other rooms" do
+      populated_room = invented_room()
+      transcript_at(populated_room, 4, ~U[2026-01-01 10:00:00.000000Z])
+
+      refute Meetings.room_has_segments?(invented_room())
+      assert Meetings.room_has_segments?(populated_room)
+    end
+
+    test "get_summarizable_transcript_for_room/1 picks the populated row when the EMPTY row is newest" do
+      {room_id, populated, empty} = shadowed_room()
+
+      assert DateTime.compare(empty.inserted_at, populated.inserted_at) == :gt
+
+      selected = Meetings.get_summarizable_transcript_for_room(room_id)
+
+      assert selected.id == populated.id,
+             "expected the populated row #{populated.id} (7 segments), got #{selected.id} " <>
+               "with #{length(selected.segments)} segments"
+    end
+
+    test "get_summarizable_transcript_for_room/1 direction control: same answer when the populated row is NEWEST" do
+      # If this passed but the case above failed, the implementation is
+      # ordering by recency and the pair of tests is what detects it.
+      room_id = invented_room()
+      base = ~U[2026-01-01 10:00:00.000000Z]
+
+      empty = transcript_at(room_id, 0, base)
+      populated = transcript_at(room_id, 7, DateTime.add(base, 600, :second))
+
+      assert DateTime.compare(populated.inserted_at, empty.inserted_at) == :gt
+
+      selected = Meetings.get_summarizable_transcript_for_room(room_id)
+
+      assert selected.id == populated.id,
+             "expected the populated row #{populated.id} (7 segments), got #{selected.id} " <>
+               "with #{length(selected.segments)} segments"
+    end
+
+    test "get_summarizable_transcript_for_room/1 breaks a segment-count tie toward the OLDEST row" do
+      room_id = invented_room()
+      base = ~U[2026-01-01 10:00:00.000000Z]
+
+      oldest = transcript_at(room_id, 4, base)
+      _newer = transcript_at(room_id, 4, DateTime.add(base, 300, :second))
+
+      assert Meetings.get_summarizable_transcript_for_room(room_id).id == oldest.id
+    end
+
+    test "get_summarizable_transcript_for_room/1 returns a terminal-status row rather than nil" do
+      room_id = invented_room()
+      failed = transcript_at(room_id, 9, ~U[2026-01-01 10:00:00.000000Z], "failed")
+
+      selected = Meetings.get_summarizable_transcript_for_room(room_id)
+      assert selected.id == failed.id
+      assert selected.status == "failed"
+    end
+
+    test "get_summarizable_transcript_for_room/1 is nil for a room with no rows" do
+      assert Meetings.get_summarizable_transcript_for_room(invented_room()) == nil
+    end
+
+    test "list_rooms_with_multiple_transcripts/0 reports count and populated_count" do
+      {room_id, _populated, _empty} = shadowed_room()
+      single_room = invented_room()
+      transcript_at(single_room, 3, ~U[2026-01-01 10:00:00.000000Z])
+
+      rows = Meetings.list_rooms_with_multiple_transcripts()
+
+      assert %{count: 2, populated_count: 1} =
+               Enum.find(rows, &(&1.room_id == room_id))
+
+      # A room with exactly one row is not a duplicate.
+      refute Enum.any?(rows, &(&1.room_id == single_room))
+    end
+
+    test "list_silently_failed_transcripts/0 matches failed + NULL summary + segments present" do
+      base = ~U[2026-01-01 10:00:00.000000Z]
+
+      silent = transcript_at(invented_room(), 6, base, "failed")
+
+      # Each of these differs from `silent` in exactly one condition.
+      failed_but_empty = transcript_at(invented_room(), 0, base, "failed")
+      populated_but_complete = transcript_at(invented_room(), 6, base, "complete")
+
+      failed_with_summary = transcript_at(invented_room(), 6, base, "failed")
+
+      {1, nil} =
+        Repo.update_all(
+          from(t in Transcript, where: t.id == ^failed_with_summary.id),
+          set: [summary: "An invented summary."]
+        )
+
+      ids = Enum.map(Meetings.list_silently_failed_transcripts(), & &1.id)
+
+      assert silent.id in ids
+      refute failed_but_empty.id in ids
+      refute populated_but_complete.id in ids
+      refute failed_with_summary.id in ids
+    end
+  end
+
   describe "claim_router_dispatch/1 (task 019fa56b-c81f stage 2)" do
     test "first claim wins — {:ok, :claimed} and nil -> non-nil transition" do
       transcript = create_processing_transcript()
@@ -336,7 +527,7 @@ defmodule Platform.MeetingsTest do
         })
 
       {1, nil} =
-        Platform.Repo.update_all(
+        Repo.update_all(
           from(t in Transcript, where: t.id == ^transcript.id),
           set: [router_dispatched_at: DateTime.add(DateTime.utc_now(), offset_ms, :millisecond)]
         )
@@ -371,7 +562,7 @@ defmodule Platform.MeetingsTest do
         })
 
       {1, nil} =
-        Platform.Repo.update_all(
+        Repo.update_all(
           from(t in Transcript, where: t.id == ^done.id),
           set: [router_dispatched_at: DateTime.add(DateTime.utc_now(), -600, :millisecond)]
         )

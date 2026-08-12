@@ -740,7 +740,14 @@ defmodule Platform.RepoLookupBoundaryTest do
     # the head guards `is_binary(meeting_id)`. The READ path
     # (`get_whiteboard/1`) takes the opposite call because it IS handed
     # unresolved ids, and guards with `Platform.UUID.valid?/1`.
-    "platform/meetings.ex" => 12,
+    # 12 -> 14 with task 019ff6f3 stage 1: `room_has_segments?/1` and
+    # `get_summarizable_transcript_for_room/1`. Neither pins an id column —
+    # both filter on `where: t.room_id == ^room_id`, and `room_id` is a
+    # `:string` field (the LiveKit room name), not a uuid. A malformed value
+    # therefore returns no rows rather than raising Ecto.Query.CastError, so
+    # no `Platform.UUID.valid?/1` guard applies. Both heads guard
+    # `is_binary(room_id)`.
+    "platform/meetings.ex" => 14,
     # Task 019fb954-c848 stage 2 — `Archive.counts/3`, the single aggregate
     # pass behind `search/2`. Triaged by hand as this map asks: its `where:`
     # clauses come from `scoped_query/2`, and TWO of them pin ids that arrive
