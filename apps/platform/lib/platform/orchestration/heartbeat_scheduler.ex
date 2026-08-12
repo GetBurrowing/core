@@ -103,6 +103,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   **Your first tool call must be `task_ack(task_id="__TASK_ID__", stage_id="__STAGE_ID__", subagent_id="__SUBAGENT_ID__")`.**
 
   Spawn the subagent FIRST, then include its returned agent id in the ack. Empty or missing subagent_id will fail validation — this ordering makes it structurally impossible to ack a dispatch you never spawned a subagent for. Without a successful ack the router will fire a no-ack alert in 5 minutes.
+
+  **If `task_ack` is missing from your MCP tool cache** (a known cross-version issue where a session's catalog predates a new tool), call `alarm_silence(task_id="__TASK_ID__", stage_id="__STAGE_ID__", until_seconds=1800, reason="task_ack absent from stale MCP catalog; subagent live")` as the operator escape hatch. Do NOT use `report_blocker(needs_human: false)` — that anti-pattern sets a task-level lease to blocked and leaks across stage boundaries.
   """
 
   @evidence_workflow_reference """
@@ -369,12 +371,43 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         rendered
 
       {:error, :not_found} ->
-        hardcoded_dispatch_planning(
-          task,
-          provider_guidance,
-          previous_rejection_reason,
-          parent_plans
-        )
+        derived_or_hardcoded("dispatch.planning", assigns, fn ->
+          hardcoded_dispatch_planning(
+            task,
+            provider_guidance,
+            previous_rejection_reason,
+            parent_plans
+          )
+        end)
+    end
+  end
+
+  # DERIVE, don't restate (task 019ff10f stage 1).
+  #
+  # When the served row is unavailable, render the SOURCE DESCRIPTOR for the
+  # same slug with the same assigns instead of a hand-written restatement of
+  # it. `PromptTemplates.render_default/2` is Repo-free by construction, which
+  # is what makes it usable on the branch whose precondition is that the
+  # database may be unreachable.
+  #
+  # This is the structural fix for a drift class, not a repair of its
+  # instances: a paragraph added to a `dispatch.*` descriptor now reaches the
+  # fallback body with no edit here. `DispatchFallbackParityTest` pins the
+  # relation, and `heartbeat_scheduler_test.exs`'s derivation test proves the
+  # tracking rather than today's strings.
+  #
+  # The `hardcoded_dispatch_*` bodies stay as the LAST resort, for a slug that
+  # is not a registered default at all — there `render_default/2` itself
+  # answers `{:error, :not_found}` and there is no source to derive from.
+  # Post-processing is unchanged either way: the caller still runs
+  # `enrich_*_prompt/3` and the git-workflow strip over whichever body comes
+  # back, and a derived body is byte-identical to the happy-path body for an
+  # unmodified row, so those post-processors see exactly the input they were
+  # written against.
+  defp derived_or_hardcoded(slug, assigns, last_resort) when is_function(last_resort, 0) do
+    case PromptTemplates.render_default(slug, assigns) do
+      {:ok, rendered} -> rendered
+      {:error, :not_found} -> last_resort.()
     end
   end
 
@@ -441,7 +474,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
           rendered
 
         {:error, :not_found} ->
-          hardcoded_dispatch_in_progress(task, plan, stage, provider_guidance)
+          derived_or_hardcoded("dispatch.in_progress", assigns, fn ->
+            hardcoded_dispatch_in_progress(task, plan, stage, provider_guidance)
+          end)
       end
 
     enrich_in_progress_prompt(prompt, task, stage)
@@ -500,13 +535,15 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
           # Fallback paths intentionally diverge by template kind: e2e_behavior
           # falls back to a hardcoded behavioral prompt; manual_approval / other
           # kinds fall back to the existing in_review prompt.
-          case template_slug do
-            "dispatch.review_e2e" ->
-              hardcoded_dispatch_review_e2e(task, assigns)
+          derived_or_hardcoded(template_slug, assigns, fn ->
+            case template_slug do
+              "dispatch.review_e2e" ->
+                hardcoded_dispatch_review_e2e(task, assigns)
 
-            _ ->
-              hardcoded_dispatch_in_review(task, plan, stage, provider_guidance)
-          end
+              _ ->
+                hardcoded_dispatch_in_review(task, plan, stage, provider_guidance)
+            end
+          end)
       end
 
     enrich_in_review_prompt(prompt, task, stage)
@@ -602,7 +639,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         rendered
 
       {:error, :not_found} ->
-        hardcoded_dispatch_fallback(task, plan, stage)
+        derived_or_hardcoded("dispatch.fallback", assigns, fn ->
+          hardcoded_dispatch_fallback(task, plan, stage)
+        end)
     end
   end
 

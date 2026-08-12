@@ -290,6 +290,41 @@ defmodule Platform.Orchestration.PromptTemplates do
   end
 
   @doc """
+  Render a slug's DEFAULT (source-descriptor) content with `assigns`, without
+  touching the database.
+
+  This is the derive-don't-restate path for dispatch fallbacks. A caller that
+  reaches it has already been told `{:error, :not_found}` by
+  `render_template/2`, which happens for two reasons: the row was never seeded,
+  or the DB is unreachable and the blanket `rescue` turned that into
+  `:not_found`. Both mean the same thing here — the served body is unavailable
+  and the descriptor in this module is the closest thing to it that still
+  exists.
+
+  ## Why this deliberately skips `resolve_content/3`
+
+  No Repo call, no experiment resolution — and that is not an oversight to be
+  tidied up later. An experiment variant is a DB concern: variants, experiments
+  and assignment rows all live in Postgres. A fallback taken BECAUSE the
+  database is unreachable cannot resolve one, and a fallback taken because the
+  row is missing has no experiment targeting it either. Routing this through
+  the resolver would add a query on the one path whose precondition is that
+  queries do not work — turning a degraded dispatch into a failed one, which is
+  the posture ADR-0048 forbids. Interpolation is the SAME private
+  `interpolate/2` the served path uses, so a derived body differs from the
+  served one only by which blob was interpolated.
+
+  Returns `{:error, :not_found}` when the slug is not a registered default.
+  """
+  @spec render_default(String.t(), map()) :: {:ok, String.t()} | {:error, :not_found}
+  def render_default(slug, assigns) do
+    case default_content_for_slug(slug) do
+      nil -> {:error, :not_found}
+      content -> {:ok, interpolate(content, assigns)}
+    end
+  end
+
+  @doc """
   Seed the 5 default prompt templates from the hardcoded HeartbeatScheduler prompts.
 
   Idempotent — only inserts if the slug doesn't already exist.

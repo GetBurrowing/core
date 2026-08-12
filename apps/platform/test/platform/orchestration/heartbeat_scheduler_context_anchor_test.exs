@@ -54,11 +54,16 @@ defmodule Platform.Orchestration.HeartbeatSchedulerContextAnchorTest do
   # one, the contract was appended rather than spliced.
   @db_tail_block "## Subagent-spawn discipline"
 
-  # The hardcoded fallbacks do NOT interpolate `PromptTemplates.federation_preamble/0`
-  # — they close with `@evidence_workflow_reference` followed by
-  # `@skills_reference`. Their equivalent trailing landmark is the evidence
-  # workflow heading, which likewise sits after the anchor paragraph.
-  @fallback_tail_block "## Submitting evidence for a `manual_approval` validation"
+  # The fallback path used to land on a hand-written body that closed with
+  # `@evidence_workflow_reference` instead of the federation preamble, so it
+  # needed a landmark of its own ("## Submitting evidence for a
+  # `manual_approval` validation"). Since task 019ff10f the fallback DERIVES
+  # from the same descriptor the row is seeded from, so both paths close with
+  # the same block and `@db_tail_block` is the landmark for both. The fallback
+  # tests below are still worth their own describe: they exercise a different
+  # code path (`PromptTemplates.render_default/2` rather than
+  # `render_template/2`) reaching the same post-processor, which is exactly the
+  # seam a derivation change could break.
 
   @dispatch_slugs ["dispatch.in_progress", "dispatch.in_review"]
 
@@ -106,7 +111,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerContextAnchorTest do
     end
   end
 
-  describe "insert_before_context/2 against the hardcoded fallbacks" do
+  describe "insert_before_context/2 against the derived fallbacks" do
     setup do
       # Delete inside the sandbox transaction so `render_template/2` returns
       # `{:error, :not_found}` and `dispatch_prompt/4` takes the fallback. The
@@ -121,25 +126,25 @@ defmodule Platform.Orchestration.HeartbeatSchedulerContextAnchorTest do
       :ok
     end
 
-    test "in_progress splices the Stage Execution Contract before the evidence workflow block" do
+    test "in_progress splices the Stage Execution Contract before the closing block" do
       prompt = HeartbeatScheduler.dispatch_prompt(in_progress_task(), plan(), execution_stage())
 
-      assert offset!(prompt, @execution_contract) < offset!(prompt, @fallback_tail_block),
+      assert offset!(prompt, @execution_contract) < offset!(prompt, @db_tail_block),
              """
              The Stage Execution Contract landed AFTER the evidence-workflow block in the \
-             hardcoded in_progress fallback, so insert_before_context/2 matched no anchor there \
-             either. The fallback carries the same closing paragraph as the DB body \
-             (heartbeat_scheduler.ex:1009) and must stay in sync with @context_anchors.
+             DERIVED in_progress fallback, so insert_before_context/2 matched no anchor there \
+             either. The derived body is the descriptor's, so an anchor present on the DB path \
+             and absent here means the derivation stopped feeding the post-processor.
              """
     end
 
-    test "in_review splices the Review Validation Contract before the evidence workflow block" do
+    test "in_review splices the Review Validation Contract before the closing block" do
       prompt = HeartbeatScheduler.dispatch_prompt(in_review_task(), plan(), review_stage())
 
-      assert offset!(prompt, @review_contract) < offset!(prompt, @fallback_tail_block),
+      assert offset!(prompt, @review_contract) < offset!(prompt, @db_tail_block),
              """
-             The Review Validation Contract landed AFTER the evidence-workflow block in the \
-             hardcoded in_review fallback (heartbeat_scheduler.ex:1073).
+             The Review Validation Contract landed AFTER the closing block in the DERIVED \
+             in_review fallback.
              """
     end
   end

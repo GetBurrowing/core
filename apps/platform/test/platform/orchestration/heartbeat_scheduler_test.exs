@@ -2,6 +2,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
   use ExUnit.Case, async: true
 
   alias Platform.Orchestration.HeartbeatScheduler
+  alias Platform.Orchestration.PromptTemplates
 
   describe "interval_ms/1" do
     test "returns correct intervals per stage type" do
@@ -236,12 +237,26 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "Auth is broken"
       assert prompt =~ "plan_create"
       assert prompt =~ "plan_submit"
-      assert prompt =~ "Implementation stages"
       assert prompt =~ "test_pass"
       assert prompt =~ "lint_pass"
-      assert prompt =~ "Push the branch when implementation stages are complete"
-      assert prompt =~ "do NOT open a PR"
       assert prompt =~ "manual_approval"
+
+      # The "## Plan structure / **Implementation stages** / Push the branch …
+      # do NOT open a PR" block used to be asserted here. It was never in the
+      # `dispatch.planning` TEMPLATE — only in the hardcoded fallback — so the
+      # planner has not been told it on the DB-served path for as long as that
+      # path has existed. Since task 019ff10f this branch derives its fallback
+      # from the same descriptor the row is seeded from, so the two paths now
+      # agree, and they agree on NOT carrying it.
+      #
+      # Deliberately not fixed here by editing the descriptor:
+      # `prompt_templates_test.exs:248` pins the live row equal to the shipped
+      # default, so adding the paragraph requires a paired migration + descriptor
+      # change, which this stage rules out of scope. Restoring the text to the
+      # descriptor alone would break that pin; restoring it to the fallback alone
+      # would recreate the restatement this task removed. It belongs in a
+      # follow-up that writes both. The role-separation assertions below still
+      # cover the "planner does not author a deploy stage" half of the same rule.
 
       # New e2e_behavior + scoping guidance — v2 plurals: 2-5 adversarial validations,
       # no planner-supplied failure_feedback.
@@ -841,8 +856,17 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "subagent_id=",
              "in_progress fallback must render subagent_id= in the ack call"
 
-      assert prompt =~ "<unknown — spawn a subagent first>",
-             "in_progress fallback must render the readable subagent_id sentinel default"
+      # The HAZARD is an EMPTY subagent_id, not one particular sentinel string.
+      # Since task 019ff10f this branch DERIVES its body from the
+      # `dispatch.in_progress` descriptor, whose ack preamble spells the
+      # placeholder "<the id returned when you spawned the SuiteExecutor /
+      # SuiteReviewer via the Agent tool>" rather than the hardcoded body's
+      # "<unknown — spawn a subagent first>". Pinning either literal would pin
+      # WHICH body rendered, which is not what this guard is about; the
+      # `deploying` case below still pins the hardcoded sentinel, so that
+      # spelling keeps a test of its own.
+      assert prompt =~ ~r/subagent_id="<[^"]+>"/,
+             "in_progress fallback must render a non-empty subagent_id placeholder in the ack call"
 
       assert prompt =~ "Spawn the subagent FIRST",
              "in_progress fallback must instruct spawn-first ordering"
@@ -872,8 +896,17 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "subagent_id=",
              "in_review fallback must render subagent_id= in the ack call"
 
-      assert prompt =~ "<unknown — spawn a subagent first>",
-             "in_review fallback must render the readable subagent_id sentinel default"
+      # The HAZARD is an EMPTY subagent_id, not one particular sentinel string.
+      # Since task 019ff10f this branch DERIVES its body from the
+      # `dispatch.in_review` descriptor, whose ack preamble spells the
+      # placeholder "<the id returned when you spawned the SuiteExecutor /
+      # SuiteReviewer via the Agent tool>" rather than the hardcoded body's
+      # "<unknown — spawn a subagent first>". Pinning either literal would pin
+      # WHICH body rendered, which is not what this guard is about; the
+      # `deploying` case below still pins the hardcoded sentinel, so that
+      # spelling keeps a test of its own.
+      assert prompt =~ ~r/subagent_id="<[^"]+>"/,
+             "in_review fallback must render a non-empty subagent_id placeholder in the ack call"
 
       assert prompt =~ "Spawn the subagent FIRST",
              "in_review fallback must instruct spawn-first ordering"
@@ -3345,6 +3378,142 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
       refute deploy_prompt =~ @review_sentinel
       refute deploy_prompt =~ @review_tail_sentinel
+    end
+  end
+
+  describe "dispatch fallbacks DERIVE from the template descriptor (task 019ff10f)" do
+    # These tests run with NO database row for the slug — this module is a plain
+    # `ExUnit.Case` with no sandbox, so `PromptTemplates.render_template/2`'s
+    # blanket rescue answers `{:error, :not_found}`, which is the real
+    # production trigger (row missing, or DB unreachable). What renders is the
+    # fallback.
+    #
+    # ## What "derivation" is asserted as, and why not a literal
+    #
+    # A test that asserted `prompt =~ "design_critique_request"` would pass on
+    # d32dd1b1 too, where that paragraph was HAND-COPIED into the scheduler's
+    # fallback string. It would pin today's tools and say nothing about
+    # tomorrow's. So the discriminator is computed at run time: the tool names
+    # the DESCRIPTOR names, minus every name that appears anywhere in
+    # `heartbeat_scheduler.ex`'s source. A name in that difference cannot have
+    # reached the rendered body by being restated in the scheduler — the only
+    # route left is derivation from the descriptor.
+    #
+    # That set is the in-test equivalent of "add a tool mention to the source
+    # descriptor and watch it appear in the fallback with no scheduler edit":
+    # the descriptor is a compile-time module attribute, so a test cannot
+    # rewrite it in place, but quantifying over the set re-evaluates the same
+    # claim for every tool on every run — including one added tomorrow, with no
+    # edit here.
+    @scheduler_source "lib/platform/orchestration/heartbeat_scheduler.ex"
+
+    # Same shape the parity test extracts: a backticked snake_case identifier.
+    @tool_like ~r/`([a-z][a-z0-9]*(?:[._][a-z0-9]+)+)\(?/
+
+    defp descriptor_only_tools(slug) do
+      source = File.read!(@scheduler_source)
+
+      @tool_like
+      |> Regex.scan(PromptTemplates.default_content_for_slug(slug))
+      |> Enum.map(fn [_full, name] -> name end)
+      |> Enum.uniq()
+      |> Enum.reject(&String.contains?(source, &1))
+    end
+
+    test "the in_review fallback carries tool guidance that exists ONLY in the descriptor" do
+      task = %{
+        id: "task-derive-ir",
+        title: "Derivation guard in_review",
+        description: "Body",
+        status: "in_review",
+        priority: "medium"
+      }
+
+      plan = %{version: 1, stages: [%{}]}
+
+      stage = %{
+        id: "stage-derive-ir",
+        position: 1,
+        name: "review",
+        validations: [%{id: "val-derive-manual", kind: "manual_approval", status: "pending"}]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      discriminators = descriptor_only_tools("dispatch.in_review")
+
+      # Anti-vacuity: an empty difference would make the loop below assert
+      # nothing. It is also exactly the state d32dd1b1 was in for the tools it
+      # hand-copied — the copy put them back into the scheduler source, so
+      # nothing discriminated.
+      refute discriminators == [],
+             "the dispatch.in_review descriptor names no tool that is absent from " <>
+               "#{@scheduler_source}. Either the fallback has been hand-restated back " <>
+               "into the scheduler (the drift this guards against) or the descriptor " <>
+               "stopped naming tools — do not delete this test to make it pass."
+
+      for tool <- discriminators do
+        assert prompt =~ tool,
+               "`#{tool}` is named by the dispatch.in_review descriptor and appears " <>
+                 "nowhere in #{@scheduler_source}, so the rendered fallback can only " <>
+                 "carry it by DERIVING from the descriptor. It is missing, which means " <>
+                 "the fallback is a restatement again."
+      end
+    end
+
+    test "the planning fallback carries tool guidance that exists ONLY in the descriptor" do
+      task = %{
+        title: "Derivation guard planning",
+        description: "Body",
+        status: "planning",
+        priority: "medium"
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, nil, nil)
+
+      discriminators = descriptor_only_tools("dispatch.planning")
+
+      refute discriminators == [],
+             "the dispatch.planning descriptor names no tool absent from #{@scheduler_source}"
+
+      for tool <- discriminators do
+        assert prompt =~ tool,
+               "`#{tool}` is descriptor-only and missing from the planning fallback"
+      end
+    end
+
+    test "render_default/2 issues no database query" do
+      # The branch's whole precondition is that the DB may be unreachable, so
+      # the derivation path must not query. Asserted through Ecto's query
+      # telemetry rather than by reading the code: a Repo call added inside
+      # `resolve_content/3` (or anywhere below) would emit here even though the
+      # sandbox would happily serve it in a DataCase.
+      handler = {__MODULE__, :repo_free, make_ref()}
+      test_pid = self()
+
+      :telemetry.attach(
+        handler,
+        [:platform, :repo, :query],
+        fn _event, _measure, meta, _cfg ->
+          # Ecto emits query telemetry in the process that RAN the query, and
+          # this suite is `async: true` — without the pid filter a sibling
+          # test's query lands in this mailbox and reds a correct
+          # implementation.
+          if self() == test_pid, do: send(test_pid, {:repo_query, meta[:query]})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, body} =
+               PromptTemplates.render_default("dispatch.in_review", %{task_title: "T"})
+
+      assert body =~ "T", "the interpolation must actually have run"
+
+      refute_receive {:repo_query, _}, 50
+
+      assert PromptTemplates.render_default("no.such.slug", %{}) == {:error, :not_found}
     end
   end
 end
