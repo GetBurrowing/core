@@ -129,7 +129,7 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
     attrs = %{
       project_id: project.id,
       title: "Lands in more than one repository",
-      status: "in_progress",
+      status: "in_review",
       deploy_target: "production",
       deploy_strategy: %{
         "type" => "pr_merge",
@@ -1019,7 +1019,7 @@ defmodule Platform.Tasks.DeployMergeReconcilerTickLogTest do
       Tasks.create_task(%{
         project_id: project.id,
         title: "Minted before the branch was recorded",
-        status: "in_progress",
+        status: "in_review",
         deploy_target: "production"
       })
 

@@ -168,6 +168,23 @@ defmodule Platform.Tasks.Task do
     # `Platform.Responsibilities.outcome/1` rather than re-deriving it.
     field(:planning_step_outcomes, :map, default: %{})
 
+    # Bounded review loop (task 019ff788 stage 3). Counts the GENUINE
+    # gate-failure bounces this task has taken — a review round that
+    # returned a verdict about the feature. On the third the router routes
+    # the task to re-planning instead of back to `in_progress`; see
+    # `Platform.Orchestration.TaskRouter` and `Platform.Tasks.ReviewDisposition`.
+    #
+    # A round where the gate COULD NOT BE RUN does not touch this column.
+    # Reset to 0 when an approved plan starts and when the task is
+    # re-planned, so a fresh plan gets a fresh three rounds. Non-null,
+    # default 0 — see migration
+    # `20260812230000_add_review_round_count_to_tasks.exs`. Written ONLY via
+    # `review_round_changeset/2`, deliberately absent from `changeset/2`'s
+    # cast list for the same reason `:planning_step` is: `changeset/2` casts
+    # `:status`, so routing the counter through it would put the loop bound
+    # on the same unguarded surface `Tasks.update_task/3` exposes to agents.
+    field(:review_round_count, :integer, default: 0)
+
     # `search_vector` (task 019f3dbb stage 1) is a Postgres `tsvector`
     # column, `GENERATED ALWAYS AS (to_tsvector('english', coalesce(title,
     # '') || ' ' || coalesce(description, ''))) STORED` — see migration
@@ -361,6 +378,20 @@ defmodule Platform.Tasks.Task do
       introduce a fourth outcome value that downstream readers would
       then have to guess about.
   """
+  @doc """
+  Narrow changeset for the bounded-review-loop counter (task 019ff788
+  stage 3). Casts `:review_round_count` and nothing else — in particular
+  not `:status`, so a caller holding only this changeset cannot smuggle a
+  status transition through it, and `changeset/2` (the sole recorded
+  status writer) stays the only unguarded status surface.
+  """
+  def review_round_changeset(task, attrs) do
+    task
+    |> cast(attrs, [:review_round_count])
+    |> validate_required([:review_round_count])
+    |> validate_number(:review_round_count, greater_than_or_equal_to: 0)
+  end
+
   def planning_step_changeset(task, attrs) do
     task
     |> cast(attrs, [:planning_step, :planning_step_outcomes])

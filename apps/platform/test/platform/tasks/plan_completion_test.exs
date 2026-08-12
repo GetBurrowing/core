@@ -21,7 +21,7 @@ defmodule Platform.Tasks.PlanCompletionTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Deploy then done, routerless",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: %{"type" => "manual"},
           # Stage-2 deploy-target guard (task 019f42db) refuses `:deploying`
           # transitions without a resolved target.

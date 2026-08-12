@@ -1073,6 +1073,21 @@ defmodule Platform.Orchestration.PromptTemplates do
         - Post that same observation into the execution space ({{execution_space_id}}) so the implementing
           agent reads it on the next dispatch — your observation IS the failure_feedback.
 
+        On COULD NOT EVALUATE — you were unable to run the test case at all (the dev server will not boot, a
+        fixture cannot be built, the case hit a known flake), as distinct from running it and seeing the wrong
+        behaviour:
+        - Call `suite_validation_evaluate` with the matching `validation_id`, `status: "failed"`, and an
+          `evidence` map carrying `disposition: "could_not_evaluate"` AND a non-blank `reason` explaining what
+          stopped you: `evidence: %{disposition: "could_not_evaluate", reason: "<what blocked the run>",
+          diagnostics: "<logs/details>"}`.
+        - This raises a blocker and does NOT spend one of the task's three review rounds. A failed verdict
+          without that marker DOES spend a round, and after three the task is returned to PLANNING and its
+          plan superseded — so a broken environment reported as a plain failure re-plans a feature that was
+          never wrong.
+        - The `reason` is mandatory. A `could_not_evaluate` marker with no reason is counted as a genuine
+          failure.
+        - Use it ONLY when the run was impossible. "The feature looks wrong" is a plain failed verdict.
+
         ## Forbidden
 
         - Do NOT call `task_update` to bounce the task status. The plan engine handles the

@@ -315,7 +315,7 @@ defmodule Platform.Tasks.PlanEngineStackMemberMergeTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Solo task gets deploy stage",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: %{"type" => "pr_merge", "config" => %{}},
           # Stage-2 guard `require_deploy_target_for/2` needs a resolvable
           # target before the engine can inject a Deploy stage; without it
@@ -375,7 +375,7 @@ defmodule Platform.Tasks.PlanEngineStackMemberMergeTest do
           Tasks.create_task(%{
             project_id: project.id,
             title: "Solo no-stack-dispatch",
-            status: "in_progress",
+            status: "in_review",
             deploy_strategy: %{"type" => "pr_merge", "config" => %{}},
             deploy_target: "production"
           })
@@ -448,7 +448,7 @@ defmodule Platform.Tasks.PlanEngineStackMemberMergeTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Solo callable",
-          status: "in_progress"
+          status: "in_review"
         })
 
       record = Tasks.get_task_record(task.id)

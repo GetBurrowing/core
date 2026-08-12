@@ -1433,6 +1433,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     On failure, call `suite_validation_evaluate` with the matching `validation_id`, `status: "failed"` and an `evidence` map containing what you EXPECTED (verbatim from the payload) and what you ACTUALLY OBSERVED, with diagnostics. Post that same observation into the execution space (#{execution_space_id}) so the implementing agent reads it on the next dispatch — your observation IS the failure_feedback.
 
+    If you COULD NOT EVALUATE a test case — you were unable to run it at all (the dev server will not boot, a fixture cannot be built, the case hit a known flake), as distinct from running it and seeing the wrong behaviour — call `suite_validation_evaluate` with `status: "failed"` and an `evidence` map carrying `disposition: "could_not_evaluate"` AND a non-blank `reason` explaining what stopped you. That raises a blocker and does NOT spend one of the task's three review rounds. A failed verdict without that marker DOES spend a round, and after three the task is returned to PLANNING and its plan superseded — so a broken environment reported as a plain failure re-plans a feature that was never wrong. The `reason` is mandatory: a `could_not_evaluate` marker with no reason is counted as a genuine failure. Use it ONLY when the run was impossible; "the feature looks wrong" is a plain failed verdict.
+
     Run every pending e2e_behavior validation even if an earlier one failed.
 
     Do NOT call `task_update` to bounce the task — the plan engine handles in_review→in_progress automatically on any failed e2e_behavior verdict.

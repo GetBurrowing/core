@@ -434,7 +434,7 @@ defmodule Platform.Deploy.ProjectFilesTest do
         Tasks.create_task(%{
           project_id: source.id,
           title: "Auto-injected project_files task",
-          status: "in_progress",
+          status: "in_review",
           # `require_deploy_target_for/2` still gates on the legacy
           # string until the follow-up migration lands. Give it a value
           # so the transition to `deploying` can proceed.

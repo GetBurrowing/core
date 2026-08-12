@@ -106,7 +106,7 @@ defmodule Platform.Orchestration.TaskRouter do
   alias Platform.Lifecycle.Edges
   alias Platform.Lifecycle.Executor
   alias Platform.Tasks
-  alias Platform.Tasks.{DeployResolver, Plan, ReviewRequests, Stage}
+  alias Platform.Tasks.{DeployResolver, Plan, ReviewDisposition, ReviewRequests, Stage}
 
   # ── State ──────────────────────────────────────────────────────────────
 
@@ -994,37 +994,39 @@ defmodule Platform.Orchestration.TaskRouter do
         if stage.status == "failed" do
           task = Tasks.get_task_detail(state.task_id)
 
-          cond do
-            # Deploy stage failed — bounce deploying → in_progress
-            task && task.status == "deploying" ->
-              handle_deploy_stage_failure(state, task, stage)
+          failure_outcome =
+            cond do
+              # Deploy stage failed — bounce deploying → in_progress
+              task && task.status == "deploying" ->
+                handle_deploy_stage_failure(state, task, stage)
+                :bounced
 
-            # Review stage failed — bounce in_review → in_progress
-            task && task.status == "in_review" ->
-              case Tasks.transition_task(task, "in_progress") do
-                {:ok, _updated} ->
-                  Logger.info(
-                    "[TaskRouter] review stage failed — bounced task #{state.task_id} back to in_progress"
-                  )
+              # Review stage failed — bounce in_review → in_progress, unless
+              # this was the round that exhausts the bound (task 019ff788
+              # stage 3), in which case the task goes back to PLANNING.
+              task && task.status == "in_review" ->
+                handle_review_stage_failure(state, task, stage)
 
-                {:error, reason} ->
-                  Logger.warning(
-                    "[TaskRouter] failed to bounce task #{state.task_id} to in_progress: #{inspect(reason)}"
-                  )
-              end
-
-            true ->
-              :ok
-          end
+              true ->
+                :bounced
+            end
 
           # Re-dispatch so the agent picks up the in_progress prompt. The
           # subsequent `do_dispatch/2` call will `record_dispatch/4` +
           # re-arm liveness timers automatically.
           if state.execution_space_id do
+            log_line =
+              case failure_outcome do
+                :replanned ->
+                  "Stage failure exhausted the review-round bound — task returned to planning | "
+
+                _ ->
+                  "Stage failure bounced task back to in_progress | "
+              end
+
             ExecutionSpace.post_log(
               state.execution_space_id,
-              "Stage failure bounced task back to in_progress | " <>
-                diagnostic_snapshot(state, task, stage_override: stage)
+              log_line <> diagnostic_snapshot(state, task, stage_override: stage)
             )
           end
 
@@ -1037,8 +1039,13 @@ defmodule Platform.Orchestration.TaskRouter do
           # swallow it) and BEFORE the dispatch. When no pending stage exists
           # this is a no-op and the withhold clause in `handle_info(:dispatch,
           # _)` catches the resulting dead end.
+          #
+          # A re-planned task is the one case that must NOT re-open an
+          # execution stage: its plan has just been superseded and the next
+          # dispatch is a PLANNING dispatch, so opening a stage on a dead
+          # plan would hand the planner an executable stage it never wrote.
           state =
-            if stage_needs_opening?(state.task_id) do
+            if failure_outcome != :replanned and stage_needs_opening?(state.task_id) do
               ensure_execution_stage_started(state, state.task_id)
             else
               state
@@ -1047,6 +1054,15 @@ defmodule Platform.Orchestration.TaskRouter do
           send(self(), :dispatch)
           %{state | status: :running}
         else
+          # ADR 0029: the task must HOLD `in_review` while the review gate runs.
+          # Ordering is load-bearing — `HeartbeatScheduler.dispatch_prompt/4`
+          # selects its template off the task's status, so a write that lands
+          # after `send(self(), :dispatch)` changes nothing observable and the
+          # gate keeps rendering the implementation prompt.
+          if stage.status == "running" do
+            maybe_enter_in_review(state.task_id, stage)
+          end
+
           if waiting_for_human_review?(state) do
             if stage.status == "running" do
               send(self(), :dispatch)
@@ -2505,6 +2521,41 @@ defmodule Platform.Orchestration.TaskRouter do
     end
   end
 
+  # A stage is the task-level review gate when it hosts at least one
+  # `e2e_behavior` validation. Deliberately structural rather than a name match
+  # on "Task-level review": `PlanEngine.attach_e2e_validations_to_review_stage/2`
+  # REUSES a planner-authored stage whose name merely contains "review" or
+  # "validation", so a name-equality check would miss every reused-stage plan.
+  defp review_gate_stage?(stage) do
+    stage
+    |> stage_validations()
+    |> Enum.any?(fn validation -> Map.get(validation, :kind) == "e2e_behavior" end)
+  end
+
+  # Move the task to `in_review` when its review gate starts running. Guarded on
+  # `in_progress` so a re-broadcast for the same stage, or a task already past
+  # the gate, is a no-op. Never crashes the router: a rejected transition is
+  # logged and execution continues (the stage still dispatches, just with the
+  # implementation prompt — the pre-change behaviour).
+  defp maybe_enter_in_review(task_id, stage) do
+    with true <- review_gate_stage?(stage),
+         %{status: "in_progress"} = task <- Tasks.get_task_detail(task_id) do
+      case Tasks.transition_task(task, "in_review") do
+        {:ok, _updated} ->
+          Logger.info(
+            "[TaskRouter] review gate stage #{stage.id} running — task #{task_id} moved to in_review"
+          )
+
+        {:error, reason} ->
+          Logger.warning(
+            "[TaskRouter] failed to move task #{task_id} to in_review at the review gate: #{inspect(reason)}"
+          )
+      end
+    else
+      _ -> :ok
+    end
+  end
+
   defp runtime_phase_for_task(%{status: "planning"}), do: "planning"
   defp runtime_phase_for_task(%{status: "in_review"}), do: "review"
   defp runtime_phase_for_task(%{status: "deploying"}), do: "deploying"
@@ -3217,6 +3268,159 @@ defmodule Platform.Orchestration.TaskRouter do
   # — `maybe_lease_deploy_credentials/3` still uses it.
 
   # ── Deploy failure handling ────────────────────────────────────────────
+
+  # ── Bounded review loop (task 019ff788 stage 3) ───────────────────────────
+  #
+  # Returns `:bounced` (task is back at `in_progress`) or `:replanned` (the
+  # bound is exhausted; the plan is superseded and the task is at
+  # `planning`). The caller uses the distinction to decide whether to
+  # re-open an execution stage.
+  #
+  # THE LOAD-BEARING BRANCH is the first one. A gate that COULD NOT BE RUN —
+  # dev server will not boot, a fixture that cannot be built, a known flake —
+  # raises a blocker and spends NO round. Without it a broken environment
+  # burns three rounds and re-plans a feature that was never wrong. The
+  # reviewer expresses that through `Platform.Tasks.ReviewDisposition`, which
+  # is also the seam the `dispatch.review_e2e` prompt quotes; see its
+  # moduledoc for why the marker rides in `evidence` rather than in a third
+  # validation status.
+  defp handle_review_stage_failure(%State{} = state, task, stage) do
+    failed = failed_validations_for_stage(stage)
+
+    case ReviewDisposition.classify_all(failed) do
+      {:could_not_evaluate, reason} ->
+        record_review_unrunnable_blocker(state, task, stage, reason)
+
+        Logger.warning(
+          "[TaskRouter] review gate could not be evaluated for task #{state.task_id} — " <>
+            "blocker raised, review round NOT spent (count stays " <>
+            "#{task.review_round_count || 0}): #{reason}"
+        )
+
+        bounce_to_in_progress(state, task, "review gate could not be evaluated")
+
+      classification ->
+        if classification == :malformed do
+          # A `could_not_evaluate` marker with no reason is not a free pass:
+          # treated as a genuine verdict so the cheap path stays the honest
+          # one, and logged so the reviewer's omission is visible.
+          Logger.warning(
+            "[TaskRouter] review evidence for task #{state.task_id} claimed " <>
+              "#{ReviewDisposition.marker()} without a #{ReviewDisposition.reason_key()} — " <>
+              "counted as a genuine failure"
+          )
+        end
+
+        spend_round_and_route(state, task)
+    end
+  end
+
+  defp spend_round_and_route(%State{} = state, task) do
+    case Tasks.spend_review_round(task) do
+      {:ok, updated, count} ->
+        if count >= Tasks.max_review_rounds() do
+          replan_after_exhausted_rounds(state, updated, count)
+        else
+          bounce_to_in_progress(state, task, "review round #{count}/#{Tasks.max_review_rounds()}")
+        end
+
+      {:error, reason} ->
+        # The counter is bookkeeping; failing to write it must never strand
+        # a failed review. Bounce anyway and say so.
+        Logger.warning(
+          "[TaskRouter] could not spend a review round for task #{state.task_id}: #{inspect(reason)}"
+        )
+
+        bounce_to_in_progress(state, task, "review round counter unwritten")
+    end
+  end
+
+  defp replan_after_exhausted_rounds(%State{} = state, task, count) do
+    reason =
+      "Behavioural review failed #{count} times (bound: #{Tasks.max_review_rounds()}). " <>
+        "Returning the task to planning rather than bouncing it to implementation again."
+
+    case Tasks.supersede_current_plan(task.id, reason, "task_router") do
+      {:ok, _replanning_task} ->
+        Logger.warning(
+          "[TaskRouter] review-round bound exhausted for task #{state.task_id} " <>
+            "(#{count}/#{Tasks.max_review_rounds()}) — plan superseded, task returned to planning"
+        )
+
+        :replanned
+
+      {:error, err} ->
+        Logger.warning(
+          "[TaskRouter] review-round bound exhausted for task #{state.task_id} but " <>
+            "re-planning failed (#{inspect(err)}) — falling back to in_progress"
+        )
+
+        bounce_to_in_progress(state, task, "re-plan failed")
+    end
+  end
+
+  defp bounce_to_in_progress(%State{} = state, task, why) do
+    case Tasks.transition_task(task, "in_progress") do
+      {:ok, _updated} ->
+        Logger.info(
+          "[TaskRouter] review stage failed — bounced task #{state.task_id} back to in_progress (#{why})"
+        )
+
+      {:error, reason} ->
+        Logger.warning(
+          "[TaskRouter] failed to bounce task #{state.task_id} to in_progress: #{inspect(reason)}"
+        )
+    end
+
+    :bounced
+  end
+
+  # Read the stage's failed validations FROM THE DATABASE rather than off the
+  # broadcast `%Stage{}`: the transition message carries whatever association
+  # state the writer happened to hold, so `stage.validations` can be an
+  # `Ecto.Association.NotLoaded{}` here and any `Enum` over it would raise on
+  # the failure path — the one path that must not crash the router.
+  defp failed_validations_for_stage(stage) do
+    stage_id = Map.get(stage, :id) || Map.get(stage, "id")
+
+    if is_binary(stage_id) do
+      stage_id
+      |> Tasks.list_validations()
+      |> Enum.filter(&(&1.status == "failed"))
+    else
+      []
+    end
+  end
+
+  defp record_review_unrunnable_blocker(%State{} = state, task, stage, reason) do
+    attrs = %{
+      "task_id" => task.id,
+      "phase" => "review",
+      "runtime_id" => "task_router",
+      "event_type" => "execution.blocked",
+      "execution_space_id" => state.execution_space_id,
+      "payload" => %{
+        "stage_id" => Map.get(stage, :id) || Map.get(stage, "id"),
+        "description" =>
+          "Behavioural review could not be evaluated: #{reason}. No review round was " <>
+            "spent — fix the environment and re-run the gate.",
+        "needs_human" => true,
+        "reported_by" => "task_router"
+      }
+    }
+
+    case Platform.Orchestration.record_runtime_event(attrs) do
+      {:ok, _event} ->
+        :ok
+
+      {:error, err} ->
+        Logger.error(
+          "[TaskRouter] failed to record un-runnable-review blocker for task #{task.id}: #{inspect(err)}"
+        )
+
+        :error
+    end
+  end
 
   defp handle_deploy_stage_failure(%State{} = state, task, stage) do
     # Extract failure evidence from the stage's failed validations

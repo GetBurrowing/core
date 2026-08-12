@@ -120,7 +120,7 @@ defmodule Mix.Tasks.Suite.Deploy.ScopeGateTest do
         %{
           project_id: project.id,
           title: "Lands in a repository nobody declared",
-          status: "in_progress",
+          status: "in_review",
           deploy_target: "production",
           deploy_strategy: %{"type" => "pr_merge", "config" => %{"auto_merge" => false}}
         },
@@ -145,7 +145,7 @@ defmodule Mix.Tasks.Suite.Deploy.ScopeGateTest do
         %{
           project_id: project.id,
           title: "Lands in one declared repository",
-          status: "in_progress",
+          status: "in_review",
           deploy_target: "production",
           deploy_strategy: %{
             "type" => "pr_merge",

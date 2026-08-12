@@ -53,7 +53,7 @@ defmodule PlatformWeb.GithubWebhookMultiRepoTest do
       Tasks.create_task(%{
         project_id: project.id,
         title: "Lands in two repositories",
-        status: "in_progress",
+        status: "in_review",
         # Stage-2 deploy-target guard (task 019f42db) refuses `:deploying`
         # transitions without a resolved target.
         deploy_target: "production",

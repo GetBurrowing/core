@@ -73,7 +73,7 @@ defmodule PlatformWeb.GithubWebhookCiScopingTest do
       Tasks.create_task(%{
         project_id: project.id,
         title: "Lands in two repositories",
-        status: "in_progress",
+        status: "in_review",
         deploy_target: "production",
         deploy_strategy: %{
           "type" => "pr_merge",

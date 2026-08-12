@@ -60,47 +60,49 @@ defmodule Platform.Tasks.PlanEngine do
   """
   @spec reopen_manual_approval(Ecto.UUID.t()) :: {:ok, Validation.t()} | {:error, term()}
   def reopen_manual_approval(validation_id) do
-    Repo.transaction(fn ->
-      # `validation_id` is an agent-supplied MCP tool argument. The bang form's
-      # contract is `Ecto.NoResultsError` on a miss, so a malformed id raises
-      # THAT rather than `Ecto.Query.CastError` — otherwise this one lookup
-      # raises two different ways depending on how the agent typo'd.
-      Platform.UUID.valid?(validation_id) ||
-        raise(Ecto.NoResultsError, queryable: Validation)
+    deferring_broadcasts(fn ->
+      Repo.transaction(fn ->
+        # `validation_id` is an agent-supplied MCP tool argument. The bang form's
+        # contract is `Ecto.NoResultsError` on a miss, so a malformed id raises
+        # THAT rather than `Ecto.Query.CastError` — otherwise this one lookup
+        # raises two different ways depending on how the agent typo'd.
+        Platform.UUID.valid?(validation_id) ||
+          raise(Ecto.NoResultsError, queryable: Validation)
 
-      validation = Repo.get!(Validation, validation_id)
+        validation = Repo.get!(Validation, validation_id)
 
-      if validation.kind != "manual_approval" do
-        Repo.rollback(:not_manual_approval)
-      end
+        if validation.kind != "manual_approval" do
+          Repo.rollback(:not_manual_approval)
+        end
 
-      stage = Repo.get!(Stage, validation.stage_id)
+        stage = Repo.get!(Stage, validation.stage_id)
 
-      cond do
-        validation.status == "passed" ->
-          Repo.rollback(:already_passed)
+        cond do
+          validation.status == "passed" ->
+            Repo.rollback(:already_passed)
 
-        stage.status == "failed" ->
-          {:ok, _stage} = transition_stage(stage, "running")
+          stage.status == "failed" ->
+            {:ok, _stage} = transition_stage(stage, "running")
 
-        stage.status in ["running", "pending"] ->
-          :ok
+          stage.status in ["running", "pending"] ->
+            :ok
 
-        true ->
-          Repo.rollback(:invalid_stage_state)
-      end
+          true ->
+            Repo.rollback(:invalid_stage_state)
+        end
 
-      {:ok, updated} =
-        validation
-        |> Validation.changeset(%{
-          status: "pending",
-          evidence: %{},
-          evaluated_by: nil,
-          evaluated_at: nil
-        })
-        |> Repo.update()
+        {:ok, updated} =
+          validation
+          |> Validation.changeset(%{
+            status: "pending",
+            evidence: %{},
+            evaluated_by: nil,
+            evaluated_at: nil
+          })
+          |> Repo.update()
 
-      updated
+        updated
+      end)
     end)
     |> case do
       {:ok, validation} -> {:ok, validation}
@@ -126,57 +128,59 @@ defmodule Platform.Tasks.PlanEngine do
             "validation result status must be \"passed\" or \"failed\", got: #{inspect(status)}"
     end
 
-    Repo.transaction(fn ->
-      # `validation_id` is an agent-supplied MCP tool argument. The bang form's
-      # contract is `Ecto.NoResultsError` on a miss, so a malformed id raises
-      # THAT rather than `Ecto.Query.CastError` — otherwise this one lookup
-      # raises two different ways depending on how the agent typo'd.
-      Platform.UUID.valid?(validation_id) ||
-        raise(Ecto.NoResultsError, queryable: Validation)
+    deferring_broadcasts(fn ->
+      Repo.transaction(fn ->
+        # `validation_id` is an agent-supplied MCP tool argument. The bang form's
+        # contract is `Ecto.NoResultsError` on a miss, so a malformed id raises
+        # THAT rather than `Ecto.Query.CastError` — otherwise this one lookup
+        # raises two different ways depending on how the agent typo'd.
+        Platform.UUID.valid?(validation_id) ||
+          raise(Ecto.NoResultsError, queryable: Validation)
 
-      validation = Repo.get!(Validation, validation_id)
+        validation = Repo.get!(Validation, validation_id)
 
-      {:ok, updated} =
-        validation
-        |> Validation.changeset(%{
-          status: status,
-          evidence: evidence,
-          evaluated_by: evaluated_by,
-          evaluated_at: DateTime.utc_now()
-        })
-        |> Repo.update()
+        {:ok, updated} =
+          validation
+          |> Validation.changeset(%{
+            status: status,
+            evidence: evidence,
+            evaluated_by: evaluated_by,
+            evaluated_at: DateTime.utc_now()
+          })
+          |> Repo.update()
 
-      emit_validation_telemetry(updated)
+        emit_validation_telemetry(updated)
 
-      # Auto-advance: if no more pending/running validations on this stage, advance.
-      # A newly failed validation should fail a running stage immediately, while
-      # a later failed->passed flip must be able to reopen and re-advance a stage
-      # that had already entered failed.
-      stage = Repo.get!(Stage, updated.stage_id)
+        # Auto-advance: if no more pending/running validations on this stage, advance.
+        # A newly failed validation should fail a running stage immediately, while
+        # a later failed->passed flip must be able to reopen and re-advance a stage
+        # that had already entered failed.
+        stage = Repo.get!(Stage, updated.stage_id)
 
-      cond do
-        stage.status == "running" and status == "failed" ->
-          advance_stage(stage)
+        cond do
+          stage.status == "running" and status == "failed" ->
+            advance_stage(stage)
 
-        all_validations_resolved?(stage.id) ->
-          maybe_advance_resolved_stage(stage)
+          all_validations_resolved?(stage.id) ->
+            maybe_advance_resolved_stage(stage)
 
-        true ->
-          :ok
-      end
+          true ->
+            :ok
+        end
 
-      # ADR 0041 (T5 stage 3) — when a validation pass resolves the
-      # last pending validation on a stack member's review stage, the
-      # member is now review-ready. The in_review transition's earlier
-      # rollup-merge attempt may have no-op'd as `:not_ready`; re-fire
-      # the deployer hook so the merge can now proceed. The deployer
-      # is idempotent (already-merged short-circuits) and enforces its
-      # own readiness gate.
-      if status == "passed" do
-        maybe_retrigger_stack_member_merge(updated.stage_id)
-      end
+        # ADR 0041 (T5 stage 3) — when a validation pass resolves the
+        # last pending validation on a stack member's review stage, the
+        # member is now review-ready. The in_review transition's earlier
+        # rollup-merge attempt may have no-op'd as `:not_ready`; re-fire
+        # the deployer hook so the merge can now proceed. The deployer
+        # is idempotent (already-merged short-circuits) and enforces its
+        # own readiness gate.
+        if status == "passed" do
+          maybe_retrigger_stack_member_merge(updated.stage_id)
+        end
 
-      updated
+        updated
+      end)
     end)
   end
 
@@ -271,57 +275,59 @@ defmodule Platform.Tasks.PlanEngine do
     asserted_stage_id = Keyword.get(opts, :stage_id)
     completed_by = Keyword.get(opts, :completed_by)
 
-    Repo.transaction(fn ->
-      plan = Repo.get!(Plan, plan_id)
-      stages = ordered_stages(plan_id)
+    deferring_broadcasts(fn ->
+      Repo.transaction(fn ->
+        plan = Repo.get!(Plan, plan_id)
+        stages = ordered_stages(plan_id)
 
-      case current_stage(stages) do
-        nil ->
-          # `current_stage/1` returns nil for [passed, failed] exactly as it does
-          # for [passed, passed] — it looks only for a running or pending stage.
-          # This branch used to call `complete_plan/1` unconditionally, which on
-          # 2026-07-25 completed task 019f9ae5's plan at 20:58:58 while its
-          # stage 3 sat `failed`; the stale `completed` later rode a
-          # `{:plan_updated}` broadcast into the router and marked the task
-          # `done` eight minutes before its PR merged (task 019f9b34).
-          # Mirror `maybe_advance_next/3`'s all-terminal guard instead, and
-          # route completion through the deploy-aware seam.
-          cond do
-            stages == [] ->
-              # Degenerate plan with no stages at all — nothing to deploy,
-              # preserve the historical completion behavior.
-              {:ok, completed} = complete_plan(plan, :degenerate_plan)
-              Repo.preload(completed, stages_query())
+        case current_stage(stages) do
+          nil ->
+            # `current_stage/1` returns nil for [passed, failed] exactly as it does
+            # for [passed, passed] — it looks only for a running or pending stage.
+            # This branch used to call `complete_plan/1` unconditionally, which on
+            # 2026-07-25 completed task 019f9ae5's plan at 20:58:58 while its
+            # stage 3 sat `failed`; the stale `completed` later rode a
+            # `{:plan_updated}` broadcast into the router and marked the task
+            # `done` eight minutes before its PR merged (task 019f9b34).
+            # Mirror `maybe_advance_next/3`'s all-terminal guard instead, and
+            # route completion through the deploy-aware seam.
+            cond do
+              stages == [] ->
+                # Degenerate plan with no stages at all — nothing to deploy,
+                # preserve the historical completion behavior.
+                {:ok, completed} = complete_plan(plan, :degenerate_plan)
+                Repo.preload(completed, stages_query())
 
-            Enum.all?(stages, &(&1.status in ~w(passed skipped))) ->
-              maybe_inject_deploy_or_complete(plan, stages)
+              Enum.all?(stages, &(&1.status in ~w(passed skipped))) ->
+                maybe_inject_deploy_or_complete(plan, stages)
 
-            true ->
-              # A failed stage is present — leave the plan alone. The failed
-              # stage reopens when its validations flip (see
-              # `maybe_advance_resolved_stage/1`).
-              Repo.preload(plan, stages_query())
-          end
+              true ->
+                # A failed stage is present — leave the plan alone. The failed
+                # stage reopens when its validations flip (see
+                # `maybe_advance_resolved_stage/1`).
+                Repo.preload(plan, stages_query())
+            end
 
-        stage when is_binary(asserted_stage_id) and stage.id != asserted_stage_id ->
-          # The caller asserted a stage other than the one currently in
-          # flight. Do not sweep a stage nobody claimed — no-op.
-          Repo.preload(plan, stages_query())
+          stage when is_binary(asserted_stage_id) and stage.id != asserted_stage_id ->
+            # The caller asserted a stage other than the one currently in
+            # flight. Do not sweep a stage nobody claimed — no-op.
+            Repo.preload(plan, stages_query())
 
-        stage ->
-          case stage_verdict(stage) do
-            :all_passed ->
-              {:ok, _passed_stage} = transition_stage(stage, "passed", completed_by)
-              maybe_advance_next(plan, stages, stage.position)
+          stage ->
+            case stage_verdict(stage) do
+              :all_passed ->
+                {:ok, _passed_stage} = transition_stage(stage, "passed", completed_by)
+                maybe_advance_next(plan, stages, stage.position)
 
-            :has_failures ->
-              {:ok, _failed_stage} = transition_stage(stage, "failed")
-              Repo.preload(Repo.get!(Plan, plan_id), stages_query())
+              :has_failures ->
+                {:ok, _failed_stage} = transition_stage(stage, "failed")
+                Repo.preload(Repo.get!(Plan, plan_id), stages_query())
 
-            :pending ->
-              Repo.preload(plan, stages_query())
-          end
-      end
+              :pending ->
+                Repo.preload(plan, stages_query())
+            end
+        end
+      end)
     end)
   end
 
@@ -922,8 +928,22 @@ defmodule Platform.Tasks.PlanEngine do
     end
   end
 
-  # Statuses from which a task can transition to "deploying"
-  @deployable_statuses ~w(in_progress in_review)
+  # Statuses from which the ENGINE will inject a deploy stage (task 019ff788
+  # stage 2). `in_progress` was dropped: it was correct when
+  # `@deployable_statuses` was written (commit 3e37b8cd, #109), because a plan
+  # then held only implementation stages and "plan completed" meant
+  # "implementation done". `synthesize_task_level_review_stage/2` later put the
+  # review gate INSIDE the same plan, which redefined plan completion as
+  # "implementation AND review done" — so a plan that completes while its task
+  # still reads `in_progress` now means the review gate never ran or the task
+  # never entered `in_review` (stage 1's write failed). Deploying on it would
+  # ship an unreviewed task.
+  #
+  # This is deliberately a NARROWING: unreviewed work stops rather than ships.
+  # The failure mode it introduces is a task that completes its plan without a
+  # deploy stage, and that mode is loud — the `Logger.warning` below names the
+  # task id and the disqualifying status.
+  @deployable_statuses ~w(in_review)
 
   # Check if a deploy stage needs to be injected before completing the plan.
   # If a deploy stage already exists (was previously injected), complete normally.
@@ -1017,10 +1037,15 @@ defmodule Platform.Tasks.PlanEngine do
               if task.status in @deployable_statuses do
                 inject_deploy_stage(plan, task, stage_def, strategy)
               else
-                # Task can't transition to deploying (e.g. backlog, planning) — complete normally
-                Logger.info(
-                  "[PlanEngine] skipping deploy injection for task #{task.id} " <>
-                    "(status: #{task.status}, not deployable)"
+                # Task can't transition to deploying (e.g. backlog, planning) —
+                # complete normally. Warning, not info: this branch is exactly
+                # where a task with a wrong status silently piles up looking
+                # like a clean completion, so the message names the id AND the
+                # status that disqualified it.
+                Logger.warning(
+                  "[PlanEngine] NOT injecting deploy stage for task #{task.id} - " <>
+                    "status #{task.status} is not in @deployable_statuses; " <>
+                    "plan completed without deploy"
                 )
 
                 {:ok, completed} = complete_plan(plan, :not_deployable)
@@ -1227,8 +1252,91 @@ defmodule Platform.Tasks.PlanEngine do
       metadata
     )
 
-    # Broadcast to the board PubSub topic so TaskRouter can react
-    Tasks.broadcast_board({:stage_transitioned, stage})
+    # Broadcast to the board PubSub topic so TaskRouter can react.
+    #
+    # DEFERRED PAST COMMIT ON PURPOSE (task 019ff788). Every consumer of this
+    # message RE-READS the database off it — `TaskRouter`'s review-failure
+    # bounce calls `Tasks.list_validations/1` from its own process. Emitting
+    # from inside `evaluate_validation/2`'s `Repo.transaction` published the
+    # transition while the writer's rows were still uncommitted, so a fast
+    # subscriber read `status: "pending"` for a validation this very
+    # transaction had just marked `failed`. The observed consequence: an
+    # empty failed-validation list, `ReviewDisposition.classify_all([])`, and
+    # a correctly-marked un-runnable review spending a round of the bound —
+    # the one outcome the bound exists to prevent.
+    #
+    # LOAD DIRECTION IS INVERTED, which is why this hid: under eight busy
+    # routers the subscriber never won the race (8/8 correct); a single IDLE
+    # router with a ~300 ms quiet gap lost it every time (0/8). Production
+    # sits in the quiet state — a router is idle while a reviewer composes a
+    # verdict. Any probe for this must exercise the idle path.
+    #
+    # `defer_broadcast/1` is a no-op wrapper outside a
+    # `deferring_broadcasts/1` scope, so callers that transition a stage
+    # without a surrounding transaction still broadcast synchronously.
+    defer_broadcast({:stage_transitioned, stage})
+  end
+
+  # ── Post-commit broadcast deferral ──────────────────────────────────────
+  #
+  # Scoped via the process dictionary rather than `Repo.in_transaction?/0`:
+  # the sandbox owns a connection-level transaction in test, so that
+  # predicate cannot distinguish "inside OUR transaction" from "checked out
+  # by the test", and a mis-read would silently drop every broadcast under
+  # test. An explicit scope is decidable in both environments.
+  #
+  # Scope is limited to `{:stage_transitioned, _}` (task 019ff788 fence).
+  # The `{:plan_updated, _}` emits carry the same shape of hazard, but
+  # changing them is a separate, separately-revertible decision.
+  @deferred_broadcasts_key :platform_plan_engine_deferred_broadcasts
+
+  # Run `fun` (which owns a `Repo.transaction`) with stage broadcasts queued
+  # instead of published. On commit the queue is flushed IN ORDER; on
+  # rollback it is DISCARDED — a transition that did not commit must not be
+  # announced, which the pre-commit emit could not honour either way.
+  defp deferring_broadcasts(fun) do
+    case Process.get(@deferred_broadcasts_key) do
+      # Already inside an outer scope — let the outermost one flush, so a
+      # nested transaction cannot publish before the outer commit.
+      nil ->
+        Process.put(@deferred_broadcasts_key, [])
+
+        try do
+          result = fun.()
+
+          case result do
+            {:ok, _} -> flush_deferred_broadcasts()
+            _ -> :ok
+          end
+
+          result
+        after
+          Process.delete(@deferred_broadcasts_key)
+        end
+
+      _queued ->
+        fun.()
+    end
+  end
+
+  defp defer_broadcast(message) do
+    case Process.get(@deferred_broadcasts_key) do
+      nil ->
+        Tasks.broadcast_board(message)
+
+      queued ->
+        Process.put(@deferred_broadcasts_key, [message | queued])
+        :ok
+    end
+  end
+
+  defp flush_deferred_broadcasts do
+    queued = Process.get(@deferred_broadcasts_key, [])
+    Process.put(@deferred_broadcasts_key, [])
+
+    queued
+    |> Enum.reverse()
+    |> Enum.each(&Tasks.broadcast_board/1)
   end
 
   defp emit_validation_telemetry(%Validation{} = validation) do

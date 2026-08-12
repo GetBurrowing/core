@@ -99,6 +99,22 @@ defmodule Platform.Tasks do
     # in `stack_pending` and the in-stack sweep promotes it once every
     # sibling plan is approved.
     "planning" => ~w(in_progress blocked backlog stack_pending cancelled),
+    # `deploying` is KEPT here deliberately (task 019ff788 stage 2), even though
+    # the engine no longer emits it: `PlanEngine.@deployable_statuses` is now
+    # `~w(in_review)`, so no automated path produces `in_progress -> deploying`.
+    # It was added by the same commit as `@deployable_statuses` (3e37b8cd, #109)
+    # and the two are one decision, so it gets an explicit answer rather than a
+    # silent survival.
+    #
+    # Kept, because this map is the OPERATOR's vocabulary, not the engine's
+    # guard. The board renders `available_transitions/1` from it, so dropping
+    # `deploying` removes the drag from the In Progress column to Deploying —
+    # the one manual move for un-sticking a task whose review gate misfired.
+    # Removing it would also buy no real protection: anything that wants to
+    # force a deploy (including the agent-reachable `task_update` tool) can
+    # still walk `in_progress -> in_review -> deploying` in two calls. The guard
+    # that actually decides whether unreviewed work ships is
+    # `@deployable_statuses`, and that one is now closed.
     "in_progress" => ~w(in_review deploying blocked done stack_pending cancelled),
     # ADR 0041 (task 019e2be4): `done` is reachable from `in_review` for stack
     # members whose terminal transition is the rollup-PR merge fan-out — they
@@ -3625,6 +3641,19 @@ defmodule Platform.Tasks do
 
       task = Repo.get!(Task, updated_plan.task_id)
 
+      # Bounded review loop (task 019ff788 stage 3): an approved plan starts
+      # with a full allowance of review rounds. This is the reset for BOTH
+      # documented cases — a first approval (no-op, the column already reads
+      # 0) and a re-plan after the bound fired, where the router superseded
+      # the old plan and the planner authored a new one. Resetting here
+      # rather than at the supersede call keeps the invariant tied to the
+      # plan the rounds are counted AGAINST: rounds spent on v1 must not be
+      # charged to v2.
+      task =
+        task
+        |> Task.review_round_changeset(%{review_round_count: 0})
+        |> Repo.update!()
+
       # Task 019f7b7e stage 2: reserve per-stack Ecto migration timestamps for
       # any stage whose description says it will author a migration. Runs
       # INSIDE this transaction so approval + reservation are atomic — a
@@ -4356,6 +4385,56 @@ defmodule Platform.Tasks do
     else
       {:error, :invalid_transition}
     end
+  end
+
+  # ── Bounded review loop (task 019ff788 stage 3) ───────────────────────────
+
+  @max_review_rounds 3
+
+  @doc """
+  How many GENUINE review-gate failures a task may take before it is routed
+  back to planning instead of back to `in_progress`.
+
+  A round is spent only when the gate returned a verdict about the feature.
+  A gate that could not be RUN raises a blocker and spends nothing — see
+  `Platform.Tasks.ReviewDisposition`.
+  """
+  @spec max_review_rounds() :: pos_integer()
+  def max_review_rounds, do: @max_review_rounds
+
+  @doc """
+  Spend one review round. Returns `{:ok, task, count}` with the POST-increment
+  count so the caller can compare it against `max_review_rounds/0` without a
+  second read (the comparison and the write must not be able to disagree).
+  """
+  # Takes the LOADED task rather than an id on purpose: the only production
+  # caller (`TaskRouter`'s review-failure bounce) has already read the row,
+  # and an id-taking clause would add a second `Repo.get(Task)` to this
+  # module for no caller — a lookup the boundary inventory would then have
+  # to classify.
+  @spec spend_review_round(Task.t()) ::
+          {:ok, Task.t(), pos_integer()} | {:error, Ecto.Changeset.t()}
+  def spend_review_round(%Task{} = task) do
+    next = (task.review_round_count || 0) + 1
+
+    task
+    |> Task.review_round_changeset(%{review_round_count: next})
+    |> Repo.update()
+    |> case do
+      {:ok, updated} -> {:ok, updated, updated.review_round_count}
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
+
+  @doc """
+  Return the review-round counter to zero. Idempotent. Same loaded-task
+  contract as `spend_review_round/1`, for the same reason.
+  """
+  @spec reset_review_rounds(Task.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  def reset_review_rounds(%Task{} = task) do
+    task
+    |> Task.review_round_changeset(%{review_round_count: 0})
+    |> Repo.update()
   end
 
   # ── Validations ──────────────────────────────────────────────────────────

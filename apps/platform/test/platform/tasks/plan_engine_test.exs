@@ -379,6 +379,12 @@ defmodule Platform.Tasks.PlanEngineTest do
 
   # ── Deploy stage injection ─────────────────────────────────────────────
 
+  # Every fixture here parks its task at `in_review`, not `in_progress`: task
+  # 019ff788 stage 2 narrowed `PlanEngine.@deployable_statuses` to `~w(in_review)`
+  # because the review gate now lives INSIDE the plan, so a plan that completes
+  # while its task still reads `in_progress` means the review never happened.
+  # See "a plan completing at in_progress injects nothing" below for the
+  # anti-vacuity pair.
   describe "deploy stage injection" do
     test "injects deploy stage when strategy is not none", %{project: project} do
       strategy = %{"type" => "pr_merge", "config" => %{"require_ci_pass" => true}}
@@ -387,7 +393,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Deployable task",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: strategy,
           # Stage-2 deploy-target guard (task 019f42db) refuses `:deploying`
           # transitions without a resolved target.
@@ -447,7 +453,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Two-repo deployable task",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: strategy,
           deploy_target: "production"
         })
@@ -520,7 +526,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Single-repo deployable task",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: %{"type" => "pr_merge", "config" => %{}},
           deploy_target: "production"
         })
@@ -550,7 +556,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Repo-less deployable task",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: %{"type" => "pr_merge", "config" => %{}},
           deploy_target: "production"
         })
@@ -583,7 +589,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "All-terminal deployable task",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: strategy,
           deploy_target: "production"
         })
@@ -617,7 +623,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Drifted plan deployable task",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: strategy,
           deploy_target: "production"
         })
@@ -649,7 +655,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "No-deploy task",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: %{"type" => "none"}
         })
 
@@ -670,7 +676,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Deploy then done",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: strategy,
           # Stage-2 deploy-target guard (task 019f42db) refuses `:deploying`
           # transitions without a resolved target.
@@ -717,7 +723,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Inherit strategy",
-          status: "in_progress"
+          status: "in_review"
         })
 
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
@@ -736,7 +742,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Fallback manual",
-          status: "in_progress",
+          status: "in_review",
           # Stage-2 deploy-target guard (task 019f42db) refuses `:deploying`
           # transitions without a resolved target.
           deploy_target: "production"
@@ -766,7 +772,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Planner omitted deploy stage",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: strategy,
           # Stage-2 deploy-target guard (task 019f42db) refuses `:deploying`
           # transitions without a resolved target.
@@ -814,7 +820,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "No double inject",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: strategy,
           # Stage-2 deploy-target guard (task 019f42db) refuses `:deploying`
           # transitions without a resolved target.
@@ -852,7 +858,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Stack member task",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: %{"type" => "pr_merge", "config" => %{}}
         })
 
@@ -874,6 +880,130 @@ defmodule Platform.Tasks.PlanEngineTest do
       # Task status MUST NOT have been moved to "deploying"
       reloaded = Tasks.get_task_record(task.id)
       refute reloaded.status == "deploying"
+    end
+  end
+
+  # ── task 019ff788 stage 2: @deployable_statuses is ~w(in_review) ───────
+
+  describe "@deployable_statuses narrowing" do
+    @moduletag :deployable_statuses
+
+    # WHY THE FIXTURE IS BUILT DIRECTLY. After stage 1 the normal flow can no
+    # longer produce "plan completes while the task reads in_progress" — the
+    # router writes `in_review` when the review gate starts. A flow-driven
+    # fixture would therefore complete at `in_review` and pass against BOTH
+    # implementations, proving nothing. The state is forced here instead:
+    # create the task, park it at `in_progress`, complete the plan.
+    test "a plan completing at in_progress injects nothing and does not deploy",
+         %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Unreviewed task",
+          status: "in_progress",
+          deploy_strategy: %{"type" => "manual"},
+          deploy_target: "production"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      assert Tasks.get_task_record(task.id).status == "in_progress",
+             "the fixture must reach the engine at in_progress or the test is vacuous"
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+          assert updated_plan.status == "completed"
+
+          refute Enum.any?(updated_plan.stages, &DeployStageBuilder.deploy_stage_name?(&1.name)),
+                 "an unreviewed task must not receive a deploy stage: got " <>
+                   inspect(Enum.map(updated_plan.stages, & &1.name))
+        end)
+
+      assert Tasks.get_task_record(task.id).status == "in_progress",
+             "an unreviewed task must not be moved to deploying"
+
+      # Silent skipping is the failure mode this whole change risks — a task
+      # that stops deploying and looks like a clean completion. The warning is
+      # the operator's only signal, so it is asserted, not assumed.
+      assert log =~ "NOT injecting deploy stage for task #{task.id}"
+      assert log =~ "status in_progress is not in @deployable_statuses"
+    end
+
+    test "the same plan completing at in_review injects the deploy stage and deploys",
+         %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Reviewed task",
+          status: "in_review",
+          deploy_strategy: %{"type" => "manual"},
+          deploy_target: "production"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+      deploy_stage = Enum.find(updated_plan.stages, &(&1.name == "Deploy: Manual"))
+      assert deploy_stage != nil, "a reviewed task must still get its deploy stage"
+      assert deploy_stage.status == "running"
+      assert Tasks.get_task_record(task.id).status == "deploying"
+    end
+
+    # The `:stack_ships_atomically` arm of the `cond` in
+    # `maybe_inject_deploy_or_complete/2` sits BEFORE the status check, so a
+    # stack member is unaffected by the narrowing. Parked at `in_progress` —
+    # the status that now disqualifies a solo task — so a regression that
+    # reordered the `cond` would change the observable reason for the same
+    # outcome. The discriminator is the ABSENCE of the not-deployable warning:
+    # the member's plan completes because it ships atomically, not because its
+    # status was refused.
+    test "a stack member short-circuits before the status check", %{project: project} do
+      alias Platform.Tasks.Stacks
+
+      {:ok, stack} =
+        Stacks.create_stack(%{
+          project_id: project.id,
+          slug: "short-circuit-#{System.unique_integer([:positive])}",
+          name: "Short Circuit Stack",
+          rollup_branch: "stack/short-circuit-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Stack member at in_progress",
+          status: "in_progress",
+          deploy_strategy: %{"type" => "pr_merge", "config" => %{}}
+        })
+
+      {:ok, task} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
+
+      assert Tasks.dispatch_deploy_for_task(task) == {:error, :stack_ships_atomically}
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+          assert updated_plan.status == "completed"
+          assert length(updated_plan.stages) == 1
+        end)
+
+      refute log =~ "not in @deployable_statuses",
+             "the stack arm must be reached BEFORE the status check — a member " <>
+               "that completes for the status reason means the cond was reordered"
+
+      refute Tasks.get_task_record(task.id).status == "deploying"
     end
   end
 
@@ -1429,7 +1559,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Ordinary single-repo task",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: %{"type" => "pr_merge", "config" => %{}},
           deploy_target: "production"
         })
@@ -1504,7 +1634,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Declared single-repo task",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: %{
             "type" => "pr_merge",
             "config" => %{},
@@ -1543,7 +1673,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Two-repo task",
-          status: "in_progress",
+          status: "in_review",
           deploy_strategy: %{
             "type" => "pr_merge",
             "config" => %{},
