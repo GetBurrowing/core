@@ -42,7 +42,14 @@ defmodule PlatformWeb.RouterExternalChatHostTest do
   """
   use PlatformWeb.ConnCase, async: false
 
+  alias Platform.Accounts.User
+  alias Platform.Repo
+  alias Platform.Tenancy
+  alias Platform.Tenancy.OrgMembership
+
   @router PlatformWeb.Router
+
+  @chat_host "chat.example.com"
 
   # Resolve the live_session name (or :error, or a controller plug tuple)
   # for a route under a given host. Mirrors the host-swap mechanics used by
@@ -139,6 +146,116 @@ defmodule PlatformWeb.RouterExternalChatHostTest do
 
       assert {:live, PlatformWeb.OrgMemoryLive, :authenticated} =
                resolve("GET", "/org_memory", "chat.localhost")
+    end
+  end
+
+  # ── Request-level helpers (the route_info helper above cannot see the
+  # app fence, which is a PIPELINE plug and not a route property).
+  #
+  # Mirrors `router_host_isolation_test.exs`: an INTERNAL user, because
+  # `ExternalUserScope` already gates external users and would confound
+  # the signal. The seeded "sxi" org is used for the same reason it is
+  # there — its slug atom is pre-registered for the authenticated shell.
+  defp internal_user! do
+    n = System.unique_integer([:positive])
+
+    user =
+      %User{}
+      |> User.changeset(%{
+        email: "chat-host-root-#{n}@example.com",
+        name: "ChatHostRoot #{n}",
+        oidc_sub: "oidc-chat-host-root-#{n}"
+      })
+      |> Repo.insert!()
+
+    org = Tenancy.get_org_by_slug!("sxi")
+
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: "member"})
+    |> Repo.insert!()
+
+    user
+  end
+
+  defp signed_in_conn(conn), do: init_test_session(conn, current_user_id: internal_user!().id)
+
+  defp with_enforcement(value) do
+    previous = Application.get_env(:platform, :host_surface_enforcement, :off)
+    Application.put_env(:platform, :host_surface_enforcement, value)
+    on_exit(fn -> Application.put_env(:platform, :host_surface_enforcement, previous) end)
+    :ok
+  end
+
+  describe "the chat host serves a root landing route" do
+    setup do
+      # Explicit, not ambient: the fence is the thing that made `/` a 404,
+      # so a test that silently ran with it off would prove nothing.
+      with_enforcement(:on)
+    end
+
+    test "an AUTHENTICATED user hitting / on the chat host is redirected to /chat, not 404'd",
+         %{conn: conn} do
+      # THE LOAD-BEARING ASSERTION. Without a `/` route inside the `chat.`
+      # scope, `/` falls through to the match-any-host default scope, whose
+      # pipeline ends in `:require_app_surface` -> `HostSurface` -> a flat
+      # 404 for any non-`:app` surface. The unauthenticated case below
+      # returns 302 either way and is NOT evidence.
+      conn =
+        conn
+        |> signed_in_conn()
+        |> Map.put(:host, @chat_host)
+        |> get("/")
+
+      assert redirected_to(conn) == "/chat"
+    end
+
+    test "/ on the chat host is NOT compiled with the app fence in its pipeline" do
+      # `resolve/3` answers `PageController` on this host both before and
+      # after the fix (the default scope also declares `/` with a
+      # match-any-host pattern), so the plug list — not the module — is
+      # what distinguishes the two routes.
+      %{pipe_through: pipes} = Phoenix.Router.route_info(@router, "GET", "/", @chat_host)
+
+      refute :require_app_surface in pipes
+      assert :enforce_external_scope in pipes
+
+      # Positive control on the SAME instrument: the default host's root
+      # still carries the fence, so a passing `refute` above cannot be an
+      # artefact of the key being absent or renamed.
+      %{pipe_through: default_pipes} =
+        Phoenix.Router.route_info(@router, "GET", "/", "localhost")
+
+      assert :require_app_surface in default_pipes
+    end
+
+    test "an UNAUTHENTICATED request to / on the chat host still goes to login", %{conn: conn} do
+      # Included as a control, and labelled: this passes with or without the
+      # root route (`:require_auth` halts before the fence), so it is a
+      # regression guard on the auth ordering only — never the fix's proof.
+      conn = conn |> Map.put(:host, @chat_host) |> get("/")
+
+      assert redirected_to(conn) =~ "/auth/login"
+    end
+
+    test "the app fence is NOT widened — an app-only path still 404s on the chat host",
+         %{conn: conn} do
+      conn =
+        conn
+        |> signed_in_conn()
+        |> Map.put(:host, @chat_host)
+        |> get("/tasks")
+
+      assert conn.status == 404
+    end
+
+    test "the default host's own / is untouched and still redirects to /chat", %{conn: conn} do
+      conn =
+        conn
+        |> signed_in_conn()
+        |> Map.put(:host, PlatformWeb.Endpoint.config(:url)[:host] || "localhost")
+        |> get("/")
+
+      assert redirected_to(conn) == "/chat"
     end
   end
 

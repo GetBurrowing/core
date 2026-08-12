@@ -331,6 +331,25 @@ defmodule PlatformWeb.Router do
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
     end
+
+    # ROOT LANDING for the chat host. An external user handed the bare
+    # hostname types it with no path, and without this route `/` fell
+    # through to the match-any-host default `scope "/"` below — whose
+    # pipeline ends in `:require_app_surface`, so `HostSurface` saw a
+    # non-`:app` surface and rendered the uniform 404. Signing in first
+    # made no difference: the fence runs after auth. Declared HERE, inside
+    # the host scope, so it inherits this scope's pipeline (no
+    # `:require_app_surface`) rather than widening the app fence.
+    #
+    # `PageController.home/2` is the SAME action the default host's root
+    # uses and is already exactly `redirect(to: ~p"/chat")`, which is the
+    # wanted destination on this host too — hence reused, not reimplemented.
+    # Outside the live_session on purpose: it is a controller redirect.
+    #
+    # NOTE: the sibling `meet.` scope below has the identical gap and is
+    # deliberately NOT fixed here — its routes all require a slug, so
+    # there is no obvious landing target to redirect to.
+    get("/", PageController, :home)
   end
 
   # Invited-member meeting surface on the `meet.` host (task 019fb955-f8b1
