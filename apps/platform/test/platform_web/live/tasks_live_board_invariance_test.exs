@@ -647,7 +647,32 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   #   * one blank line separating the log from the `{:noreply, ...}`: +1.
   # No new function, no new branch, no new assign, no new derived state: the
   # `{:error, ...}` clause was already there and still returns the same flash.
-  @shell_line_count 5_948
+  #
+  # RE-PINNED (+39) by task 019ff182, the Merge / Open PR cluster on the task
+  # detail panel. The markup and its tone->class mapping are NOT here: they
+  # live in `PlatformWeb.Components.TaskMergeControls`, and the eligibility
+  # rules (`pr_merge`, `auto_merge: false`, not a stack member, a live
+  # `pr_merged` gate) live in `Platform.Tasks.MergeControl`. What is left is
+  # the part that cannot live anywhere else — one assign and one event.
+  # ARITHMETIC, +39 = 39 insertions, 0 deletions:
+  #   * `alias Platform.Tasks.MergeControl`: +1.
+  #   * `|> assign(:merge_control, nil)` in `mount/3`: +1.
+  #   * the same assign on both `assign_selected_task/2` clauses — `nil` on
+  #     deselect, `MergeControl.for_task(task)` on select: +2.
+  #   * `handle_event("merge_task_branch", …)`: +35, of which 13 are the
+  #     clause itself (delegate to `MergeControl.merge/3`, flash + reload on
+  #     success, re-assign the control with the returned band on failure) and
+  #     22 are a comment block recording the three refusals that are easy to
+  #     re-introduce: it calls `AutoMerger.execute_merge/4` rather than
+  #     writing a second merge, it does NOT pass the `pr_merged` validation
+  #     from the click (that gate auto-passes on the `pull_request.closed`
+  #     webhook, and passing it here would pass it on a merge that might not
+  #     have landed), and every failure — including a missing `gh` — lands in
+  #     the state band rather than a flash, a crash or a vanishing button.
+  # One new assign and one new branch, both irreducible: an event handler
+  # cannot live in a function component, and the panel cannot read derived
+  # state it was never assigned.
+  @shell_line_count 5_987
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

@@ -17,6 +17,7 @@ defmodule PlatformWeb.TasksLive do
   alias Platform.Tasks
   alias Platform.Tasks.CanvasAttachments
   alias Platform.Tasks.ChatPins
+  alias Platform.Tasks.MergeControl
   alias Platform.Tasks.PlanRejection
   alias Platform.Tasks.{Epic, Plan, Project, ReviewRequest, ReviewRequests, Stack, Stacks, Task}
   alias Platform.Tenancy
@@ -282,6 +283,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:review_request_subscriptions, initial_task_ids)
      |> assign(:selected_task, nil)
      |> assign(:selected_task_canvases, [])
+     |> assign(:merge_control, nil)
      |> assign(:show_detail, false)
      # Stack detail panel state (T8 stage 1). `:selected_stack` is the
      # `%Platform.Tasks.Stack{}` whose detail panel is open, with
@@ -1053,6 +1055,41 @@ defmodule PlatformWeb.TasksLive do
   defp push_selected_project_changed(socket) do
     id = socket.assigns.selected_project_id || "__all__"
     push_event(socket, "selected_project_changed", %{id: id})
+  end
+
+  # Merge the selected task's branch from the panel.
+  #
+  # Delegates to `MergeControl.merge/3`, which resolves the branch's open
+  # PR on demand and hands it to `AutoMerger.execute_merge/4` — the same
+  # entry point the auto-merge webhook path uses, carrying the
+  # planning-gate refusal and the stack-member deferral. There is no
+  # second merge implementation and this adds no new GitHub write access.
+  #
+  # It does NOT touch the `pr_merged` validation. That gate auto-passes on
+  # the `pull_request.closed` webhook; passing it from the click would
+  # pass it on a merge that might not have landed.
+  #
+  # Every failure — including a missing `gh` — lands in the state band as
+  # a named sentence rather than a flash, a crash, or a vanishing button.
+  def handle_event("merge_task_branch", _params, socket) do
+    case {socket.assigns.selected_task, socket.assigns.merge_control} do
+      {%Task{} = task, %{} = control} ->
+        actor = %{id: socket.assigns.current_user_id, org_id: nil}
+
+        case MergeControl.merge(task, control, actor) do
+          {:ok, _sha} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Merge requested for #{control.branch}.")
+             |> assign_selected_task(Tasks.get_task_detail(task.id))}
+
+          {:error, band} ->
+            {:noreply, assign(socket, :merge_control, %{control | band: band})}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("select_task", %{"id" => task_id}, socket) do
@@ -5615,6 +5652,7 @@ defmodule PlatformWeb.TasksLive do
     |> assign(:selected_task_canvases, [])
     |> assign(:expanded_plans, MapSet.new())
     |> assign(:edit_mode, false)
+    |> assign(:merge_control, nil)
   end
 
   defp assign_selected_task(socket, %Task{} = task) do
@@ -5623,6 +5661,7 @@ defmodule PlatformWeb.TasksLive do
     |> assign(:selected_task_canvases, load_attached_canvases(task.id))
     |> assign(:expanded_plans, MapSet.new(default_expanded_plan_ids(task)))
     |> assign(:edit_mode, false)
+    |> assign(:merge_control, MergeControl.for_task(task))
   end
 
   # Flatten `CanvasAttachments.list_task_canvases/1` into a chip-render

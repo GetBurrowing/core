@@ -2732,6 +2732,17 @@
         </div>
       </div>
     </div>
+
+    <%!-- Merge / Open PR cluster. `@merge_control` is nil — nothing
+         renders at all — unless the deploy is `pr_merge` with
+         `auto_merge: false` on a non-stacked task with a live
+         `pr_merged` gate. See `Platform.Tasks.MergeControl` for the
+         gate and `PlatformWeb.Components.TaskMergeControls` for the
+         colour rule. --%>
+    <PlatformWeb.Components.TaskMergeControls.task_merge_controls
+      :if={@merge_control}
+      control={@merge_control}
+    />
   </div>
 
   <%!-- Stack detail panel (T8 stage 1 — slide-in from right).
