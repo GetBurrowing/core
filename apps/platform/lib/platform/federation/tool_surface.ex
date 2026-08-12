@@ -698,7 +698,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "memory_search",
         description:
-          "Hybrid (semantic + lexical) search across memory pages, journal entries, chat messages, and tasks. Results are source-tagged and ranked via Reciprocal Rank Fusion (k=60) across corpora. Message hits are filtered to spaces the calling agent participates in.",
+          "Hybrid (semantic + lexical) search across memory pages, journal entries, chat messages, and tasks. Results are source-tagged and ranked via Reciprocal Rank Fusion (k=60) across corpora. Message hits are filtered to spaces the calling agent participates in. Each hit carries a BOUNDED SNIPPET (first 500 characters of the body) in `content`, not the full body — call `memory_view` with the hit's `path` to read the whole thing.",
         parameters: %{
           query: %{
             type: "string",
@@ -752,9 +752,9 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{results: [%{source, id, path, space_id, content, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], fusion_constant_k: 60, truncated: boolean}. Task hits (source: \"task\") carry additional advisory fields: `status`, `priority`, `updated_at`, `merged_pr_url` (or nil), `follow_up_task_ids` (list of open tasks that reference this one), and `cancellation_note` (rework directive for cancelled tasks).",
+          "%{results: [%{source, id, path, space_id, content, content_truncated, content_length, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], fusion_constant_k: 60, truncated: boolean, payload_truncated: boolean}. `content` is a 500-character snippet; `content_truncated` says whether the body was longer and `content_length` is its full byte size — fetch the body with `memory_view` on `path`. Task hits (source: \"task\") carry additional advisory fields: `status`, `priority`, `updated_at`, `merged_pr_url` (or nil), `follow_up_task_ids` (list of open tasks that reference this one), and `cancellation_note` (rework directive for cancelled tasks).",
         limitations:
-          "Message hits are filtered to spaces the calling agent participates in (anonymous callers get no message hits). Deleted or orphaned rows are silently dropped. `truncated: true` indicates a channel hit its `2*limit` cap and a higher `limit` may surface more hits.",
+          "Message hits are filtered to spaces the calling agent participates in (anonymous callers get no message hits). Deleted or orphaned rows are silently dropped. `truncated: true` indicates a channel hit its `2*limit` cap and a higher `limit` may surface more hits. `payload_truncated: true` is a different thing: the whole response is capped at 20_000 bytes, and lowest-ranked hits were dropped from the tail to fit.",
         when_to_use:
           "When you need to recall information beyond the org preamble — past decisions, journal entries, relevant chat threads, prior tasks (shipped or in-flight), or any cross-corpus lookup."
       },
@@ -7465,15 +7465,82 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # ── memory_search payload bound ──────────────────────────────────────
+  #
+  # `Search.search/2` hydrates each hit with the FULL body (`page.content`
+  # / `entry.content`). Twenty full org pages serialize to a six-figure
+  # JSON string, which is unusable as a single MCP tool result.
+  #
+  # The bound lives HERE, on the MCP dispatch head, and deliberately NOT
+  # inside `Search.search/2`: that function has a second consumer with no
+  # token budget — the org-memory LiveView search pane, which renders full
+  # content and clamps to its own 240-char preview. Narrowing the shared
+  # function would silently degrade that surface. A token cap is a
+  # property of the MCP transport, so it belongs on the transport's head.
+  @memory_search_snippet_chars 500
+  @memory_search_max_payload_bytes 20_000
+
   def execute("memory_search", args, context) do
     with {:ok, query} <- require_string(args, "query", "memory_search") do
       agent = load_agent(context)
 
       with :ok <- authorize_org_filter(agent, Map.get(args, "org_id")),
            {:ok, opts} <- search_opts_from(args, agent) do
-        Search.search(query, opts)
+        query |> Search.search(opts) |> bound_memory_search_payload()
       end
     end
+  end
+
+  # Snippet each hit's `:content`, then drop hits from the TAIL (the list
+  # is score-sorted, so the highest-ranked survive) until the encoded
+  # envelope fits the byte budget.
+  #
+  # `:payload_truncated` is NOT `:truncated`. `:truncated` comes from
+  # `Search.search/2` and means a channel hit its `2*limit` cap — a
+  # statement about the search. `:payload_truncated` means this transport
+  # bound dropped hits that the search did return. Do not conflate them.
+  defp bound_memory_search_payload({:ok, %{results: hits} = envelope}) when is_list(hits) do
+    snipped = Enum.map(hits, &bound_memory_search_hit/1)
+
+    # Measure with the `payload_truncated` key already present (and with
+    # its longer `false` rendering) so the flag we add can never push a
+    # payload back over the budget we just measured it against.
+    base = envelope |> Map.put(:results, snipped) |> Map.put(:payload_truncated, false)
+
+    {kept, dropped?} = fit_memory_search_payload(base, snipped)
+
+    {:ok, base |> Map.put(:results, kept) |> Map.put(:payload_truncated, dropped?)}
+  end
+
+  defp bound_memory_search_payload(other), do: other
+
+  defp bound_memory_search_hit(%{content: content} = hit) when is_binary(content) do
+    sliced = String.slice(content, 0, @memory_search_snippet_chars)
+
+    hit
+    |> Map.put(:content, sliced)
+    |> Map.put(:content_truncated, byte_size(content) > byte_size(sliced))
+    |> Map.put(:content_length, byte_size(content))
+  end
+
+  defp bound_memory_search_hit(hit), do: hit
+
+  defp fit_memory_search_payload(base, hits) do
+    cond do
+      memory_search_payload_bytes(Map.put(base, :results, hits)) <=
+          @memory_search_max_payload_bytes ->
+        {hits, length(hits) < length(base.results)}
+
+      hits == [] ->
+        {[], true}
+
+      true ->
+        fit_memory_search_payload(base, Enum.drop(hits, -1))
+    end
+  end
+
+  defp memory_search_payload_bytes(envelope) do
+    byte_size(Jason.encode!(envelope))
   end
 
   # ── Memory-feedback read tools (task 019f6381 stage 4) ───────────────────
