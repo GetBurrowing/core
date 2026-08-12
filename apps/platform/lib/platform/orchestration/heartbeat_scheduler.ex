@@ -93,19 +93,16 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   Only fall back to filesystem skill lookup if the payload clearly references a path without including the needed content.\
   """
 
-  # Ack-first preamble prepended to every hardcoded dispatch fallback
-  # (task 019f640d stage 5). Mirrors `PromptTemplates.task_ack_preamble/0`
-  # in shape — the DB template does the mustache substitution; the
-  # hardcoded fallback interpolates via Elixir `#{...}` so both routes
-  # ship the same guidance regardless of whether the DB template row
-  # exists yet.
-  @task_ack_preamble_template """
-  **Your first tool call must be `task_ack(task_id="__TASK_ID__", stage_id="__STAGE_ID__", subagent_id="__SUBAGENT_ID__")`.**
-
-  Spawn the subagent FIRST, then include its returned agent id in the ack. Empty or missing subagent_id will fail validation — this ordering makes it structurally impossible to ack a dispatch you never spawned a subagent for. Without a successful ack the router will fire a no-ack alert in 5 minutes.
-
-  **If `task_ack` is missing from your MCP tool cache** (a known cross-version issue where a session's catalog predates a new tool), call `alarm_silence(task_id="__TASK_ID__", stage_id="__STAGE_ID__", until_seconds=1800, reason="task_ack absent from stale MCP catalog; subagent live")` as the operator escape hatch. Do NOT use `report_blocker(needs_human: false)` — that anti-pattern sets a task-level lease to blocked and leaks across stage boundaries.
-  """
+  # The ack-first preamble has exactly ONE source: `PromptTemplates.task_ack_preamble/0`
+  # (task 019ff45b stage 1 deleted the second copy that used to live here).
+  # The hardcoded fallback path has no mustache renderer, so this module
+  # converts that constant's `{{task_id}}` / `{{stage_id}}` placeholders and
+  # its literal prose subagent slot into interpolated values in
+  # `fallback_form/3`. That conversion is the ONLY permitted difference
+  # between the two routes' rendered wording, and it is enforced by
+  # `test/platform/orchestration/dispatch_ack_preamble_derivation_test.exs`
+  # ("every non-placeholder line of the single constant appears verbatim in
+  # the fallback body").
 
   @evidence_workflow_reference """
   ## Submitting evidence for a `manual_approval` validation
@@ -891,9 +888,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   # ── Hardcoded fallback prompts ─────────────────────────────────────────
 
-  # Render the ack-first preamble for the hardcoded fallback path with
-  # the runtime's actual task_id / stage_id / subagent_id substituted in
-  # place of the __TASK_ID__ / __STAGE_ID__ / __SUBAGENT_ID__ placeholders.
+  # Render the ack-first preamble for the hardcoded fallback path from the
+  # single constant `PromptTemplates.task_ack_preamble/0`, with the runtime's
+  # actual task_id / stage_id / subagent_id substituted in place of the
+  # constant's mustache placeholders and its literal prose subagent slot.
   # Callers pass empty strings for stage_id when a stage isn't available
   # yet (planning dispatch) — the tool tolerates a missing stage_id and
   # resolves via current_running_stage.
@@ -909,10 +907,35 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
          stage_id,
          subagent_id \\ "<unknown — spawn a subagent first>"
        ) do
-    @task_ack_preamble_template
-    |> String.replace("__TASK_ID__", task_id || "")
-    |> String.replace("__STAGE_ID__", stage_id || "")
-    |> String.replace("__SUBAGENT_ID__", subagent_id || "")
+    fallback_form(task_id || "", stage_id || "", subagent_id || "")
+  end
+
+  # The subagent slot in `PromptTemplates.task_ack_preamble/0` is prose, not a
+  # mustache placeholder. Match it on the EXACT literal rather than a regex
+  # over `<...>`: a loose match silently no-ops when the prose is reworded,
+  # which is the same class of failure this collapse exists to end. If the
+  # literal ever stops matching, raise — a preamble that ships the prose
+  # placeholder to a runtime is worse than a loud failure in a test run.
+  @subagent_slot "<the id returned when you spawned the SuiteExecutor / SuiteReviewer via the Agent tool>"
+
+  defp fallback_form(task_id, stage_id, subagent_id) do
+    body = PromptTemplates.task_ack_preamble()
+
+    unless String.contains?(body, @subagent_slot) do
+      raise """
+      PromptTemplates.task_ack_preamble/0 no longer contains the subagent slot literal \
+      that HeartbeatScheduler.fallback_form/3 substitutes:
+
+        #{@subagent_slot}
+
+      Update @subagent_slot to the new literal from the constant.
+      """
+    end
+
+    body
+    |> String.replace("{{task_id}}", task_id)
+    |> String.replace("{{stage_id}}", stage_id)
+    |> String.replace(@subagent_slot, subagent_id)
   end
 
   # Kept in parity with the DB `dispatch.planning` template so environments
