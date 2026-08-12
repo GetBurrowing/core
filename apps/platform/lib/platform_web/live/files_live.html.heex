@@ -420,84 +420,12 @@
       </dl>
 
       <div class="mt-4" data-role="files-detail-preview">
-        <%= case preview_mode(@selected_file) do %>
-          <% :image -> %>
-            <img
-              src={file_attachment_url(@selected_file)}
-              alt={@selected_file.original_filename}
-              class="mx-auto max-h-[80vh] max-w-full rounded border border-base-300 object-contain"
-              data-role="files-detail-image"
-            />
-          <% :pdf -> %>
-            <iframe
-              src={file_attachment_url(@selected_file)}
-              class="h-[80vh] w-full rounded border-0"
-              title={"Preview of " <> (@selected_file.original_filename || "file")}
-              data-role="files-detail-pdf"
-            >
-            </iframe>
-          <% :markdown -> %>
-            <div
-              :if={@selected_file_text}
-              class="prose prose-sm max-w-none rounded border border-base-300 bg-base-100 p-3"
-              data-role="files-detail-markdown"
-            >
-              {render_markdown_text(@selected_file_text)}
-            </div>
-            <p
-              :if={!@selected_file_text}
-              class="text-sm text-base-content/60"
-              data-role="files-detail-no-text"
-            >
-              No extracted text yet. The file may still be ingesting.
-            </p>
-          <% :text -> %>
-            <pre
-              :if={@selected_file_text}
-              class="whitespace-pre-wrap break-words rounded border border-base-300 bg-base-200 p-3 text-xs"
-              data-role="files-detail-text"
-            >{@selected_file_text}</pre>
-            <p
-              :if={!@selected_file_text}
-              class="text-sm text-base-content/60"
-              data-role="files-detail-no-text"
-            >
-              No extracted text yet. The file may still be ingesting.
-            </p>
-          <% :document -> %>
-            <div
-              :if={@selected_file_text}
-              class="prose prose-sm max-w-none whitespace-pre-wrap break-words rounded border border-base-300 bg-base-100 p-3"
-              data-role="files-detail-document"
-            >
-              {@selected_file_text}
-            </div>
-            <p
-              :if={!@selected_file_text}
-              class="text-sm text-base-content/60"
-              data-role="files-detail-no-text"
-            >
-              No extracted text yet. The file may still be ingesting, or the
-              format isn't text-bearing.
-            </p>
-          <% :unknown -> %>
-            <div
-              class="rounded border border-base-300 bg-base-200 p-4 text-sm text-base-content/70"
-              data-role="files-detail-unknown"
-            >
-              <p>Cannot preview this file type ({@selected_file.content_type}) in the browser.</p>
-              <p class="mt-2">
-                <a
-                  href={file_download_url(@selected_file)}
-                  class="link link-primary"
-                  download={@selected_file.original_filename || @selected_file.name || "file"}
-                >
-                  Download the file
-                </a>
-                to open it in a native application.
-              </p>
-            </div>
-        <% end %>
+        <PlatformWeb.Components.FilePreview.file_preview
+          file={@selected_file}
+          text={@selected_file_text}
+          scope="files-detail"
+          expandable
+        />
       </div>
     </div>
   </aside>
@@ -563,65 +491,23 @@
         />
       </div>
 
-      <%= case preview_mode(@selected_file) do %>
-        <% :image -> %>
-          <img
-            src={file_attachment_url(@selected_file)}
-            alt={@selected_file.original_filename}
-            class="mx-auto max-h-[80vh] max-w-full rounded border border-base-300 object-contain"
-          />
-        <% :pdf -> %>
-          <iframe
-            src={file_attachment_url(@selected_file)}
-            class="h-[80vh] w-full rounded border-0"
-            title={"Preview of " <> (@selected_file.original_filename || "file")}
-          >
-          </iframe>
-        <% :markdown -> %>
-          <div
-            :if={@selected_file_text}
-            class="prose prose-sm max-w-none rounded border border-base-300 bg-base-100 p-3"
-          >
-            {render_markdown_text(@selected_file_text)}
-          </div>
-          <p :if={!@selected_file_text} class="text-sm text-base-content/60">
-            No extracted text yet.
-          </p>
-        <% :text -> %>
-          <pre
-            :if={@selected_file_text}
-            class="whitespace-pre-wrap break-words rounded border border-base-300 bg-base-200 p-3 text-xs"
-          >{@selected_file_text}</pre>
-          <p :if={!@selected_file_text} class="text-sm text-base-content/60">
-            No extracted text yet.
-          </p>
-        <% :document -> %>
-          <div
-            :if={@selected_file_text}
-            class="prose prose-sm max-w-none whitespace-pre-wrap break-words rounded border border-base-300 bg-base-100 p-3"
-          >
-            {@selected_file_text}
-          </div>
-          <p :if={!@selected_file_text} class="text-sm text-base-content/60">
-            No extracted text yet.
-          </p>
-        <% :unknown -> %>
-          <div class="rounded border border-base-300 bg-base-200 p-4 text-sm text-base-content/70">
-            <p>Cannot preview this file type ({@selected_file.content_type}) in the browser.</p>
-            <p class="mt-2">
-              <a
-                href={file_download_url(@selected_file)}
-                class="link link-primary"
-                download={@selected_file.original_filename || @selected_file.name || "file"}
-              >
-                Download the file
-              </a>
-              to open it in a native application.
-            </p>
-          </div>
-      <% end %>
+      <PlatformWeb.Components.FilePreview.file_preview
+        file={@selected_file}
+        text={@selected_file_text}
+        scope="files-detail-mobile"
+        expandable
+      />
     </div>
   </div>
+
+  <%!-- Full-screen preview overlay (task 019ff1ab stage 2). Mirrors the
+       active_review_canvas modal on the Tasks panel. Guarded on
+       @selected_file so it can never outlive the row it shows. --%>
+  <PlatformWeb.Components.FilePreview.preview_fullscreen
+    :if={@preview_fullscreen && @selected_file}
+    file={@selected_file}
+    text={@selected_file_text}
+  />
 
   <%!-- Mobile FAB: open upload sheet.
        Position mirrors the canonical Tasks "+" button so the FAB always

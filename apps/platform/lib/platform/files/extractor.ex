@@ -78,7 +78,8 @@ defmodule Platform.Files.Extractor do
     __MODULE__.DOCX,
     __MODULE__.Image,
     __MODULE__.Text,
-    __MODULE__.CSV
+    __MODULE__.CSV,
+    __MODULE__.HTML
   ]
 
   @spec extract(binary(), String.t()) :: {:ok, ok_result()} | {:error, term()}
@@ -121,6 +122,10 @@ defmodule Platform.Files.Extractor do
   defp dispatch("text/csv"), do: {:ok, __MODULE__.CSV}
   defp dispatch("text/plain"), do: {:ok, __MODULE__.Text}
   defp dispatch("text/markdown"), do: {:ok, __MODULE__.Text}
+  # NOT __MODULE__.Text: routing HTML at the pass-through extractor flips the
+  # row to `succeeded` and indexes markup, CSS and nav chrome with no error and
+  # no failed status. See the HTML module's moduledoc.
+  defp dispatch("text/html"), do: {:ok, __MODULE__.HTML}
   defp dispatch("image/png"), do: {:ok, __MODULE__.Image}
   defp dispatch("image/jpeg"), do: {:ok, __MODULE__.Image}
   defp dispatch("image/jpg"), do: {:ok, __MODULE__.Image}

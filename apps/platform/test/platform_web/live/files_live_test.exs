@@ -809,6 +809,165 @@ defmodule PlatformWeb.FilesLiveTest do
     end
   end
 
+  describe "HTML preview + full screen (task 019ff1ab stage 2)" do
+    # Every negative here is paired with a positive control in the SAME
+    # test: without one, an assertion like "no allow-scripts anywhere"
+    # passes for a preview that renders nothing at all.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "HTML Preview Project")
+      {:ok, conn: conn, project: project}
+    end
+
+    defp seed_html_file(project) do
+      seed_file(project, %{
+        name: "mockup.html",
+        original_filename: "mockup.html",
+        content_type: "text/html",
+        ingest_status: "ingested"
+      })
+    end
+
+    defp select(view, file),
+      do: view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+    test "text/html classifies as :html, and text/plain still does not", %{project: _project} do
+      assert PlatformWeb.FilesLive.preview_mode(%Files.File{content_type: "text/html"}) == :html
+      assert PlatformWeb.FilesLive.preview_mode(%Files.File{content_type: "text/plain"}) == :text
+    end
+
+    test "html frame carries a sandbox that grants neither same-origin nor scripts",
+         %{conn: conn, project: project} do
+      html_file = seed_html_file(project)
+
+      pdf_file =
+        seed_file(project, %{
+          name: "spec.pdf",
+          original_filename: "spec.pdf",
+          content_type: "application/pdf",
+          ingest_status: "ingested"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      html = select(view, html_file)
+
+      assert node_count(html, "iframe[data-role='files-detail-html']") == 1
+      sandboxes = attribute_values(html, "iframe[data-role='files-detail-html']", "sandbox")
+
+      # The attribute must EXIST (an absent attribute yields [], which
+      # would otherwise satisfy every "does not contain" below).
+      assert length(sandboxes) == 1
+      [sandbox] = sandboxes
+      refute sandbox =~ "allow-same-origin"
+      refute sandbox =~ "allow-scripts"
+
+      # Declared design width, not 100% — a pane-sized frame fires the
+      # mockup's own media queries and shows the mobile layout.
+      [style] = attribute_values(html, "iframe[data-role='files-detail-html']", "style")
+      assert style =~ "width: #{PlatformWeb.FilesLive.html_preview_width()}px"
+
+      # POSITIVE CONTROL: a non-HTML file still renders its own branch,
+      # so the assertions above are not passing on an empty preview.
+      pdf_html = select(view, pdf_file)
+      assert node_count(pdf_html, "iframe[data-role='files-detail-pdf']") == 1
+      assert node_count(pdf_html, "iframe[data-role='files-detail-html']") == 0
+    end
+
+    test "scripts-off notice renders with the exact copy and no warning/error colour",
+         %{conn: conn, project: project} do
+      file = seed_html_file(project)
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      html = select(view, file)
+
+      assert node_count(html, "[data-role='files-detail-html-notice']") == 1
+
+      notice =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("[data-role='files-detail-html-notice']")
+        |> LazyHTML.text()
+
+      assert notice =~ "Scripts are off in preview."
+      assert notice =~ "Download"
+
+      [classes] = attribute_values(html, "[data-role='files-detail-html-notice']", "class")
+      refute classes =~ "warning"
+      refute classes =~ "error"
+      # Positive control on the same attribute: the strip IS styled, so
+      # the two refutes are not reading an empty class list.
+      assert classes =~ "border-base-300"
+    end
+
+    test "full-screen overlay opens, does NOT take the reserved z-50, and Escape-closes",
+         %{conn: conn, project: project} do
+      file = seed_html_file(project)
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      before_open = select(view, file)
+      assert node_count(before_open, "[data-role='files-preview-fullscreen']") == 0
+
+      opened =
+        view
+        |> element("[data-role='files-detail-fullscreen-open']")
+        |> render_click()
+
+      assert node_count(opened, "[data-role='files-preview-fullscreen']") == 1
+
+      [overlay_class] =
+        attribute_values(opened, "[data-role='files-preview-fullscreen']", "class")
+
+      # z-50 belongs to the per-canvas review overlay. Two surfaces at the
+      # same level only misbehave when both are open — the state nobody
+      # screenshots — so the reservation is asserted here instead.
+      refute overlay_class =~ "z-50"
+      assert overlay_class =~ "z-[45]"
+
+      # The overlay renders the preview body itself, not a placeholder.
+      assert node_count(opened, "iframe[data-role='files-fullscreen-html']") == 1
+
+      closed = render_keydown(view, "close_preview_fullscreen", %{"key" => "Escape"})
+      assert node_count(closed, "[data-role='files-preview-fullscreen']") == 0
+    end
+
+    test "full-screen control is on every previewable type and absent on :unknown",
+         %{conn: conn, project: project} do
+      html_file = seed_html_file(project)
+
+      image_file =
+        seed_file(project, %{
+          name: "shot.png",
+          original_filename: "shot.png",
+          content_type: "image/png",
+          ingest_status: "ingested"
+        })
+
+      unknown_file =
+        seed_file(project, %{
+          name: "blob.bin",
+          original_filename: "blob.bin",
+          content_type: "application/octet-stream",
+          ingest_status: "ingested"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      for file <- [html_file, image_file] do
+        html = select(view, file)
+
+        assert node_count(html, "[data-role='files-detail-fullscreen-open']") == 1,
+               "expected a full-screen control for #{file.content_type}"
+      end
+
+      unknown_html = select(view, unknown_file)
+      # Presence and absence live in the same test so a selector rename
+      # breaks both rather than silently passing one.
+      assert node_count(unknown_html, "[data-role='files-detail-unknown']") == 1
+      assert node_count(unknown_html, "[data-role='files-detail-fullscreen-open']") == 0
+    end
+  end
+
   describe "filtered_and_sorted helper" do
     test "filter narrows by case-insensitive substring", %{conn: _conn} do
       project = seed_project("fabrikam", "Filter Helper Project")
@@ -1302,6 +1461,16 @@ defmodule PlatformWeb.FilesLiveTest do
   # test pin "Ingesting" specifically to the row that flipped, not just
   # to the document as a whole (other rows may still be pending in a
   # broader fixture).
+  # `LazyHTML.query/2` returns a struct, so BOTH `== []` and `!= []` are
+  # wrong for "no nodes matched". Count.
+  defp node_count(html, selector) do
+    html |> LazyHTML.from_fragment() |> LazyHTML.query(selector) |> Enum.count()
+  end
+
+  defp attribute_values(html, selector, attr) do
+    html |> LazyHTML.from_fragment() |> LazyHTML.query(selector) |> LazyHTML.attribute(attr)
+  end
+
   defp refute_in_row(html, file_id, needle) do
     case Regex.run(
            ~r/<tr[^>]*data-file-id="#{Regex.escape(file_id)}"[^>]*>(.*?)<\/tr>/s,

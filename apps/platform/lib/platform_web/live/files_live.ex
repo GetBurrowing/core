@@ -113,6 +113,10 @@ defmodule PlatformWeb.FilesLive do
      |> assign(:files, [])
      |> assign(:selected_file, nil)
      |> assign(:selected_file_text, nil)
+     # Ephemeral full-screen preview overlay. Socket state only — no
+     # ClientState, no hook — and guarded on `@selected_file` at render so
+     # it cannot outlive the row it is showing.
+     |> assign(:preview_fullscreen, false)
      |> assign(:filter, "")
      |> assign(:sort, "date_desc")
      |> assign(:semantic_query, "")
@@ -189,7 +193,8 @@ defmodule PlatformWeb.FilesLive do
         {:noreply,
          socket
          |> assign(:selected_file, file)
-         |> assign(:selected_file_text, load_text_excerpt(file))}
+         |> assign(:selected_file_text, load_text_excerpt(file))
+         |> assign(:preview_fullscreen, false)}
     end
   end
 
@@ -197,7 +202,16 @@ defmodule PlatformWeb.FilesLive do
     {:noreply,
      socket
      |> assign(:selected_file, nil)
-     |> assign(:selected_file_text, nil)}
+     |> assign(:selected_file_text, nil)
+     |> assign(:preview_fullscreen, false)}
+  end
+
+  def handle_event("open_preview_fullscreen", _params, socket) do
+    {:noreply, assign(socket, :preview_fullscreen, true)}
+  end
+
+  def handle_event("close_preview_fullscreen", _params, socket) do
+    {:noreply, assign(socket, :preview_fullscreen, false)}
   end
 
   # Optimistic delete — no confirm dialog (ratified design: undo over
@@ -280,7 +294,8 @@ defmodule PlatformWeb.FilesLive do
          socket
          |> assign(:selected_file, file)
          |> assign(:selected_file_text, load_text_excerpt(file))
-         |> assign(:highlight_snippet, snippet)}
+         |> assign(:highlight_snippet, snippet)
+         |> assign(:preview_fullscreen, false)}
     end
   end
 
@@ -1048,6 +1063,26 @@ defmodule PlatformWeb.FilesLive do
   """
   def file_download_url(%Files.File{id: id}), do: "/files/blob/#{id}?download=1"
 
+  @doc """
+  Frame source for the sandboxed HTML preview. `?preview=1` is what makes
+  the blob route answer markup inline at all — without it the same URL
+  downloads, which is the point of the disposition rule. The response is
+  still `Content-Security-Policy: sandbox`, so nothing in the document
+  runs regardless of which frame asks for it.
+  """
+  def file_preview_frame_url(%Files.File{id: id}), do: "/files/blob/#{id}?preview=1"
+
+  @doc """
+  Design width, in CSS pixels, the HTML preview frame is given.
+
+  Deliberately NOT `100%`. A frame sized to the pane hands a desktop
+  mockup a narrow viewport, its own media queries fire, and the reviewer
+  studies the mobile layout believing it is the desktop one. The pane
+  scrolls horizontally instead; shrink-to-fit was rejected because 5px
+  type defeats the entire use case (read the mockup).
+  """
+  def html_preview_width, do: 1280
+
   @doc false
   def is_image?(%Files.File{content_type: ct}) when is_binary(ct),
     do: String.starts_with?(ct, "image/")
@@ -1063,6 +1098,8 @@ defmodule PlatformWeb.FilesLive do
 
     * `:image`    — render an inline `<img>` (image/*).
     * `:pdf`      — embed in an `<iframe>` (application/pdf).
+    * `:html`     — render the markup in a SANDBOXED `<iframe>`
+                    (text/html), scripts refused.
     * `:markdown` — render extracted text through the chat markdown
                     pipeline (text/markdown).
     * `:text`     — render extracted text in a `<pre>` block
@@ -1072,11 +1109,13 @@ defmodule PlatformWeb.FilesLive do
                     no native browser preview.
     * `:unknown`  — fall back to "cannot preview" + download link.
   """
-  @spec preview_mode(Files.File.t()) :: :image | :pdf | :markdown | :text | :document | :unknown
+  @spec preview_mode(Files.File.t()) ::
+          :image | :pdf | :html | :markdown | :text | :document | :unknown
   def preview_mode(%Files.File{content_type: ct}) when is_binary(ct) do
     cond do
       String.starts_with?(ct, "image/") -> :image
       ct == "application/pdf" -> :pdf
+      ct == "text/html" -> :html
       ct == "text/markdown" -> :markdown
       ct == "text/plain" -> :text
       ct == "text/csv" -> :text

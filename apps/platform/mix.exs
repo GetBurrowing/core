@@ -51,6 +51,13 @@ defmodule Platform.MixProject do
       {:mint, "~> 1.0"},
       {:castore, "~> 1.0"},
       {:lazy_html, ">= 0.1.0", only: :test},
+      # Runtime HTML parsing for Platform.Files.Extractor.HTML. Floki and not
+      # LazyHTML deliberately: `lazy_html` is `only: :test` above AND is a NIF
+      # (elixir_make + a c_src tree), so promoting it would put the first
+      # compiled C into the production release. Floki is pure Elixir with no
+      # dependencies of its own — its html5ever / fast_html backends are
+      # separate packages we do not pull in.
+      {:floki, "~> 0.38"},
       {:ecto_sql, "~> 3.10"},
       {:cloak_ecto, "~> 1.3"},
       {:req, "~> 0.5"},

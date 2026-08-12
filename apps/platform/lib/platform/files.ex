@@ -386,15 +386,45 @@ defmodule Platform.Files do
   Works from any prior state: a `"human_only"` + `"not_attempted"` row
   (terminal, never tried) and an `"attempt"` + `"failed"` row (tried,
   broke) both become `"attempt"` + `"pending"` and get re-enqueued.
+
+  ## `:mode` — who is allowed to outlive the ingest
+
+  `mode: :async` (the default) is the request/response contract: the row
+  is flipped, a supervised task is spawned, and the caller returns
+  immediately. That is correct for a LiveView or an MCP tool, because
+  the BEAM those callers run on stays up long enough for the task to
+  finish.
+
+  `mode: :sync` runs `Platform.Files.Ingester.run/1` in the CALLING
+  process and reports its outcome — `{:error, reason}` when the ingest
+  itself failed, as distinct from `{:error, %Ecto.Changeset{}}` when the
+  flip failed. A batch caller that exits when its loop ends (a mix task
+  halts the VM, and the supervisor dies with it) MUST use this: with
+  `:async` such a caller leaves the row parked at `"attempt"` +
+  `"pending"` with no text and no running task, and — because `pending`
+  is not a retry candidate — no later run will pick it up. Same pipeline
+  either way; the only difference is whether the caller waits.
   """
-  @spec request_ingest(File.t()) :: {:ok, File.t()} | {:error, Ecto.Changeset.t()}
-  def request_ingest(%File{} = file) do
+  @spec request_ingest(File.t(), keyword()) ::
+          {:ok, File.t()} | {:error, Ecto.Changeset.t() | term()}
+  def request_ingest(%File{} = file, opts \\ []) do
+    mode = Keyword.get(opts, :mode, :async)
+
     with {:ok, updated} <-
            file
            |> File.changeset(%{ingest_intent: "attempt", ingest_status: "pending"})
            |> Repo.update() do
-      :ok = Platform.Files.Ingester.ingest_async(updated)
-      {:ok, updated}
+      case mode do
+        :async ->
+          :ok = Platform.Files.Ingester.ingest_async(updated)
+          {:ok, updated}
+
+        :sync ->
+          case Platform.Files.Ingester.run(updated) do
+            :ok -> {:ok, get_file(updated.id)}
+            {:error, reason} -> {:error, reason}
+          end
+      end
     end
   end
 
