@@ -3988,9 +3988,23 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "Alias kept for call sites that still use the older name."
+  @doc """
+  Roster entries that name a *live agent* — the denominator for space health.
+
+  The predicate is POSITIVE: an entry counts when its `:agent` resolved to an
+  `%Agent{}`. Rejected alternative: excluding the known non-agent kinds
+  (`participant_type != "system"`), which silently readmits the next kind
+  somebody adds. Unresolved entries (deleted agents, the synthetic TaskRouter)
+  have no runtime to be healthy or unhealthy about, so they belong in neither
+  half of the ratio. `list_space_agents/1` still returns them — the roster UI
+  renders a deleted agent deliberately.
+  """
   @spec list_active_space_agents(binary()) :: [roster_entry()]
-  def list_active_space_agents(space_id), do: list_space_agents(space_id)
+  def list_active_space_agents(space_id) do
+    space_id
+    |> list_space_agents()
+    |> Enum.filter(&match?(%Agent{}, &1.agent))
+  end
 
   defp preload_roster_entries([]), do: []
 

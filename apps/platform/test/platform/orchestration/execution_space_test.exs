@@ -208,7 +208,9 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
       {:ok, space} = ExecutionSpace.find_or_create(@task_id)
       assert {:ok, participant} = ExecutionSpace.ensure_system_participant(space.id)
       assert participant.display_name == "TaskRouter"
-      assert participant.participant_type == "agent"
+      # The router is its own kind: no `agents` row resolves it, so counting it
+      # in an agent roster inflated every space-health denominator (019ff1af).
+      assert participant.participant_type == "system"
     end
 
     test "is idempotent" do
@@ -258,7 +260,7 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
       assert first.content == "First log message"
       assert first.log_only == true
       assert first.sender_name == "TaskRouter"
-      assert first.sender_type == "agent"
+      assert first.sender_type == "system"
 
       assert second.content == "Heartbeat prompt"
       assert second.log_only == false

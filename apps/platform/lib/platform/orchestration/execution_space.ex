@@ -143,7 +143,7 @@ defmodule Platform.Orchestration.ExecutionSpace do
 
     case Repo.get_by(Participant,
            space_id: space_id,
-           participant_type: "agent",
+           participant_type: "system",
            participant_id: system_id
          ) do
       %Participant{} = p ->
@@ -151,7 +151,7 @@ defmodule Platform.Orchestration.ExecutionSpace do
 
       nil ->
         Chat.add_participant(space_id, %{
-          participant_type: "agent",
+          participant_type: "system",
           participant_id: system_id,
           display_name: @system_display_name,
           attention_mode: "mention",

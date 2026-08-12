@@ -5,7 +5,13 @@ defmodule Platform.Chat.Participant do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @participant_types ~w(user agent)
+  # "system" types the synthetic per-space TaskRouter participant minted by
+  # `Platform.Orchestration.ExecutionSpace.ensure_system_participant/1`. It is
+  # a distinct kind, not an agent: no `agents` row resolves it, so counting it
+  # in an agent roster inflates every space health denominator. Rejected
+  # alternative: a metadata flag or id prefix — every consumer would have to
+  # remember a filter, and the ones that forget fail silently.
+  @participant_types ~w(user agent system)
   @roles ~w(member admin observer principal)
   @attention_modes ~w(mention heartbeat active all)
 
