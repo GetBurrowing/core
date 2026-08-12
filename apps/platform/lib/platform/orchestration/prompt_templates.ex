@@ -647,6 +647,9 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         Do NOT include a stage like "Deploy via PR merge", "Open PR", "Watch CI", or "Merge". Those are the deployer's job, not the planner's. The system auto-injects the deploy stage from the resolved deploy strategy when it is needed.
 
+        **Branch handling for implementation stages**
+        - Push the branch when implementation stages are complete — do NOT open a PR (the auto-injected deploy stage handles PR + CI + merge)
+
         A good plan stage must include:
         - A clear name (not just a category label)
         - A description that explains: what specifically will be changed, which files will be modified or created, what the implementation approach is, and why that approach was chosen

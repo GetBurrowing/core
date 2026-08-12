@@ -5113,6 +5113,76 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     end
   end
 
+  describe "dispatch.planning — branch handling for implementation stages (task 019ff4c2 stage 1)" do
+    # `HeartbeatScheduler.hardcoded_dispatch_planning/4` has always told the
+    # planner to push the branch and not open a PR; the DB row served to every
+    # real planning dispatch did not. These assertions go through
+    # `render_template/2` — the DB row — and never through
+    # `default_content_for_slug/1`: a descriptor-reading test passes against a
+    # stale row indefinitely, which is exactly the failure that hid this gap.
+    #
+    # They anchor on PROSE, not on a tool name. `DispatchFallbackParityTest`
+    # compares tool-NAME sets and is structurally blind to a missing section,
+    # so a tool-name assertion here would be green while the rule is absent.
+    @branch_rule_landmark "**Branch handling for implementation stages**"
+    @branch_rule_sentence "- Push the branch when implementation stages are complete — do NOT open a PR (the auto-injected deploy stage handles PR + CI + merge)"
+
+    defp branch_rule_assigns do
+      @stage5_render_assigns
+      |> Map.put(:federation_preamble, PromptTemplates.federation_preamble())
+      |> Map.put(:elapsed_minutes, "12")
+      |> Map.put(:pending_validation_ids, "[]")
+    end
+
+    test "the served dispatch.planning row carries the landmark and the verbatim sentence" do
+      assert {:ok, rendered} =
+               PromptTemplates.render_template("dispatch.planning", branch_rule_assigns())
+
+      assert rendered =~ @branch_rule_landmark,
+             "the served `dispatch.planning` row is missing the section landmark " <>
+               "#{inspect(@branch_rule_landmark)} — the force-update migration for this " <>
+               "rule has not reached this database (render_template/2 reads the row, not " <>
+               "the descriptor)"
+
+      assert rendered =~ @branch_rule_sentence,
+             "the served `dispatch.planning` row is missing the branch rule verbatim: " <>
+               "#{inspect(@branch_rule_sentence)}"
+    end
+
+    test "dispatch.deploying does NOT carry the rule — the deployer is the role that opens the PR" do
+      assert {:ok, rendered} =
+               PromptTemplates.render_template("dispatch.deploying", branch_rule_assigns())
+
+      refute rendered =~ @branch_rule_landmark,
+             "dispatch.deploying must not carry the planner's branch-handling landmark — " <>
+               "the deployer opens the PR"
+
+      refute rendered =~ "do NOT open a PR"
+    end
+
+    test "nudge does NOT carry the rule (short-form negative control)" do
+      assert {:ok, rendered} =
+               PromptTemplates.render_template("nudge", branch_rule_assigns())
+
+      refute rendered =~ @branch_rule_landmark
+      refute rendered =~ "do NOT open a PR"
+    end
+
+    test "row and descriptor agree on the rule (row substring + row==default equality)" do
+      # Two halves, neither redundant: the substring catches a migration that
+      # never ran (equality alone passes trivially when BOTH sides are stale),
+      # the equality catches a `lib/`-only revert.
+      row = PromptTemplates.get_template_by_slug("dispatch.planning")
+      assert row, "the dispatch.planning row must exist in a migrated test DB"
+
+      assert row.content =~ @branch_rule_sentence,
+             "the dispatch.planning ROW does not carry the branch rule — the force-update " <>
+               "migration never ran against this database"
+
+      assert row.content == PromptTemplates.default_content_for_slug("dispatch.planning")
+    end
+  end
+
   defp subject(subject_id), do: %{subject_type: "task", subject_id: subject_id}
 
   # Builds a RUNNING experiment targeting the fixture template, with the
