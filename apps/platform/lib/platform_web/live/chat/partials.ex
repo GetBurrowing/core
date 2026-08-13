@@ -8,12 +8,12 @@ defmodule PlatformWeb.ChatLive.Partials do
 
   Extracted here:
     * `notification_banner/1` — notification opt-in bar
-    * `pin_control/1` — per-row pin / unpin control in the sidebar rail
-    * `move_to_org_control/1` — admin "Move to organisation…" row control
-    * `move_to_org_picker/1` — the destination chooser that control opens
+    * `move_to_org_picker/1` — the admin destination chooser for a channel
     * `move_to_org_dialog/1` — the confirmation a chosen destination opens
     * `row_actions_control/1` — per-row overflow control in the mobile drawer
     * `row_actions_sheet/1` — the bottom sheet that control opens
+    * `row_actions_trigger/1` — per-row overflow control in the desktop rail
+    * `row_actions_dialog/1` — the centred menu that trigger opens
     * `upload_dialog/1` — staging modal for attachments
     * `canvas_overlay/1` — active-canvas side panel + mobile full-screen
     * `meeting_panel/1` — in-meeting UI (desktop sidebar + mobile overlay)
@@ -47,166 +47,6 @@ defmodule PlatformWeb.ChatLive.Partials do
         class="btn btn-info btn-sm flex-shrink-0"
       >
         Enable
-      </button>
-    </div>
-    """
-  end
-
-  @doc """
-  Pin / unpin control for one sidebar conversation row (task 019fd80f stage 3).
-
-  Renders as a SIBLING of the row's navigate-link, never a child. A `<button>`
-  nested in an `<a>` is invalid HTML, and LiveView binds click on `window` in
-  the bubble phase, so a nested control needs a `stopPropagation` guard that
-  swallows the event along with the navigation. This is the same shape the
-  sub-org hide button and the task-pin unpin button already use.
-
-  ONE control, one component, on every conversation row in the rail. What
-  varies with `@pinned` is the glyph, the verb in the accessible name, and the
-  state the click posts.
-
-  ## Visible at rest
-
-  The control renders at rest on every row, at `--color-base-content` 60%,
-  the same resting treatment the task row's unpin control already carries.
-  It used to be `opacity-0` plus a hover/focus reveal.
-
-  Two independent reasons it is visible now, from opposite directions:
-
-    * Rowan asked for the always-visible shape on the Pin-to-Chat work ("a
-      discoverable small pin icon next to the task"), which is why task rows
-      have had it since that stage.
-    * Marlowe, 2026-08-11: "when developing pinned channels, use similar
-      interactions as what's used for pinned tasks (hover doesn't work on
-      mobile)."
-
-  Marlowe's half is the load-bearing one. Tailwind compiles `hover:` and
-  `group-hover:` inside `@media (hover: hover)`, so on a touch device the
-  reveal rule never matches at all. A hover-only control is not
-  hard-to-reach there; it is unreachable. `focus-within:` answers the
-  keyboard case and answers nothing for a finger.
-
-  ## The glyph forks on state, and that is the point
-
-  Unpinned rows get `hero-map-pin`. PINNED rows get `hero-x-mark`, the same
-  glyph the pinned-TASK rows in the same block already use for the same
-  user-visible operation.
-
-  This is Marlowe's 2026-08-12 review: "remember to add a way for user to unpin
-  just like how pinned tasks have an 'x' to unpin". The capability was already
-  there and already labelled "Unpin <name>", so what she reported is not a
-  missing control. It is a control she could not read as one: a map-pin on a
-  row that is already pinned points the wrong way. It says "pin", so a pinned
-  row wearing one says nothing about how to get out. Sitting inches from task
-  rows that use a plain x for the same operation, the block taught two idioms
-  for one verb and she took the ambiguous one as an absence.
-
-  The counter-argument, recorded because it is real: forking a glyph by state
-  is close to the pinned-STATE marking that a 2026-08-11 review removed ("No
-  need to append a pin icon to pinned items. The section header is
-  sufficient"). It is not the same thing. What was removed was a FILLED pin
-  next to an outline pin, the same glyph in two weights, whose only job was to
-  say "this row is pinned" on rows already grouped under a heading that says
-  so. An x is not read as a state; nobody looks at an x and concludes the row
-  is pinned. It names the direction of the ACTION, which is the one thing the
-  map-pin got wrong.
-
-  ## Width
-
-  The control is `flex-shrink-0` and occupies its 24px on every row, pinned or
-  not, and both glyphs are `size-3.5`, so the fork costs no layout. The name
-  keeps `flex-1 min-w-0 truncate` and the control never squeezes, so the icon
-  cannot be crushed by a long display name and the name never loses space to
-  it. The touch target is 44x44, taken from a hit-area pseudo-element rather
-  than from the box, so the row keeps its height and the name keeps its
-  width (see `.channel-row-pin-button` in app.css).
-
-  ## Accessible name
-
-  Carries the verb AND the target: "Pin Gen-migration", "Unpin Rowan
-  Ellis". A bare "Pin" is meaningless in a list of twenty identical
-  controls.
-  """
-  attr(:space_id, :string, required: true)
-  attr(:name, :string, required: true)
-  attr(:pinned, :boolean, required: true)
-
-  def pin_control(assigns) do
-    ~H"""
-    <button
-      type="button"
-      class="channel-row-pin-button"
-      phx-click="toggle_pinned"
-      phx-value-space_id={@space_id}
-      phx-value-pinned={to_string(not @pinned)}
-      data-role="pin-control"
-      data-space-id={@space_id}
-      data-pinned={to_string(@pinned)}
-      aria-label={"#{if @pinned, do: "Unpin", else: "Pin"} #{@name}"}
-      title={if @pinned, do: "Unpin", else: "Pin"}
-    >
-      <span class={[(@pinned && "hero-x-mark") || "hero-map-pin", "size-3.5"]}></span>
-    </button>
-    """
-  end
-
-  @doc """
-  Fabrikam-admin "Move to organisation…" control for one channel row.
-
-  ## Why this exists
-
-  Refiling a channel used to be a drag between sidebar sections. That gesture
-  is being retired (task 019fd76a stage 2) because it performs a company-wide
-  write on a drop, with a consequence the gesture never states: canvas read
-  follows org membership (`Chat.CanvasAccess.org_readable_space?/2`), so a
-  move hands the destination org's members a direct link to this channel's
-  canvases and takes it from the source org's. This control replaces it and
-  becomes the ONLY reassignment path in the product.
-
-  ## The row holds only the trigger
-
-  The destination list is `move_to_org_picker/1`, a centred dialog rendered
-  once at the top level of the template. It was built first as a popover
-  hanging off this row, following the `lifecycle_menu/1` pattern, and that
-  does not work here: `#chat-section-list` is `overflow-y-auto`, which
-  computes `overflow-x` to `auto` too, so it clips on both axes. Measured on
-  the running app, the popover on a lower row ran to 992px against a nav
-  bottom of 810px, putting every destination out of reach, and on the sub-org
-  rows it crossed the rail's left edge by about 9px and cut into the leading
-  colour dots. The rail is roughly 224px wide, so no width fixes both.
-  """
-  attr(:space_id, :string, required: true)
-  attr(:name, :string, required: true)
-  attr(:open, :boolean, default: false)
-
-  def move_to_org_control(assigns) do
-    ~H"""
-    <div
-      class={
-        [
-          "flex-shrink-0",
-          # Revealed on row hover or keyboard focus, like the pin and hide
-          # controls beside it — except while the chooser is open, when the
-          # trigger must stay put even though the pointer has left the row.
-          not @open && "opacity-0 focus-within:opacity-100 group-hover/row:opacity-100"
-        ]
-      }
-      data-role="move-to-org"
-    >
-      <button
-        type="button"
-        id={"move-to-org-trigger-#{@space_id}"}
-        class="channel-row-hide-button focus-visible-ring"
-        phx-click="toggle_reassign_menu"
-        phx-value-channel_id={@space_id}
-        aria-haspopup="dialog"
-        aria-expanded={to_string(@open)}
-        aria-controls="move-to-org-picker"
-        aria-label={"Move ##{@name} to another organisation"}
-        title="Move to organisation…"
-        data-role="move-to-org-trigger"
-      >
-        <span class="hero-building-office-2 size-3.5"></span>
       </button>
     </div>
     """
@@ -390,12 +230,18 @@ defmodule PlatformWeb.ChatLive.Partials do
   @doc """
   Overflow control for one MOBILE DRAWER conversation row (task 019fe998).
 
-  The touch counterpart to `pin_control/1`. That control, and the sub-org
-  row's `.channel-row-hide-button`, are both revealed by `group-hover/row:` or
-  `focus-within:`. Tailwind compiles `hover:` inside `@media (hover: hover)`,
-  so on a phone neither variant ever matches and pin, unpin and hide have no
-  touch path at all. This control is therefore ALWAYS visible — no `opacity-0`
-  and no hover variant anywhere in its class list, which
+  The touch counterpart to the rail's `row_actions_trigger/1`. Before either
+  existed the rail row carried its actions directly, and a phone could reach
+  none of them. "Move to organisation…" was `opacity-0` with
+  `group-hover/row:opacity-100 focus-within:opacity-100` carried inline, and
+  Tailwind compiles `group-hover:` inside `@media (hover: hover)`, which never
+  matches on a touch device. The sub-org row's `.channel-row-hide-button` was
+  `opacity-0` revealed by a plain-CSS `.channel-row-wrap:hover` /
+  `:focus-within`: not media-gated, still asking a finger for a hover it
+  cannot produce. Only the pin was visible at rest, and only from 2026-08-11.
+
+  This control is therefore ALWAYS visible: no `opacity-0` and no hover
+  variant anywhere in its class list, which
   `chat_live_drawer_row_actions_test.exs` asserts by refutation.
 
   ## One control, not a row of icons
@@ -480,9 +326,9 @@ defmodule PlatformWeb.ChatLive.Partials do
 
   ## Accessible name on the pin row
 
-  This is the drawer's unpin path, the touch counterpart to the rail's
-  `pin_control/1`, so it holds the same rule: the accessible name
-  carries the verb AND the target. The visible label stays "Unpin
+  This is the drawer's unpin path, the touch counterpart to the pin item in
+  the rail's `row_actions_dialog/1`, so it holds the same rule: the accessible
+  name carries the verb AND the target. The visible label stays "Unpin
   conversation" and the `aria-label` extends it to "Unpin conversation Rowan
   Ellis". Extends rather than replaces, because WCAG 2.5.3 requires the
   accessible name to contain the visible label, so "Unpin Rowan Ellis"
@@ -543,6 +389,289 @@ defmodule PlatformWeb.ChatLive.Partials do
         </li>
       </ul>
     </.sheet>
+    """
+  end
+
+  @doc """
+  Overflow trigger for one DESKTOP RAIL conversation row (task 019ff8ba stage 1).
+
+  The desktop counterpart to `row_actions_control/1`. Same event, same
+  payload, different chrome: the drawer opens a bottom sheet, the rail opens
+  `row_actions_dialog/1`.
+
+  ## Why the row's controls moved behind it
+
+  A sub-org row carried three trailing controls — pin, "Move to
+  organisation…", hide — and the pin was visible at rest on every row of the
+  rail, all the time. Marlowe, 2026-08-13, choosing Option C off the design
+  canvas: the pin leaves the row in EVERY mode, not only while arranging. One
+  trigger replaces the set.
+
+  The cost, stated rather than discovered later: pinning is two clicks now
+  instead of one.
+
+  ## Every row, including the pinned task rows
+
+  Marlowe, 2026-08-13: "let's simplify and make it consistent where 3-dots brings
+  up additional actions for a row in the Chat page (channel - unpin/pin, task -
+  unpin since it gets pinned from a diff page)." So the trigger is the one
+  trailing control on every row of the rail, and what varies is what its menu
+  holds.
+
+  Stage 1 shipped this control on every row EXCEPT the pinned task rows, on the
+  reasoning that a task row's menu would be empty: a task pin comes off through
+  `unpin_task_from_chat` rather than `toggle_pinned`, and it carries no hide and
+  no org filing. Marlowe's answer is that the unpin IS the item, and it is the
+  only one because a task is pinned from another page.
+
+  ## Chrome
+
+  `.channel-row-actions-button` in app.css: a 24px box at
+  `--color-base-content` 60% at rest, with the 44x44 hit area coming from a
+  pseudo-element so the touch target costs the conversation name no width.
+  The declarations were the per-row pin's, shared by both selectors while
+  both controls existed. Stage 3 dropped the pin's selector when the pin's
+  markup went; nothing about the trigger's chrome changed with it.
+
+  `hero-ellipsis-horizontal` rather than the drawer's vertical ellipsis: the
+  rail row is a horizontal strip of controls, and the drawer's control is a
+  44px touch target in a full-bleed list.
+
+  ## `JS.push_focus/0`
+
+  Escape must return focus to the trigger, and the dialog is server-rendered:
+  closing it REMOVES the focused element from the DOM, which drops focus to
+  `<body>`. `JS.push_focus/0` with no `:to` pushes this element (the client
+  reads `sourceEl`), and every close path in `row_actions_dialog/1` pops it.
+  The event name and the `phx-value-space_id` payload are unchanged from the
+  drawer's control — `JS.push/2` merges the element's `phx-value-*`
+  attributes, so the contract on the wire is identical.
+  """
+  attr(:space_id, :string, required: true)
+  attr(:name, :string, required: true)
+
+  def row_actions_trigger(assigns) do
+    ~H"""
+    <button
+      type="button"
+      class="channel-row-actions-button"
+      phx-click={JS.push_focus() |> JS.push("open_row_actions")}
+      phx-value-space_id={@space_id}
+      data-role="row-actions-trigger"
+      data-space-id={@space_id}
+      aria-haspopup="dialog"
+      aria-label={"More actions for #{@name}"}
+      title="More actions"
+    >
+      <span class="hero-ellipsis-horizontal size-3.5"></span>
+    </button>
+    """
+  end
+
+  @doc """
+  The menu `row_actions_trigger/1` opens on DESKTOP (task 019ff8ba stage 1).
+
+  ## A centred dialog, not a dropdown
+
+  `#chat-section-list` is `overflow-y-auto`, so `overflow-x` computes to
+  `auto` and clips a row-anchored popover on both axes. Measured on the
+  running app when the same shape was tried for "Move to organisation…": the
+  popover ran to 992px against a nav bottom of 810px, and crossed the rail's
+  left edge by about 9px. The rail is ~224px wide, so no width fixes both.
+  The chrome here is `move_to_org_dialog/1`'s, copied rather than reinvented.
+
+  ## Both chromes are in the DOM at once
+
+  `row_actions_sheet/1` keeps `lg:hidden`; this keeps `hidden lg:contents`.
+  The wrapper, rather than a `hidden lg:block` on the modal itself, because
+  daisyUI's `.modal` is `display: grid` and a block override breaks its
+  centring — and `.modal-box` has to stay a child of `.modal` to be revealed
+  at all. `display: none` on the wrapper also keeps the dialog out of
+  LiveView's click-away dispatch below `lg`, which gates on `JS.isVisible/1`.
+
+  ## Items
+
+  Pin or Unpin, then hide, then move — the order the rows themselves used.
+  Each item is gated on what the ROW could do before this stage, so the menu
+  adds no capability anywhere:
+
+    * Pin / Unpin: every conversation row.
+    * Hide from my rail: sub-org channel rows only. `hide_channel` writes
+      `users.preferences["hidden_channel_ids"]`, and the Hidden drawer that
+      reverses it lists channels, so offering it on a DM would create a state
+      with no way back.
+    * Move to organisation…: Fabrikam admin, on a channel with an `org_id`. It
+      stays reachable from a PINNED row: pinning lifts a channel out of its
+      sub-org section, so gating this on "unpinned" would strand it.
+
+  Both action events are copied verbatim, `toggle_pinned` carrying
+  `phx-value-pinned` as the DESIRED next state rather than a flip, so a
+  duplicated event from a render race is idempotent instead of a silent
+  unpin.
+
+  ## A pinned TASK row's menu holds ONE item
+
+  A task conversation is pinned from the Tasks page and comes off through
+  `unpin_task_from_chat` (`task_chat_pins`, participant-scoped self-unpin), not
+  through the viewer's `toggle_pinned` preferences. Hide and org filing are
+  meaningless on it. So the whole item list forks on `@target.kind` rather than
+  gating four items individually: two disjoint menus read more clearly than one
+  menu with three dead branches.
+
+  The task item keeps `data-role="pinned-task-rail-unpin"` and its
+  `phx-value-task-id`, the contract the row's own button carried before this
+  amendment moved it into the menu. Same reason the pin item keeps
+  `pin-control`: one operation, one role name, wherever it renders. It differs
+  from the phone sheet's `pinned-task-drawer-unpin` because both chromes are in
+  the DOM at every width.
+
+  Its visible label is the bare verb, matching the conversation item, and its
+  accessible name is the row's unchanged "Unpin <name> from Chat". "Unpin" is
+  inside that string, so WCAG 2.5.3 holds.
+
+  ## Two chromes, two `data-role`s on the hide item
+
+  `row_actions_sheet/1`'s hide item is `data-role="row-actions-hide"`; this
+  one is `rail-row-actions-hide`. Both are in the DOM at every width, so one
+  shared role makes `button[data-role="row-actions-hide"]` ambiguous and every
+  drawer test that selects it fails on the count rather than on the behaviour.
+  The pin is the exception below and can share a role, because the sheet's pin
+  never carried `pin-control` to begin with.
+
+  ## The pin item keeps `data-role="pin-control"`
+
+  The role, the `data-space-id`, the event and the desired-next-state payload
+  are the ones the row's own `pin_control/1` carried before this menu took the
+  operation over (that component is deleted; this is its only remaining
+  renderer). One contract, one role name, so a caller that used to address the
+  row addresses the menu item unchanged. The class differs because a labelled
+  menu row is not a 24px icon box, and the glyph still forks on state:
+  `hero-map-pin` to pin, `hero-x-mark` to unpin.
+
+  ## Accessible names
+
+  The pin item's visible label is the bare verb and its accessible name adds
+  the conversation ("Pin Gen-migration"). WCAG 2.5.3 wants the visible label
+  inside the accessible name, and "Pin" is. The task item follows the same
+  rule with the string the task row already used ("Unpin <name> from Chat").
+  The other two items take their accessible name from their visible label
+  alone: the dialog's heading already names the target, and neither
+  verb repeats anywhere else on screen.
+  """
+  attr(:target, :any,
+    default: nil,
+    doc: "nil when closed, else the `row_actions_target/5` map for the row that opened it"
+  )
+
+  attr(:fabrikam_admin?, :boolean, default: false)
+
+  def row_actions_dialog(assigns) do
+    ~H"""
+    <div :if={@target} class="hidden lg:contents">
+      <div
+        id="chat-row-actions-dialog"
+        class="modal modal-open"
+        phx-window-keydown={JS.pop_focus() |> JS.push("close_row_actions")}
+        phx-key="escape"
+        data-role="row-actions-dialog"
+      >
+        <div
+          class="modal-box max-w-xs"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="chat-row-actions-title"
+          phx-click-away={JS.pop_focus() |> JS.push("close_row_actions")}
+          phx-mounted={JS.focus_first()}
+          tabindex="-1"
+        >
+          <%!-- Wraps rather than truncates. The name is the one thing that
+               says which row this menu acts on. --%>
+          <h2 id="chat-row-actions-title" class="break-words text-base font-semibold">
+            {@target.name}
+          </h2>
+          <ul :if={@target.kind == :task} class="mt-3 flex flex-col" role="list">
+            <li>
+              <button
+                type="button"
+                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                phx-click="unpin_task_from_chat"
+                phx-value-task-id={@target.task_id}
+                data-role="pinned-task-rail-unpin"
+                data-space-id={@target.space_id}
+                aria-label={"Unpin #{@target.name} from Chat"}
+              >
+                <span class="hero-x-mark size-4 flex-shrink-0" aria-hidden="true"></span>
+                <span>Unpin</span>
+              </button>
+            </li>
+          </ul>
+          <ul :if={@target.kind != :task} class="mt-3 flex flex-col" role="list">
+            <li>
+              <button
+                type="button"
+                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                phx-click="toggle_pinned"
+                phx-value-space_id={@target.space_id}
+                phx-value-pinned={to_string(not @target.pinned)}
+                data-role="pin-control"
+                data-space-id={@target.space_id}
+                data-pinned={to_string(@target.pinned)}
+                aria-label={"#{if @target.pinned, do: "Unpin", else: "Pin"} #{@target.name}"}
+              >
+                <span
+                  class={[(@target.pinned && "hero-x-mark") || "hero-map-pin", "size-4 flex-shrink-0"]}
+                  aria-hidden="true"
+                >
+                </span>
+                <span>{if @target.pinned, do: "Unpin", else: "Pin"}</span>
+              </button>
+            </li>
+            <li :if={@target.hideable} class="border-t border-base-300">
+              <button
+                type="button"
+                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                phx-click="hide_channel"
+                phx-value-id={@target.space_id}
+                data-role="rail-row-actions-hide"
+                data-space-id={@target.space_id}
+              >
+                <span class="hero-eye-slash size-4 flex-shrink-0" aria-hidden="true"></span>
+                <span>Hide from my rail</span>
+              </button>
+            </li>
+            <%!-- Closes this dialog on the way, client-side, so the
+                 destination chooser never opens on top of it. Same shape as
+                 the drawer's `new_conversation_open |> close_mobile_browser`
+                 pair; no new server event. --%>
+            <li :if={@fabrikam_admin? and @target.movable} class="border-t border-base-300">
+              <button
+                type="button"
+                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                phx-click={
+                  JS.pop_focus() |> JS.push("close_row_actions") |> JS.push("toggle_reassign_menu")
+                }
+                phx-value-channel_id={@target.space_id}
+                data-role="move-to-org-trigger"
+                data-space-id={@target.space_id}
+              >
+                <span class="hero-building-office-2 size-4 flex-shrink-0" aria-hidden="true"></span>
+                <span>Move to organisation…</span>
+              </button>
+            </li>
+          </ul>
+          <div class="modal-action">
+            <button
+              type="button"
+              class="btn btn-ghost btn-sm focus-visible-ring"
+              phx-click={JS.pop_focus() |> JS.push("close_row_actions")}
+              data-role="row-actions-close"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
     """
   end
 

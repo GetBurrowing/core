@@ -3369,12 +3369,17 @@ defmodule PlatformWeb.ChatLiveTest do
       refute has_element?(view, "[aria-label='Pinned']")
     end
 
-    # ── Stage 4 fixup #2 (Rowan review): inline unpin icon on each rail row.
-    # Every viewer that sees a row can unpin themselves via a small
-    # `hero-x-mark` at the row's tail — no navigation to the task detail
-    # panel required. Unpin is participant-scoped (self only), so a
-    # sponsor's unpin does NOT drop other participants' rows.
-    test "rail row renders an unpin button that removes the pin", %{conn: conn} do
+    # ── Stage 4 fixup #2 (Rowan review): every viewer that sees a row can
+    # unpin themselves without navigating to the task detail panel. Unpin is
+    # participant-scoped (self only), so a sponsor's unpin does NOT drop other
+    # participants' rows.
+    #
+    # The control moved on 2026-08-13 (task 019ff8ba). It was a `hero-x-mark`
+    # at the row's tail; it is now the single item in the menu the row's
+    # three-dot trigger opens, so every rail row offers one interaction and
+    # not two. Same event, same `task-id` payload, same `data-role` — only the
+    # place changed, and these tests open the menu to reach it.
+    test "a rail row's menu carries an unpin item that removes the pin", %{conn: conn} do
       user =
         insert_chat_user(%{
           email: "unpin-btn-#{System.unique_integer([:positive])}@example.com",
@@ -3387,7 +3392,8 @@ defmodule PlatformWeb.ChatLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/chat")
 
-      # Row + inline unpin button both present at initial render.
+      # The row and its trigger are both present at initial render; the unpin
+      # itself is one menu-open away.
       assert has_element?(
                view,
                "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
@@ -3395,10 +3401,19 @@ defmodule PlatformWeb.ChatLiveTest do
 
       assert has_element?(
                view,
+               "button[data-role='row-actions-trigger'][data-space-id='#{space.id}']"
+             )
+
+      view
+      |> element("button[data-role='row-actions-trigger'][data-space-id='#{space.id}']")
+      |> render_click()
+
+      assert has_element?(
+               view,
                "button[data-role='pinned-task-rail-unpin'][data-space-id='#{space.id}']"
              )
 
-      # Click the unpin button — the phx-click event fires with the task
+      # Click the unpin item — the phx-click event fires with the task
       # id as `task-id`, the handler calls `ChatPins.unpin/3`, and the
       # `:task_pin_removed` broadcast folds the row out of the rail
       # without a navigation.
@@ -3453,6 +3468,10 @@ defmodule PlatformWeb.ChatLiveTest do
                view,
                "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
              )
+
+      view
+      |> element("button[data-role='row-actions-trigger'][data-space-id='#{space.id}']")
+      |> render_click()
 
       view
       |> element("button[data-role='pinned-task-rail-unpin'][data-space-id='#{space.id}']")

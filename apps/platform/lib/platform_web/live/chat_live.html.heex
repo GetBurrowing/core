@@ -380,7 +380,7 @@
                    at each use would double the block's query count. --%>
               <% row_label = pinned_row_label(kind, space, @user_id) %>
               <%!-- Row wrapper: pairs the navigate-link with the row's own
-                   pin/unpin control as SIBLINGS, the same shape the sub-org
+                   overflow trigger as SIBLINGS, the same shape the sub-org
                    rows use. The wrapper carries the row's margin, rounding and
                    hover/active background (see `.channel-row-wrap` in app.css)
                    so the highlight spans the control too, and the `--active`
@@ -408,11 +408,11 @@
               >
                 <%!-- Grab handle (task 019fe987), borrowed verbatim from the
                      sub-org rows rather than invented here. Rendered ONLY in
-                     personal-edit mode, never at rest: the row already carries a
-                     pin control on its right edge, and a second permanent control
-                     on its left squeezes the name from both sides, which the
-                     brand page's truncation rule forbids because the name is the
-                     protected fragment.
+                     personal-edit mode, never at rest: the row already carries
+                     its overflow trigger on the right edge, and a second
+                     permanent control on its left squeezes the name from both
+                     sides, which the brand page's truncation rule forbids
+                     because the name is the protected fragment.
 
                      CONVERSATION ROWS ONLY (Marlowe, 2026-08-12: "it's essentially
                      two separate lists so makes me think to not commingle the
@@ -558,68 +558,35 @@
                     <span class="hero-chevron-down size-3"></span>
                   </button>
                 </span>
-                <%!-- The trailing control is the one thing besides the glyph
-                     that differs, and it differs because the two pins are
-                     different rows in different tables. A conversation unpins
-                     through `toggle_pinned` (the user's preferences); a task
-                     conversation unpins through `unpin_task_from_chat`
-                     (`task_chat_pins`, participant-scoped self-unpin). Both are
-                     a small muted icon button in the same slot, and both are
-                     visible at rest: Rowan asked for that on the Pin-to-Chat
-                     work ("a discoverable small pin icon next to the task") and
-                     Marlowe asked for it again from the touch side on
-                     2026-08-11, so the conversation control matches the task
-                     control rather than the other way round. --%>
-                <%= if kind == :task do %>
-                  <button
-                    type="button"
-                    class="channel-row-unpin-button"
-                    phx-click="unpin_task_from_chat"
-                    phx-value-task-id={space.metadata["task_id"]}
-                    data-role="pinned-task-rail-unpin"
-                    data-space-id={space.id}
-                    aria-label={"Unpin #{row_label} from Chat"}
-                    title="Unpin from Chat"
-                  >
-                    <span class="hero-x-mark size-3.5"></span>
-                  </button>
-                <% else %>
-                  <%!-- Same control as any other row, visible at rest here as
-                       everywhere. `pinned={true}` changes the glyph, the verb in
-                       the accessible name and the state the click posts.
+                <%!-- ONE trailing control on every row of the block, whatever
+                     the row holds. Marlowe, 2026-08-13: "for pinned items, it's a
+                     little weird to see an 'x' with 3-dots menu, so we should
+                     keep the interaction more consistent and just have a 3-dot
+                     menu where one of the actions for a pinned item is to unpin
+                     it."
 
-                       The glyph is where Marlowe's 2026-08-12 review landed:
-                       "remember to add a way for user to unpin just like how
-                       pinned tasks have an 'x' to unpin". The way out already
-                       existed here and already announced "Unpin <name>", so this
-                       is not a missing control being added. It is a control that
-                       could not be READ as one: a map-pin on an already-pinned
-                       row points the wrong way, and the pinned-TASK rows in the
-                       same block use a plain x for the same operation. Two
-                       idioms for one verb, and she took the ambiguous one as an
-                       absence.
+                     This replaces a pair of controls that differed by kind: the
+                     conversation rows carried `pin_control/1` wearing an x, and
+                     the task rows carried an x of their own, each of them beside
+                     the trigger. The two unpins are still different operations
+                     in different tables — a conversation unpins through
+                     `toggle_pinned` (the user's preferences), a task conversation
+                     through `unpin_task_from_chat` (`task_chat_pins`,
+                     participant-scoped self-unpin) — and the menu keeps them
+                     apart. What is gone is the second control on the row.
 
-                       A pinned row therefore wears the x. It was briefly a
-                       permanent FILLED pin here, to mark the row as pinned; that
-                       was removed on review, and this does not bring it back. A
-                       fill marked STATE on rows already grouped under a heading
-                       that states it. An x names the direction of the ACTION,
-                       which is the one thing the map-pin got wrong. --%>
-                  <.pin_control space_id={space.id} name={row_label} pinned={true} />
-                  <%!-- "Move to organisation…" (task 019fd76a stage 1). Pinning
-                       LIFTS a channel out of its sub-org section, so without the
-                       control on this row a pinned channel would have no
-                       reassignment path at all once stage 2 removes the drag.
-                       This branch already excludes task conversations;
-                       `movable_channel?` is what keeps it off the person rows,
-                       which carry no org filing to move. --%>
-                  <.move_to_org_control
-                    :if={@fabrikam_admin? and movable_channel?(space)}
-                    space_id={space.id}
-                    name={space.name}
-                    open={match?(%{channel_id: id} when id == space.id, @reassign_picker)}
-                  />
-                <% end %>
+                     Marlowe's 2026-08-12 ask for a visible way out of the block is
+                     reversed here, by her, with a reason: a row wearing two ways
+                     to act on it reads as two different objects. The way out is
+                     the menu's first item on every pinned row, task rows
+                     included, and it is the only item a task row's menu holds
+                     ("task - unpin since it gets pinned from a diff page").
+
+                     A task row's trigger is why `row_actions_dialog/1` resolves
+                     its subject through `rail_row_actions_target/6` rather than
+                     the sheet's resolver: a task-exec space is in neither
+                     `@channels` nor `@dm_conversations`. --%>
+                <.row_actions_trigger space_id={space.id} name={row_label} />
               </div>
             <% end %>
           </section>
@@ -684,7 +651,10 @@
                   </span>
                 <% end %>
               </.link>
-              <.pin_control space_id={space.id} name={row_label} pinned={false} />
+              <%!-- One trigger, no pin (task 019ff8ba stage 1). A DM's menu
+                   holds Pin alone: `hide_channel` has no reverse for a DM and
+                   a person row has no org filing to move. --%>
+              <.row_actions_trigger space_id={space.id} name={row_label} />
             </div>
           <% end %>
         <% end %>
@@ -1019,47 +989,21 @@
                   <span class="hero-chevron-down size-3"></span>
                 </button>
               </span>
-              <%!-- Pin control (stage 3). Available in NORMAL mode: pinning is
-                   not an act of rearranging the rail, it is how you use it,
-                   and gating it behind "Edit my layout" would put a two-step
-                   preamble in front of a one-click action. Rows in this
-                   section are unpinned by definition — a pinned channel is
-                   lifted into the Pinned block above and is not rendered
-                   here — so this call site is always the Pin direction. --%>
-              <.pin_control space_id={space.id} name={space.name} pinned={false} />
-              <%!-- "Move to organisation…" (task 019fd76a stage 1). Fabrikam-admin
-                   only, and NOT gated on admin-edit mode: it is a single
-                   deliberate action with its own confirmation, so putting a
-                   mode toggle in front of it would add a step without adding
-                   a safeguard. Replaces the drag-to-reassign gesture, which
-                   stage 2 removes. --%>
-              <.move_to_org_control
-                :if={@fabrikam_admin? and movable_channel?(space)}
-                space_id={space.id}
-                name={space.name}
-                open={match?(%{channel_id: id} when id == space.id, @reassign_picker)}
-              />
-              <%!-- Per-channel hide affordance (chat sidebar v3 Stage 2). Sub-org
-                   rows ONLY (NOT Pinned, NOT DMs). Rendered as a SIBLING of the
-                   row link — never a child — so its click reaches LiveView's
-                   window-level `phx-click` listener. A <button> nested in the
-                   <a> is invalid HTML, and the old anti-navigation
-                   stopPropagation guard there also swallowed the hide event
-                   (LiveView binds click on `window` in the bubble phase, so
-                   stopPropagation killed it). Outside the anchor, clicking the
-                   button can't trigger navigation, so no propagation guard is
-                   needed. Revealed on wrapper :hover OR :focus-within for
-                   keyboard reach (WCAG 2.1.1). --%>
-              <button
-                type="button"
-                class="channel-row-hide-button"
-                phx-click="hide_channel"
-                phx-value-id={space.id}
-                aria-label={"Hide ##{space.name}"}
-                title="Hide channel"
-              >
-                <span class="hero-eye-slash size-3.5"></span>
-              </button>
+              <%!-- The row's only trailing control (task 019ff8ba stage 1,
+                   Option C). Pin, "Move to organisation…" and the eye-slash
+                   hide button all stood here at rest, on every row of the
+                   rail, all the time. Marlowe, 2026-08-13: the pin leaves the
+                   row in EVERY mode, not only while arranging.
+
+                   Available in NORMAL mode, for the reason the pin was:
+                   pinning is how you use the rail, not an act of rearranging
+                   it, and gating it behind "Edit my layout" would put a
+                   two-step preamble in front of it.
+
+                   Rows in this section are unpinned by definition — a pinned
+                   channel is lifted into the Pinned block above — so the
+                   menu's first item is always the Pin direction here. --%>
+              <.row_actions_trigger space_id={space.id} name={space.name} />
             </div>
             <%!-- "Show all (N)": the line that stops a partial list reading as a
                  rendering bug. N is the section's TOTAL channel count, so it
@@ -3445,6 +3389,40 @@
       @row_actions_space_id,
       @channels,
       @dm_conversations,
+      @pinned_space_ids,
+      @user_id
+    )
+  }
+/>
+
+<%!-- Desktop rail row-actions menu (task 019ff8ba stage 1). Same assign, same
+     open/close events and same resolver as the sheet above; only the chrome
+     and the breakpoint differ. Rendered HERE, at the template root, for the
+     reason `move_to_org_dialog/1` is: `#chat-section-list` is
+     `overflow-y-auto`, so `overflow-x` computes to `auto` and clips anything
+     anchored to a row on both axes.
+
+     The resolver is called a second time rather than bound to a variable
+     shared with the sheet: `:if` short-circuits attribute evaluation, and
+     these assigns are absent on the embedded and external surfaces. The
+     duplicate costs one `list_participants/1` per render, and only while a
+     DM's menu is open.
+
+     A DIFFERENT resolver from the sheet's, and deliberately so. The rail's
+     Pinned block carries task rows and they now carry a trigger too (Marlowe,
+     2026-08-13), so this one also looks in `@pinned_task_spaces`. The sheet
+     keeps the conversation-only resolver: the phone drawer's task rows unpin
+     on the row itself and never open it, and the sheet's two actions
+     (`toggle_pinned`, `hide_channel`) are the wrong verbs for a task pin. --%>
+<.row_actions_dialog
+  :if={!@embedded and !@external?}
+  fabrikam_admin?={@fabrikam_admin?}
+  target={
+    rail_row_actions_target(
+      @row_actions_space_id,
+      @channels,
+      @dm_conversations,
+      @pinned_task_spaces,
       @pinned_space_ids,
       @user_id
     )

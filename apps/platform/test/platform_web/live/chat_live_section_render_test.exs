@@ -26,11 +26,29 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
   alias Platform.Accounts.User
   alias Platform.Chat
+  alias Platform.Chat.Sidebar
   alias Platform.Repo
 
   defp authenticated_conn(conn) do
     user = insert_chat_user()
     init_test_session(conn, current_user_id: user.id)
+  end
+
+  defp user_id(conn), do: Plug.Conn.get_session(conn, :current_user_id)
+
+  # The row's overflow menu (task 019ff8ba stage 1). It renders at the template
+  # root, outside `<aside id="chat-sidebar">`, so `desktop_sidebar/1` never
+  # contains it and every row action now costs an open step.
+  #
+  # `LazyHTML.query/2`, not `filter/2`: filter keeps ROOT nodes matching the
+  # selector, and the roots of a rendered page are `<html>` and friends.
+  defp open_row_menu(view, space_id) do
+    view
+    |> element(~s(button[data-role="row-actions-trigger"][data-space-id="#{space_id}"]))
+    |> render_click()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s([data-role="row-actions-dialog"]))
+    |> LazyHTML.to_html()
   end
 
   defp insert_chat_user do
@@ -210,33 +228,56 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
     end
   end
 
+  # Task 019ff8ba stage 1 moved hide off the row and into the row's overflow
+  # menu, which renders at the TEMPLATE ROOT — outside `<aside id="chat-sidebar">`
+  # and therefore outside every `desktop_sidebar/1` slice below.
+  #
+  # That breaks two of these tests in a way worth stating rather than patching
+  # quietly. Both used to prove a row had been REMOVED by refuting
+  # `phx-click="hide_channel" phx-value-id=<id>` inside the sidebar slice.
+  # After the move that refutation is true of every row, hidden or not, so both
+  # tests would still pass while proving nothing at all. They are re-anchored on
+  # a locator that survives on a VISIBLE row: the row wrapper's own
+  # `data-space-id` inside the client section.
   describe "per-channel hide affordance (chat sidebar v3 Stage 2)" do
-    test "sub-org rows render the eye-slash hide button; Pinned + DMs do not",
+    test "the hide action is in a sub-org row's menu, and not in a pinned row's",
          %{conn: conn} do
       conn = authenticated_conn(conn)
-      create_channel("general")
+      channel = create_channel("general")
 
-      {:ok, _view, html} = live_following_redirect(conn)
+      {:ok, view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
 
-      # General channel falls into the Fabrikam bucket; its row must carry
-      # phx-click="hide_channel" wired to the row's space id.
-      assert sidebar =~ ~s(phx-click="hide_channel"),
-             "Sub-org channel rows should expose a hide_channel event"
+      # One trigger, one row. Counted rather than merely asserted present, so
+      # a build that renders a trigger per row AND leaves the old buttons
+      # behind does not pass.
+      trigger_count = Regex.scan(~r/data-role="row-actions-trigger"/, sidebar) |> length()
 
-      assert sidebar =~ ~s(aria-label="Hide #General"),
-             "Hide button should carry an aria-label naming the channel"
+      assert trigger_count == 1,
+             "Expected exactly one row-actions trigger (for #general); found #{trigger_count}"
 
-      # The button-count on the Fabrikam bucket — one per visible channel.
-      hide_button_count =
-        Regex.scan(~r/phx-click="hide_channel"/, sidebar)
-        |> length()
+      refute sidebar =~ ~s(phx-click="hide_channel"),
+             "The eye-slash hide button is still on the row: Option C takes it off"
 
-      assert hide_button_count == 1,
-             "Expected exactly one hide button (for #general); found #{hide_button_count}"
+      menu = open_row_menu(view, channel.id)
+
+      assert menu =~ ~s(phx-click="hide_channel"),
+             "The sub-org row's menu does not carry the hide action"
+
+      assert menu =~ ~s(phx-value-id="#{channel.id}"),
+             "The menu's hide action is not wired to this row's space id"
+
+      # The scope half, which is the reason this test names Pinned and DMs.
+      # `hide_channel` writes a preference the Hidden drawer reverses by
+      # CHANNEL, so a pinned row (and a DM) must not offer it.
+      {:ok, _} = Sidebar.set_space_pinned(user_id(conn), channel.id, true)
+      {:ok, pinned_view, _html} = live_following_redirect(conn)
+
+      refute open_row_menu(pinned_view, channel.id) =~ ~s(phx-click="hide_channel"),
+             "A Pinned-block row's menu offers hide, which has no way back for that row"
     end
 
-    test "clicking hide_channel removes the row from the rendered list", %{conn: conn} do
+    test "hiding from the menu removes the row from the rendered list", %{conn: conn} do
       conn = authenticated_conn(conn)
       target = create_channel("hide-me")
       _other = create_channel("keep-me")
@@ -244,24 +285,24 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       {:ok, view, html_before} = live_following_redirect(conn)
       sidebar_before = desktop_sidebar(html_before)
 
-      assert sidebar_before =~ "Hide-me"
+      assert sidebar_before =~ ~s(data-space-id="#{target.id}"),
+             "The target's row is missing before the hide"
+
       assert sidebar_before =~ "Keep-me"
+
+      _ = open_row_menu(view, target.id)
 
       html_after =
         view
-        |> element(~s(button[phx-click="hide_channel"][phx-value-id="#{target.id}"]))
+        |> element(~s(button[data-role="rail-row-actions-hide"][data-space-id="#{target.id}"]))
         |> render_click()
 
       sidebar_after = desktop_sidebar(html_after)
 
-      # Stage 3 surfaces the hidden channel's name in an undo toast at the
-      # bottom of the sidebar (role=status), so a bare substring check for
-      # the name would falsely fail. Assert at the row level instead: the
-      # hide button only renders inside a visible sub-org row, so its
-      # absence confirms the row was removed. The undo toast's button uses
-      # `phx-click="undo_hide"`, not `hide_channel`, so it won't match.
-      refute sidebar_after =~
-               ~s(phx-click="hide_channel" phx-value-id="#{target.id}"),
+      # Anchored on the ROW's own `data-space-id`, not on the hide button.
+      # The button moved out of this slice entirely, so refuting it here would
+      # be true whether or not the row went anywhere.
+      refute sidebar_after =~ ~s(data-space-id="#{target.id}"),
              "Hidden channel's row should be removed from the rendered sidebar"
 
       assert sidebar_after =~ "Keep-me",
@@ -274,8 +315,10 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
       {:ok, view, _} = live_following_redirect(conn)
 
+      _ = open_row_menu(view, target.id)
+
       view
-      |> element(~s(button[phx-click="hide_channel"][phx-value-id="#{target.id}"]))
+      |> element(~s(button[data-role="rail-row-actions-hide"][data-space-id="#{target.id}"]))
       |> render_click()
 
       # Fresh LV mount — the hidden id should be loaded from
@@ -283,15 +326,11 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       {:ok, _view2, html_remount} = live_following_redirect(conn)
       sidebar_remount = desktop_sidebar(html_remount)
 
-      # Stage 3 v3 (Option B): the global Hidden drawer at the rail's
-      # foot now renders the hidden channel's name in its grouped list
-      # (the panel always renders for the CSS transition; visibility is
-      # CSS-driven). So a bare substring check would falsely fail. Assert
-      # at the row level instead: the channel's hide button only renders
-      # inside a visible sub-org row, so its absence after remount proves
-      # the preference was loaded and the row was filtered out.
-      refute sidebar_remount =~
-               ~s(phx-click="hide_channel" phx-value-id="#{target.id}"),
+      # Same re-anchor as above, and for the same reason. The rail's Hidden
+      # drawer names the channel in its own list, so a bare name check would
+      # falsely fail; the row wrapper's `data-space-id` is what distinguishes
+      # a visible row from a listed-as-hidden one.
+      refute sidebar_remount =~ ~s(data-space-id="#{target.id}"),
              "Hidden channel's row should remain absent after remount (preference persisted)"
     end
   end

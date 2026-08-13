@@ -3161,11 +3161,13 @@ body, .font-fabrikam {
     @apply flex items-center gap-2 px-3 py-1.5 mx-1 text-sm rounded transition-colors hover:bg-base-300;
   }
 
-  /* Sub-org rows pair a navigate-link with a hide button as SIBLINGS inside
-     this wrapper (see the heex comment). The wrapper owns the horizontal
-     margin, rounding, and hover/active background so the highlight spans the
-     whole row — including the button. The scoped overrides below only touch
-     rows INSIDE a wrapper, so bare Pinned/DM `.channel-row`s are unaffected. */
+  /* Sub-org rows pair a navigate-link with the row-actions trigger as
+     SIBLINGS inside this wrapper (see the heex comment). It was a hide button
+     there until task 019ff8ba stage 1 collapsed the row's controls into one
+     trigger. The wrapper owns the horizontal margin, rounding, and
+     hover/active background so the highlight spans the whole row — including
+     the button. The scoped overrides below only touch rows INSIDE a wrapper,
+     so bare Pinned/DM `.channel-row`s are unaffected. */
   .channel-row-wrap {
     @apply flex items-center mx-1 rounded transition-colors hover:bg-base-300;
   }
@@ -3184,36 +3186,23 @@ body, .font-fabrikam {
     @apply bg-transparent;
   }
 
-  /* Per-channel hide button (chat sidebar v3 Stage 2). Sub-org rows only;
-     hidden by default and revealed on wrapper :hover OR :focus-within. The
-     :focus-within branch is the WCAG 2.1.1 fix — keyboard-tab users must be
-     able to reveal and activate the button without a mouse. */
-  .channel-row-hide-button {
-    @apply flex-shrink-0 inline-flex items-center justify-center w-6 h-6 mr-1 rounded text-base-content/50 hover:text-base-content hover:bg-base-200 opacity-0 transition-opacity duration-75;
-  }
+  /* The rail row's ONE trailing control: the row-actions overflow trigger
+     (task 019ff8ba stage 1). Renders on sub-org channel rows, Direct
+     Messages rows and Pinned-block rows, in normal mode and in arrange mode
+     alike. Arrange mode ADDS the ▲▼ move controls beside it; it never
+     removes the trigger.
 
-  .channel-row-wrap:hover .channel-row-hide-button,
-  .channel-row-wrap:focus-within .channel-row-hide-button,
-  .channel-row-hide-button:focus-visible {
-    @apply opacity-100;
-  }
+     The trigger took pin, hide and "Move to organisation…" off the rows that
+     used to carry them, so `.channel-row-pin-button`,
+     `.channel-row-hide-button` and `.channel-row-unpin-button` left this
+     file in stage 3 once their markup was gone.
 
-  /* Per-row unpin button (Pin-to-Chat stage 4 fixup #2, task 019f62a1).
-     Renders on Pinned task-exec rail rows. Unlike .channel-row-hide-button
-     this stays visible (muted) at rest — Rowan's feedback specifically asked
-     for a discoverable "small pin icon next to the task" rather than a
-     hover-only affordance. Hover/focus lift to `text-primary` so the
-     control still feels interactive when targeted. */
-  .channel-row-unpin-button {
-    @apply flex-shrink-0 inline-flex items-center justify-center w-6 h-6 mr-1 rounded text-base-content/40 hover:text-primary hover:bg-base-200 focus-visible:text-primary transition-colors;
-  }
+     VISIBLE AT REST, at `--color-base-content` 60%, the same 60% the row's
+     own glyphs use. No new colour token.
 
-  /* Per-row pin / unpin control (task 019fd80f stage 3). Renders on sub-org
-     channel rows, Direct Messages rows, and Pinned-block rows.
-
-     VISIBLE AT REST, at `--color-base-content` 60% — the same resting
-     treatment `.channel-row-unpin-button` carries on task rows, and the same
-     60% the row's own glyphs use. No new colour token.
+     The rule was written for the per-row pin (task 019fd80f stage 3), and
+     that control's history is why no `hover:` or `group-hover:` reveal may
+     be added to anything on this surface:
 
      It used to be `opacity-0` with a hover/focus reveal carried inline on
      the button. Removed 2026-08-11: Tailwind compiles `hover:` and
@@ -3223,21 +3212,19 @@ body, .font-fabrikam {
      chosen visible-at-rest for the task row's control, so both surfaces now
      agree.
 
-     ONE rule for both states, one colour, every row. The GLYPH forks in the
-     markup: `hero-map-pin` unpinned, `hero-x-mark` pinned (see
-     `PlatformWeb.ChatLive.Partials.pin_control/1`). A map-pin on an
-     already-pinned row points the wrong way and reads as "pin", which is how
-     a pinned row came to look like it had no way out (Marlowe, 2026-08-12).
-     Both glyphs are `size-3.5` in the same 24px box, so the fork costs no
-     layout and the conversation name gives up no width.
+     The trigger inherited that resting treatment. ONE rule, one colour,
+     every row, no reveal gate of any kind. `chat_live_pin_control_test.exs`
+     pins the resting class by exact equality rather than by a list of
+     refutes, so a reveal variant added back here fails a test instead of
+     shipping a control nobody on a phone can see.
 
-     An earlier revision made the control permanent AND filled inside the
-     Pinned block; the fill was removed on review, because the block already
-     marks the state. The x does not bring that back: a fill marked STATE, an
-     x names the direction of the ACTION.
+     One glyph now, `hero-ellipsis-horizontal` at `size-3.5` in the 24px box
+     (see `PlatformWeb.ChatLive.Partials.row_actions_trigger/1`). The pin's
+     two-glyph fork went with the pin: pinned and unpinned are a difference
+     the MENU states in words, so the row no longer has to say it in an icon.
 
      `transition` covers colour and background on hover/focus. */
-  .channel-row-pin-button {
+  .channel-row-actions-button {
     @apply relative flex-shrink-0 inline-flex items-center justify-center w-6 h-6 mr-1 rounded text-base-content/60 hover:text-primary hover:bg-base-200 focus-visible:text-primary transition duration-75;
   }
 
@@ -3248,7 +3235,7 @@ body, .font-fabrikam {
      centred on the 24px icon, so it reaches ~10px into the row link on each
      side — blank truncation space on a channel row, and the cost of making
      the control tappable at all. */
-  .channel-row-pin-button::after {
+  .channel-row-actions-button::after {
     content: "";
     position: absolute;
     top: 50%;
@@ -3264,9 +3251,14 @@ body, .font-fabrikam {
 
   /* ── Edit-layout mode (chat sidebar Stage 5) ──────────────────────────
      Desktop-only per-user arrangement affordances. None of these alter the
-     normal-mode rail — every control is gated behind @sidebar_edit in the
-     template, and the wrapper `--editing` modifier only reflows when the
-     user opts into editing. */
+     normal-mode rail: every control is gated behind @sidebar_edit in the
+     template.
+
+     `.channel-row-wrap--editing` is applied to the wrapper in both edit
+     modes and has NO rule in this file, so it reflows nothing. It is a hook
+     waiting for a rule, not a modifier doing work. Taking it out of the
+     template is a markup change, so stage 3 left it standing and named it
+     rather than deciding for the template. */
 
   /* "Done" toggle shown in the sidebar header while in personal-edit mode.
      (Normal mode no longer renders this — the entry point is the overflow

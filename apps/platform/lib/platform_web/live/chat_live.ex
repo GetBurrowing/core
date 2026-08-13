@@ -2776,7 +2776,17 @@ defmodule PlatformWeb.ChatLive do
       email ->
         participant = %{kind: "user", id: email}
         _ = Platform.Tasks.ChatPins.unpin(task_id, participant, email)
-        {:noreply, put_flash(socket, :info, "Unpinned from Chat.")}
+
+        # Dismiss the rail's row-actions menu, which is where this click now
+        # comes from (task 019ff8ba, 2026-08-13). Same line `toggle_pinned`
+        # carries and for the same reason: the row is about to leave the rail,
+        # and a menu describing a row that is gone is a menu with no subject.
+        # Unconditional because the assign is already nil on every other path
+        # into this handler.
+        {:noreply,
+         socket
+         |> assign(:row_actions_space_id, nil)
+         |> put_flash(:info, "Unpinned from Chat.")}
     end
   end
 
@@ -3162,16 +3172,82 @@ defmodule PlatformWeb.ChatLive do
   # shut, which is why this returns nil rather than raising.
   defp row_actions_target(nil, _channels, _dms, _pinned_ids, _user_id), do: nil
 
+  # `hideable` and `movable` are the DESKTOP menu's item gates (task 019ff8ba
+  # stage 1), resolved here rather than in a second resolver so both chromes
+  # read one description of the row.
+  #
+  # They restate what the ROW could already do, so the menu adds no capability
+  # anywhere. `hide_channel` writes `users.preferences["hidden_channel_ids"]`
+  # and the Hidden drawer that reverses it lists CHANNELS, so a hidden DM
+  # would have no way back — hence the kind check, and hence the pinned check,
+  # since the Pinned block never carried a hide button either. `movable` is
+  # `movable_channel?/1`, the same predicate that gated the row control.
+  #
+  # `row_actions_sheet/1` (the phone drawer) ignores both and keeps offering
+  # hide on every row it opens on. That surface is out of this stage's scope.
   defp row_actions_target(space_id, channels, dms, pinned_ids, user_id) do
     case Enum.find(channels ++ dms, &(&1.id == space_id)) do
       nil ->
         nil
 
       space ->
+        pinned? = space_id in pinned_ids
+
         %{
           space_id: space.id,
+          kind: :conversation,
+          task_id: nil,
           name: sidebar_row_label(space, user_id),
-          pinned: space_id in pinned_ids
+          pinned: pinned?,
+          hideable: space.kind == "channel" and not pinned?,
+          movable: movable_channel?(space)
+        }
+    end
+  end
+
+  # The DESKTOP menu's subject (task 019ff8ba stage 1, amended 2026-08-13).
+  #
+  # Everything `row_actions_target/5` resolves, plus the pinned TASK rows.
+  # Marlowe's rule is that every rail row carries a three-dot menu and nothing
+  # else, so a task row has a trigger now, and a task-exec space is in neither
+  # `@channels` nor `@dm_conversations` — the sheet's resolver returns nil for
+  # it, which is what left the task rows without a menu until now.
+  #
+  # Conversations are tried FIRST and win a tie. The two lists are disjoint in
+  # practice (a task-exec space is not a user conversation), and preferring the
+  # conversation shape keeps the ordinary rows on one code path.
+  #
+  # `kind` is what `row_actions_dialog/1` branches on. It is stated rather than
+  # inferred from `task_id`: the two unpins are different operations on
+  # different tables, and a nil check would read as "no task id yet" rather
+  # than "this is not a task".
+  defp rail_row_actions_target(nil, _channels, _dms, _task_spaces, _pinned_ids, _user_id), do: nil
+
+  defp rail_row_actions_target(space_id, channels, dms, task_spaces, pinned_ids, user_id) do
+    case row_actions_target(space_id, channels, dms, pinned_ids, user_id) do
+      nil -> pinned_task_actions_target(space_id, task_spaces, user_id)
+      target -> target
+    end
+  end
+
+  # A pinned task row's menu holds one item, Unpin, and Marlowe stated the reason
+  # it is the only one: the pin is made on the Tasks page, not here. `hideable`
+  # and `movable` are false rather than absent so both shapes answer the same
+  # questions and the dialog needs no `Map.get/3`.
+  defp pinned_task_actions_target(space_id, task_spaces, user_id) do
+    case Enum.find(task_spaces, &(&1.id == space_id)) do
+      nil ->
+        nil
+
+      space ->
+        %{
+          space_id: space.id,
+          kind: :task,
+          task_id: space.metadata["task_id"],
+          name: pinned_row_label(:task, space, user_id),
+          pinned: true,
+          hideable: false,
+          movable: false
         }
     end
   end

@@ -138,8 +138,27 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
   defp destination_selector(section_id),
     do: ~s([data-role="move-to-org-destination"][data-section-id="#{section_id}"])
 
-  # "Move to organisation…" step 1a: open one row's destination chooser.
+  # One rail row's overflow menu (task 019ff8ba stage 1). The row's three
+  # trailing controls, "Move to organisation…" among them, moved behind it, and
+  # the menu renders at the TEMPLATE ROOT — outside `<aside id="chat-sidebar">`
+  # and so outside every `desktop_sidebar/1` slice in this file.
+  #
+  # `LazyHTML.query/2`, not `filter/2`: filter keeps ROOT nodes matching the
+  # selector, and the roots of a rendered page are `<html>` and friends.
+  defp open_row_menu(view, channel_id) do
+    view
+    |> element(~s(button[data-role="row-actions-trigger"][data-space-id="#{channel_id}"]))
+    |> render_click()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s([data-role="row-actions-dialog"]))
+    |> LazyHTML.to_html()
+  end
+
+  # "Move to organisation…" step 1a: open one row's destination chooser. Two
+  # clicks since 019ff8ba stage 1 — the row's menu, then the item inside it.
   defp open_move_menu(view, channel_id) do
+    _ = open_row_menu(view, channel_id)
+
     view
     |> element(~s(button[data-role="move-to-org-trigger"][phx-value-channel_id="#{channel_id}"]))
     |> render_click()
@@ -653,6 +672,27 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert Sidebar.list_default_sections() |> Enum.map(& &1.id) == before_ids
     end
 
+    test "a Fabrikam admin's row menu carries the move item", %{conn: conn} do
+      # The positive control for the refutation in the test below. Since task
+      # 019ff8ba stage 1 the item lives in a menu that has to be opened, so a
+      # build that dropped the item for EVERYONE would satisfy that refutation
+      # on its own. This is what makes the role, rather than the move, the
+      # thing being measured there.
+      admin = admin_user!("reassign_positive")
+      conn = authenticated_conn(conn, admin)
+      channel = create_channel("roamer", "fabrikam")
+
+      {:ok, view, _html} = live_following_redirect(conn)
+
+      menu = open_row_menu(view, channel.id)
+
+      assert menu =~ ~s(data-role="move-to-org-trigger"),
+             "an admin's row menu is missing the move item"
+
+      assert menu =~ ~s(phx-value-channel_id="#{channel.id}"),
+             "the move item is not wired to this row's channel id"
+    end
+
     test "a member gets no move control, no confirmation from a forged request, and no write from a forged confirm",
          %{conn: conn} do
       member = member_user!("reassign_reject")
@@ -661,10 +701,23 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       sxi_section = section_id_for_org("sxi")
       fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
 
-      {:ok, view, html} = live_following_redirect(conn)
+      {:ok, view, _html} = live_following_redirect(conn)
 
-      # (1) The affordance is absent.
-      refute desktop_sidebar(html) =~ ~s(data-role="move-to-org-trigger")
+      # (1) The affordance is absent — asserted where it now LIVES.
+      #
+      # This used to refute the trigger inside `desktop_sidebar(html)`. Task
+      # 019ff8ba stage 1 moved it into the row's overflow menu, which renders
+      # at the template root, so that refutation became true for every user of
+      # any role and the test passed while proving nothing. Re-anchored on the
+      # menu's own contents, with the admin control below proving the menu is
+      # a place the item CAN appear.
+      member_menu = open_row_menu(view, channel.id)
+
+      assert member_menu =~ ~s(data-role="row-actions-dialog"),
+             "the member's row menu did not open, so the refutation below is vacuous"
+
+      refute member_menu =~ ~s(data-role="move-to-org-trigger"),
+             "a non-admin's row menu offers the move item"
 
       # (2) A forged step-1 assigns NO confirmation. This is what stops a
       # non-admin from getting a populated `@reassign_confirm` that a later
