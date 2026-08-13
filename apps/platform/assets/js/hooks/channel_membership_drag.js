@@ -38,9 +38,51 @@
 // to begin, so a plain click never starts a drag. We additionally guard
 // dragstart on the grab handle so clicking the row link still navigates.
 
+// Reorder scopes (task 019fe987). The hook is mounted twice: once around the
+// sub-org sections, once around the Pinned block. Two attributes keep them
+// apart, and both live on the .channel-section the rows sit in:
+//
+//   data-row-reorderable="true"  — rows inside me may be reordered. This is a
+//     DIFFERENT question from data-section-reorderable, which asks whether the
+//     section itself may be dragged to another position, and is what the
+//     SectionReorder hook reads. Pinned is locked as a section (it stays at the
+//     top of the rail) while its rows reorder freely, so the two answers
+//     genuinely differ and one flag cannot carry both.
+//
+//   data-row-scope="pinned"      — push `pinned_reordered` on drop instead of
+//     `channel_moved`. Absent means the channel scope.
+//
+// A pinned row carries data-space-id and no data-channel-id: the block holds
+// DMs, and calling a person a channel in the payload is how a `kind` check
+// gets written later.
+// A LOCKED row is in the list but not of the arrangement: it renders inside a
+// row-reorderable section, and a drag may neither move it nor land among its
+// kind. The Pinned block's task rows are the only ones today. They exist
+// because the block shows two pin models at once — a task pin is a row in
+// `task_chat_pins`, a conversation pin is a position in the user's
+// `chat_pinned_spaces` preference — so no single write could reorder both, and
+// Marlowe's 2026-08-12 call was to keep them apart rather than define a
+// cross-table order: "it's essentially two separate lists so makes me think to
+// not commingle the interactions too much."
+//
+// Marked with a data attribute rather than a scope test so the rule is one
+// rule. A section with no locked rows (every sub-org section) filters nothing
+// and behaves exactly as before.
 const GRAB_SELECTOR = ".channel-row-grab";
 const ROW_SELECTOR = ".channel-row-wrap";
 const SECTION_SELECTOR = ".channel-section";
+const PINNED_SCOPE = "pinned";
+
+const rowId = (row) => row.dataset.channelId || row.dataset.spaceId || null;
+const isLocked = (row) => row.dataset.rowLocked === "true";
+
+// The nearest ancestor that permits ROW reorder, or null. Every gate below
+// goes through this, so the two scopes cannot drift apart.
+const rowContainer = (target) => {
+  const section = target.closest(SECTION_SELECTOR);
+  if (!section || section.dataset.rowReorderable !== "true") return null;
+  return section;
+};
 
 const ChannelMembershipDrag = {
   mounted() {
@@ -62,7 +104,7 @@ const ChannelMembershipDrag = {
       const row = e.target.closest(ROW_SELECTOR);
       if (!row) return;
 
-      const id = row.dataset.channelId;
+      const id = rowId(row);
       if (!id) return;
 
       this._draggedId = id;
@@ -80,8 +122,8 @@ const ChannelMembershipDrag = {
     this._onDragOver = (e) => {
       if (!this._editMode() || !this._draggedId) return;
 
-      const section = e.target.closest(SECTION_SELECTOR);
-      if (!section || section.dataset.sectionReorderable !== "true") return;
+      const section = rowContainer(e.target);
+      if (!section) return;
 
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
@@ -106,12 +148,25 @@ const ChannelMembershipDrag = {
     this._onDrop = (e) => {
       if (!this._editMode() || !this._draggedId) return;
 
-      const section = e.target.closest(SECTION_SELECTOR);
-      if (!section || section.dataset.sectionReorderable !== "true") return;
+      const section = rowContainer(e.target);
+      if (!section) return;
 
       e.preventDefault();
       e.stopPropagation();
       this._clearDropTargets();
+
+      // Pinned scope (task 019fe987): the drop is a reorder of the user's own
+      // pin list and nothing else. No target section, and no admin branch —
+      // there is no global default for "what Marlowe pinned".
+      if (section.dataset.rowScope === PINNED_SCOPE) {
+        const overRow = e.target.closest(ROW_SELECTOR);
+
+        this.pushEvent("pinned_reordered", {
+          space_id: this._draggedId,
+          ordered_ids: this._computeOrder(section, overRow, e.clientY),
+        });
+        return;
+      }
 
       const targetSectionId = section.dataset.sectionId;
       if (!targetSectionId) return;
@@ -176,20 +231,27 @@ const ChannelMembershipDrag = {
   // drop landed past the last row (or onto an empty section / header), so
   // the dragged id is appended.
   _computeOrder(section, overRow, clientY) {
-    const rows = Array.from(section.querySelectorAll(ROW_SELECTOR));
+    // Locked rows are dropped here, before anything reads a position, so they
+    // can appear in neither the computed order nor the anchor search. The
+    // server writes the order it is sent, and a locked row's id names a record
+    // in a different table — sending one would ask that write to mean two
+    // things.
+    const rows = Array.from(section.querySelectorAll(ROW_SELECTOR)).filter(
+      (row) => !isLocked(row),
+    );
 
     const beforeId = this._insertBeforeId(rows, overRow, clientY);
 
     const ids = [];
     let inserted = false;
     for (const row of rows) {
-      if (row.dataset.channelId === this._draggedId) continue;
+      if (rowId(row) === this._draggedId) continue;
 
-      if (!inserted && row.dataset.channelId === beforeId) {
+      if (!inserted && rowId(row) === beforeId) {
         ids.push(this._draggedId);
         inserted = true;
       }
-      ids.push(row.dataset.channelId);
+      ids.push(rowId(row));
     }
     if (!inserted) ids.push(this._draggedId);
 
@@ -210,17 +272,25 @@ const ChannelMembershipDrag = {
   _insertBeforeId(rows, overRow, clientY) {
     if (!overRow) return null;
 
+    // Dropped ONTO a locked row. `rows` no longer contains it, so the scan
+    // below would fall through to null and null means APPEND — the bottom of
+    // the list, which is the opposite end from where the cursor is. Locked
+    // rows render above the movable run (the Pinned block is tasks, then
+    // conversations), so the nearest slot the drop is allowed to have is the
+    // TOP of that run. Clamp there.
+    if (isLocked(overRow)) return rows.length ? rowId(rows[0]) : null;
+
     const rect = overRow.getBoundingClientRect();
     const overUpperHalf = clientY < rect.top + rect.height / 2;
-    if (overUpperHalf && overRow.dataset.channelId !== this._draggedId) {
-      return overRow.dataset.channelId;
+    if (overUpperHalf && rowId(overRow) !== this._draggedId) {
+      return rowId(overRow);
     }
 
     const overIdx = rows.indexOf(overRow);
     if (overIdx === -1) return null;
     for (let i = overIdx + 1; i < rows.length; i++) {
-      if (rows[i].dataset.channelId !== this._draggedId) {
-        return rows[i].dataset.channelId;
+      if (rowId(rows[i]) !== this._draggedId) {
+        return rowId(rows[i]);
       }
     }
     return null;

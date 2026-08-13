@@ -1674,6 +1674,50 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, socket |> assign(:row_actions_space_id, nil) |> recompute_pinned()}
   end
 
+  # Reorder within the Pinned block, DRAG path (task 019fe987). Modelled on
+  # `section_reordered` below: the client sends the order it just drew, the
+  # server owns persistence and re-renders from what it wrote.
+  #
+  # The param is `space_id`, not `channel_id`: pinned rows carry DM ids too,
+  # and a `channel_id` name here would invite a `kind` check that empties the
+  # block of people while passing every channel-only test.
+  #
+  # Pinning stays out of this path. Dragging INTO or OUT OF the block is not
+  # a thing the hook can express — the pinned drag scope contains only pinned
+  # rows — so a reorder can never change WHAT is pinned, only its order.
+  def handle_event(
+        "pinned_reordered",
+        %{"space_id" => space_id, "ordered_ids" => ordered_ids},
+        socket
+      )
+      when is_binary(space_id) and is_list(ordered_ids) do
+    {:noreply, apply_pinned_move(socket, space_id, ordered_ids, nil)}
+  end
+
+  # Reorder within the Pinned block, KEYBOARD and screen-reader path (WCAG
+  # 2.1.1). Not a touch fallback: drag alone is operable by one kind of user
+  # with one kind of input, and this rail already carries a logged defect
+  # where a hover-gated control was unreachable without a pointer.
+  #
+  # Shares every line of persistence with the drag above. The direction is
+  # resolved against the RENDERED block (what the user is looking at), then
+  # translated to a stored index by `pinned_destination_index/3`.
+  def handle_event(
+        "move_pinned",
+        %{"space_id" => space_id, "direction" => direction},
+        socket
+      )
+      when is_binary(space_id) and direction in ["up", "down"] do
+    rendered = rendered_pinned_ids(socket)
+    reordered = move_in_list(rendered, space_id, direction)
+
+    if reordered == rendered do
+      {:noreply, socket}
+    else
+      {:noreply, apply_pinned_move(socket, space_id, reordered, direction)}
+    end
+  end
+
   # Reset the user's entire personal arrangement (section order, channel
   # placement, hidden sections) back to the org default. Resetting clears the
   # explicit personal order, so the rail snaps back to the ADMIN DEFAULT order
@@ -1726,6 +1770,98 @@ defmodule PlatformWeb.ChatLive do
     _ = Sidebar.put_channel_order(socket.assigns.user_id, section_id, ids)
     ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())
     recompute_sidebar(socket)
+  end
+
+  # ── Pinned-block reorder (task 019fe987) ──────────────────────────────
+
+  # The ▲▼ baseline: the block AS RENDERED, filtered to the rows a
+  # conversation may legally move among. Derived from
+  # `pinned_conversation_entries/2` rather than read off
+  # `@channel_sections.pinned`, so the arrows and the screen can never
+  # describe two different lists. See that function for why.
+  defp rendered_pinned_ids(socket) do
+    socket.assigns.channel_sections.pinned
+    |> pinned_conversation_entries(socket.assigns.pinned_task_spaces)
+    |> Enum.map(& &1.space.id)
+  end
+
+  # Persist, broadcast so the user's other tabs converge, then re-render from
+  # what was written. `recompute_pinned/1` re-reads preferences rather than
+  # patching the assign, so a write that did not land shows as a block that
+  # did not move instead of a rail that disagrees with the database.
+  defp apply_pinned_move(socket, space_id, ordered_ids, direction) do
+    stored = Sidebar.list_pinned_space_ids(socket.assigns.user_id)
+
+    case pinned_destination_index(stored, space_id, ordered_ids) do
+      nil ->
+        # Not pinned any more (a second tab unpinned it mid-drag), or a stale
+        # payload from a client that has since re-rendered. Ignore silently,
+        # the same way the section reorder ignores an unknown id.
+        socket
+
+      to_index ->
+        _ = Sidebar.move_pinned_space(socket.assigns.user_id, space_id, to_index)
+        ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())
+
+        socket
+        |> recompute_pinned()
+        |> announce_pinned_move(space_id, direction)
+    end
+  end
+
+  # Translate a RENDERED order into an index in the STORED pin list.
+  #
+  # The two lists are not the same. `PinnedSpaces.partition/2` drops a pinned
+  # id that names no loaded space (archived, or in an org the viewer has left),
+  # and states that skip-unknown property in its own moduledoc, so the block
+  # can render a strict SUBSET of what is stored. Writing the rendered order
+  # back wholesale would unpin every conversation it could not see.
+  #
+  # So resolve one anchor instead: the first id after `space_id` in the new
+  # rendered order that is still stored. The pin lands immediately before that
+  # anchor, leaving unrendered pins where they are. No anchor means the pin was
+  # moved to the end of the block, so it appends.
+  #
+  # Returns nil when `space_id` is not pinned at all, which the caller treats
+  # as "ignore this event".
+  defp pinned_destination_index(stored, space_id, ordered_ids) do
+    if space_id in stored do
+      rest = Enum.reject(stored, &(&1 == space_id))
+
+      successor =
+        ordered_ids
+        |> Enum.drop_while(&(&1 != space_id))
+        |> Enum.drop(1)
+        |> Enum.find(&(&1 in rest))
+
+      case successor do
+        nil -> length(rest)
+        id -> Enum.find_index(rest, &(&1 == id))
+      end
+    end
+  end
+
+  # Feeds the drawer's existing sr-only aria-live region. The name comes from
+  # `sidebar_row_label/2`, the same helper the row's visible label uses, so a
+  # DM announces the person's name rather than a nil `space.name`. No "#"
+  # prefix: the block holds channels and people, and a hash on a person is
+  # the wrong object type.
+  defp announce_pinned_move(socket, space_id, direction) do
+    name =
+      case Enum.find(socket.assigns.channel_sections.pinned, &(&1.id == space_id)) do
+        nil -> nil
+        space -> sidebar_row_label(space, socket.assigns.user_id)
+      end
+
+    text =
+      case {name, direction} do
+        {nil, _} -> nil
+        {name, "up"} -> "Moved #{name} up"
+        {name, "down"} -> "Moved #{name} down"
+        {name, nil} -> "Moved #{name}"
+      end
+
+    assign(socket, :drawer_reorder_announcement, text)
   end
 
   # Recompute `@sidebar_sections` from the current channel list + saved
@@ -3422,28 +3558,31 @@ defmodule PlatformWeb.ChatLive do
   # assign would be a sixth thing each of them has to remember, and the
   # failure mode is a silently stale block. Deriving at render costs two
   # list walks over tens of rows.
-  @typedoc "One row of the Pinned block, tagged with the kind of thing it is."
-  @type pinned_entry :: %{kind: :channel | :dm | :task, space: Platform.Chat.Space.t()}
+  @typedoc """
+  One row of the Pinned block, tagged with the kind of thing it is.
+
+  `move_index` / `move_count` describe the row's place among the rows it may
+  be REORDERED among, which is the conversation half only: a task row carries
+  `move_index: nil` and renders no reorder chrome (Marlowe, 2026-08-12). A
+  conversation carries its 0-based index within the conversation run and the
+  run's length, which is what disables the ▲ on the first conversation and
+  the ▼ on the last. Indexing against the whole block instead would disable
+  the ▲ on a conversation that has task rows above it but is the top of what
+  it can actually move within.
+
+  Annotated here rather than in the template so the desktop rail and the
+  mobile drawer read the same numbers from one place; the previous stage on
+  this stack shipped rail-only chrome and left the drawer broken.
+  """
+  @type pinned_entry :: %{
+          kind: :channel | :dm | :task,
+          space: Platform.Chat.Space.t(),
+          move_index: non_neg_integer() | nil,
+          move_count: non_neg_integer()
+        }
 
   @doc """
   The Pinned block as ONE ordered list of `%{kind:, space:}` entries.
-
-  Order is NEWEST-PINNED FIRST across the whole block (Marlowe, 2026-08-10).
-  It matches what task pins already did and it matches the use case: what
-  you pinned most recently is what you are working on now.
-
-  Two caveats, both deliberate:
-
-    * Conversation pins are stored as an APPEND-ordered id list in
-      `users.preferences` with no timestamp (see
-      `Sidebar.set_space_pinned/3`), so newest-first is `Enum.reverse/1`.
-      A user with existing pinned channels sees that half reverse once.
-      No data is lost and there is no migration.
-
-    * The two halves cannot be INTERLEAVED by pin time, because
-      conversation pins carry no pin timestamp to interleave on — only a
-      list position. So the block is tasks-then-conversations, each half
-      newest-first, rather than one globally sorted run.
 
   Tasks sit at the TOP (Marlowe, 2026-08-11): "if I'm working on a task and I
   deliberately pin, I would want to have that as easiest to access while I'm
@@ -3451,25 +3590,94 @@ defmodule PlatformWeb.ChatLive do
   chip strip, which already iterates `@pinned_task_spaces` before
   `@channel_sections.pinned`.
 
+  The two halves cannot be INTERLEAVED, and now they are not meant to be.
+  Marlowe, 2026-08-12, choosing between commingling the two pin models and
+  keeping them apart: "I lean towards #2 — it's essentially two separate
+  lists so makes me think to not commingle the interactions too much." Task
+  rows keep their own ordering and are not hand-orderable; hand-ordering
+  applies only to the conversations below them. That also means no
+  cross-table reorder has to be defined at all: task pins live in
+  `task_chat_pins`, conversation pins in the `chat_pinned_spaces`
+  preference.
+
+  ## The conversation half renders in STORED order
+
+  It used to render `Enum.reverse/1` of the stored list, because pins are
+  stored append-ordered (most-recently-pinned LAST) and the block wanted to
+  read newest-first. Hand-ordering ends that: once the user sets an order,
+  "newest first" and "the order you dragged it into" are the same list
+  asked to be two different things, and a reversing render would display a
+  hand-set order backwards from how it is stored.
+
+  So the reverse is gone and rendered order IS stored order. The
+  consequence, stated rather than discovered: a newly pinned conversation
+  APPENDS, so it arrives at the bottom of the conversation half instead of
+  the top, and the user drags it up if they want it there.
+
+  `Sidebar.set_space_pinned/3` keeps its append contract untouched. Making
+  it prepend would restore newest-first for NEW pins only — existing stored
+  lists stay append-ordered and there is no migration — so it would buy a
+  half-fix for a rewrite of that function's stated contract and 25 test
+  assertions.
+
+  A user with existing pinned conversations sees that half flip order once,
+  on first load. No data is lost and there is no migration.
+
   The reflow that costs is accepted, not overlooked. A task row removes
   itself when its task hits done or cancelled, so every conversation row
   below it shifts up. Marlowe's call: the row gets no animation, no
   placeholder and no notice.
-
-  Reordering within the block is a separate task (019fe987-03c3).
   """
   @spec pinned_rail_entries([Platform.Chat.Space.t()], [Platform.Chat.Space.t()]) ::
           [pinned_entry()]
   def pinned_rail_entries(pinned_conversations, pinned_task_spaces)
       when is_list(pinned_conversations) and is_list(pinned_task_spaces) do
+    move_count = length(pinned_conversations)
+
     conversations =
       pinned_conversations
-      |> Enum.reverse()
-      |> Enum.map(fn space -> %{kind: conversation_pin_kind(space), space: space} end)
+      |> Enum.with_index()
+      |> Enum.map(fn {space, index} ->
+        %{
+          kind: conversation_pin_kind(space),
+          space: space,
+          move_index: index,
+          move_count: move_count
+        }
+      end)
 
-    tasks = Enum.map(pinned_task_spaces, fn space -> %{kind: :task, space: space} end)
+    tasks =
+      Enum.map(pinned_task_spaces, fn space ->
+        %{kind: :task, space: space, move_index: nil, move_count: move_count}
+      end)
 
     tasks ++ conversations
+  end
+
+  @doc """
+  The conversation half of the Pinned block, in RENDERED order.
+
+  The drag and the ▲▼ buttons both resolve against this list, never against
+  `@channel_sections.pinned` directly. Two reasons, and the second is the
+  bug this function exists to prevent:
+
+    * Task rows are in the block but are NOT hand-orderable (Marlowe,
+      2026-08-12), so the baseline has to drop them or a conversation could
+      be given a destination among them.
+
+    * Rendered order and stored order have to be the SAME sequence for
+      `pinned_destination_index/3` to anchor on the right neighbour. They
+      are today, because `pinned_rail_entries/2` no longer reverses. Deriving
+      the baseline from the render rather than from the stored assign means a
+      reversing render can never again make a drag up persist as a move down
+      — the two would move together.
+  """
+  @spec pinned_conversation_entries([Platform.Chat.Space.t()], [Platform.Chat.Space.t()]) ::
+          [pinned_entry()]
+  def pinned_conversation_entries(pinned_conversations, pinned_task_spaces) do
+    pinned_conversations
+    |> pinned_rail_entries(pinned_task_spaces)
+    |> Enum.reject(&(&1.kind == :task))
   end
 
   # Tagged from the SOURCE list, not sniffed from the row: task entries can

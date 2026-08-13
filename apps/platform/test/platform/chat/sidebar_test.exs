@@ -70,6 +70,20 @@ defmodule Platform.Chat.SidebarTest do
     channel!(Map.merge(%{kind: "dm", is_direct: true, name: nil, slug: nil}, attrs))
   end
 
+  # Three pins in a known order, one of them a DM, and the order asserted
+  # before any test builds on it. The premise the reorder work rests on is
+  # that `chat_pinned_spaces` round-trips in the order written; asserting it
+  # here means a regression in the WRITE side cannot masquerade as a
+  # regression in the reorder.
+  defp three_pins(user) do
+    [a, b, c] = [channel!(), dm!(), channel!()]
+
+    for space <- [a, b, c], do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+    assert Sidebar.list_pinned_space_ids(user.id) == [a.id, b.id, c.id]
+    {a, b, c}
+  end
+
   # In-memory fixtures for the pure resolve/3 tests (no DB needed).
   defp sec(id, org_id, pos), do: %Section{id: id, org_id: org_id, name: id, position: pos}
   defp chan(id, org_id), do: %Space{id: id, org_id: org_id, kind: "channel"}
@@ -571,6 +585,120 @@ defmodule Platform.Chat.SidebarTest do
       # Anonymous chat sessions carry a generated UUID matching no row.
       assert {:error, :not_found} =
                Sidebar.set_space_pinned(Ecto.UUID.generate(), Ecto.UUID.generate(), true)
+    end
+  end
+
+  # ── Reordering the Pinned block (task 019fe987) ──────────────────────────
+  #
+  # Reordering is a REWRITE of `chat_pinned_spaces`, which the describe above
+  # establishes is already an ordered list. No new preference key and no
+  # position column. Every test here asserts the PERSISTED order after the
+  # call, never that the call returned `{:ok, _}`: a setter that accepts its
+  # arguments and writes nothing satisfies the return shape on every path.
+  describe "move_pinned_space/3" do
+    test "moves a pin to a new index and the list reads back in the new order" do
+      user = create_user!()
+      {a, b, c} = three_pins(user)
+
+      # Last to first. Predicted: [c, a, b].
+      assert {:ok, _} = Sidebar.move_pinned_space(user.id, c.id, 0)
+      assert Sidebar.list_pinned_space_ids(user.id) == [c.id, a.id, b.id]
+
+      # And back to the middle. The index names a slot in the list with `c`
+      # already removed, so 1 puts it between `a` and `b`. Predicted:
+      # [a, c, b].
+      assert {:ok, _} = Sidebar.move_pinned_space(user.id, c.id, 1)
+      assert Sidebar.list_pinned_space_ids(user.id) == [a.id, c.id, b.id]
+    end
+
+    test "moving to the tail index appends rather than raising" do
+      # `length(rest)` is a legal destination, not an off-by-one: it is how
+      # "put this at the bottom of the block" arrives.
+      user = create_user!()
+      {a, b, c} = three_pins(user)
+
+      assert {:ok, _} = Sidebar.move_pinned_space(user.id, a.id, 2)
+      assert Sidebar.list_pinned_space_ids(user.id) == [b.id, c.id, a.id]
+    end
+
+    test "a DM reorders identically to a channel" do
+      # Anti-vacuity for the mixed block. A `kind` check anywhere in the
+      # reorder path passes every channel-only assertion here and silently
+      # refuses to move people, who are the rows with the longest labels and
+      # the ones a user most wants at the top.
+      user = create_user!()
+      {a, b, c} = three_pins(user)
+
+      assert {:ok, _} = Sidebar.move_pinned_space(user.id, b.id, 0)
+      assert Sidebar.list_pinned_space_ids(user.id) == [b.id, a.id, c.id]
+    end
+
+    test "an id that is not pinned leaves the list unchanged and does not raise" do
+      user = create_user!()
+      {a, b, c} = three_pins(user)
+      stranger = channel!()
+
+      assert {:ok, _} = Sidebar.move_pinned_space(user.id, stranger.id, 0)
+      assert Sidebar.list_pinned_space_ids(user.id) == [a.id, b.id, c.id]
+
+      assert {:ok, _} = Sidebar.move_pinned_space(user.id, Ecto.UUID.generate(), 1)
+      assert Sidebar.list_pinned_space_ids(user.id) == [a.id, b.id, c.id]
+    end
+
+    test "an out-of-range index leaves the list unchanged and does not raise" do
+      # `List.insert_at/3` accepts both of these silently: a negative index
+      # counts from the end, and any index past the tail appends. Either would
+      # relocate a pin on a payload that means nothing.
+      user = create_user!()
+      {a, b, c} = three_pins(user)
+
+      assert {:ok, _} = Sidebar.move_pinned_space(user.id, a.id, -1)
+      assert Sidebar.list_pinned_space_ids(user.id) == [a.id, b.id, c.id]
+
+      assert {:ok, _} = Sidebar.move_pinned_space(user.id, a.id, 3)
+      assert Sidebar.list_pinned_space_ids(user.id) == [a.id, b.id, c.id]
+    end
+
+    test "a stale pinned id keeps its slot while a live pin moves around it" do
+      # Pin ids outlive the spaces they name (PinnedSpaces states the
+      # skip-unknown property in its moduledoc), so the stored list can hold
+      # ids the block never renders. A reorder must not double as a cleanup
+      # pass over preferences.
+      user = create_user!()
+      ghost = Ecto.UUID.generate()
+      [a, b] = [channel!(), channel!()]
+
+      for id <- [a.id, ghost, b.id], do: {:ok, _} = Sidebar.set_space_pinned(user.id, id, true)
+      assert Sidebar.list_pinned_space_ids(user.id) == [a.id, ghost, b.id]
+
+      assert {:ok, _} = Sidebar.move_pinned_space(user.id, b.id, 0)
+      assert Sidebar.list_pinned_space_ids(user.id) == [b.id, a.id, ghost]
+    end
+
+    test "reordering leaves the other four preference keys untouched" do
+      # The obvious wrong implementation rewrites the whole preferences map
+      # and clobbers a sibling key.
+      user = create_user!()
+      {:ok, _} = Sidebar.put_section_order(user.id, ["s2", "s1"])
+      {:ok, _} = Sidebar.put_channel_order(user.id, "sA", ["c1", "c2"])
+      {:ok, _} = Sidebar.set_section_hidden(user.id, "s9", true)
+      {:ok, _} = Sidebar.set_section_collapsed(user.id, "s7", true)
+      {a, b, c} = three_pins(user)
+
+      assert {:ok, _} = Sidebar.move_pinned_space(user.id, c.id, 0)
+
+      prefs = Accounts.get_user_preferences(user.id)
+      assert prefs["chat_section_order"] == ["s2", "s1"]
+      assert prefs["chat_channel_order"] == %{"sA" => ["c1", "c2"]}
+      assert prefs["chat_hidden_sections"] == ["s9"]
+      assert prefs["chat_collapsed_sections"] == ["s7"]
+      assert prefs["chat_pinned_spaces"] == [c.id, a.id, b.id]
+    end
+
+    test "no-ops for an id that isn't a real user" do
+      # Anonymous chat sessions carry a generated UUID matching no row.
+      assert {:error, :not_found} =
+               Sidebar.move_pinned_space(Ecto.UUID.generate(), Ecto.UUID.generate(), 0)
     end
   end
 

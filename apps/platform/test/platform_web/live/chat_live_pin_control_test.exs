@@ -359,16 +359,26 @@ defmodule PlatformWeb.ChatLivePinControlTest do
     end
   end
 
-  # ── 4. A pinned row behaves exactly like any other row ──────────────────
+  # ── 4. A pinned row wears the x ─────────────────────────────────────────
   #
-  # Marlowe on review: "No need to append a pin icon to pinned items. The
-  # section header is sufficient." The permanent filled icon was justified as
-  # marking the row's pinned state, and under lift-not-copy that is false: a
-  # pinned conversation only ever appears inside the Pinned block, so the
-  # block IS the state and a mark on every row in it distinguishes nothing.
+  # Two of Marlowe's reviews land here, on DIFFERENT objects. Keeping them
+  # apart is the whole reason these tests are worded the way they are.
   #
-  # One code path now. The only thing that varies with pinned-ness is the
-  # verb in the accessible name and the state the click posts.
+  # 2026-08-11, on a permanent FILLED pin: "No need to append a pin icon to
+  # pinned items. The section header is sufficient." That was a STATE marker,
+  # the same glyph in two weights, on rows already grouped under a heading
+  # that says they are pinned. It stays removed, and a `refute` below holds
+  # that line.
+  #
+  # 2026-08-12, on the block that resulted: "remember to add a way for user to
+  # unpin just like how pinned tasks have an \'x\' to unpin". The way out was
+  # already there and already announced "Unpin <name>", so this is not an
+  # absent control. It is one she could not read: a map-pin on an
+  # already-pinned row points the wrong way, and the pinned-TASK rows nearby
+  # use a plain x for the same operation.
+  #
+  # So the glyph forks on state and nothing else does. Same component, same
+  # class, same 24px box, same event contract.
 
   describe "the control on a pinned row" do
     test "renders at rest, like any other row", %{conn: conn} do
@@ -382,6 +392,38 @@ defmodule PlatformWeb.ChatLivePinControlTest do
 
       assert attr(control, "class") == @resting_class,
              "the pinned row's control carries a reveal gate the other rows do not: #{inspect(attr(control, "class"))}"
+    end
+
+    test "wears the x, the same glyph the pinned-task rows use", %{conn: conn} do
+      # The 2026-08-12 fix. A map-pin here reads as "pin" on a row that is
+      # already pinned, which is how the way out came to look like an absence.
+      {conn, user} = authed(conn)
+      channel = create_channel("gen-migration")
+      {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
+
+      control = rail(conn) |> pinned_block() |> pin_control_for(channel.id)
+
+      assert control =~ "hero-x-mark",
+             "the pinned row still shows a pin glyph rather than the x: #{inspect(control)}"
+
+      refute control =~ "hero-map-pin",
+             "both glyphs render on the pinned row: #{inspect(control)}"
+    end
+
+    test "an UNPINNED row keeps the map-pin, so the fork is real", %{conn: conn} do
+      # Anti-vacuity for the test above. Swapping the glyph everywhere would
+      # pass it while making every unpinned row offer an x, which reads as
+      # "remove this channel".
+      {conn, _user} = authed(conn)
+      channel = create_channel("stays-put")
+
+      control = rail(conn) |> client_section() |> pin_control_for(channel.id)
+
+      assert control =~ "hero-map-pin",
+             "an unpinned row lost its pin glyph: #{inspect(control)}"
+
+      refute control =~ "hero-x-mark",
+             "an unpinned row offers an x, which reads as remove: #{inspect(control)}"
     end
 
     test "carries the same classes as the control on an unpinned row", %{conn: conn} do
@@ -403,7 +445,10 @@ defmodule PlatformWeb.ChatLivePinControlTest do
              "pinned control classes #{inspect(pinned_class)} differ from an unpinned row's #{inspect(unpinned_class)}"
     end
 
-    test "the Pinned block uses the same single glyph as everywhere else", %{conn: conn} do
+    test "the removed pinned-STATE marker stays removed", %{conn: conn} do
+      # Marlowe's EARLIER review, still binding. What she removed was a FILLED
+      # variant used to mark the row as pinned. The x is an action glyph, not
+      # a state one, so no fill may come back with it.
       {conn, user} = authed(conn)
       channel = create_channel("gen-migration")
       {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
@@ -411,9 +456,9 @@ defmodule PlatformWeb.ChatLivePinControlTest do
       block = rail(conn) |> pinned_block()
 
       refute block =~ "hero-map-pin-solid",
-             "a filled variant survives in the Pinned block; there is one glyph now"
+             "a filled pin variant is back in the Pinned block"
 
-      assert pin_control_for(block, channel.id) =~ "hero-map-pin"
+      refute block =~ "hero-x-mark-solid", "a filled x variant crept in"
     end
 
     test "the accessible name still says Unpin and names the channel", %{conn: conn} do
@@ -429,7 +474,12 @@ defmodule PlatformWeb.ChatLivePinControlTest do
       assert attr(control, "aria-label") == "Unpin Gen-migration"
     end
 
-    test "a pinned DM reads Unpin, names the person, and renders at rest", %{conn: conn} do
+    test "a pinned DM reads Unpin, names the person, and wears the x", %{conn: conn} do
+      # Asserted for a DM SPECIFICALLY: a DM has no `name` field and its label
+      # resolves through `sidebar_display_name/2`, a different helper from the
+      # one channel rows use. Reaching for `space.name` renders empty, which
+      # has shipped on this surface once, and a channel-only test passes for
+      # exactly that bug.
       {conn, user} = authed(conn)
       create_channel("general")
       dm = create_dm(user, "Rowan Ellis")
@@ -440,6 +490,9 @@ defmodule PlatformWeb.ChatLivePinControlTest do
       assert control, "no unpin control on the pinned DM row"
       assert attr(control, "class") == @resting_class
       assert attr(control, "aria-label") == "Unpin Rowan Ellis"
+      assert attr(control, "title") == "Unpin"
+      assert control =~ "hero-x-mark"
+      refute attr(control, "class") =~ "opacity-0"
     end
   end
 
@@ -488,37 +541,60 @@ defmodule PlatformWeb.ChatLivePinControlTest do
       assert dm_section(sidebar) =~ "Marlowe Quill"
     end
 
-    test "clicking again unpins and the channel returns to its client section", %{conn: conn} do
-      {conn, _user} = authed(conn)
+    test "the x unpins a channel: it persists, and the row returns to its client section",
+         %{conn: conn} do
+      # ANTI-VACUITY. Three checks, escalating: the re-rendered page, then the
+      # PREFERENCE, then a FRESH mount. A handler that accepts the click and
+      # writes nothing still re-renders a page, and a socket that patched only
+      # its own assigns still shows the row move. Only the last two can tell
+      # the difference.
+      {conn, user} = authed(conn)
       channel = create_channel("gen-migration")
+      {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
 
       {:ok, view, _html} = live_rail(conn)
-      selector = ~s(button[data-role="pin-control"][data-space-id="#{channel.id}"])
 
-      view |> element(selector) |> render_click()
-      html = view |> element(selector) |> render_click()
+      html =
+        view
+        |> element(~s(button[data-role="pin-control"][data-space-id="#{channel.id}"]))
+        |> render_click()
 
       sidebar = desktop_sidebar(html)
-
       refute pinned_block(sidebar), "the Pinned block should render nothing once empty"
       assert client_section(sidebar) =~ "Gen-migration"
+
+      assert Sidebar.list_pinned_space_ids(user.id) == [],
+             "the click re-rendered the rail but never wrote the unpin to preferences"
+
+      fresh = rail(conn)
+      refute pinned_block(fresh), "the pin came back on a fresh mount"
+      assert client_section(fresh) =~ "Gen-migration"
     end
 
-    test "clicking again unpins and the DM returns to Direct Messages", %{conn: conn} do
+    test "the x unpins a DM: it persists, and the row returns to Direct Messages",
+         %{conn: conn} do
       {conn, user} = authed(conn)
       create_channel("general")
       dm = create_dm(user, "Rowan Ellis")
+      {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
 
       {:ok, view, _html} = live_rail(conn)
-      selector = ~s(button[data-role="pin-control"][data-space-id="#{dm.id}"])
 
-      view |> element(selector) |> render_click()
-      html = view |> element(selector) |> render_click()
+      html =
+        view
+        |> element(~s(button[data-role="pin-control"][data-space-id="#{dm.id}"]))
+        |> render_click()
 
       sidebar = desktop_sidebar(html)
-
       refute pinned_block(sidebar)
       assert dm_section(sidebar) =~ "Rowan Ellis"
+
+      assert Sidebar.list_pinned_space_ids(user.id) == [],
+             "the click re-rendered the rail but never wrote the unpin to preferences"
+
+      fresh = rail(conn)
+      refute pinned_block(fresh)
+      assert dm_section(fresh) =~ "Rowan Ellis"
     end
 
     test "the event posts the DESIRED next state, so a double-fire is idempotent",

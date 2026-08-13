@@ -363,6 +363,57 @@ defmodule Platform.Chat.Sidebar do
   end
 
   @doc """
+  Move one pinned conversation to a new position in the user's pin order
+  (task 019fe987).
+
+  Reordering is a REWRITE of `chat_pinned_spaces`, which is already an
+  ordered list. There is no position column and no second preference key:
+  the list's own order is what the Pinned block renders, via
+  `Platform.Chat.PinnedSpaces.partition/2`.
+
+  `to_index` is an index into the list with `space_id` REMOVED, so it names
+  the slot the pin lands in. `0` is the top of the block and
+  `length(list) - 1` is the bottom. Callers derive it from the rendered
+  order; see `PlatformWeb.ChatLive`'s `pinned_destination_index/3`.
+
+  Tolerant on both arguments, matching the skip-unknown property the read
+  side already holds (`PinnedSpaces` drops a pinned id that names no live
+  space, so a stale id survives in preferences indefinitely and can reach
+  this function):
+
+    * a `space_id` that is not in the list leaves the list unchanged
+    * a `to_index` outside `0..length(rest)` leaves the list unchanged
+
+  Neither raises. An unchanged list is still written, so the return shape
+  matches `set_space_pinned/3` on every path.
+  """
+  @spec move_pinned_space(binary(), binary(), integer()) ::
+          {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def move_pinned_space(user_id, space_id, to_index)
+      when is_binary(space_id) and is_integer(to_index) do
+    next =
+      user_id
+      |> list_pinned_space_ids()
+      |> move_pin(space_id, to_index)
+
+    Accounts.update_user_preference(user_id, @pinned_spaces_key, next)
+  end
+
+  # Guard the out-of-range cases explicitly rather than leaning on
+  # `List.insert_at/3`, which treats a negative index as "from the end" and
+  # any index past the tail as "append". Both would silently relocate a pin
+  # on a payload that means nothing, which is worse than ignoring it.
+  defp move_pin(current, space_id, to_index) do
+    rest = Enum.reject(current, &(&1 == space_id))
+
+    if space_id in current and to_index >= 0 and to_index <= length(rest) do
+      List.insert_at(rest, to_index, space_id)
+    else
+      current
+    end
+  end
+
+  @doc """
   Reset the user's sidebar to the org default by clearing all five override
   keys (the no-copy-on-write "reset to default"). No-op for anonymous ids.
   """

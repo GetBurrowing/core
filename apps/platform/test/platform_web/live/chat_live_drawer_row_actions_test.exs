@@ -129,6 +129,23 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
     view
   end
 
+  # A drawer row scoped to the SECTION it sits in, so "the row moved back to
+  # its home section" is a real assertion. Both surfaces label their sections
+  # identically, hence the `#mobile-channel-browser` prefix: without it a
+  # desktop-rail row satisfies a drawer assertion.
+  # `aria-label="Pinned"`, not "Pinned Channels": task 019feec6-73d9 merged the
+  # drawer's two pinned sections into one block holding channels, DMs and task
+  # conversations, and renamed the heading to match what it now holds.
+  defp pinned_drawer_row(space_id) do
+    ~s(#mobile-channel-browser section[aria-label="Pinned"] ) <>
+      ~s([data-role="drawer-row-wrap"][data-space-id="#{space_id}"])
+  end
+
+  defp dm_drawer_row(space_id) do
+    ~s(#mobile-channel-browser section[aria-label="Direct Messages"] ) <>
+      ~s([data-role="drawer-row-wrap"][data-space-id="#{space_id}"])
+  end
+
   # ── HTML helpers ────────────────────────────────────────────────────────
 
   # One element's own markup. Not a page grep: `element/2` resolves a single
@@ -394,6 +411,106 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
 
       refute view |> markup(@sheet) |> attr("class") =~ "sheet-open",
              "the sheet stayed open after acting"
+    end
+  end
+
+  # ── 5b. The DRAWER's unpin path (task 019fe987) ─────────────────────────
+  #
+  # Marlowe, 2026-08-12, reviewing the desktop rail: "remember to add a way for
+  # user to unpin just like how pinned tasks have an \'x\' to unpin". The rail
+  # answered by forking the row control's GLYPH on state: a pinned row wears
+  # `hero-x-mark` instead of the `hero-map-pin` that pointed the wrong way.
+  #
+  # The drawer needs no equivalent, and adding one would be wrong. Its row
+  # control is an overflow, not a pin toggle, so it never carried a
+  # direction-bearing glyph to get backwards; the verb is spelled out in words
+  # in the sheet it opens. A second, literal x on the row would take 44px
+  # permanently from a 375px row whose names already truncate, which the
+  # truncation rule forbids.
+  #
+  # That makes the SHEET the drawer's unpin control, so it holds the rail's
+  # contract. These assert it on this surface rather than assuming the desktop
+  # tests cover it.
+
+  describe "the drawer's unpin path" do
+    test "its accessible name carries the verb AND the DM's person", %{conn: conn} do
+      # Asserted for a DM SPECIFICALLY. A DM has no `name` field and its label
+      # resolves through `sidebar_display_name/2`, a different helper from the
+      # one channel rows use; reaching for `space.name` renders empty, which
+      # has shipped on this surface once already.
+      #
+      # The aria-label EXTENDS the visible "Unpin conversation" rather than
+      # replacing it: WCAG 2.5.3 requires the accessible name to contain the
+      # visible label, so a bare "Unpin Rowan Ellis" would break speech
+      # input on a control that reads "Unpin conversation".
+      {conn, user} = authed(conn)
+      create_channel("general")
+      dm = create_dm(user, "Rowan Ellis")
+      {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
+
+      assert Sidebar.list_pinned_space_ids(user.id) == [dm.id],
+             "the DM is not actually pinned, so the sheet below would read Pin"
+
+      view = conn |> open_drawer() |> open_sheet(dm.id)
+      pin = view |> markup(@sheet_pin)
+
+      assert visible_text(pin) == "Unpin conversation"
+      assert attr(pin, "aria-label") == "Unpin conversation Rowan Ellis"
+    end
+
+    test "names the target on an unpinned row too", %{conn: conn} do
+      # Anti-vacuity for the assertion above: an implementation that hardcoded
+      # the pinned string would pass it and fail here.
+      {conn, _user} = authed(conn)
+      channel = create_channel("gen-migration")
+
+      view = conn |> open_drawer() |> open_sheet(channel.id)
+
+      assert view |> markup(@sheet_pin) |> attr("aria-label") ==
+               "Pin conversation Gen-migration"
+    end
+
+    test "unpinning a DM persists and returns it to Direct Messages", %{conn: conn} do
+      # The rail's contract on this surface: PERSISTED state, and the row back
+      # in its home section. A handler that accepts the event and writes
+      # nothing re-renders a perfectly good drawer.
+      {conn, user} = authed(conn)
+      create_channel("general")
+      dm = create_dm(user, "Rowan Ellis")
+      {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
+
+      view = conn |> open_drawer()
+
+      assert has_element?(view, pinned_drawer_row(dm.id)),
+             "the DM is not in the drawer\'s Pinned block to begin with"
+
+      view |> open_sheet(dm.id) |> element(@sheet_pin) |> render_click()
+
+      assert Sidebar.list_pinned_space_ids(user.id) == [],
+             "the sheet\'s Unpin re-rendered the drawer but never reached storage"
+
+      refute has_element?(view, pinned_drawer_row(dm.id)),
+             "the DM is still in the drawer\'s Pinned block after unpinning"
+
+      assert has_element?(view, dm_drawer_row(dm.id)),
+             "the unpinned DM did not return to the drawer\'s Direct Messages section"
+    end
+
+    test "the drawer row carries one control, and the rail\'s x does not leak onto it",
+         %{conn: conn} do
+      # The width decision, asserted rather than left to a comment.
+      {conn, user} = authed(conn)
+      channel = create_channel("gen-migration")
+      {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
+
+      view = conn |> open_drawer()
+      row = view |> markup(pinned_drawer_row(channel.id))
+
+      assert row =~ ~s(data-role="drawer-row-actions"),
+             "the drawer row lost its overflow control, which is its only unpin path"
+
+      refute row =~ ~s(data-role="pin-control"),
+             "the rail\'s pin/unpin control leaked onto the drawer row; that is 24px off the name"
     end
   end
 

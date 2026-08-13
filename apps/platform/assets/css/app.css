@@ -3217,11 +3217,18 @@ body, .font-fabrikam {
      chosen visible-at-rest for the task row's control, so both surfaces now
      agree.
 
-     A pinned row gets exactly this treatment, not a special one. An earlier
-     revision made the control permanent AND filled inside the Pinned block;
-     the fill was removed on review, because the block already marks the
-     state. Only the fill went — this rule is one glyph, one colour, every
-     row.
+     ONE rule for both states, one colour, every row. The GLYPH forks in the
+     markup: `hero-map-pin` unpinned, `hero-x-mark` pinned (see
+     `PlatformWeb.ChatLive.Partials.pin_control/1`). A map-pin on an
+     already-pinned row points the wrong way and reads as "pin", which is how
+     a pinned row came to look like it had no way out (Marlowe, 2026-08-12).
+     Both glyphs are `size-3.5` in the same 24px box, so the fork costs no
+     layout and the conversation name gives up no width.
+
+     An earlier revision made the control permanent AND filled inside the
+     Pinned block; the fill was removed on review, because the block already
+     marks the state. The x does not bring that back: a fill marked STATE, an
+     x names the direction of the ACTION.
 
      `transition` covers colour and background on hover/focus. */
   .channel-row-pin-button {

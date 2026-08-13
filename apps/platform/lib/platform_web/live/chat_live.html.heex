@@ -342,156 +342,288 @@
            flush with the rest of the rail. (Task 019fd810 would have added
            a per-row colour marker and was cancelled; reserved space with
            nothing in it reads as a rendering bug.) --%>
+      <%!-- Row-drag scope for the Pinned block (task 019fe987). A SECOND
+           mount of the same ChannelMembershipDrag hook, not a second hook:
+           the sub-org mount lives further down the rail and an element
+           carries one phx-hook, so the block needs its own root. The rows
+           below are the only draggables inside it, which is why a drag can
+           never move a conversation INTO or OUT OF the block — pinning
+           stays a click on the pin control.
+
+           `data-admin-edit` is hard-coded false. There is no org default
+           for "what this person pinned", so admin-edit must not turn a
+           pinned drag into a global reassignment. --%>
       <% pinned_entries = pinned_rail_entries(@channel_sections.pinned, @pinned_task_spaces) %>
       <%= if pinned_entries != [] do %>
-        <section
-          class="channel-section group border-b border-base-300 pb-2 mb-2"
-          data-section-key="pinned"
-          data-section-reorderable="false"
-          aria-label="Pinned"
+        <div
+          id="pinned-row-drag"
+          phx-hook="ChannelMembershipDrag"
+          data-sidebar-edit={to_string(@sidebar_edit)}
+          data-admin-edit="false"
         >
-          <div class="channel-section-header">
-            <p class="channel-section-label">Pinned</p>
-          </div>
-          <%= for %{kind: kind, space: space} <- pinned_entries do %>
-            <%!-- Bound once, used twice: as the row's visible label and as the
-                 target inside the row control's accessible name. Resolving a
-                 DM's label runs a participants query, so calling the helper
-                 at each use would double the block's query count. --%>
-            <% row_label = pinned_row_label(kind, space, @user_id) %>
-            <%!-- Row wrapper: pairs the navigate-link with the row's own
-                 pin/unpin control as SIBLINGS, the same shape the sub-org
-                 rows use. The wrapper carries the row's margin, rounding and
-                 hover/active background (see `.channel-row-wrap` in app.css)
-                 so the highlight spans the control too, and the `--active`
-                 modifier must ride along or the scoped
-                 `.channel-row-wrap > .channel-row--active` rule strips the
-                 selected row's tint.
-
-                 `data-role="pinned-task-rail-row-wrap"` survives the merge on
-                 task rows only — it is what the task-pin tests address. --%>
-            <div
-              class={[
-                "channel-row-wrap",
-                @active_space && @active_space.id == space.id && "channel-row-wrap--active"
-              ]}
-              data-role={kind == :task && "pinned-task-rail-row-wrap"}
-              data-space-id={space.id}
-            >
-              <.link
-                navigate={~p"/chat/#{space_nav_target(space)}"}
-                data-role={kind == :task && "pinned-task-rail-row"}
-                data-space-id={kind == :task && space.id}
-                class={[
-                  "channel-row",
-                  @active_space && @active_space.id == space.id && "channel-row--active"
-                ]}
-              >
-                <%!-- The glyph column: 20px wide, and the ONLY thing that
-                     varies between the three kinds.
-
-                     `#` for a channel, an empty slot for a person, and
-                     `hero-clipboard-document-list-mini` for a task
-                     conversation. All three already existed before the merge;
-                     no new marker was designed and none was added.
-
-                     Both glyphs render at `--color-base-content` 60%. The `#`
-                     was at 40% and the task glyph at 40% while they lived in
-                     separate blocks; side by side in one column, two opacities
-                     read as two levels of importance rather than two kinds of
-                     thing.
-
-                     The person slot stays EMPTY rather than taking an avatar:
-                     `initials/1` takes the first two words of the label, so a
-                     group DM named "Rowan Ellis, Alexandra ..." rendered
-                     "RM" and was indistinguishable from a private DM with
-                     Rowan. It is not the reserved gutter plan v3 rules out —
-                     that was space held for a colour marker that is never
-                     arriving, whereas a blank beside rows visibly carrying a
-                     `#` reads as "no hash here". --%>
-                <%= case kind do %>
-                  <% :channel -> %>
-                    <span
-                      class="w-5 shrink-0 text-center text-base-content/60"
-                      data-role="pinned-row-hash"
-                    >
-                      #
-                    </span>
-                  <% :dm -> %>
-                    <span class="w-5 shrink-0" data-role="pinned-row-indent" aria-hidden="true">
-                    </span>
-                  <% :task -> %>
-                    <%!-- Wrapped in the same `w-5` slot the `#` occupies so
-                         the names form one straight column. The glyph itself
-                         is 14px like the hash; the box around it is 20px. --%>
-                    <span
-                      class="w-5 shrink-0 text-center"
-                      data-role="pinned-row-task-glyph"
-                      aria-hidden="true"
-                    >
-                      <span class="hero-clipboard-document-list-mini size-3.5 text-base-content/60">
-                      </span>
-                    </span>
-                <% end %>
-                <span class="truncate flex-1">{row_label}</span>
-                <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-                  <span class="channel-row-unread-pill">
-                    {unread_label(Map.get(@unread_counts, space.id, 0))}
-                  </span>
-                <% end %>
-              </.link>
-              <%!-- The trailing control is the one thing besides the glyph
-                   that differs, and it differs because the two pins are
-                   different rows in different tables. A conversation unpins
-                   through `toggle_pinned` (the user's preferences); a task
-                   conversation unpins through `unpin_task_from_chat`
-                   (`task_chat_pins`, participant-scoped self-unpin). Both are
-                   a small muted icon button in the same slot, and both are
-                   visible at rest: Rowan asked for that on the Pin-to-Chat
-                   work ("a discoverable small pin icon next to the task") and
-                   Marlowe asked for it again from the touch side on
-                   2026-08-11, so the conversation control matches the task
-                   control rather than the other way round. --%>
-              <%= if kind == :task do %>
-                <button
-                  type="button"
-                  class="channel-row-unpin-button"
-                  phx-click="unpin_task_from_chat"
-                  phx-value-task-id={space.metadata["task_id"]}
-                  data-role="pinned-task-rail-unpin"
-                  data-space-id={space.id}
-                  aria-label={"Unpin #{row_label} from Chat"}
-                  title="Unpin from Chat"
-                >
-                  <span class="hero-x-mark size-3.5"></span>
-                </button>
-              <% else %>
-                <%!-- Same control as any other row, visible at rest here as
-                     everywhere. `pinned={true}` changes only the verb in the
-                     accessible name and the state the click posts. It was
-                     briefly permanent and FILLED here, to mark the row as
-                     pinned; the fill was removed on review, because a pinned
-                     conversation only ever appears inside this block, so the
-                     block is the state and a mark on every row in it
-                     distinguishes nothing. One glyph, one colour. --%>
-                <.pin_control space_id={space.id} name={row_label} pinned={true} />
-                <%!-- "Move to organisation…" (task 019fd76a stage 1). Pinning
-                     LIFTS a channel out of its sub-org section, so without the
-                     control on this row a pinned channel would have no
-                     reassignment path at all once stage 2 removes the drag.
-                     This branch already excludes task conversations;
-                     `movable_channel?` is what keeps it off the person rows,
-                     which carry no org filing to move. --%>
-                <.move_to_org_control
-                  :if={@fabrikam_admin? and movable_channel?(space)}
-                  space_id={space.id}
-                  name={space.name}
-                  open={match?(%{channel_id: id} when id == space.id, @reassign_picker)}
-                />
-              <% end %>
+          <section
+            class="channel-section group border-b border-base-300 pb-2 mb-2"
+            data-section-key="pinned"
+            data-section-reorderable="false"
+            data-row-reorderable="true"
+            data-row-scope="pinned"
+            aria-label="Pinned"
+          >
+            <div class="channel-section-header">
+              <p class="channel-section-label">Pinned</p>
             </div>
-          <% end %>
-        </section>
+            <%= for %{kind: kind, space: space, move_index: move_index, move_count: move_count} <-
+                  pinned_entries do %>
+              <%!-- Bound once, used twice: as the row's visible label and as the
+                   target inside the row control's accessible name. Resolving a
+                   DM's label runs a participants query, so calling the helper
+                   at each use would double the block's query count. --%>
+              <% row_label = pinned_row_label(kind, space, @user_id) %>
+              <%!-- Row wrapper: pairs the navigate-link with the row's own
+                   pin/unpin control as SIBLINGS, the same shape the sub-org
+                   rows use. The wrapper carries the row's margin, rounding and
+                   hover/active background (see `.channel-row-wrap` in app.css)
+                   so the highlight spans the control too, and the `--active`
+                   modifier must ride along or the scoped
+                   `.channel-row-wrap > .channel-row--active` rule strips the
+                   selected row's tint.
+
+                   `data-role="pinned-task-rail-row-wrap"` survives the merge on
+                   task rows only — it is what the task-pin tests address.
+
+                   `data-row-locked` marks a row the drag must route AROUND
+                   rather than through: the hook drops locked rows from the
+                   order it computes and clamps a drop that lands on one. It is
+                   the client half of the rule that `move_index: nil` states on
+                   the server. Task rows are the only locked rows today. --%>
+              <div
+                class={[
+                  "channel-row-wrap group/row",
+                  @sidebar_edit && "channel-row-wrap--editing",
+                  @active_space && @active_space.id == space.id && "channel-row-wrap--active"
+                ]}
+                data-role={kind == :task && "pinned-task-rail-row-wrap"}
+                data-space-id={space.id}
+                data-row-locked={kind == :task && "true"}
+              >
+                <%!-- Grab handle (task 019fe987), borrowed verbatim from the
+                     sub-org rows rather than invented here. Rendered ONLY in
+                     personal-edit mode, never at rest: the row already carries a
+                     pin control on its right edge, and a second permanent control
+                     on its left squeezes the name from both sides, which the
+                     brand page's truncation rule forbids because the name is the
+                     protected fragment.
+
+                     CONVERSATION ROWS ONLY (Marlowe, 2026-08-12: "it's essentially
+                     two separate lists so makes me think to not commingle the
+                     interactions too much"). A task row is in the block but is
+                     not hand-orderable, and the absence of a handle is what says
+                     so. `move_index` is nil exactly on those rows.
+
+                     NOT gated on `@sidebar_admin_edit` (unlike the sub-org rows,
+                     which drag in either mode). Admin-edit rearranges the org
+                     default; a pin list is one person's and has no org default,
+                     so there is nothing for an admin to drag here.
+
+                     This span, not the wrapper, carries `draggable` so it is the
+                     HTML5 drag SOURCE and the hook's `.channel-row-grab` gate
+                     matches. `tabindex` is untouched (a span is not focusable):
+                     the keyboard path is the ▲▼ pair below, not this. --%>
+                <span
+                  :if={@sidebar_edit and move_index != nil}
+                  class="channel-row-grab"
+                  aria-hidden="true"
+                  title="Drag to reorder"
+                  draggable="true"
+                >
+                  ⠿
+                </span>
+                <%!-- The handle's slot, held open on the rows that do not get
+                     one, so the names stay in one column when edit mode opens.
+                     Same `w-5 ml-1` box `.channel-row-grab` occupies; no new
+                     class and no new token for an empty box. --%>
+                <span
+                  :if={@sidebar_edit and move_index == nil}
+                  class="w-5 ml-1 shrink-0"
+                  aria-hidden="true"
+                >
+                </span>
+                <.link
+                  navigate={~p"/chat/#{space_nav_target(space)}"}
+                  data-role={kind == :task && "pinned-task-rail-row"}
+                  data-space-id={kind == :task && space.id}
+                  class={[
+                    "channel-row",
+                    @active_space && @active_space.id == space.id && "channel-row--active"
+                  ]}
+                >
+                  <%!-- The glyph column: 20px wide, and the ONLY thing that
+                       varies between the three kinds.
+
+                       `#` for a channel, an empty slot for a person, and
+                       `hero-clipboard-document-list-mini` for a task
+                       conversation. All three already existed before the merge;
+                       no new marker was designed and none was added.
+
+                       Both glyphs render at `--color-base-content` 60%. The `#`
+                       was at 40% and the task glyph at 40% while they lived in
+                       separate blocks; side by side in one column, two opacities
+                       read as two levels of importance rather than two kinds of
+                       thing.
+
+                       The person slot stays EMPTY rather than taking an avatar:
+                       `initials/1` takes the first two words of the label, so a
+                       group DM named "Rowan Ellis, Alexandra ..." rendered
+                       "RM" and was indistinguishable from a private DM with
+                       Rowan. It is not the reserved gutter plan v3 rules out —
+                       that was space held for a colour marker that is never
+                       arriving, whereas a blank beside rows visibly carrying a
+                       `#` reads as "no hash here". --%>
+                  <%= case kind do %>
+                    <% :channel -> %>
+                      <span
+                        class="w-5 shrink-0 text-center text-base-content/60"
+                        data-role="pinned-row-hash"
+                      >
+                        #
+                      </span>
+                    <% :dm -> %>
+                      <span class="w-5 shrink-0" data-role="pinned-row-indent" aria-hidden="true">
+                      </span>
+                    <% :task -> %>
+                      <%!-- Wrapped in the same `w-5` slot the `#` occupies so
+                           the names form one straight column. The glyph itself
+                           is 14px like the hash; the box around it is 20px. --%>
+                      <span
+                        class="w-5 shrink-0 text-center"
+                        data-role="pinned-row-task-glyph"
+                        aria-hidden="true"
+                      >
+                        <span class="hero-clipboard-document-list-mini size-3.5 text-base-content/60">
+                        </span>
+                      </span>
+                  <% end %>
+                  <span class="truncate flex-1">{row_label}</span>
+                  <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+                    <span class="channel-row-unread-pill">
+                      {unread_label(Map.get(@unread_counts, space.id, 0))}
+                    </span>
+                  <% end %>
+                </.link>
+                <%!-- Keyboard and screen-reader reorder path (task 019fe987,
+                     WCAG 2.1.1). NOT a touch fallback for the drag above: drag
+                     alone is operable by one kind of user with one kind of
+                     input, and this rail already carries a logged defect where a
+                     hover-gated control was unreachable without a pointer. These
+                     ship the same day the drag does.
+
+                     The accessible name carries the VERB AND THE TARGET. A bare
+                     "Move up" is meaningless in a list of identical controls, and
+                     the block is exactly such a list. No "#" prefix, unlike the
+                     sub-org rows: this block holds people too, and a hash on a
+                     person names the wrong object type.
+
+                     Boundary buttons are disabled rather than hidden, matching
+                     the sub-org rows, so focus order stays stable as a row
+                     travels to the top or the bottom. The boundaries are
+                     `move_index` against `move_count` — the row's place among
+                     the CONVERSATIONS, not among the block's rows. Counting the
+                     task rows would leave the ▲ enabled on the top conversation
+                     and point it at a destination it is not allowed to have. --%>
+                <span :if={@sidebar_edit and move_index != nil} class="channel-row-move-controls">
+                  <button
+                    type="button"
+                    class="channel-row-move-button"
+                    phx-click="move_pinned"
+                    phx-value-space_id={space.id}
+                    phx-value-direction="up"
+                    disabled={move_index == 0}
+                    data-role="pinned-move-up"
+                    aria-label={"Move #{row_label} up"}
+                    title="Move up"
+                  >
+                    <span class="hero-chevron-up size-3"></span>
+                  </button>
+                  <button
+                    type="button"
+                    class="channel-row-move-button"
+                    phx-click="move_pinned"
+                    phx-value-space_id={space.id}
+                    phx-value-direction="down"
+                    disabled={move_index == move_count - 1}
+                    data-role="pinned-move-down"
+                    aria-label={"Move #{row_label} down"}
+                    title="Move down"
+                  >
+                    <span class="hero-chevron-down size-3"></span>
+                  </button>
+                </span>
+                <%!-- The trailing control is the one thing besides the glyph
+                     that differs, and it differs because the two pins are
+                     different rows in different tables. A conversation unpins
+                     through `toggle_pinned` (the user's preferences); a task
+                     conversation unpins through `unpin_task_from_chat`
+                     (`task_chat_pins`, participant-scoped self-unpin). Both are
+                     a small muted icon button in the same slot, and both are
+                     visible at rest: Rowan asked for that on the Pin-to-Chat
+                     work ("a discoverable small pin icon next to the task") and
+                     Marlowe asked for it again from the touch side on
+                     2026-08-11, so the conversation control matches the task
+                     control rather than the other way round. --%>
+                <%= if kind == :task do %>
+                  <button
+                    type="button"
+                    class="channel-row-unpin-button"
+                    phx-click="unpin_task_from_chat"
+                    phx-value-task-id={space.metadata["task_id"]}
+                    data-role="pinned-task-rail-unpin"
+                    data-space-id={space.id}
+                    aria-label={"Unpin #{row_label} from Chat"}
+                    title="Unpin from Chat"
+                  >
+                    <span class="hero-x-mark size-3.5"></span>
+                  </button>
+                <% else %>
+                  <%!-- Same control as any other row, visible at rest here as
+                       everywhere. `pinned={true}` changes the glyph, the verb in
+                       the accessible name and the state the click posts.
+
+                       The glyph is where Marlowe's 2026-08-12 review landed:
+                       "remember to add a way for user to unpin just like how
+                       pinned tasks have an 'x' to unpin". The way out already
+                       existed here and already announced "Unpin <name>", so this
+                       is not a missing control being added. It is a control that
+                       could not be READ as one: a map-pin on an already-pinned
+                       row points the wrong way, and the pinned-TASK rows in the
+                       same block use a plain x for the same operation. Two
+                       idioms for one verb, and she took the ambiguous one as an
+                       absence.
+
+                       A pinned row therefore wears the x. It was briefly a
+                       permanent FILLED pin here, to mark the row as pinned; that
+                       was removed on review, and this does not bring it back. A
+                       fill marked STATE on rows already grouped under a heading
+                       that states it. An x names the direction of the ACTION,
+                       which is the one thing the map-pin got wrong. --%>
+                  <.pin_control space_id={space.id} name={row_label} pinned={true} />
+                  <%!-- "Move to organisation…" (task 019fd76a stage 1). Pinning
+                       LIFTS a channel out of its sub-org section, so without the
+                       control on this row a pinned channel would have no
+                       reassignment path at all once stage 2 removes the drag.
+                       This branch already excludes task conversations;
+                       `movable_channel?` is what keeps it off the person rows,
+                       which carry no org filing to move. --%>
+                  <.move_to_org_control
+                    :if={@fabrikam_admin? and movable_channel?(space)}
+                    space_id={space.id}
+                    name={space.name}
+                    open={match?(%{channel_id: id} when id == space.id, @reassign_picker)}
+                  />
+                <% end %>
+              </div>
+            <% end %>
+          </section>
+        </div>
       <% end %>
 
       <%!-- DMs section — always rendered, even when empty (Marlowe: empty
@@ -592,6 +724,13 @@
         data-sidebar-edit={to_string(@sidebar_edit)}
         data-admin-edit={to_string(@sidebar_admin_edit)}
       >
+        <%!-- `data-row-reorderable` says rows inside this section may be
+             reordered. Separate from `data-section-reorderable`, which answers
+             whether the SECTION may be dragged elsewhere and is what the
+             SectionReorder hook reads. The Pinned block (task 019fe987)
+             reorders its rows while staying locked at the top of the rail, so
+             the two answers genuinely differ and one flag cannot carry
+             both. --%>
         <section
           :for={
             %{section: section, channels: section_channels, collapsed?: collapsed?} <-
@@ -603,6 +742,7 @@
           data-section-slug={section.color}
           data-section-id={section.id}
           data-section-reorderable="true"
+          data-row-reorderable="true"
           draggable="true"
           aria-label={"#{section.name} channels"}
         >
@@ -1362,21 +1502,133 @@
               </p>
               <%!-- Lock affordance (chat sidebar mobile Stage 2, Decision #5).
                  Touch has no hover state to reveal that Pinned is locked to the
-                 top and can't be reordered, so we surface an explicit
-                 hero-lock-closed icon in edit mode (`@sidebar_edit`, the same
-                 personal-edit mode that gates desktop section reorder). The
-                 drag handle stays omitted — mirroring desktop's
-                 data-section-reorderable="false" branch, which renders no
-                 .channel-section-drag-handle on locked sections. --%>
+                 top, so we surface an explicit hero-lock-closed icon in edit
+                 mode (`@sidebar_edit`, the same personal-edit mode that gates
+                 desktop section reorder). The SECTION drag handle stays omitted
+                 — mirroring desktop's data-section-reorderable="false" branch,
+                 which renders no .channel-section-drag-handle on locked
+                 sections.
+
+                 Copy revised (task 019fe987): this used to read "and can't be
+                 reordered", which is now false at row level. The block stays
+                 pinned to the top of the drawer; the rows inside it reorder. --%>
               <span
                 :if={@sidebar_edit}
                 class="channel-section-lock hero-lock-closed ml-auto size-3.5 text-base-content/40"
                 aria-hidden="true"
-                title="Pinned stays at the top and can't be reordered"
+                title="Pinned stays at the top of the list"
               >
               </span>
             </div>
-            <%!-- Row wrapper: SIBLING link + trailing control, so a tap on
+            <%!-- EDIT-MODE pinned rows (task 019fe987). Both surfaces or
+                 neither: the parent task shipped a stage that wired the desktop
+                 rail and left the drawer rendering rows that could not do the
+                 thing, and it reached a human approval gate before anyone
+                 noticed.
+
+                 Shape copied from the sub-org edit rows directly below, so the
+                 drawer teaches ONE arranging convention. That means: the row
+                 stops being a link (a mis-tap would navigate and close the
+                 drawer, ejecting the user from the mode), the ▲▼ pair is
+                 persistent rather than revealed, boundary buttons are disabled
+                 rather than hidden, and the unread badge yields its right-edge
+                 slot to the reorder chrome because edit mode is a mode and
+                 counts are browse chrome.
+
+                 TASK ROWS STAY, and stay unarranged (Marlowe, 2026-08-12: "it's
+                 essentially two separate lists so makes me think to not
+                 commingle the interactions too much"). They render in the same
+                 list with the same glyph column and NO ▲▼ pair, so edit mode
+                 shows the block a phone user actually has rather than a
+                 filtered version of it. `move_index` is nil on exactly those
+                 rows.
+
+                 No ☰ drag handle here, unlike the sub-org rows. Touch drag is
+                 the desktop drag's twin and the arrows are the accessible path;
+                 the block is three to eight rows, where two taps does the job.
+                 If phone users reach for the gesture, adding it is a second
+                 mount of RowReorderTouch, not a new pattern.
+
+                 Search suppresses the mode: reordering a filtered view writes
+                 an order the user cannot see. Same guard the sub-org rows and
+                 the section handles use, and it is what keeps `move_index`
+                 contiguous — the indices describe the unfiltered block. --%>
+            <%= if @sidebar_edit && @drawer_query == "" do %>
+              <div
+                :for={
+                  %{kind: kind, space: space, move_index: move_index, move_count: move_count} <-
+                    drawer_pinned
+                }
+                class="flex items-center gap-3 px-4 py-3 text-sm"
+                data-role={
+                  if kind == :task,
+                    do: "drawer-pinned-task-edit-row",
+                    else: "drawer-pinned-edit-row"
+                }
+                data-space-id={space.id}
+              >
+                <% row_label = pinned_row_label(kind, space, @user_id) %>
+                <%!-- Same three-glyph column as the browse rows below and as the
+                     desktop rail, so a row does not change kind when the mode
+                     changes. --%>
+                <%= case kind do %>
+                  <% :channel -> %>
+                    <span
+                      class="w-5 shrink-0 text-center text-base-content/60 text-lg"
+                      data-role="pinned-row-hash"
+                    >
+                      #
+                    </span>
+                  <% :dm -> %>
+                    <span class="w-5 shrink-0" data-role="pinned-row-indent" aria-hidden="true">
+                    </span>
+                  <% :task -> %>
+                    <span
+                      class="w-5 shrink-0 text-center"
+                      data-role="pinned-row-task-glyph"
+                      aria-hidden="true"
+                    >
+                      <span class="hero-clipboard-document-list-mini size-4 text-base-content/60">
+                      </span>
+                    </span>
+                <% end %>
+                <span class="truncate flex-1">{row_label}</span>
+                <%!-- Boundaries are the row's place among the CONVERSATIONS
+                     (`move_index` against `move_count`), not among the block's
+                     rows. Counting the task rows above would leave the ▲
+                     enabled on the top conversation and point it at a
+                     destination it is not allowed to have. --%>
+                <span :if={move_index != nil} class="channel-row-move-controls--touch">
+                  <button
+                    type="button"
+                    class="channel-row-move-button--touch"
+                    phx-click="move_pinned"
+                    phx-value-space_id={space.id}
+                    phx-value-direction="up"
+                    disabled={move_index == 0}
+                    data-role="pinned-move-up"
+                    aria-label={"Move #{row_label} up"}
+                    title="Move up"
+                  >
+                    <span class="hero-chevron-up size-4"></span>
+                  </button>
+                  <button
+                    type="button"
+                    class="channel-row-move-button--touch"
+                    phx-click="move_pinned"
+                    phx-value-space_id={space.id}
+                    phx-value-direction="down"
+                    disabled={move_index == move_count - 1}
+                    data-role="pinned-move-down"
+                    aria-label={"Move #{row_label} down"}
+                    title="Move down"
+                  >
+                    <span class="hero-chevron-down size-4"></span>
+                  </button>
+                </span>
+              </div>
+            <% else %>
+              <%!-- Row wrapper: SIBLING link + trailing control, so a tap on
                  the control never bubbles into the anchor's navigation. A
                  `<button>` nested in an `<a>` is invalid HTML, and LiveView
                  binds click on `window` in the bubble phase, so a nested
@@ -1404,78 +1656,79 @@
                  on purpose: opening the sheet must not collapse the drawer
                  out from under it, and unpinning must not collapse it
                  mid-tap. --%>
-            <div
-              :for={%{kind: kind, space: space} <- drawer_pinned}
-              class="flex items-center"
-              data-role={
-                if kind == :task, do: "pinned-task-drawer-row-wrap", else: "drawer-row-wrap"
-              }
-              data-space-id={space.id}
-            >
-              <% row_label = pinned_row_label(kind, space, @user_id) %>
-              <.link
-                navigate={~p"/chat/#{space_nav_target(space)}"}
-                phx-click="close_mobile_browser"
-                data-role={kind == :task && "pinned-task-drawer-row"}
-                data-space-id={kind == :task && space.id}
-                class={[
-                  "flex items-center gap-3 flex-1 min-w-0 px-4 py-3 text-sm transition-colors",
-                  "hover:bg-base-200",
-                  @active_space && @active_space.id == space.id &&
-                    "bg-base-200 text-primary font-semibold"
-                ]}
+              <div
+                :for={%{kind: kind, space: space} <- drawer_pinned}
+                class="flex items-center"
+                data-role={
+                  if kind == :task, do: "pinned-task-drawer-row-wrap", else: "drawer-row-wrap"
+                }
+                data-space-id={space.id}
               >
-                <%!-- The glyph column, same three glyphs as the desktop rail
+                <% row_label = pinned_row_label(kind, space, @user_id) %>
+                <.link
+                  navigate={~p"/chat/#{space_nav_target(space)}"}
+                  phx-click="close_mobile_browser"
+                  data-role={kind == :task && "pinned-task-drawer-row"}
+                  data-space-id={kind == :task && space.id}
+                  class={[
+                    "flex items-center gap-3 flex-1 min-w-0 px-4 py-3 text-sm transition-colors",
+                    "hover:bg-base-200",
+                    @active_space && @active_space.id == space.id &&
+                      "bg-base-200 text-primary font-semibold"
+                  ]}
+                >
+                  <%!-- The glyph column, same three glyphs as the desktop rail
                      and the only thing that varies between the kinds. Before
                      the kind branch existed the row rendered `{space.name}`
                      for everything, and a DM has no `name`, so a pinned person
                      appeared as a `#` with no label: an unnamed CHANNEL, the
                      wrong object type rather than a missing string. --%>
-                <%= case kind do %>
-                  <% :channel -> %>
-                    <span
-                      class="w-5 shrink-0 text-center text-base-content/60 text-lg"
-                      data-role="pinned-row-hash"
-                    >
-                      #
-                    </span>
-                  <% :dm -> %>
-                    <span class="w-5 shrink-0" data-role="pinned-row-indent" aria-hidden="true">
-                    </span>
-                  <% :task -> %>
-                    <span
-                      class="w-5 shrink-0 text-center"
-                      data-role="pinned-row-task-glyph"
-                      aria-hidden="true"
-                    >
-                      <span class="hero-clipboard-document-list-mini size-4 text-base-content/60">
+                  <%= case kind do %>
+                    <% :channel -> %>
+                      <span
+                        class="w-5 shrink-0 text-center text-base-content/60 text-lg"
+                        data-role="pinned-row-hash"
+                      >
+                        #
                       </span>
+                    <% :dm -> %>
+                      <span class="w-5 shrink-0" data-role="pinned-row-indent" aria-hidden="true">
+                      </span>
+                    <% :task -> %>
+                      <span
+                        class="w-5 shrink-0 text-center"
+                        data-role="pinned-row-task-glyph"
+                        aria-hidden="true"
+                      >
+                        <span class="hero-clipboard-document-list-mini size-4 text-base-content/60">
+                        </span>
+                      </span>
+                  <% end %>
+                  <span class="truncate flex-1">{row_label}</span>
+                  <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+                    <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+                      {unread_label(Map.get(@unread_counts, space.id, 0))}
                     </span>
+                  <% end %>
+                </.link>
+                <%= if kind == :task do %>
+                  <button
+                    type="button"
+                    class="flex-shrink-0 inline-flex items-center justify-center w-10 h-10 mr-2 rounded text-base-content/40 hover:text-primary hover:bg-base-200 transition-colors"
+                    phx-click="unpin_task_from_chat"
+                    phx-value-task-id={space.metadata["task_id"]}
+                    data-role="pinned-task-drawer-unpin"
+                    data-space-id={space.id}
+                    aria-label={"Unpin #{row_label} from Chat"}
+                    title="Unpin from Chat"
+                  >
+                    <span class="hero-x-mark size-4"></span>
+                  </button>
+                <% else %>
+                  <.row_actions_control space_id={space.id} name={row_label} />
                 <% end %>
-                <span class="truncate flex-1">{row_label}</span>
-                <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-                  <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-                    {unread_label(Map.get(@unread_counts, space.id, 0))}
-                  </span>
-                <% end %>
-              </.link>
-              <%= if kind == :task do %>
-                <button
-                  type="button"
-                  class="flex-shrink-0 inline-flex items-center justify-center w-10 h-10 mr-2 rounded text-base-content/40 hover:text-primary hover:bg-base-200 transition-colors"
-                  phx-click="unpin_task_from_chat"
-                  phx-value-task-id={space.metadata["task_id"]}
-                  data-role="pinned-task-drawer-unpin"
-                  data-space-id={space.id}
-                  aria-label={"Unpin #{row_label} from Chat"}
-                  title="Unpin from Chat"
-                >
-                  <span class="hero-x-mark size-4"></span>
-                </button>
-              <% else %>
-                <.row_actions_control space_id={space.id} name={row_label} />
-              <% end %>
-            </div>
+              </div>
+            <% end %>
           </section>
 
           <%!-- Direct Messages — locked directly under Pinned. While a search

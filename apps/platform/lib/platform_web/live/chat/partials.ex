@@ -61,6 +61,10 @@ defmodule PlatformWeb.ChatLive.Partials do
   swallows the event along with the navigation. This is the same shape the
   sub-org hide button and the task-pin unpin button already use.
 
+  ONE control, one component, on every conversation row in the rail. What
+  varies with `@pinned` is the glyph, the verb in the accessible name, and the
+  state the click posts.
+
   ## Visible at rest
 
   The control renders at rest on every row, at `--color-base-content` 60%,
@@ -82,20 +86,35 @@ defmodule PlatformWeb.ChatLive.Partials do
   hard-to-reach there; it is unreachable. `focus-within:` answers the
   keyboard case and answers nothing for a finger.
 
-  ONE treatment on every row, pinned or not. The only thing that varies with
-  pinned-ness is the verb in the accessible name and the state the click
-  posts. That was already true when the control was hover-revealed and it
-  stays true now: an earlier revision gave pinned rows a permanent FILLED
-  variant to mark the row's pinned state, which Marlowe removed on review ("No
+  ## The glyph forks on state, and that is the point
+
+  Unpinned rows get `hero-map-pin`. PINNED rows get `hero-x-mark`, the same
+  glyph the pinned-TASK rows in the same block already use for the same
+  user-visible operation.
+
+  This is Marlowe's 2026-08-12 review: "remember to add a way for user to unpin
+  just like how pinned tasks have an 'x' to unpin". The capability was already
+  there and already labelled "Unpin <name>", so what she reported is not a
+  missing control. It is a control she could not read as one: a map-pin on a
+  row that is already pinned points the wrong way. It says "pin", so a pinned
+  row wearing one says nothing about how to get out. Sitting inches from task
+  rows that use a plain x for the same operation, the block taught two idioms
+  for one verb and she took the ambiguous one as an absence.
+
+  The counter-argument, recorded because it is real: forking a glyph by state
+  is close to the pinned-STATE marking that a 2026-08-11 review removed ("No
   need to append a pin icon to pinned items. The section header is
-  sufficient") because pinning LIFTS a conversation into the Pinned block, so
-  the block is the state and a mark on every row in it distinguishes nothing.
-  Visible-at-rest does not bring that back — same glyph, same colour, one
-  code path.
+  sufficient"). It is not the same thing. What was removed was a FILLED pin
+  next to an outline pin, the same glyph in two weights, whose only job was to
+  say "this row is pinned" on rows already grouped under a heading that says
+  so. An x is not read as a state; nobody looks at an x and concludes the row
+  is pinned. It names the direction of the ACTION, which is the one thing the
+  map-pin got wrong.
 
   ## Width
 
-  The control is `flex-shrink-0` and occupies its 24px on every row. The name
+  The control is `flex-shrink-0` and occupies its 24px on every row, pinned or
+  not, and both glyphs are `size-3.5`, so the fork costs no layout. The name
   keeps `flex-1 min-w-0 truncate` and the control never squeezes, so the icon
   cannot be crushed by a long display name and the name never loses space to
   it. The touch target is 44x44, taken from a hit-area pseudo-element rather
@@ -122,10 +141,11 @@ defmodule PlatformWeb.ChatLive.Partials do
       phx-value-pinned={to_string(not @pinned)}
       data-role="pin-control"
       data-space-id={@space_id}
+      data-pinned={to_string(@pinned)}
       aria-label={"#{if @pinned, do: "Unpin", else: "Pin"} #{@name}"}
       title={if @pinned, do: "Unpin", else: "Pin"}
     >
-      <span class="hero-map-pin size-3.5"></span>
+      <span class={[(@pinned && "hero-x-mark") || "hero-map-pin", "size-3.5"]}></span>
     </button>
     """
   end
@@ -457,6 +477,21 @@ defmodule PlatformWeb.ChatLive.Partials do
 
   `@target` is nil whenever the sheet is closed, which keeps the header empty
   rather than holding the last-opened conversation's name.
+
+  ## Accessible name on the pin row
+
+  This is the drawer's unpin path, the touch counterpart to the rail's
+  `pin_control/1`, so it holds the same rule: the accessible name
+  carries the verb AND the target. The visible label stays "Unpin
+  conversation" and the `aria-label` extends it to "Unpin conversation Rowan
+  Ellis". Extends rather than replaces, because WCAG 2.5.3 requires the
+  accessible name to contain the visible label, so "Unpin Rowan Ellis"
+  alone would break speech input on a control reading "Unpin conversation".
+
+  The sheet title already shows the name, but a title is context a screen
+  reader announces once on open, and the buttons below it are then two
+  identical verbs. Naming the target on the control costs no width here: the
+  sheet row is full-bleed and the string is never rendered.
   """
   attr(:target, :any,
     default: nil,
@@ -483,6 +518,10 @@ defmodule PlatformWeb.ChatLive.Partials do
             phx-value-space_id={@target && @target.space_id}
             phx-value-pinned={@target && to_string(not @target.pinned)}
             data-role="row-actions-pin"
+            aria-label={
+              @target &&
+                "#{if @target.pinned, do: "Unpin", else: "Pin"} conversation #{@target.name}"
+            }
           >
             <span class="hero-map-pin size-5 flex-shrink-0" aria-hidden="true"></span>
             <span>

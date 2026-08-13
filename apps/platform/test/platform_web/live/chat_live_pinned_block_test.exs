@@ -179,6 +179,68 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
     |> List.first()
   end
 
+  # ── Reorder helpers (task 019fe987) ─────────────────────────────────────
+
+  # The rows of a block, top to bottom, by the space id each carries.
+  #
+  # `data-space-id` appears more than once per row (the wrapper, then the
+  # row's own controls), always CONSECUTIVELY, so `dedup` collapses each row
+  # to one id while still catching two different rows that render the same
+  # conversation twice.
+  defp pinned_order(nil), do: []
+
+  defp pinned_order(slice) do
+    ~r/data-space-id="([0-9a-fA-F-]{36})"/
+    |> Regex.scan(slice)
+    |> Enum.map(fn [_, id] -> id end)
+    |> Enum.dedup()
+  end
+
+  # One move button's whole opening tag, found by BOTH its role and the space
+  # it moves. Matching on attribute presence rather than on a fixed attribute
+  # ORDER: the order HEEx emits them in is not part of the contract.
+  defp move_button(nil, _space_id, _role), do: nil
+
+  defp move_button(slice, space_id, role) do
+    ~r/<button[^>]*>/
+    |> Regex.scan(slice)
+    |> Enum.map(&hd/1)
+    |> Enum.find(fn tag ->
+      String.contains?(tag, ~s(data-role="#{role}")) and
+        String.contains?(tag, ~s(phx-value-space_id="#{space_id}"))
+    end)
+  end
+
+  defp aria_label(nil), do: nil
+
+  defp aria_label(tag) do
+    case Regex.run(~r/aria-label="([^"]*)"/, tag) do
+      [_, label] -> label
+      _ -> nil
+    end
+  end
+
+  # Occurrences of a literal inside a slice. Used with a PREDICTED number
+  # written into the test, so a check that quietly matches nothing (or the
+  # whole page) shows up as a disagreement instead of a pass.
+  defp count(nil, _needle), do: 0
+
+  defp count(slice, needle), do: slice |> String.split(needle) |> length() |> Kernel.-(1)
+
+  # The drawer, open, in personal-edit mode. Edit mode also clears
+  # `@drawer_query`, which is the state the drawer's reorder chrome is gated
+  # on, so the order of these two clicks is not interchangeable.
+  defp drawer_in_edit_mode(conn, space) do
+    {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
+
+    view
+    |> element(~s(button[phx-click="toggle_mobile_browser"]))
+    |> render_click()
+
+    html = render_click(view, "toggle_sidebar_edit", %{})
+    {view, html}
+  end
+
   # How many pinned SECTIONS a slice renders.
   #
   # The count is the only assertion that can tell one block from two, and it
@@ -796,6 +858,428 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       # A task conversation was never in a client section, so it needs no
       # lifting — and the section it was never in is still whole.
       assert client_section(sidebar) =~ "Stays-home"
+    end
+  end
+
+  # ── Reordering the block (task 019fe987) ────────────────────────────────
+  #
+  # The assertion that matters in here is the PERSISTED order after a move.
+  # A handler that accepts the event and writes nothing re-renders a block
+  # still holding every row in some order, so any check that only asks "did
+  # the page survive" passes it. Each test below reads
+  # `Sidebar.list_pinned_space_ids/1` back out of preferences AND asserts the
+  # rendered order, and the two must agree.
+
+  describe "reordering the Pinned block" do
+    test "an arrow move persists the new order and the desktop rail renders it",
+         %{conn: conn} do
+      {conn, user} = authed(conn)
+      alpha = create_channel("alpha-one")
+      beta = create_channel("beta-two")
+      gamma = create_channel("gamma-three")
+
+      for space <- [alpha, beta, gamma],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      {:ok, view, _html} = live_rail(conn)
+      render_click(view, "toggle_sidebar_edit", %{})
+
+      # Predicted before running: gamma moves above beta, so the stored list
+      # and the rail both read [alpha, gamma, beta].
+      html = render_click(view, "move_pinned", %{"space_id" => gamma.id, "direction" => "up"})
+
+      assert Sidebar.list_pinned_space_ids(user.id) == [alpha.id, gamma.id, beta.id]
+
+      assert html |> desktop_sidebar() |> pinned_block() |> pinned_order() ==
+               [alpha.id, gamma.id, beta.id]
+    end
+
+    test "a drag drop persists the new order and the desktop rail renders it",
+         %{conn: conn} do
+      {conn, user} = authed(conn)
+      alpha = create_channel("drag-alpha")
+      beta = create_channel("drag-beta")
+      gamma = create_channel("drag-gamma")
+
+      for space <- [alpha, beta, gamma],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      {:ok, view, _html} = live_rail(conn)
+      render_click(view, "toggle_sidebar_edit", %{})
+
+      # The payload ChannelMembershipDrag pushes: the dragged id plus the
+      # order the client just drew. Gamma dragged to the top.
+      html =
+        render_hook(view, "pinned_reordered", %{
+          "space_id" => gamma.id,
+          "ordered_ids" => [gamma.id, alpha.id, beta.id]
+        })
+
+      assert Sidebar.list_pinned_space_ids(user.id) == [gamma.id, alpha.id, beta.id]
+
+      assert html |> desktop_sidebar() |> pinned_block() |> pinned_order() ==
+               [gamma.id, alpha.id, beta.id]
+    end
+
+    test "a move down persists, so the handler is not a one-direction stub", %{conn: conn} do
+      {conn, user} = authed(conn)
+      alpha = create_channel("down-alpha")
+      beta = create_channel("down-beta")
+
+      for space <- [alpha, beta],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      {:ok, view, _html} = live_rail(conn)
+      render_click(view, "toggle_sidebar_edit", %{})
+      render_click(view, "move_pinned", %{"space_id" => alpha.id, "direction" => "down"})
+
+      assert Sidebar.list_pinned_space_ids(user.id) == [beta.id, alpha.id]
+    end
+
+    test "the mobile drawer renders the new order after a move", %{conn: conn} do
+      {conn, user} = authed(conn)
+      alpha = create_channel("drawer-alpha")
+      beta = create_channel("drawer-beta")
+      gamma = create_channel("drawer-gamma")
+
+      for space <- [alpha, beta, gamma],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      {view, _html} = drawer_in_edit_mode(conn, alpha)
+
+      html = render_click(view, "move_pinned", %{"space_id" => gamma.id, "direction" => "up"})
+
+      assert Sidebar.list_pinned_space_ids(user.id) == [alpha.id, gamma.id, beta.id]
+
+      assert html |> drawer_pinned_section() |> pinned_order() ==
+               [alpha.id, gamma.id, beta.id]
+    end
+
+    test "a move naming a space that is no longer pinned changes nothing", %{conn: conn} do
+      # A second tab unpinned it between the render and the drop. The rail
+      # ignores the event rather than raising or shuffling the block.
+      {conn, user} = authed(conn)
+      alpha = create_channel("stale-alpha")
+      beta = create_channel("stale-beta")
+      stranger = create_channel("stale-stranger")
+
+      for space <- [alpha, beta],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      {:ok, view, _html} = live_rail(conn)
+      render_click(view, "toggle_sidebar_edit", %{})
+
+      html =
+        render_hook(view, "pinned_reordered", %{
+          "space_id" => stranger.id,
+          "ordered_ids" => [stranger.id, alpha.id, beta.id]
+        })
+
+      assert Sidebar.list_pinned_space_ids(user.id) == [alpha.id, beta.id]
+
+      assert html |> desktop_sidebar() |> pinned_block() |> pinned_order() ==
+               [alpha.id, beta.id]
+    end
+  end
+
+  describe "reorder chrome appears only in edit mode" do
+    test "the desktop block carries no handle and no arrows at rest", %{conn: conn} do
+      {conn, user} = authed(conn)
+      channel = create_channel("rest-state-chan")
+      dm = create_dm(user, "Rowan Ellis")
+
+      for space <- [channel, dm],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      {:ok, view, html} = live_rail(conn)
+      block = html |> desktop_sidebar() |> pinned_block()
+
+      assert block, "expected the desktop Pinned block"
+      refute block =~ "channel-row-grab"
+      refute block =~ "move_pinned"
+      # The glyph itself, not only the class: a handle rendered with the wrong
+      # class still squeezes the name it sits beside.
+      refute block =~ "⠿"
+
+      # And the row still reads as its name, whole. One assertion that catches
+      # a stray glyph AND an emptied label, which marker-absence does not.
+      assert block |> row_containing("Rowan Ellis") |> row_text() == "Rowan Ellis"
+
+      # Same block in edit mode. Predicted: 2 rows × 2 buttons = 4 move
+      # controls, and 2 grab handles.
+      edit_block =
+        view |> render_click("toggle_sidebar_edit", %{}) |> desktop_sidebar() |> pinned_block()
+
+      assert count(edit_block, ~s(phx-click="move_pinned")) == 4
+      assert count(edit_block, "channel-row-grab") == 2
+    end
+
+    test "the mobile drawer carries no arrows at rest", %{conn: conn} do
+      {conn, user} = authed(conn)
+      alpha = create_channel("drawer-rest-alpha")
+      beta = create_channel("drawer-rest-beta")
+
+      for space <- [alpha, beta],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      browse = conn |> open_mobile_drawer(alpha) |> drawer_pinned_section()
+
+      assert browse, "expected the drawer's Pinned section"
+      refute browse =~ "move_pinned"
+
+      # Edit mode. Predicted: 2 rows × 2 buttons = 4.
+      {_view, edit_html} = drawer_in_edit_mode(conn, alpha)
+      edit = drawer_pinned_section(edit_html)
+
+      assert count(edit, ~s(phx-click="move_pinned")) == 4
+      assert count(edit, ~s(phx-value-direction="up")) == 2
+      assert count(edit, ~s(phx-value-direction="down")) == 2
+    end
+  end
+
+  describe "move controls name what they move" do
+    test "a DM's arrows carry the person's name, not a bare Move up", %{conn: conn} do
+      # A bare "Move up" is meaningless in a list of identical controls, and a
+      # DM is the case that breaks first: its label comes from
+      # `sidebar_display_name/2`, not from `space.name`, which is nil for a DM.
+      # An implementation reaching for `space.name` renders "Move  up" and
+      # passes any check that only asserts the verb.
+      {conn, user} = authed(conn)
+      dm = create_dm(user, "Rowan Ellis")
+      channel = create_channel("named-arrows-chan")
+
+      for space <- [dm, channel],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      {:ok, view, _html} = live_rail(conn)
+
+      block =
+        view |> render_click("toggle_sidebar_edit", %{}) |> desktop_sidebar() |> pinned_block()
+
+      assert block |> move_button(dm.id, "pinned-move-down") |> aria_label() ==
+               "Move Rowan Ellis down"
+
+      # The channel beside it, so the DM assertion is not passing on a string
+      # every row happens to share.
+      assert block |> move_button(channel.id, "pinned-move-up") |> aria_label() ==
+               "Move Named-arrows-chan up"
+    end
+
+    test "boundary arrows are disabled rather than hidden", %{conn: conn} do
+      # Disabled, not hidden, so focus order stays stable as a row travels to
+      # an end of the list.
+      {conn, user} = authed(conn)
+      first = create_channel("boundary-first")
+      last = create_channel("boundary-last")
+
+      for space <- [first, last],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      {:ok, view, _html} = live_rail(conn)
+
+      block =
+        view |> render_click("toggle_sidebar_edit", %{}) |> desktop_sidebar() |> pinned_block()
+
+      assert move_button(block, first.id, "pinned-move-up") =~ "disabled"
+      refute move_button(block, first.id, "pinned-move-down") =~ "disabled"
+      refute move_button(block, last.id, "pinned-move-up") =~ "disabled"
+      assert move_button(block, last.id, "pinned-move-down") =~ "disabled"
+    end
+  end
+
+  # ── The task rows are a floor a conversation cannot cross (019fe987) ────
+  #
+  # Marlowe, 2026-08-12, choosing between commingling the two pin models and
+  # keeping them apart: "I lean towards #2 - it's essentially two separate
+  # lists so makes me think to not commingle the interactions too much."
+  #
+  # Asserted on the PERSISTED list, not on the render. A render can only show
+  # what it was handed, so a check there passes for a server that wrote
+  # something else and re-rendered from a stale assign. The stored list is
+  # what survives a reload, and it is where a cross-table write would show
+  # up: `chat_pinned_spaces` holds conversation ids only, because a task pin
+  # is a row in `task_chat_pins`.
+
+  describe "a conversation cannot be ordered into or above the task rows" do
+    test "a drag payload claiming a slot above a task row lands at the top of the conversations",
+         %{conn: conn} do
+      {conn, user} = authed(conn)
+      alpha = create_channel("floor-alpha")
+      beta = create_channel("floor-beta")
+
+      for space <- [alpha, beta],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      %{space: task_space} = seed_pinned_task_for(user, "Floor Task")
+
+      {:ok, view, _html} = live_rail(conn)
+      render_click(view, "toggle_sidebar_edit", %{})
+
+      # The hostile payload: beta claims the very top of the block, ABOVE the
+      # task row. A real client cannot draw this — the hook filters locked
+      # rows out of the order it computes — so this is the server being asked
+      # to honour it directly, with the client's guard removed.
+      render_hook(view, "pinned_reordered", %{
+        "space_id" => beta.id,
+        "ordered_ids" => [beta.id, task_space.id, alpha.id]
+      })
+
+      # Predicted before running: beta lands at index 0 of the CONVERSATIONS,
+      # which is as high as it goes, and the task id never enters the pref.
+      persisted = Sidebar.list_pinned_space_ids(user.id)
+
+      assert persisted == [beta.id, alpha.id],
+             "the clamp did not hold: #{inspect(persisted)}"
+
+      refute task_space.id in persisted,
+             "a task id was written into chat_pinned_spaces, which is a cross-table reorder"
+    end
+
+    test "an arrow move cannot lift the top conversation past a task row", %{conn: conn} do
+      # The keyboard path shares every line of persistence with the drag, but
+      # it resolves its own direction, so it gets its own assertion.
+      {conn, user} = authed(conn)
+      alpha = create_channel("arrow-floor-alpha")
+      beta = create_channel("arrow-floor-beta")
+
+      for space <- [alpha, beta],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      %{space: task_space} = seed_pinned_task_for(user, "Arrow Floor Task")
+
+      {:ok, view, _html} = live_rail(conn)
+      render_click(view, "toggle_sidebar_edit", %{})
+      render_click(view, "move_pinned", %{"space_id" => alpha.id, "direction" => "up"})
+
+      persisted = Sidebar.list_pinned_space_ids(user.id)
+
+      assert persisted == [alpha.id, beta.id],
+             "the top conversation moved on a no-op arrow: #{inspect(persisted)}"
+
+      refute task_space.id in persisted
+    end
+
+    test "the top conversation's Move up is disabled even with a task row above it",
+         %{conn: conn} do
+      # The boundary is `move_index` against `move_count`, the row's place
+      # among the CONVERSATIONS. Counting the block's rows instead would leave
+      # this button live and point it at a destination it is not allowed to
+      # have.
+      {conn, user} = authed(conn)
+      alpha = create_channel("bound-alpha")
+      beta = create_channel("bound-beta")
+
+      for space <- [alpha, beta],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      seed_pinned_task_for(user, "Bound Task")
+
+      {:ok, view, _html} = live_rail(conn)
+
+      block =
+        view |> render_click("toggle_sidebar_edit", %{}) |> desktop_sidebar() |> pinned_block()
+
+      assert move_button(block, alpha.id, "pinned-move-up") =~ "disabled",
+             "the top conversation can be moved up, so the arrows are counting the task rows"
+
+      assert move_button(block, beta.id, "pinned-move-down") =~ "disabled"
+    end
+
+    test "a task row carries no reorder controls at all", %{conn: conn} do
+      {conn, user} = authed(conn)
+      channel = create_channel("chrome-chan")
+      {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
+      %{space: task_space} = seed_pinned_task_for(user, "Chrome Task")
+
+      {:ok, view, _html} = live_rail(conn)
+
+      block =
+        view |> render_click("toggle_sidebar_edit", %{}) |> desktop_sidebar() |> pinned_block()
+
+      refute move_button(block, task_space.id, "pinned-move-up"),
+             "a task row offers a Move up, so it reads as hand-orderable"
+
+      refute move_button(block, task_space.id, "pinned-move-down"),
+             "a task row offers a Move down, so it reads as hand-orderable"
+
+      # Anti-vacuity for the two refutes: the conversation row in the same
+      # block DOES carry them, so they are not passing because edit mode
+      # failed to open or the block failed to render.
+      assert move_button(block, channel.id, "pinned-move-up"),
+             "no move controls anywhere, so the refutes above prove nothing"
+    end
+  end
+
+  # ── Rendered order IS stored order (019fe987 regression guard) ──────────
+  #
+  # The bug this catches, stated so a later reader does not undo it: the
+  # block used to render `Enum.reverse/1` of the stored conversation list,
+  # because pins are stored append-ordered while the block wanted to read
+  # newest-first. A drag resolves a move by finding the dragged id's
+  # SUCCESSOR in the order the client drew and inserting before it in the
+  # STORED list. If the render reverses and the resolution does not, "after"
+  # on screen is "before" in storage: the user drags a row up and it persists
+  # a move down.
+  #
+  # These assert the two lists are the same SEQUENCE after a move, on both
+  # surfaces, with a task row present so the conversation filtering is
+  # exercised at the same time. Asserting the rendered order alone would not
+  # catch it — a reversing render of a reversed write looks correct on screen
+  # and is wrong in the database.
+
+  describe "rendered order matches persisted order after a move" do
+    test "on the desktop rail", %{conn: conn} do
+      {conn, user} = authed(conn)
+      alpha = create_channel("mirror-alpha")
+      beta = create_channel("mirror-beta")
+      gamma = create_channel("mirror-gamma")
+
+      for space <- [alpha, beta, gamma],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      %{space: task_space} = seed_pinned_task_for(user, "Mirror Task")
+
+      {:ok, view, _html} = live_rail(conn)
+      render_click(view, "toggle_sidebar_edit", %{})
+
+      html = render_click(view, "move_pinned", %{"space_id" => gamma.id, "direction" => "up"})
+
+      persisted = Sidebar.list_pinned_space_ids(user.id)
+      assert persisted == [alpha.id, gamma.id, beta.id]
+
+      rendered = html |> desktop_sidebar() |> pinned_block() |> pinned_order()
+
+      # One assertion carrying both halves: the task row leads, and the
+      # conversation rows below it are the stored list in the stored order.
+      assert rendered == [task_space.id | persisted],
+             "the rail does not render the stored order. rendered #{inspect(rendered)}, stored #{inspect(persisted)}"
+    end
+
+    test "in the mobile drawer", %{conn: conn} do
+      # Both surfaces or neither. An earlier stage on this stack wired the
+      # rail, left the drawer rendering rows that could not do the thing, and
+      # reached a human approval gate before anyone noticed.
+      {conn, user} = authed(conn)
+      alpha = create_channel("mirror-drawer-alpha")
+      beta = create_channel("mirror-drawer-beta")
+      gamma = create_channel("mirror-drawer-gamma")
+
+      for space <- [alpha, beta, gamma],
+          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+
+      %{space: task_space} = seed_pinned_task_for(user, "Mirror Drawer Task")
+
+      {view, _html} = drawer_in_edit_mode(conn, alpha)
+
+      html = render_click(view, "move_pinned", %{"space_id" => gamma.id, "direction" => "up"})
+
+      persisted = Sidebar.list_pinned_space_ids(user.id)
+      assert persisted == [alpha.id, gamma.id, beta.id]
+
+      rendered = html |> drawer_pinned_section() |> pinned_order()
+
+      assert rendered == [task_space.id | persisted],
+             "the drawer does not render the stored order. rendered #{inspect(rendered)}, stored #{inspect(persisted)}"
     end
   end
 
