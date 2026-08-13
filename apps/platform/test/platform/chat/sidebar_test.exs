@@ -9,6 +9,7 @@ defmodule Platform.Chat.SidebarTest do
   alias Platform.Accounts
   alias Platform.Accounts.User
   alias Platform.Chat
+  alias Platform.Chat.PinnedSpaces
   alias Platform.Chat.Section
   alias Platform.Chat.Sidebar
   alias Platform.Chat.Space
@@ -61,6 +62,12 @@ defmodule Platform.Chat.SidebarTest do
 
     {:ok, space} = Chat.create_space(Map.merge(default, attrs))
     space
+  end
+
+  # A direct message is the same `chat_spaces` row as a channel with a
+  # different `kind`. The pin store must not be able to tell them apart.
+  defp dm!(attrs \\ %{}) do
+    channel!(Map.merge(%{kind: "dm", is_direct: true, name: nil, slug: nil}, attrs))
   end
 
   # In-memory fixtures for the pure resolve/3 tests (no DB needed).
@@ -288,6 +295,56 @@ defmodule Platform.Chat.SidebarTest do
     end
   end
 
+  # ── Collapse is a flag, not a filter (task 019fd80f) ─────────────────────
+
+  describe "resolve/3 vs chat_collapsed_sections" do
+    test "no pref: every section resolves collapsed? false" do
+      {sections, channels} = resolve_fixture()
+
+      assert [%{collapsed?: false}, %{collapsed?: false}] =
+               Sidebar.resolve(sections, channels, %{})
+    end
+
+    test "a collapsed section still renders, keeps its place and keeps its channels" do
+      {sections, channels} = resolve_fixture()
+      prefs = %{"chat_collapsed_sections" => ["sA"]}
+
+      assert [
+               %{section: %{id: "sA"}, channels: a, collapsed?: true},
+               %{section: %{id: "sB"}, channels: b, collapsed?: false}
+             ] = Sidebar.resolve(sections, channels, prefs)
+
+      # The load-bearing difference from hide: the channels are STILL here, so
+      # the render can count new activity inside a folded section.
+      assert Enum.map(a, & &1.id) == ["c1", "c2"]
+      assert Enum.map(b, & &1.id) == ["c3"]
+    end
+
+    test "collapse and hide are independent overrides on the same section" do
+      {sections, channels} = resolve_fixture()
+      prefs = %{"chat_collapsed_sections" => ["sA"], "chat_hidden_sections" => ["sA"]}
+
+      # Hide still wins on presence — but only because hide filters and collapse
+      # does not. Collapsing must never be able to remove a section.
+      assert [%{section: %{id: "sB"}}] = Sidebar.resolve(sections, channels, prefs)
+
+      assert [%{section: %{id: "sA"}, collapsed?: true}, %{section: %{id: "sB"}}] =
+               Sidebar.resolve(sections, channels, %{"chat_collapsed_sections" => ["sA"]})
+    end
+
+    test "a collapsed id naming a section that no longer exists is skipped, not raised" do
+      # Deleting or archiving an org must never require a cleanup pass over
+      # preferences JSONB — the stale id is just a MapSet miss.
+      {sections, channels} = resolve_fixture()
+      prefs = %{"chat_collapsed_sections" => ["ghost", "sB"]}
+
+      assert [
+               %{section: %{id: "sA"}, collapsed?: false},
+               %{section: %{id: "sB"}, collapsed?: true}
+             ] = Sidebar.resolve(sections, channels, prefs)
+    end
+  end
+
   # ── Stage 3: preference writes ───────────────────────────────────────────
 
   describe "preference writes + reset" do
@@ -315,11 +372,13 @@ defmodule Platform.Chat.SidebarTest do
       assert cco["sB"] == ["c1"]
     end
 
-    test "reset_to_default clears all three override keys" do
+    test "reset_to_default clears all five override keys" do
       user = create_user!()
       {:ok, _} = Sidebar.put_section_order(user.id, ["s1"])
       {:ok, _} = Sidebar.put_channel_order(user.id, "sA", ["c1"])
       {:ok, _} = Sidebar.set_section_hidden(user.id, "s2", true)
+      {:ok, _} = Sidebar.set_section_collapsed(user.id, "s3", true)
+      {:ok, _} = Sidebar.set_space_pinned(user.id, "sp1", true)
 
       assert {:ok, _} = Sidebar.reset_to_default(user.id)
 
@@ -327,6 +386,191 @@ defmodule Platform.Chat.SidebarTest do
       assert is_nil(prefs["chat_section_order"])
       assert prefs["chat_channel_order"] == %{}
       assert prefs["chat_hidden_sections"] == []
+      assert prefs["chat_collapsed_sections"] == []
+      assert prefs["chat_pinned_spaces"] == []
+    end
+
+    test "set_section_collapsed round-trips true then false" do
+      user = create_user!()
+
+      assert {:ok, _} = Sidebar.set_section_collapsed(user.id, "s1", true)
+      assert Accounts.get_user_preferences(user.id)["chat_collapsed_sections"] == ["s1"]
+
+      # Idempotent: the caller posts the desired state, so a double-fire from a
+      # render race must not re-expand.
+      assert {:ok, _} = Sidebar.set_section_collapsed(user.id, "s1", true)
+      assert Accounts.get_user_preferences(user.id)["chat_collapsed_sections"] == ["s1"]
+
+      assert {:ok, _} = Sidebar.set_section_collapsed(user.id, "s1", false)
+      assert Accounts.get_user_preferences(user.id)["chat_collapsed_sections"] == []
+    end
+
+    test "set_section_collapsed leaves the other three preference keys untouched" do
+      # The obvious wrong implementation writes the whole preferences map and
+      # clobbers a sibling key. Hide in particular must survive: collapse and
+      # hide are separate features on the same section.
+      user = create_user!()
+      {:ok, _} = Sidebar.put_section_order(user.id, ["s2", "s1"])
+      {:ok, _} = Sidebar.put_channel_order(user.id, "sA", ["c1", "c2"])
+      {:ok, _} = Sidebar.set_section_hidden(user.id, "s9", true)
+
+      assert {:ok, _} = Sidebar.set_section_collapsed(user.id, "s1", true)
+
+      prefs = Accounts.get_user_preferences(user.id)
+      assert prefs["chat_section_order"] == ["s2", "s1"]
+      assert prefs["chat_channel_order"] == %{"sA" => ["c1", "c2"]}
+      assert prefs["chat_hidden_sections"] == ["s9"]
+      assert prefs["chat_collapsed_sections"] == ["s1"]
+
+      # And the reverse direction: hiding must not drop the collapse.
+      assert {:ok, _} = Sidebar.set_section_hidden(user.id, "s8", true)
+      assert Accounts.get_user_preferences(user.id)["chat_collapsed_sections"] == ["s1"]
+    end
+
+    test "set_section_collapsed no-ops for an id that isn't a real user" do
+      assert {:error, :not_found} =
+               Sidebar.set_section_collapsed(Ecto.UUID.generate(), "s1", true)
+    end
+  end
+
+  # ── Pinned conversations (task 019fd80f stage 1) ─────────────────────────
+  #
+  # The store is keyed to a SPACE, with no `kind` restriction anywhere. The
+  # Pinned block holds channels and direct messages in one list, and both are
+  # `chat_spaces` rows differing only by `kind`.
+
+  describe "pinned conversations (chat_pinned_spaces)" do
+    test "set_space_pinned round-trips pin then unpin" do
+      user = create_user!()
+      space = channel!()
+
+      assert {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
+      assert Sidebar.list_pinned_space_ids(user.id) == [space.id]
+      assert Sidebar.pinned_space_ids(user.id) == MapSet.new([space.id])
+
+      assert {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, false)
+      assert Sidebar.list_pinned_space_ids(user.id) == []
+      assert Sidebar.pinned_space_ids(user.id) == MapSet.new()
+    end
+
+    test "a DM round-trips identically to a channel" do
+      # Anti-vacuity for the whole stage. An implementation that filters on
+      # `kind` in the schema, the setter or the read passes every
+      # channel-only test here and silently breaks the block for people.
+      user = create_user!()
+      chan = channel!()
+      dm = dm!()
+
+      assert {:ok, _} = Sidebar.set_space_pinned(user.id, chan.id, true)
+      assert {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
+
+      assert Sidebar.list_pinned_space_ids(user.id) == [chan.id, dm.id]
+
+      assert {:ok, _} = Sidebar.set_space_pinned(user.id, chan.id, false)
+      assert Sidebar.list_pinned_space_ids(user.id) == [dm.id]
+
+      assert {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, false)
+      assert Sidebar.list_pinned_space_ids(user.id) == []
+
+      # And the reverse pin order, so neither kind depends on going first.
+      assert {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
+      assert {:ok, _} = Sidebar.set_space_pinned(user.id, chan.id, true)
+      assert Sidebar.list_pinned_space_ids(user.id) == [dm.id, chan.id]
+    end
+
+    test "a group DM pins the same way a two-person DM does" do
+      user = create_user!()
+      group = channel!(%{kind: "group", name: "Crew"})
+
+      assert {:ok, _} = Sidebar.set_space_pinned(user.id, group.id, true)
+      assert Sidebar.list_pinned_space_ids(user.id) == [group.id]
+    end
+
+    test "order is most-recently-pinned last" do
+      user = create_user!()
+      [a, b, c] = [channel!(), dm!(), channel!()]
+
+      {:ok, _} = Sidebar.set_space_pinned(user.id, a.id, true)
+      {:ok, _} = Sidebar.set_space_pinned(user.id, b.id, true)
+      {:ok, _} = Sidebar.set_space_pinned(user.id, c.id, true)
+
+      assert Sidebar.list_pinned_space_ids(user.id) == [a.id, b.id, c.id]
+    end
+
+    test "re-pinning an already-pinned space is idempotent and keeps its position" do
+      # The caller posts the desired state, so a double-fire from a render
+      # race must neither duplicate the row nor shuffle the block.
+      user = create_user!()
+      [a, b] = [channel!(), channel!()]
+
+      {:ok, _} = Sidebar.set_space_pinned(user.id, a.id, true)
+      {:ok, _} = Sidebar.set_space_pinned(user.id, b.id, true)
+
+      assert {:ok, _} = Sidebar.set_space_pinned(user.id, a.id, true)
+      assert Sidebar.list_pinned_space_ids(user.id) == [a.id, b.id]
+    end
+
+    test "unpinning a space that was never pinned is a no-op, not an error" do
+      user = create_user!()
+
+      assert {:ok, _} = Sidebar.set_space_pinned(user.id, Ecto.UUID.generate(), false)
+      assert Sidebar.list_pinned_space_ids(user.id) == []
+    end
+
+    test "a pinned id naming a space that no longer exists does not raise on read" do
+      # Deleting a space must never require a cleanup pass over preferences
+      # JSONB. The read tolerates the stale id; resolving it against the
+      # loaded space list drops it (see PinnedSpaces.partition/2).
+      user = create_user!()
+      live = channel!()
+      ghost = Ecto.UUID.generate()
+
+      {:ok, _} = Sidebar.set_space_pinned(user.id, ghost, true)
+      {:ok, _} = Sidebar.set_space_pinned(user.id, live.id, true)
+
+      assert Sidebar.list_pinned_space_ids(user.id) == [ghost, live.id]
+
+      assert PinnedSpaces.partition([live], Sidebar.list_pinned_space_ids(user.id)) ==
+               {[live], []}
+    end
+
+    test "set_space_pinned leaves the other four preference keys untouched" do
+      # The obvious wrong implementation rewrites the whole preferences map
+      # and clobbers a sibling key.
+      user = create_user!()
+      {:ok, _} = Sidebar.put_section_order(user.id, ["s2", "s1"])
+      {:ok, _} = Sidebar.put_channel_order(user.id, "sA", ["c1", "c2"])
+      {:ok, _} = Sidebar.set_section_hidden(user.id, "s9", true)
+      {:ok, _} = Sidebar.set_section_collapsed(user.id, "s7", true)
+
+      assert {:ok, _} = Sidebar.set_space_pinned(user.id, "sp1", true)
+
+      prefs = Accounts.get_user_preferences(user.id)
+      assert prefs["chat_section_order"] == ["s2", "s1"]
+      assert prefs["chat_channel_order"] == %{"sA" => ["c1", "c2"]}
+      assert prefs["chat_hidden_sections"] == ["s9"]
+      assert prefs["chat_collapsed_sections"] == ["s7"]
+      assert prefs["chat_pinned_spaces"] == ["sp1"]
+
+      # And the reverse direction: the sibling writers must not drop the pin.
+      assert {:ok, _} = Sidebar.set_section_hidden(user.id, "s8", true)
+      assert {:ok, _} = Sidebar.set_section_collapsed(user.id, "s6", true)
+      assert Accounts.get_user_preferences(user.id)["chat_pinned_spaces"] == ["sp1"]
+    end
+
+    test "reads are empty for a user with no pins and for an unknown user" do
+      user = create_user!()
+
+      assert Sidebar.list_pinned_space_ids(user.id) == []
+      assert Sidebar.pinned_space_ids(user.id) == MapSet.new()
+      assert Sidebar.list_pinned_space_ids(Ecto.UUID.generate()) == []
+      assert Sidebar.pinned_space_ids(nil) == MapSet.new()
+    end
+
+    test "set_space_pinned no-ops for an id that isn't a real user" do
+      # Anonymous chat sessions carry a generated UUID matching no row.
+      assert {:error, :not_found} =
+               Sidebar.set_space_pinned(Ecto.UUID.generate(), Ecto.UUID.generate(), true)
     end
   end
 

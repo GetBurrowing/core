@@ -25,6 +25,16 @@ defmodule Platform.Chat.Sidebar do
   @section_order_key "chat_section_order"
   @channel_order_key "chat_channel_order"
   @hidden_sections_key "chat_hidden_sections"
+  # Collapse is NOT hide. A hidden section leaves the rail entirely (and takes
+  # its channels with it); a collapsed section still renders its header, just
+  # without its channel rows. The two keys stay separate so a user can undo
+  # either one on its own.
+  @collapsed_sections_key "chat_collapsed_sections"
+  # Pinned CONVERSATIONS, not pinned channels. The key holds `chat_spaces` ids
+  # of either kind, because the Pinned block lifts channels and direct messages
+  # into one flat list. Naming it `chat_pinned_channels` would buy a migration
+  # the first time someone pins a DM.
+  @pinned_spaces_key "chat_pinned_spaces"
 
   @doc """
   The org-default sections, ordered by admin position then name.
@@ -136,8 +146,18 @@ defmodule Platform.Chat.Sidebar do
 
   # ── Per-user resolver (Stage 3) ─────────────────────────────────────────
 
-  @typedoc "A rendered section + its ordered channels."
-  @type resolved :: %{section: Section.t(), channels: [Chat.Space.t()]}
+  @typedoc """
+  A rendered section + its ordered channels + whether the user has collapsed it.
+
+  `collapsed?` is presentation state, not filtering: the entry is present either
+  way, and `channels` is populated either way. Only the render decides whether to
+  draw the rows.
+  """
+  @type resolved :: %{
+          section: Section.t(),
+          channels: [Chat.Space.t()],
+          collapsed?: boolean()
+        }
 
   @doc """
   Flatten resolved sections into one ordered channel list — the user's
@@ -173,14 +193,24 @@ defmodule Platform.Chat.Sidebar do
   `chat_hidden_sections` (a hidden section takes its channels with it —
   design decision (a)); (3) place each channel in the user's chosen section
   via `chat_channel_order`, else its `org_id` default section, with
-  user-ordered channels first and new/unplaced channels appended.
+  user-ordered channels first and new/unplaced channels appended; (4) stamp
+  `collapsed?` from `chat_collapsed_sections`.
+
+  Step (4) is a FLAG, never a filter. A collapsed section keeps its place in
+  the list and keeps its resolved `channels`, so the render can still count
+  unread activity inside it and `flatten_sections/1` still sees those channels.
+  Collapse is the one override in this module that changes nothing about what
+  the resolver returns beyond the boolean.
 
   Every lookup is skip-unknown: stale section/channel ids in prefs are
-  silently ignored so a poisoned preference can never crash the rail.
+  silently ignored so a poisoned preference can never crash the rail. A
+  collapsed id naming a deleted section is simply a MapSet miss, so deleting or
+  archiving an org never needs a cleanup pass over preferences.
   """
   @spec resolve([Section.t()], [Chat.Space.t()], map()) :: [resolved()]
   def resolve(sections, channels, prefs) when is_list(sections) and is_list(channels) do
     hidden = MapSet.new(prefs[@hidden_sections_key] || [])
+    collapsed = MapSet.new(prefs[@collapsed_sections_key] || [])
     channel_order = prefs[@channel_order_key] || %{}
 
     visible_sections =
@@ -188,7 +218,9 @@ defmodule Platform.Chat.Sidebar do
       |> order_sections(prefs[@section_order_key])
       |> Enum.reject(&MapSet.member?(hidden, &1.id))
 
-    place_channels(visible_sections, sections, channels, channel_order)
+    visible_sections
+    |> place_channels(sections, channels, channel_order)
+    |> Enum.map(&Map.put(&1, :collapsed?, MapSet.member?(collapsed, &1.section.id)))
   end
 
   # ── Per-user preference writes (Stage 3) ────────────────────────────────
@@ -236,14 +268,111 @@ defmodule Platform.Chat.Sidebar do
   end
 
   @doc """
-  Reset the user's sidebar to the org default by clearing all three override
+  Collapse or expand a section in the user's view.
+
+  Distinct from `set_section_hidden/3`: collapsing keeps the section in the
+  rail and only folds away its channel rows, so it writes a different
+  preference key and neither call disturbs the other.
+
+  Takes the DESIRED next state rather than flipping, so a double-fire from a
+  render race is idempotent instead of a silent re-expand.
+  """
+  @spec set_section_collapsed(binary(), binary(), boolean()) ::
+          {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def set_section_collapsed(user_id, section_id, collapsed?) when is_binary(section_id) do
+    current = Accounts.get_user_preferences(user_id)[@collapsed_sections_key] || []
+
+    next =
+      if collapsed?,
+        do: Enum.uniq([section_id | current]),
+        else: Enum.reject(current, &(&1 == section_id))
+
+    Accounts.update_user_preference(user_id, @collapsed_sections_key, next)
+  end
+
+  # ── Pinned conversations (task 019fd80f stage 1) ────────────────────────
+  #
+  # Storage choice, and the evidence for it. Neither existing pin table can
+  # represent "this user pinned this conversation":
+  #
+  #   * `chat_pins` (`Platform.Chat.Pin`) is MESSAGE pinning. `message_id` is
+  #     NOT NULL with an FK to `chat_messages`, so there is no row shape for a
+  #     pin that names only a space.
+  #
+  #   * `task_chat_pins` (`Platform.Tasks.ChatPin`) pins a TASK. The FK is
+  #     `task_id` into `tasks`, ON DELETE CASCADE, and the space is recovered
+  #     indirectly. A channel or a DM has no task, so it cannot be stored.
+  #
+  # So this is a `users.preferences` key alongside the four arrangement keys
+  # above, which is also where every other per-user rail override already
+  # lives.
+
+  @doc """
+  The user's pinned space ids, in pin order (most-recently-pinned last).
+
+  A list rather than a `MapSet` because the Pinned block renders in this
+  order. Use `pinned_space_ids/1` for the O(1) membership check on the
+  exclusion path, and `Platform.Chat.PinnedSpaces.partition/2` to resolve
+  ids against loaded spaces.
+
+  Empty list for anonymous or unknown user ids.
+  """
+  @spec list_pinned_space_ids(binary() | nil) :: [binary()]
+  def list_pinned_space_ids(user_id) do
+    user_id
+    |> Accounts.get_user_preferences()
+    |> Map.get(@pinned_spaces_key, [])
+    |> List.wrap()
+  end
+
+  @doc """
+  The user's pinned space ids as a `MapSet`, for the per-row membership test
+  on the render path. Empty set for anonymous or unknown user ids.
+  """
+  @spec pinned_space_ids(binary() | nil) :: MapSet.t(binary())
+  def pinned_space_ids(user_id), do: user_id |> list_pinned_space_ids() |> MapSet.new()
+
+  @doc """
+  Pin or unpin a conversation for a user.
+
+  Takes the DESIRED next state rather than flipping, so a double-fire from a
+  render race is idempotent instead of a silent unpin.
+
+  Accepts any `chat_spaces` id with no `kind` restriction: the Pinned block
+  holds channels and direct messages in one list.
+
+  Pinning APPENDS, so the block reads most-recently-pinned last. Re-pinning
+  an already-pinned space keeps its existing position rather than moving it
+  to the end, so a repeated event cannot shuffle the block. There is no
+  position field; reordering within the block is out of scope.
+
+  Returns `{:error, :not_found}` when the id matches no user row. Anonymous
+  chat sessions carry a generated UUID, and callers treat that as a no-op.
+  """
+  @spec set_space_pinned(binary(), binary(), boolean()) ::
+          {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def set_space_pinned(user_id, space_id, pinned?) when is_binary(space_id) do
+    current = list_pinned_space_ids(user_id)
+
+    next =
+      if pinned?,
+        do: Enum.uniq(current ++ [space_id]),
+        else: Enum.reject(current, &(&1 == space_id))
+
+    Accounts.update_user_preference(user_id, @pinned_spaces_key, next)
+  end
+
+  @doc """
+  Reset the user's sidebar to the org default by clearing all five override
   keys (the no-copy-on-write "reset to default"). No-op for anonymous ids.
   """
   @spec reset_to_default(binary()) :: {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def reset_to_default(user_id) do
     with {:ok, _} <- Accounts.update_user_preference(user_id, @section_order_key, nil),
-         {:ok, _} <- Accounts.update_user_preference(user_id, @channel_order_key, %{}) do
-      Accounts.update_user_preference(user_id, @hidden_sections_key, [])
+         {:ok, _} <- Accounts.update_user_preference(user_id, @channel_order_key, %{}),
+         {:ok, _} <- Accounts.update_user_preference(user_id, @hidden_sections_key, []),
+         {:ok, _} <- Accounts.update_user_preference(user_id, @collapsed_sections_key, []) do
+      Accounts.update_user_preference(user_id, @pinned_spaces_key, [])
     end
   end
 

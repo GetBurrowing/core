@@ -8,6 +8,12 @@ defmodule PlatformWeb.ChatLive.Partials do
 
   Extracted here:
     * `notification_banner/1` — notification opt-in bar
+    * `pin_control/1` — per-row pin / unpin control in the sidebar rail
+    * `move_to_org_control/1` — admin "Move to organisation…" row control
+    * `move_to_org_picker/1` — the destination chooser that control opens
+    * `move_to_org_dialog/1` — the confirmation a chosen destination opens
+    * `row_actions_control/1` — per-row overflow control in the mobile drawer
+    * `row_actions_sheet/1` — the bottom sheet that control opens
     * `upload_dialog/1` — staging modal for attachments
     * `canvas_overlay/1` — active-canvas side panel + mobile full-screen
     * `meeting_panel/1` — in-meeting UI (desktop sidebar + mobile overlay)
@@ -17,7 +23,9 @@ defmodule PlatformWeb.ChatLive.Partials do
   use Phoenix.Component
 
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
+  import PlatformWeb.Components.Sheet, only: [sheet: 1]
 
+  alias Phoenix.LiveView.JS
   alias PlatformWeb.ChatLive.CanvasHooks
 
   @doc "Notification opt-in banner (when push permission is 'prompt')."
@@ -41,6 +49,461 @@ defmodule PlatformWeb.ChatLive.Partials do
         Enable
       </button>
     </div>
+    """
+  end
+
+  @doc """
+  Pin / unpin control for one sidebar conversation row (task 019fd80f stage 3).
+
+  Renders as a SIBLING of the row's navigate-link, never a child. A `<button>`
+  nested in an `<a>` is invalid HTML, and LiveView binds click on `window` in
+  the bubble phase, so a nested control needs a `stopPropagation` guard that
+  swallows the event along with the navigation. This is the same shape the
+  sub-org hide button and the task-pin unpin button already use.
+
+  ## Visible at rest
+
+  The control renders at rest on every row, at `--color-base-content` 60%,
+  the same resting treatment the task row's unpin control already carries.
+  It used to be `opacity-0` plus a hover/focus reveal.
+
+  Two independent reasons it is visible now, from opposite directions:
+
+    * Rowan asked for the always-visible shape on the Pin-to-Chat work ("a
+      discoverable small pin icon next to the task"), which is why task rows
+      have had it since that stage.
+    * Marlowe, 2026-08-11: "when developing pinned channels, use similar
+      interactions as what's used for pinned tasks (hover doesn't work on
+      mobile)."
+
+  Marlowe's half is the load-bearing one. Tailwind compiles `hover:` and
+  `group-hover:` inside `@media (hover: hover)`, so on a touch device the
+  reveal rule never matches at all. A hover-only control is not
+  hard-to-reach there; it is unreachable. `focus-within:` answers the
+  keyboard case and answers nothing for a finger.
+
+  ONE treatment on every row, pinned or not. The only thing that varies with
+  pinned-ness is the verb in the accessible name and the state the click
+  posts. That was already true when the control was hover-revealed and it
+  stays true now: an earlier revision gave pinned rows a permanent FILLED
+  variant to mark the row's pinned state, which Marlowe removed on review ("No
+  need to append a pin icon to pinned items. The section header is
+  sufficient") because pinning LIFTS a conversation into the Pinned block, so
+  the block is the state and a mark on every row in it distinguishes nothing.
+  Visible-at-rest does not bring that back — same glyph, same colour, one
+  code path.
+
+  ## Width
+
+  The control is `flex-shrink-0` and occupies its 24px on every row. The name
+  keeps `flex-1 min-w-0 truncate` and the control never squeezes, so the icon
+  cannot be crushed by a long display name and the name never loses space to
+  it. The touch target is 44x44, taken from a hit-area pseudo-element rather
+  than from the box, so the row keeps its height and the name keeps its
+  width (see `.channel-row-pin-button` in app.css).
+
+  ## Accessible name
+
+  Carries the verb AND the target: "Pin Gen-migration", "Unpin Rowan
+  Ellis". A bare "Pin" is meaningless in a list of twenty identical
+  controls.
+  """
+  attr(:space_id, :string, required: true)
+  attr(:name, :string, required: true)
+  attr(:pinned, :boolean, required: true)
+
+  def pin_control(assigns) do
+    ~H"""
+    <button
+      type="button"
+      class="channel-row-pin-button"
+      phx-click="toggle_pinned"
+      phx-value-space_id={@space_id}
+      phx-value-pinned={to_string(not @pinned)}
+      data-role="pin-control"
+      data-space-id={@space_id}
+      aria-label={"#{if @pinned, do: "Unpin", else: "Pin"} #{@name}"}
+      title={if @pinned, do: "Unpin", else: "Pin"}
+    >
+      <span class="hero-map-pin size-3.5"></span>
+    </button>
+    """
+  end
+
+  @doc """
+  Fabrikam-admin "Move to organisation…" control for one channel row.
+
+  ## Why this exists
+
+  Refiling a channel used to be a drag between sidebar sections. That gesture
+  is being retired (task 019fd76a stage 2) because it performs a company-wide
+  write on a drop, with a consequence the gesture never states: canvas read
+  follows org membership (`Chat.CanvasAccess.org_readable_space?/2`), so a
+  move hands the destination org's members a direct link to this channel's
+  canvases and takes it from the source org's. This control replaces it and
+  becomes the ONLY reassignment path in the product.
+
+  ## The row holds only the trigger
+
+  The destination list is `move_to_org_picker/1`, a centred dialog rendered
+  once at the top level of the template. It was built first as a popover
+  hanging off this row, following the `lifecycle_menu/1` pattern, and that
+  does not work here: `#chat-section-list` is `overflow-y-auto`, which
+  computes `overflow-x` to `auto` too, so it clips on both axes. Measured on
+  the running app, the popover on a lower row ran to 992px against a nav
+  bottom of 810px, putting every destination out of reach, and on the sub-org
+  rows it crossed the rail's left edge by about 9px and cut into the leading
+  colour dots. The rail is roughly 224px wide, so no width fixes both.
+  """
+  attr(:space_id, :string, required: true)
+  attr(:name, :string, required: true)
+  attr(:open, :boolean, default: false)
+
+  def move_to_org_control(assigns) do
+    ~H"""
+    <div
+      class={
+        [
+          "flex-shrink-0",
+          # Revealed on row hover or keyboard focus, like the pin and hide
+          # controls beside it — except while the chooser is open, when the
+          # trigger must stay put even though the pointer has left the row.
+          not @open && "opacity-0 focus-within:opacity-100 group-hover/row:opacity-100"
+        ]
+      }
+      data-role="move-to-org"
+    >
+      <button
+        type="button"
+        id={"move-to-org-trigger-#{@space_id}"}
+        class="channel-row-hide-button focus-visible-ring"
+        phx-click="toggle_reassign_menu"
+        phx-value-channel_id={@space_id}
+        aria-haspopup="dialog"
+        aria-expanded={to_string(@open)}
+        aria-controls="move-to-org-picker"
+        aria-label={"Move ##{@name} to another organisation"}
+        title="Move to organisation…"
+        data-role="move-to-org-trigger"
+      >
+        <span class="hero-building-office-2 size-3.5"></span>
+      </button>
+    </div>
+    """
+  end
+
+  @doc """
+  Destination chooser for "Move to organisation…". Renders when `@picker` is set.
+
+  ## Keyboard
+
+  Every destination is a real `<button>` in normal document order, so Tab
+  reaches each one and Enter or Space activates it. The container is
+  `role="group"`, deliberately NOT `role="menu"`: a menu promises arrow-key
+  roving tabindex with a single tab stop, which is the opposite of what is
+  wanted here. Once the drag path is gone this is the only way to refile a
+  channel, so a mouse-only affordance would remove the capability outright
+  for keyboard users.
+
+  Same `.modal .modal-open` chrome as `move_to_org_dialog/1` below, because
+  the two are consecutive steps of one action and reading as one object is
+  the point. See that function's docs for why all three classes are needed.
+  """
+  attr(:picker, :map,
+    default: nil,
+    doc: "nil when closed, else `%{channel_id:, channel_name:, destinations:}`."
+  )
+
+  def move_to_org_picker(assigns) do
+    ~H"""
+    <div
+      :if={@picker && @picker.destinations != []}
+      id="move-to-org-picker"
+      class="modal modal-open"
+      phx-window-keydown="close_reassign_menu"
+      phx-key="escape"
+      data-role="move-to-org-picker"
+    >
+      <div
+        class="modal-box max-w-sm"
+        role="group"
+        aria-labelledby="move-to-org-picker-title"
+        phx-click-away="close_reassign_menu"
+        phx-mounted={JS.focus_first()}
+        tabindex="-1"
+      >
+        <%!-- Which channel is being moved is the one thing that must survive,
+             so the name is never the part that gives way: the trailing words
+             wrap below it instead. It is NOT `whitespace-nowrap` on a flex
+             child, which was tried and fails on the real data — a 44-character
+             channel name then has nothing to give and runs straight out of the
+             card, taking "to organisation" off the edge with it. Wrapping
+             keeps the whole name AND the box. --%>
+        <h2 id="move-to-org-picker-title" class="break-words text-base font-semibold">
+          {"Move ##{@picker.channel_name}"}
+          <span class="font-normal text-base-content/60">to organisation</span>
+        </h2>
+        <div class="mt-3 flex flex-col gap-1">
+          <button
+            :for={dest <- @picker.destinations}
+            type="button"
+            phx-click="request_channel_reassign"
+            phx-value-channel_id={@picker.channel_id}
+            phx-value-target_section_id={dest.section_id}
+            class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-base-200 focus-visible-ring"
+            data-role="move-to-org-destination"
+            data-section-id={dest.section_id}
+          >
+            <span :if={dest.dot} class={["channel-section-color-dot", dest.dot]} aria-hidden="true">
+            </span>
+            <span class="min-w-0 truncate">{dest.name}</span>
+          </button>
+        </div>
+        <div class="modal-action">
+          <button
+            type="button"
+            class="btn btn-ghost focus-visible-ring"
+            phx-click="close_reassign_menu"
+            data-role="move-to-org-picker-cancel"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
+  Confirmation for "Move to organisation…". Renders when `@confirm` is set.
+
+  ## The copy is load-bearing
+
+  The third body line is a VERIFIED fact, not a hedge:
+  `Chat.CanvasAccess.org_readable_space?/2` grants canvas read to any member
+  of the channel's org via `Tenancy.member_of?/2`, with no channel membership
+  required. An earlier draft of this dialog said "who can read it does not
+  change", which was false. Do not soften or delete that line.
+
+  ## Chrome
+
+  Warning accent, not error, and no warning triangle: nothing is destroyed
+  and nobody's access to the CHANNEL changes. The accent is spent on the
+  confirm button's FILL (`btn-warning` is amber with
+  `--color-warning-content` text) rather than on body text, because
+  `--color-warning` as a text colour on `base-100` measures about 2.2:1 and
+  misses the 4.5:1 floor in docs/design-system/04-accessibility.md.
+
+  ## `.modal` needs `.modal-open`
+
+  DaisyUI ships `.modal` as `visibility: hidden; pointer-events: none` and
+  `.modal-box` as `scale: 95%; opacity: 0`, revealed only by a `.modal`
+  ancestor carrying `.modal-open`, `[open]` or `:target` (assets/vendor
+  daisyui.js). `.modal` + `.modal-box` alone renders a correctly-sized,
+  correctly-placed, completely invisible dialog — the symptom Marlowe hit on
+  task 019f4eaa. All three classes, or none of them.
+  """
+  attr(:confirm, :map,
+    default: nil,
+    doc: "nil when closed, else `%{channel_id:, channel_name:, from:, to:}`."
+  )
+
+  def move_to_org_dialog(assigns) do
+    ~H"""
+    <div
+      :if={@confirm}
+      id="move-to-org-dialog"
+      class="modal modal-open"
+      phx-window-keydown="cancel_channel_reassign"
+      phx-key="escape"
+      data-role="move-to-org-dialog"
+    >
+      <div
+        class="modal-box max-w-md"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="move-to-org-title"
+        aria-describedby="move-to-org-body"
+        phx-click-away="cancel_channel_reassign"
+        phx-mounted={JS.focus_first()}
+        tabindex="-1"
+      >
+        <%!-- Wraps rather than truncates: a long channel name in a max-w-md
+             card would otherwise lose the destination at the end of the
+             question, which is the part being agreed to. --%>
+        <h2 id="move-to-org-title" class="break-words text-lg font-semibold">
+          {"Move ##{@confirm.channel_name} to #{@confirm.to.name}?"}
+        </h2>
+        <%!-- All four lines share ONE aria-describedby container so a screen
+             reader hears the org-scope consequence, not just the first line. --%>
+        <div id="move-to-org-body" class="mt-3 flex flex-col gap-2 text-sm text-base-content/80">
+          <p>{"Everyone sees this channel filed under #{@confirm.to.name}."}</p>
+          <p>Nobody is added to or removed from the channel.</p>
+          <p>
+            {"People in #{@confirm.to.name} will be able to open this channel's canvases by direct link, and people in #{@confirm.from.name} will not."}
+          </p>
+          <p>Personal layouts are not affected.</p>
+        </div>
+        <div class="modal-action">
+          <button
+            type="button"
+            class="btn btn-ghost focus-visible-ring"
+            phx-click="cancel_channel_reassign"
+            data-role="move-to-org-cancel"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn btn-warning focus-visible-ring"
+            phx-click="confirm_channel_reassign"
+            data-role="move-to-org-confirm"
+          >
+            {"Move to #{@confirm.to.name}"}
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
+  Overflow control for one MOBILE DRAWER conversation row (task 019fe998).
+
+  The touch counterpart to `pin_control/1`. That control, and the sub-org
+  row's `.channel-row-hide-button`, are both revealed by `group-hover/row:` or
+  `focus-within:`. Tailwind compiles `hover:` inside `@media (hover: hover)`,
+  so on a phone neither variant ever matches and pin, unpin and hide have no
+  touch path at all. This control is therefore ALWAYS visible — no `opacity-0`
+  and no hover variant anywhere in its class list, which
+  `chat_live_drawer_row_actions_test.exs` asserts by refutation.
+
+  ## One control, not a row of icons
+
+  44px is the touch floor, so pin beside hide is 88px taken permanently from a
+  375px drawer whose names already truncate. One overflow costs 44px once and
+  holds every action the row grows later. The name keeps `flex-1 min-w-0
+  truncate` on the sibling link and this control is `flex-shrink-0`, so a long
+  display name can never crush it.
+
+  ## Accessible name
+
+  Carries the verb AND the target: "More actions for Rowan Ellis". A bare
+  "More" is meaningless in a list of twenty identical controls, and a DM has
+  no `name` field — reaching for `space.name` renders it empty, which has
+  already shipped on this surface once. Callers pass the row's resolved label.
+
+  Renders as a SIBLING of the row's navigate-link, never a child: a `<button>`
+  inside an `<a>` is invalid HTML, and LiveView binds click on `window` in the
+  bubble phase, so a nested control needs a `stopPropagation` guard that
+  swallows navigation along with the event.
+
+  ## Right gutter
+
+  `mr-2` is load-bearing, not spacing taste. Without it the control's border
+  box ends exactly on the viewport's right edge (measured: right 375 on a
+  375px screen), and `focus-visible:ring-2` draws 2px OUTSIDE that box, so the
+  keyboard focus ring was clipped by the screen edge. 8px is also the gutter
+  the drawer's existing row control already uses (the pinned-task row's unpin
+  button), so this matches the neighbouring control rather than inventing a
+  third value.
+  """
+  attr(:space_id, :string, required: true)
+  attr(:name, :string, required: true)
+
+  def row_actions_control(assigns) do
+    ~H"""
+    <button
+      type="button"
+      class="mr-2 flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center rounded-lg text-base-content/60 transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+      phx-click="open_row_actions"
+      phx-value-space_id={@space_id}
+      data-role="drawer-row-actions"
+      data-space-id={@space_id}
+      aria-haspopup="dialog"
+      aria-label={"More actions for #{@name}"}
+    >
+      <span class="hero-ellipsis-vertical size-5"></span>
+    </button>
+    """
+  end
+
+  @doc """
+  The bottom sheet `row_actions_control/1` opens (task 019fe998).
+
+  Wraps the shared `PlatformWeb.Components.Sheet` primitive — the same one
+  `Components.MoreSheet` and `Components.Chat.AddParticipantSheet` wrap. No
+  second sheet, no bespoke popover.
+
+  ## Placement and breakpoint
+
+  Rendered at the TEMPLATE ROOT, not inside `#mobile-channel-browser`. `.sheet`
+  is `position: fixed`, and a CSS `transform` on any ancestor becomes the
+  containing block for fixed descendants — an overlay rendered inside a
+  transformed rail centres on the rail instead of the viewport, which has
+  shipped here before.
+
+  `lg:hidden` is load-bearing, not decoration. Marlowe reported the bottom-sheet
+  component rendering on desktop at all widths on 2026-07-12; the design
+  system scopes sheets to mobile. Desktop keeps its hover-and-focus reveal.
+
+  ## Actions
+
+  Both reuse the EXISTING server handlers. `toggle_pinned` takes the desired
+  next state rather than flipping what it finds, so a duplicated event from a
+  render race is idempotent instead of a silent unpin. `hide_channel` takes
+  `id`. Nothing here is destructive, so `--color-error` stays unspent: the day
+  something in this sheet is destructive, it reads instantly.
+
+  `@target` is nil whenever the sheet is closed, which keeps the header empty
+  rather than holding the last-opened conversation's name.
+  """
+  attr(:target, :any,
+    default: nil,
+    doc: "nil when closed, else %{space_id:, name:, pinned:} for the row that opened it"
+  )
+
+  def row_actions_sheet(assigns) do
+    ~H"""
+    <.sheet
+      id="chat-row-actions-sheet"
+      open={@target != nil}
+      placement={:bottom}
+      on_close="close_row_actions"
+      class="lg:hidden"
+    >
+      <:title>{@target && @target.name}</:title>
+
+      <ul class="flex flex-col" role="list">
+        <li>
+          <button
+            type="button"
+            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            phx-click="toggle_pinned"
+            phx-value-space_id={@target && @target.space_id}
+            phx-value-pinned={@target && to_string(not @target.pinned)}
+            data-role="row-actions-pin"
+          >
+            <span class="hero-map-pin size-5 flex-shrink-0" aria-hidden="true"></span>
+            <span>
+              {if @target && @target.pinned, do: "Unpin conversation", else: "Pin conversation"}
+            </span>
+          </button>
+        </li>
+        <li class="border-t border-base-300">
+          <button
+            type="button"
+            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            phx-click="hide_channel"
+            phx-value-id={@target && @target.space_id}
+            data-role="row-actions-hide"
+          >
+            <span class="hero-eye-slash size-5 flex-shrink-0" aria-hidden="true"></span>
+            <span>Hide from my rail</span>
+          </button>
+        </li>
+      </ul>
+    </.sheet>
     """
   end
 

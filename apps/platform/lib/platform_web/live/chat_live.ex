@@ -31,6 +31,7 @@ defmodule PlatformWeb.ChatLive do
   alias Platform.Accounts
   alias Platform.Chat
   alias Platform.Chat.HiddenChannels
+  alias Platform.Chat.PinnedSpaces
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Chat.Sidebar
 
@@ -253,12 +254,17 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:can_cancel_deletion?, false)
       |> assign(:dm_conversations, dm_conversations)
       |> assign(:hidden_channel_ids, Accounts.get_hidden_channel_ids(user_id))
+      # The user's pinned conversations, ordered most-recently-pinned last
+      # (task 019fd80f). Held as an assign so every rail recompute below can
+      # pass the same list without re-reading preferences; the Pinned block
+      # empties itself on the next channel switch if any site forgets.
+      |> assign(:pinned_space_ids, Sidebar.list_pinned_space_ids(user_id))
       |> assign(
         :channel_sections,
         channel_sections(
           channels,
           dm_conversations,
-          MapSet.new(),
+          Sidebar.list_pinned_space_ids(user_id),
           Accounts.get_hidden_channel_ids(user_id)
         )
       )
@@ -342,6 +348,15 @@ defmodule PlatformWeb.ChatLive do
       # the archive undo toast targets.
       |> assign(:undo_archive, nil)
       |> assign(:sidebar_admin_edit, false)
+      # Explicit "Move to organisation…" (task 019fd76a stage 1).
+      # `:reassign_picker` is nil or the `%{channel_id:, channel_name:,
+      # destinations:}` the destination chooser renders (one row at a time);
+      # `:reassign_confirm` is nil or the resolved
+      # `%{channel_id:, channel_name:, from:, to:}` the confirmation dialog
+      # renders AND the confirm handler writes from. Nothing is written until
+      # the confirm event fires.
+      |> assign(:reassign_picker, nil)
+      |> assign(:reassign_confirm, nil)
       # Sidebar layout overflow menu (chat sidebar header). The "CHANNELS"
       # header is a ~260px rail that can't fit two text toggles (personal
       # "Edit layout" + admin "Edit default"), so both entry points collapse
@@ -374,6 +389,13 @@ defmodule PlatformWeb.ChatLive do
       # aria-live region, set after every row move so screen-reader users
       # get confirmation the reorder happened. nil renders an empty region.
       |> assign(:drawer_reorder_announcement, nil)
+      # Mobile drawer row-actions sheet (task 019fe998): nil when closed,
+      # else the space_id of the row whose overflow control was tapped. Only
+      # the ID is held — name and pinned-ness are re-derived at render by
+      # `row_actions_target/5`, so the sheet's header and its Pin/Unpin verb
+      # stay correct after any change to the underlying row. Same shape as
+      # `:open_message_actions_id` above.
+      |> assign(:row_actions_space_id, nil)
       |> assign(:show_new_channel_modal, false)
       |> assign(:show_new_conversation_modal, false)
       # Per-message actions sheet (3-dot menu): nil when closed, msg.id when open.
@@ -684,7 +706,12 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:spaces, channels ++ dm_convos)
        |> assign(
          :channel_sections,
-         channel_sections(channels, dm_convos, MapSet.new(), socket.assigns.hidden_channel_ids)
+         channel_sections(
+           channels,
+           dm_convos,
+           socket.assigns.pinned_space_ids,
+           socket.assigns.hidden_channel_ids
+         )
        )
        |> assign(
          :sidebar_sections,
@@ -994,7 +1021,7 @@ defmodule PlatformWeb.ChatLive do
        channel_sections(
          socket.assigns.channels,
          socket.assigns.dm_conversations,
-         MapSet.new(),
+         socket.assigns.pinned_space_ids,
          hidden
        )
      )
@@ -1006,7 +1033,12 @@ defmodule PlatformWeb.ChatLive do
          hidden
        )
      )
-     |> assign(:undo_toast, channel_name && %{space_id: space_id, name: channel_name})}
+     |> assign(:undo_toast, channel_name && %{space_id: space_id, name: channel_name})
+     # Dismiss the mobile row-actions sheet if the hide came from there (task
+     # 019fe998). Mandatory rather than cosmetic: the hidden row is gone from
+     # the rail, so a sheet left open would name a conversation that is no
+     # longer on screen and still offer to act on it.
+     |> assign(:row_actions_space_id, nil)}
   end
 
   # Stage 3 v3 (chat sidebar Option B). Toggle the single global
@@ -1059,7 +1091,7 @@ defmodule PlatformWeb.ChatLive do
       channel_sections(
         socket.assigns.channels,
         socket.assigns.dm_conversations,
-        MapSet.new(),
+        socket.assigns.pinned_space_ids,
         hidden
       )
     )
@@ -1234,6 +1266,11 @@ defmodule PlatformWeb.ChatLive do
   # `org_id` from `@sidebar_sections` (already loaded) and call
   # `Sidebar.reassign_channel/3`, which sets `chat_spaces.org_id` globally and
   # prunes per-user placement overrides so the admin move wins everywhere.
+  #
+  # DEPRECATED by the explicit "Move to organisation…" action below (task
+  # 019fd76a stage 1) and deleted along with the drag hook in stage 2. It
+  # stays here only so the old gesture keeps working until its replacement
+  # has shipped; nothing new should push it.
   def handle_event(
         "channel_reassigned",
         %{"channel_id" => channel_id, "target_section_id" => section_id},
@@ -1256,6 +1293,146 @@ defmodule PlatformWeb.ChatLive do
             {:noreply, put_flash(socket, :error, "Could not move the channel.")}
         end
     end
+  end
+
+  # ── Explicit "Move to organisation…" (task 019fd76a stage 1) ────────────
+  #
+  # Refiling a channel is a company-wide act with a consequence that is not
+  # visible in the gesture: `CanvasAccess.org_readable_space?/2` grants read
+  # on this channel's canvases to any member of the owning org, with no
+  # channel membership required, so a move hands the destination org's
+  # members a direct link they did not have and takes it away from the
+  # source org's. That is not something to do on a drop, which is why the
+  # drag path is being retired in favour of these three events.
+  #
+  # TWO STEPS, and the split is the security property. Step 1 resolves
+  # display data and WRITES NOTHING. Step 2 carries no ids at all: it reads
+  # the channel and the destination org back out of `@reassign_confirm`, so
+  # the most a forged confirm can do is confirm the move THIS session has
+  # already requested and rendered. It cannot re-point an approved move at a
+  # different channel or a different destination.
+
+  # Step 1 — open the confirmation. `@fabrikam_admin?` is re-checked here (the
+  # control is an affordance, never the gate) so a non-admin's forged request
+  # assigns nothing and therefore has nothing to confirm.
+  def handle_event(
+        "request_channel_reassign",
+        %{"channel_id" => channel_id, "target_section_id" => section_id},
+        socket
+      )
+      when is_binary(channel_id) and is_binary(section_id) do
+    with true <- socket.assigns.fabrikam_admin?,
+         %{} = destination <- section_summary(socket.assigns.sidebar_sections, section_id),
+         %Chat.Space{kind: "channel"} = channel <- Chat.get_space(channel_id),
+         # The SOURCE org is the channel's own `org_id`, read from the ORG
+         # RECORD rather than matched against `@sidebar_sections`. Three real
+         # states break the section lookup and none of them should block a
+         # legitimate move: an unfiled channel falls back to the lowest-position
+         # section (`Sidebar.default_section_id/3`), a section the acting admin
+         # has hidden is absent from the resolver's output, and an ARCHIVED
+         # org's section is dropped by `list_active_default_sections/0`. The
+         # dialog's canvas-access line is a claim about `org_id`, so `org_id`
+         # is what names it.
+         %Platform.Tenancy.Org{} = source_org <- Platform.Tenancy.get_org(channel.org_id),
+         # A move to where it already is has no confirmation to write. The
+         # popover excludes the current section; this catches a forged one.
+         false <- destination.org_id == channel.org_id do
+      # Label the source the way the RAIL labels it, so the sentence echoes
+      # the words the admin just read: the destination half of it is the
+      # section name they clicked in the popover, and an admin can rename a
+      # section away from its org's name. The org record is the fallback for
+      # exactly the three states above, where there is no section to read.
+      source = %{name: source_section_name(socket.assigns.sidebar_sections, source_org)}
+
+      {:noreply,
+       socket
+       # Picking a destination closes the chooser it was picked from — the
+       # confirmation is the next step, not a second layer on top of it.
+       |> assign(:reassign_picker, nil)
+       |> assign(:reassign_confirm, %{
+         channel_id: channel.id,
+         channel_name: channel.name,
+         from: source,
+         to: destination
+       })}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  # Step 2 — perform the move. Takes NO parameters from the client on
+  # purpose; see the block comment above.
+  def handle_event("confirm_channel_reassign", _params, socket) do
+    case socket.assigns.reassign_confirm do
+      %{channel_id: channel_id, to: %{org_id: org_id, name: to_name}} ->
+        socket = assign(socket, :reassign_confirm, nil)
+
+        # The destination is re-checked for archival here, not just when the
+        # dialog opened. `Chat.assign_space_org/2` has no such guard, and a
+        # channel filed to an archived org loses its section for EVERY user
+        # (`list_active_default_sections/0` drops it) and lands in the
+        # fallback one. The popover never offers an archived org, so this
+        # only closes the window between opening the dialog and confirming.
+        if org_archived?(org_id) do
+          {:noreply,
+           put_flash(socket, :error, "#{to_name} was archived. The channel was not moved.")}
+        else
+          case Sidebar.reassign_channel(%{id: socket.assigns.user_id}, channel_id, org_id) do
+            {:ok, _space} ->
+              {:noreply, recompute_sidebar_after_admin_write(socket)}
+
+            {:error, :unauthorized} ->
+              {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
+
+            {:error, reason} ->
+              {:noreply, put_flash(socket, :error, reassign_error_message(reason, to_name))}
+          end
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_channel_reassign", _params, socket) do
+    {:noreply, assign(socket, :reassign_confirm, nil)}
+  end
+
+  # Open / close the destination chooser for one row. One at a time, and it
+  # resolves its own list server-side so the picker markup carries no
+  # authority: `request_channel_reassign` re-derives everything anyway.
+  #
+  # The chooser is a CENTRED dialog, not a popover hanging off the row. A
+  # row-anchored popover was built first and measured: `#chat-section-list`
+  # is `overflow-y-auto`, which computes `overflow-x` to `auto` as well, so
+  # it clips on both axes. On the lower rows the destination list fell
+  # entirely below the scroller's bottom edge (popover bottom 992px against a
+  # nav bottom of 810px) and none of the destinations were reachable, and on
+  # the sub-org rows the box ran about 9px past the rail's left edge, cutting
+  # into the leading colour dots. The rail is only ~224px wide, so there is
+  # no width at which a row-anchored list both fits and stays legible.
+  def handle_event("toggle_reassign_menu", %{"channel_id" => channel_id}, socket)
+      when is_binary(channel_id) do
+    already_open? =
+      match?(%{channel_id: ^channel_id}, socket.assigns.reassign_picker)
+
+    with false <- already_open?,
+         true <- socket.assigns.fabrikam_admin?,
+         %Chat.Space{} = channel <- Chat.get_space(channel_id),
+         true <- movable_channel?(channel) do
+      {:noreply,
+       assign(socket, :reassign_picker, %{
+         channel_id: channel.id,
+         channel_name: channel.name,
+         destinations: reassign_destinations(socket.assigns.sidebar_sections, channel.org_id)
+       })}
+    else
+      _ -> {:noreply, assign(socket, :reassign_picker, nil)}
+    end
+  end
+
+  def handle_event("close_reassign_menu", _params, socket) do
+    {:noreply, assign(socket, :reassign_picker, nil)}
   end
 
   # ── Container lifecycle (task 019f4eaa stage 6) ───────────────────────
@@ -1460,6 +1637,43 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, recompute_sidebar(socket)}
   end
 
+  # Collapse or expand a section in the user's view. Like `toggle_section_hidden`
+  # above, `collapsed` arrives as the DESIRED next state so a render race can't
+  # flip it twice. Unlike hide, the section stays in the rail: the resolver only
+  # stamps `collapsed?` on it, and the template decides whether to draw the rows.
+  # Broadcast so the user's other tabs converge on the same fold state.
+  def handle_event("toggle_section_collapsed", %{"section_id" => section_id} = params, socket)
+      when is_binary(section_id) do
+    collapsed? = truthy?(params["collapsed"])
+    _ = Sidebar.set_section_collapsed(socket.assigns.user_id, section_id, collapsed?)
+    ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())
+    {:noreply, recompute_sidebar(socket)}
+  end
+
+  # Pin or unpin one conversation for this user (task 019fd80f stage 3).
+  #
+  # `pinned` arrives as the DESIRED next state ("true"/"false") rather than as
+  # a flip, so a duplicated event from a client-side render race is idempotent
+  # instead of a silent unpin. Same contract as `toggle_section_hidden` above.
+  #
+  # The param is `space_id`, not `channel_id`: the Pinned block holds channels
+  # AND direct messages, and both are `chat_spaces` rows.
+  #
+  # No confirmation and no toast. The action is reversible by the same control
+  # in one click, which is the definition of one that should not ask.
+  def handle_event("toggle_pinned", %{"space_id" => space_id} = params, socket)
+      when is_binary(space_id) do
+    pinned? = truthy?(params["pinned"])
+    _ = Sidebar.set_space_pinned(socket.assigns.user_id, space_id, pinned?)
+    ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())
+
+    # Dismiss the mobile row-actions sheet if this came from there (task
+    # 019fe998). Unconditional because it is already nil on every desktop
+    # path, and leaving it open would leave a menu on screen describing a row
+    # that has just moved between sections.
+    {:noreply, socket |> assign(:row_actions_space_id, nil) |> recompute_pinned()}
+  end
+
   # Reset the user's entire personal arrangement (section order, channel
   # placement, hidden sections) back to the org default. Resetting clears the
   # explicit personal order, so the rail snaps back to the ADMIN DEFAULT order
@@ -1529,6 +1743,32 @@ defmodule PlatformWeb.ChatLive do
         socket.assigns.hidden_channel_ids
       )
     )
+  end
+
+  # Re-read the pin list and rebuild every rail region that consumes it:
+  # `@channel_sections` (the Pinned block plus the DM and sub-org remainders
+  # a pin is lifted out of) and `@sidebar_sections` (the resolver-driven
+  # client sections, which exclude pinned channels).
+  #
+  # Reads back from preferences rather than patching `@pinned_space_ids` in
+  # place, so the render agrees with what was persisted — including the
+  # append-if-absent ordering `Sidebar.set_space_pinned/3` applies and the
+  # no-op it performs for an anonymous session with no user row.
+  defp recompute_pinned(socket) do
+    pinned_space_ids = Sidebar.list_pinned_space_ids(socket.assigns.user_id)
+
+    socket
+    |> assign(:pinned_space_ids, pinned_space_ids)
+    |> assign(
+      :channel_sections,
+      channel_sections(
+        socket.assigns.channels,
+        socket.assigns.dm_conversations,
+        pinned_space_ids,
+        socket.assigns.hidden_channel_ids
+      )
+    )
+    |> recompute_sidebar()
   end
 
   # Refresh after an org archive / schedule-deletion (task 019f4eaa stage 6):
@@ -1713,6 +1953,103 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
+  # One rendered section flattened into what the "Move to organisation…"
+  # dialog and the write both need: the human-readable name, the colour dot
+  # token, and the `org_id` that actually goes onto `chat_spaces`.
+  defp section_summary(sidebar_sections, section_id) when is_binary(section_id) do
+    Enum.find_value(sidebar_sections, fn
+      %{section: %{id: ^section_id} = s} ->
+        %{section_id: s.id, org_id: s.org_id, name: s.name, color: s.color}
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp section_summary(_sidebar_sections, _section_id), do: nil
+
+  # The rail's own label for the org a channel is moving OUT of, falling back
+  # to the org record's name when that org has no section in the rail.
+  defp source_section_name(sidebar_sections, %Platform.Tenancy.Org{} = org) do
+    Enum.find_value(sidebar_sections, org.name, fn
+      %{section: %{org_id: section_org_id, name: name}} when section_org_id == org.id -> name
+      _ -> nil
+    end)
+  end
+
+  defp org_archived?(org_id) do
+    case Platform.Tenancy.get_org(org_id) do
+      %Platform.Tenancy.Org{archived_at: nil} -> false
+      %Platform.Tenancy.Org{} -> true
+      # A destination that no longer resolves is not somewhere to file a
+      # channel either, so refuse on the same branch.
+      _ -> true
+    end
+  end
+
+  # Every section a channel can be moved TO: the rail minus where it already
+  # is. Built from the channel's `org_id` rather than the section it renders
+  # under so a personal placement override cannot offer a no-op destination.
+  defp reassign_destinations(sidebar_sections, org_id) do
+    sidebar_sections
+    |> Enum.map(& &1.section)
+    |> Enum.reject(&(&1.org_id == org_id))
+    |> Enum.map(
+      &%{
+        section_id: &1.id,
+        org_id: &1.org_id,
+        name: &1.name,
+        dot: section_dot_class(&1.color)
+      }
+    )
+  end
+
+  # Which rows get the "Move to organisation…" control. Two conditions, and
+  # both are about the ROW, not the viewer (`@fabrikam_admin?` gates that
+  # separately):
+  #
+  #   * `kind == "channel"` — the Pinned block holds channels AND DMs in one
+  #     flat list, and a DM has no org filing to move.
+  #   * a real `org_id` — a channel with none renders under the fallback
+  #     section (`Sidebar.default_section_id/3`), and filing it for the first
+  #     time is a different action from moving it between two named orgs,
+  #     with different copy. Out of scope for this stage.
+  defp movable_channel?(%{kind: "channel", org_id: org_id}), do: is_binary(org_id)
+  defp movable_channel?(_space), do: false
+
+  # A name clash is the ORDINARY failure of this action, not an edge case.
+  # `chat_spaces_unique_org_slug` is a partial unique index on
+  # `(org_id, slug) WHERE org_id IS NOT NULL` (migration 20260618220754,
+  # declared on `Chat.Space.changeset/2`), and two channels called "general"
+  # in two different orgs is the normal shape of the data — so moving one
+  # onto the other is a thing admins will hit in routine use. The old generic
+  # "Could not move the channel." told them nothing actionable.
+  #
+  # Matched on the CONSTRAINT NAME, not on the `:slug` key. `Space.changeset/2`
+  # declares four unique constraints plus a required-slug validation, all of
+  # which surface under `:slug`. Only this one can fire from an org_id-only
+  # update today, but `chat_spaces_null_scope_channel_slug` starts firing the
+  # day a "move to no organisation" destination exists — and matching the key
+  # would then name an org in a message about a channel that has none.
+  defp reassign_error_message(%Ecto.Changeset{errors: errors}, to_name) do
+    slug_taken? =
+      Enum.any?(errors, fn
+        {:slug, {_msg, opts}} ->
+          Keyword.get(opts, :constraint_name) == "chat_spaces_unique_org_slug"
+
+        _ ->
+          false
+      end)
+
+    if slug_taken? do
+      "A channel in #{to_name} already uses that name. Rename one of them first."
+    else
+      "Could not move the channel."
+    end
+  end
+
+  defp reassign_error_message(_reason, _to_name), do: "Could not move the channel."
+
   # The 5 scope tokens are the recolor palette — whitelist-validate the
   # inbound color so a forged payload can't write an arbitrary string onto a
   # section's `color` (defense-in-depth on top of the admin gate).
@@ -1750,6 +2087,28 @@ defmodule PlatformWeb.ChatLive do
      socket
      |> assign(:open_message_actions_id, nil)
      |> assign(:open_message_actions_msg, nil)}
+  end
+
+  # ── Mobile drawer row actions (task 019fe998) ─────────────────────────────
+  #
+  # Pin, unpin and hide were all revealed by `group-hover/row:` /
+  # `focus-within:`, and Tailwind compiles `hover:` inside
+  # `@media (hover: hover)`, so none of the three could fire on a phone. The
+  # drawer row's overflow control opens a bottom sheet carrying all three.
+  #
+  # These two handlers are the ONLY new events, and they carry no business
+  # logic: the sheet's actions reuse `toggle_pinned` and `hide_channel`
+  # unchanged. Same shape as `open_message_actions` above.
+  #
+  # Only the id is stored. Name and pinned-ness are re-derived at render, so
+  # the header and the Pin/Unpin verb cannot go stale against the row.
+  def handle_event("open_row_actions", %{"space_id" => space_id}, socket)
+      when is_binary(space_id) do
+    {:noreply, assign(socket, :row_actions_space_id, space_id)}
+  end
+
+  def handle_event("close_row_actions", _params, socket) do
+    {:noreply, assign(socket, :row_actions_space_id, nil)}
   end
 
   # ── Infinite scroll (task 019e18fc Stage 3) ────────────────────────────────
@@ -2161,7 +2520,7 @@ defmodule PlatformWeb.ChatLive do
                channel_sections(
                  channels,
                  dm_convos,
-                 MapSet.new(),
+                 socket.assigns.pinned_space_ids,
                  socket.assigns.hidden_channel_ids
                )
              )
@@ -2358,7 +2717,7 @@ defmodule PlatformWeb.ChatLive do
        channel_sections(
          channels,
          dm_conversations,
-         MapSet.new(),
+         socket.assigns.pinned_space_ids,
          socket.assigns.hidden_channel_ids
        )
      )
@@ -2478,18 +2837,17 @@ defmodule PlatformWeb.ChatLive do
       channels = Chat.list_spaces(kind: "channel")
       archived_channels = Chat.list_spaces(kind: "channel", archived: true)
 
+      # `recompute_pinned/1` covers the `@sidebar_sections` re-resolve this
+      # handler used to do inline, and adds the pin refresh. The topic is
+      # per-user (`chat:sidebar:<user_id>`) and the broadcast excludes the
+      # acting process, so this arm runs in the SAME user's other tabs — which
+      # is exactly where a pin has to converge. Without the pin half, tab B
+      # kept rendering a stale Pinned block until its next navigation.
       {:noreply,
        socket
        |> assign(:channels, channels)
        |> assign(:archived_channels, archived_channels)
-       |> assign(
-         :sidebar_sections,
-         resolve_sidebar_sections(
-           socket.assigns.user_id,
-           channels,
-           socket.assigns.hidden_channel_ids
-         )
-       )}
+       |> recompute_pinned()}
     end
   end
 
@@ -2642,6 +3000,46 @@ defmodule PlatformWeb.ChatLive do
     Chat.display_name_for_space(space, participants, current_user_id)
   end
 
+  # The label a rail row shows, which is also what its pin control must name
+  # ("Pin Gen-migration", "Pin Rowan Ellis"). A channel is its `name`; a DM
+  # or group has none and resolves through its participants.
+  #
+  # Channels short-circuit rather than falling through to
+  # `sidebar_display_name/2`, which runs a `list_participants/1` query — the
+  # control would otherwise add one query per channel row on every render.
+  defp sidebar_row_label(%{kind: "channel", name: name}, _user_id), do: name
+  defp sidebar_row_label(space, user_id), do: sidebar_display_name(space, user_id)
+
+  # The mobile drawer's row-actions sheet target (task 019fe998). nil closes
+  # the sheet; a map opens it with the row's own name and pinned state.
+  #
+  # Derived at RENDER from `@row_actions_space_id` rather than snapshotted
+  # when the control was tapped, so the header and the Pin/Unpin verb follow
+  # the row. Snapshotting would leave the sheet asserting "Pin" on a
+  # conversation a second tab had just pinned.
+  #
+  # Resolved against `channels ++ dms` (the unfiltered assigns) rather than
+  # the rendered sections: a row is reachable from Pinned, from Direct
+  # Messages or from a sub-org section, and the sheet should not care which
+  # bucket it was tapped in. An id matching nothing — a stale click racing a
+  # hide, or a hand-crafted payload — resolves to nil and the sheet stays
+  # shut, which is why this returns nil rather than raising.
+  defp row_actions_target(nil, _channels, _dms, _pinned_ids, _user_id), do: nil
+
+  defp row_actions_target(space_id, channels, dms, pinned_ids, user_id) do
+    case Enum.find(channels ++ dms, &(&1.id == space_id)) do
+      nil ->
+        nil
+
+      space ->
+        %{
+          space_id: space.id,
+          name: sidebar_row_label(space, user_id),
+          pinned: space_id in pinned_ids
+        }
+    end
+  end
+
   # ── Drawer search filters (mobile channel search Stage 1) ─────────────
   #
   # Render-time, in-memory filters over the drawer's already-computed
@@ -2656,19 +3054,27 @@ defmodule PlatformWeb.ChatLive do
     String.contains?(String.downcase(name), String.downcase(query))
   end
 
-  # Plain space lists (Pinned) — filter on the space name.
-  defp drawer_filter_spaces(spaces, ""), do: spaces
+  # The Pinned block (`pinned_rail_entries/2` output). Matches each entry on
+  # the label the ROW renders, which differs by kind: a channel's `name`, a
+  # DM's resolved participant name, a task's display name. Matching on
+  # `space.name` for all three — what the block's two halves used to do
+  # separately — drops every pinned DM from search results, because a DM row
+  # has no `name`.
+  defp drawer_filter_pinned(entries, "", _user_id), do: entries
 
-  defp drawer_filter_spaces(spaces, query),
-    do: Enum.filter(spaces, &drawer_match?(&1.name, query))
+  defp drawer_filter_pinned(entries, query, user_id) do
+    Enum.filter(entries, fn %{kind: kind, space: space} ->
+      drawer_match?(pinned_row_label(kind, space, user_id), query)
+    end)
+  end
 
   # Flat external switcher list (task 019f9257-a83e): the external mobile
   # switcher renders `@channels ++ @dm_conversations` as ONE flat list (no
   # sub-org sections), so its filter matches channels on `space.name` and
   # DM/group rows on their computed display name — the same label split the
-  # rows themselves render. Kept separate from `drawer_filter_spaces`
-  # (name-only) and `drawer_filter_dms` (display-name-only) because this list
-  # mixes both kinds.
+  # rows themselves render. Kept separate from `drawer_filter_pinned`
+  # (kind-tagged entries) and `drawer_filter_dms` (display-name-only) because
+  # this list is a flat list of plain spaces mixing both kinds.
   defp drawer_filter_external_spaces(spaces, "", _user_id), do: spaces
 
   defp drawer_filter_external_spaces(spaces, query, user_id) do
@@ -2707,10 +3113,14 @@ defmodule PlatformWeb.ChatLive do
 
   # True when an active search matched nothing anywhere — drives the
   # dedicated "No matches" state (NOT the genuinely-empty-account copy).
-  defp drawer_no_matches?(_channel_sections, _sidebar_sections, "", _user_id), do: false
+  defp drawer_no_matches?(_pinned, _channel_sections, _sidebar_sections, "", _user_id), do: false
 
-  defp drawer_no_matches?(channel_sections, sidebar_sections, query, user_id) do
-    drawer_filter_spaces(channel_sections.pinned, query) == [] and
+  defp drawer_no_matches?(pinned_entries, channel_sections, sidebar_sections, query, user_id) do
+    # Takes the MERGED Pinned block rather than `channel_sections.pinned`:
+    # the block now holds task conversations too, and a query that matches
+    # only a pinned task would otherwise render a row and the "No matches"
+    # copy at the same time.
+    drawer_filter_pinned(pinned_entries, query, user_id) == [] and
       drawer_filter_dms(channel_sections.dms, query, user_id) == [] and
       drawer_filter_sections(sidebar_sections, query) == []
   end
@@ -2722,6 +3132,31 @@ defmodule PlatformWeb.ChatLive do
   defp unread_label(count) when count >= 9, do: "9+"
   defp unread_label(count) when count > 0, do: Integer.to_string(count)
   defp unread_label(_), do: nil
+
+  # Which of a client section's channel rows the desktop rail draws (019fd80f
+  # stage 3). Expanded draws all of them; COLLAPSED draws only the ones with
+  # unread, which is the whole point of the feature — it is what lets someone
+  # keep four clients closed and still see anything that moved. A collapse that
+  # hid everything would be a worse Hide, since Hide at least frees the space.
+  #
+  # The index is the row's position in the FULL channel list, not in the
+  # filtered one. It drives the keyboard move controls' disabled states, so a
+  # peeked row keeps reasoning about the section as a whole: derived from the
+  # filtered list, the first peeked row would report itself as the section's
+  # first channel and refuse to move up past the quiet rows above it.
+  #
+  # The predicate is `count > 0`, which is exactly when `unread_label/1` returns
+  # a label — a peeked row therefore always carries a visible pill, and no row
+  # can be peeked on a count the reader cannot see.
+  defp section_channel_rows(channels, false = _collapsed?, _unread_counts) do
+    Enum.with_index(channels)
+  end
+
+  defp section_channel_rows(channels, true = _collapsed?, unread_counts) do
+    channels
+    |> Enum.with_index()
+    |> Enum.filter(fn {space, _idx} -> Map.get(unread_counts, space.id, 0) > 0 end)
+  end
 
   # ADR 0027: default_attention_mode/1 and default_attention_label/1 removed
   # (agent_attention field no longer exists on Space)
@@ -2883,10 +3318,11 @@ defmodule PlatformWeb.ChatLive do
   # swap its body for `Platform.Orgs.slug(channel.org_id)` and the rest of
   # this module keeps working unchanged.
   #
-  # The `pinned_channel_ids` parameter is a hook for future channel-level
-  # pinning (no schema today). Callers pass an empty MapSet; once the
-  # `chat_pinned_channels` table or `metadata["pinned_by"]` convention lands,
-  # the caller can compute a MapSet of pinned ids and pass it here.
+  # `pinned_space_ids` is the user's ordered pin list from
+  # `Sidebar.list_pinned_space_ids/1` (task 019fd80f). It covers CHANNELS AND
+  # DMs: both are `chat_spaces` rows and the Pinned block holds them in one
+  # flat list, ordered by when the user pinned them. A `MapSet` is also
+  # accepted, in which case the block falls back to input order.
   @sub_org_buckets ["Paragon", "Soylent", "Fabrikam", "Wayne-Tech", "SXI"]
 
   @doc """
@@ -2899,7 +3335,7 @@ defmodule PlatformWeb.ChatLive do
   @spec channel_sections(
           [Platform.Chat.Space.t()],
           [Platform.Chat.Space.t()],
-          MapSet.t(String.t()),
+          [String.t()] | MapSet.t(String.t()),
           MapSet.t(String.t())
         ) :: %{
           pinned: [Platform.Chat.Space.t()],
@@ -2910,12 +3346,18 @@ defmodule PlatformWeb.ChatLive do
   def channel_sections(
         channels,
         dm_conversations,
-        pinned_channel_ids \\ MapSet.new(),
+        pinned_space_ids \\ MapSet.new(),
         hidden_channel_ids \\ MapSet.new()
       )
       when is_list(channels) and is_list(dm_conversations) do
-    {pinned, unpinned_channels} =
-      Enum.split_with(channels, fn ch -> MapSet.member?(pinned_channel_ids, ch.id) end)
+    # Three partitions rather than one, because the block is a single list
+    # ordered by pin time across BOTH kinds while the two leftovers go to
+    # different places. Partitioning the concatenation gives the block its
+    # cross-kind order; the two narrow passes give each home section its
+    # remainder. Lists here are tens of rows, so the extra passes are free.
+    {pinned, _} = PinnedSpaces.partition(channels ++ dm_conversations, pinned_space_ids)
+    {_, unpinned_channels} = PinnedSpaces.partition(channels, pinned_space_ids)
+    {_, unpinned_dms} = PinnedSpaces.partition(dm_conversations, pinned_space_ids)
 
     empty_buckets = Map.new(@sub_org_buckets, fn slug -> {slug, []} end)
 
@@ -2932,7 +3374,11 @@ defmodule PlatformWeb.ChatLive do
     # Stage 3: also expose the per-bucket hidden list under `hidden_sub_orgs`
     # so the header `Hidden (N)` chip and the inline unhide list can render
     # without re-doing the bucketing/filter in the template.
-    {visible_dms, _hidden_dms} = HiddenChannels.filter(dm_conversations, hidden_channel_ids)
+    #
+    # The hidden filter runs on the UNPINNED DM remainder, so a pinned DM has
+    # already left this bucket. Lifting happens before hiding for the same
+    # reason it does for channels: the block is the conversation's one place.
+    {visible_dms, _hidden_dms} = HiddenChannels.filter(unpinned_dms, hidden_channel_ids)
 
     bucketed =
       Map.new(sub_orgs, fn {bucket, spaces} ->
@@ -2950,6 +3396,95 @@ defmodule PlatformWeb.ChatLive do
       hidden_sub_orgs: hidden_sub_orgs
     }
   end
+
+  # ── The Pinned block: one list, three kinds of row ─────────────────────
+  #
+  # The rail used to carry two adjacent pinned blocks — "Pinned Channels"
+  # from `channel_sections/4` and "Pinned Tasks" from `@pinned_task_spaces`.
+  # Marlowe pinned a task from the Tasks page, went to Chat, and found its
+  # execution log in her rail: pinning a task is the same act as pinning a
+  # channel, so it is one need and one block.
+  #
+  # This is the READ-layer union and the only one there will be. The two
+  # storage tables stay separate: a backlog task has no space to key on
+  # (`ExecutionSpace.find_or_create/1` materialises lazily and most tasks
+  # never reach it), and a channel has no task to key on, so neither table
+  # can represent the other's rows.
+  #
+  # Entries carry their own `kind` so the template branches on a field
+  # rather than on which assign a row arrived in. That is what keeps the
+  # three row shapes from drifting apart again: there is one loop.
+  #
+  # Called from the template rather than held as an assign, deliberately.
+  # `@channel_sections` and `@pinned_task_spaces` are recomputed at five
+  # separate sites (mount, `handle_params`, `recompute_pinned/1`,
+  # `refresh_pinned_task_spaces/1`, the space-created broadcast); a derived
+  # assign would be a sixth thing each of them has to remember, and the
+  # failure mode is a silently stale block. Deriving at render costs two
+  # list walks over tens of rows.
+  @typedoc "One row of the Pinned block, tagged with the kind of thing it is."
+  @type pinned_entry :: %{kind: :channel | :dm | :task, space: Platform.Chat.Space.t()}
+
+  @doc """
+  The Pinned block as ONE ordered list of `%{kind:, space:}` entries.
+
+  Order is NEWEST-PINNED FIRST across the whole block (Marlowe, 2026-08-10).
+  It matches what task pins already did and it matches the use case: what
+  you pinned most recently is what you are working on now.
+
+  Two caveats, both deliberate:
+
+    * Conversation pins are stored as an APPEND-ordered id list in
+      `users.preferences` with no timestamp (see
+      `Sidebar.set_space_pinned/3`), so newest-first is `Enum.reverse/1`.
+      A user with existing pinned channels sees that half reverse once.
+      No data is lost and there is no migration.
+
+    * The two halves cannot be INTERLEAVED by pin time, because
+      conversation pins carry no pin timestamp to interleave on — only a
+      list position. So the block is tasks-then-conversations, each half
+      newest-first, rather than one globally sorted run.
+
+  Tasks sit at the TOP (Marlowe, 2026-08-11): "if I'm working on a task and I
+  deliberately pin, I would want to have that as easiest to access while I'm
+  on the go / on my phone." It also makes this list agree with the mobile
+  chip strip, which already iterates `@pinned_task_spaces` before
+  `@channel_sections.pinned`.
+
+  The reflow that costs is accepted, not overlooked. A task row removes
+  itself when its task hits done or cancelled, so every conversation row
+  below it shifts up. Marlowe's call: the row gets no animation, no
+  placeholder and no notice.
+
+  Reordering within the block is a separate task (019fe987-03c3).
+  """
+  @spec pinned_rail_entries([Platform.Chat.Space.t()], [Platform.Chat.Space.t()]) ::
+          [pinned_entry()]
+  def pinned_rail_entries(pinned_conversations, pinned_task_spaces)
+      when is_list(pinned_conversations) and is_list(pinned_task_spaces) do
+    conversations =
+      pinned_conversations
+      |> Enum.reverse()
+      |> Enum.map(fn space -> %{kind: conversation_pin_kind(space), space: space} end)
+
+    tasks = Enum.map(pinned_task_spaces, fn space -> %{kind: :task, space: space} end)
+
+    tasks ++ conversations
+  end
+
+  # Tagged from the SOURCE list, not sniffed from the row: task entries can
+  # only come from `@pinned_task_spaces`, so only the conversation half needs
+  # a kind test at all.
+  defp conversation_pin_kind(%{kind: kind}) when kind in ["dm", "group"], do: :dm
+  defp conversation_pin_kind(_space), do: :channel
+
+  # The visible name of a Pinned row. A task conversation's space name is a
+  # generated `task-exec-<hex>` slug, so it has its own display helper; a DM
+  # has no `name` at all and resolves through the participants query.
+  defp pinned_row_label(:task, space, _user_id),
+    do: Platform.Tasks.ChatPins.display_name_for_space(space)
+
+  defp pinned_row_label(_kind, space, user_id), do: sidebar_row_label(space, user_id)
 
   # ── Resolver-driven sub-org rail (chat sidebar v3 Stage 4) ─────────────
   #
@@ -2990,7 +3525,17 @@ defmodule PlatformWeb.ChatLive do
   defp resolve_sidebar_sections(user_id, channels, hidden_ids) do
     {visible_channels, _hidden} = HiddenChannels.filter(channels, hidden_ids)
 
-    Sidebar.resolve_for_user(user_id, visible_channels)
+    # The pin exclusion is read HERE rather than threaded in as a fourth
+    # argument, and that is deliberate. The client sections render from this
+    # function while the Pinned block renders from `channel_sections/4`, so a
+    # pinned channel has to be removed in two places or it renders twice.
+    # There are five call sites; taking the set from the user id means none
+    # of them can forget to pass it, which is the failure mode that would
+    # show up as a duplicated row with two unread pills.
+    {_pinned, unpinned} =
+      PinnedSpaces.partition(visible_channels, Sidebar.pinned_space_ids(user_id))
+
+    Sidebar.resolve_for_user(user_id, unpinned)
   end
 
   # Apply an explicit section-id order to already-resolved sections IN-MEMORY,

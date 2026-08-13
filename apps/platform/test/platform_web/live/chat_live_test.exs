@@ -3197,7 +3197,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/chat")
 
-      refute has_element?(view, "[aria-label='Pinned tasks']")
+      refute has_element?(view, "[aria-label='Pinned']")
     end
 
     test "section renders one row per pinned task-exec space", %{conn: conn} do
@@ -3214,7 +3214,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       {:ok, view, html} = live(conn, ~p"/chat")
 
-      assert has_element?(view, "[aria-label='Pinned tasks']")
+      assert has_element?(view, "[aria-label='Pinned']")
 
       assert has_element?(
                view,
@@ -3226,9 +3226,14 @@ defmodule PlatformWeb.ChatLiveTest do
                "[data-role='pinned-task-rail-row'][data-space-id='#{space2.id}']"
              )
 
-      # Section header + task-glyph icon rendered (Saru: hero-map-pin-mini
-      # on the header, hero-clipboard-document-list-mini per row).
-      assert html =~ "hero-map-pin-mini"
+      # Per-row task glyph rendered (Saru:
+      # hero-clipboard-document-list-mini marks a task-scoped conversation).
+      #
+      # The `hero-map-pin-mini` header icon this used to assert went with the
+      # separate "Pinned Tasks" section (task 019feec6-73d9). One block holds
+      # pinned channels, DMs and task conversations now, and it carries no
+      # header icon at all — see "the PINNED label carries no icon, no fill
+      # and no collapse control" in chat_live_pinned_block_test.exs.
       assert html =~ "hero-clipboard-document-list-mini"
     end
 
@@ -3279,7 +3284,7 @@ defmodule PlatformWeb.ChatLiveTest do
       conn = init_test_session(conn, current_user_id: user.id)
 
       {:ok, view, _html} = live(conn, ~p"/chat")
-      refute has_element?(view, "[aria-label='Pinned tasks']")
+      refute has_element?(view, "[aria-label='Pinned']")
 
       # Pin AFTER mount → the handle_info clause + refresh should fold
       # the new row in without a page refresh.
@@ -3354,14 +3359,14 @@ defmodule PlatformWeb.ChatLiveTest do
 
       # Sanity: no Pinned tasks section for user_a either (they still
       # have zero pins of their own).
-      refute has_element?(view, "[aria-label='Pinned tasks']")
+      refute has_element?(view, "[aria-label='Pinned']")
 
       # Sanity: a stray broadcast that isn't wearing the "user" kind at
       # all (e.g. an agent pin) also doesn't crash the handler or
       # surface a row for user_a.
       _ = ChatPubSub.broadcast_space_event({:task_pin_added, %{participant_kind: "agent"}})
       Process.sleep(50)
-      refute has_element?(view, "[aria-label='Pinned tasks']")
+      refute has_element?(view, "[aria-label='Pinned']")
     end
 
     # ── Stage 4 fixup #2 (Rowan review): inline unpin icon on each rail row.

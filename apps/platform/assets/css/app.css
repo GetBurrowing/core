@@ -2932,6 +2932,21 @@ body, .font-fabrikam {
     @apply flex items-center gap-2 px-2 pb-1.5;
   }
 
+  /* Collapse toggle in a client section header (019fd80f stage 2). It is the
+     header's first child, not a wrapper around it — the Hide control and drag
+     handle are siblings, so nesting would put a button inside a button. The
+     button is a bare hit target: it adds NO type of its own, so the section
+     name keeps `.channel-section-label` exactly as it was. */
+  .channel-section-collapse-toggle {
+    @apply inline-flex min-w-0 items-center gap-1.5 rounded text-left;
+  }
+
+  /* Decorative chevron (aria-hidden in the markup). `--color-base-content` per
+     the design direction — no new colour token. */
+  .channel-section-chevron {
+    @apply flex-shrink-0 text-base-content/60;
+  }
+
   .channel-section-label {
     @apply text-xs font-semibold uppercase tracking-widest text-base-content/60;
   }
@@ -3185,6 +3200,49 @@ body, .font-fabrikam {
      control still feels interactive when targeted. */
   .channel-row-unpin-button {
     @apply flex-shrink-0 inline-flex items-center justify-center w-6 h-6 mr-1 rounded text-base-content/40 hover:text-primary hover:bg-base-200 focus-visible:text-primary transition-colors;
+  }
+
+  /* Per-row pin / unpin control (task 019fd80f stage 3). Renders on sub-org
+     channel rows, Direct Messages rows, and Pinned-block rows.
+
+     VISIBLE AT REST, at `--color-base-content` 60% — the same resting
+     treatment `.channel-row-unpin-button` carries on task rows, and the same
+     60% the row's own glyphs use. No new colour token.
+
+     It used to be `opacity-0` with a hover/focus reveal carried inline on
+     the button. Removed 2026-08-11: Tailwind compiles `hover:` and
+     `group-hover:` inside `@media (hover: hover)`, so on a touch device the
+     reveal rule never matches and the control is unreachable rather than
+     merely quiet (Marlowe: "hover doesn't work on mobile"). Rowan had already
+     chosen visible-at-rest for the task row's control, so both surfaces now
+     agree.
+
+     A pinned row gets exactly this treatment, not a special one. An earlier
+     revision made the control permanent AND filled inside the Pinned block;
+     the fill was removed on review, because the block already marks the
+     state. Only the fill went — this rule is one glyph, one colour, every
+     row.
+
+     `transition` covers colour and background on hover/focus. */
+  .channel-row-pin-button {
+    @apply relative flex-shrink-0 inline-flex items-center justify-center w-6 h-6 mr-1 rounded text-base-content/60 hover:text-primary hover:bg-base-200 focus-visible:text-primary transition duration-75;
+  }
+
+  /* 44x44 touch target from a hit-area pseudo-element, not from the box.
+     WCAG 2.5.5 wants 44px; a 44px BUTTON in a 32px rail row would either
+     grow the row or take 20px more from the conversation name, and the name
+     is the fragment that must not lose space. The overlay is transparent and
+     centred on the 24px icon, so it reaches ~10px into the row link on each
+     side — blank truncation space on a channel row, and the cost of making
+     the control tappable at all. */
+  .channel-row-pin-button::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
   }
 
   .channel-row--active {
@@ -3502,6 +3560,39 @@ body, .font-fabrikam {
      stack at every row. */
   .channel-row-unread-pill {
     @apply ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none;
+  }
+
+  /* Ajar group (019fd80f stage 3) — the peeked rows of a COLLAPSED client
+     section, plus the "Show all (N)" line that closes them off.
+
+     The 2px left rule is what makes a closed client read as ONE object left
+     ajar rather than as loose rows that failed to hide. `--color-base-300` is
+     the only token it needs: it is the border slot in light and the raised
+     surface in dark, so it clears the rail in both. Deliberately NO surface
+     fill — the rail is already base-200 in dark and a second fill in that
+     range will not read.
+
+     The group adds no type and no opacity of its own, so a peeked row renders
+     exactly like an expanded one. They are the rows a person actually wants to
+     click; shrinking or dimming them would punish the only channels the
+     collapse was keeping on screen.
+
+     The indent is deliberately small — a 4px margin plus the 2px rule, so a
+     peeked row starts 6px right of an expanded one. The rule lives in whitespace
+     the rail already had rather than pushing the rows across: at a 12px indent,
+     "Gen-migration" truncated to "Gen-migra…" while ajar and fit whole while
+     expanded (93px of text into an 83px box). A row whose name you cannot read
+     is a poor reward for keeping it on screen. */
+  .channel-ajar-group {
+    @apply ml-1 border-l-2 border-base-300;
+  }
+
+  /* The only new type in the feature: xs at 60% base-content, quiet enough to
+     stay a utility line and loud enough to be read before the section is
+     dismissed as broken. A real <button> in the markup, so focus-visible is the
+     browser's and the tab order is the DOM's. */
+  .channel-ajar-show-all {
+    @apply block w-full px-3 py-1 mx-1 text-left text-xs rounded text-base-content/60 hover:text-base-content hover:bg-base-300 transition-colors;
   }
 
   /* Chat-header scope-pill — prominent size variant (chat plan v2 Stage 4).

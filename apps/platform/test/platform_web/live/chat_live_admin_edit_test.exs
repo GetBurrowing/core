@@ -135,6 +135,27 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
     section.id
   end
 
+  defp destination_selector(section_id),
+    do: ~s([data-role="move-to-org-destination"][data-section-id="#{section_id}"])
+
+  # "Move to organisation…" step 1a: open one row's destination chooser.
+  defp open_move_menu(view, channel_id) do
+    view
+    |> element(~s(button[data-role="move-to-org-trigger"][phx-value-channel_id="#{channel_id}"]))
+    |> render_click()
+  end
+
+  # Step 1b: pick a destination out of the open popover. Clicking the real
+  # entry (rather than pushing `request_channel_reassign` directly) is what
+  # proves the popover is wired to the handler at all.
+  defp pick_move_destination(view, channel_id, section_id) do
+    view
+    |> element(
+      ~s(button[data-role="move-to-org-destination"][phx-value-channel_id="#{channel_id}"][data-section-id="#{section_id}"])
+    )
+    |> render_click()
+  end
+
   # ── (a) toggle visibility: admin sees it, member does not ───────────────
 
   describe "Edit default (admin) toggle visibility" do
@@ -323,24 +344,131 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
                Enum.find_index(after_ids, &(&1 == to_id)) - 1
     end
 
-    test "channel_reassigned in admin-edit sets the channel's org_id globally",
+    test "requesting a move opens the confirmation and writes nothing until it is confirmed",
          %{conn: conn} do
       admin = admin_user!("reassign")
       conn = authenticated_conn(conn, admin)
       channel = create_channel("roamer", "fabrikam")
       sxi_section = section_id_for_org("sxi")
+      fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+      sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
+      to_label = Repo.get!(Section, sxi_section).name
+      from_label = Repo.get!(Section, section_id_for_org("fabrikam")).name
+
+      {:ok, view, _html} = live_following_redirect(conn)
+
+      # Driven through the REAL controls, not forged events: the row's trigger
+      # renders the popover, the popover's SXI entry opens the confirmation.
+      # A handler test alone would pass for a control nothing is wired to.
+      open_move_menu(view, channel.id)
+
+      # The chooser offers the other orgs and NOT the one the channel is
+      # already in — a destination that writes nothing is not a destination.
+      # Matched by selector rather than by substring, so the assertion does
+      # not depend on the order HEEx happens to emit the attributes in.
+      assert has_element?(view, destination_selector(sxi_section))
+      refute has_element?(view, destination_selector(section_id_for_org("fabrikam")))
+
+      html = pick_move_destination(view, channel.id, sxi_section)
+
+      # All four lines, verbatim. The canvas line in particular is a verified
+      # fact about `CanvasAccess.org_readable_space?/2` and an earlier draft of
+      # this dialog stated its opposite, so it is asserted rather than trusted.
+      assert html =~ "Move ##{channel.name} to #{to_label}?"
+      assert html =~ "Everyone sees this channel filed under #{to_label}."
+      assert html =~ "Nobody is added to or removed from the channel."
+
+      assert html =~
+               "People in #{to_label} will be able to open this channel&#39;s canvases by direct link, and people in #{from_label} will not."
+
+      assert html =~ "Personal layouts are not affected."
+
+      # Step 1 wrote NOTHING.
+      assert Chat.get_space(channel.id).org_id == fabrikam_org_id
+
+      # Step 2 writes.
+      view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
+
+      assert Chat.get_space(channel.id).org_id == sxi_org_id
+    end
+
+    test "cancelling a requested move leaves the channel where it was", %{conn: conn} do
+      admin = admin_user!("reassign_cancel")
+      conn = authenticated_conn(conn, admin)
+      channel = create_channel("stayer", "fabrikam")
+      sxi_section = section_id_for_org("sxi")
+      fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+
+      {:ok, view, _html} = live_following_redirect(conn)
+
+      open_move_menu(view, channel.id)
+      pick_move_destination(view, channel.id, sxi_section)
+
+      html = view |> element(~s(button[data-role="move-to-org-cancel"])) |> render_click()
+
+      # The dialog is gone and the channel never moved.
+      refute html =~ ~s(data-role="move-to-org-dialog")
+      assert Chat.get_space(channel.id).org_id == fabrikam_org_id
+    end
+
+    test "a forged confirm payload cannot re-point an approved move", %{conn: conn} do
+      admin = admin_user!("reassign_repoint")
+      conn = authenticated_conn(conn, admin)
+      approved = create_channel("approved", "fabrikam")
+      bystander = create_channel("bystander", "fabrikam")
+      sxi_section = section_id_for_org("sxi")
+      soylent_section = section_id_for_org("soylent")
+      fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
       sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
 
       {:ok, view, _html} = live_following_redirect(conn)
 
-      enter_admin_edit(view)
+      # The admin approves ONE move: #approved to SXI.
+      open_move_menu(view, approved.id)
+      pick_move_destination(view, approved.id, sxi_section)
 
-      render_hook(view, "channel_reassigned", %{
-        "channel_id" => channel.id,
-        "target_section_id" => sxi_section
+      # The confirm event then arrives naming a DIFFERENT channel and a
+      # DIFFERENT destination. This is the whole point of the two-step split:
+      # `confirm_channel_reassign` reads its ids from `@reassign_confirm`, so
+      # the payload is inert. The actor here is a genuine admin, which is what
+      # makes this a mutation probe rather than an authorization test — an
+      # authorization check would let this through.
+      render_hook(view, "confirm_channel_reassign", %{
+        "channel_id" => bystander.id,
+        "target_section_id" => soylent_section
       })
 
-      assert Chat.get_space(channel.id).org_id == sxi_org_id
+      # The approved move happened, exactly as approved.
+      assert Chat.get_space(approved.id).org_id == sxi_org_id
+      # The channel named in the forged payload did not move.
+      assert Chat.get_space(bystander.id).org_id == fabrikam_org_id
+    end
+
+    test "a name already taken in the destination org says so, not 'could not move'",
+         %{conn: conn} do
+      admin = admin_user!("reassign_collision")
+      conn = authenticated_conn(conn, admin)
+
+      # Two channels called "general" in two different orgs is the ORDINARY
+      # shape of this data, so `chat_spaces_unique_org_slug` fires in routine
+      # use rather than as an edge case.
+      mover = create_channel("general", "fabrikam")
+      _blocker = create_channel("general", "sxi")
+      sxi_section = section_id_for_org("sxi")
+      fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+      to_label = Repo.get!(Section, sxi_section).name
+
+      {:ok, view, _html} = live_following_redirect(conn)
+
+      open_move_menu(view, mover.id)
+      pick_move_destination(view, mover.id, sxi_section)
+
+      html = view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
+
+      assert html =~ "A channel in #{to_label} already uses that name."
+      refute html =~ "Could not move the channel."
+      # The write was refused, not half-applied.
+      assert Chat.get_space(mover.id).org_id == fabrikam_org_id
     end
   end
 
@@ -525,7 +653,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert Sidebar.list_default_sections() |> Enum.map(& &1.id) == before_ids
     end
 
-    test "channel_reassigned by a member does not change the channel's org_id",
+    test "a member gets no move control, no confirmation from a forged request, and no write from a forged confirm",
          %{conn: conn} do
       member = member_user!("reassign_reject")
       conn = authenticated_conn(conn, member)
@@ -533,14 +661,29 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       sxi_section = section_id_for_org("sxi")
       fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
 
-      {:ok, view, _html} = live_following_redirect(conn)
+      {:ok, view, html} = live_following_redirect(conn)
 
-      render_hook(view, "channel_reassigned", %{
+      # (1) The affordance is absent.
+      refute desktop_sidebar(html) =~ ~s(data-role="move-to-org-trigger")
+
+      # (2) A forged step-1 assigns NO confirmation. This is what stops a
+      # non-admin from getting a populated `@reassign_confirm` that a later
+      # confirm could then act on.
+      html =
+        render_hook(view, "request_channel_reassign", %{
+          "channel_id" => channel.id,
+          "target_section_id" => sxi_section
+        })
+
+      refute html =~ ~s(data-role="move-to-org-dialog")
+
+      # (3) A forged step-2 writes nothing either — belt and braces, since
+      # `Sidebar.reassign_channel/3` re-checks `fabrikam_admin?` underneath.
+      render_hook(view, "confirm_channel_reassign", %{
         "channel_id" => channel.id,
         "target_section_id" => sxi_section
       })
 
-      # org_id is still Fabrikam — the member's forged reassign was rejected.
       assert Chat.get_space(channel.id).org_id == fabrikam_org_id
     end
 

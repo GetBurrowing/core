@@ -4,17 +4,26 @@ defmodule PlatformWeb.ChatLiveMobilePinnedStripTest do
 
   The strip is a `lg:hidden` horizontally-scrollable chip row at the top of
   the chat main pane that surfaces the same pinned spaces the desktop rail
-  shows — `@pinned_task_spaces` (task-exec pins, `hero-map-pin-mini`) and
-  `@channel_sections.pinned` (channel pins, `hero-bookmark-solid`). Without
-  it, pinned spaces are unreachable on mobile because `<aside id="chat-sidebar">`
-  is `hidden lg:flex`.
+  shows — `@pinned_task_spaces` (task-exec pins,
+  `hero-clipboard-document-list-mini`) and `@channel_sections.pinned`
+  (pinned conversations). Without it, pinned spaces are unreachable on
+  mobile because `<aside id="chat-sidebar">` is `hidden lg:flex`.
 
-  Channel-level pinning is not yet wired end-to-end
-  (`channel_sections/4` receives `MapSet.new()` for `pinned_channel_ids` at
-  every current call site), so `@channel_sections.pinned` is always `[]` in
-  production today. These tests exercise the task-pin path (which IS wired)
-  and assert the template also carries the channel-chip skeleton so the
-  branch is ready when channel-pinning ships.
+  Updated by task 019fd80f stage 2. Conversation pinning is now wired at
+  every `channel_sections/4` call site, so `@channel_sections.pinned` is no
+  longer always `[]`, and the chips no longer carry `hero-bookmark-solid`:
+  a pin marker on every chip in a strip of pins never varied and told the
+  reader nothing. Chips now use the desktop row identity, a bare name for
+  a person and `#` for a channel. Render coverage for both kinds lives in
+  `chat_live_pinned_block_test.exs`, which can seed a pinned conversation;
+  the tests here stay on the task-pin path.
+
+  Updated again by task 019feec6-73d9. The task chip carried
+  `hero-map-pin-mini` while the rail's task row carried
+  `hero-clipboard-document-list-mini` — one concept, two glyphs depending on
+  which surface you were looking at. The glyph is the ONLY thing that
+  distinguishes the three kinds of pinned row, so the two surfaces now use
+  the one Saru's design canvas specifies.
 
   Strip render requires an active_space (`:if={@active_space && !@embedded && …}`) —
   each test navigates to a concrete chat route so the LiveView has a chosen
@@ -149,7 +158,7 @@ defmodule PlatformWeb.ChatLiveMobilePinnedStripTest do
   end
 
   describe "mobile Pinned strip chip rendering" do
-    test "task chip renders hero-map-pin-mini icon + task title label", %{conn: conn} do
+    test "task chip renders the rail's task glyph + task title label", %{conn: conn} do
       user = insert_chat_user()
       %{space: space} = seed_pinned_task_for(user, title: "Iconic Task")
 
@@ -162,10 +171,15 @@ defmodule PlatformWeb.ChatLiveMobilePinnedStripTest do
         |> element("[data-role='mobile-pinned-task-chip'][data-space-id='#{space.id}']")
         |> render()
 
-      # hero-map-pin-mini matches the desktop rail's Pinned-tasks section
-      # header icon at chat_live.html.heex:353 — same mental model, same
-      # glyph, so a mobile user recognises the pin metaphor immediately.
-      assert chip_html =~ "hero-map-pin-mini"
+      # The SAME glyph the desktop rail and the mobile drawer put on a task
+      # row. This chip carried `hero-map-pin-mini` until task 019feec6-73d9:
+      # a task read as one thing in the rail and another in the strip, and
+      # the glyph is the only thing separating a task from a channel or a
+      # person.
+      assert chip_html =~ "hero-clipboard-document-list-mini"
+
+      refute chip_html =~ "hero-map-pin-mini",
+             "the task chip still carries the old pin glyph alongside the new one"
 
       # Chip label MUST be the real task title, not the cryptic
       # `task-exec-<id>` space slug (regression against the desktop rail
@@ -201,12 +215,20 @@ defmodule PlatformWeb.ChatLiveMobilePinnedStripTest do
       assert chip_html =~ "href=\"#{expected_path}\""
     end
 
-    test "channel-chip branch is present in the template skeleton", %{conn: _conn} do
-      # Channel-level pinning isn't wired at the DB level yet (see moduledoc);
-      # we can't seed a pinned channel through the Chat context today. This
-      # snapshot-style assertion locks the channel-chip skeleton to the
-      # template so removing it would fail loudly instead of silently
-      # dropping the branch once channel-pinning lands.
+    test "conversation-chip branch is present in the template skeleton", %{conn: _conn} do
+      # A snapshot assertion locking the conversation-chip branch to the
+      # template so removing it fails loudly.
+      #
+      # This test is SCOPED to the chip's own markup rather than grepping the
+      # whole file, and the history is why. It used to assert
+      # `hero-bookmark-solid` was present. When task 019fd80f stage 2 removed
+      # that icon from the chips, the assertion did NOT fail: the string still
+      # appears five times elsewhere in the file for message pinning. A
+      # whole-file grep for a string that is not unique to the thing under
+      # test cannot fail for the reason it was written.
+      #
+      # Scoping to the region between the chip's data-role and its closing tag
+      # makes every assertion below answer a question about the chip itself.
       template_path =
         Path.join([
           File.cwd!(),
@@ -215,9 +237,29 @@ defmodule PlatformWeb.ChatLiveMobilePinnedStripTest do
 
       template = File.read!(template_path)
 
-      assert template =~ "data-role=\"mobile-pinned-channel-chip\""
-      assert template =~ "hero-bookmark-solid"
       assert template =~ "@channel_sections.pinned"
+      assert template =~ "data-role=\"mobile-pinned-channel-chip\""
+
+      chip =
+        case Regex.run(~r/data-role="mobile-pinned-channel-chip".*?<\/\.link>/s, template) do
+          [match] -> match
+          _ -> flunk("could not locate the conversation-chip markup in the template")
+        end
+        # HEEx comments are stripped before asserting. Without this the
+        # refutes below match the comment that EXPLAINS why the bookmark and
+        # the avatar are absent, so a correct template fails. Scoping the
+        # region was not enough on its own; the region has to be markup.
+        |> String.replace(~r/<%!--.*?--%>/s, "")
+
+      # A channel chip keeps the hash; a person chip is a bare display name.
+      assert chip =~ "data-role=\"pinned-row-hash\""
+      assert chip =~ "sidebar_display_name(space, @user_id)"
+
+      # Neither marker belongs on these chips. The bookmark never varied in a
+      # strip where every chip is already a pin, and the avatar rendered
+      # misleading initials for group DMs.
+      refute chip =~ "hero-bookmark-solid"
+      refute chip =~ "human_avatar"
     end
   end
 

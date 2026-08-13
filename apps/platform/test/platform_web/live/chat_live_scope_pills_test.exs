@@ -167,10 +167,10 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
       assert sidebar =~ "Soylent"
 
       # …but Paragon and Fabrikam sub-org headers are filtered out.
-      refute sidebar =~ ~r/<p[^>]*class="channel-section-label"[^>]*>Paragon</,
+      refute sidebar =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Paragon\s*</,
              "Paragon sub-org section should be hidden by the Soylent scope filter"
 
-      refute sidebar =~ ~r/<p[^>]*class="channel-section-label"[^>]*>Fabrikam</,
+      refute sidebar =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Fabrikam\s*</,
              "Fabrikam sub-org section should be hidden by the Soylent scope filter"
     end
 
@@ -239,7 +239,7 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
 
       sidebar1 = desktop_sidebar(html1)
 
-      refute sidebar1 =~ ~r/<p[^>]*class="channel-section-label"[^>]*>Paragon</,
+      refute sidebar1 =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Paragon\s*</,
              "After first click, Paragon bucket should be hidden"
 
       # Second click on the same pill → clears the filter, both buckets
@@ -253,10 +253,10 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
 
       sidebar2 = desktop_sidebar(html2)
 
-      assert sidebar2 =~ ~r/<p[^>]*class="channel-section-label"[^>]*>Paragon</,
+      assert sidebar2 =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Paragon\s*</,
              "After second click on the same pill, Paragon bucket should re-appear"
 
-      assert sidebar2 =~ ~r/<p[^>]*class="channel-section-label"[^>]*>Soylent</
+      assert sidebar2 =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Soylent\s*</
     end
   end
 end

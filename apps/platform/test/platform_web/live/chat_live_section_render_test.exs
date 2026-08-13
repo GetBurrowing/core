@@ -349,9 +349,23 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
       view = open_mobile_browser(conn)
 
-      # Pinning isn't wired yet (pinned is always empty today), so the Pinned
-      # section must not render — matching the desktop rail's conditional.
-      refute has_element?(view, ~s(#mobile-channel-browser section[aria-label="Pinned"])),
+      # This user has pinned nothing, so the section must not render, matching
+      # the desktop rail's conditional. The old comment here said pinning
+      # "isn't wired yet"; it has been wired since stage 1 of 019fd80f. The
+      # test still holds because this fixture pins nothing, not because the
+      # feature is absent.
+      #
+      # The selector tracks the section's accessible name, which is the bare
+      # "Pinned" again now that one block holds pinned channels, DMs and task
+      # conversations together (task 019feec6-73d9). A selector left pointing
+      # at a name the section no longer carries would go on passing forever.
+      # The POSITIVE case proving this selector fires when a pin does exist is
+      # "the mobile drawer's section carries the same label" in
+      # chat_live_pinned_block_test.exs.
+      refute has_element?(
+               view,
+               ~s(#mobile-channel-browser section[aria-label="Pinned"])
+             ),
              "Empty Pinned section should be suppressed in the mobile overlay"
     end
   end
@@ -690,6 +704,317 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       [match] -> match
       _ -> ""
     end
+  end
+
+  describe "section collapse toggle (019fd80f stage 2)" do
+    # The header-mounted accordion. Collapse is NOT hide: the section, its
+    # header and its toggle all stay on screen — only the channel rows fold
+    # away. Every assertion below is scoped to the DESKTOP rail so the mobile
+    # overlay, which renders the same sections, can't satisfy one by accident.
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {section, channel} = seed_channel_in_first_section()
+      {:ok, view, _html} = live_following_redirect(conn)
+      %{conn: conn, view: view, section: section, channel: channel}
+    end
+
+    test "expanded by default: rows render and the toggle reports aria-expanded=true",
+         %{view: view, section: section, channel: channel} do
+      sidebar = desktop_sidebar(render(view))
+
+      assert sidebar =~ channel.name,
+             "A section is expanded by default, so its channel rows must render"
+
+      assert collapse_toggle_attr(sidebar, section.id, "aria-expanded") == "true"
+
+      assert collapse_toggle_attr(sidebar, section.id, "aria-label") ==
+               "Collapse #{section.name}",
+             "The accessible name must name the section, not read a bare \"Collapse\""
+    end
+
+    test "collapsing removes the section's channel rows but KEEPS its header",
+         %{view: view, section: section, channel: channel} do
+      sidebar = desktop_sidebar(click_collapse(view, section, true))
+
+      refute sidebar =~ channel.name,
+             "Collapsing a section must fold away its channel rows"
+
+      # Anti-vacuity. An implementation that dropped the whole section would
+      # pass the refute above while shipping Hide under a new name, so pin the
+      # header, its label text and the toggle itself as still present.
+      assert sidebar =~ ~s(data-section-id="#{section.id}"),
+             "A collapsed section must still render — collapse is not hide"
+
+      assert sidebar =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*#{section.name}/,
+             "A collapsed section must still render its header label"
+
+      assert collapse_toggle_attr(sidebar, section.id, "aria-expanded") == "false"
+
+      assert collapse_toggle_attr(sidebar, section.id, "aria-label") ==
+               "Expand #{section.name}",
+             "A collapsed toggle must offer to expand, and name its section"
+    end
+
+    test "expanding again restores the rows", %{view: view, section: section, channel: channel} do
+      _ = click_collapse(view, section, true)
+      sidebar = desktop_sidebar(click_collapse(view, section, false))
+
+      assert sidebar =~ channel.name, "Expanding must bring the channel rows back"
+      assert collapse_toggle_attr(sidebar, section.id, "aria-expanded") == "true"
+    end
+
+    test "collapse state survives a remount of the LiveView",
+         %{conn: conn, view: view, section: section, channel: channel} do
+      _ = click_collapse(view, section, true)
+
+      {:ok, _view2, html} = live_following_redirect(conn)
+      sidebar = desktop_sidebar(html)
+
+      refute sidebar =~ channel.name,
+             "Collapse is a persisted preference, so a fresh mount must come back collapsed"
+
+      assert collapse_toggle_attr(sidebar, section.id, "aria-expanded") == "false"
+    end
+  end
+
+  describe "collapsed section peeks unread channels (019fd80f stage 3)" do
+    # The load-bearing state of the feature. A COLLAPSED section renders its
+    # header plus ONLY the channels carrying unread; an EXPANDED one renders all
+    # of them. Three states, not two: expanded, collapsed-with-activity, and
+    # collapsed-quiet. A collapse that hides everything is a worse Hide, which is
+    # exactly what these tests exist to prevent.
+    #
+    # The unread counts here are REAL, and that is deliberate.
+    # `Chat.unread_counts_for_user/1` counts undeleted, non-thread messages
+    # posted by ANOTHER participant after the reader's last_read_message_id, and
+    # drops zero counts from the map entirely. On a database with no messages
+    # every count is zero, so "a collapsed section still shows its unread rows"
+    # would pass vacuously against an implementation that shows nothing at all.
+    # The setup asserts a non-zero count BEFORE any render assertion runs.
+    setup %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      [section, quiet_section | _] =
+        Platform.Chat.Section |> Repo.all() |> Enum.sort_by(& &1.position)
+
+      noisy = create_channel_in("Noisy", "noisy", section)
+      quiet = create_channel_in("Quiet", "quiet", section)
+      lonely = create_channel_in("Lonely", "lonely", quiet_section)
+
+      seed_unread(noisy, user.id, 3)
+
+      # Data gate. Everything below reads @unread_counts, which is this map.
+      assert Chat.unread_counts_for_user(user.id) == %{noisy.id => 3},
+             "The peek tests are meaningless unless the reader really has unread messages"
+
+      # Land on `lonely`, which sits in NEITHER of the two channel rows under
+      # test: opening a space clears its unread from the socket assign, so
+      # landing on `noisy` would silently zero the count the whole describe
+      # block depends on.
+      {:ok, view, _html} = live(conn, ~p"/chat/#{lonely.slug}")
+
+      %{
+        view: view,
+        section: section,
+        quiet_section: quiet_section,
+        noisy: noisy,
+        quiet: quiet
+      }
+    end
+
+    test "collapsing a section hides the channels with ZERO unread",
+         %{view: view, section: section, quiet: quiet} do
+      rows = view |> click_collapse(section, true) |> section_rows(section.id)
+
+      refute {quiet.name, ""} in rows,
+             "A collapsed section must fold away the channels with nothing new in them, got #{inspect(rows)}"
+    end
+
+    test "a channel in that SAME collapsed section WITH unread still renders",
+         %{view: view, section: section, noisy: noisy} do
+      rows = view |> click_collapse(section, true) |> section_rows(section.id)
+
+      # The anti-vacuity assertion of the stage. The pill text rides along
+      # because a peeked row whose count is not on screen would not be evidence
+      # of anything: it is the count that justifies peeking the row at all.
+      assert rows == [{noisy.name, "3"}],
+             "A collapsed section must keep showing the channels that have new activity, got #{inspect(rows)}"
+    end
+
+    test "expanding shows everything again",
+         %{view: view, section: section, noisy: noisy, quiet: quiet} do
+      _ = click_collapse(view, section, true)
+      rows = view |> click_collapse(section, false) |> section_rows(section.id)
+
+      assert Enum.sort(rows) == Enum.sort([{noisy.name, "3"}, {quiet.name, ""}]),
+             "Expanding must restore the quiet rows alongside the noisy one"
+    end
+
+    test "a collapsed section with no unread anywhere renders its header and no rows",
+         %{view: view, quiet_section: quiet_section} do
+      html = click_collapse(view, quiet_section, true)
+
+      assert section_rows(html, quiet_section.id) == []
+
+      # Asserting the section's WHOLE visible text rather than refuting a
+      # marker: collapsed-quiet is an ordinary accordion, so the header label and
+      # the drag handle are the only text it may render. No peeked rows and no
+      # "Show all" line.
+      assert section_text(html, quiet_section.id) == "#{quiet_section.name} ☰",
+             "A collapsed section with nothing new is a plain header"
+    end
+
+    test ~S|"Show all (N)" is a real control that names the count and the section, and expands|,
+         %{view: view, section: section, noisy: noisy, quiet: quiet} do
+      html = click_collapse(view, section, true)
+      button = show_all_button(html, section.id)
+
+      assert LazyHTML.tag(button) == ["button"],
+             "\"Show all\" must be a focusable control, not decorative text, got #{inspect(LazyHTML.tag(button))}"
+
+      # N is the section's TOTAL channel count (2 here: one peeked, one hidden),
+      # so the line answers "where did the rest go". The accessible name carries
+      # that count and the section, because the left rule that groups the peeked
+      # rows communicates nothing to a screen reader.
+      assert LazyHTML.attribute(button, "aria-label") ==
+               ["Show all 2 channels in #{section.name}"]
+
+      assert button |> LazyHTML.text() |> String.trim() == "Show all (2)"
+
+      rows =
+        view
+        |> element(~s(section[data-section-id="#{section.id}"] button.channel-ajar-show-all))
+        |> render_click()
+        |> section_rows(section.id)
+
+      assert Enum.sort(rows) == Enum.sort([{noisy.name, "3"}, {quiet.name, ""}]),
+             "The \"Show all\" line doubles as the expand control"
+    end
+  end
+
+  # Click a section's HEADER collapse toggle, posting the DESIRED next state
+  # (the server takes the value rather than flipping), and return the new
+  # render. Scoped by class because the stage-3 "Show all (N)" line posts the
+  # same event for the same section, so the bare event selector matches two
+  # elements once a section is ajar.
+  defp click_collapse(view, section, collapsed?) do
+    view
+    |> element(~s(button.channel-section-collapse-toggle[phx-value-section_id="#{section.id}"]))
+    |> render_click(%{"section_id" => section.id, "collapsed" => to_string(collapsed?)})
+  end
+
+  # {channel name, unread pill text} for every row rendered inside ONE section
+  # of the DESKTOP rail, in DOM order. Scoped to the section element on purpose:
+  # a channel name also appears in the mobile overlay and can appear in another
+  # section, so a whole-blob match would satisfy a presence assertion without
+  # the row being anywhere near the section under test. The pill text rides
+  # along so a row can't be counted as "peeked" while showing no count.
+  defp section_rows(html, section_id) do
+    html
+    |> desktop_sidebar()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(
+      ~s(section[data-section-id="#{section_id}"] .channel-row-wrap a.channel-row)
+    )
+    |> Enum.map(fn row ->
+      {node_text(row, "span.truncate"), node_text(row, "span.channel-row-unread-pill")}
+    end)
+  end
+
+  defp node_text(node, selector) do
+    node |> LazyHTML.query(selector) |> LazyHTML.text() |> String.trim()
+  end
+
+  # The whole visible text of one desktop-rail section, whitespace collapsed.
+  defp section_text(html, section_id) do
+    html
+    |> desktop_sidebar()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s(section[data-section-id="#{section_id}"]))
+    |> LazyHTML.text()
+    |> String.split()
+    |> Enum.join(" ")
+  end
+
+  defp show_all_button(html, section_id) do
+    html
+    |> desktop_sidebar()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s(section[data-section-id="#{section_id}"] button.channel-ajar-show-all))
+  end
+
+  defp authenticated_conn_with_user(conn) do
+    user = insert_chat_user()
+    {init_test_session(conn, current_user_id: user.id), user}
+  end
+
+  defp create_channel_in(name, slug, section) do
+    {:ok, ch} =
+      Chat.create_space(%{name: name, slug: slug, kind: "channel", org_id: section.org_id})
+
+    ch
+  end
+
+  # Real unread for `user_id` in `space`: join the reader, join a second
+  # participant, and post `count` messages as that second participant. The
+  # reader never marks the space read, so last_read_message_id stays nil and
+  # every one of those messages counts (`count_unread/3` caps that branch at
+  # 10, so keep `count` well under it).
+  defp seed_unread(space, user_id, count) do
+    {:ok, _reader} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: user_id,
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, other} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: Ecto.UUID.generate(),
+        joined_at: DateTime.utc_now()
+      })
+
+    for n <- 1..count do
+      {:ok, _} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: other.id,
+          content_type: "text",
+          content: "unread #{n}"
+        })
+    end
+
+    :ok
+  end
+
+  # Read one attribute off a given section's collapse toggle. Returns nil when
+  # the toggle isn't rendered at all, so a missing control fails loudly rather
+  # than matching an expected string by omission.
+  defp collapse_toggle_attr(html, section_id, attr) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(
+      ~s(section[data-section-id="#{section_id}"] button[phx-click="toggle_section_collapsed"])
+    )
+    |> LazyHTML.attribute(attr)
+    |> List.first()
+  end
+
+  # One channel filed into the lowest-position org section, returned with that
+  # section so a test can address the exact header it collapsed.
+  defp seed_channel_in_first_section do
+    section = Platform.Chat.Section |> Repo.all() |> Enum.min_by(& &1.position)
+
+    {:ok, channel} =
+      Chat.create_space(%{
+        name: "Collapsible",
+        slug: "collapsible",
+        kind: "channel",
+        org_id: section.org_id
+      })
+
+    {section, channel}
   end
 
   # Ordered, de-duplicated sub-org section ids from a rendered HTML blob.
