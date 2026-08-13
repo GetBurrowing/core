@@ -99,7 +99,7 @@ function anchoredRows(el) {
 // ── Tests ──────────────────────────────────────────────────────────────
 
 describe("ScrollToBottom — deep-link anchor holds the arrival position", () => {
-  let priorMO
+  let priorMO, priorRO, priorRAF
 
   beforeEach(() => {
     priorMO = globalThis.MutationObserver
@@ -110,10 +110,29 @@ describe("ScrollToBottom — deep-link anchor holds the arrival position", () =>
       observe() {}
       disconnect() {}
     }
+
+    // Polyfill ResizeObserver for node test env (task 019ff6c9)
+    priorRO = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      constructor(cb) {
+        this.cb = cb
+      }
+      observe() {}
+      disconnect() {}
+    }
+
+    // Polyfill requestAnimationFrame / cancelAnimationFrame
+    priorRAF = globalThis.requestAnimationFrame
+    globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0)
+    globalThis.cancelAnimationFrame = (id) => clearTimeout(id)
   })
 
   afterEach(() => {
     globalThis.MutationObserver = priorMO
+    if (priorRO !== undefined) globalThis.ResizeObserver = priorRO
+    else delete globalThis.ResizeObserver
+    if (priorRAF !== undefined) globalThis.requestAnimationFrame = priorRAF
+    else delete globalThis.requestAnimationFrame
   })
 
   it("BASELINE: with no anchor attribute, mount hard-snaps to the bottom", () => {

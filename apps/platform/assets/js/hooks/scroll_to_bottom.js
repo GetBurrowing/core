@@ -74,8 +74,52 @@ const ScrollToBottom = {
     this._observer = new MutationObserver(() => {
       this._safeUpdate();
     });
+
+    // iOS PWA cold-launch fix (task 019ff6c9):
+    // On iOS Safari in standalone (PWA) mode, mounted() fires before the
+    // browser has completed its initial layout pass. scrollHeight is
+    // inaccurate at this point, so the view lands mid-conversation.
+    // The MutationObserver only catches new childList additions, but on
+    // cold launch the nodes are already present — just not laid out yet.
+    //
+    // ResizeObserver detects when the container's dimensions stabilize
+    // after fonts, images, and layout settle. We keep snapping to bottom
+    // during the initial phase, then disconnect once stable.
+    if (typeof ResizeObserver !== "undefined") {
+      this._resizeObserver = new ResizeObserver(() => {
+        if (this._initialScroll) {
+          this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+        } else {
+          // Initial phase ended — no longer needed
+          this._disconnectResizeObserver();
+        }
+      });
+      this._resizeObserver.observe(this.scrollEl);
+    }
+
+    // Wrap the first scrollToBottom in rAF so the browser has done at
+    // least one layout pass before we read scrollHeight.
+    requestAnimationFrame(() => {
+      this._safeUpdate();
+    });
+
+    // One-shot fallback for iOS Safari standalone mode: it sometimes
+    // reports incorrect scrollHeight before the first paint completes.
+    this._iosFallbackTimer = setTimeout(() => {
+      this._iosFallbackTimer = null;
+      if (this._initialScroll) {
+        this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+      }
+    }, 100);
+
     this._safeUpdate();
     this._observer.observe(this.el, { childList: true, subtree: false });
+  },
+  _disconnectResizeObserver() {
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver = null;
+    }
   },
   _safeUpdate() {
     // Disconnect observer to prevent infinite loop from our own DOM changes
@@ -93,6 +137,11 @@ const ScrollToBottom = {
   destroyed() {
     if (this._observer) this._observer.disconnect();
     if (this._holdFrame) cancelAnimationFrame(this._holdFrame);
+    this._disconnectResizeObserver();
+    if (this._iosFallbackTimer) {
+      clearTimeout(this._iosFallbackTimer);
+      this._iosFallbackTimer = null;
+    }
   },
   distanceFromBottom() {
     return (
@@ -121,6 +170,7 @@ const ScrollToBottom = {
     // the container overflows; leaving it open would re-snap on the
     // very next stream batch and undo the arrival.
     this._initialScroll = false;
+    this._disconnectResizeObserver();
     return true;
   },
   scrollToBottom() {
@@ -133,6 +183,7 @@ const ScrollToBottom = {
       // snap until there is real scrollable content to anchor against.
       if (this.scrollEl.scrollHeight > this.scrollEl.clientHeight) {
         this._initialScroll = false;
+        this._disconnectResizeObserver();
       }
       return;
     }
