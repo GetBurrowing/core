@@ -25,6 +25,16 @@ defmodule PlatformWeb.ExternalRecoveryLive do
       a `{:external_admission_holding, _}` broadcast live-appends the row +
       increments a "new" badge WITHOUT a reload.
 
+  ## Group-claim mapping editor (task 019ff7ff stage 5)
+
+  The same page carries the IdP group value -> org mapping editor backing
+  `Tenancy.resolve_org_from_groups/1`. Adding a mapping changes only what
+  FUTURE holding logins pre-select — it grants nothing retroactively, and
+  no membership/participant/allowlist row is ever written from here. Each
+  holding row that matched nothing lists the group values it actually
+  carried (or says they were not recorded) so an admin maps a real value
+  instead of a guessed one.
+
   Fabrikam-only gate is inherited from the `:admin` `live_session`
   (`{PlatformWeb.LiveAuth, :ensure_admin}`).
   """
@@ -36,6 +46,7 @@ defmodule PlatformWeb.ExternalRecoveryLive do
   alias Platform.Chat
   alias Platform.Tenancy
   alias Platform.Tenancy.ExternalGrants
+  alias Platform.Tenancy.OrgGroupClaim
 
   @impl true
   def mount(_params, _session, socket) do
@@ -54,6 +65,7 @@ defmodule PlatformWeb.ExternalRecoveryLive do
       |> assign(:grant_spaces, Chat.list_spaces(kind: "channel"))
       |> load_queue()
       |> load_provisioned()
+      |> load_group_claims()
 
     {:ok, socket}
   end
@@ -83,6 +95,60 @@ defmodule PlatformWeb.ExternalRecoveryLive do
     end
   end
 
+  # Task 019ff7ff stage 5 — the group-claim mapping editor. Creating a
+  # mapping changes FUTURE pre-selection only: no `apply_grant`, no
+  # `recover/3`, no membership write happens here. An admin still grants
+  # each holding user by hand; the mapping just stops them guessing which
+  # org a group value means.
+  def handle_event("add_group_mapping", params, socket) do
+    attrs = %{
+      claim_value: Map.get(params, "claim_value"),
+      org_id: presence(Map.get(params, "org_id"))
+    }
+
+    case Tenancy.create_group_claim(attrs) do
+      {:ok, _claim} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Mapped #{OrgGroupClaim.normalize(attrs.claim_value)}.")
+         |> load_group_claims()
+         |> load_queue()}
+
+      {:error, changeset} ->
+        # Reload first: the row that owns a duplicate value may have been
+        # added by another admin since this mount, and the message is only
+        # useful if it can name its org.
+        socket = load_group_claims(socket)
+
+        {:noreply,
+         put_flash(socket, :error, mapping_error_message(changeset, attrs, socket.assigns))}
+    end
+  end
+
+  def handle_event("delete_group_mapping", %{"id" => id}, socket) do
+    # Resolve off the already-loaded list rather than a fresh `Repo.get` —
+    # an id from the DOM never reaches a query, so a stale or malformed one
+    # is a no-op instead of a cast error.
+    case Enum.find(socket.assigns.group_claims, &(&1.id == id)) do
+      nil ->
+        {:noreply,
+         socket |> put_flash(:error, "That mapping is already gone.") |> load_group_claims()}
+
+      claim ->
+        case Tenancy.delete_group_claim(claim) do
+          {:ok, _} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Removed the mapping for #{claim.claim_value}.")
+             |> load_group_claims()
+             |> load_queue()}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Could not remove that mapping. Try again.")}
+        end
+    end
+  end
+
   # Live-append: a fresh holding login arrived while this queue is open.
   # Prepend it (skip if already provisioned or already listed) and bump the
   # "new" badge — no reload.
@@ -92,13 +158,23 @@ defmodule PlatformWeb.ExternalRecoveryLive do
          %_{} = user <- Accounts.get_user(uid),
          false <- Tenancy.external_user?(user),
          false <- Enum.any?(socket.assigns.queue, &(&1.user_id == uid)) do
-      row = %{
-        user: user,
-        user_id: uid,
-        email: user.email,
-        reason: to_string_reason(Map.get(payload, :reason)),
-        last_seen_at: Map.get(payload, :at) || DateTime.utc_now()
-      }
+      # Build through `ExternalAdmission.build_row/2` + `attach_org_suggestions/1`
+      # — the SAME two functions `awaiting_setup/0` ends in — so a live-appended
+      # row is shape-identical to a reloaded one, group-claim suggestion
+      # included. A suggestion that only shows up after a refresh is the
+      # regression that costs; sharing the constructor is what prevents it
+      # (task 019ff7ff stage 3).
+      [row] =
+        user
+        |> ExternalAdmission.build_row(
+          reason: Map.get(payload, :reason),
+          last_seen_at: Map.get(payload, :at) || DateTime.utc_now(),
+          suggested_org_id: Map.get(payload, :suggested_org_id),
+          group_match: Map.get(payload, :group_match),
+          group_values: Map.get(payload, :group_values)
+        )
+        |> List.wrap()
+        |> ExternalAdmission.attach_org_suggestions()
 
       {:noreply,
        socket
@@ -188,6 +264,55 @@ defmodule PlatformWeb.ExternalRecoveryLive do
     |> Enum.uniq()
   end
 
+  defp load_group_claims(socket) do
+    assign(socket, :group_claims, Tenancy.list_group_claims())
+  end
+
+  # A legible failure, and for the duplicate case a failure that NAMES the
+  # org already holding the value — "has already been taken" alone sends an
+  # admin hunting for a mapping they cannot see, and a second mapping for
+  # the same value is exactly what makes the resolver answer `:ambiguous`
+  # for everyone.
+  defp mapping_error_message(changeset, attrs, assigns) do
+    cond do
+      taken?(changeset, :claim_value) ->
+        value = OrgGroupClaim.normalize(attrs.claim_value)
+
+        "\"#{value}\" is already mapped to #{owning_org_name(assigns, value)}. " <>
+          "Remove that mapping first."
+
+      blank?(changeset, :claim_value) ->
+        "Enter a group value to map. A blank value would match every login."
+
+      blank?(changeset, :org_id) ->
+        "Choose the org this group value maps to."
+
+      true ->
+        "Could not save that mapping. Check the value and try again."
+    end
+  end
+
+  defp owning_org_name(assigns, value) do
+    case Enum.find(assigns.group_claims, &(&1.claim_value == value)) do
+      %{org: %{name: name}} when is_binary(name) -> name
+      _ -> "another org"
+    end
+  end
+
+  defp taken?(changeset, field) do
+    Enum.any?(changeset.errors, fn
+      {^field, {_msg, opts}} -> Keyword.get(opts, :constraint) == :unique
+      _ -> false
+    end)
+  end
+
+  defp blank?(changeset, field) do
+    Enum.any?(changeset.errors, fn
+      {^field, {_msg, opts}} -> Keyword.get(opts, :validation) == :required
+      _ -> false
+    end)
+  end
+
   defp load_queue(socket) do
     assign(socket, :queue, ExternalAdmission.awaiting_setup())
   end
@@ -211,11 +336,6 @@ defmodule PlatformWeb.ExternalRecoveryLive do
   defp presence(nil), do: nil
   defp presence(""), do: nil
   defp presence(v) when is_binary(v), do: v
-
-  defp to_string_reason(nil), do: nil
-  defp to_string_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp to_string_reason(reason) when is_binary(reason), do: reason
-  defp to_string_reason(_), do: nil
 
   # ── Template helpers ───────────────────────────────────────────────────
 

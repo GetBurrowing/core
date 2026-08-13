@@ -9,7 +9,8 @@ defmodule Platform.Accounts.ExternalAdmissionNotifier do
   an ungranted external user just black-holed — and does two things:
 
     1. Broadcasts `{:external_admission_holding, %{user_id:, email:, reason:,
-       at:}}` on `admin_admissions_topic/0` so any OPEN M3 stage-4 recovery
+       suggested_org_id:, group_match:, group_values:, at:}}` (the last
+       three from task 019ff7ff stages 2 and 5) on `admin_admissions_topic/0` so any OPEN M3 stage-4 recovery
        surface live-appends the row + increments its "new" badge without a
        reload.
     2. Push-notifies Fabrikam root-org admins through the existing
@@ -72,6 +73,16 @@ defmodule Platform.Accounts.ExternalAdmissionNotifier do
       user_id: Map.get(metadata, :actor_id),
       email: Map.get(metadata, :email),
       reason: Map.get(metadata, :reason),
+      # Task 019ff7ff stage 2 — the group-claim suggestion, mirrored so the
+      # live-appended queue row carries it without a reload. `nil` /
+      # `:none` are the honest values when nothing resolved.
+      suggested_org_id: Map.get(metadata, :suggested_org_id),
+      group_match: Map.get(metadata, :group_match, :none),
+      # Task 019ff7ff stage 5 — the group values this login carried, so a
+      # live-appended unmapped row can show them. Absent (nil) means the
+      # emitter did not record them, which the admin surface reports as
+      # "not recorded" rather than as an empty list.
+      group_values: Map.get(metadata, :external_groups),
       at: DateTime.utc_now()
     }
 

@@ -495,8 +495,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/tasks/task_access.ex", :get, "Task", 1, :safe_internal,
      "TaskAccess.load/1 checks Platform.UUID.valid?/1 on the task_id before the lookup — a raw task_attach_canvas / task_detach_canvas / task_list_canvases MCP tool argument — folding a malformed id into the same {:error, :not_found} an absent row returns"},
     # ── Tenancy ────────────────────────────────────────────────────────
-    {"platform/tenancy.ex", :platform_uuid_guard, "-", 3, :safe_internal,
-     "uuid?/1 in member_of?/2 is now Platform.UUID.valid?/1, so a 16-character org slug takes the slug branch instead of being pinned as ^org_id against Org's strict UUIDv7 key; plus the get_org/1 and get_org!/1 guards"},
+    {"platform/tenancy.ex", :platform_uuid_guard, "-", 4, :safe_internal,
+     "uuid?/1 in member_of?/2 is now Platform.UUID.valid?/1, so a 16-character org slug takes the slug branch instead of being pinned as ^org_id against Org's strict UUIDv7 key; plus the get_org/1 and get_org!/1 guards, plus live_orgs_by_id/1 (task 019ff7ff stage 3), which filters ids read out of audit metadata through Platform.UUID.valid?/1 before pinning them with `o.id in ^valid` — a junk id folds into an absent map key, not a cast error"},
     {"platform/tenancy.ex", :get, "Org", 3, :safe_internal,
      "Tenancy.get_org/1 checks Platform.UUID.valid?/1, so the caller-supplied org ids from lifecycle_actions.ex, recovery_live.ex and chat_live.ex return nil; the other two walk parent_org_id off loaded structs"},
     {"platform/tenancy.ex", :get!, "Org", 1, :safe_internal,

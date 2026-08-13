@@ -70,6 +70,37 @@ defmodule Platform.OIDC do
 
   def external_claim?(_claims), do: false
 
+  @doc """
+  The configured claim's value as a **list of strings**.
+
+  Reads the SAME claim name as `external_claim?/1` (`external_claim/0`) but
+  keeps the values instead of reducing them to a boolean — this is the seam
+  `Tenancy.resolve_org_from_groups/1` consumes to name the org an external
+  login belongs to.
+
+  Shapes:
+
+    * a list — non-binary members are dropped, order preserved
+    * a bare string — wrapped to a one-element list
+    * `nil` / absent / any other shape (number, map, …) — `[]`
+
+  Never raises, never returns `nil`. Unlike `external_claim?/1` this does NOT
+  depend on `external_group/0` being configured: the group values are data,
+  not a marker test.
+  """
+  @spec claim_groups(map()) :: [String.t()]
+  def claim_groups(claims) when is_map(claims) do
+    claims
+    |> Map.get(external_claim())
+    |> normalize_groups()
+  end
+
+  def claim_groups(_claims), do: []
+
+  defp normalize_groups(value) when is_list(value), do: Enum.filter(value, &is_binary/1)
+  defp normalize_groups(value) when is_binary(value), do: [value]
+  defp normalize_groups(_value), do: []
+
   defp claim_contains?(value, group) when is_list(value), do: Enum.any?(value, &(&1 == group))
   defp claim_contains?(value, group) when is_binary(value), do: value == group
   defp claim_contains?(_value, _group), do: false

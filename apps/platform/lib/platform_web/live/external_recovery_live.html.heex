@@ -51,6 +51,47 @@
           </div>
         </div>
 
+        <%!-- Unmapped affordance (task 019ff7ff stage 5): this login's group
+             claim named no org, so show the values it actually carried —
+             an admin maps a real string instead of guessing one. A login
+             recorded before group capture shows a "not recorded" note, NOT
+             an empty list, which would read as "carried no groups". --%>
+        <div
+          :if={row.group_match == :none}
+          class="mt-2 flex flex-col gap-1"
+          data-role="unmapped-groups"
+        >
+          <span class="text-xs font-medium text-base-content/60">
+            No mapped group matched this login
+          </span>
+          <div
+            :if={is_list(row.group_values) and row.group_values != []}
+            class="flex flex-wrap gap-1"
+          >
+            <span
+              :for={value <- row.group_values}
+              class="badge badge-ghost badge-xs font-mono"
+              data-role="unmapped-group-value"
+            >
+              {value}
+            </span>
+          </div>
+          <span
+            :if={row.group_values == []}
+            class="text-xs text-base-content/50"
+            data-role="unmapped-groups-empty"
+          >
+            This login carried no group values at all.
+          </span>
+          <span
+            :if={is_nil(row.group_values)}
+            class="text-xs text-base-content/50"
+            data-role="unmapped-groups-unknown"
+          >
+            Group values weren't recorded for this login, so there is nothing to map from here.
+          </span>
+        </div>
+
         <%!-- Grant form: target org + a multi-select checkbox list of
              channels (0..N) + per-org DM allowlist. Mobile-first — stacks
              vertically so it stays usable at 375px. Submits to recover/3. --%>
@@ -61,16 +102,43 @@
         >
           <input type="hidden" name="user_id" value={row.user_id} />
 
+          <%!-- Target org. The group claim only ever SUGGESTS (task 019ff7ff
+               stage 4): a `:one` match pre-selects its org and says so; a
+               `:none` or `:ambiguous` row leaves the placeholder selected, so
+               the browser cannot silently default to the first <option> — that
+               default IS the wrong-tenant grant the incidents were made of.
+               `required` keeps an empty submit from posting. --%>
           <label class="flex flex-col gap-1">
-            <span class="text-xs font-medium text-base-content/60">Target org</span>
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-xs font-medium text-base-content/60">Target org</span>
+              <span
+                :if={row.group_match == :one and row.suggested_org_id}
+                class="badge badge-ghost badge-xs gap-1"
+                data-role="org-suggestion"
+              >
+                <span class="hero-sparkles size-3"></span> suggested from group claim
+              </span>
+            </div>
             <select
               name="target_org_id"
               required
               data-role="grant-org"
               class="select select-sm select-bordered bg-base-100"
             >
-              <option :for={org <- @orgs} value={org.id}>{org.name}</option>
+              <option value="" disabled selected={is_nil(row.suggested_org_id)}>
+                Choose an org…
+              </option>
+              <option :for={org <- @orgs} value={org.id} selected={org.id == row.suggested_org_id}>
+                {org.name}
+              </option>
             </select>
+            <span
+              :if={row.group_match == :ambiguous}
+              class="text-xs text-warning"
+              data-role="org-ambiguous"
+            >
+              This login matched more than one mapped group, so no org was pre-selected. Choose one.
+            </span>
           </label>
 
           <div class="flex flex-col gap-1">
@@ -156,6 +224,96 @@
             </button>
           </form>
         </div>
+      </div>
+    </div>
+
+    <%!-- Group-claim mapping editor (task 019ff7ff stage 5). Maps an IdP
+         group value to an org so a FUTURE holding login pre-selects it.
+         Nothing here grants anything — no membership is written, and
+         existing holding users are unaffected until an admin grants them.
+         Mobile-first: the form stacks vertically and stays usable at
+         375px, matching the grant forms above. --%>
+    <div class="mx-auto mt-6 max-w-4xl" data-role="group-mapping-section">
+      <h2 class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+        Group claim → org mapping
+      </h2>
+      <p class="mb-3 text-xs text-base-content/50">
+        A mapping only pre-selects an org for logins that arrive after it is added. It grants nothing.
+      </p>
+
+      <div class="rounded-lg border border-base-300 bg-base-200 p-4">
+        <p
+          :if={@group_claims == []}
+          class="text-xs text-base-content/50"
+          data-role="group-mapping-empty"
+        >
+          No group values are mapped yet.
+        </p>
+
+        <div :if={@group_claims != []} class="flex flex-col gap-2">
+          <div
+            :for={claim <- @group_claims}
+            data-role="group-mapping-row"
+            data-claim-id={claim.id}
+            class="flex flex-wrap items-center gap-2 rounded-md border border-base-300 bg-base-100 px-3 py-2"
+          >
+            <span class="font-mono text-xs text-base-content" data-role="group-mapping-value">
+              {claim.claim_value}
+            </span>
+            <span class="hero-arrow-right size-3 text-base-content/40"></span>
+            <span class="text-sm text-base-content" data-role="group-mapping-org">
+              {claim.org && claim.org.name}
+            </span>
+            <button
+              type="button"
+              phx-click="delete_group_mapping"
+              phx-value-id={claim.id}
+              data-role="group-mapping-delete"
+              aria-label={"Remove the mapping for #{claim.claim_value}"}
+              class="btn btn-ghost btn-xs ml-auto gap-1"
+            >
+              <span class="hero-trash size-4"></span> Remove
+            </button>
+          </div>
+        </div>
+
+        <form
+          phx-submit="add_group_mapping"
+          data-role="group-mapping-form"
+          class="mt-3 flex flex-col gap-3 border-t border-base-300 pt-3"
+        >
+          <label class="flex flex-col gap-1">
+            <span class="text-xs font-medium text-base-content/60">Group claim value</span>
+            <input
+              type="text"
+              name="claim_value"
+              autocomplete="off"
+              placeholder="e.g. clients-northwind"
+              data-role="group-mapping-input"
+              class="input input-sm input-bordered bg-base-100"
+            />
+          </label>
+
+          <label class="flex flex-col gap-1">
+            <span class="text-xs font-medium text-base-content/60">Org</span>
+            <select
+              name="org_id"
+              data-role="group-mapping-org-select"
+              class="select select-sm select-bordered bg-base-100"
+            >
+              <option value="" disabled selected>Choose an org…</option>
+              <option :for={org <- @orgs} value={org.id}>{org.name}</option>
+            </select>
+          </label>
+
+          <button
+            type="submit"
+            class="btn btn-sm btn-primary gap-2 self-start"
+            data-role="group-mapping-submit"
+          >
+            <span class="hero-plus size-4"></span> Add mapping
+          </button>
+        </form>
       </div>
     </div>
   </div>

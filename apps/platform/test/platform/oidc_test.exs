@@ -59,6 +59,60 @@ defmodule Platform.OIDCTest do
     end
   end
 
+  # Task 019ff7ff stage 2 — the claim's VALUES, not its truthiness.
+  describe "claim_groups/1" do
+    test "a list comes back as a list of strings, order preserved" do
+      assert OIDC.claim_groups(%{"groups" => ["employees", "acme-client"]}) ==
+               ["employees", "acme-client"]
+    end
+
+    test "a bare string wraps to a one-element list" do
+      assert OIDC.claim_groups(%{"groups" => "acme-client"}) == ["acme-client"]
+    end
+
+    test "nil, absent, and malformed claims all yield []" do
+      assert OIDC.claim_groups(%{"groups" => nil}) == []
+      assert OIDC.claim_groups(%{"sub" => "x"}) == []
+      assert OIDC.claim_groups(%{"groups" => %{"nested" => true}}) == []
+      assert OIDC.claim_groups(%{"groups" => 42}) == []
+    end
+
+    test "non-binary members of a list are dropped, binaries kept" do
+      assert OIDC.claim_groups(%{"groups" => ["acme-client", 42, nil, %{}]}) == ["acme-client"]
+    end
+
+    test "non-map input -> []" do
+      assert OIDC.claim_groups(nil) == []
+      assert OIDC.claim_groups("groups") == []
+    end
+
+    test "reads the configured claim NAME, not a hardcoded \"groups\"" do
+      original = Application.get_env(:platform, :oidc, [])
+
+      try do
+        Application.put_env(:platform, :oidc, Keyword.put(original, :external_claim, "roles"))
+        assert OIDC.claim_groups(%{"roles" => ["acme-client"]}) == ["acme-client"]
+        # Anti-vacuity: the OLD claim name no longer reads.
+        assert OIDC.claim_groups(%{"groups" => ["acme-client"]}) == []
+      after
+        Application.put_env(:platform, :oidc, original)
+      end
+    end
+
+    test "does NOT depend on external_group being configured (values are data, not a marker)" do
+      original = Application.get_env(:platform, :oidc, [])
+
+      try do
+        Application.put_env(:platform, :oidc, Keyword.put(original, :external_group, nil))
+        assert OIDC.claim_groups(%{"groups" => ["acme-client"]}) == ["acme-client"]
+        # Control: the predicate DOES go false under the same config.
+        refute OIDC.external_claim?(%{"groups" => ["sxi-external"]})
+      after
+        Application.put_env(:platform, :oidc, original)
+      end
+    end
+  end
+
   describe "external_claim?/1" do
     test "list containing the group -> true" do
       assert OIDC.external_claim?(%{"groups" => ["employees", "sxi-external"]})

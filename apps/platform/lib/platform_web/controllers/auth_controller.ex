@@ -330,10 +330,22 @@ defmodule PlatformWeb.AuthController do
     # `find_or_create_from_oidc/1` ignores this extra key.
     external_claim? = OIDC.external_claim?(user)
 
+    # Task 019ff7ff stage 2: carry the claim's VALUES through as well, so
+    # admission can resolve which org an external login names. Purely
+    # additive — `external_claim?` keeps its own callers and its meaning.
+    external_groups = OIDC.claim_groups(user)
+
     case {user["sub"], user["email"], name} do
       {sub, email, n} when is_binary(sub) and is_binary(email) and is_binary(n) ->
         {:ok,
-         %{sub: sub, email: email, name: n, avatar_url: picture, external_claim?: external_claim?}}
+         %{
+           sub: sub,
+           email: email,
+           name: n,
+           avatar_url: picture,
+           external_claim?: external_claim?,
+           external_groups: external_groups
+         }}
 
       _ ->
         {:error, :invalid_oidc_user}

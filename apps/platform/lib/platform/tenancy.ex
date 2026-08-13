@@ -80,6 +80,7 @@ defmodule Platform.Tenancy do
   alias Platform.Repo
   alias Platform.Tenancy.ExternalDmAllowlistEntry
   alias Platform.Tenancy.Org
+  alias Platform.Tenancy.OrgGroupClaim
   alias Platform.Tenancy.OrgMembership
 
   # ── Org finders ───────────────────────────────────────────────────────
@@ -105,6 +106,37 @@ defmodule Platform.Tenancy do
   end
 
   def get_org(_), do: nil
+
+  @doc """
+  Fetch the LIVE (non-archived) orgs named by `ids`, as an `id => %Org{}` map
+  (task 019ff7ff stage 3).
+
+  One query for a whole batch — the external-login queue resolves every row's
+  group-claim suggestion through this instead of an `get_org/1` per row.
+
+  An id that names no org, or an org whose `archived_at` is set (archived or
+  deletion-scheduled — `Lifecycle` stamps both), is simply ABSENT from the
+  result. That absence is what lets a caller degrade a dangling suggestion to
+  `nil` rather than render a broken option. Malformed ids are dropped before
+  the query, so a junk string folds into the same absence instead of raising
+  `Ecto.Query.CastError`.
+  """
+  @spec live_orgs_by_id([binary()]) :: %{binary() => Org.t()}
+  def live_orgs_by_id(ids) when is_list(ids) do
+    ids
+    |> Enum.filter(&(is_binary(&1) and Platform.UUID.valid?(&1)))
+    |> Enum.uniq()
+    |> case do
+      [] ->
+        %{}
+
+      valid ->
+        Org
+        |> where([o], o.id in ^valid and is_nil(o.archived_at))
+        |> Repo.all()
+        |> Map.new(&{&1.id, &1})
+    end
+  end
 
   @doc "Fetch an org by slug. Returns `nil` if not found."
   @spec get_org_by_slug(String.t()) :: Org.t() | nil
@@ -703,6 +735,113 @@ defmodule Platform.Tenancy do
     |> Repo.all()
     |> MapSet.new()
   end
+
+  # ── Org group-claim mapping (IdP group value → org) ────────────────────
+  #
+  # Mapping rows live in the DATABASE, not app config: adding a client must
+  # never require a deploy. `resolve_org_from_groups/1` is the safety story
+  # — it refuses to guess.
+
+  @doc """
+  Every group-claim mapping, `:org` preloaded, oldest first.
+  """
+  @spec list_group_claims() :: [OrgGroupClaim.t()]
+  def list_group_claims do
+    OrgGroupClaim
+    |> order_by([c], asc: c.inserted_at)
+    |> Repo.all()
+    |> Repo.preload(:org)
+  end
+
+  @doc """
+  The group-claim mappings for one org. Accepts an `%Org{}` or an org id.
+  """
+  @spec list_group_claims_for_org(Org.t() | binary()) :: [OrgGroupClaim.t()]
+  def list_group_claims_for_org(%Org{id: org_id}), do: list_group_claims_for_org(org_id)
+
+  def list_group_claims_for_org(org_id) when is_binary(org_id) do
+    OrgGroupClaim
+    |> where([c], c.org_id == ^org_id)
+    |> order_by([c], asc: c.claim_value)
+    |> Repo.all()
+  end
+
+  @doc """
+  Create a group-claim mapping. Returns `{:ok, claim}` or
+  `{:error, changeset}` — a duplicate `claim_value` is rejected by the
+  unique index, so one group value can never name two orgs.
+  """
+  @spec create_group_claim(map()) :: {:ok, OrgGroupClaim.t()} | {:error, Ecto.Changeset.t()}
+  def create_group_claim(attrs) do
+    %OrgGroupClaim{}
+    |> OrgGroupClaim.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @doc """
+  Delete a group-claim mapping.
+  """
+  @spec delete_group_claim(OrgGroupClaim.t()) ::
+          {:ok, OrgGroupClaim.t()} | {:error, Ecto.Changeset.t()}
+  def delete_group_claim(%OrgGroupClaim{} = claim), do: Repo.delete(claim)
+
+  @doc """
+  Resolve the org named by a set of IdP group-claim values.
+
+  Returns **exactly one** of:
+
+    * `{:ok, %Org{}}` — one and only one DISTINCT org matched.
+    * `:none` — nothing matched. There is deliberately **no fallback** to a
+      default org, the first org, or the root org: a misconfigured IdP must
+      not silently place a client user in another tenant.
+    * `{:ambiguous, [%Org{}]}` — two or more DISTINCT orgs matched. The
+      caller gets the list and must decide; picking one here is exactly how
+      a client user lands in the wrong client's org.
+
+  Two claim values mapping to the SAME org is one match, not ambiguity —
+  results are deduped by org id before the count is taken.
+
+  Input tolerance mirrors `Platform.OIDC`'s claim handling: a list of
+  strings, a bare string, `nil`, or anything else. Non-binary members are
+  dropped rather than raising. Values are normalized (trim + downcase) to
+  the stored form before lookup.
+  """
+  @spec resolve_org_from_groups(term()) :: {:ok, Org.t()} | :none | {:ambiguous, [Org.t()]}
+  def resolve_org_from_groups(groups) when is_binary(groups),
+    do: resolve_org_from_groups([groups])
+
+  def resolve_org_from_groups(groups) when is_list(groups) do
+    values =
+      groups
+      |> Enum.filter(&is_binary/1)
+      |> Enum.map(&OrgGroupClaim.normalize/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
+    case values do
+      [] ->
+        :none
+
+      values ->
+        orgs =
+          from(c in OrgGroupClaim,
+            join: o in Org,
+            on: o.id == c.org_id,
+            where: c.claim_value in ^values,
+            select: o
+          )
+          |> Repo.all()
+          |> Enum.uniq_by(& &1.id)
+
+        case orgs do
+          [] -> :none
+          [org] -> {:ok, org}
+          many -> {:ambiguous, many}
+        end
+    end
+  end
+
+  def resolve_org_from_groups(_), do: :none
 
   # ── Per-org DM allowlist (stack member 1, rbac-external-users) ─────────
   #
