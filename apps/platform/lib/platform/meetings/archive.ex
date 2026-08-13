@@ -118,11 +118,28 @@ defmodule Platform.Meetings.Archive do
 
   ## Authorization
 
-  Scoping mirrors `Platform.Meetings.fetch_meeting_for_user/2`: join
-  `Platform.Tasks.Project` and require its `org_id` to be one the viewer holds
-  an `org_memberships` row for, with `Platform.Tenancy.fabrikam_admin?/1` seeing
-  everything. Like that function this is org isolation, not project isolation
-  — there is no `project_members` table in this codebase.
+  Three branches, matching `Platform.Meetings.viewer_listing_query/1` so the
+  archive and the `/meetings` index scope alike:
+
+    * `Platform.Tenancy.fabrikam_admin?/1` — everything.
+    * `Platform.Tenancy.external_user?/1` — only meetings the viewer holds a
+      LIVE invite for, via `Platform.Meetings.invited_meeting_ids_query/1`.
+      Invitation, not participation and not org membership: an external
+      collaborator's `external: true` membership would otherwise expose every
+      ended meeting in the client org.
+    * everyone else (INTERNAL viewers) — org isolation, mirroring
+      `Platform.Meetings.fetch_meeting_for_user/2`: join `Platform.Tasks.Project`
+      and require its `org_id` to be one the viewer holds an `org_memberships`
+      row for. Like that function this is org isolation, not project isolation
+      — there is no `project_members` table in this codebase.
+
+  A viewer with no identifiable id falls into the internal branch and is
+  narrowed by an empty membership subquery — fail closed, not "everything".
+
+  `artifacts_for/2` needs no separate gate: it builds on `scoped_query/2`
+  itself and additionally intersects with the caller-supplied ids, so it is
+  narrowed by the same three branches independently of what `search/2`
+  returned.
 
   It is also hand-rolled rather than routed through `Platform.Tenancy.scope/3`
   for exactly the reason that function documents: `Tenancy.visibility/1`
@@ -700,7 +717,7 @@ defmodule Platform.Meetings.Archive do
       on: p.id == m.project_id,
       where: m.status in ^@archived_statuses
     )
-    |> narrow_to_viewer_orgs(viewer)
+    |> narrow_to_viewer(viewer)
     |> maybe_filter_project(Keyword.get(opts, :project_id))
     |> maybe_filter_person(Keyword.get(opts, :person_id))
   end
@@ -709,12 +726,39 @@ defmodule Platform.Meetings.Archive do
   # moduledoc. This mirrors `Meetings.fetch_meeting_for_user/2`'s
   # `fabrikam_admin?/1` bypass, which is narrower than `visibility/1`'s
   # `root_member?/1`. Converting widens who can read the archive.
-  defp narrow_to_viewer_orgs(query, viewer) do
-    if Tenancy.fabrikam_admin?(viewer) do
-      query
-    else
-      from([_m, p] in query, where: p.org_id in subquery(viewer_org_ids(viewer)))
+  # Three branches, in the same order and with the same predicates as
+  # `Platform.Meetings.viewer_listing_query/1`, so the archive and the index
+  # answer "whose meeting is this?" identically.
+  #
+  # The external branch is INVITATION, not org membership and not
+  # participation. Org membership is too wide — an external collaborator holds
+  # an `external: true` membership in the client org, so the org rule would
+  # hand them every ended meeting that org ever held. Participation is the
+  # wrong key in both directions: revoking an invite stamps `revoked_at` and
+  # leaves the chat participant row behind, and an invite that was sent but
+  # never used is still a meeting the invitee is entitled to look back on.
+  #
+  # It composes `Meetings.invited_meeting_ids_query/1` rather than restating
+  # the liveness and identity conditions here; a local clone is how this
+  # codebase ends up with six copies of one filter helper with incompatible
+  # nil semantics.
+  defp narrow_to_viewer(query, viewer) do
+    cond do
+      Tenancy.fabrikam_admin?(viewer) ->
+        query
+
+      Tenancy.external_user?(viewer) ->
+        from([m, _p] in query,
+          where: m.id in subquery(Platform.Meetings.invited_meeting_ids_query(viewer))
+        )
+
+      true ->
+        narrow_to_viewer_orgs(query, viewer)
     end
+  end
+
+  defp narrow_to_viewer_orgs(query, viewer) do
+    from([_m, p] in query, where: p.org_id in subquery(viewer_org_ids(viewer)))
   end
 
   defp viewer_org_ids(%{id: user_id}) when is_binary(user_id) do

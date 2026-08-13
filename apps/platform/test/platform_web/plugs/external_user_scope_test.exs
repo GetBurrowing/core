@@ -556,6 +556,66 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
       end
     end
 
+    # ── stage 4: the meetings INDEX is on surface ────────────────────────
+    #
+    # Stages 1–3 made the index, the calendar week and the archive
+    # viewer-scoped; until this clause landed external users could not reach
+    # `/meetings` at all, so that scoping was inert. Admission here is
+    # unconditional BECAUSE the page behind it filters per row — the tests
+    # below pin that this widened exactly one path and nothing adjacent.
+    test "external user on the meet host reaches the meetings index", ctx do
+      conn = run_on_host("/meetings", @meet_host, ctx.ext_user, ctx.ext_membership)
+
+      refute conn.halted
+    end
+
+    test "the archive view is the same path and is admitted too", ctx do
+      conn = run_on_host("/meetings?view=archive", @meet_host, ctx.ext_user, ctx.ext_membership)
+
+      refute conn.halted
+    end
+
+    # The index being open must not soften the per-meeting gate beside it.
+    test "index open, but a meeting they hold no invite to is still 403", ctx do
+      index = run_on_host("/meetings", @meet_host, ctx.ext_user, ctx.ext_membership)
+      refute index.halted
+
+      show =
+        run_on_host(
+          "/meetings/" <> ctx.other_meeting.slug,
+          @meet_host,
+          ctx.ext_user,
+          ctx.ext_membership
+        )
+
+      assert show.halted
+      assert show.status == 403
+    end
+
+    test "other app routes on the meet host are still 403 external_off_surface", ctx do
+      ref = attach_telemetry()
+
+      for path <- ["/tasks", "/files", "/admin", "/meetings/archive/extra"] do
+        conn = run_on_host(path, @meet_host, ctx.ext_user, ctx.ext_membership)
+        assert conn.halted, "expected halt on #{path}"
+        assert conn.status == 403, "expected 403 (not #{conn.status}) on #{path}"
+      end
+
+      assert_receive {:access_blocked, meta}
+      assert meta.reason == "external_off_surface"
+      detach_telemetry(ref)
+    end
+
+    # The widening is SURFACE-scoped: `/meetings` stays off surface on the chat
+    # and app hosts, where nothing scoped the page for those viewers.
+    test "the index stays 403 on the chat and app hosts", ctx do
+      for host <- ["chat.example.com", "suite.example.com"] do
+        conn = run_on_host("/meetings", host, ctx.ext_user, ctx.ext_membership)
+        assert conn.halted, "expected halt on #{host}"
+        assert conn.status == 403, "expected 403 (not #{conn.status}) on #{host}"
+      end
+    end
+
     # ── The invariant host branching breaks first ────────────────────────
     test "internal users remain a complete no-op on the meet host", ctx do
       ref = attach_telemetry()

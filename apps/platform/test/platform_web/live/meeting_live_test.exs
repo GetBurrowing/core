@@ -2379,14 +2379,20 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, user: user, project: project}
     end
 
-    test "an empty index draws the calendar, not a 'No meetings yet' card", %{conn: conn} do
+    test "an empty index still draws the calendar, not a grouped list", %{conn: conn} do
       {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
 
       # The deleted surface, named so a revert is loud rather than merely
-      # duplicated on screen.
-      refute html =~ ~s(data-empty-state="meetings-index")
-      refute html =~ "No meetings yet"
+      # duplicated on screen. NOTE (019f9cb7 stage 5): the two refutes that
+      # named `data-empty-state="meetings-index"` and "No meetings yet" were
+      # re-pointed, not dropped. What this describe deleted was the grouped
+      # LIST and its centred card; scoping the index made zero meetings an
+      # ordinary answer for a real viewer rather than a fresh-install one, so
+      # a left-aligned empty state came back above the grid. The claim worth
+      # pinning is that it did not bring the LIST back with it, and that the
+      # calendar still draws — both asserted here and below.
       refute html =~ ~s(data-role="meeting-row")
+      refute html =~ ~s(data-section="upcoming")
 
       # What replaced it: below `lg` the strip and the day view draw their
       # chrome with nothing in them, exactly as the desktop grid does. An
@@ -2440,6 +2446,90 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert html =~ live_meeting.name
       assert html =~ upcoming.name
+    end
+
+    # ── Scoped-index states (019f9cb7 stage 5) ────────────────────────────
+    #
+    # Scoping changed what a CORRECT index holds: zero is ordinary for a new
+    # external user, one is ordinary for most people. These pin the states a
+    # scoped list actually produces.
+
+    test "an empty index tells an INTERNAL viewer their org's meetings land here",
+         %{conn: conn} do
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert html =~ ~s(data-empty-state="meetings-index")
+      assert html =~ "No meetings yet."
+
+      # The branch matters more than the string. An internal viewer is scoped
+      # by ORG MEMBERSHIP and will routinely open meetings nobody invited
+      # them to, so the invite copy would tell them something false about why
+      # their list is empty.
+      assert attrs_of(html, ~s([data-role="meetings-index-empty-note"]), "data-viewer") ==
+               ["internal"]
+
+      assert html =~ "Meetings for your organisation will appear here."
+      refute html =~ "once you&#39;ve been invited"
+    end
+
+    # The EXTERNAL branch of this same empty state is asserted in
+    # `meeting_live_index_external_test.exs` — reaching `/meetings` as an
+    # external user needs the configured meet host, which is process-global
+    # config and cannot be set from this `async: true` module.
+
+    test "a one-meeting index is a finished page: the row draws and the empty state does not",
+         %{conn: conn, project: project} do
+      today = grid_today()
+
+      only =
+        seed_grid_meeting(project,
+          slug: "only-one",
+          name: "The Only Meeting",
+          status: "scheduled",
+          scheduled_start_at: zoned_utc(today, 9, 0),
+          scheduled_end_at: zoned_utc(today, 10, 0)
+        )
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "data-meeting-id") ==
+               [only.id]
+
+      refute html =~ ~s(data-empty-state="meetings-index")
+
+      # No skeleton implying more is loading. A single row is the whole
+      # answer, not a partially-loaded one.
+      refute html =~ "animate-pulse bg-base-300"
+      refute html =~ ~s(data-role="meetings-skeleton")
+    end
+
+    test "the empty state renders under the not-found flash without a centred hero",
+         %{conn: conn} do
+      other_org_project = create_project(Platform.TenancyFixtures.tenant_org_id("soylent"))
+      {meeting, _space} = create_meeting(%{project: other_org_project, name: "Not Yours"})
+
+      # The real path this state has to survive: a denied detail request
+      # redirects HERE carrying "Meeting not found.".
+      assert {:error, {:live_redirect, %{to: "/meetings", flash: flash}}} =
+               live(grid_conn(conn), ~p"/meetings/#{meeting.slug}")
+
+      assert flash["error"] == "Meeting not found."
+
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+
+      empty =
+        html
+        |> doc()
+        |> LazyHTML.query(~s([data-empty-state="meetings-index"]))
+        |> LazyHTML.attribute("class")
+        |> List.first()
+
+      # Two centred messages stacked read as a broken app, so this block is
+      # left-aligned body text in the content column. If it ever acquires
+      # hero centring, this goes red.
+      refute empty =~ "text-center"
+      refute empty =~ "items-center"
+      refute empty =~ "justify-center"
     end
 
     test "index renders without forcing a local data-theme override (inherits shell theme)",

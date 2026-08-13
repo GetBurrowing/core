@@ -433,10 +433,16 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
       # Pinned exactly, not `> 0`: the telemetry handler silently measuring
       # nothing would make the equality below hold at 0 == 0, and the whole
-      # test would pass on a resolver that never touched the database. Five
-      # is `fabrikam_admin?/1`'s membership lookup plus one query per chip family
-      # plus the row context — see the moduledoc's "Batching".
-      assert one_row == 5
+      # test would pass on a resolver that never touched the database. Six is
+      # `fabrikam_admin?/1`'s membership lookup, `external_user?/1`'s membership
+      # lookup, one query per chip family, and the row context — see the
+      # moduledoc's "Batching".
+      #
+      # Both viewer-class lookups are per CALL, not per row, which is why the
+      # equality below still pins the batching property. If a third viewer
+      # class is ever added, this number moves again — that is the point of
+      # pinning it.
+      assert one_row == 6
 
       assert six_rows == one_row,
              "artifacts_for/2 issued #{six_rows} queries for six meetings and " <>

@@ -31,6 +31,7 @@ defmodule Platform.Meetings.ArchiveTest do
   alias Platform.Chat
   alias Platform.Meetings
   alias Platform.Meetings.Archive
+  alias Platform.Meetings.Invite
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.Transcript
   alias Platform.Repo
@@ -486,5 +487,176 @@ defmodule Platform.Meetings.ArchiveTest do
       assert result.others == []
       assert result.total == 0
     end
+  end
+
+  # ── External viewers: invitation, not org membership ───────────────────────
+  #
+  # Every negative below is paired with a positive control in the SAME test.
+  # An archive that returned nothing at all for every external viewer would
+  # satisfy all three refutations, and that is a bug, not a pass.
+
+  describe "search/2 for an external viewer" do
+    test "an invited meeting they never attended appears; an uninvited one in the SAME org does not" do
+      org_id = tenant_org_id("soylent")
+      external = create_user!() |> external_member!(org_id)
+      insider = create_user!() |> member!(org_id)
+
+      invited =
+        create_meeting!("Soylent invited review", org_id: org_id) |> end_meeting!(ago(4))
+
+      uninvited =
+        create_meeting!("Soylent internal retro", org_id: org_id) |> end_meeting!(ago(3))
+
+      invite!(invited, %{user_id: external.id})
+
+      refute Chat.participant?(invited.chat_space_id, external.id),
+             "fixture precondition: invited-but-absent, no participant row"
+
+      insider_ids = archive_ids(insider)
+
+      assert invited.id in insider_ids and uninvited.id in insider_ids,
+             "positive control: both rows exist and an internal viewer sees them"
+
+      ids = archive_ids(external)
+      assert invited.id in ids, "positive control: the invited row appears"
+      refute uninvited.id in ids, "same-org membership must not widen an external archive"
+    end
+
+    test "attending without an invite does not surface the meeting" do
+      org_id = tenant_org_id("soylent")
+      external = create_user!() |> external_member!(org_id)
+
+      attended = create_meeting!("Soylent attended", org_id: org_id) |> end_meeting!(ago(4))
+      invited = create_meeting!("Soylent invited", org_id: org_id) |> end_meeting!(ago(3))
+
+      seat!(attended, external)
+      invite!(invited, %{user_id: external.id})
+
+      assert Chat.participant?(attended.chat_space_id, external.id),
+             "fixture precondition: the participation really is there"
+
+      ids = archive_ids(external)
+      assert invited.id in ids, "positive control: the invited meeting appears"
+      refute attended.id in ids, "participation is not invitation"
+    end
+
+    test "a revoked invite disappears while a live invite in the same run remains" do
+      org_id = tenant_org_id("soylent")
+      external = create_user!() |> external_member!(org_id)
+
+      revoked_meeting =
+        create_meeting!("Soylent revoked", org_id: org_id) |> end_meeting!(ago(4))
+
+      live_meeting =
+        create_meeting!("Soylent live invite", org_id: org_id) |> end_meeting!(ago(3))
+
+      revoked = invite!(revoked_meeting, %{user_id: external.id})
+      invite!(live_meeting, %{user_id: external.id})
+      # Revocation leaves the participant row behind — the reason the rule
+      # cannot key on participation.
+      seat!(revoked_meeting, external)
+
+      assert revoked_meeting.id in archive_ids(external),
+             "positive control: it appears BEFORE revocation"
+
+      {:ok, _} = Meetings.revoke_invite(revoked)
+
+      ids = archive_ids(external)
+      assert live_meeting.id in ids, "positive control: the live invite survives"
+      refute revoked_meeting.id in ids
+    end
+
+    test "counts and filters compose on top of the narrowed set" do
+      org_id = tenant_org_id("soylent")
+      external = create_user!() |> external_member!(org_id)
+
+      invited = create_meeting!("Soylent counted", org_id: org_id)
+      canvas!(invited, "#{@term} rollout plan")
+      invited = end_meeting!(invited, ago(4))
+
+      uninvited = create_meeting!("Soylent uncounted", org_id: org_id)
+      canvas!(uninvited, "#{@term} rollout plan")
+      uninvited = end_meeting!(uninvited, ago(3))
+
+      invite!(invited, %{user_id: external.id})
+
+      result = Archive.search(external, query: @term)
+
+      assert ids(result.matches) == [invited.id], "positive control: the invited row matches"
+      assert result.total == 1
+      assert result.matched == 1
+      refute uninvited.id in ids(result.others)
+
+      # `:project_id` still narrows, and a malformed one still fails closed.
+      kept = Archive.search(external, project_id: invited.project_id)
+      assert ids(kept.others) ++ ids(kept.matches) == [invited.id]
+      assert Archive.search(external, project_id: "not-a-uuid").total == 0
+    end
+
+    test "artifacts_for/2 is gated by the same rule, independently of search/2" do
+      org_id = tenant_org_id("soylent")
+      external = create_user!() |> external_member!(org_id)
+      insider = create_user!() |> member!(org_id)
+
+      invited = create_meeting!("Soylent artifacts in", org_id: org_id)
+      canvas!(invited, "#{@term} rollout plan")
+      invited = end_meeting!(invited, ago(4))
+
+      uninvited = create_meeting!("Soylent artifacts out", org_id: org_id)
+      canvas!(uninvited, "#{@term} rollout plan")
+      uninvited = end_meeting!(uninvited, ago(3))
+
+      invite!(invited, %{user_id: external.id})
+
+      insider_artifacts = Archive.artifacts_for(insider, [invited, uninvited])
+
+      assert Map.has_key?(insider_artifacts, uninvited.id),
+             "positive control: the row does have artifacts for someone entitled to them"
+
+      # Handed BOTH ids directly — the gate must hold without relying on
+      # `search/2` having filtered the list first.
+      artifacts = Archive.artifacts_for(external, [invited, uninvited])
+      assert Map.has_key?(artifacts, invited.id), "positive control: the invited row resolves"
+      refute Map.has_key?(artifacts, uninvited.id)
+    end
+  end
+
+  # ── External fixtures ──────────────────────────────────────────────────────
+
+  defp external_member!(user, org_id) do
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{
+      user_id: user.id,
+      org_id: org_id,
+      role: "member",
+      external: true
+    })
+    |> Repo.insert!()
+
+    user
+  end
+
+  defp invite!(%Meeting{} = meeting, attrs) do
+    %Invite{}
+    |> Invite.changeset(
+      Map.merge(%{meeting_id: meeting.id, display_name: "Archive Invitee"}, attrs)
+    )
+    |> Repo.insert!()
+  end
+
+  defp seat!(%Meeting{} = meeting, user) do
+    {:ok, participant} =
+      Chat.add_participant(meeting.chat_space_id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        joined_at: DateTime.utc_now()
+      })
+
+    participant
+  end
+
+  defp archive_ids(viewer) do
+    result = Archive.search(viewer, [])
+    ids(result.matches) ++ ids(result.others)
   end
 end

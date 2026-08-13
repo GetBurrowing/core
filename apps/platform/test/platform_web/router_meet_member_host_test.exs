@@ -146,16 +146,23 @@ defmodule PlatformWeb.RouterMeetMemberHostTest do
       assert {:controller, PlatformWeb.PageController} = resolve("GET", "/", "localhost")
     end
 
-    test "the meetings INDEX is not captured by the new scope on either host" do
-      # The new scope declares exactly one route. `/meetings` still falls
-      # through to the default scope even on the meet host — where
-      # `ExternalUserScope` then denies it for an external user. Route
-      # omission is not surface limitation; the plug is.
+    test "the meetings INDEX resolves per host: :authenticated on app, :meet_member on meet" do
+      # 019f9cb7: the index was added to the meet scope. On the DEFAULT host
+      # it must still resolve to the app-scope `:authenticated` route — the
+      # meet scope narrows by host prefix, it does not steal the app surface.
       assert {:live, PlatformWeb.MeetingLive, :authenticated} =
                resolve("GET", "/meetings", "localhost")
 
-      assert {:live, PlatformWeb.MeetingLive, :authenticated} =
+      assert {:live, PlatformWeb.MeetingLive, :meet_member} =
                resolve("GET", "/meetings", @shared_host)
+    end
+
+    test "the meet scope still declares NO root route" do
+      # Explicitly out of scope for 019f9cb7 and deliberately gated as a
+      # follow-up. `/` on the meet host must keep falling through to the
+      # app-scope PageController (where the fence handles it), not mount a
+      # meet-host landing surface nobody reviewed.
+      assert {:controller, PlatformWeb.PageController} = resolve("GET", "/", @shared_host)
     end
 
     test "the chat host scope is unaffected by the new scope's placement" do

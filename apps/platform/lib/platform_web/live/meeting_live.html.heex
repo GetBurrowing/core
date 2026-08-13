@@ -1646,10 +1646,10 @@
            replaced the list and the chip kept pointing at the old
            collection, so it counted rows the grid deliberately refuses to
            place (cancelled, and never-scheduled) and reported 7 beside 5
-           blocks. Worse than stale: `@meetings` is
-           `Meetings.list_all_meetings_unscoped/0`, which is unscoped and unbounded
-           in time — the archive half already refuses to source from it
-           for that reason. --%>
+           blocks. Worse than stale: `@meetings` is the whole viewer-scoped
+           index list, unbounded in time — the archive half already refuses
+           to source from it for that reason. (It is viewer-scoped as of
+           019f9cb7; it was not when this chip was written.) --%>
         <%!-- The header count makes the SAME false assertion the day count
            does — "No meetings this week" while the week was never
            queried — and it is the one a viewer reads first. Suppressing
@@ -2086,6 +2086,52 @@
           class="flex-1 overflow-y-auto px-3 py-3 sm:px-6 sm:py-5"
           data-region="meetings-list"
         >
+          <%!-- ── The viewer's whole scoped index is empty (019f9cb7 stage 5) ─
+           Deliberately NOT the centred hero the archive's two empty states
+           use, and not centred at all. This route is the redirect target for
+           a `/meetings/:slug` the viewer may not see, so this block renders
+           UNDER a "Meeting not found." flash more often than not, and two
+           centred messages stacked read as a broken app rather than as an
+           ordinary empty list. Left-aligned body text in the content column
+           is subordinate to the flash, which is the correct relationship:
+           the flash is the event, this is the resting state.
+
+           It sits ABOVE the week nav and does not replace the grid. Zero
+           meetings in total is a different fact from an empty week, and the
+           calendar still has to be navigable — a viewer with no meetings can
+           still page weeks and start one.
+
+           No exclamation mark and no illustration: this is a normal state,
+           not an apology or an error. --%>
+          <div
+            :if={@index_empty?}
+            class="mb-4 max-w-prose"
+            data-empty-state="meetings-index"
+          >
+            <h2 class="text-base font-semibold" data-role="meetings-index-empty-heading">
+              No meetings yet.
+            </h2>
+            <%!-- Branching, not one string, because the two classes of viewer
+             are empty for different reasons and each explanation is FALSE
+             for the other. See `:viewer_external?` in `meeting_live.ex`. --%>
+            <p
+              :if={@viewer_external?}
+              class="mt-1 text-sm text-base-content/60"
+              data-role="meetings-index-empty-note"
+              data-viewer="external"
+            >
+              You'll see a meeting here once you've been invited.
+            </p>
+            <p
+              :if={!@viewer_external?}
+              class="mt-1 text-sm text-base-content/60"
+              data-role="meetings-index-empty-note"
+              data-viewer="internal"
+            >
+              Meetings for your organisation will appear here.
+            </p>
+          </div>
+
           <%!-- Week nav. Renders at every width — paging the week and
            naming the zone are not desktop concerns, and stage 3's
            mobile strip sits under this rather than replacing it. --%>

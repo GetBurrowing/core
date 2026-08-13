@@ -537,6 +537,136 @@ defmodule Platform.Meetings do
     do: where(query, [m], m.project_id == ^project_id)
 
   @doc """
+  List every meeting `user` may see, newest-created first.
+
+  The viewer-scoped replacement for `list_all_meetings_unscoped/0`: same shape,
+  same `desc: inserted_at` ordering, narrowed to the rows this viewer is
+  allowed to read. The scoping rule is `viewer_listing_query/1` — one
+  definition shared with `list_meetings_in_range_for_user/4` so the index and
+  the calendar can never disagree about who sees what.
+
+  A nil, non-map, or id-less viewer answers `[]` — the empty answer, never the
+  unscoped one. That is an explicit clause rather than a fallthrough so a
+  future edit cannot widen it by accident.
+  """
+  @spec list_meetings_for_user(term()) :: [Meeting.t()]
+  def list_meetings_for_user(%{id: user_id} = user) when is_binary(user_id) do
+    user
+    |> viewer_listing_query()
+    |> order_by([m], desc: m.inserted_at)
+    |> Repo.all()
+  end
+
+  def list_meetings_for_user(_user), do: []
+
+  @doc """
+  List the meetings `user` may see that are *intended* to happen inside a time
+  window, in intended order.
+
+  The viewer-scoped replacement for `list_meetings_in_range/3`. Every edge of
+  that function's contract is preserved exactly, because a calendar grid places
+  rows with it and those edges are pinned by tests:
+
+    * half-open `[from, to)` on `scheduled_start_at`;
+    * `scheduled_start_at IS NULL` rows excluded by construction;
+    * `asc: scheduled_start_at` with `asc: inserted_at` as the tiebreak;
+    * optional `:project_id` narrowing, via the same `scope_range_to_project/2`.
+
+  The only difference is the viewer narrowing in front of them, which is the
+  shared `viewer_listing_query/1`. A nil, non-map, or id-less viewer answers
+  `[]`, as an explicit clause.
+  """
+  @spec list_meetings_in_range_for_user(term(), DateTime.t(), DateTime.t(), keyword()) ::
+          [Meeting.t()]
+  def list_meetings_in_range_for_user(user, from, to, opts \\ [])
+
+  def list_meetings_in_range_for_user(
+        %{id: user_id} = user,
+        %DateTime{} = from,
+        %DateTime{} = to,
+        opts
+      )
+      when is_binary(user_id) do
+    user
+    |> viewer_listing_query()
+    |> where([m], m.scheduled_start_at >= ^from and m.scheduled_start_at < ^to)
+    |> scope_range_to_project(Keyword.get(opts, :project_id))
+    |> order_by([m], asc: m.scheduled_start_at, asc: m.inserted_at)
+    |> Repo.all()
+  end
+
+  def list_meetings_in_range_for_user(_user, _from, _to, _opts), do: []
+
+  # The ONE viewer-scoping rule for meeting LISTINGS, rooted on `Meeting` so
+  # every caller composes further `where`/`order_by` against binding `[m]`.
+  #
+  # Three branches, matching the detail route (`fetch_meeting_for_user/2`)
+  # wherever a listing can:
+  #
+  #   * Fabrikam root ADMIN — everything. The bypass predicate is
+  #     `Tenancy.fabrikam_admin?/1`, the same one `viewer_meeting_query/3` uses.
+  #     NOT `root_member?/1`, which is strictly wider: every OIDC signup gets a
+  #     plain `role: "member"` row in the root org, so swapping the predicate
+  #     would hand every signed-up user every tenant's meetings. See the
+  #     moduledoc's "Why this is still hand-rolled" section.
+  #
+  #   * External user — the meetings they hold a LIVE INVITE for. Invitation,
+  #     not participation, and the distinction is load-bearing in both
+  #     directions. Revoking an invite stamps `revoked_at`; it does NOT delete
+  #     the meeting's chat participant row, so a participation-keyed listing
+  #     would keep showing a revoked invitee their old meetings forever. In the
+  #     other direction, an invite that was sent but never used is exactly the
+  #     row the invitee needs to see in order to join. Where the two sets
+  #     diverge, the invite decides. `invited_to_slug?/2` makes the same
+  #     argument for the single-meeting case.
+  #
+  #   * Internal user — org membership, mirroring `viewer_meeting_query/3`:
+  #     join the project and require its `org_id` among the viewer's orgs.
+  defp viewer_listing_query(user) do
+    cond do
+      Platform.Tenancy.fabrikam_admin?(user) ->
+        from(m in Meeting)
+
+      Platform.Tenancy.external_user?(user) ->
+        from(m in Meeting, where: m.id in subquery(invited_meeting_ids_query(user)))
+
+      true ->
+        from(m in Meeting,
+          join: p in Platform.Tasks.Project,
+          on: p.id == m.project_id,
+          where: p.org_id in subquery(Platform.Tenancy.viewer_org_ids_query(user.id))
+        )
+    end
+  end
+
+  @doc """
+  The meeting ids this user holds a LIVE invite for, as a subquery-able query
+  selecting `meeting_invites.meeting_id`.
+
+  Composed from `active_invite_query/1` — the one place the liveness
+  conditions (not expired, not revoked) and the identity clause (`user_id`,
+  OR a case-insensitive `email` match when the invite carries no `user_id`)
+  are written — so `viewer_listing_query/1`, `Platform.Meetings.Archive`,
+  `invited_to_slug?/2` and `invited_to_space?/2` can never drift apart.
+
+  The email disjunct inside it is what makes the invite-an-address-then-they
+  -sign-in flow work at all: `Platform.Accounts.ExternalAdmission` never
+  backfills `meeting_invites.user_id`, so a listing keyed on `user_id` alone
+  would show a freshly admitted external user nothing.
+
+  Public only so the archive can compose the SAME rule rather than clone it.
+  Intended for `where: m.id in subquery(...)`, never as a standalone read:
+  `IN (subquery)` rather than a join, because an invitee holding two live
+  invites to one meeting must produce one row, not two.
+  """
+  @spec invited_meeting_ids_query(map()) :: Ecto.Query.t()
+  def invited_meeting_ids_query(user) do
+    user
+    |> active_invite_query()
+    |> select([i, _m], i.meeting_id)
+  end
+
+  @doc """
   Was this meeting *meant* to have happened by `now`, and never started?
 
   This is a REPORT over the `(status, scheduled_start_at, started_at)`

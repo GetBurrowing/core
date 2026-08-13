@@ -37,8 +37,41 @@ defmodule Platform.Security.MeetingSlugScopeTest do
       required. This is the `ExternalScope.visible_space_id?/2` composition
       that makes org scoping sufficient rather than crude.
     * SURFACE — the unscoped `Meetings.get_meeting_by_slug/1` cannot come back.
+
+  ## The INDEX half (task 019f9cb7 stage 6)
+
+  Sections 8-13 extend the same file to the `/meetings` LISTING — the index,
+  its calendar week, its archive view and its live refresh. The detail route
+  above was only ever half the leak: a scoped `/meetings/:slug` that redirects
+  a stranger away is worth nothing while the index it redirects them TO
+  renders every meeting name in every org.
+
+  Two rules, held to at every assertion:
+
+    * BOTH LAYERS. Every claim is made twice — once against the context
+      (`Meetings.list_meetings_for_user/1`, `Archive.search/2`) and once
+      against the RENDERED LiveView. A context-only test does not prove the
+      page stopped leaking; the page is what leaked.
+    * A POSITIVE CONTROL IN EVERY NEGATIVE TEST. A listing that returns `[]`
+      for everybody satisfies every "must not see" assertion in this file
+      vacuously, so each one also asserts, on the same fixture and through
+      the same call, that a viewer who SHOULD see that exact row does.
+
+  And one distinction the external branch turns on: INVITATION, not
+  participation. Section 10 pins it in both directions — a meeting attended
+  with no invite is hidden, and an invite never used is shown.
+
+  ## Why this module is `async: false`
+
+  Reaching `/meetings` as an EXTERNAL user requires `:meet_host` to be set and
+  `:host_surface_enforcement` relaxed (see section 10's setup, which documents
+  the routing gap that makes the relaxation necessary). Both are process-global
+  application env, which no `async: true` module may touch — a concurrent test
+  would observe another module's host config. The alternative was to assert the
+  external branch somewhere else, which would have split one boundary across
+  two files.
   """
-  use PlatformWeb.ConnCase, async: true
+  use PlatformWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
   import Platform.TenancyFixtures
@@ -47,6 +80,8 @@ defmodule Platform.Security.MeetingSlugScopeTest do
   alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Meetings
+  alias Platform.Meetings.Archive
+  alias Platform.Meetings.Invite
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
@@ -94,16 +129,169 @@ defmodule Platform.Security.MeetingSlugScopeTest do
   # `Meetings.create_meeting/1` mints the bound chat space itself, so the
   # meeting arrives with a real `chat_space_id` — which is what every topic
   # in the success body is keyed off.
-  defp meeting_in_org(org_id, name) do
+  defp meeting_in_org(org_id, name, attrs \\ %{}) do
     {:ok, project} =
       Tasks.create_project(%{
         name: "Scope Project #{System.unique_integer([:positive])}",
         org_id: org_id
       })
 
-    {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: name})
+    attrs = Map.merge(%{project_id: project.id, name: name}, attrs)
+
+    # `Meeting.changeset/2` requires the intended-time PAIR: a start without
+    # an end is rejected, so a caller who names only the start gets the end.
+    attrs =
+      case attrs do
+        %{scheduled_start_at: %DateTime{} = start} ->
+          Map.put_new(attrs, :scheduled_end_at, DateTime.add(start, 1800, :second))
+
+        _ ->
+          attrs
+      end
+
+    {:ok, meeting} = Meetings.create_meeting(attrs)
     meeting
   end
+
+  # ── Index fixtures (019f9cb7 stage 6) ─────────────────────────────────────
+
+  # The calendar week is the index's only NAME-bearing surface — the grouped
+  # list this route used to render is gone — so a meeting that is to be seen
+  # (or proven unseen) on the index has to be placed inside the week on
+  # screen. `Etc/UTC` keeps the fixture instant and the rendered column the
+  # same date without depending on a tz database.
+  @index_zone "Etc/UTC"
+
+  defp today_at(hour) do
+    @index_zone
+    |> MeetingLive.calendar_today_date()
+    |> DateTime.new!(Time.new!(hour, 0, 0), @index_zone)
+    |> DateTime.shift_zone!("Etc/UTC")
+  end
+
+  defp scheduled_meeting_in_org(org_id, name, hour \\ 9),
+    do: meeting_in_org(org_id, name, %{scheduled_start_at: today_at(hour)})
+
+  # An archived row: `Archive` reads `status in ~w(ended cancelled)` and dates
+  # rows off the actuals, so both are stamped. Written through
+  # `Ecto.Changeset.change/2` rather than a context call because the lifecycle
+  # transition is not what is under test here.
+  defp ended!(meeting) do
+    # Microsecond precision, not truncated: the actuals are
+    # `:utc_datetime_usec` and a second-precision value is rejected at dump.
+    now = DateTime.utc_now()
+
+    meeting
+    |> Ecto.Changeset.change(%{
+      status: "ended",
+      started_at: DateTime.add(now, -3600, :second),
+      ended_at: DateTime.add(now, -1800, :second)
+    })
+    |> Repo.update!()
+  end
+
+  defp invite!(meeting, attrs) do
+    %Invite{}
+    |> Invite.changeset(
+      Map.merge(%{meeting_id: meeting.id, display_name: "Scope Invitee"}, attrs)
+    )
+    |> Repo.insert!()
+  end
+
+  # A `chat_participants` row for the meeting's bound space and NO invite —
+  # the shape that makes "participation is not invitation" constructible.
+  defp seat!(meeting, user) do
+    {:ok, participant} =
+      Chat.add_participant(meeting.chat_space_id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        joined_at: DateTime.utc_now()
+      })
+
+    participant
+  end
+
+  # ── Layer helpers: context ids and RENDERED ids ───────────────────────────
+
+  defp listed_ids(user), do: user |> Meetings.list_meetings_for_user() |> Enum.map(& &1.id)
+
+  defp archived_ids(user) do
+    result = Archive.search(user, [])
+    Enum.map(result.matches ++ result.others, & &1.id)
+  end
+
+  # `put_connect_params/2` supplies the zone the calendar needs; without it
+  # `:calendar_time_zone` is nil, the week list is `[]` BY CONTRACT, and every
+  # "must not see" assertion below would pass for the wrong reason.
+  defp index_conn(conn, user, opts) do
+    conn = if host = opts[:host], do: %{conn | host: host}, else: conn
+
+    conn
+    |> sign_in(user)
+    |> put_connect_params(%{"timezone" => @index_zone})
+  end
+
+  defp index_html(conn, user, opts \\ []) do
+    {:ok, view, _html} = live(index_conn(conn, user, opts), ~p"/meetings")
+    {view, render(view)}
+  end
+
+  defp rendered_ids(html, selector) do
+    html
+    |> LazyHTML.from_document()
+    |> LazyHTML.query(selector)
+    |> LazyHTML.attribute("data-meeting-id")
+    |> Enum.uniq()
+  end
+
+  # The week grid and the mobile day view render the same contract, so the
+  # ids arrive twice; `Enum.uniq/1` in `rendered_ids/2` makes that a set.
+  defp index_ids(conn, user, opts \\ []) do
+    {_view, html} = index_html(conn, user, opts)
+    {rendered_ids(html, ~s([data-role="calendar-event"])), html}
+  end
+
+  defp archive_ids(conn, user, opts \\ []) do
+    conn = index_conn(conn, user, opts)
+    {:ok, _view, html} = live(conn, ~p"/meetings?view=archive")
+    {rendered_ids(html, ~s([data-role="archive-row"])), html}
+  end
+
+  # ── External-viewer setup, shared by sections 10 and 11b ──────────────────
+  #
+  # See section 10's comment for WHY the host fence is relaxed and why that is
+  # a finding rather than a fixture detail. The env writes are the reason this
+  # module is `async: false`; both keys are restored on exit, including the
+  # "was unset" case, so a later module sees the config it configured.
+  @meet_host "meet.example.com"
+
+  defp relax_host_fence_and_seed_external(_ctx) do
+    previous_host = Application.get_env(:platform, :meet_host)
+    previous_fence = Application.get_env(:platform, :host_surface_enforcement, :off)
+
+    Application.put_env(:platform, :meet_host, @meet_host)
+    Application.put_env(:platform, :host_surface_enforcement, :off)
+
+    on_exit(fn ->
+      Application.put_env(:platform, :host_surface_enforcement, previous_fence)
+
+      if previous_host do
+        Application.put_env(:platform, :meet_host, previous_host)
+      else
+        Application.delete_env(:platform, :meet_host)
+      end
+    end)
+
+    org_id = tenant_org_id("soylent")
+
+    %{
+      org_id: org_id,
+      external: user_in_org(org_id, external: true),
+      insider: user_in_org(org_id)
+    }
+  end
+
+  defp external_index(conn, user), do: index_ids(conn, user, host: @meet_host)
 
   defp sign_in(conn, user), do: init_test_session(conn, current_user_id: user.id)
 
@@ -457,6 +645,490 @@ defmodule Platform.Security.MeetingSlugScopeTest do
       # `mount/3` fabricates a UUID for `:user_id`, which must never be the
       # authorization subject.
       assert {:error, {:redirect, _}} = live(conn, ~p"/meetings/#{meeting.slug}")
+    end
+
+    # ── The INDEX half of the same pin (019f9cb7 stage 6) ─────────────────
+    #
+    # A string scan rather than `function_exported?/3`, because the two
+    # unscoped LISTING functions still EXIST on `Platform.Meetings` — they
+    # are legitimate for callers that are not viewer-facing (jobs, counts,
+    # the anti-vacuity control in `MeetingListingScopeTest`). What must not
+    # come back is `MeetingLive` reaching them, and only a scan over the
+    # module's source can say that.
+    #
+    # `meeting_live.ex` describes its own scoping in prose WITHOUT naming
+    # the unscoped functions, deliberately — the same convention
+    # `Platform.Tasks.ProjectScopeTest` relies on. Keep it that way or this
+    # test trips on a comment.
+    test "MeetingLive does not reach either unscoped listing function" do
+      source = File.read!("lib/platform_web/live/meeting_live.ex")
+
+      # Anti-vacuity: the scan is proven to be able to find a name, on this
+      # exact file, before its silence about the other two means anything.
+      assert source =~ "list_meetings_for_user",
+             "the scan is reading the wrong file — it cannot find the scoped call it should"
+
+      refute source =~ "list_all_meetings_unscoped",
+             "the meetings index is back on an unscoped listing read — see task 019f9cb7"
+
+      refute source =~ "list_meetings_in_range(",
+             "the calendar week is back on the unscoped range read — see task 019f9cb7"
+
+      # And the scoped pair really is what the index resolves through, so the
+      # refutations above cannot be satisfied by deleting the call entirely.
+      Code.ensure_loaded!(Meetings)
+      assert function_exported?(Meetings, :list_meetings_for_user, 1)
+      assert function_exported?(Meetings, :list_meetings_in_range_for_user, 4)
+    end
+  end
+
+  # ── 8. The INDEX is scoped for INTERNAL viewers ───────────────────────────
+
+  describe "cross-org denial on the /meetings index" do
+    test "a foreign-org meeting is absent from the list AND from the rendered week",
+         %{conn: conn} do
+      foreign = scheduled_meeting_in_org(tenant_org_id("wayne_tech"), "Wayne-Tech Index Only")
+      own = scheduled_meeting_in_org(tenant_org_id("soylent"), "Soylent Index Standup", 11)
+
+      viewer = user_in_org(tenant_org_id("soylent"))
+      insider = user_in_org(tenant_org_id("wayne_tech"))
+
+      # CONTEXT layer.
+      ids = listed_ids(viewer)
+      assert own.id in ids, "positive control: the viewer's own-org meeting is listed"
+      refute foreign.id in ids
+
+      assert foreign.id in listed_ids(insider),
+             "positive control: the foreign row exists and IS visible to its own org"
+
+      # RENDER layer — the half that actually leaked. The name is the payload;
+      # the slug is asserted too because it is the link a name would carry.
+      {rendered, html} = index_ids(conn, viewer)
+
+      assert own.id in rendered, "positive control: the own-org meeting draws on the week"
+      refute foreign.id in rendered
+      assert html =~ own.name
+      refute html =~ foreign.name
+      refute html =~ foreign.slug
+
+      {insider_rendered, insider_html} = index_ids(conn, insider)
+
+      assert foreign.id in insider_rendered,
+             "positive control: the same page DOES draw that meeting for its own org"
+
+      assert insider_html =~ foreign.name
+    end
+
+    test "a viewer with no memberships gets an empty index, not everyone's", %{conn: conn} do
+      meeting = scheduled_meeting_in_org(tenant_org_id("soylent"), "Membership Gated Sync")
+      insider = user_in_org(tenant_org_id("soylent"))
+
+      orphan =
+        Repo.insert!(%User{
+          email: "mtg-scope-orphan-#{System.unique_integer([:positive])}@example.com",
+          name: "Orphan Viewer",
+          oidc_sub: "oidc-mtg-scope-orphan-#{System.unique_integer([:positive])}"
+        })
+
+      assert meeting.id in listed_ids(insider), "positive control"
+      refute meeting.id in listed_ids(orphan)
+
+      {rendered, html} = index_ids(conn, orphan)
+      refute meeting.id in rendered
+      refute html =~ meeting.name
+
+      # An empty scoped answer says so, rather than rendering a week that
+      # reads as "your meetings" while holding somebody else's.
+      assert html =~ ~s(data-empty-state="meetings-index")
+    end
+  end
+
+  # ── 9. Root admin and anonymous, on the index ─────────────────────────────
+
+  describe "the index bypass and the index floor" do
+    test "a Fabrikam root admin still sees every org's meetings, at both layers", %{conn: conn} do
+      a = scheduled_meeting_in_org(tenant_org_id("soylent"), "Root Index Reach A", 9)
+      b = scheduled_meeting_in_org(tenant_org_id("wayne_tech"), "Root Index Reach B", 13)
+      admin = user_in_org(fabrikam_org_id(), role: "admin")
+
+      assert Tenancy.fabrikam_admin?(admin)
+
+      ids = listed_ids(admin)
+      assert a.id in ids and b.id in ids
+
+      {rendered, html} = index_ids(conn, admin)
+      assert a.id in rendered and b.id in rendered
+      assert html =~ a.name and html =~ b.name
+    end
+
+    test "a nil / anonymous viewer sees nothing an authenticated viewer does see",
+         %{conn: conn} do
+      meeting = scheduled_meeting_in_org(tenant_org_id("soylent"), "Anonymous Floor Sync")
+      insider = user_in_org(tenant_org_id("soylent"))
+
+      assert meeting.id in listed_ids(insider), "positive control"
+      assert Meetings.list_meetings_for_user(nil) == []
+      assert Archive.search(nil, []).total == 0
+
+      # Through the route: no session means no mount at all, so the page
+      # cannot leak — but the context floor above is what holds if a future
+      # surface mounts without one.
+      assert {:error, {:redirect, _}} = live(conn, ~p"/meetings")
+
+      {rendered, html} = index_ids(conn, insider)
+      assert meeting.id in rendered, "positive control: the row is real and renderable"
+      assert html =~ meeting.name
+    end
+  end
+
+  # ── 10. External viewers on the index: INVITATION, not participation ──────
+
+  describe "external viewers see exactly their live invites" do
+    # ── The host fence, relaxed DELIBERATELY and under protest ────────────
+    #
+    # An external user cannot reach `/meetings` over HTTP today at all:
+    # `ExternalUserScope` admits the index on the `:meet` surface only, but
+    # `/meetings` is declared ONLY in the app-host router scope, and
+    # `HostSurface` (`:host_surface_enforcement` is `:on` in config.exs)
+    # 404s an app-scope route reached on a `meet.`-prefixed host. So it is
+    # 403 on the app host and 404 on the meet host, and the admission clause
+    # is unreachable.
+    #
+    # That is a ROUTING gap, tracked separately (019ffbb3) and explicitly not
+    # this stage's to fix. Relaxing the fence here exercises the query
+    # scoping as it will behave once `/meetings` is declared on the meet
+    # scope. It is stated rather than quietly done, because a test that
+    # switches off a production fence to reach its subject is evidence about
+    # the subject, not a detail of the fixture.
+    setup :relax_host_fence_and_seed_external
+
+    test "an invited meeting is shown and an UNINVITED one in the SAME org is not",
+         %{conn: conn} = ctx do
+      invited = scheduled_meeting_in_org(ctx.org_id, "Invited Working Session", 9)
+      uninvited = scheduled_meeting_in_org(ctx.org_id, "Internal Only Session", 14)
+      invite!(invited, %{user_id: ctx.external.id})
+
+      assert Tenancy.external_user?(ctx.external)
+      assert Tenancy.member_of?(ctx.external, ctx.org_id)
+
+      # Both halves in one test on purpose: an implementation that scoped
+      # external users to their ORG would pass the first half alone, and org
+      # scoping is exactly the too-broad rule this task rules out. The
+      # negative row is same-org, so only externality can be denying it.
+      insider_ids = listed_ids(ctx.insider)
+      assert invited.id in insider_ids and uninvited.id in insider_ids
+
+      ids = listed_ids(ctx.external)
+      assert invited.id in ids, "positive control: the invited meeting is listed"
+      refute uninvited.id in ids
+
+      {rendered, html} = external_index(conn, ctx.external)
+      assert invited.id in rendered
+      assert html =~ invited.name
+      refute uninvited.id in rendered
+      refute html =~ uninvited.name
+      refute html =~ uninvited.slug
+    end
+
+    test "a meeting they ATTENDED but hold no invite for is not shown",
+         %{conn: conn} = ctx do
+      attended = scheduled_meeting_in_org(ctx.org_id, "Attended Without Invite", 9)
+      invited = scheduled_meeting_in_org(ctx.org_id, "Invited Elsewhere", 15)
+
+      seat!(attended, ctx.external)
+      invite!(invited, %{user_id: ctx.external.id})
+
+      assert Chat.participant?(attended.chat_space_id, ctx.external.id),
+             "fixture precondition: the participation really is there"
+
+      # Participation is REAL access on the detail route — which is precisely
+      # why the listing keying on it would look correct and be wrong.
+      assert {:ok, _} = Meetings.fetch_meeting_for_user(ctx.external, attended.slug)
+
+      ids = listed_ids(ctx.external)
+      assert invited.id in ids, "positive control: the invited meeting is listed"
+      refute attended.id in ids, "participation is not invitation"
+
+      {rendered, html} = external_index(conn, ctx.external)
+      assert invited.id in rendered
+      refute attended.id in rendered
+      refute html =~ attended.name
+    end
+
+    test "an invited meeting they never attended IS shown — the converse",
+         %{conn: conn} = ctx do
+      never_attended = scheduled_meeting_in_org(ctx.org_id, "Invited Never Attended", 10)
+      invite!(never_attended, %{user_id: ctx.external.id})
+
+      refute Chat.participant?(never_attended.chat_space_id, ctx.external.id),
+             "fixture precondition: no participant row exists"
+
+      assert never_attended.id in listed_ids(ctx.external)
+
+      {rendered, html} = external_index(conn, ctx.external)
+      assert never_attended.id in rendered
+      assert html =~ never_attended.name
+    end
+
+    test "a REVOKED invite and an EXPIRED invite both disappear", %{conn: conn} = ctx do
+      revoked_meeting = scheduled_meeting_in_org(ctx.org_id, "Revoked Invite Session", 9)
+      expired_meeting = scheduled_meeting_in_org(ctx.org_id, "Expired Invite Session", 11)
+      live_meeting = scheduled_meeting_in_org(ctx.org_id, "Live Invite Session", 13)
+
+      revoked = invite!(revoked_meeting, %{user_id: ctx.external.id})
+
+      invite!(expired_meeting, %{
+        user_id: ctx.external.id,
+        expires_at: DateTime.add(DateTime.utc_now(), -3600, :second)
+      })
+
+      invite!(live_meeting, %{
+        user_id: ctx.external.id,
+        expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
+      })
+
+      # Revocation leaves the chat participant row behind — the reason the
+      # rule cannot key on participation.
+      seat!(revoked_meeting, ctx.external)
+
+      assert revoked_meeting.id in listed_ids(ctx.external),
+             "positive control: it is listed BEFORE revocation"
+
+      {:ok, _} = Meetings.revoke_invite(revoked)
+
+      ids = listed_ids(ctx.external)
+      assert live_meeting.id in ids, "positive control: the live invite survives"
+      refute revoked_meeting.id in ids
+      refute expired_meeting.id in ids
+
+      {rendered, html} = external_index(conn, ctx.external)
+      assert live_meeting.id in rendered
+      assert html =~ live_meeting.name
+      refute revoked_meeting.id in rendered
+      refute html =~ revoked_meeting.name
+      refute expired_meeting.id in rendered
+      refute html =~ expired_meeting.name
+    end
+
+    test "an invite with user_id: nil resolves on EMAIL, case-insensitively",
+         %{conn: conn} = ctx do
+      # `ExternalAdmission` never backfills `meeting_invites.user_id`, so a
+      # listing keyed on `user_id` alone passes every other test here and
+      # shows a real invitee nothing.
+      invitee = user_in_org(ctx.org_id, external: true)
+      matched = scheduled_meeting_in_org(ctx.org_id, "Address Matched Session", 9)
+      other_address = scheduled_meeting_in_org(ctx.org_id, "Other Address Session", 14)
+
+      invite!(matched, %{user_id: nil, email: String.upcase(invitee.email)})
+      invite!(other_address, %{user_id: nil, email: "someone.else@example.com"})
+
+      ids = listed_ids(invitee)
+      assert matched.id in ids, "the email disjunct must admit the account-less invite row"
+      refute other_address.id in ids
+
+      {rendered, html} = external_index(conn, invitee)
+      assert matched.id in rendered
+      assert html =~ matched.name
+      refute other_address.id in rendered
+      refute html =~ other_address.name
+    end
+  end
+
+  # ── 11. The ARCHIVE obeys the same four rules ─────────────────────────────
+
+  describe "the archive is scoped the way the index is" do
+    test "an internal viewer's archive excludes another org's ended meetings",
+         %{conn: conn} do
+      own = tenant_org_id("soylent") |> meeting_in_org("Soylent Archived Retro") |> ended!()
+      foreign = tenant_org_id("wayne_tech") |> meeting_in_org("Wayne-Tech Archived Retro") |> ended!()
+
+      viewer = user_in_org(tenant_org_id("soylent"))
+      insider = user_in_org(tenant_org_id("wayne_tech"))
+
+      ids = archived_ids(viewer)
+      assert own.id in ids, "positive control"
+      refute foreign.id in ids
+
+      assert foreign.id in archived_ids(insider),
+             "positive control: the foreign row is archived and visible to its own org"
+
+      {rendered, html} = archive_ids(conn, viewer)
+      assert own.id in rendered, "positive control: the archive page draws the own-org row"
+      refute foreign.id in rendered
+      assert html =~ own.name
+      refute html =~ foreign.name
+      refute html =~ foreign.slug
+    end
+
+    test "a Fabrikam root admin's archive spans orgs; a nil viewer's is empty", %{conn: conn} do
+      a = tenant_org_id("soylent") |> meeting_in_org("Archive Root Reach A") |> ended!()
+      b = tenant_org_id("wayne_tech") |> meeting_in_org("Archive Root Reach B") |> ended!()
+      admin = user_in_org(fabrikam_org_id(), role: "admin")
+
+      ids = archived_ids(admin)
+      assert a.id in ids and b.id in ids
+
+      {rendered, html} = archive_ids(conn, admin)
+      assert a.id in rendered and b.id in rendered
+      assert html =~ a.name and html =~ b.name
+
+      assert archived_ids(nil) == []
+    end
+  end
+
+  # ── 11b. The archive, for an EXTERNAL viewer ──────────────────────────────
+  #
+  # Its own describe rather than a nested one (ExUnit does not nest), sharing
+  # section 10's host-fence relaxation and the objection recorded there.
+
+  describe "the archive for an external viewer" do
+    setup :relax_host_fence_and_seed_external
+
+    test "invited is shown, uninvited in the SAME org is not", %{conn: conn} = ctx do
+      invited = ctx.org_id |> meeting_in_org("Archived Invited Review") |> ended!()
+      uninvited = ctx.org_id |> meeting_in_org("Archived Internal Review") |> ended!()
+      invite!(invited, %{user_id: ctx.external.id})
+
+      insider_ids = archived_ids(ctx.insider)
+      assert invited.id in insider_ids and uninvited.id in insider_ids
+
+      ids = archived_ids(ctx.external)
+      assert invited.id in ids, "positive control"
+      refute uninvited.id in ids
+
+      {rendered, html} = archive_ids(conn, ctx.external, host: @meet_host)
+      assert invited.id in rendered
+      assert html =~ invited.name
+      refute uninvited.id in rendered
+      refute html =~ uninvited.name
+    end
+
+    test "attended-without-invite is hidden; invited-never-attended is shown",
+         %{conn: conn} = ctx do
+      attended = ctx.org_id |> meeting_in_org("Archived Attended Session") |> ended!()
+      invited = ctx.org_id |> meeting_in_org("Archived Invited Absent") |> ended!()
+
+      seat!(attended, ctx.external)
+      invite!(invited, %{user_id: ctx.external.id})
+
+      refute Chat.participant?(invited.chat_space_id, ctx.external.id),
+             "fixture precondition: invited-but-absent"
+
+      ids = archived_ids(ctx.external)
+      assert invited.id in ids, "the converse: an invite never used still archives"
+      refute attended.id in ids, "participation is not invitation"
+
+      {rendered, html} = archive_ids(conn, ctx.external, host: @meet_host)
+      assert invited.id in rendered
+      refute attended.id in rendered
+      refute html =~ attended.name
+    end
+
+    test "a revoked invite and an expired invite drop out of the archive",
+         %{conn: conn} = ctx do
+      revoked_meeting = ctx.org_id |> meeting_in_org("Archived Revoked") |> ended!()
+      expired_meeting = ctx.org_id |> meeting_in_org("Archived Expired") |> ended!()
+      live_meeting = ctx.org_id |> meeting_in_org("Archived Live Invite") |> ended!()
+
+      revoked = invite!(revoked_meeting, %{user_id: ctx.external.id})
+
+      invite!(expired_meeting, %{
+        user_id: ctx.external.id,
+        expires_at: DateTime.add(DateTime.utc_now(), -3600, :second)
+      })
+
+      invite!(live_meeting, %{user_id: ctx.external.id})
+      seat!(revoked_meeting, ctx.external)
+
+      assert revoked_meeting.id in archived_ids(ctx.external),
+             "positive control: archived BEFORE revocation"
+
+      {:ok, _} = Meetings.revoke_invite(revoked)
+
+      ids = archived_ids(ctx.external)
+      assert live_meeting.id in ids, "positive control"
+      refute revoked_meeting.id in ids
+      refute expired_meeting.id in ids
+
+      {rendered, html} = archive_ids(conn, ctx.external, host: @meet_host)
+      assert live_meeting.id in rendered
+      refute revoked_meeting.id in rendered
+      refute expired_meeting.id in rendered
+      refute html =~ revoked_meeting.name
+    end
+
+    test "an invite with user_id: nil matches on email in the archive too",
+         %{conn: conn} = ctx do
+      invitee = user_in_org(ctx.org_id, external: true)
+      matched = ctx.org_id |> meeting_in_org("Archived Address Match") |> ended!()
+      other = ctx.org_id |> meeting_in_org("Archived Other Address") |> ended!()
+
+      invite!(matched, %{user_id: nil, email: String.upcase(invitee.email)})
+      invite!(other, %{user_id: nil, email: "someone.else@example.com"})
+
+      ids = archived_ids(invitee)
+      assert matched.id in ids
+      refute other.id in ids
+
+      {rendered, html} = archive_ids(conn, invitee, host: @meet_host)
+      assert matched.id in rendered
+      refute other.id in rendered
+      refute html =~ other.name
+    end
+  end
+
+  # ── 12. The LIVE refresh is scoped too ────────────────────────────────────
+
+  describe "a broadcast does not re-leak into a correctly mounted index" do
+    test "a meeting-created event for a foreign meeting leaves the index unchanged",
+         %{conn: conn} do
+      org_id = tenant_org_id("soylent")
+      viewer = user_in_org(org_id)
+
+      {view, html} = index_html(conn, viewer)
+      refute html =~ "Broadcast Foreign Meeting"
+
+      foreign =
+        scheduled_meeting_in_org(tenant_org_id("wayne_tech"), "Broadcast Foreign Meeting", 9)
+
+      # The handler re-queries the whole list, so delivering the message is
+      # enough to exercise the refresh regardless of which topics this mount
+      # subscribed to.
+      send(view.pid, {:meeting_created, foreign})
+      after_foreign = render(view)
+
+      refute after_foreign =~ foreign.name
+      refute foreign.id in rendered_ids(after_foreign, ~s([data-role="calendar-event"]))
+
+      # POSITIVE CONTROL, and it is the important half: the same message for
+      # a meeting the viewer MAY see must appear, or the refutation above
+      # only proves the refresh is dead.
+      own = scheduled_meeting_in_org(org_id, "Broadcast Own Meeting", 15)
+      send(view.pid, {:meeting_created, own})
+      after_own = render(view)
+
+      assert after_own =~ own.name
+      assert own.id in rendered_ids(after_own, ~s([data-role="calendar-event"]))
+      refute after_own =~ foreign.name
+
+      # ── Why this test also reads the ASSIGN ───────────────────────────
+      #
+      # MUTATION FINDING (019f9cb7 stage 6). Restoring the unscoped read at
+      # THIS call site alone changes nothing on screen: the grouped list that
+      # used to render `@meetings` is gone, and the refresh re-draws the week
+      # from the range query — which is scoped by a different call. So the
+      # refreshed list is currently a LATENT leak: it holds foreign rows that
+      # no element draws today, and the first template that renders
+      # `@meetings` again ships them.
+      #
+      # Rendered assertions therefore cannot pin this call site, and a guard
+      # that cannot fire is not a guard. The assign is read directly instead,
+      # and named as the reason.
+      assigns = :sys.get_state(view.pid).socket.assigns
+      listed = Enum.map(assigns.meetings, & &1.id)
+
+      assert own.id in listed, "positive control: the refreshed assign holds the own-org row"
+      refute foreign.id in listed, "the refreshed list re-leaked a foreign meeting"
     end
   end
 end

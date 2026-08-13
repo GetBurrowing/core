@@ -132,4 +132,131 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
       assert foreign.name in options
     end
   end
+
+  # ── Index meeting scoping (task 019f9cb7 stage 2) ─────────────────────────
+  #
+  # The meetings the index DRAWS, as distinct from the projects its picker
+  # offers. Three reads fed this surface unscoped: the `:index` load, the
+  # PubSub re-query behind a peer's broadcast, and the calendar week range
+  # query. The first two share `@meetings`; the third is what puts a NAME on
+  # screen, so the rendered-output assertions here go through the grid.
+  #
+  # Every denial carries a positive control in the SAME test: an index that
+  # renders nothing for everybody satisfies each `refute` on its own.
+  describe "index meeting scoping" do
+    @index_zone "America/Chicago"
+
+    defp index_conn(conn, user) do
+      conn
+      |> init_test_session(current_user_id: user.id)
+      |> put_connect_params(%{"timezone" => @index_zone})
+    end
+
+    # Noon on the anchor day, in the viewer's zone: comfortably inside the
+    # rendered week and inside any hour window derived from it.
+    defp midday_today do
+      @index_zone
+      |> PlatformWeb.MeetingLive.calendar_today_date()
+      |> DateTime.new!(~T[12:00:00], @index_zone)
+      |> DateTime.shift_zone!("Etc/UTC")
+    end
+
+    defp meeting!(org_id, label) do
+      project = project!(org_id, "#{label} Project #{System.unique_integer([:positive])}")
+      start_at = midday_today()
+
+      {:ok, meeting} =
+        Platform.Meetings.create_meeting(%{
+          project_id: project.id,
+          name: "#{label} Meeting #{System.unique_integer([:positive])}",
+          scheduled_start_at: start_at,
+          scheduled_end_at: DateTime.add(start_at, 1800, :second)
+        })
+
+      {project, meeting}
+    end
+
+    # `@meetings` is the assign the `:index` load and the PubSub re-query
+    # both write. It has no surface of its own on today's index — the list
+    # half was replaced by the calendar, and the count chip counts the
+    # WEEK's rows, not this collection — so a rendered assertion cannot
+    # distinguish a scoped read from an unscoped one here. It is still
+    # carried to the client on every diff and the archive sibling reads it,
+    # so it is asserted directly rather than left uncovered.
+    defp meeting_assign_ids(view) do
+      %{socket: %{assigns: %{meetings: meetings}}} = :sys.get_state(view.pid)
+      Enum.map(meetings, & &1.id)
+    end
+
+    test "a member sees own-org meetings and not a foreign org's", %{conn: conn} do
+      own_org_id = Platform.TenancyFixtures.tenant_org_id("soylent")
+      foreign_org_id = Platform.TenancyFixtures.tenant_org_id("sxi")
+
+      {_own_project, own_meeting} = meeting!(own_org_id, "Own")
+      {_foreign_project, foreign_meeting} = meeting!(foreign_org_id, "Foreign")
+
+      user = user!("member", own_org_id)
+      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_member?(user)
+
+      {:ok, view, html} = live(index_conn(conn, user), "/meetings")
+
+      ids = meeting_assign_ids(view)
+      assert own_meeting.id in ids
+      refute foreign_meeting.id in ids
+
+      # Positive control first — if this fails the refutes below prove
+      # nothing, because an empty index satisfies them.
+      assert html =~ own_meeting.name
+      refute html =~ foreign_meeting.name
+      refute html =~ foreign_meeting.slug
+
+      # The same foreign row IS drawn for a member of ITS org, through the
+      # same route and the same fixture. That is what makes the absence
+      # above a scoping fact rather than a rendering accident.
+      other = user!("member", foreign_org_id)
+      {:ok, _other_view, other_html} = live(index_conn(conn, other), "/meetings")
+
+      assert other_html =~ foreign_meeting.name
+      refute other_html =~ own_meeting.name
+    end
+
+    test "a peer broadcast does not re-leak a foreign meeting into a scoped index",
+         %{conn: conn} do
+      own_org_id = Platform.TenancyFixtures.tenant_org_id("soylent")
+      foreign_org_id = Platform.TenancyFixtures.tenant_org_id("sxi")
+
+      {own_project, own_meeting} = meeting!(own_org_id, "Own")
+      {_foreign_project, foreign_meeting} = meeting!(foreign_org_id, "Foreign")
+
+      user = user!("member", own_org_id)
+      {:ok, view, html} = live(index_conn(conn, user), "/meetings")
+
+      assert html =~ own_meeting.name
+      refute html =~ foreign_meeting.name
+
+      # The broadcast lands on a topic this view IS subscribed to (its own
+      # project's), which is the only way the clause runs at all. What it
+      # carries is a foreign meeting — the point is the RE-QUERY the clause
+      # performs, which used to be unscoped and so re-leaked into an index
+      # that had mounted correctly.
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        Platform.Meetings.project_meetings_topic(own_project.id),
+        {:meeting_created, foreign_meeting}
+      )
+
+      updated = render(view)
+
+      assert updated =~ own_meeting.name
+      refute updated =~ foreign_meeting.name
+      refute updated =~ foreign_meeting.slug
+
+      # The list assign the same clause rewrites, which the render cannot
+      # speak for.
+      ids = meeting_assign_ids(view)
+      assert own_meeting.id in ids
+      refute foreign_meeting.id in ids
+    end
+  end
 end

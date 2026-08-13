@@ -417,6 +417,17 @@ defmodule PlatformWeb.Router do
       on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
       layout: {PlatformWeb.Layouts, :guest},
       session: %{"chrome_mode" => "none"} do
+      # The INDEX (019f9cb7). `ExternalUserScope` admits an external user to
+      # `["meetings"]` on the `:meet` surface, but until this line existed
+      # `/meetings` was declared ONLY in the app-host scope below, and
+      # `HostSurface` 404s an app-scope route reached on a `meet.` host. So
+      # the admission clause was unreachable over HTTP: 403 on the app host,
+      # 404 here. Route omission is not surface limitation. One segment, so
+      # it does not compete with the two-segment guest route.
+      #
+      # Deliberately NOT added: a `"/"` route on this scope. The meet-host
+      # ROOT is a separate follow-up.
+      live("/meetings", MeetingLive, :index)
       live("/meetings/:slug", MeetingLive, :show)
     end
   end

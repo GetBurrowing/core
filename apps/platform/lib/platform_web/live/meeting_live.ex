@@ -376,6 +376,11 @@ defmodule PlatformWeb.MeetingLive do
     socket
     |> assign(:meetings, [])
     |> assign(:grouped_meetings, %{live: [], upcoming: [], ended: []})
+    # `false`, not `meetings == []`, even though the list above is empty:
+    # this is a guest FAILURE surface, and "No meetings yet." would be a
+    # claim about a scoped list that was never queried for this visitor.
+    |> assign(:index_empty?, false)
+    |> assign(:viewer_external?, true)
     |> assign(:projects, [])
     |> assign(:meeting_subscribed_project_ids, [])
     |> assign(:show_start_meeting_sheet, false)
@@ -518,7 +523,7 @@ defmodule PlatformWeb.MeetingLive do
   # `:calendar_zone_unresolved?` is false there and the static HTML is
   # byte-identical to what it was before this existed — the dead-render
   # contract documented at `CalendarWindow.resolve_time_zone/1` and at
-  # `list_calendar_week_meetings/2` below.
+  # `list_calendar_week_meetings/3` below.
   #
   # `:calendar_time_zone_raw` is CLIENT-CONTROLLED data. It is truncated
   # to a label's worth of bytes and relies on HEEx escaping at the point
@@ -802,15 +807,15 @@ defmodule PlatformWeb.MeetingLive do
     # the index lists every meeting; per-project subscription keeps
     # `{:meeting_created, _}` / `{:meeting_ended, _}` / `{:meeting_started, _}`
     # broadcasts flowing in.
-    # TODO(scope): this index still reads `list_all_meetings_unscoped/0` —
-    # renders every meeting in every org to every authenticated user, a
-    # name/existence leak of the same family as the `:show` one fixed
-    # above. Left out of task 019f9b14 deliberately (fixing it changes
-    # rendered output). The unscoped project-list half of this TODO is
-    # closed: the project picker below is now viewer-scoped. (Spelled out
-    # in prose rather than naming the unscoped function, so the
-    # `Platform.Tasks.ProjectScopeTest` LiveView guard — a plain string
-    # scan over this directory — is not tripped by a comment.)
+    # The index is viewer-scoped: `Meetings.list_meetings_for_user/1`
+    # supplies the rule (Fabrikam root admin sees all; an external user sees
+    # the meetings they hold a live invite for; everyone else is narrowed
+    # by org membership), and the calendar below shares that one rule via
+    # its range sibling. The project picker is viewer-scoped too. (Which
+    # rows are excluded is spelled out in prose rather than by naming the
+    # unscoped query function, so the `Platform.Tasks.ProjectScopeTest`
+    # LiveView guard — a plain string scan over this directory — is not
+    # tripped by a comment.)
     #
     # `:current_user_record` is assigned by `ShellLive.on_mount/4`, which
     # runs before `handle_params/3` for every route in the authenticated
@@ -822,7 +827,12 @@ defmodule PlatformWeb.MeetingLive do
       Enum.each(project_ids, &Meetings.subscribe_to_project_meetings/1)
     end
 
-    meetings = Meetings.list_all_meetings_unscoped()
+    # Same `:current_user_record` the project list above reads — the USER
+    # STRUCT. Never `:current_user`, which holds a display string: a
+    # non-map viewer lands in the scoped query's empty-answer clause and
+    # would render an empty index to everybody, which passes every
+    # must-not-see assertion vacuously.
+    meetings = Meetings.list_meetings_for_user(socket.assigns[:current_user_record])
     grouped = group_meetings_by_status(meetings)
 
     # The now-line has to move on its own. Arming the tick here (only when
@@ -840,6 +850,26 @@ defmodule PlatformWeb.MeetingLive do
      # and the calendar is an additional projection, not a replacement.
      |> assign(:meetings, meetings)
      |> assign(:grouped_meetings, grouped)
+     # ── Why the index needs an empty state again (019f9cb7 stage 5) ──────
+     # Scoping the index changed the shape of a CORRECT answer. Before it,
+     # `@meetings` held every meeting in the system and was empty only on a
+     # fresh install; now zero is an ordinary result for a new external user
+     # and one row is an ordinary result for most people. The calendar draws
+     # its chrome either way, but a viewer whose ENTIRE scoped list is empty
+     # is looking at a page that never says so, and this route is where a
+     # denied `/meetings/:slug` redirects — so they arrive under "Meeting not
+     # found." at a grid that reads as "your week", not as "you have none".
+     #
+     # `@meetings` (unbounded in time), never the week list: an empty WEEK is
+     # a navigation fact the week's own count already reports.
+     |> assign(:index_empty?, meetings == [])
+     # Resolved once per index render, not per row: `external_user?/1` is a
+     # query. The empty-state subline branches on it because the two viewer
+     # classes are empty for DIFFERENT reasons — an external user sees only
+     # meetings they hold a live invite for, an internal user is scoped by
+     # org membership and will routinely open meetings nobody invited them
+     # to. Telling an internal user to wait for an invite would be false.
+     |> assign(:viewer_external?, Tenancy.external_user?(socket.assigns[:current_user_record]))
      |> assign(:meeting_subscribed_project_ids, project_ids)
      |> assign_new(:projects, fn -> projects end)
      |> assign_new(:show_start_meeting_sheet, fn -> false end)
@@ -891,13 +921,20 @@ defmodule PlatformWeb.MeetingLive do
   # navigation events funnel through here, so there is exactly one range
   # query in the module and no way for a handler to drift from it.
   #
-  # One query per WEEK, not seven per day: `list_meetings_in_range/3` is
-  # already half-open over the same bounds `week_bounds/2` produces, and
-  # the day columns are a partition of that result in memory.
+  # One query per WEEK, not seven per day: the range query is already
+  # half-open over the same bounds `week_bounds/2` produces, and the day
+  # columns are a partition of that result in memory.
+  #
+  # The viewer is read from the socket here rather than threaded in by
+  # each caller, and is deliberately NOT a new assign: `:current_user_record`
+  # is already assigned by `ShellLive.on_mount/4` for every route in the
+  # authenticated live_session, so all four navigation events and the
+  # PubSub refresh inherit the scoping without knowing about it.
   defp assign_calendar_week(socket, %Date{} = anchor, selected \\ nil) do
     time_zone = socket.assigns.calendar_time_zone
     selected = selected || anchor
-    meetings = list_calendar_week_meetings(anchor, time_zone)
+    viewer = socket.assigns[:current_user_record]
+    meetings = list_calendar_week_meetings(viewer, anchor, time_zone)
 
     socket
     |> assign(:calendar_anchor_date, anchor)
@@ -910,11 +947,14 @@ defmodule PlatformWeb.MeetingLive do
   # placing everything in UTC: a row that visibly jumps between day
   # columns one beat after connect is a worse answer than one beat of
   # empty grid, and the extra range query would be work done to be undone.
-  defp list_calendar_week_meetings(_anchor, nil), do: []
+  defp list_calendar_week_meetings(_viewer, _anchor, nil), do: []
 
-  defp list_calendar_week_meetings(%Date{} = anchor, time_zone) do
+  # Viewer-scoped for the same reason the list is: the grid draws meeting
+  # NAMES, so an unscoped range query leaks exactly what the list would.
+  # Same rule, shared with the index by construction.
+  defp list_calendar_week_meetings(viewer, %Date{} = anchor, time_zone) do
     {from, to} = CalendarWindow.week_bounds(anchor, time_zone)
-    Meetings.list_meetings_in_range(from, to)
+    Meetings.list_meetings_in_range_for_user(viewer, from, to)
   end
 
   defp calendar_hour_window(_meetings, nil), do: CalendarWindow.hour_window([], "Etc/UTC")
@@ -1611,9 +1651,10 @@ defmodule PlatformWeb.MeetingLive do
   # rides the same URL for the same reason: an archive search that cannot be
   # pasted to someone else is half a feature.
   #
-  # `Meetings.list_all_meetings_unscoped/0` is deliberately NOT the source here. It is
-  # unscoped (it carries its own `TODO(scope)`), and the archive is a
-  # viewer-facing search — `Archive.search/2` does the org narrowing.
+  # The index's own meetings list is deliberately NOT the source here. Even
+  # now that it is viewer-scoped it is unbounded in time and carries no
+  # filters, and the archive is a viewer-facing SEARCH — `Archive.search/2`
+  # does its own org narrowing over the fields being searched.
   defp assign_archive(socket, params) do
     view = archive_view(params)
     query = archive_param(params, "q") || ""
@@ -3018,7 +3059,11 @@ defmodule PlatformWeb.MeetingLive do
   def handle_info({tag, %Meetings.Meeting{}}, socket)
       when tag in [:meeting_created, :meeting_started, :meeting_ended, :meeting_cancelled] do
     if Map.has_key?(socket.assigns, :meetings) do
-      meetings = Meetings.list_all_meetings_unscoped()
+      # Scoped with the same viewer as the initial render. A peer's
+      # broadcast re-queries the list, so an unscoped read here would
+      # re-leak a foreign meeting into an index that mounted correctly —
+      # the live-update half of the same rule, not a separate one.
+      meetings = Meetings.list_meetings_for_user(socket.assigns[:current_user_record])
 
       {:noreply,
        socket

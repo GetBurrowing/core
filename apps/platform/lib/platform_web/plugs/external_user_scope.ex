@@ -81,6 +81,25 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
       {:meet, ["meetings", slug]} ->
         gate_meeting(conn, user, slug)
 
+      # The meetings INDEX (and the archive, which is `?view=archive` — a query
+      # param on this same path, so `conn.path_info` is still `["meetings"]`).
+      #
+      # UNCONDITIONAL ON PURPOSE, unlike its `/meetings/:slug` sibling above.
+      # A route gate sees a path, not a result set, so it cannot express "only
+      # the rows you are invited to" — the sibling can carry an
+      # `invited_to_slug?/2` check precisely because a slug names ONE meeting.
+      # Per-row authorization for the index belongs in the QUERY, and that is
+      # where it now lives: the index and calendar week resolve through
+      # `Meetings.list_meetings_for_user/1` and
+      # `Meetings.list_meetings_in_range_for_user/4`, and the archive through
+      # the invitation branch of `Platform.Meetings.Archive.search/2`.
+      #
+      # So this clause is surface ADMISSION only. Do not "harden" it with a
+      # grant check that cannot be written correctly here, and do not copy the
+      # unconditional form onto a route whose page is not viewer-scoped.
+      {:meet, ["meetings"]} ->
+        conn
+
       {:meet, _} ->
         deny(conn, user, "external_off_surface")
 
