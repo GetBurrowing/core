@@ -648,9 +648,11 @@ defmodule PlatformWeb.MeetingLive do
       # A DENIED MOUNT MUST NOT BOUNCE OFF THE CHROME-LESS SURFACE (task
       # 019fb955-f8b1 stage 5). The shell branches below `push_navigate` to
       # `/meetings`, which is right for an internal viewer and wrong for a
-      # member on the `meet.` host: that route is not in the meet surface's
-      # allowlist, so `ExternalUserScope` answers it with a 403 and the
-      # denial reads as a broken app rather than a closed door. Render the
+      # member on the `meet.` host. `/meetings` IS on the meet surface as of
+      # task 019ffbb3 — routed in the `:meet_member` live_session and admitted
+      # by `ExternalUserScope` — so the navigation would now SUCCEED, and that
+      # is exactly why it must not happen: a member denied one meeting must
+      # not be handed a navigation to a list. Render the
       # SAME terminal invalid-invite card a bad guest link produces, so the
       # two denials are one outcome and the meeting name never reaches the
       # DOM. Matched first so the `chrome_mode == :shell` clauses below

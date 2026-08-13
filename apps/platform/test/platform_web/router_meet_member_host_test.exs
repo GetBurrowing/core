@@ -146,15 +146,14 @@ defmodule PlatformWeb.RouterMeetMemberHostTest do
       assert {:controller, PlatformWeb.PageController} = resolve("GET", "/", "localhost")
     end
 
-    test "the meetings INDEX resolves per host: :authenticated on app, :meet_member on meet" do
-      # 019f9cb7: the index was added to the meet scope. On the DEFAULT host
-      # it must still resolve to the app-scope `:authenticated` route — the
-      # meet scope narrows by host prefix, it does not steal the app surface.
+    test "the meetings INDEX resolves to :authenticated on the default host" do
+      # The app host is untouched by the meet-scoped index (task 019ffbb3
+      # stage 1): internal users keep the shell-rendered list. Narrowed to
+      # the DEFAULT-host half deliberately — the meet-host half is pinned in
+      # the `meetings index on the meet host` block below, where a failure
+      # names the meet surface rather than this non-shadowing contract.
       assert {:live, PlatformWeb.MeetingLive, :authenticated} =
                resolve("GET", "/meetings", "localhost")
-
-      assert {:live, PlatformWeb.MeetingLive, :meet_member} =
-               resolve("GET", "/meetings", @shared_host)
     end
 
     test "the meet scope still declares NO root route" do
@@ -171,6 +170,31 @@ defmodule PlatformWeb.RouterMeetMemberHostTest do
 
       assert {:live, PlatformWeb.ChatLive, :external_chat} =
                resolve("GET", "/chat/some-space", "chat.example.com")
+    end
+  end
+
+  describe "the meetings index on the meet host (task 019ffbb3 stage 1)" do
+    test "/meetings resolves into the :meet_member live_session" do
+      # The failure this pins: `:authenticated` here means the route was
+      # added BELOW the default match-any-host scope and is dead code —
+      # `HostSurface` then 404s the index on a `meet.` host, which is the
+      # entire bug. `:error` means the path was typo'd.
+      assert {:live, PlatformWeb.MeetingLive, :meet_member} =
+               resolve("GET", "/meetings", @shared_host)
+    end
+
+    test "the sibling room route did not get reordered out from under itself" do
+      # If this flips to `:guest_meeting` with `slug: "meetings"`, the
+      # scopes were reordered and the whole member surface is gone.
+      assert {:live, PlatformWeb.MeetingLive, :meet_member} =
+               resolve("GET", "/meetings/some-slug", @shared_host)
+    end
+
+    test "a host that merely CONTAINS `meet.` does not reach the index here" do
+      # Same boundary the room route draws: Phoenix's host option is a
+      # PREFIX match, so `notmeet.` is the app surface, not the meet one.
+      assert {:live, PlatformWeb.MeetingLive, :authenticated} =
+               resolve("GET", "/meetings", "notmeet.example.com")
     end
   end
 end

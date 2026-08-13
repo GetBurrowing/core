@@ -427,6 +427,21 @@ defmodule PlatformWeb.Router do
       #
       # Deliberately NOT added: a `"/"` route on this scope. The meet-host
       # ROOT is a separate follow-up.
+      #
+      # Declared INSIDE `:meet_member` rather than in a live_session of its
+      # own so index → room is a LIVE PATCH instead of a full page reload,
+      # and so it inherits the `:guest` layout and `chrome_mode: "none"` —
+      # an external user gets no app-shell nav. A second live_session using
+      # the `:external` layout was considered and rejected: it forces a
+      # reload on every index→room click and duplicates the on_mount list.
+      #
+      # ONE route covers index, calendar week AND archive: the archive is
+      # `?view=archive`, a query param on this same path, so `path_info`
+      # stays `["meetings"]`. Do not add a second route for it.
+      #
+      # Paired with the `{:meet, ["meetings"]} -> conn` admission clause in
+      # `ExternalUserScope`; without the route that clause 404s here, which
+      # is the bug this closes.
       live("/meetings", MeetingLive, :index)
       live("/meetings/:slug", MeetingLive, :show)
     end
