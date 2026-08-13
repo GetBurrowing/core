@@ -24,6 +24,31 @@ defmodule Platform.Orchestration.DispatchPhaseRoutingTest do
   passing the negative one by absence. This is mandated for this task because
   every assertion in the file is a substring match on rendered output.
 
+  ## Task `019ff83c` stage 2 — the co-located `test_pass` + `e2e_behavior` stage
+
+  The `describe "a co-located test_pass + e2e_behavior stage"` block below pins
+  stage 1's precedence fix at the seam the recipient actually reads: the
+  RENDERED dispatch body, not `DispatchPhase.resolve/3`'s struct. The struct was
+  never what misled the agent — the template body was.
+
+  Its two assertions are an anti-vacuity PAIR and are deliberately in one test
+  against ONE fixture: while `test_pass` is pending the stage renders the
+  implementation body, and after `test_pass` passes the SAME stage renders
+  `dispatch.review_e2e`. Neither half is evidence alone — the first is satisfied
+  by a selector that never renders review at all, the second by the pre-fix
+  behaviour.
+
+  That fixture is built from REAL DB rows (project / task / approved plan /
+  running stage / two validations) rather than the bare maps the rest of this
+  file uses, and is constructed directly through `Platform.Tasks` rather than
+  through `PlanEngine.route_e2e_behavior_validations/1`: ingestion would split
+  the e2e case onto its own stage, but the co-located shape exists in production
+  data regardless, and it is the shape that misrouted. The fixture's shape is
+  asserted (two validations, kinds `["e2e_behavior", "test_pass"]`) BEFORE any
+  dispatch assertion, because an `e2e_behavior` row without a populated
+  `evaluation_payload` does not persist — and a silently one-validation stage
+  would make the whole pair vacuous.
+
   ## Template rows are forced to shipped content
 
   `PromptTemplates.seed_defaults/0` is skip-if-exists, so a stale seeded row
@@ -43,6 +68,23 @@ defmodule Platform.Orchestration.DispatchPhaseRoutingTest do
   @in_progress_anchor "Plan approved — execute the current stage."
   @in_review_anchor "Task is in review — produce a human-judgment review request"
   @deploying_anchor "Task is deploying — execute the deploy stage based on the resolved strategy."
+  @review_e2e_anchor "Task is in behavioral review"
+
+  # Invented — `core` is public. `dispatch.review_e2e` treats this as a REQUIRED
+  # assign and renders a degraded body without it, which would weaken the
+  # rendered-body claim.
+  @execution_space_id "019ff83c-0000-7000-8000-0000000000e5"
+
+  alias Platform.Tasks
+
+  # Minimal payload that satisfies `Platform.Tasks.Validation`'s
+  # `validate_e2e_behavior_payload/1` — setup/actions/expected must each be a
+  # non-blank string or the row does not persist.
+  @e2e_payload %{
+    "setup" => "Boot the dev server on the task worktree.",
+    "actions" => "Dispatch the running stage and read the rendered prompt.",
+    "expected" => "The executor body, not the behavioural-review body."
+  }
 
   setup do
     :ok = PromptTemplates.seed_defaults()
@@ -328,4 +370,156 @@ defmodule Platform.Orchestration.DispatchPhaseRoutingTest do
       assert DispatchPhase.phase_for_pending([]) == nil
     end
   end
+
+  describe "a co-located test_pass + e2e_behavior stage (019ff83c)" do
+    test "renders the IMPLEMENTATION body while test_pass is pending, then review_e2e once only the e2e case remains" do
+      task_id =
+        build_stage_fixture("in_progress", "Land the resolver and prove it end to end", [
+          {"test_pass", nil},
+          {"e2e_behavior", @e2e_payload}
+        ])
+
+      {task, _plan, stage} = reload(task_id)
+
+      # FIXTURE SHAPE FIRST. A dropped e2e_behavior row would leave a
+      # one-validation stage and make both halves below vacuous.
+      assert length(stage.validations) == 2,
+             "fixture collapsed to #{length(stage.validations)} validation(s) — " <>
+               "the e2e_behavior row did not persist"
+
+      assert Enum.sort(Enum.map(stage.validations, & &1.kind)) == ["e2e_behavior", "test_pass"]
+      assert Enum.all?(stage.validations, &(&1.status == "pending"))
+      assert stage.status == "running"
+
+      # HALF ONE — implementation outranks the pending e2e case.
+      before = HeartbeatScheduler.dispatch_prompt(task, plan_of(task_id), stage, dispatch_opts())
+
+      refute before =~ @review_e2e_anchor,
+             "a stage with pending implementation work must not receive the behavioural-review body"
+
+      assert before =~ @in_progress_anchor,
+             "a stage with pending implementation work must receive the execution dispatch"
+
+      assert String.length(before) > 200,
+             "render collapsed to #{String.length(before)} chars — the refute above would pass vacuously"
+
+      # Pass test_pass. The stage stays `running` because the e2e case is
+      # still pending, so the SAME stage is re-dispatched.
+      test_pass = Enum.find(stage.validations, &(&1.kind == "test_pass"))
+      {:ok, _} = Tasks.evaluate_validation(test_pass.id, "passed", %{"result" => "0 failures"})
+
+      {task, _plan, stage} = reload(task_id)
+
+      assert stage.status == "running", "fixture advanced past the stage under test"
+
+      assert Enum.sort(for(v <- stage.validations, v.status == "pending", do: v.kind)) == [
+               "e2e_behavior"
+             ]
+
+      # HALF TWO — with implementation done, the same stage flips to review_e2e.
+      after_pass =
+        HeartbeatScheduler.dispatch_prompt(task, plan_of(task_id), stage, dispatch_opts())
+
+      refute after_pass =~ @in_progress_anchor,
+             "a stage whose only pending validation is e2e_behavior must not receive the execution dispatch"
+
+      assert after_pass =~ @review_e2e_anchor,
+             "a lone pending e2e_behavior must receive the behavioural-review body"
+
+      assert String.length(after_pass) > 200,
+             "render collapsed to #{String.length(after_pass)} chars — the refute above would pass vacuously"
+    end
+
+    # DIRECTION CONTROL. Without this, half one above is also satisfied by a
+    # selector that never renders `dispatch.review_e2e` at all.
+    test "a stage carrying ONLY e2e_behavior renders review_e2e immediately" do
+      task_id =
+        build_stage_fixture("in_review", "Behavioural review only", [
+          {"e2e_behavior", @e2e_payload}
+        ])
+
+      {task, plan, stage} = reload(task_id)
+
+      assert Enum.map(stage.validations, & &1.kind) == ["e2e_behavior"]
+
+      output = HeartbeatScheduler.dispatch_prompt(task, plan, stage, dispatch_opts())
+
+      refute output =~ @in_progress_anchor
+      assert output =~ @review_e2e_anchor
+      assert String.length(output) > 200
+    end
+
+    # STALE-STATUS CONTROL, the rendered twin of dispatch_phase_test.exs's
+    # "stale in_progress status on an e2e_behavior stage resolves to
+    # review_e2e". Stage 1's precedence change must not reintroduce a
+    # `task.status` read on this shape.
+    test "a lone e2e_behavior stage on a task row still reading in_progress renders review_e2e" do
+      task_id =
+        build_stage_fixture("in_progress", "Stale in_progress task row", [
+          {"e2e_behavior", @e2e_payload}
+        ])
+
+      {task, plan, stage} = reload(task_id)
+
+      assert task.status == "in_progress"
+      assert Enum.map(stage.validations, & &1.kind) == ["e2e_behavior"]
+
+      output = HeartbeatScheduler.dispatch_prompt(task, plan, stage, dispatch_opts())
+
+      refute output =~ @in_progress_anchor,
+             "the stale task.status must not select the execution dispatch"
+
+      assert output =~ @review_e2e_anchor
+      assert String.length(output) > 200
+    end
+  end
+
+  # Built directly through `Platform.Tasks` rather than through plan
+  # ingestion: `PlanEngine.route_e2e_behavior_validations/1` would split the
+  # e2e case onto its own stage, but the co-located shape exists in production
+  # data and is the shape that misrouted.
+  defp build_stage_fixture(task_status, title, validation_specs) do
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: "Routing fixture #{System.unique_integer([:positive])}",
+        repo_url: "https://github.com/test/router"
+      })
+
+    {:ok, task} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: title,
+        description: "Fixture for the co-located dispatch routing assertions."
+      })
+
+    {:ok, task} = Tasks.update_task(task, %{status: task_status})
+
+    {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        position: 1,
+        name: "Implement and verify",
+        status: "running"
+      })
+
+    for {kind, payload} <- validation_specs do
+      attrs = %{stage_id: stage.id, kind: kind, status: "pending"}
+      attrs = if payload, do: Map.put(attrs, :evaluation_payload, payload), else: attrs
+      {:ok, _} = Tasks.create_validation(attrs)
+    end
+
+    task.id
+  end
+
+  defp reload(task_id) do
+    plan = plan_of(task_id)
+    stage = Enum.find(plan.stages, &(&1.status == "running"))
+    {Tasks.get_task_detail(task_id), plan, stage}
+  end
+
+  defp plan_of(task_id), do: Tasks.current_plan(task_id)
+
+  defp dispatch_opts, do: [execution_space_id: @execution_space_id]
 end

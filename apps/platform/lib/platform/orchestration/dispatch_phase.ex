@@ -165,10 +165,21 @@ defmodule Platform.Orchestration.DispatchPhase do
   # describes, not a degraded-but-useful prompt.
   @stage_scoped_phases [:in_progress, :in_review, :review_e2e, :deploying]
 
-  # Precedence order applied to the SET of phases implied by the pending kinds.
-  # e2e before deploying before in_progress; :in_review is handled separately
-  # because it only wins when it is the ONLY phase present.
-  @phase_precedence [:review_e2e, :deploying, :in_progress]
+  # Precedence order applied to the SET of phases implied by the pending kinds:
+  # deploying, then implementation, then behavioural. :in_review is handled
+  # separately because it only wins when it is the ONLY phase present.
+  #
+  # Implementation kinds outrank :review_e2e (019ff83c). A stage carrying both a
+  # pending implementation validation and a pending `e2e_behavior` case is real
+  # and in flight today: `PlanEngine.attach_e2e_validations_to_review_stage/2`
+  # lifts the e2e case onto an existing stage whose name merely contains
+  # "review"/"validation", so plans ALREADY minted hold both kinds on one stage.
+  # Ordering the phase by the stage's unmet validations repairs those in-flight
+  # plans; teaching PlanEngine to always split the e2e case onto its own gate
+  # would not (it cannot reach an approved plan), and would leave a directly
+  # built mixed stage still answering :review_e2e here. The PlanEngine
+  # name-substring reuse is a separate defect, filed separately, not fixed here.
+  @phase_precedence [:deploying, :in_progress, :review_e2e]
 
   @doc """
   The validation-kind -> phase classification table.
@@ -232,11 +243,22 @@ defmodule Platform.Orchestration.DispatchPhase do
       # manual_approval gate with implementation validations still needs the
       # implementation done first.
       phases == [:in_review] -> :in_review
+      no_implementation_e2e?(phases) -> :review_e2e
       true -> Enum.find(@phase_precedence, :in_review, &(&1 in phases))
     end
   end
 
   def phase_for_pending(_), do: nil
+
+  # e2e still outranks a deploy gate, but ONLY when no implementation kind is
+  # pending. Carried over from the pre-019ff83c order rather than expressed in
+  # @phase_precedence, because the three relations are not a total order:
+  # deploying beats in_progress, in_progress beats review_e2e, and review_e2e
+  # beats deploying. A deploy stage never legitimately carries an e2e_behavior
+  # validation (DeployStageBuilder's moduledoc forbids it), so this only decides
+  # hand-built stages — but dropping it would silently change that answer.
+  defp no_implementation_e2e?(phases),
+    do: :review_e2e in phases and :in_progress not in phases
 
   # -- internals ------------------------------------------------------------
 
@@ -253,7 +275,10 @@ defmodule Platform.Orchestration.DispatchPhase do
     cond do
       # e2e first — a deploy stage never carries one (DeployStageBuilder's
       # moduledoc forbids it), so this arm is a defensive ordering, not a
-      # policy the two signals actually contest.
+      # policy the two signals actually contest. Since 019ff83c this can no
+      # longer see a stage that also has pending implementation validations:
+      # phase_for_pending/1 already answered :in_progress for those, so this
+      # arm cannot resurrect the old e2e-first precedence.
       kind_phase == :review_e2e -> :review_e2e
       deploy_stage?(stage) -> :deploying
       not is_nil(kind_phase) -> kind_phase

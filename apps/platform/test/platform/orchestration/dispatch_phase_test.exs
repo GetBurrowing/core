@@ -155,6 +155,60 @@ defmodule Platform.Orchestration.DispatchPhaseTest do
       assert phase.slug == "dispatch.in_progress"
     end
 
+    test "test_pass pending alongside e2e_behavior resolves to in_progress (019ff83c)" do
+      # The in-flight shape: PlanEngine lifted an e2e case onto a stage that
+      # still has implementation work. Dispatch it as implementation.
+      phase =
+        DispatchPhase.resolve(task("in_progress"), %{}, stage(["test_pass", "e2e_behavior"]))
+
+      assert phase.slug == "dispatch.in_progress"
+    end
+
+    test "the same stage with test_pass PASSED resolves to review_e2e" do
+      # Direction control for the case above: it is the PENDING implementation
+      # validation doing the work, not the mere presence of a test_pass row.
+      phase =
+        DispatchPhase.resolve(
+          task("in_progress"),
+          %{},
+          stage([{"test_pass", "passed"}, {"e2e_behavior", "pending"}])
+        )
+
+      assert phase.slug == "dispatch.review_e2e"
+    end
+
+    test "a lone pending e2e_behavior still resolves to review_e2e" do
+      phase = DispatchPhase.resolve(task("in_progress"), %{}, stage(["e2e_behavior"]))
+
+      assert phase.slug == "dispatch.review_e2e"
+    end
+
+    test "e2e_behavior still outranks manual_approval when no implementation kind is pending" do
+      # The documented e2e-wins-over-manual policy referenced from
+      # HeartbeatScheduler.select_review_template/2. :in_review is not in
+      # @phase_precedence, so this is decided by the no-implementation e2e arm
+      # plus Enum.find/3's default — asserted, not assumed.
+      phase =
+        DispatchPhase.resolve(
+          task("in_progress"),
+          %{},
+          stage(["manual_approval", "e2e_behavior"])
+        )
+
+      assert phase.slug == "dispatch.review_e2e"
+    end
+
+    test "a deploy stage is unaffected by the implementation-first order" do
+      phase =
+        DispatchPhase.resolve(
+          task("in_progress"),
+          %{},
+          stage(["pr_merged"], %{name: "Deploy: PR merge"})
+        )
+
+      assert phase.slug == "dispatch.deploying"
+    end
+
     test "manual_approval alone across several validations still resolves to in_review" do
       phase =
         DispatchPhase.resolve(
