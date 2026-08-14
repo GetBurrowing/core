@@ -28,9 +28,21 @@ import ScrollToBottom from "../../js/hooks/scroll_to_bottom.js"
 // ── Fakes ──────────────────────────────────────────────────────────────
 
 function fakeRow(messageId, participantId = "p-1") {
+  const classes = new Set()
   return {
     dataset: { messageId, participantId },
     style: {},
+    // `applyGrouping` marks continuation rows with a class and lets
+    // app.css own the collapsed geometry, so the shim needs a real
+    // `classList.toggle`. Only the two-argument form is used.
+    classList: {
+      toggle(name, force) {
+        if (force) classes.add(name)
+        else classes.delete(name)
+        return Boolean(force)
+      },
+      contains: (name) => classes.has(name),
+    },
     scrollIntoViewCalls: [],
     scrollIntoView(opts) {
       this.scrollIntoViewCalls.push(opts)
@@ -270,7 +282,8 @@ describe("ScrollToBottom — deep-link anchor holds the arrival position", () =>
 
     // `applyGrouping` runs before `scrollToBottom` in `_safeUpdate`;
     // returning early from the anchor branch must not skip it.
-    expect(grouped.style.paddingTop).toBe("1px")
-    expect(el.rows[2].style.paddingTop).toBe("")
+    expect(grouped.classList.contains("message-row--grouped")).toBe(true)
+    // …and the row after it opens a new author group, so it stays ungrouped.
+    expect(el.rows[2].classList.contains("message-row--grouped")).toBe(false)
   })
 })

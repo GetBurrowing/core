@@ -48,6 +48,18 @@ class ClassList {
   contains(name) {
     return this._set.has(name);
   }
+  // Two-argument form only — `applyGrouping` always passes an explicit
+  // force flag, and the one-argument flip is deliberately not implemented
+  // so a future caller relying on it fails loudly here rather than
+  // silently no-op'ing.
+  toggle(name, force) {
+    if (force === undefined) {
+      throw new Error("ClassList.toggle shim requires an explicit force flag");
+    }
+    if (force) this._set.add(name);
+    else this._set.delete(name);
+    return Boolean(force);
+  }
   toString() {
     return Array.from(this._set).join(" ");
   }
@@ -191,10 +203,24 @@ function makeMessageRow({ participantId, id }) {
 }
 
 // ---------------------------------------------------------------------------
-// applyGrouping — consecutive same-author rows collapse avatar + header
+// applyGrouping — consecutive same-author rows are marked as continuations
+//
+// The hook used to write inline styles (`visibility: hidden` on the avatar,
+// `display: none` on the header, a 1px top padding on the row) and these
+// tests asserted on those styles. It now sets a single
+// `message-row--grouped` class and app.css owns the collapsed geometry.
+//
+// That move was the fix, not a tidy-up: `visibility: hidden` concealed the
+// avatar while it went on reserving its full height, so a grouped one-line
+// message stayed 66px tall to show 20px of text. Reclaiming that space
+// needs rules an inline style cannot express, so the contract these tests
+// guard is now "which rows are continuations", and the stylesheet answers
+// "what a continuation looks like".
 // ---------------------------------------------------------------------------
 
-test("applyGrouping collapses consecutive same-author rows", () => {
+const isGrouped = (row) => row.classList.contains("message-row--grouped");
+
+test("applyGrouping marks consecutive same-author rows as continuations", () => {
   const el = makeContainer();
   const r1 = makeMessageRow({ participantId: "p1" });
   const r2 = makeMessageRow({ participantId: "p1" });
@@ -207,23 +233,35 @@ test("applyGrouping collapses consecutive same-author rows", () => {
 
   ScrollToBottom.applyGrouping.call({ el });
 
-  // r1 is first in its group — avatar + header visible
-  assert.equal(r1.querySelector(".message-avatar").style.visibility, "");
-  assert.equal(r1.querySelector(".message-header").style.display, "");
-  assert.equal(r1.style.paddingTop, "");
+  // r1 opens its group — full avatar + header.
+  assert.equal(isGrouped(r1), false);
+  // r2 follows the same author — collapsed.
+  assert.equal(isGrouped(r2), true);
+  // r3 starts a NEW author group even though it directly follows a
+  // grouped row — a different author always opens a group.
+  assert.equal(isGrouped(r3), false);
+  // r4 continues r3.
+  assert.equal(isGrouped(r4), true);
+});
 
-  // r2 follows the same author — avatar hidden, header collapsed
-  assert.equal(r2.querySelector(".message-avatar").style.visibility, "hidden");
-  assert.equal(r2.querySelector(".message-header").style.display, "none");
-  assert.equal(r2.style.paddingTop, "1px");
+test("applyGrouping never groups a row missing its participant id", () => {
+  // A row whose `data-participant-id` is absent must not inherit the
+  // previous row's identity, and must not lend its own (undefined) one to
+  // the row after it — otherwise two unrelated authors either side of a
+  // system row would collapse into one visual group.
+  const el = makeContainer();
+  const r1 = makeMessageRow({ participantId: "p1" });
+  const r2 = makeMessageRow({ participantId: undefined });
+  const r3 = makeMessageRow({ participantId: undefined });
+  el.appendChild(r1);
+  el.appendChild(r2);
+  el.appendChild(r3);
 
-  // r3 starts a new author group — avatar + header visible again
-  assert.equal(r3.querySelector(".message-avatar").style.visibility, "");
-  assert.equal(r3.querySelector(".message-header").style.display, "");
+  ScrollToBottom.applyGrouping.call({ el });
 
-  // r4 grouped with r3
-  assert.equal(r4.querySelector(".message-avatar").style.visibility, "hidden");
-  assert.equal(r4.querySelector(".message-header").style.display, "none");
+  assert.equal(isGrouped(r1), false);
+  assert.equal(isGrouped(r2), false);
+  assert.equal(isGrouped(r3), false);
 });
 
 test("applyGrouping is idempotent across consecutive calls", () => {
@@ -233,26 +271,19 @@ test("applyGrouping is idempotent across consecutive calls", () => {
   el.appendChild(makeMessageRow({ participantId: "p2" }));
 
   ScrollToBottom.applyGrouping.call({ el });
-  const after1 = el.children.map((c) => ({
-    av: c.querySelector(".message-avatar").style.visibility,
-    hd: c.querySelector(".message-header").style.display,
-    pt: c.style.paddingTop,
-  }));
+  const after1 = el.children.map(isGrouped);
 
   ScrollToBottom.applyGrouping.call({ el });
-  const after2 = el.children.map((c) => ({
-    av: c.querySelector(".message-avatar").style.visibility,
-    hd: c.querySelector(".message-header").style.display,
-    pt: c.style.paddingTop,
-  }));
+  const after2 = el.children.map(isGrouped);
 
   assert.deepStrictEqual(after2, after1);
+  assert.deepStrictEqual(after1, [false, true, false]);
 });
 
 test("applyGrouping resets a previously-collapsed row when its predecessor changes author", () => {
   // Simulate a row's data-participant-id flipping due to a server
-  // re-render: the hook should re-show avatar/header on the no-longer-
-  // grouped row.
+  // re-render: the hook must UNgroup the no-longer-grouped row. This is
+  // the case a plain `classList.add` would get wrong.
   const el = makeContainer();
   const r1 = makeMessageRow({ participantId: "p1" });
   const r2 = makeMessageRow({ participantId: "p1" });
@@ -260,13 +291,11 @@ test("applyGrouping resets a previously-collapsed row when its predecessor chang
   el.appendChild(r2);
 
   ScrollToBottom.applyGrouping.call({ el });
-  assert.equal(r2.querySelector(".message-avatar").style.visibility, "hidden");
+  assert.equal(isGrouped(r2), true);
 
   // Server re-renders r2 with a new author.
   r2.dataset.participantId = "p2";
   ScrollToBottom.applyGrouping.call({ el });
 
-  assert.equal(r2.querySelector(".message-avatar").style.visibility, "");
-  assert.equal(r2.querySelector(".message-header").style.display, "");
-  assert.equal(r2.style.paddingTop, "");
+  assert.equal(isGrouped(r2), false);
 });

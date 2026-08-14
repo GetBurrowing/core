@@ -213,26 +213,28 @@ const ScrollToBottom = {
   },
   // Walk visible message rows; if the participant matches the previous row,
   // collapse the avatar + header for a compact grouped look.
+  //
+  // This only decides WHICH rows are continuations. What a continuation row
+  // looks like lives in app.css under `.message-row--grouped`, because the
+  // previous inline-style version could only hide things, and hiding is not
+  // the same as reclaiming the space:
+  //
+  //   `avatar.style.visibility = "hidden"` made the avatar invisible while it
+  //   went on reserving its full 47px of row height. A one-line follow-up
+  //   message was 66px tall to hold 20px of text, and no amount of padding
+  //   tuning could get under that floor while a 47px ghost held the row open.
+  //
+  // Anything that needs to reclaim layout — not just conceal it — belongs in
+  // the stylesheet where the collapsed geometry is written down once.
   applyGrouping() {
     const rows = Array.from(this.el.querySelectorAll("[data-participant-id]"));
     let prevParticipantId = null;
 
     rows.forEach((row) => {
       const pid = row.dataset.participantId;
-      const avatar = row.querySelector(".message-avatar");
-      const header = row.querySelector(".message-header");
+      const grouped = Boolean(pid) && pid === prevParticipantId;
 
-      if (pid && pid === prevParticipantId) {
-        // Grouped — hide avatar and header, reduce top padding
-        if (avatar) avatar.style.visibility = "hidden";
-        if (header) header.style.display = "none";
-        row.style.paddingTop = "1px";
-      } else {
-        // First in group — show avatar and header normally
-        if (avatar) avatar.style.visibility = "";
-        if (header) header.style.display = "";
-        row.style.paddingTop = "";
-      }
+      row.classList.toggle("message-row--grouped", grouped);
 
       prevParticipantId = pid || null;
     });

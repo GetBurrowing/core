@@ -1950,6 +1950,66 @@ body, .font-fabrikam {
   .reaction-add-btn:focus-visible {
     opacity: 1;
   }
+
+  /* …and give the SPACE back, not just the ink.
+     `opacity: 0` above hides the "+" but keeps its box, so every message
+     nobody had reacted to still reserved ~24px of blank strip under its
+     text — measured as the single largest piece of dead space in the
+     message list, and the one that reads as "a massive gap underneath".
+     A row with real reactions is never empty and never collapses. */
+  .reaction-row[data-empty="true"] {
+    height: 0;
+    margin-top: 0;
+    overflow: hidden;
+  }
+
+  /* Revealed on hover / keyboard focus, so discovery is exactly what it
+     was before. `focus-within` — not `:focus` — because the thing being
+     focused is the button INSIDE this row, and without it a keyboard user
+     would tab to a control sitting in a zero-height box.
+
+     Descendant combinators are safe here: inline thread replies render
+     from their own markup (`.thread-reply` / `.msg-body`) and carry no
+     `.reaction-row`, so there is no nested row for a parent's hover to
+     reach past its own. */
+  .group:hover .reaction-row[data-empty="true"],
+  .group:focus-within .reaction-row[data-empty="true"] {
+    height: auto;
+    margin-top: 0.125rem;
+    overflow: visible;
+  }
+}
+
+/* ── Grouped continuation rows ────────────────────────────────────────
+   Applied by ScrollToBottom.applyGrouping() to every message whose author
+   matches the row above it. The class only marks WHICH rows continue a
+   group; the collapsed geometry is here.
+
+   The avatar is the load-bearing rule. It used to be hidden with
+   `visibility: hidden`, which conceals the picture but leaves its 47px box
+   holding the row open — so a stacked one-line reply was 66px tall to show
+   20px of text and the list read as a column of near-empty cards. Zero
+   height reclaims that; the element keeps its 32px WIDTH (from the avatar
+   inside it) so continuation text stays aligned under the first message of
+   the group rather than sliding left into the gutter. */
+.message-row--grouped .message-avatar {
+  visibility: hidden;
+  height: 0;
+  margin-top: 0;
+  overflow: hidden;
+}
+
+.message-row--grouped .message-header {
+  display: none;
+}
+
+/* Tighter than the 8px a group-opening row carries: a continuation needs
+   enough separation to read as its own message and no more. Paired with
+   the reclaimed avatar height this puts a one-line follow-up at roughly
+   26px rather than 66px. */
+.message-row--grouped .message-row-inner {
+  padding-top: 0.125rem;
+  padding-bottom: 0.125rem;
 }
 
 /* Scrim with backdrop blur. Fallback: solid semi-transparent background

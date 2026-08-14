@@ -94,7 +94,11 @@ defmodule PlatformWeb.Components.ChatMessage do
         <div class="flex-1 border-t border-base-300"></div>
       </div>
 
-      <div class="flex gap-3 px-2 py-2 transition-all duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-base-200/40 active:scale-[0.99] rounded-2xl">
+      <%!-- `message-row-inner` is the padding box. It carries a stable class
+           because a grouped continuation row needs tighter vertical padding
+           than the first row of a group, and that rule lives in app.css
+           rather than in the grouping JS — see `.message-row--grouped`. --%>
+      <div class="message-row-inner flex gap-3 px-2 py-2 transition-all duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-base-200/40 active:scale-[0.99] rounded-2xl">
         <%!-- Avatar circle (hidden when grouped with previous message via JS) --%>
         <div class="flex-shrink-0 mt-0.5 message-avatar">
           <%= if MapSet.member?(@agent_participant_ids, @msg.participant_id) do %>
@@ -352,9 +356,16 @@ defmodule PlatformWeb.Components.ChatMessage do
             </a>
           </div>
 
+          <%!-- `data-empty` marks a message nobody has reacted to yet. Such a
+               row holds only the dashed "+" button, which is already
+               `opacity: 0` until hover on pointer devices — but opacity does
+               not free layout, so every unreacted message was reserving ~24px
+               of blank space under its text. `data-empty` lets app.css take
+               that height back and hand it out again on hover. --%>
           <div
             role="toolbar"
             aria-label="Message actions"
+            data-empty={to_string(@msg.reactions == [])}
             class="reaction-row flex flex-wrap gap-1 mt-0.5"
           >
             <%!-- Reaction pills stay visible on read-only snapshots (they
