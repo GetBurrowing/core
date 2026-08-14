@@ -1147,7 +1147,18 @@
          do_unhide/2 in the LiveView, so the round-trip is identical
          regardless of which way the user reverses the hide. Auto-clears
          via a Process.send_after → handle_info({:clear_undo_toast,
-         space_id}) pair scheduled by the hide_channel handler. --%>
+         space_id}) pair scheduled by the hide_channel handler.
+
+         HIDE ONLY. Task 019ffc5f stage 2 gave this toast a second variant
+         for the DM Close action, and stage 3 gave that variant a second
+         line teaching the rule that brings the row back. Marlowe rejected it
+         at the stage-3 gate: "We don't need a acknowledgement / affirmation
+         for a close action on a DM. A User can simply search for a person
+         or agent to DM again if they want to bring back the window." So a
+         close now passes silently and this element is back to the single
+         verb it shipped with. Hide keeps it because Hide's reverse is a
+         drawer, and the toast is the only thing that says the drawer now
+         has something in it. --%>
     <div
       :if={@undo_toast}
       role="status"

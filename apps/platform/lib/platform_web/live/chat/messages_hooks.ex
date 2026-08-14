@@ -92,6 +92,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   alias Platform.Chat
   alias Platform.Chat.AttachmentStorage
+  alias Platform.Chat.ClosedDms
+  alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.SearchHooks
 
   @message_limit 50
@@ -956,7 +958,9 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
     socket =
       if is_background_dm and not is_own_message do
-        increment_unread(socket, msg.space_id)
+        socket
+        |> increment_unread(msg.space_id)
+        |> maybe_return_closed_dm(msg)
       else
         streaming =
           socket.assigns.streaming_replies
@@ -1653,6 +1657,85 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   defp increment_unread(socket, space_id) do
     current = Map.get(socket.assigns.unread_counts, space_id, 0)
     update(socket, :unread_counts, &Map.put(&1, space_id, current + 1))
+  end
+
+  # A closed DM comes back the moment the other person writes, and it has to
+  # come back on the page the viewer is already looking at (task 019ffc5f
+  # stage 4). Before this, a message in a background DM only moved the unread
+  # count, and a closed one stayed off the rail until a reload — so the row
+  # nobody could see was the row someone was writing to.
+  #
+  # NOTHING IS WRITTEN. The close is stored as a timestamp and the rail's
+  # filter (`Platform.Chat.ClosedDms.filter/2`) is a comparison against the
+  # conversation's `last_activity_at`. The arriving message already carries a
+  # newer timestamp, so putting it on the DM the rail renders from is enough
+  # to flip that comparison. `closed_at` is left exactly where it is. That is
+  # the property the timestamp design buys: no clearing pass to schedule, no
+  # background job, and no second copy of "is it closed" to drift.
+  #
+  # Patched in memory, never re-fetched. `{:new_message, _}` fires for every
+  # space the viewer is subscribed to, so a query here would put a database
+  # round-trip on the arrival of every message anyone sends them.
+  #
+  # Every assign is read defensively. `MessagesHooks` has one `attach/1`
+  # caller today (`ChatLive.mount/3`), so in practice they are all there;
+  # reading them through `assigns[...]` costs nothing and means a future
+  # surface that attaches this hook without a rail gets a no-op instead of a
+  # crash. Defaulting a MISSING one is not the safer branch and is not done
+  # here: rebuilding the sections from an empty `channels` would empty the
+  # rail.
+  defp maybe_return_closed_dm(socket, msg) do
+    assigns = socket.assigns
+
+    with %{} = closed_dm_at <- assigns[:closed_dm_at],
+         %DateTime{} = closed_at <- Map.get(closed_dm_at, msg.space_id),
+         %DateTime{} = arrived_at <- msg.inserted_at,
+         :gt <- DateTime.compare(arrived_at, closed_at),
+         dms when is_list(dms) <- assigns[:dm_conversations],
+         channels when is_list(channels) <- assigns[:channels],
+         %{} <- assigns[:channel_sections],
+         pinned when not is_nil(pinned) <- assigns[:pinned_space_ids],
+         hidden when not is_nil(hidden) <- assigns[:hidden_channel_ids],
+         dm when not is_nil(dm) <- Enum.find(dms, &(&1.id == msg.space_id)),
+         # Only when the row is hidden RIGHT NOW, asked of the same module the
+         # rail asks so the two can never disagree about the rule. Nothing
+         # clears `closed_at` until the viewer opens the DM, so without this
+         # the recompute would re-run for EVERY later message in that
+         # conversation — and since the patched timestamp differs each time,
+         # `assign/3`'s equality check would miss and LiveView would re-diff
+         # the whole sidebar once per message, forever.
+         #
+         # It also settles three edge cases at no extra cost: a space that is
+         # not in `@dm_conversations` never gets here, and neither does a
+         # message that arrives out of order behind one already counted, so
+         # `last_activity_at` can only ever move forward.
+         {[], [^dm]} <- ClosedDms.filter([dm], closed_dm_at) do
+      # Kept on the assign, not just handed to the recompute below. The next
+      # unrelated rebuild of the sections — a pin toggle, a hide — reads
+      # `@dm_conversations` again, and would put the row straight back into
+      # hiding if the newer activity only ever lived in a local variable.
+      #
+      # `@spaces` holds the same structs and is deliberately NOT patched: no
+      # template reads `last_activity_at` off it. A rail built from `@spaces`
+      # later would need patching here too.
+      patched =
+        Enum.map(dms, fn
+          %{id: id} = conversation when id == msg.space_id ->
+            %{conversation | last_activity_at: arrived_at}
+
+          conversation ->
+            conversation
+        end)
+
+      socket
+      |> assign(:dm_conversations, patched)
+      |> assign(
+        :channel_sections,
+        ChatLive.channel_sections(channels, patched, pinned, hidden, closed_dm_at)
+      )
+    else
+      _ -> socket
+    end
   end
 
   # ── Upload plumbing shared between send_message, send_thread_message, upload_send ──

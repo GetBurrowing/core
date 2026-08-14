@@ -30,6 +30,7 @@ defmodule PlatformWeb.ChatLive do
   alias Phoenix.LiveView.JS
   alias Platform.Accounts
   alias Platform.Chat
+  alias Platform.Chat.ClosedDms
   alias Platform.Chat.HiddenChannels
   alias Platform.Chat.PinnedSpaces
   alias Platform.Chat.PubSub, as: ChatPubSub
@@ -254,6 +255,13 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:can_cancel_deletion?, false)
       |> assign(:dm_conversations, dm_conversations)
       |> assign(:hidden_channel_ids, Accounts.get_hidden_channel_ids(user_id))
+      # The user's closed DMs as `%{space_id => closed_at}` (task 019ffc5f).
+      # Held as an assign for the same reason `:hidden_channel_ids` is: EVERY
+      # site that rebuilds `@channel_sections` has to pass it, and a site that
+      # forgets renders a rail with a closed DM back on it until the next
+      # navigation. Timestamps rather than ids, because the row's return is a
+      # comparison against its newest activity.
+      |> assign(:closed_dm_at, Accounts.get_closed_dm_at(user_id))
       # Task 019ffb7b stage 5: whether this user has dismissed the notification
       # opt-in banner. Read from `users.preferences` on every mount — same
       # column and same read-at-mount / write-on-event shape as
@@ -274,7 +282,8 @@ defmodule PlatformWeb.ChatLive do
           channels,
           dm_conversations,
           Sidebar.list_pinned_space_ids(user_id),
-          Accounts.get_hidden_channel_ids(user_id)
+          Accounts.get_hidden_channel_ids(user_id),
+          Accounts.get_closed_dm_at(user_id)
         )
       )
       # Stage 3 v3 (chat sidebar Option B): the global "N hidden channels"
@@ -691,6 +700,16 @@ defmodule PlatformWeb.ChatLive do
       # pipeline so the message-window loader can be chosen up front.
       anchor = resolve_deep_link_anchor(params, space, scope)
 
+      # The second way a closed DM comes back (task 019ffc5f). Entering the
+      # conversation reverses the close outright, ahead of the recompute
+      # below so this render already shows the row.
+      #
+      # This is what makes "I start a new DM with that person" work:
+      # `Chat.find_or_create_dm/4` returns the SAME space for an existing
+      # pair, so a "new" DM lands on the closed space id and would otherwise
+      # open a conversation whose row is missing from the rail.
+      closed_dm_at = maybe_reopen_dm(socket, space)
+
       {:noreply,
        socket
        |> assign(:page_title, page_title)
@@ -716,13 +735,15 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:archived_channels, archived_channels)
        |> assign(:dm_conversations, dm_convos)
        |> assign(:spaces, channels ++ dm_convos)
+       |> assign(:closed_dm_at, closed_dm_at)
        |> assign(
          :channel_sections,
          channel_sections(
            channels,
            dm_convos,
            socket.assigns.pinned_space_ids,
-           socket.assigns.hidden_channel_ids
+           socket.assigns.hidden_channel_ids,
+           closed_dm_at
          )
        )
        |> assign(
@@ -1034,7 +1055,8 @@ defmodule PlatformWeb.ChatLive do
          socket.assigns.channels,
          socket.assigns.dm_conversations,
          socket.assigns.pinned_space_ids,
-         hidden
+         hidden,
+         socket.assigns.closed_dm_at
        )
      )
      |> assign(
@@ -1045,12 +1067,36 @@ defmodule PlatformWeb.ChatLive do
          hidden
        )
      )
+     # Hide is the only action that raises this toast. Stage 2 of task
+     # 019ffc5f added a `:kind` so DM Close could share it; Marlowe rejected
+     # that acknowledgement at the stage-3 gate, so the map is back to the
+     # two fields the one remaining verb needs.
      |> assign(:undo_toast, channel_name && %{space_id: space_id, name: channel_name})
      # Dismiss the mobile row-actions sheet if the hide came from there (task
      # 019fe998). Mandatory rather than cosmetic: the hidden row is gone from
      # the rail, so a sheet left open would name a conversation that is no
      # longer on screen and still offer to act on it.
      |> assign(:row_actions_space_id, nil)}
+  end
+
+  # ── The DM Close action (task 019ffc5f stage 2) ────────────────────────
+  #
+  # Close takes ONE DM row off the rail and nothing else. It is not Hide:
+  # `hide_channel` writes `hidden_channel_ids` and is reversed by a drawer
+  # that lists channels, whereas a closed DM comes back by itself on the next
+  # message in it (`Platform.Chat.ClosedDms.filter/2`) or the moment the user
+  # opens it (`maybe_reopen_dm/2` in `handle_params/3`). Those two returns are
+  # why there is no closed-DM drawer to build or maintain.
+  #
+  # The id is resolved against `@dm_conversations` and the handler no-ops when
+  # it matches nothing. Close has no meaning for a channel, and a stale click
+  # racing a rail refresh should do nothing rather than write a channel id
+  # into the closed map where the DM filter would never look at it again.
+  def handle_event("close_dm", %{"id" => space_id}, socket) when is_binary(space_id) do
+    case Enum.find(socket.assigns.dm_conversations, &(&1.id == space_id)) do
+      nil -> {:noreply, socket}
+      space -> {:noreply, do_close_dm(socket, space)}
+    end
   end
 
   # Stage 3 v3 (chat sidebar Option B). Toggle the single global
@@ -1104,7 +1150,8 @@ defmodule PlatformWeb.ChatLive do
         socket.assigns.channels,
         socket.assigns.dm_conversations,
         socket.assigns.pinned_space_ids,
-        hidden
+        hidden,
+        socket.assigns.closed_dm_at
       )
     )
     |> assign(
@@ -1118,6 +1165,104 @@ defmodule PlatformWeb.ChatLive do
     |> assign(:undo_toast, cleared_toast)
     |> assign(:hidden_drawer_open, drawer_open)
   end
+
+  # Close raises NO acknowledgement. Stage 2 gave it an undo toast and stage 3
+  # gave that toast a line explaining the return; Marlowe rejected both at the
+  # stage-3 gate: "We don't need a acknowledgement / affirmation for a close
+  # action on a DM. A User can simply search for a person or agent to DM again
+  # if they want to bring back the window." The row leaves and that is the
+  # whole feedback. `@undo_toast` is therefore untouched here — a hide toast
+  # raised moments earlier is still true and still has its own timer running,
+  # so clearing it would be a second unasked-for behaviour change.
+  defp do_close_dm(socket, space) do
+    user_id = socket.assigns.user_id
+
+    # Closing a PINNED DM unpins it as well, so the row leaves the rail on the
+    # click that closed it (Marlowe, 2026-08-13: "Closing a pinned item doesn't
+    # do anything. As soon as I unpin the item (DM), it disappears because I
+    # closed it at some point. I expect if I closed a pinned item, it would
+    # undo the pin and close the DM.").
+    #
+    # `channel_sections/5` runs the close filter over the UNPINNED DM
+    # remainder only, because the Pinned block is a conversation's one place
+    # and nothing filters it. Without the unpin the close was still recorded,
+    # the row sat there, and the DM disappeared whenever the user unpinned it
+    # later: possibly days later, attached to an action they had no reason to
+    # connect to it. One rule everywhere instead. Close means this leaves my
+    # list now.
+    #
+    # THE OLD PIN IS DISCARDED, NOT STASHED. Designer's decision, tradeoff
+    # accepted by Marlowe: a DM that comes back (a new message in it, or the user
+    # opening it) comes back UNPINNED and is re-pinned in one click. Do not
+    # "improve" this by remembering the pin and restoring it on return. That
+    # would be a second piece of state the user cannot see, and invisible state
+    # is precisely what produced this bug.
+    #
+    # Written unconditionally rather than under a `pinned?` test, and BEFORE
+    # the close. `Sidebar.set_space_pinned/3` takes the DESIRED state, so
+    # stating the end state costs one idempotent write on a human-rate click,
+    # whereas a membership test against `@pinned_space_ids` can be stale and
+    # would fail by silently restoring the old behaviour. Unpin first because
+    # if the second write fails the user is left with an unpinned DM still on
+    # the rail, which is visible and recoverable; the other order fails back
+    # into the bug.
+    _ = Sidebar.set_space_pinned(user_id, space.id, false)
+    _ = Accounts.close_dm(user_id, space.id)
+
+    # Both halves are user preferences, so the user's OTHER tabs have to
+    # converge or they keep rendering a pinned row whose pin no longer exists.
+    # `toggle_pinned` already broadcasts for the pin half; a close broadcast
+    # nothing, so a second tab kept a closed DM on the rail until its next
+    # navigation. `handle_info(:sidebar_changed, ...)` re-reads the close store
+    # as well as the pin list, so the receiving tab applies BOTH halves. With
+    # only the pin half it would move the row out of Pinned into Direct
+    # Messages and leave it sitting there, which is this same bug one tab over.
+    ChatPubSub.broadcast_sidebar_changed_from(user_id, self())
+
+    socket
+    |> assign(:closed_dm_at, Accounts.get_closed_dm_at(user_id))
+    # The menu that issued this is still open on a row that has just left the
+    # rail. Same reason `hide_channel` does it: a menu naming a conversation
+    # the user can no longer see, still offering to act on it, is worse than
+    # the lost context of closing it.
+    |> assign(:row_actions_space_id, nil)
+    # Rebuilds `@channel_sections` off the pin list as PERSISTED. Rebuilding it
+    # here from `@pinned_space_ids` would use the pin this function has just
+    # dropped, and the row would stay in the Pinned block until the next
+    # navigation.
+    |> recompute_pinned()
+  end
+
+  # Entering a conversation clears its close, and returns the map the rail
+  # should be rebuilt from.
+  #
+  # Reads the STORE, not `@closed_dm_at`. The assign would be right today, but
+  # only because every space change remounts this LiveView and mount reads the
+  # store moments earlier. The store is the thing a second tab writes to, and
+  # the day a `<.link patch=` lands on a space route this would become a
+  # silent lost write: the user opens the DM, reads it, and the close another
+  # tab made survives to hide the row again. One preferences read on a DM
+  # navigation is not worth that trap.
+  #
+  # The write is still guarded on the key being present, so an ordinary DM
+  # navigation costs one read and no UPDATE.
+  #
+  # Groups are treated exactly like DMs, because `closeable` offers Close on
+  # both. A group whose close could only be undone by someone else posting in
+  # it would be the one closed conversation with no way back from the user's
+  # own side.
+  defp maybe_reopen_dm(socket, %{kind: kind, id: space_id}) when kind in ["dm", "group"] do
+    closed_dm_at = Accounts.get_closed_dm_at(socket.assigns.user_id)
+
+    if Map.has_key?(closed_dm_at, space_id) do
+      _ = Accounts.reopen_dm(socket.assigns.user_id, space_id)
+      Map.delete(closed_dm_at, space_id)
+    else
+      closed_dm_at
+    end
+  end
+
+  defp maybe_reopen_dm(socket, _space), do: socket.assigns.closed_dm_at
 
   # Scope filter (chat plan v2 Stage 4). Clicking a scope-pill in the
   # sectioned rail (or the chat-header pill) narrows the visible sub-org
@@ -1913,7 +2058,8 @@ defmodule PlatformWeb.ChatLive do
         socket.assigns.channels,
         socket.assigns.dm_conversations,
         pinned_space_ids,
-        socket.assigns.hidden_channel_ids
+        socket.assigns.hidden_channel_ids,
+        socket.assigns.closed_dm_at
       )
     )
     |> recompute_sidebar()
@@ -2669,7 +2815,8 @@ defmodule PlatformWeb.ChatLive do
                  channels,
                  dm_convos,
                  socket.assigns.pinned_space_ids,
-                 socket.assigns.hidden_channel_ids
+                 socket.assigns.hidden_channel_ids,
+                 socket.assigns.closed_dm_at
                )
              )
              |> assign(
@@ -2876,7 +3023,8 @@ defmodule PlatformWeb.ChatLive do
          channels,
          dm_conversations,
          socket.assigns.pinned_space_ids,
-         socket.assigns.hidden_channel_ids
+         socket.assigns.hidden_channel_ids,
+         socket.assigns.closed_dm_at
        )
      )
      |> assign(
@@ -3001,10 +3149,24 @@ defmodule PlatformWeb.ChatLive do
       # acting process, so this arm runs in the SAME user's other tabs — which
       # is exactly where a pin has to converge. Without the pin half, tab B
       # kept rendering a stale Pinned block until its next navigation.
+      #
+      # `@closed_dm_at` is re-read here for the same reason and from the same
+      # place, the user's preferences (task 019ffc5f, Marlowe's pinned-close
+      # report). Close now writes the pin AND the close together, so a tab that
+      # refreshed only the pin list would take the row out of the Pinned block
+      # and leave it in Direct Messages: half the action applied, which is the
+      # shape of the bug being fixed. Safe to overwrite because every writer of
+      # this assign already sets it from the store, so the assign is a cache of
+      # that store and never holds an optimistic value.
+      #
+      # The re-read lives here, not inside `recompute_pinned/1`: its other two
+      # callers act on the tab that just wrote, where the assign is already
+      # fresh, and would pay a preferences read for nothing.
       {:noreply,
        socket
        |> assign(:channels, channels)
        |> assign(:archived_channels, archived_channels)
+       |> assign(:closed_dm_at, Accounts.get_closed_dm_at(socket.assigns.user_id))
        |> recompute_pinned()}
     end
   end
@@ -3195,8 +3357,17 @@ defmodule PlatformWeb.ChatLive do
   # since the Pinned block never carried a hide button either. `movable` is
   # `movable_channel?/1`, the same predicate that gated the row control.
   #
-  # `row_actions_sheet/1` (the phone drawer) ignores both and keeps offering
-  # hide on every row it opens on. That surface is out of this stage's scope.
+  # `closeable` is the exact complement (task 019ffc5f stage 2): the DM and
+  # group rows Hide is refused on are the ones Close is FOR. It carries no
+  # pinned check, and that is deliberate. Pin and Close are both explicit
+  # statements about the same row, "always show me this" and "not now", and
+  # pin wins: the close is recorded, the Pinned block ignores it, and the row
+  # goes quiet only once the pin comes off. Offering Close on a pinned DM and
+  # having it appear to do nothing is the cost, stated rather than discovered.
+  #
+  # `row_actions_sheet/1` (the phone drawer) reads `closeable` but still
+  # ignores `hideable`, so its Hide item remains on every row it opens on.
+  # That predates this stage and Hide is out of its scope.
   defp row_actions_target(space_id, channels, dms, pinned_ids, user_id) do
     case Enum.find(channels ++ dms, &(&1.id == space_id)) do
       nil ->
@@ -3212,7 +3383,8 @@ defmodule PlatformWeb.ChatLive do
           name: sidebar_row_label(space, user_id),
           pinned: pinned?,
           hideable: space.kind == "channel" and not pinned?,
-          movable: movable_channel?(space)
+          movable: movable_channel?(space),
+          closeable: space.kind in ["dm", "group"]
         }
     end
   end
@@ -3259,7 +3431,8 @@ defmodule PlatformWeb.ChatLive do
           name: pinned_row_label(:task, space, user_id),
           pinned: true,
           hideable: false,
-          movable: false
+          movable: false,
+          closeable: false
         }
     end
   end
@@ -3560,7 +3733,8 @@ defmodule PlatformWeb.ChatLive do
           [Platform.Chat.Space.t()],
           [Platform.Chat.Space.t()],
           [String.t()] | MapSet.t(String.t()),
-          MapSet.t(String.t())
+          MapSet.t(String.t()),
+          %{optional(String.t()) => DateTime.t()}
         ) :: %{
           pinned: [Platform.Chat.Space.t()],
           dms: [Platform.Chat.Space.t()],
@@ -3571,7 +3745,8 @@ defmodule PlatformWeb.ChatLive do
         channels,
         dm_conversations,
         pinned_space_ids \\ MapSet.new(),
-        hidden_channel_ids \\ MapSet.new()
+        hidden_channel_ids \\ MapSet.new(),
+        closed_dm_at \\ %{}
       )
       when is_list(channels) and is_list(dm_conversations) do
     # Three partitions rather than one, because the block is a single list
@@ -3604,6 +3779,16 @@ defmodule PlatformWeb.ChatLive do
     # reason it does for channels: the block is the conversation's one place.
     {visible_dms, _hidden_dms} = HiddenChannels.filter(unpinned_dms, hidden_channel_ids)
 
+    # The DM Close action (task 019ffc5f), applied to the SAME remainder and
+    # for the same reason: a pinned DM has already left this bucket, and the
+    # Pinned block is the conversation's one place.
+    #
+    # `ClosedDms.filter/2` is a timestamp comparison, not a set membership —
+    # a closed DM whose `last_activity_at` is newer than the stored close has
+    # already earned its way back and never reaches the closed half. That is
+    # the whole reason Close needs no drawer to reverse it, unlike Hide.
+    {open_dms, _closed_dms} = ClosedDms.filter(visible_dms, closed_dm_at)
+
     bucketed =
       Map.new(sub_orgs, fn {bucket, spaces} ->
         {visible, hidden} = HiddenChannels.filter(spaces, hidden_channel_ids)
@@ -3615,7 +3800,7 @@ defmodule PlatformWeb.ChatLive do
 
     %{
       pinned: pinned,
-      dms: visible_dms,
+      dms: open_dms,
       sub_orgs: visible_sub_orgs,
       hidden_sub_orgs: hidden_sub_orgs
     }

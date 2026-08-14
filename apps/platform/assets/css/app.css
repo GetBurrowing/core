@@ -3683,8 +3683,26 @@ body, .font-fabrikam {
     @apply flex-1 min-w-0 truncate;
   }
 
+  /* A filled pill, not a bare text link.
+     ------------------------------------------------------------------
+     This was `text-primary` on the toast's `bg-base-300`. Measured in Chrome
+     against the rendered surface: 1.16:1 in LIGHT, so the Undo was
+     effectively invisible in one of the two themes, and 9.56:1 in dark. Cyan
+     is never text on a light surface, and every pairing has to clear WCAG AA.
+
+     `--color-primary` is paired with `--color-primary-content` (black) by the
+     brand itself, so this borrows a blessed pairing rather than inventing a
+     colour: 12.55:1 light, 11.13:1 dark. Filling it also turns a text link
+     into an obvious control, which suits Undo being the way back from an
+     action that makes a row vanish.
+
+     Size, padding, radius and the colour transition are unchanged. Only the
+     hover moved: `hover:bg-primary/10` was a tint FOR a transparent button and
+     reads as nothing once the button is filled, so it becomes the house
+     filled-button hover — `hover:bg-primary/90`, the same one
+     `chat_message_editor.ex` uses. The toast SURFACE is untouched. */
   .channel-undo-toast-button {
-    @apply flex-shrink-0 inline-flex items-center justify-center px-2 py-0.5 text-xs font-semibold rounded text-primary hover:bg-primary/10 transition-colors;
+    @apply flex-shrink-0 inline-flex items-center justify-center px-2 py-0.5 text-xs font-semibold rounded bg-primary text-primary-content hover:bg-primary/90 transition-colors;
   }
 
   /* Unread-count pill on a channel row. Identical sizing to the previous

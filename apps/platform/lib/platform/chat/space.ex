@@ -24,6 +24,15 @@ defmodule Platform.Chat.Space do
     field(:deletion_scheduled_at, :utc_datetime_usec)
     field(:archived_cascade_org_id, :binary_id)
 
+    # Virtual: the newest non-deleted message's `inserted_at`, falling back to
+    # the space's own `inserted_at` when nothing has been said yet. Populated
+    # only by `Platform.Chat.list_user_conversations/2`, which already computes
+    # this expression to order the rail. Nil on every other read path, and
+    # `Platform.Chat.ClosedDms.filter/2` treats nil as visible for exactly that
+    # reason. Deliberately absent from `changeset/2`: it is derived, so it must
+    # never arrive from user input.
+    field(:last_activity_at, :utc_datetime_usec, virtual: true)
+
     timestamps(type: :utc_datetime_usec)
   end
 

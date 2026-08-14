@@ -465,6 +465,111 @@ defmodule Platform.Accounts do
 
   def unhide_channel(_, _), do: {:error, :not_found}
 
+  # ── Closed DMs (DM Close action) ───────────────────────────────────────
+  #
+  # Stored as `preferences["closed_dm_at"] = %{"<space_uuid>" => "<ISO8601>"}`
+  # in the same JSONB column as `hidden_channel_ids` and `chat_section_order`.
+  #
+  # A DM row leaves the rail when its newest activity is not newer than the
+  # stored timestamp, and returns on its own the moment a new message lands.
+  # That is what removes the need for an undo surface or a hidden-DM list. The
+  # comparison lives in `Platform.Chat.ClosedDms.filter/2`.
+  #
+  # Reads FAIL OPEN. A value that will not parse back into a `DateTime` is
+  # dropped, which leaves that conversation visible. Both writers rebuild the
+  # stored map from the parsed one, so anything unparsable is also cleaned up
+  # on the next write rather than lingering.
+  #
+  # This is deliberately NOT the hidden-channel store. Hide and Close are two
+  # actions with two honest meanings: a channel is a place you may want gone
+  # even while it is busy, and a DM is a person.
+
+  @closed_dms_key "closed_dm_at"
+
+  @doc """
+  Returns the user's closed DMs as `%{space_id => DateTime}`. Empty map for
+  unknown users, users who have closed nothing, and stored values of an
+  unexpected shape.
+
+  Entries whose stored timestamp will not parse are dropped, so a corrupted
+  value can only ever make a DM visible.
+  """
+  @spec get_closed_dm_at(binary() | nil) :: %{optional(String.t()) => DateTime.t()}
+  def get_closed_dm_at(user_id) when is_binary(user_id) do
+    user_id
+    |> get_user_preferences()
+    |> Map.get(@closed_dms_key)
+    |> parse_closed_dm_at()
+  end
+
+  def get_closed_dm_at(_), do: %{}
+
+  @doc """
+  Record `space_id` as closed for this user, stamped `DateTime.utc_now()`.
+  Closing an already-closed DM re-stamps it.
+
+  Returns `{:ok, %User{}}`, or `{:error, :not_found}` when the user_id doesn't
+  match a real row. Anonymous chat sessions use a generated UUID, so callers
+  should treat the not-found case as a silent no-op.
+  """
+  @spec close_dm(binary(), binary()) ::
+          {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def close_dm(user_id, space_id) when is_binary(user_id) and is_binary(space_id) do
+    next =
+      user_id
+      |> get_closed_dm_at()
+      |> Map.put(space_id, DateTime.utc_now())
+      |> dump_closed_dm_at()
+
+    update_user_preference(user_id, @closed_dms_key, next)
+  end
+
+  def close_dm(_, _), do: {:error, :not_found}
+
+  @doc """
+  Drop `space_id` from the user's closed DMs, so the row is visible again
+  regardless of activity. Idempotent on a never-closed id.
+
+  Same return shape as `close_dm/2`.
+  """
+  @spec reopen_dm(binary(), binary()) ::
+          {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def reopen_dm(user_id, space_id) when is_binary(user_id) and is_binary(space_id) do
+    next =
+      user_id
+      |> get_closed_dm_at()
+      |> Map.delete(space_id)
+      |> dump_closed_dm_at()
+
+    update_user_preference(user_id, @closed_dms_key, next)
+  end
+
+  def reopen_dm(_, _), do: {:error, :not_found}
+
+  defp parse_closed_dm_at(stored) when is_map(stored) do
+    Enum.reduce(stored, %{}, fn {space_id, value}, acc ->
+      case parse_closed_at(value) do
+        {:ok, at} -> Map.put(acc, space_id, at)
+        :error -> acc
+      end
+    end)
+  end
+
+  defp parse_closed_dm_at(_), do: %{}
+
+  defp parse_closed_at(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, at, _utc_offset} -> {:ok, at}
+      {:error, _reason} -> :error
+    end
+  end
+
+  defp parse_closed_at(_), do: :error
+
+  defp dump_closed_dm_at(parsed) do
+    Map.new(parsed, fn {space_id, %DateTime{} = at} -> {space_id, DateTime.to_iso8601(at)} end)
+  end
+
   # ── Notification-banner dismissal (task 019ffb7b stage 5) ──────────────
   #
   # Stored as `preferences["notification_banner_dismissed"] = true`. Same

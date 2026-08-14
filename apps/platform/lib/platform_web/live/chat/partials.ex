@@ -424,6 +424,22 @@ defmodule PlatformWeb.ChatLive.Partials do
   `@target` is nil whenever the sheet is closed, which keeps the header empty
   rather than holding the last-opened conversation's name.
 
+  ## Close (task 019ffc5f stage 2)
+
+  A third item, gated on `@target.closeable` (DM and group rows), rendering
+  the touch counterpart of the rail dialog's Close from the SAME resolver.
+  Its `data-role` is `row-actions-close-dm`, not `row-actions-close`: that
+  bare name already belongs to the rail dialog's dismiss button, and both
+  chromes sit in the DOM at every width, so sharing it would make the
+  selector match two nodes.
+
+  Close reads as the least of the three and is styled identically to them.
+  Nothing is deleted and the row returns on the next message in that DM, so
+  the red this sheet has never spent stays unspent.
+
+  Hide is still offered on every row this sheet opens on, including DMs where
+  it has no reverse. That predates this stage and is untouched by it.
+
   ## Accessible name on the pin row
 
   This is the drawer's unpin path, the touch counterpart to the pin item in
@@ -485,6 +501,19 @@ defmodule PlatformWeb.ChatLive.Partials do
           >
             <span class="hero-eye-slash size-5 flex-shrink-0" aria-hidden="true"></span>
             <span>Hide from my rail</span>
+          </button>
+        </li>
+        <li :if={@target && @target.closeable} class="border-t border-base-300">
+          <button
+            type="button"
+            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            phx-click="close_dm"
+            phx-value-id={@target && @target.space_id}
+            data-role="row-actions-close-dm"
+            aria-label={@target && "Close #{@target.name}"}
+          >
+            <span class="hero-minus-circle size-5 flex-shrink-0" aria-hidden="true"></span>
+            <span>Close</span>
           </button>
         </li>
       </ul>
@@ -629,7 +658,22 @@ defmodule PlatformWeb.ChatLive.Partials do
   accessible name is the row's unchanged "Unpin <name> from Chat". "Unpin" is
   inside that string, so WCAG 2.5.3 holds.
 
-  ## Two chromes, two `data-role`s on the hide item
+  ## Close (task 019ffc5f stage 2)
+
+  Last item, on DM and group rows only — the exact rows Hide is refused on,
+  because `hidden_channel_ids` has no reverse for a conversation that is a
+  person. Close takes the row off the rail and it comes back on its own: on
+  the next message in that DM, or the moment the user opens it. Nothing is
+  deleted, nothing is unsubscribed, and no drawer lists what is closed.
+
+  Styled EXACTLY like its siblings, deliberately. `--color-error` stays
+  unspent here as it does in the sheet: red would teach the fear this design
+  exists to remove, on an action that reverses itself. The copy is "Close" and
+  not Dismiss, Snooze, Hide or Tidy — "close a conversation" is what the user
+  is doing, and every alternative either promises a timer or collides with the
+  action directly above it in this same menu.
+
+  ## Two chromes, two `data-role`s on the hide and close items
 
   `row_actions_sheet/1`'s hide item is `data-role="row-actions-hide"`; this
   one is `rail-row-actions-hide`. Both are in the DOM at every width, so one
@@ -637,6 +681,11 @@ defmodule PlatformWeb.ChatLive.Partials do
   drawer test that selects it fails on the count rather than on the behaviour.
   The pin is the exception below and can share a role, because the sheet's pin
   never carried `pin-control` to begin with.
+
+  Close splits the same way and hits one extra constraint: `row-actions-close`
+  was already this dialog's DISMISS button before the Close item existed, and
+  a test asserts it. So the rail's Close item is `rail-row-actions-close`, and
+  the sheet's is `row-actions-close-dm` rather than the bare name.
 
   ## The pin item keeps `data-role="pin-control"`
 
@@ -758,15 +807,39 @@ defmodule PlatformWeb.ChatLive.Partials do
                 <span>Move to organisation…</span>
               </button>
             </li>
+            <%!-- LAST, and under the same hairline every item after the first
+                 carries. Close is the one item that changes what the rail
+                 SHOWS rather than what the conversation IS, so it sits below
+                 the operations on the conversation itself rather than among
+                 them. --%>
+            <li :if={@target.closeable} class="border-t border-base-300">
+              <button
+                type="button"
+                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                phx-click="close_dm"
+                phx-value-id={@target.space_id}
+                data-role="rail-row-actions-close"
+                data-space-id={@target.space_id}
+                aria-label={"Close #{@target.name}"}
+              >
+                <span class="hero-minus-circle size-4 flex-shrink-0" aria-hidden="true"></span>
+                <span>Close</span>
+              </button>
+            </li>
           </ul>
           <div class="modal-action">
+            <%!-- "Cancel", not "Close", since task 019ffc5f put a Close ITEM
+                 in this menu. Two buttons reading "Close" one above the other,
+                 one of which removes the row and one of which does nothing, is
+                 a coin flip. The `data-role` is unchanged: this is still the
+                 dismiss, and callers address it by role. --%>
             <button
               type="button"
               class="btn btn-ghost btn-sm focus-visible-ring"
               phx-click={JS.pop_focus() |> JS.push("close_row_actions")}
               data-role="row-actions-close"
             >
-              Close
+              Cancel
             </button>
           </div>
         </div>

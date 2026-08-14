@@ -6,6 +6,7 @@ defmodule Platform.Chat.ConversationTest do
   use Platform.DataCase, async: false
 
   alias Platform.Chat
+  alias Platform.Chat.Message
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Repo
@@ -43,6 +44,27 @@ defmodule Platform.Chat.ConversationTest do
   end
 
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
+
+  # Insert straight through Repo so `inserted_at` is exact. The
+  # `last_activity_at` assertions below compare timestamps, and letting the
+  # schema autogenerate them would only prove "roughly now".
+  defp post_message!(space_id, participant_id, inserted_at, opts \\ []) do
+    Repo.insert!(%Message{
+      space_id: space_id,
+      participant_id: participant_id,
+      content_type: "text",
+      content: "hello",
+      inserted_at: inserted_at,
+      deleted_at: Keyword.get(opts, :deleted_at)
+    })
+  end
+
+  defp participant_id_for(space_id, user_id) do
+    space_id
+    |> Chat.list_participants()
+    |> Enum.find(&(&1.participant_id == user_id))
+    |> Map.fetch!(:id)
+  end
 
   # ── find_or_create_dm ──────────────────────────────────────────────────────
 
@@ -207,6 +229,41 @@ defmodule Platform.Chat.ConversationTest do
       conversation_ids = Enum.map(conversations, & &1.id)
 
       assert dm_space.id in conversation_ids
+    end
+
+    test "populates last_activity_at from the newest non-deleted message" do
+      user1 = create_user()
+      user2 = create_user()
+
+      {:ok, dm} = Chat.find_or_create_dm(user1.id, "user", user2.id)
+      participant_id = participant_id_for(dm.id, user1.id)
+
+      # Non-zero microseconds on purpose: the query casts the aggregate, and a
+      # cast that dropped sub-second precision would still pass on round times.
+      older = ~U[2026-08-01 10:00:00.123456Z]
+      newest = ~U[2026-08-02 10:00:00.654321Z]
+      deleted_but_later = ~U[2026-08-03 10:00:00.111111Z]
+
+      post_message!(dm.id, participant_id, older)
+      post_message!(dm.id, participant_id, newest)
+      post_message!(dm.id, participant_id, deleted_but_later, deleted_at: DateTime.utc_now())
+
+      space = Enum.find(Chat.list_user_conversations(user1.id), &(&1.id == dm.id))
+
+      assert %DateTime{} = space.last_activity_at
+      assert DateTime.compare(space.last_activity_at, newest) == :eq
+    end
+
+    test "falls back to the space's own inserted_at for a DM with no messages" do
+      user1 = create_user()
+      user2 = create_user()
+
+      {:ok, dm} = Chat.find_or_create_dm(user1.id, "user", user2.id)
+
+      space = Enum.find(Chat.list_user_conversations(user1.id), &(&1.id == dm.id))
+
+      assert %DateTime{} = space.last_activity_at
+      assert DateTime.compare(space.last_activity_at, dm.inserted_at) == :eq
     end
   end
 

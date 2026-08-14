@@ -975,10 +975,25 @@ defmodule Platform.Chat do
   naturally-scoped read. The optional `:scope` opt applies
   `ExternalScope.scope_spaces/2` anyway as belt-and-suspenders defense in
   depth. Absent / nil / internal scopes are pass-through.
+
+  Each returned `%Space{}` carries the virtual `last_activity_at`, which is the
+  same value the ordering uses. `Platform.Chat.ClosedDms.filter/2` compares it
+  against the user's stored close timestamp to decide whether a closed DM has
+  earned its way back onto the rail. This is the only read path that populates
+  it; everywhere else it stays nil, which ClosedDms treats as visible.
   """
   @spec list_user_conversations(binary(), keyword()) :: [Space.t()]
   def list_user_conversations(user_id, opts \\ []) do
     scope = Keyword.get(opts, :scope)
+
+    # One expression with two consumers: the rail orders by it, and the
+    # closed-DM rule compares against it. Writing it out twice would let the
+    # ordering and the return rule drift apart on a later edit.
+    last_activity =
+      dynamic(
+        [s, _p, m],
+        type(fragment("COALESCE(MAX(?), ?)", m.inserted_at, s.inserted_at), :utc_datetime_usec)
+      )
 
     from(s in Space,
       join: p in Participant,
@@ -989,8 +1004,9 @@ defmodule Platform.Chat do
         p.participant_type == "user" and p.participant_id == ^user_id and
           is_nil(s.archived_at),
       group_by: s.id,
-      order_by: [desc: fragment("COALESCE(MAX(?), ?)", m.inserted_at, s.inserted_at)],
-      select: s
+      order_by: ^[desc: last_activity],
+      select: s,
+      select_merge: ^%{last_activity_at: last_activity}
     )
     |> ExternalScope.scope_spaces(scope)
     |> Repo.all()
