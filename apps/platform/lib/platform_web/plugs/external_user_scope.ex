@@ -100,6 +100,27 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
       {:meet, ["meetings"]} ->
         conn
 
+      # The meet-host ROOT. Surface ADMISSION only, mirroring
+      # `{:meet, ["meetings"]}` above: it grants no data, because the root
+      # serves a redirect to a page whose per-row authorization lives in the
+      # QUERY (`Meetings.list_meetings_for_user/1`).
+      #
+      # This clause MUST sit above the terminal `{:meet, _}` deny — clause
+      # order IS the allowlist mechanism, and below the deny it is dead code.
+      #
+      # Why the CHAT host needed no equivalent, and why this must not be
+      # "simplified" away by pattern-matching on that sibling: the chat host's
+      # root already falls through to `{_, []} -> fence_to_chat_host(conn) ||
+      # conn`, which admits it (and no-ops when already on the chat host). The
+      # meet surface is fenced EARLIER by its own terminal deny, so its root
+      # never reaches that clause. The two hosts differ here for a real reason.
+      #
+      # Deliberately NOT a fall-through to `fence_to_chat_host/1`: bouncing a
+      # meet-host member to the chat host is exactly the defeat the meet
+      # comment above warns about.
+      {:meet, []} ->
+        conn
+
       {:meet, _} ->
         deny(conn, user, "external_off_surface")
 

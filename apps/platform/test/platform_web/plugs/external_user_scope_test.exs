@@ -17,6 +17,12 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
       meeting they are not invited to and a slug naming no meeting all halt
       with a uniform `403` — no existence oracle on either surface
     * the DM allowlist branch grants access to a DM with an allowlisted org
+
+  KNOWN LIMIT: a plug-direct test cannot observe whether a route EXISTS on
+  the host it admits. `refute conn.halted` is perfectly compatible with a
+  404 — the plug saying yes to a door that is not there. That is exactly the
+  defect `019f9cb7` shipped green. The routed proof for the meet-host root
+  lives in `router_meet_root_test.exs`; nothing in this module claims it.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -315,6 +321,12 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
       :ok
     end
 
+    defp restore_chat_host(prev) do
+      if prev,
+        do: Application.put_env(:platform, :chat_host, prev),
+        else: Application.delete_env(:platform, :chat_host)
+    end
+
     # Same as `run/3` but with an explicit request host.
     defp run_on_host(path, host, user, membership) do
       Phoenix.ConnTest.build_conn(:get, path)
@@ -539,7 +551,11 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
 
     # The chat-host fence must NOT fire on the meet surface — a 302 here would
     # bounce an invited member off their meeting host and back to /chat.
-    test "root and /chat on the meet host are 403, NOT a 302 fence redirect", ctx do
+    #
+    # The root is now ADMITTED (`{:meet, []}`), so the property it carries here
+    # is the negative one: whatever the root does, it must not be a 302 to the
+    # chat host. `/chat` on this host stays a 403.
+    test "the meet root is admitted and /chat is 403 — neither is a 302 fence", ctx do
       prev = Application.get_env(:platform, :chat_host)
       Application.put_env(:platform, :chat_host, "chat.example.com")
 
@@ -549,11 +565,12 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
           else: Application.delete_env(:platform, :chat_host)
       end)
 
-      for path <- ["/", "/chat"] do
-        conn = run_on_host(path, @meet_host, ctx.ext_user, ctx.ext_membership)
-        assert conn.halted, "expected halt on #{path}"
-        assert conn.status == 403, "expected 403 (not #{conn.status}) on #{path}"
-      end
+      root = run_on_host("/", @meet_host, ctx.ext_user, ctx.ext_membership)
+      refute root.halted, "expected the meet root admitted, got status #{root.status}"
+
+      chat = run_on_host("/chat", @meet_host, ctx.ext_user, ctx.ext_membership)
+      assert chat.halted, "expected halt on /chat"
+      assert chat.status == 403, "expected 403 (not #{chat.status}) on /chat"
     end
 
     # ── stage 4: the meetings INDEX is on surface ────────────────────────
@@ -614,6 +631,52 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
         assert conn.halted, "expected halt on #{host}"
         assert conn.status == 403, "expected 403 (not #{conn.status}) on #{host}"
       end
+    end
+
+    # ── the meet-host ROOT is on surface ─────────────────────────────────
+    #
+    # Before this clause the root hit the terminal `{:meet, _}` deny, so a
+    # route alone would have turned a 404 into a 403 — the same dead end with
+    # a different number.
+    test "external user on the meet host reaches the root", ctx do
+      conn = run_on_host("/", @meet_host, ctx.ext_user, ctx.ext_membership)
+
+      assert conn.path_info == []
+      refute conn.halted
+    end
+
+    # DIRECTION CONTROL for the two clauses below: a clause written
+    # `{_, []}` instead of `{:meet, []}` admits the meet root (above) and
+    # ALSO changes these two — the app host would stop being fenced.
+    test "the APP host root is unchanged — still fenced to the chat host", ctx do
+      prev = Application.get_env(:platform, :chat_host)
+      Application.put_env(:platform, :chat_host, "chat.example.com")
+      on_exit(fn -> restore_chat_host(prev) end)
+
+      conn = run_on_host("/", "suite.example.com", ctx.ext_user, ctx.ext_membership)
+
+      assert conn.halted
+      assert conn.status == 302
+    end
+
+    test "the CHAT host root is unchanged — admitted, no redirect loop", ctx do
+      prev = Application.get_env(:platform, :chat_host)
+      Application.put_env(:platform, :chat_host, "chat.example.com")
+      on_exit(fn -> restore_chat_host(prev) end)
+
+      conn = run_on_host("/", "chat.example.com", ctx.ext_user, ctx.ext_membership)
+
+      refute conn.halted
+    end
+
+    test "internal user on the meet-host root is a complete no-op", ctx do
+      ref = attach_telemetry()
+
+      conn = run_on_host("/", @meet_host, ctx.int_user, ctx.int_membership)
+
+      refute conn.halted
+      refute_receive {:access_blocked, _}, 50
+      detach_telemetry(ref)
     end
 
     # ── The invariant host branching breaks first ────────────────────────

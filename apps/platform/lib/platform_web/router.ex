@@ -346,9 +346,13 @@ defmodule PlatformWeb.Router do
     # wanted destination on this host too — hence reused, not reimplemented.
     # Outside the live_session on purpose: it is a controller redirect.
     #
-    # NOTE: the sibling `meet.` scope below has the identical gap and is
-    # deliberately NOT fixed here — its routes all require a slug, so
-    # there is no obvious landing target to redirect to.
+    # NOTE: the sibling `meet.` scope below HAD the identical gap and now
+    # closes it the same way — `get("/", PageController, :meet_home)`,
+    # redirecting to `/meetings`. The justification once recorded here for
+    # deferring it ("its routes all require a slug, so there is no obvious
+    # landing target") DIED when task 019ffbb3 added the slugless
+    # `live("/meetings", MeetingLive, :index)`: a landing target exists.
+    # Nobody re-examined the deferral when the fact under it changed.
     get("/", PageController, :home)
   end
 
@@ -425,8 +429,8 @@ defmodule PlatformWeb.Router do
       # 404 here. Route omission is not surface limitation. One segment, so
       # it does not compete with the two-segment guest route.
       #
-      # Deliberately NOT added: a `"/"` route on this scope. The meet-host
-      # ROOT is a separate follow-up.
+      # The meet-host ROOT is now declared too — see the `get("/", ...)`
+      # below, OUTSIDE this live_session.
       #
       # Declared INSIDE `:meet_member` rather than in a live_session of its
       # own so index → room is a LIVE PATCH instead of a full page reload,
@@ -445,6 +449,46 @@ defmodule PlatformWeb.Router do
       live("/meetings", MeetingLive, :index)
       live("/meetings/:slug", MeetingLive, :show)
     end
+
+    # ROOT LANDING for the meet host (task 019ffe8a stage 2). A member
+    # handed the bare hostname types it with no path; before this route `/`
+    # fell through to the match-any-host default `scope "/"` below — whose
+    # pipeline ends in `:require_app_surface`, so `HostSurface` saw a
+    # non-`:app` surface and rendered the uniform 404. Declared HERE, inside
+    # the host scope, so it inherits THIS scope's pipeline rather than
+    # widening the app fence. Mirrors the `chat.` root above exactly.
+    #
+    # A REDIRECT to `/meetings`, not a second render of the index at `/`.
+    # Rendering here would put two routes for one view inside
+    # `:meet_member` that must be kept identical forever, and would leave
+    # `MeetingLive`'s `:index` action bound to two paths — making
+    # `handle_params/3`, the `?view=archive` branch and every `~p"/meetings"`
+    # patch target ambiguous. Cost is one round trip per bare-domain visit.
+    #
+    # Outside the live_session on purpose: it is a controller redirect.
+    #
+    # DEPENDS ON `{:meet, []} -> conn` in `PlatformWeb.Plugs.ExternalUserScope`
+    # (stage 1). A root request has `path_info == []`, which without that
+    # clause hits the terminal `{:meet, _}` deny — so this route alone would
+    # convert the 404 into a 403, the same dead end with a different number.
+    # If this root ever starts 403ing, that clause is what to look at; a 404
+    # means this route went missing instead.
+    #
+    # KNOWN GAP, named deliberately and NOT fixed here (task 019ffe8a stage
+    # 3). This root serves an ALREADY-SIGNED-IN member. An ANONYMOUS visitor
+    # is bounced by `:require_auth` to the host-relative `/auth/login`, which
+    # is reachable on this host (it lives in the unauthenticated match-any-
+    # host scope, deliberately without `:require_app_surface`) — so the
+    # redirect is not a dead end. But `PlatformWeb.AuthController.callback/2`
+    # sends an external full user to `ExternalRedirect.chat_url("/chat")`, an
+    # ABSOLUTE chat-host URL, whenever `CHAT_HOST` is configured (task
+    # 019f9257) — the OIDC redirect URI is a fixed absolute value registered
+    # with the IdP and cannot round-trip the originating host. CONSEQUENCE: a
+    # member who signs in FROM this host completes login on the CHAT host,
+    # not back at `/meetings`. Carrying an origin host through OIDC state has
+    # its own security surface (open redirect via an attacker-supplied return
+    # host) and deserves its own ticket.
+    get("/", PageController, :meet_home)
   end
 
   # Guest meeting ingress (task 019f2483 stage 3, consolidated onto
