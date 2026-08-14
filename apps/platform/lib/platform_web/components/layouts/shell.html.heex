@@ -44,16 +44,10 @@
        saved URL rather than the module root. Singleton hook — one instance
        covers the whole shell. See `apps/platform/assets/js/hooks/route_resume.js`. --%>
   <div id="route-resume" phx-hook="RouteResume" class="hidden"></div>
-  <%!-- Unread-count badge mirror (task 019ffb7b stage 6). Singleton hook,
-       same pattern as the two above: one instance covers every surface that
-       renders this shell, and the shell is the only place with a count to
-       mirror. `PlatformWeb.ShellLive` pushes an `app_badge` event on mount
-       and on every inbox change (its `:inbox_count_refresh` attach); the
-       hook paints `navigator.setAppBadge` in an installed window and a
-       `(3) ` document-title prefix in a plain tab. Nothing renders here —
-       the marker is on the app icon and in the title bar, both outside the
-       document. See `apps/platform/assets/js/hooks/app_badge.js`. --%>
-  <div id="app-badge" phx-hook="AppBadge" class="hidden"></div>
+  <%!-- Unread-count badge mirror. Singleton hook, same pattern as the two
+       above. Markup and rationale live on `Layouts.app_badge_mount/1`'s
+       @doc — shared with the `:external` layout. --%>
+  <.app_badge_mount />
   <%!-- Web-push registration (task 019ffb7b stage 3). Singleton hook, one
        instance per page, covering every surface that renders this shell —
        Tasks, Inbox, Meetings, Activity, the lot. It used to live in

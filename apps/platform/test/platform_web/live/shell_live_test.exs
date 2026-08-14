@@ -65,6 +65,23 @@ defmodule PlatformWeb.ShellLiveTest do
     assert html =~ "overscroll-contain"
   end
 
+  # Task 01a00161 stage 1 extracted the shipped
+  # `<div id="app-badge" phx-hook="AppBadge" class="hidden">` out of
+  # `shell.html.heex` into `Layouts.app_badge_mount/1` so the `:external`
+  # layout could mount it too. This is the mirror of the external-layout
+  # assertion in `test/platform_web/components/layouts_external_test.exs`:
+  # the extraction must not silently drop the ORIGINAL shell mount, which
+  # would swap one broken surface for another. ShellLive pushes `app_badge`
+  # unconditionally, so nothing else in the suite notices a missing hook.
+  test "shell still mounts the app-badge hook after the shared-component extraction",
+       %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    assert html =~ ~s(id="app-badge")
+    assert html =~ ~s(phx-hook="AppBadge")
+  end
+
   # Shell main + inner-content-column min-h-0 regression. Take 2 of the
   # PWA scroll lock (Rowan's report after #333 merged): #333 rooted the
   # OUTER shell chrome, but the inner content column and <main> were

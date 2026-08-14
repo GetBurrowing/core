@@ -50,6 +50,16 @@ defmodule PlatformWeb.LayoutsExternalTest do
     refute html =~ ~s(id="app-shell")
   end
 
+  test "mounts the shared app-badge hook (task 01a00161)" do
+    html =
+      %{inner_content: {:safe, "SENTINEL"}, flash: %{}}
+      |> PlatformWeb.Layouts.external()
+      |> rendered_to_string()
+
+    assert html =~ ~s(id="app-badge")
+    assert html =~ ~s(phx-hook="AppBadge")
+  end
+
   test "tolerates a missing :flash assign (falls back to empty flash group)" do
     html =
       %{inner_content: {:safe, "SENTINEL"}}

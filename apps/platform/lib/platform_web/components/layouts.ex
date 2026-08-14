@@ -216,6 +216,30 @@ defmodule PlatformWeb.Layouts do
     </main>
 
     <.flash_group flash={assigns[:flash] || %{}} />
+    <.app_badge_mount />
+    """
+  end
+
+  @doc """
+  Unread-count badge mirror (task 019ffb7b stage 6). Singleton hook: one
+  instance covers every surface that renders the layout it sits in.
+  `PlatformWeb.ShellLive` pushes an `app_badge` event on mount and on every
+  inbox change (its `:inbox_count_refresh` attach); the hook paints
+  `navigator.setAppBadge` in an installed window and a `(3) `
+  document-title prefix in a plain tab. Nothing renders here — the marker
+  is on the app icon and in the title bar, both outside the document. See
+  `apps/platform/assets/js/hooks/app_badge.js`.
+
+  Mounted by BOTH the `:shell` layout (`layouts/shell.html.heex`) and the
+  `:external` layout (`external/1` above). `ShellLive` runs for the
+  `chat.`-host `:external_chat` live_session too (`router.ex:324-334`), so
+  the event was already being pushed to external users and silently
+  discarded for want of a hook on the page — task 01a00161 extracted this
+  component so exactly one definition of the markup serves both layouts.
+  """
+  def app_badge_mount(assigns) do
+    ~H"""
+    <div id="app-badge" phx-hook="AppBadge" class="hidden"></div>
     """
   end
 
