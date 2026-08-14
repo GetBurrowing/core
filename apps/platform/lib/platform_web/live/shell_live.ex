@@ -5,6 +5,8 @@ defmodule PlatformWeb.ShellLive do
   import Phoenix.Component
   import Phoenix.LiveView
 
+  require Logger
+
   alias Phoenix.LiveView.AsyncResult
   alias Platform.Accounts
   alias Platform.Agents.{Agent, AgentServer, WorkspaceBootstrap}
@@ -15,9 +17,11 @@ defmodule PlatformWeb.ShellLive do
   alias Platform.Inbox
   alias Platform.Meetings
   alias Platform.Meetings.State, as: MeetingState
+  alias Platform.Push
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tenancy
+  alias PlatformWeb.Components.IconRail
 
   def on_mount(:default, _params, session, socket) do
     raw_user_id = session["current_user_id"]
@@ -148,6 +152,30 @@ defmodule PlatformWeb.ShellLive do
       # shell's own broadcast) so the cache stays the authority.
       |> assign(:shell_bar_mic_on, true)
       |> assign(:shell_bar_camera_on, false)
+      # Task 019ffb7b stage 3: the browser's notification-permission state,
+      # reported by the `PushSubscribe` hook mounted at
+      # `shell.html.heex`. Seeded here rather than in ChatLive so every
+      # surface running this on_mount has it. The five wire values are
+      # "unknown", "prompt", "granted", "denied" and "unsupported";
+      # "unknown" means the client has not reported yet, and nothing that
+      # keys on this assign may render until it has.
+      |> assign(:push_permission, "unknown")
+      # Task 019ffb7b stage 4 rework: the browser refused the request without
+      # ever asking the user (private window, or notifications off for all
+      # sites). Deliberately a flag beside `:push_permission` and not a value
+      # of it. See the `push_permission_state` clause below.
+      |> assign(:push_auto_denied, false)
+      # Same rework: the blocked row names the browser and gives the real
+      # clicks, so it needs the user agent. Read once at mount from the
+      # connect info; it cannot change for the life of the socket.
+      |> assign(:user_agent, connect_user_agent(socket))
+      # Task 019ffb7b stage 6: seed the AppBadge hook with the count it must
+      # paint before any inbox event fires. Without this the OS badge and the
+      # title prefix stay blank on a fresh load until the next inbox change,
+      # which for an already-behind user is exactly the moment the marker
+      # matters most. Connected-only: a dead render has no client to receive
+      # the event.
+      |> push_app_badge()
       |> maybe_seed_meeting_state(raw_user_id)
       |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
         uri = URI.parse(url)
@@ -378,7 +406,12 @@ defmodule PlatformWeb.ShellLive do
           if new_count == socket.assigns.inbox_unread_count do
             {:cont, socket}
           else
-            {:cont, assign(socket, :inbox_unread_count, new_count)}
+            # Same recomputed number feeds both consumers: the rail badge
+            # (assign) and the OS/app-icon + title-prefix markers (pushed to
+            # the `AppBadge` hook). Pushing from here is why that hook needs
+            # no PubSub subscription and no polling of its own — task
+            # 019ffb7b stage 6.
+            {:cont, socket |> assign(:inbox_unread_count, new_count) |> push_app_badge()}
           end
 
         _msg, socket ->
@@ -456,8 +489,89 @@ defmodule PlatformWeb.ShellLive do
         _event, _params, socket ->
           {:cont, socket}
       end)
+      # Web-push wiring (task 019ffb7b stage 3). These four events come from
+      # the `PushSubscribe` hook anchored in `shell.html.heex`, plus the
+      # `enable_notifications` click that the chat banner and the `/inbox`
+      # notification-state row (stage 4) emit. They lived on
+      # `PlatformWeb.ChatLive` until this stage, which bound the whole feature
+      # to `/chat`.
+      #
+      # The attach is the right home rather than the template alone: the
+      # `:external_chat` and `:meet_member` live_sessions run this same
+      # on_mount chain while rendering the chrome-less `:external` / `:guest`
+      # layouts, so a template-only move would drop them.
+      |> attach_hook(:push_events, :handle_event, fn
+        "push_subscribed", %{"endpoint" => endpoint, "keys" => keys}, socket ->
+          # `Platform.Push.subscribe/2` keys a subscription to a
+          # `Chat.Participant` id, which is per-space. `:current_participant`
+          # is assigned by ChatLive and MeetingLive and by nothing else, so
+          # off those surfaces there is no participant row to key to and the
+          # endpoint is dropped. See the stage-3 handoff: making registration
+          # durable on every route needs the subscription re-keyed on the
+          # user, or fanned out across the user's participant rows, and that
+          # is a schema decision this stage does not take.
+          if participant = socket.assigns[:current_participant] do
+            Push.subscribe(participant.id, %{
+              endpoint: endpoint,
+              keys: %{p256dh: keys["p256dh"], auth: keys["auth"]}
+            })
+          end
+
+          {:halt, assign(socket, :push_permission, "granted")}
+
+        # `auto_denied` (stage 4 rework) is a SEPARATE fact, carried beside the
+        # permission rather than folded into it: the five wire values above are
+        # a fixed vocabulary that several readers key on by string, so a sixth
+        # would break them silently. The hook sets it when the browser refused
+        # without ever showing a dialog. See
+        # `assets/js/hooks/push_subscribe.js`. Absent from older payloads and
+        # from every non-denied state, hence the `== true`.
+        "push_permission_state", %{"state" => state} = params, socket ->
+          {:halt,
+           socket
+           |> assign(:push_permission, state)
+           |> assign(:push_auto_denied, params["auto_denied"] == true)}
+
+        "push_unsupported", _params, socket ->
+          {:halt, assign(socket, :push_permission, "unsupported")}
+
+        # pushManager.subscribe/1 rejected after the browser already granted
+        # permission. Deliberately leaves :push_permission alone: a failed
+        # subscribe is not a denial, and downgrading the assign would hide
+        # the banner from a user who still has no working subscription.
+        "push_subscribe_failed", params, socket ->
+          Logger.warning(
+            "web push subscribe failed: " <>
+              inspect(Map.take(params, ["name", "message"]), printable_limit: 500)
+          )
+
+          {:halt, socket}
+
+        # Fired by the chat banner and, from stage 4, by the `/inbox`
+        # notification-state row (`PlatformWeb.Components.NotificationState`).
+        # Handled here rather than per-LiveView so both call sites reach the
+        # same handler on every surface that runs this on_mount chain.
+        "enable_notifications", _params, socket ->
+          {:halt, push_event(socket, "request_push_permission", %{})}
+
+        _event, _params, socket ->
+          {:cont, socket}
+      end)
 
     {:cont, socket}
+  end
+
+  # Raw user-agent header for the surfaces that vary copy by browser (today:
+  # the `/inbox` blocked-notifications row). Requires `:user_agent` in the
+  # LiveSocket's `connect_info` (see `PlatformWeb.Endpoint`), or the connected
+  # mount would report nil and silently undo what the dead render worked out.
+  #
+  # `get_connect_info/2` raises anywhere but a root LiveView's mount, and
+  # ChatLive also mounts nested under MeetingLive through `embedded_mount/3`.
+  # Guarding on the same key LiveView checks means such a mount degrades to
+  # the generic instruction instead of crashing the surface.
+  defp connect_user_agent(socket) do
+    if socket.private[:connect_info], do: get_connect_info(socket, :user_agent)
   end
 
   def default_agent_status do
@@ -845,4 +959,31 @@ defmodule PlatformWeb.ShellLive do
   end
 
   defp compute_inbox_count(_), do: 0
+
+  # Task 019ffb7b stage 6. Mirror the already-computed `:inbox_unread_count`
+  # onto the `AppBadge` JS hook (`assets/js/hooks/app_badge.js`), which paints
+  # `navigator.setAppBadge` on the app icon of an installed window and a
+  # `(3) ` document-title prefix in a plain tab.
+  #
+  # Server-pushed rather than client-polled: this module already recomputes
+  # the count on every inbox event, so the hook needs neither a timer nor a
+  # second PubSub subscription. There is exactly one counter in the system.
+  #
+  # `count` is the raw integer because `setAppBadge` takes a Number and the
+  # platform formats large values itself. `label` is `IconRail.badge_text/1`
+  # — the same "99+" cap the rail pill renders, reused rather than
+  # reimplemented, so the two markers can never show different numbers.
+  # Both are sent in one event so the client never has to derive one from
+  # the other.
+  #
+  # Connected-only: `push_event/3` on a disconnected mount has no client to
+  # deliver to, and the connected mount that follows pushes the same value.
+  defp push_app_badge(socket) do
+    if connected?(socket) do
+      count = socket.assigns[:inbox_unread_count] || 0
+      push_event(socket, "app_badge", %{count: count, label: IconRail.badge_text(count)})
+    else
+      socket
+    end
+  end
 end

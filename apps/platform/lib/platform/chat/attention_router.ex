@@ -330,7 +330,7 @@ defmodule Platform.Chat.AttentionRouter do
           participant = Map.get(participant_by_id, pid)
           user_id = if participant, do: participant.participant_id, else: pid
 
-          unless MapSet.member?(online_user_ids, user_id) do
+          if send_push?(reason, MapSet.member?(online_user_ids, user_id)) do
             maybe_send_push(participant || pid, sender_name, message, reason)
           end
       end
@@ -612,6 +612,27 @@ defmodule Platform.Chat.AttentionRouter do
   defp deliver_push(participant_id, payload) when is_binary(participant_id) do
     Platform.Push.send_notification(participant_id, payload)
   end
+
+  @doc """
+  Decide whether a routing decision earns a web push, given the recipient's
+  presence in the space.
+
+  Presence means a connected LiveView socket, which a minimised window and a
+  background tab both satisfy. Suppressing on presence alone therefore drops
+  the notification for someone who is not looking at the screen. A direct
+  `:mention` is addressed at one person and pushes regardless of presence.
+
+  Every other reason keeps the presence gate. `:active`, `:all`, `:watch`,
+  `:directed`, `:here` and `:heartbeat` fire on ambient room activity, so
+  pushing them to a connected socket would notify on each message.
+
+  `online?` comes from `Presence.list_space/1` at the call site; the function
+  itself is pure so tests can exercise every reason without a presence
+  process or a push subscription.
+  """
+  @spec send_push?(atom(), boolean()) :: boolean()
+  def send_push?(:mention, _online?), do: true
+  def send_push?(_reason, online?), do: not online?
 
   @doc """
   Build the push-notification title for a given sender + routing reason.

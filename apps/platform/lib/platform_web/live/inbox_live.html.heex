@@ -7,6 +7,23 @@
       </p>
     </header>
 
+    <%!-- Notification-permission state (task 019ffb7b stage 4). The rail bell
+         this replaces was rejected on review: it collided with the Inbox tile,
+         which is where the actual notifications live. The state belongs on the
+         page those notifications land on. `@push_permission` arrives via
+         ShellLive's on_mount, which this LiveView already runs; it renders
+         nothing for unknown / unsupported / granted.
+
+         `@user_agent` and `@push_auto_denied` arrive the same way and decide
+         the blocked row's wording: which browser's steps to give, and whether
+         to give steps at all (the browser can refuse without ever asking, and
+         then site settings are not the problem). --%>
+    <.notification_state_row
+      push_permission={@push_permission}
+      user_agent={@user_agent}
+      auto_denied={@push_auto_denied}
+    />
+
     <%!-- Empty inbox: no section headers, no rows — just the calm minimal
          state. Sections below are each gated on their own count, so when
          every count is zero only this renders. --%>

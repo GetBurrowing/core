@@ -28,26 +28,126 @@ defmodule PlatformWeb.ChatLive.Partials do
   alias Phoenix.LiveView.JS
   alias PlatformWeb.ChatLive.CanvasHooks
 
-  @doc "Notification opt-in banner (when push permission is 'prompt')."
+  @doc """
+  Notification opt-in banner, rendered when push permission is exactly
+  `"prompt"` (task 019ffb7b stage 5).
+
+  ## The one state it renders in
+
+  `"prompt"` and nothing else. `"granted"` has nothing to offer, `"unknown"`
+  has not heard from the client yet, `"unsupported"` browsers could never
+  honour the offer, and `"denied"` is deliberately absent from this component:
+  no web API can re-prompt after a browser-level block, so a strip pinned to
+  the top of every chat with no action on it would be a nag nobody could
+  clear. The blocked state lives on `/inbox`, in
+  `PlatformWeb.Components.NotificationState`, which is a page the user chooses
+  to visit. Do not add a `denied` branch here.
+
+  For the same reason this stays on chat and is not hoisted into the shell:
+  a permanent top-of-app strip is the shape that was rejected. `/inbox` is the
+  durable home; this is a contextual offer where mentions actually arrive.
+
+  ## Colour
+
+  Tint is `--color-info` (10% fill, 20% border), which says "this is
+  informational". The button is `--color-primary`, because turning
+  notifications on is an action, and an action button painted in the same hue
+  as the surface it sits on stops reading as a button at all. That was the
+  defect: `btn-info` on `bg-info/10` was a button-shaped piece of the banner.
+  Radius comes from `--radius-field` via daisyUI's `.btn`.
+
+  Semantic token slots only, no raw hex.
+
+  ## Layout
+
+  The copy takes `min-w-0 truncate` and the button `shrink-0`, so a narrow
+  viewport shortens the sentence and leaves the control at full size. Without
+  `min-w-0` a flex item refuses to shrink below its content and the button is
+  what gets squashed instead.
+
+  The action and the dismiss x share ONE `shrink-0` wrapper. `justify-between`
+  distributes free space between every direct child, so as three siblings the
+  action button drifted into the middle of a wide banner with the x alone at
+  the far edge. Grouped, the copy stays left and both controls sit together at
+  the right, which is where the x belongs.
+
+  `role="status"` because the banner renders nothing server-side (permission
+  starts at `"unknown"`) and appears a moment after connect, when the
+  `PushSubscribe` hook reports. It has to announce on appearance.
+
+  ## Dismissal, and why it is PERSISTENT
+
+  Marlowe, 2026-08-13: "this banner needs a way to be dismissed. A user should
+  be able to dismiss this notification if they dont want notifications or they
+  dont want to set it up right now."
+
+  Those are two reasons with two different lifetimes. "I don't want
+  notifications" is permanent; "not right now" is temporary. One x cannot
+  express both, so it takes the lifetime that satisfies the harder case. A
+  session-scoped dismissal would re-nag the user who already said they don't
+  want notifications, on every single visit, which is the behaviour the
+  feedback is asking to stop. So the x writes
+  `users.preferences["notification_banner_dismissed"]` (see
+  `Platform.Accounts.dismiss_notification_banner/1`) and the banner reads it
+  at mount.
+
+  Permanent is safe here ONLY because dismissing is never a dead end: the
+  Inbox notification row (`PlatformWeb.Components.NotificationState`, on
+  `/inbox`) is a permanent surface that always offers the same control and
+  never consults this preference. The user who dismisses today and wants
+  notifications next month has somewhere to go. If that row is ever removed,
+  this dismissal has to become reversible from here, or the feature becomes
+  unreachable after one click.
+
+  ## The control
+
+  A real `<button>` — in the tab order, with an accessible name that says what
+  is being dismissed rather than a bare "Close". 24px box (the WCAG 2.5.8
+  floor for a pointer target) with the tap area taken to 44x44 by a
+  transparent `::after`, the same trick `.channel-row-pin-button` uses.
+
+  VISIBLE AT REST. No `hover:` or `group-hover:` variant may gate it: Tailwind
+  compiles both inside `@media (hover: hover)`, which never matches on a touch
+  device, so a hover-revealed control is not subtle there, it is absent. This
+  is the same rule the rail's pin control had to learn (Marlowe: "hover doesn't
+  work on mobile"). `:hover` and `:focus-visible` move its colour only, as
+  plain selectors in `app.css`.
+  """
   attr(:push_permission, :string, required: true)
+  attr(:dismissed, :boolean, default: false)
 
   def notification_banner(assigns) do
     ~H"""
     <div
-      :if={@push_permission == "prompt"}
+      :if={@push_permission == "prompt" and not @dismissed}
       class="flex items-center justify-between gap-3 border-b border-info/20 bg-info/10 px-4 py-2"
+      role="status"
+      data-role="chat-notification-banner"
     >
-      <p class="text-sm text-info">
+      <p class="min-w-0 truncate text-sm text-info">
         <span class="hero-bell-alert mr-1 inline-block h-4 w-4 align-text-bottom" />
-        Enable notifications to get alerts when agents respond or you're mentioned.
+        Get notified when someone mentions you.
       </p>
-      <button
-        type="button"
-        phx-click="enable_notifications"
-        class="btn btn-info btn-sm flex-shrink-0"
-      >
-        Enable
-      </button>
+      <div class="flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          phx-click="enable_notifications"
+          class="btn btn-primary btn-sm shrink-0"
+          data-role="chat-notification-enable"
+        >
+          Turn on notifications
+        </button>
+        <button
+          type="button"
+          phx-click="dismiss_notification_banner"
+          class="chat-notification-dismiss"
+          aria-label="Dismiss notification setup"
+          title="Dismiss"
+          data-role="chat-notification-dismiss"
+        >
+          <span class="hero-x-mark size-3.5"></span>
+        </button>
+      </div>
     </div>
     """
   end

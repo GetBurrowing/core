@@ -16,9 +16,14 @@ defmodule PlatformWeb.Endpoint do
     websocket: [timeout: 120_000, check_origin: false],
     longpoll: false
 
+  # `:user_agent` is here for `PlatformWeb.ShellLive`, which names the browser
+  # in the blocked-notifications row on `/inbox` (task 019ffb7b stage 4). The
+  # dead render reads the header off the conn either way; without this the
+  # CONNECTED mount would read nil and quietly replace the browser-specific
+  # instruction with the generic one a moment after the page settles.
   socket("/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]],
-    longpoll: [connect_info: [session: @session_options]]
+    websocket: [connect_info: [:user_agent, session: @session_options]],
+    longpoll: [connect_info: [:user_agent, session: @session_options]]
   )
 
   # Serve at "/" the static files from "priv/static" directory.

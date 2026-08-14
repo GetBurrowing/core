@@ -1338,6 +1338,41 @@ defmodule Platform.Chat.AttentionRouterTest do
     end
   end
 
+  # ── Push suppression predicate (task 019ffb7b Stage 1) ────────────────────
+  #
+  # `maybe_send_push/4` short-circuits under `:test` and the send runs inside
+  # `Task.start`, so ExUnit cannot observe delivery. Asserting "a push was
+  # sent" would mean re-deriving the router's own condition in the test, which
+  # can never fail. These assert the decision itself.
+
+  describe "send_push?/2" do
+    test "a direct mention pushes even when the recipient is present in the space" do
+      assert AttentionRouter.send_push?(:mention, true)
+    end
+
+    test "a direct mention pushes when the recipient is absent" do
+      assert AttentionRouter.send_push?(:mention, false)
+    end
+
+    test "ambient activity does not push to a present recipient" do
+      refute AttentionRouter.send_push?(:active, true)
+    end
+
+    test "ambient activity pushes to an absent recipient" do
+      assert AttentionRouter.send_push?(:active, false)
+    end
+
+    test "every non-mention reason stays presence-gated" do
+      for reason <- [:active, :all, :watch, :directed, :here, :heartbeat] do
+        refute AttentionRouter.send_push?(reason, true),
+               "expected #{inspect(reason)} to stay suppressed for a present recipient"
+
+        assert AttentionRouter.send_push?(reason, false),
+               "expected #{inspect(reason)} to push to an absent recipient"
+      end
+    end
+  end
+
   # ── Archived-user filtering (task 019f671f Stage 3) ──────────────────────
   #
   # Archiving a user flips `users.archived_at` but does NOT hard-delete the

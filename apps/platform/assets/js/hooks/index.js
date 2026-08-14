@@ -1,3 +1,4 @@
+import AppBadge from "./app_badge"
 import ButtonLoading from "./button_loading"
 import CanvasSidebarResize from "./canvas_sidebar_resize"
 import ChannelMembershipDrag from "./channel_membership_drag"
@@ -48,6 +49,7 @@ import ThemeToggle from "./theme_toggle"
 import UploadButton from "./upload_button"
 
 export default {
+  AppBadge,
   ButtonLoading,
   CanvasSidebarResize,
   ChannelMembershipDrag,

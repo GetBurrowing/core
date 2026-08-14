@@ -3,7 +3,14 @@
      them a second time would create duplicate elements with the same id
      (LiveKit Room would double-subscribe). Suppress them in embedded
      mode and let the parent own the singletons. --%>
-<div :if={!@embedded} id="push-subscribe" phx-hook="PushSubscribe" class="hidden"></div>
+
+<%!-- `#push-subscribe` used to be the first anchor here. It moved to
+     `shell.html.heex` in task 019ffb7b stage 3, where it is a singleton
+     covering every surface rather than only `/chat`, so the
+     `:if={!@embedded}` guard it carried is gone too — a shell-level
+     element cannot collide with itself. `@push_permission` is seeded and
+     maintained by `PlatformWeb.ShellLive` and still drives
+     `<.notification_banner>` below. --%>
 
 <%!-- data-camera-enabled / data-mic-enabled carry the server's committed
      media intent. On a LiveKit reconnect (task 019e4b3e stage 3) the JS
@@ -22,7 +29,11 @@
 <div :if={!@embedded} id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
 <div :if={!@embedded} id="meeting-soundboard" phx-hook="MeetingSoundboard" class="hidden"></div>
 
-<.notification_banner :if={!@embedded} push_permission={@push_permission} />
+<.notification_banner
+  :if={!@embedded}
+  push_permission={@push_permission}
+  dismissed={@notification_banner_dismissed}
+/>
 
 <%!-- Chat root must claim the full height of <main> AND set min-h-0 so its
      descendant flex columns (chat-drop-zone, #message-list) can correctly

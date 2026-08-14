@@ -727,4 +727,79 @@ defmodule PlatformWeb.InboxLiveTest do
       refute has_element?(lv2, row_selector(item))
     end
   end
+
+  # ── Notification-permission row (task 019ffb7b stage 4) ────────────────
+  #
+  # The call site for `PlatformWeb.Components.NotificationState`. The
+  # component's own DOM contract lives in
+  # `test/platform_web/components/notification_state_test.exs`; what these
+  # assert is the wiring — that `/inbox` reads ShellLive's `:push_permission`
+  # assign, and that the row flips in when the `PushSubscribe` hook reports,
+  # rather than only rendering under a hand-made assign.
+  describe "notification-permission row" do
+    setup %{conn: conn} do
+      user = insert_user()
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      %{lv: lv, user: user}
+    end
+
+    test "renders nothing on mount — the client has not reported yet", %{lv: lv} do
+      refute has_element?(lv, ~s([data-role="notification-state"]))
+
+      # Positive control: the surface itself rendered.
+      assert has_element?(lv, ~s([data-role="inbox-surface"]))
+    end
+
+    test "prompt flips the offer row in, with its action", %{lv: lv} do
+      render_hook(lv, "push_permission_state", %{"state" => "prompt"})
+
+      assert has_element?(lv, ~s([data-role="notification-state"][data-permission="prompt"]))
+      assert has_element?(lv, ~s([data-role="notification-enable"]))
+    end
+
+    test "the offer's button reaches the shell handler", %{lv: lv} do
+      render_hook(lv, "push_permission_state", %{"state" => "prompt"})
+
+      lv |> element(~s([data-role="notification-enable"])) |> render_click()
+
+      assert_push_event(lv, "request_push_permission", %{})
+    end
+
+    test "denied flips in a row with no action at all", %{lv: lv} do
+      render_hook(lv, "push_permission_state", %{"state" => "denied"})
+
+      assert has_element?(lv, ~s([data-role="notification-state"][data-permission="denied"]))
+      refute has_element?(lv, ~s([data-role="notification-enable"]))
+    end
+
+    test "the auto-denied flag reaches the row beside the permission", %{lv: lv} do
+      # The wiring the component tests cannot see: the hook sends the flag in
+      # the SAME payload as the state, the shell keeps it in its own assign,
+      # and `/inbox` hands both to the row. The permission stays "denied";
+      # the flag never becomes a sixth value of it.
+      render_hook(lv, "push_permission_state", %{"state" => "denied", "auto_denied" => true})
+
+      assert has_element?(
+               lv,
+               ~s([data-role="notification-state"][data-permission="denied"][data-auto-denied="true"])
+             )
+
+      assert render(lv) =~ "Your browser turned notifications down without asking you."
+
+      # And an ordinary denial afterwards clears it rather than sticking.
+      render_hook(lv, "push_permission_state", %{"state" => "denied"})
+
+      assert has_element?(lv, ~s([data-role="notification-state"][data-auto-denied="false"]))
+      assert render(lv) =~ "Your browser is blocking notifications from Suite."
+    end
+
+    test "granted and unsupported leave the page unchanged", %{lv: lv} do
+      for state <- ["granted", "unsupported"] do
+        render_hook(lv, "push_permission_state", %{"state" => state})
+
+        refute has_element?(lv, ~s([data-role="notification-state"])),
+               "expected no notification row for push_permission=#{state}"
+      end
+    end
+  end
 end

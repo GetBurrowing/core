@@ -44,6 +44,7 @@ defmodule PlatformWeb.InboxLive do
 
   import Ecto.Query, only: [order_by: 3]
   import PlatformWeb.Components.InboxItem, only: [inbox_item: 1]
+  import PlatformWeb.Components.NotificationState, only: [notification_state_row: 1]
 
   alias Platform.Chat
   alias Platform.Inbox

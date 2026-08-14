@@ -34,6 +34,18 @@ defmodule PlatformWeb.Components.IconRail do
     * Wiring `<.link>` / navigation (Stage 2 keeps tiles as `<div>`/`<button>`).
     * Reconciling destinations whose `:path` doesn't yet have a route.
 
+  Task 019ffb7b stage 4 first added a notification-state bell here, in the Live
+  cluster directly under the Inbox tile. Marlowe rejected that placement on
+  review and it was removed: a rail row whose only behaviour was opening a
+  hover panel collided with the Inbox tile beside it, which is where the actual
+  activity notifications live, and a rail is a set of navigation targets. The
+  durable notification-state row now lives on `/inbox`, rendered by
+  `PlatformWeb.Components.NotificationState`. Settings was considered and ruled
+  out: there is no `/settings` route, and the rail's bottom gear is Admin,
+  `fabrikam_only?: true`, so it could never host a feature that has to reach
+  external users. The rail therefore carries no `push_permission` state at all;
+  `ShellLive`'s `:push_permission` assign feeds `/inbox` and the chat banner.
+
   ## Single-source-of-truth architecture
 
   Both desktop and mobile views consume the same `destinations/1` list.
@@ -443,10 +455,20 @@ defmodule PlatformWeb.Components.IconRail do
     if dest.key == active_key, do: "page", else: nil
   end
 
-  # Inbox unread-badge label. Returns nil at 0 (badge node omitted from the
-  # DOM), the integer as a string for 1..99, and "99+" for anything above 99
-  # (ADR-0022 DM-badge overflow grammar). Non-integer inputs are treated as 0.
-  defp badge_text(count) when is_integer(count) do
+  @doc """
+  Inbox unread-badge label.
+
+  Returns nil at 0 (badge node omitted from the DOM), the integer as a
+  string for 1..99, and "99+" for anything above 99 (ADR-0022 DM-badge
+  overflow grammar). Non-integer inputs are treated as 0.
+
+  Public because the rail is no longer the only surface showing this count:
+  `PlatformWeb.ShellLive` pushes the same label to the `AppBadge` JS hook
+  for the document-title prefix (task 019ffb7b stage 6). One definition of
+  the cap, so the rail pill and the title prefix cannot disagree.
+  """
+  @spec badge_text(term()) :: String.t() | nil
+  def badge_text(count) when is_integer(count) do
     cond do
       count <= 0 -> nil
       count > 99 -> "99+"
@@ -454,7 +476,7 @@ defmodule PlatformWeb.Components.IconRail do
     end
   end
 
-  defp badge_text(_), do: nil
+  def badge_text(_), do: nil
 
   # Canonical 11-entry destination list. Order within a cluster determines
   # render order in the rail. Paths marked `# TODO` don't have routes yet

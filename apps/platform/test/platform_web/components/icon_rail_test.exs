@@ -702,4 +702,60 @@ defmodule PlatformWeb.Components.IconRailTest do
       refute class =~ ~r/#[0-9a-fA-F]{3,6}/
     end
   end
+
+  # ---------------------------------------------------------------------
+  # Notification state is NOT in the rail (task 019ffb7b stage 4, revised).
+  #
+  # The first cut of this stage put a notification-state bell in the Live
+  # cluster, under the Inbox tile. Marlowe rejected the placement on review: the
+  # row navigated nowhere, and it collided with the Inbox tile beside it, which
+  # is where the actual notifications land. The row now lives on `/inbox` and
+  # its behavioural tests moved with it, to `notification_state_test.exs`.
+  # What stays here is the guard against the bell coming back: the rail is a
+  # list of navigation targets and each tile keeps exactly one behaviour.
+  # ---------------------------------------------------------------------
+  describe "icon_rail/1 carries no notification state" do
+    test "no bell node renders, at either rail width, with or without unread items" do
+      for collapsed <- [true, false], count <- [0, 7], fabrikam <- [true, false] do
+        doc =
+          count
+          |> render_rail_with_count(%{sidebar_collapsed: collapsed, is_fabrikam_user: fabrikam})
+          |> LazyHTML.from_fragment()
+
+        for selector <- [
+              ~s([data-role="notification-bell"]),
+              ~s([data-role="notification-bell-trigger"]),
+              ~s([data-role="notification-off-dot"]),
+              ~s([data-role="notification-popover"]),
+              ~s([data-role="notification-state"]),
+              ~s([phx-click="toggle_push_popover"]),
+              ~s([phx-click="close_push_popover"]),
+              ~s([phx-click="enable_notifications"])
+            ] do
+          assert doc |> LazyHTML.query(selector) |> Enum.count() == 0,
+                 "expected no #{selector} in the rail " <>
+                   "(collapsed=#{collapsed}, count=#{count}, fabrikam=#{fabrikam})"
+        end
+
+        # Positive control: this is a fully rendered rail, so the absences
+        # above are about the bell and not about an empty render.
+        assert doc |> LazyHTML.query(~s([data-destination="inbox"])) |> Enum.count() == 1
+      end
+    end
+
+    test "the component no longer accepts a notification-permission state at all" do
+      attrs =
+        PlatformWeb.Components.IconRail.__components__()
+        |> Map.fetch!(:icon_rail)
+        |> Map.fetch!(:attrs)
+        |> Enum.map(& &1.name)
+
+      refute :push_permission in attrs
+      refute :push_popover_open in attrs
+
+      # Positive control: the attr list is real, so the two refutes above are
+      # reading a populated list rather than an empty one.
+      assert :inbox_unread_count in attrs
+    end
+  end
 end

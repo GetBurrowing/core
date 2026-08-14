@@ -44,6 +44,45 @@
        saved URL rather than the module root. Singleton hook — one instance
        covers the whole shell. See `apps/platform/assets/js/hooks/route_resume.js`. --%>
   <div id="route-resume" phx-hook="RouteResume" class="hidden"></div>
+  <%!-- Unread-count badge mirror (task 019ffb7b stage 6). Singleton hook,
+       same pattern as the two above: one instance covers every surface that
+       renders this shell, and the shell is the only place with a count to
+       mirror. `PlatformWeb.ShellLive` pushes an `app_badge` event on mount
+       and on every inbox change (its `:inbox_count_refresh` attach); the
+       hook paints `navigator.setAppBadge` in an installed window and a
+       `(3) ` document-title prefix in a plain tab. Nothing renders here —
+       the marker is on the app icon and in the title bar, both outside the
+       document. See `apps/platform/assets/js/hooks/app_badge.js`. --%>
+  <div id="app-badge" phx-hook="AppBadge" class="hidden"></div>
+  <%!-- Web-push registration (task 019ffb7b stage 3). Singleton hook, one
+       instance per page, covering every surface that renders this shell —
+       Tasks, Inbox, Meetings, Activity, the lot. It used to live in
+       `chat_live.html.heex` behind an `:if={!@embedded}` guard, which bound
+       registration to `/chat` alone: a user working from any other route
+       mounted no hook, reported no permission state, and could never be
+       offered the opt-in. The guard existed only to stop a duplicate DOM id
+       when ChatLive mounts inside MeetingLive, and a shell-level anchor
+       cannot collide with itself, so it is deliberately not reproduced here.
+
+       `data-permission` mirrors the server's `:push_permission` assign back
+       into the DOM. The hook does not read it (there is no `updated()`
+       callback); it exists so the wire state is observable — in tests via
+       `has_element?/2`, and in a browser via the element inspector — on
+       routes that render nothing else off the assign. The visible consumers
+       are the `/inbox` notification-state row
+       (`PlatformWeb.Components.NotificationState`) and the chat banner.
+
+       Handlers live in `PlatformWeb.ShellLive`'s `:push_events` attach, not
+       in this template's LiveViews, because the `:external_chat` and
+       `:meet_member` live_sessions run the same on_mount chain while
+       rendering a chrome-less layout. --%>
+  <div
+    id="push-subscribe"
+    phx-hook="PushSubscribe"
+    data-permission={@push_permission}
+    class="hidden"
+  >
+  </div>
   <%!-- Desktop icon-rail (lg+ width). Single-source-of-truth destination
        list lives in PlatformWeb.Components.IconRail.destinations/1; the
        template here just hands off current_path / is_fabrikam_user /

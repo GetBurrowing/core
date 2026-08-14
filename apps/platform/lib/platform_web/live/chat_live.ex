@@ -254,6 +254,15 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:can_cancel_deletion?, false)
       |> assign(:dm_conversations, dm_conversations)
       |> assign(:hidden_channel_ids, Accounts.get_hidden_channel_ids(user_id))
+      # Task 019ffb7b stage 5: whether this user has dismissed the notification
+      # opt-in banner. Read from `users.preferences` on every mount — same
+      # column and same read-at-mount / write-on-event shape as
+      # `:hidden_channel_ids` on the line above — so the dismissal survives a
+      # reload instead of dying with the LiveView process.
+      |> assign(
+        :notification_banner_dismissed,
+        Accounts.notification_banner_dismissed?(user_id)
+      )
       # The user's pinned conversations, ordered most-recently-pinned last
       # (task 019fd80f). Held as an assign so every rail recompute below can
       # pass the same list without re-reading preferences; the Pinned block
@@ -418,7 +427,10 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:version_history, nil)
       |> assign(:show_settings, false)
       |> assign(:quick_emojis, @quick_emojis)
-      |> assign(:push_permission, "unknown")
+      # `:push_permission` is seeded by `PlatformWeb.ShellLive`'s on_mount
+      # (task 019ffb7b stage 3), which every live_session ChatLive is routed
+      # under runs. Seeding it a second time here would overwrite a state the
+      # hook may already have reported.
       |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
       |> assign(:lightbox_url, nil)
       |> allow_upload(:attachments,
@@ -2483,27 +2495,27 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  def handle_event("push_subscribed", %{"endpoint" => endpoint, "keys" => keys}, socket) do
-    if participant = socket.assigns[:current_participant] do
-      Platform.Push.subscribe(participant.id, %{
-        endpoint: endpoint,
-        keys: %{p256dh: keys["p256dh"], auth: keys["auth"]}
-      })
-    end
+  # The five push events ("push_subscribed", "push_permission_state",
+  # "push_unsupported", "push_subscribe_failed", "enable_notifications")
+  # moved to the `:push_events` attach in `PlatformWeb.ShellLive` in task
+  # 019ffb7b stage 3, alongside the `#push-subscribe` anchor. Attached
+  # handlers run ahead of a LiveView's own `handle_event/3` and halt, so
+  # they now answer on every shell surface instead of only on `/chat`.
 
-    {:noreply, assign(socket, :push_permission, "granted")}
-  end
+  # The banner's dismiss control (task 019ffb7b stage 5) stays HERE rather
+  # than joining that attach, because the banner it dismisses is a chat-only
+  # component. `enable_notifications` moved because both the banner and the
+  # `/inbox` row emit it; nothing outside `/chat` emits this one.
+  #
+  # Persisted, not session-scoped: `Accounts.dismiss_notification_banner/1`
+  # writes `users.preferences["notification_banner_dismissed"]`, the same
+  # column and the same `_ =` no-op-on-anonymous shape as `hide_channel`
+  # below. The assign flip is what takes the banner down now; the write is
+  # what keeps it down on the next mount.
+  def handle_event("dismiss_notification_banner", _params, socket) do
+    _ = Accounts.dismiss_notification_banner(socket.assigns.user_id)
 
-  def handle_event("push_permission_state", %{"state" => state}, socket) do
-    {:noreply, assign(socket, :push_permission, state)}
-  end
-
-  def handle_event("push_unsupported", _params, socket) do
-    {:noreply, assign(socket, :push_permission, "unsupported")}
-  end
-
-  def handle_event("enable_notifications", _params, socket) do
-    {:noreply, push_event(socket, "request_push_permission", %{})}
+    {:noreply, assign(socket, :notification_banner_dismissed, true)}
   end
 
   # ── Upload staging dialog events ──────────────────────────────────────

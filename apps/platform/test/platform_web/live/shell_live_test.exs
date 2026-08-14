@@ -861,6 +861,75 @@ defmodule PlatformWeb.ShellLiveTest do
       refute html =~ ~s(data-role="inbox-badge")
     end
 
+    # -------------------------------------------------------------------
+    # App-icon badge / document-title prefix delivery (task 019ffb7b st. 6)
+    #
+    # `navigator.setAppBadge` and the `(3) ` title prefix are painted by the
+    # `AppBadge` JS hook, so nothing about the marks themselves is
+    # observable from ExUnit. What IS observable, and what actually breaks,
+    # is the delivery: the count has to reach the client on mount and again
+    # on every inbox change, or the hook paints a stale number forever
+    # (it holds no subscription and never polls — that is deliberate).
+    # These tests pin the push, not the paint.
+    # -------------------------------------------------------------------
+    test "mount pushes the seeded count to the badge hook", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      {:ok, _} = Inbox.emit(inbox_attrs(user_id))
+      {:ok, _} = Inbox.emit(inbox_attrs(user_id))
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Raw integer for setAppBadge (which takes a Number), plus the capped
+      # display label the title prefix and the rail pill share.
+      assert_push_event(view, "app_badge", %{count: 2, label: "2"})
+    end
+
+    test "an inbox change re-pushes the recomputed count", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      {:ok, _} = Inbox.emit(inbox_attrs(user_id))
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert_push_event(view, "app_badge", %{count: 1, label: "1"})
+
+      {:ok, _} = Inbox.emit(inbox_attrs(user_id))
+      _ = render(view)
+
+      assert_push_event(view, "app_badge", %{count: 2, label: "2"})
+    end
+
+    test "reading the last item pushes zero so the hook clears the badge", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      {:ok, item} = Inbox.emit(inbox_attrs(user_id))
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert_push_event(view, "app_badge", %{count: 1, label: "1"})
+
+      # mark_read/2 broadcasts the coarse {:inbox_changed, user_id}; the
+      # recompute drops the read row, so the client must be told to clear.
+      # A nil label is the hook's "no prefix" signal, matching the rail
+      # dropping its badge node at 0.
+      {:ok, _} = Inbox.mark_read(item.id, user_id)
+      _ = render(view)
+
+      assert_push_event(view, "app_badge", %{count: 0, label: nil})
+    end
+
+    test "the pushed label uses the rail's cap, not a second one", %{conn: _conn} do
+      # ShellLive builds the label with IconRail.badge_text/1 rather than its
+      # own formatting, so this is the only place the "99+" grammar is
+      # defined. Pinned here because the function had to become public for
+      # the push to reuse it.
+      assert PlatformWeb.Components.IconRail.badge_text(99) == "99"
+      assert PlatformWeb.Components.IconRail.badge_text(100) == "99+"
+      assert PlatformWeb.Components.IconRail.badge_text(0) == nil
+    end
+
     test "a second user's inbox items do not leak into this user's badge", %{conn: conn} do
       conn = authenticated_conn(conn)
       user_id = conn.private.plug_session["current_user_id"]
@@ -2053,6 +2122,110 @@ defmodule PlatformWeb.ShellLiveTest do
 
       refute panel_classes =~ "right-0",
              "right-0 anchors the panel to a mid-strip button and pushes it off-screen"
+    end
+  end
+
+  # ── Push registration on every shell surface (task 019ffb7b stage 3) ──────
+  #
+  # Before this stage the `#push-subscribe` anchor lived in
+  # `chat_live.html.heex` and the four push handlers lived in `chat_live.ex`,
+  # so registration was bound to `/chat`. A user working from Tasks or Inbox
+  # mounted no hook, reported no permission state, and never registered a
+  # subscription. The anchor is now a shell singleton and the handlers are a
+  # `:push_events` attach on `ShellLive.on_mount/4`, so every surface that
+  # renders the shell carries both.
+  #
+  # `data-permission` reflects the server assign onto the anchor so the wire
+  # state is observable in the DOM. Without it there is nothing on `/tasks`
+  # that renders off `:push_permission` — the visible consumers are the
+  # stage-4 notification-state row on `/inbox` and the banner on `/chat` — and
+  # the assign could only be asserted by reaching into the LiveView's process
+  # state.
+  describe "push registration anchor" do
+    test "renders on a non-chat authenticated route", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      assert has_element?(view, "#push-subscribe[phx-hook='PushSubscribe']")
+    end
+
+    test "seeds the permission state as unknown", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      assert has_element?(view, "#push-subscribe[data-permission='unknown']")
+    end
+
+    test "is a singleton on /chat, where the anchor used to be declared", %{conn: conn} do
+      conn = authenticated_conn(conn)
+
+      # `/chat` live-redirects to the first active channel when the user has
+      # one; the anchor is shell-level either way.
+      html =
+        case live(conn, ~p"/chat") do
+          {:ok, _view, html} -> html
+          {:error, {:live_redirect, %{to: path}}} -> elem(live(conn, path), 2)
+        end
+
+      count =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("#push-subscribe")
+        |> Enum.count()
+
+      assert count == 1,
+             "exactly one element may carry the push-subscribe DOM id, found #{count}"
+    end
+  end
+
+  describe "push events on a non-chat route" do
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      %{view: view}
+    end
+
+    test "push_permission_state sets the assign", %{view: view} do
+      render_hook(view, "push_permission_state", %{"state" => "prompt"})
+
+      assert has_element?(view, "#push-subscribe[data-permission='prompt']")
+    end
+
+    test "push_unsupported sets the assign", %{view: view} do
+      render_hook(view, "push_unsupported", %{})
+
+      assert has_element?(view, "#push-subscribe[data-permission='unsupported']")
+    end
+
+    test "enable_notifications pushes the permission request back to the hook", %{view: view} do
+      render_hook(view, "enable_notifications", %{})
+
+      assert_push_event(view, "request_push_permission", %{})
+    end
+
+    # A subscribe failure under an already-granted permission is not a
+    # denial. TasksLive has no catch-all handle_event/3, so an unhandled
+    # hook event would take the view down here.
+    test "push_subscribe_failed is handled and leaves the assign alone", %{view: view} do
+      render_hook(view, "push_permission_state", %{"state" => "granted"})
+
+      render_hook(view, "push_subscribe_failed", %{
+        "name" => "AbortError",
+        "message" => "push service error"
+      })
+
+      assert has_element?(view, "#push-subscribe[data-permission='granted']")
+    end
+
+    # No `current_participant` exists off `/chat`, so there is no participant
+    # row to key a subscription to. The handler must no-op rather than crash.
+    test "push_subscribed does not crash without a current participant", %{view: view} do
+      render_hook(view, "push_subscribed", %{
+        "endpoint" => "https://push.example.com/endpoint",
+        "keys" => %{"p256dh" => "p256dh-key", "auth" => "auth-key"}
+      })
+
+      assert has_element?(view, "#push-subscribe[data-permission='granted']")
     end
   end
 end

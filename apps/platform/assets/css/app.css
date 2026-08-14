@@ -3245,6 +3245,73 @@ body, .font-fabrikam {
     transform: translate(-50%, -50%);
   }
 
+  /* Dismiss control on the chat notification opt-in banner (task 019ffb7b
+     stage 5, Marlowe 2026-08-13: "dismissal could take the form of an 'x' in
+     top right corner of the banner").
+
+     Written as PLAIN SELECTORS, not `@apply hover:…`. Tailwind compiles every
+     `hover:` variant inside `@media (hover: hover)`, so a rule written that
+     way is dead on a touch device. Here that would only cost a colour change,
+     but the same mechanism is what made the rail's pin control unreachable
+     before it went visible-at-rest, and this control must never acquire a
+     hover-gated `opacity` by someone copying the pattern from a `@apply`
+     line. The x is painted at rest; hover and focus move its colour.
+
+     Tokens only, no raw hex. At rest the glyph is `--color-base-content` at
+     60%, the same resting treatment `.channel-row-pin-button` above carries,
+     and it is a neutral on purpose: it does not compete with the primary
+     action beside it, and it clears the WCAG 1.4.11 3:1 floor for a non-text
+     control in both themes. Painted in the banner's own `--color-info` at
+     rest it measured ~2:1 on the light theme's `bg-info/10` — legible to the
+     person who already knew it was there, and to nobody else. Hover and focus
+     lift it to `--color-info` over a `--color-base-300` wash, which is where
+     the banner's hue belongs: on the interaction, not on the resting state.
+     `--radius-field` for the corner.
+
+     24px painted box clears the WCAG 2.5.8 pointer-target floor; the 44x44
+     comes from a transparent `::after`, same as `.channel-row-pin-button`
+     above, so the banner keeps its height. The overlay reaches ~10px left
+     into the 12px gap before the "Turn on notifications" button and stops
+     short of it. */
+  .chat-notification-dismiss {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-field);
+    color: color-mix(in oklch, var(--color-base-content) 60%, transparent);
+    transition:
+      color 75ms ease,
+      background-color 75ms ease;
+  }
+
+  .chat-notification-dismiss::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+
+  .chat-notification-dismiss:hover,
+  .chat-notification-dismiss:focus-visible {
+    color: var(--color-info);
+    background-color: color-mix(in oklch, var(--color-base-300) 60%, transparent);
+  }
+
+  /* Keyboard reachability is the point of the <button>; give the focus ring a
+     colour that survives on the info-tinted fill rather than leaning on the
+     UA default. */
+  .chat-notification-dismiss:focus-visible {
+    outline: 2px solid var(--color-info);
+    outline-offset: 2px;
+  }
+
   .channel-row--active {
     @apply bg-primary/10 text-primary font-semibold border-l-2 border-primary;
   }

@@ -464,4 +464,55 @@ defmodule Platform.Accounts do
   end
 
   def unhide_channel(_, _), do: {:error, :not_found}
+
+  # ── Notification-banner dismissal (task 019ffb7b stage 5) ──────────────
+  #
+  # Stored as `preferences["notification_banner_dismissed"] = true`. Same
+  # column, same read/write helpers as `hidden_channel_ids` above — no new
+  # table and no migration: `users.preferences` has been a JSONB column
+  # since `20260519134626_add_preferences_to_users`.
+  #
+  # PERSISTENT, not session-scoped. See the rationale on
+  # `PlatformWeb.ChatLive.Partials.notification_banner/1`: one of the two
+  # reasons a user dismisses ("I don't want notifications") is permanent, and
+  # a per-session flag would re-nag exactly that user on every visit.
+  #
+  # There is no un-dismiss writer, and that is deliberate rather than
+  # unfinished. The banner is a contextual offer; the durable control lives on
+  # `/inbox` (`PlatformWeb.Components.NotificationState`), which always renders
+  # and never consults this key. A user who changes their mind goes there.
+
+  @notification_banner_dismissed_key "notification_banner_dismissed"
+
+  @doc """
+  Whether the user has dismissed the chat notification opt-in banner.
+
+  `false` for unknown users — anonymous chat sessions use a generated UUID
+  that matches no row, so they see the offer and their dismissal is a no-op
+  for the length of that LiveView.
+  """
+  @spec notification_banner_dismissed?(binary() | nil) :: boolean()
+  def notification_banner_dismissed?(user_id) when is_binary(user_id) do
+    user_id
+    |> get_user_preferences()
+    |> Map.get(@notification_banner_dismissed_key, false) == true
+  end
+
+  def notification_banner_dismissed?(_), do: false
+
+  @doc """
+  Record that the user dismissed the chat notification opt-in banner.
+  Idempotent.
+
+  Returns `{:ok, %User{}}`, or `{:error, :not_found}` when the user_id doesn't
+  match a real row — same anonymous-session contract as `hide_channel/2`, and
+  callers should treat not-found as a silent no-op.
+  """
+  @spec dismiss_notification_banner(binary()) ::
+          {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def dismiss_notification_banner(user_id) when is_binary(user_id) do
+    update_user_preference(user_id, @notification_banner_dismissed_key, true)
+  end
+
+  def dismiss_notification_banner(_), do: {:error, :not_found}
 end
