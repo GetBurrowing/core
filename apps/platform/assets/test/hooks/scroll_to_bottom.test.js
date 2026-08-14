@@ -108,6 +108,16 @@ function anchoredRows(el) {
   return el.rows.flatMap((r) => r.scrollIntoViewCalls)
 }
 
+// `applyGrouping` marks continuations AND run boundaries; these read the two
+// class flags back off the rows in list order.
+function groupings(el) {
+  return el.rows.map((r) => r.classList.contains("message-row--grouped"))
+}
+
+function runEnds(el) {
+  return el.rows.map((r) => r.classList.contains("message-row--run-end"))
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────
 
 describe("ScrollToBottom — deep-link anchor holds the arrival position", () => {
@@ -285,5 +295,95 @@ describe("ScrollToBottom — deep-link anchor holds the arrival position", () =>
     expect(grouped.classList.contains("message-row--grouped")).toBe(true)
     // …and the row after it opens a new author group, so it stays ungrouped.
     expect(el.rows[2].classList.contains("message-row--grouped")).toBe(false)
+
+    // Run boundaries ride the same pass, so they must survive the anchored
+    // path too. m-2 closes p-1's run (m-3 switches author) and m-3 is last in
+    // the container, so both end runs; m-1 is mid-run and does not.
+    expect(runEnds(el)).toEqual([false, true, true])
+  })
+
+  it("marks the last row of each author run, on the ordinary snap path", () => {
+    const el = fakeList({
+      rows: [
+        fakeRow("m-1", "p-1"),
+        fakeRow("m-2", "p-1"),
+        fakeRow("m-3", "p-1"),
+        fakeRow("m-4", "p-2"),
+        fakeRow("m-5", "p-1"),
+      ],
+    })
+    const hook = buildHook(el)
+
+    hook.mounted()
+
+    // Only the LAST row of each run is a boundary. The two middles of the
+    // opening three-row run are the rows a "mark everything" implementation
+    // would get wrong.
+    expect(runEnds(el)).toEqual([false, false, true, true, true])
+    // m-4 and m-5 are single-message runs: no `--grouped`, but still a
+    // run end each, which is what keeps them fully rounded.
+    expect(groupings(el)).toEqual([false, true, true, false, false])
+  })
+
+  it("clears a stale run-end once a later row joins the run", () => {
+    // The re-render case: `toggle` must UNmark a row that has stopped being
+    // the end of its run, exactly as it already does for `--grouped`.
+    const first = fakeRow("m-1", "p-1")
+    const second = fakeRow("m-2", "p-2")
+    const el = fakeList({ rows: [first, second] })
+    const hook = buildHook(el)
+
+    hook.mounted()
+    expect(runEnds(el)).toEqual([true, true])
+
+    // Server re-renders m-2 under the same author, merging the two runs.
+    second.dataset.participantId = "p-1"
+    hook.updated()
+
+    expect(runEnds(el)).toEqual([false, true])
+    expect(groupings(el)).toEqual([false, true])
+  })
+
+  // Task 019ffe5e stage 3 — the JS half of the reclaimed-height guard.
+  //
+  // #733 got a grouped one-line row from 66px to 31px by taking geometry
+  // AWAY from this hook: it used to hide the grouped avatar with an inline
+  // `visibility: hidden`, which conceals the picture while its 47px box
+  // holds the row open, and no stylesheet rule can get under a ghost that
+  // an inline style is propping up. The hook now only says WHICH rows
+  // continue a run; app.css decides what one looks like.
+  //
+  // The e2e guard in `e2e/tests/chat_message_density.spec.ts` measures the
+  // resulting 31px, but it can only see the final number, not who chose
+  // it. This sees who chose it. The regression it catches is a future
+  // "just hide the avatar in the hook" patch, which is the natural shape
+  // for that fix to take and would put the dead space straight back while
+  // the class assertions above all stayed green.
+  it("writes no inline geometry — the stylesheet owns what a grouped row looks like", () => {
+    const el = fakeList({
+      rows: [
+        fakeRow("m-1", "p-1"),
+        fakeRow("m-2", "p-1"),
+        fakeRow("m-3", "p-1"),
+        fakeRow("m-4", "p-2"),
+      ],
+    })
+    const hook = buildHook(el)
+
+    hook.mounted()
+
+    // Positive control: grouping really did run on these rows, so the
+    // "no inline style" assertion below is a statement about a hook that
+    // did its job rather than one that never executed.
+    expect(groupings(el)).toEqual([false, true, true, false])
+
+    for (const row of el.rows) {
+      expect(
+        Object.keys(row.style),
+        `applyGrouping wrote inline style ${JSON.stringify(row.style)} on ` +
+          `${row.dataset.messageId}. Row geometry belongs in app.css — an ` +
+          `inline style can only hide something, never reclaim its space.`,
+      ).toEqual([])
+    }
   })
 })

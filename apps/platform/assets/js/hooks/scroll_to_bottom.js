@@ -211,13 +211,32 @@ const ScrollToBottom = {
     };
     hold();
   },
-  // Walk visible message rows; if the participant matches the previous row,
-  // collapse the avatar + header for a compact grouped look.
+  // Walk visible message rows and mark where each author's RUN starts and
+  // ends. A run is a maximal block of consecutive rows from one participant.
   //
-  // This only decides WHICH rows are continuations. What a continuation row
-  // looks like lives in app.css under `.message-row--grouped`, because the
-  // previous inline-style version could only hide things, and hiding is not
-  // the same as reclaiming the space:
+  // Two classes, both driven off the same single pass:
+  //
+  //   `message-row--grouped`  this row continues the author above it, so its
+  //                           avatar + header collapse for a compact look.
+  //   `message-row--run-end`  nothing after this row continues it — the next
+  //                           row is a different author, or there is no next
+  //                           row at all.
+  //
+  // There is deliberately no third class for "first in run": that is simply a
+  // row WITHOUT `--grouped`. A single-message run therefore carries no
+  // `--grouped` and does carry `--run-end`, which is exactly what lets it keep
+  // full rounding with no special case.
+  //
+  // Both are set with `classList.toggle(name, bool)` rather than `add`. When
+  // the server re-renders a row with a new author, a row that has stopped
+  // being a continuation — or stopped being a run end — has to be UNmarked;
+  // a bare `add` leaves the stale class behind and the row keeps rendering as
+  // something it no longer is.
+  //
+  // This only decides WHICH rows are continuations and boundaries. What those
+  // rows look like lives in app.css, because the previous inline-style version
+  // could only hide things, and hiding is not the same as reclaiming the
+  // space:
   //
   //   `avatar.style.visibility = "hidden"` made the avatar invisible while it
   //   went on reserving its full 47px of row height. A one-line follow-up
@@ -230,11 +249,19 @@ const ScrollToBottom = {
     const rows = Array.from(this.el.querySelectorAll("[data-participant-id]"));
     let prevParticipantId = null;
 
-    rows.forEach((row) => {
+    rows.forEach((row, i) => {
       const pid = row.dataset.participantId;
       const grouped = Boolean(pid) && pid === prevParticipantId;
 
+      // Look one row ahead rather than back-patching the previous row, so
+      // this stays a single forward pass. A row with no participant id is
+      // its own run of one: it never continues anything and nothing
+      // continues it, so it always ends a run.
+      const nextPid = rows[i + 1]?.dataset.participantId;
+      const runEnd = !(Boolean(pid) && nextPid === pid);
+
       row.classList.toggle("message-row--grouped", grouped);
+      row.classList.toggle("message-row--run-end", runEnd);
 
       prevParticipantId = pid || null;
     });

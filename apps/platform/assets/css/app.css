@@ -2012,6 +2012,104 @@ body, .font-fabrikam {
   padding-bottom: 0.125rem;
 }
 
+/* ── A run renders as one block ───────────────────────────────────────
+   Companion to the marking pass above. `--grouped` and `--run-end` say
+   WHERE a run starts and ends; these rules are what make the run look like
+   one object rather than a stack of separate cards.
+
+   Per the design direction "a run of your own messages should read as one
+   block", this is a GEOMETRY change and nothing else. The own-message tint
+   keeps the exact value it already had, in both themes — only its EXTENT
+   changes, one fill spanning the run instead of one fill per row. No
+   border around the run, no deeper tint for grouped rows, no padding given
+   back to "breathe", no tail notch on the last row: each of those was
+   drafted and cut in the direction's own self-critique, so adding one is a
+   regression against the design rather than an improvement.
+
+   Two moves, and only two:
+
+     corners  `--radius-box` on the run's OUTER corners only. A row that
+              does not continue the row above opens the run and rounds its
+              TOP; a `--run-end` row closes it and rounds its BOTTOM; where
+              two rows meet mid-run, both edges are square. A lone message
+              opens and closes its own run, so it keeps full rounding with
+              no special case — which is the sign the rule is the right one.
+
+     seams    zero the 4px `space-y-1` gap BETWEEN rows of one run so the
+              fill is unbroken. Runs stay 4px apart, which the direction
+              says should do all the separating.
+
+   Everything below is written as "fully rounded by default, square only
+   what is provably mid-run", rather than "square by default, round the
+   ends". Both describe the same finished list, but only this one is safe
+   before the socket connects: the dead render reaches the browser with no
+   grouping classes on any row, and under a square-by-default rule every
+   one of those rows would read as mid-run and the whole list would render
+   as rounded-top/square-bottom tabs until the LiveView hook mounts. With
+   the default rounded, an unmarked row renders exactly as it does today.
+
+   `.msg-agent` is excluded throughout. An agent message is not a tinted
+   bubble but a left-accent card with its own `border-radius`
+   (`0 0.5rem 0.5rem 0`) and its own `margin: 2px 0`; running this shape
+   over it would flatten the accent edge it is identified by. It is also
+   unlayered at the same specificity, so without the exclusion these rules
+   would win over it on source order alone, silently. Agent runs are left
+   exactly as they are.
+
+   `[data-participant-id]` is the row handle rather than a positional `*`:
+   it is the same attribute `applyGrouping` selects on, so CSS and JS agree
+   on what counts as a row. */
+#message-list > [data-participant-id]:not(.msg-agent) {
+  --run-radius-top: var(--radius-box, 1rem);
+  --run-radius-bottom: var(--radius-box, 1rem);
+}
+
+/* Both boxes that paint a background have to take the run's shape, or the
+   inner one re-draws the seam the outer one just lost. The row div carries
+   the own-message tint (`bg-base-200/60`, set in chat_message.ex) plus
+   `rounded-2xl`; `.message-row-inner` carries its own `rounded-2xl` and the
+   `hover:bg-base-200/40` fill. Driving both off the same two custom
+   properties — which inherit from the row to the inner — means the two
+   cannot disagree about where a corner is. */
+#message-list > [data-participant-id]:not(.msg-agent),
+#message-list > [data-participant-id]:not(.msg-agent) > .message-row-inner {
+  border-radius:
+    var(--run-radius-top) var(--run-radius-top)
+    var(--run-radius-bottom) var(--run-radius-bottom);
+}
+
+/* Continues the row above, so square where the two meet. A positive test on
+   a class only the grouping pass sets, so an unmarked row keeps the default
+   rounding. `margin-block-start` is belt-and-braces — see the note on the
+   trailing edge below. */
+#message-list > [data-participant-id].message-row--grouped:not(.msg-agent) {
+  --run-radius-top: 0;
+  margin-block-start: 0;
+}
+
+/* Something continues below, so square that edge and drop the trailing 4px.
+   This is the seam rule, and it is on the row ABOVE the join rather than
+   the one below it because Tailwind v4 compiles `space-y-1` to
+   `margin-block-end` on `:where(& > :not(:last-child))` — the trailing
+   margin of every row except the last — where v3 put a leading margin on
+   every row after the first. So the gap visible between two rows of a run
+   belongs to the upper row, and the rows that own a gap needing removal are
+   exactly the ones something continues: every row that is not a run end.
+   (Equivalent to testing `--grouped` on the row below: both flags fall out
+   of the same `pid === prevPid` comparison in `applyGrouping`.)
+
+   The negative test is why this rule alone needs the
+   `:has(.message-row--run-end)` gate. It reads "the grouping pass has run
+   at least once", and it is true for any non-empty list once it has, since
+   the final row can never have anything following it and so always ends a
+   run. Without the gate, the dead render — where no row carries the class —
+   would match every row. */
+#message-list:has(.message-row--run-end)
+  > [data-participant-id]:not(.msg-agent):not(.message-row--run-end) {
+  --run-radius-bottom: 0;
+  margin-block-end: 0;
+}
+
 /* Scrim with backdrop blur. Fallback: solid semi-transparent background
    for browsers without backdrop-filter support (older Mobile Safari). */
 .longpress-scrim {
