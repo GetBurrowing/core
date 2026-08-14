@@ -232,7 +232,7 @@ defmodule Platform.Tasks.TaskReferenceTest do
       FROM tasks AS source
       CROSS JOIN LATERAL regexp_matches(
         coalesce(source.description, ''),
-        '(019[a-f0-9]{5}-[a-f0-9]{4}-7[a-f0-9]{3}-[a-f0-9]{4}-[a-f0-9]{12})',
+        '([a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})',
         'gi'
       ) AS m(captures)
       JOIN tasks AS target ON target.id::text = lower(m.captures[1])
@@ -261,7 +261,10 @@ defmodule Platform.Tasks.TaskReferenceTest do
          %{source: source} do
       # Overwrite the description with a valid-shaped UUIDv7 that doesn't
       # match any existing task — the JOIN must drop it.
-      ghost_id = "019abcdef-1234-7abc-89ab-cdef01234567"
+      # Well-formed UUIDv7 (so the regex genuinely matches it) that is not
+      # a row in `tasks` — the assertion below must be earned by the JOIN
+      # dropping it, not by the pattern failing to match at all.
+      ghost_id = "019abcde-1234-7abc-89ab-cdef01234567"
 
       {:ok, _} =
         Tasks.update_task(source, %{
@@ -276,7 +279,7 @@ defmodule Platform.Tasks.TaskReferenceTest do
       FROM tasks AS source
       CROSS JOIN LATERAL regexp_matches(
         coalesce(source.description, ''),
-        '(019[a-f0-9]{5}-[a-f0-9]{4}-7[a-f0-9]{3}-[a-f0-9]{4}-[a-f0-9]{12})',
+        '([a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})',
         'gi'
       ) AS m(captures)
       JOIN tasks AS target ON target.id::text = lower(m.captures[1])
@@ -307,7 +310,7 @@ defmodule Platform.Tasks.TaskReferenceTest do
       FROM tasks AS source
       CROSS JOIN LATERAL regexp_matches(
         coalesce(source.description, ''),
-        '(019[a-f0-9]{5}-[a-f0-9]{4}-7[a-f0-9]{3}-[a-f0-9]{4}-[a-f0-9]{12})',
+        '([a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})',
         'gi'
       ) AS m(captures)
       JOIN tasks AS target ON target.id::text = lower(m.captures[1])

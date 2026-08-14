@@ -55,16 +55,29 @@ defmodule Platform.Tasks.ReferencesTest do
     end
 
     test "ignores things that only look UUID-ish" do
-      # Not starting with 019 → not a task id.
-      refute Enum.any?(References.extract_uuids("018f3dbb-3843-70fb-962c-d26b6d1eefcd"), fn _ ->
-               true
-             end)
-
       # Version nibble != 7 → not UUIDv7.
       assert References.extract_uuids("019f3dbb-3843-40fb-962c-d26b6d1eefcd") == []
 
+      # Variant nibble outside [89ab] → not RFC 9562 compliant.
+      assert References.extract_uuids("019f3dbb-3843-70fb-762c-d26b6d1eefcd") == []
+
       # Missing groups.
       assert References.extract_uuids("019f3dbb-38430-70fb-962c") == []
+
+      # Wrong group widths (9 hex in the first group).
+      assert References.extract_uuids("019abcdef-1234-7abc-89ab-cdef01234567") == []
+    end
+
+    test "matches a UUIDv7 whose timestamp prefix is outside the 019 era" do
+      # The leading hex digits of a UUIDv7 are a wall-clock millisecond
+      # timestamp. Extraction must not be pinned to the prefix that
+      # happened to be current when this scanner was written — task ids
+      # minted from 2026-08-14 onward begin `01a0…`, and earlier ones
+      # begin `018…`. Both are task ids.
+      later = "01a04758-9abc-7def-8123-456789abcdef"
+      earlier = "018f3dbb-3843-70fb-962c-d26b6d1eefcd"
+
+      assert References.extract_uuids("see #{later} and #{earlier}") == [later, earlier]
     end
 
     test "matches at end-of-string with no trailing punctuation" do

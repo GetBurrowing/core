@@ -46,11 +46,20 @@ defmodule Platform.Tasks.References do
   alias Platform.Tasks.Task
   alias Platform.Tasks.TaskReference
 
-  # UUIDv7 shape (task ids across the platform): `019` prefix, version
-  # nibble `7`, standard 8-4-4-4-12 grouping. Case-insensitive because
-  # descriptions may quote the id in either case; we lower-case the
-  # captured value for a stable set-diff.
-  @uuid_regex ~r/\b(019[a-f0-9]{5}-[a-f0-9]{4}-7[a-f0-9]{3}-[a-f0-9]{4}-[a-f0-9]{12})\b/i
+  # UUIDv7 shape (task ids across the platform), per RFC 9562: standard
+  # 8-4-4-4-12 grouping, version nibble `7`, variant nibble `[89ab]`.
+  #
+  # This deliberately does NOT pin the leading hex digits. The first 12
+  # hex characters of a UUIDv7 are a 48-bit millisecond timestamp, so any
+  # literal prefix is a wall-clock expiry date: the original `019` pin
+  # matched only ids minted before 2026-08-14T11:19:55Z, after which
+  # freshly generated task ids begin `01a0…` and stopped being extracted
+  # at all. Shape is validated here; whether an extracted id is a real
+  # task is decided by `filter_existing/1` against the `tasks` table.
+  #
+  # Case-insensitive because descriptions may quote the id in either
+  # case; we lower-case the captured value for a stable set-diff.
+  @uuid_regex ~r/\b([a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})\b/i
 
   @doc """
   Return the current UUIDv7 regex (exposed so tests can reference the
