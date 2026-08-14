@@ -1274,3 +1274,190 @@ describe("MeetingClient -- local camera mute shows the avatar backdrop", () => {
     expect(hook._localCameraOff(room)).toBe(true)
   })
 })
+
+// ── Live-navigation audio survival (task 019ffe99) ───────────────────────
+//
+// The bug only manifests ACROSS a LiveView swap: `/meetings` -> `/org_memory`
+// sits inside `live_session :authenticated`, so it is a live redirect with no
+// page reload. LiveView removes `#meeting-media`, taking every remote <audio>
+// child with it, while the LiveKit Room happily survives on
+// window.__livekit_room. A test that never navigates cannot catch that —
+// which is exactly how it shipped. So this block builds the media, asserts it
+// is really there (positive control), THEN removes `#meeting-media` and calls
+// destroyed(), and only then asserts survival.
+//
+// Harness note: `Phoenix.LiveViewTest` cannot observe any of this. These
+// <audio> elements are minted client-side by `track.attach()` and never
+// appear in server-rendered HTML, so a server-side live_redirect test would
+// assert something adjacent and prove nothing. The end-to-end coverage is the
+// e2e_behavior cases driven through CDP against a live two-party meeting.
+
+function camelize(name) {
+  return name.replace(/-([a-z])/g, (_m, c) => c.toUpperCase())
+}
+
+function descendants(node) {
+  return node.children.flatMap((c) => [c, ...descendants(c)])
+}
+
+// fakeNode + the bits `_mediaContainer()` / the audio branch actually touch:
+// id, setAttribute, a `[data-audio-track="..."]` querySelector, and a REAL
+// `isConnected` computed by walking to the root (so removing an ancestor
+// genuinely disconnects the subtree, the way a LiveView swap does).
+function navNode(attrs = {}) {
+  const node = fakeNode(attrs)
+  node.tagName = "DIV"
+  node.id = ""
+  node.setAttribute = function (name, value) {
+    if (name === "id") this.id = value
+    else if (name.startsWith("data-")) this.dataset[camelize(name.slice(5))] = value
+    else this[name] = value
+  }
+  node.querySelector = function (sel) {
+    const m = /^\[data-audio-track="(.+)"\]$/.exec(sel)
+    if (!m) return null
+    return descendants(this).find((n) => n.dataset.audioTrack === m[1]) || null
+  }
+  Object.defineProperty(node, "isConnected", {
+    get() {
+      let n = this
+      while (n.parentElement) n = n.parentElement
+      return n._isBody === true
+    },
+  })
+  return node
+}
+
+function buildNavDocument({ meetingMedia = true } = {}) {
+  const body = navNode()
+  body._isBody = true
+  const doc = {
+    body,
+    createElement(tag) {
+      const n = navNode()
+      n.tagName = String(tag).toUpperCase()
+      return n
+    },
+    getElementById(id) {
+      return descendants(body).find((n) => n.id === id) || null
+    },
+    querySelector() {
+      return null
+    },
+  }
+  if (meetingMedia) doc._media = addMeetingMedia(body)
+  return doc
+}
+
+// The server-rendered sink (meeting_live.html.heex:142 / partials.ex:1377).
+function addMeetingMedia(body) {
+  const media = navNode()
+  media.id = "meeting-media"
+  body.appendChild(media)
+  return media
+}
+
+function fakeAudioTrack(sid) {
+  return {
+    kind: "audio",
+    sid,
+    attachCalls: [],
+    detachCalls: [],
+    attach() {
+      const el = globalThis.document.createElement("audio")
+      this.attachCalls.push(el)
+      return el
+    },
+    detach(el) {
+      this.detachCalls.push(el === undefined ? null : el)
+      return el ? [el] : []
+    },
+  }
+}
+
+function mountNavHook() {
+  const hook = Object.create(MeetingClient)
+  hook.el = navNode()
+  hook.handleEvent = () => {}
+  hook.mounted()
+  return hook
+}
+
+function sinkAudioFor(sid) {
+  const sink = globalThis.document.getElementById("meeting-audio-sink")
+  if (!sink) return []
+  return descendants(sink).filter((n) => n.dataset.audioTrack === sid)
+}
+
+describe("MeetingClient — remote audio survives a LiveView navigation", () => {
+  beforeEach(() => {
+    globalThis.console = globalThis.console || { warn() {}, error() {} }
+    globalThis.window = {
+      matchMedia: () => ({
+        matches: true,
+        addEventListener() {},
+        removeEventListener() {},
+      }),
+      addEventListener() {},
+      removeEventListener() {},
+    }
+    globalThis.document = buildNavDocument()
+  })
+
+  afterEach(() => {
+    delete globalThis.document
+    delete globalThis.window
+  })
+
+  it("keeps the remote <audio> connected when #meeting-media is swapped away, and does not duplicate it on the way back", () => {
+    const hook = mountNavHook()
+    const track = fakeAudioTrack("TR_remote_1")
+    const remote = { identity: "bob", isLocal: false }
+
+    hook._attachTrack(track, remote)
+
+    // (1) POSITIVE CONTROL — there really is audio in the document before we
+    // navigate. An assertion that passes because no audio ever existed would
+    // prove nothing.
+    expect(track.attachCalls).toHaveLength(1)
+    const el = track.attachCalls[0]
+    expect(el.isConnected).toBe(true)
+    expect(el.parentElement).not.toBeNull()
+
+    // (2) THE SWAP — LiveView going /meetings -> /org_memory (which declares
+    // no #meeting-media) removes the node and destroys the hook.
+    globalThis.document._media.remove()
+    hook.destroyed()
+
+    // (3) SURVIVAL — same element, still connected, parked in the body-level
+    // sink, and the track was never detached.
+    expect(el.isConnected).toBe(true)
+    expect(el.parentElement).toBe(
+      globalThis.document.getElementById("meeting-audio-sink"),
+    )
+    expect(track.detachCalls).toEqual([])
+
+    // (4) NAVIGATE BACK — re-render #meeting-media, re-mount the hook, re-run
+    // the attach path for the SAME track. Reparent, never re-attach.
+    globalThis.document._media = addMeetingMedia(globalThis.document.body)
+    const hook2 = mountNavHook()
+    hook2._attachTrack(track, remote)
+
+    expect(track.attachCalls).toHaveLength(1)
+    expect(track.detachCalls).toEqual([])
+    expect(sinkAudioFor("TR_remote_1")).toEqual([el])
+    expect(el.parentElement).toBe(
+      globalThis.document.getElementById("meeting-audio-sink"),
+    )
+  })
+
+  it("still attaches zero audio elements for the LOCAL participant (echo-loop guard)", () => {
+    const hook = mountNavHook()
+    const local = fakeAudioTrack("TR_local")
+
+    hook._attachTrack(local, { identity: "me", isLocal: true })
+
+    expect(local.attachCalls).toEqual([])
+    expect(sinkAudioFor("TR_local")).toEqual([])
+  })
+})

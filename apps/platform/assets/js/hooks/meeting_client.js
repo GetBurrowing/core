@@ -20,6 +20,12 @@ const MeetingClient = {
   mounted() {
     this._room = null
     this._tiles = new Map()
+    // Remote <audio> elements, keyed by `track.sid || track.mediaStreamID`.
+    // The MAP is per-instance bookkeeping; the ELEMENTS deliberately outlive
+    // the hook — they live in the body-level `#meeting-audio-sink` so a
+    // LiveView live-navigation swap (which removes `#meeting-media`) cannot
+    // take remote audio with it. destroyed() clears the Map, never the nodes.
+    this._audioEls = new Map()
     // Per-instance bookkeeping for the Room we've wired listeners onto,
     // and the listener refs themselves. Cleared in destroyed() so a
     // re-mount against the surviving window-pinned Room doesn't
@@ -96,6 +102,12 @@ const MeetingClient = {
     // `livekit:state` events firing per RoomEvent. (task 019ee06b stage 2
     // v2 fix.)
     this._releaseRoomListeners()
+
+    // Clear the MAP, never the DOM elements. The remote <audio> nodes live in
+    // the body-level `#meeting-audio-sink` and must outlive this hook — that
+    // is the entire point of the fix. Do NOT re-wire the detach side here:
+    // re-wiring resurrects the global-detach race fixed in 019e42f6.
+    this._audioEls?.clear()
 
     window.removeEventListener("pagehide", this._onPageHide)
     window.removeEventListener("beforeunload", this._onPageHide)
@@ -750,8 +762,26 @@ const MeetingClient = {
     )
   },
 
+  // Lazily-created, JS-owned, body-level audio sink. Previously this returned
+  // `#meeting-media`, which is server-rendered by meeting_live.html.heex and
+  // chat/partials.ex — but NOT by OrgMemoryLive. All three surfaces sit in
+  // `live_session :authenticated`, so navigating between them is a live
+  // redirect with no page reload: LiveView swaps the DOM, `#meeting-media`
+  // is removed, and every remote <audio> child goes with it while the
+  // LiveKit Room happily survives on window.__livekit_room. No LiveView
+  // renders `#meeting-audio-sink`, so no morphdom patch and no live-nav
+  // swap can remove it.
   _mediaContainer() {
-    return document.getElementById("meeting-media") || document.body
+    const existing = document.getElementById("meeting-audio-sink")
+    if (existing) return existing
+
+    const sink = document.createElement("div")
+    sink.id = "meeting-audio-sink"
+    if (sink.style) sink.style.display = "none"
+    // Guard a missing document.body (the vitest fake document): return the
+    // sink itself rather than throwing.
+    if (document.body) document.body.appendChild(sink)
+    return sink
   },
 
   // On MeetingLive (`/meetings`) the `#meeting-participants` grids no longer
@@ -867,10 +897,36 @@ const MeetingClient = {
       el.muted = participant.isLocal === true
       wrapper.appendChild(el)
     } else if (track.kind === Track.Kind.Audio) {
+      // STAYS: attaching local audio creates an echo loop.
       if (participant.isLocal) return
+
+      const sink = this._mediaContainer()
+      const key = track.sid || track.mediaStreamID
+      // Map first; fall back to the sink itself, because destroyed() clears
+      // the Map while the elements survive — after a live-nav re-mount the
+      // element is still parked in the sink and must be re-adopted, not
+      // re-attached (that is what would double the audio).
+      const mapped = key ? this._audioEls?.get(key) : null
+      const existing =
+        mapped ||
+        (key && sink.querySelector
+          ? sink.querySelector(`[data-audio-track="${key}"]`)
+          : null)
+
+      // reparent, do not re-attach — `track.attach()` called repeatedly
+      // creates duplicate elements and doubled audio.
+      if (existing && existing.isConnected !== false && existing.parentElement) {
+        sink.appendChild(existing)
+        if (key) this._audioEls?.set(key, existing)
+        return
+      }
+
       const el = track.attach()
       el.autoplay = true
-      this._mediaContainer().appendChild(el)
+      if (key && el.setAttribute) el.setAttribute("data-audio-track", key)
+      if (key && el.dataset) el.dataset.audioTrack = key
+      sink.appendChild(el)
+      if (key) this._audioEls?.set(key, el)
     }
   },
 
