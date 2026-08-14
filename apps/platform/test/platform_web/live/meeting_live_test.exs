@@ -1330,10 +1330,25 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> element(~s([data-stage-mode-button="canvas"]))
         |> render_click()
 
-      # The data-canvas-id attribute on the center stage points at the
+      # The data-canvas-id attribute on the CENTER STAGE points at the
       # newer canvas — older canvases lose to insertion-order tail.
-      assert html =~ ~s(data-canvas-id="#{newer.id}")
-      refute html =~ ~s(data-canvas-id="#{older.id}")
+      #
+      # Scoped to the stage container as of stage 3 (task 019ff704). The
+      # bare `refute html =~ data-canvas-id="<older>"` was correct while
+      # the stage was the only element carrying that attribute; the canvas
+      # picker now lists every canvas in the space, each row carrying its
+      # own `data-canvas-id`, so the unscoped refute was asserting "the
+      # older canvas is not offered anywhere", which is not what this test
+      # is about and is no longer true by design.
+      assert shown_canvas_id(html) == newer.id
+      refute shown_canvas_id(html) == older.id
+
+      # The older canvas is still REACHABLE — it is in the picker. This is
+      # the other half of the scoping: it pins what replaced the old
+      # refute rather than just deleting an assertion.
+      assert count(html, ~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"])) ==
+               1
+
       # Empty-state CTA does NOT render when a canvas is present.
       refute html =~ "No canvas yet"
     end
@@ -9636,5 +9651,1071 @@ defmodule PlatformWeb.MeetingLiveTest do
 
     [readout] = Regex.run(~r/<span[^>]*data-role="intent-confidence"[^>]*>.*?<\/span>/s, row)
     readout
+  end
+
+  # A canvas in `space`, authored by a throwaway chat participant. The
+  # participant row is the canvas author, NOT a roster fixture for the
+  # tile — the tile never needs one, which is the point of the leak
+  # assertions below.
+  defp seed_canvas(space, attrs \\ %{}) do
+    {:ok, author} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: Ecto.UUID.generate(),
+        display_name: "Canvas Author",
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, canvas} =
+      Chat.create_canvas(
+        Map.merge(
+          %{
+            "space_id" => space.id,
+            "created_by" => author.id,
+            "title" => "Meeting notes"
+          },
+          attrs
+        )
+      )
+
+    canvas
+  end
+
+  # A canonical canvas document whose only text is `token`, so an
+  # assertion on the token is an assertion that THIS document reached the
+  # tile — not that some unrelated markup happens to contain a substring.
+  defp canvas_document_with(token, revision) do
+    %{
+      "version" => 1,
+      "revision" => revision,
+      "root" => %{
+        "id" => "root",
+        "type" => "stack",
+        "props" => %{},
+        "children" => [
+          %{
+            "id" => "block-1",
+            "type" => "markdown",
+            "props" => %{"content" => token},
+            "children" => []
+          }
+        ]
+      },
+      "theme" => %{},
+      "bindings" => %{},
+      "meta" => %{}
+    }
+  end
+
+  defp frag(html), do: LazyHTML.from_fragment(html)
+
+  defp count(html, selector), do: html |> frag() |> LazyHTML.query(selector) |> Enum.count()
+
+  # ── Canvas tile on the meeting stage (task 019ff704 stage 2) ─────────────
+  #
+  # The tile is a UI slot sourced from LiveView assigns. Two things have to
+  # hold at once and each is asserted separately below: it must SHOW the
+  # canvas (and keep showing the current one, live), and it must never be
+  # mistaken for a roster entry by anything that counts participants.
+  describe "canvas tile in the gallery grid and the bottom strip" do
+    setup %{conn: conn} do
+      {meeting, space} =
+        create_meeting(%{
+          slug: "canvas-tile-#{System.unique_integer([:positive])}",
+          name: "Canvas Tile Stage"
+        })
+
+      {conn, _user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space}
+    end
+
+    test "renders exactly one canvas tile, as the LAST cell of the gallery grid", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      canvas = seed_canvas(space)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # One cell for the human, one for the canvas — same wrapper, so the
+      # grid geometry stays uniform.
+      assert count(html, ~s([data-gallery-grid] [data-gallery-cell])) == 2
+      assert count(html, ~s([data-gallery-grid] [data-role="canvas-tile"])) == 1
+
+      cells = html |> frag() |> LazyHTML.query(~s([data-gallery-grid] [data-gallery-cell]))
+      last_cell = cells |> Enum.to_list() |> List.last() |> LazyHTML.to_html()
+
+      # LAST, not merely present: the canvas tile is in the final cell and
+      # the face tile is not.
+      assert count(last_cell, ~s([data-role="canvas-tile"])) == 1
+      assert count(last_cell, ~s(.meeting-video-tile)) == 0
+
+      # Distinct dom id prefix from the strip instance.
+      assert html
+             |> frag()
+             |> LazyHTML.query(~s([data-gallery-grid] [data-role="canvas-tile"]))
+             |> LazyHTML.attribute("id") == ["gallery-canvas-tile-#{canvas.id}"]
+    end
+
+    test "the canvas tile occupies the same cell geometry as a face tile, whatever it contains",
+         %{conn: conn, meeting: meeting, space: space} do
+      # Rowan rejected the first build partly because content dictated the
+      # tile's size: a tall canvas grew its cell and pushed a neighbouring
+      # face tile out of line. Two canvases are rendered here — a one-liner
+      # and a 200-block monster — and the assertion is that the tile's
+      # geometry-bearing attributes are IDENTICAL between them. The small
+      # fixture alone would pass against the rejected build, which is exactly
+      # why both are here.
+      seed_meeting_presence(space, "user", "Ada Human")
+
+      tile_geometry = fn doc ->
+        {m, s} =
+          create_meeting(%{
+            slug: "canvas-geo-#{System.unique_integer([:positive])}",
+            name: "Canvas Geometry"
+          })
+
+        seed_meeting_presence(s, "user", "Ada Human")
+        seed_canvas(s, %{"document" => doc})
+
+        {:ok, _view, html} = live(conn, ~p"/meetings/#{m.slug}")
+
+        frag = frag(html)
+
+        %{
+          # The tile's own classes: what it asks of its parent.
+          tile_class:
+            frag
+            |> LazyHTML.query(~s([data-gallery-grid] [data-role="canvas-tile"]))
+            |> LazyHTML.attribute("class"),
+          # The cell wrapper: the grid geometry it is placed into.
+          cell_class:
+            frag
+            |> LazyHTML.query(~s([data-gallery-grid] [data-gallery-cell]))
+            |> LazyHTML.attribute("class"),
+          # The grid shape: how many rows/cols the whole grid resolves to.
+          shape:
+            frag
+            |> LazyHTML.query(~s([data-gallery-grid]))
+            |> LazyHTML.attribute("data-gallery-grid-shape"),
+          html: html
+        }
+      end
+
+      small = tile_geometry.(canvas_document_with("one short line", 1))
+
+      big_doc = %{
+        "version" => 1,
+        "revision" => 2,
+        "root" => %{
+          "id" => "root",
+          "type" => "stack",
+          "props" => %{},
+          "children" =>
+            for i <- 1..200 do
+              %{
+                "id" => "b#{i}",
+                "type" => "markdown",
+                "props" => %{
+                  "content" => "Line #{i} " <> String.duplicate("lorem ipsum dolor sit amet ", 12)
+                },
+                "children" => []
+              }
+            end
+        },
+        "theme" => %{},
+        "bindings" => %{},
+        "meta" => %{}
+      }
+
+      large = tile_geometry.(big_doc)
+
+      # The fixtures really are different documents — without this the
+      # equality below could be two renders of the same thing.
+      assert large.html =~ "Line 200"
+      refute small.html =~ "Line 200"
+
+      assert small.tile_class == large.tile_class
+      assert small.cell_class == large.cell_class
+      assert small.shape == large.shape
+
+      # And the tile is placed in the SAME wrapper the face tiles use, so its
+      # sizing comes from the shared `[data-gallery-cell]` container query
+      # rather than from anything canvas-specific.
+      assert count(large.html, ~s([data-gallery-cell] > [data-role="canvas-tile"])) == 1
+      assert count(large.html, ~s([data-gallery-cell] > .meeting-video-tile)) == 1
+
+      # The document is out of flow inside the tile — the structural reason
+      # the equality above holds rather than a coincidence of class strings.
+      assert count(
+               large.html,
+               ~s([data-role="canvas-tile-content"].overflow-hidden [data-role="canvas-tile-preview"].absolute)
+             ) == 1
+    end
+
+    test "the grid shape accounts for the canvas cell without it becoming a participant", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      seed_canvas(space)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      shape =
+        html
+        |> frag()
+        |> LazyHTML.query(~s([data-gallery-grid]))
+        |> LazyHTML.attribute("data-gallery-grid-shape")
+
+      # One human + the canvas cell = a TWO-cell grid, even though the
+      # participant count is one. If the tile were laundered through the
+      # participant list this would read as the one-cell shape, and
+      # `data-gallery-tile-count` would read "2".
+      assert shape == [PlatformWeb.MeetingLive.gallery_grid_class(2, :shell)]
+      assert shape != [PlatformWeb.MeetingLive.gallery_grid_class(1, :shell)]
+
+      assert html
+             |> frag()
+             |> LazyHTML.query(~s([data-placeholder="center-stage"][data-gallery-tile-count]))
+             |> LazyHTML.attribute("data-gallery-tile-count") == ["1"]
+    end
+
+    test "no canvas means no tile in either surface", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert count(html, ~s([data-role="canvas-tile"])) == 0
+
+      canvas_html =
+        view |> element(~s([data-stage-mode-button="canvas"])) |> render_click()
+
+      assert count(canvas_html, ~s([data-role="canvas-tile"])) == 0
+      # The empty-state CTA stays the only canvas affordance.
+      assert count(canvas_html, ~s([data-empty-state="canvas"])) == 1
+    end
+
+    test "the bottom strip carries the tile in canvas mode under a distinct dom id", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      canvas = seed_canvas(space)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html = view |> element(~s([data-stage-mode-button="canvas"])) |> render_click()
+
+      assert count(html, ~s([data-pane="bottom-strip"] [data-role="canvas-tile"])) == 1
+
+      assert html
+             |> frag()
+             |> LazyHTML.query(~s([data-pane="bottom-strip"] [data-role="canvas-tile"]))
+             |> LazyHTML.attribute("id") == ["strip-canvas-tile-#{canvas.id}"]
+
+      # The strip is hidden in gallery mode, so exactly one instance is on
+      # screen at a time — the ids differ so morphdom mounts/destroys rather
+      # than moving the node between surfaces.
+      gallery_html = view |> element(~s([data-stage-mode-button="gallery"])) |> render_click()
+      assert count(gallery_html, ~s([data-pane="bottom-strip"])) == 0
+      assert count(gallery_html, ~s([data-role="canvas-tile"])) == 1
+    end
+
+    # ANTI-VACUITY. "A tile element exists" is satisfied by a tile that
+    # renders once at mount and never moves again — which is the exact
+    # failure this ticket exists to prevent. So: drive a REAL canvas write
+    # through `Chat.update_canvas/3` (the path `publish_canvas_updated/1`
+    # fires from), with a document whose only text is a freshly generated
+    # string, and assert that string reaches the TILE's own HTML on the
+    # SAME connected LiveView — having asserted it absent first, so the
+    # assertion cannot pass on a document that was always there.
+    test "the tile's content live-updates when its source canvas is patched", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      canvas = seed_canvas(space)
+
+      token = "canvas-tile-live-token-#{System.unique_integer([:positive])}"
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Direction control: absent BEFORE the patch, and the tile is on
+      # screen already (so a later pass cannot be explained by the tile
+      # simply appearing).
+      refute html =~ token
+      assert count(html, ~s([data-role="canvas-tile"])) == 1
+
+      {:ok, _updated} =
+        Chat.update_canvas(:system, canvas, %{
+          "document" => canvas_document_with(token, 2)
+        })
+
+      updated_html = render(view)
+
+      tile_text =
+        updated_html
+        |> frag()
+        |> LazyHTML.query(~s([data-role="canvas-tile"]))
+        |> LazyHTML.text()
+
+      assert tile_text =~ token
+
+      # And the transient just-changed marker is set — once, statically.
+      assert updated_html
+             |> frag()
+             |> LazyHTML.query(~s([data-role="canvas-tile"]))
+             |> LazyHTML.attribute("data-changed") == ["true"]
+    end
+
+    test "the tile never leaks into the human or agent tile counts, and mints no participant row",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Human")
+      seed_meeting_presence(space, "agent", "Helper Agent")
+      canvas = seed_canvas(space)
+
+      rows_before = Repo.aggregate(Platform.Chat.Participant, :count, :id)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = view |> element(~s([data-stage-mode-button="canvas"])) |> render_click()
+
+      # The tile lives in neither roster section.
+      assert count(html, ~s([data-section="humans"] [data-role="canvas-tile"])) == 0
+      assert count(html, ~s([data-section="agents"] [data-role="canvas-tile"])) == 0
+
+      # The declared counts match the tiles actually rendered in each
+      # section. Pinned against the rendered count rather than a literal
+      # because the viewer's own presence also lands in the humans section —
+      # what matters is that the canvas adds to NEITHER number.
+      strip = frag(html) |> LazyHTML.query(~s([data-pane="bottom-strip"]))
+      human_tiles = count(html, ~s([data-section="humans"] .meeting-video-tile))
+      assert human_tiles >= 1
+      assert LazyHTML.attribute(strip, "data-tile-count-humans") == [to_string(human_tiles)]
+      assert LazyHTML.attribute(strip, "data-tile-count-agents") == ["1"]
+      assert count(html, ~s([data-section="agents"] [data-agent-tile])) == 1
+
+      # ...and it is genuinely rendered, so the two refutes above are not
+      # vacuous.
+      assert count(html, ~s([data-section="canvas"] [data-role="canvas-tile"])) == 1
+
+      # Rendering the tile — and live-updating its canvas — inserts no
+      # `chat_participants` row.
+      #
+      # Measured as a DELTA against a control meeting with no canvas at
+      # all, not as an absolute count: mounting a meeting legitimately
+      # inserts the viewer's own participant row (the embedded chat surface
+      # joins), so an absolute count would fail for a reason that has
+      # nothing to do with the tile. Equal deltas is the statement that
+      # matters: the canvas costs zero rows.
+      {:ok, _updated} =
+        Chat.update_canvas(:system, canvas, %{
+          "document" => canvas_document_with("second-render-token", 3)
+        })
+
+      _ = render(view)
+      delta_with_canvas = Repo.aggregate(Platform.Chat.Participant, :count, :id) - rows_before
+
+      {control_meeting, control_space} =
+        create_meeting(%{
+          slug: "canvas-tile-control-#{System.unique_integer([:positive])}",
+          name: "No Canvas Stage"
+        })
+
+      seed_meeting_presence(control_space, "user", "Bea Human")
+      seed_meeting_presence(control_space, "agent", "Second Agent")
+      control_before = Repo.aggregate(Platform.Chat.Participant, :count, :id)
+
+      {:ok, control_view, control_html} = live(conn, ~p"/meetings/#{control_meeting.slug}")
+      _ = control_view |> element(~s([data-stage-mode-button="canvas"])) |> render_click()
+
+      # Control direction check: the control really has no tile, so the
+      # delta comparison is between a canvas surface and a canvas-free one.
+      assert count(control_html, ~s([data-role="canvas-tile"])) == 0
+
+      delta_without_canvas =
+        Repo.aggregate(Platform.Chat.Participant, :count, :id) - control_before
+
+      assert delta_with_canvas == delta_without_canvas
+    end
+
+    test "gallery_cell_count/2 adds the canvas cell without touching the participant count" do
+      assert PlatformWeb.MeetingLive.gallery_cell_count(0, false) == 0
+      assert PlatformWeb.MeetingLive.gallery_cell_count(0, true) == 1
+      assert PlatformWeb.MeetingLive.gallery_cell_count(3, false) == 3
+      assert PlatformWeb.MeetingLive.gallery_cell_count(3, true) == 4
+    end
+  end
+
+  # ── Per-session canvas selection + picker (task 019ff704 stage 3) ────────
+  #
+  # The picker exists so a participant can choose which canvas they are
+  # looking at. The selection is a per-socket assign, so the property that
+  # actually matters — one person's choice cannot move another person's
+  # view — is structural rather than enforced by a rule somewhere.
+  describe "canvas picker" do
+    setup %{conn: conn} do
+      {meeting, space} =
+        create_meeting(%{
+          slug: "canvas-picker-#{System.unique_integer([:positive])}",
+          name: "Canvas Picker"
+        })
+
+      {conn, _user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space}
+    end
+
+    # Two canvases with DISTINCT inserted_at. Same-timestamp fixtures make
+    # the "most recently created wins" assertion vacuous: with a tie, the
+    # ordering is whatever the query happens to return, so the assertion
+    # would pass against an implementation that picked either one.
+    defp seed_two_canvases(space) do
+      older = seed_canvas(space, %{"title" => "Older canvas"})
+
+      # Push the first canvas a full minute into the past. Two back-to-back
+      # inserts can land close enough that the ordering is not observably
+      # different, and a tie is exactly what makes the "newest wins"
+      # assertion vacuous.
+      older =
+        older
+        |> Ecto.Changeset.change(%{inserted_at: DateTime.add(DateTime.utc_now(), -60, :second)})
+        |> Repo.update!()
+
+      newer = seed_canvas(space, %{"title" => "Newer canvas"})
+
+      # Make created-order and updated-order DISAGREE: the older canvas is
+      # the most recently TOUCHED. Without this the two orderings pick the
+      # same canvas and the "most-recently-created" assertion is vacuous —
+      # a mutation switching the default to `updated_at` survives it. That
+      # mutation is not hypothetical: it is the change DECISION 2
+      # explicitly rejects, so the test has to be able to see it.
+      older =
+        older
+        |> Ecto.Changeset.change(%{updated_at: DateTime.utc_now()})
+        |> Repo.update!()
+
+      {older, newer}
+    end
+
+    defp open_canvas_mode(conn, meeting) do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = view |> element(~s([data-stage-mode-button="canvas"])) |> render_click()
+      {view, html}
+    end
+
+    defp shown_canvas_id(html) do
+      html
+      |> frag()
+      |> LazyHTML.query(~s([data-placeholder="center-stage"][data-canvas-id]))
+      |> LazyHTML.attribute("data-canvas-id")
+      |> List.first()
+    end
+
+    test "lists every non-deleted canvas in the space", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {older, newer} = seed_two_canvases(space)
+
+      # A soft-deleted canvas is the direction control: without it, a
+      # picker that simply listed everything would pass.
+      deleted = seed_canvas(space, %{"title" => "Deleted canvas"})
+      {:ok, _} = Chat.delete_canvas(deleted)
+
+      {_view, html} = open_canvas_mode(conn, meeting)
+
+      ids =
+        html
+        |> frag()
+        |> LazyHTML.query(~s([data-role="canvas-picker-option"]))
+        |> LazyHTML.attribute("data-canvas-id")
+        |> Enum.sort()
+
+      assert ids == Enum.sort([older.id, newer.id])
+      refute deleted.id in ids
+
+      assert count(html, ~s([data-role="canvas-picker"])) == 1
+      assert html =~ "Older canvas"
+      assert html =~ "Newer canvas"
+      refute html =~ "Deleted canvas"
+    end
+
+    test "with no explicit selection the default is the most-recently-CREATED canvas", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {older, newer} = seed_two_canvases(space)
+
+      # The fixture makes the two candidate rules DISAGREE, which is the
+      # only condition under which this assertion tests anything:
+      #   * most recently CREATED  -> newer  (what we want)
+      #   * most recently UPDATED  -> older  (the rejected alternative)
+      assert DateTime.compare(older.inserted_at, newer.inserted_at) == :lt
+      assert DateTime.compare(older.updated_at, newer.updated_at) == :gt
+
+      {_view, html} = open_canvas_mode(conn, meeting)
+
+      assert shown_canvas_id(html) == newer.id
+      refute shown_canvas_id(html) == older.id
+    end
+
+    test "clicking an option changes the canvas the stage container shows", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {older, newer} = seed_two_canvases(space)
+
+      {view, html} = open_canvas_mode(conn, meeting)
+
+      # Direction control: the OLDER canvas is not what is shown before
+      # the click, so a later pass cannot be the default agreeing with us.
+      assert shown_canvas_id(html) == newer.id
+
+      after_click =
+        view
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> render_click()
+
+      assert shown_canvas_id(after_click) == older.id
+
+      # And the picker's own label follows the selection, so the control
+      # never claims to be showing something it is not.
+      assert after_click
+             |> frag()
+             |> LazyHTML.query(~s([data-role="canvas-picker-current"]))
+             |> LazyHTML.text() =~ "Older canvas"
+
+      # Choosing again goes back — the selection is not one-way.
+      back =
+        view
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{newer.id}"]))
+        |> render_click()
+
+      assert shown_canvas_id(back) == newer.id
+    end
+
+    test "an unknown canvas_id is ignored and the selection is unchanged", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {older, newer} = seed_two_canvases(space)
+
+      {view, _html} = open_canvas_mode(conn, meeting)
+
+      # Establish a selection first, so "unchanged" is a real state and
+      # not just "still the default" — an implementation that reset to the
+      # default on unknown input would pass without this.
+      after_pick =
+        view
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> render_click()
+
+      assert shown_canvas_id(after_pick) == older.id
+
+      # A canvas that exists but lives in ANOTHER space: the clamp is
+      # about membership of THIS meeting's set, not about existence.
+      {_other_meeting, other_space} =
+        create_meeting(%{slug: "other-#{System.unique_integer([:positive])}", name: "Other"})
+
+      foreign = seed_canvas(other_space, %{"title" => "Foreign canvas"})
+
+      for bogus <- [Ecto.UUID.generate(), foreign.id, "not-a-uuid", ""] do
+        after_bogus = render_click(view, "select_meeting_canvas", %{"canvas_id" => bogus})
+
+        assert shown_canvas_id(after_bogus) == older.id,
+               "canvas_id #{inspect(bogus)} moved the selection"
+
+        refute after_bogus =~ "Foreign canvas"
+      end
+
+      # Sanity: the LV is still alive and still switchable after all that.
+      assert view
+             |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{newer.id}"]))
+             |> render_click()
+             |> shown_canvas_id() == newer.id
+    end
+
+    test "one viewer's selection does not move another viewer's view", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {older, newer} = seed_two_canvases(space)
+
+      {viewer_a, _} = open_canvas_mode(conn, meeting)
+      {viewer_b, html_b} = open_canvas_mode(conn, meeting)
+
+      assert shown_canvas_id(html_b) == newer.id
+
+      _ =
+        viewer_a
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> render_click()
+
+      # B is a separate LiveView process. If the selection were persisted
+      # to a shared row or broadcast, B would have moved.
+      assert shown_canvas_id(render(viewer_b)) == newer.id
+      assert shown_canvas_id(render(viewer_a)) == older.id
+    end
+
+    test "a peer's new canvas joins the picker without yanking a viewer who chose", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {older, _newer} = seed_two_canvases(space)
+
+      {view, _html} = open_canvas_mode(conn, meeting)
+
+      _ =
+        view
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> render_click()
+
+      # A peer creates a canvas. Driven through the real context so the
+      # real broadcast fires.
+      third = seed_canvas(space, %{"title" => "Peer canvas"})
+
+      html = render(view)
+
+      # It is reachable...
+      assert count(html, ~s([data-role="canvas-picker-option"][data-canvas-id="#{third.id}"])) ==
+               1
+
+      assert html =~ "Peer canvas"
+
+      # ...but it did NOT take over the view of someone who had chosen.
+      assert shown_canvas_id(html) == older.id
+    end
+
+    test "resolve_meeting_canvas/2 falls back when the selection no longer resolves" do
+      a = %Platform.Chat.Canvas{id: Ecto.UUID.generate(), title: "A"}
+      b = %Platform.Chat.Canvas{id: Ecto.UUID.generate(), title: "B"}
+
+      # No pick -> the default (last, i.e. most recently created).
+      assert PlatformWeb.MeetingLive.resolve_meeting_canvas([a, b], nil) == b
+
+      # A live pick wins over the default.
+      assert PlatformWeb.MeetingLive.resolve_meeting_canvas([a, b], a.id) == a
+
+      # A pick that no longer names a live canvas falls back rather than
+      # blanking the stage at someone whose canvas was deleted.
+      assert PlatformWeb.MeetingLive.resolve_meeting_canvas([a, b], Ecto.UUID.generate()) == b
+
+      # Empty space -> nil, which is what drives the empty-state CTA.
+      assert PlatformWeb.MeetingLive.resolve_meeting_canvas([], nil) == nil
+      assert PlatformWeb.MeetingLive.resolve_meeting_canvas([], a.id) == nil
+    end
+
+    test "the picker is persistent, not hover-revealed, and its rows are touch-sized", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_two_canvases(space)
+
+      {_view, html} = open_canvas_mode(conn, meeting)
+
+      picker =
+        html
+        |> frag()
+        |> LazyHTML.query(~s([data-role="canvas-picker"]))
+        |> LazyHTML.to_html()
+
+      # `hover:` variants compile inside `@media (hover: hover)` and never
+      # match on touch, so a hover-gated control is INVISIBLE on a phone
+      # rather than merely quiet. None of the picker's own visibility may
+      # depend on one.
+      refute picker =~ "hover:opacity"
+      refute picker =~ "group-hover:"
+      refute picker =~ "hover:visible"
+
+      # Touch targets match the existing meeting buttons.
+      options = html |> frag() |> LazyHTML.query(~s([data-role="canvas-picker-option"]))
+      assert Enum.count(options) == 2
+
+      for class <- LazyHTML.attribute(options, "class") do
+        assert class =~ "min-h-11", "picker option is not a touch-sized target: #{class}"
+        # The name yields space, the marker never does.
+        assert class =~ "truncate" or picker =~ "truncate"
+      end
+
+      # The selected row is marked with --color-primary, and exactly one
+      # row is marked.
+      assert count(html, ~s([data-role="canvas-picker-option"][data-selected="true"])) == 1
+    end
+
+    test "no canvas means no picker — the empty-state CTA stays the only affordance", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {_view, html} = open_canvas_mode(conn, meeting)
+
+      assert count(html, ~s([data-role="canvas-picker"])) == 0
+      assert count(html, ~s([data-empty-state="canvas"])) == 1
+    end
+  end
+
+  # ── Hold the choice, signal the change (task 019ff704 stage 4) ───────────
+  #
+  # The behaviour under test is a NON-EVENT: the view does not move. That
+  # is hard to test honestly, because "the id is still X" passes just as
+  # well against a page that never rendered, a LiveView that died, or a
+  # fixture where X was the only candidate. Every test below therefore
+  # pins the id BEFORE the event as a direction control, and every
+  # fixture makes the non-selected canvas the NEWEST — the one the
+  # default rule (`List.last/1` over an oldest-first list) would pick.
+  # Against a single-canvas fixture, or one where the selection happens
+  # to be the newest anyway, "unchanged" is true by construction and the
+  # suppression could be deleted entirely without reddening anything.
+  describe "canvas changed-signal" do
+    setup %{conn: conn} do
+      {meeting, space} =
+        create_meeting(%{
+          slug: "canvas-signal-#{System.unique_integer([:positive])}",
+          name: "Canvas Signal"
+        })
+
+      {conn, user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space, user: user}
+    end
+
+    # Ids of the canvases currently wearing a changed-dot in the picker.
+    defp dotted_canvas_ids(html) do
+      html
+      |> frag()
+      |> LazyHTML.query(~s([data-role="canvas-changed-dot"]))
+      |> LazyHTML.attribute("data-canvas-id")
+      |> Enum.sort()
+    end
+
+    # A real write through the real context, so the real broadcast fires.
+    # `revision` lives inside the canonical document, not on the schema.
+    defp patch_canvas(canvas, revision) do
+      token = "canvas-signal-token-#{System.unique_integer([:positive])}"
+
+      {:ok, updated} =
+        Chat.update_canvas(:system, canvas, %{"document" => canvas_document_with(token, revision)})
+
+      updated
+    end
+
+    test "a peer's edit to the canvas you did NOT choose leaves your view alone and dots the picker",
+         %{conn: conn, meeting: meeting, space: space} do
+      {older, newer} = seed_two_canvases(space)
+
+      {view, html} = open_canvas_mode(conn, meeting)
+
+      # Direction control #1: before any pick, the default is the NEWEST.
+      # This is what makes the fixture bite — the canvas that is about to
+      # change is the one the default rule wants to show.
+      assert shown_canvas_id(html) == newer.id
+
+      picked =
+        view
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> render_click()
+
+      # Direction control #2: the pick actually moved the view, so the
+      # "unchanged" assertions below are about suppression rather than
+      # about a click that silently did nothing.
+      assert shown_canvas_id(picked) == older.id
+
+      # Direction control #3: the list opens clean. A picker that dotted
+      # everything at mount would satisfy the dot assertions below
+      # without any of the change-tracking existing.
+      assert dotted_canvas_ids(picked) == []
+
+      # ── Event 1: the OTHER (newest) canvas is edited. ──
+      _ = patch_canvas(newer, 2)
+      after_update = render(view)
+
+      assert shown_canvas_id(after_update) == older.id,
+             "an edit to a canvas the viewer did not choose moved their view"
+
+      assert dotted_canvas_ids(after_update) == [newer.id]
+
+      # The canvas ON SCREEN is never dotted — the news is elsewhere.
+      refute older.id in dotted_canvas_ids(after_update)
+
+      # ── Event 2: a peer CREATES a canvas, which is now the newest. ──
+      third = seed_canvas(space, %{"title" => "Peer canvas"})
+      after_create = render(view)
+
+      assert shown_canvas_id(after_create) == older.id,
+             "a newly created canvas took over the view of someone who had chosen"
+
+      # It is reachable AND announced: both halves matter. Reachable
+      # without a signal is a canvas nobody knows to look at.
+      assert count(
+               after_create,
+               ~s([data-role="canvas-picker-option"][data-canvas-id="#{third.id}"])
+             ) ==
+               1
+
+      assert dotted_canvas_ids(after_create) == Enum.sort([newer.id, third.id])
+    end
+
+    test "selecting a dotted canvas clears its dot, and a later edit raises it again", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {older, newer} = seed_two_canvases(space)
+
+      {view, _html} = open_canvas_mode(conn, meeting)
+
+      _ =
+        view
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> render_click()
+
+      _ = patch_canvas(newer, 2)
+      assert dotted_canvas_ids(render(view)) == [newer.id]
+
+      # Going to look at it spends the news.
+      switched =
+        view
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{newer.id}"]))
+        |> render_click()
+
+      assert shown_canvas_id(switched) == newer.id
+      assert dotted_canvas_ids(switched) == []
+
+      # ...and the news STAYS spent once you look away again. The
+      # assertion directly above cannot see this: the render guard
+      # suppresses the dot on whatever is on screen, so it holds even if
+      # selecting never recorded a baseline at all. A mutation removing
+      # the mark-seen from the select handler survived every other
+      # assertion in this describe block and was caught only here —
+      # without it, a canvas you had just finished reading would re-dot
+      # the instant you moved off it, which is the marker crying wolf
+      # about news the viewer has already consumed.
+      back =
+        view
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> render_click()
+
+      assert shown_canvas_id(back) == older.id
+      assert dotted_canvas_ids(back) == []
+
+      # Return to `newer` so the re-arm assertion below still describes a
+      # viewer sitting on it.
+      _ =
+        view
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{newer.id}"]))
+        |> render_click()
+
+      # ANTI-VACUITY: the marker must be re-armable. A implementation that
+      # cleared the entry permanently (rather than re-baselining it at the
+      # revision seen) would pass every assertion above and then never
+      # signal this canvas again for the rest of the call. Edit the canvas
+      # the viewer has now moved OFF of.
+      _ = patch_canvas(older, 3)
+      after_second = render(view)
+
+      assert shown_canvas_id(after_second) == newer.id
+      assert dotted_canvas_ids(after_second) == [older.id]
+    end
+
+    test "an edit to the canvas you ARE looking at raises no dot", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {older, newer} = seed_two_canvases(space)
+
+      {view, html} = open_canvas_mode(conn, meeting)
+      assert shown_canvas_id(html) == newer.id
+
+      _ = patch_canvas(newer, 2)
+      after_update = render(view)
+
+      # The view follows its own canvas's edits (that is the stage-2
+      # behaviour, unchanged) and the picker stays quiet: a dot on the
+      # thing already on screen is noise, not news.
+      assert shown_canvas_id(after_update) == newer.id
+      assert dotted_canvas_ids(after_update) == []
+
+      # ANTI-VACUITY, and the assertion that actually has teeth. The
+      # check above is satisfied by the render-level "never dot the
+      # canvas on screen" guard ALONE, so it cannot see whether the
+      # baseline was advanced. Move off the canvas and the difference
+      # becomes observable: if `:canvas_updated` failed to re-baseline
+      # the canvas the viewer watched change, it would dot the instant
+      # they looked away — announcing news they had already read.
+      switched =
+        view
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> render_click()
+
+      assert shown_canvas_id(switched) == older.id
+      assert dotted_canvas_ids(switched) == []
+    end
+
+    test "the stage-mode Canvas button carries the dot so the signal survives gallery mode", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {older, newer} = seed_two_canvases(space)
+
+      {view, _html} = open_canvas_mode(conn, meeting)
+
+      _ =
+        view
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> render_click()
+
+      # Direction control: no indicator before anything has changed.
+      gallery = view |> element(~s([data-stage-mode-button="gallery"])) |> render_click()
+      assert count(gallery, ~s([data-role="canvas-changed-indicator"])) == 0
+
+      # The picker is not even rendered here, which is precisely why the
+      # mode control has to carry the signal.
+      assert count(gallery, ~s([data-role="canvas-picker"])) == 0
+
+      _ = patch_canvas(newer, 2)
+      after_update = render(view)
+
+      assert count(after_update, ~s([data-role="canvas-changed-indicator"])) == 1
+      assert count(after_update, ~s([data-role="canvas-picker"])) == 0
+
+      # It hangs off the Canvas button specifically, not just anywhere on
+      # the control — the signal has to say WHERE to go.
+      assert after_update
+             |> frag()
+             |> LazyHTML.query(
+               ~s([data-stage-mode-button="canvas"] [data-role="canvas-changed-indicator"])
+             )
+             |> Enum.count() == 1
+
+      # And the accessible name carries it too: `aria-label` on the button
+      # suppresses inner text, so the dot alone would be silent.
+      assert after_update
+             |> frag()
+             |> LazyHTML.query(~s([data-stage-mode-button="canvas"]))
+             |> LazyHTML.attribute("aria-label")
+             |> List.first() =~ "canvas changed"
+
+      # Still no auto-switch: the mode is unchanged and so is the canvas.
+      assert after_update
+             |> frag()
+             |> LazyHTML.query(~s([data-stage-mode-button="gallery"]))
+             |> LazyHTML.attribute("data-active") == ["true"]
+    end
+
+    test "two users on the same meeting each keep their OWN canvas across an update", %{
+      meeting: meeting,
+      space: space
+    } do
+      {older, newer} = seed_two_canvases(space)
+      third = seed_canvas(space, %{"title" => "Third canvas"})
+
+      {conn_a, user_a} = authenticated_conn(build_conn())
+      {conn_b, user_b} = authenticated_conn(build_conn())
+
+      # Two DIFFERENT users. Same-user sessions would still exercise the
+      # per-socket assign, but they could not distinguish it from state
+      # keyed on the user — which is a shape that would break exactly
+      # here and nowhere else.
+      refute user_a.id == user_b.id
+
+      {view_a, _} = open_canvas_mode(conn_a, meeting)
+      {view_b, _} = open_canvas_mode(conn_b, meeting)
+
+      a_html =
+        view_a
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> render_click()
+
+      b_html =
+        view_b
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{newer.id}"]))
+        |> render_click()
+
+      # Direction control: the two sessions genuinely disagree before the
+      # event. Identical selections would make "each kept its own"
+      # unfalsifiable.
+      assert shown_canvas_id(a_html) == older.id
+      assert shown_canvas_id(b_html) == newer.id
+      refute shown_canvas_id(a_html) == shown_canvas_id(b_html)
+
+      # Drive an update on the canvas NEITHER of them picked.
+      _ = patch_canvas(third, 2)
+
+      assert shown_canvas_id(render(view_a)) == older.id
+      assert shown_canvas_id(render(view_b)) == newer.id
+
+      # Both are told about it, independently.
+      assert dotted_canvas_ids(render(view_a)) == [third.id]
+      assert dotted_canvas_ids(render(view_b)) == [third.id]
+
+      # Now edit B's canvas. A must learn about it; B must not be dotted
+      # for the canvas it is watching. One event, two correct-but-
+      # different outcomes — which is the whole per-user claim.
+      _ = patch_canvas(newer, 3)
+
+      assert shown_canvas_id(render(view_a)) == older.id
+      assert shown_canvas_id(render(view_b)) == newer.id
+
+      assert dotted_canvas_ids(render(view_a)) == Enum.sort([newer.id, third.id])
+      assert dotted_canvas_ids(render(view_b)) == [third.id]
+    end
+
+    test "the whole flow mints no chat_participants row and no synthetic agent participant", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {older, newer} = seed_two_canvases(space)
+
+      {view, _html} = open_canvas_mode(conn, meeting)
+
+      # Measured AFTER mount on purpose. Mounting a meeting legitimately
+      # inserts the viewer's own participant row (the embedded chat
+      # surface joins), so an absolute count would fail for a reason that
+      # has nothing to do with this stage. The window is exactly the
+      # select-and-signal flow this stage added.
+      rows_before = Repo.aggregate(Platform.Chat.Participant, :count, :id)
+
+      _ =
+        view
+        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> render_click()
+
+      # The update path is driven with `:system`, so any participant row
+      # appearing here would have been minted by the LiveView reacting to
+      # the broadcast — which is the leak this asserts against.
+      _ = patch_canvas(newer, 2)
+      html = render(view)
+
+      assert Repo.aggregate(Platform.Chat.Participant, :count, :id) == rows_before
+
+      # ANTI-VACUITY: the flow really did run. Without this the row-count
+      # assertion is also satisfied by a dead LiveView that rendered
+      # nothing at all.
+      assert shown_canvas_id(html) == older.id
+      assert dotted_canvas_ids(html) == [newer.id]
+
+      # No synthetic agent participant reached the roster either. No agent
+      # presence is seeded in this meeting, so any tile here would have
+      # been invented by the canvas flow — which is the specific failure
+      # stage 1 removed and this stage must not reintroduce.
+      assert count(html, ~s([data-section="agents"] [data-agent-tile])) == 0
+    end
   end
 end

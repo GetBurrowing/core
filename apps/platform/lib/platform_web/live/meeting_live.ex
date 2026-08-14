@@ -121,8 +121,32 @@ defmodule PlatformWeb.MeetingLive do
     * `:participants` — `Platform.Chat.list_participants/1` for the
       meeting's bound chat space; drives the Gallery-mode tile grid
       and the participant-rail placeholder.
-    * `:meeting_canvas` — the most-recently-created canvas in the
-      meeting's chat space, or `nil`. Canvas mode renders this.
+    * `:meeting_canvas` — the RESOLVED canvas: the viewer's explicit
+      `:selected_canvas_id` when it still names a live canvas, otherwise
+      the default from `latest_canvas/1`. Canvas mode and the canvas tile
+      both render this. May be `nil` when the space has no canvas.
+    * `:meeting_canvases` — every non-deleted canvas in the meeting's
+      chat space (`Chat.list_canvases/1`, oldest-first). Drives the
+      canvas picker and is the CLAMP SET for `select_meeting_canvas`.
+    * `:selected_canvas_id` — the viewer's explicit pick, or `nil` for
+      "no pick yet, use the default". **A per-socket assign, exactly like
+      `:captions_visible`** — never persisted to a shared row and never
+      broadcast. That is structural, not a convention: with the choice
+      living only in this LiveView's own state, one participant's pick is
+      INCAPABLE of moving another participant's view. A shared column
+      would make the yank possible and leave "don't broadcast it" as the
+      only thing preventing it.
+    * `:canvas_seen_revisions` — `%{canvas_id => revision}`: the document
+      revision each canvas carried the last time THIS viewer had it in
+      view. A canvas whose current revision is greater, or that has no
+      entry at all, is CHANGED and wears a dot in the picker. Per-socket
+      for the same structural reason as `:selected_canvas_id`.
+
+      The baseline is seeded at mount from every loaded canvas, so the
+      list opens clean and a dot means strictly "this changed while you
+      were in this meeting". The absent-entry case then falls out of the
+      same rule rather than needing its own: a canvas that arrives DURING
+      the session was never part of your baseline, so it is news.
     * `:user_id` — authenticated user_id off the session (same pattern
       as ChatLive); used as the canvas-creator participant when the
       Canvas-mode "Create canvas" CTA fires.
@@ -197,6 +221,8 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.Attachments.ToolHandlers, as: AttachmentHandlers
+  alias Platform.Chat.Canvas
+  alias Platform.Chat.CanvasDocument
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Meetings
   alias Platform.Meetings.Archive
@@ -256,6 +282,11 @@ defmodule PlatformWeb.MeetingLive do
 
   @doc "Stage modes the segmented control exposes (ADR 0042)."
   def stage_modes, do: @stage_modes
+
+  # How long the canvas tile's just-changed highlight stays on before the
+  # LV clears it. Long enough to notice on a glance back at the grid,
+  # short enough that it does not become permanent chrome.
+  @canvas_changed_ms 6_000
 
   # ── New-meeting sheet: duration options and refusal copy ─────────────────
   #
@@ -414,7 +445,8 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:participants, participants)
     |> assign(:agents_by_id, %{})
     |> assign(:speaking_participant_ids, MapSet.new())
-    |> assign(:meeting_canvas, latest_canvas(meeting.chat_space_id))
+    |> assign_meeting_canvases(meeting.chat_space_id)
+    |> assign(:canvas_tile_changed?, false)
     |> assign(:current_stage_mode, :gallery)
     |> assign(:active_space, meeting.chat_space)
     |> assign(:current_participant, nil)
@@ -736,7 +768,6 @@ defmodule PlatformWeb.MeetingLive do
             do: build_meeting_participants(meeting.chat_space_id),
             else: []
 
-        meeting_canvas = latest_canvas(meeting.chat_space_id)
         agents_by_id = load_agents_by_id(participants)
 
         # Resolve the viewer's existing participant row (read-only — the
@@ -761,7 +792,8 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:participants, participants)
           |> assign(:agents_by_id, agents_by_id)
           |> assign(:speaking_participant_ids, MapSet.new())
-          |> assign(:meeting_canvas, meeting_canvas)
+          |> assign_meeting_canvases(meeting.chat_space_id)
+          |> assign(:canvas_tile_changed?, false)
           |> assign(:current_stage_mode, :gallery)
           |> assign(:active_space, meeting.chat_space)
           |> assign(:current_participant, current_participant)
@@ -2166,6 +2198,46 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
+  # Canvas picker (task 019ff704 stage 3). Records THIS viewer's choice of
+  # which canvas the meeting surface shows.
+  #
+  # Per-socket only. The pick is a plain assign — no shared row, no
+  # broadcast — for the same reason `:captions_visible` is: the choice is
+  # about one person's view of the meeting, and making it shared would
+  # let one participant's click yank everybody else's screen mid-call.
+  # With the state living here, that yank is not merely disallowed, it is
+  # unrepresentable.
+  #
+  # The id is CLAMPED to the loaded `:meeting_canvases`, mirroring
+  # `parse_stage_mode/1`: an id that is not in the set is IGNORED and the
+  # current selection stands. A hand-crafted phx-click therefore cannot
+  # point this LV at a canvas in another space, nor blank the stage by
+  # naming something that does not exist.
+  def handle_event("select_meeting_canvas", %{"canvas_id" => canvas_id}, socket) do
+    canvases = socket.assigns[:meeting_canvases] || []
+
+    case Enum.find(canvases, fn c -> c.id == canvas_id end) do
+      nil ->
+        # Unknown id — selection unchanged, no crash, no flash.
+        {:noreply, socket}
+
+      canvas ->
+        {:noreply,
+         socket
+         |> assign(:selected_canvas_id, canvas.id)
+         |> assign(:meeting_canvas, canvas)
+         # A deliberate switch is not a "this canvas just changed"
+         # event: leaving the marker set would put the just-changed ring
+         # on a tile the viewer themselves just opened.
+         |> assign(:canvas_tile_changed?, false)
+         # Selecting a canvas IS looking at it, so its news is spent.
+         # Re-baselined at the revision it carries right now, not
+         # cleared: a later edit to this same canvas must be able to
+         # raise the dot again once the viewer moves off it.
+         |> mark_canvas_seen(canvas)}
+    end
+  end
+
   # "Create canvas" CTA on the Canvas-mode empty state. Mints a fresh
   # blank canvas in the meeting's bound chat space (ADR 0036 canonical
   # document) and assigns it as the active `:meeting_canvas` so the
@@ -2203,7 +2275,17 @@ defmodule PlatformWeb.MeetingLive do
 
             case Chat.create_canvas_with_message(meeting.chat_space_id, participant.id, attrs) do
               {:ok, canvas, _message} ->
-                {:noreply, assign(socket, :meeting_canvas, canvas)}
+                # Creating a canvas is an explicit act, so it both lands in
+                # the picker AND becomes this viewer's selection — otherwise
+                # the author is the one person who has to go find the thing
+                # they just made.
+                {:noreply,
+                 socket
+                 |> assign(:meeting_canvases, append_canvas(socket, canvas))
+                 |> assign(:selected_canvas_id, canvas.id)
+                 |> assign(:meeting_canvas, canvas)
+                 # You made it and you are looking at it: no news.
+                 |> mark_canvas_seen(canvas)}
 
               {:error, _reason} ->
                 {:noreply, put_flash(socket, :error, "Failed to create canvas.")}
@@ -3026,24 +3108,141 @@ defmodule PlatformWeb.MeetingLive do
   # one so a peer's "Create canvas" click flips this LV's center stage
   # without a refresh. If we already have one, prefer the newer (the
   # most-recently-created canvas wins, matching `latest_canvas/1`).
+  #
+  # Stage 3 (task 019ff704) adds the picker's list to what this refreshes:
+  # a canvas created by a peer has to APPEAR in the picker, otherwise the
+  # only way to reach it is a page reload. The list is appended to rather
+  # than re-queried so the ordering contract (`list_canvases/1` is
+  # oldest-first, and `latest_canvas/1` takes the last) still holds.
+  #
+  # The rendered canvas only latches on when the viewer has NOT picked
+  # one: an explicit `:selected_canvas_id` outranks a peer's new canvas,
+  # because being moved off the canvas you chose is precisely the yank
+  # this ticket exists to stop.
+  #
+  # Stage 4 (task 019ff704) closes the loop: the suppressed canvas is not
+  # merely ignored, it is SIGNALLED. It joins `:meeting_canvases` and,
+  # by having no `:canvas_seen_revisions` baseline, wears a dot in the
+  # picker. The list is where you go to change what you are looking at,
+  # so the list is where the news belongs.
+  #
+  # This repo has already made this exact call once, and the precedent is
+  # cited rather than paraphrased because the temptation recurs:
+  # `Platform.Chat.AttentionRouter` REMOVED its `primary_agent_id`
+  # fallback because it "silently reopened the eye the user had just
+  # closed". Auto-switching the canvas view is the same move on a
+  # different surface — and it stays refused even for a viewer who
+  # happens to be idle, because "they were not doing anything" is a guess
+  # about a person, not a fact about the system. It never moves you; you
+  # move yourself.
   def handle_info({:canvas_created, canvas}, socket) do
     %{assigns: %{meeting: meeting, meeting_canvas: current}} = socket
 
     cond do
-      is_nil(meeting) -> {:noreply, socket}
-      canvas.space_id != meeting.chat_space_id -> {:noreply, socket}
-      is_nil(current) -> {:noreply, assign(socket, :meeting_canvas, canvas)}
-      newer?(canvas, current) -> {:noreply, assign(socket, :meeting_canvas, canvas)}
-      true -> {:noreply, socket}
+      is_nil(meeting) ->
+        {:noreply, socket}
+
+      canvas.space_id != meeting.chat_space_id ->
+        {:noreply, socket}
+
+      true ->
+        socket = assign(socket, :meeting_canvases, append_canvas(socket, canvas))
+
+        cond do
+          # A viewer who chose a canvas keeps it. The new one is in the
+          # picker wearing a dot; switching is their decision to make.
+          # No `mark_canvas_seen/2` here, deliberately — the missing
+          # baseline IS the dot.
+          is_binary(socket.assigns[:selected_canvas_id]) ->
+            {:noreply, socket}
+
+          # No explicit pick: today's latch-onto-newest behaviour is
+          # unchanged. The canvas becomes the one on screen, so it is
+          # seen by definition and must not also be dotted.
+          is_nil(current) ->
+            {:noreply, socket |> assign(:meeting_canvas, canvas) |> mark_canvas_seen(canvas)}
+
+          newer?(canvas, current) ->
+            {:noreply, socket |> assign(:meeting_canvas, canvas) |> mark_canvas_seen(canvas)}
+
+          # Older than what we already show, and nobody picked: it stays
+          # off screen, so it is news like any other.
+          true ->
+            {:noreply, socket}
+        end
+    end
+  end
+
+  # Upsert by id, preserving `list_canvases/1`'s oldest-first ordering so
+  # `latest_canvas/1`'s `List.last/1` keeps meaning what it says.
+  defp append_canvas(socket, canvas) do
+    existing = socket.assigns[:meeting_canvases] || []
+
+    if Enum.any?(existing, &(&1.id == canvas.id)) do
+      Enum.map(existing, fn c -> if c.id == canvas.id, do: canvas, else: c end)
+    else
+      existing ++ [canvas]
     end
   end
 
   # Live canvas-update broadcasts: refresh the cached struct so the
   # rendered document reflects the latest server state when the active
   # meeting canvas is the one that changed.
+  #
+  # Stage 2 (task 019ff704) widened the reason this matters. The canvas
+  # tile (`<.canvas_tile>`, rendered in the gallery grid and the bottom
+  # strip) reads the SAME source canvas as the canvas view —
+  # `canvas_tile_canvas/1` — so it is on screen in gallery / screen /
+  # whiteboard modes, where the canvas view is not. A refresh that only
+  # fired for the view would leave the tile frozen at mount, which is
+  # exactly the failure this ticket exists to prevent. The canvas VIEW's
+  # behaviour is deliberately unchanged here: the same struct is
+  # reassigned, on the same condition.
+  #
+  # `:canvas_tile_changed?` is the transient just-changed marker the tile
+  # renders once and then stills (no looping animation — see the
+  # component moduledoc). It is cleared by a self-scheduled message so
+  # the highlight decays on its own rather than persisting for the rest
+  # of the call.
   def handle_info({:canvas_updated, canvas}, socket) do
-    case socket.assigns[:meeting_canvas] do
-      %{id: id} when id == canvas.id -> {:noreply, assign(socket, :meeting_canvas, canvas)}
+    # Refresh the picker's copy first, and only for a canvas already in
+    # the list — an update for a canvas this LV never loaded belongs to
+    # another space and must not be pulled into this meeting's picker.
+    # This keeps a renamed canvas's picker row current without touching
+    # which canvas is RENDERED, which the clause below still owns.
+    socket =
+      if Enum.any?(socket.assigns[:meeting_canvases] || [], &(&1.id == canvas.id)) do
+        assign(socket, :meeting_canvases, append_canvas(socket, canvas))
+      else
+        socket
+      end
+
+    case canvas_tile_canvas(socket.assigns) do
+      %{id: id} when id == canvas.id ->
+        Process.send_after(self(), {:clear_canvas_tile_changed, canvas.id}, @canvas_changed_ms)
+
+        {:noreply,
+         socket
+         |> assign(:meeting_canvas, canvas)
+         |> assign(:canvas_tile_changed?, true)
+         # In view means seen: advance the baseline to the revision that
+         # just landed so this edit never becomes a dot on the canvas
+         # the viewer is watching it happen on. An update to any OTHER
+         # canvas takes the clause below, leaves its baseline behind,
+         # and therefore raises the dot in the picker.
+         |> mark_canvas_seen(canvas)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # Decay the one-shot highlight. Scoped to the canvas id that set it so
+  # a later update to a DIFFERENT canvas can't be un-marked by an older
+  # timer.
+  def handle_info({:clear_canvas_tile_changed, canvas_id}, socket) do
+    case canvas_tile_canvas(socket.assigns) do
+      %{id: ^canvas_id} -> {:noreply, assign(socket, :canvas_tile_changed?, false)}
       _ -> {:noreply, socket}
     end
   end
@@ -4242,21 +4441,198 @@ defmodule PlatformWeb.MeetingLive do
 
   # ── Canvas-mode helpers ──────────────────────────────────────────────────
   #
-  # Canvas mode uses the most-recently-created canvas in the meeting's
-  # bound chat space (per ADR 0036 + ADR 0042). When none exists, the
-  # heex renders the "No canvas yet" empty-state CTA which routes back
-  # to `handle_event("create_meeting_canvas", …)` above.
+  # Canvas mode renders the RESOLVED canvas: the viewer's explicit pick
+  # when they have made one, otherwise the default below. When the space
+  # has no canvas at all, the heex renders the "No canvas yet"
+  # empty-state CTA which routes back to
+  # `handle_event("create_meeting_canvas", …)` above.
 
-  # Most-recently-created non-deleted canvas in the meeting's chat
-  # space. `Chat.list_canvases/1` returns oldest-first; we take the last
-  # element so a meeting's freshly-minted canvas wins over older ones.
+  # THE default rule, in one place. Every path that needs "which canvas
+  # when nobody has chosen" goes through here — `latest_canvas/1` for a
+  # space id, `resolve_meeting_canvas/2` for an already-loaded list — so
+  # the decision below is stated once and cannot drift between them.
+  #
+  # `Chat.list_canvases/1` returns oldest-first (it orders
+  # `[asc: c.inserted_at]`), so the last element is the most recently
+  # CREATED.
+  #
+  # Decision (task 019ff704 stage 3) — this stays most-recently-CREATED.
+  # It is NOT changed to most-recently-UPDATED, and that is deliberate
+  # rather than an oversight: `Canvas` carries both `updated_at` and
+  # `revision`, so the switch would be a one-line change.
+  #
+  # The reason to refuse it: "most recently updated" makes the default
+  # view MOVE whenever an agent edits some OTHER canvas. That is the
+  # same silent yank this ticket exists to prevent — a participant
+  # watching one canvas is dragged to another by an edit they did not
+  # make — merely applied to the people who have not picked yet instead
+  # of the people who have. The complaint that motivates "latest
+  # updated" is really staleness, and staleness is what the PICKER and
+  # the just-changed dot answer: a viewer who wants the freshly-edited
+  # canvas can see which one changed and choose it. Choosing is stable;
+  # being moved is not.
+  defp default_canvas(canvases) when is_list(canvases), do: List.last(canvases)
+  defp default_canvas(_), do: nil
+
+  # `default_canvas/1` for a space id rather than a loaded list.
   defp latest_canvas(space_id) when is_binary(space_id) do
     space_id
     |> Chat.list_canvases()
-    |> List.last()
+    |> default_canvas()
   end
 
   defp latest_canvas(_), do: nil
+
+  # Load the space's canvases and (re)resolve the rendered one. Used at
+  # both mount clauses and after any broadcast that can change the set,
+  # so `:meeting_canvases` and `:meeting_canvas` are never derived from
+  # different snapshots.
+  defp assign_meeting_canvases(socket, space_id) do
+    canvases = if is_binary(space_id), do: Chat.list_canvases(space_id), else: []
+    selected = socket.assigns[:selected_canvas_id]
+
+    socket
+    |> assign(:meeting_canvases, canvases)
+    |> assign(:selected_canvas_id, selected)
+    |> assign(:meeting_canvas, resolve_meeting_canvas(canvases, selected))
+    |> seed_canvas_seen_revisions(canvases)
+  end
+
+  # The session's "state of the world when you arrived" baseline. Every
+  # canvas already in the space counts as seen, so the picker opens with
+  # no dots: the dot answers "what changed since I got here", not "what
+  # have I never opened". A meeting with five canvases would otherwise
+  # open with four permanent dots that nothing but clicking each one can
+  # clear — a signal that is on by default is not a signal.
+  #
+  # Existing entries WIN over the freshly-seeded ones so a re-entry into
+  # this function cannot silently re-baseline a canvas the viewer has an
+  # unacknowledged change for.
+  defp seed_canvas_seen_revisions(socket, canvases) do
+    existing = socket.assigns[:canvas_seen_revisions] || %{}
+    seeded = Map.new(canvases, fn c -> {c.id, canvas_revision(c)} end)
+
+    assign(socket, :canvas_seen_revisions, Map.merge(seeded, existing))
+  end
+
+  # Record `canvas` as seen at its current revision — i.e. the viewer is
+  # looking at it now, so it has no news left to carry.
+  defp mark_canvas_seen(socket, %{id: id} = canvas) do
+    seen = socket.assigns[:canvas_seen_revisions] || %{}
+
+    assign(socket, :canvas_seen_revisions, Map.put(seen, id, canvas_revision(canvas)))
+  end
+
+  defp mark_canvas_seen(socket, _), do: socket
+
+  # `revision` is NOT a column on `Chat.Canvas`. It lives inside the
+  # canonical `document` map (ADR 0036) and is read through
+  # `CanvasDocument.revision/1`, which returns 0 for a document that has
+  # no integer revision. Reading `canvas.revision` would compile (structs
+  # raise only on unknown keys at build time, and this one is fetched
+  # dynamically in places) but would be `nil` forever, and `nil > 3` is
+  # `true` in Elixir's term order — a silently always-dotted picker.
+  defp canvas_revision(%{document: document}) when is_map(document),
+    do: CanvasDocument.revision(document)
+
+  defp canvas_revision(_), do: 0
+
+  @doc """
+  Display name for a canvas in the picker.
+
+  Canvas titles are user-written, so blank and whitespace-only titles are
+  both real. They collapse to the same placeholder the canvas tile uses —
+  a picker row with no visible text is unclickable in practice.
+  """
+  @spec canvas_picker_label(Canvas.t() | map() | nil) :: String.t()
+  def canvas_picker_label(%{title: title}) when is_binary(title) do
+    case String.trim(title) do
+      "" -> "Untitled canvas"
+      trimmed -> trimmed
+    end
+  end
+
+  def canvas_picker_label(_), do: "Untitled canvas"
+
+  @doc """
+  Does `canvas` carry news this viewer has not seen?
+
+  True when its document revision has moved past the recorded baseline,
+  or when it has no baseline at all (it arrived after the viewer did).
+
+  The canvas currently ON SCREEN never reports changed, whatever the map
+  says. That is the "clear the marker when it is the displayed canvas"
+  rule stated once, at the point of render, so no future handler can
+  reintroduce a dot on the thing the viewer is already looking at by
+  forgetting to clear it.
+
+  HONEST NOTE (task 019ff704 stage 4): a mutation deleting that first
+  clause SURVIVED the suite. Every path that currently puts a canvas on
+  screen also calls `mark_canvas_seen/2`, so the guard changes no
+  observable outcome and the tests cannot tell it is there. It is kept
+  rather than deleted because one reachable path does NOT mark:
+  `resolve_meeting_canvas/2` falls back to the default when a selection
+  stops resolving (the picked canvas was deleted mid-call), which can
+  put a canvas with an unseen edit on screen without any handler
+  recording it. No test drives a mid-session delete, so that path is
+  argued rather than demonstrated — which is exactly why the surviving
+  mutant is recorded here instead of being papered over with a test
+  written backwards from the mutation.
+  """
+  @spec canvas_changed?(map(), Canvas.t() | map(), Canvas.t() | map() | nil) :: boolean()
+  def canvas_changed?(seen, canvas, shown)
+
+  def canvas_changed?(_seen, %{id: id}, %{id: id}), do: false
+
+  def canvas_changed?(seen, %{id: id} = canvas, _shown) when is_map(seen) do
+    case Map.fetch(seen, id) do
+      :error -> true
+      {:ok, revision} -> canvas_revision(canvas) > revision
+    end
+  end
+
+  def canvas_changed?(_, _, _), do: false
+
+  @doc """
+  Does ANY canvas in the picker carry unseen news?
+
+  Drives the subtle dot on the stage-mode Canvas button, so a viewer
+  whose eyes are on the gallery grid — where the picker is not rendered
+  at all — still gets a signal that there is something to go and look
+  at. Without it the entire signal would be invisible from three of the
+  four stage modes.
+  """
+  @spec any_canvas_changed?(map()) :: boolean()
+  def any_canvas_changed?(assigns) when is_map(assigns) do
+    seen = assigns[:canvas_seen_revisions] || %{}
+    shown = canvas_tile_canvas(assigns)
+
+    Enum.any?(assigns[:meeting_canvases] || [], &canvas_changed?(seen, &1, shown))
+  end
+
+  def any_canvas_changed?(_), do: false
+
+  @doc """
+  The canvas to render, given the loaded set and the viewer's pick.
+
+  An explicit `selected_id` wins, but ONLY while it still resolves to a
+  live canvas: a canvas can be deleted out from under a viewer who
+  picked it, and falling back to the default is better than rendering
+  the empty state at someone whose canvas merely went away. A stale
+  selection is therefore ignored rather than honoured — but it is NOT
+  cleared, because the row can come back and re-clearing on every
+  resolve would silently discard a pick during a transient miss.
+  """
+  @spec resolve_meeting_canvas([Canvas.t()], String.t() | nil) :: Canvas.t() | nil
+  def resolve_meeting_canvas(canvases, selected_id)
+
+  def resolve_meeting_canvas(canvases, nil), do: default_canvas(canvases)
+
+  def resolve_meeting_canvas(canvases, selected_id) when is_binary(selected_id) do
+    Enum.find(canvases, fn c -> c.id == selected_id end) || default_canvas(canvases)
+  end
+
+  def resolve_meeting_canvas(canvases, _), do: default_canvas(canvases)
 
   # Strict "newer than" comparison for two %Canvas{} structs. Falls back
   # to id-comparison when timestamps tie (extremely unlikely with µs
@@ -4478,6 +4854,41 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   def gallery_participants(_), do: []
+
+  @doc """
+  The canvas the meeting's canvas TILE displays, or `nil` when the
+  meeting has no canvas at all.
+
+  Deliberately a named seam rather than reading `:meeting_canvas` at the
+  call sites: the tile and the canvas view happen to share a source
+  today, and a later stage gives the view a per-session selection. When
+  that lands, only this function moves.
+
+  `nil` is load-bearing: with no canvas the tile must not render at all,
+  and the canvas view's "No canvas yet" CTA stays the only canvas
+  affordance in the meeting.
+  """
+  def canvas_tile_canvas(assigns) when is_map(assigns), do: assigns[:meeting_canvas]
+  def canvas_tile_canvas(_), do: nil
+
+  @doc """
+  Number of CELLS the gallery grid lays out: one per gallery participant,
+  plus one for the canvas tile when the meeting has a canvas.
+
+  This exists so the canvas tile can influence the grid SHAPE without
+  being laundered through the participant list. The tile is a UI slot,
+  not a roster entry — appending a fake participant so the arithmetic
+  came out right would put it in reach of every roster query in the
+  module (`gallery_participants/1`, `strip_humans/1`, `strip_agents/1`)
+  and reproduce the synthetic-participant scars the component moduledoc
+  documents. Counting cells is the honest statement of what the grid
+  needs to know.
+  """
+  @spec gallery_cell_count(non_neg_integer(), boolean()) :: non_neg_integer()
+  def gallery_cell_count(participant_count, canvas_tile?)
+      when is_integer(participant_count) and participant_count >= 0 do
+    participant_count + if canvas_tile?, do: 1, else: 0
+  end
 
   @doc """
   Stable LiveKit-style identity key for a participant tile, mirroring the

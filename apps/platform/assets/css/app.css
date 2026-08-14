@@ -3023,7 +3023,8 @@ body, .font-fabrikam {
   container-name: gallery-cell;
 }
 
-[data-gallery-cell] > .meeting-video-tile {
+[data-gallery-cell] > .meeting-video-tile,
+[data-gallery-cell] > .meeting-canvas-tile {
   aspect-ratio: 16 / 9;
   max-width: 100%;
   max-height: 100%;
@@ -3031,7 +3032,8 @@ body, .font-fabrikam {
 
 @container gallery-cell (min-aspect-ratio: 16/9) {
   /* Cell is wider than 16:9 → fix height, let width derive. */
-  [data-gallery-cell] > .meeting-video-tile {
+  [data-gallery-cell] > .meeting-video-tile,
+  [data-gallery-cell] > .meeting-canvas-tile {
     height: 100%;
     width: auto;
   }
@@ -3040,10 +3042,41 @@ body, .font-fabrikam {
 @container gallery-cell (max-aspect-ratio: 16/9) {
   /* Cell is narrower than (or equal to) 16:9 → fix width, let
      height derive. */
-  [data-gallery-cell] > .meeting-video-tile {
+  [data-gallery-cell] > .meeting-video-tile,
+  [data-gallery-cell] > .meeting-canvas-tile {
     width: 100%;
     height: auto;
   }
+}
+
+/* Canvas tile hard clamp (task 019ff704 stage 2 rework).
+
+   The canvas tile is the one gallery tile whose interior has intrinsic
+   content — a document — so it is the one tile that can be pushed around by
+   what it contains. Two defaults conspire: a grid ITEM's `min-height` is
+   `auto`, and a flex ITEM's `min-height`/`min-width` are `auto` too, both
+   meaning "never shrink below your content". A long canvas therefore used to
+   grow its cell and shove a neighbouring face tile out of alignment.
+
+   Call sites pass `min-h-0 max-h-full …`, but a call site can forget, and a
+   forgotten clamp is a silently mis-sized tile rather than a failure. So the
+   clamp also lives HERE, on the component's own class.
+
+   Why a call-site utility cannot undo it: this rule is UNLAYERED, while
+   Tailwind's utilities live in `@layer utilities`. Unlayered styles beat
+   layered ones in the cascade regardless of specificity or source order, so
+   `class="min-h-[400px]"` on the tile loses to this block. Overriding it takes
+   an equally unlayered edit right here — a deliberate act, with this comment
+   attached to it. That is the point.
+
+   Deliberately NOT `overflow: hidden` here: the component already sets it as a
+   utility, and pinning it unlayered would also outrank a future call site that
+   legitimately needs something to escape the tile box. */
+.meeting-canvas-tile {
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 /* Local-video gallery dock: mirror the .meeting-video-tile sizing so the

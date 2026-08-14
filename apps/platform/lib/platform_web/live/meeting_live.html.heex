@@ -621,13 +621,18 @@
             type="button"
             phx-click="set_stage_mode"
             phx-value-mode={mode}
-            aria-label={stage_mode_label(mode)}
+            aria-label={
+              if(mode == :canvas and any_canvas_changed?(assigns),
+                do: stage_mode_label(mode) <> " (a canvas changed)",
+                else: stage_mode_label(mode)
+              )
+            }
             aria-pressed={to_string(@current_stage_mode == mode)}
             title={stage_mode_label(mode)}
             data-stage-mode-button={mode}
             data-active={to_string(@current_stage_mode == mode)}
             class={[
-              "join-item btn btn-sm min-h-11 gap-1.5 border-base-300",
+              "join-item btn btn-sm relative min-h-11 gap-1.5 border-base-300",
               if(@current_stage_mode == mode,
                 do: "bg-base-200 text-primary",
                 else: "btn-ghost text-base-content/60"
@@ -636,6 +641,28 @@
           >
             <span class={[stage_mode_icon(mode), "size-4"]}></span>
             <span class="hidden sm:inline">{stage_mode_label(mode)}</span>
+            <%!-- The same changed-signal, paired onto the mode control so
+               it survives leaving canvas mode: the picker is rendered
+               ONLY in canvas mode, so without this the signal would be
+               invisible from gallery / screen / whiteboard — which is
+               where someone watching the grid actually is.
+
+               ABSOLUTE, not an inline sibling. This control is a tight
+               `overflow-x-auto` row that already lost buttons off-screen
+               once at 375px; a dot that takes layout width would push it
+               again, and a control that reflows when a peer edits a
+               canvas is its own small yank. No animation here either.
+
+               The label carries the news too — `aria-label` on the
+               button suppresses inner text for assistive tech, so an
+               sr-only span in here would announce nothing. --%>
+            <span
+              :if={mode == :canvas and any_canvas_changed?(assigns)}
+              class="absolute right-1 top-1 size-1.5 rounded-full bg-secondary"
+              data-role="canvas-changed-indicator"
+              aria-hidden="true"
+            >
+            </span>
           </button>
         </div>
 
@@ -890,15 +917,131 @@
                  renderer so the meeting's surface stays visually
                  consistent with how a canvas appears in chat. --%>
               <div
-                class="flex h-full w-full justify-center overflow-y-auto"
+                class="flex h-full w-full flex-col items-center"
                 data-placeholder="center-stage"
                 data-canvas-id={@meeting_canvas.id}
               >
-                <div class="w-full max-w-3xl">
-                  <.canvas_document
-                    canvas={@meeting_canvas}
-                    dom_id_base="meeting-stage"
-                  />
+                <%!-- Canvas picker (task 019ff704 stage 3).
+
+                   A LABELLED CONTROL carrying the current canvas's name,
+                   opening a plain LIST. Deliberately not a tab strip:
+                   canvas names are user-written and arbitrarily long, and
+                   tabs make truncation worse with every canvas added,
+                   until no tab shows a distinguishing word.
+
+                   PERSISTENT, never hover-revealed. Tailwind's `hover:`
+                   variants compile inside `@media (hover: hover)` and so
+                   never match on touch — a hover-gated control does not
+                   go quiet on a phone, it goes INVISIBLE. That exact
+                   mistake already forced a removal in the rail on
+                   2026-08-11.
+
+                   `<details>` rather than a server-held open flag: the
+                   disclosure state is pure client-side presentation, and
+                   keeping it out of the assigns means a peer's canvas
+                   broadcast can't snap the list shut mid-scroll. --%>
+                <details
+                  :if={@meeting_canvases != []}
+                  class="group w-full max-w-3xl shrink-0 px-1 pt-1"
+                  data-role="canvas-picker"
+                  data-canvas-count={length(@meeting_canvases)}
+                >
+                  <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg border border-base-300 bg-base-200 px-3 text-left">
+                    <span
+                      class="hero-rectangle-stack size-4 shrink-0 text-base-content/60"
+                      aria-hidden="true"
+                    >
+                    </span>
+                    <span class="shrink-0 text-xs uppercase tracking-wide text-base-content/50">
+                      Canvas
+                    </span>
+                    <%!-- The name yields space; the affordance never does. --%>
+                    <span
+                      class="min-w-0 truncate text-sm font-medium text-base-content"
+                      data-role="canvas-picker-current"
+                    >
+                      {canvas_picker_label(@meeting_canvas)}
+                    </span>
+                    <span
+                      class="hero-chevron-down ml-auto size-4 shrink-0 text-base-content/60 group-open:rotate-180"
+                      aria-hidden="true"
+                    >
+                    </span>
+                  </summary>
+
+                  <ul
+                    class="mt-1 max-h-64 overflow-y-auto rounded-lg border border-base-300 bg-base-100 py-1"
+                    aria-label="Choose a canvas"
+                  >
+                    <li :for={c <- @meeting_canvases}>
+                      <button
+                        type="button"
+                        phx-click="select_meeting_canvas"
+                        phx-value-canvas_id={c.id}
+                        data-role="canvas-picker-option"
+                        data-canvas-id={c.id}
+                        data-selected={to_string(c.id == @meeting_canvas.id)}
+                        aria-current={c.id == @meeting_canvas.id && "true"}
+                        class={[
+                          "flex min-h-11 w-full items-center gap-2 px-3 text-left text-sm",
+                          if(c.id == @meeting_canvas.id,
+                            do: "font-medium text-primary",
+                            else: "text-base-content"
+                          )
+                        ]}
+                      >
+                        <span class="min-w-0 truncate">{canvas_picker_label(c)}</span>
+                        <%!-- The marker is `shrink-0 whitespace-nowrap`: a
+                           marker must never win space from the name it
+                           annotates. --%>
+                        <span
+                          :if={c.id == @meeting_canvas.id}
+                          class="ml-auto shrink-0 whitespace-nowrap text-xs text-primary"
+                        >
+                          Showing
+                        </span>
+                        <%!-- Changed-since-you-looked marker (task 019ff704
+                           stage 4). A DOT, and that is the whole signal:
+                           the list is where you go to change what you are
+                           looking at, so the list is where the news
+                           belongs. It does not move the view and there is
+                           no auto-switch anywhere behind it.
+
+                           NO looping animation. A dot that pulses forever
+                           is a thing you have to actively ignore for the
+                           rest of the call; the marker's job is to be
+                           findable when you look, not to keep asking.
+
+                           Mutually exclusive with "Showing" by
+                           construction — `canvas_changed?/3` returns
+                           false for the canvas on screen — so both may
+                           claim `ml-auto` without ever competing. --%>
+                        <span
+                          :if={canvas_changed?(@canvas_seen_revisions, c, @meeting_canvas)}
+                          class="ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-secondary"
+                          data-role="canvas-changed-dot"
+                          data-canvas-id={c.id}
+                        >
+                          <span class="size-2 rounded-full bg-secondary" aria-hidden="true">
+                          </span>
+                          <span class="sr-only">Changed</span>
+                        </span>
+                      </button>
+                    </li>
+                  </ul>
+                </details>
+
+                <%!-- `min-h-0` on the scroll child: a flex item's default
+                   `min-height: auto` refuses to shrink below its content,
+                   so without it the document pushes the picker off the
+                   top instead of scrolling under it. --%>
+                <div class="flex w-full min-h-0 flex-1 justify-center overflow-y-auto">
+                  <div class="w-full max-w-3xl">
+                    <.canvas_document
+                      canvas={@meeting_canvas}
+                      dom_id_base="meeting-stage"
+                    />
+                  </div>
                 </div>
               </div>
             <% @current_stage_mode == :canvas -> %>
@@ -1041,14 +1184,20 @@
                     class={[
                       "grid h-full w-full auto-rows-fr gap-2 overflow-y-auto p-1 place-items-center",
                       gallery_grid_class(
-                        length(gallery_participants(assigns[:participants] || [])),
+                        gallery_cell_count(
+                          length(gallery_participants(assigns[:participants] || [])),
+                          canvas_tile_canvas(assigns) != nil
+                        ),
                         assigns[:chrome_mode] || :shell
                       )
                     ]}
                     data-gallery-grid
                     data-gallery-grid-shape={
                       gallery_grid_class(
-                        length(gallery_participants(assigns[:participants] || [])),
+                        gallery_cell_count(
+                          length(gallery_participants(assigns[:participants] || [])),
+                          canvas_tile_canvas(assigns) != nil
+                        ),
                         assigns[:chrome_mode] || :shell
                       )
                     }
@@ -1141,6 +1290,37 @@
                         data-dock-mode="gallery"
                       >
                       </div>
+                    </div>
+                    <%!-- Canvas tile: exactly ONE cell, always LAST, and only
+                       when the meeting actually has a canvas. It reuses the
+                       same `[data-gallery-cell]` wrapper as the face tiles so
+                       the grid geometry stays uniform — the cell is a size
+                       container the tile sizes itself against.
+
+                       It is NOT a participant: `gallery_participants/1` never
+                       sees it, `data-gallery-tile-count` above still counts
+                       people only, and the extra cell reaches the grid shape
+                       through `gallery_cell_count/2` instead of a synthetic
+                       roster row.
+
+                       `id_prefix="gallery-canvas-tile"` is distinct from the
+                       strip's `strip-canvas-tile` for the reason documented on
+                       the video tiles: a shared id encourages morphdom to
+                       move/reuse the node across `set_stage_mode` swaps, and
+                       the move path has historically dropped injected
+                       children. --%>
+                    <div
+                      :if={canvas_tile_canvas(assigns)}
+                      class="relative grid h-full w-full place-items-center"
+                      data-gallery-cell
+                    >
+                      <PlatformWeb.Components.Meeting.CanvasTile.canvas_tile
+                        id_prefix="gallery-canvas-tile"
+                        layout={:gallery}
+                        canvas={canvas_tile_canvas(assigns)}
+                        changed?={assigns[:canvas_tile_changed?] || false}
+                        class="max-h-full max-w-full min-h-0 min-w-0"
+                      />
                     </div>
                   </div>
                 <% end %>
@@ -1466,6 +1646,40 @@
             activity_state={:idle}
             accent_color={nil}
             avatar_url={participant.avatar_url}
+          />
+        </section>
+
+        <%!-- Canvas section: the same tile as the gallery grid, on the
+           agent side of the strip, so the canvas stays visible in
+           canvas / screen / whiteboard modes too. Its own `<section>`
+           (not inside `[data-section="agents"]`) precisely so the canvas
+           never lands in an agent tile count — it is not an agent any
+           more than it is a participant.
+
+           Distinct dom id prefix from the gallery instance; see the
+           rationale on the gallery cell. --%>
+        <section
+          :if={canvas_tile_canvas(assigns)}
+          class="flex h-full items-stretch gap-2"
+          data-section="canvas"
+          aria-label="Meeting canvas"
+        >
+          <div
+            :if={
+              strip_humans(assigns[:participants]) != [] or
+                strip_agents(assigns[:participants]) != []
+            }
+            class="h-full w-px flex-shrink-0 self-stretch border-l border-base-300"
+            data-role="strip-canvas-divider"
+            aria-hidden="true"
+          >
+          </div>
+          <PlatformWeb.Components.Meeting.CanvasTile.canvas_tile
+            id_prefix="strip-canvas-tile"
+            layout={:strip}
+            canvas={canvas_tile_canvas(assigns)}
+            changed?={assigns[:canvas_tile_changed?] || false}
+            class="max-h-full max-w-full min-h-0 min-w-0"
           />
         </section>
       </footer>
