@@ -321,3 +321,10 @@ config :platform,
 # swap in a process-dictionary-driven stub so no HTTP round trip is
 # made and each case controls the "LLM" response deterministically.
 config :platform, :dep_inference_adapter, Platform.Tasks.Stacks.DepInference.StubAdapter
+
+# Branch provisioning (task 01a001ac). `TaskRouter` pre-creates
+# `task/<uuid>` on every execution-phase dispatch, and the default runner
+# shells out to `gh`. Left unpinned, the whole suite makes live GitHub
+# calls about fixture repositories that do not exist. Tests that mean to
+# assert provisioning pin their own stub through the same key.
+config :platform, :branch_provisioner, runner: Platform.Tasks.BranchProvisioner.NoopRunner

@@ -51,6 +51,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Orchestration.ProviderGuidance
+  alias Platform.Tasks.BranchReconciler
   alias Platform.Tasks.ReviewRequest
   alias Platform.Tasks.Stage
 
@@ -1694,7 +1695,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
     ### #{heading}
     1. Ensure all changes are committed and pushed to `task/#{task_slug}` in #{heading}.
-    #{legacy_branch_recovery_step(task_slug, heading)}
+    #{legacy_branch_recovery_step(task_slug, heading)}#{branch_mismatch_step(entry.repo_url, task_slug, heading)}
     2. Open a PR against `#{default_branch}` on #{heading} if not already open.
     #{ci_instruction(entry)}
     #{merge_instruction(entry, auto_merge)}
@@ -1726,6 +1727,31 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     legacy_branch_prefix = task_slug |> String.split("-") |> hd()
 
     "   - If `git ls-remote --heads origin 'task/#{task_slug}'` prints nothing in #{heading}, this task was dispatched before branch names carried the full task UUID and its branch may be on the remote under the 8-char prefix instead: run `git ls-remote --heads origin 'task/#{legacy_branch_prefix}*'`, deploy whichever ref actually exists, and name that branch explicitly in the PR body. Transitional only — every new dispatch creates `task/#{task_slug}`."
+  end
+
+  # Task 01a001ac stage 4. The line above is a CONDITIONAL the deployer has to
+  # run itself; this one is an OBSERVATION Suite already made. When
+  # `BranchReconciler` finds a sibling ref under the same 8-hex prefix while
+  # the recorded name is absent, the deploy prompt names BOTH branches rather
+  # than leaving the deployer to discover the mismatch by running a command
+  # whose empty output it might read as "nothing to do".
+  #
+  # `:match` and `:unknown` render the EMPTY STRING, so the ordinary prompt is
+  # byte-identical to what it was before this change. A failed probe is never
+  # a mismatch (see `BranchReconciler`): a GitHub blip must not put a naming
+  # accusation into every deploy prompt.
+  #
+  # Reports, never adopts — the deployer is told to stop and name both, not to
+  # deploy whatever ref happens to exist. That distinction is the whole point
+  # of the reconciler and it must not soften here.
+  defp branch_mismatch_step(repo_url, task_slug, heading) do
+    case BranchReconciler.reconcile(repo_url, "task/" <> task_slug) do
+      {:mismatch, [found | _]} ->
+        "\n   - Suite recorded `task/#{task_slug}` but the remote carries `#{found}` in #{heading} — do not assume the recorded name. Confirm which ref actually holds this task's commits, name it explicitly in the PR body, and do not merge a branch you have not confirmed."
+
+      _ ->
+        ""
+    end
   end
 
   # `ci: "none"` is not a softer version of `ci: "required"` — it inverts what a
@@ -2092,9 +2118,14 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # (`member_slug/1`), so siblings minted in one batch can never collide on a
   # shared id prefix. Membership (ADR 0041, detected via `stack_membership/1`)
   # decides only the SHAPE of the section: a stack member branches from the
-  # rollup HEAD and gains a `## Task Stack Membership` sub-block naming the
-  # stack_id and rollup branch; a non-stack task branches from the default
-  # branch and gets neither.
+  # rollup HEAD (CREATE form — nothing pre-creates a member ref) and gains a
+  # `## Task Stack Membership` sub-block naming the stack_id and rollup branch;
+  # a non-stack task TRACKS `origin/task/<uuid>`, the ref the router pre-creates
+  # at the first execution dispatch, and gets neither. The track form is the
+  # point: `-b task/<slug> origin/<default>` mints a local branch whatever the
+  # remote holds, which is how task 01a00161 came to push `task/ext-app-badge`
+  # instead of its recorded branch. `--track ... origin/task/<uuid>` fails loudly
+  # when the ref is absent instead.
   #
   # Both branches also render the same worktree PREFLIGHT: unique slugs prevent
   # two concurrent dispatches from colliding, but a stale tree, a redispatch, or
@@ -2120,14 +2151,14 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     ## Git Workflow (CRITICAL)
     Repository: #{primary_repo_url(repos)}
     Base branch: #{default_branch}
-    #{additional_repos_block(repos, task_slug, default_branch)}\
+    #{additional_repos_block(repos, task_slug, default_branch, :track)}\
 
-    1. Create a worktree from the latest #{default_branch} branch:
+    1. Create a worktree TRACKING the branch Suite already created for this task:
        ```
        git fetch origin
        # Preflight: if the worktree already exists, it MUST be on this task's branch.
        if [ -d ../worktrees/#{task_slug} ]; then git -C ../worktrees/#{task_slug} rev-parse --abbrev-ref HEAD; fi
-       git worktree add ../worktrees/#{task_slug} -b task/#{task_slug} origin/#{default_branch}
+       git worktree add ../worktrees/#{task_slug} --track -b task/#{task_slug} origin/task/#{task_slug}
        cd ../worktrees/#{task_slug}
        ```
        - Preflight printed NOTHING: the worktree does not exist. Run `git worktree add` exactly as shown.
@@ -2139,7 +2170,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
        - Commit all changes with a descriptive message referencing task #{full_task_id(task)}
        - Push the branch: `git push -u origin task/#{task_slug}`
        - Do NOT open a PR yet — PR opening happens in the deploy phase
-    4. NEVER work on ANOTHER task's branch. When creating, branch from latest origin/#{default_branch}; reuse an existing worktree ONLY when its HEAD is `task/#{task_slug}`.
+    4. NEVER work on ANOTHER task's branch. `origin/task/#{task_slug}` already exists — the `--track` form above FAILS LOUDLY if it does not, which is the signal to `report_blocker`, NOT to fall back to creating a branch from origin/#{default_branch}; reuse an existing worktree ONLY when its HEAD is `task/#{task_slug}`.
+    5. Do NOT rename the branch, do NOT re-point it at another name, and do NOT report a DIFFERENT branch back to Suite. `task/#{task_slug}` is the only branch Suite will merge; an executor-reported branch name is never authoritative, so pushing elsewhere and reporting it would get Suite to merge the wrong place.
     """
   end
 
@@ -2188,7 +2220,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     ## Git Workflow (CRITICAL)
     Repository: #{primary_repo_url(repos)}
     Base branch: #{default_branch}
-    #{additional_repos_block(repos, task_slug, parent_branch)}\
+    #{additional_repos_block(repos, task_slug, parent_branch, :create)}\
 
     1. Create a worktree from the latest #{parent_branch} branch:
        ```
@@ -2298,18 +2330,29 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # The branch name is deliberately the SAME in every repository:
   # `Changelog.extract_task_id_from_branch/1` resolves a task from the branch
   # name, and per-repo suffixes would break that for every repo but one.
-  defp additional_repos_block([], _task_slug, _base_branch), do: ""
-  defp additional_repos_block([_only], _task_slug, _base_branch), do: ""
+  defp additional_repos_block([], _task_slug, _base_branch, _mode), do: ""
+  defp additional_repos_block([_only], _task_slug, _base_branch, _mode), do: ""
 
-  defp additional_repos_block(repos, task_slug, base_branch) do
+  defp additional_repos_block(repos, task_slug, base_branch, mode) do
     lines =
       repos
       |> Enum.with_index(1)
       |> Enum.map_join("\n", fn {entry, index} ->
+        dir = "../worktrees/#{task_slug}-#{repo_dir_suffix(entry, index)}"
+
+        add =
+          case mode do
+            :track ->
+              "git worktree add #{dir} --track -b task/#{task_slug} origin/task/#{task_slug}"
+
+            :create ->
+              "git worktree add #{dir} -b task/#{task_slug} origin/#{base_branch}"
+          end
+
         """
         - #{entry.repo_url} (#{entry.role}, CI: #{entry.ci})
           ```
-          git worktree add ../worktrees/#{task_slug}-#{repo_dir_suffix(entry, index)} -b task/#{task_slug} origin/#{base_branch}
+          #{add}
           ```\
         """
       end)

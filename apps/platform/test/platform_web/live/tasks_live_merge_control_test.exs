@@ -46,6 +46,25 @@ defmodule PlatformWeb.TasksLiveMergeControlTest do
     end
   end
 
+  # The ref seam the reconciler reads. Application env rather than the
+  # process dictionary because `reconcile/3` runs inside the LiveView
+  # process, not the test one.
+  defmodule StubRefRunner do
+    @moduledoc false
+    @behaviour Platform.Tasks.BranchProvisioner.Runner
+
+    @impl true
+    def default_branch_sha(_), do: {:error, :not_used}
+
+    @impl true
+    def create_ref(_), do: {:error, :not_used}
+
+    @impl true
+    def list_matching_refs(%{repo: _, ref: _}) do
+      Application.get_env(:platform, :merge_control_stub_refs, {:ok, []})
+    end
+  end
+
   defmodule StubMerger do
     @moduledoc false
 
@@ -65,14 +84,18 @@ defmodule PlatformWeb.TasksLiveMergeControlTest do
 
   setup do
     prev = Application.get_env(:platform, :merge_control, [])
+    prev_provisioner = Application.get_env(:platform, :branch_provisioner, [])
 
     Application.put_env(:platform, :merge_control, runner: StubRunner, merger: StubMerger)
+    Application.put_env(:platform, :branch_provisioner, runner: StubRefRunner)
     Application.put_env(:platform, :merge_control_test_pid, self())
     put_pr_state({:ok, pr(checks: [])})
 
     on_exit(fn ->
       Application.put_env(:platform, :merge_control, prev)
+      Application.put_env(:platform, :branch_provisioner, prev_provisioner)
       Application.delete_env(:platform, :merge_control_stub_pr_state)
+      Application.delete_env(:platform, :merge_control_stub_refs)
       Application.delete_env(:platform, :merge_control_test_pid)
     end)
 
@@ -81,6 +104,9 @@ defmodule PlatformWeb.TasksLiveMergeControlTest do
 
   defp put_pr_state(state),
     do: Application.put_env(:platform, :merge_control_stub_pr_state, state)
+
+  defp put_refs(answer),
+    do: Application.put_env(:platform, :merge_control_stub_refs, answer)
 
   defp pr(opts) do
     %{
@@ -371,6 +397,71 @@ defmodule PlatformWeb.TasksLiveMergeControlTest do
       # A Suite-performed merge must not be indistinguishable from an
       # auto-merger one.
       assert event.metadata["performed_by"] == "merge_control"
+    end
+  end
+
+  # ── The two states that used to be one sentence ──────────────────────────
+
+  describe "no open PR, recorded branch missing from the remote" do
+    @recorded "task/019ff182-cd38"
+
+    test "names BOTH the recorded and the found branch", %{conn: conn} do
+      {conn, _user} = authenticated_conn(conn)
+      put_pr_state({:ok, nil})
+      put_refs({:ok, ["refs/heads/task/ext-app-badge"]})
+
+      html = open_panel(conn, task_with_live_deploy_gate!()) |> render()
+      band = text_of(html, @band)
+
+      # The distinguishing text, not merely the tone: a red band whose
+      # sentence still read "This branch has no open pull request to
+      # merge." would leave the defect exactly where it was.
+      assert band =~ "Recorded branch not found"
+      assert band =~ @recorded
+      assert band =~ "task/ext-app-badge"
+      refute band =~ "This branch has no open pull request to merge."
+      assert count(html, ~s(#{@band}[data-tone="error"])) == 1
+    end
+
+    test "positive control: a matching ref with no PR keeps the ordinary sentence", %{conn: conn} do
+      {conn, _user} = authenticated_conn(conn)
+      put_pr_state({:ok, nil})
+      put_refs({:ok, ["refs/heads/" <> @recorded]})
+
+      band = open_panel(conn, task_with_live_deploy_gate!()) |> render() |> text_of(@band)
+
+      assert band == "No open pull request This branch has no open pull request to merge."
+    end
+
+    test "a failed ref probe is never reported as a mismatch", %{conn: conn} do
+      {conn, _user} = authenticated_conn(conn)
+      put_pr_state({:ok, nil})
+      put_refs({:error, :gh_unavailable, "`gh` not found on PATH"})
+
+      band = open_panel(conn, task_with_live_deploy_gate!()) |> render() |> text_of(@band)
+
+      assert band == "No open pull request This branch has no open pull request to merge."
+    end
+
+    test "clicking Merge on a mismatch refuses with the mismatch headline in the audit row", %{
+      conn: conn
+    } do
+      {conn, user} = authenticated_conn(conn)
+      put_pr_state({:ok, nil})
+      put_refs({:ok, ["refs/heads/task/ext-app-badge"]})
+      task = task_with_live_deploy_gate!()
+
+      open_panel(conn, task) |> element(@merge_button) |> render_click()
+
+      [event] =
+        Platform.Audit.list(event_type: "platform.tasks.merge_control", resource_id: task.id)
+
+      assert event.action == "refused"
+      assert event.actor_id == user.id
+      assert event.metadata["detail"] == "Recorded branch not found"
+
+      # The merge implementation was never reached.
+      refute_received {:execute_merge, _, _, _, _}
     end
   end
 end

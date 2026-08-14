@@ -52,6 +52,7 @@ defmodule Platform.Tasks.MergeControl do
   alias Platform.Audit
   alias Platform.Tasks
   alias Platform.Tasks.AutoMerger
+  alias Platform.Tasks.BranchReconciler
   alias Platform.Tasks.MergeControl.GhRunner
   alias Platform.Tasks.Task, as: TaskRecord
 
@@ -158,7 +159,11 @@ defmodule Platform.Tasks.MergeControl do
         |> tap(fn result -> audit(task, control, actor, number, result) end)
 
       {:ok, nil} ->
-        refuse(task, control, actor, no_open_pr_band())
+        # Reconcile before refusing, so a click on a task whose branch was
+        # never pushed under the recorded name gets the mismatch sentence
+        # rather than the generic one — and so the audit row records the
+        # mismatch headline instead of an ordinary "No open pull request".
+        refuse(task, control, actor, no_pr_band(control.repo_url, control.branch))
 
       {:error, :gh_unavailable, _message} ->
         refuse(task, control, actor, gh_unavailable_band())
@@ -228,7 +233,31 @@ defmodule Platform.Tasks.MergeControl do
       merge_method: payload["merge_method"] || "squash",
       pr_number: pr && pr.number,
       pr_url: pr && pr.url,
-      band: band(pr_state)
+      band: render_band(pr_state, repo_url, branch)
+    }
+  end
+
+  # `band/1` stays the pure colour rule and is asserted directly. Only the
+  # `{:ok, nil}` state needs the repository context, because it is the only
+  # one whose sentence is ambiguous between a wrong state and an ordinary
+  # one.
+  defp render_band({:ok, nil}, repo_url, branch), do: no_pr_band(repo_url, branch)
+  defp render_band(pr_state, _repo_url, _branch), do: band(pr_state)
+
+  # `:match` and `:unknown` are byte-for-byte today's behaviour. A probe
+  # that could not run is NEVER reported as a mismatch.
+  defp no_pr_band(repo_url, branch) do
+    case BranchReconciler.reconcile(repo_url, branch) do
+      {:mismatch, [found | _]} -> branch_mismatch_band(branch, found)
+      _ -> no_open_pr_band()
+    end
+  end
+
+  defp branch_mismatch_band(recorded, found) do
+    %{
+      tone: :error,
+      headline: "Recorded branch not found",
+      sentence: "Expected `#{recorded}`, found `#{found}` on the remote."
     }
   end
 

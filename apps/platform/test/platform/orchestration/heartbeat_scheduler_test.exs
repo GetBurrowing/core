@@ -2093,7 +2093,10 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
 
       refute prompt =~ "Task Stack Membership"
-      assert prompt =~ "git worktree add ../worktrees/#{id} -b task/#{id} origin/main"
+
+      assert prompt =~
+               "git worktree add ../worktrees/#{id} --track -b task/#{id} origin/task/#{id}"
+
       assert prompt =~ "git push -u origin task/#{id}"
       refute prompt =~ "../worktrees/019e2474 "
       refute prompt =~ "task/019e2474 "
@@ -2225,11 +2228,104 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
 
-      # Full-UUID slug, main-branched, no stack block, no rollup ref anywhere.
-      assert prompt =~ "git worktree add ../worktrees/#{id} -b task/#{id} origin/main"
+      # Full-UUID slug, tracking its own pre-created ref, no stack block, no
+      # rollup ref anywhere.
+      assert prompt =~
+               "git worktree add ../worktrees/#{id} --track -b task/#{id} origin/task/#{id}"
+
       refute prompt =~ "Task Stack Membership"
       refute prompt =~ "origin/stack/"
       refute prompt =~ "rollup_branch_ready"
+    end
+  end
+
+  # ── Task 01a001ac stage 5 ────────────────────────────────────────────────
+  # The non-stack worktree command TRACKS the ref the router pre-creates at the
+  # first execution dispatch instead of CREATING a local branch off the default
+  # branch. The create form is what let task 01a00161 push `task/ext-app-badge`
+  # instead of its recorded branch: `-b <name> origin/main` succeeds no matter
+  # what the remote holds, so nothing downstream of it can tell a
+  # correctly-provisioned executor from a confused one.
+  #
+  # Stack members are deliberately EXCLUDED — nothing pre-creates a member ref,
+  # so a track form there would fail on every dispatch.
+  describe "non-stack worktree tracks origin/task/<uuid> (task 01a001ac)" do
+    @track_id "01a001ac-0ad8-7ece-bea6-2c524238fb86"
+
+    defp track_task(overrides \\ []) do
+      Enum.into(overrides, %{
+        id: @track_id,
+        title: "Tracking task",
+        status: "in_progress",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: nil
+      })
+    end
+
+    defp track_prompt(task) do
+      {plan, stage} = simple_plan_with_stage()
+      HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+    end
+
+    test "the rendered add command uses --track against origin/task/<full uuid>" do
+      prompt = track_prompt(track_task())
+
+      # Anti-vacuity: the block must actually be present.
+      assert prompt =~ "Git Workflow (CRITICAL)"
+
+      assert prompt =~
+               "git worktree add ../worktrees/#{@track_id} --track -b task/#{@track_id} origin/task/#{@track_id}"
+    end
+
+    test "the bare CREATE form is gone from the non-stack block" do
+      prompt = track_prompt(track_task())
+
+      refute prompt =~ "-b task/#{@track_id} origin/main"
+    end
+
+    test "the prompt forbids renaming, re-pointing, or reporting a different branch" do
+      prompt = track_prompt(track_task())
+
+      assert prompt =~ "Do NOT rename the branch"
+      assert prompt =~ "do NOT re-point it at another name"
+      assert prompt =~ "do NOT report a DIFFERENT branch back to Suite"
+      assert prompt =~ "an executor-reported branch name is never authoritative"
+    end
+
+    test "an absent ref is a report_blocker, NOT a fallback to the create form" do
+      prompt = track_prompt(track_task())
+
+      assert prompt =~ "FAILS LOUDLY"
+      assert prompt =~ "NOT to fall back to creating a branch from origin/main"
+    end
+
+    test "the worktree preflight and its three outcome bullets are intact" do
+      prompt = track_prompt(track_task())
+
+      assert prompt =~
+               "if [ -d ../worktrees/#{@track_id} ]; then git -C ../worktrees/#{@track_id} rev-parse --abbrev-ref HEAD; fi"
+
+      assert prompt =~ "Preflight printed NOTHING"
+      assert prompt =~ "Preflight printed exactly `task/#{@track_id}`"
+      assert prompt =~ "Preflight printed ANYTHING ELSE"
+      assert prompt =~ "reuse an existing worktree ONLY when its HEAD is `task/#{@track_id}`"
+    end
+
+    test "the stack-member section is UNCHANGED — it still creates from the rollup parent" do
+      task =
+        track_task(
+          stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+          stack: meeting_module_stack_ready()
+        )
+
+      prompt = track_prompt(task)
+
+      assert prompt =~
+               "git worktree add ../worktrees/#{@track_id} -b task/#{@track_id} origin/stack/meeting-module"
+
+      refute prompt =~ "--track"
+      assert prompt =~ "Task Stack Membership"
     end
   end
 
@@ -2517,6 +2613,99 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
         assert recovery_lines(prompt) == [],
                "#{strategy["type"]} rendered transitional pr_merge recovery guidance"
       end
+    end
+
+    # Task 01a001ac stage 4. The recovery line above is a conditional the
+    # deployer runs; these cover the observation Suite already made through
+    # `BranchReconciler`. The ordinary prompt must stay byte-identical, so
+    # every negative here is paired against a rendered positive from the same
+    # helper — a mismatch line that never renders at all would satisfy the
+    # `:match` / `:unknown` assertions while proving nothing.
+    @mismatch_marker "do not assume the recorded name"
+
+    defmodule MismatchRunner do
+      @moduledoc false
+      @behaviour Platform.Tasks.BranchProvisioner.Runner
+
+      @impl true
+      def default_branch_sha(_), do: {:error, :not_used}
+
+      @impl true
+      def create_ref(_), do: {:error, :not_used}
+
+      @impl true
+      def list_matching_refs(_), do: {:ok, ["refs/heads/task/ext-app-badge"]}
+    end
+
+    defmodule MatchRunner do
+      @moduledoc false
+      @behaviour Platform.Tasks.BranchProvisioner.Runner
+
+      @impl true
+      def default_branch_sha(_), do: {:error, :not_used}
+
+      @impl true
+      def create_ref(_), do: {:error, :not_used}
+
+      @impl true
+      def list_matching_refs(%{ref: "heads/" <> prefix}),
+        do: {:ok, ["refs/heads/" <> prefix <> "-0ad8-7ece-bea6-2c524238fb86"]}
+    end
+
+    defp with_runner(runner, fun) do
+      previous = Application.get_env(:platform, :branch_provisioner)
+      Application.put_env(:platform, :branch_provisioner, runner: runner)
+
+      try do
+        fun.()
+      after
+        if previous,
+          do: Application.put_env(:platform, :branch_provisioner, previous),
+          else: Application.delete_env(:platform, :branch_provisioner)
+      end
+    end
+
+    @reconciler_id "01a001ac-0ad8-7ece-bea6-2c524238fb86"
+
+    test "a mismatch renders a line naming BOTH the recorded and the found branch" do
+      prompt = with_runner(MismatchRunner, fn -> deploying_prompt(@reconciler_id) end)
+
+      assert [line] =
+               prompt
+               |> String.split("\n")
+               |> Enum.filter(&String.contains?(&1, @mismatch_marker))
+               |> Enum.map(&String.trim/1)
+
+      assert line =~ "`task/#{@reconciler_id}`"
+      assert line =~ "`task/ext-app-badge`"
+    end
+
+    test ":match renders nothing extra and leaves the prompt byte-identical" do
+      baseline = with_runner(MismatchRunner, fn -> deploying_prompt(@reconciler_id) end)
+      matched = with_runner(MatchRunner, fn -> deploying_prompt(@reconciler_id) end)
+
+      # Positive control: the helper CAN produce the mismatch line, so its
+      # absence below is a fact about `:match`, not about the fixture.
+      assert baseline =~ @mismatch_marker
+      refute matched =~ @mismatch_marker
+
+      # The pre-existing recovery line is untouched by this change.
+      assert [line] = recovery_lines(matched)
+
+      assert backtick_spans(line) == [
+               "git ls-remote --heads origin 'task/#{@reconciler_id}'",
+               "git ls-remote --heads origin 'task/01a001ac*'",
+               "task/#{@reconciler_id}"
+             ]
+    end
+
+    test ":unknown renders nothing extra either" do
+      # `NoopRunner` is the configured test runner and answers
+      # `{:error, :branch_provisioning_disabled}` — an unresolvable probe.
+      prompt = deploying_prompt(@reconciler_id)
+
+      refute prompt =~ @mismatch_marker
+      assert [_line] = recovery_lines(prompt)
     end
   end
 
@@ -2890,8 +3079,15 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       # `deploy_merge_reconciler_test.exs`).
       slug = HeartbeatScheduler.member_slug(task)
 
-      assert section =~ "../worktrees/#{slug}-core -b task/#{slug} "
-      assert section =~ "../worktrees/#{slug}-openclaw-suite-channel -b task/#{slug} "
+      # Task 01a001ac stage 5: every clone TRACKS the pre-created ref rather
+      # than minting a local branch off the default branch.
+      assert section =~
+               "../worktrees/#{slug}-core --track -b task/#{slug} origin/task/#{slug}"
+
+      assert section =~
+               "../worktrees/#{slug}-openclaw-suite-channel --track -b task/#{slug} origin/task/#{slug}"
+
+      refute section =~ "-b task/#{slug} origin/main"
       refute section =~ "-b task/#{slug}-core"
 
       # The behavioural half of the same bug: one green gate read as a
@@ -3016,12 +3212,12 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       Repository: #{@core_url}
       Base branch: main
 
-      1. Create a worktree from the latest main branch:
+      1. Create a worktree TRACKING the branch Suite already created for this task:
          ```
          git fetch origin
          # Preflight: if the worktree already exists, it MUST be on this task's branch.
          if [ -d ../worktrees/task-1234abcd ]; then git -C ../worktrees/task-1234abcd rev-parse --abbrev-ref HEAD; fi
-         git worktree add ../worktrees/task-1234abcd -b task/task-1234abcd origin/main
+         git worktree add ../worktrees/task-1234abcd --track -b task/task-1234abcd origin/task/task-1234abcd
          cd ../worktrees/task-1234abcd
          ```
          - Preflight printed NOTHING: the worktree does not exist. Run `git worktree add` exactly as shown.
@@ -3033,7 +3229,8 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
          - Commit all changes with a descriptive message referencing task task-1234abcd
          - Push the branch: `git push -u origin task/task-1234abcd`
          - Do NOT open a PR yet — PR opening happens in the deploy phase
-      4. NEVER work on ANOTHER task's branch. When creating, branch from latest origin/main; reuse an existing worktree ONLY when its HEAD is `task/task-1234abcd`.
+      4. NEVER work on ANOTHER task's branch. `origin/task/task-1234abcd` already exists — the `--track` form above FAILS LOUDLY if it does not, which is the signal to `report_blocker`, NOT to fall back to creating a branch from origin/main; reuse an existing worktree ONLY when its HEAD is `task/task-1234abcd`.
+      5. Do NOT rename the branch, do NOT re-point it at another name, and do NOT report a DIFFERENT branch back to Suite. `task/task-1234abcd` is the only branch Suite will merge; an executor-reported branch name is never authoritative, so pushing elsewhere and reporting it would get Suite to merge the wrong place.
       """
 
       assert git_workflow_section(prompt) == expected

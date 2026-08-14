@@ -441,6 +441,36 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       refute rendered =~ "{{task_slug}}"
     end
 
+    # Task 01a001ac stage 5 — the template must carry the TRACK form through
+    # verbatim. The block is built by HeartbeatScheduler (one source of truth);
+    # this pins that nothing in the template layer rewrites or drops it.
+    test "render_template carries the non-stack --track form through verbatim" do
+      :ok = PromptTemplates.seed_defaults()
+
+      id = "01a001ac-0ad8-7ece-bea6-2c524238fb86"
+
+      task = %{
+        id: id,
+        title: "Tracking task",
+        status: "in_progress",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: nil
+      }
+
+      plan = %{version: 1, stages: [%{id: "stage-1", position: 1, name: "coding"}]}
+      stage = %{id: "stage-1", position: 1, name: "coding", validations: []}
+
+      rendered = Platform.Orchestration.HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert rendered =~
+               "git worktree add ../worktrees/#{id} --track -b task/#{id} origin/task/#{id}"
+
+      refute rendered =~ "-b task/#{id} origin/main"
+      refute rendered =~ "Task Stack Membership"
+      refute rendered =~ "{{task_slug}}"
+    end
+
     test "render_template interpolates a pre-rendered stack-member git workflow block" do
       :ok = PromptTemplates.seed_defaults()
 

@@ -106,6 +106,7 @@ defmodule Platform.Orchestration.TaskRouter do
   alias Platform.Lifecycle.Edges
   alias Platform.Lifecycle.Executor
   alias Platform.Tasks
+  alias Platform.Tasks.BranchProvisioner
   alias Platform.Tasks.{DeployResolver, Plan, ReviewDisposition, ReviewRequests, Stage}
 
   # ── State ──────────────────────────────────────────────────────────────
@@ -1557,9 +1558,133 @@ defmodule Platform.Orchestration.TaskRouter do
     state
   end
 
+  # ── Branch provisioning (task 01a001ac) ───────────────────────────────
+  #
+  # Two conditions, both necessary.
+  #
+  # EXECUTION PHASE ONLY. Gated on `DispatchPhase.resolve/3` — the same
+  # resolver `unresolved_stage_dispatch?/3` uses — rather than on
+  # `task.status`, for the reason that module's moduledoc gives: `task.status`
+  # lags a dispatch cycle behind the plan engine. A planning dispatch has no
+  # executor to constrain, and a review or deploy dispatch arrives after the
+  # push it was supposed to precede.
+  #
+  # NOT STACK MEMBERS. A stack member ships through the rollup branch
+  # (`Tasks.resolve_deploy_strategy/1` answers `no_op_wait_for_rollup`) and
+  # `StackDeployer` owns its refs. The gate is `task.stack_id`, NOT the
+  # `no_op_wait_for_rollup` strategy answer: that answer additionally requires
+  # a non-empty `stack.rollup_branch` (`tasks.ex:1718`), so a member whose
+  # rollup has not been cut yet would fall through it and get a solo task
+  # branch provisioned underneath the stack. `stack_id` is the stricter gate
+  # and the one that matches "skip stack members entirely".
+  #
+  # Best-effort, mirroring `unresolved_stage_dispatch?/3`: a resolver that
+  # raises yields `false` and the dispatch proceeds unprovisioned.
+  defp provision_branches?(task, plan, stage) do
+    is_nil(task.stack_id) and execution_dispatch?(task, plan, stage)
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  # TWO slugs, not one — and the second is the load-bearing surprise.
+  #
+  # The plan said "gate on the resolved phase", meaning `dispatch.in_progress`.
+  # That slug requires a RUNNING stage: `do_dispatch/2` resolves `stage` with
+  # `current_running_stage/1` (`:1361`), so a task at `in_progress` whose next
+  # stage is still `pending` resolves NO stage and `DispatchPhase.resolve/3`
+  # falls to step 3, `dispatch.fallback`.
+  #
+  # That fallback dispatch is not an edge case — it is THE FIRST execution
+  # dispatch of most tasks, and the comment on `unresolved_stage_dispatch?/3`
+  # says so explicitly: it "is the only thing that will ever get an agent to
+  # call `stage_start`". It is therefore the dispatch that most needs the
+  # branch to already exist, since it is the one the executor runs
+  # `git worktree add` from. Gating on `dispatch.in_progress` alone would have
+  # skipped provisioning at exactly the moment it matters and provisioned only
+  # on the redispatches after the executor had already invented a name.
+  #
+  # `dispatch.fallback` alone is not enough of a signal though — a task in a
+  # stage-less status renders it too. Pairing it with
+  # `Tasks.current_phase(task) == "execution"` narrows it to the shape above.
+  defp execution_dispatch?(task, plan, stage) do
+    case DispatchPhase.resolve(task, plan, stage).slug do
+      "dispatch.in_progress" -> true
+      "dispatch.fallback" -> Tasks.current_phase(task) == "execution"
+      _ -> false
+    end
+  end
+
+  defp maybe_provision_branches(state, task, plan, stage) do
+    if provision_branches?(task, plan, stage) do
+      provision_branches(state, task)
+    else
+      :ok
+    end
+  end
+
+  # FAIL SOFT, LOG LOUD. A task that cannot reach GitHub still needs its
+  # executor prompted — suppressing the dispatch would trade a missing branch
+  # for a stalled task, which is strictly worse. So every failure path here
+  # ends in a log line and `:ok`, never a raise and never an early return from
+  # `do_dispatch_resolved/5`. Drift left behind by a failed provision is what
+  # the reconciliation pass is for.
+  defp provision_branches(state, task) do
+    {:ok, %{branch: branch, results: results}} = BranchProvisioner.ensure_branches(task)
+
+    Enum.each(results, fn
+      %{result: {:ok, _}} ->
+        :ok
+
+      %{repo_url: repo_url, result: failure} ->
+        report_provision_failure(state, task, branch, repo_url, failure)
+    end)
+
+    :ok
+  rescue
+    error -> report_provision_failure(state, task, provision_branch_name(task), nil, error)
+  catch
+    :exit, reason ->
+      report_provision_failure(state, task, provision_branch_name(task), nil, {:exit, reason})
+  end
+
+  defp provision_branch_name(task) do
+    BranchProvisioner.branch_for(task)
+  rescue
+    _ -> "task/#{task.id}"
+  end
+
+  defp report_provision_failure(state, task, branch, repo_url, reason) do
+    where = if repo_url, do: " in #{repo_url}", else: ""
+
+    Logger.warning(
+      "[TaskRouter] task #{task.id} could not pre-create branch #{branch}#{where}: " <>
+        "#{inspect(reason)}; dispatching anyway"
+    )
+
+    if state.execution_space_id do
+      ExecutionSpace.post_log(
+        state.execution_space_id,
+        "Branch not pre-created: #{branch}#{where} | #{inspect(reason)} | " <>
+          "dispatching anyway — push to this exact branch name"
+      )
+    end
+
+    :ok
+  end
+
   defp do_dispatch_resolved(state, task, plan, stage, entry_status) do
     # Lease deploy credentials if this is a deploy stage
     state = maybe_lease_deploy_credentials(state, task, stage)
+
+    # Create `task/<uuid>` BEFORE the executor is prompted (task 01a001ac).
+    # Deliberately here and not in `PlanEngine.build_deploy_plan/1`: the
+    # deploy plan is built after every implementation stage is done and the
+    # executor has already pushed somewhere, so a branch created there cannot
+    # constrain anything — that is detection dressed as prevention. The
+    # executor needs the ref to exist before it runs `git worktree add`.
+    maybe_provision_branches(state, task, plan, stage)
 
     context = ContextAssembler.build(state.task_id, state.deploy_lease)
     {agent, runtime} = Federation.lookup_assignment(state.assignee.id)
