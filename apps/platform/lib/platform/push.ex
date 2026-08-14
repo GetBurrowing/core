@@ -55,7 +55,16 @@ defmodule Platform.Push do
     |> Repo.delete_all()
   end
 
-  @doc "Send a web push notification to all subscriptions for a participant."
+  @doc """
+  Send a web push notification addressed to one `chat_participants` row.
+
+  Addressing stays per-participant (the archived guard and the external
+  redaction both key on `participant_id`), while device resolution goes through
+  `subscriptions_for_recipient/1`: a user-typed recipient reaches every device
+  that user owns, once per distinct endpoint, whichever conversation the device
+  was registered in (task 019ffd19). Agent-typed and unknown recipients keep
+  the per-membership device set.
+  """
   @spec send_notification(binary(), map()) :: :ok
   def send_notification(participant_id, %{title: _, body: _} = payload) do
     if archived_user_participant?(participant_id) do
@@ -71,9 +80,7 @@ defmodule Platform.Push do
 
       :ok
     else
-      subscriptions =
-        from(s in Subscription, where: s.participant_id == ^participant_id)
-        |> Repo.all()
+      subscriptions = subscriptions_for_recipient(participant_id)
 
       # Redact the payload for external recipients before it leaves the box.
       # The archived guard above still wins — an archived external user is
@@ -92,6 +99,54 @@ defmodule Platform.Push do
             Logger.warning("[Push] failed to send to #{sub.endpoint}: #{inspect(reason)}")
         end
       end)
+    end
+  end
+
+  @doc """
+  Resolve the set of devices a chat notification for a recipient should reach.
+
+  Takes either a `%Participant{}` row (callers that already hold one skip the
+  lookup) or a `chat_participants.id`.
+
+  A USER-typed recipient resolves to every subscription across ALL of that
+  user's user-typed participant rows, collapsed to one row per distinct
+  `endpoint` via `distinct_endpoint_subscriptions/1` — the same query
+  `send_to_user/2` uses. Turning notifications on registers a device under
+  whichever conversation happened to be open at the time, so the old
+  per-membership lookup found that device only for messages in that one
+  conversation and delivered nothing everywhere else (task 019ffd19). The
+  endpoint collapse is load-bearing: a user in N conversations owns N
+  membership rows, and resolving them without it would send N copies to one
+  device.
+
+  Any other recipient — an AGENT-typed row, or an id with no
+  `chat_participants` row — keeps the per-membership lookup. `participant_id`
+  on an agent row holds an AGENT id, and `distinct_endpoint_subscriptions/1`
+  filters `participant_type == "user"`, so an agent id must never be handed to
+  the user-scoped query.
+
+  Distinct from `list_subscriptions/1`, which is a literal "rows stored under
+  this participant row" listing and stays per-participant by definition.
+
+  Kept public (not private) so behavioural tests can assert the resolved device
+  set directly, the same reason `preview_for_recipient/2` is public: the router
+  short-circuits push under the test env and sends inside `Task.start`, so
+  delivery itself is not observable from ExUnit.
+  """
+  @spec subscriptions_for_recipient(Participant.t() | binary()) :: [Subscription.t()]
+  def subscriptions_for_recipient(%Participant{participant_type: "user", participant_id: user_id})
+      when is_binary(user_id) do
+    distinct_endpoint_subscriptions(user_id)
+  end
+
+  def subscriptions_for_recipient(%Participant{id: participant_id}) do
+    participant_row_subscriptions(participant_id)
+  end
+
+  def subscriptions_for_recipient(participant_id) when is_binary(participant_id) do
+    case Repo.get(Participant, participant_id) do
+      %Participant{} = participant -> subscriptions_for_recipient(participant)
+      _ -> participant_row_subscriptions(participant_id)
     end
   end
 
@@ -165,6 +220,15 @@ defmodule Platform.Push do
     |> Repo.all()
   end
 
+  # Every `push_subscriptions` row stored under exactly ONE `chat_participants`
+  # row. Backs both `list_subscriptions/1` (the literal listing) and the
+  # non-user branch of `subscriptions_for_recipient/1`.
+  @spec participant_row_subscriptions(binary()) :: [Subscription.t()]
+  defp participant_row_subscriptions(participant_id) do
+    from(s in Subscription, where: s.participant_id == ^participant_id)
+    |> Repo.all()
+  end
+
   # User-level twin of `archived_user_participant?/1`: suppress push to a user
   # whose `users` row carries a non-nil `archived_at`.
   @spec archived_user?(binary()) :: boolean()
@@ -176,11 +240,19 @@ defmodule Platform.Push do
     end
   end
 
-  # User-level twin of `preview_for_recipient/2`: external users get the
-  # redacted generic copy (same telemetry event, emitted once per user
-  # notification); internal users get the payload unchanged.
+  @doc """
+  User-level twin of `preview_for_recipient/2`: external users get the redacted
+  generic copy (same telemetry event, emitted once per user notification);
+  internal users get the payload unchanged.
+
+  Kept public for the same reason `preview_for_recipient/2` is: this is the
+  redaction chokepoint on the user-scoped push path that `AttentionRouter` took
+  up in task 019ffd19, and a security test has to be able to assert the
+  resolved payload itself, not merely that the telemetry fired. Body unchanged
+  from the private version it replaces.
+  """
   @spec preview_for_user(binary(), map()) :: map()
-  defp preview_for_user(user_id, payload) do
+  def preview_for_user(user_id, payload) do
     if Tenancy.external_user?(%{id: user_id}) do
       :telemetry.execute(
         [:platform, :push, :external_safe_preview],
@@ -282,10 +354,7 @@ defmodule Platform.Push do
 
   @doc "List all push subscriptions for a participant."
   @spec list_subscriptions(binary()) :: [Subscription.t()]
-  def list_subscriptions(participant_id) do
-    from(s in Subscription, where: s.participant_id == ^participant_id)
-    |> Repo.all()
-  end
+  def list_subscriptions(participant_id), do: participant_row_subscriptions(participant_id)
 
   @doc "Return the VAPID public key for use in client-side subscription."
   @spec vapid_public_key() :: String.t() | nil

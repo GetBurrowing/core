@@ -331,7 +331,7 @@ defmodule Platform.Chat.AttentionRouter do
           user_id = if participant, do: participant.participant_id, else: pid
 
           unless MapSet.member?(online_user_ids, user_id) do
-            maybe_send_push(pid, sender_name, message, reason)
+            maybe_send_push(participant || pid, sender_name, message, reason)
           end
       end
 
@@ -559,7 +559,10 @@ defmodule Platform.Chat.AttentionRouter do
 
   defp return_empty, do: []
 
-  defp maybe_send_push(participant_id, sender_name, %Message{content: content}, reason) do
+  # `recipient` is the `%Participant{}` row when the caller resolved one (it
+  # already holds `participant_by_id`, so this costs no query), otherwise the
+  # bare `chat_participants.id`.
+  defp maybe_send_push(recipient, sender_name, %Message{content: content}, reason) do
     # Skip in test env. The spawned Task races with Ecto sandbox teardown:
     # when a test finishes, its Repo connection owner exits, and an
     # in-flight `Repo.all(Subscription)` inside this Task raises a
@@ -570,18 +573,44 @@ defmodule Platform.Chat.AttentionRouter do
     if Application.get_env(:platform, :env) != :test do
       body = if is_binary(content), do: String.slice(content, 0, 200), else: ""
 
-      Task.start(fn ->
-        Platform.Push.send_notification(participant_id, %{
-          title: notification_title(sender_name, reason),
-          body: body,
-          url: "/chat"
-        })
-      end)
+      payload = %{
+        title: notification_title(sender_name, reason),
+        body: body,
+        url: "/chat"
+      }
+
+      Task.start(fn -> deliver_push(recipient, payload) end)
     end
 
     :ok
   rescue
     _ -> :ok
+  end
+
+  # A user-typed recipient is addressed as a USER: `Push.send_to_user/2`
+  # resolves their devices across every conversation they're in and delivers
+  # once per distinct endpoint. Enabling notifications is a per-DEVICE act that
+  # happens in whichever conversation is open, so the per-membership path
+  # reached that device only for messages in that one conversation and sent
+  # nothing anywhere else (task 019ffd19). Applied to every routing reason, not
+  # only `:mention` — `:all`, `:here`, `:watch`, `:directed` and `:active` all
+  # lost the same devices, and the endpoint dedup makes the wider resolution
+  # quieter than the old one, never noisier.
+  #
+  # Agent-typed and unresolved recipients keep `send_notification/2`:
+  # `participant.participant_id` holds an AGENT id on an agent row, and the
+  # user-scoped resolution filters `participant_type == "user"`.
+  defp deliver_push(%Participant{participant_type: "user", participant_id: user_id}, payload)
+       when is_binary(user_id) do
+    Platform.Push.send_to_user(user_id, payload)
+  end
+
+  defp deliver_push(%Participant{id: participant_id}, payload) do
+    Platform.Push.send_notification(participant_id, payload)
+  end
+
+  defp deliver_push(participant_id, payload) when is_binary(participant_id) do
+    Platform.Push.send_notification(participant_id, payload)
   end
 
   @doc """

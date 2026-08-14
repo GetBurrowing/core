@@ -374,6 +374,136 @@ defmodule Platform.PushTest do
     end
   end
 
+  describe "subscriptions_for_recipient/1 across conversations (task 019ffd19)" do
+    test "a device enabled in conversation B is resolved for a mention in conversation A" do
+      user = insert_user(name: "Two Channel User")
+
+      # The same user, two conversations, therefore two chat_participants rows.
+      participant_a = add_user_participant(create_space().id, user)
+      participant_b = add_user_participant(create_space().id, user)
+
+      # Two devices, each registered while the user was looking at a different
+      # conversation: the phone in A, the laptop in B. Turning notifications on
+      # is a per-device act, so which conversation was open at the time is an
+      # accident of timing and must not decide where a mention lands.
+      endpoint_phone = "https://push.example.com/device/phone"
+      endpoint_laptop = "https://push.example.com/device/laptop"
+      subscribe_endpoint(participant_a.id, endpoint_phone)
+      subscribe_endpoint(participant_b.id, endpoint_laptop)
+
+      resolved =
+        participant_a.id
+        |> Push.subscriptions_for_recipient()
+        |> Enum.map(& &1.endpoint)
+        |> Enum.sort()
+
+      assert resolved == Enum.sort([endpoint_phone, endpoint_laptop]),
+             "a mention in conversation A must reach every device the user owns, " <>
+               "including the one registered in conversation B; got #{inspect(resolved)}"
+    end
+
+    test "one physical device registered under two memberships resolves ONCE" do
+      user = insert_user(name: "One Device Two Channels")
+
+      participant_a = add_user_participant(create_space().id, user)
+      participant_b = add_user_participant(create_space().id, user)
+
+      # ONE device. The browser re-registers the same endpoint under whichever
+      # conversation was open when notifications were turned on, so a user in N
+      # conversations owns N rows for the SAME endpoint. Resolving across
+      # memberships with a plain join would therefore send N copies to one
+      # device: the duplicate-storm defect wearing the cross-conversation fix's
+      # clothes. The endpoint collapse is what keeps the two apart.
+      endpoint = "https://push.example.com/device/only-phone"
+      subscribe_endpoint(participant_a.id, endpoint)
+      subscribe_endpoint(participant_b.id, endpoint)
+
+      assert Repo.aggregate(Subscription, :count) == 2,
+             "fixture must store one subscription row per membership"
+
+      resolved =
+        participant_a.id
+        |> Push.subscriptions_for_recipient()
+        |> Enum.map(& &1.endpoint)
+
+      assert resolved == [endpoint],
+             "two membership rows for one endpoint must resolve to one device; " <>
+               "got #{inspect(resolved)}"
+
+      # End to end on the same path: with VAPID unconfigured each do_send_push
+      # logs exactly one "VAPID keys not configured" line, so counting the line
+      # counts delivery attempts. One device, one push.
+      log =
+        capture_log(fn ->
+          assert Push.send_notification(participant_a.id, %{title: "hi", body: "there"}) == :ok
+        end)
+
+      deliveries =
+        log |> String.split("VAPID keys not configured") |> length() |> Kernel.-(1)
+
+      assert deliveries == 1,
+             "one physical device must be pushed once, not once per membership; " <>
+               "got #{deliveries}; log: #{log}"
+    end
+  end
+
+  describe "subscriptions_for_recipient/1 recipient typing (task 019ffd19)" do
+    test "agent-typed recipient keeps the per-membership device set" do
+      space = create_space()
+
+      {:ok, agent} =
+        Chat.add_participant(space.id, %{
+          participant_type: "agent",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Zip",
+          joined_at: DateTime.utc_now()
+        })
+
+      endpoint = "https://push.example.com/device/agent-row"
+      subscribe_endpoint(agent.id, endpoint)
+
+      resolved =
+        agent.id
+        |> Push.subscriptions_for_recipient()
+        |> Enum.map(& &1.endpoint)
+
+      # The user-scoped query joins on `participant_type == "user"`, so handing
+      # an agent row to it resolves nothing at all. Agent recipients must stay
+      # on the per-membership lookup.
+      assert resolved == [endpoint],
+             "an agent recipient must resolve its own membership's devices; " <>
+               "got #{inspect(resolved)}"
+    end
+
+    test "an agent row whose participant_id collides with a user id resolves NO user devices" do
+      # `participant_id` holds a USER id on a user row and an AGENT id on an
+      # agent row: two id spaces in one column. Handing an agent row to the
+      # user-scoped lookup asks "which user-typed rows carry this id", so a
+      # collision would hand the agent every device that user owns. The type
+      # branch, not the improbability of a UUID collision, is what prevents it.
+      user = insert_user(name: "Collision User")
+      user_participant = add_user_participant(create_space().id, user)
+      human_endpoint = "https://push.example.com/device/human-laptop"
+      subscribe_endpoint(user_participant.id, human_endpoint)
+
+      {:ok, agent} =
+        Chat.add_participant(create_space().id, %{
+          participant_type: "agent",
+          participant_id: user.id,
+          display_name: "Zip",
+          joined_at: DateTime.utc_now()
+        })
+
+      resolved =
+        agent.id
+        |> Push.subscriptions_for_recipient()
+        |> Enum.map(& &1.endpoint)
+
+      assert resolved == [],
+             "an agent recipient must never resolve a user's devices; got #{inspect(resolved)}"
+    end
+  end
+
   describe "send_to_user/2 endpoint dedup (#592 duplicate-storm fix)" do
     test "same endpoint under many participant rows → exactly ONE push per endpoint" do
       user = insert_user(name: "Heavy User")

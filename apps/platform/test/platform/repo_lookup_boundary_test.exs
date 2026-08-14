@@ -380,8 +380,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/org/wiki/routing.ex", :platform_uuid_guard, "-", 5, :safe_internal,
      "all five namespace/owner casts are Platform.UUID.cast/1, so a 16-character project/space path segment no longer validates as a namespace uuid nor gets compared as an owner id. Fabricated-value family: nothing raised before, which is why an assert_raise test would not have caught it"},
     # ── Push ───────────────────────────────────────────────────────────
-    {"platform/push.ex", :get, "Participant", 2, :safe_internal,
-     "`participant_id` comes off the recipient list `Chat.list_participants/2` returned for the space being notified"},
+    {"platform/push.ex", :get, "Participant", 3, :safe_internal,
+     "`participant_id` comes off the recipient list `Chat.list_participants/2` returned for the space being notified. The third call (task 019ffd19) is `subscriptions_for_recipient/1` reading `participant_type` to decide between user-scoped and per-membership device resolution; same provenance as the other two, and the router passes the already-loaded `%Participant{}` so its own path never reaches this clause"},
     {"platform/push.ex", :get, "User", 2, :safe_internal,
      "`user_id` is `participant.participant_id` off the `%Participant{}` loaded on the line above, or a recipient id from the same list"},
     # ── Responsibilities (sibling-owned) ───────────────────────────────

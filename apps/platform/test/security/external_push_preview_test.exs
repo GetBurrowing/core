@@ -16,6 +16,11 @@ defmodule Platform.Security.ExternalPushPreviewTest do
     * An agent participant → pass-through unchanged (no external redaction).
     * An archived external participant → `Push.send_notification/2` short-circuits
       on the pre-existing archived guard (no preview swap).
+    * USER-SCOPED path (task 019ffd19) → chat push now resolves a recipient's
+      devices across every conversation they belong to, which moved the router
+      onto `Push.send_to_user/2` and its `preview_for_user/2` chokepoint. Same
+      three safe strings, same telemetry, and a device registered in another
+      conversation is reached only with the redacted copy.
 
   A single adversarial helper scans the external output's VALUES and fails if any
   seeded internal string is present.
@@ -24,6 +29,8 @@ defmodule Platform.Security.ExternalPushPreviewTest do
   `send_notification/2`, `Tenancy.external_user?/1`.
   """
   use Platform.DataCase, async: false
+
+  import ExUnit.CaptureLog
 
   alias Platform.Accounts
   alias Platform.ExternalUserFixtures, as: World
@@ -46,11 +53,7 @@ defmodule Platform.Security.ExternalPushPreviewTest do
   # ── Recipient fixtures ─────────────────────────────────────────────────
 
   defp external_participant do
-    user = World.create_user!(%{name: "Xavier External"})
-
-    {:ok, _} =
-      Tenancy.mark_membership_external(%{user_id: user.id, org_id: TenancyFixtures.fabrikam_org_id()})
-
+    user = external_user!("Xavier External")
     space = World.channel!()
     {p, _} = user_participant(space.id, user)
     p
@@ -92,6 +95,33 @@ defmodule Platform.Security.ExternalPushPreviewTest do
 
     {p, user}
   end
+
+  defp external_user!(name) do
+    user = World.create_user!(%{name: name})
+
+    {:ok, _} =
+      Tenancy.mark_membership_external(%{user_id: user.id, org_id: TenancyFixtures.fabrikam_org_id()})
+
+    user
+  end
+
+  defp subscribe_endpoint!(participant_id, endpoint) do
+    n = System.unique_integer([:positive])
+
+    {:ok, sub} =
+      Push.subscribe(participant_id, %{
+        endpoint: endpoint,
+        keys: %{p256dh: "p256dh-#{n}", auth: "auth-#{n}"}
+      })
+
+    sub
+  end
+
+  # With VAPID unconfigured (the test default) each attempted delivery logs
+  # exactly one "VAPID keys not configured" line, so counting the line counts
+  # the devices actually reached.
+  defp delivery_attempts(log),
+    do: log |> String.split("VAPID keys not configured") |> length() |> Kernel.-(1)
 
   # Adversarial no-leak invariant: fail if ANY seeded internal string appears in
   # ANY value of the external recipient's resolved payload.
@@ -179,6 +209,83 @@ defmodule Platform.Security.ExternalPushPreviewTest do
 
       detach(suppressed)
       detach(safe)
+    end
+  end
+
+  # ── User-scoped push path (task 019ffd19) ──────────────────────────────
+
+  # Resolving a recipient's devices across every conversation they belong to
+  # moved the chat push path onto `Push.send_to_user/2`, whose redaction
+  # chokepoint is `preview_for_user/2` rather than `preview_for_recipient/2`.
+  # The control has to hold on the new path with the same strings, or the fix
+  # for the missed-notification bug becomes a leak.
+  describe "user-scoped path (task 019ffd19)" do
+    test "external recipient gets the generic preview; channel name is redacted too" do
+      channel_name = "Acme Launch War Room"
+      user = external_user!("Xavier External")
+      space = World.channel!(%{name: channel_name})
+      {_p, _} = user_participant(space.id, user)
+
+      payload = %{
+        title: "Rowan Ellis in #{channel_name}",
+        body: "internal roadmap: shipping the Acme deal Friday",
+        url: "/chat"
+      }
+
+      ref = attach([:platform, :push, :external_safe_preview], :safe_preview)
+
+      resolved = Push.preview_for_user(user.id, payload)
+
+      assert resolved == %{title: "New message", body: "You have a new message", url: "/chat"}
+      refute_leak(resolved, ["Rowan Ellis", "internal roadmap", "Acme", channel_name])
+
+      assert_receive {:safe_preview, %{count: 1}, %{user_id: uid}}
+      assert uid == user.id
+
+      detach(ref)
+    end
+
+    test "internal recipient's payload is byte-identical on the user-scoped path" do
+      user = World.create_user!(%{name: "Ian Internal"})
+      World.plain_member!(user, Tenancy.get_org_by_slug!("fabrikam"))
+
+      ref = attach([:platform, :push, :external_safe_preview], :safe_preview)
+
+      # Positive control: the redaction is external-scoped, so a green external
+      # assertion above cannot be an unconditional swap.
+      assert Push.preview_for_user(user.id, @chat_payload) == @chat_payload
+      refute_receive {:safe_preview, _, _}, 50
+
+      detach(ref)
+    end
+
+    test "a device registered in another conversation is reached, and still only redacted" do
+      user = external_user!("Yara External")
+
+      # Two conversations, so two chat_participants rows. The device was
+      # registered in B; the message arrives in A. Before task 019ffd19 that
+      # device resolved nothing, so the redaction never even got a chance to
+      # run for it.
+      {participant_a, _} = user_participant(World.channel!().id, user)
+      {participant_b, _} = user_participant(World.channel!().id, user)
+      subscribe_endpoint!(participant_b.id, "https://push.example.com/device/ext-laptop")
+
+      ref = attach([:platform, :push, :external_safe_preview], :safe_preview)
+
+      log =
+        capture_log(fn ->
+          assert :ok = Push.send_notification(participant_a.id, @chat_payload)
+        end)
+
+      assert delivery_attempts(log) == 1,
+             "the conversation-B device must now be reached from conversation A; log: #{log}"
+
+      # Reached, and redacted on the way: the widened device resolution does not
+      # route around the external chokepoint.
+      assert_receive {:safe_preview, %{count: 1}, %{participant_id: pid}}
+      assert pid == participant_a.id
+
+      detach(ref)
     end
   end
 
