@@ -262,4 +262,81 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
       refute html =~ ~s(data-role="meeting-roster")
     end
   end
+
+  # Task 019ff712 stage 2 — ONE caption host per panel render.
+  #
+  # `render_panel/1` renders `meeting_panel/1` in its PRODUCTION shape:
+  # both breakpoint subtrees are emitted into the same document (one is
+  # hidden by CSS at any given width), which is exactly the condition
+  # that used to produce two `MeetingCaptions` hosts. A cut-down render
+  # of a single container would pass against the two-host markup too and
+  # would prove nothing.
+  #
+  # Counted with LazyHTML, not with `=~`: `LazyHTML.query/2` returns a
+  # struct and is NEVER falsy, so `if result do` and `result == []` are
+  # both wrong — the nodes have to be counted.
+  describe "single caption host (stage 2)" do
+    defp caption_hosts(html) do
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([phx-hook="MeetingCaptions"]))
+      |> Enum.count()
+    end
+
+    test "renders exactly one MeetingCaptions host across both breakpoint subtrees" do
+      html = render_panel(%{})
+
+      # Anti-vacuity: the production shape really does emit both
+      # subtrees, so a count of 1 is a collapse and not a missing panel.
+      assert html =~ ~s(id="meeting-share-btn-desktop")
+      assert html =~ ~s(id="meeting-share-btn-mobile")
+
+      assert caption_hosts(html) == 1
+      assert html =~ ~s(id="meeting-captions")
+      assert html =~ ~s(data-role="meeting-captions")
+    end
+
+    test "the single host is hoisted out of the breakpoint-scoped subtrees" do
+      html = render_panel(%{})
+
+      # The old per-breakpoint host lived inside the desktop rail /
+      # mobile overlay. The hoisted one is a fixed-position sibling of
+      # both, so it is legible at either width rather than swapping.
+      host =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="meeting-captions"]))
+
+      assert Enum.count(host) == 1
+
+      classes = host |> LazyHTML.attribute("class") |> List.first()
+      assert classes =~ "fixed"
+      # ONE bottom offset, unprefixed, so the host clears the control row
+      # at both widths — measured over CDP against both control rows.
+      assert classes =~ "bottom-32"
+      refute classes =~ "lg:bottom-"
+      # Pinned inside the w-96 desktop rail at lg, full-bleed below it.
+      assert classes =~ "lg:right-3"
+      assert classes =~ "inset-x-4"
+    end
+
+    test "the host carries phx-update=ignore so a patch cannot wipe committed lines" do
+      html = render_panel(%{})
+
+      update =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="meeting-captions"]))
+        |> LazyHTML.attribute("phx-update")
+
+      assert update == ["ignore"]
+    end
+
+    test "no caption host at all when not in a meeting" do
+      html = render_panel(%{in_meeting: false})
+
+      assert caption_hosts(html) == 0
+      refute html =~ ~s(data-role="meeting-captions")
+    end
+  end
 end

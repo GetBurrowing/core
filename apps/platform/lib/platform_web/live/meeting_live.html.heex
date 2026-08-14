@@ -1088,15 +1088,6 @@
                          `_detach` runs cleanly on the old tile,
                          `_syncExistingTrack` rebinds the live track on the
                          freshly mounted tile in the new location. --%>
-                      <%!-- Per-speaker caption overlay (task 019f3f17 stage 2).
-                         `caption_slot?={true}` renders a
-                         `[data-caption-slot]` div inside the tile that
-                         MeetingCaptions writes into when a matching
-                         `meeting:caption` event lands. Only gallery mode
-                         opts in — the bottom strip's 96/120px tiles are
-                         too short to fit a legible caption line, and the
-                         central bar already carries the transcript in
-                         canvas/screen/whiteboard modes. --%>
                       <.video_tile
                         id_prefix="gallery-tile"
                         participant={
@@ -1110,7 +1101,6 @@
                         speaking?={false}
                         avatar_url={Map.get(p, :avatar_url)}
                         layout={:gallery}
-                        caption_slot?={@captions_visible}
                         data-local-dock={local? && "true"}
                       />
                       <%!-- Gallery local-video dock: the persistent local
@@ -1531,33 +1521,46 @@
        `#meeting-captions-persist-host` (see above) so a page reload with
        the server default `:captions_visible = false` still restores the
        viewer's stored preference. --%>
-    <%!-- Gallery-mode caption fan-out: when the stage is in gallery mode we
-       hide the combined caption bar via `hidden` (display:none) rather
-       than dropping it from the DOM with `:if`. The `MeetingCaptions`
-       hook does DOUBLE duty — it renders the central rolling buffer AND
-       fans each `meeting:caption` segment out to per-tile
-       `[data-participant] [data-caption-slot]` overlays. Removing the
-       host element unmounts the hook and would silence the per-tile
-       overlays too, regressing the gallery-view UX this task exists to
-       preserve.
+    <%!-- One caption surface in EVERY stage mode, gallery included (task
+       019ff712). Gallery used to hide this bar because it had per-tile
+       caption overlays of its own; those are gone, and the mode-conditional
+       `hidden` class went with them. Re-adding either without the other
+       leaves gallery viewers with no captions at all.
 
        Two-div structure — the OUTER `#meeting-captions-shell` carries the
-       positioning classes AND the conditional `hidden` toggle. The INNER
-       `#meeting-captions` div is the stable hook host (`phx-update="ignore"`
-       + `phx-hook="MeetingCaptions"`). Splitting them matters: with
-       `phx-update="ignore"` on the hook host, Phoenix's morphdom (and the
-       LV test client, see `Phoenix.LiveViewTest.TreeDOM.apply_phx_update/4`)
-       preserves NON-`data-*` attributes across renders, so the `hidden`
-       class flip has to live on an element the LV freely re-renders. The
-       wrapper's `data-stage-mode` attribute mirrors the assign so CDP e2e
-       and tests can query it. --%>
+       positioning classes. The INNER `#meeting-captions` div is the stable
+       hook host (`phx-update="ignore"` + `phx-hook="MeetingCaptions"`).
+       Splitting them matters: with `phx-update="ignore"` on the hook host,
+       Phoenix's morphdom (and the LV test client, see
+       `Phoenix.LiveViewTest.TreeDOM.apply_phx_update/4`) preserves
+       NON-`data-*` attributes across renders, so any class flip has to live
+       on an element the LV freely re-renders. The wrapper's
+       `data-stage-mode` attribute mirrors the assign so CDP e2e and tests
+       can query it.
+
+       OFFSET (stage 4): `1.75rem`, up from `1rem`, and deliberately the SAME
+       constant in every stage mode — a gallery-specific position would make
+       the eye hunt for the bar on a mode switch, which is the thing one
+       caption surface exists to avoid. It is composed from the layout's own
+       gutters rather than guessed: the centre stage is `p-4` (1rem), the
+       gallery grid inside it is `p-1` (0.25rem), and tiles are separated by
+       `gap-2` (0.5rem) — so seating the bar one inter-tile gutter below the
+       grid's own bottom edge is 1 + 0.25 + 0.5 = 1.75rem. Measured at
+       1280x800 with a full 2x2 grid: bottom tile row ends at y=684, bar top
+       at y=700 — 16px of clear space, where the old 1rem offset left 4px.
+
+       Both the `env(safe-area-inset-bottom)` and `var(--bottom-nav-height,0px)`
+       terms are load-bearing and must stay: dropping the first puts the bar
+       under the iOS home indicator, dropping the second puts it behind the
+       mobile bottom-nav rail. A headless screenshot cannot prove the
+       safe-area term (headless Chrome reports a zero inset), so it is pinned
+       by the render test instead. --%>
     <div
       :if={@captions_visible}
       data-role="meeting-captions-shell"
       data-stage-mode={@current_stage_mode}
       class={[
-        "fixed bottom-[calc(1rem+env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] left-1/2 -translate-x-1/2 z-40 w-full max-w-2xl px-4 pointer-events-none",
-        @current_stage_mode == :gallery && "hidden"
+        "fixed bottom-[calc(1.75rem+env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] left-1/2 -translate-x-1/2 z-40 w-full max-w-2xl px-4 pointer-events-none"
       ]}
     >
       <div

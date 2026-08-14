@@ -14,20 +14,21 @@ import ClientState from "../client_state"
  * - Auto-hides after 5 seconds of silence
  * - CSS classes handle positioning (bottom overlay, semi-transparent bg)
  *
- * Stage 2 (task 019f3f17): in addition to the central rolling buffer, the
- * hook fans each incoming segment out to a matching per-speaker overlay
- * slot on the gallery tile — `[data-participant='<identity>']
- * [data-caption-slot]`. When gallery mode is active AND the speaker is
- * a visible tile, the tile-slot displays the latest line beneath the
- * speaker's face. When the speaker is off-page (paged out, or a non-
- * gallery mode is active), no matching slot exists in the DOM and the
- * per-tile render silently no-ops — the central bar still carries the
- * transcript so the viewer never loses a line.
+ * This bar is the ONE caption surface in every stage mode, gallery
+ * included (task 019ff712). There is no per-tile fan-out: a single
+ * attributed line beneath the video area is the whole contract.
  */
 
-const MAX_LINES = 3
+// Two, not three (task 019ff712 stage 4). The 3-line buffer was chosen when
+// this bar only ever drew over canvas / screen-share, where the bottom of the
+// frame is dead space. It is now the caption surface in gallery too, and
+// there the same three lines land on somebody's face — occlusion, not
+// headroom. Measured at 1280x800: three lines make the bar 96px tall against
+// a 116px band of clear space below the bottom tile row; two make it 72px.
+// This is the ONLY knob that was turned — the dedupe in `_commitLine`
+// (stage 1) is untouched.
+const MAX_LINES = 2
 const HIDE_AFTER_MS = 5000
-const SPEAKER_SLOT_HIDE_AFTER_MS = 5000
 
 const MeetingCaptions = {
   mounted() {
@@ -35,8 +36,6 @@ const MeetingCaptions = {
     this._lines = []
     this._hideTimer = null
     this._interimLine = null // Track the current interim segment by ID
-    /** @type {Map<string, { text: string, speaker: string, timerId: number|null }>} */
-    this._speakerSlots = new Map()
 
     this._boundOnCaption = this._onCaption.bind(this)
     document.addEventListener("meeting:caption", this._boundOnCaption)
@@ -56,13 +55,6 @@ const MeetingCaptions = {
   destroyed() {
     document.removeEventListener("meeting:caption", this._boundOnCaption)
     this._clearHideTimer()
-    // Clear every pending speaker-slot fade timer so a tile that
-    // remounts under a fresh identity doesn't inherit a stale scheduled
-    // clear from a previous session.
-    for (const slot of this._speakerSlots.values()) {
-      if (slot.timerId) clearTimeout(slot.timerId)
-    }
-    this._speakerSlots.clear()
   },
 
   // ── Private ──────────────────────────────────────────────────────────
@@ -94,15 +86,6 @@ const MeetingCaptions = {
     }
 
     this._render()
-
-    // Stage 2 fan-out: mirror the SAME segment (interim OR final) into
-    // the speaker's per-tile overlay slot when one is mounted. The slot
-    // is only present in gallery layout AND when the speaker's tile is
-    // visible — the query silently returns null in every other case, so
-    // this is a no-op fallback path (central bar continues rendering).
-    if (typeof identity === "string" && identity !== "") {
-      this._renderSpeakerSlot({ identity, speaker: displaySpeaker, text })
-    }
   },
 
   _updateInterim({ id, speaker, text }) {
@@ -117,13 +100,24 @@ const MeetingCaptions = {
   },
 
   _commitLine({ id, speaker, text }) {
-    // If this was the interim line, promote it
-    if (this._interimLine && this._interimLine.id === id) {
-      this._interimLine = null
-    }
+    // A final segment ends the current interim segment, whatever id it
+    // carries. Transcribers do not reliably reuse the interim's id for
+    // the final (task 019ff712): the previous `id === this._interimLine.id`
+    // guard left the interim orphaned whenever the ids differed, and
+    // `_render` then emitted it alongside the committed final — one
+    // utterance, two visible `.caption-line` nodes.
+    this._interimLine = null
 
-    // Add to the finalized lines buffer
-    this._lines.push({ id, speaker, text, final: true })
+    // Add to the finalized lines buffer. A redelivered final must update
+    // the entry it already owns rather than append a second identical
+    // one; a genuinely new id still appends, so scrollback is preserved.
+    const line = { id, speaker, text, final: true }
+    const existing = this._lines.findIndex((l) => l.id === id)
+    if (existing !== -1) {
+      this._lines[existing] = line
+    } else {
+      this._lines.push(line)
+    }
 
     // Keep only the last MAX_LINES finalized lines
     if (this._lines.length > MAX_LINES) {
@@ -171,63 +165,6 @@ const MeetingCaptions = {
     const div = document.createElement("div")
     div.textContent = str
     return div.innerHTML
-  },
-
-  // ── Per-speaker slot fan-out (stage 2) ───────────────────────────────
-  //
-  // Look up the tile carrying `data-participant="<identity>"` and, if
-  // it has a `[data-caption-slot]` overlay child (opted in via the
-  // video_tile `caption_slot?={true}` attr), write the speaker's latest
-  // line into it and schedule a fade after SPEAKER_SLOT_HIDE_AFTER_MS
-  // of silence. Silently no-ops when either the tile or the slot is
-  // missing — that's the fallback path (off-page speaker, non-gallery
-  // layout) where the central bar carries the transcript on its own.
-  _renderSpeakerSlot({ identity, speaker, text }) {
-    // Escape the identity into a valid CSS attribute selector — LiveKit
-    // identities can contain characters like `:` (`user:<uuid>`,
-    // `guest:<slug>`) which are structural in selectors. `CSS.escape` is
-    // the browser-native way to quote them.
-    const safeIdentity = window.CSS && window.CSS.escape
-      ? window.CSS.escape(identity)
-      : identity.replace(/["\\]/g, "\\$&")
-
-    // Prefer a gallery-tile scope so the strip's identical
-    // `data-participant` attribute (see meeting_live.html.heex bottom
-    // strip) never picks up the slot query — the strip never carries a
-    // `[data-caption-slot]` today, but a `querySelector` traversing the
-    // page would still traverse that subtree unnecessarily.
-    const tile = document.querySelector(
-      `[data-participant="${safeIdentity}"] [data-caption-slot]`
-    )
-    if (!tile) return
-
-    tile.textContent = `${speaker}: ${text}`
-    tile.classList.remove("opacity-0")
-    tile.classList.add("opacity-100")
-
-    // Track + clear on a fade timer per identity so a burst of interim
-    // segments doesn't stack listeners; each new segment resets the
-    // timer to keep the slot visible while the speaker is still going.
-    const existing = this._speakerSlots.get(identity)
-    if (existing && existing.timerId) {
-      clearTimeout(existing.timerId)
-    }
-
-    const timerId = setTimeout(() => {
-      // The tile might have unmounted (mode swap, participant left) —
-      // re-resolve rather than caching a possibly-stale reference.
-      const slot = document.querySelector(
-        `[data-participant="${safeIdentity}"] [data-caption-slot]`
-      )
-      if (slot) {
-        slot.classList.remove("opacity-100")
-        slot.classList.add("opacity-0")
-        slot.textContent = ""
-      }
-      this._speakerSlots.delete(identity)
-    }, SPEAKER_SLOT_HIDE_AFTER_MS)
-
-    this._speakerSlots.set(identity, { text, speaker, timerId })
   },
 }
 

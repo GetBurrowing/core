@@ -295,90 +295,49 @@ defmodule PlatformWeb.Components.Meeting.VideoTileTest do
     end
   end
 
-  # ── caption_slot? attr (task 019f3f17 stage 2) ─────────────────────────────
+  # ── no per-tile caption overlay (task 019ff712 stage 3) ────────────────────
   #
-  # Stage 2 adds a per-speaker caption overlay slot to gallery tiles. The
-  # MeetingCaptions JS hook queries `[data-participant='<identity>']
-  # [data-caption-slot]` and writes the speaker's latest line into it. The
-  # slot renders ONLY when the caller opts in via `caption_slot?={true}` —
-  # the bottom strip (default) never carries one because its 96/120px tile
-  # height leaves no legible caption room.
-  describe "video_tile/1 — caption_slot? attr" do
-    test "caption_slot?=false (default) omits the [data-caption-slot] overlay" do
+  # The per-speaker `[data-caption-slot]` overlay and its `caption_slot?`
+  # attr are GONE. Captions are the single consolidated bar in every stage
+  # mode, gallery included — see `meeting_live_test.exs`, which asserts the
+  # bar renders un-hidden in gallery. Deleting the overlay on its own would
+  # have left gallery caption-less; the two changes landed together.
+  describe "video_tile/1 — no caption overlay" do
+    test "no layout renders a [data-caption-slot] overlay" do
       assigns = %{p: participant()}
 
-      html =
+      gallery =
         rendered_to_string(~H"""
         <.video_tile participant={@p} layout={:gallery} />
         """)
 
-      refute html =~ ~s(data-caption-slot)
+      strip =
+        rendered_to_string(~H"""
+        <.video_tile participant={@p} layout={:strip} />
+        """)
+
+      refute gallery =~ ~s(data-caption-slot)
+      refute strip =~ ~s(data-caption-slot)
+
+      # Anti-vacuity: both renders really did produce a tile, so the
+      # refutes above are about the overlay and not about an empty string.
+      assert gallery =~ ~s(data-participant)
+      assert strip =~ ~s(data-participant)
     end
 
-    test "caption_slot?=true renders a [data-caption-slot] overlay inside the tile" do
-      assigns = %{p: participant()}
+    test "the caption_slot? attr is no longer declared on the component" do
+      # A leftover declaration is invisible to a render assertion — every
+      # caller stopped passing it, so the overlay would be absent either
+      # way. Assert the attr itself is gone from the compiled component.
+      attrs =
+        PlatformWeb.Components.Meeting.VideoTile.__components__()
+        |> Map.fetch!(:video_tile)
+        |> Map.fetch!(:attrs)
+        |> Enum.map(& &1.name)
 
-      html =
-        rendered_to_string(~H"""
-        <.video_tile participant={@p} layout={:gallery} caption_slot?={true} />
-        """)
-
-      # The overlay is present and carries phx-update="ignore" so
-      # morphdom leaves the JS-populated caption content alone across
-      # unrelated re-renders.
-      assert html =~ ~s(data-caption-slot)
-      assert html =~ ~r/data-caption-slot[^>]*|phx-update="ignore"[^>]*data-caption-slot/
-      # Server render is empty — the JS hook writes the caption text.
-      # We assert the outer div is stable + empty by matching a
-      # self-open then a matching close with only whitespace between.
-      assert html =~ ~r/data-caption-slot[^>]*>\s*<\/div>/
-    end
-
-    test "the caption overlay carries aria-live=polite for screen readers" do
-      # `aria-live` on the overlay lets the operating system announce
-      # each incoming caption line as it's written by the hook.
-      assigns = %{p: participant()}
-
-      html =
-        rendered_to_string(~H"""
-        <.video_tile participant={@p} layout={:gallery} caption_slot?={true} />
-        """)
-
-      assert html =~
-               ~r/data-caption-slot[^>]*aria-live="polite"|aria-live="polite"[^>]*data-caption-slot/
-    end
-
-    test "the caption overlay id is namespaced by id_prefix + identity so multiple tiles don't collide" do
-      # Each tile's caption slot needs a unique DOM id so LiveView's
-      # morphdom + `phx-update="ignore"` correctly identify it across
-      # re-renders. `caption-slot-<id_prefix>-<identity>` mirrors the
-      # existing tile-id and video-slot-id schemes.
-      assigns = %{p: %{identity: "user:a", name: "Ada"}}
-
-      html_a =
-        rendered_to_string(~H"""
-        <.video_tile
-          participant={@p}
-          layout={:gallery}
-          id_prefix="gallery-tile"
-          caption_slot?={true}
-        />
-        """)
-
-      assigns = %{p: %{identity: "user:b", name: "Bea"}}
-
-      html_b =
-        rendered_to_string(~H"""
-        <.video_tile
-          participant={@p}
-          layout={:gallery}
-          id_prefix="gallery-tile"
-          caption_slot?={true}
-        />
-        """)
-
-      assert html_a =~ ~s(id="caption-slot-gallery-tile-user:a")
-      assert html_b =~ ~s(id="caption-slot-gallery-tile-user:b")
+      refute :caption_slot? in attrs
+      # Anti-vacuity: the attr list is the real one.
+      assert :participant in attrs
     end
   end
 end

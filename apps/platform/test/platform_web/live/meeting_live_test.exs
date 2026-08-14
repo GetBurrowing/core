@@ -197,6 +197,21 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
+  # The caption shell's `class` attribute, parsed rather than regexed, so an
+  # assertion about a class is an assertion about the CLASS LIST and not about
+  # a substring that happens to appear anywhere in the opening tag. Raises
+  # when the shell is absent — a nil class list would make every `refute`
+  # below it vacuously true.
+  defp caption_bar_shell_class(html) do
+    [class] =
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-role="meeting-captions-shell"]))
+      |> LazyHTML.attribute("class")
+
+    class
+  end
+
   describe "route resolution" do
     test "/meetings/:slug resolves and mounts the meeting shell", %{conn: conn} do
       {meeting, _space} = create_meeting(%{slug: "kickoff-route", name: "Kickoff"})
@@ -7276,6 +7291,20 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ ~s(phx-hook="MeetingCaptions")
       assert html =~ ~s(data-role="meeting-captions")
 
+      # Task 019ff712 stage 2 — MeetingLive still mounts the hook exactly
+      # ONCE with captions on. That stage collapsed the quick-meet panel's
+      # two hosts into one; /meetings is a genuinely different render
+      # path, so its host contract has to be asserted here rather than
+      # inferred from the quick-meet test. Counted with LazyHTML because
+      # `LazyHTML.query/2` returns a struct and is never falsy.
+      hosts =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([phx-hook="MeetingCaptions"]))
+        |> Enum.count()
+
+      assert hosts == 1
+
       # Server-push mirrored to localStorage by the hook: assert the
       # meeting_captions_persist event landed.
       assert_push_event(view, "meeting_captions_persist", %{visible: true})
@@ -7357,8 +7386,9 @@ defmodule PlatformWeb.MeetingLiveTest do
 
   # ── Closed captions (task 019f3f17 stage 2) ─────────────────────────
   #
-  # Stage 2 extends the caption feed with per-speaker overlay slots on
-  # gallery tiles PLUS two fold-in review fixes from stage 1:
+  # Stage 2's per-speaker overlay slots are GONE (task 019ff712 stage 3) —
+  # what remains here are the two fold-in review fixes from stage 1 plus the
+  # assertion that gallery has no per-tile slot and DOES have the bar:
   #
   #   1. Persistence host div is mounted OUTSIDE the `:if @captions_visible`
   #      gate so localStorage restore survives a reload with the server
@@ -7367,13 +7397,7 @@ defmodule PlatformWeb.MeetingLiveTest do
   #   2. Caption bar z-index bumped from `z-30` to `z-40` so it paints
   #      above the sticky mobile bottom-nav (which sits at `z-30`).
   #
-  # The per-tile overlay itself is server-rendered as an empty
-  # `[data-caption-slot]` div on each gallery `<.video_tile>` when the
-  # viewer has captions on. The JS hook populates content at runtime;
-  # these tests only pin the SERVER contract: the slot renders in
-  # gallery mode when CC is on, and NOT in the strip / non-gallery
-  # layouts / with CC off.
-  describe "closed captions (stage 2 — per-tile overlays)" do
+  describe "closed captions (no per-tile overlays)" do
     setup %{conn: conn} do
       # Reuse the stage-1 LiveKit env stub so `:in_meeting=true` after
       # auto-join and the CC toggle button is reachable.
@@ -7470,93 +7494,155 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html =~ ~r/data-role="meeting-captions-shell"[^>]*\bz-30\b/
     end
 
-    test "gallery tiles carry a `[data-caption-slot]` overlay when CC is on", %{
+    test "gallery with CC on: zero caption slots AND one un-hidden consolidated bar", %{
       conn: conn,
       meeting: meeting,
       space: space
     } do
-      # Seed one visible human participant so the gallery tile exists.
+      # BOTH halves in one test, deliberately. Task 019ff712 stage 3 deleted
+      # the per-tile `[data-caption-slot]` overlay AND removed the
+      # `@current_stage_mode == :gallery && "hidden"` class that suppressed
+      # the consolidated bar. Half (a) alone is satisfied by simply deleting
+      # every caption surface in gallery — half (b) is what makes it an
+      # assertion about captions rather than about their absence.
       {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
-      # Sanity: gallery is the default layout.
-      html = render(view)
-      assert html =~ ~s(data-stage-mode="gallery")
-
-      # CC off: no per-tile overlay slot on the gallery tiles.
-      refute html =~ ~s(data-caption-slot)
-
-      # Toggle CC on and re-render.
       html =
         view
         |> element(~s([data-role="meeting-captions-toggle"]))
         |> render_click()
 
-      # Now the gallery `<.video_tile>` renders a `[data-caption-slot]`
-      # child on the tile. The JS hook uses
-      # `[data-participant='<identity>'] [data-caption-slot]` to write
-      # per-speaker captions — the empty div is the anchor.
-      assert html =~ ~s(data-caption-slot)
-      # The overlay is `phx-update="ignore"` so morphdom leaves the
-      # JS-populated content alone on unrelated re-renders.
-      assert html =~ ~r/data-caption-slot[^>]*|phx-update="ignore"[^>]*data-caption-slot/
+      assert :sys.get_state(view.pid).socket.assigns.current_stage_mode == :gallery
+      doc = LazyHTML.from_fragment(html)
+
+      # Anti-vacuity: a gallery tile really rendered, so (a) is a statement
+      # about the overlay and not about an empty gallery.
+      assert doc |> LazyHTML.query(~s([data-participant])) |> Enum.count() > 0
+
+      # (a) zero per-tile caption slots.
+      assert doc |> LazyHTML.query(~s([data-caption-slot])) |> Enum.count() == 0
+
+      # (b) exactly one consolidated bar host, and its shell is NOT hidden.
+      assert doc |> LazyHTML.query(~s([data-role="meeting-captions"])) |> Enum.count() == 1
+
+      shell_classes =
+        doc
+        |> LazyHTML.query(~s([data-role="meeting-captions-shell"]))
+        |> LazyHTML.attribute("class")
+
+      assert [shell_class] = shell_classes
+
+      refute "hidden" in String.split(shell_class),
+             "consolidated caption bar must render in gallery; class list was: #{shell_class}"
     end
 
-    test "the bottom strip's video_tile does NOT carry a caption slot even with CC on", %{
+    test "the shell's positioning classes are pinned in gallery AND canvas", %{
       conn: conn,
       meeting: meeting,
       space: space
     } do
-      # Strip tiles are 96/120px tall — too short for a legible caption
-      # line, and the central bar already carries the transcript in
-      # non-gallery modes. The stage-2 opt-in (`caption_slot?={true}`)
-      # is thread through from the gallery layout only.
+      # Task 019ff712 stage 4. Three separate regressions this pins, each of
+      # which a later refactor could reintroduce silently:
+      #
+      #   1. the gallery-specific `hidden` class coming back (refuted on the
+      #      GALLERY render specifically — the canvas assert below cannot see
+      #      it, which is why there is one assertion per side);
+      #   2. either of the two offset terms being dropped —
+      #      `env(safe-area-inset-bottom)` (the iOS home indicator) or
+      #      `var(--bottom-nav-height,0px)` (the mobile bottom-nav rail).
+      #      NEITHER is observable in a headless screenshot: headless Chrome
+      #      reports a zero safe-area inset and the nav var is 0 on desktop,
+      #      so this render assertion is the only thing that can see them;
+      #   3. the offset becoming mode-conditional. The exact same class
+      #      string is asserted in gallery and in canvas — one caption
+      #      surface means one position, not a per-mode position.
       {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
-      # Enable captions first so the central overlay is up.
+      gallery_html =
+        view
+        |> element(~s([data-role="meeting-captions-toggle"]))
+        |> render_click()
+
+      assert :sys.get_state(view.pid).socket.assigns.current_stage_mode == :gallery
+
+      offset =
+        "bottom-[calc(1.75rem+env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]"
+
+      gallery_class = caption_bar_shell_class(gallery_html)
+
+      assert gallery_class =~ offset,
+             "gallery caption shell lost its offset; class list was: #{gallery_class}"
+
+      assert gallery_class =~ "env(safe-area-inset-bottom)"
+      assert gallery_class =~ "var(--bottom-nav-height,0px)"
+      assert gallery_class =~ "fixed"
+      assert gallery_class =~ "left-1/2"
+      assert gallery_class =~ "-translate-x-1/2"
+
+      # One assertion per side: the canvas case below cannot observe a
+      # `hidden` that only gallery renders.
+      refute "hidden" in String.split(gallery_class),
+             "caption shell must not be hidden in gallery; class list was: #{gallery_class}"
+
+      canvas_html = render_click(view, "set_stage_mode", %{"mode" => "canvas"})
+      canvas_class = caption_bar_shell_class(canvas_html)
+
+      assert canvas_class =~ offset,
+             "canvas caption shell lost its offset; class list was: #{canvas_class}"
+
+      refute "hidden" in String.split(canvas_class),
+             "caption shell must not be hidden in canvas; class list was: #{canvas_class}"
+
+      # The placement is SHARED, so the two class lists are identical.
+      assert gallery_class == canvas_class,
+             "caption placement must not branch on stage mode; gallery=#{gallery_class} canvas=#{canvas_class}"
+    end
+
+    test "no caption slot renders in the bottom strip either", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
       view
       |> element(~s([data-role="meeting-captions-toggle"]))
       |> render_click()
 
-      # Then flip to a non-gallery mode so the bottom strip renders.
       html =
         view
         |> element(~s([data-stage-mode-button="canvas"]))
         |> render_click()
 
       assert html =~ ~s(data-pane="bottom-strip")
-
-      # Isolate the strip section and confirm no caption slot bleeds in
-      # from the strip tiles. The strip renders `id_prefix="strip-tile"`
-      # — a scoped scan is enough.
-      [_, strip_section] = String.split(html, ~s(data-pane="bottom-strip"), parts: 2)
-
-      refute strip_section =~ ~s(data-caption-slot),
-             "bottom strip tiles must NOT carry `[data-caption-slot]` (strip is too short for captions)"
+      refute html =~ ~s(data-caption-slot)
     end
 
-    test "no per-tile caption slot renders in gallery when CC is off", %{
+    test "with CC off the consolidated bar is absent from the DOM", %{
       conn: conn,
       meeting: meeting,
       space: space
     } do
-      # The gallery `<.video_tile>` opt-in is `caption_slot?={@captions_visible}`,
-      # so the slot must be absent by default (server assign starts false).
+      # The `:if={@captions_visible}` gate is untouched by stage 3 — removing
+      # the `hidden` class must not turn the bar into an always-on element.
       {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
 
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
 
-      # No overlay and no per-tile slot when CC is off.
       refute html =~ ~s(data-role="meeting-captions")
       refute html =~ ~s(data-caption-slot)
     end
 
-    test "toggling CC off removes the per-tile caption slots from gallery tiles", %{
+    test "toggling CC off withdraws the consolidated bar in gallery", %{
       conn: conn,
       meeting: meeting,
       space: space
@@ -7566,42 +7652,33 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
-      # Toggle CC on → slot present.
       html =
         view
         |> element(~s([data-role="meeting-captions-toggle"]))
         |> render_click()
 
-      assert html =~ ~s(data-caption-slot)
+      assert html =~ ~s(data-role="meeting-captions-shell")
 
-      # Toggle CC off → slot withdrawn.
       html =
         view
         |> element(~s([data-role="meeting-captions-toggle"]))
         |> render_click()
 
-      refute html =~ ~s(data-caption-slot)
+      refute html =~ ~s(data-role="meeting-captions-shell")
     end
   end
 
   # ── Caption bar / gallery interaction (task 019f43e4 stage 1) ─────────
   #
-  # In gallery mode, the per-tile `[data-caption-slot]` overlays are the
-  # primary surface for spoken captions — the combined lower bar becomes
-  # visually redundant (and, on mobile, competes with the sticky nav for
-  # safe-area space). We hide the bar via a `hidden` class rather than
-  # unmounting it with `:if`, because the `MeetingCaptions` JS hook
-  # mounts on `#meeting-captions` and fans caption segments out to BOTH
-  # the bar AND every per-tile `[data-caption-slot]`. Dropping the host
-  # element from the DOM would silence the per-tile fan-out too.
-  #
-  # These tests pin the server contract: the bar's class list flips
-  # `hidden` on/off in lock-step with `:current_stage_mode`, and the
-  # `data-stage-mode` attribute mirrors the assign so CDP e2e can query
-  # it. Morphdom must re-apply the class change even though
-  # `phx-update="ignore"` is on the element (ignore preserves CHILDREN,
-  # not attributes).
-  describe "caption bar / gallery interaction (stage 1 — gallery dedup)" do
+  # Gallery used to hide the consolidated bar with a `hidden` class because
+  # it had per-tile caption overlays instead. Those overlays are gone (task
+  # 019ff712 stage 3) and the class went with them: the bar is now the ONE
+  # caption surface in EVERY stage mode. These tests pin that the class list
+  # carries no `hidden` in any mode, while `data-stage-mode` still mirrors
+  # the assign so CDP e2e can query it. The canvas / screen / whiteboard
+  # cases are the control — they worked before this change and must be
+  # byte-for-byte unaffected by it.
+  describe "caption bar / stage mode interaction" do
     setup %{conn: conn} do
       # Same LiveKit env stub the other caption describe blocks use —
       # captions come from the LiveKit stream, so `:in_meeting=true` must
@@ -7630,7 +7707,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, user: user, meeting: meeting, space: space}
     end
 
-    test "caption bar renders with `hidden` class in gallery mode when captions on",
+    test "caption bar renders WITHOUT `hidden` class in gallery mode when captions on",
          %{conn: conn, meeting: meeting} do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
@@ -7648,12 +7725,13 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert tag,
              ~s(expected `[data-role="meeting-captions-shell"]` element to render when captions are on)
 
-      # Bar carries the mode attribute AND the `hidden` class.
+      # Bar carries the mode attribute and NO `hidden` class.
       assert tag =~ ~s(data-stage-mode="gallery")
-      assert tag =~ ~r/\bhidden\b/
 
-      # The host div is still in the DOM — hook stays mounted so per-tile
-      # fan-out keeps working.
+      refute tag =~ ~r/\bhidden\b/,
+             "caption bar must render in gallery mode; got: #{tag}"
+
+      # The host div is in the DOM and the hook is mounted on it.
       assert html =~ ~s(id="meeting-captions")
       assert html =~ ~s(phx-hook="MeetingCaptions")
     end
@@ -7698,13 +7776,13 @@ defmodule PlatformWeb.MeetingLiveTest do
       end
     end
 
-    test "toggling stage mode gallery -> canvas -> gallery flips the hidden class in-place",
+    test "toggling stage mode gallery -> canvas -> gallery never hides the bar",
          %{conn: conn, meeting: meeting} do
-      # Regression: with `phx-update=\"ignore\"` on the element, we need
-      # morphdom to re-apply attribute + class changes on stage-mode
-      # transitions — `ignore` preserves children, not attributes. If the
-      # class doesn't flip we've regressed the whole reason for using
-      # `hidden` over `:if` (per-tile fan-out preservation).
+      # Regression: with `phx-update=\"ignore\"` on the element, morphdom
+      # still has to re-apply attribute changes on stage-mode transitions
+      # — `ignore` preserves children, not attributes. `data-stage-mode`
+      # is the observable that proves the transition actually happened, so
+      # the `hidden` refutes are not passing on a stale render.
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
@@ -7714,7 +7792,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       html_gallery = render(view)
       tag_g1 = caption_bar_shell_open_tag(html_gallery)
-      assert tag_g1 =~ ~r/\bhidden\b/
+      refute tag_g1 =~ ~r/\bhidden\b/
       assert tag_g1 =~ ~s(data-stage-mode="gallery")
 
       html_canvas = render_click(view, "set_stage_mode", %{"mode" => "canvas"})
@@ -7724,7 +7802,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       html_back = render_click(view, "set_stage_mode", %{"mode" => "gallery"})
       tag_g2 = caption_bar_shell_open_tag(html_back)
-      assert tag_g2 =~ ~r/\bhidden\b/
+      refute tag_g2 =~ ~r/\bhidden\b/
       assert tag_g2 =~ ~s(data-stage-mode="gallery")
     end
 

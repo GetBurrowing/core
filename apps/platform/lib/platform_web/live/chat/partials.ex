@@ -1201,12 +1201,6 @@ defmodule PlatformWeb.ChatLive.Partials do
           class="mt-2 aspect-video w-full overflow-hidden rounded-lg bg-base-300 empty:hidden"
         >
         </div>
-        <div
-          id="meeting-captions"
-          phx-hook="MeetingCaptions"
-          class="mt-2 rounded-lg bg-base-300/80 px-3 py-2 text-sm opacity-0 pointer-events-none transition-opacity duration-300"
-        >
-        </div>
       </div>
 
       <div class="flex items-center justify-center gap-2 border-t border-base-300 px-4 py-3">
@@ -1364,12 +1358,6 @@ defmodule PlatformWeb.ChatLive.Partials do
           class="mt-2 aspect-video w-full overflow-hidden rounded-lg bg-base-300 empty:hidden"
         >
         </div>
-        <div
-          id="meeting-captions-mobile"
-          phx-hook="MeetingCaptions"
-          class="mt-2 rounded-lg bg-base-300/80 px-3 py-2 text-sm opacity-0 pointer-events-none transition-opacity duration-300"
-        >
-        </div>
       </div>
 
       <div class="flex items-center justify-center gap-3 border-t border-base-300 px-4 py-4 safe-area-bottom">
@@ -1429,6 +1417,30 @@ defmodule PlatformWeb.ChatLive.Partials do
           <span class="hero-phone-x-mark size-6"></span>
         </button>
       </div>
+    </div>
+
+    <%!-- Task 019ff712 stage 2: ONE caption host for the whole quick-meet
+         panel. Captions used to be authored twice — once inside the
+         `hidden lg:flex` desktop rail and again inside the `lg:hidden`
+         mobile overlay — which doubled the DOM nodes and the hook
+         instances for a single visible line. There is one approach to
+         captions in every context, so the
+         host is hoisted OUT of both breakpoint subtrees and positioned to
+         sit below the video area and above the control row at BOTH widths:
+         full-bleed above the mobile control row, and pinned inside the
+         w-96 rail above the desktop control row at `lg`. `z-[60]` clears
+         the mobile overlay's `z-50`. `phx-update="ignore"` matches
+         MeetingLive's host — the hook writes `innerHTML`, and a LiveView
+         patch would otherwise wipe committed lines. `data-role` so tests
+         and tooling query by role rather than id. --%>
+    <div
+      :if={@in_meeting}
+      id="meeting-captions"
+      data-role="meeting-captions"
+      phx-hook="MeetingCaptions"
+      phx-update="ignore"
+      class="pointer-events-none fixed z-[60] rounded-lg bg-base-300/80 px-3 py-2 text-sm opacity-0 transition-opacity duration-300 inset-x-4 bottom-32 lg:inset-x-auto lg:right-3 lg:w-[22rem]"
+    >
     </div>
     """
   end
