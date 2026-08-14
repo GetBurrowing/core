@@ -361,6 +361,169 @@ defmodule PlatformWeb.AuthControllerTest do
     end
   end
 
+  # ── meet-host return after login (task 019ffec0) ───────────────────────
+  #
+  # EVERY assertion here compares `redirected_to/2` to an EXACT string. That a
+  # 302 happened is not the property under test — WHICH HOST IT NAMES is the
+  # defect, and a `=~` or a bare status assertion cannot see it.
+  #
+  # The negative cases are what stop this set being vacuous. An implementation
+  # that skipped validation entirely — echoing whatever sits under the session
+  # key — passes case 1 and the direction control on its own. Cases "no origin
+  # key", "malformed binary", "unknown atom" and ":meet_host unset" are the
+  # ones it fails.
+  describe "meet-host return (task 019ffec0)" do
+    setup do
+      prev_chat = Application.get_env(:platform, :chat_host)
+      prev_meet = Application.get_env(:platform, :meet_host)
+
+      Application.put_env(:platform, :chat_host, "chat.localhost")
+      Application.put_env(:platform, :meet_host, "meet.localhost")
+
+      on_exit(fn ->
+        restore_host(:chat_host, prev_chat)
+        restore_host(:meet_host, prev_meet)
+      end)
+
+      :ok
+    end
+
+    defp restore_host(key, nil), do: Application.delete_env(:platform, key)
+    defp restore_host(key, value), do: Application.put_env(:platform, key, value)
+
+    # The OIDC claims resolve to user@example.com / test-subject, so a grant on
+    # those makes the callback's admission return `external?: true, state:
+    # :full` — the state whose landing this ticket changes.
+    defp external_grant_for_claims! do
+      target_org = tenant_org!()
+      space = channel!(target_org)
+
+      {:ok, _grant} =
+        ExternalGrants.create_grant(%{
+          email: "user@example.com",
+          oidc_sub: "test-subject",
+          target_org_id: target_org.id,
+          space_grants: [%{"space_id" => space.id, "role" => "member"}],
+          dm_allowlist_org_ids: [target_org.id]
+        })
+
+      :ok
+    end
+
+    # Drives the REAL `callback/2` through the router. `origin` is seeded into
+    # the same signed session the `state` check reads, which is exactly where
+    # `LoginOrigin.capture/1` puts it in `login/2`.
+    defp callback_with_origin(conn, origin) do
+      mock_oidc_response(%{
+        user: base_claims(),
+        userinfo: base_claims(),
+        id_token: base_claims()
+      })
+
+      session =
+        case origin do
+          :none ->
+            [oidc_session_params: %{state: "expected-state", nonce: "n"}]
+
+          value ->
+            [
+              oidc_session_params: %{state: "expected-state", nonce: "n"},
+              login_origin_surface: value
+            ]
+        end
+
+      conn
+      |> init_test_session(session)
+      |> get(~p"/auth/oidc/callback?code=test-code&state=expected-state")
+    end
+
+    test "1. external :full with origin :meet lands on the ABSOLUTE meet host", %{conn: conn} do
+      external_grant_for_claims!()
+
+      conn = callback_with_origin(conn, :meet)
+
+      assert redirected_to(conn, 302) == "https://meet.localhost/meetings"
+      assert get_session(conn, :current_user_id)
+    end
+
+    test "2. NO origin key lands on the chat host — today's destination", %{conn: conn} do
+      external_grant_for_claims!()
+
+      conn = callback_with_origin(conn, :none)
+
+      assert redirected_to(conn, 302) == "https://chat.localhost/chat"
+    end
+
+    test "3. a malformed BINARY origin is not echoed — chat host, no attacker string",
+         %{conn: conn} do
+      external_grant_for_claims!()
+
+      conn = callback_with_origin(conn, "meet.attacker.example")
+
+      assert redirected_to(conn, 302) == "https://chat.localhost/chat"
+
+      refute redirected_to(conn, 302) =~ "attacker",
+             "the supplied value must never reach the Location header; equality with " <>
+               "the chat URL alone would still pass if the two happened to coincide"
+    end
+
+    test "4. an unknown atom origin lands on the chat host", %{conn: conn} do
+      external_grant_for_claims!()
+
+      conn = callback_with_origin(conn, :evil)
+
+      assert redirected_to(conn, 302) == "https://chat.localhost/chat"
+    end
+
+    # DIRECTION CONTROL. This clause is the shared landing for every sign-in on
+    # every surface, so the change must be invisible to internal users even
+    # when the origin says :meet and both hosts are configured. Byte-identical
+    # to the existing internal expectations.
+    test "5. an INTERNAL :full user is unchanged — host-relative, origin ignored", %{conn: conn} do
+      conn_callback = callback_with_origin(conn, :meet)
+
+      assert redirected_to(conn_callback, 302) == ~p"/"
+
+      slug = "meetint#{System.unique_integer([:positive])}"
+
+      conn_dev =
+        conn
+        |> init_test_session(login_origin_surface: :meet)
+        |> PlatformWeb.AuthController.dev_login(%{"as" => slug})
+
+      assert redirected_to(conn_dev, 302) == ~p"/chat"
+    end
+
+    test "6. origin :meet with :meet_host UNSET falls back — never https:///", %{conn: conn} do
+      Application.delete_env(:platform, :meet_host)
+      external_grant_for_claims!()
+
+      conn = callback_with_origin(conn, :meet)
+
+      assert redirected_to(conn, 302) == "https://chat.localhost/chat"
+      refute redirected_to(conn, 302) =~ "https:///"
+    end
+
+    test "7. login/2 stores the origin when the request arrives on the meet host",
+         %{conn: conn} do
+      conn = %{conn | host: "meet.localhost"} |> get(~p"/auth/login")
+
+      assert get_session(conn, :login_origin_surface) == :meet
+      assert redirected_to(conn, 302) =~ "https://issuer.example.com/authorize?"
+    end
+
+    test "8. a completed callback CLEARS the origin key", %{conn: conn} do
+      external_grant_for_claims!()
+
+      conn = callback_with_origin(conn, :meet)
+
+      assert redirected_to(conn, 302) == "https://meet.localhost/meetings"
+
+      assert get_session(conn, :login_origin_surface) == nil,
+             "a completed login must not leave a key that steers the next one"
+    end
+  end
+
   test "GET /auth/logout clears the session and redirects to the end-session endpoint", %{
     conn: conn
   } do

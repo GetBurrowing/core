@@ -91,6 +91,19 @@ defmodule PlatformWeb.ExternalSurface do
     do: String.starts_with?(to_string(conn.host), "chat.")
 
   @doc """
+  The configured meet host, or `nil`.
+
+  THE one reader of `:meet_host`. `PlatformWeb.ExternalRedirect.meet_url/1`
+  calls this rather than making its own `Application.get_env/2` call, exactly
+  as this module calls `ExternalRedirect` for `:chat_host`. Returns the raw
+  configured value — trimming and port-stripping belong to whoever is matching
+  or building with it, and differ between the two (`on_meet_host?/1` strips a
+  port, `meet_url/1` does not).
+  """
+  @spec meet_host() :: String.t() | nil
+  def meet_host, do: Application.get_env(:platform, :meet_host)
+
+  @doc """
   Is a meet host configured? True only for a binary whose `String.trim/1` is
   non-empty — mirrors `ExternalRedirect.chat_host_configured?/0`. Unset or
   blank means the meet surface does not exist.
@@ -135,6 +148,4 @@ defmodule PlatformWeb.ExternalSurface do
   end
 
   defp normalize_host(host), do: host |> to_string() |> String.downcase()
-
-  defp meet_host, do: Application.get_env(:platform, :meet_host)
 end

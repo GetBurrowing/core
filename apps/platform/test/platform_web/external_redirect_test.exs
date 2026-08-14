@@ -65,6 +65,92 @@ defmodule PlatformWeb.ExternalRedirectTest do
     end
   end
 
+  # ── meet_url/1, the chat_url/1 mirror (task 019ffec0) ──────────────────
+  #
+  # `:meet_host` has exactly ONE reader, `ExternalSurface.meet_host/0`, and
+  # `meet_url/1` builds through it. These cases set the app env directly, the
+  # same way the chat cases above do, so they exercise the real read path.
+  describe "meet_url/1" do
+    setup do
+      prev = Application.get_env(:platform, :meet_host)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:platform, :meet_host, prev),
+          else: Application.delete_env(:platform, :meet_host)
+      end)
+
+      :ok
+    end
+
+    test "configured host yields the exact absolute string" do
+      Application.put_env(:platform, :meet_host, "meet.example.com")
+
+      assert ExternalRedirect.meet_url("/meetings") == "https://meet.example.com/meetings"
+
+      assert ExternalRedirect.meet_url("/meetings/standup") ==
+               "https://meet.example.com/meetings/standup"
+
+      assert ExternalRedirect.meet_host_configured?()
+    end
+
+    test "the default path is /meetings" do
+      Application.put_env(:platform, :meet_host, "meet.example.com")
+
+      assert ExternalRedirect.meet_url() == "https://meet.example.com/meetings"
+
+      Application.delete_env(:platform, :meet_host)
+
+      assert ExternalRedirect.meet_url() == "/meetings"
+    end
+
+    test "a path without a leading slash gets one" do
+      Application.put_env(:platform, :meet_host, "meet.example.com")
+
+      assert ExternalRedirect.meet_url("meetings") == "https://meet.example.com/meetings"
+    end
+
+    # PINNING OBSERVED BEHAVIOUR, NOT AN ASPIRATION. A `":port"` suffix is
+    # carried through into the URL verbatim — neither builder strips it, and
+    # `chat_url/1` does the same for the same input (asserted alongside so the
+    # mirror claim is checked rather than assumed). Note this is NOT what
+    # `ExternalSurface.on_meet_host?/1` does with the same configured value:
+    # matching strips the port, building does not. That divergence is
+    # deliberate for now — `conn.host` never carries a port, so the matcher
+    # must strip it, while a dev-style host:port is a real address to build.
+    test "a \":port\" suffix is carried into the URL, exactly as chat_url/1 does" do
+      Application.put_env(:platform, :meet_host, "meet.localhost:4000")
+      Application.put_env(:platform, :chat_host, "meet.localhost:4000")
+
+      assert ExternalRedirect.meet_url("/meetings") == "https://meet.localhost:4000/meetings"
+
+      assert ExternalRedirect.chat_url("/meetings") == ExternalRedirect.meet_url("/meetings"),
+             "meet_url/1 must mirror chat_url/1 clause for clause; same host in, same URL out"
+    end
+
+    # BOTH fixtures are required. A guard written as `if host do` handles the
+    # UNSET case and silently builds `https:///meetings` for the BLANK one, so
+    # a suite testing only `nil` passes while the bug ships.
+    test "an UNSET meet host degrades to the host-relative path — never https:///" do
+      Application.delete_env(:platform, :meet_host)
+
+      assert ExternalRedirect.meet_url("/meetings") == "/meetings"
+      refute ExternalRedirect.meet_url("/meetings") =~ "https:///"
+      refute ExternalRedirect.meet_host_configured?()
+    end
+
+    test "a BLANK meet host degrades to the host-relative path — never https:///" do
+      Application.put_env(:platform, :meet_host, "   ")
+
+      assert ExternalRedirect.meet_url("/meetings") == "/meetings",
+             "a blank host must take the same branch as an unset one; a nil-only " <>
+               "guard passes the unset case and emits https:///meetings here"
+
+      refute ExternalRedirect.meet_url("/meetings") =~ "https:///"
+      refute ExternalRedirect.meet_host_configured?()
+    end
+  end
+
   # ── CHAT_HOST is readable OUTSIDE :prod (task 019fb955-f8b1 rework) ─────
   #
   # Every test above sets `:chat_host` as an OTP app env directly, so none of

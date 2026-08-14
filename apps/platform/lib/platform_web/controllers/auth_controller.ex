@@ -5,6 +5,8 @@ defmodule PlatformWeb.AuthController do
   alias Platform.Accounts.ExternalAdmission
   alias Platform.OIDC
   alias PlatformWeb.ExternalRedirect
+  alias PlatformWeb.ExternalSurface
+  alias PlatformWeb.LoginOrigin
 
   def login(conn, _params) do
     :telemetry.execute(
@@ -15,8 +17,15 @@ defmodule PlatformWeb.AuthController do
 
     case OIDC.authorize_url() do
       {:ok, %{url: url, session_params: session_params}} ->
+        # task 019ffec0: remember WHICH surface this login started on, in the
+        # same chain and the same signed session as `:oidc_session_params` —
+        # the callback's `state` check already depends on that session
+        # surviving the sibling-host -> IdP -> app-host round trip, so the
+        # origin rides a cookie we already trust. `capture/1` resolves it
+        # server-side from `conn.host`; nothing client-supplied is stored.
         conn
         |> put_session(:oidc_session_params, session_params)
+        |> LoginOrigin.capture()
         |> redirect(external: url)
 
       {:error, error} ->
@@ -65,6 +74,11 @@ defmodule PlatformWeb.AuthController do
       )
 
       conn
+      # task 019ffec0: the login-origin key is cleared inside `land_admission/3`,
+      # NOT here. It must be read before it is dropped, and `land_admission/3`
+      # both reads it and sends the response — clearing it in this chain would
+      # wipe the key one step before the only function that consumes it, and
+      # clearing it after would be a `put_session` on an already-sent conn.
       |> delete_session(:oidc_session_params)
       |> put_session(:current_user_id, user.id)
       |> maybe_put_id_token(auth)
@@ -122,13 +136,47 @@ defmodule PlatformWeb.AuthController do
     # today's EXACT host-relative redirect (`/` for callback, `/chat` for
     # dev_login); when CHAT_HOST is unconfigured (dev/test) external users also
     # fall back to host-relative so local flows are unchanged.
-    if result.external? and ExternalRedirect.chat_host_configured?() do
-      redirect(conn, external: ExternalRedirect.chat_url("/chat"))
-    else
-      redirect(conn, to: full_path)
+    #
+    # task 019ffec0: an EXTERNAL full user who started this login on the meet
+    # host goes back to the meet host. The origin is read from the signed
+    # session (`LoginOrigin`), never from anything the client supplied, and it
+    # is a closed set of three atoms — a stored value outside that set reads
+    # `:app` and takes the branch below.
+    #
+    # `result.external?` gates the new branch as well as the old one, so an
+    # INTERNAL user's destination is unchanged whatever the origin says. That
+    # is deliberate: this function is the shared landing for every sign-in on
+    # every surface, and the internal host-relative path (`/` for callback,
+    # `/chat` for dev_login) must stay unreachable from here.
+    #
+    # The origin is read INSIDE this clause rather than threaded in as an
+    # argument, which keeps `land_admission/3`'s arity and therefore keeps
+    # `dev_login/2` exercising this identical branch as a test harness.
+    origin = LoginOrigin.read(conn)
+
+    # Clearing lives HERE, not in the `callback/2` chain: this clause is the
+    # only consumer of the key AND it sends the response, so a clear upstream
+    # would drop the value one step before the read, and a clear downstream
+    # would be a `put_session` on an already-sent conn.
+    conn = LoginOrigin.clear(conn)
+
+    cond do
+      result.external? and origin == :meet and ExternalSurface.meet_host_configured?() ->
+        redirect(conn, external: ExternalRedirect.meet_url("/meetings"))
+
+      result.external? and ExternalRedirect.chat_host_configured?() ->
+        redirect(conn, external: ExternalRedirect.chat_url("/chat"))
+
+      true ->
+        redirect(conn, to: full_path)
     end
   end
 
+  # task 019ffec0: DELIBERATELY UNCHANGED. A holding user still lands on the
+  # host-relative `post_login_path(result)` whatever surface they started on.
+  # Sending a holding user to the meet host is a separate decision about what
+  # a not-yet-admitted external user may see there, and this ticket does not
+  # make it.
   defp land_admission(conn, %ExternalAdmission.Result{state: :holding} = result, _full_path) do
     conn
     |> put_session(:external_admission, %{
