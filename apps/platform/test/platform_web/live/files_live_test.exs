@@ -1438,7 +1438,347 @@ defmodule PlatformWeb.FilesLiveTest do
     end
   end
 
+  describe "failed-ingest summary line (task 01a0008b stage 4)" do
+    test "renders with the project-wide count when files failed", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Summary Count Project")
+
+      seed_failed_file(project, %{name: "broken-one.txt"}, 1)
+      seed_failed_file(project, %{name: "broken-two.txt"}, 1)
+      seed_file(project, %{name: "fine.txt", ingest_status: "ingested"})
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      assert html =~ ~s(data-role="files-failed-summary")
+      assert summary_attr(html, "data-failed-count") == "2"
+      assert html =~ ~s(data-role="files-retry-all")
+    end
+
+    # The absence IS the design decision, so this asserts the element is
+    # gone from the DOM — not that it rendered with a zero or an empty
+    # string. A summary that renders when everything is fine trains
+    # people to stop reading it.
+    test "does not render AT ALL for a project with no failed ingests", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Summary Clean Project")
+
+      seed_file(project, %{name: "fine-one.txt", ingest_status: "ingested"})
+      seed_file(project, %{name: "fine-two.txt", ingest_status: "ingested"})
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      refute html =~ ~s(data-role="files-failed-summary")
+      refute html =~ ~s(data-role="files-retry-all")
+      # And no all-clear surface took its place. (The apostrophe in the
+      # real copy is HTML-escaped, so match the escape-free tail.)
+      refute html =~ "be read by agents"
+      # The table still starts at the top exactly as before.
+      assert html =~ ~s(data-role="files-table")
+    end
+
+    # A `human_only` / `not_attempted` file was never attempted and never
+    # broke. Reporting it as a failure would surface every deliberate
+    # exclusion as something to repair, which is the same noise problem
+    # this line exists to remove.
+    test "a human_only / not_attempted file produces NO summary line", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Summary Human Only Project")
+
+      seed_file(project, %{name: "readable.txt", ingest_status: "ingested"})
+
+      withheld =
+        seed_file(project, %{
+          name: "people-only.txt",
+          ingest_intent: "human_only",
+          ingest_status: "not_attempted"
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      refute html =~ ~s(data-role="files-failed-summary")
+      refute html =~ ~s(data-role="files-retry-all")
+
+      # The row itself is untouched — still listed, still badged.
+      assert_in_row(html, withheld.id, "People only")
+    end
+
+    test "a file at the repeat-failure threshold re-diagnoses and withdraws the action",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Summary Exhausted Project")
+
+      threshold = Files.repeat_failure_threshold()
+      exhausted = seed_failed_file(project, %{name: "corrupt.pdf"}, threshold)
+      assert Files.get_file(exhausted.id).ingest_failure_count == threshold
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      # Still present, still counted, still the same colour slot.
+      assert html =~ ~s(data-role="files-failed-summary")
+      assert summary_attr(html, "data-failed-count") == "1"
+
+      element = summary_html(html)
+      assert element =~ "text-error"
+
+      # The sentence changed...
+      assert element =~ "likely needs re-exporting"
+      refute element =~ "be read by agents"
+
+      # ...and the button did not come back, in the line or the panel.
+      refute html =~ ~s(data-role="files-retry-all")
+      refute html =~ ~s(data-role="files-detail-retry")
+
+      # Nothing got louder: it did not borrow the in-flight warning slot,
+      # and it is not an alert component.
+      refute element =~ "warning"
+      refute element =~ ~s(role="alert")
+    end
+
+    test "both populations: retry-all stays, and the note accounts for the withheld ones",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Summary Mixed Project")
+
+      threshold = Files.repeat_failure_threshold()
+      seed_failed_file(project, %{name: "fresh.txt"}, 1)
+      seed_failed_file(project, %{name: "corrupt.pdf"}, threshold)
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      assert summary_attr(html, "data-failed-count") == "2"
+      # The action survives for the one that is still worth trying...
+      assert html =~ ~s(data-role="files-retry-all")
+      assert summary_attr(html, "data-retryable-count") == "1"
+      # ...and the sentence does not pretend it will fix the other.
+      assert html =~ "1 of them has failed #{threshold} times"
+    end
+
+    # Deterministic by construction rather than by waiting: the retry
+    # flips both rows out of "failed" INSIDE the click handler, so the
+    # count is zero the moment the handler returns, whatever the spawned
+    # ingest task is doing. The telemetry sync point below then pins that
+    # the retry genuinely completed rather than merely being asked for —
+    # no sleep, no poll loop.
+    test "retry-all flips the failed rows and the summary disappears", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      root = attachments_root()
+      project = seed_project("fabrikam", "Summary Retry Project")
+
+      one = seed_readable_failed_file(project, root, "first recoverable body", "one.txt")
+      two = seed_readable_failed_file(project, root, "second recoverable body", "two.txt")
+
+      attach_ingest_telemetry([[:platform, :files, :ingested, :stop]])
+
+      {:ok, view, html} = live(conn, ~p"/files/#{project.id}")
+      assert summary_attr(html, "data-failed-count") == "2"
+
+      html_after =
+        view
+        |> element(~s([data-role="files-retry-all"]))
+        |> render_click()
+
+      # Gone from the DOM entirely, not lingering with a stale number.
+      refute html_after =~ ~s(data-role="files-failed-summary")
+
+      # Both rows left "failed" through the single retry entry point.
+      refute Files.get_file(one.id).ingest_status == "failed"
+      refute Files.get_file(two.id).ingest_status == "failed"
+
+      # Sync on the pipeline resolving, then pin the end state.
+      assert_receive {:ingest_telemetry, [:platform, :files, :ingested, :stop], _, %{file_id: a}},
+                     2_000
+
+      assert_receive {:ingest_telemetry, [:platform, :files, :ingested, :stop], _, %{file_id: b}},
+                     2_000
+
+      assert Enum.sort([a, b]) == Enum.sort([one.id, two.id])
+
+      assert Files.get_file(one.id).ingest_status == "ingested"
+      assert Files.get_file(two.id).ingest_status == "ingested"
+      assert Files.count_failed_ingests(project.id) == 0
+
+      # Still absent after the PubSub round-trip — the count was
+      # recomputed, not merely cleared once.
+      refute render(view) =~ ~s(data-role="files-failed-summary")
+    end
+
+    test "the summary is recomputed when a single row fails over PubSub", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Summary Recompute Project")
+      file = seed_file(project, %{name: "will-break.txt"})
+
+      {:ok, view, html} = live(conn, ~p"/files/#{project.id}")
+      refute html =~ ~s(data-role="files-failed-summary")
+
+      {:ok, _} = Files.update_ingest_status(file, "failed")
+      :ok = Files.broadcast_project(project.id, {:file_ingest_failed, file.id, :extract_failed})
+
+      html_after = render(view)
+
+      assert html_after =~ ~s(data-role="files-failed-summary")
+      assert summary_attr(html_after, "data-failed-count") == "1"
+    end
+  end
+
+  describe "detail-panel retry (task 01a0008b stage 4)" do
+    test "appears for a failed file and drives request_ingest/2", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      root = attachments_root()
+      project = seed_project("fabrikam", "Detail Retry Project")
+
+      file = seed_readable_failed_file(project, root, "detail panel body", "detail.txt")
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      html =
+        view
+        |> element(~s([data-role="files-row"][data-file-id="#{file.id}"]))
+        |> render_click()
+
+      assert html =~ ~s(data-role="files-detail-retry")
+
+      view
+      |> element(~s([data-role="files-detail-retry"]))
+      |> render_click()
+
+      refute Files.get_file(file.id).ingest_status == "failed"
+    end
+
+    test "does not appear for an ingested file", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Detail No Retry Project")
+      file = seed_file(project, %{name: "healthy.txt", ingest_status: "ingested"})
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      html =
+        view
+        |> element(~s([data-role="files-row"][data-file-id="#{file.id}"]))
+        |> render_click()
+
+      # The panel is open (the agent toggle proves it) and the retry is
+      # simply not offered.
+      assert html =~ ~s(data-role="files-detail-agent-toggle")
+      refute html =~ ~s(data-role="files-detail-retry")
+    end
+
+    test "does not appear for a file at the repeat-failure threshold", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Detail Exhausted Project")
+
+      file =
+        seed_failed_file(project, %{name: "exhausted.pdf"}, Files.repeat_failure_threshold())
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      html =
+        view
+        |> element(~s([data-role="files-row"][data-file-id="#{file.id}"]))
+        |> render_click()
+
+      assert html =~ ~s(data-role="files-detail-agent-toggle")
+      refute html =~ ~s(data-role="files-detail-retry")
+    end
+  end
+
   # ── Local helpers ──────────────────────────────────────────────────────
+
+  # Drive the failure count through the real seam
+  # (`update_ingest_status/2` increments it) rather than writing the
+  # column directly — it is outside `@cast_fields` precisely so nothing
+  # but that function can move it.
+  defp seed_failed_file(project, attrs, failures) do
+    file = seed_file(project, attrs)
+
+    Enum.reduce(1..failures, file, fn _n, acc ->
+      {:ok, updated} = Files.update_ingest_status(acc, "failed")
+      updated
+    end)
+  end
+
+  # A failed file whose bytes are genuinely on disk, so a retry can
+  # actually succeed instead of breaking again.
+  defp seed_readable_failed_file(project, root, body, filename) do
+    storage_key = "files/#{project.id}/#{Ecto.UUID.generate()}/#{filename}"
+    abs_path = Path.join(root, storage_key)
+    File.mkdir_p!(Path.dirname(abs_path))
+    File.write!(abs_path, body)
+
+    seed_failed_file(
+      project,
+      %{
+        name: filename,
+        original_filename: filename,
+        content_type: "text/plain",
+        byte_size: byte_size(body),
+        storage_key: storage_key
+      },
+      1
+    )
+  end
+
+  # Point the local-disk attachment adapter at a per-test tmp dir so the
+  # extractor's path resolution works. Mirrors the ingester test's setup.
+  defp attachments_root do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "platform-files-live-test-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(root)
+    previous = Application.get_env(:platform, :chat_attachments_root)
+    Application.put_env(:platform, :chat_attachments_root, root)
+
+    on_exit(fn ->
+      File.rm_rf!(root)
+
+      if previous,
+        do: Application.put_env(:platform, :chat_attachments_root, previous),
+        else: Application.delete_env(:platform, :chat_attachments_root)
+    end)
+
+    root
+  end
+
+  defp attach_ingest_telemetry(events) do
+    handler_id = "files-live-ingest-#{System.unique_integer([:positive])}"
+    test_pid = self()
+
+    :telemetry.attach_many(
+      handler_id,
+      events,
+      fn name, measurements, metadata, _config ->
+        send(test_pid, {:ingest_telemetry, name, measurements, metadata})
+      end,
+      %{}
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    :ok
+  end
+
+  # The whole summary element. Colour and component assertions scope to
+  # this rather than the page: `role="alert"` and the warning slot both
+  # legitimately appear elsewhere in the layout, so a page-wide `refute`
+  # would be asserting something other than what it claims.
+  defp summary_html(html) do
+    case Regex.run(~r/<div[^>]*data-role="files-failed-summary".*?<\/div>/s, html) do
+      [element] -> element
+      _ -> flunk("no element matched data-role=\"files-failed-summary\"")
+    end
+  end
+
+  # Pull one attribute off an element inside the summary, so a count
+  # assertion keys on the stable hook instead of a copy string.
+  defp summary_attr(html, attr) do
+    element = summary_html(html)
+
+    case Regex.run(~r/#{Regex.escape(attr)}="([^"]*)"/, element) do
+      [_, value] -> value
+      _ -> flunk("summary element had no #{attr}; got: #{element}")
+    end
+  end
 
   # Row-scoped presence assertion. Sibling of `refute_in_row/3` — a
   # whole-body `=~` would pass on a string another row supplied.

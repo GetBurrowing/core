@@ -60,6 +60,16 @@ defmodule Platform.Files.File do
     # flip a row in or out of the deleted state.
     field(:deleted_at, :utc_datetime_usec)
 
+    # Consecutive failed ingest attempts (task 01a0008b stage 1).
+    # `ingest_status` holds only the latest outcome, so this is what tells
+    # "failed once" from "failed three times". Moved exclusively by
+    # `Platform.Files.update_ingest_status/2` — `"failed"` increments,
+    # `"ingested"` resets to 0 — and deliberately NOT in `@cast_fields`,
+    # for the same reason as `deleted_at` above: bulk attrs from an upload
+    # form or an MCP tool must never be able to set a file's failure
+    # history.
+    field(:ingest_failure_count, :integer, default: 0)
+
     # Catalog card backlink (task 01a0008c). `card_file_key` is the wiki
     # file_key of this file's card page — `project/<uuid>/page/files/
     # <slug>.md`. Nil means "no card yet", which is what the backfill

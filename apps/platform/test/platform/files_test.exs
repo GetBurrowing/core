@@ -646,6 +646,126 @@ defmodule Platform.FilesTest do
     end
   end
 
+  # ── Consecutive failure count (task 01a0008b stage 1) ────────────────────
+  #
+  # `ingest_status` records only the LATEST outcome, so on its own it cannot
+  # tell a file that broke once from one that has broken three times on the
+  # same unchanged bytes. `ingest_failure_count` carries that history, and it
+  # moves at exactly one seam — `update_ingest_status/2`. Every test below
+  # keys on the count surviving (or not surviving) a specific transition; a
+  # future refactor that maintains the counter at the CALL SITES instead
+  # fails the `request_ingest/2` case first, because that caller writes its
+  # status directly.
+  describe "update_ingest_status/2 and ingest_failure_count" do
+    setup do
+      {:ok, project} =
+        Tasks.create_project(%{name: "Failure Count #{System.unique_integer([:positive])}"})
+
+      {:ok, file} =
+        Files.create_file(%{
+          project_id: project.id,
+          content_type: "text/plain",
+          byte_size: 3,
+          storage_key: "files/#{project.id}/fc/#{System.unique_integer([:positive])}.txt",
+          content_hash: String.duplicate("f", 64)
+        })
+
+      %{project: project, target: file}
+    end
+
+    test "a new row starts at zero and each failure increments it", %{target: file} do
+      assert file.ingest_failure_count == 0
+
+      assert {:ok, once} = Files.update_ingest_status(file, "failed")
+      assert once.ingest_failure_count == 1
+      assert Files.get_file(file.id).ingest_failure_count == 1
+
+      assert {:ok, twice} = Files.update_ingest_status(once, "failed")
+      assert twice.ingest_failure_count == 2
+      assert Files.get_file(file.id).ingest_failure_count == 2
+    end
+
+    test "an ingested write resets the count to zero", %{target: file} do
+      # CONSECUTIVE is the whole contract: a success ends the streak. Without
+      # the reset, a file that broke twice a month ago and has ingested
+      # cleanly ever since would still be withheld from retry as if it were
+      # currently broken.
+      {:ok, file} = Files.update_ingest_status(file, "failed")
+      {:ok, file} = Files.update_ingest_status(file, "failed")
+      assert file.ingest_failure_count == 2
+
+      assert {:ok, ingested} = Files.update_ingest_status(file, "ingested")
+      assert ingested.ingest_failure_count == 0
+      assert Files.get_file(file.id).ingest_failure_count == 0
+    end
+
+    test "a pending write leaves the count byte-identical", %{target: file} do
+      # Re-queueing is not an outcome. If `pending` cleared the count, every
+      # retry would reset the history it exists to accumulate.
+      {:ok, file} = Files.update_ingest_status(file, "failed")
+      {:ok, file} = Files.update_ingest_status(file, "failed")
+
+      assert {:ok, requeued} = Files.update_ingest_status(file, "pending")
+      assert requeued.ingest_failure_count == 2
+      assert Files.get_file(file.id).ingest_failure_count == 2
+    end
+
+    test "a not_attempted write leaves the count byte-identical", %{target: file} do
+      {:ok, file} = Files.update_ingest_status(file, "failed")
+      {:ok, file} = Files.update_ingest_status(file, "failed")
+
+      # `not_attempted` is only reachable alongside `human_only` intent — the
+      # check constraint `platform_files_not_attempted_requires_human_only_check`
+      # refuses the pair `attempt` + `not_attempted`.
+      {:ok, file} = Files.set_ingest_intent(file, "human_only")
+
+      assert {:ok, withheld} = Files.update_ingest_status(file, "not_attempted")
+      assert withheld.ingest_failure_count == 2
+      assert Files.get_file(file.id).ingest_failure_count == 2
+    end
+
+    test "request_ingest/2 does not clear the count — three failed attempts reach three",
+         %{target: file} do
+      {:ok, file} = Files.update_ingest_status(file, "failed")
+      {:ok, file} = Files.update_ingest_status(file, "failed")
+      assert file.ingest_failure_count == 2
+
+      # Read the PERSISTED row at the instant the pipeline starts: that
+      # moment is strictly after `request_ingest/2`'s own
+      # `attempt` + `pending` write and strictly before any outcome is
+      # recorded, so it isolates the retry's flip from the attempt it
+      # triggers. `mode: :sync` runs the ingest in this process, so the
+      # observation is ordered, not raced.
+      handler = "ingest-failure-count-#{file.id}"
+
+      :telemetry.attach(
+        handler,
+        [:platform, :files, :ingested, :start],
+        fn _event, _measurements, meta, pid ->
+          send(pid, {:at_ingest_start, Files.get_file(meta.file_id)})
+        end,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      capture_log(fn ->
+        # The row's bytes were never written to storage, so extraction fails
+        # and this retry is a genuine third failure rather than a fixture.
+        assert {:error, _reason} = Files.request_ingest(file, mode: :sync)
+      end)
+
+      assert_received {:at_ingest_start, requeued}
+      assert requeued.ingest_intent == "attempt"
+      assert requeued.ingest_status == "pending"
+      assert requeued.ingest_failure_count == 2
+
+      settled = Files.get_file(file.id)
+      assert settled.ingest_status == "failed"
+      assert settled.ingest_failure_count == 3
+    end
+  end
+
   describe "set_ingest_intent/2" do
     setup do
       {:ok, project} = Tasks.create_project(%{name: "Intent Writes"})
@@ -801,6 +921,291 @@ defmodule Platform.FilesTest do
 
       assert length(all) == 4
     end
+  end
+
+  describe "list_failed_ingests/2 + count_failed_ingests/1 (task 01a0008b stage 2)" do
+    setup do
+      {:ok, project} =
+        Tasks.create_project(%{name: "Failed Sweep #{System.unique_integer([:positive])}"})
+
+      %{project: project}
+    end
+
+    test "a failed file we still mean to read is returned and counted", ctx do
+      target = sweep_file!(ctx.project, ingest_status: "failed", ingest_intent: "attempt")
+
+      assert [returned] = Files.list_failed_ingests(ctx.project.id)
+      assert returned.id == target.id
+      assert Files.count_failed_ingests(ctx.project.id) == 1
+    end
+
+    test "the returned rows carry ingest_failure_count", ctx do
+      target = sweep_file!(ctx.project, ingest_status: "failed", ingest_intent: "attempt")
+      {:ok, _} = Files.update_ingest_status(target, "failed")
+
+      assert [returned] = Files.list_failed_ingests(ctx.project.id)
+      assert returned.ingest_failure_count == 1
+    end
+
+    test "a human_only file the ingester never attempted is NOT a failure: not returned, not counted",
+         ctx do
+      # `not_attempted` means extraction was deliberately withheld —
+      # `ingest_async/1` short-circuits before spawning anything, so nothing
+      # ran and nothing broke. Reporting it as a broken file would surface
+      # every intentionally-excluded document as something to repair, which
+      # is the exact noise this sweep exists to avoid. `HtmlBackfill` matches
+      # `~w(failed not_attempted)` for its own reasons; copying that shape
+      # here is the way this function gets it wrong.
+      withheld =
+        sweep_file!(ctx.project, ingest_status: "not_attempted", ingest_intent: "human_only")
+
+      assert Files.list_failed_ingests(ctx.project.id) == []
+      assert Files.count_failed_ingests(ctx.project.id) == 0
+
+      # And it really is in the state the test claims.
+      persisted = Files.get_file(withheld.id)
+      assert persisted.ingest_status == "not_attempted"
+      assert persisted.ingest_intent == "human_only"
+    end
+
+    test "pending and ingested files are not returned", ctx do
+      sweep_file!(ctx.project, ingest_status: "pending", ingest_intent: "attempt")
+      sweep_file!(ctx.project, ingest_status: "ingested", ingest_intent: "attempt")
+
+      assert Files.list_failed_ingests(ctx.project.id) == []
+      assert Files.count_failed_ingests(ctx.project.id) == 0
+    end
+
+    test "a failed file since withheld as human_only is not offered for repair", ctx do
+      # Legal pair: the check constraint forbids `attempt` + `not_attempted`,
+      # not `human_only` + `failed`. Someone flipping a broken file to
+      # human_only has answered the question; do not re-open it.
+      sweep_file!(ctx.project, ingest_status: "failed", ingest_intent: "human_only")
+
+      assert Files.list_failed_ingests(ctx.project.id) == []
+      assert Files.count_failed_ingests(ctx.project.id) == 0
+    end
+
+    test "a soft-deleted failed file is not returned", ctx do
+      target = sweep_file!(ctx.project, ingest_status: "failed", ingest_intent: "attempt")
+
+      capture_log(fn ->
+        assert {:ok, _} = Files.delete_file(%{id: Ecto.UUID.generate()}, target)
+      end)
+
+      assert Files.list_failed_ingests(ctx.project.id) == []
+      assert Files.count_failed_ingests(ctx.project.id) == 0
+    end
+
+    test "failed files in another project are not returned", ctx do
+      {:ok, other} =
+        Tasks.create_project(%{name: "Other Sweep #{System.unique_integer([:positive])}"})
+
+      sweep_file!(other, ingest_status: "failed", ingest_intent: "attempt")
+      mine = sweep_file!(ctx.project, ingest_status: "failed", ingest_intent: "attempt")
+
+      assert [returned] = Files.list_failed_ingests(ctx.project.id)
+      assert returned.id == mine.id
+      assert Files.count_failed_ingests(ctx.project.id) == 1
+      assert Files.count_failed_ingests(other.id) == 1
+    end
+
+    test "the count is a database aggregate, so 60 failed files count as 60", ctx do
+      # Pins that no 50-row default or 200-row page cap leaked into the
+      # count. `list_files_for_project/2` defaults to `limit: 50`; a count
+      # derived from a capped list would report 50 here and be silently
+      # wrong on any project big enough to matter.
+      for _ <- 1..60 do
+        sweep_file!(ctx.project, ingest_status: "failed", ingest_intent: "attempt")
+      end
+
+      assert Files.count_failed_ingests(ctx.project.id) == 60
+      assert length(Files.list_failed_ingests(ctx.project.id)) == 60
+    end
+  end
+
+  describe "retry_failed_ingests/2 (task 01a0008b stage 3)" do
+    setup do
+      {:ok, project} =
+        Tasks.create_project(%{name: "Retry Sweep #{System.unique_integer([:positive])}"})
+
+      # Observe the PERSISTED row at the instant the pipeline starts. That
+      # moment is strictly after `request_ingest/2`'s `attempt` + `pending`
+      # flip and strictly before any outcome is recorded, so it is the only
+      # point at which "the retry flipped the row" is observable — by the
+      # time the call returns, the pipeline has already written the next
+      # outcome over it. `mode: :sync` runs ingest in this process, so every
+      # message below is ordered rather than raced.
+      #
+      # It doubles as the enqueue detector: this event fires only from
+      # `Ingester.run/1`, so its ABSENCE for a file id is proof that file
+      # was never handed to the pipeline.
+      handler = "retry-failed-ingests-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:platform, :files, :ingested, :start],
+        fn _event, _measurements, meta, pid ->
+          send(pid, {:at_ingest_start, Files.get_file(meta.file_id)})
+        end,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      %{project: project}
+    end
+
+    test "two failed files are flipped to attempt + pending and reported as requested", ctx do
+      first = failed_file!(ctx.project, 1)
+      second = failed_file!(ctx.project, 1)
+
+      capture_log(fn ->
+        assert {:ok, summary} = Files.retry_failed_ingests(ctx.project.id, mode: :sync)
+        assert summary == %{requested: 2, withheld: 0}
+      end)
+
+      started =
+        for _ <- 1..2 do
+          assert_received {:at_ingest_start, row}
+          assert row.ingest_intent == "attempt"
+          assert row.ingest_status == "pending"
+          row.id
+        end
+
+      assert Enum.sort(started) == Enum.sort([first.id, second.id])
+
+      # The retry really reached the extractor: these fixtures have no bytes
+      # in storage, so each attempt is a genuine further failure.
+      assert Files.get_file(first.id).ingest_failure_count == 2
+      assert Files.get_file(second.id).ingest_failure_count == 2
+    end
+
+    test "a file at the repeat-failure threshold is withheld, not retried", ctx do
+      target = failed_file!(ctx.project, Files.repeat_failure_threshold())
+      assert target.ingest_failure_count == 3
+
+      assert {:ok, summary} = Files.retry_failed_ingests(ctx.project.id, mode: :sync)
+      assert summary == %{requested: 0, withheld: 1}
+
+      # NOTE: `ingest_status == "failed"` is a WEAK assertion on its own — a
+      # row that WAS retried and broke again lands back on "failed" too. The
+      # two assertions that actually detect a retry are the untouched
+      # `ingest_failure_count` (a real attempt would make it 4) and the
+      # absence of an ingest-start event for this file.
+      persisted = Files.get_file(target.id)
+      assert persisted.ingest_status == "failed"
+      assert persisted.ingest_intent == "attempt"
+      assert persisted.ingest_failure_count == 3
+
+      refute_received {:at_ingest_start, _}
+    end
+
+    test "one below the threshold is still retried while the one at it is withheld", ctx do
+      retryable = failed_file!(ctx.project, Files.repeat_failure_threshold() - 1)
+      exhausted = failed_file!(ctx.project, Files.repeat_failure_threshold())
+
+      capture_log(fn ->
+        assert {:ok, summary} = Files.retry_failed_ingests(ctx.project.id, mode: :sync)
+        assert summary == %{requested: 1, withheld: 1}
+      end)
+
+      assert_received {:at_ingest_start, %{id: started_id}}
+      assert started_id == retryable.id
+      refute_received {:at_ingest_start, _}
+
+      assert Files.get_file(exhausted.id).ingest_failure_count == 3
+    end
+
+    test "a human_only / not_attempted file in the same project is untouched", ctx do
+      # The write-side twin of the read-side exclusion in the sweep tests
+      # above. Getting this wrong here does not merely mis-count: it mutates
+      # the row and silently re-enqueues a file a human deliberately withheld
+      # from every agent-visible reader.
+      failed = failed_file!(ctx.project, 1)
+
+      withheld =
+        sweep_file!(ctx.project, ingest_status: "not_attempted", ingest_intent: "human_only")
+
+      capture_log(fn ->
+        assert {:ok, summary} = Files.retry_failed_ingests(ctx.project.id, mode: :sync)
+        assert summary == %{requested: 1, withheld: 0}
+      end)
+
+      persisted = Files.get_file(withheld.id)
+      assert persisted.ingest_intent == "human_only"
+      assert persisted.ingest_status == "not_attempted"
+      assert persisted.ingest_failure_count == 0
+
+      # And it was never handed to the pipeline: the only ingest that
+      # started belongs to the genuinely failed row.
+      assert_received {:at_ingest_start, %{id: started_id}}
+      assert started_id == failed.id
+      refute_received {:at_ingest_start, _}
+    end
+
+    test "no row is ever left in the forbidden attempt + not_attempted pair", ctx do
+      failed_file!(ctx.project, 1)
+      failed_file!(ctx.project, Files.repeat_failure_threshold())
+      sweep_file!(ctx.project, ingest_status: "not_attempted", ingest_intent: "human_only")
+
+      capture_log(fn ->
+        assert {:ok, _summary} = Files.retry_failed_ingests(ctx.project.id, mode: :sync)
+      end)
+
+      rows = Files.list_files_for_project(ctx.project.id, limit: nil)
+      assert length(rows) == 3
+
+      # `platform_files_not_attempted_requires_human_only_check` refuses this
+      # pair at the database, so reaching it would have raised rather than
+      # persisted — the assertion is that the retry path never even tries,
+      # i.e. it neither flips intent without status nor touches a withheld row.
+      refute Enum.any?(
+               rows,
+               &(&1.ingest_intent == "attempt" and &1.ingest_status == "not_attempted")
+             )
+    end
+
+    test "a project with nothing failed reports zeroes and enqueues nothing", ctx do
+      sweep_file!(ctx.project, ingest_status: "ingested", ingest_intent: "attempt")
+
+      assert {:ok, %{requested: 0, withheld: 0}} = Files.retry_failed_ingests(ctx.project.id)
+      refute_received {:at_ingest_start, _}
+    end
+  end
+
+  # A file that has genuinely broken `times` times: seeded `pending` and then
+  # driven through `update_ingest_status/2`, the one seam that moves
+  # `ingest_failure_count`, so the count is accumulated rather than asserted
+  # into place.
+  defp failed_file!(project, times) do
+    file = sweep_file!(project, ingest_status: "pending", ingest_intent: "attempt")
+
+    Enum.reduce(1..times, file, fn _, acc ->
+      {:ok, failed} = Files.update_ingest_status(acc, "failed")
+      failed
+    end)
+  end
+
+  # Builds a file directly in the requested ingest state. `create_file/1`
+  # casts `ingest_status` / `ingest_intent`, so a fixture can seed a real
+  # outcome without running the pipeline.
+  defp sweep_file!(project, opts) do
+    n = System.unique_integer([:positive])
+
+    {:ok, file} =
+      Files.create_file(%{
+        project_id: project.id,
+        original_filename: "sweep-#{n}.txt",
+        content_type: "text/plain",
+        byte_size: 1,
+        storage_key: "files/#{project.id}/sweep/#{n}.txt",
+        content_hash: :crypto.hash(:sha256, "sweep-#{n}") |> Base.encode16(case: :lower),
+        ingest_status: Keyword.fetch!(opts, :ingest_status),
+        ingest_intent: Keyword.fetch!(opts, :ingest_intent)
+      })
+
+    file
   end
 
   describe "list_catalogable_files/2 — the cataloging eligibility seam (task 01a0008c)" do

@@ -58,6 +58,39 @@ defmodule PlatformWeb.FilesLive do
   mid-undo (30-day sweeper) surfaces as a graceful "couldn't restore"
   flash, never a crash.
 
+  ## Failed-ingest summary (task 01a0008b stage 4)
+
+  One sentence above the table, rendered ONLY when
+  `Platform.Files.count_failed_ingests/1` is greater than zero, carrying
+  the project-wide count and the retry-all action.
+
+  Two things were missing before it, and neither was visibility: the red
+  "Failed" badge already rendered per row. What was missing was an
+  AGGREGATE (noticing cost opening a project and scanning every row, so
+  nobody did) and an ACTION (the badge was a dead end —
+  `Platform.Files.request_ingest/2` existed and nothing in the UI called
+  it).
+
+  The zero case renders NOTHING — no empty state, no green all-clear, no
+  persistent widget. That absence is the design decision, not an
+  omission: a status surface that renders when everything is fine trains
+  people to stop reading it, and then it fails on the one day it
+  matters. Its mere presence is the signal, before anyone reads the
+  number.
+
+  The count comes from the DB aggregate, never from `@files` — that list
+  is capped at 200 (`list_files/1`), so a list-derived count starts
+  under-reporting exactly when a project is big enough for the summary to
+  matter, and a wrong number on a surface whose only job is trust is
+  worse than no number. It is recomputed on every event that can move it
+  (see `assign_failed_summary/1`), not just on mount and project switch.
+
+  Repeated failure does NOT escalate. At
+  `Platform.Files.repeat_failure_threshold/0` consecutive failures a file
+  is withheld from retry and the sentence re-diagnoses it as likely
+  needing a re-export; nothing pages, alerts, or changes colour. A fourth
+  attempt on unchanged bytes has no new information to act on.
+
   ## Out of scope
 
   Chat-attachment → Files promotion is a separate stack — this surface
@@ -117,6 +150,10 @@ defmodule PlatformWeb.FilesLive do
      |> assign(:supersession_claims, %{})
      |> assign(:selected_file, nil)
      |> assign(:selected_file_text, nil)
+     # nil means "render no summary line at all", which is also what a
+     # project with zero failed ingests resolves to. There is no
+     # zero-state variant of this assign on purpose.
+     |> assign(:failed_summary, nil)
      # Ephemeral full-screen preview overlay. Socket state only — no
      # ClientState, no hook — and guarded on `@selected_file` at render so
      # it cannot outlive the row it is showing.
@@ -161,6 +198,7 @@ defmodule PlatformWeb.FilesLive do
      |> assign(:supersession_claims, %{})
      |> assign(:selected_file, nil)
      |> assign(:selected_file_text, nil)
+     |> assign(:failed_summary, nil)
      |> assign(:semantic_results, [])
      |> assign(:semantic_search_state, :idle)
      |> assign(:filter, "")}
@@ -381,6 +419,50 @@ defmodule PlatformWeb.FilesLive do
 
   def handle_event("cancel_upload", %{"ref" => ref}, socket) do
     {:noreply, cancel_upload(socket, :files, ref)}
+  end
+
+  # Retry every failed ingest in the project that is still worth
+  # retrying. Lives in the summary line rather than on each row: eight
+  # failures would otherwise be eight clicks, which is how a repair gets
+  # abandoned halfway through.
+  #
+  # No flash on success. The line disappearing IS the feedback, and a
+  # toast confirming a repair the page already shows would be the second
+  # place to look this design exists to avoid.
+  def handle_event("retry_failed_ingests", _params, socket) do
+    case socket.assigns.selected_project_id do
+      nil ->
+        {:noreply, socket}
+
+      project_id ->
+        {:ok, _summary} = Files.retry_failed_ingests(project_id)
+
+        # Re-list rather than patch rows: the sweep is project-wide and
+        # uncapped, so it can touch rows this page never loaded.
+        {:noreply,
+         socket
+         |> assign(:files, list_files(project_id))
+         |> assign_failed_summary()}
+    end
+  end
+
+  # Per-file retry from the detail panel. `request_ingest/2` is the
+  # single retry entry point (it flips intent + status in one write and
+  # enqueues); the default `mode: :async` is correct here because a
+  # LiveView's BEAM outlives the spawned task.
+  #
+  # The eligibility check is repeated server-side because the button is
+  # only *rendered* conditionally — a stale or replayed click must not be
+  # able to spend a fourth attempt on bytes that already broke three
+  # times.
+  def handle_event("retry_file", %{"id" => file_id}, socket) do
+    case find_known_file(socket, file_id) do
+      nil ->
+        {:noreply, socket}
+
+      file ->
+        if can_retry_file?(file), do: do_retry_file(socket, file), else: {:noreply, socket}
+    end
   end
 
   # ── PubSub ──────────────────────────────────────────────────────────────
@@ -710,6 +792,7 @@ defmodule PlatformWeb.FilesLive do
       |> assign(:files, list_files(project_id))
       |> assign(:selected_file, nil)
       |> assign(:selected_file_text, nil)
+      |> assign_failed_summary()
       |> assign(:semantic_results, [])
       |> assign(:semantic_search_state, :idle)
       |> assign(:filter, "")
@@ -748,7 +831,9 @@ defmodule PlatformWeb.FilesLive do
         other -> other
       end
 
-    assign(socket, files: files, selected_file: selected)
+    socket
+    |> assign(files: files, selected_file: selected)
+    |> assign_failed_summary()
   end
 
   defp refresh_file(%{assigns: %{selected_project_id: nil}} = socket, _file_id), do: socket
@@ -757,7 +842,9 @@ defmodule PlatformWeb.FilesLive do
     case Files.get_file(file_id) do
       nil ->
         # Row vanished — drop it from the list.
-        assign(socket, :files, Enum.reject(socket.assigns.files, &(&1.id == file_id)))
+        socket
+        |> assign(:files, Enum.reject(socket.assigns.files, &(&1.id == file_id)))
+        |> assign_failed_summary()
 
       file ->
         files = Enum.map(socket.assigns.files, fn f -> if f.id == file_id, do: file, else: f end)
@@ -775,7 +862,84 @@ defmodule PlatformWeb.FilesLive do
         # this is the event on which a claim first becomes renderable.
         socket
         |> assign(files: files, selected_file: selected)
+        |> assign_failed_summary()
         |> put_claims()
+    end
+  end
+
+  # ── Failed-ingest summary (task 01a0008b stage 4) ───────────────────────
+
+  # Recompute the summary from the DATABASE. Called from every seam that
+  # can move the count — the single-row refresh behind
+  # `{:file_ingested, _}` / `{:file_ingest_failed, _}` / `{:file_restored, _}`,
+  # the drop behind `{:file_deleted, _}`, the in-place write behind the
+  # agent-context toggle (an intent flip moves a row in or out of the
+  # sweep), and both retry actions.
+  #
+  # Recomputing here rather than only on mount / project switch is the
+  # point: those clauses refresh ONE row, so a count left alone goes
+  # stale the instant a retry succeeds, and a summary line still claiming
+  # "3 files" over three green rows is worse than no line.
+  defp assign_failed_summary(%{assigns: %{selected_project_id: nil}} = socket),
+    do: assign(socket, :failed_summary, nil)
+
+  defp assign_failed_summary(%{assigns: %{selected_project_id: project_id}} = socket),
+    do: assign(socket, :failed_summary, build_failed_summary(project_id))
+
+  # nil — not a zero-count struct — when there is nothing to say, so the
+  # template's `:if` drops the element from the DOM entirely.
+  defp build_failed_summary(project_id) do
+    case Files.count_failed_ingests(project_id) do
+      0 ->
+        nil
+
+      count ->
+        rows = Files.list_failed_ingests(project_id)
+        threshold = Files.repeat_failure_threshold()
+        {retryable, withheld} = Enum.split_with(rows, &(failure_count(&1) < threshold))
+
+        %{
+          # The DB aggregate, deliberately not `length(rows)` and never
+          # `@files` — see the moduledoc.
+          count: count,
+          retryable: length(retryable),
+          withheld: length(withheld),
+          threshold: threshold,
+          last_attempt_at: last_attempt_at(rows)
+        }
+    end
+  end
+
+  # No column records "when did we last try this": `update_ingest_status/2`
+  # writes the failure, so the row's own `updated_at` is that moment. The
+  # newest one across the swept rows is what "last tried" means for the
+  # group.
+  defp last_attempt_at([]), do: nil
+
+  defp last_attempt_at(rows) do
+    rows
+    |> Enum.map(& &1.updated_at)
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      stamps -> Enum.max(stamps, DateTime)
+    end
+  end
+
+  defp failure_count(%Files.File{ingest_failure_count: n}) when is_integer(n), do: n
+  defp failure_count(_file), do: 0
+
+  defp do_retry_file(socket, file) do
+    case Files.request_ingest(file) do
+      {:ok, updated} ->
+        {:noreply,
+         socket
+         |> put_file_row(updated)
+         |> assign_failed_summary()}
+
+      {:error, _reason} ->
+        {:noreply,
+         put_flash(socket, :error, "Couldn't retry #{display_name(file)}. Please try again.")}
     end
   end
 
@@ -852,7 +1016,9 @@ defmodule PlatformWeb.FilesLive do
         socket
       end
 
-    assign(socket, :files, files)
+    socket
+    |> assign(:files, files)
+    |> assign_failed_summary()
   end
 
   # One toast at a time: a consecutive delete replaces the toast and its
@@ -939,6 +1105,7 @@ defmodule PlatformWeb.FilesLive do
 
       socket
       |> assign(:files, files)
+      |> assign_failed_summary()
       |> put_claims()
     else
       socket
@@ -1115,6 +1282,89 @@ defmodule PlatformWeb.FilesLive do
   def status_label("failed"), do: "Failed"
   def status_label("not_attempted"), do: "People only"
   def status_label(_), do: "Ingesting…"
+
+  @doc """
+  Whether the detail panel offers a retry for this file (task 01a0008b
+  stage 4).
+
+  Two conditions, both required: the file's extraction actually broke,
+  and it has not yet broken `Platform.Files.repeat_failure_threshold/0`
+  times. The threshold is READ, never re-spelled — a second literal `3`
+  in this module would be free to drift away from the one the bulk retry
+  enforces, and then the button and the sweep would disagree about which
+  files are still worth trying.
+
+  A `"not_attempted"` file is not offered a retry here: it was withheld
+  on purpose, and the audience toggle beside this button is the control
+  that means "actually, do read this one".
+  """
+  def can_retry_file?(%Files.File{ingest_status: "failed"} = file),
+    do: failure_count(file) < Files.repeat_failure_threshold()
+
+  def can_retry_file?(_file), do: false
+
+  @doc """
+  The words following the count in the summary line.
+
+  The count itself is rendered separately so it alone can carry the error
+  colour, so this deliberately starts mid-sentence at the noun.
+
+  When nothing is left to retry the sentence CHANGES rather than the
+  styling: same colour, same size, different diagnosis. Getting louder on
+  the third failure would be escalation, and escalation on a condition
+  the reader cannot fix from the notification is the noise this task
+  exists to remove, relocated.
+  """
+  def failed_summary_sentence(%{count: count, retryable: 0, threshold: threshold}) do
+    "#{file_noun(count)} #{has_have(count)} failed #{threshold} times and " <>
+      "likely #{needs_need(count)} re-exporting."
+  end
+
+  def failed_summary_sentence(%{count: count}) do
+    "#{file_noun(count)} can't be read by agents."
+  end
+
+  @doc """
+  The quieter clause after the sentence: when these files were last
+  tried, plus — when both populations are present — how many of them the
+  retry will not touch.
+
+  Returns `nil` when there is nothing quiet to add, so the template can
+  omit the element rather than render an empty one.
+  """
+  def failed_summary_note(%{} = summary) do
+    [last_tried_clause(summary), withheld_clause(summary)]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts, " ")
+    end
+  end
+
+  defp last_tried_clause(%{last_attempt_at: nil}), do: nil
+
+  defp last_tried_clause(%{last_attempt_at: at}),
+    do: "Last tried #{Calendar.strftime(at, "%Y-%m-%d %H:%M")}."
+
+  # Only when BOTH populations exist. If every file is withheld the main
+  # sentence already says so, and if none are there is nothing to
+  # withhold — in both cases this clause would just repeat or mislead.
+  defp withheld_clause(%{retryable: retryable, withheld: withheld, threshold: threshold})
+       when retryable > 0 and withheld > 0 do
+    "#{withheld} of them #{has_have(withheld)} failed #{threshold} times and " <>
+      "#{needs_need(withheld)} re-exporting instead."
+  end
+
+  defp withheld_clause(_summary), do: nil
+
+  defp file_noun(1), do: "file"
+  defp file_noun(_count), do: "files"
+
+  defp has_have(1), do: "has"
+  defp has_have(_count), do: "have"
+
+  defp needs_need(1), do: "needs"
+  defp needs_need(_count), do: "need"
 
   @doc false
   def agent_toggle_label("attempt"), do: "Included for agents"

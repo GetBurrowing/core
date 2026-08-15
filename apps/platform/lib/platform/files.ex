@@ -248,6 +248,89 @@ defmodule Platform.Files do
   end
 
   @doc """
+  Counts the files in `project_id` whose extraction was ATTEMPTED and BROKE
+  (task 01a0008b stage 2).
+
+  A `Repo.aggregate(:count)` computed entirely in the database. It is
+  deliberately NOT `length(list_failed_ingests(project_id))`, and
+  deliberately not an option on `list_files_for_project/2`: that function
+  caps at 50 by default and the Files page calls it with `limit: 200`, so a
+  count taken from a loaded list starts under-reporting the moment a
+  project outgrows the cap. A wrong number on a surface whose entire job is
+  to be trusted is worse than no number.
+
+  See `list_failed_ingests/2` for the predicate, which is shared.
+  """
+  @spec count_failed_ingests(binary()) :: non_neg_integer()
+  def count_failed_ingests(project_id) when is_binary(project_id) do
+    project_id
+    |> failed_ingests_query()
+    |> Repo.aggregate(:count)
+  end
+
+  @doc """
+  Lists the files in `project_id` whose extraction was ATTEMPTED and BROKE,
+  newest first (task 01a0008b stage 2).
+
+  Each row carries `:ingest_failure_count`, so a caller can tell a file
+  that broke once from one that has broken three times on the same
+  unchanged bytes.
+
+  ## The predicate, and the one distinction it exists to preserve
+
+  A row is swept when ALL of the following hold:
+
+    * `ingest_status == "failed"` — extraction ran and broke. A defect.
+    * `ingest_intent == "attempt"` — we still mean to read this file.
+    * not soft-deleted.
+
+  `"not_attempted"` is EXCLUDED, and that exclusion is the point of this
+  function. A `"not_attempted"` row carries `ingest_intent: "human_only"`,
+  so `Platform.Files.Ingester.ingest_async/1` short-circuits before
+  spawning anything: nothing was tried, nothing broke, and the state is
+  terminal by design until someone calls `request_ingest/2`. It is a
+  deliberate exclusion, not a breakage. Sweeping the two together would
+  report every file a human intentionally withheld as something to repair,
+  and that noise would bury the handful of real defects this sweep exists
+  to surface.
+
+  `Platform.Files.HtmlBackfill` matches `~w(failed not_attempted)` and is
+  correct to — its job is re-attempting everything that lacks text. It is
+  NOT a template for this predicate.
+
+  `"human_only"` + `"failed"` is excluded too. The pair is legal (the
+  `platform_files_not_attempted_requires_human_only_check` constraint
+  forbids only `attempt` + `not_attempted`) and reachable by calling
+  `set_ingest_intent/2` on a row that already failed. Someone deciding a
+  broken file should stay human-only is an answer, not an open defect.
+
+  ## Options
+
+    * `:limit` — caps the result count. Defaults to `nil`, i.e. UNCAPPED,
+      unlike `list_files_for_project/2`. A truncated repair list silently
+      hides work.
+    * `:preload` — Ecto preload spec applied after the query.
+  """
+  @spec list_failed_ingests(binary(), keyword()) :: [File.t()]
+  def list_failed_ingests(project_id, opts \\ []) when is_binary(project_id) do
+    project_id
+    |> failed_ingests_query()
+    |> order_by([f], desc: f.inserted_at)
+    |> maybe_limit(Keyword.get(opts, :limit))
+    |> Repo.all()
+    |> Repo.preload(Keyword.get(opts, :preload, []))
+  end
+
+  # Single source of truth for the sweep predicate, so the count and the
+  # list can never disagree about what "failed" means.
+  defp failed_ingests_query(project_id) do
+    File
+    |> not_deleted()
+    |> where([f], f.project_id == ^project_id)
+    |> where([f], f.ingest_status == "failed" and f.ingest_intent == "attempt")
+  end
+
+  @doc """
   Lists the files in a project that are eligible for catalog-card
   generation, oldest first (task 01a0008c).
 
@@ -400,6 +483,28 @@ defmodule Platform.Files do
 
   Used by `Platform.Files.Ingester` to mark `:ingested` / `:failed`
   after the memory-service round-trip. Returns the updated file row.
+
+  ## Contract: this is the only place `:ingest_failure_count` moves
+
+  `:ingest_status` records the LATEST outcome, which cannot distinguish a
+  file that broke once from one that has broken three times on the same
+  unchanged bytes. `:ingest_failure_count` carries that history, and it is
+  maintained here — at the single seam every `"failed"` and `"ingested"`
+  write already passes through — rather than at the call sites:
+
+    * `"failed"` — increments the count by one.
+    * `"ingested"` — resets it to zero. The count is CONSECUTIVE failures;
+      a success is what makes the streak end.
+    * `"pending"` / `"not_attempted"` — leaves it byte-identical. A
+      re-queue is not an outcome, so `request_ingest/2` (which writes
+      `"pending"` on its own) must not clear the history either: three
+      retries that all fail have to reach three, which is the entire point
+      of the field.
+
+  Maintaining it at the call sites instead would mean the ingester's
+  `mark_failed/1`, its two dedup/success branches, and every future writer
+  each remembering to do it — the same drift the enqueue choke point
+  documented on `set_ingest_intent/2` exists to prevent.
   """
   @spec update_ingest_status(File.t(), String.t()) ::
           {:ok, File.t()} | {:error, Ecto.Changeset.t()}
@@ -407,8 +512,39 @@ defmodule Platform.Files do
       when status in ~w(pending ingested failed not_attempted) do
     file
     |> File.changeset(%{ingest_status: status})
+    |> put_failure_count(file, status)
     |> Repo.update()
   end
+
+  # `:ingest_failure_count` is outside `@cast_fields` on purpose, so it
+  # moves only through this explicit change and never through bulk attrs.
+  #
+  # Read-then-write off the struct the caller handed us, rather than a
+  # DB-side `inc:`, for two reasons. First, `Repo.update_all` would bypass
+  # `File.changeset/2` and turn the
+  # `platform_files_not_attempted_requires_human_only_check` violation into
+  # a raised `Postgrex.Error` instead of the `{:error, changeset}` this
+  # function's callers rely on. Second, the write is not contended: ingest
+  # is spawned per file from one choke point, and the ingester's
+  # `mark_failed/1` reloads the row immediately before calling here. A lost
+  # update under a hypothetical concurrent double-ingest would undercount,
+  # delaying a retry-withhold by one attempt — not corrupt anything — so it
+  # does not justify a lock.
+  defp put_failure_count(changeset, %File{} = file, "failed") do
+    Ecto.Changeset.put_change(
+      changeset,
+      :ingest_failure_count,
+      (file.ingest_failure_count || 0) + 1
+    )
+  end
+
+  defp put_failure_count(changeset, _file, "ingested") do
+    Ecto.Changeset.put_change(changeset, :ingest_failure_count, 0)
+  end
+
+  defp put_failure_count(changeset, _file, status)
+       when status in ~w(pending not_attempted),
+       do: changeset
 
   @doc """
   Records that `file` now has a catalog card at `card_file_key`
@@ -537,6 +673,132 @@ defmodule Platform.Files do
             {:error, reason} -> {:error, reason}
           end
       end
+    end
+  end
+
+  # Consecutive failures after which a file stops being offered a retry.
+  # One number, read by everything that has to agree about it: the bulk
+  # sweep below and — through `repeat_failure_threshold/0` — the Files
+  # page's per-row control. A second literal `3` in the LiveView is the
+  # drift this attribute exists to prevent.
+  @repeat_failure_threshold 3
+
+  @doc """
+  The number of consecutive failed ingests after which a file is withheld
+  from retry (task 01a0008b stage 3).
+
+  Public because the withhold rule has two enforcement points and they
+  must not disagree: `retry_failed_ingests/2` applies it to the bulk
+  action, and the Files page applies it to the per-file retry control.
+  The UI must read this rather than hardcode its own copy of the number.
+  """
+  @spec repeat_failure_threshold() :: pos_integer()
+  def repeat_failure_threshold, do: @repeat_failure_threshold
+
+  @doc """
+  Retries every failed ingest in `project_id` that is still worth
+  retrying (task 01a0008b stage 3).
+
+  Reads the sweep from `list_failed_ingests/2` and calls
+  `request_ingest/2` — the single retry entry point — on each eligible
+  row. Returns `{:ok, %{requested: n, withheld: m}}`.
+
+  ## Routed, not reimplemented
+
+  Every row goes through `request_ingest/2`, which performs the
+  `"attempt"` + `"pending"` flip in ONE write and then hands the
+  refreshed row to `Platform.Files.Ingester.ingest_async/1`. This
+  function calls neither `Repo.update` nor `ingest_async/1` itself.
+  Doing the flip inline would re-create the half-transition
+  (`request_ingest/2`'s docstring describes it) that leaves a row
+  stranded; calling the ingester directly would add a fourth production
+  caller to the system's single enqueue choke point, which is exactly
+  the drift the ingester/context split exists to prevent.
+
+  `opts` is passed straight through to `request_ingest/2`, so `:mode`
+  behaves identically here (`:async` by default, correct for a LiveView).
+
+  ## Eligibility: three strikes and the machine stops pretending
+
+  A row whose `:ingest_failure_count` has reached
+  `repeat_failure_threshold/0` is WITHHELD — counted, not retried. The
+  same bytes have already broken the extractor three times; a fourth
+  identical attempt has no new information to act on, so it would be the
+  system performing work rather than doing it, and it would keep the
+  file's real problem (it likely needs re-exporting) hidden behind a
+  button that looks like a fix.
+
+  Repeated failure deliberately does NOT escalate. Nothing pages, no
+  notification is sent, no digest line is written, no severity or colour
+  changes, and no surface outside the Files page is created. The file
+  becomes self-diagnosing rather than louder: withheld here, re-worded
+  there. An alert firing on a condition nobody can act on from the alert
+  is the same noise this task exists to remove, relocated.
+
+  ## What is NOT swept
+
+  Everything `list_failed_ingests/2` excludes, and for its reasons —
+  most importantly a `"human_only"` / `"not_attempted"` row, which was
+  never attempted and is withheld ON PURPOSE. Re-enqueueing one here
+  would silently overturn a human decision, which on the write side is a
+  mutation rather than a mis-count.
+
+  Retry is human-initiated only: there is no schedule, no cron, no job
+  queue and no automatic re-attempt behind this function. It runs when
+  somebody presses the button.
+
+  ## The two arms of the summary always add up
+
+  `requested + withheld` equals the size of the sweep, so a caller can
+  trust the numbers to describe every file it swept:
+
+    * `{:ok, _}` from `request_ingest/2` — requested.
+    * `{:error, reason}` under `mode: :sync` — requested. The flip landed
+      and the pipeline ran; that the extraction then failed is the
+      retry's outcome, not a sign the retry was never asked for.
+    * `{:error, %Ecto.Changeset{}}` — the flip itself was refused, so
+      nothing was asked of the pipeline. Counted as withheld and logged.
+      Practically unreachable (the sweep only yields rows for which
+      `"attempt"` + `"pending"` is a valid write), but silently dropping
+      it would make the totals lie on the one surface whose whole job is
+      to be trusted.
+  """
+  @spec retry_failed_ingests(binary(), keyword()) ::
+          {:ok, %{requested: non_neg_integer(), withheld: non_neg_integer()}}
+  def retry_failed_ingests(project_id, opts \\ []) when is_binary(project_id) do
+    summary =
+      project_id
+      |> list_failed_ingests()
+      |> Enum.reduce(%{requested: 0, withheld: 0}, fn file, acc ->
+        if retryable_failure?(file) do
+          retry_one(file, opts, acc)
+        else
+          %{acc | withheld: acc.withheld + 1}
+        end
+      end)
+
+    {:ok, summary}
+  end
+
+  defp retryable_failure?(%File{} = file) do
+    (file.ingest_failure_count || 0) < @repeat_failure_threshold
+  end
+
+  defp retry_one(%File{} = file, opts, acc) do
+    case request_ingest(file, opts) do
+      {:ok, _requested} ->
+        %{acc | requested: acc.requested + 1}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        Logger.warning(
+          "retry_failed_ingests: refused the attempt/pending flip for file " <>
+            "#{file.id}: #{inspect(changeset.errors)}"
+        )
+
+        %{acc | withheld: acc.withheld + 1}
+
+      {:error, _ingest_failure} ->
+        %{acc | requested: acc.requested + 1}
     end
   end
 

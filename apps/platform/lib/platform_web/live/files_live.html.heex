@@ -253,6 +253,48 @@
         </p>
       </div>
 
+      <%!-- Failed-ingest summary (task 01a0008b stage 4).
+
+           Renders ONLY when the count is above zero — no zero state, no
+           green all-clear, no persistent widget. The table starts at the
+           top on a healthy project exactly as it did before, and the
+           line's mere presence is the signal before anyone reads the
+           number.
+
+           An ordinary sentence, not a heading: it comes and goes, and a
+           heading that vanishes leaves a hole. A bottom hairline, not a
+           box or an alert — a recoverable condition should not be
+           dressed as an incident. Only the count takes the error slot;
+           the words around it stay body colour. --%>
+      <div
+        :if={@failed_summary}
+        class="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b border-base-300 px-4 py-3 text-sm text-base-content"
+        data-role="files-failed-summary"
+        data-failed-count={@failed_summary.count}
+      >
+        <p>
+          <span class="font-semibold text-error">{@failed_summary.count}</span>
+          {failed_summary_sentence(@failed_summary)}
+        </p>
+        <%!-- Retry-all lives HERE, not on each row: eight failures would
+             otherwise be eight clicks, and that is how a repair gets
+             abandoned halfway. Withdrawn entirely once every remaining
+             file has exhausted its attempts. --%>
+        <button
+          :if={@failed_summary.retryable > 0}
+          type="button"
+          phx-click="retry_failed_ingests"
+          class="link font-medium text-base-content underline-offset-2 hover:opacity-70"
+          data-role="files-retry-all"
+          data-retryable-count={@failed_summary.retryable}
+        >
+          Try again
+        </button>
+        <span :if={failed_summary_note(@failed_summary)} class="text-base-content/60">
+          {failed_summary_note(@failed_summary)}
+        </span>
+      </div>
+
       <%!-- File table --%>
       <table
         :if={@selected_project && @files != []}
@@ -403,6 +445,23 @@
         >
           <.icon name={agent_toggle_icon(@selected_file.ingest_intent)} class="size-4" />
           {agent_toggle_label(@selected_file.ingest_intent)}
+        </button>
+        <%!-- Per-file retry. Only for a file whose extraction actually
+             broke and has attempts left — see can_retry_file?/1, which
+             reads the shared threshold rather than re-spelling it. Sits
+             beside the audience toggle because both answer "what should
+             agents do with this file"; it stays on the constructive side
+             of the spacer. --%>
+        <button
+          :if={can_retry_file?(@selected_file)}
+          type="button"
+          phx-click="retry_file"
+          phx-value-id={@selected_file.id}
+          class="btn btn-ghost btn-sm"
+          data-role="files-detail-retry"
+          data-ingest-failure-count={@selected_file.ingest_failure_count}
+        >
+          <.icon name="hero-arrow-path" class="size-4" /> Try again
         </button>
         <%!-- Flex spacer: destructive separation — Delete is right-
              aligned, never glued to the constructive verbs. --%>
