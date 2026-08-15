@@ -3472,8 +3472,7 @@ body, .font-fabrikam {
     justify-content: center;
     width: 24px;
     height: 24px;
-    border-radius: var(--radius-field);
-    color: color-mix(in oklch, var(--color-base-content) 60%, transparent);
+      color: color-mix(in oklch, var(--color-base-content) 60%, transparent);
     transition:
       color 75ms ease,
       background-color 75ms ease;
@@ -4160,4 +4159,112 @@ body, .font-fabrikam {
    hold. The three states stay distinguishable by icon shape regardless. */
 .canvas-inert [data-node-id][data-state] {
   cursor: default;
+}
+
+/* ── Linked-canvas chip (task 01a002bd) ──────────────────────────────────
+   The Canvases strip on the task detail panel renders each attached canvas
+   as a daisyUI `.badge`. That rule sets a FIXED `height: var(--size)` with
+   `align-items: center` and no `white-space: nowrap`, so a title too long
+   for one line wraps freely inside a box that never grows. The overflow
+   escapes symmetrically through both borders, and since the border is
+   painted on the box, it lands across the glyphs.
+
+   Measured before this rule, at 1440x900: a chip 21px tall (top 134, bottom
+   155) holding text that ran 125.5 to 162.5. The border sat 8.5px inside
+   the text.
+
+   What that costs is not tidiness. The line reads as a STRIKETHROUGH, so
+   the panel silently asserts that a live canvas has been deleted or
+   superseded — and the strip already spends `--color-error` on exactly that
+   meaning for the soft-deleted branch. Two conventions were claiming one
+   signal; this removes the accidental one.
+
+   A badge is the wrong container for a sentence, and replacing the strip
+   with a list of rows is the better long-term answer. That is a redesign of
+   the surface rather than a bug fix, and the design direction deliberately
+   declined to smuggle it in behind a border defect. If this surface earns a
+   third geometry complaint, that is the signal to stop patching the pill.
+
+   Three moves, and only three:
+
+     grow   `height: auto` + `min-height` so the box takes the height it
+            always needed. A one-line chip is unchanged, because its content
+            never exceeds the old fixed height.
+
+     clamp  two lines, then an ellipsis. Unbounded growth was considered and
+            cut: one runaway title would otherwise own the strip. Two lines
+            holds every design-direction title this surface actually
+            receives.
+
+     hold   the detach button neither stretches nor shrinks as the box
+            grows. Left to itself it would become the largest thing in a
+            chip whose subject is the title.
+
+   NO colour change, no icon, no background, no weight change, and the
+   second line is the same size as the first — shrinking the wrapped line
+   would invent a hierarchy where both halves are simply the title. */
+/* THE CORNER IS DELIBERATELY NOT DECLARED HERE. Do not add a border-radius
+   rule to this selector — read this first, because the obvious edit breaks
+   the one-line case.
+
+   The design direction asks for a pill at one line and a squarer block at
+   two. CSS cannot query an element's own line count, so there is no literal
+   implementation. But the CSS corner-overlap rule scales a radius down when
+   it exceeds half the box, and MEASURED at 1440x900 that already produces
+   exactly the split the direction wanted, from `.badge`'s inherited
+   `--radius-selector` alone:
+
+     one line   29px tall, declared 16px -> clamped to 14.5px = half the
+                height, which IS a pill
+     two lines  50px tall, declared 16px -> stays 16px, which reads as a
+                rounded block
+
+   1rem is not a lucky number here, it is the only value that works: to be a
+   pill at one line it must be >= 14.5, and to avoid being a lozenge at two
+   it must be < 25. Both alternatives fail:
+
+     `--radius-field` (10px)  one-line effective 10px — NOT a pill. This is
+                              the tempting edit, because 10px is what the
+                              direction names for the two-line state. Applied
+                              unconditionally it destroys the one-line pill.
+     a full pill (999px)      two-line effective 25px — a lozenge, which the
+                              direction explicitly cut.
+
+   The deviation from the direction is the two-line corner being 16px rather
+   than 10px, disclosed and accepted rather than chased with a ResizeObserver
+   toggling a class on every resize for a 6px difference.
+
+   `task_canvas_chip.spec.ts` pins both states, so an edit here that breaks
+   the pill fails a test rather than being noticed in review. */
+[data-role="linked-canvas-chip"] {
+  height: auto;
+  min-height: var(--size);
+  /* Keeps the detach button on the centreline as the box grows, rather than
+     letting it stretch to the full two-line height. */
+  align-items: center;
+  /* Glyphs would otherwise sit flush against the border on a wrapped chip.
+     Block-only: the horizontal padding `.badge` already sets is untouched,
+     so nothing moves sideways. */
+  padding-block: 0.1875rem;
+}
+
+/* The clamp lives on the title, not the chip, so the detach button is never
+   part of the clamped box. `-webkit-box` is the only line-clamp mechanism
+   with the browser support this needs; the unprefixed `line-clamp` is
+   carried alongside it for when that changes. */
+.canvas-chip-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  /* The full string stays in the DOM and reachable to a screen reader; only
+     the paint is clipped. `title=` on the element carries it for pointer
+     users. */
+  overflow-wrap: anywhere;
+}
+
+[data-role="linked-canvas-chip"] > button {
+  flex: none;
+  align-self: center;
 }

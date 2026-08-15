@@ -1671,12 +1671,18 @@
           <.link
             :if={entry.canvas_present}
             href={~p"/canvases/#{entry.canvas_id}"}
-            class="hover:underline"
+            class="canvas-chip-title hover:underline"
             data-role="linked-canvas-chip-link"
+            title={entry.title || "(untitled)"}
           >
             {entry.title || "(untitled)"}
           </.link>
-          <span :if={not entry.canvas_present} class="text-error">
+          <span
+            :if={not entry.canvas_present}
+            class="canvas-chip-title text-error"
+            data-role="linked-canvas-chip-deleted"
+            title={entry.title || "(deleted canvas)"}
+          >
             {entry.title || "(deleted canvas)"}
           </span>
           <button
