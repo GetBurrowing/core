@@ -1461,13 +1461,13 @@ defmodule Platform.Tasks.TasksContextTest do
       %{project: project}
     end
 
-    test "returns the five sub-org keys with non-negative integer counts", %{project: project} do
+    test "returns the six sub-org keys with non-negative integer counts", %{project: project} do
       _t1 = Tasks.create_task(%{project_id: project.id, title: "Some task"})
 
       counts = Tasks.count_by_scope()
 
       assert Map.keys(counts) |> Enum.sort() ==
-               Enum.sort([:fabrikam, :soylent, :wayne_tech, :sxi, :paragon])
+               Enum.sort([:fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne])
 
       for {_key, value} <- counts do
         assert is_integer(value) and value >= 0

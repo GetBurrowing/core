@@ -228,6 +228,14 @@
   .bg-paragon-dot { background-color: oklch(80% 0.16 95); }
   .hover\:bg-paragon\/22:hover { background-color: oklch(80% 0.16 95 / 22%); }
 
+  /* ─ cyberdyne ─ magenta ─ */
+  .text-cyberdyne { color: oklch(66% 0.19 340); }
+  .bg-cyberdyne { background-color: oklch(66% 0.19 340 / 12%); }
+  .bg-cyberdyne-active { background-color: oklch(66% 0.19 340); color: oklch(15% 0 0); box-shadow: 0 0 0 2px oklch(66% 0.19 340 / 30%); }
+  .border-cyberdyne { border-color: oklch(66% 0.19 340 / 30%); }
+  .bg-cyberdyne-dot { background-color: oklch(66% 0.19 340); }
+  .hover\:bg-cyberdyne\/22:hover { background-color: oklch(66% 0.19 340 / 22%); }
+
   /* ── Scope-pill LABEL text (WCAG 1.4.3 AA, ≥4.5:1) ────────────────────
      The full-saturation `text-<slug>` token above is tuned for the
      full-saturation dot / active fill, NOT for label text sitting on the
@@ -245,20 +253,24 @@
      only soylent is nudged (0.65→0.67 L) to clear AA in dark.
 
      Measured contrast (label text vs composited 12% tint over base-100):
-       LIGHT (over #FFFFFF):  fabrikam 4.61 · soylent 4.66 · wayne-tech 4.66 · sxi 4.56 · paragon 4.65
-       DARK  (over #171b25):  fabrikam 5.51 · soylent 4.56 · wayne-tech 5.11 · sxi 5.71 · paragon 7.31
-     All ten ≥ 4.5:1. (Recomputed via OKLCH→sRGB→WCAG, 2026-06-23.) */
+       LIGHT (over #FFFFFF):  fabrikam 4.61 · soylent 4.66 · wayne-tech 4.66 · sxi 4.56 · paragon 4.65 · cyberdyne 4.61
+       DARK  (over #171b25):  fabrikam 5.51 · soylent 4.56 · wayne-tech 5.11 · sxi 5.71 · paragon 7.31 · cyberdyne 4.62
+     All twelve ≥ 4.5:1. (Recomputed via OKLCH→sRGB→WCAG; cyberdyne added 2026-08-14.)
+     cyberdyne uses half-percent L (55.5% / 67.5%) because whole-percent
+     steps at hue 340 overshoot the 4.56–4.66 band in light. */
   .text-fabrikam-label     { color: oklch(55% 0.16 50); }
   .text-soylent-label { color: oklch(55% 0.20 295); }
   .text-wayne-tech-label { color: oklch(52% 0.15 240); }
   .text-sxi-label      { color: oklch(51% 0.15 162); }
   .text-paragon-label { color: oklch(54% 0.16 95); }
+  .text-cyberdyne-label { color: oklch(55.5% 0.19 340); }
 
   [data-theme=dark] .text-fabrikam-label     { color: oklch(72% 0.16 50); }
   [data-theme=dark] .text-soylent-label { color: oklch(67% 0.20 295); }
   [data-theme=dark] .text-wayne-tech-label { color: oklch(68% 0.15 240); }
   [data-theme=dark] .text-sxi-label      { color: oklch(70% 0.15 162); }
   [data-theme=dark] .text-paragon-label { color: oklch(80% 0.16 95); }
+  [data-theme=dark] .text-cyberdyne-label { color: oklch(67.5% 0.19 340); }
 }
 
 /* ──────────────────────────────────────────────────────
@@ -3691,6 +3703,10 @@ body, .font-fabrikam {
 
   .channel-section-swatch--paragon {
     background-color: oklch(80% 0.16 95);
+  }
+
+  .channel-section-swatch--cyberdyne {
+    background-color: oklch(66% 0.19 340);
   }
 
   /* ── Stage 3 v3 (chat sidebar Option B): global "N hidden channels"

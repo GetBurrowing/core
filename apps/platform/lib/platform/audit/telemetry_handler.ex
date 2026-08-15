@@ -53,6 +53,13 @@ defmodule Platform.Audit.TelemetryHandler do
     [:platform, :tenancy, :org_unarchived],
     [:platform, :tenancy, :org_deletion_scheduled],
     [:platform, :tenancy, :org_deletion_cancelled],
+    # Task 019ffe9d stage 1 — org creation. Emitted by
+    # `Platform.Tenancy.Lifecycle.create_org/2` after the insert commits.
+    # Same org metadata shape as the lifecycle events above. Registration
+    # here is load-bearing: an emit with no matching @events entry fails
+    # SILENTLY (nothing raises, the audit row simply never appears), which
+    # is why `lifecycle_test.exs` pins this row explicitly.
+    [:platform, :tenancy, :org_created],
     # Task 019f4eaa stage 3 — project lifecycle (single-row). Emitted by
     # `Platform.Tenancy.Lifecycle` (archive/schedule/restore). Metadata
     # carries actor_id, resource_type: "project", resource_id + project

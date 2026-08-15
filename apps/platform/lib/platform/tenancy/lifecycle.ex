@@ -1,7 +1,8 @@
 defmodule Platform.Tenancy.Lifecycle do
   @moduledoc """
-  Archive / schedule-deletion / restore lifecycle for the container
-  resources — orgs and projects (task 019f4eaa stage 3).
+  Create / archive / schedule-deletion / restore lifecycle for the container
+  resources — orgs and projects (task 019f4eaa stage 3; `create_org/2` added
+  by task 019ffe9d stage 1).
 
   Mirrors the proven channel lifecycle in `Platform.Chat`
   (`archive_space/2`, `schedule_space_deletion/2`, …) but adds the two
@@ -48,6 +49,126 @@ defmodule Platform.Tenancy.Lifecycle do
   @type org_error :: :unauthorized | :not_deletable | :not_scheduled | :not_found
   @type project_error :: :unauthorized | :not_scheduled
   @type restore_error :: :unauthorized | :not_found
+
+  # ── Org creation ──────────────────────────────────────────────────────
+
+  @doc """
+  Create a TENANT org — the write the tenancy context never had (task
+  019ffe9d stage 1). Until this existed, every org in the system came from
+  the seed migration `20260519143620_seed_root_orgs.exs`, so onboarding a
+  client meant shipping a migration.
+
+  Fabrikam-admin only, and deliberately actor-first arity-2 like every sibling
+  in this module: creating an org is a *higher*-privilege act than archiving
+  one, so it gets the same `{:error, :unauthorized}` gate rather than
+  resting solely on the caller's route hook. There is no unauthenticated
+  arity — an attrs-only `create_org/1` would be an unauthorized writer, and
+  nothing in the system needs one.
+
+  ## Parentage
+
+  New orgs are tenants of the root org, and `:parent_org_id` is *derived*,
+  not asked for: when the caller omits it, it defaults to the id of the row
+  the DB itself calls root (the single `parent_org_id IS NULL` row behind
+  the `orgs_single_root` partial unique index). An explicit `nil` is
+  refused as a changeset error on `:parent_org_id` — see
+  `require_tenant_parent/1` — because the alternative is a raised
+  `Ecto.ConstraintError` that a form cannot render.
+
+  ## Validation
+
+  All of it already lives in `Platform.Tenancy.Org.changeset/2` — required
+  name+slug, the `~r/^[a-z][a-z0-9_-]*$/` slug format, `unique_constraint(:slug)`
+  paired with the real `unique_index(:orgs, [:slug])`, and the parent FK
+  constraint. This function adds exactly one create-time rule (the tenant
+  parent) and otherwise just wraps that changeset, so a duplicate slug comes
+  back as `{:error, %Ecto.Changeset{}}` with an error on `:slug` rather than
+  a 500.
+
+  Accepts atom- or string-keyed attrs (LiveView form params are the latter).
+
+  Emits `[:platform, :tenancy, :org_created]` AFTER the insert commits;
+  the event is registered in `Platform.Audit.TelemetryHandler` `@events`
+  so it bridges to an audit row.
+
+  ## What this does NOT do
+
+  It does not register the new org in the scope enums
+  (`Platform.Tasks.scope_keys/0`, `PlatformWeb.Components.ScopePill.scopes/0`)
+  or give it a colour ramp, both of which are hand-authored code literals.
+  An org created here is real and selectable but gets no chip on the tasks
+  scope rail until that follow-up lands — `TasksLive.active_scope_keys/1`
+  intersects the viewer's orgs against the enum and filters out anything
+  absent from it.
+  """
+  @spec create_org(actor(), map()) ::
+          {:ok, Org.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def create_org(actor, attrs) when is_map(attrs) do
+    with_fabrikam_admin_authz(actor, fn ->
+      %Org{}
+      |> Org.changeset(put_default_parent(attrs))
+      |> require_tenant_parent()
+      |> Repo.insert()
+      |> case do
+        {:ok, %Org{} = org} ->
+          emit([:platform, :tenancy, :org_created], actor, org_meta(org, %{}))
+          {:ok, org}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:error, changeset}
+      end
+    end)
+  end
+
+  # Default `:parent_org_id` to the root org when the caller omitted the key
+  # entirely. A key that IS present — including one holding an explicit nil —
+  # is left alone so `require_tenant_parent/1` can report it.
+  #
+  # The key has to be inserted in whichever style the caller used: LiveView
+  # form params arrive string-keyed, internal callers use atoms, and Ecto's
+  # `cast/3` raises on a map with MIXED key types.
+  defp put_default_parent(attrs) do
+    if Map.has_key?(attrs, :parent_org_id) or Map.has_key?(attrs, "parent_org_id") do
+      attrs
+    else
+      case root_org_id() do
+        nil -> attrs
+        root_id -> Map.put(attrs, parent_key(attrs), root_id)
+      end
+    end
+  end
+
+  defp parent_key(attrs) do
+    if Enum.any?(Map.keys(attrs), &is_binary/1), do: "parent_org_id", else: :parent_org_id
+  end
+
+  # The root org is resolved by STRUCTURE — the single row the
+  # `orgs_single_root` partial unique index permits to have a NULL parent —
+  # not by the "fabrikam" slug, so a rename can never silently reparent new orgs.
+  # Returns nil rather than raising when no root exists (a bare test DB);
+  # `require_tenant_parent/1` then turns that into a changeset error instead
+  # of a `Repo.get_by!` blow-up.
+  defp root_org_id do
+    Repo.one(from(o in Org, where: is_nil(o.parent_org_id), select: o.id))
+  end
+
+  # Refuse to even ATTEMPT a second root. `Org.changeset/2` does not require
+  # `:parent_org_id` (the seeded root legitimately has none), and the
+  # `orgs_single_root` index lives only in the DB with no matching
+  # `unique_constraint`, so a nil parent reaching `Repo.insert/1` comes back
+  # as a RAISED Ecto.ConstraintError — a 500, not something a form can render
+  # on the field. Every org this function creates is a tenant.
+  defp require_tenant_parent(%Ecto.Changeset{} = changeset) do
+    if is_nil(Ecto.Changeset.get_field(changeset, :parent_org_id)) do
+      Ecto.Changeset.add_error(
+        changeset,
+        :parent_org_id,
+        "is required — a new org is a tenant of the root org"
+      )
+    else
+      changeset
+    end
+  end
 
   # ── Org lifecycle ─────────────────────────────────────────────────────
 

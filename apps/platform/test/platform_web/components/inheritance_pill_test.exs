@@ -315,4 +315,131 @@ defmodule PlatformWeb.Components.InheritancePillTest do
       refute html =~ "Only Fabrikam admins can override"
     end
   end
+
+  # ── Cyberdyne, the sixth scope (task 019ffe9d) ───────────────────────
+  #
+  # Stage 3 appended `:cyberdyne` to this component's `:scope` attr
+  # `values:` list and added the `"cyberdyne" -> :cyberdyne` clause to
+  # `scope_from_org/1`, but added no render coverage here — so nothing
+  # pinned that the pill actually accents with the cyberdyne token.
+  # This component has NO production call site (it is referenced only by
+  # its own moduledoc example and this file), so a browser cannot observe
+  # it; a render test is the only available evidence.
+  #
+  # The org is created AT RUNTIME through `Tenancy.create_org/2`, never by
+  # extending the seed migration: `tenancy_test.exs`, `projects_test.exs`
+  # and `federation/tool_surface_org_filters_test.exs` all assert the exact
+  # five-org SEEDED set, and a sixth seeded org would turn them red.
+  describe "cyberdyne scope" do
+    setup do
+      admin = create_fabrikam_admin!()
+      {:ok, cyberdyne} = Tenancy.create_org(admin, %{name: "Cyberdyne", slug: "cyberdyne"})
+      {:ok, cyberdyne: cyberdyne}
+    end
+
+    test "defined_here accents with the cyberdyne token", ctx do
+      assigns = %{
+        org: ctx.cyberdyne,
+        scope: :cyberdyne,
+        record_key: :my_skill,
+        default: nil,
+        fabrikam_admin?: false,
+        lookup_fn: build_lookup(%{{ctx.cyberdyne.id, :my_skill} => "cyberdyne-local"})
+      }
+
+      html = render_pill(assigns)
+
+      assert html =~ "text-cyberdyne"
+      assert html =~ "Defined here"
+    end
+
+    test "overridden accents with the cyberdyne token", ctx do
+      assigns = %{
+        org: ctx.cyberdyne,
+        scope: :cyberdyne,
+        record_key: :my_skill,
+        default: nil,
+        fabrikam_admin?: false,
+        lookup_fn:
+          build_lookup(%{
+            {ctx.cyberdyne.id, :my_skill} => "cyberdyne-local",
+            {ctx.fabrikam.id, :my_skill} => "fabrikam-default"
+          })
+      }
+
+      html = render_pill(assigns)
+
+      assert html =~ "text-cyberdyne"
+    end
+
+    test "the cyberdyne accent is the token Tenancy publishes, not a literal", ctx do
+      # Guards against the accent and the scope registry drifting apart:
+      # `accent_class/2` delegates to `Tenancy.scope_color/1`.
+      assert Tenancy.scope_color(:cyberdyne) == "text-cyberdyne"
+
+      html =
+        render_pill(%{
+          org: ctx.cyberdyne,
+          scope: :cyberdyne,
+          record_key: :my_skill,
+          default: nil,
+          fabrikam_admin?: false,
+          lookup_fn: build_lookup(%{{ctx.cyberdyne.id, :my_skill} => "v"})
+        })
+
+      assert html =~ Tenancy.scope_color(:cyberdyne)
+    end
+
+    test "inherited resolves cyberdyne's parent to the fabrikam accent, not cyberdyne's", ctx do
+      # A tenant inherits from the root, so the SOURCE org here is Fabrikam.
+      # `:inherited` renders no accent at all (`accent_class(:inherited, _)`
+      # is nil) — asserted so a future accent-on-inherited change has to
+      # come past this test.
+      html =
+        render_pill(%{
+          org: ctx.cyberdyne,
+          scope: :cyberdyne,
+          record_key: :my_skill,
+          default: nil,
+          fabrikam_admin?: false,
+          lookup_fn: build_lookup(%{{ctx.fabrikam.id, :my_skill} => "fabrikam-default"})
+        })
+
+      assert html =~ "Inherited from Fabrikam"
+      refute html =~ "text-cyberdyne"
+    end
+
+    test "creating cyberdyne at runtime leaves the seeded five untouched", ctx do
+      # The sibling suites assert the exact five-org seeded set; this pins
+      # that a runtime create does not join it.
+      slugs = Tenancy.list_orgs() |> Enum.map(& &1.slug) |> Enum.sort()
+      assert slugs == ~w(paragon soylent fabrikam wayne_tech sxi cyberdyne)
+      assert ctx.cyberdyne.parent_org_id == ctx.fabrikam.id
+      assert Tenancy.tier(ctx.cyberdyne) == :tenant
+    end
+  end
+
+  # Fabrikam-admin actor — `Tenancy.create_org/2` refuses anyone else.
+  defp create_fabrikam_admin! do
+    n = System.unique_integer([:positive])
+
+    user =
+      %Platform.Accounts.User{}
+      |> Platform.Accounts.User.changeset(%{
+        email: "inheritance-pill-#{n}@example.com",
+        name: "Inheritance Pill #{n}",
+        oidc_sub: "oidc-inheritance-pill-#{n}"
+      })
+      |> Platform.Repo.insert!()
+
+    %Platform.Tenancy.OrgMembership{}
+    |> Platform.Tenancy.OrgMembership.changeset(%{
+      user_id: user.id,
+      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      role: "admin"
+    })
+    |> Platform.Repo.insert!()
+
+    user
+  end
 end

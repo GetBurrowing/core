@@ -681,6 +681,14 @@ defmodule PlatformWeb.Router do
       # `:ensure_admin` gate + `:shell` chrome from this live_session.
       live("/admin/external-logins", ExternalRecoveryLive, :index)
       live("/admin/users", UserAccessLive, :index)
+      # Task 019ffe9d stage 4: the human-reachable caller for
+      # `Tenancy.create_org/2`. It is an admin list-plus-write surface of
+      # exactly the same shape as `/admin/users`, so it takes the same gate
+      # from this live_session rather than inventing a second one — and the
+      # context function re-checks the actor itself
+      # (`Lifecycle.with_fabrikam_admin_authz/2`) so neither half is load-bearing
+      # alone.
+      live("/admin/orgs", AdminOrgsLive, :index)
       live("/admin/prompts", AdminPromptsLive, :index)
       live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/admin/federation", AdminFederationLive, :index)

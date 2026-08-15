@@ -870,6 +870,9 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.AdminFederationLive ->
         "Admin"
 
+      PlatformWeb.AdminOrgsLive ->
+        "Admin"
+
       _ ->
         view
         |> Module.split()

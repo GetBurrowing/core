@@ -5089,7 +5089,7 @@ defmodule PlatformWeb.TasksLive do
   end
 
   defp desktop_column_items_for_scope(_columns, _stacks_by_column, _col_key, scope)
-       when scope in [:soylent, :wayne_tech, :sxi, :paragon] do
+       when scope in [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne] do
     []
   end
 
@@ -5542,8 +5542,8 @@ defmodule PlatformWeb.TasksLive do
   # assets/css/app.css. A truly data-driven rail needs color allocation for
   # arbitrary orgs and is out of scope for a crash fix.
   #
-  # Order is preserved: `Tasks.scope_keys/0` is the same five slugs in the same
-  # sequence as `Tenancy.tenant_priority/0`, so for seeded orgs the output is
+  # Order is preserved: `Tasks.scope_keys/0` LEADS with the same five slugs in the same
+  # sequence as `Tenancy.tenant_priority/0` (`:cyberdyne` appends; the 9_999 unknown-slug sentinel sorts it last there too), so for seeded orgs the output is
   # identical to the old `sort_by_tenant_priority/2` result. Mirrors
   # `parse_scope/1` above — allowlist first, never convert.
   defp active_scope_keys(viewer) do

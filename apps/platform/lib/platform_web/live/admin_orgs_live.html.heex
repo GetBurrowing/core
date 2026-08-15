@@ -1,0 +1,197 @@
+<div class="flex h-full min-h-0 flex-col">
+  <.breadcrumb segments={[
+    %{label: "Admin", navigate: ~p"/admin"},
+    %{label: "Orgs", navigate: nil}
+  ]} />
+  <%!-- Header. Chrome uses semantic token slots only — `base-300` for the
+       divider (border), `base-content/60` for the muted eyebrow, `primary`
+       for the single CTA. No raw hex anywhere on this surface. --%>
+  <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+    <div class="flex items-center gap-3">
+      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+        Admin · Orgs
+      </h1>
+      <span class="badge badge-ghost badge-sm">{length(@orgs)}</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button
+        type="button"
+        phx-click="open_create_sheet"
+        class="btn btn-sm btn-primary gap-2"
+        data-role="open-create-org"
+      >
+        <span class="hero-plus size-4"></span> New org
+      </button>
+    </div>
+  </div>
+
+  <div class="flex-1 min-h-0 overflow-y-auto p-4">
+    <div class="mx-auto max-w-3xl space-y-4">
+      <%!-- The honest state of the system after this task: the form removes
+           the MIGRATION, not the DEPLOY. Stated on the list too, not only in
+           the create sheet, so it is still true for someone arriving after
+           the org was made and wondering where it went. --%>
+      <div
+        class="rounded-lg border border-base-300 bg-base-200 p-3 text-xs text-base-content/60"
+        data-role="scope-rail-notice"
+      >
+        Creating an org registers the tenant. It does not give the org a scope colour or
+        a chip on the Tasks scope rail — those are hand-authored code, so a new org stays
+        invisible on the rail until a follow-up code change ships.
+      </div>
+
+      <div :if={@orgs == []} class="text-sm text-base-content/40">
+        No orgs yet.
+      </div>
+
+      <div :if={@orgs != []} class="overflow-x-auto">
+        <table class="table table-sm" data-role="org-list">
+          <thead>
+            <tr class="text-base-content/60">
+              <th>Name</th>
+              <th>Slug</th>
+              <th>Tier</th>
+              <th>Scope rail</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr :for={org <- @orgs} data-role="org-row" data-org-slug={org.slug}>
+              <td class="font-medium text-base-content">{org.name}</td>
+              <td class="font-mono text-xs text-base-content/60">{org.slug}</td>
+              <td class="text-xs text-base-content/60">
+                {if root_org?(org), do: "Root", else: "Tenant"}
+              </td>
+              <td>
+                <span
+                  :if={on_scope_rail?(org.slug)}
+                  class="badge badge-ghost badge-sm"
+                  data-role="scope-rail-yes"
+                >
+                  Registered
+                </span>
+                <span
+                  :if={not on_scope_rail?(org.slug)}
+                  class="badge badge-warning badge-sm badge-outline"
+                  data-role="scope-rail-no"
+                  title="Needs a follow-up code change: scope colour ramp + scope-key registration."
+                >
+                  Not on rail
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <%!-- Create sheet — the unified `<.sheet>` (bottom drawer on mobile,
+       side/centred panel on desktop). Backdrop-tap, Escape and focus
+       management come from the component; nothing is hand-rolled here.
+       `:if={@show_create_sheet}` rather than a permanently-mounted sheet so
+       the notice copy and helper text can't leak into list-level assertions.
+
+       The submit button lives in the `:actions` slot (the slot's documented
+       purpose: Cancel plus a primary CTA) and reaches the form in the body
+       through the HTML5 `form="create-org-form"` cross-form attribute — the
+       same association already used by the chat composer's upload send
+       button. --%>
+  <.sheet
+    :if={@show_create_sheet}
+    id="create-org-sheet"
+    open={true}
+    placement={:bottom}
+    on_close="close_create_sheet"
+  >
+    <:title>New org</:title>
+
+    <.form
+      for={@org_form}
+      id="create-org-form"
+      phx-change="validate_org"
+      phx-submit="create_org"
+      class="form-fields space-y-4"
+      data-role="create-org-form"
+    >
+      <%!-- Name --%>
+      <div>
+        <label class="label label-text text-xs font-medium" for="org_name">Name *</label>
+        <input
+          type="text"
+          id="org_name"
+          name="org[name]"
+          value={@org_form[:name].value}
+          required
+          placeholder="Cyberdyne"
+          class="input input-bordered w-full"
+        />
+        <p
+          :for={msg <- Enum.map(@org_form[:name].errors, &translate_error/1)}
+          class="mt-1 text-xs text-error"
+          data-role="org-name-error"
+        >
+          {msg}
+        </p>
+      </div>
+
+      <%!-- Slug. The format rule is shown up front rather than discovered by
+           rejection; the rule itself is NOT re-implemented here — the
+           messages below are whatever `Org.changeset/2` produced. --%>
+      <div>
+        <label class="label label-text text-xs font-medium" for="org_slug">Slug *</label>
+        <input
+          type="text"
+          id="org_slug"
+          name="org[slug]"
+          value={@org_form[:slug].value}
+          required
+          placeholder="cyberdyne"
+          class="input input-bordered w-full font-mono"
+        />
+        <p
+          :for={msg <- Enum.map(@org_form[:slug].errors, &translate_error/1)}
+          class="mt-1 text-xs text-error"
+          data-role="org-slug-error"
+        >
+          {msg}
+        </p>
+        <p class="mt-1 text-xs text-base-content/60" data-role="org-slug-hint">
+          Lowercase, starts with a letter, then letters, digits, hyphens or underscores
+          (<span class="font-mono">^[a-z][a-z0-9_-]*$</span>). Must be unique.
+        </p>
+      </div>
+
+      <%!-- Parentage is derived, not asked for — see the moduledoc. Say so,
+           so its absence reads as a decision rather than a missing field. --%>
+      <p class="text-xs text-base-content/60" data-role="org-parent-note">
+        New orgs are created as tenants of Fabrikam. There is exactly one root org and it
+        already exists, so there is nothing to choose here.
+      </p>
+
+      <%!-- The surface must not pretend the form finishes the job. --%>
+      <div
+        class="rounded-lg border border-base-300 bg-base-200 p-3 text-xs text-base-content/60"
+        data-role="create-org-followup-note"
+      >
+        Creating an org registers the tenant. Its scope colour and its chip on the Tasks
+        scope rail require a follow-up code change — the colour ramp is hand-authored CSS
+        with contrast-checked label values, so it cannot be picked in this form. Until
+        that ships, the org exists and is selectable but will not appear on the scope rail.
+      </div>
+    </.form>
+
+    <:actions>
+      <button type="button" phx-click="close_create_sheet" class="btn btn-ghost btn-sm">
+        Cancel
+      </button>
+      <button
+        type="submit"
+        form="create-org-form"
+        class="btn btn-primary btn-sm"
+        data-role="submit-create-org"
+      >
+        Create org
+      </button>
+    </:actions>
+  </.sheet>
+</div>

@@ -76,7 +76,7 @@ defmodule PlatformWeb.Components.InheritancePill do
 
   attr(:scope, :atom,
     required: true,
-    values: [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon],
+    values: [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne],
     doc:
       "The sub-org scope slug. Drives the accent color in the `:defined_here` and `:overridden` states (no accent for `:inherited`)."
   )
@@ -208,6 +208,7 @@ defmodule PlatformWeb.Components.InheritancePill do
       "wayne_tech" -> :wayne_tech
       "sxi" -> :sxi
       "paragon" -> :paragon
+      "cyberdyne" -> :cyberdyne
       _ -> :fabrikam
     end
   end

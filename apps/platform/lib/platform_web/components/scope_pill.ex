@@ -103,7 +103,7 @@ defmodule PlatformWeb.Components.ScopePill do
   use Phoenix.Component
   import PlatformWeb.CoreComponents, only: [icon: 1]
 
-  @scopes [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon]
+  @scopes [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
 
   @doc """
   The canonical list of scope atoms, in display order.
@@ -121,7 +121,7 @@ defmodule PlatformWeb.Components.ScopePill do
 
   attr(:propagated_to, :atom,
     default: nil,
-    values: [nil, :fabrikam, :soylent, :wayne_tech, :sxi, :paragon],
+    values: [nil, :fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne],
     doc:
       "When set, renders the propagated variant — `<scope> → <propagated_to>` joined by a hero-arrow-right glyph."
   )
@@ -334,6 +334,7 @@ defmodule PlatformWeb.Components.ScopePill do
   defp slug(:wayne_tech), do: "wayne-tech"
   defp slug(:sxi), do: "sxi"
   defp slug(:paragon), do: "paragon"
+  defp slug(:cyberdyne), do: "cyberdyne"
 
   # ── Labels ─────────────────────────────────────────────────────────
 
@@ -342,6 +343,7 @@ defmodule PlatformWeb.Components.ScopePill do
   defp scope_label(:wayne_tech), do: "Wayne-Tech"
   defp scope_label(:sxi), do: "SXI"
   defp scope_label(:paragon), do: "Paragon"
+  defp scope_label(:cyberdyne), do: "Cyberdyne"
 
   defp aria_label(scope, true), do: "Currently filtered by #{scope_label(scope)} scope"
   defp aria_label(scope, false), do: "Filter by #{scope_label(scope)} scope"

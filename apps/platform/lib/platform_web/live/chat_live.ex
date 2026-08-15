@@ -2344,11 +2344,11 @@ defmodule PlatformWeb.ChatLive do
 
   defp reassign_error_message(_reason, _to_name), do: "Could not move the channel."
 
-  # The 5 scope tokens are the recolor palette — whitelist-validate the
+  # The scope tokens are the recolor palette — whitelist-validate the
   # inbound color so a forged payload can't write an arbitrary string onto a
   # section's `color` (defense-in-depth on top of the admin gate).
   defp valid_scope_token?(color),
-    do: color in ["paragon", "soylent", "fabrikam", "wayne-tech", "sxi"]
+    do: color in ["paragon", "soylent", "fabrikam", "wayne-tech", "sxi", "cyberdyne"]
 
   # Shared tail for every successful admin-default write: broadcast the
   # shared-defaults invalidation to all OTHER sessions (so non-admin users and
@@ -4045,6 +4045,7 @@ defmodule PlatformWeb.ChatLive do
   def section_scope_atom("fabrikam"), do: :fabrikam
   def section_scope_atom("wayne-tech"), do: :wayne_tech
   def section_scope_atom("sxi"), do: :sxi
+  def section_scope_atom("cyberdyne"), do: :cyberdyne
   def section_scope_atom(_), do: nil
 
   # Map a section's `color` token (CSS form, e.g. "wayne-tech") to its color-only
@@ -4061,6 +4062,7 @@ defmodule PlatformWeb.ChatLive do
   def section_dot_class("fabrikam"), do: "bg-fabrikam-dot"
   def section_dot_class("wayne-tech"), do: "bg-wayne-tech-dot"
   def section_dot_class("sxi"), do: "bg-sxi-dot"
+  def section_dot_class("cyberdyne"), do: "bg-cyberdyne-dot"
   def section_dot_class(_), do: nil
 
   # Today: exact (case-insensitive) match on channel slug against the
@@ -4074,7 +4076,8 @@ defmodule PlatformWeb.ChatLive do
     "soylent" => "Soylent",
     "fabrikam" => "Fabrikam",
     "wayne-tech" => "Wayne-Tech",
-    "sxi" => "SXI"
+    "sxi" => "SXI",
+    "cyberdyne" => "Cyberdyne"
   }
 
   defp channel_scope(%{slug: slug}) when is_binary(slug) do
@@ -4146,6 +4149,7 @@ defmodule PlatformWeb.ChatLive do
   defp sub_org_scope_atom("Fabrikam"), do: :fabrikam
   defp sub_org_scope_atom("Wayne-Tech"), do: :wayne_tech
   defp sub_org_scope_atom("SXI"), do: :sxi
+  defp sub_org_scope_atom("Cyberdyne"), do: :cyberdyne
 
   # Map a Space to the scope atom the `scope_pill` component takes.
   #
@@ -4212,7 +4216,7 @@ defmodule PlatformWeb.ChatLive do
   def space_nav_target(space), do: Chat.space_path_segment(space)
 
   # Parse the inbound `scope_filter` payload's string scope name back into
-  # an atom. Returns nil for any value not in the canonical 5-scope set so
+  # an atom. Returns nil for any value not in the canonical scope set so
   # a stale/malformed client payload silently clears the filter rather than
   # crashing the LV. Whitelist (no String.to_existing_atom) keeps the surface
   # impervious to atom-table flooding.
@@ -4223,6 +4227,7 @@ defmodule PlatformWeb.ChatLive do
   def parse_scope("fabrikam"), do: :fabrikam
   def parse_scope("wayne_tech"), do: :wayne_tech
   def parse_scope("sxi"), do: :sxi
+  def parse_scope("cyberdyne"), do: :cyberdyne
   def parse_scope(_), do: nil
 
   # Inverse of `sub_org_scope_atom/1` — bucket-display-name from scope
@@ -4235,6 +4240,7 @@ defmodule PlatformWeb.ChatLive do
   def bucket_for_scope(:fabrikam), do: "Fabrikam"
   def bucket_for_scope(:wayne_tech), do: "Wayne-Tech"
   def bucket_for_scope(:sxi), do: "SXI"
+  def bucket_for_scope(:cyberdyne), do: "Cyberdyne"
   def bucket_for_scope(_), do: nil
 
   # `section_slug/1` (bucket-name → slug) was retired in Stage 4: the

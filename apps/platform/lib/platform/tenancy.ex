@@ -1049,6 +1049,15 @@ defmodule Platform.Tenancy do
   def tier(%Org{parent_org_id: nil}), do: :root
   def tier(%Org{}), do: :tenant
 
+  # ── Org creation ──────────────────────────────────────────────────────
+  #
+  # Task 019ffe9d stage 1. Implemented alongside the lifecycle writes in
+  # `Platform.Tenancy.Lifecycle`; delegated here so callers use the natural
+  # context API. Fabrikam-admin only, like every other org write.
+
+  @doc "See `Platform.Tenancy.Lifecycle.create_org/2`."
+  defdelegate create_org(actor, attrs), to: Platform.Tenancy.Lifecycle
+
   # ── Org lifecycle (archive / schedule-deletion / restore) ─────────────
   #
   # Task 019f4eaa stage 3. Implemented in `Platform.Tenancy.Lifecycle`
@@ -1174,7 +1183,8 @@ defmodule Platform.Tenancy do
     soylent: "text-soylent",
     wayne_tech: "text-wayne-tech",
     sxi: "text-sxi",
-    paragon: "text-paragon"
+    paragon: "text-paragon",
+    cyberdyne: "text-cyberdyne"
   }
 
   @scope_labels %{
@@ -1182,7 +1192,8 @@ defmodule Platform.Tenancy do
     soylent: "Soylent",
     wayne_tech: "Wayne-Tech",
     sxi: "SXI",
-    paragon: "Paragon"
+    paragon: "Paragon",
+    cyberdyne: "Cyberdyne"
   }
 
   @doc """

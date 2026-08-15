@@ -2,7 +2,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
   @moduledoc """
   Unit tests for the scope-provenance pill component.
 
-  Covers all 5 scope atoms, the propagated variant, click-to-filter wiring,
+  Covers all 6 scope atoms, the propagated variant, click-to-filter wiring,
   non-clickable read-only variant, and the active-filter visual state.
 
   Follows the precedent in `bottom_nav_test.exs`: assert against rendered DOM
@@ -40,8 +40,8 @@ defmodule PlatformWeb.Components.ScopePillTest do
   end
 
   describe "scopes/0 enum" do
-    test "returns the canonical 5-atom list in display order" do
-      assert scopes() == [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon]
+    test "returns the canonical 6-atom list in display order" do
+      assert scopes() == [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
     end
   end
 
@@ -94,6 +94,33 @@ defmodule PlatformWeb.Components.ScopePillTest do
       refute html =~ ~r{\btext-paragon(?![-a-z/])}
       assert html =~ "border-paragon"
       assert html =~ ">Paragon</span>"
+    end
+
+    # Cyberdyne (task 019ffe9d) is the sixth scope. Render-level coverage is
+    # the only guard for the sources a cross-source key comparison cannot
+    # reach: `slug/1` and `scope_label/1` are NON-TOTAL, so a missing clause
+    # raises FunctionClauseError here rather than degrading silently.
+    test "cyberdyne renders with the cyberdyne named utility classes" do
+      html = render_pill(%{scope: :cyberdyne})
+      assert html =~ "bg-cyberdyne"
+      assert html =~ "text-cyberdyne-label"
+      refute html =~ ~r{\btext-cyberdyne(?![-a-z/])}
+      assert html =~ "border-cyberdyne"
+      assert html =~ ">Cyberdyne</span>"
+    end
+
+    test "cyberdyne renders in the active variant" do
+      html = render_pill(%{scope: :cyberdyne, active: true})
+      assert html =~ "bg-cyberdyne-active"
+      assert html =~ ">Cyberdyne</span>"
+    end
+
+    test "cyberdyne renders in the compact variant" do
+      html = render_pill(%{scope: :cyberdyne, size: :compact})
+      assert html =~ "bg-cyberdyne"
+      assert html =~ "text-cyberdyne-label"
+      assert html =~ "bg-cyberdyne-dot"
+      assert html =~ ">Cyberdyne</span>"
     end
 
     test "renders without the arrow glyph" do

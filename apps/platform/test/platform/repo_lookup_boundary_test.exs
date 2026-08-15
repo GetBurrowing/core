@@ -824,7 +824,15 @@ defmodule Platform.RepoLookupBoundaryTest do
     # still occupy the `email` unique index (it is not partial on
     # `applied_at`). Branching on the blind one is fail-open.
     "platform/tenancy/external_grants.ex" => 2,
-    "platform/tenancy/lifecycle.ex" => 2,
+    # 2 → 3 for task 019ffe9d stage 1's `root_org_id/0`, which resolves the
+    # single `parent_org_id IS NULL` org so `create_org/2` can parent a new
+    # tenant. Triaged by hand as this map asks: the `where:` clause is
+    # `is_nil(o.parent_org_id)` — a NULL test over a column, pinning NO id at
+    # all, so nothing crosses a boundary into it and `Ecto.Query.CastError` is
+    # unreachable. No `Platform.UUID.valid?/1` guard applies. It deliberately
+    # does NOT use `get_org_by_slug!("fabrikam")`: resolving the root by slug would
+    # both raise on a bare DB and let a rename silently reparent new orgs.
+    "platform/tenancy/lifecycle.ex" => 3,
     "platform/vault.ex" => 4,
     "platform/webhooks/github_signature.ex" => 1,
     # Task 019fa63a: was 2 before stage 3, 1 after it, 0 now. Both of this

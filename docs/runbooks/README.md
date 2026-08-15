@@ -18,6 +18,10 @@ rollback, verification.
 - [`external_users.md`](external_users.md)
   — Onboard, recover, and offboard scoped external (SXI) chat users
   (Pocket-ID OIDC + pre-staged grants, admin recovery queue, archival).
+- [`onboard_tenant_org.md`](onboard_tenant_org.md)
+  — Add a new client org: the `/admin/orgs` form for the row, memberships,
+  and the code change its scope-rail chip and colour ramp still need
+  (task `019ffe9d`). Notes that the branch creates **no** org itself.
 - [`claude-channel-bridge-rollout.md`](claude-channel-bridge-rollout.md)
   — Roll the `system_event` envelope fix onto a `claude_channel` bridge, and
   read `mix platform.runtime_wake_report` (`proven` / `unproven` / `revoked`)

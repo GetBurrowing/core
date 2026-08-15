@@ -4681,16 +4681,17 @@ defmodule Platform.Tasks do
 
   # ── Scope-filter rail (Stage 3 of Tasks v2 plan, 2026-05-19) ──────────────
   #
-  # Five sub-org scopes — fabrikam, soylent, wayne_tech, sxi, paragon — match the
+  # Six sub-org scopes — fabrikam, soylent, wayne_tech, sxi, paragon, cyberdyne —
+  # match the
   # canonical scope list in `PlatformWeb.Components.ScopePill` (futureproof
   # seam for the MT/RBAC stack 019e3c49). Today, `tasks` has no `org_id`
   # column, so we can't bucket tasks per-org from the DB. The today-state
   # contract (per the Stage 3 dispatch + the MT/RBAC plan) is to fold every
-  # task under `:fabrikam` and report 0 for the other four. Once `tasks.org_id`
+  # task under `:fabrikam` and report 0 for the others. Once `tasks.org_id`
   # lands the body of `count_by_scope/0` becomes a `group_by org_id` query;
-  # the public API (a map keyed by the five scope atoms) stays unchanged so
+  # the public API (a map keyed by the scope atoms) stays unchanged so
   # the LiveView's scope-rail render isn't coupled to the data shape.
-  @scope_keys [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon]
+  @scope_keys [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
 
   @doc """
   Returns the canonical list of scope atoms used by the scope-filter rail.
@@ -4705,8 +4706,9 @@ defmodule Platform.Tasks do
   @doc """
   Count tasks per sub-org scope.
 
-  Returns a map with exactly the five scope keys (`:fabrikam`, `:soylent`,
-  `:wayne_tech`, `:sxi`, `:paragon`) populated as non-negative integers.
+  Returns a map with exactly the six scope keys (`:fabrikam`, `:soylent`,
+  `:wayne_tech`, `:sxi`, `:paragon`, `:cyberdyne`) populated as non-negative
+  integers.
 
   ## Today-state (pre-MT/RBAC-on-Tasks)
 

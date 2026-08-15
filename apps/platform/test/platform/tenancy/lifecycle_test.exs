@@ -107,6 +107,168 @@ defmodule Platform.Tenancy.LifecycleTest do
     end)
   end
 
+  defp org_count, do: Repo.aggregate(Org, :count)
+
+  # ── Org creation (task 019ffe9d stage 1) ───────────────────────────────
+
+  describe "create_org/2" do
+    test "creates a tenant org parented to the root and PERSISTS it" do
+      admin = admin_user!()
+      fabrikam_id = Tenancy.get_org_by_slug!("fabrikam").id
+
+      assert {:ok, %Org{} = org} =
+               Tenancy.create_org(admin, %{name: "Cyberdyne", slug: "cyberdyne"})
+
+      assert org.name == "Cyberdyne"
+      assert org.slug == "cyberdyne"
+      assert org.parent_org_id == fabrikam_id
+      assert Tenancy.tier(org) == :tenant
+      assert is_nil(org.archived_at)
+      assert is_nil(org.deletion_scheduled_at)
+
+      # Re-read from the DB, not the returned struct: a create that returned
+      # {:ok, org} without inserting would pass every assertion above.
+      persisted = Tenancy.get_org_by_slug("cyberdyne")
+      assert %Org{} = persisted
+      assert persisted.id == org.id
+      assert persisted.parent_org_id == fabrikam_id
+
+      assert Enum.any?(Tenancy.list_orgs(), &(&1.id == org.id))
+      assert Enum.any?(Tenancy.list_tenants(), &(&1.id == org.id))
+    end
+
+    test "accepts string-keyed attrs (LiveView form params)" do
+      admin = admin_user!()
+
+      assert {:ok, %Org{} = org} =
+               Tenancy.create_org(admin, %{"name" => "Form Org", "slug" => "form_org"})
+
+      assert org.parent_org_id == Tenancy.get_org_by_slug!("fabrikam").id
+      assert Tenancy.tier(org) == :tenant
+    end
+
+    # STAGE-2 MUTATION TARGET. Deleting `unique_constraint(:slug)` from
+    # Org.changeset/2 must make THIS test fail: the DB index still refuses the
+    # insert, but as a RAISED Ecto.ConstraintError instead of the changeset an
+    # admin form can render on the field. Hence the explicit changeset-shape
+    # and :slug-key assertions — "something went wrong" would pass on a raise.
+    test "duplicate slug returns a changeset error on :slug and inserts no row" do
+      admin = admin_user!()
+      assert {:ok, _first} = Tenancy.create_org(admin, %{name: "Cyberdyne", slug: "cyberdyne"})
+
+      before = org_count()
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Tenancy.create_org(admin, %{name: "Cyberdyne Two", slug: "cyberdyne"})
+
+      assert %{slug: ["has already been taken"]} = errors_on(changeset)
+      assert org_count() == before
+      assert [_only_one] = Repo.all(from(o in Org, where: o.slug == "cyberdyne"))
+    end
+
+    test "rejects malformed slugs on the format rule" do
+      admin = admin_user!()
+      before = org_count()
+
+      for bad <- ["Cyberdyne", "1cyberdyne", "war balloon", "-cyberdyne", "war/balloon"] do
+        assert {:error, %Ecto.Changeset{} = changeset} =
+                 Tenancy.create_org(admin, %{name: "Cyberdyne", slug: bad}),
+               "expected slug #{inspect(bad)} to be rejected"
+
+        assert %{slug: ["must start with a lowercase letter and contain only [a-z0-9_-]"]} =
+                 errors_on(changeset)
+      end
+
+      assert org_count() == before
+    end
+
+    test "rejects a missing name" do
+      admin = admin_user!()
+      before = org_count()
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Tenancy.create_org(admin, %{slug: "nameless"})
+
+      assert %{name: ["can't be blank"]} = errors_on(changeset)
+      assert org_count() == before
+    end
+
+    test "rejects a missing slug" do
+      admin = admin_user!()
+      before = org_count()
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Tenancy.create_org(admin, %{name: "Slugless"})
+
+      assert %{slug: ["can't be blank"]} = errors_on(changeset)
+      assert org_count() == before
+    end
+
+    # The orgs_single_root partial unique index has no matching
+    # `unique_constraint`, so an explicit nil parent reaching Repo.insert/1
+    # would RAISE Ecto.ConstraintError. It must come back as a changeset.
+    test "an explicit nil parent_org_id is a changeset error, not a second root" do
+      admin = admin_user!()
+      before = org_count()
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Tenancy.create_org(admin, %{
+                 name: "Second Root",
+                 slug: "second_root",
+                 parent_org_id: nil
+               })
+
+      assert %{parent_org_id: [_ | _]} = errors_on(changeset)
+      assert org_count() == before
+      assert [_one_root] = Repo.all(from(o in Org, where: is_nil(o.parent_org_id)))
+    end
+
+    test "an unknown parent_org_id comes back as a foreign-key changeset error" do
+      admin = admin_user!()
+      before = org_count()
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Tenancy.create_org(admin, %{
+                 name: "Orphan",
+                 slug: "orphan",
+                 parent_org_id: Platform.Types.UUIDv7.generate()
+               })
+
+      assert %{parent_org_id: [_ | _]} = errors_on(changeset)
+      assert org_count() == before
+    end
+
+    test "a nil actor is unauthorized and writes nothing" do
+      before = org_count()
+
+      assert {:error, :unauthorized} =
+               Tenancy.create_org(nil, %{name: "Cyberdyne", slug: "cyberdyne"})
+
+      assert org_count() == before
+      assert is_nil(Tenancy.get_org_by_slug("cyberdyne"))
+    end
+
+    test "a non-admin org member is unauthorized and writes nothing" do
+      member = member_user!()
+      before = org_count()
+
+      assert {:error, :unauthorized} =
+               Tenancy.create_org(member, %{name: "Cyberdyne", slug: "cyberdyne"})
+
+      assert org_count() == before
+      assert is_nil(Tenancy.get_org_by_slug("cyberdyne"))
+    end
+
+    test "a user with no membership at all is unauthorized" do
+      stranger = create_user!()
+
+      assert {:error, :unauthorized} =
+               Tenancy.create_org(stranger, %{name: "Cyberdyne", slug: "cyberdyne"})
+
+      assert is_nil(Tenancy.get_org_by_slug("cyberdyne"))
+    end
+  end
+
   # ── Org archive / unarchive round-trip + cascade ───────────────────────
 
   describe "archive_org/2 + unarchive_org/2" do
@@ -498,6 +660,44 @@ defmodule Platform.Tenancy.LifecycleTest do
       end)
 
       :ok
+    end
+
+    # The failure this pins is SILENT: drop [:platform, :tenancy, :org_created]
+    # from TelemetryHandler @events and the emit still succeeds, nothing
+    # raises, and the audit row simply never appears. Assert the persisted
+    # row, not just the telemetry event — only the row proves the bridge.
+    test "create_org emits telemetry AND persists a bridged audit row" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:platform, :tenancy, :org_created]])
+
+      admin = admin_user!()
+
+      assert {:ok, org} = Tenancy.create_org(admin, %{name: "Cyberdyne", slug: "cyberdyne"})
+
+      assert_receive {[:platform, :tenancy, :org_created], ^ref, _m, meta}
+      assert meta.actor_id == admin.id
+      assert meta.actor_type == "user"
+      assert meta.resource_type == "org"
+      assert meta.resource_id == org.id
+
+      assert [event] = Audit.list(event_type: "platform.tenancy.org_created")
+      assert event.actor_id == admin.id
+      assert event.actor_type == "user"
+      assert event.resource_type == "org"
+      assert event.resource_id == org.id
+      assert event.action == "org_created"
+      assert event.metadata["org_slug"] == "cyberdyne"
+      assert event.metadata["org_name"] == "Cyberdyne"
+    end
+
+    test "a rejected create writes no audit row" do
+      admin = admin_user!()
+
+      assert {:error, %Ecto.Changeset{}} =
+               Tenancy.create_org(admin, %{name: "Bad", slug: "Not A Slug"})
+
+      assert {:error, :unauthorized} = Tenancy.create_org(nil, %{name: "Bad", slug: "bad"})
+
+      assert [] = Audit.list(event_type: "platform.tenancy.org_created")
     end
 
     test "archive_org emits telemetry AND persists a bridged audit row" do
