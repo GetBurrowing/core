@@ -47,10 +47,13 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Meetings
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Journal, Routing, Search}
+  alias Platform.Orchestration.Diagnostics
+  alias Platform.Orchestration.ExecutionLease
   alias Platform.Tasks
 
   alias Platform.Tasks.{
     CanvasAttachments,
+    PhaseTransitions,
     Plan,
     PlanEngine,
     Stack,
@@ -1096,9 +1099,14 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "Array of message objects with id, participant_id, content, search_headline, inserted_at",
+          "Array of message objects with id, participant_id, content, search_headline, inserted_at. " <>
+            "If the query parsed to no searchable terms, returns %{results: [], no_searchable_terms: true, note: ...} instead of an array.",
         limitations:
-          "Only searches spaces the agent is a participant in. Max 10 results. Uses PostgreSQL full-text search.",
+          "Only searches spaces the agent is a participant in. Max 10 results. Uses PostgreSQL full-text search " <>
+            "(English stemming via websearch_to_tsquery). A punctuation-only query parses to an empty tsquery and " <>
+            "matches nothing by construction — that case comes back as the no_searchable_terms envelope, NOT an " <>
+            "empty array, so a zero result is never ambiguous between 'no such message' and 'the query had nothing " <>
+            "to search with'. UUIDs and ISO dates DO tokenize and search normally.",
         when_to_use: "When you need to find specific messages or topics discussed in a space"
       },
       %{
@@ -1607,6 +1615,77 @@ defmodule Platform.Federation.ToolSurface do
           "Task object with id, title, description, status, priority, project_id, epic_id, and sponsor (nil or %{id, name, email} per ADR 0042).",
         limitations: "Returns nil if task not found",
         when_to_use: "When you need to check the current state of a specific task"
+      },
+      %{
+        name: "task_transition_list",
+        description:
+          "Read a task's recorded status-transition history — every observed status change, oldest first, with who caused it and when. Pure read over the rows `Platform.Tasks.Task` already writes inside the same transaction as the status change itself; this tool adds no instrumentation and records nothing.",
+        parameters: %{
+          task_id: %{
+            type: "string",
+            required: true,
+            description: "The task whose transition history you want"
+          }
+        },
+        returns:
+          "%{task_id, count, transitions: [%{from_status, to_status, occurred_at, actor_kind, actor_id, actor_label, via}], note} — transitions are OLDEST FIRST. `from_status` is null when no prior status was recorded. `actor_kind` is one of user | agent | system | unknown; `unknown` means the write was unattributed, not that it was automated.",
+        limitations:
+          "ZERO ROWS IS NOT ZERO DATA. A task with `count: 0` predates this instrumentation — the `note` field says so explicitly. It does NOT mean the task never changed status, and nothing here may be reconstructed from tasks.inserted_at / updated_at (backfill is forbidden). Denied non-recoverably for a tenant-pinned agent whose org does not own the task's project, and for a task_id that cannot be resolved to an org.",
+        when_to_use:
+          "When you need to know why and when a task reached its current status — who moved it, through which path, and how long ago — without database or SSH access."
+      },
+      %{
+        name: "runtime_event_list",
+        description:
+          "Read a task's orchestration runtime events — the ack/heartbeat/progress/blocked stream the TaskRouter and its watchdog act on — newest first. Pure read over rows `Platform.Orchestration.RuntimeSupervision` already writes; this tool adds no instrumentation and records nothing.",
+        parameters: %{
+          task_id: %{
+            type: "string",
+            required: true,
+            description: "The task whose runtime events you want"
+          },
+          event_type: %{
+            type: "string",
+            required: false,
+            description:
+              "Exact-match filter, e.g. \"execution.acked\" or \"execution.blocked\". Omit for all types."
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description: "Max events to return. Defaults to 50, hard-capped at 200."
+          }
+        },
+        returns:
+          "%{task_id, count, limit, events: [%{event_type, payload, runtime_id, phase, lease_id, occurred_at}]} — events are NEWEST FIRST. `payload` is returned verbatim, including `payload[\"stage_id\"]`, which is how you attribute an event to a specific stage: there is no top-level stage_id column.",
+        limitations:
+          "A TASK WITH RUNTIME EVENTS AND ZERO EXECUTION LEASES IS NORMAL, NOT A DEFECT. Leases are created only by the blocker/lifecycle path, never by a plain dispatch-ack: `RuntimeSupervision`'s `@event_statuses` maps `\"execution.acked\" => nil`, and a nil status makes `upsert_lease/2` return the existing lease and insert nothing. Do not read an empty `execution_lease_list` alongside a populated event stream as missing data. `limit` is CLAMPED to 200, not rejected, so a `count` of 200 may mean truncation rather than exhaustion. `event_type` is an open vocabulary and is not validated — an unknown value returns zero events. Denied non-recoverably for a tenant-pinned agent whose org does not own the task's project, and for a task_id that cannot be resolved to an org.",
+        when_to_use:
+          "When diagnosing whether a runtime actually acked, heartbeat or blocked on a task — especially to confirm or refute a watchdog no-ack alarm — without database or SSH access."
+      },
+      %{
+        name: "execution_lease_list",
+        description:
+          "Read a task's execution leases — the lifecycle/liveness records the safety-net timer reasons over — newest first. Pure read; creates and mutates nothing.",
+        parameters: %{
+          task_id: %{
+            type: "string",
+            required: true,
+            description: "The task whose execution leases you want"
+          },
+          status: %{
+            type: "string",
+            required: false,
+            description:
+              "Filter to one status: active | blocked | finished | failed | expired | abandoned. An unknown value is REJECTED rather than silently ignored."
+          }
+        },
+        returns:
+          "%{task_id, count, status_filter, leases: [%{id, stage_id, phase, runtime_id, status, started_at, last_heartbeat_at, last_progress_at, expires_at, block_reason, metadata}]} — newest first by started_at.",
+        limitations:
+          "AN EMPTY LIST IS A LEGITIMATE ANSWER FOR A LIVE, HEALTHY TASK. Leases are created only by the blocker/lifecycle path, never by dispatch: `@event_statuses` maps `\"execution.acked\" => nil`, and `upsert_lease/2` short-circuits on a nil status without inserting. So a task can show a full `runtime_event_list` and zero leases and be working exactly as designed — do NOT report that as missing data. An unknown `status` returns an invalid-argument error rather than every lease, because a silent empty result for a typo is indistinguishable from that genuinely-empty case. Denied non-recoverably for a tenant-pinned agent whose org does not own the task's project, and for a task_id that cannot be resolved to an org.",
+        when_to_use:
+          "When you need a task's lease lifecycle — whether one is active, blocked, expired, or was never created at all — to interpret a watchdog escalation without database or SSH access."
       },
       %{
         name: "task_list",
@@ -2391,18 +2470,41 @@ defmodule Platform.Federation.ToolSurface do
       },
       %{
         name: "plan_get",
-        description: "Get the current approved plan for a task with full stage/validation tree.",
+        description:
+          "Get a task's plan with its full stage/validation tree. Defaults to the CURRENT plan " <>
+            "(latest approved or completed), exactly as it always has. Pass `status` to read a " <>
+            "plan the default resolution hides: the `rejected` plan whose `rejection_reason` and " <>
+            "`architecture_verdict` explain why it was turned down, or the `draft` / " <>
+            "`pending_review` plan that is blocking a fresh `plan_create`.",
         parameters: %{
           task_id: %{
             type: "string",
             required: true,
             aliases: ["id"],
             description: "The task ID"
+          },
+          status: %{
+            type: "string",
+            required: false,
+            description:
+              "Which plan to resolve. Omit (or \"approved\") for today's behaviour: the highest-version " <>
+                "approved-or-completed plan. \"latest\" (alias \"any\") returns the highest-version plan " <>
+                "whatever its status. An explicit draft|pending_review|approved|rejected|completed " <>
+                "returns the highest-version plan with THAT status. Any other value is refused — it is " <>
+                "never silently narrowed back to approved, because a silently-ignored filter would read " <>
+                "as \"no such plan exists\"."
           }
         },
-        returns: "Plan object with stages and validations preloaded",
-        limitations: "Returns error if no approved plan exists for the task",
-        when_to_use: "When you need to check the current execution plan for a task"
+        returns:
+          "Plan object with stages and validations preloaded, plus `status`, `version`, " <>
+            "`rejection_reason`, `architecture_verdict`, and `is_current`. `is_current` is false " <>
+            "whenever the returned plan is neither approved nor completed — a rejected or " <>
+            "pending_review plan is NOT the plan the task is executing, and must not be read as one.",
+        limitations:
+          "Returns error if no plan matching the requested status exists for the task. With no " <>
+            "`status` that error is the historical \"No approved plan for task\", unchanged.",
+        when_to_use:
+          "When you need the current execution plan for a task — or, with `status`, the rejected plan's reason or the unapproved plan blocking plan_create."
       },
       %{
         name: "plan_submit",
@@ -3382,22 +3484,48 @@ defmodule Platform.Federation.ToolSurface do
     limit = args |> Map.get("limit", 10) |> min(10)
 
     with :ok <- assert_agent_in_space(space_id, context) do
-      messages = Chat.search_messages(space_id, query, limit: limit)
-
-      {:ok,
-       Enum.map(messages, fn m ->
-         {trimmed_content, truncated?} = cap_content(m.content || "")
-
+      # Guard (task 01a006c2 stage 4): a query that parses to an EMPTY tsquery
+      # — punctuation only, or otherwise no word token the `english` config
+      # will keep — matches nothing by construction. Returning a bare `[]` for
+      # that reads to the caller as "no such message" when the truth is "your
+      # probe had nothing to search with". Return a distinguishable envelope.
+      #
+      # Authorization is deliberately checked BEFORE this branch: an
+      # unauthorized caller must not learn anything, including how their query
+      # parsed.
+      if Chat.searchable_query?(query) do
+        search_hits(space_id, query, limit)
+      else
+        {:ok,
          %{
-           id: m.id,
-           participant_id: m.participant_id,
-           content: trimmed_content,
-           content_truncated: truncated?,
-           search_headline: m.search_headline,
-           inserted_at: format_datetime(m.inserted_at)
-         }
-       end)}
+           results: [],
+           no_searchable_terms: true,
+           note:
+             "The query contained no searchable terms after full-text parsing " <>
+               "(e.g. punctuation only), so it matched nothing by construction. " <>
+               "This is NOT evidence that the space contains no such message. " <>
+               "Retry with ordinary words, or use space_get_messages."
+         }}
+      end
     end
+  end
+
+  defp search_hits(space_id, query, limit) do
+    messages = Chat.search_messages(space_id, query, limit: limit)
+
+    {:ok,
+     Enum.map(messages, fn m ->
+       {trimmed_content, truncated?} = cap_content(m.content || "")
+
+       %{
+         id: m.id,
+         participant_id: m.participant_id,
+         content: trimmed_content,
+         content_truncated: truncated?,
+         search_headline: m.search_headline,
+         inserted_at: format_datetime(m.inserted_at)
+       }
+     end)}
   end
 
   def execute("space_get_messages", args, context) do
@@ -4159,6 +4287,85 @@ defmodule Platform.Federation.ToolSurface do
 
       task ->
         {:ok, serialize_task(task)}
+    end
+  end
+
+  # Read-only over `task_phase_transitions`. There is deliberately NO writer
+  # here: the rows are written by `prepare_changes(&record_status_transition/1)`
+  # in `Platform.Tasks.Task`, last in the changeset pipeline and inside the same
+  # Repo transaction as the update they describe. A second, non-transactional
+  # copy would diverge on rollback and is forbidden.
+  def execute("task_transition_list", args, context) do
+    # `require_string/3` first, with no `"id"` fallback: the declared
+    # `required: true` must be HONEST. An absent task_id must refuse rather
+    # than fall through to `list_for_task(nil)`, which would return the
+    # zero-row "predates instrumentation" shape for a call that named no task
+    # at all — the precise confusion this tool exists to remove.
+    #
+    # Authorize BEFORE serializing — a denied caller must see no actor label,
+    # no `via`, and no status prose.
+    with {:ok, task_id} <- require_string(args, "task_id", "task_transition_list"),
+         :ok <- authorize_review_access(context, task_id) do
+      # `list_for_task/2`'s second argument is a Repo, not options. One arg.
+      transitions = PhaseTransitions.list_for_task(task_id)
+
+      {:ok,
+       %{
+         task_id: task_id,
+         count: length(transitions),
+         transitions: Enum.map(transitions, &serialize_phase_transition/1),
+         note: transition_list_note(transitions)
+       }}
+    end
+  end
+
+  # Read-only over `runtime_events`. No writer here and no migration: the rows
+  # are written by `Platform.Orchestration.RuntimeSupervision` in the same
+  # transaction as the lease upsert they accompany. Query lives in the
+  # Orchestration context (`Diagnostics`), not inline here — same separation as
+  # `PhaseTransitions.list_for_task/1` above.
+  def execute("runtime_event_list", args, context) do
+    # Required-arg guard FIRST, no `"id"` alias. Stage 1 of this task found
+    # that omitting it lets a call naming no task at all fall through and
+    # return a confident zero-row answer about a task the caller never
+    # identified — the exact misreading these diagnostics exist to prevent.
+    #
+    # Authorize BEFORE serializing: a denial must carry no payload fragment
+    # and no runtime_id.
+    with {:ok, task_id} <- require_string(args, "task_id", "runtime_event_list"),
+         :ok <- authorize_review_access(context, task_id) do
+      limit = Diagnostics.clamp_limit_for(Map.get(args, "limit"))
+
+      events =
+        Diagnostics.list_runtime_events(task_id,
+          event_type: Map.get(args, "event_type"),
+          limit: limit
+        )
+
+      {:ok,
+       %{
+         task_id: task_id,
+         count: length(events),
+         limit: limit,
+         events: Enum.map(events, &serialize_runtime_event/1)
+       }}
+    end
+  end
+
+  # Read-only over `execution_leases`. See `runtime_event_list` above for why
+  # an empty result here is normal rather than a defect.
+  def execute("execution_lease_list", args, context) do
+    with {:ok, task_id} <- require_string(args, "task_id", "execution_lease_list"),
+         :ok <- authorize_review_access(context, task_id),
+         {:ok, leases} <-
+           lease_list_result(task_id, Map.get(args, "status")) do
+      {:ok,
+       %{
+         task_id: task_id,
+         count: length(leases),
+         status_filter: Map.get(args, "status"),
+         leases: Enum.map(leases, &serialize_execution_lease/1)
+       }}
     end
   end
 
@@ -6832,21 +7039,38 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  def execute("plan_get", args, _context) do
+  # Task 01a006c2 stage 3 — `plan_get` widened with an explicit,
+  # default-preserving `status`. Deliberately NOT a sibling tool: a sibling
+  # means a caller must know to try a second tool after the first says
+  # not-found, which is precisely the round trip that cost an agent a cycle
+  # when it could not read a rejected plan's `rejection_reason`.
+  #
+  # The `"id"` alias is kept because the registration declares it — removing
+  # it here would make the registration lie to callers. What is added is the
+  # guard: a call naming NO task used to fall into `current_plan(nil)` and
+  # come back "No approved plan for task", a confident answer about a task
+  # the caller never identified.
+  #
+  # Cross-tenant fix (01a006c2, post-e2e): this clause used to take `_context`
+  # and no authorization ran anywhere in the chain, so any agent that could
+  # name a task_id read its plan. Stage 3 widened the OUTPUT CLASS — rejected
+  # and pending_review plans carry `rejection_reason` and
+  # `architecture_verdict`, human-written prose — which re-opened the
+  # authorization question on a line the stage never edited. The check is the
+  # same `authorize_review_access/2` stages 1 and 2 use, and it runs BEFORE
+  # `plan_get_resolution/1` and any serialization so the denial envelope
+  # carries no plan id, no status, no rejection prose. It runs before the
+  # status parse too: a denied caller must not learn which statuses exist.
+  # Omitting `status` is authorized identically — that is the path every
+  # existing caller uses — and its not-found envelope is untouched.
+  def execute("plan_get", args, context) do
     task_id = Map.get(args, "task_id") || Map.get(args, "id")
 
-    case Tasks.current_plan(task_id) do
-      nil ->
-        {:error,
-         %{
-           error: "No approved plan for task",
-           recoverable: false,
-           suggestion: "Create a plan with plan_create and approve it first"
-         }}
-
-      plan ->
-        plan = Repo.preload(plan, stages: :validations)
-        {:ok, serialize_plan(plan)}
+    with {:ok, task_id} <- require_string(%{"task_id" => task_id}, "task_id", "plan_get"),
+         :ok <- authorize_review_access(context, task_id),
+         {:ok, resolution} <- plan_get_resolution(args),
+         {:ok, plan} <- resolve_plan_by_status(task_id, resolution) do
+      {:ok, serialize_plan(Repo.preload(plan, stages: :validations))}
     end
   end
 
@@ -8421,6 +8645,81 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # A typo'd status must REFUSE, not return every lease. Silently widening the
+  # filter would hand back a full list the caller believes is filtered — and
+  # silently returning [] would be indistinguishable from the genuinely-empty
+  # case (no lease was ever created, which is normal) that these tools exist to
+  # let a caller trust.
+  defp lease_list_result(task_id, status) do
+    case Diagnostics.list_execution_leases(task_id, status: status) do
+      {:ok, leases} ->
+        {:ok, leases}
+
+      {:error, :invalid_status} ->
+        {:error,
+         %{
+           error: "execution_lease_list: unknown `status` #{inspect(status)}",
+           recoverable: true,
+           suggestion:
+             "Use one of: #{Enum.join(ExecutionLease.statuses(), " | ")}. Omit `status` for all leases."
+         }}
+    end
+  end
+
+  defp serialize_runtime_event(event) do
+    %{
+      event_type: event.event_type,
+      # Verbatim. `payload["stage_id"]` is the only stage attribution these
+      # rows carry — there is no top-level stage_id column — so plucking a
+      # curated subset here would destroy the field callers most need.
+      payload: event.payload,
+      runtime_id: event.runtime_id,
+      phase: event.phase,
+      lease_id: event.lease_id,
+      occurred_at: event.occurred_at
+    }
+  end
+
+  defp serialize_execution_lease(lease) do
+    %{
+      id: lease.id,
+      stage_id: lease.stage_id,
+      phase: lease.phase,
+      runtime_id: lease.runtime_id,
+      status: lease.status,
+      started_at: lease.started_at,
+      last_heartbeat_at: lease.last_heartbeat_at,
+      last_progress_at: lease.last_progress_at,
+      expires_at: lease.expires_at,
+      # Human-written prose, same class as review feedback: only ever reached
+      # after `authorize_review_access/2` has already returned :ok.
+      block_reason: lease.block_reason,
+      metadata: lease.metadata
+    }
+  end
+
+  defp serialize_phase_transition(transition) do
+    %{
+      from_status: transition.from_status,
+      to_status: transition.to_status,
+      occurred_at: transition.occurred_at,
+      actor_kind: transition.actor_kind,
+      actor_id: transition.actor_id,
+      actor_label: transition.actor_label,
+      via: transition.via
+    }
+  end
+
+  # Zero rows is not zero data. A bare `[]` reads as "nothing happened"; it
+  # actually means the task predates the instrumentation.
+  defp transition_list_note([]) do
+    "No transition rows exist for this task. This means the task predates the phase-transition instrumentation, NOT that its status never changed. The history cannot be reconstructed and must not be inferred from inserted_at/updated_at."
+  end
+
+  defp transition_list_note(transitions) do
+    "#{length(transitions)} recorded transition(s), oldest first. Every status change since the phase-transition instrumentation shipped is present; anything earlier was never recorded."
+  end
+
   defp review_project_org_id(task_id) do
     # `get_by_uuid/2` rather than a bare Repo.get/2: the task_id is a raw tool
     # argument, and the helper's Platform.UUID.valid? guard is what keeps a
@@ -9914,6 +10213,94 @@ defmodule Platform.Federation.ToolSurface do
     %{id: user.id, name: user.name, email: user.email}
   end
 
+  # Task 01a006c2 stage 3 — `plan_get`'s status resolution.
+  #
+  # The closed vocabulary. `nil` (argument omitted) and "approved" both mean
+  # the historical resolution, `Tasks.current_plan/1`, whose filter is
+  # `status in ["approved", "completed"]`. That is why "approved" is NOT
+  # routed through the explicit-status branch: it is the default, and the
+  # default must stay bit-for-bit what it was, error envelope included.
+  @plan_get_statuses ~w(draft pending_review approved rejected completed)
+
+  defp plan_get_resolution(args) do
+    case Map.get(args, "status") do
+      nil -> {:ok, :current}
+      "approved" -> {:ok, :current}
+      status when status in ["latest", "any"] -> {:ok, :latest}
+      status when status in @plan_get_statuses -> {:ok, {:status, status}}
+      other -> {:error, plan_get_unknown_status_error(other)}
+    end
+  end
+
+  # An unknown status REFUSES rather than falling back to approved. Stage 2 of
+  # this task drew the line: a clamped `limit` is visible in the echoed field,
+  # so clamping is honest; a silently-widened (or silently-ignored) status
+  # filter is invisible, and the caller would read the approved plan as though
+  # it were the rejected one they asked for.
+  defp plan_get_unknown_status_error(other) do
+    %{
+      error: "plan_get: unknown `status` #{inspect(other)}",
+      recoverable: false,
+      suggestion:
+        "Use one of #{Enum.join(@plan_get_statuses, ", ")}, or \"latest\"/\"any\" for the " <>
+          "highest-version plan regardless of status. Omit `status` for the current approved plan."
+    }
+  end
+
+  # No new Ecto query lives here on purpose — `current_plan/1`, `latest_plan/1`
+  # and `list_plans/1` already exist in `Platform.Tasks`.
+  defp resolve_plan_by_status(task_id, :current) do
+    case Tasks.current_plan(task_id) do
+      nil ->
+        # The historical envelope, preserved verbatim. Any caller that
+        # pattern-matched this string still matches it.
+        {:error,
+         %{
+           error: "No approved plan for task",
+           recoverable: false,
+           suggestion: "Create a plan with plan_create and approve it first"
+         }}
+
+      plan ->
+        {:ok, plan}
+    end
+  end
+
+  defp resolve_plan_by_status(task_id, :latest) do
+    case Tasks.latest_plan(task_id) do
+      nil ->
+        {:error,
+         %{
+           error: "No plan for task",
+           recoverable: false,
+           suggestion: "Create a plan with plan_create."
+         }}
+
+      plan ->
+        {:ok, plan}
+    end
+  end
+
+  defp resolve_plan_by_status(task_id, {:status, status}) do
+    task_id
+    |> Tasks.list_plans()
+    |> Enum.filter(&(&1.status == status))
+    |> Enum.max_by(& &1.version, fn -> nil end)
+    |> case do
+      nil ->
+        {:error,
+         %{
+           error: "No #{status} plan for task",
+           recoverable: false,
+           suggestion:
+             "Call plan_get with status \"latest\" to see the highest-version plan whatever its status."
+         }}
+
+      plan ->
+        {:ok, plan}
+    end
+  end
+
   defp serialize_plan(plan) do
     stages =
       case plan.stages do
@@ -9926,6 +10313,14 @@ defmodule Platform.Federation.ToolSurface do
       task_id: plan.task_id,
       status: plan.status,
       version: plan.version,
+      # Task 01a006c2 stage 3. `plan_get` can now hand back a rejected or
+      # still-unapproved plan, so the wire shape must say out loud whether
+      # this is the plan the task is actually executing. Without it, a
+      # caller that asked for status:"rejected" gets a plan object shaped
+      # exactly like the current one and can read it as authoritative.
+      is_current: plan.status in ["approved", "completed"],
+      rejection_reason: plan.rejection_reason,
+      architecture_verdict: plan.architecture_verdict,
       approved_by: plan.approved_by,
       approved_at: format_datetime(plan.approved_at),
       # Task 019f25f2 stage 5 — timestamp when the plan was auto-approved

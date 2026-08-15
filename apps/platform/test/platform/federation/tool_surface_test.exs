@@ -88,7 +88,15 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # evidence for a human verdict and then had no way to read the verdict
       # back, so a rejection's feedback text was unreachable to the agent
       # expected to act on it.
-      assert length(tools) == 94
+      # 95 as of task 01a006c2 stage 1, which added `task_transition_list` to
+      # the `task` bundle — the status-transition rows existed and were
+      # written transactionally, but no agent without DB access could read
+      # them back.
+      # 97 as of task 01a006c2 stage 2, which added `runtime_event_list` and
+      # `execution_lease_list` to the `task` bundle — the runtime-event and
+      # lease rows existed, but reading them back to refute a watchdog
+      # no-ack alarm required database access nobody federated has.
+      assert length(tools) == 97
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names

@@ -644,7 +644,18 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # that can file evidence can read the verdict on it; until now an agent
     # could submit a manual_approval gate and had no way to read back what the
     # human actually said (+review_request_get, +review_item_list → 94)
-    @t6_baseline_tool_count 94
+    # bumped by task 01a006c2 stage 1 — `task_transition_list`, added to the
+    # existing `task` bundle: anything able to MOVE a task may read why it
+    # moved. Pure read over rows the task changeset already writes in the same
+    # transaction as the status change; no new writer and no new bundle
+    # (+task_transition_list → 95)
+    # bumped by task 01a006c2 stage 2 — the orchestration diagnostics pair,
+    # added to the same `task` bundle. Read-only over `runtime_events` and
+    # `execution_leases`; no writer and no migration. Diagnosing a watchdog
+    # false-alarm previously required SSH plus a hand-written SQL query, which
+    # a federated agent does not have
+    # (+runtime_event_list, +execution_lease_list → 97)
+    @t6_baseline_tool_count 97
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

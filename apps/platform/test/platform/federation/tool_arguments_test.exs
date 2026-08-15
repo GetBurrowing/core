@@ -80,7 +80,21 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # be: both tools authorize on the id they are given, so a tolerated absence
   # would be an unscoped read of a surface that carries a human's private
   # assessment.
-  @surveyed_required_count 131
+  # 132 as of task 01a006c2 stage 1: `task_transition_list`'s `task_id`.
+  # HONEST. The handler opens with `require_string/3` and deliberately declares
+  # no `"id"` alias — an absent task_id must refuse, because falling through to
+  # `list_for_task(nil)` would return the zero-row "this task predates the
+  # instrumentation" shape for a call that named no task at all, which is the
+  # exact false reading the tool exists to remove.
+  # 134 as of task 01a006c2 stage 2: `runtime_event_list`'s and
+  # `execution_lease_list`'s `task_id`. Both HONEST, for the same reason as
+  # stage 1 and carrying its finding forward — each handler opens with
+  # `require_string/3` and declares no `"id"` alias. A tolerated absence would
+  # return a confident empty event/lease list about a task the caller never
+  # identified, and an empty lease list is ALREADY a legitimate answer here
+  # (leases are created only by the blocker path, never by dispatch), so the
+  # two cases would be indistinguishable.
+  @surveyed_required_count 134
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

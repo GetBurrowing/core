@@ -2045,6 +2045,35 @@ defmodule Platform.Chat do
   lightweight highlighted excerpt in the virtual `search_headline` field.
   Blank queries return an empty list.
   """
+  @doc """
+  Returns true when `query` parses to at least one lexeme under the SAME
+  `websearch_to_tsquery('english', ...)` parse that `search_messages/3` uses.
+
+  Exists so callers can tell "no message matched" apart from "the query had
+  nothing to match with". Punctuation-only input (`"--- ??? !!!"`) parses to an
+  EMPTY tsquery, which matches every row zero times — indistinguishable from a
+  genuine miss if you only look at the row count. Task 01a006c2 stage 4.
+
+  Note that UUIDs and dates are NOT in this category: Postgres' `english`
+  parser splits `01a006c2-6c88-...` and `2026-08-15` into real lexemes, so they
+  search fine.
+  """
+  @spec searchable_query?(term()) :: boolean()
+  def searchable_query?(query) when not is_binary(query), do: false
+
+  def searchable_query?(query) do
+    trimmed = String.trim(query)
+
+    if trimmed == "" do
+      false
+    else
+      %{rows: [[rendered]]} =
+        Repo.query!("SELECT websearch_to_tsquery('english', $1)::text", [trimmed])
+
+      rendered not in [nil, ""]
+    end
+  end
+
   @spec search_messages(binary(), String.t(), keyword()) :: [Message.t()]
   def search_messages(space_id, query, opts \\ [])
   def search_messages(_space_id, query, _opts) when not is_binary(query) or query == "", do: []
