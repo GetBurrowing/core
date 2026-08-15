@@ -579,6 +579,10 @@ defmodule Platform.RepoLookupBoundaryTest do
      "get_external_agent/1 and get_external_agent!/1 — the id:-keyed get_by pair that `git grep \"Repo.get(\"` cannot see"},
     {"platform/files.ex", :platform_uuid_guard, "-", 3, :safe_internal,
      "get_file/2, get_file!/2 and fetch_extracted_text/1. The last matters most: Files.Text keys on a bare :binary_id, a different symptom from the UUIDv7 schemas"},
+    {"platform/files/cataloger.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a0008c stage 2 — `card_path?/2`'s guard on the project_id it is about to INTERPOLATE INTO A REGEX, not into a query. This is the same predicate protecting a different failure mode, which is why it is recorded rather than waved through: `card_path_regex/1` interpolates it into `~r/^project\\/<project_id>\\/page\\/files\\/…/` to decide whether a wiki file_key belongs to this project's card prefix, and the cataloger is a background emitter with NO authorization above it (`Wiki.upsert_page/3` never consults `Wiki.Routing`; the `:historian_required` gate lives at the MCP surface a server-side emitter never crosses). A non-UUID project_id reaching that interpolation makes the gate answer for a pattern nobody wrote — `Regex.escape/1` stops metacharacters, but the guard is what stops a caller-shaped fragment from being treated as a legitimate project scope at all. The module performs no `Repo.get/2` of its own: it reads through `Files.list_catalogable_files/2`, `Files.get_file/1` and `Tasks.get_project/1`, each of which carries its own classified guard"},
+    {"platform/files/supersession.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a0008c stage 5 — `rule_claim/3`'s guard on the claimant id it reads out of a card's FRONTMATTER before handing it to `Files.get_file/1`. Frontmatter is a parsed YAML map on a wiki page: the cataloger writes a real `platform_files.id` there, but the same page is writable through `Wiki.upsert_page/3`, which performs no authorization at all, so the value is agent-reachable and cannot be treated as internal. `Files.get_file/1` carries its own classified guard, so this one is belt-and-braces at the boundary rather than the only rail — it is what makes a malformed claimant id return the `{:error, :no_card}` the caller already handles instead of relying on the callee's guard to fold it into a nil this function would then have to re-interpret"},
     {"platform/memory/proposals.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "Proposals.get/1's guard on the phx-value-id LiveView param from org_memory_live/view.ex:358,393"},
     {"platform/orchestration/prompt_templates.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -625,7 +629,18 @@ defmodule Platform.RepoLookupBoundaryTest do
     # from `HistorianDispatcher.slice_windows/2`. No `x.id == ^value` on the
     # path, so no `Ecto.Query.CastError` is reachable from a boundary and no
     # `Platform.UUID.valid?/1` guard applies.
-    "platform/agents/historian.ex" => 11,
+    #
+    # 11 → 13 for task 01a0008c stage 4's two `sum_corpus_bytes("files", …)`
+    # clauses. Triaged by hand: they are the exact complement of the two
+    # `sum_corpus_bytes("pages", …)` clauses already counted here — same
+    # `org_wiki_pages` source, same `type(^workspace_id, :binary_id)` cast,
+    # same `updated_at` cursor filter — differing only by
+    # `Wiki.only_card_pages/1` vs `exclude_card_pages/1`, whose subquery
+    # pins no id at all (`card_file_key IS NOT NULL` and
+    # `deleted_at IS NULL`). No `x.id == ^value` on the path, so no
+    # `Ecto.Query.CastError` is reachable from a boundary and no
+    # `Platform.UUID.valid?/1` guard applies.
+    "platform/agents/historian.ex" => 13,
     # Task 019fa1cc stage 1 — `HistorianAudit.dispatched_message/3` and
     # `count_between/4`. Triaged by hand: neither `where:` clause pins an id.
     # `dispatched_message/3` compares JSONB text extractions against ISO-8601
@@ -633,7 +648,15 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `count_between/4` compares a timestamp column against two `DateTime`s.
     # No `x.id == ^value` on either path, so no `Ecto.Query.CastError` is
     # reachable from a boundary and no `Platform.UUID.valid?/1` guard applies.
-    "platform/agents/historian_audit.ex" => 2,
+    #
+    # 2 → 4 for task 01a0008c stage 4's `raw_row_count("pages", …)` and
+    # `raw_row_count("files", …)`, which stopped sharing `count_between/4`
+    # so each could compose its half of the card partition. Triaged by
+    # hand: both are `count_between_query/4` — two `DateTime`s against
+    # `org_wiki_pages.updated_at` — narrowed by a subquery on
+    # `platform_files.card_file_key`, which pins no id either. Same
+    # verdict as the two above.
+    "platform/agents/historian_audit.ex" => 4,
     "platform/analytics.ex" => 1,
     # Task 019fa61c: `task_id_for/1`'s `where: p.id == ^plan_id`, whose plan_id
     # is `stage.plan_id` off a loaded `%Stage{}` — a UUID column read from a

@@ -279,7 +279,19 @@
             data-ingest-status={file.ingest_status}
             data-ingest-intent={file.ingest_intent}
           >
-            <td class="font-medium">{file.name || file.original_filename}</td>
+            <td class="font-medium">
+              <div>{file.name || file.original_filename}</div>
+              <%!-- Ghost badge, on its own line under the name it
+                   qualifies. In the NAME cell, not the Status cell: a
+                   supersession claim is about the document's standing,
+                   not about its ingest, and the Status column stays
+                   single-axis. --%>
+              <div :if={Map.has_key?(@supersession_claims, file.id)} class="mt-0.5">
+                <PlatformWeb.Components.SupersessionRuling.supersession_badge claim={
+                  Map.get(@supersession_claims, file.id)
+                } />
+              </div>
+            </td>
             <td class="text-xs text-base-content/60">{file.content_type}</td>
             <td class="text-right tabular-nums">{humanize_bytes(file.byte_size)}</td>
             <td>
@@ -419,6 +431,16 @@
         </dd>
       </dl>
 
+      <%!-- Supersession ruling. Sits between the metadata and the
+           preview: it IS metadata, but it is the only metadata here a
+           person can act on. Renders nothing when the card records no
+           claim. --%>
+      <PlatformWeb.Components.SupersessionRuling.supersession_panel
+        claim={Map.get(@supersession_claims, @selected_file.id)}
+        file_id={@selected_file.id}
+        can_rule={can_rule_supersession?(@current_user_id)}
+      />
+
       <div class="mt-4" data-role="files-detail-preview">
         <PlatformWeb.Components.FilePreview.file_preview
           file={@selected_file}
@@ -490,6 +512,16 @@
           class="min-h-11"
         />
       </div>
+
+      <%!-- Same block as the desktop pane, distinct data-role suffix so
+           a selector resolves to exactly one node (the page renders both
+           viewports' markup). Mirrors files-detail-delete-mobile. --%>
+      <PlatformWeb.Components.SupersessionRuling.supersession_panel
+        claim={Map.get(@supersession_claims, @selected_file.id)}
+        file_id={@selected_file.id}
+        can_rule={can_rule_supersession?(@current_user_id)}
+        suffix="-mobile"
+      />
 
       <PlatformWeb.Components.FilePreview.file_preview
         file={@selected_file}

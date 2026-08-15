@@ -69,6 +69,7 @@ defmodule PlatformWeb.FilesLive do
   alias Platform.Chat.ContentRenderer
   alias Platform.Files
   alias Platform.Files.Storage
+  alias Platform.Files.Supersession
   alias Platform.Memory
   alias Platform.Projects
   alias Platform.Tasks
@@ -111,6 +112,9 @@ defmodule PlatformWeb.FilesLive do
      |> assign(:selected_project_id, nil)
      |> assign(:selected_project, nil)
      |> assign(:files, [])
+     # file_id => Files.Supersession.claim(). Absent for every file
+     # whose card records no claim, which is nearly all of them.
+     |> assign(:supersession_claims, %{})
      |> assign(:selected_file, nil)
      |> assign(:selected_file_text, nil)
      # Ephemeral full-screen preview overlay. Socket state only — no
@@ -154,6 +158,7 @@ defmodule PlatformWeb.FilesLive do
      |> assign(:selected_project_id, nil)
      |> assign(:selected_project, nil)
      |> assign(:files, [])
+     |> assign(:supersession_claims, %{})
      |> assign(:selected_file, nil)
      |> assign(:selected_file_text, nil)
      |> assign(:semantic_results, [])
@@ -295,7 +300,10 @@ defmodule PlatformWeb.FilesLive do
          |> assign(:selected_file, file)
          |> assign(:selected_file_text, load_text_excerpt(file))
          |> assign(:highlight_snippet, snippet)
-         |> assign(:preview_fullscreen, false)}
+         |> assign(:preview_fullscreen, false)
+         # A semantic hit can select a row outside @files, so the claim
+         # map has to be widened to cover the selection.
+         |> put_claims()}
     end
   end
 
@@ -336,6 +344,37 @@ defmodule PlatformWeb.FilesLive do
 
           {:error, _changeset} ->
             {:noreply, put_flash(socket, :error, "Could not change this file's audience.")}
+        end
+    end
+  end
+
+  # Rule on the supersession claim made ABOUT this file. The verbs sit
+  # on the superseded document (design direction: the ruling belongs on
+  # the document, not in a queue), so `file_id` here is the SUPERSEDED
+  # file and the write lands on the claimant's card — see
+  # `Supersession.rule_claim/3`.
+  #
+  # This is the ONLY mutation the ghost state has: nothing here
+  # publishes, unpublishes, hides or unhides a card. The claim was
+  # already visible metadata before anybody clicked, and stays visible
+  # metadata afterwards. Confirm upgrades it to authoritative; Not true
+  # denies it.
+  def handle_event("rule_supersession", %{"id" => file_id, "ruling" => ruling}, socket)
+      when is_binary(file_id) do
+    cond do
+      ruling not in Supersession.rulings() ->
+        {:noreply, socket}
+
+      not can_rule_supersession?(socket.assigns.current_user_id) ->
+        {:noreply, put_flash(socket, :error, "Sign in to rule on supersession claims.")}
+
+      true ->
+        case Map.get(socket.assigns.supersession_claims, file_id) do
+          nil ->
+            {:noreply, socket}
+
+          claim ->
+            do_rule_supersession(socket, claim, ruling)
         end
     end
   end
@@ -640,6 +679,7 @@ defmodule PlatformWeb.FilesLive do
     socket
     |> assign(:files, list_files(project_id))
     |> assign(:show_upload_sheet, false)
+    |> put_claims()
   end
 
   defp empty_upload_batch, do: %{created: [], dedup: [], errors: []}
@@ -673,6 +713,7 @@ defmodule PlatformWeb.FilesLive do
       |> assign(:semantic_results, [])
       |> assign(:semantic_search_state, :idle)
       |> assign(:filter, "")
+      |> put_claims()
     end
   end
 
@@ -730,7 +771,11 @@ defmodule PlatformWeb.FilesLive do
             other -> other
           end
 
-        assign(socket, files: files, selected_file: selected)
+        # The ingest that just resolved is what triggers cataloging, so
+        # this is the event on which a claim first becomes renderable.
+        socket
+        |> assign(files: files, selected_file: selected)
+        |> put_claims()
     end
   end
 
@@ -892,9 +937,52 @@ defmodule PlatformWeb.FilesLive do
           [file | files]
         end
 
-      assign(socket, :files, files)
+      socket
+      |> assign(:files, files)
+      |> put_claims()
     else
       socket
+    end
+  end
+
+  # ── Supersession rulings (task 01a0008c stage 5) ───────────────────────
+
+  # Recompute the claim map from whatever this LV is currently showing.
+  # Keyed by the SUPERSEDED file's id — that is the row a claim renders
+  # on. The selection is folded in because a semantic-search hit can be
+  # selected without ever being in @files, and its card may be the one
+  # making a claim.
+  defp put_claims(socket) do
+    files =
+      case socket.assigns[:selected_file] do
+        %Files.File{id: id} = selected ->
+          if Enum.any?(socket.assigns.files, &(&1.id == id)),
+            do: socket.assigns.files,
+            else: [selected | socket.assigns.files]
+
+        _ ->
+          socket.assigns.files
+      end
+
+    assign(socket, :supersession_claims, Supersession.claims_for_files(files))
+  end
+
+  defp do_rule_supersession(socket, claim, ruling) do
+    case Supersession.rule_claim(claim, ruling, actor_id: socket.assigns.current_user_id) do
+      {:ok, _claim} ->
+        {:noreply, put_claims(socket)}
+
+      {:error, reason} when reason in [:no_card, :card_missing, :no_claim] ->
+        # The card was regenerated, purged, or never carried a claim —
+        # the panel the user clicked is stale. Re-read rather than
+        # insisting on the state we rendered.
+        {:noreply,
+         socket
+         |> put_claims()
+         |> put_flash(:error, "That supersession claim is no longer on this document's card.")}
+
+      {:error, _other} ->
+        {:noreply, put_flash(socket, :error, "Couldn't record that ruling. Please try again.")}
     end
   end
 
@@ -997,6 +1085,18 @@ defmodule PlatformWeb.FilesLive do
   for the disabled-button render path rather than a reachable state.
   """
   def can_delete?(current_user_id), do: is_binary(current_user_id)
+
+  @doc """
+  Whether the current viewer may rule on a supersession claim.
+
+  Same gate as `can_delete?/1` — actor presence — because a ruling is
+  the same class of act as the page's other mutations and the route
+  already sits behind RequireAuth. The buttons render disabled rather
+  than hidden (persistent controls over reveal, the locked direction on
+  this surface), and `handle_event/3` re-checks: a disabled button
+  still emits clicks.
+  """
+  def can_rule_supersession?(current_user_id), do: is_binary(current_user_id)
 
   @doc false
   def status_badge_class("ingested"), do: "badge badge-success badge-sm"

@@ -803,6 +803,132 @@ defmodule Platform.FilesTest do
     end
   end
 
+  describe "list_catalogable_files/2 — the cataloging eligibility seam (task 01a0008c)" do
+    test "EXCLUDES a human_only file whose status is \"ingested\" — the disclosure boundary" do
+      # The load-bearing case. A human_only row that is ALSO non-ingested
+      # would be dropped by the status clause anyway, so pinning the
+      # boundary with one of those would pin nothing: delete the intent
+      # clause and the test would still pass. This row is ingested, so
+      # the intent clause is the only thing standing between a
+      # deliberately-unindexed document and an LLM card pass.
+      #
+      # Same reasoning `Platform.Federation.ToolSurface` records for its
+      # own second barrier over `ingest_intent`: "Both barriers are
+      # required; neither subsumes the other."
+      {:ok, project} = Tasks.create_project(%{name: "Catalog HumanOnly"})
+
+      withheld = catalog_row(project, "withheld-orion-prompts", "human_only", "ingested")
+      control = catalog_row(project, "ordinary-doc", "attempt", "ingested")
+
+      ids = project.id |> Files.list_catalogable_files() |> Enum.map(& &1.id)
+
+      refute withheld.id in ids,
+             "a human_only file reached the cataloging seam — its bytes must never " <>
+               "reach an LLM card pass, for the same reason Ingester.ingest_async/1 " <>
+               "short-circuits it before Extractor.extract/1"
+
+      assert control.id in ids
+    end
+
+    test "EXCLUDES the production human_only shape (human_only + not_attempted)" do
+      # What `withdraw_from_agent_context/1` actually produces, and the
+      # shape of the live SXI row `to-be-optimized-orion_prompts.mjs`.
+      {:ok, project} = Tasks.create_project(%{name: "Catalog Withdrawn"})
+
+      withdrawn = catalog_row(project, "withdrawn-doc", "human_only", "not_attempted")
+      control = catalog_row(project, "kept-doc", "attempt", "ingested")
+
+      ids = project.id |> Files.list_catalogable_files() |> Enum.map(& &1.id)
+
+      refute withdrawn.id in ids
+      assert ids == [control.id]
+    end
+
+    test "EXCLUDES every ingest_status other than \"ingested\"" do
+      {:ok, project} = Tasks.create_project(%{name: "Catalog Status"})
+
+      pending = catalog_row(project, "still-pending", "attempt", "pending")
+      failed = catalog_row(project, "rubric-failed", "attempt", "failed")
+      ingested = catalog_row(project, "good-doc", "attempt", "ingested")
+
+      ids = project.id |> Files.list_catalogable_files() |> Enum.map(& &1.id)
+
+      refute pending.id in ids, "a pending file has no extracted text to summarize"
+      refute failed.id in ids, "a failed ingest never produced text and never will"
+      assert ids == [ingested.id]
+    end
+
+    test "EXCLUDES soft-deleted rows" do
+      {:ok, project} = Tasks.create_project(%{name: "Catalog SoftDelete"})
+
+      gone = catalog_row(project, "deleted-doc", "attempt", "ingested", deleted: true)
+      kept = catalog_row(project, "live-doc", "attempt", "ingested")
+
+      ids = project.id |> Files.list_catalogable_files() |> Enum.map(& &1.id)
+
+      refute gone.id in ids
+      assert ids == [kept.id]
+    end
+
+    test "is scoped to the project it was asked about" do
+      {:ok, mine} = Tasks.create_project(%{name: "Catalog Mine"})
+      {:ok, theirs} = Tasks.create_project(%{name: "Catalog Theirs"})
+
+      ours = catalog_row(mine, "ours", "attempt", "ingested")
+      _ = catalog_row(theirs, "theirs", "attempt", "ingested")
+
+      assert [%{id: id}] = Files.list_catalogable_files(mine.id)
+      assert id == ours.id
+    end
+
+    test "has NO default cap — 60 catalogable files return 60, not 50" do
+      # `list_files_for_project/2` defaults to `limit: 50`. A catalog that
+      # silently stops at 50 rows and reports success is precisely the
+      # failure this seam's nil default exists to prevent, so 60 rows here
+      # is not an arbitrary number: it straddles that inherited default.
+      {:ok, project} = Tasks.create_project(%{name: "Catalog Nocap"})
+
+      for n <- 1..60, do: catalog_row(project, "bulk-#{n}", "attempt", "ingested")
+
+      assert length(Files.list_catalogable_files(project.id)) == 60
+    end
+
+    test "honours an explicitly-passed limit" do
+      {:ok, project} = Tasks.create_project(%{name: "Catalog Limit"})
+
+      for n <- 1..5, do: catalog_row(project, "capped-#{n}", "attempt", "ingested")
+
+      assert length(Files.list_catalogable_files(project.id, limit: 2)) == 2
+    end
+
+    test "returns rows in a stable oldest-first order across repeated calls" do
+      {:ok, project} = Tasks.create_project(%{name: "Catalog Order"})
+
+      for n <- 1..8, do: catalog_row(project, "ordered-#{n}", "attempt", "ingested")
+
+      first = project.id |> Files.list_catalogable_files() |> Enum.map(& &1.id)
+      second = project.id |> Files.list_catalogable_files() |> Enum.map(& &1.id)
+
+      assert first == second
+      assert length(first) == 8
+    end
+
+    test "SXI corpus shape: 49 files, 39 catalogable" do
+      # Mirrors the live SXI project the plan cites: 49 rows total, of
+      # which one is human_only and nine are `failed` *Rubric.md files.
+      # The ticket's "49 files" is wrong as an ELIGIBLE count; 39 is the
+      # number, and the arithmetic only works if both exclusions apply.
+      {:ok, project} = Tasks.create_project(%{name: "Catalog SXI Shape"})
+
+      catalog_row(project, "sxi-human-only", "human_only", "not_attempted")
+      for n <- 1..9, do: catalog_row(project, "sxi-rubric-#{n}", "attempt", "failed")
+      for n <- 1..39, do: catalog_row(project, "sxi-doc-#{n}", "attempt", "ingested")
+
+      assert length(Files.list_files_for_project(project.id, limit: nil)) == 49
+      assert length(Files.list_catalogable_files(project.id)) == 39
+    end
+  end
+
   describe "find_ingested_sibling/2" do
     test "returns the most recent ingested row with matching project + hash" do
       {:ok, project} = Tasks.create_project(%{name: "Dedup Search"})
@@ -930,6 +1056,37 @@ defmodule Platform.FilesTest do
       assert Files.fetch_extracted_text("higgins") == nil
       assert Files.fetch_extracted_text(@slug_16) == nil
       assert Files.fetch_extracted_text(:crypto.strong_rand_bytes(16)) == nil
+    end
+  end
+
+  # ── Helpers ───────────────────────────────────────────────────────────
+
+  # Row-maker for the `list_catalogable_files/2` block. `slug` doubles as
+  # the uniqueness source for storage_key and content_hash (the latter is
+  # unique per project), so every call is independently insertable.
+  defp catalog_row(project, slug, intent, status, opts \\ []) do
+    {:ok, f} =
+      Files.create_file(%{
+        project_id: project.id,
+        original_filename: "#{slug}.txt",
+        content_type: "text/plain",
+        byte_size: 1,
+        storage_key: "files/#{project.id}/#{slug}/#{slug}.txt",
+        content_hash: Base.encode16(:crypto.hash(:sha256, slug), case: :lower)
+      })
+
+    {:ok, f} = if intent == "attempt", do: {:ok, f}, else: Files.set_ingest_intent(f, intent)
+    {:ok, f} = if status == "pending", do: {:ok, f}, else: Files.update_ingest_status(f, status)
+
+    if Keyword.get(opts, :deleted, false) do
+      # Marks the soft-delete column directly rather than going through
+      # `delete_file/2`, which additionally scrubs the search index via the
+      # memory provider and would force this module to `async: false`. The
+      # seam reads the column; the column is what needs setting.
+      {:ok, deleted} = f |> Ecto.Changeset.change(deleted_at: DateTime.utc_now()) |> Repo.update()
+      deleted
+    else
+      f
     end
   end
 end

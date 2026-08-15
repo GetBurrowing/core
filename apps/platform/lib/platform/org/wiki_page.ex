@@ -66,11 +66,26 @@ defmodule Platform.Org.WikiPage do
   @doc """
   Changeset for upserts with optimistic locking on version.
   Increments version on each update.
+
+  `:org_id` / `:project_id` are castable here (task 01a0008c stage 2)
+  so a row whose tenancy is wrong can be repaired by rewriting it.
+  Before this, they were castable on insert and nowhere else, which
+  made `maybe_default_org_id/1`'s Fabrikam fallback a **permanent** state
+  for any page written at a tenant path — the path said one tenant,
+  the row said another, and no write through `Wiki.upsert_page/3`
+  could ever move it back.
+
+  There is no re-defaulting on this path: an update that does not
+  mention the keys leaves them exactly as they are. `Wiki.upsert_page/3`
+  only forwards keys its caller actually supplied, so this widening
+  cannot move a page that nobody asked to move.
   """
   def update_changeset(wiki_page, attrs) do
     wiki_page
-    |> cast(attrs, [:content, :frontmatter, :updated_by])
-    |> validate_required([:content])
+    |> cast(attrs, [:content, :frontmatter, :updated_by, :org_id, :project_id])
+    |> validate_required([:content, :org_id])
+    |> foreign_key_constraint(:org_id)
+    |> foreign_key_constraint(:project_id)
     |> optimistic_lock(:version)
   end
 

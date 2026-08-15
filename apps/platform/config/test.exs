@@ -71,6 +71,22 @@ config :platform, :meetings_summary, %{
   temperature: 0.3
 }
 
+# File catalog cards (task 01a0008c) — same reasoning as the block above,
+# one step earlier. `Platform.Files.Cataloger` already defaults to
+# `provider: :none`, so this is not load-bearing today; it is pinned
+# explicitly so that the day somebody adds a YAML or env fallback to
+# `llm_config/0`, the test suite does not quietly start making real HTTP
+# calls on whichever machine has a provider configured. A test that needs
+# a provider wires a stubbed one per-test and restores it.
+config :platform, :file_cards, %{
+  provider: :none,
+  model: nil,
+  base_url: nil,
+  api_key_env: nil,
+  max_tokens: 700,
+  temperature: 0.2
+}
+
 # TaskRouterWatcher — do NOT boot the global singleton in test.
 #
 # Task 019fb978 stage 1 measured a full-suite run and found 212 sandbox
@@ -131,6 +147,15 @@ config :platform, :start_deploy_merge_reconciler, false
 # FilePurger (task 019f7cb0 stage 3): tests call `sweep/1` directly
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_file_purger, false
+
+# CatalogEmitter (task 01a0008c stage 3): a globally-booted instance would
+# subscribe to `[:platform, :files, :ingested, :stop]` for the whole suite
+# and then run Repo queries from a process that owns no sandbox
+# connection — every existing ingest test would start force-disconnecting
+# pooled connections. `Platform.Files.CatalogEmitterTest` starts its own
+# instance under `start_supervised/1`, which attaches its own handler and
+# detaches it on exit.
+config :platform, :start_catalog_emitter, false
 
 # M1 stage 4 (ADR-0041): Platform.Responsibilities.Registry runs
 # `register_all/1` on init, which writes to the DB. Tests use the

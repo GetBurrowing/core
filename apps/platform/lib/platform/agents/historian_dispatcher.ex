@@ -50,10 +50,16 @@ defmodule Platform.Agents.HistorianDispatcher do
   # Ordering the slicer emits within a single day. Deterministic so
   # per-corpus cursor advance stays monotonic across ticks even when
   # multiple corpora fire on the same day.
-  @corpus_order [:pages, :journal, :messages, :transcripts]
+  @corpus_order [:pages, :journal, :messages, :transcripts, :files]
 
-  # Corpus tiebreaker for sort — mirrors `@corpus_order` positionally.
-  @corpus_index %{pages: 0, journal: 1, messages: 2, transcripts: 3}
+  # Corpus tiebreaker for sort. DERIVED from `@corpus_order` rather than
+  # restated as a literal map (task 01a0008c stage 4): it used to be a
+  # hand-maintained positional mirror, which is a corpus registration
+  # site that fails silently — a corpus present in `@corpus_order` but
+  # absent from the map sorts under the `99` fallback in
+  # `slice_windows/2`, quietly reordering same-instant windows. Deriving
+  # it makes that drift unrepresentable.
+  @corpus_index @corpus_order |> Enum.with_index() |> Map.new()
 
   # Default lookback bound when a corpus's cursor is unset. Prevents
   # the slicer from paying enumerate-a-decade-of-calendar-days cost on
@@ -68,7 +74,7 @@ defmodule Platform.Agents.HistorianDispatcher do
   @min_sub_window_seconds 3_600
 
   @type window :: %{
-          corpus: :pages | :journal | :messages | :transcripts,
+          corpus: :pages | :journal | :messages | :transcripts | :files,
           window_start: DateTime.t(),
           window_end: DateTime.t(),
           token_estimate: non_neg_integer(),

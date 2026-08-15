@@ -3,10 +3,19 @@ defmodule Platform.Agents.Historian do
   Context module for the Historian agent — the curator of org wiki pages
   and journal entries.
 
-  The Historian walks four corpora per workspace and remembers progress
+  The Historian walks five corpora per workspace and remembers progress
   via `Platform.Agents.HistorianCursor` rows in `org_historian_cursors`.
   This module owns ALL writes to that table; `SystemEventScheduler` stays
   a pure dispatcher.
+
+  ## Adding a corpus
+
+  `@corpora` is ONE of six places a corpus must be registered, and the
+  other five degrade silently when they are missed — most severely
+  `HistorianCursor.@valid_corpora`, because `mark_run_started/1` below
+  discards the changeset error and the corpus then re-dispatches its
+  whole history on every pass with `:ok` returned.
+  `Platform.Agents.HistorianCorpusRegistrationTest` enumerates all six.
 
   ## Token estimator
 
@@ -18,10 +27,35 @@ defmodule Platform.Agents.Historian do
 
   | Corpus          | Table                      | Timestamp column | Byte source                          |
   |-----------------|----------------------------|------------------|--------------------------------------|
-  | `"pages"`       | `org_wiki_pages`           | `updated_at`     | `byte_size(content)`                 |
+  | `"pages"`       | `org_wiki_pages` (no cards)| `updated_at`     | `byte_size(content)`                 |
   | `"journal"`     | `org_wiki_journal_entries` | `inserted_at`    | `byte_size(content)`                 |
   | `"messages"`    | `chat_messages`            | `inserted_at`    | `byte_size(content)` (nil → 0)       |
   | `"transcripts"` | `meeting_transcripts`      | `completed_at`   | `byte_size(summary) + segments JSON` |
+  | `"files"`       | `org_wiki_pages`, cards    | `updated_at`     | `byte_size(content)` — the CARD      |
+
+  ## The pages / files partition — a deliberate decision, do NOT "fix" it
+
+  A catalog card is a wiki page, so `pages` and `files` read the same
+  table and are told apart by `Platform.Files.card_page_keys_query/0`
+  through `Wiki.exclude_card_pages/1` / `Wiki.only_card_pages/1`. Every
+  wiki page in a span belongs to exactly one of the two corpora.
+
+  The `files` byte weight is the CARD's bytes, never the source
+  document's (`platform_file_texts.text`). A `files` window renders
+  cards, and the `019fa1cc` invariant is that the byte signal charges
+  for exactly what the renderer renders. Weighting by document text
+  would read as ~300k tokens against a 100k-token threshold and flood
+  the slicer with oversize windows whose bodies are a few KB — the same
+  defect class in a new corpus — and it would push document text back
+  into the Historian's context, which is the entire thing the file
+  catalog exists to remove.
+
+  The cost of that decision is the `pages` exclusion, which must be
+  applied at EVERY `pages` site: `sum_corpus_bytes/3` (both workspace
+  variants), `per_day_bytes_query/4` (both), the digest accessor
+  `Wiki.list_pages_updated_since/2`, and
+  `HistorianAudit.raw_row_count/3`. An exclusion applied at some of them
+  double-charges the ones that forgot.
 
   ## Digest eligibility — one seam, not two predicates
 
@@ -44,9 +78,10 @@ defmodule Platform.Agents.Historian do
   alias Platform.Agents.HistorianCursor
   alias Platform.Chat
   alias Platform.Meetings
+  alias Platform.Org.Wiki
   alias Platform.Repo
 
-  @corpora ~w(pages journal messages transcripts)
+  @corpora ~w(pages journal messages transcripts files)
 
   # Sentinel workspace_id string used by `Platform.Tasks.Projects` to represent
   # "the whole org" during V1 fan-out (see `Projects.list_active_workspaces/0`).
@@ -63,8 +98,8 @@ defmodule Platform.Agents.Historian do
   # ── Public API ──────────────────────────────────────────────────────────
 
   @doc """
-  Returns the sum of pending (post-cursor) bytes across all four corpora
-  for `workspace_id`. Rows older than or equal to the corpus's
+  Returns the sum of pending (post-cursor) bytes across every corpus in
+  `corpora/0` for `workspace_id`. Rows older than or equal to the corpus's
   `last_processed_at` are excluded. If a corpus has no cursor row yet,
   all rows count.
   """
@@ -86,7 +121,7 @@ defmodule Platform.Agents.Historian do
   @doc """
   Returns the per-corpus `{last_processed_at, pending_bytes}` pair the
   slicer needs to plan windows without re-querying the same cursor +
-  byte-sum state four separate times.
+  byte-sum state once per corpus.
 
   Consumed by `Platform.Agents.HistorianDispatcher.slice_windows/2` at
   planning time. Keeping this as the sole DB-hitting surface for
@@ -94,14 +129,15 @@ defmodule Platform.Agents.Historian do
   test against a stubbed input.
 
   Corpus keys are atoms (`:pages`, `:journal`, `:messages`,
-  `:transcripts`) rather than strings — the slicer atoms are the
-  public contract for downstream telemetry / message metadata.
+  `:transcripts`, `:files`) rather than strings — the slicer atoms are
+  the public contract for downstream telemetry / message metadata.
   """
   @spec pending_windows_input(binary() | nil) :: %{
           pages: {DateTime.t() | nil, non_neg_integer()},
           journal: {DateTime.t() | nil, non_neg_integer()},
           messages: {DateTime.t() | nil, non_neg_integer()},
-          transcripts: {DateTime.t() | nil, non_neg_integer()}
+          transcripts: {DateTime.t() | nil, non_neg_integer()},
+          files: {DateTime.t() | nil, non_neg_integer()}
         }
   def pending_windows_input(workspace_id) do
     Enum.reduce(@corpora, %{}, fn corpus, acc ->
@@ -211,7 +247,7 @@ defmodule Platform.Agents.Historian do
   end
 
   @doc """
-  Returns the max `last_run_at` across the four corpus cursor rows for
+  Returns the max `last_run_at` across the corpus cursor rows for
   `workspace_id`, or `nil` if no cursor has ever been stamped.
 
   V1 fan-out passes `nil` for org-scope; the `is_nil/1` guard keeps Ecto from
@@ -336,17 +372,28 @@ defmodule Platform.Agents.Historian do
 
   # Org-scope sentinel (from `Tasks.Projects.list_active_workspaces/0` fan-out)
   # → coerce to nil so we hit the `is_nil(workspace_id)` clauses below.
-  # Guarded to `pages`/`journal` — messages/transcripts ignore workspace_id
-  # entirely and the guard prevents a future refactor from silently
-  # widening the coercion.
+  # Guarded to `pages`/`journal`/`files` — messages/transcripts ignore
+  # workspace_id entirely and the guard prevents a future refactor from
+  # silently widening the coercion. (`files` is org_wiki_pages under a
+  # different half of the card partition, so it scopes exactly like
+  # `pages` does.)
   defp sum_corpus_bytes(corpus, @org_scope_workspace_id, last_at)
-       when corpus in ["pages", "journal"],
+       when corpus in ["pages", "journal", "files"],
        do: sum_corpus_bytes(corpus, nil, last_at)
 
-  # Pages corpus → org_wiki_pages. Updated_at because pages mutate.
+  # Pages corpus → org_wiki_pages MINUS catalog cards. Updated_at because
+  # pages mutate.
   # nil workspace_id (V1 org-scope) → sum across rows with null workspace_id.
+  #
+  # `Wiki.exclude_card_pages/1` is the pages half of the card partition —
+  # see the moduledoc. It must be composed at BOTH workspace variants and
+  # at both `per_day_bytes_query("pages", …)` clauses; a card left in one
+  # of them is charged to `pages` and to `files` at once.
   defp sum_corpus_bytes("pages", nil, last_at) do
-    query = from(f in "org_wiki_pages", where: is_nil(f.workspace_id))
+    query =
+      from(f in "org_wiki_pages", where: is_nil(f.workspace_id))
+      |> Wiki.exclude_card_pages()
+
     query = apply_cursor_filter(query, :updated_at, last_at)
 
     query
@@ -360,6 +407,42 @@ defmodule Platform.Agents.Historian do
       from(f in "org_wiki_pages",
         where: f.workspace_id == type(^workspace_id, :binary_id)
       )
+      |> Wiki.exclude_card_pages()
+
+    query = apply_cursor_filter(query, :updated_at, last_at)
+
+    query
+    |> select([f], sum(fragment("coalesce(octet_length(?), 0)", f.content)))
+    |> Repo.one()
+    |> to_non_neg()
+  end
+
+  # Files corpus → org_wiki_pages, catalog cards ONLY. The exact
+  # complement of the two `pages` clauses above: same table, same
+  # `updated_at` clock, same `octet_length(content)` weight.
+  #
+  # THE WEIGHT IS THE CARD, NOT THE DOCUMENT, and that is deliberate —
+  # see the moduledoc. `platform_file_texts.text` must never appear in
+  # this query.
+  defp sum_corpus_bytes("files", nil, last_at) do
+    query =
+      from(f in "org_wiki_pages", where: is_nil(f.workspace_id))
+      |> Wiki.only_card_pages()
+
+    query = apply_cursor_filter(query, :updated_at, last_at)
+
+    query
+    |> select([f], sum(fragment("coalesce(octet_length(?), 0)", f.content)))
+    |> Repo.one()
+    |> to_non_neg()
+  end
+
+  defp sum_corpus_bytes("files", workspace_id, last_at) do
+    query =
+      from(f in "org_wiki_pages",
+        where: f.workspace_id == type(^workspace_id, :binary_id)
+      )
+      |> Wiki.only_card_pages()
 
     query = apply_cursor_filter(query, :updated_at, last_at)
 
@@ -476,10 +559,13 @@ defmodule Platform.Agents.Historian do
   # Org-scope sentinel → coerce to nil (matches the `sum_corpus_bytes/3`
   # pass-through above). Guarded to `pages`/`journal` for the same reason.
   defp per_day_bytes_query(corpus, @org_scope_workspace_id, start_at, end_at)
-       when corpus in ["pages", "journal"],
+       when corpus in ["pages", "journal", "files"],
        do: per_day_bytes_query(corpus, nil, start_at, end_at)
 
-  # Pages corpus → org_wiki_pages. Updated_at because pages mutate.
+  # Pages corpus → org_wiki_pages MINUS catalog cards. Updated_at because
+  # pages mutate. The exclusion mirrors `sum_corpus_bytes("pages", …)`;
+  # applying it to one and not the other means the day-grouped signal and
+  # the total disagree about the same span.
   defp per_day_bytes_query("pages", nil, start_at, end_at) do
     from(f in "org_wiki_pages",
       where:
@@ -491,6 +577,7 @@ defmodule Platform.Agents.Historian do
         bytes: sum(fragment("coalesce(octet_length(?), 0)", f.content))
       }
     )
+    |> Wiki.exclude_card_pages()
   end
 
   defp per_day_bytes_query("pages", workspace_id, start_at, end_at) do
@@ -504,6 +591,37 @@ defmodule Platform.Agents.Historian do
         bytes: sum(fragment("coalesce(octet_length(?), 0)", f.content))
       }
     )
+    |> Wiki.exclude_card_pages()
+  end
+
+  # Files corpus → org_wiki_pages, catalog cards ONLY. Complement of the
+  # two `pages` clauses above, on the same clock and the same weight.
+  defp per_day_bytes_query("files", nil, start_at, end_at) do
+    from(f in "org_wiki_pages",
+      where:
+        is_nil(f.workspace_id) and f.updated_at >= ^start_at and
+          f.updated_at < ^end_at,
+      group_by: fragment("date_trunc('day', ?)", f.updated_at),
+      select: %{
+        day: fragment("date_trunc('day', ?)", f.updated_at),
+        bytes: sum(fragment("coalesce(octet_length(?), 0)", f.content))
+      }
+    )
+    |> Wiki.only_card_pages()
+  end
+
+  defp per_day_bytes_query("files", workspace_id, start_at, end_at) do
+    from(f in "org_wiki_pages",
+      where:
+        f.workspace_id == type(^workspace_id, :binary_id) and
+          f.updated_at >= ^start_at and f.updated_at < ^end_at,
+      group_by: fragment("date_trunc('day', ?)", f.updated_at),
+      select: %{
+        day: fragment("date_trunc('day', ?)", f.updated_at),
+        bytes: sum(fragment("coalesce(octet_length(?), 0)", f.content))
+      }
+    )
+    |> Wiki.only_card_pages()
   end
 
   # Journal corpus → org_wiki_journal_entries. Inserted_at because

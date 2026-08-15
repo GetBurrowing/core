@@ -42,11 +42,16 @@ defmodule Platform.Agents.ActivityDigest do
   @message_content_preview 280
   @task_event_cap 50
 
-  # The four corpora `HistorianDispatcher.slice_windows/2` emits and
+  # The corpora `HistorianDispatcher.slice_windows/2` emits and
   # `Historian` keeps cursors for. Anything else is a code bug in the
   # plan-caller; `build_windowed_result/1` surfaces it as a visible digest
   # artefact rather than a scheduler crash.
-  @corpora [:messages, :transcripts, :pages, :journal]
+  #
+  # A corpus missing from THIS list does not crash and does not warn: the
+  # `windowed_body/4` guard below falls through to `_(unknown corpus)_`
+  # and `corpus_items/4` falls through to `[]`, so the Historian dutifully
+  # digests nothing. See `Platform.Agents.HistorianCorpusRegistrationTest`.
+  @corpora [:messages, :transcripts, :pages, :journal, :files]
 
   # ── The three strings (task 019fa1cc stage 4) ────────────────────────────
   #
@@ -170,7 +175,7 @@ defmodule Platform.Agents.ActivityDigest do
 
   Recognised corpus keys mirror the atoms `slice_windows/2` returns and
   the atoms `Historian.pending_windows_input/1` uses: `:messages`,
-  `:transcripts`, `:pages`, `:journal`. Unknown corpus keys fall back to
+  `:transcripts`, `:pages`, `:journal`, `:files`. Unknown corpus keys fall back to
   a `_(unknown corpus)_` marker rather than raising — the plan-caller is
   the sole producer so garbage keys can only come from a code bug we'd
   rather surface as a visible digest artefact than a scheduler crash.
@@ -302,8 +307,25 @@ defmodule Platform.Agents.ActivityDigest do
     # the caller). The Wiki accessor filters by workspace as an option;
     # matching Historian's byte-sum which walks `is_nil(workspace_id)`.
     # Pages are org-wiki, not space-scoped — `scope` does not apply.
+    #
+    # Catalog cards are excluded INSIDE `list_pages_updated_since/2`, not
+    # here: the exclusion is a property of the pages corpus, and a
+    # post-filter at this call site would be a second predicate that can
+    # drift from the one the byte signal composes (task 019fa1cc).
     ws
     |> Wiki.list_pages_updated_since(window_end: we, workspace_id: nil)
+    |> Enum.map(&%{id: &1.id, at: &1.updated_at, bytes: byte_size(&1.content || ""), row: &1})
+  end
+
+  # Files corpus → the catalog cards, i.e. exactly the wiki pages
+  # `:pages` above excludes. Weighted by the CARD's bytes, matching
+  # `Historian.sum_corpus_bytes("files", …)` — the document text these
+  # cards summarise never enters the Historian's context, which is the
+  # point of the catalog. Same `updated_at` clock as `:pages`, because it
+  # is the same table.
+  def corpus_items(:files, %DateTime{} = ws, %DateTime{} = we, _opts) do
+    ws
+    |> Wiki.list_card_pages_updated_since(window_end: we, workspace_id: nil)
     |> Enum.map(&%{id: &1.id, at: &1.updated_at, bytes: byte_size(&1.content || ""), row: &1})
   end
 
@@ -420,6 +442,7 @@ defmodule Platform.Agents.ActivityDigest do
 
   defp render_corpus(:pages, included), do: digest_pages(Enum.map(included, & &1.row))
   defp render_corpus(:journal, included), do: digest_journal(Enum.map(included, & &1.row))
+  defp render_corpus(:files, included), do: digest_file_cards(Enum.map(included, & &1.row))
 
   defp watermark([]), do: nil
   defp watermark(included), do: included |> List.last() |> Map.fetch!(:at)
@@ -486,6 +509,7 @@ defmodule Platform.Agents.ActivityDigest do
   defp corpus_heading(:transcripts), do: "Meetings"
   defp corpus_heading(:pages), do: "Wiki pages"
   defp corpus_heading(:journal), do: "Journal"
+  defp corpus_heading(:files), do: "File cards"
   defp corpus_heading(other), do: "#{other}"
 
   # ── Messages ─────────────────────────────────────────────────────────────
@@ -603,6 +627,29 @@ defmodule Platform.Agents.ActivityDigest do
       |> Enum.join("\n")
 
     "### Wiki\n\n" <> body
+  end
+
+  # ── File cards (windowed only) ───────────────────────────────────────────
+  #
+  # Cards are wiki pages, so this renders the same shape as
+  # `digest_pages/1` under a heading that says which corpus it came from.
+  # `[card]` rather than `[page]` matters to the reader: a card is a
+  # summary of a document the Historian will never be shown, so "go read
+  # the source" is a different action than it is for a wiki page.
+
+  defp digest_file_cards([]), do: nil
+
+  defp digest_file_cards(cards) do
+    body =
+      cards
+      |> Enum.map(fn c ->
+        time = format_datetime(c.updated_at)
+        preview = page_preview(c.content)
+        "- #{time} [card] `#{c.file_key}` (v#{c.version}): #{preview}"
+      end)
+      |> Enum.join("\n")
+
+    "### File cards\n\n" <> body
   end
 
   defp page_preview(nil), do: ""

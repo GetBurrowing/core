@@ -42,6 +42,7 @@ defmodule Platform.Org.Wiki do
   require Logger
 
   alias Ecto.Adapters.SQL
+  alias Platform.Files
   alias Platform.Org.WikiJournalEntry
   alias Platform.Org.WikiPage
   alias Platform.Repo
@@ -58,10 +59,20 @@ defmodule Platform.Org.Wiki do
   required key; `:updated_by`/`:expected_version` are optional. The
   frontmatter map and version are managed by the module — callers do
   not pass them directly.
+
+  `:org_id` / `:project_id` are the ADR-0042 tenancy columns (task
+  `01a0008c` stage 2). They are **opt-in**: a caller that omits them
+  keeps the historical behaviour exactly, which for `:org_id` means
+  `WikiPage.changeset/2` attaching the row to the root Fabrikam org. A
+  caller that writes under a tenant-scoped path — anything shaped
+  `project/<uuid>/…` — must pass both, or the row's tenancy will
+  disagree with its own `file_key`.
   """
   @type page_attrs :: %{
           optional(:content) => String.t(),
           optional(:updated_by) => binary() | nil,
+          optional(:org_id) => binary() | nil,
+          optional(:project_id) => binary() | nil,
           optional(String.t()) => term()
         }
 
@@ -119,6 +130,51 @@ defmodule Platform.Org.Wiki do
     |> Repo.all()
   end
 
+  # ── The pages / files corpus partition (task 01a0008c stage 4) ───────────
+  #
+  # A catalog card is a wiki page at `project/<uuid>/page/files/<slug>.md`,
+  # so the moment `files` became the Historian's fifth corpus, every card
+  # was sitting in TWO corpora at once. The Historian charges bytes for
+  # what the renderer renders (the `019fa1cc` invariant), and a card
+  # rendered twice is charged twice — the same 100k-token threshold fires
+  # on doubled bytes and the Historian digests the same card in a `pages`
+  # window and again in a `files` window.
+  #
+  # These two composers ARE the partition. They are complements over one
+  # predicate — `Platform.Files.card_page_keys_query/0` — so `pages` and
+  # `files` cannot disagree about which side a card falls on. Every
+  # `pages` site composes `exclude_card_pages/1`; every `files` site
+  # composes `only_card_pages/1`. An exclusion applied at some pages
+  # sites and not others is worse than none: it double-charges the sites
+  # that forgot and drops nothing anywhere, which reads as a byte signal
+  # that is merely "a bit high".
+
+  @doc """
+  Narrows a wiki-page query to rows that are NOT catalog cards.
+
+  The `pages` half of the pages/files corpus partition. See the note
+  above this function and `Platform.Files.card_page_keys_query/0`.
+
+  Composes on `file_key`, so it works against both `WikiPage` and the
+  schemaless `from(p in "org_wiki_pages")` sources the Historian's
+  byte-sum queries use.
+  """
+  @spec exclude_card_pages(Ecto.Queryable.t()) :: Ecto.Query.t()
+  def exclude_card_pages(query) do
+    where(query, [p], p.file_key not in subquery(Files.card_page_keys_query()))
+  end
+
+  @doc """
+  Narrows a wiki-page query to rows that ARE catalog cards.
+
+  The `files` half of the pages/files corpus partition — the exact
+  complement of `exclude_card_pages/1`.
+  """
+  @spec only_card_pages(Ecto.Queryable.t()) :: Ecto.Query.t()
+  def only_card_pages(query) do
+    where(query, [p], p.file_key in subquery(Files.card_page_keys_query()))
+  end
+
   @doc """
   List wiki pages updated in `[window_start, window_end)`, ordered by
   `updated_at asc`.
@@ -129,6 +185,14 @@ defmodule Platform.Org.Wiki do
   `Platform.Chat.list_messages_since/2` /
   `Platform.Meetings.list_transcripts_since/2`.
 
+  **Catalog cards are excluded** (task 01a0008c stage 4): they are the
+  `files` corpus, not the `pages` corpus. This function is the digest's
+  sole `pages` accessor, so the exclusion lands here rather than being
+  post-filtered by the caller — a second predicate at the call site is
+  how the byte signal and the renderer drifted apart in `019fa1cc`.
+  Callers that want every page regardless of card status want
+  `list_pages/1`.
+
   ## Options
     * `:workspace_id` (default `nil` — org-scoped; matches rows with
       `is_nil(workspace_id)`)
@@ -136,6 +200,42 @@ defmodule Platform.Org.Wiki do
   """
   @spec list_pages_updated_since(DateTime.t(), keyword()) :: [WikiPage.t()]
   def list_pages_updated_since(%DateTime{} = window_start, opts \\ []) do
+    window_start
+    |> pages_updated_since_query(opts)
+    |> exclude_card_pages()
+    |> Repo.all()
+  end
+
+  @doc """
+  List catalog-card wiki pages updated in `[window_start, window_end)`,
+  ordered by `updated_at asc` — the `files` corpus accessor
+  (task 01a0008c stage 4).
+
+  The exact complement of `list_pages_updated_since/2`: same table, same
+  clock, same ordering, opposite side of the card partition. Every wiki
+  page in the span is returned by exactly one of the two.
+
+  **This is why the `files` corpus is weighted by CARD bytes, not
+  document bytes.** What a `files` window renders is these rows, and the
+  byte signal must charge for what the renderer renders. Weighting by
+  `platform_file_texts.text` instead would read as hundreds of thousands
+  of tokens against the window budget while producing a body of a few
+  KB — and would put the document text back into the Historian's context,
+  which is the entire thing the catalog exists to remove.
+
+  ## Options
+    * `:workspace_id` (default `nil` — org-scoped)
+    * `:window_end`   (default `DateTime.utc_now/0`)
+  """
+  @spec list_card_pages_updated_since(DateTime.t(), keyword()) :: [WikiPage.t()]
+  def list_card_pages_updated_since(%DateTime{} = window_start, opts \\ []) do
+    window_start
+    |> pages_updated_since_query(opts)
+    |> only_card_pages()
+    |> Repo.all()
+  end
+
+  defp pages_updated_since_query(%DateTime{} = window_start, opts) do
     workspace_id = Keyword.get(opts, :workspace_id)
     window_end = Keyword.get(opts, :window_end, DateTime.utc_now())
 
@@ -146,7 +246,6 @@ defmodule Platform.Org.Wiki do
     )
     |> filter_workspace(workspace_id)
     |> order_by([p], asc: p.updated_at)
-    |> Repo.all()
   end
 
   @doc """
@@ -197,6 +296,27 @@ defmodule Platform.Org.Wiki do
     5. Emit telemetry `[:platform, :org, :wiki_page_written]` and
        PubSub `{:wiki_page_written, payload}` on `"org_wiki:index"`.
 
+  ## Tenancy (`:org_id` / `:project_id`) — task 01a0008c stage 2
+
+  Until this change, `upsert_page/3` read only `:content` and
+  `:updated_by` out of `attrs`. Every other column — including the
+  ADR-0042 tenancy pair — was unreachable through this function, so a
+  page written at `project/<uuid>/page/…` landed as a **root-Fabrikam row
+  with a nil `project_id`**: `WikiPage.changeset/2`'s
+  `maybe_default_org_id/1` fills a nil `org_id` with the `"fabrikam"` org
+  by design, as a legacy-caller accommodation. The path said one
+  tenant, the row said another, and because `update_changeset/2` cast
+  neither column, no later write through this path could repair it.
+
+  Both keys are now read from `attrs` and forwarded to the changeset —
+  on insert AND on update, so an existing mis-tenanted row is
+  repairable by rewriting it with the right pair. Only keys the caller
+  actually supplies are forwarded: omit them and behaviour is
+  byte-identical to before, Fabrikam default included. Nothing here
+  *requires* them, because most callers legitimately write org-level
+  pages; the requirement belongs to whoever owns a tenant-scoped path.
+  `Platform.Files.Cataloger` is the reference caller.
+
   ## Options
     * `:workspace_id` (default `nil`)
     * `:expected_version` — when set, a mismatch returns `{:error, :stale}`
@@ -212,6 +332,8 @@ defmodule Platform.Org.Wiki do
 
     updated_by =
       Map.get(attrs, :updated_by) || Map.get(attrs, "updated_by")
+
+    tenancy_attrs = tenancy_attrs(attrs)
 
     {frontmatter, _body_after_fm} = parse_frontmatter(content)
     parsed_links = parse_wikilinks(content)
@@ -229,13 +351,15 @@ defmodule Platform.Org.Wiki do
           case existing do
             nil ->
               %WikiPage{}
-              |> WikiPage.changeset(%{
-                file_key: file_key,
-                workspace_id: workspace_id,
-                content: content,
-                frontmatter: frontmatter,
-                updated_by: updated_by
-              })
+              |> WikiPage.changeset(
+                Map.merge(tenancy_attrs, %{
+                  file_key: file_key,
+                  workspace_id: workspace_id,
+                  content: content,
+                  frontmatter: frontmatter,
+                  updated_by: updated_by
+                })
+              )
               |> Repo.insert()
               |> unwrap_or_rollback()
 
@@ -245,11 +369,13 @@ defmodule Platform.Org.Wiki do
               end
 
               row
-              |> WikiPage.update_changeset(%{
-                content: content,
-                frontmatter: frontmatter,
-                updated_by: updated_by
-              })
+              |> WikiPage.update_changeset(
+                Map.merge(tenancy_attrs, %{
+                  content: content,
+                  frontmatter: frontmatter,
+                  updated_by: updated_by
+                })
+              )
               |> Repo.update()
               |> case do
                 {:ok, updated} -> updated
@@ -288,6 +414,25 @@ defmodule Platform.Org.Wiki do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # Collect only the tenancy keys the caller actually supplied.
+  #
+  # Absence and an explicit nil are deliberately NOT the same thing
+  # here. Absence means "I have no opinion" and must leave the legacy
+  # behaviour untouched, including the Fabrikam default on insert. An
+  # explicit nil means "unset this", which is a legitimate thing to ask
+  # for on `project_id` and which the changeset will reject on `org_id`
+  # (it is `validate_required`) rather than silently re-defaulting.
+  defp tenancy_attrs(attrs) do
+    [:org_id, :project_id]
+    |> Enum.reduce(%{}, fn key, acc ->
+      cond do
+        Map.has_key?(attrs, key) -> Map.put(acc, key, Map.fetch!(attrs, key))
+        Map.has_key?(attrs, Atom.to_string(key)) -> Map.put(acc, key, attrs[Atom.to_string(key)])
+        true -> acc
+      end
+    end)
   end
 
   @doc """

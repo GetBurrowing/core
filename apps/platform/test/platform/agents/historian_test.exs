@@ -125,14 +125,19 @@ defmodule Platform.Agents.HistorianTest do
       assert DateTime.compare(second, first) == :gt,
              "expected #{inspect(second)} > #{inspect(first)} on second mark_run_started"
 
-      # Exactly 4 cursor rows — one per corpus — exist for this workspace.
+      # Exactly one cursor row per registered corpus exists for this
+      # workspace. Derived from `Historian.corpora/0` rather than a literal:
+      # a corpus added to `@corpora` but rejected by
+      # `HistorianCursor.@valid_corpora` writes no row and `mark_run_started/1`
+      # still returns `:ok`, so a hardcoded count would need editing in the
+      # same commit that introduced the silent failure.
       count =
         Repo.aggregate(
           from(c in HistorianCursor, where: c.workspace_id == ^workspace_id),
           :count
         )
 
-      assert count == 4
+      assert count == length(Historian.corpora())
     end
   end
 
@@ -213,7 +218,7 @@ defmodule Platform.Agents.HistorianTest do
       start_at = ~U[2001-01-01 00:00:00Z]
       end_at = ~U[2001-01-08 00:00:00Z]
 
-      for corpus <- ~w(pages journal messages transcripts) do
+      for corpus <- Historian.corpora() do
         assert Historian.pending_bytes_per_day(corpus, start_at, end_at, workspace_id) == %{}
         assert Historian.pending_bytes_per_day(corpus, start_at, end_at) == %{}
       end
@@ -1030,7 +1035,7 @@ defmodule Platform.Agents.HistorianTest do
       nil_rows =
         Repo.all(from(c in HistorianCursor, where: is_nil(c.workspace_id)))
 
-      assert length(nil_rows) == 4,
+      assert length(nil_rows) == length(Historian.corpora()),
              "expected one nil-workspace cursor row per corpus, got #{length(nil_rows)}"
 
       assert Enum.map(nil_rows, & &1.corpus) |> Enum.sort() ==
@@ -1063,7 +1068,7 @@ defmodule Platform.Agents.HistorianTest do
       before_count =
         Repo.aggregate(from(c in HistorianCursor, where: is_nil(c.workspace_id)), :count)
 
-      assert before_count == 4
+      assert before_count == length(Historian.corpora())
 
       :ok = Historian.mark_run_started(@org_scope_workspace_id)
 
@@ -1071,7 +1076,7 @@ defmodule Platform.Agents.HistorianTest do
       after_count =
         Repo.aggregate(from(c in HistorianCursor, where: is_nil(c.workspace_id)), :count)
 
-      assert after_count == 4
+      assert after_count == length(Historian.corpora())
 
       # last_run_at advanced past old_at.
       new_at = Historian.last_run_at(nil)

@@ -60,6 +60,14 @@ defmodule Platform.Files.File do
     # flip a row in or out of the deleted state.
     field(:deleted_at, :utc_datetime_usec)
 
+    # Catalog card backlink (task 01a0008c). `card_file_key` is the wiki
+    # file_key of this file's card page — `project/<uuid>/page/files/
+    # <slug>.md`. Nil means "no card yet", which is what the backfill
+    # selects on; a failed LLM pass is deliberately indistinguishable
+    # from never-attempted, because the retry strategy IS the backfill.
+    field(:card_file_key, :string)
+    field(:card_generated_at, :utc_datetime_usec)
+
     timestamps(type: :utc_datetime_usec)
   end
 
@@ -75,6 +83,8 @@ defmodule Platform.Files.File do
     content_hash
     ingest_status
     ingest_intent
+    card_file_key
+    card_generated_at
   )a
 
   @required_fields ~w(project_id content_type byte_size storage_key)a

@@ -15,6 +15,7 @@ defmodule Mix.Tasks.Platform.HistorianAuditOversize do
 
       mix platform.historian_audit_oversize
       mix platform.historian_audit_oversize --corpus messages
+      mix platform.historian_audit_oversize --corpus files
       mix platform.historian_audit_oversize --since 2026-07-14
       mix platform.historian_audit_oversize --summary-only
       mix platform.historian_audit_oversize --class silent_loss
@@ -25,7 +26,12 @@ defmodule Mix.Tasks.Platform.HistorianAuditOversize do
     * `--since` — ISO date (`YYYY-MM-DD`) or full ISO-8601 instant; lower
       bound on `audit_events.inserted_at`
     * `--corpus` — restrict to one corpus (`messages`, `transcripts`,
-      `pages`, `journal`)
+      `pages`, `journal`, `files`). This list is a hand-maintained mirror
+      of `Platform.Agents.HistorianCursor.valid_corpora/0`; a corpus
+      missing from it is still filterable but undiscoverable, so the
+      operator debugging that corpus's oversize windows never learns the
+      flag accepts it. `Platform.Agents.HistorianCorpusRegistrationTest`
+      pins this text against the real corpus list.
     * `--class` — print only windows with this classification
       (`spurious`, `silent_loss`, `truncated_loss`, `legitimate`). The
       summary still covers every window walked.

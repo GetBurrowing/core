@@ -134,6 +134,7 @@ defmodule Platform.Application do
       |> maybe_add_space_purger()
       |> maybe_add_container_purger()
       |> maybe_add_file_purger()
+      |> maybe_add_catalog_emitter()
       |> maybe_add_deploy_merge_reconciler()
       |> ensure_task_router_watcher_after_endpoint()
 
@@ -274,6 +275,21 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_file_purger, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Files.Purger)
+    else
+      children
+    end
+  end
+
+  # CatalogEmitter (task 01a0008c stage 3): attaches to
+  # `[:platform, :files, :ingested, :stop]` in its own `init/1` and is the
+  # single process that runs card passes, which is how the burst bound is
+  # enforced (see its moduledoc). Disabled in test — an ingest inside the
+  # Ecto sandbox would otherwise hand DB work to a process that does not
+  # own the connection; tests start their own instance.
+  defp maybe_add_catalog_emitter(children) do
+    if Application.get_env(:platform, :start_catalog_emitter, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Files.CatalogEmitter)
     else
       children
     end

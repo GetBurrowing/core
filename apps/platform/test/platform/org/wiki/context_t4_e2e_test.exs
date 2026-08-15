@@ -414,7 +414,15 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
     end
 
     # A Suite task id, an ADR number, or a PR number.
-    @migration_work_reference ~r/019[0-9a-f]{5}|ADR[-\s]?0\d{3}|#\d{3,}/
+    #
+    # Task ids are UUIDv7 prefixes, so their leading hex digits are a
+    # timestamp that rolls over. The original `019` literal silently
+    # stopped matching on 2026-08-13, when newly-minted ids began `01a0`
+    # — every migration citing a current task id failed clause (b) while
+    # the help text advertised three forms of which none was reachable.
+    # `01[9a-f]` keeps the same 8-hex-digit shape and covers the next
+    # several rollovers rather than pinning one prefix.
+    @migration_work_reference ~r/01[9a-f][0-9a-f]{5}|ADR[-\s]?0\d{3}|#\d{3,}/
 
     @min_moduledoc_length 40
 
@@ -486,7 +494,7 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
              it. Exactly three reference forms are recognised, anywhere in the
              file:
 
-               * a Suite task id      019fba52   (019 + 5 hex digits)
+               * a Suite task id      01a0008c   (01 + 9/a-f + 5 hex digits)
                * an ADR number        ADR-0033   (also "ADR 0033" / "ADR0033")
                * a PR number          #647       (at least 3 digits)
 

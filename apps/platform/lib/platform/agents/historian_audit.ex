@@ -120,6 +120,7 @@ defmodule Platform.Agents.HistorianAudit do
   alias Platform.Agents.ActivityDigest
   alias Platform.Audit.Event
   alias Platform.Chat.Message
+  alias Platform.Org.Wiki
   alias Platform.Repo
 
   # Kept in sync with `ActivityDigest`'s empty-window line (activity_digest.ex
@@ -415,21 +416,47 @@ defmodule Platform.Agents.HistorianAudit do
   def raw_row_count("transcripts", window_start, window_end),
     do: count_between("meeting_transcripts", :updated_at, window_start, window_end)
 
+  # `pages` and `files` are two halves of one table (task 01a0008c stage
+  # 4). The card partition is applied here for the same reason the corpus
+  # clock is: this count must describe the population the corresponding
+  # byte-sum charged for. Without it, every `pages` window would report
+  # the whole org wiki as "raw rows in scope" including cards that were
+  # never charged to `pages`, and every `files` window would report the
+  # entire wiki as raw — inflating the raw-vs-eligible gap that IS the
+  # finding this module exists to produce.
   def raw_row_count("pages", window_start, window_end),
-    do: count_between("org_wiki_pages", :updated_at, window_start, window_end)
+    do:
+      "org_wiki_pages"
+      |> count_between_query(:updated_at, window_start, window_end)
+      |> Wiki.exclude_card_pages()
+      |> Repo.one()
+      |> Kernel.||(0)
+
+  def raw_row_count("files", window_start, window_end),
+    do:
+      "org_wiki_pages"
+      |> count_between_query(:updated_at, window_start, window_end)
+      |> Wiki.only_card_pages()
+      |> Repo.one()
+      |> Kernel.||(0)
 
   def raw_row_count("journal", window_start, window_end),
     do: count_between("org_wiki_journal_entries", :inserted_at, window_start, window_end)
 
   def raw_row_count(_unknown_corpus, _window_start, _window_end), do: 0
 
-  defp count_between(table, column, window_start, window_end) do
+  defp count_between_query(table, column, window_start, window_end) do
     from(r in table,
       where:
         field(r, ^column) >= ^window_start and
           field(r, ^column) < ^window_end,
       select: count()
     )
+  end
+
+  defp count_between(table, column, window_start, window_end) do
+    table
+    |> count_between_query(column, window_start, window_end)
     |> Repo.one()
     |> Kernel.||(0)
   end

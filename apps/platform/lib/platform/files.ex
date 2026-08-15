@@ -182,6 +182,37 @@ defmodule Platform.Files do
   end
 
   @doc """
+  The wiki `file_key`s that are catalog cards — one row per live file
+  that has one (task 01a0008c stage 4).
+
+  **This is the single definition of "is this wiki page a catalog
+  card?"**, and it exists because the answer partitions the Historian's
+  corpora: a card page is charged to the `files` corpus and must NOT
+  also be charged to `pages`. Both sides of that partition compose this
+  query (`Platform.Org.Wiki.only_card_pages/1` and
+  `exclude_card_pages/1`), so they cannot disagree about which rows they
+  are talking about. Two hand-written predicates would eventually
+  double-charge a card or drop one entirely, which is the same defect
+  class task `019fa1cc` spent five stages removing from the messages
+  corpus.
+
+  Returns an `Ecto.Query` selecting `card_file_key`, intended for
+  `subquery/1` — never `Repo.all/1` into an `IN ^list`, which would
+  materialise the whole card set into the app.
+
+  Soft-deleted files are excluded via `not_deleted/1`: their card page
+  is no longer backed by a live file, so it falls back to being an
+  ordinary wiki page rather than becoming invisible to both corpora.
+  """
+  @spec card_page_keys_query() :: Ecto.Query.t()
+  def card_page_keys_query do
+    File
+    |> not_deleted()
+    |> where([f], not is_nil(f.card_file_key))
+    |> select([f], f.card_file_key)
+  end
+
+  @doc """
   Lists files for a project, newest first.
 
   ## Options
@@ -211,6 +242,62 @@ defmodule Platform.Files do
     |> maybe_filter_ingest_intent(ingest_intent)
     |> maybe_filter_ingest_status(ingest_status)
     |> order_by([f], desc: f.inserted_at)
+    |> maybe_limit(limit)
+    |> Repo.all()
+    |> Repo.preload(preload)
+  end
+
+  @doc """
+  Lists the files in a project that are eligible for catalog-card
+  generation, oldest first (task 01a0008c).
+
+  **This is the single eligibility seam for cataloging.** Every consumer
+  — the card writer, the ingest telemetry emitter, the backfill mix task
+  — enumerates through here. Nothing in the catalog path may hand-roll a
+  `Repo.all(File)`: the exclusions below are not display filters, and a
+  query that re-derives them will eventually re-derive them wrong.
+
+  ## Exclusions
+
+    * **`ingest_intent == "human_only"` — a disclosure boundary, not a
+      filter nicety.** `Platform.Files.Ingester.ingest_async/1`
+      short-circuits such a file to `"not_attempted"` *before* any
+      telemetry, task spawn or `Extractor.extract/1` call, precisely so
+      its bytes never reach a third-party extractor. An LLM card pass is
+      the same class of disclosure. The telemetry path inherits that
+      protection for free (no `:stop` event ever fires for these rows);
+      a backfill running its own query inherits nothing, which is the
+      whole reason this function exists.
+    * **`ingest_status != "ingested"`.** A `pending` file has no text
+      yet, a `failed` one never will, and `not_attempted` is the
+      human_only marker again. Only `"ingested"` has something to
+      summarize.
+    * **`deleted_at` not nil** — soft-deleted rows are invisible on
+      every other path in this module and must be here too.
+
+  ## Options
+
+    * `:limit` — **defaults to nil, meaning no cap.** Deliberately unlike
+      `list_files_for_project/2`, which defaults to 50: a catalog that
+      silently stops at 50 rows and reports success is the failure mode
+      this default exists to prevent. A caller that wants a page must ask
+      for one.
+    * `:preload` — Ecto preload spec applied after the query.
+
+  Ordered ascending by `inserted_at` with an id tiebreak, so a backfill
+  run and a sibling list see the same sequence twice in a row.
+  """
+  @spec list_catalogable_files(binary(), keyword()) :: [File.t()]
+  def list_catalogable_files(project_id, opts \\ []) when is_binary(project_id) do
+    limit = Keyword.get(opts, :limit)
+    preload = Keyword.get(opts, :preload, [])
+
+    File
+    |> not_deleted()
+    |> where([f], f.project_id == ^project_id)
+    |> where([f], f.ingest_intent != "human_only")
+    |> where([f], f.ingest_status == "ingested")
+    |> order_by([f], asc: f.inserted_at, asc: f.id)
     |> maybe_limit(limit)
     |> Repo.all()
     |> Repo.preload(preload)
@@ -320,6 +407,31 @@ defmodule Platform.Files do
       when status in ~w(pending ingested failed not_attempted) do
     file
     |> File.changeset(%{ingest_status: status})
+    |> Repo.update()
+  end
+
+  @doc """
+  Records that `file` now has a catalog card at `card_file_key`
+  (task 01a0008c stage 2).
+
+  Stamps `card_generated_at` to now in the same write. The two columns
+  move together on purpose: `card_file_key` without a timestamp gives
+  the backfill no way to tell a fresh card from a stale one, and a
+  timestamp without a key points at nothing.
+
+  Deliberately has no "unset" counterpart. A card that fails to
+  generate leaves both columns nil, which is indistinguishable from
+  never-attempted — that is the whole retry strategy (retry *is* the
+  backfill), so there is nothing to clear.
+  """
+  @spec mark_card_generated(File.t(), String.t()) ::
+          {:ok, File.t()} | {:error, Ecto.Changeset.t()}
+  def mark_card_generated(%File{} = file, card_file_key) when is_binary(card_file_key) do
+    file
+    |> File.changeset(%{
+      card_file_key: card_file_key,
+      card_generated_at: DateTime.utc_now()
+    })
     |> Repo.update()
   end
 

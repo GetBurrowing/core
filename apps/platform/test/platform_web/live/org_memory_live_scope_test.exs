@@ -96,19 +96,69 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   # scope each pages/journal digest to a single `[window_start,
   # window_end)` range. Pure list-Ecto helpers, no behavioural
   # changes to any existing surface.
-  @wiki_ex_sha256_2026_07_11 "06e9ac5d8c4ac7f86fbde0b21c83dfba333a7570cc02f2a23b3e7d1b102d5e72"
+  #
+  # Re-pinned 2026-08-14 (task 01a0008c stage 2): the file-catalog plan
+  # authorizes `upsert_page/3` to read `:org_id` / `:project_id` out of
+  # its attrs and forward them to the changeset. This is a BEHAVIOURAL
+  # change to an existing surface, not an additive accessor, so it is
+  # worth stating precisely what moved:
+  #
+  #   * `upsert_page/3` previously read only `:content` and
+  #     `:updated_by`, which made the ADR-0042 tenancy pair unreachable
+  #     through the one function every page write goes through. A page
+  #     written at `project/<uuid>/…` therefore landed as a root-Fabrikam
+  #     row with a nil `project_id` (`WikiPage.changeset/2`'s
+  #     `maybe_default_org_id/1` fills a nil org by design), and
+  #     `update_changeset/2` cast neither column, so nothing could ever
+  #     repair it. The path said one tenant and the row said another,
+  #     permanently.
+  #   * The new `tenancy_attrs/1` helper forwards ONLY the keys a caller
+  #     actually supplied. Absence is not an explicit nil: omit both and
+  #     the write is byte-identical to the old behaviour, Fabrikam default
+  #     included. Every existing caller omits them.
+  #
+  # `Platform.Files.Cataloger` is the reference caller and the reason
+  # the change was authorized.
+  #
+  # Re-pinned 2026-08-15 (task 01a0008c stage 4): registering `files` as
+  # the Historian's fifth corpus authorizes the pages/files partition to
+  # live here, because a catalog card IS a wiki page and this module owns
+  # every read of that table. What moved:
+  #
+  #   * `exclude_card_pages/1` / `only_card_pages/1` — two additive,
+  #     composable query narrowings that are exact complements over
+  #     `Platform.Files.card_page_keys_query/0`. They are public because
+  #     `Platform.Agents.Historian` and `HistorianAudit` must compose the
+  #     SAME predicate the digest accessor does; a hand-written copy at
+  #     each site is the drift class task 019fa1cc spent five stages
+  #     removing.
+  #   * `list_pages_updated_since/2` now composes `exclude_card_pages/1`.
+  #     This IS a behavioural change to an existing surface, and it is the
+  #     point: a card charged to both `pages` and `files` is charged
+  #     twice, and the Historian digests it twice. `ActivityDigest` is the
+  #     function's only caller (`list_pages/1` remains unfiltered for
+  #     everything else, including the OrgMemoryLive surfaces this file
+  #     guards).
+  #   * `list_card_pages_updated_since/2` — the complementary accessor,
+  #     additive. Its docstring carries the reasoning for weighting the
+  #     files corpus by card bytes rather than document bytes; do not
+  #     "fix" that to read `platform_file_texts`.
+  #   * `pages_updated_since_query/2` — private extraction of the shared
+  #     body of the two accessors, so the clock/ordering/workspace
+  #     scoping cannot differ between the two halves of the partition.
+  @wiki_ex_sha256_2026_08_15 "c7dab7d6cb02a072b133cba17212d523e0af880a91b49fcbe3efe1823aab34b4"
 
-  test "wiki.ex matches the 2026-07-11 authorized domain surface (sha256 pin)" do
+  test "wiki.ex matches the 2026-08-15 authorized domain surface (sha256 pin)" do
     rel_path = "lib/platform/org/wiki.ex"
     contents = File.read!(Path.join(app_root(), rel_path))
     hash = :crypto.hash(:sha256, contents) |> Base.encode16(case: :lower)
 
-    assert hash == @wiki_ex_sha256_2026_07_11,
+    assert hash == @wiki_ex_sha256_2026_08_15,
            """
-           Scope-creep detected: #{rel_path} drifted from the 2026-07-11
-           authorized content (task 019f4f55 stage 2 — Historian windowed
-           dispatch accessors).
-           Expected sha256: #{@wiki_ex_sha256_2026_07_11}
+           Scope-creep detected: #{rel_path} drifted from the 2026-08-15
+           authorized content (task 01a0008c stage 4 — the pages/files
+           corpus partition).
+           Expected sha256: #{@wiki_ex_sha256_2026_08_15}
            Got sha256:      #{hash}
            Domain changes to Platform.Org.Wiki require explicit authorization
            — re-pin this constant in the same commit as the authorized change.

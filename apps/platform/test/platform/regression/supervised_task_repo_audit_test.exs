@@ -225,7 +225,21 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # `Platform.Tasks.DeployMergeReconciler.sweep/1` directly with a stub
     # runner; left running it would both hit Repo outside the sandbox and
     # shell out to `gh` from a test process.
-    :start_deploy_merge_reconciler
+    :start_deploy_merge_reconciler,
+    # Task 01a0008c stage 3 — `Platform.Files.CatalogEmitter`. This entry is
+    # the audit test working as designed a second time: adding the gate to
+    # application.ex failed this assertion on the first full-suite run.
+    #
+    # It is precisely the singleton shape this list guards against. The
+    # emitter subscribes to `[:platform, :files, :ingested, :stop]` for the
+    # whole VM and then runs `Files.list_catalogable_files/2` from its own
+    # process, which owns no sandbox connection — so a globally-booted
+    # instance would turn every existing ingest test into an ownership
+    # violation, and would additionally try to spend provider money on
+    # fixture rows. `Platform.Files.CatalogEmitterTest` starts its own
+    # named instance with `start_supervised!/1`; each instance attaches its
+    # own handler in `init/1` and detaches it in `terminate/2`.
+    :start_catalog_emitter
   ]
 
   # ── Assertion 1: Task-Supervisor rescue audit ─────────────────────
