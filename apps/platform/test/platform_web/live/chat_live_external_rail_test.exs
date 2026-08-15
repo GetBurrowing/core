@@ -407,6 +407,157 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
     end
   end
 
+  # ── task 019ffebf-4745: `:sidebar_changed` re-broadens the external rail ────
+  #
+  # The invariant, quoted from the comment above `rail_channels/1` in
+  # `chat_live.ex`: "every reload of `:channels` after mount (nav,
+  # `:space_created` broadcast, org-archive refresh, unarchive) must re-apply
+  # `@external_scope` or a workspace-wide `list_spaces` would re-broaden an
+  # external user's rail past their allowlist."
+  #
+  # `handle_info(:sidebar_changed, socket)` reloads `:channels` via
+  # `Chat.list_spaces(kind: "channel")` with no `scope:`, and three lines later
+  # `recompute_pinned/1` rebuilds `@channel_sections` off that widened list. The
+  # leak therefore reaches the rendered rail as well as the raw assign.
+  #
+  # TWO SESSIONS, deliberately. `chat:sidebar:<user_id>` is per-user and
+  # `broadcast_sidebar_changed_from/2` excludes the acting pid, so the acting
+  # tab never runs this arm. A one-session test can only reach the handler by
+  # calling it directly, which proves nothing about the path a user walks.
+  describe "sidebar invalidation keeps the external allowlist (task 019ffebf-4745)" do
+    setup %{conn: conn} do
+      org = tenant_org!()
+      ext = external_user!(org)
+
+      allowed = channel!("Client Room", org_id: org.id) |> join!(ext)
+      off_limits = channel!("Fabrikam Internal Ops")
+
+      %{conn: conn, ext: ext, org: org, allowed: allowed, off_limits: off_limits}
+    end
+
+    test "a sidebar change in one tab does not re-broaden the OTHER tab's rail",
+         %{conn: conn, ext: ext, allowed: allowed, off_limits: off_limits} do
+      # Tab A: the acting session. Tab B: the one that receives the broadcast.
+      {:ok, view_a, _} =
+        conn |> with_chat_host() |> authed(ext) |> live("/chat/#{allowed.slug}")
+
+      {:ok, view_b, _} =
+        conn |> with_chat_host() |> authed(ext) |> live("/chat/#{allowed.slug}")
+
+      # Anti-vacuity precondition: the allowlist genuinely EXCLUDES a
+      # non-archived channel at mount. If mount already leaked, every assertion
+      # below would be measuring the wrong defect.
+      assert allowed.id in channel_ids(view_b)
+
+      refute off_limits.id in channel_ids(view_b),
+             "mount already leaked, so this case is measuring the wrong defect"
+
+      # The cheapest real sidebar write. It broadcasts
+      # `:sidebar_changed` from tab A's pid, so ONLY tab B receives it.
+      render_click(view_a, "toggle_pinned", %{"space_id" => allowed.id, "pinned" => "true"})
+
+      # Sync tab B so the cast has been drained before reading its assigns.
+      _ = render(view_b)
+
+      after_ids = channel_ids(view_b)
+
+      # THE LEAK. Tab B reloaded `:channels` workspace-wide.
+      refute off_limits.id in after_ids,
+             "#{off_limits.name} re-entered the external user's rail after a " <>
+               ":sidebar_changed broadcast. The reload dropped @external_scope."
+
+      # POSITIVE CONTROL, same test: the allowlisted channel survives. A rail
+      # that merely emptied would satisfy the refute above and prove nothing.
+      assert allowed.id in after_ids,
+             "the allowlisted channel vanished, so the rail emptied instead of staying scoped"
+
+      # The leak reaches the RENDER too, not only the assign.
+      refute render(view_b) =~ off_limits.name
+    end
+
+    test "an INTERNAL user's rail is byte-identical across the same broadcast", %{conn: conn} do
+      internal = create_user!("Ingo Internal")
+      home = channel!("Internal General") |> join!(internal)
+      _elsewhere = channel!("Another Internal Room")
+
+      {:ok, view_a, _} = conn |> authed(internal) |> live("/chat/#{home.slug}")
+      {:ok, view_b, _} = conn |> authed(internal) |> live("/chat/#{home.slug}")
+
+      before_channels = :sys.get_state(view_b.pid).socket.assigns.channels
+
+      # Vacuity guard: an internal rail with nothing in it would pass the
+      # equality below no matter what the handler did.
+      assert length(before_channels) >= 2,
+             "the internal control is vacuous with fewer than two channels in the rail"
+
+      render_click(view_a, "toggle_pinned", %{"space_id" => home.id, "pinned" => "true"})
+      _ = render(view_b)
+
+      after_assigns = :sys.get_state(view_b.pid).socket.assigns
+
+      # Delivery proof. Without it the equality below passes just as well on a
+      # broadcast that never arrived, which is the vacuous version of this case.
+      assert home.id in after_assigns.pinned_space_ids,
+             "tab B never ran the :sidebar_changed handler, so the control proves nothing"
+
+      assert after_assigns.channels == before_channels,
+             "the internal rail changed across a sidebar broadcast. The fix must be a no-op here."
+    end
+
+    # A fence on a LATENT defect, so it gets no red-first step, unlike the two
+    # cases above. `:archived_channels` was read unscoped in three handlers, and
+    # it leaked nothing because both renderings of the archived group sit behind
+    # `!@external?` gates in `chat_live.html.heex` and `@external?` is assigned
+    # once in `do_mount/3`. `rail_archived_channels/1` routes those reads through
+    # one place so that deleting a template gate cannot quietly make the unscoped
+    # read visible.
+    #
+    # Asserted on the ASSIGN, not the markup: for an external user this section
+    # never renders, so there is no HTML to match on. Same mechanism the rest of
+    # the `chat_live*` suite uses for assign-level facts.
+    test "archived channels stay empty for an external user and populated for an internal one",
+         %{conn: conn, ext: ext, allowed: allowed} do
+      {:ok, archived} = Chat.archive_space(channel!("Retired Internal Room"))
+
+      {:ok, ext_a, _} = conn |> with_chat_host() |> authed(ext) |> live("/chat/#{allowed.slug}")
+      {:ok, ext_b, _} = conn |> with_chat_host() |> authed(ext) |> live("/chat/#{allowed.slug}")
+
+      assert archived_channels(ext_b) == []
+
+      render_click(ext_a, "toggle_pinned", %{"space_id" => allowed.id, "pinned" => "true"})
+      _ = render(ext_b)
+
+      assert archived_channels(ext_b) == [],
+             "an archived channel entered the external user's :archived_channels after a " <>
+               ":sidebar_changed broadcast"
+
+      # POSITIVE CONTROL: the same archived channel IS delivered to an internal
+      # user across the same broadcast. Without it the empty list above would
+      # pass on a build where nobody gets archived channels at all.
+      internal = create_user!("Ida Internal")
+      home = channel!("Internal Landing") |> join!(internal)
+
+      {:ok, int_a, _} = conn |> authed(internal) |> live("/chat/#{home.slug}")
+      {:ok, int_b, _} = conn |> authed(internal) |> live("/chat/#{home.slug}")
+
+      assert archived.id in Enum.map(archived_channels(int_b), & &1.id)
+
+      render_click(int_a, "toggle_pinned", %{"space_id" => home.id, "pinned" => "true"})
+      _ = render(int_b)
+
+      assert archived.id in Enum.map(archived_channels(int_b), & &1.id),
+             "the internal user lost the archived channel, so the helper is emptying too widely"
+    end
+  end
+
+  defp archived_channels(view) do
+    :sys.get_state(view.pid).socket.assigns.archived_channels
+  end
+
+  defp channel_ids(view) do
+    :sys.get_state(view.pid).socket.assigns.channels |> Enum.map(& &1.id)
+  end
+
   # `live/2` follows the `/chat` → first-space redirect so the index cases can
   # assert against the landed rail (same live_session, unchanged layout).
   defp live_settled(conn, path) do

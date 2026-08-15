@@ -2085,6 +2085,28 @@ defmodule PlatformWeb.ChatLive do
     Chat.list_spaces(kind: "channel", scope: socket.assigns[:external_scope])
   end
 
+  # The rail's ARCHIVED channel list. Sibling of `rail_channels/1` above, and
+  # deliberately a separate function rather than an `archived: true` flag on it:
+  # the two lists treat an external user differently, and a boolean parameter
+  # would bury that asymmetry at every call site. The live list is FILTERED to
+  # the allowlist; this one is EMPTIED outright, because the collapsed
+  # "Archived" group is an internal discovery surface (design canvas §1
+  # non-goals) and an external user has no archived view at all. That is the
+  # same reason `do_mount/3` already states where it seeds the assign.
+  #
+  # Latent, not live, at the time of writing (task 019ffebf-4745): both
+  # renderings of the archived group sit inside `!@external?` gates in
+  # `chat_live.html.heex`, and `@external?` is assigned once in `do_mount/3`
+  # and never reassigned, so the gate cannot flip mid-session and an unrendered
+  # assign never reaches the wire. Routed through here anyway so that deleting
+  # one of those template gates cannot silently turn an unscoped read into a
+  # leak.
+  defp rail_archived_channels(socket) do
+    if socket.assigns[:external?],
+      do: [],
+      else: Chat.list_spaces(kind: "channel", archived: true)
+  end
+
   # Current ordered channel ids for a section, read from the already-resolved
   # `@sidebar_sections` (the live render state). Used by the keyboard move
   # handler to compute the new order without a DB round-trip.
@@ -2798,7 +2820,7 @@ defmodule PlatformWeb.ChatLive do
                 ensure_participant(updated.id, socket.assigns.user_id)
 
             channels = rail_channels(socket)
-            archived_channels = Chat.list_spaces(kind: "channel", archived: true)
+            archived_channels = rail_archived_channels(socket)
             dm_convos = socket.assigns.dm_conversations
 
             {:noreply,
@@ -2857,7 +2879,7 @@ defmodule PlatformWeb.ChatLive do
              |> assign_active_space(updated)
              |> assign(:can_unarchive?, can_unarchive?(updated, socket.assigns.user_id))
              |> assign(:can_cancel_deletion?, socket.assigns.fabrikam_admin?)
-             |> assign(:archived_channels, Chat.list_spaces(kind: "channel", archived: true))
+             |> assign(:archived_channels, rail_archived_channels(socket))
              |> put_flash(:info, "Deletion cancelled — the channel remains archived.")}
 
           {:error, :unauthorized} ->
@@ -3140,8 +3162,12 @@ defmodule PlatformWeb.ChatLive do
     if socket.assigns.embedded do
       {:noreply, socket}
     else
-      channels = Chat.list_spaces(kind: "channel")
-      archived_channels = Chat.list_spaces(kind: "channel", archived: true)
+      # `rail_channels/1`, not a bare `Chat.list_spaces/1` (task 019ffebf-4745).
+      # This arm runs in the acting user's OTHER tabs, so an unscoped read here
+      # re-broadened an external user's rail to every channel in the workspace
+      # on any sidebar change they made elsewhere.
+      channels = rail_channels(socket)
+      archived_channels = rail_archived_channels(socket)
 
       # `recompute_pinned/1` covers the `@sidebar_sections` re-resolve this
       # handler used to do inline, and adds the pin refresh. The topic is
