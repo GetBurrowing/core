@@ -1949,48 +1949,30 @@ body, .font-fabrikam {
   }
 }
 
-/* The add-reaction ("+") button: invisible on hover-capable devices
-   (reveals on message hover / keyboard focus, matching the existing
-   desktop UX), but always visible on touch devices where there is no
-   hover to trigger discovery. */
-@media (hover: hover) and (pointer: fine) {
-  .reaction-add-btn {
-    opacity: 0;
-    transition: opacity 140ms ease;
-  }
-  .group:hover .reaction-add-btn,
-  .reaction-add-btn:focus-visible {
-    opacity: 1;
-  }
+/* THE HOVER HEIGHT REVEAL IS GONE (task 01a000c0 stage 4).
+   A `@media (hover: hover) and (pointer: fine)` block used to live here. It
+   collapsed `.reaction-row[data-empty="true"]` to `height: 0` and then, on
+   `.group:hover` / `.group:focus-within`, restored it to `height: auto`
+   with a `0.125rem` top margin. That pair is the whole ticket: putting the
+   cursor on a message grew the message, which pushed its own text and every
+   row under it down the list.
 
-  /* …and give the SPACE back, not just the ink.
-     `opacity: 0` above hides the "+" but keeps its box, so every message
-     nobody had reacted to still reserved ~24px of blank strip under its
-     text — measured as the single largest piece of dead space in the
-     message list, and the one that reads as "a massive gap underneath".
-     A row with real reactions is never empty and never collapses. */
-  .reaction-row[data-empty="true"] {
-    height: 0;
-    margin-top: 0;
-    overflow: hidden;
-  }
+   Measured against this stylesheet before the change, with a stand-in "+"
+   put back into an empty row: 67px at rest, 89px hovered.
 
-  /* Revealed on hover / keyboard focus, so discovery is exactly what it
-     was before. `focus-within` — not `:focus` — because the thing being
-     focused is the button INSIDE this row, and without it a keyboard user
-     would tab to a control sitting in a zero-height box.
+   Two things replace it and neither can reflow:
+     · the add-reaction control now sits in the header action row, revealed
+       by OPACITY on `.group` hover/focus-within (Tailwind classes in
+       chat_message.ex — that is where to look, not here);
+     · a reaction row with nothing in it is no longer rendered at all, so
+       there is no empty box left to collapse or expand. `data-empty` went
+       with it.
 
-     Descendant combinators are safe here: inline thread replies render
-     from their own markup (`.thread-reply` / `.msg-body`) and carry no
-     `.reaction-row`, so there is no nested row for a parent's hover to
-     reach past its own. */
-  .group:hover .reaction-row[data-empty="true"],
-  .group:focus-within .reaction-row[data-empty="true"] {
-    height: auto;
-    margin-top: 0.125rem;
-    overflow: visible;
-  }
-}
+   The `.reaction-add-btn` opacity rules that shared this block went too:
+   stage 3 deleted the element that carried the class. The coarse-pointer
+   block above still sizes `.reaction-add-btn` — left deliberately untouched
+   under this task's instructions; it is inert until something re-introduces
+   that class. */
 
 /* ── Grouped continuation rows ────────────────────────────────────────
    Applied by ScrollToBottom.applyGrouping() to every message whose author
@@ -2011,8 +1993,62 @@ body, .font-fabrikam {
   overflow: hidden;
 }
 
-.message-row--grouped .message-header {
+/* A continuation repeats its author's name and, at this density, its
+   timestamp — so both go. This rule used to be `display: none` on the whole
+   `.message-header`, and that stopped being safe the moment task 01a000c0
+   stage 3 moved the add-reaction control INTO the header: a `display: none`
+   subtree cannot hold focus, so the "+", copy, reply, thread, pin and the
+   overflow menu were all unreachable by keyboard on every continuation row.
+   In a real conversation that is most messages, and it directly contradicts
+   the requirement stage 3 was built to satisfy.
+
+   Verified by pressing Tab rather than by reading this file: before the
+   change, 60 Shift+Tab presses walking back from the compose box reached
+   only the left-gutter reply button on grouped rows and never once landed
+   on "Add reaction" inside one.
+
+   So hide the repeated TEXT and keep the action row. */
+.message-row--grouped .message-header > :not(.message-action-row) {
   display: none;
+}
+
+/* With every in-flow child gone the header is a zero-height flex box sitting
+   exactly where the message body starts — which makes it the right anchor
+   for the action row below, and a better one than the row: the row box also
+   contains the day separator, so anything positioned against it lands in the
+   wrong place on the first message of a day. */
+.message-row--grouped .message-header {
+  position: relative;
+}
+
+/* The action row then has to leave the flow. Left in it, the header would
+   stop being zero-height and every continuation row would grow by the
+   height of a button — reintroducing on every row exactly the reflow this
+   ticket removed from the hover state. Floating a hover affordance over the
+   row is the pattern `.msg-reply-gutter` already uses further up this file,
+   for the same reason.
+
+   It stays `opacity: 0` until hover or focus-within (Tailwind classes, in
+   chat_message.ex), so a continuation row is visually untouched at rest and
+   still measures the 31px it measured before.
+
+   `right: 0` against the header lands it at the same x it occupies on a
+   run-opening row, and `top` pins it to the FIRST line of the body rather
+   than the row's centre. Centring looked right on a one-line row and cut the
+   text of a wrapped one in half lengthwise — the strip sat across the middle
+   of the glyphs with their ascenders poking out above it.
+
+   The backing is not decoration: revealed, these buttons sit ON TOP of the
+   message text, and `--color-base-100` is the pane's own surface in both
+   themes, so it occludes the words underneath instead of tinting them. */
+.message-row--grouped .message-action-row {
+  position: absolute;
+  right: 0;
+  top: -0.125rem;
+  z-index: 10;
+  background-color: var(--color-base-100);
+  border-radius: 0.5rem;
+  padding-inline: 0.25rem;
 }
 
 /* Tighter than the 8px a group-opening row carries: a continuation needs

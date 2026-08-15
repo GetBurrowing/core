@@ -1633,10 +1633,28 @@ defmodule PlatformWeb.ChatLiveTest do
 
       html = render(view)
 
-      # The (+) add-reaction button (the picker entry point below every
-      # message) MUST render even though the message has no reactions.
+      # The add-reaction control MUST render even though the message has no
+      # reactions. That is what task 019e3402 stage 1 was protecting, and it
+      # still holds.
       assert html =~ ~s(aria-label="Add reaction")
-      assert html =~ "reaction-add-btn"
+
+      # THE GUARD MOVED, IT DID NOT VANISH (task 01a000c0 stage 3). This used
+      # to also assert `reaction-add-btn`, the dashed pill that sat in the
+      # reaction row below the message body. That control now lives in the
+      # upper-right action row, so the class is gone by design — asserting it
+      # would pin the OLD location rather than the behaviour.
+      #
+      # What the original guard was actually protecting is unchanged: you can
+      # add a reaction to a message that has none. So assert that, at its new
+      # home, rather than deleting the case.
+      refute html =~ "reaction-add-btn"
+
+      assert html =~ ~s(phx-click="open_reaction_picker")
+
+      # And it is inside the action row, not orphaned somewhere else in the
+      # markup — the row is revealed by opacity so it stays tab-reachable
+      # (see the comment on that div in chat_message.ex).
+      assert html =~ "group-focus-within:opacity-100"
     end
 
     test "reacting to a message persists the reaction and updates the reaction count in the UI",
@@ -2219,6 +2237,152 @@ defmodule PlatformWeb.ChatLiveTest do
 
       # Popover closed — close_picker/1 also resets :longpress_menu_for.
       refute html =~ ~s(id="longpress-menu")
+    end
+  end
+
+  # ── Quick-reaction strip in the touch actions sheet ─────────────────────────
+  #
+  # Task 01a000c0 stage 1. On touch there is no hover, so the always-visible
+  # dashed "+" is currently the only add-reaction path on a phone. Later
+  # stages of this task move that "+" into the desktop hover row, which a
+  # touch device never reveals — these guards pin the replacement path so
+  # that move cannot strand phone users.
+  #
+  # The contract under test is ONE TAP: tapping a strip emoji must persist
+  # the reaction and close the sheet, with no picker in between. A test that
+  # has to open the picker to succeed is testing the wrong thing.
+  #
+  # The strip is 👍 ❤️ 😂 🎉 + — five targets in ONE row, the last of them a
+  # "+" that opens the picker. Harper ruled out the separate "More
+  # reactions…" row these tests originally pinned: stage 3 puts a "+" beside
+  # the same four emoji in the desktop hover row, and a labelled menu row on
+  # touch against a glyph on pointer would be two ways to do one thing.
+
+  describe "message actions sheet — quick-reaction strip" do
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "sheet strip target"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      %{view: view, msg: msg}
+    end
+
+    test "the sheet renders a one-tap strip for every quick emoji, above the action rows",
+         %{view: view, msg: msg} do
+      html = render_click(view, "open_message_actions", %{"id" => msg.id})
+
+      assert html =~ ~s(id="message-actions-quick-reactions")
+      assert html =~ ~s(aria-label="Quick reactions")
+
+      # The strip is driven by @quick_emojis — the SAME assign the desktop
+      # hover action row renders — so the two surfaces cannot drift. If this
+      # list changes, change it in chat_live.ex, never in the template.
+      for emoji <- ["👍", "❤️", "😂", "🎉"] do
+        assert html =~ ~s(phx-value-emoji="#{emoji}")
+        assert html =~ ~s(aria-label="React with #{emoji}")
+      end
+
+      # Every strip button carries the sheet's target message id, so a tap
+      # reacts to the message the sheet was opened for.
+      assert html =~ ~s(phx-value-message-id="#{msg.id}")
+
+      # The strip sits ABOVE "Reply in thread" — ordering is the design, not
+      # an accident: the one-tap path is first, the menu rows follow.
+      strip_at = :binary.match(html, "message-actions-quick-reactions") |> elem(0)
+      reply_at = :binary.match(html, "Reply in thread") |> elem(0)
+      assert strip_at < reply_at
+
+      # The escape hatch is the "+" INSIDE the strip, not a labelled row of
+      # its own — Harper's ruling, and the shape stage 3 gives the desktop
+      # hover row. So it must fall between the strip and "Reply in thread",
+      # and the old bottom row must be gone entirely.
+      more_at = :binary.match(html, ~s(id="message-actions-more-reactions")) |> elem(0)
+      assert strip_at < more_at
+      assert more_at < reply_at
+      refute html =~ "More reactions…"
+    end
+
+    test "every strip button is at least a 44x44 CSS px touch target",
+         %{view: view, msg: msg} do
+      html = render_click(view, "open_message_actions", %{"id" => msg.id})
+
+      buttons =
+        html
+        |> Floki.parse_document!()
+        |> Floki.find("#message-actions-quick-reactions button")
+
+      # Counted in two parts on purpose, rather than asserting `== 5`.
+      # The strip holds two DIFFERENT kinds of target: four emoji that come
+      # from @quick_emojis, and one "+" that opens the picker. A flat `== 5`
+      # would still pass if somebody added the "+" as a fifth emoji in the
+      # assign and deleted the real control — exactly the mistake the
+      # ruling's wording ("the + is a control, not an emoji") invites. So
+      # pin the two facts separately.
+      emoji_buttons = Floki.filter_out(buttons, "#message-actions-more-reactions")
+      assert length(emoji_buttons) == 4
+
+      assert [_] = Floki.find(buttons, "#message-actions-more-reactions")
+      refute html =~ ~s(phx-value-emoji="+")
+
+      # ALL five, "+" included, are 44x44. size-11 is Tailwind's 2.75rem on
+      # both axes, matching the .longpress-pill-btn hit target this strip
+      # borrows from. shrink-0 stops flex from squeezing one below 44px on a
+      # narrow phone — the "+" is last in the row and would be squeezed first.
+      assert length(buttons) == 5
+
+      for button <- buttons do
+        classes = button |> Floki.attribute("class") |> List.first() |> String.split()
+        assert "size-11" in classes
+        assert "shrink-0" in classes
+      end
+    end
+
+    test "one tap on a strip emoji persists the reaction and closes the sheet",
+         %{view: view, msg: msg} do
+      render_click(view, "open_message_actions", %{"id" => msg.id})
+
+      # Click the real element so the chained JS command runs exactly as it
+      # will in the browser: push("react") with the phx-value-* attributes,
+      # then push("close_message_actions"). Firing the bare event by name
+      # would skip the wiring this stage is adding.
+      view
+      |> element("#message-actions-quick-reactions button", "🎉")
+      |> render_click()
+
+      assert [%{emoji: "🎉"}] = Chat.list_reactions(msg.id)
+
+      html = render(view)
+
+      # ONE TAP: the sheet is gone and the picker never opened.
+      refute html =~ ~s(id="message-actions-sheet")
+      refute html =~ ~s(id="reaction-picker")
+    end
+
+    test "the '+' at the end of the strip opens the picker and closes the sheet",
+         %{view: view, msg: msg} do
+      render_click(view, "open_message_actions", %{"id" => msg.id})
+
+      # Scoped THROUGH the strip container: the control has to be reachable
+      # as the last target in the emoji row, not as a row somewhere else in
+      # the sheet. If it is ever lifted back out into its own labelled row,
+      # this selector stops matching and the test fails.
+      view
+      |> element("#message-actions-quick-reactions #message-actions-more-reactions")
+      |> render_click()
+
+      html = render(view)
+
+      assert html =~ ~s(id="reaction-picker")
+      refute html =~ ~s(id="message-actions-sheet")
+
+      # The "+" opens the picker; it does not itself react.
+      assert [] = Chat.list_reactions(msg.id)
     end
   end
 

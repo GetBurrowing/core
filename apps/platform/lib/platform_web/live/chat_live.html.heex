@@ -3651,6 +3651,85 @@
 >
   <:title>Message actions</:title>
   <div class="flex flex-col gap-1">
+    <%!-- Quick-reaction strip (task 01a000c0 stage 1).
+
+         WHY A STRIP AND NOT AN "Add reaction…" MENU ROW: design canvas
+         01a000c4-5bd3-795c-b982-acbb9488e5f8 (ADR-0046) cut the menu row.
+         On touch there is no hover, so the always-visible dashed "+" is
+         today the only add-reaction path on a phone — a single tap. A menu
+         row would turn that one tap into four (double-tap, read the menu,
+         tap the row, wait for the picker, tap an emoji). One tap here has
+         to stay one tap.
+
+         EMOJI SET: @quick_emojis, the same assign the desktop hover action
+         row renders (chat_message.ex ~line 159), so pointer and touch
+         cannot drift. Do not hardcode a literal list here; if the set is
+         wrong, change the assign in chat_live.ex.
+
+         THE "+" IS IN THIS ROW, NOT A ROW OF ITS OWN: Harper's ruling —
+         "the reaction should be next to the other emojis as a + sign; when
+         you hit that you get the other options". Stage 3 moves the desktop
+         "+" into the hover action row, which already renders these same
+         four @quick_emojis, so touch and pointer end up the same shape and
+         the same gesture. A labelled "More reactions…" menu row on one
+         surface and a glyph on the other would be two ways to do one thing.
+         The "+" is an additional CONTROL, not a fifth entry in the assign.
+
+         SIZING: 44x44 hit targets (size-11), the vertical hairline before
+         the "+", and the "+"'s own base-200 fill / scale-on-press are
+         borrowed from the orphaned .longpress-pill, .longpress-pill-divider
+         and .longpress-pill-more treatment in app.css rather than
+         reinvented. --%>
+    <div
+      id="message-actions-quick-reactions"
+      class="flex items-center gap-1 px-1 pb-2"
+      role="group"
+      aria-label="Quick reactions"
+    >
+      <button
+        :for={emoji <- @quick_emojis}
+        type="button"
+        aria-label={"React with #{emoji}"}
+        title={"React with #{emoji}"}
+        phx-click={
+          Phoenix.LiveView.JS.push("react")
+          |> Phoenix.LiveView.JS.push("close_message_actions")
+        }
+        phx-value-message-id={@open_message_actions_id}
+        phx-value-emoji={emoji}
+        class="flex size-11 shrink-0 items-center justify-center rounded-lg text-2xl leading-none text-base-content hover:bg-base-200 active:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+      >
+        {emoji}
+      </button>
+      <%!-- Hairline before the "+", matching .longpress-pill-divider (1px x
+           24px on --color-base-300). It says the "+" is a different KIND of
+           target from the four beside it — one opens the picker, the others
+           react — without pulling it out of the row. --%>
+      <div class="h-6 w-px shrink-0 bg-base-300" aria-hidden="true"></div>
+      <%!-- Escape hatch for anything outside @quick_emojis. Same event chain
+           the deleted "More reactions…" row used: open the existing
+           #reaction-picker, then close this sheet. Filled on --color-base-200
+           with a press-scale rather than a press-fill (borrowed verbatim from
+           .longpress-pill-more / .longpress-pill-btn:active), because at rest
+           it already carries that fill. No --color-primary: an add-reaction
+           control is not an action to advertise. --%>
+      <button
+        type="button"
+        id="message-actions-more-reactions"
+        aria-label="More reactions"
+        title="More reactions"
+        phx-click={
+          Phoenix.LiveView.JS.push("open_reaction_picker",
+            value: %{"message-id" => @open_message_actions_id}
+          )
+          |> Phoenix.LiveView.JS.push("close_message_actions")
+        }
+        class="flex size-11 shrink-0 items-center justify-center rounded-full bg-base-200 text-base-content transition-transform active:scale-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+      >
+        <span class="hero-plus size-5"></span>
+      </button>
+    </div>
+    <div class="border-t border-base-300" aria-hidden="true"></div>
     <button
       type="button"
       phx-click={

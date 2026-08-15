@@ -154,7 +154,48 @@ defmodule PlatformWeb.Components.ChatMessage do
               (edited)
             </button>
 
-            <div :if={!@read_only} class="ml-auto hidden group-hover:flex items-center gap-1">
+            <%!-- Revealed by OPACITY, not `hidden`, and the distinction is the whole
+                 keyboard story (task 01a000c0 stage 3).
+
+                 This row was `hidden`, swapped to `flex` under a group-hover
+                 variant. `hidden` is `display: none`, so nothing inside it was
+                 tab-reachable — not the quick-react emoji, not copy, reply,
+                 thread or pin. Adding a group-focus-within variant does NOT
+                 fix that: a `display: none` element cannot take focus, so
+                 focus can never get inside to trigger focus-within. It is
+                 circular, and it is the tempting one-word fix.
+
+                 (Those two variants are described rather than spelled: files
+                 under an `@source` path are scanned as plain text, so a
+                 utility written literally in a comment is a build candidate
+                 even with no markup using it. Quoting them here was emitting
+                 a real, unused rule into the compiled stylesheet until
+                 task 01a000c0 stage 4 rephrased this.)
+
+                 Opacity keeps every button in the tab order and focusable, so
+                 Tab reaches them and `group-focus-within` then reveals the row
+                 it is already inside. `pointer-events` is gated alongside, or
+                 the invisible row would swallow clicks aimed at the message.
+
+                 No transition on the reveal: the design direction cut fade,
+                 slide and transform because at this row density it reads as
+                 flicker. `transition-colors` on the buttons is hover colour,
+                 not the reveal, and stays.
+
+                 The row costs no vertical space — it is `ml-auto` on the
+                 existing header line — which is why moving the "+" here
+                 removes the reflow instead of relocating it.
+
+                 `message-action-row` is the handle app.css needs to keep this
+                 row alive on a grouped continuation row, where the header
+                 around it is stripped down to nothing (task 01a000c0
+                 stage 4). Without it the whole header was `display: none`
+                 there and every control in here — the "+" included — was
+                 unreachable by keyboard on most messages in a conversation. --%>
+            <div
+              :if={!@read_only}
+              class="message-action-row ml-auto flex items-center gap-1 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
+            >
               <button
                 :for={emoji <- @quick_emojis}
                 phx-click="react"
@@ -164,6 +205,26 @@ defmodule PlatformWeb.Components.ChatMessage do
                 class="rounded px-1.5 py-0.5 text-sm hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 {emoji}
+              </button>
+
+              <%!-- Add-reaction, moved here from the reaction row below the
+                   message body (task 01a000c0 stage 3). It joins four
+                   quick-react buttons that were already here, so this row was
+                   always partly about reacting — the consolidation is putting
+                   the general case next to the shortcuts rather than in a
+                   second corner revealed by the same gesture.
+
+                   Treatment is copied verbatim from its siblings: no new
+                   colour, no text label (it would be the only word in a glyph
+                   row), no divider. Accessible name via aria-label only. --%>
+              <button
+                aria-label="Add reaction"
+                title="Add reaction"
+                phx-click="open_reaction_picker"
+                phx-value-message-id={@msg.id}
+                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+              >
+                <span class="hero-plus size-4"></span>
               </button>
 
               <button
@@ -356,16 +417,30 @@ defmodule PlatformWeb.Components.ChatMessage do
             </a>
           </div>
 
-          <%!-- `data-empty` marks a message nobody has reacted to yet. Such a
-               row holds only the dashed "+" button, which is already
-               `opacity: 0` until hover on pointer devices — but opacity does
-               not free layout, so every unreacted message was reserving ~24px
-               of blank space under its text. `data-empty` lets app.css take
-               that height back and hand it out again on hover. --%>
+          <%!-- Reaction pills, rendered only when there are reactions to show
+               (task 01a000c0 stage 4).
+
+               This used to render unconditionally and carry
+               `data-empty={@msg.reactions == []}`, which app.css read to
+               collapse the empty case to zero height inside
+               `@media (hover: hover) and (pointer: fine)` — and then to hand
+               that height BACK on hover. Growing a message under the cursor
+               and shoving everything below it down is the bug this whole
+               ticket exists to remove.
+
+               Once stage 3 moved the "+" into the header action row, an empty
+               row had no children at all, so the honest reconciliation is to
+               stop rendering it rather than to render an empty box and
+               permanently collapse it. Not rendering is the stronger of the
+               two: there is no attribute left to get backwards, and no rule
+               left that could collapse a row that DOES have reactions. It
+               also keeps an empty `role="toolbar"` out of the accessibility
+               tree on every message nobody has reacted to — which is most of
+               them. --%>
           <div
+            :if={@msg.reactions != []}
             role="toolbar"
             aria-label="Message actions"
-            data-empty={to_string(@msg.reactions == [])}
             class="reaction-row flex flex-wrap gap-1 mt-0.5"
           >
             <%!-- Reaction pills stay visible on read-only snapshots (they
@@ -392,15 +467,15 @@ defmodule PlatformWeb.Components.ChatMessage do
               <span>{r.count}</span>
             </button>
 
-            <button
-              :if={!@read_only}
-              class="reaction-add-btn flex items-center gap-1 rounded-full border border-dashed border-base-300 px-2 py-0.5 text-xs text-base-content/40 hover:bg-base-300 hover:text-base-content"
-              aria-label="Add reaction"
-              phx-click="open_reaction_picker"
-              phx-value-message-id={@msg.id}
-            >
-              <span class="hero-plus size-4"></span>
-            </button>
+            <%!-- The dashed add-reaction "+" that used to live here moved into the
+                 upper-right action row (task 01a000c0 stage 3). It was the
+                 second hover affordance on the same object, in a different
+                 corner, revealed by the same gesture — and being below the
+                 body it cost vertical space, which is what made the row grow
+                 on hover and shift everything under it.
+
+                 So this row is now pills and nothing else, which is why
+                 stage 4 could gate it on there being pills to show. --%>
           </div>
 
           <%!-- Inline thread: indicator + expanded thread --%>

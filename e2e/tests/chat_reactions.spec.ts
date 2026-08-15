@@ -8,16 +8,31 @@
  *   1. Desktop hover quick-react    — action bar 👍 click adds a pill.
  *   2. Desktop "+" picker modal     — opens centered on viewport ≥640px.
  *   3. Mobile bottom-sheet picker   — picker enters from bottom under 640px.
- *   4. Mobile double-tap longpress  — `LongpressMenu` hook fires the overlay.
+ *   4. Mobile double-tap            — `LongpressMenu` hook opens the
+ *                                     per-message actions sheet.
+ *   5. Mobile one-tap react         — the coarse-pointer add-reaction
+ *                                     contract (task 01a000c0 stage 2).
  *
  * Each test creates its own alice/bob slug pair so the seed data does not
  * collide across tests, and uses a unique message body so DOM lookups are
  * unambiguous when many runs land in the same dev DB.
+ *
+ * NOT IN CI. `.github/workflows/ci.yml` runs `mix format --check-formatted`
+ * and `mix test` only — there is no Playwright step. Everything in this file
+ * has to be run by hand against a dev server (see e2e/README.md), which is
+ * how the `#longpress-menu` assertion in case 4 was able to rot for as long
+ * as it did. Treat a green `mix test` as saying nothing about this file.
  */
 
 import { test, expect, devices, Browser, BrowserContext, Page } from "@playwright/test"
 
 const SPACE = "general"
+
+// Mirrors the `@quick_emojis` assign (`chat_live.ex` line 53), which is the
+// single source for BOTH the desktop hover action row and the touch sheet's
+// strip. If this count drifts, the assign changed and the strip changed with
+// it — update here, not in the template.
+const QUICK_EMOJI_COUNT = 4
 
 interface Peer {
   slug: string
@@ -175,11 +190,25 @@ test.describe("chat reactions", () => {
   // follow-up task should isolate per-test DBs (or pin the suite to
   // sequential mobile execution) before re-enabling.
   test.fixme("mobile + picker enters as a bottom sheet (under 640px)", async ({ browser }) => {
-    // Production path being tested: when a message already has reactions,
-    // a `.reaction-add-btn` (dashed `+`) appears at the end of the
-    // reaction-row. Tapping it on a < 640px viewport opens the picker as a
-    // bottom sheet. Avoids depending on the touch double-tap gesture, which
-    // is covered separately in test 4.
+    // ⚠️ THE PREMISE OF THIS TEST NO LONGER EXISTS (task 01a000c0 stage 3).
+    // It was already `fixme` for an unrelated reason (dev-server contention,
+    // see the note above), so it has not been running and did not go red —
+    // but the `.reaction-add-btn` it taps was deleted when the "+" moved into
+    // the desktop hover action row, and that row is not revealed on a coarse
+    // pointer at all. There is no longer a tappable "+" on a phone to open
+    // the picker with, so re-enabling this as written cannot pass.
+    //
+    // Deliberately NOT rewritten to route through the actions sheet: case 5
+    // below already covers reaching a reaction from the sheet in one tap, and
+    // duplicating it here would test the sheet twice while quietly retiring
+    // the record that mobile lost its picker entry point. That loss is the
+    // thing worth keeping visible — reaching the FULL emoji picker on a phone
+    // now costs a hop through `#message-actions-more-reactions`.
+    //
+    // Original intent: when a message already has reactions, a dashed `+`
+    // appeared at the end of the reaction row; tapping it on a < 640px
+    // viewport opened the picker as a bottom sheet. Avoided depending on the
+    // touch double-tap gesture, which is covered separately in test 4.
     const alice = await login(browser, `r3-alice-${Date.now()}`)
     const bob = await login(browser, `r3-bob-${Date.now()}`, true)
     const body = `r3 bottom sheet ${Date.now()}`
@@ -243,7 +272,24 @@ test.describe("chat reactions", () => {
     }
   })
 
-  test("mobile double-tap opens the longpress overlay and reacts", async ({
+  // RETARGETED by task 01a000c0 stage 2. This case used to be called "mobile
+  // double-tap opens the longpress overlay and reacts" and asserted that
+  // `#longpress-menu` became visible after a double-tap. It was ALREADY
+  // FAILING before stage 2 touched it — verified by running the suite
+  // unchanged first: "element(s) not found" on `locator('#longpress-menu')`.
+  //
+  // It cannot pass on current main and has not been able to for some time.
+  // `assets/js/hooks/longpress_menu.js` pushes `open_message_actions`, and
+  // NOTHING in production pushes `open_longpress_menu` — which is the only
+  // writer of the `:longpress_menu_for` assign that `#longpress-menu` renders
+  // behind. The overlay is unreachable, so the guard was asserting on a
+  // surface the app no longer opens. Because this suite is not in CI, nobody
+  // found out.
+  //
+  // The gesture itself is real and still worth guarding, so the case is
+  // pointed at what the gesture actually opens today: the per-message actions
+  // sheet, and the quick-reaction strip task 01a000c0 stage 1 put in it.
+  test("mobile double-tap opens the message actions sheet with a quick-reaction strip", async ({
     browser,
   }) => {
     const alice = await login(browser, `r4-alice-${Date.now()}`)
@@ -263,21 +309,122 @@ test.describe("chat reactions", () => {
 
       await doubleTap(bob.page, bobBubble)
 
-      // Longpress overlay surfaces with the 6 quick emojis.
-      const overlay = bob.page.locator("#longpress-menu")
-      await expect(overlay).toBeVisible({ timeout: 5_000 })
-      const pill = overlay.locator(".longpress-pill")
-      const buttons = pill.locator(".longpress-pill-btn:not(.longpress-pill-more)")
-      await expect(buttons).toHaveCount(6)
+      // The gesture opens the per-message actions sheet — not the orphaned
+      // #longpress-menu overlay.
+      const sheet = bob.page.locator("#message-actions-sheet")
+      await expect(sheet).toBeVisible({ timeout: 5_000 })
 
-      // Tap 🎉.
-      await pill.locator('button[phx-value-emoji="🎉"]').tap()
+      // The strip sits INSIDE the sheet. Scoping through the sheet matters:
+      // a strip that got lifted out into some other surface should fail here,
+      // and a bare `#message-actions-quick-reactions` would not catch that.
+      const strip = sheet.locator("#message-actions-quick-reactions")
+      await expect(strip).toBeVisible()
 
-      // Overlay closes; pill persists on the message.
-      await expect(overlay).toBeHidden({ timeout: 3_000 })
+      // Two separate assertions on purpose. The emoji buttons are driven by
+      // the `@quick_emojis` assign; the "+" is a CONTROL that opens the
+      // picker, not a fifth emoji. A single `toHaveCount(5)` would still pass
+      // if someone deleted the real control and added "+" to the assign.
+      const emojiButtons = strip.locator("button[phx-value-emoji]")
+      await expect(emojiButtons).toHaveCount(QUICK_EMOJI_COUNT)
+      await expect(strip.locator("#message-actions-more-reactions")).toBeVisible()
+
+      // Touch-target floor, on the surface that is touch-only.
+      for (const btn of await emojiButtons.all()) {
+        const box = await btn.boundingBox()
+        expect(box).not.toBeNull()
+        if (box) {
+          expect(box.width).toBeGreaterThanOrEqual(44)
+          expect(box.height).toBeGreaterThanOrEqual(44)
+        }
+      }
+      const moreBox = await strip
+        .locator("#message-actions-more-reactions")
+        .boundingBox()
+      expect(moreBox).not.toBeNull()
+      if (moreBox) {
+        expect(moreBox.width).toBeGreaterThanOrEqual(44)
+        expect(moreBox.height).toBeGreaterThanOrEqual(44)
+      }
+
+      // The orphaned overlay must NOT be what the gesture opened. This is the
+      // assertion the old version of this test had backwards.
+      await expect(bob.page.locator("#longpress-menu")).toHaveCount(0)
+    } finally {
+      await alice.context.close()
+      await bob.context.close()
+    }
+  })
+
+  // THE GATE (task 01a000c0 stage 2). This is the contract stage 3 is allowed
+  // to rely on before it moves the desktop "+" into a `group-hover` row that
+  // a touch device can never reveal.
+  //
+  // On touch there is no hover. When this was written the always-visible
+  // dashed "+" below every message was the ONLY add-reaction path on a phone,
+  // and it was one tap. Stage 1's strip had to replace it at the same cost:
+  // after the sheet opens, ONE deliberate tap puts a reaction on the message.
+  // If this case ever needs to route through `#message-actions-more-reactions`
+  // and the picker to go green, the strip is not a one-tap path and stage 1
+  // built the wrong thing — do not "fix" the test by adding the picker hop.
+  //
+  // Stages 3 and 4 have since REMOVED that "+", so this is no longer a
+  // comparison against a working alternative: the sheet is the ONLY
+  // add-reaction path a phone has, which makes this case load-bearing rather
+  // than a second opinion.
+  //
+  // Stage 2 reported this gate as FAILING (sheet never opens under iPhone 12
+  // emulation) and stages 3 and 4 shipped over it. Stage 4 re-ran it against
+  // HEAD, before making any change, and it PASSES — as does case 4 above.
+  // The likely difference is worker count; see the note on the bottom-sheet
+  // case for how mobile cases starve the dev server in parallel. Emulation
+  // was never the part in doubt, so a real phone is still worth one check.
+  test("mobile one tap on a strip emoji reacts to a peer's message and closes the sheet", async ({
+    browser,
+  }) => {
+    const alice = await login(browser, `r5-alice-${Date.now()}`)
+    const bob = await login(browser, `r5-bob-${Date.now()}`, true)
+    const body = `r5 one-tap react ${Date.now()}`
+
+    try {
+      // A PEER's message, not bob's own — reacting to your own message is not
+      // the path that matters here, and own-message double-tap carries edit
+      // semantics.
+      await compose(alice, body)
+      const bobBubble = await messageBubble(bob, body)
+      await expect(bobBubble).toBeVisible({ timeout: 5_000 })
+      await expect(bobBubble).toHaveAttribute("data-is-own-message", "false")
+
+      await doubleTap(bob.page, bobBubble)
+
+      const sheet = bob.page.locator("#message-actions-sheet")
+      await expect(sheet).toBeVisible({ timeout: 5_000 })
+
+      // ONE tap. No picker hop, no menu row, no confirmation.
+      await sheet
+        .locator('#message-actions-quick-reactions button[phx-value-emoji="🎉"]')
+        .tap()
+
+      // The sheet closes on the same tap — the `react` push is chained to
+      // `close_message_actions`, so the user is returned to the conversation
+      // rather than left dismissing a sheet they are done with.
+      await expect(sheet).toBeHidden({ timeout: 5_000 })
+
+      // The reaction PERSISTS on that message, on the touch user's own view.
       await expect(
         bobBubble.locator('.reaction-pill[data-emoji="🎉"]'),
       ).toBeVisible({ timeout: 5_000 })
+
+      // …and reached the peer, so it is a real persisted reaction and not a
+      // local optimistic render.
+      const aliceBubble = await messageBubble(alice, body)
+      await expect(
+        aliceBubble.locator('.reaction-pill[data-emoji="🎉"]'),
+      ).toBeVisible({ timeout: 5_000 })
+
+      // The picker never appeared. This is the load-bearing half of the
+      // one-tap claim: reaching a reaction must not have cost a trip through
+      // #reaction-picker.
+      await expect(bob.page.locator("#reaction-picker")).toHaveCount(0)
     } finally {
       await alice.context.close()
       await bob.context.close()

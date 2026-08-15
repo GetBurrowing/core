@@ -5,13 +5,21 @@
 // per-message bottom sheet (Reply / Pin / Edit for own + text) which is
 // the unified mobile entry point for message actions. (Task 019e3402.)
 //
-// The desktop hover action bar is `hidden group-hover:flex`, which
-// touch devices never reveal, so on mobile this gesture is the only
-// way to reach the action sheet. The previous own-vs-others split (own
-// → bottom sheet, others → lifted-clone quick-react pill from task
-// 019e3233) is gone: Feature A's always-visible (+) below every message
-// is the canonical add-reaction path now, so the lifted-clone pill is
-// redundant.
+// The desktop hover action bar is revealed by opacity under a group-hover
+// variant (spelled out rather than quoted: `@source` scans these files as
+// plain text, so a utility written literally in a comment is still a build
+// candidate). Touch devices never trigger it, so on mobile this gesture is
+// the only way to reach the action sheet. The previous own-vs-others split
+// (own → bottom sheet, others → lifted-clone quick-react pill from task
+// 019e3233) is gone.
+//
+// NOTE (task 01a000c0): the dashed (+) that used to sit below every message
+// is gone — the add-reaction control moved into the desktop hover action row
+// in stage 3, and that row is never revealed on a coarse pointer. This
+// gesture, and the sheet it opens, are now the ONLY add-reaction path on
+// touch. Covered by e2e/tests/chat_message_density.spec.ts and cases 4-5 of
+// e2e/tests/chat_reactions.spec.ts; if you change the gesture, those are the
+// tests that stand between a phone user and no way to react at all.
 //
 // Why double-tap (not long-press): the PWA's 450ms long-press detector
 // competed with the browser's native text-selection menu (Chrome on
