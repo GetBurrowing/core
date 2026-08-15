@@ -639,7 +639,12 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # bump above: the reviewer dispatch template asked for Saru's critique in
     # prose and named no tool that could obtain one
     # (+design_critique_request → 92)
-    @t6_baseline_tool_count 92
+    # bumped by task 01a00570 stage 2 — the review read-back pair, added to
+    # the existing `review` bundle beside `review_request_create`. Anything
+    # that can file evidence can read the verdict on it; until now an agent
+    # could submit a manual_approval gate and had no way to read back what the
+    # human actually said (+review_request_get, +review_item_list → 94)
+    @t6_baseline_tool_count 94
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

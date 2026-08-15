@@ -263,6 +263,65 @@ defmodule Platform.Tasks.ReviewRequests do
     |> Repo.all()
   end
 
+  @doc """
+  Fetch a review request by ID with items preloaded, as a total result tuple.
+
+  A thin wrapper over `get_review_request/1` for callers that want
+  `{:ok, request} | {:error, :not_found}` rather than `nil` — notably the MCP
+  tool surface, where a bare `nil` has to be re-wrapped at every call site.
+  Guarded by `Platform.UUID.valid?/1` via `get_review_request/1`, so a
+  malformed id returns the error tuple instead of raising.
+  """
+  @spec fetch_request_with_items(binary()) :: {:ok, ReviewRequest.t()} | {:error, :not_found}
+  def fetch_request_with_items(id) do
+    case get_review_request(id) do
+      nil -> {:error, :not_found}
+      request -> {:ok, request}
+    end
+  end
+
+  @doc """
+  List every review item recorded against a task, newest ruling first.
+
+  Keyed on `task_id`, not `validation_id`: the task id is the identifier an
+  agent reading back a human's ruling always has in hand.
+
+  Superseded requests are INCLUDED and LABELLED, never filtered. This function
+  exists because a reader could not find a ruling that had in fact been made;
+  dropping rows to keep the list "clean" recreates exactly that failure. Each
+  row carries its parent's `request_status` and `validation_id` so the caller
+  can tell a live ruling from one whose evidence was replaced.
+
+  Ordered `reviewed_at` desc with NULLs last (undispositioned items sort after
+  ruled ones), then `inserted_at` desc.
+  """
+  @spec list_items_for_task(binary()) :: [map()]
+  def list_items_for_task(task_id) do
+    if Platform.UUID.valid?(task_id) do
+      ReviewItem
+      |> join(:inner, [ri], rr in ReviewRequest, on: ri.review_request_id == rr.id)
+      |> where([_ri, rr], rr.task_id == ^task_id)
+      |> order_by([ri], desc_nulls_last: ri.reviewed_at, desc: ri.inserted_at)
+      |> select([ri, rr], %{
+        id: ri.id,
+        review_request_id: ri.review_request_id,
+        label: ri.label,
+        canvas_id: ri.canvas_id,
+        content: ri.content,
+        status: ri.status,
+        feedback: ri.feedback,
+        reviewed_by: ri.reviewed_by,
+        reviewed_at: ri.reviewed_at,
+        inserted_at: ri.inserted_at,
+        request_status: rr.status,
+        validation_id: rr.validation_id
+      })
+      |> Repo.all()
+    else
+      []
+    end
+  end
+
   # ── Item disposition ────────────────────────────────────────────────────
 
   @doc "Approve a review item and check if the request can be resolved."

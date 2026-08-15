@@ -73,7 +73,14 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # whatever was posted last. So the tool declares the key required and the
   # gate refuses before that fallback is ever reached. Enforcing it breaks no
   # live runtime — the tool ships in this same commit with no callers.
-  @surveyed_required_count 129
+  # 131 as of task 01a00570 stage 2: `review_request_get`'s `review_request_id`
+  # and `review_item_list`'s `task_id`. Both HONEST. Each handler opens with
+  # `require_string/3`, which refuses a missing or non-binary value before any
+  # lookup runs — there is no absence-tolerance below it, and there must not
+  # be: both tools authorize on the id they are given, so a tolerated absence
+  # would be an unscoped read of a surface that carries a human's private
+  # assessment.
+  @surveyed_required_count 131
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

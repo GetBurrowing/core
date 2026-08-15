@@ -933,6 +933,42 @@ defmodule Platform.Federation.ToolSurface do
           "When you reach a manual_approval validation gate and need to submit evidence (screenshots, canvases, text) for human review"
       },
       %{
+        name: "review_request_get",
+        description:
+          "Read back one review request plus every item on it — including each item's status, the human's feedback text, who reviewed it and when. PRECEDENCE RULE: the review_items row is authoritative for WHAT A HUMAN SAID; the validations row is GATE STATE and can legitimately read `pending` again after a gate is reopened for another attempt. If you see item=needs_revision and validation=pending, the item is the ruling and the validation is the current gate — act on the item's feedback, do not read the pending validation as 'no verdict yet'.",
+        parameters: %{
+          review_request_id: %{
+            type: "string",
+            required: true,
+            description: "UUID of the review request to read."
+          }
+        },
+        returns:
+          "The review request (id, validation_id, task_id, status, submitted_by, timestamps) with an `items` list; each item carries id, label, status, feedback, reviewed_by, reviewed_at, canvas_id, content.",
+        limitations:
+          "Reads only. Scoped to the org that owns the request's task — a tenant-pinned agent reading a sibling org's request is denied before any label or feedback is serialized. Unknown or malformed ids return a non-recoverable not-found envelope.",
+        when_to_use:
+          "After a manual_approval gate comes back and you need the human's actual words — the rejection feedback that tells you what to change — rather than just the gate's pass/fail bit."
+      },
+      %{
+        name: "review_item_list",
+        description:
+          "List every review item across every review request on a task, newest ruling first. Superseded requests are INCLUDED and labelled via `request_status`, never filtered — a ruling that was made must always be findable. PRECEDENCE RULE: the review_items row is authoritative for WHAT A HUMAN SAID; the validations row is GATE STATE and can legitimately read `pending` again after a gate is reopened for another attempt. If you see item=needs_revision and validation=pending, the item is the ruling and the validation is the current gate.",
+        parameters: %{
+          task_id: %{
+            type: "string",
+            required: true,
+            description: "UUID of the task whose review items you want."
+          }
+        },
+        returns:
+          "A map with task_id, count, and `items` — each item carries id, label, status, feedback, reviewed_by, reviewed_at, canvas_id, content, plus review_request_id, request_status and validation_id so you can tell a live ruling from one whose evidence was replaced.",
+        limitations:
+          "Reads only. Scoped to the org that owns the task — a tenant-pinned agent reading a sibling org's task is denied before any label or feedback is serialized. A malformed or unknown task_id returns an empty list, not an error.",
+        when_to_use:
+          "When you are picking up a task that has already been through review and need every ruling a human has made on it, across attempts."
+      },
+      %{
         name: "design_critique_request",
         description:
           "Obtain the Designer role's design critique (`design.critique`, held by Saru) of one evidence canvas, synchronously. Returns the verdict to you so you can inline it into your own review request; when `review_request_id` is supplied the verdict is ALSO appended to that pending request as an item the human reads.",
@@ -2978,6 +3014,31 @@ defmodule Platform.Federation.ToolSurface do
            suggestion:
              "Verify the validation_id belongs to an existing manual_approval validation"
          }}
+    end
+  end
+
+  # Read-back tools for review verdicts. Authorization runs BEFORE any
+  # serialization: a review item can carry a human's private assessment, so a
+  # denied caller must never see a label, a feedback string, or content.
+  def execute("review_request_get", args, context) do
+    with {:ok, request_id} <- require_string(args, "review_request_id", "review_request_get"),
+         {:ok, request} <- fetch_review_request_for_read(request_id),
+         :ok <- authorize_review_access(context, request.task_id) do
+      {:ok, serialize_review_request(request)}
+    end
+  end
+
+  def execute("review_item_list", args, context) do
+    with {:ok, task_id} <- require_string(args, "task_id", "review_item_list"),
+         :ok <- authorize_review_access(context, task_id) do
+      items = Platform.Tasks.ReviewRequests.list_items_for_task(task_id)
+
+      {:ok,
+       %{
+         task_id: task_id,
+         count: length(items),
+         items: Enum.map(items, &serialize_review_item_row/1)
+       }}
     end
   end
 
@@ -8301,6 +8362,80 @@ defmodule Platform.Federation.ToolSurface do
     Map.put(envelope, :error, "unauthorized: file is in an org you are not a member of")
   end
 
+  defp fetch_review_request_for_read(request_id) do
+    case Platform.Tasks.ReviewRequests.fetch_request_with_items(request_id) do
+      {:ok, request} ->
+        {:ok, request}
+
+      {:error, :not_found} ->
+        {:error,
+         %{
+           error: "review_request_get: review request not found (#{request_id})",
+           code: :not_found,
+           recoverable: false,
+           suggestion:
+             "Confirm the review_request_id — list the task's items via review_item_list."
+         }}
+    end
+  end
+
+  # Mirrors `authorize_file_access/2` exactly, re-keyed for review reads: the
+  # task resolves to a project, the project's `org_id` is the tenancy pin, and
+  # `authorize_org_filter/2` is the single rule. Same four conventions:
+  # nil agent permits (bare-call test paths), nil project org_id permits
+  # (pre-ADR-0042 row), root-pinned agent permits, tenant-pinned agent against
+  # a sibling org is refused non-recoverably.
+  #
+  # A task or project we cannot resolve is NOT a permit: with no org to check
+  # against there is nothing to authorize, so we refuse.
+  defp authorize_review_access(context, task_id) do
+    agent = load_agent(context)
+
+    if is_nil(agent) do
+      :ok
+    else
+      case review_project_org_id(task_id) do
+        {:ok, nil} ->
+          # Project with no org_id is a pre-ADR-0042 row; root-equivalent.
+          :ok
+
+        {:ok, org_id} ->
+          case authorize_org_filter(agent, org_id) do
+            :ok -> :ok
+            {:error, envelope} -> {:error, review_unauthorized_envelope(envelope)}
+          end
+
+        :error ->
+          {:error,
+           %{
+             error: "unauthorized: review target could not be resolved to an org",
+             recoverable: false,
+             suggestion: "Confirm the task_id refers to an existing task."
+           }}
+      end
+    end
+  end
+
+  defp review_project_org_id(task_id) do
+    # `get_by_uuid/2` rather than a bare Repo.get/2: the task_id is a raw tool
+    # argument, and the helper's Platform.UUID.valid? guard is what keeps a
+    # 16-byte binary from reaching Postgres.
+    with task when not is_nil(task) <- get_by_uuid(Task, task_id),
+         project when not is_nil(project) <- Platform.Tasks.get_project(task.project_id) do
+      {:ok, project.org_id}
+    else
+      _ -> :error
+    end
+  end
+
+  defp review_unauthorized_envelope(envelope) do
+    # Re-key the message so callers can tell review_request_get /
+    # review_item_list produced the rejection (vs memory_search or file_list).
+    # The shape is identical. Deliberately carries no item label, feedback or
+    # content — the denial must not leak the thing it is protecting.
+    Map.put(envelope, :error, "unauthorized: review is in an org you are not a member of")
+  end
+
   defp normalize_limit(nil, default, _max), do: default
 
   defp normalize_limit(value, _default, max) when is_integer(value) and value > 0 do
@@ -9883,6 +10018,21 @@ defmodule Platform.Federation.ToolSurface do
       reviewed_by: item.reviewed_by,
       reviewed_at: format_datetime(item.reviewed_at)
     }
+  end
+
+  # `list_items_for_task/1` returns plain maps (a joined select), not
+  # ReviewItem structs. `serialize_review_item/1` is reused verbatim — it only
+  # dot-accesses atom keys, which the select map carries — and the parent-request
+  # columns the join adds are merged on top so a reader can tell a live ruling
+  # from one whose evidence was superseded.
+  defp serialize_review_item_row(row) do
+    row
+    |> serialize_review_item()
+    |> Map.merge(%{
+      review_request_id: row.review_request_id,
+      request_status: row.request_status,
+      validation_id: row.validation_id
+    })
   end
 
   # MCP serializer for a `Platform.MemoryFeedback.Entry` row. The

@@ -83,7 +83,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # `design_critique_request` to the `review` bundle — the same shape of
       # defect one layer down: the reviewer dispatch template asked for a
       # design review in prose and named no tool that could obtain one.
-      assert length(tools) == 92
+      # 94 as of task 01a00570 stage 2, which added `review_request_get` and
+      # `review_item_list` to the same `review` bundle — an agent could file
+      # evidence for a human verdict and then had no way to read the verdict
+      # back, so a rejection's feedback text was unreachable to the agent
+      # expected to act on it.
+      assert length(tools) == 94
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
