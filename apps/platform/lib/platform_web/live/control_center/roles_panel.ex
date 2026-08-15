@@ -21,6 +21,8 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
   """
   use Phoenix.Component
 
+  import PlatformWeb.AvatarComponents, only: [agent_avatar: 1]
+
   alias PlatformWeb.ControlCenter.AgentData
 
   attr :roles, :list, required: true
@@ -220,9 +222,17 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
   defp assignee_cell(assigns) do
     ~H"""
     <div class="flex items-center gap-2">
-      <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold uppercase text-primary">
-        {String.slice(@agent.name || "?", 0, 2)}
-      </span>
+      <%!-- Who holds this role. This drew `String.slice(name, 0, 2)` — TWO
+           letters, the human-shaped treatment that splitting `agent_avatar/1`
+           out of `human_avatar/1` exists to stop. `@agent` is a whole
+           `%Agent{}` from `AgentData.list_selectable_agents/0`, so the avatar
+           was one field read away. --%>
+      <.agent_avatar
+        name={@agent.name || "Agent"}
+        avatar_url={@agent.avatar_url}
+        size="md"
+        class="shrink-0"
+      />
       <div class="flex flex-col">
         <span class="text-sm font-semibold text-base-content">{@agent.name}</span>
         <span class={kind_pill_class(AgentData.agent_kind_pill(@agent))}>

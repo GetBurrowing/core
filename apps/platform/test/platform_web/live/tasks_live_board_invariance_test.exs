@@ -698,7 +698,24 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # One new assign pair and one new event, all three irreducible for the
   # same reason as the merge cluster above: a function component holds no
   # LiveView state and receives no events.
-  @shell_line_count 6_008
+  #
+  # RE-PINNED (-1) by task 01a00122-553c stage 5, "render the agent face
+  # everywhere an agent appears". This is the first re-pin that SHRINKS the
+  # shell, because the change deleted a helper rather than adding a feature:
+  # the board's agent assignee chip was a hand-rolled circle that could never
+  # show an image, and both of its call sites now render the shared
+  # `AvatarComponents.agent_avatar/1`. ARITHMETIC, -1 = +6 - 7:
+  #   * `assignee_identity/3`'s agent clause gains `avatar_url: agent &&
+  #     agent.avatar_url` (+1) and a 5-line comment recording that
+  #     `agents_by_id` held whole `%Agent{}` rows all along and the avatar was
+  #     simply never read, and that `:seed` survives only for shape parity
+  #     with the user clause: +6.
+  #   * REMOVED: `agent_initials/1`, both clauses and the blank between them
+  #     (-11), replaced by a 4-line comment saying where the initial is
+  #     derived now: -7.
+  # No new assign, no new branch, no new event — the shell lost a private
+  # helper and gained one field on a map it already built.
+  @shell_line_count 6_007
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

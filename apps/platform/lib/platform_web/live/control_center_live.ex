@@ -14,6 +14,7 @@ defmodule PlatformWeb.ControlCenterLive do
   alias Platform.Federation.RuntimePresence
   alias Platform.Repo
 
+  alias PlatformWeb.ControlCenter.AgentAvatarUpload
   alias PlatformWeb.ControlCenter.AgentCard
   alias PlatformWeb.ControlCenter.AgentCrudEvents
   alias PlatformWeb.ControlCenter.AgentData
@@ -86,7 +87,17 @@ defmodule PlatformWeb.ControlCenterLive do
      # Roles panel assigns (M7 stage 5)
      |> assign(:active_tab, :roles)
      |> assign(:show_role_advanced, false)
-     |> assign_roles_panel()}
+     |> assign_roles_panel()
+     # Avatar upload (task 01a00122 stage 2). `max_entries: 1` also buys the
+     # replace semantics for free: `UploadConfig.maybe_replace_sole_entry/2`
+     # cancels the previous entry when a second file is picked, so the form
+     # never holds two candidate avatars. See `AgentAvatarUpload` for why
+     # `accept` is not the type control.
+     |> allow_upload(AgentAvatarUpload.upload_name(),
+       accept: AgentAvatarUpload.accept(),
+       max_entries: 1,
+       max_file_size: AgentAvatarUpload.max_file_size()
+     )}
   end
 
   @impl true
@@ -306,37 +317,80 @@ defmodule PlatformWeb.ControlCenterLive do
 
   # ── Config save ───────────────────────────────────────────────────
 
+  # `phx-change` on the config form is not decoration — `live_file_input`
+  # only reports picked files through the enclosing form's change event, so
+  # without this the avatar upload never registers an entry. Rebuilding the
+  # form from the submitted params is what keeps the OTHER inputs from being
+  # reverted to their assigned values on that re-render.
+  def handle_event(
+        "validate_config",
+        %{"config" => params},
+        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+      ) do
+    {:noreply, assign(socket, :config_form, AgentData.build_config_form(agent, params))}
+  end
+
+  def handle_event("validate_config", _params, socket), do: {:noreply, socket}
+
   def handle_event(
         "save_config",
         %{"config" => params},
         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
       ) do
-    attrs = AgentData.config_attrs_from_params(agent, params)
+    case AgentAvatarUpload.consume(socket, agent) do
+      {:ok, avatar_attrs} -> save_config_with_avatar(socket, agent, params, avatar_attrs)
+      {:error, message} -> {:noreply, reject_config_save(socket, agent, params, message)}
+    end
+  end
 
-    case agent |> Agent.changeset(attrs) |> Repo.update() do
+  def handle_event("save_config", _params, socket), do: {:noreply, socket}
+
+  # Clears both columns and takes the blob with them, returning the agent to
+  # the color-plus-initials fallback. Without this the fallback is
+  # unreachable once an avatar is set, because an upload-only control has no
+  # way to express "none".
+  def handle_event(
+        "remove_avatar",
+        _params,
+        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+      ) do
+    previous_key = agent.avatar_storage_key
+
+    case agent
+         |> Agent.changeset(%{avatar_url: nil, avatar_storage_key: nil})
+         |> Repo.update() do
       {:ok, updated_agent} ->
-        refresh_runtime_if_running(updated_agent)
+        # Only after the row no longer points at it. The reverse order can
+        # delete the bytes and then fail to commit, leaving a live row
+        # pointing at nothing.
+        AgentAvatarUpload.delete_blob(previous_key)
 
         {:noreply,
          socket
-         |> put_flash(:info, "Updated #{updated_agent.name}.")
+         |> put_flash(:info, "Removed the avatar for #{updated_agent.name}.")
          |> assign(:agents, AgentData.list_agents())
          |> assign(:selected_agent, updated_agent)
          |> assign_agent_panel(updated_agent,
            selected_file_key: socket.assigns.selected_file_key,
            memory_filters: socket.assigns.memory_filters,
-           config_params: params
+           # Remove is its own button, not a save. Carrying the current
+           # params forward keeps any unsaved edit to name/model/etc. from
+           # being silently reverted by the panel rebuild.
+           config_params: socket.assigns.config_form.params
          )}
 
       {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply,
-         socket
-         |> assign(:config_form, AgentData.build_config_form(agent, params))
-         |> put_flash(:error, changeset_error_summary(changeset))}
+        {:noreply, put_flash(socket, :error, changeset_error_summary(changeset))}
     end
   end
 
-  def handle_event("save_config", _params, socket), do: {:noreply, socket}
+  def handle_event("remove_avatar", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cancel_avatar_upload", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, AgentAvatarUpload.upload_name(), ref)}
+  end
+
+  def handle_event("cancel_avatar_upload", _params, socket), do: {:noreply, socket}
 
   # ── Agent CRUD events (delegated) ────────────────────────────────
 
@@ -639,6 +693,7 @@ defmodule PlatformWeb.ControlCenterLive do
               <AgentDetail.federation_panels
                 agent={@selected_agent}
                 config_form={@config_form}
+                uploads={@uploads}
                 regenerated_token={@regenerated_token}
                 federation_online?={@federation_online?}
                 federation_spaces={@federation_spaces}
@@ -656,6 +711,7 @@ defmodule PlatformWeb.ControlCenterLive do
                 <AgentDetail.config_form
                   agent={@selected_agent}
                   config_form={@config_form}
+                  uploads={@uploads}
                   model_chain_result={@model_chain_result}
                   selected_agent_directory_entry={@selected_agent_directory_entry}
                 />
@@ -872,6 +928,54 @@ defmodule PlatformWeb.ControlCenterLive do
       _ -> nil
     end
   end
+
+  defp save_config_with_avatar(socket, %Agent{} = agent, params, avatar_attrs) do
+    previous_key = agent.avatar_storage_key
+
+    attrs =
+      agent
+      |> AgentData.config_attrs_from_params(params)
+      |> Map.merge(avatar_attrs)
+
+    case agent |> Agent.changeset(attrs) |> Repo.update() do
+      {:ok, updated_agent} ->
+        # The row now points at the new key, so the old blob is
+        # unreachable — delete it rather than leak it. This is the whole
+        # reason stage 1 added `avatar_storage_key`.
+        maybe_delete_superseded_avatar(previous_key, avatar_attrs)
+        refresh_runtime_if_running(updated_agent)
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Updated #{updated_agent.name}.")
+         |> assign(:agents, AgentData.list_agents())
+         |> assign(:selected_agent, updated_agent)
+         |> assign_agent_panel(updated_agent,
+           selected_file_key: socket.assigns.selected_file_key,
+           memory_filters: socket.assigns.memory_filters,
+           config_params: params
+         )}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        # Nothing committed, so the blob we just wrote is the orphan now.
+        AgentAvatarUpload.delete_blob(avatar_attrs[:avatar_storage_key])
+
+        {:noreply, reject_config_save(socket, agent, params, changeset_error_summary(changeset))}
+    end
+  end
+
+  defp reject_config_save(socket, %Agent{} = agent, params, message) do
+    socket
+    |> assign(:config_form, AgentData.build_config_form(agent, params))
+    |> put_flash(:error, message)
+  end
+
+  defp maybe_delete_superseded_avatar(previous_key, %{avatar_storage_key: new_key})
+       when previous_key != new_key do
+    AgentAvatarUpload.delete_blob(previous_key)
+  end
+
+  defp maybe_delete_superseded_avatar(_previous_key, _avatar_attrs), do: :ok
 
   defp refresh_runtime_if_running(%Agent{} = agent) do
     case AgentServer.whereis(agent.id) do

@@ -1293,6 +1293,52 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  Build a map of `participant.id → avatar_url` for agent participants in a space.
+
+  Resolves from the `agents` table, NOT from `chat_participants.avatar_url`.
+  That column is never written for agent rows (`do_add_agent_participant/3`
+  inserts no avatar), and it deliberately stays that way: an avatar is one
+  mutable fact about the agent, so copying it onto every participant row in
+  every space would mean rewriting all of them whenever the agent's avatar
+  changes. This mirrors `agent_color_map_for_participants/1`, which resolves
+  `agent.color` the same way and for the same reason.
+
+  Agents with no avatar (or a blank one) are ABSENT from the map rather than
+  present with a nil/empty value, so a plain `Map.get/2` yields `nil` and the
+  seam never hands the render layer an empty string.
+
+  The stored URL carries a `?v=` cache token hashed from the storage key
+  (the serving route does not change when the bytes do). It is passed
+  through verbatim — never parsed or stripped.
+  """
+  @spec agent_avatar_map_for_participants([Participant.t()]) :: %{binary() => binary()}
+  def agent_avatar_map_for_participants(participants) do
+    # Build map: agent_id → participant.id (for agent participants only)
+    agent_participant_ids =
+      participants
+      |> Enum.filter(&(&1.participant_type == "agent"))
+      |> Map.new(fn p -> {p.participant_id, p.id} end)
+
+    if map_size(agent_participant_ids) == 0 do
+      %{}
+    else
+      agent_ids = Map.keys(agent_participant_ids)
+
+      from(a in Agent,
+        where: a.id in ^agent_ids and not is_nil(a.avatar_url),
+        select: {a.id, a.avatar_url}
+      )
+      |> Repo.all()
+      |> Enum.reduce(%{}, fn {agent_id, avatar_url}, acc ->
+        case String.trim(avatar_url) do
+          "" -> acc
+          url -> Map.put(acc, Map.fetch!(agent_participant_ids, agent_id), url)
+        end
+      end)
+    end
+  end
+
+  @doc """
   Hard-delete a participant row (ADR 0038). Messages/pins/canvases
   authored by this participant survive via the author_* snapshot columns.
 
@@ -4217,7 +4263,12 @@ defmodule Platform.Chat do
   items (not soft-deleted), sorted chronologically newest first.
 
   Each result is a map: `%{kind: :message | :canvas, item: t, agent_name: name,
-  space_id: id, inserted_at: dt}`.
+  agent_avatar_url: url | nil, space_id: id, inserted_at: dt}`.
+
+  `agent_avatar_url` is resolved from the `agents` table at read time, not from
+  the author snapshot: the snapshot columns freeze the acting agent's NAME so a
+  historical row keeps saying who acted, but an avatar is a mutable fact about
+  the agent and the feed should show the face the agent has now.
 
   Options:
     * `:since` (`DateTime`) — only items with `inserted_at >= since`. If omitted,
@@ -4464,13 +4515,19 @@ defmodule Platform.Chat do
 
     base = if since, do: where(base, [m], m.inserted_at >= ^since), else: base
 
-    base
-    |> Repo.all()
-    |> Enum.map(fn m ->
+    rows = Repo.all(base)
+
+    avatars =
+      rows
+      |> Enum.map(& &1.author_agent_id)
+      |> agent_avatar_map_for_agent_ids()
+
+    Enum.map(rows, fn m ->
       %{
         kind: :message,
         item: m,
         agent_name: m.author_display_name || "Agent",
+        agent_avatar_url: Map.get(avatars, m.author_agent_id),
         space_id: m.space_id,
         inserted_at: m.inserted_at,
         state: if(is_nil(m.deleted_at), do: :active, else: :undone)
@@ -4491,18 +4548,62 @@ defmodule Platform.Chat do
 
     base = if since, do: where(base, [c], c.inserted_at >= ^since), else: base
 
-    base
-    |> Repo.all()
-    |> Enum.map(fn c ->
+    # A canvas snapshots its creator's NAME but carries no agent id (see the
+    # Canvas schema) — only `created_by`, the participant row id. Messages have
+    # `author_agent_id` directly. So the agent behind a canvas is reached one
+    # hop further out, through the participant row, and a hard-deleted
+    # participant (ADR 0038) simply yields no avatar rather than breaking the row.
+    rows =
+      base
+      |> join(:left, [c], p in Participant, on: p.id == c.created_by)
+      |> select([c, p], {c, p.participant_id})
+      |> Repo.all()
+
+    avatars =
+      rows
+      |> Enum.map(fn {_c, agent_id} -> agent_id end)
+      |> agent_avatar_map_for_agent_ids()
+
+    Enum.map(rows, fn {c, agent_id} ->
       %{
         kind: :canvas,
         item: c,
         agent_name: c.created_by_display_name || "Agent",
+        agent_avatar_url: Map.get(avatars, agent_id),
         space_id: c.space_id,
         inserted_at: c.inserted_at,
         state: if(is_nil(c.deleted_at), do: :active, else: :undone)
       }
     end)
+  end
+
+  # `agent.id → avatar_url` for a list of (possibly nil, possibly repeated)
+  # agent ids. Mirrors `agent_avatar_map_for_participants/1`: agents with no
+  # avatar — or a blank one — are ABSENT from the map rather than present with
+  # an empty value, so a plain `Map.get/2` yields nil and the render layer is
+  # never handed "". The `?v=` cache token on the stored URL is passed through
+  # verbatim.
+  defp agent_avatar_map_for_agent_ids(agent_ids) do
+    agent_ids =
+      agent_ids
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    if agent_ids == [] do
+      %{}
+    else
+      from(a in Agent,
+        where: a.id in ^agent_ids and not is_nil(a.avatar_url),
+        select: {a.id, a.avatar_url}
+      )
+      |> Repo.all()
+      |> Enum.reduce(%{}, fn {agent_id, avatar_url}, acc ->
+        case String.trim(avatar_url) do
+          "" -> acc
+          url -> Map.put(acc, agent_id, url)
+        end
+      end)
+    end
   end
 
   @doc """

@@ -799,9 +799,15 @@
                               class="size-4 shrink-0"
                             />
                           <% else %>
-                            <span class="flex size-4 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[9px] font-bold text-accent">
-                              {agent_initials(assignee.name)}
-                            </span>
+                            <%!-- Mobile twin of the desktop assignee chip. Same
+                                 `size-4` wrapper the human branch beside it
+                                 uses. --%>
+                            <.agent_avatar
+                              name={assignee.name}
+                              avatar_url={assignee.avatar_url}
+                              size="xs"
+                              class="size-4 shrink-0"
+                            />
                           <% end %>
                           <span class="truncate">{assignee.name}</span>
                           <span aria-hidden="true">·</span>
@@ -1278,13 +1284,19 @@
                                 title={assignee.name}
                               />
                             <% else %>
-                              <span
-                                class="flex size-5 items-center justify-center rounded-full bg-accent/15 text-[10px] font-bold text-accent ring-1 ring-accent/20"
+                              <%!-- An agent assigned to a task is an agent
+                                   appearing, so it gets the same face it has in
+                                   chat and in meetings. The accent ring rides on
+                                   the component's outer wrapper, which is
+                                   `rounded-full`, so it survives an image
+                                   avatar exactly as `.msg-agent-avatar` does. --%>
+                              <.agent_avatar
+                                name={assignee.name}
+                                avatar_url={assignee.avatar_url}
+                                size="xs"
+                                class="shrink-0 ring-1 ring-accent/20"
                                 title={assignee.name}
-                                data-avatar-kind="agent"
-                              >
-                                {agent_initials(assignee.name)}
-                              </span>
+                              />
                             <% end %>
                           <% end %>
                           <%!-- Sponsor chip (ADR 0042 stage 1). Absent sponsor

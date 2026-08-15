@@ -40,7 +40,7 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
 
   use Phoenix.Component
 
-  import PlatformWeb.AvatarComponents, only: [human_avatar: 1]
+  import PlatformWeb.AvatarComponents, only: [agent_avatar: 1]
 
   @activity_states [:idle, :typing, :computing, :listening]
 
@@ -105,10 +105,12 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
     >
       <%!-- Avatar centered on the accent background. --%>
       <div class="absolute inset-0 flex items-center justify-center">
-        <.human_avatar
+        <%!-- `agent_avatar/1`, not `human_avatar/1` — a tile is an agent by
+             definition, and the human component would draw two initials over
+             the seeded human palette under `data-avatar-kind="human"`. --%>
+        <.agent_avatar
           name={@name}
           avatar_url={@avatar_url}
-          seed={@identity}
           size="lg"
           class="agent-tile-avatar"
         />

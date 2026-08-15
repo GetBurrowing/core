@@ -157,6 +157,32 @@ defmodule PlatformWeb.Router do
     get("/chat/attachments/:id", ChatAttachmentController, :show)
   end
 
+  # Agent avatar reads (task 01a00122 stage 1). A plain authenticated session
+  # is the whole gate — see `AgentAvatarController`'s moduledoc for why the
+  # two existing byte routes' gates (space membership / project org
+  # membership) would blank the avatar for legitimate viewers.
+  #
+  # `:accepts ["html", "json"]` matches `:attachment_auth` rather than naming
+  # an image type: browsers send `Accept: image/avif,…,*/*` for an <img>, and
+  # this exact list already serves every inline chat image today.
+  pipeline :agent_avatar do
+    plug(:accepts, ["html", "json"])
+    plug(:fetch_session)
+    plug(PlatformWeb.Plugs.RequireAuth)
+  end
+
+  # HOST-AGNOSTIC (deliberate — same reasoning as the attachment scope
+  # above). Avatar URLs are minted RELATIVE and rendered on the chat host,
+  # the meet host and the default host alike. Under the fenced default scope
+  # `:require_app_surface` would 404 this on `chat.`/`meet.` once
+  # `:host_surface_enforcement` is on, breaking every agent avatar on two of
+  # the three surfaces while the control center kept looking fine.
+  scope "/", PlatformWeb do
+    pipe_through(:agent_avatar)
+
+    get("/agents/:id/avatar", AgentAvatarController, :show)
+  end
+
   # Presigned upload POST — HMAC token in the URL is the only auth. No
   # session / no bearer. Body parsers are bypassed via the endpoint's
   # body-reader skip-list so the controller can stream raw bytes.

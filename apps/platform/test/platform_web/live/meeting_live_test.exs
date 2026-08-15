@@ -6969,6 +6969,102 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert {"Helper Bot", nil} = MeetingLive.resolve_identity(p)
     end
 
+    # ── Agent avatars (task 01a00122 stage 4) ──────────────────────────────
+    #
+    # This clause used to return a LITERAL `{name, nil}`: `meetings.participants`
+    # has no `avatar_url` column, so the rail's agent section
+    # (participant_rail.ex:157) passed a structurally-guaranteed nil and every
+    # agent rendered as an initial. The avatar now comes off the preloaded
+    # `%Agent{}` — `Meetings.active_participants/1` preloads `[:user, :agent]`
+    # — WITHOUT adding a column to the participant row, which would denormalise
+    # a mutable field onto every presence row in every meeting.
+    test "resolve_identity/1 returns the AGENT'S avatar_url where it once hardcoded nil" do
+      p = %MeetingParticipant{
+        agent: %Platform.Agents.Agent{
+          name: "Helper Bot",
+          avatar_url: "/agents/de305d54/avatar?v=GKHEI"
+        },
+        display_name: nil
+      }
+
+      assert {"Helper Bot", avatar_url} = MeetingLive.resolve_identity(p)
+
+      assert avatar_url == "/agents/de305d54/avatar?v=GKHEI",
+             "agent avatar must resolve from the preloaded agent row, got: " <>
+               inspect(avatar_url)
+    end
+
+    test "resolve_identity/1 passes the ?v= cache token through verbatim" do
+      # The serving route is stable across re-uploads, so the query string IS
+      # the cache-buster. Stripping or re-encoding it pins viewers to a stale
+      # image.
+      url = "/agents/abc123/avatar?v=aB3-_x9"
+
+      p = %MeetingParticipant{
+        agent: %Platform.Agents.Agent{name: "Cache Bot", avatar_url: url},
+        display_name: nil
+      }
+
+      assert {"Cache Bot", ^url} = MeetingLive.resolve_identity(p)
+    end
+
+    test "resolve_identity/1 gives an agent with no avatar nil, not an empty string" do
+      p_nil = %MeetingParticipant{
+        agent: %Platform.Agents.Agent{name: "Bare Bot", avatar_url: nil},
+        display_name: nil
+      }
+
+      assert {"Bare Bot", nil} = MeetingLive.resolve_identity(p_nil)
+
+      p_blank = %MeetingParticipant{
+        agent: %Platform.Agents.Agent{name: "Blank Bot", avatar_url: "   "},
+        display_name: nil
+      }
+
+      assert {"Blank Bot", avatar_url} = MeetingLive.resolve_identity(p_blank)
+
+      assert avatar_url == nil,
+             "a blank column must normalise to nil rather than reach the render " <>
+               "layer as junk, got: " <> inspect(avatar_url)
+    end
+
+    test "resolve_identity/1 still prefers the agent name over the stale join name" do
+      # The avatar change must not disturb the name-precedence contract.
+      p = %MeetingParticipant{
+        agent: %Platform.Agents.Agent{name: "Real Name", avatar_url: "/agents/x/avatar?v=1"},
+        display_name: "stale join name"
+      }
+
+      assert {"Real Name", "/agents/x/avatar?v=1"} = MeetingLive.resolve_identity(p)
+    end
+
+    test "meeting_participant_view_model exposes the agent avatar on the rail view-model" do
+      # The rail reads `p.avatar_url` off this map (participant_rail.ex:157),
+      # so the seam has to survive the wrapping, not just resolve_identity/1.
+      agent = %Platform.Agents.Agent{
+        id: "11111111-1111-1111-1111-111111111111",
+        name: "Rail Bot",
+        avatar_url: "/agents/11111111/avatar?v=RAIL"
+      }
+
+      p = %MeetingParticipant{
+        id: "22222222-2222-2222-2222-222222222222",
+        agent_id: agent.id,
+        agent: agent,
+        user_id: nil,
+        user: nil,
+        display_name: nil,
+        metadata: %{"identity" => "agent:" <> agent.id}
+      }
+
+      vm = MeetingLive.meeting_participant_view_model(p)
+
+      assert vm.participant_type == "agent"
+      assert vm.participant_id == agent.id
+      assert vm.display_name == "Rail Bot"
+      assert vm.avatar_url == "/agents/11111111/avatar?v=RAIL"
+    end
+
     test "resolve_identity/1 returns nil display_name for a genuinely-unknown row" do
       # Orphaned presence row: user/agent not loaded, no join name. The
       # render layer (not this fn) supplies the honest "Unknown participant".

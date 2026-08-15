@@ -190,7 +190,13 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       |> Enum.map(& &1.participant_id)
       |> Accounts.get_users_map(include_archived: true)
 
-    participants_map = build_participant_identity_map(participants, users_by_id)
+    # Agent avatars live on the `agents` row, not on the participant row, so
+    # they are resolved here and threaded into the identity map. Built once
+    # per presence rebuild — see `build_participant_identity_map/3`.
+    agent_avatars_map = Chat.agent_avatar_map_for_participants(participants)
+
+    participants_map =
+      build_participant_identity_map(participants, users_by_id, agent_avatars_map)
 
     agent_participant_ids =
       participants |> Enum.filter(&(&1.participant_type == "agent")) |> MapSet.new(& &1.id)
@@ -234,10 +240,21 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
         nil
       end
 
+    # An agent seated mid-session isn't in the mount-time avatar snapshot, so
+    # resolve just this one row rather than leaving it faceless until the next
+    # presence rebuild. Users don't need this — their avatar comes off the
+    # `%User{}` loaded directly above.
+    agent_avatars =
+      if participant.participant_type == "agent" do
+        Chat.agent_avatar_map_for_participants([participant])
+      else
+        %{}
+      end
+
     {:halt,
      socket
      |> update(:participants_map, fn map ->
-       Map.put(map, participant.id, participant_identity(participant, user))
+       Map.put(map, participant.id, participant_identity(participant, user, agent_avatars))
      end)
      |> reinsert_rendered_messages()}
   end
@@ -561,18 +578,36 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
 
   # ── Identity helpers (shared between Presence and other features) ──
 
-  @doc "Build the `participant.id => identity` map used across render regions."
-  def build_participant_identity_map(participants, users_by_id) do
+  @doc """
+  Build the `participant.id => identity` map used across render regions.
+
+  `agent_avatars` is the `participant.id => avatar_url` map from
+  `Chat.agent_avatar_map_for_participants/1`. Agent avatars are NOT stored on
+  the participant row, so they have to arrive here from the `agents` table;
+  see that function for why the column is not backfilled.
+
+  CACHING: this map is a snapshot taken when presence is (re)built — at mount,
+  and again whenever the participant list changes. An agent whose avatar is
+  changed mid-session keeps showing the old URL to already-connected viewers
+  until the next rebuild. That is deliberate and safe: the stored URL carries
+  a `?v=` cache token, so a stale map can only serve a stale *snapshot*, never
+  a broken link or the wrong agent's face.
+  """
+  def build_participant_identity_map(participants, users_by_id, agent_avatars \\ %{}) do
     Map.new(participants, fn participant ->
       {participant.id,
-       participant_identity(participant, Map.get(users_by_id, participant.participant_id))}
+       participant_identity(
+         participant,
+         Map.get(users_by_id, participant.participant_id),
+         agent_avatars
+       )}
     end)
   end
 
   @doc "Identity struct for a participant (with optional user for profile data)."
-  def participant_identity(participant, user \\ nil)
+  def participant_identity(participant, user \\ nil, agent_avatars \\ %{})
 
-  def participant_identity(%{participant_type: "agent"} = participant, _user) do
+  def participant_identity(%{participant_type: "agent"} = participant, _user, agent_avatars) do
     name = participant.display_name || "Agent"
 
     %{
@@ -583,7 +618,12 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       # reads this so the @-mention filter can reason about the participant by
       # identity; agents are dropped wholesale on the external surface anyway.
       principal_id: participant.participant_id || participant.id,
-      avatar_url: participant.avatar_url,
+      # Resolved from the `agents` row, not from `chat_participants.avatar_url`
+      # — nothing writes that column for agent rows, so reading it here would
+      # be a structurally-guaranteed nil. Absent from the map means "no
+      # avatar", which is `nil` (never ""), so the render layer falls back to
+      # the single-initial `agent_avatar/1` glyph.
+      avatar_url: Map.get(agent_avatars, participant.id),
       avatar_seed: participant.participant_id || participant.id,
       # Agents are never "archived" in the user-lifecycle sense — the flag
       # exists so the Mentions autocomplete filter can be a single map-lookup
@@ -595,7 +635,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     }
   end
 
-  def participant_identity(participant, user) do
+  def participant_identity(participant, user, _agent_avatars) do
     name = participant_name(participant, user)
 
     %{

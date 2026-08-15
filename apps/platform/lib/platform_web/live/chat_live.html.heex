@@ -3120,9 +3120,15 @@
         }
       >
         <div class="flex items-start gap-2">
-          <div class="flex size-7 shrink-0 items-center justify-center rounded-full bg-base-300 text-xs font-medium msg-agent-avatar">
-            {PresenceHooks.avatar_initial(@participants_map, entry.participant_id)}
-          </div>
+          <%!-- The face shown WHILE the agent is typing. It has to be the same
+               avatar the settled message row draws, or the image would pop in
+               only once the stream finishes and read as a rendering bug. --%>
+          <.agent_avatar
+            name={PresenceHooks.sender_name(@participants_map, entry.participant_id)}
+            avatar_url={PresenceHooks.sender_avatar_url(@participants_map, entry.participant_id)}
+            size="sm"
+            class="msg-agent-avatar"
+          />
           <div class="min-w-0 flex-1">
             <div class="text-xs font-medium mb-0.5 msg-agent-name">
               {PresenceHooks.sender_name(@participants_map, entry.participant_id)}
@@ -3205,13 +3211,17 @@
                         <span class="hero-megaphone size-4"></span>
                       </div>
                     <% suggestion.participant_type == "agent" -> %>
-                      <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
-                        {suggestion
-                        |> Map.get(:name)
-                        |> String.trim()
-                        |> String.first()
-                        |> String.upcase()}
-                      </div>
+                      <%!-- The human branch below already showed a stored photo
+                           here; the agent branch drew a letter, so picking who
+                           to @mention showed faces for people and initials for
+                           agents. `suggestion.avatar_url` was in hand the whole
+                           time — the identity map fills it for agents too. --%>
+                      <.agent_avatar
+                        name={suggestion.name}
+                        avatar_url={suggestion.avatar_url}
+                        size="sm"
+                        class="flex-shrink-0"
+                      />
                     <% true -> %>
                       <.human_avatar
                         name={suggestion.name}

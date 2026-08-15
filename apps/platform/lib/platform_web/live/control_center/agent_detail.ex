@@ -11,6 +11,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   import PlatformWeb.ControlCenter.Helpers
 
+  alias PlatformWeb.ControlCenter.AgentAvatarUpload
   alias PlatformWeb.ControlCenter.RuntimePanel
 
   # ── Header ────────────────────────────────────────────────────────
@@ -234,6 +235,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   attr :agent, :map, required: true
   attr :config_form, :map, required: true
+  attr :uploads, :map, required: true
   attr :regenerated_token, :string, default: nil
   attr :federation_online?, :boolean, required: true
   attr :federation_spaces, :list, default: []
@@ -269,10 +271,13 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       <p class="mt-1 text-sm text-base-content/60">
         How this agent appears in Suite chat. Config and model routing are managed by the remote OpenClaw instance.
       </p>
+      <%!-- `phx-change`: see the note on the native config form — the avatar
+      `live_file_input` needs it to report a picked file. --%>
       <.form
         for={@config_form}
         id="federated-identity-form"
         phx-submit="save_config"
+        phx-change="validate_config"
         class="mt-4 space-y-4"
       >
         <label class="form-control max-w-md">
@@ -317,6 +322,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             </label>
           </div>
         </div>
+        <.avatar_field agent={@agent} uploads={@uploads} />
         <div class="flex justify-stretch sm:justify-end">
           <button type="submit" class="btn btn-neutral w-full sm:w-auto">
             Update identity
@@ -405,10 +411,145 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
     """
   end
 
+  # ── Avatar ────────────────────────────────────────────────────────
+
+  @doc """
+  Avatar picker for the agent identity forms (task `01a00122` stage 2).
+
+  Sits beside the color picker because it is the same kind of field: both
+  decide how this agent is recognised at a glance, and `color` is the
+  fallback this control replaces.
+
+  There is deliberately NO URL text field. The rejection of the previous
+  plan was explicit that linking off-platform to host a simple image is the
+  wrong shape, so the only way in is a file on the operator's machine.
+
+  Remove is not an afterthought either: with upload as the only input, an
+  agent that has been given an avatar could never get back to its
+  color-and-initials fallback.
+  """
+  attr :agent, :map, required: true
+  attr :uploads, :map, required: true
+
+  def avatar_field(assigns) do
+    assigns =
+      assigns
+      |> assign(:upload, assigns.uploads[AgentAvatarUpload.upload_name()])
+      |> assign(:initials, agent_initials(assigns.agent.name))
+
+    ~H"""
+    <div id="agent-avatar-field">
+      <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
+        Avatar
+      </span>
+      <div class="flex flex-wrap items-center gap-4 rounded-2xl border border-base-300 bg-base-200/50 p-4">
+        <div class="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-full border border-base-300 bg-base-100">
+          <img
+            :if={@agent.avatar_url}
+            src={@agent.avatar_url}
+            alt={"#{@agent.name} avatar"}
+            class="size-full object-cover"
+            data-avatar-kind="agent"
+          />
+          <span
+            :if={!@agent.avatar_url}
+            class="text-sm font-semibold uppercase tracking-wide text-base-content/50"
+            data-avatar-kind="agent-fallback"
+          >
+            {@initials}
+          </span>
+        </div>
+
+        <div class="min-w-0 flex-1 space-y-2">
+          <.live_file_input
+            upload={@upload}
+            class="file-input file-input-bordered file-input-sm w-full max-w-xs"
+          />
+
+          <p class="text-xs text-base-content/60">
+            {AgentAvatarUpload.accept_label()} up to {AgentAvatarUpload.max_file_size_label()}.
+            The image is saved with the rest of the form.
+          </p>
+
+          <div :for={entry <- @upload.entries} class="flex items-center gap-2 text-xs">
+            <span class="truncate text-base-content/70">{entry.client_name}</span>
+            <%!-- Only for an entry that will actually upload. A rejected
+            entry never gets progress, and a full-looking bar under a
+            rejection message reads as "it worked". --%>
+            <progress
+              :if={entry.valid?}
+              class="progress progress-primary w-24"
+              value={entry.progress}
+              max="100"
+            >
+            </progress>
+            <button
+              type="button"
+              class="btn btn-ghost btn-xs"
+              phx-click="cancel_avatar_upload"
+              phx-value-ref={entry.ref}
+              aria-label="Cancel this upload"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <p
+            :for={message <- avatar_upload_errors(@upload)}
+            class="text-xs text-error"
+            data-avatar-upload-error
+          >
+            {message}
+          </p>
+
+          <button
+            :if={@agent.avatar_url}
+            type="button"
+            class="btn btn-ghost btn-xs"
+            phx-click="remove_avatar"
+          >
+            Remove avatar
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # Flattens the config-level errors (too many files) and the per-entry
+  # errors (not accepted, too large) into one list of operator-facing
+  # strings, so the template does not have to nest two comprehensions.
+  defp avatar_upload_errors(upload) do
+    config_errors = Enum.map(upload_errors(upload), &AgentAvatarUpload.error_message/1)
+
+    entry_errors =
+      Enum.flat_map(upload.entries, fn entry ->
+        Enum.map(upload_errors(upload, entry), &AgentAvatarUpload.error_message/1)
+      end)
+
+    Enum.uniq(config_errors ++ entry_errors)
+  end
+
+  defp agent_initials(name) when is_binary(name) do
+    name
+    |> String.split(~r/[\s_-]+/, trim: true)
+    |> Enum.take(2)
+    |> Enum.map(&String.first/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join()
+    |> case do
+      "" -> "A"
+      initials -> String.upcase(initials)
+    end
+  end
+
+  defp agent_initials(_name), do: "A"
+
   # ── Config form ───────────────────────────────────────────────────
 
   attr :agent, :map, required: true
   attr :config_form, :map, required: true
+  attr :uploads, :map, required: true
   attr :model_chain_result, :any, required: true
   attr :selected_agent_directory_entry, :map, default: nil
 
@@ -424,10 +565,14 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         </div>
       </div>
 
+      <%!-- `phx-change` is required by the avatar `live_file_input`: a picked
+      file is only reported to the server through the enclosing form's change
+      event. --%>
       <.form
         for={@config_form}
         id="agent-config-form"
         phx-submit="save_config"
+        phx-change="validate_config"
         class="mt-4 space-y-4"
       >
         <div class="grid gap-4 md:grid-cols-2">
@@ -560,6 +705,8 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             </label>
           </div>
         </div>
+
+        <.avatar_field agent={@agent} uploads={@uploads} />
 
         <p
           :if={

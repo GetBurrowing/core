@@ -22,6 +22,7 @@ defmodule PlatformWeb.ChatLive.Partials do
 
   use Phoenix.Component
 
+  import PlatformWeb.AvatarComponents, only: [agent_avatar: 1, human_avatar: 1]
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
   import PlatformWeb.Components.Sheet, only: [sheet: 1]
 
@@ -1664,9 +1665,28 @@ defmodule PlatformWeb.ChatLive.Partials do
           data-identity={roster_identity(p)}
           class="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-base-200"
         >
-          <span class="flex size-7 flex-shrink-0 items-center justify-center rounded-full bg-base-300 text-xs font-semibold uppercase">
-            {roster_initial(p)}
-          </span>
+          <%!-- The roster is the authoritative who-is-present surface, and it
+               is agent-inclusive by construction (`roster_identity/1` mints
+               `agent:<id>` keys). It drew `roster_initial/1` — its own
+               bitstring-pattern initial helper — over a flat circle for every
+               kind. `build_meeting_participants/1` has carried `:avatar_url`
+               for both kinds all along, resolved for agents off the preloaded
+               `%Agent{}`. --%>
+          <.agent_avatar
+            :if={roster_agent?(p)}
+            name={roster_name(p)}
+            avatar_url={Map.get(p, :avatar_url)}
+            size="sm"
+            class="flex-shrink-0"
+          />
+          <.human_avatar
+            :if={!roster_agent?(p)}
+            name={roster_name(p)}
+            avatar_url={Map.get(p, :avatar_url)}
+            seed={roster_identity(p)}
+            size="sm"
+            class="flex-shrink-0"
+          />
           <span class="min-w-0 truncate text-sm">{roster_name(p)}</span>
           <%!-- Per-identity media slot: meeting_client.js may attach the
                live <video>/<audio> here by identity without the LV ever
@@ -1702,12 +1722,11 @@ defmodule PlatformWeb.ChatLive.Partials do
 
   defp roster_name(_), do: "Unknown participant"
 
-  defp roster_initial(p) do
-    case roster_name(p) do
-      <<first::utf8, _rest::binary>> -> String.upcase(<<first::utf8>>)
-      _ -> "?"
-    end
-  end
+  # `roster_initial/1` lived here — a bitstring-pattern initial helper that the
+  # usual `String.first` greps never found. Both kinds now render the shared
+  # avatar components, which derive the initial themselves.
+  defp roster_agent?(%{participant_type: "agent"}), do: true
+  defp roster_agent?(_), do: false
 
   @doc """
   Soundboard icon + hover/focus popover showing the 1–8 key mappings and

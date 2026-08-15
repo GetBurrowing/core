@@ -421,8 +421,9 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
     # — every migration citing a current task id failed clause (b) while
     # the help text advertised three forms of which none was reachable.
     # `01[9a-f]` keeps the same 8-hex-digit shape and covers the next
-    # several rollovers rather than pinning one prefix. Found by task
-    # 01a0008b, whose migration was the first to trip it.
+    # several rollovers rather than pinning one prefix. Tripped
+    # independently by tasks 01a00122 and 01a0008b/01a0008c the same
+    # week, each citing a current task id this pattern rejected.
     @migration_work_reference ~r/01[9a-f][0-9a-f]{5}|ADR[-\s]?0\d{3}|#\d{3,}/
 
     @min_moduledoc_length 40

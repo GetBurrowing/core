@@ -281,9 +281,18 @@ defmodule PlatformWeb.Components.Chat.AddParticipantSheet do
                   data-participant-kind="agent"
                   data-agent-id={agent.id}
                 >
-                  <span class="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-accent/20 text-xs font-bold text-accent">
-                    {String.first(agent.name || "A") |> String.upcase()}
-                  </span>
+                  <%!-- Twin of the new-conversation picker's Agents section,
+                       beside a People section that already calls
+                       `human_avatar/1`. Converted for consistency even though
+                       this component currently has no `live_component` call
+                       site anywhere in `lib/` — an unmounted copy of the
+                       hand-rolled pattern is exactly how it gets resurrected. --%>
+                  <.agent_avatar
+                    name={agent.name || "Agent"}
+                    avatar_url={agent.avatar_url}
+                    size="sm"
+                    class="flex-shrink-0"
+                  />
                   <span class="min-w-0 flex-1 truncate">
                     {agent.name}
                   </span>

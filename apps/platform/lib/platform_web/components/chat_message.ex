@@ -15,7 +15,7 @@ defmodule PlatformWeb.Components.ChatMessage do
   alias Phoenix.LiveView.JS
 
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
-  import PlatformWeb.AvatarComponents, only: [human_avatar: 1]
+  import PlatformWeb.AvatarComponents, only: [human_avatar: 1, agent_avatar: 1]
   import PlatformWeb.Components.ChatHelpers
 
   alias PlatformWeb.ChatLive.PresenceHooks
@@ -102,9 +102,18 @@ defmodule PlatformWeb.Components.ChatMessage do
         <%!-- Avatar circle (hidden when grouped with previous message via JS) --%>
         <div class="flex-shrink-0 mt-0.5 message-avatar">
           <%= if MapSet.member?(@agent_participant_ids, @msg.participant_id) do %>
-            <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold select-none bg-base-300 text-primary msg-agent-avatar">
-              {PresenceHooks.avatar_initial(@participants_map, @msg)}
-            </div>
+            <%!-- `msg-agent-avatar` is the accent ring (a box-shadow keyed off
+                 `--agent-accent`, set on the row above). It lands on the
+                 component's OUTER wrapper, which is why that wrapper carries
+                 `rounded-full` — see AvatarComponents.render_avatar/1. The ring
+                 therefore survives an image avatar unchanged, and `agents.color`
+                 stays the ring colour rather than leaking into the circle. --%>
+            <.agent_avatar
+              name={PresenceHooks.sender_name(@participants_map, @msg)}
+              avatar_url={PresenceHooks.sender_avatar_url(@participants_map, @msg)}
+              size="md"
+              class="msg-agent-avatar"
+            />
           <% else %>
             <.human_avatar
               name={PresenceHooks.sender_name(@participants_map, @msg)}
@@ -526,18 +535,29 @@ defmodule PlatformWeb.Components.ChatMessage do
                   )
                 ]}
               >
-                <div
-                  class={[
-                    "msg-avatar",
-                    if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
-                      do: "ai",
-                      else: "human"
-                    )
-                  ]}
-                  style="width:28px;height:28px;font-size:10px"
-                >
-                  {PresenceHooks.avatar_initial(@participants_map, tmsg.participant_id)}
-                </div>
+                <%!-- Inline thread preview. This used to be a bare `msg-avatar`
+                     div holding a single letter for BOTH kinds. `.msg-avatar`
+                     had no rule of its own anywhere in the stylesheet — only
+                     `.thread-reply .msg-avatar { width/height/font-size }` — so
+                     the `ai`/`human` modifier painted nothing and neither an
+                     agent nor a human ever showed a face here. Both branches now
+                     go through the shared components, which is also what gives
+                     the human path its avatar back. --%>
+                <%= if MapSet.member?(@agent_participant_ids, tmsg.participant_id) do %>
+                  <.agent_avatar
+                    name={PresenceHooks.sender_name(@participants_map, tmsg)}
+                    avatar_url={PresenceHooks.sender_avatar_url(@participants_map, tmsg)}
+                    size="sm"
+                  />
+                <% else %>
+                  <.human_avatar
+                    name={PresenceHooks.sender_name(@participants_map, tmsg)}
+                    avatar_url={PresenceHooks.sender_avatar_url(@participants_map, tmsg)}
+                    seed={PresenceHooks.sender_avatar_seed(@participants_map, tmsg)}
+                    size="sm"
+                    class="shrink-0"
+                  />
+                <% end %>
                 <div class="msg-body">
                   <div class="msg-header">
                     <span class={[
@@ -601,12 +621,35 @@ defmodule PlatformWeb.Components.ChatMessage do
                           }
                           class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
                         >
-                          <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
-                            {(suggestion.display_name || "U")
-                            |> String.trim()
-                            |> String.first()
-                            |> String.upcase()}
-                          </div>
+                          <%!-- The inline-thread twin of the compose dropdown in
+                               `chat_live.html.heex`. It had NO kind branch at
+                               all: agents, humans and the `here` sentinel alike
+                               got one hand-rolled letter, so nobody's face ever
+                               appeared. Now mirrors the main dropdown's three
+                               branches, over the same suggestion shape — the
+                               identity map carries `name`, `avatar_url` and
+                               `avatar_seed` for every kind. --%>
+                          <%= cond do %>
+                            <% suggestion.participant_type == "broadcast" -> %>
+                              <div class="w-6 h-6 rounded-full bg-warning/15 text-warning flex items-center justify-center flex-shrink-0">
+                                <span class="hero-megaphone size-4"></span>
+                              </div>
+                            <% suggestion.participant_type == "agent" -> %>
+                              <.agent_avatar
+                                name={suggestion.display_name || "Agent"}
+                                avatar_url={suggestion.avatar_url}
+                                size="sm"
+                                class="flex-shrink-0"
+                              />
+                            <% true -> %>
+                              <.human_avatar
+                                name={suggestion.display_name || "User"}
+                                avatar_url={suggestion.avatar_url}
+                                seed={suggestion.avatar_seed}
+                                size="sm"
+                                class="flex-shrink-0"
+                              />
+                          <% end %>
                           <span class="flex-1 truncate font-medium">
                             {suggestion.display_name || "User"}
                           </span>

@@ -135,16 +135,12 @@ defmodule PlatformWeb.ActivityLive do
   def range_label("all"), do: "All time"
   def range_label(other), do: other
 
-  def avatar_initial(nil), do: "?"
-  def avatar_initial(""), do: "?"
-
-  def avatar_initial(name) when is_binary(name) do
-    name
-    |> String.trim()
-    |> String.first()
-    |> Kernel.||("?")
-    |> String.upcase()
-  end
+  # `avatar_initial/1` lived here — a THIRD initial implementation, taking a
+  # bare name string rather than the `(participants_map, participant)` shape of
+  # `PresenceHooks.avatar_initial/2`. Its one call site now renders
+  # `agent_avatar/1`, which derives the initial itself, so the row shows the
+  # agent's uploaded face when there is one and falls back to the same single
+  # letter when there is not.
 
   def kind_label(:message), do: "Message"
   def kind_label(:canvas), do: "Canvas"

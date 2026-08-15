@@ -30,6 +30,22 @@ defmodule Platform.Agents.Agent do
   stages route through `Ecto.Changeset.change/2` to avoid the
   `validate_required([:slug, :name, :status])` guard on minimal
   per-row observability updates.
+
+  ## Avatar
+
+  `avatar_url` is the servable URL; `avatar_storage_key` is the key the
+  bytes live under in `Platform.Agents.AvatarStorage`. The second field is
+  NOT provenance — it exists so replacing an avatar can delete the previous
+  blob rather than leaking it.
+
+  There is deliberately no `avatar_source` enum here, unlike
+  `Platform.Accounts.User`. That column arbitrates between two competing
+  writers (an OIDC refresh vs. a user upload); an agent has no OIDC and no
+  login, so `avatar_url` has exactly one writer and nothing to arbitrate.
+
+  Both fields are nullable and stay that way: an agent without an avatar
+  falls back to `color` plus initials, which is the default state rather
+  than a degraded one.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -68,6 +84,8 @@ defmodule Platform.Agents.Agent do
     field(:last_probe_status, :string)
     field(:last_probe_latency_ms, :integer)
     field(:last_successful_fire_at, :utc_datetime_usec)
+    field(:avatar_url, :string)
+    field(:avatar_storage_key, :string)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -101,7 +119,9 @@ defmodule Platform.Agents.Agent do
       :last_probe_at,
       :last_probe_status,
       :last_probe_latency_ms,
-      :last_successful_fire_at
+      :last_successful_fire_at,
+      :avatar_url,
+      :avatar_storage_key
     ])
     |> validate_required([:slug, :name, :status])
     |> validate_inclusion(:status, @valid_statuses)

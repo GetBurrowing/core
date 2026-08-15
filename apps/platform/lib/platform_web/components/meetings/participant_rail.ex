@@ -152,10 +152,13 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             data-participant-type="agent"
             class="group flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm min-h-11 hover:bg-base-300/40 transition-colors"
           >
-            <.human_avatar
+            <%!-- `agent_avatar/1`, not `human_avatar/1`. This section is agents
+                 by construction, and the human component would give them two
+                 initials over the seeded human palette and stamp them
+                 `data-avatar-kind="human"`. --%>
+            <.agent_avatar
               name={p.display_name || "Agent"}
               avatar_url={p.avatar_url}
-              seed={p.participant_id || p.id}
               size="sm"
               class="flex-shrink-0"
             />

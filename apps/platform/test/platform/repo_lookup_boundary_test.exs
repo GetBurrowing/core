@@ -522,6 +522,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # ── Web: channels / controllers / plugs ────────────────────────────
     {"platform_web/channels/runtime_channel.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
      "`runtime.agent_id` off the `%AgentRuntime{}` the channel authenticated at join"},
+    {"platform_web/controllers/agent_avatar_controller.ex", :get, "Agent", 1, :must_cast,
+     "task 01a00122 stage 1. `id` is the `:id` path segment of `GET /agents/:id/avatar` — the most directly attacker-controlled shape there is, since anyone with a session can type it. Unguarded it raises `Ecto.Query.CastError` against Agent's strict `Platform.Types.UUIDv7` PK, turning `/agents/x/avatar` into a 500. Guarded with `Platform.UUID.valid?/1` in `fetch_avatar_key/1`, returning the site's existing 404; covered by `agent_avatar_controller_test.exs` \"404, not 500, for a non-UUID id\""},
+    {"platform_web/controllers/agent_avatar_controller.ex", :platform_uuid_guard, "-", 1,
+     :safe_internal,
+     "the guard itself, paired with the `:get \"Agent\"` entry above: `Platform.UUID.valid?/1` is used as a BOOLEAN and the original string is passed to `Repo.get/2` unchanged, which is the raise-exposed shape — safe only because `valid?/1` is the strict 36-character check, so a 16-byte binary cannot clear it and reach the strict UUIDv7 PK the way a bare `Ecto.UUID.cast/1` would let it"},
     {"platform_web/controllers/chat_attachment_upload_controller.ex", :get_by, "Attachment", 1,
      :safe_internal,
      "keyed `storage_key:`, a `chat_attachments.storage_key` string column minted by the presign step; no UUID type participates in the comparison"},

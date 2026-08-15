@@ -477,7 +477,20 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       data-entry-id={@entry.id}
       data-tag={@tag}
     >
+      <%!-- Every entry builder sets `:agent`, and exactly one row is ever true:
+           the meeting producer from `MeetingLive.producer_rows/0`. It was going
+           through `human_avatar/1` like everyone else, which gave the producer
+           two initials over the seeded human palette — the agent branch was the
+           last place in the roster where an agent still wore a human's face. --%>
+      <.agent_avatar
+        :if={@entry.agent}
+        name={@entry.name}
+        avatar_url={@entry.avatar_url}
+        size="sm"
+        class="shrink-0"
+      />
       <.human_avatar
+        :if={!@entry.agent}
         name={@entry.name}
         avatar_url={@entry.avatar_url}
         seed={@entry.id}

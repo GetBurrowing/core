@@ -215,9 +215,16 @@ defmodule PlatformWeb.ChatLive.NewConversationComponent do
                   if(is_selected, do: "bg-primary/10 text-primary", else: "hover:bg-base-200")
                 ]}
               >
-                <span class="w-6 h-6 rounded-full bg-accent/20 flex items-center justify-center text-xs font-bold text-accent">
-                  {String.first(agent.name || "A") |> String.upcase()}
-                </span>
+                <%!-- The Users section directly above already renders a stored
+                     photo via `human_avatar/1`; the Agents section drew a
+                     letter. `agent` is a whole `%Agent{}` from
+                     `Chat.list_agents_for_picker/0`. --%>
+                <.agent_avatar
+                  name={agent.name || "Agent"}
+                  avatar_url={agent.avatar_url}
+                  size="sm"
+                  class="flex-shrink-0"
+                />
                 <span class="truncate">{agent.name}</span>
                 <span class="badge badge-xs badge-accent ml-1">bot</span>
                 <span :if={is_selected} class="ml-auto text-xs">selected</span>

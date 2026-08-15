@@ -37,8 +37,11 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
       assert html =~ ~s(data-activity-state="idle")
       # Role chip defaults to 'agent' when no role supplied.
       assert html =~ ~s(data-role-chip)
-      # The human_avatar component renders for the avatar slot.
-      assert html =~ ~s(data-avatar-kind="human")
+      # The shared AVATAR component renders for the avatar slot — the AGENT one.
+      # This asserted `"human"` until task 01a00122 stage 5: the tile is an agent
+      # by definition, and `human_avatar/1` was giving it two initials over the
+      # seeded human palette. See `PlatformWeb.AgentFaceEverywhereTest`.
+      assert html =~ ~s(data-avatar-kind="agent")
     end
   end
 

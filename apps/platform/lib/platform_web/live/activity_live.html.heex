@@ -77,14 +77,25 @@
               action.state == :undone && "opacity-70"
             ]}
           >
+            <%!-- The acting agent's face. This was a hand-rolled circle over a
+                 local `avatar_initial/1` that took a bare name string — NOT
+                 `PresenceHooks.avatar_initial/2` — and tinted itself by row
+                 KIND (primary for a message, secondary for a canvas). Reviewer
+                 ruling on 01a003b7-035f-7399-8523-06f8ca142fd8: keep the tint —
+                 restored below via `agent_avatar`'s `fallback_class` seam so an
+                 imageless row still reads its kind at a glance. It now also
+                 shows the agent's uploaded image when there is one, in which
+                 case `fallback_class` is inert and the row is unchanged. --%>
             <div class="flex-shrink-0 pt-1">
-              <span class={[
-                "inline-flex size-8 items-center justify-center rounded-full text-xs font-bold",
-                action.kind == :message && "bg-primary/10 text-primary",
-                action.kind == :canvas && "bg-secondary/10 text-secondary"
-              ]}>
-                {avatar_initial(action.agent_name)}
-              </span>
+              <.agent_avatar
+                name={action.agent_name}
+                avatar_url={action.agent_avatar_url}
+                size="md"
+                fallback_class={[
+                  action.kind == :message && "bg-primary/10 text-primary",
+                  action.kind == :canvas && "bg-secondary/10 text-secondary"
+                ]}
+              />
             </div>
 
             <div class="min-w-0 flex-1">

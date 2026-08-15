@@ -421,6 +421,55 @@ defmodule Platform.Agents.AgentDBTest do
     end
   end
 
+  describe "Agent avatar columns round-trip (task 01a00122 stage 1)" do
+    test "avatar_url and avatar_storage_key round-trip through the DB" do
+      storage_key = "agent-avatars/#{Ecto.UUID.generate()}/#{Ecto.UUID.generate()}-face.png"
+
+      attrs =
+        @valid_agent_attrs
+        |> Map.put(:workspace_id, Ecto.UUID.generate())
+        |> Map.put(:avatar_url, "/agents/abc/avatar")
+        |> Map.put(:avatar_storage_key, storage_key)
+
+      {:ok, inserted} = Repo.insert(Agent.changeset(%Agent{}, attrs))
+
+      loaded = Repo.get!(Agent, inserted.id)
+      assert loaded.avatar_url == "/agents/abc/avatar"
+      assert loaded.avatar_storage_key == storage_key
+    end
+
+    test "avatar columns default to nil — an agent without a face is still valid" do
+      attrs = Map.put(@valid_agent_attrs, :workspace_id, Ecto.UUID.generate())
+
+      {:ok, inserted} = Repo.insert(Agent.changeset(%Agent{}, attrs))
+
+      loaded = Repo.get!(Agent, inserted.id)
+      assert loaded.avatar_url == nil
+      assert loaded.avatar_storage_key == nil
+    end
+
+    test "replacing an avatar overwrites both columns, so the old key is recoverable first" do
+      attrs =
+        @valid_agent_attrs
+        |> Map.put(:workspace_id, Ecto.UUID.generate())
+        |> Map.put(:avatar_url, "/agents/abc/avatar")
+        |> Map.put(:avatar_storage_key, "agent-avatars/a/old.png")
+
+      {:ok, agent} = Repo.insert(Agent.changeset(%Agent{}, attrs))
+
+      # The whole reason avatar_storage_key exists: the caller reads the
+      # previous key off the row before writing the new one, so the old
+      # blob can be deleted instead of leaked.
+      previous_key = agent.avatar_storage_key
+
+      {:ok, updated} =
+        Repo.update(Agent.changeset(agent, %{avatar_storage_key: "agent-avatars/a/new.webp"}))
+
+      assert previous_key == "agent-avatars/a/old.png"
+      assert updated.avatar_storage_key == "agent-avatars/a/new.webp"
+    end
+  end
+
   describe "Memory bigserial ordering" do
     test "memories are ordered by bigserial id (monotonically increasing)" do
       {:ok, agent} = Repo.insert(Agent.changeset(%Agent{}, @valid_agent_attrs))

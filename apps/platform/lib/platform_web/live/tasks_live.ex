@@ -5237,9 +5237,15 @@ defmodule PlatformWeb.TasksLive do
        when is_binary(id) do
     agent = Map.get(agents_by_id, id)
 
+    # `agents_by_id` is built from `Chat.list_agents_for_picker/0`, which selects
+    # whole `%Agent{}` rows — the avatar was simply never read here. `:seed`
+    # stays for shape parity with the user clause below; the agent chip does not
+    # pass it on, because `agent_avatar/1` takes no seed (agents never draw the
+    # seeded human palette).
     %{
       type: :agent,
       name: agent_name(agent),
+      avatar_url: agent && agent.avatar_url,
       seed: id
     }
   end
@@ -5275,17 +5281,10 @@ defmodule PlatformWeb.TasksLive do
   defp user_seed(%{email: email}, _fallback) when is_binary(email) and email != "", do: email
   defp user_seed(_user, fallback), do: fallback
 
-  defp agent_initials(name) when is_binary(name) do
-    name
-    |> String.trim()
-    |> String.first()
-    |> case do
-      nil -> "A"
-      ch -> String.upcase(ch)
-    end
-  end
-
-  defp agent_initials(_name), do: "A"
+  # `agent_initials/1` lived here — the board's own single-letter helper, one of
+  # four such implementations in the app. Both call sites (the desktop assignee
+  # chip and its mobile twin) now render `agent_avatar/1`, which derives the
+  # initial itself and shows the agent's uploaded image when there is one.
 
   defp assignee_name(%Task{assignee_type: "agent", assignee_id: id}, agent_names)
        when is_binary(id) do

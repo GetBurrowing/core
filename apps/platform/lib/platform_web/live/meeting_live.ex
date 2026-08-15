@@ -1664,7 +1664,10 @@ defmodule PlatformWeb.MeetingLive do
             expires_at: nil,
             external: nil,
             agent: true,
-            avatar_url: nil,
+            # Stage 4 left this hardcoded nil with a real `%Agent{}` in hand and
+            # flagged it. The producer is an agent appearing in the roster, so
+            # it belongs to "render the face everywhere an agent appears".
+            avatar_url: agent.avatar_url,
             removable: false,
             copy_url: nil
           }
@@ -3611,7 +3614,10 @@ defmodule PlatformWeb.MeetingLive do
   # view-model. `:participant_id` is the preloaded `user.id` / `agent.id`
   # (NOT the meeting_participants row id) so `gallery_identity/1` produces
   # the same `"user:<user_id>"` LiveKit identity MeetingHooks joins with.
-  defp meeting_participant_view_model(%Meetings.Participant{} = p) do
+  # Public for the same reason `resolve_identity/1` below is: the rail reads
+  # `avatar_url` off THIS map, so the wrapping is worth asserting directly and
+  # not only through a mounted LiveView.
+  def meeting_participant_view_model(%Meetings.Participant{} = p) do
     {participant_type, participant_id} =
       cond do
         is_binary(p.agent_id) -> {"agent", p.agent_id}
@@ -3664,7 +3670,15 @@ defmodule PlatformWeb.MeetingLive do
         nilify(p.display_name)
       ])
 
-    {name, nil}
+    # The avatar comes off the preloaded `%Agent{}` (`active_participants/1`
+    # preloads `[:user, :agent]`), NOT off the participant row — `meetings.participants`
+    # has no `avatar_url` column and deliberately gains none, for the same
+    # reason `chat_participants` is not backfilled: an avatar is one mutable
+    # fact about the agent, and denormalising it onto every presence row would
+    # mean rewriting them all whenever it changes. `nilify/1` keeps a blank
+    # column from reaching the render layer as an empty string. The stored URL
+    # carries a `?v=` cache token and is passed through verbatim.
+    {name, nilify(agent.avatar_url)}
   end
 
   def resolve_identity(%Meetings.Participant{user: %{} = user} = p) do
