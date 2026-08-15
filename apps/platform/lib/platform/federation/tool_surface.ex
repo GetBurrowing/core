@@ -2714,7 +2714,12 @@ defmodule Platform.Federation.ToolSurface do
       },
       %{
         name: "validation_list",
-        description: "List all validations for a stage.",
+        description:
+          "List all validations for a stage. A gate that reads `pending` may still have been " <>
+            "judged before: when a manual_approval gate is reopened for another attempt, the " <>
+            "ruling it clears is archived on the same row under `evidence[\"prior_rulings\"]` " <>
+            "(oldest first, each entry carrying the earlier status, evidence and evaluator), so " <>
+            "read that list for the feedback a human left on a previous attempt.",
         parameters: %{
           stage_id: %{type: "string", required: true, description: "The stage ID"}
         },

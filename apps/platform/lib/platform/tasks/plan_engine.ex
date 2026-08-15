@@ -95,7 +95,7 @@ defmodule Platform.Tasks.PlanEngine do
           validation
           |> Validation.changeset(%{
             status: "pending",
-            evidence: %{},
+            evidence: archive_ruling(validation),
             evaluated_by: nil,
             evaluated_at: nil
           })
@@ -109,6 +109,48 @@ defmodule Platform.Tasks.PlanEngine do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  # A reopen must leave the gate reading as un-evaluated (`pending`, no
+  # evaluator) while still preserving what the human said. Those two are only
+  # compatible if the old ruling moves somewhere that is plainly not the
+  # current one: `evidence["prior_rulings"]`, oldest first. Every other
+  # top-level evidence key belonged to the ruling being cleared and goes with
+  # it. Keys are strings because this round-trips through JSONB.
+  @prior_rulings_limit 20
+
+  defp archive_ruling(validation) do
+    prior =
+      case validation.evidence do
+        %{"prior_rulings" => rulings} when is_list(rulings) -> rulings
+        _ -> []
+      end
+
+    current =
+      case validation.evidence do
+        map when is_map(map) -> Map.delete(map, "prior_rulings")
+        _ -> %{}
+      end
+
+    if current == %{} and is_nil(validation.evaluated_by) do
+      # Nothing was ruled, so there is nothing to remember. Reopening a blank
+      # row repeatedly must not accumulate empty history entries.
+      if prior == [], do: %{}, else: %{"prior_rulings" => prior}
+    else
+      entry = %{
+        "status" => validation.status,
+        "evidence" => current,
+        "evaluated_by" => validation.evaluated_by,
+        "evaluated_at" => iso8601_or_nil(validation.evaluated_at),
+        "reopened_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+      }
+
+      %{"prior_rulings" => Enum.take(prior ++ [entry], -@prior_rulings_limit)}
+    end
+  end
+
+  defp iso8601_or_nil(nil), do: nil
+  defp iso8601_or_nil(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp iso8601_or_nil(%NaiveDateTime{} = dt), do: NaiveDateTime.to_iso8601(dt)
 
   @doc """
   Record a validation result and auto-advance if this was the last pending

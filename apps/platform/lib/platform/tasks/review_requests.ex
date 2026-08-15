@@ -453,6 +453,21 @@ defmodule Platform.Tasks.ReviewRequests do
     |> Repo.update()
   end
 
+  # A ruling replaces the validation's whole `evidence` map. The archive that
+  # `PlanEngine.reopen_manual_approval/1` keeps under `"prior_rulings"` is not
+  # part of the new ruling, so it has to be carried across this write or the
+  # second reject-reopen cycle silently deletes the first human's words
+  # (task `01a00575`).
+  defp carry_prior_rulings(validation_id, evidence) do
+    case Repo.get(Validation, validation_id) do
+      %Validation{evidence: %{"prior_rulings" => [_ | _] = prior}} ->
+        Map.put(evidence, "prior_rulings", prior)
+
+      _ ->
+        evidence
+    end
+  end
+
   defp resolve_request(request) do
     now = DateTime.utc_now()
 
@@ -471,7 +486,7 @@ defmodule Platform.Tasks.ReviewRequests do
       if all_approved? do
         PlanEngine.evaluate_validation(request.validation_id, %{
           status: "passed",
-          evidence: %{review_request_id: request.id},
+          evidence: carry_prior_rulings(request.validation_id, %{review_request_id: request.id}),
           evaluated_by: "review_gate"
         })
       else
@@ -491,7 +506,11 @@ defmodule Platform.Tasks.ReviewRequests do
 
         PlanEngine.evaluate_validation(request.validation_id, %{
           status: "failed",
-          evidence: %{review_request_id: request.id, feedback: consolidated},
+          evidence:
+            carry_prior_rulings(request.validation_id, %{
+              review_request_id: request.id,
+              feedback: consolidated
+            }),
           evaluated_by: "review_gate"
         })
 

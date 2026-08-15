@@ -90,15 +90,49 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       assert retried_request.status == "pending"
       assert Repo.get!(Task, task.id).status == "in_review"
 
+      # The gate reads as un-evaluated again, but the rejection it carried is
+      # archived rather than destroyed (task 01a00575). This assertion used to
+      # require `evidence == %{}`, which pinned the defect.
       retried_validation = Repo.get!(Validation, ctx.validation.id)
       assert retried_validation.status == "pending"
-      assert retried_validation.evidence == %{}
       assert retried_validation.evaluated_by == nil
       assert retried_validation.evaluated_at == nil
+
+      assert [prior] = retried_validation.evidence["prior_rulings"]
+      assert prior["status"] == "failed"
+      assert prior["evaluated_by"] == "review_gate"
+      assert prior["evidence"]["feedback"] =~ "Needs work"
 
       retried_stage = Repo.get!(Stage, ctx.stage.id)
       assert retried_stage.status == "running"
       assert retried_stage.completed_at == nil
+    end
+
+    # RETRY-PATH PROOF (task 01a00575 stage 4). The reopen path through
+    # create_review_request/1 must leave a gate that can still be passed.
+    test "a gate reopened by create_review_request/1 can still be approved and advances the stage",
+         ctx do
+      task = ctx.task |> Task.changeset(%{status: "in_review"}) |> Repo.update!()
+      ctx = %{ctx | task: task}
+
+      {:ok, first} = create_request(ctx, ["Desktop"])
+      {:ok, _} = ReviewRequests.reject_item(hd(first.items).id, "rowan", "Needs work")
+
+      {:ok, retry} = create_request(ctx, ["Retried desktop"])
+      assert Repo.get!(Validation, ctx.validation.id).status == "pending"
+      assert Repo.get!(Stage, ctx.stage.id).status == "running"
+
+      assert {:ok, _} = ReviewRequests.approve_item(hd(retry.items).id, "rowan")
+
+      passed = Repo.get!(Validation, ctx.validation.id)
+      assert passed.status == "passed"
+      assert passed.evaluated_by == "review_gate"
+      assert [prior] = passed.evidence["prior_rulings"]
+      assert prior["evidence"]["feedback"] =~ "Needs work"
+
+      advanced = Repo.get!(Stage, ctx.stage.id)
+      assert advanced.status == "passed"
+      assert advanced.completed_at != nil
     end
   end
 

@@ -228,16 +228,82 @@ defmodule Platform.Tasks.TaskTest do
       assert retried_stage.status == "running"
       assert retried_stage.completed_at == nil
 
+      # The gate reads un-evaluated again, but the ruling it carried is archived
+      # rather than destroyed (task 01a00575). This previously asserted
+      # `evidence == %{}`, which pinned that erasure as the expected behaviour.
       retried_validation = Repo.get!(Validation, validation.id)
       assert retried_validation.status == "pending"
-      assert retried_validation.evidence == %{}
       assert retried_validation.evaluated_by == nil
       assert retried_validation.evaluated_at == nil
+
+      assert [prior] = retried_validation.evidence["prior_rulings"]
+      assert prior["status"] == "failed"
+      assert prior["evaluated_by"] == "test"
 
       assert RuntimeSupervision.current_lease_for_task(task.id) == nil
 
       assert Repo.get!(Platform.Orchestration.ExecutionLease, started_event.lease_id).status ==
                "abandoned"
+    end
+
+    # RETRY-PATH PROOF (task 01a00575 stage 4). Preserving the old ruling must
+    # not leave the gate un-passable: a reopened validation still has to accept
+    # a fresh approval and carry the stage forward. A retry that can no longer
+    # succeed would be a worse defect than the erasure being fixed.
+    test "a gate reopened by transition_task/2 can still be approved and advances the stage",
+         %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Retry then pass",
+          status: "in_progress"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 1,
+          name: "Manual review",
+          status: "running"
+        })
+
+      {:ok, validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval", status: "pending"})
+
+      {:ok, _} =
+        PlanEngine.evaluate_validation(validation.id, %{
+          status: "failed",
+          evidence: %{"feedback" => "Round one rejected"},
+          evaluated_by: "test"
+        })
+
+      assert {:ok, _} = Tasks.transition_task(task, "in_review")
+      assert Repo.get!(Validation, validation.id).status == "pending"
+      assert Repo.get!(Stage, stage.id).status == "running"
+
+      {:ok, request} =
+        Platform.Tasks.ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: task.id,
+          items: [%{label: "Retried desktop"}]
+        })
+
+      assert {:ok, _} =
+               Platform.Tasks.ReviewRequests.approve_item(hd(request.items).id, "rowan")
+
+      passed = Repo.get!(Validation, validation.id)
+      assert passed.status == "passed"
+      assert passed.evaluated_by == "review_gate"
+
+      # And the archived ruling survives the approval write too.
+      assert [prior] = passed.evidence["prior_rulings"]
+      assert prior["evidence"]["feedback"] =~ "Round one rejected"
+
+      advanced = Repo.get!(Stage, stage.id)
+      assert advanced.status == "passed"
+      assert advanced.completed_at != nil
     end
   end
 
