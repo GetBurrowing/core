@@ -255,6 +255,9 @@ defmodule Platform.Orchestration.TaskRouterTest do
   describe "current_status/1" do
     test "returns router status after dispatch", %{task: task, assignee: assignee} do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      # Task 01a00587: the init dispatch is debounced; barrier on the router so
+      # the status read below observes the reconcile rather than pre-empting it.
+      :ok = sync_router(task.id)
 
       status = TaskRouter.current_status(task.id)
 
@@ -283,6 +286,8 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # Simulate a board event for our task
       updated_task = Tasks.get_task_detail(task.id)
       Tasks.broadcast_board({:task_updated, updated_task})
+      # Task 01a00587: debounced dispatch — barrier before reading status.
+      :ok = sync_router(task.id)
 
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
@@ -627,6 +632,8 @@ defmodule Platform.Orchestration.TaskRouterTest do
       {:ok, other_task} = Tasks.create_task(%{project_id: project.id, title: "Other"})
       other_detail = Tasks.get_task_detail(other_task.id)
       Tasks.broadcast_board({:task_updated, other_detail})
+      # Task 01a00587: debounced dispatch — barrier before reading status.
+      :ok = sync_router(task.id)
 
       status = TaskRouter.current_status(task.id)
       # last_evidence_at should be nil since we only got the unrelated event
@@ -638,6 +645,8 @@ defmodule Platform.Orchestration.TaskRouterTest do
   describe "dispatch" do
     test "transitions to :running after init dispatch", %{task: task, assignee: assignee} do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      # Task 01a00587: the init dispatch is debounced; barrier before reading.
+      :ok = sync_router(task.id)
 
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
@@ -756,6 +765,223 @@ defmodule Platform.Orchestration.TaskRouterTest do
     case payload do
       %{message: %{content: content}} when is_binary(content) -> content
       _ -> ""
+    end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # DISPATCH COALESCING (task 01a00587 stage 3).
+  #
+  # The observable throughout is the `attention` broadcast on
+  # `runtime:<assignee id>` — a SIDE EFFECT of `do_dispatch/2`, never
+  # `state.dispatch_timer`. A timer ref can be armed, cleared and re-armed
+  # exactly as designed while the reconcile underneath it still runs twice;
+  # only the broadcast counts dispatches.
+  #
+  # The four tests are deliberately not redundant:
+  #
+  #   A (inside the window)  — a burst collapses to ONE dispatch. Alone, this
+  #                            is passed by a coalescer that swallows
+  #                            everything and never dispatches at all.
+  #   B (outside the window) — two dispatches separated by an observed
+  #                            broadcast produce TWO. This is what refutes the
+  #                            swallow-everything reading of A, and it
+  #                            establishes the window has elapsed by waiting on
+  #                            the first broadcast rather than on the clock.
+  #   C (direction control)  — a SINGLE `:dispatch` still fires, well inside a
+  #                            1s deadline. A and B both hold if the debounce
+  #                            grew to seconds; this pins that the window adds
+  #                            latency, not a lost or badly delayed dispatch.
+  #   D (final state wins)   — the burst dispatches the LATEST state, not the
+  #                            state as of the first message. A coalescer that
+  #                            keeps the head of the burst and drops the tail
+  #                            passes A, B and C and then dispatches stale
+  #                            state — worse than the original bug, because a
+  #                            duplicate prompt is redundant while a stale one
+  #                            is wrong.
+  #
+  # No `Process.sleep` in any assertion path here: A refutes against a deadline
+  # (an absence assertion, which cannot be replaced by a barrier), B waits on
+  # the broadcast itself, and D widens the debounce through
+  # `:task_router_dispatch_debounce_ms` with an `on_exit` that deletes it, so
+  # the DB mutation is inside the window by construction rather than by a race
+  # against a 50ms clock.
+  # ───────────────────────────────────────────────────────────────────────────
+  describe "dispatch coalescing (task 01a00587)" do
+    # A. INSIDE THE WINDOW — six `:dispatch` messages, one dispatch.
+    test "a burst of :dispatch inside the debounce window produces exactly one dispatch", %{
+      task: task,
+      assignee: assignee
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # Drain the init dispatch so the count below is of the burst alone.
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+      :ok = sync_router(task.id)
+
+      for _ <- 1..6, do: send(pid, :dispatch)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention", payload: payload}, 1_000
+      assert payload.signal.task_id == task.id
+
+      # The other five. An absence assertion needs a real deadline — there is
+      # no barrier that can prove a message will never arrive, only one that
+      # proves the router has drained what it already had.
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
+    end
+
+    # B. OUTSIDE THE WINDOW — two separated `:dispatch` messages, two
+    # dispatches. Without this, A is satisfied by a coalescer that drops
+    # everything on the floor.
+    test "two :dispatch messages separated by a completed dispatch produce two dispatches", %{
+      task: task,
+      assignee: assignee
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+      :ok = sync_router(task.id)
+
+      send(pid, :dispatch)
+
+      # This receive is doing two jobs: it proves the first dispatch fired, and
+      # — because the broadcast is emitted from inside `:dispatch_now` — it
+      # establishes that the window opened by that `:dispatch` has already
+      # closed. That is why the second `send` below is genuinely OUTSIDE the
+      # window without a single sleep.
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      send(pid, :dispatch)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention", payload: payload}, 1_000
+      assert payload.signal.task_id == task.id
+    end
+
+    # C. DIRECTION CONTROL — one `:dispatch`, one dispatch, promptly. The
+    # window is a coalescer, not a suppressor and not a long delay.
+    test "a single :dispatch still dispatches exactly once", %{task: task, assignee: assignee} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+      :ok = sync_router(task.id)
+
+      send(pid, :dispatch)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
+    end
+
+    # D. FINAL STATE WINS. The failure this test exists for is invisible to A,
+    # B and C: a coalescer that keeps the FIRST message of a burst and drops
+    # the rest satisfies all three and then prompts the executor about a stage
+    # that has already passed.
+    #
+    # The property holds by construction today — `:dispatch_now` carries no
+    # payload and re-reads `Tasks.get_task_detail/1` + `Tasks.current_plan/1`
+    # at FIRE time — and this test is what stops a later refactor from
+    # "optimising" that into state cached onto the scheduling message.
+    test "the coalesced dispatch reflects state as of fire time, not schedule time", %{
+      task: task,
+      assignee: assignee,
+      plan: plan,
+      stage: stage_one
+    } do
+      # Widen the window so the mutation below is inside it by construction.
+      # This is the sanctioned alternative to sleeping: the test controls the
+      # window instead of racing it.
+      Application.put_env(:platform, :task_router_dispatch_debounce_ms, 400)
+      on_exit(fn -> Application.delete_env(:platform, :task_router_dispatch_debounce_ms) end)
+
+      stage_one =
+        stage_one
+        |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+        |> Platform.Repo.update!()
+
+      {:ok, stage_two} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 2,
+          name: "coalescing-stage-two",
+          description: "The stage the dispatch must name"
+        })
+
+      {:ok, _validation_two} =
+        Tasks.create_validation(%{stage_id: stage_two.id, kind: "test_pass"})
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # Init dispatch — this one names stage 1, and draining it is what makes
+      # the assertion below about the BURST rather than about start-up.
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention", payload: init_payload}, 2_000
+      assert init_payload.message.content =~ "stage 1/2"
+      :ok = sync_router(task.id)
+
+      send(pid, :dispatch)
+
+      # BARRIER, and the load-bearing line of this test (found by the stage-4
+      # mutation probe: without it, a coalescer that snapshots state when the
+      # FIRST message is HANDLED survives this test). Widening the debounce
+      # widens schedule→fire; it does nothing about send→handle. Until the
+      # router has actually dequeued the `:dispatch` above, the writes below
+      # race it, and if they win, schedule-time state and fire-time state are
+      # identical — leaving nothing for the assertions to discriminate.
+      #
+      # NOT `sync_router/1` here, deliberately: that helper drains the armed
+      # timer, i.e. it waits for the dispatch to FIRE — which closes the very
+      # window this test needs to write inside. `:sys.get_state/1` is a system
+      # message, so it is answered strictly after the `:dispatch` above and
+      # strictly before the timer fires. The assertion on `dispatch_timer` is a
+      # window check, not the observable under test — every dispatch claim
+      # below is still made against the `attention` broadcast.
+      assert :sys.get_state(pid).dispatch_timer != nil
+
+      # INSIDE the window: the engine's state moves on underneath the pending
+      # reconcile, exactly as it does in production when several senders each
+      # observe a different moment of the same transition.
+      stage_one
+      |> Ecto.Changeset.change(%{status: "passed", completed_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      stage_two =
+        stage_two
+        |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+        |> Platform.Repo.update!()
+
+      send(pid, :dispatch)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention", payload: payload}, 2_000
+
+      # The LATER state. `=~ "stage 2/2"` and the stage name together rule out
+      # a prompt that merely mentions two stages; the refute rules out the
+      # first-message-wins coalescer, which would send a byte-identical copy of
+      # the init prompt.
+      assert payload.message.content =~ "stage 2/2"
+      assert payload.message.content =~ "coalescing-stage-two"
+      refute payload.message.content =~ "stage 1/2"
+
+      # Second, independent channel on the same claim: the lease the dispatch
+      # wrote. A prompt could in principle be recomposed correctly while the
+      # lease still pinned the stale stage, and it is the lease that `task_ack`
+      # and the liveness timers are keyed on.
+      #
+      # Barrier, not a wait: the broadcast is emitted PARTWAY THROUGH
+      # `do_dispatch/2` and `LeaseManager.record_dispatch/4` runs after it, so
+      # receiving the attention above does not imply the lease row is written
+      # yet. Without this the read observes the init dispatch's lease and the
+      # test fails for a reason that has nothing to do with coalescing.
+      :ok = sync_router(task.id)
+
+      assert LeaseManager.get(task.id).stage_id == stage_two.id
+
+      # And exactly one dispatch came out of the pair.
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
     end
   end
 
@@ -4645,6 +4871,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # owned by another process now (the spawned edge runner), so there is a
       # process to name and `sync_router/1` would prove nothing about it.
       assert_eventually(fn -> reload_task(held).planning_step == "designing" end)
+      # Task 01a00587: `:dispatch` is now debounced, so the router's status is
+      # set by the `:dispatch_now` that lands ~50ms later. Barrier on the
+      # router (which drains the armed timer) before reading it.
+      :ok = sync_router(held.id)
       assert TaskRouter.current_status(held.id).status == :waiting_design
 
       # PAIRED POSITIVE CONTROL. Same runtime topic, same window, same task
@@ -4670,6 +4900,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       held = design_task!(project, @design_ui_title)
       {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
+      # Task 01a00587: `:dispatch` is now debounced, so the router's status is
+      # set by the `:dispatch_now` that lands ~50ms later. Barrier on the
+      # router (which drains the armed timer) before reading it.
+      :ok = sync_router(held.id)
       assert TaskRouter.current_status(held.id).status == :waiting_design
 
       # The hold clears the lease only once the step is genuinely OPEN, so the
@@ -4756,6 +4990,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       held = design_task!(project, @design_ui_title)
       {:ok, _pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
+      # Task 01a00587: `:dispatch` is now debounced, so the router's status is
+      # set by the `:dispatch_now` that lands ~50ms later. Barrier on the
+      # router (which drains the armed timer) before reading it.
+      :ok = sync_router(held.id)
       assert TaskRouter.current_status(held.id).status == :waiting_design
       refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
 
@@ -4801,6 +5039,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       held = design_task!(project, @design_ui_title)
       {:ok, _pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
+      # Task 01a00587: `:dispatch` is now debounced, so the router's status is
+      # set by the `:dispatch_now` that lands ~50ms later. Barrier on the
+      # router (which drains the armed timer) before reading it.
+      :ok = sync_router(held.id)
       assert TaskRouter.current_status(held.id).status == :waiting_design
 
       # The step is genuinely open and genuinely held BEFORE the budget can
@@ -4904,6 +5146,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # decline does to an OPEN step; without this they would all hold just as
       # well on a task that never reached the design step at all, which is the
       # exact shape of vacuity this stage exists to avoid.
+      # Task 01a00587: `:dispatch` is now debounced, so the router's status is
+      # set by the `:dispatch_now` that lands ~50ms later. Barrier on the
+      # router (which drains the armed timer) before reading it.
+      :ok = sync_router(held.id)
       assert TaskRouter.current_status(held.id).status == :waiting_design
       assert_eventually(fn -> reload_task(held).planning_step == "designing" end)
       refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
@@ -5040,6 +5286,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       held = design_task!(project, @design_ui_title)
       {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
+      # Task 01a00587: `:dispatch` is now debounced, so the router's status is
+      # set by the `:dispatch_now` that lands ~50ms later. Barrier on the
+      # router (which drains the armed timer) before reading it.
+      :ok = sync_router(held.id)
       assert TaskRouter.current_status(held.id).status == :waiting_design
       assert_eventually(fn -> reload_task(held).planning_step == "designing" end)
 

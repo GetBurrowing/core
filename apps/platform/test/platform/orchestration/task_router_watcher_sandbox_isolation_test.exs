@@ -480,11 +480,13 @@ defmodule Platform.Orchestration.TaskRouterWatcherSandboxIsolationTest do
 
       # `current_status/1` is a `GenServer.call`, so it is answered only after
       # the `:dispatch` message `init/1` sent to itself has been fully
-      # handled — including `arm_liveness_timers/3`. That makes the lease
-      # assertion below exact rather than a race, and leaves the router with
-      # no in-flight Repo work to be orphaned when this test's sandbox owner
-      # exits. This is what the 100-300ms sleeps elsewhere in the suite are
-      # approximating.
+      # handled. Since task 01a00587 handling `:dispatch` only ARMS a ~50ms
+      # `:dispatch_now`, so the call alone no longer proves the dispatch RAN —
+      # `sync_router/2` adds the wait on `state.dispatch_timer` clearing. That
+      # makes the lease assertion below (armed inside `arm_liveness_timers/3`)
+      # exact rather than a race, and leaves the router with no in-flight Repo
+      # work to be orphaned when this test's sandbox owner exits.
+      :ok = sync_router(task.id)
       assert %{} = TaskRouter.current_status(task.id)
 
       assert %{stage_id: leased_stage_id, stage_kind: "coding"} = LeaseManager.get(task.id),

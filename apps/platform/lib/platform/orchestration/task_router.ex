@@ -39,6 +39,25 @@ defmodule Platform.Orchestration.TaskRouter do
      events are gated by `LeaseManager.mark_*_fired/1` so a spurious re-wake
      never re-fires.
 
+  ## Dispatch coalescing (task 01a00587)
+
+  `:dispatch` is a REQUEST TO RECONCILE, not a command to dispatch. Nine
+  in-module senders each observe a genuine state change and each asks for a
+  dispatch, so one change fans in as a burst — the 01a00571 trace recorded 12
+  duplicate `:dispatch` messages inside 137ms from a single state change, each
+  producing a full prompt payload.
+
+  Receiving `:dispatch` therefore only schedules a `:dispatch_now` 50ms out,
+  and drops the message if one is already scheduled. The window is chosen to
+  absorb a fan-in burst while adding latency far below anything a human or
+  agent perceives, and an order of magnitude below the 1s endpoint-not-ready
+  retry inside `do_dispatch/2` (which deliberately still sends `:dispatch`, so
+  the retry coalesces too).
+
+  `:dispatch_now` carries no payload: it re-reads the task and plan at fire
+  time, so the FINAL state wins rather than whichever message happened to
+  arrive first.
+
   ## Assignee resolution (task 019fb977)
 
   `state.assignee` is a CACHE, refreshed from
@@ -109,6 +128,14 @@ defmodule Platform.Orchestration.TaskRouter do
   alias Platform.Tasks.BranchProvisioner
   alias Platform.Tasks.{DeployResolver, Plan, ReviewDisposition, ReviewRequests, Stage}
 
+  # Task 01a00587. Dispatch coalescing window. Behind `Application.get_env/3`
+  # so a test can inject a window instead of sleeping on the real one.
+  @dispatch_debounce_ms 50
+
+  defp dispatch_debounce_ms do
+    Application.get_env(:platform, :task_router_dispatch_debounce_ms, @dispatch_debounce_ms)
+  end
+
   # ── State ──────────────────────────────────────────────────────────────
 
   defmodule State do
@@ -123,6 +150,7 @@ defmodule Platform.Orchestration.TaskRouter do
             last_evidence_at: DateTime.t() | nil,
             last_runtime_event_at: DateTime.t() | nil,
             last_dispatch_at: DateTime.t() | nil,
+            dispatch_timer: reference() | nil,
             task_status: String.t() | nil,
             lease_status: String.t() | nil,
             deploy_lease: CredentialLease.t() | nil,
@@ -142,6 +170,11 @@ defmodule Platform.Orchestration.TaskRouter do
       :last_evidence_at,
       :last_runtime_event_at,
       :last_dispatch_at,
+      # Task 01a00587. The pending debounce timer ref, or `nil` when no
+      # `:dispatch_now` is scheduled. Deliberately NOT surfaced through
+      # `current_status/1`: nothing outside the router should key off whether a
+      # reconcile happens to be in flight.
+      :dispatch_timer,
       :task_status,
       :lease_status,
       :deploy_lease,
@@ -400,8 +433,32 @@ defmodule Platform.Orchestration.TaskRouter do
     {:reply, reply, state}
   end
 
+  # Task 01a00587. `:dispatch` is a REQUEST TO RECONCILE, not a command to
+  # dispatch. Nine in-module senders each observe a real state change and each
+  # correctly asks for a dispatch; a single change fans in as a burst. This
+  # clause does no work beyond scheduling one `:dispatch_now`.
+  #
+  # If a timer is already armed the message is DROPPED — not cancelled, not
+  # restarted, not extended. A restart-on-every-message debounce can be starved
+  # indefinitely by a steady arrival stream; drop-if-scheduled bounds the delay
+  # at one window.
   @impl true
   def handle_info(:dispatch, state) do
+    if state.dispatch_timer do
+      {:noreply, state}
+    else
+      ref = Process.send_after(self(), :dispatch_now, dispatch_debounce_ms())
+      {:noreply, %{state | dispatch_timer: ref}}
+    end
+  end
+
+  # The real dispatch decision. Carries NO payload: it re-reads
+  # `Tasks.get_task_detail/1` (and `Tasks.current_plan/1` inside
+  # `do_dispatch/2`) at FIRE time, so the dispatch reflects state as of the
+  # moment it fires rather than the moment any one scheduling message arrived.
+  def handle_info(:dispatch_now, state) do
+    state = %{state | dispatch_timer: nil}
+
     # FIRE SITE for the designer lifecycle edge (ADR-0046 member 7 stage 5;
     # moved onto the pipeline frame by task 019fe1b7 stage 2).
     # Deliberately here and not on the `backlog -> planning` transition: that

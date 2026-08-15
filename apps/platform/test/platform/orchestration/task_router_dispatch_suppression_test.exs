@@ -357,5 +357,14 @@ defmodule Platform.Orchestration.TaskRouterDispatchSuppressionTest do
   # A complete mailbox barrier: `current_status/1` is a `GenServer.call`, so it
   # is answered only after every message queued ahead of it is handled. NOT a
   # sleep — task 019fa121 is removing all 116 of those from the sibling file.
-  defp barrier(task), do: TaskRouter.current_status(task.id)
+  # Task 01a00587: `:dispatch` only ARMS a ~50ms `:dispatch_now`, so a bare
+  # `current_status/1` call is answered before the reconcile runs and every
+  # assertion after it would observe pre-dispatch state (a suppression refute
+  # would go vacuously green). `sync_router/2` makes the same call and then
+  # waits on `state.dispatch_timer` returning to `nil` — the observable for
+  # "no reconcile is still owed" — so the barrier means what it did before.
+  defp barrier(task) do
+    :ok = sync_router(task.id)
+    TaskRouter.current_status(task.id)
+  end
 end

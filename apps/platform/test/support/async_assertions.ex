@@ -111,6 +111,7 @@ defmodule Platform.AsyncAssertions do
   @default_timeout 2_000
   @default_interval 10
   @default_barrier_timeout 5_000
+  @dispatch_drain_interval 5
 
   @typedoc "Result of a non-raising poll: the truthy value, or the last falsy one."
   @type poll_result :: {:ok, term()} | {:timeout, term()}
@@ -182,7 +183,7 @@ defmodule Platform.AsyncAssertions do
         # wrapper only so `timeout` is honourable.
         try do
           _ = GenServer.call(pid, :current_status, timeout)
-          :ok
+          drain_dispatch(pid, task_id, System.monotonic_time(:millisecond) + timeout)
         catch
           :exit, reason ->
             flunk("""
@@ -205,6 +206,48 @@ defmodule Platform.AsyncAssertions do
         establish the ordering the assertion after it depends on. Assert on the
         router's absence explicitly instead of syncing against it.
         """)
+    end
+  end
+
+  # Task 01a00587. `:dispatch` no longer DOES anything: it arms a ~50ms
+  # `:dispatch_now` timer and returns, so a plain mailbox barrier proves only
+  # that the router has SCHEDULED the reconcile, not that it has run. That is a
+  # strictly weaker claim than every call site here was written against.
+  #
+  # The timer ref in `state.dispatch_timer` is the observable for "a reconcile
+  # is still owed": the router sets it when it arms the timer and clears it as
+  # the FIRST thing `:dispatch_now` does, so `nil` observed through
+  # `:sys.get_state/1` — itself a call, hence itself a complete mailbox barrier
+  # — means no dispatch is pending AND the last one ran to completion (fact 2 of
+  # the module doc: the router spawns nothing).
+  #
+  # The ordering that makes this sound is the same one the barrier above rests
+  # on: whatever the caller did to provoke a dispatch is already in the router's
+  # mailbox ahead of our call, so by the time we look, the timer is armed. We
+  # then wait on the TIMER, not on the clock — a fixed sleep of the debounce
+  # window would be a guess in both directions and is exactly what this file
+  # exists to refuse.
+  defp drain_dispatch(pid, task_id, deadline) do
+    # `Map.get/3`, not `.dispatch_timer`: `sync_router/2` is also used against
+    # stand-in routers (see this module's own test) whose state carries no such
+    # key. A state with no dispatch timer owes no dispatch.
+    if Map.get(:sys.get_state(pid), :dispatch_timer) == nil do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("""
+        sync_router/2 waited past its timeout for task #{task_id} with a
+        debounced dispatch still armed.
+
+        `state.dispatch_timer` never returned to `nil`, so either the router is
+        re-arming `:dispatch` faster than it drains it (the endpoint-not-ready
+        retry inside `do_dispatch/2` is the usual suspect), or a `:dispatch_now`
+        handler is blocked.
+        """)
+      else
+        Process.sleep(@dispatch_drain_interval)
+        drain_dispatch(pid, task_id, deadline)
+      end
     end
   end
 

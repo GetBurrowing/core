@@ -312,6 +312,11 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
 
       # Drain the boot dispatch before subscribing, so every broadcast the
       # assertions below see is attributable to a reconnect.
+      # Task 01a00587: `:dispatch` is debounced, so the bare call proves only
+      # that a reconcile is SCHEDULED. `sync_router/2` waits for it to run,
+      # which is what makes the `refute_received`/`assert_received` below
+      # statements about the dispatch rather than about scheduling.
+      :ok = sync_router(task.id)
       assert %{task_id: _} = TaskRouter.current_status(task.id)
 
       PlatformWeb.Endpoint.subscribe("runtime:#{runtime_a}")
@@ -324,6 +329,11 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       # this task, so nothing should be poked.
       send(watcher, {:runtime_reconnected, runtime_a})
       TaskRouterWatcher.sync()
+      # Task 01a00587: `:dispatch` is debounced, so the bare call proves only
+      # that a reconcile is SCHEDULED. `sync_router/2` waits for it to run,
+      # which is what makes the `refute_received`/`assert_received` below
+      # statements about the dispatch rather than about scheduling.
+      :ok = sync_router(task.id)
       assert %{task_id: _} = TaskRouter.current_status(task.id)
 
       # Two exact barriers, not a sleep: `sync/0` returns only after the
@@ -337,6 +347,11 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       # The EXECUTION agent's runtime reconnects — this one owns the phase.
       send(watcher, {:runtime_reconnected, runtime_b})
       TaskRouterWatcher.sync()
+      # Task 01a00587: `:dispatch` is debounced, so the bare call proves only
+      # that a reconcile is SCHEDULED. `sync_router/2` waits for it to run,
+      # which is what makes the `refute_received`/`assert_received` below
+      # statements about the dispatch rather than about scheduling.
+      :ok = sync_router(task.id)
       assert %{task_id: _} = TaskRouter.current_status(task.id)
 
       assert_received %Phoenix.Socket.Broadcast{
@@ -509,6 +524,11 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       # enqueues `:dispatch` before `start_assignment/2` returns, and a pure
       # `GenServer.call` is answered strictly after every message already in
       # the mailbox is handled.
+      # Task 01a00587: `:dispatch` is debounced, so the bare call proves only
+      # that a reconcile is SCHEDULED. `sync_router/2` waits for it to run,
+      # which is what makes the `refute_received`/`assert_received` below
+      # statements about the dispatch rather than about scheduling.
+      :ok = sync_router(task.id)
       assert %{task_id: _} = TaskRouter.current_status(task.id)
 
       assert {:ok, _} = Tasks.soft_delete_task(task)
@@ -562,6 +582,11 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
 
       # See note in soft_delete test above — drain the router's :dispatch tick
       # before transitioning.
+      # Task 01a00587: `:dispatch` is debounced, so the bare call proves only
+      # that a reconcile is SCHEDULED. `sync_router/2` waits for it to run,
+      # which is what makes the `refute_received`/`assert_received` below
+      # statements about the dispatch rather than about scheduling.
+      :ok = sync_router(task.id)
       assert %{task_id: _} = TaskRouter.current_status(task.id)
 
       assert {:ok, _} = Tasks.transition_task_status(task, "planning")
