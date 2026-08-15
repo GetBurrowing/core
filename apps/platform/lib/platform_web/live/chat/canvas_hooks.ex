@@ -28,6 +28,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   alias Platform.Chat.CanvasAccess
   alias Platform.Chat.Presence
   alias Platform.Chat.PubSub, as: ChatPubSub
+  alias PlatformWeb.ChatLive.MessagesHooks
 
   @doc "Attach canvas handlers. Call from `ChatLive.mount/3`."
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -482,22 +483,58 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   defp handle_event(_event, _params, socket), do: {:cont, socket}
 
-  defp handle_info({:canvas_created, canvas}, socket), do: {:halt, put(socket, canvas)}
+  # Both clauses gate on `MessagesHooks.same_active_space?/2` — the same guard,
+  # from the same definition, that the message-broadcast handlers use. The
+  # LiveView is subscribed to every channel in the workspace (intended: internal
+  # staff can see channels across client orgs), so these clauses receive canvas
+  # lifecycle events for spaces the viewer is not looking at. `put/2` merges the
+  # canvas into `@canvases_by_id`, and `chat_message.ex` renders the whole
+  # document inline for any `content_type == "canvas"` row whose canvas is in
+  # that map. Guarding only `messages_hooks.ex` would leave the foreign canvas
+  # sitting in that map and the bug half fixed.
+  #
+  # Strict on `space_id`, with the one consequence stated rather than
+  # special-cased: a canvas the viewer has opened whose `space_id` differs from
+  # the active space stops live-refreshing. The only route to that state is the
+  # `find/2` gap (any viewer resolves any canvas by id, and `put/2` subscribes
+  # the LiveView to foreign canvas topics on first sight), which has its own
+  # ticket. An `active_canvas.id` exemption would harden a path we intend to
+  # close, and it would only half work: `MessagesHooks` would still refuse to
+  # reinsert the message row, so the canvas pane would update while the inline
+  # card in the stream stayed frozen. Half-live is worse than not-live.
+  defp handle_info({:canvas_created, canvas}, socket) do
+    if MessagesHooks.same_active_space?(socket, canvas) do
+      {:halt, put(socket, canvas)}
+    else
+      {:halt, socket}
+    end
+  end
 
   defp handle_info({:canvas_updated, canvas}, socket) do
-    socket = put(socket, canvas)
+    if MessagesHooks.same_active_space?(socket, canvas) do
+      socket = put(socket, canvas)
 
-    socket =
-      if socket.assigns[:show_versions_panel] && active_canvas_id(socket) == canvas.id do
-        assign(socket, :canvas_versions, load_versions(canvas))
-      else
-        socket
-      end
+      socket =
+        if socket.assigns[:show_versions_panel] && active_canvas_id(socket) == canvas.id do
+          assign(socket, :canvas_versions, load_versions(canvas))
+        else
+          socket
+        end
 
-    {:halt, socket}
+      {:halt, socket}
+    else
+      {:halt, socket}
+    end
   end
 
   defp handle_info({:canvas_deleted, canvas}, socket), do: {:halt, remove(socket, canvas)}
+
+  # NOT guarded, deliberately, and flagged rather than silently widened: this is
+  # the same unguarded `put/2` vector as `:canvas_created`, broadcast on the
+  # space topic by `Chat.restore_canvas/1`. The stage-2 brief names
+  # `:canvas_created` and `:canvas_updated` and nothing else, and restore is not
+  # reachable from the reproduction. Reported to the execution space and the
+  # project journal for its own ticket instead of being absorbed here.
   defp handle_info({:canvas_restored, canvas}, socket), do: {:halt, put(socket, canvas)}
 
   # Patch broadcast from `Canvas.Server.apply_patches/3,4` — fired on every

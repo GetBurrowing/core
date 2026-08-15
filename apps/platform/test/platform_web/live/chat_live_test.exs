@@ -430,6 +430,133 @@ defmodule PlatformWeb.ChatLiveTest do
     assert render(view) =~ "INLINE_REFRESH_TOKEN"
   end
 
+  # An internal user is subscribed to every channel in the workspace at mount
+  # (and to each new one via `{:space_created, ...}`), which is intended:
+  # internal staff can see channels across client orgs. Subscription is not
+  # permission to RENDER. A `:canvas_updated` broadcast from a channel the
+  # viewer is not looking at must not reinsert that channel's messages into
+  # the open pane, and must not merge its canvas into `@canvases_by_id`.
+  #
+  # Both directions live in one test on purpose: a guard that also suppresses
+  # same-space refresh would ship green if the positive case sat in a separate
+  # test. The same-space half runs FIRST as a positive control, so a failure on
+  # the foreign half cannot be blamed on broken plumbing.
+  test "a :canvas_updated from a space the viewer is not in never renders in the open pane", %{
+    conn: conn
+  } do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/chat/general", on_error: :warn)
+
+    user = Repo.get_by!(User, email: "chat_test@example.com")
+    space = Repo.get_by!(Chat.Space, slug: "general")
+
+    participant =
+      Repo.get_by(Chat.Participant,
+        space_id: space.id,
+        participant_type: "user",
+        participant_id: user.id
+      ) ||
+        elem(
+          Chat.add_participant(space.id, %{participant_type: "user", participant_id: user.id}),
+          1
+        )
+
+    # ── Positive control: the space the user IS viewing still live-refreshes ──
+    {:ok, own_canvas, _own_message} =
+      Chat.create_canvas_with_message(space.id, participant.id, %{
+        title: "Own space canvas"
+      })
+
+    {:ok, _} =
+      Chat.update_canvas(:system, own_canvas, %{
+        "document" => canvas_document_with_token("OWN_SPACE_REFRESH_TOKEN")
+      })
+
+    assert render(view) =~ "OWN_SPACE_REFRESH_TOKEN",
+           "same-space :canvas_updated must still refresh the inline canvas card"
+
+    # ── Foreign space: mounted user is deliberately NOT a participant ──
+    {:ok, space_b} =
+      Chat.create_space(%{name: "Client Channel B", slug: "client-channel-b", kind: "channel"})
+
+    other_user =
+      insert_chat_user(%{
+        email: "other_org_user@example.com",
+        name: "Other Org User",
+        oidc_sub: "oidc-other-org-user"
+      })
+
+    {:ok, participant_b} =
+      Chat.add_participant(space_b.id, %{
+        participant_type: "user",
+        participant_id: other_user.id,
+        display_name: other_user.name,
+        joined_at: DateTime.utc_now()
+      })
+
+    # Flush the mailbox so the LiveView has handled `{:space_created, space_b}`
+    # and subscribed to space B's topic before the canvas broadcast fires.
+    # Without this the test could pass because the event never arrived.
+    _ = :sys.get_state(view.pid)
+
+    {:ok, canvas_b, message_b} =
+      Chat.create_canvas_with_message(space_b.id, participant_b.id, %{
+        title: "Foreign space canvas"
+      })
+
+    # A real write, not a hand-sent message: only `update_canvas/3` runs
+    # `publish_canvas_updated/1`, and only a write inserts through the same
+    # path production uses.
+    {:ok, _} =
+      Chat.update_canvas(:system, canvas_b, %{
+        "document" => canvas_document_with_token("FOREIGN_SPACE_BLEED_TOKEN")
+      })
+
+    refute render(view) =~ "FOREIGN_SPACE_BLEED_TOKEN",
+           "a canvas edit in a space the viewer is not in must not render in the open pane"
+
+    # The bled insert also mutates `:last_msg_day` inside
+    # `stream_insert_with_day_label/2`, so it can shift day separators for the
+    # space the user IS viewing. The damage is not limited to one extra row.
+    assigns = :sys.get_state(view.pid).socket.assigns
+
+    refute Map.has_key?(assigns.msg_day_labels, message_b.id),
+           "a foreign space's message must never enter :msg_day_labels"
+
+    # CanvasHooks state, asserted separately from the render. The two guards
+    # fail independently and the render assertion above only covers one of them:
+    # with MessagesHooks guarded and CanvasHooks not, no foreign message row
+    # reaches the stream, so the token cannot render and the refute passes while
+    # the foreign canvas still sits in `@canvases_by_id`. Verified by
+    # neutralising each guard in turn. Without this assertion the CanvasHooks
+    # half of the fix has no coverage at all.
+    refute Map.has_key?(assigns.canvases_by_id, canvas_b.id),
+           "a foreign space's canvas must never enter @canvases_by_id"
+  end
+
+  defp canvas_document_with_token(token) do
+    %{
+      "version" => 1,
+      "revision" => 2,
+      "root" => %{
+        "id" => "root",
+        "type" => "stack",
+        "props" => %{},
+        "children" => [
+          %{
+            "id" => "m1",
+            "type" => "markdown",
+            "props" => %{"content" => "#{token} body"},
+            "children" => []
+          }
+        ]
+      },
+      "theme" => %{},
+      "bindings" => %{},
+      "meta" => %{}
+    }
+  end
+
   test "clicking an action_row button surfaces a flash via :canvas_event broadcast", %{
     conn: conn
   } do

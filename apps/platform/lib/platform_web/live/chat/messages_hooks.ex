@@ -1163,11 +1163,35 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   # at its insert-time snapshot. Re-insert the referencing message(s) here so the
   # template re-renders with the updated canvas. `:cont` so CanvasHooks still runs
   # after us and refreshes `canvases_by_id` before the final diff is computed.
+  #
+  # `same_active_space?/2` gates the reinsert, the same guard the nine sibling
+  # handlers in this module already use. `Chat.list_message_ids_for_canvas/1`
+  # filters on `canvas_id` and `deleted_at` only, and `reinsert_stream_message/2`
+  # reads through the unscoped `Chat.get_message/1`, so an ungated clause appends
+  # a foreign space's messages to whatever pane the viewer has open.
+  #
+  # The guard has to sit HERE, upstream of the reinsert, not on the rendered row.
+  # A foreign message id is absent from `:msg_day_labels`, so
+  # `stream_reinsert_with_day_label/2` misses its label cache and falls through to
+  # `stream_insert_with_day_label/2`, which writes `:last_msg_day`. The next
+  # genuine message in the space the user IS viewing would then compute its day
+  # separator against a foreign space's date. Suppressing the row after the fact
+  # would leave that corruption in place.
+  #
+  # `:cont` on BOTH paths. On the pass path CanvasHooks must run after us and
+  # refresh `canvases_by_id`. On the reject path `:cont` is equally deliberate:
+  # halting here would stop the event reaching CanvasHooks and would make this
+  # module's hook ordering load-bearing for a guard that belongs to CanvasHooks.
+  # Each hook decides for itself what it will render.
   defp handle_info({:canvas_updated, canvas}, socket) do
     socket =
-      canvas.id
-      |> Chat.list_message_ids_for_canvas()
-      |> Enum.reduce(socket, &reinsert_stream_message(&2, &1))
+      if same_active_space?(socket, canvas) do
+        canvas.id
+        |> Chat.list_message_ids_for_canvas()
+        |> Enum.reduce(socket, &reinsert_stream_message(&2, &1))
+      else
+        socket
+      end
 
     {:cont, socket}
   end
@@ -1823,20 +1847,40 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     end
   end
 
-  # Cross-space broadcast guard. The chat LiveView subscribes to ALL the user's
-  # spaces on mount (chat_live.ex:104) so sidebar features like unread counts
-  # update in real time. That means message-broadcast handlers receive events
-  # from every subscribed space, not just the currently-active one. Without
-  # this guard, edits / deletes / reactions in space A leak into the user's
-  # view of space B as ghost rows in the :messages stream.
-  defp same_active_space?(socket, %{space_id: space_id}) when is_binary(space_id) do
+  @doc """
+  Cross-space broadcast guard: does `payload` belong to the space this socket
+  is currently viewing?
+
+  The chat LiveView subscribes to ALL the user's spaces on mount so sidebar
+  features like unread counts update in real time, and an internal user's
+  subscribe set spans every channel in the workspace across every org. That
+  breadth is intended (internal staff can see channels across client orgs) and
+  belongs to the SUBSCRIPTION. It is not permission to RENDER. Broadcast
+  handlers therefore receive events from every subscribed space, not just the
+  active one, and each one has to ask this question before it touches the
+  socket. Without the guard, edits / deletes / reactions / canvas writes in
+  space A leak into the user's view of space B as ghost rows in the `:messages`
+  stream.
+
+  Accepts any payload with a binary `space_id`, which covers `Message`,
+  `Canvas`, and the plain maps some broadcasts carry. Anything else is `false`:
+  a payload that cannot prove which space it came from is not renderable here.
+  `false` when there is no active space at all, for the same reason.
+
+  Public so `PlatformWeb.ChatLive.CanvasHooks` can apply the SAME guard rather
+  than growing a second copy of it. Both hook modules are attached to the one
+  `ChatLive` socket, so one definition keeps them from drifting apart and
+  disagreeing about what is renderable.
+  """
+  @spec same_active_space?(Phoenix.LiveView.Socket.t(), map()) :: boolean()
+  def same_active_space?(socket, %{space_id: space_id}) when is_binary(space_id) do
     case socket.assigns[:active_space] do
       %{id: ^space_id} -> true
       _ -> false
     end
   end
 
-  defp same_active_space?(_socket, _payload), do: false
+  def same_active_space?(_socket, _payload), do: false
 
   # Reaction payloads carry only `message_id`, not `space_id`. Look up the parent
   # message's space and compare. The DB hit only fires when the broadcast is
