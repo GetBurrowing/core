@@ -770,4 +770,228 @@ defmodule Platform.TasksTest do
       refute_receive {:task_updated, _}, 200
     end
   end
+
+  defp plan_review_task(status) do
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: "PlanReview #{System.unique_integer([:positive])}",
+        repo_url: "https://github.com/test/plan-review"
+      })
+
+    {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Reviewed"})
+
+    {:ok, _plan} =
+      %Platform.Tasks.Plan{}
+      |> Platform.Tasks.Plan.changeset(%{task_id: task.id, version: 1, status: status})
+      |> Repo.insert()
+
+    task
+  end
+
+  describe "plan_pending_review?/1 — takes a TASK id" do
+    # The `task_plan_review` inbox row's `source_id` is the task id, not the
+    # plan id (see the `Inbox.emit` in `maybe_emit_plan_review_inbox/1`), so
+    # the staleness predicate has to key on the task.
+    test "true while a plan sits in pending_review" do
+      task = plan_review_task("pending_review")
+      assert Tasks.plan_pending_review?(task.id)
+    end
+
+    test "false once the plan is approved" do
+      task = plan_review_task("approved")
+      refute Tasks.plan_pending_review?(task.id)
+    end
+
+    # Both negatives matter: an approved-only test leaves the rejection path
+    # silently broken.
+    test "false once the plan is rejected" do
+      task = plan_review_task("rejected")
+      refute Tasks.plan_pending_review?(task.id)
+    end
+
+    test "false for a missing task and for an unresolvable id" do
+      refute Tasks.plan_pending_review?(Ecto.UUID.generate())
+      refute Tasks.plan_pending_review?(nil)
+      refute Tasks.plan_pending_review?(:not_an_id)
+    end
+  end
+
+  describe "eager plan-review inbox clear at approve_plan/reject_plan" do
+    alias Platform.Inbox
+
+    defp sponsor! do
+      n = System.unique_integer([:positive])
+
+      Repo.insert!(%Platform.Accounts.User{
+        name: "Sponsor #{n}",
+        email: "sponsor-#{n}@example.com",
+        oidc_sub: "sponsor-sub-#{n}"
+      })
+    end
+
+    # A sponsored task plus `plan_count` plans all sitting in `pending_review`,
+    # and the sponsor's live `task_plan_review` row keyed on the TASK id.
+    defp sponsored_review_task!(sponsor, plan_count \\ 1) do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "EagerClear #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/eager-clear"
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sponsored",
+          sponsor_user_id: sponsor.id
+        })
+
+      plans =
+        Enum.map(1..plan_count, fn v ->
+          %Platform.Tasks.Plan{}
+          |> Platform.Tasks.Plan.changeset(%{
+            task_id: task.id,
+            version: v,
+            status: "pending_review"
+          })
+          |> Repo.insert!()
+        end)
+
+      {:ok, row} =
+        Inbox.emit(%{
+          user_id: sponsor.id,
+          kind: "task_plan_review",
+          source_type: "task",
+          source_id: task.id,
+          title: "Plan ready for review",
+          url: "/tasks/#{task.id}"
+        })
+
+      {task, plans, row}
+    end
+
+    defp live?(row_id), do: is_nil(Repo.get!(Inbox.Item, row_id).dismissed_at)
+
+    test "approval clears the sponsor's plan-review row" do
+      sponsor = sponsor!()
+      {_task, [plan], row} = sponsored_review_task!(sponsor)
+
+      assert live?(row.id)
+      assert {:ok, _} = Tasks.approve_plan(plan, sponsor.id)
+      refute live?(row.id)
+    end
+
+    # Both verdicts, one assertion each. Wiring approval alone is exactly how
+    # this class of gap arises: the rejection path settles the sponsor's
+    # action just as completely and would otherwise leave the row live until
+    # the next reconcile.
+    test "rejection clears the sponsor's plan-review row" do
+      sponsor = sponsor!()
+      {_task, [plan], row} = sponsored_review_task!(sponsor)
+
+      assert live?(row.id)
+      assert {:ok, _} = Tasks.reject_plan(plan, sponsor.id, "not yet")
+      refute live?(row.id)
+    end
+
+    # The e2e review of this task (case 3, 2026-08-14) found the eager clear
+    # sweeping the sponsor's OTHER row into the same write. `dismiss_by_source`
+    # keys on (user_id, source_type, source_id) and `task_sponsor_assigned`
+    # carries the same triple, so an unfiltered sweep dismissed both with one
+    # `dismissed_at` — undoing the "cleared by the human, by hand" decision
+    # that `Inbox.row_stale?/1` documents. One assertion per side below: the
+    # kind it owns goes, the kind it does not own stays.
+    test "settling a plan clears ONLY the plan-review row, not the sponsor row" do
+      sponsor = sponsor!()
+      {task, [plan], review_row} = sponsored_review_task!(sponsor)
+
+      {:ok, sponsor_row} =
+        Inbox.emit(%{
+          user_id: sponsor.id,
+          kind: "task_sponsor_assigned",
+          source_type: "task",
+          source_id: task.id,
+          title: "You sponsor this task",
+          url: "/tasks/#{task.id}"
+        })
+
+      assert live?(review_row.id)
+      assert live?(sponsor_row.id)
+
+      assert {:ok, _} = Tasks.approve_plan(plan, sponsor.id)
+
+      refute live?(review_row.id)
+      # The half that fails an unfiltered sweep. Sponsorship is an ongoing
+      # state with no resolution event; settling a plan is not its resolution.
+      assert live?(sponsor_row.id)
+    end
+
+    # Same, through the rejection path — the eager clear runs on both verdicts,
+    # so a kind filter present on one and absent on the other would be invisible
+    # to the approval test alone.
+    test "rejecting a plan also leaves the sponsor row alone" do
+      sponsor = sponsor!()
+      {task, [plan], review_row} = sponsored_review_task!(sponsor)
+
+      {:ok, sponsor_row} =
+        Inbox.emit(%{
+          user_id: sponsor.id,
+          kind: "task_sponsor_assigned",
+          source_type: "task",
+          source_id: task.id,
+          title: "You sponsor this task",
+          url: "/tasks/#{task.id}"
+        })
+
+      assert {:ok, _} = Tasks.reject_plan(plan, sponsor.id, "not yet")
+
+      refute live?(review_row.id)
+      assert live?(sponsor_row.id)
+    end
+
+    # The guard, from the other side: a task still holding a `pending_review`
+    # plan keeps its row, because the sponsor still has something to review.
+    test "row SURVIVES approval of one plan while a sibling stays pending_review" do
+      sponsor = sponsor!()
+      {_task, [plan_v1, _plan_v2], row} = sponsored_review_task!(sponsor, 2)
+
+      assert {:ok, _} = Tasks.approve_plan(plan_v1, sponsor.id)
+      assert live?(row.id)
+    end
+
+    # The eager clear is an OPTIMISATION BESIDE the reconciler, never the
+    # mechanism. Bypass the eager call entirely — settle the plan with a raw
+    # `Repo.update` that `Tasks` never sees — and the reconciler still clears
+    # the same row. If this test ever fails, correctness has moved into the
+    # eager path and every future resolution path must remember to call it.
+    test "reconcile_for_user still clears the row when the eager call is bypassed" do
+      sponsor = sponsor!()
+      {_task, [plan], row} = sponsored_review_task!(sponsor)
+
+      plan
+      |> Ecto.Changeset.change(status: "approved")
+      |> Repo.update!()
+
+      assert live?(row.id)
+
+      Inbox.reconcile_for_user(sponsor.id)
+      refute live?(row.id)
+    end
+
+    # And after the eager clear has already run, the reconciler is a silent
+    # no-op: nothing left to dismiss, so no second `{:inbox_changed, _}`.
+    test "reconcile after an eager clear dismisses nothing and broadcasts nothing" do
+      sponsor = sponsor!()
+      {_task, [plan], row} = sponsored_review_task!(sponsor)
+
+      assert {:ok, _} = Tasks.approve_plan(plan, sponsor.id)
+      refute live?(row.id)
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "inbox:#{sponsor.id}")
+
+      Inbox.reconcile_for_user(sponsor.id)
+
+      refute live?(row.id)
+      refute_receive {:inbox_changed, _}, 200
+    end
+  end
 end

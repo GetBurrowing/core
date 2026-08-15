@@ -121,6 +121,19 @@ defmodule PlatformWeb.ShellLive do
         socket
       end
 
+    # Task 01a00066 stage 3. Self-heal stale inbox rows ONCE per mount, right
+    # before the first `Inbox.unread_count/1` below, so the badge that renders
+    # is computed from reconciled state. This on_mount runs on every surface
+    # including the external `chat.` host's `:external_chat` live_session,
+    # which is the whole point: `/inbox` is fenced off from external users by
+    # `PlatformWeb.Plugs.ExternalUserScope`, so `InboxLive.load_items/1` — the
+    # other reconcile entry point — is unreachable for exactly the users who
+    # most need the healing. Mount-only is deliberate: the
+    # `:inbox_count_refresh` hook fires on every inbox PubSub event and
+    # reconciling there would turn one badge broadcast into a scan-and-write
+    # storm that can re-enter itself via `{:inbox_changed, …}`.
+    reconcile_inbox(raw_user_id)
+
     socket =
       socket
       |> assign(:current_user, current_user)
@@ -949,11 +962,18 @@ defmodule PlatformWeb.ShellLive do
       0
   end
 
-  # Initial unread count for the desktop icon-rail Inbox badge. Fail-open like
+  # Unread count for the desktop icon-rail Inbox badge. Fail-open like
   # compute_tasks_count — a count error renders 0 (badge hidden) rather than
   # blocking the shell mount. Anonymous/non-user mounts (nil id) are 0 too.
+  #
+  # Task 01a00066 stage 4: this is the reachability-aware count, not the raw
+  # one — a count never includes something the viewer has no way to act on.
+  # BOTH the mount assign and the `:inbox_count_refresh` recompute go through
+  # here, so the first paint and the live badge can never disagree about what
+  # is being counted. Internal users are unaffected (identical to
+  # `Inbox.unread_count/1`).
   defp compute_inbox_count(user_id) when is_binary(user_id) do
-    Inbox.unread_count(user_id)
+    Inbox.reachable_unread_count(user_id)
   rescue
     e ->
       require Logger
@@ -962,6 +982,21 @@ defmodule PlatformWeb.ShellLive do
   end
 
   defp compute_inbox_count(_), do: 0
+
+  # Task 01a00066 stage 3. One idempotent reconcile pass per mount. Same
+  # rescue-and-log posture as compute_inbox_count/1: a reconcile failure must
+  # never fail a mount — the badge simply renders the un-healed count.
+  defp reconcile_inbox(user_id) when is_binary(user_id) do
+    Inbox.reconcile_for_user(user_id)
+    :ok
+  rescue
+    e ->
+      require Logger
+      Logger.warning("[ShellLive] inbox reconcile failed: #{inspect(e)}")
+      :ok
+  end
+
+  defp reconcile_inbox(_), do: :ok
 
   # Task 019ffb7b stage 6. Mirror the already-computed `:inbox_unread_count`
   # onto the `AppBadge` JS hook (`assets/js/hooks/app_badge.js`), which paints

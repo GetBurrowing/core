@@ -436,6 +436,47 @@ defmodule Platform.Meetings do
 
   def get_live_meeting_for_space(_space_id), do: nil
 
+  @doc """
+  Whether the meeting `id` is still `live`.
+
+  The staleness predicate behind meeting inbox rows: live means the row is
+  still actionable. One indexed EXISTS over the same `status == "live"` filter
+  `get_live_meeting_for_space/1` uses — no row materialisation.
+
+  A genuinely absent meeting is `false` (nothing left to join). An id we cannot
+  resolve at all — a non-binary, or a binary that is not a UUID and so can
+  never name a row — is `true`: ambiguity must never dismiss a row, so the
+  caller errs toward leaving it in place.
+  """
+  @spec meeting_live?(binary()) :: boolean()
+  def meeting_live?(id) when is_binary(id) do
+    case Platform.UUID.cast(id) do
+      {:ok, uuid} -> Repo.exists?(from(m in Meeting, where: m.id == ^uuid and m.status == "live"))
+      :error -> true
+    end
+  end
+
+  def meeting_live?(_id), do: true
+
+  @doc """
+  Whether a meeting row with `id` exists at all, whatever its status.
+
+  Separates ABSENT from ENDED for `Platform.Inbox.reconcile_for_user/1`.
+  `meeting_live?/1` answers `false` for both, and only the second is a positive
+  confirmation that an inbox row's subject is dead; a meeting the reconciler
+  cannot find at all leaves the row in place.
+
+  One indexed EXISTS on the primary key. Deliberately uncast, matching the
+  binary clause of `Platform.Tasks.plan_pending_review?/1`: the only caller
+  passes an `inbox_items.source_id`, an `Ecto.UUID` column value.
+  """
+  @spec meeting_exists?(binary() | term()) :: boolean()
+  def meeting_exists?(id) when is_binary(id) do
+    Repo.exists?(from(m in Meeting, where: m.id == ^id))
+  end
+
+  def meeting_exists?(_id), do: false
+
   @doc "Get a meeting by its per-project slug. Returns `nil` if not found."
   @spec get_meeting_by_slug(binary(), String.t()) :: Meeting.t() | nil
   def get_meeting_by_slug(project_id, slug) do

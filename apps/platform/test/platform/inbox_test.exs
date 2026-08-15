@@ -237,6 +237,62 @@ defmodule Platform.InboxTest do
     end
   end
 
+  describe "dismiss_by_source/4 — the kind filter" do
+    # A source triple is not unique per kind: task_sponsor_assigned and
+    # task_plan_review both carry source_type "task" and the same task id. A
+    # caller that owns one kind must be able to clear only that one.
+    setup do
+      user = insert_user()
+      source_id = Ecto.UUID.generate()
+
+      {:ok, review} =
+        Inbox.emit(
+          valid_attrs(user, %{kind: "task_plan_review", source_type: "task", source_id: source_id})
+        )
+
+      {:ok, sponsor} =
+        Inbox.emit(
+          valid_attrs(user, %{
+            kind: "task_sponsor_assigned",
+            source_type: "task",
+            source_id: source_id
+          })
+        )
+
+      %{user: user, source_id: source_id, review: review, sponsor: sponsor}
+    end
+
+    defp dismissed?(id), do: not is_nil(Repo.get!(Inbox.Item, id).dismissed_at)
+
+    test "kind: clears that kind and leaves the sibling standing", ctx do
+      assert {:ok, 1} =
+               Inbox.dismiss_by_source(ctx.user.id, "task", ctx.source_id,
+                 kind: "task_plan_review"
+               )
+
+      assert dismissed?(ctx.review.id)
+      refute dismissed?(ctx.sponsor.id)
+    end
+
+    # CONTROL. Without this, a filter that matched nothing would pass the case
+    # above by dismissing neither row, and the count assertion is what tells
+    # "filtered correctly" apart from "matched nothing".
+    test "no kind: still clears every row for the source, as callers rely on", ctx do
+      assert {:ok, 2} = Inbox.dismiss_by_source(ctx.user.id, "task", ctx.source_id)
+
+      assert dismissed?(ctx.review.id)
+      assert dismissed?(ctx.sponsor.id)
+    end
+
+    test "a kind nothing matches dismisses nothing", ctx do
+      assert {:ok, 0} =
+               Inbox.dismiss_by_source(ctx.user.id, "task", ctx.source_id, kind: "chat_mention")
+
+      refute dismissed?(ctx.review.id)
+      refute dismissed?(ctx.sponsor.id)
+    end
+  end
+
   describe "dismiss = gone; @mention = back" do
     test "re-emitting the same source triple after dismissal yields a NEW row" do
       user = insert_user()
@@ -257,6 +313,501 @@ defmodule Platform.InboxTest do
       ids = Inbox.list_unread_for_user(user.id) |> Enum.map(& &1.id)
       assert ids == [second.id]
       refute first.id in ids
+    end
+  end
+
+  # ── reconcile_for_user/1 ──────────────────────────────────────────────────
+  #
+  # EVERY kind gets an assertion on BOTH sides. A reconciler that clears
+  # unconditionally passes every positive case on its own, so a clears-when-
+  # resolved test proves nothing without its survives-while-live twin.
+
+  defp live_ids(user),
+    do: Inbox.list_unread_for_user(user.id) |> Enum.map(& &1.id) |> MapSet.new()
+
+  defp reconciled_ids(user) do
+    assert :ok = Inbox.reconcile_for_user(user.id)
+    live_ids(user)
+  end
+
+  defp project! do
+    {:ok, project} =
+      Platform.Tasks.create_project(%{
+        name: "Reconcile #{System.unique_integer([:positive])}",
+        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+      })
+
+    project
+  end
+
+  defp task_with_plan!(plan_status) do
+    {:ok, task} = Platform.Tasks.create_task(%{project_id: project!().id, title: "Reconciled"})
+
+    {:ok, _plan} =
+      %Platform.Tasks.Plan{}
+      |> Platform.Tasks.Plan.changeset(%{task_id: task.id, version: 1, status: plan_status})
+      |> Repo.insert()
+
+    task
+  end
+
+  describe "reconcile_for_user/1 — chat_mention" do
+    # ONE fixture, TWO messages with distinct UUIDv7 ids and the read watermark
+    # between them: the earlier mention is read (clears), the later is not
+    # (survives). A single-message fixture cannot separate the two.
+    test "clears a mention at or below the read watermark, keeps one above it" do
+      user = insert_user()
+
+      {:ok, space} =
+        Platform.Chat.create_space(%{
+          name: "Reconcile",
+          slug: "reconcile-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      {:ok, me} =
+        Platform.Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, author} =
+        Platform.Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, earlier} =
+        Platform.Chat.post_message(%{
+          space_id: space.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: "first"
+        })
+
+      {:ok, later} =
+        Platform.Chat.post_message(%{
+          space_id: space.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: "second"
+        })
+
+      assert earlier.id < later.id
+      :ok = Platform.Chat.mark_space_read(me.id, earlier.id)
+
+      {:ok, read_row} =
+        Inbox.emit(valid_attrs(user, %{source_id: earlier.id, title: "Mentioned (read)"}))
+
+      {:ok, unread_row} =
+        Inbox.emit(valid_attrs(user, %{source_id: later.id, title: "Mentioned (unread)"}))
+
+      survivors = reconciled_ids(user)
+
+      refute MapSet.member?(survivors, read_row.id)
+      assert MapSet.member?(survivors, unread_row.id)
+    end
+  end
+
+  describe "reconcile_for_user/1 — task_plan_review" do
+    test "survives while the plan is still pending_review" do
+      user = insert_user()
+      task = task_with_plan!("pending_review")
+
+      {:ok, row} =
+        Inbox.emit(
+          valid_attrs(user, %{
+            kind: "task_plan_review",
+            source_type: "task",
+            source_id: task.id,
+            title: "Plan ready for review"
+          })
+        )
+
+      assert MapSet.member?(reconciled_ids(user), row.id)
+    end
+
+    test "clears once the plan is approved" do
+      user = insert_user()
+      task = task_with_plan!("approved")
+
+      {:ok, row} =
+        Inbox.emit(
+          valid_attrs(user, %{
+            kind: "task_plan_review",
+            source_type: "task",
+            source_id: task.id,
+            title: "Plan ready for review"
+          })
+        )
+
+      refute MapSet.member?(reconciled_ids(user), row.id)
+    end
+
+    # Both terminal verdicts, not just approval: an approval-only test leaves
+    # the rejection path silently broken and its rows stuck forever.
+    test "clears once the plan is rejected" do
+      user = insert_user()
+      task = task_with_plan!("rejected")
+
+      {:ok, row} =
+        Inbox.emit(
+          valid_attrs(user, %{
+            kind: "task_plan_review",
+            source_type: "task",
+            source_id: task.id,
+            title: "Plan ready for review"
+          })
+        )
+
+      refute MapSet.member?(reconciled_ids(user), row.id)
+    end
+  end
+
+  describe "reconcile_for_user/1 — meeting_starting" do
+    defp reconcile_meeting! do
+      {:ok, meeting} =
+        Platform.Meetings.create_meeting(%{
+          project_id: project!().id,
+          name: "Standup #{System.unique_integer([:positive])}"
+        })
+
+      meeting
+    end
+
+    # The gap this closes: a meeting that ENDS without you ever joining.
+    # `Meetings.maybe_dismiss_meeting_inbox/2` fires at join time only, so
+    # nothing else would ever clear this row.
+    test "survives while the meeting is live, clears once it has ended" do
+      user = insert_user()
+      {:ok, live} = Platform.Meetings.start_meeting(reconcile_meeting!())
+
+      {:ok, row} =
+        Inbox.emit(
+          valid_attrs(user, %{
+            kind: "meeting_starting",
+            source_type: "meeting",
+            source_id: live.id,
+            title: "Meeting started"
+          })
+        )
+
+      assert MapSet.member?(reconciled_ids(user), row.id)
+
+      {:ok, _ended} = Platform.Meetings.end_meeting(live)
+
+      refute MapSet.member?(reconciled_ids(user), row.id)
+    end
+  end
+
+  describe "reconcile_for_user/1 — task_sponsor_assigned is deliberately never reconciled" do
+    # THIS TEST PINS A DECISION. Sponsorship has no resolution EVENT — it is an
+    # ongoing state. Task completion is the only candidate trigger and it is
+    # exactly wrong: the row means "you now own this", which gets MORE relevant
+    # while the task runs. If this detonates, someone has added a reconciler
+    # clause for the kind, and the decision must be REOPENED, not the test
+    # adjusted.
+    test "a sponsor row survives reconciliation, including after its task completes" do
+      user = insert_user()
+      {:ok, task} = Platform.Tasks.create_task(%{project_id: project!().id, title: "Sponsored"})
+
+      {:ok, row} =
+        Inbox.emit(
+          valid_attrs(user, %{
+            kind: "task_sponsor_assigned",
+            source_type: "task",
+            source_id: task.id,
+            title: "You are the sponsor"
+          })
+        )
+
+      assert MapSet.member?(reconciled_ids(user), row.id)
+
+      task |> Platform.Tasks.Task.changeset(%{status: "done"}) |> Repo.update!()
+
+      assert MapSet.member?(reconciled_ids(user), row.id)
+    end
+  end
+
+  describe "reconcile_for_user/1 — review_request_pending (behaviour unchanged)" do
+    setup do
+      {:ok, task} = Platform.Tasks.create_task(%{project_id: project!().id, title: "Reviewed"})
+      {:ok, plan} = Platform.Tasks.create_plan(%{task_id: task.id})
+      {:ok, stage} = Platform.Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "UI"})
+      {:ok, _} = Platform.Tasks.PlanEngine.start_stage(stage.id)
+
+      {:ok, validation} =
+        Platform.Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      %{task: task, validation: validation}
+    end
+
+    defp review_row(user, task_id) do
+      {:ok, row} =
+        Inbox.emit(
+          valid_attrs(user, %{
+            kind: "review_request_pending",
+            source_type: "task_review",
+            source_id: task_id,
+            title: "Reviews awaiting you"
+          })
+        )
+
+      row
+    end
+
+    test "survives while the task still has a pending review request", ctx do
+      user = insert_user()
+
+      {:ok, _request} =
+        Platform.Tasks.ReviewRequests.create_review_request(%{
+          validation_id: ctx.validation.id,
+          task_id: ctx.task.id,
+          items: [%{label: "Desktop"}]
+        })
+
+      row = review_row(user, ctx.task.id)
+
+      assert MapSet.member?(reconciled_ids(user), row.id)
+    end
+
+    test "clears once the task has no pending review request", ctx do
+      user = insert_user()
+      row = review_row(user, ctx.task.id)
+
+      refute MapSet.member?(reconciled_ids(user), row.id)
+    end
+  end
+
+  describe "reconcile_for_user/1 — nothing unconfirmed is ever dismissed" do
+    # The governing rule, one row per way of being unconfirmable: a mention
+    # with no watermark to compare against, a legacy `review_request` row whose
+    # request resolves to no task, a task and a meeting that no longer exist
+    # (ABSENT, which the stage-1 predicates cannot tell apart from SETTLED —
+    # hence the existence conjuncts in `row_stale?/1`), and two kinds the
+    # reconciler has no clause for at all.
+    #
+    # This is the assertion that fails if anyone makes reconciliation
+    # optimistic. All five reconcilable kinds are represented on the survives
+    # side somewhere in this file; without that, a reconciler that dismissed
+    # everything would pass every clears-when-resolved test above.
+    test "rows whose subject cannot be positively confirmed dead all survive" do
+      user = insert_user()
+
+      rows =
+        for attrs <- [
+              %{kind: "chat_mention", source_type: "chat_message"},
+              %{kind: "review_request_pending", source_type: "review_request"},
+              %{kind: "task_plan_review", source_type: "task"},
+              %{kind: "meeting_starting", source_type: "meeting"},
+              %{kind: "meeting_invited", source_type: "meeting"},
+              %{kind: "lifecycle_step_failed", source_type: "task"}
+            ] do
+          {:ok, row} =
+            Inbox.emit(valid_attrs(user, Map.put(attrs, :source_id, Ecto.UUID.generate())))
+
+          row
+        end
+
+      survivors = reconciled_ids(user)
+
+      for row <- rows, do: assert(MapSet.member?(survivors, row.id))
+    end
+
+    # The existence conjunct in `row_stale?/1` is load-bearing, and this is what
+    # detonates if someone deletes it as redundant: with only
+    # `not plan_pending_review?/1` and `not meeting_live?/1`, BOTH rows above
+    # would be dismissed on a subject nobody confirmed dead. Pinned here
+    # separately from the survives list so the failure names the cause.
+    test "an absent task or meeting is NOT the same answer as a settled one" do
+      user = insert_user()
+
+      refute Platform.Tasks.task_exists?(Ecto.UUID.generate())
+      refute Platform.Meetings.meeting_exists?(Ecto.UUID.generate())
+
+      settled = task_with_plan!("approved")
+      assert Platform.Tasks.task_exists?(settled.id)
+      refute Platform.Tasks.plan_pending_review?(settled.id)
+
+      {:ok, ended} =
+        Platform.Meetings.end_meeting(
+          elem(Platform.Meetings.start_meeting(reconcile_meeting!()), 1)
+        )
+
+      assert Platform.Meetings.meeting_exists?(ended.id)
+      refute Platform.Meetings.meeting_live?(ended.id)
+
+      # And the settled pair really does clear, so the conjunct has not simply
+      # switched reconciliation off for these kinds.
+      {:ok, plan_row} =
+        Inbox.emit(
+          valid_attrs(user, %{
+            kind: "task_plan_review",
+            source_type: "task",
+            source_id: settled.id,
+            title: "Plan ready for review"
+          })
+        )
+
+      refute MapSet.member?(reconciled_ids(user), plan_row.id)
+    end
+
+    test "leaves another user's rows alone" do
+      mine = insert_user()
+      theirs = insert_user()
+      task = task_with_plan!("approved")
+
+      stale = %{
+        kind: "task_plan_review",
+        source_type: "task",
+        source_id: task.id,
+        title: "Plan ready for review"
+      }
+
+      {:ok, my_row} = Inbox.emit(valid_attrs(mine, stale))
+      {:ok, their_row} = Inbox.emit(valid_attrs(theirs, stale))
+
+      refute MapSet.member?(reconciled_ids(mine), my_row.id)
+      assert MapSet.member?(live_ids(theirs), their_row.id)
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # Task 01a00066 stage 4 — reachability-aware counting.
+  #
+  # THE RULE: a count never includes something the viewer has no way to act
+  # on. An external user is fenced off `/inbox` by `ExternalUserScope`, so a
+  # `task_sponsor_assigned` row is a promise their surface cannot keep; a
+  # `chat_mention` is reachable because the conversation is on their host.
+  # For an internal viewer this is `unread_scope/1` verbatim.
+  #
+  # ONE ASSERTION PER SIDE throughout: a filter that excluded EVERYTHING and
+  # a filter that excluded NOTHING both pass a one-sided test.
+  # ---------------------------------------------------------------------
+  describe "reachable_unread_scope/1,2 and reachable_unread_count/1" do
+    defp external_user! do
+      user = insert_user()
+      n = System.unique_integer([:positive])
+
+      org =
+        Repo.insert!(%Platform.Tenancy.Org{
+          name: "Reach Tenant #{n}",
+          slug: "tenant_reach_#{n}",
+          parent_org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        })
+
+      {:ok, _} = Platform.Tenancy.mark_membership_external(%{user_id: user.id, org_id: org.id})
+      # The predicate the branch keys off — pinned so the fixture cannot be
+      # the reason a filter appears (or fails) to apply.
+      assert Platform.Tenancy.external_user?(user)
+      user
+    end
+
+    # The mixed row set used on BOTH sides: one unreachable kind
+    # (`task_sponsor_assigned`) and one reachable kind (`chat_mention`).
+    # Same rows, different viewer — so a difference in the count can only be
+    # the reachability rule.
+    defp mixed_rows!(user) do
+      {:ok, sponsor} =
+        Inbox.emit(
+          valid_attrs(user, %{
+            kind: "task_sponsor_assigned",
+            source_type: "task",
+            source_id: Ecto.UUID.generate(),
+            title: "You are the sponsor"
+          })
+        )
+
+      {:ok, mention} =
+        Inbox.emit(valid_attrs(user, %{kind: "chat_mention", source_id: Ecto.UUID.generate()}))
+
+      %{sponsor: sponsor, mention: mention}
+    end
+
+    test "an external user with ONLY an unreachable row counts 0" do
+      user = external_user!()
+
+      {:ok, sponsor} =
+        Inbox.emit(
+          valid_attrs(user, %{
+            kind: "task_sponsor_assigned",
+            source_type: "task",
+            source_id: Ecto.UUID.generate(),
+            title: "You are the sponsor"
+          })
+        )
+
+      # The row IS live — the raw scope still sees it. The rule changes what
+      # the badge counts, it does not dismiss anything.
+      assert Inbox.unread_count(user.id) == 1
+      assert MapSet.member?(live_ids(user), sponsor.id)
+
+      # ...and the reachable count is 0, which is what makes the badge node
+      # leave the DOM (`IconRail.badge_text/1` returns nil at 0).
+      assert Inbox.reachable_unread_count(user.id) == 0
+    end
+
+    test "OTHER SIDE: the same external user's chat_mention IS counted" do
+      user = external_user!()
+      %{mention: mention} = mixed_rows!(user)
+
+      # Two live rows, exactly one of them reachable — so this separates the
+      # rule from a filter that drops everything.
+      assert Inbox.unread_count(user.id) == 2
+      assert Inbox.reachable_unread_count(user.id) == 1
+
+      reachable = Inbox.reachable_unread_scope(user.id) |> Repo.all() |> MapSet.new(& &1.id)
+      assert MapSet.member?(reachable, mention.id)
+    end
+
+    test "DIRECTION CONTROL: an internal user with the SAME row set counts every kind" do
+      user = insert_user()
+      refute Platform.Tenancy.external_user?(user)
+      %{sponsor: sponsor, mention: mention} = mixed_rows!(user)
+
+      # No filter, no behaviour change: identical to `unread_count/1`.
+      assert Inbox.reachable_unread_count(user.id) == 2
+      assert Inbox.reachable_unread_count(user.id) == Inbox.unread_count(user.id)
+
+      reachable = Inbox.reachable_unread_scope(user.id) |> Repo.all() |> MapSet.new(& &1.id)
+      assert MapSet.member?(reachable, sponsor.id)
+      assert MapSet.member?(reachable, mention.id)
+    end
+
+    test "the arity-2 form takes the externality as given, both ways" do
+      user = insert_user()
+      mixed_rows!(user)
+
+      # Same user, same rows — only the flag differs, so this pins that the
+      # branch is the externality and nothing else.
+      assert Repo.aggregate(Inbox.reachable_unread_scope(user.id, true), :count) == 1
+      assert Repo.aggregate(Inbox.reachable_unread_scope(user.id, false), :count) == 2
+    end
+
+    test "the internal scope is `unread_scope/1` verbatim — read and dismissed rows still drop" do
+      user = insert_user()
+      %{sponsor: sponsor, mention: mention} = mixed_rows!(user)
+
+      {:ok, _} = Inbox.mark_read(mention.id, user.id)
+      assert Inbox.reachable_unread_count(user.id) == 1
+
+      {:ok, _} = Inbox.mark_dismissed(sponsor.id, user.id)
+      assert Inbox.reachable_unread_count(user.id) == 0
+    end
+
+    test "an external user's reachable count drops to 0 when the mention is read" do
+      user = external_user!()
+      %{mention: mention} = mixed_rows!(user)
+
+      assert Inbox.reachable_unread_count(user.id) == 1
+      {:ok, _} = Inbox.mark_read(mention.id, user.id)
+
+      # Nothing reachable left → 0 → no badge at all, not a zero and not a
+      # dot. The unreachable sponsor row is still live and still uncounted.
+      assert Inbox.reachable_unread_count(user.id) == 0
+      assert Inbox.unread_count(user.id) == 1
     end
   end
 end

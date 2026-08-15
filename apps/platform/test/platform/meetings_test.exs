@@ -2339,4 +2339,44 @@ defmodule Platform.MeetingsTest do
       assert reason in [:not_found, :meetings_disabled]
     end
   end
+
+  describe "meeting_live?/1" do
+    defp live_predicate_meeting! do
+      {:ok, project} =
+        Platform.Tasks.create_project(%{
+          name: "Live Predicate #{System.unique_integer([:positive])}",
+          org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        })
+
+      {:ok, meeting} =
+        Meetings.create_meeting(%{
+          project_id: project.id,
+          name: "Standup #{System.unique_integer([:positive])}"
+        })
+
+      meeting
+    end
+
+    test "true while the meeting is live, false once it has ended" do
+      meeting = live_predicate_meeting!()
+      {:ok, live} = Meetings.start_meeting(meeting)
+
+      assert Meetings.meeting_live?(live.id)
+
+      {:ok, ended} = Meetings.end_meeting(live)
+      refute Meetings.meeting_live?(ended.id)
+    end
+
+    test "false for a meeting that is genuinely absent" do
+      refute Meetings.meeting_live?(Ecto.UUID.generate())
+    end
+
+    # Ambiguity must never dismiss the caller's row: an id we cannot resolve
+    # at all reads as still-live.
+    test "true for an id that cannot name a row at all" do
+      assert Meetings.meeting_live?(nil)
+      assert Meetings.meeting_live?(:not_an_id)
+      assert Meetings.meeting_live?("not-a-uuid")
+    end
+  end
 end

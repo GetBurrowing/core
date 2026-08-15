@@ -284,6 +284,24 @@ defmodule Platform.Tasks.RetryAutoApprovalTest do
       gated = open_gate!(task, plan)
       {:ok, _} = Tasks.resolve_architecture_gate(gated, :expired)
 
+      # Count EVERY emitted row, dismissed or not. Task 01a00066 stage 5
+      # makes the approval eagerly dismiss the sponsor's plan-review row, so
+      # an unread-scoped comparison would go green for the wrong reason: a
+      # duplicate emit followed by a source-keyed dismissal of BOTH rows
+      # reads as "unchanged" against an unread list. The subject here is
+      # whether a SECOND row is ever emitted, which only an all-rows count
+      # can see.
+      all_review_rows = fn ->
+        Platform.Inbox.Item
+        |> where([i], i.user_id == ^sponsor.id and i.kind == "task_plan_review")
+        |> select([i], i.id)
+        |> Repo.all()
+        |> Enum.sort()
+      end
+
+      ids_before = all_review_rows.()
+      assert length(ids_before) == 1
+
       rows_before = Inbox.list_unread_for_user(sponsor.id, kind: "task_plan_review")
       assert length(rows_before) == 1
       assert reload(plan).status == "pending_review"
@@ -295,7 +313,11 @@ defmodule Platform.Tasks.RetryAutoApprovalTest do
 
       assert reload(plan).auto_approved_at
 
-      assert Inbox.list_unread_for_user(sponsor.id, kind: "task_plan_review") == rows_before
+      assert all_review_rows.() == ids_before
+
+      # And the one row it did emit is now cleared, not stranded — the
+      # approval settled the sponsor's review action (task 01a00066 stage 5).
+      assert Inbox.list_unread_for_user(sponsor.id, kind: "task_plan_review") == []
     end
 
     test "the stack auto_accept_plan twin is healed by the same arm", %{project: project} do

@@ -2245,4 +2245,355 @@ defmodule PlatformWeb.ShellLiveTest do
       assert has_element?(view, "#push-subscribe[data-permission='granted']")
     end
   end
+
+  # ---------------------------------------------------------------------
+  # Inbox reconciliation on the shell mount path (task 01a00066 stage 3)
+  #
+  # THE DEFECT IS SURFACE REACHABILITY, not the reconciler. Before this
+  # stage the only caller of `Inbox.reconcile_for_user/1` was
+  # `InboxLive.load_items/1`, and `/inbox` is fenced off from external
+  # users by `PlatformWeb.Plugs.ExternalUserScope` (allowlist: `[]`,
+  # `["chat"]`, `["chat", slug]` — everything else 403s). So the one
+  # self-healing seam never ran for exactly the users who cannot reach it.
+  # The load-bearing test here is therefore an EXTERNAL user mounting the
+  # `chat.` host surface: an internal-user reconciliation test passes on
+  # `origin/main` and proves nothing.
+  #
+  # `chat.example.test` is an INVENTED host fixture — the router matches
+  # the `chat.` prefix, and `core` is public so no real hostname appears.
+  # ---------------------------------------------------------------------
+  describe "inbox reconciliation runs on the external chat mount" do
+    alias Platform.Inbox
+
+    @chat_host "chat.example.test"
+
+    defp reconcile_user!(name) do
+      n = System.unique_integer([:positive])
+
+      Repo.insert!(%User{
+        email: "reconcile-shell-#{n}@example.com",
+        name: name,
+        oidc_sub: "oidc-reconcile-shell-#{n}"
+      })
+    end
+
+    defp reconcile_tenant_org! do
+      n = System.unique_integer([:positive])
+
+      Repo.insert!(%Platform.Tenancy.Org{
+        name: "Reconcile Tenant #{n}",
+        slug: "tenant_reconcile_#{n}",
+        parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      })
+    end
+
+    defp reconcile_external_user! do
+      org = reconcile_tenant_org!()
+      user = reconcile_user!("Xena External")
+      {:ok, _} = Tenancy.mark_membership_external(%{user_id: user.id, org_id: org.id})
+      Tenancy.allow_dm(user, org)
+      %{user: user, org: org}
+    end
+
+    # ONE space, TWO messages with distinct UUIDv7 ids and the read
+    # watermark set BETWEEN them. `earlier` is behind the watermark
+    # (positively confirmed read → the reconciler must clear its row);
+    # `later` is ahead of it (unconfirmed → must survive). A one-message
+    # fixture cannot separate a reconciler from one that clears
+    # unconditionally.
+    defp mention_pair!(user, org_id) do
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Reconcile Shell",
+          slug: "reconcile-shell-#{System.unique_integer([:positive])}",
+          kind: "channel",
+          org_id: org_id
+        })
+
+      {:ok, me} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, author} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, earlier} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: "first"
+        })
+
+      {:ok, later} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: "second"
+        })
+
+      assert earlier.id < later.id
+      :ok = Chat.mark_space_read(me.id, earlier.id)
+
+      {:ok, read_row} =
+        Inbox.emit(%{
+          user_id: user.id,
+          kind: "chat_mention",
+          source_type: "chat_message",
+          source_id: earlier.id,
+          title: "Mentioned (behind the watermark)",
+          url: "/chat/#{space.slug}"
+        })
+
+      {:ok, unread_row} =
+        Inbox.emit(%{
+          user_id: user.id,
+          kind: "chat_mention",
+          source_type: "chat_message",
+          source_id: later.id,
+          title: "Mentioned (ahead of the watermark)",
+          url: "/chat/#{space.slug}"
+        })
+
+      %{space: space, read_row: read_row, unread_row: unread_row}
+    end
+
+    defp external_chat_conn(conn, user) do
+      %{conn | host: @chat_host} |> init_test_session(current_user_id: user.id)
+    end
+
+    # A separate, EMPTY channel to land the mount on. The mount must not
+    # visit the mention space: ChatLive advances that space's read
+    # watermark on mount, which would push `later` behind the watermark
+    # and dismiss BOTH rows — a fixture artefact that would read as an
+    # over-eager reconciler (and, worse, would hide one).
+    defp landing_channel!(user, org_id) do
+      {:ok, ch} =
+        Chat.create_space(%{
+          name: "Landing",
+          slug: "reconcile-landing-#{System.unique_integer([:positive])}",
+          kind: "channel",
+          org_id: org_id
+        })
+
+      {:ok, _} =
+        Chat.add_participant(ch.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          joined_at: DateTime.utc_now()
+        })
+
+      ch
+    end
+
+    test "an external user's stale mention is cleared by the mount and the badge DECREASES",
+         %{conn: conn} do
+      %{user: ext, org: org} = reconcile_external_user!()
+      %{read_row: read_row, unread_row: unread_row} = mention_pair!(ext, org.id)
+      landing = landing_channel!(ext, org.id)
+
+      # Pre-state: both rows live, so any decrease below is caused by the
+      # mount and not by the fixture.
+      assert Inbox.unread_count(ext.id) == 2
+
+      {:ok, view, _html} = live(external_chat_conn(conn, ext), "/chat/#{landing.slug}")
+
+      # The mount genuinely succeeded — asserting against a dead LiveView
+      # would pass vacuously.
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.current_user_id == ext.id
+
+      # THE NUMBER, not "a function was called". 2 -> 1.
+      assert Inbox.unread_count(ext.id) == 1
+      assert assigns.inbox_unread_count == 1
+
+      # BOTH sides on one mount: behind the watermark cleared, ahead of it
+      # survived. Without the second assertion a reconciler that dismissed
+      # every row would pass.
+      live_ids = Inbox.list_unread_for_user(ext.id) |> MapSet.new(& &1.id)
+      refute MapSet.member?(live_ids, read_row.id)
+      assert MapSet.member?(live_ids, unread_row.id)
+
+      # #589/#592: the badge and the list must AGREE after reconciliation.
+      # Both derive from `Inbox.unread_scope/1`; the list call here is the
+      # read-filtered one the Inbox surface renders.
+      assert assigns.inbox_unread_count == MapSet.size(live_ids)
+    end
+
+    test "CONTROL: the fence is unchanged — the same external user is still 403'd from /inbox",
+         %{conn: conn} do
+      %{user: ext} = reconcile_external_user!()
+
+      denied =
+        conn
+        |> init_test_session(current_user_id: ext.id)
+        |> get(~p"/inbox")
+
+      assert denied.status == 403
+      assert denied.halted
+    end
+
+    test "DIRECTION CONTROL: an internal user's mount and inbox behaviour are unchanged",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+      user = Repo.get!(User, user_id)
+      refute Tenancy.external_user?(user)
+
+      org = Tenancy.get_org_by_slug!("fabrikam")
+      %{read_row: read_row, unread_row: unread_row} = mention_pair!(user, org.id)
+
+      assert Inbox.unread_count(user_id) == 2
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      # Same seam, same per-side outcome on the internal shell — the change
+      # moved the call, it did not make it external-only.
+      assert assigns.inbox_unread_count == 1
+      assert Inbox.unread_count(user_id) == 1
+
+      live_ids = Inbox.list_unread_for_user(user_id) |> MapSet.new(& &1.id)
+      refute MapSet.member?(live_ids, read_row.id)
+      assert MapSet.member?(live_ids, unread_row.id)
+
+      # And the fence still lets an internal user through to /inbox.
+      assert conn |> get(~p"/inbox") |> Map.get(:status) == 200
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # Task 01a00066 stage 4 — the shell counts only what the viewer can reach.
+  #
+  # `compute_inbox_count/1` now consumes `Inbox.reachable_unread_count/1` for
+  # BOTH the mount assign and the `:inbox_count_refresh` recompute, so the
+  # first paint and the live badge agree about what is counted.
+  #
+  # A FINDING recorded here because it makes one assertion below weaker than
+  # it looks: the badge is painted only by `IconRail.badge_text/1` from
+  # `layouts/shell.html.heex`, and the external surface renders NO icon rail
+  # (`Layouts.external/1`). So on the external mount "no badge node" cannot
+  # by itself distinguish "correctly absent" from "nothing renders here
+  # anyway" — the load-bearing external assertion is therefore the ASSIGN
+  # (the count the renderer would be handed), and the internal test below is
+  # the control that shows a badge node does appear when the count is
+  # non-zero. That is why the rule is implemented at the COUNT.
+  # ---------------------------------------------------------------------
+  describe "the shell badge count excludes what the viewer cannot reach" do
+    alias Platform.Inbox
+
+    defp sponsor_row!(user) do
+      {:ok, row} =
+        Inbox.emit(%{
+          user_id: user.id,
+          kind: "task_sponsor_assigned",
+          source_type: "task",
+          source_id: Ecto.UUID.generate(),
+          title: "You are the sponsor"
+        })
+
+      row
+    end
+
+    defp unreachable_mention_row!(user) do
+      # A mention whose message id resolves to nothing: the reconciler cannot
+      # POSITIVELY confirm it read, so the row survives the mount and the
+      # count below is about reachability, not about reconciliation.
+      {:ok, row} =
+        Inbox.emit(%{
+          user_id: user.id,
+          kind: "chat_mention",
+          source_type: "chat_message",
+          source_id: Ecto.UUID.generate(),
+          title: "You were mentioned"
+        })
+
+      row
+    end
+
+    defp badge_nodes(html) do
+      html |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-role="inbox-badge"]))
+    end
+
+    test "an external user whose ONLY row is unreachable gets count 0 and NO badge node",
+         %{conn: conn} do
+      %{user: ext, org: org} = reconcile_external_user!()
+      sponsor = sponsor_row!(ext)
+      landing = landing_channel!(ext, org.id)
+
+      # The row is live and the RAW count sees it — so a 0 below is the
+      # reachability rule, not an empty fixture and not a dismissal.
+      assert Inbox.unread_count(ext.id) == 1
+
+      {:ok, view, html} = live(external_chat_conn(conn, ext), "/chat/#{landing.slug}")
+
+      # Pin that the mount succeeded before reading anything off the DOM.
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.current_user_id == ext.id
+
+      # THE load-bearing assertion: the number the renderer is handed is 0,
+      # which is what makes `badge_text/1` return nil and the node vanish.
+      assert assigns.inbox_unread_count == 0
+
+      # The row was NOT dismissed — counting and clearing stay separate.
+      assert Inbox.unread_count(ext.id) == 1
+      assert MapSet.member?(Inbox.list_unread_for_user(ext.id) |> MapSet.new(& &1.id), sponsor.id)
+
+      # ABSENCE, not a rendered "0". Weak on this surface (see the note
+      # above), asserted anyway so a future external rail cannot paint one.
+      assert Enum.count(badge_nodes(html)) == 0
+    end
+
+    test "OTHER SIDE: the same external user's live chat_mention IS counted", %{conn: conn} do
+      %{user: ext, org: org} = reconcile_external_user!()
+      _sponsor = sponsor_row!(ext)
+      mention = unreachable_mention_row!(ext)
+      landing = landing_channel!(ext, org.id)
+
+      assert Inbox.unread_count(ext.id) == 2
+
+      {:ok, view, _html} = live(external_chat_conn(conn, ext), "/chat/#{landing.slug}")
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.current_user_id == ext.id
+
+      # 1, not 0 and not 2: the mention counts, the sponsor row does not.
+      assert assigns.inbox_unread_count == 1
+
+      live_ids = Inbox.list_unread_for_user(ext.id) |> MapSet.new(& &1.id)
+      assert MapSet.member?(live_ids, mention.id)
+    end
+
+    test "DIRECTION CONTROL: an internal user with the SAME rows counts both AND paints a badge",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+      user = Repo.get!(User, user_id)
+      refute Tenancy.external_user?(user)
+
+      _sponsor = sponsor_row!(user)
+      _mention = unreachable_mention_row!(user)
+
+      {:ok, view, html} = live(conn, ~p"/tasks")
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.current_user_id == user_id
+
+      # Every kind, unchanged — and identical to the unfiltered count.
+      assert assigns.inbox_unread_count == 2
+      assert Inbox.unread_count(user_id) == 2
+
+      # The badge node IS present here. This is what makes the external
+      # absence above informative rather than vacuous.
+      nodes = badge_nodes(html)
+      assert Enum.count(nodes) == 1
+      assert nodes |> LazyHTML.text() |> String.trim() == "2"
+    end
+  end
 end

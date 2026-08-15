@@ -2070,6 +2070,54 @@ defmodule Platform.Tasks do
     end
   end
 
+  @doc """
+  Whether `task_id` still has a plan sitting in `pending_review`.
+
+  The staleness predicate behind the `task_plan_review` inbox row. That row's
+  `source_id` is the TASK id, not the plan id (see the `Inbox.emit` in
+  `maybe_emit_plan_review_inbox/1`), so this takes a task id to match.
+
+  Mirrors `Platform.Tasks.ReviewRequests.task_has_pending_reviews?/1` in shape:
+  a single indexed EXISTS, no preloads, no row materialisation — it runs on a
+  hot path. Anything that is not a resolvable task id returns `false`, since a
+  task with no plan under review has nothing left to review.
+
+  A `%Task{}` with `:plans` already preloaded is also accepted — the shape
+  `needs_human_action_reason/2` passes — and is answered from the loaded list.
+  A `%Task{}` whose `:plans` is NOT loaded stays `false` rather than quietly
+  issuing a lazy query.
+  """
+  @spec plan_pending_review?(binary() | Task.t() | term()) :: boolean()
+  def plan_pending_review?(task_id) when is_binary(task_id) do
+    Repo.exists?(from(p in Plan, where: p.task_id == ^task_id and p.status == "pending_review"))
+  end
+
+  def plan_pending_review?(%Task{plans: plans}) when is_list(plans) do
+    Enum.any?(plans, &(&1.status == "pending_review"))
+  end
+
+  def plan_pending_review?(_), do: false
+
+  @doc """
+  Whether a task row with `task_id` exists at all.
+
+  Separates ABSENT from RESOLVED for `Platform.Inbox.reconcile_for_user/1`.
+  `plan_pending_review?/1` answers `false` for both "this task's plan is settled"
+  and "there is no such task", and the reconciler must not treat the second as a
+  positive confirmation that the row's subject is dead — an unresolvable subject
+  is exactly the case where a row has to survive.
+
+  One indexed EXISTS on the primary key. Deliberately uncast, like the binary
+  clause of `plan_pending_review?/1` above it: the only caller passes an
+  `inbox_items.source_id`, an `Ecto.UUID` column value.
+  """
+  @spec task_exists?(binary() | term()) :: boolean()
+  def task_exists?(task_id) when is_binary(task_id) do
+    Repo.exists?(from(t in Task, where: t.id == ^task_id))
+  end
+
+  def task_exists?(_), do: false
+
   def list_plans(task_id) do
     Plan
     |> where([p], p.task_id == ^task_id)
@@ -3423,7 +3471,7 @@ defmodule Platform.Tasks do
   def approve_plan(%Plan{status: "pending_review"} = plan, approved_by, opts) do
     case architecture_gate_admission(plan, approved_by) do
       :inert ->
-        do_approve_plan(plan, approved_by, opts)
+        plan |> do_approve_plan(approved_by, opts) |> dismiss_plan_review_inbox_on_settle()
 
       {:override, %Accounts.User{} = user} ->
         # Closed FIRST, approved second. If the approval then fails, the
@@ -3432,7 +3480,7 @@ defmodule Platform.Tasks do
         # The other order would leave an APPROVED plan behind a still-open
         # gate, which stage 5's deadline would later try to settle again.
         _ = record_architecture_human_override(plan, user)
-        do_approve_plan(plan, approved_by, opts)
+        plan |> do_approve_plan(approved_by, opts) |> dismiss_plan_review_inbox_on_settle()
 
       :refuse ->
         {:error, :architecture_gate_open}
@@ -3440,6 +3488,80 @@ defmodule Platform.Tasks do
   end
 
   def approve_plan(_plan, _approved_by, _opts), do: {:error, :invalid_transition}
+
+  # ── Task 01a00066 stage 5: eager clear of the sponsor's plan-review row ──
+  #
+  # An OPTIMISATION BESIDE `Platform.Inbox.reconcile_for_user/1`, never
+  # instead of it. The reconciler (stage 2) already guarantees the row is
+  # gone the next time the sponsor loads a shell; this only removes the
+  # latency for the case a sponsor sees most — they approve or reject the
+  # plan and expect the badge to drop immediately, not on next mount.
+  #
+  # That ordering is deliberate and load-bearing: if eager clears were the
+  # PRIMARY mechanism, then every future resolution path would have to
+  # remember to call one, and the path that forgets leaves a stale row that
+  # is indistinguishable from a live one. So this may fail freely — the
+  # reconciler is the backstop.
+  #
+  # Runs POST-COMMIT (the caller's write result is already settled and
+  # returned verbatim): `dismiss_by_source/3` broadcasts
+  # `{:inbox_changed, user_id}`, and a broadcast issued inside the
+  # transaction would let a subscriber recompute the badge off pre-commit
+  # state.
+  #
+  # Guarded on `not plan_pending_review?(task_id)` — a task holding ANOTHER
+  # plan still `pending_review` keeps its row, because the sponsor still has
+  # a plan to review. Same shape as
+  # `Platform.Tasks.ReviewRequests.maybe_dismiss_reviewer_inbox/1`, and it
+  # reuses `Inbox.dismiss_by_source/3` (the `(user_id, source_type,
+  # source_id)`-indexed seam) rather than adding a new helper. The row's
+  # `source_type` is `"task"` and its `source_id` is the TASK id — see the
+  # `Inbox.emit` in `maybe_emit_plan_review_inbox/1`.
+  #
+  # BLAST RADIUS, stated because it is not obvious: `dismiss_by_source/3` is
+  # keyed on `(user_id, source_type, source_id)` and NOT on `kind`, so a
+  # `task_sponsor_assigned` row the same sponsor holds for the same task is
+  # cleared alongside the review row. That is accepted here — the plan is
+  # settled, so the sponsor's outstanding action on this task is done — but
+  # it is a WIDER clear than `reconcile_for_user/1` performs, which
+  # deliberately carries no `task_sponsor_assigned` clause. The reconciler
+  # remains the correctness floor; this only ever clears MORE, never less,
+  # so it cannot leave a stale row behind.
+  defp dismiss_plan_review_inbox_on_settle({:ok, %Plan{} = plan} = result) do
+    _ = dismiss_plan_review_inbox(plan.task_id)
+    result
+  end
+
+  defp dismiss_plan_review_inbox_on_settle(result), do: result
+
+  defp dismiss_plan_review_inbox(task_id) when is_binary(task_id) do
+    with %Task{sponsor_user_id: sponsor_uid} when is_binary(sponsor_uid) <-
+           Repo.get(Task, task_id),
+         false <- plan_pending_review?(task_id) do
+      # kind-FILTERED, deliberately. `task_sponsor_assigned` shares this
+      # user/source_type/source_id triple, and an unfiltered sweep dismisses it
+      # in the same write — undoing the "sponsor rows are cleared by the human,
+      # by hand" decision that `Inbox.row_stale?/1` documents and that stage 2's
+      # reconciler test pins. This path owns exactly one kind; it clears exactly
+      # that kind.
+      Platform.Inbox.dismiss_by_source(sponsor_uid, "task", task_id, kind: "task_plan_review")
+      :ok
+    else
+      _ -> :ok
+    end
+  rescue
+    e ->
+      Logger.warning("[Inbox] task_plan_review dismiss crashed: #{Exception.message(e)}")
+
+      :ok
+  catch
+    :exit, reason ->
+      Logger.warning("[Inbox] task_plan_review dismiss exited: #{inspect(reason)}")
+
+      :ok
+  end
+
+  defp dismiss_plan_review_inbox(_), do: :ok
 
   # ── Task 019fa510 stage 5: the admission is also a WRITER ─────────────
   #
@@ -3963,6 +4085,14 @@ defmodule Platform.Tasks do
     case plan |> Plan.changeset(attrs) |> Repo.update() do
       {:ok, updated} ->
         broadcast_board({:plan_updated, updated})
+
+        # Task 01a00066 stage 5. BOTH settle paths clear, not just approval:
+        # a rejection resolves the sponsor's "review this plan" action just
+        # as completely, and wiring approval alone is exactly how a half-live
+        # inbox row arises. Best-effort, post-commit — see
+        # `dismiss_plan_review_inbox/1`.
+        _ = dismiss_plan_review_inbox(updated.task_id)
+
         {:ok, updated}
 
       error ->
@@ -4323,16 +4453,6 @@ defmodule Platform.Tasks do
       true -> nil
     end
   end
-
-  # Inspects `task.plans` for any plan in `pending_review`. Returns `false`
-  # when `:plans` is not preloaded (rather than triggering a lazy query) so
-  # the predicate stays cheap for callers that only care about status +
-  # count.
-  defp plan_pending_review?(%Task{plans: plans}) when is_list(plans) do
-    Enum.any?(plans, &(&1.status == "pending_review"))
-  end
-
-  defp plan_pending_review?(_task), do: false
 
   # Counts pending review_requests for a single task. Used by the 1-arity
   # `needs_human_action?/1`. Batch callers should use the LV's

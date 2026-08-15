@@ -219,7 +219,7 @@ defmodule Platform.Tasks.PlanSubmitInboxTest do
   end
 
   describe "v2 supersession" do
-    test "a second submit emits a second row; the v1 row is left intact" do
+    test "a second submit emits a SECOND, distinct row" do
       project = project_fixture()
       sponsor = sponsor_fixture()
       agent = agent_fixture()
@@ -247,19 +247,29 @@ defmodule Platform.Tasks.PlanSubmitInboxTest do
       assert_receive {:inbox_item_added, %Inbox.Item{id: v1_id}}
       assert v1_id == v1_row.id
 
-      # Reject v1 so a fresh draft can be created for v2. Leave v1's inbox
-      # row undismissed.
+      # Reject v1 so a fresh draft can be created for v2.
+      #
+      # Task 01a00066 stage 5 CHANGED what this leaves behind: the rejection
+      # now eagerly clears v1's row, because a rejected plan is a settled
+      # one and the sponsor has nothing left to review. This test used to
+      # assert the row was "left intact" — that surviving row was precisely
+      # the stale-inbox defect the eager clear (and the reconciler behind
+      # it) exists to remove. What the test is really about, and what still
+      # holds, is that a second submit emits a SECOND row rather than
+      # silently deduping against the first.
       {:ok, _rejected} = Tasks.reject_plan(submitted_v1, "reviewer")
+
+      assert Inbox.list_unread_for_user(sponsor.id, kind: "task_plan_review") == []
 
       plan_v2 = plan_with_stages(task, 2, 2)
 
       assert {:ok, %Plan{status: "pending_review"}} = submit(plan_v2)
 
-      rows = Inbox.list_unread_for_user(sponsor.id, kind: "task_plan_review")
-      assert length(rows) == 2
-      assert v1_row.id in Enum.map(rows, & &1.id)
+      assert [v2_row] = Inbox.list_unread_for_user(sponsor.id, kind: "task_plan_review")
+      assert v2_row.id != v1_row.id
 
       assert_receive {:inbox_item_added, %Inbox.Item{id: v2_id}}
+      assert v2_id == v2_row.id
       assert v2_id != v1_id
     end
   end

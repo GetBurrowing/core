@@ -4114,6 +4114,43 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  Whether `user_id` has already read `message_id`.
+
+  Derived, never stored: we load the message's space, load that user's
+  participant row for the space, and compare UUIDv7 ids against the
+  `last_read_message_id` watermark — the same ordering `count_unread/3` uses,
+  and the same instinct as ADR 0023. A stored `read_at` would be a second
+  source of truth that could disagree with the watermark.
+
+  Returns `false` — not read, therefore the caller's row is NOT stale and
+  survives — whenever the answer cannot be positively established: the message
+  is gone, the user does not participate in its space, or the watermark is nil.
+  """
+  @spec message_read_by_user?(binary(), binary()) :: boolean()
+  def message_read_by_user?(message_id, user_id)
+      when is_binary(message_id) and is_binary(user_id) do
+    with {:ok, message_uuid} <- Platform.UUID.cast(message_id),
+         {:ok, user_uuid} <- Platform.UUID.cast(user_id),
+         space_id when is_binary(space_id) <-
+           Repo.one(from(m in Message, where: m.id == ^message_uuid, select: m.space_id)),
+         last_read when is_binary(last_read) <-
+           Repo.one(
+             from(p in Participant,
+               where:
+                 p.space_id == ^space_id and p.participant_id == ^user_uuid and
+                   p.participant_type == "user",
+               select: p.last_read_message_id
+             )
+           ) do
+      message_uuid <= last_read
+    else
+      _ -> false
+    end
+  end
+
+  def message_read_by_user?(_message_id, _user_id), do: false
+
+  @doc """
   Return `%{space_id => unread_count}` for every space the user participates in.
 
   Uses UUIDv7 ordering (`id > last_read_message_id`) to count newer messages.

@@ -692,6 +692,26 @@ defmodule PlatformWeb.Components.IconRailTest do
       end
     end
 
+    # Task 01a00066 stage 4 pins the badge's LOOK as unchanged: the count is
+    # filtered upstream (`Inbox.reachable_unread_count/1`), so `badge_text/1`
+    # keeps exactly one cap at 99. A second cap introduced for external users
+    # would detonate here.
+    test "badge_text/1 caps at 99+ and has NO second cap" do
+      assert badge_text(99) == "99"
+      assert badge_text(100) == "99+"
+      assert badge_text(1_000) == "99+"
+      assert badge_text(10_000) == "99+"
+
+      # Exactly one threshold in 1..250: the value stops changing after 99.
+      distinct = 1..250 |> Enum.map(&badge_text/1) |> Enum.uniq()
+      assert Enum.count(distinct) == 100
+      assert List.last(distinct) == "99+"
+
+      # Nothing below the cap is rewritten, and 0 still renders no badge.
+      assert badge_text(1) == "1"
+      assert badge_text(0) == nil
+    end
+
     test "the badge uses the destructive/accent semantic slot (badge-error), no raw hex" do
       doc = render_rail_with_count(3) |> LazyHTML.from_fragment()
 

@@ -559,6 +559,53 @@ defmodule Platform.ChatTest do
 
   # ── Pins ──────────────────────────────────────────────────────────────────────
 
+  describe "message_read_by_user?/2" do
+    # ONE fixture, TWO messages of distinct UUIDv7 ids with the watermark on the
+    # first. A one-message fixture cannot tell a correct predicate from one that
+    # returns a constant — the pair is the whole point.
+    test "reads true at or below the watermark and false above it" do
+      space = create_space()
+      user = create_participant(space.id)
+      other = create_participant(space.id)
+
+      earlier = create_message(space.id, other.id)
+      later = create_message(space.id, other.id)
+      assert earlier.id < later.id
+
+      Chat.mark_space_read(user.id, earlier.id)
+
+      assert Chat.message_read_by_user?(earlier.id, user.participant_id)
+      refute Chat.message_read_by_user?(later.id, user.participant_id)
+    end
+
+    test "false when the watermark is nil (never read anything)" do
+      space = create_space()
+      user = create_participant(space.id)
+      other = create_participant(space.id)
+      msg = create_message(space.id, other.id)
+
+      refute Chat.message_read_by_user?(msg.id, user.participant_id)
+    end
+
+    test "false when the user has no participant row in the message's space" do
+      space = create_space()
+      other = create_participant(space.id)
+      msg = create_message(space.id, other.id)
+
+      refute Chat.message_read_by_user?(msg.id, Ecto.UUID.generate())
+    end
+
+    test "false when the message is missing, or either id is unresolvable" do
+      space = create_space()
+      user = create_participant(space.id)
+
+      refute Chat.message_read_by_user?(Ecto.UUID.generate(), user.participant_id)
+      refute Chat.message_read_by_user?("not-a-uuid", user.participant_id)
+      refute Chat.message_read_by_user?(Ecto.UUID.generate(), "not-a-uuid")
+      refute Chat.message_read_by_user?(nil, user.participant_id)
+    end
+  end
+
   describe "unread_counts_for_user/1" do
     test "counts messages from other participants after last_read" do
       space = create_space()
