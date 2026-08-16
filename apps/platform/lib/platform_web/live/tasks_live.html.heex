@@ -1645,6 +1645,91 @@
         </span>
       </div>
 
+      <%!-- Why this is blocked (task 01a004ad stage 3).
+
+           The watchdog writes a careful sentence onto
+           `metadata["blocked_reason"]` when it escalates, and until this
+           block existed nothing anywhere read it. `blocked_explanation/1`
+           (tasks_live.ex) is the single source of truth for which of the
+           two branches renders; this template only paints what it returns
+           and never inspects metadata itself.
+
+           Design direction is binding (canvas "Blocked reason: design
+           direction"): the sentence IS the design. No icon, no warning
+           triangle, no alert box, no coloured fill — a reader who
+           navigated here already knows something is wrong, and chrome
+           competes with the only thing carrying information. `--color-error`
+           appears exactly once, as the 3px left border, inheriting the
+           treatment agent messages use for identity.
+
+           The sentence WRAPS FREELY — deliberately no `truncate` and no
+           `line-clamp-*`. The watchdog names a stage, a count, a duration
+           and a prior action; clamping drops the last clause, which is what
+           was already retried automatically, i.e. the useful part.
+
+           The dependency copy says in words that nothing is needed from the
+           reader. A bare list of task names does not: readers supply
+           "someone do something" from the word Blocked alone, and that is
+           false for the whole dependency-gated half of this population.
+
+           Render-only against `unmet_dependencies` — this block writes no
+           metadata. `:none` renders nothing at all: no empty block, no
+           border, no "no reason recorded" placeholder.
+
+           `{:dependencies, []}` is treated the same as `:none`. It is
+           reachable: `unmet_dependency_count/1` counts metadata ids while
+           `dependency_summary/1` resolves the `dependencies` FIELD, so a
+           task whose metadata lists unmet ids the field never recorded
+           returns an empty row list. Rendering that branch anyway would
+           print "Waiting on 0 tasks", which is worse than silence.
+
+           The card face is
+           deliberately unchanged; the card says "stopped", the panel says
+           "why". --%>
+      <% blocked_why = blocked_explanation(@selected_task) %>
+      <div
+        :if={blocked_why != :none and blocked_why != {:dependencies, []}}
+        class="flex flex-col gap-1 border-l-[3px] border-error pl-3"
+        data-role="blocked-explanation"
+      >
+        <span class="text-xs font-semibold uppercase tracking-widest text-neutral">
+          Why this is blocked
+        </span>
+        <%= case blocked_why do %>
+          <% {:reason, sentence, blocked_at} -> %>
+            <p class="text-sm text-base-content">{sentence}</p>
+            <span :if={blocked_at} class="text-xs text-neutral">
+              {relative_time(blocked_at)}
+            </span>
+          <% {:dependencies, blocked_deps} -> %>
+            <p class="text-sm text-base-content">
+              {if length(blocked_deps) == 1,
+                do:
+                  "Waiting on 1 task. This clears itself when it finishes; nothing is needed from you.",
+                else:
+                  "Waiting on #{length(blocked_deps)} tasks. This clears itself when they finish; nothing is needed from you."}
+            </p>
+            <ul class="flex flex-col gap-1 text-xs">
+              <li
+                :for={dep <- blocked_deps}
+                class="flex items-center gap-2 rounded bg-base-200 px-2 py-1"
+              >
+                <span class={"#{dependency_status_icon(dep.status)} size-4 shrink-0"}></span>
+                <span class="truncate flex-1">
+                  {dep.title || "(missing dependency)"}
+                </span>
+                <span
+                  :if={dep.status}
+                  class="text-[10px] uppercase tracking-wider text-base-content/40"
+                >
+                  {status_label(dep.status)}
+                </span>
+              </li>
+            </ul>
+          <% :none -> %>
+        <% end %>
+      </div>
+
       <%!-- Linked-canvases strip (stage 5 of task_attach_canvas).
            Renders chips for canvases attached via the task_attach_canvas
            MCP tool (typically agent-uploaded evidence). Soft-deleted

@@ -2279,11 +2279,16 @@ defmodule Platform.Orchestration.TaskRouter do
       elapsed_ms_since_dispatch: elapsed_ms
     })
 
-    post_router_blocker(
-      state,
+    sentence =
       "Executor never acked the dispatch. No `task_ack` runtime event received within " <>
         "#{div(elapsed_ms, 1_000)}s of dispatch — the runtime likely dropped before " <>
-        "the agent spawned. Manual intervention required.",
+        "the agent spawned. Manual intervention required."
+
+    stamp_blocked_reason(state.task_id, sentence)
+
+    post_router_blocker(
+      state,
+      sentence,
       %{
         "reason" => "execution.no_ack_timeout",
         "stage_id" => lease.stage_id,
@@ -2310,11 +2315,16 @@ defmodule Platform.Orchestration.TaskRouter do
       last_validation_pass_at: lease.last_progress_at
     })
 
-    post_router_blocker(
-      state,
+    sentence =
       "Stage safety-net exceeded (#{div(elapsed_ms, 60_000)}m elapsed for #{lease.stage_kind}). " <>
         "The executor acked but has not produced validation progress within the stage's safety-net window. " <>
-        "Check whether the agent is stuck; manual intervention may be required.",
+        "Check whether the agent is stuck; manual intervention may be required."
+
+    stamp_blocked_reason(state.task_id, sentence)
+
+    post_router_blocker(
+      state,
+      sentence,
       %{
         "reason" => "execution.safety_net_fired",
         "stage_id" => lease.stage_id,
@@ -2323,6 +2333,31 @@ defmodule Platform.Orchestration.TaskRouter do
         "elapsed_ms" => elapsed_ms
       }
     )
+  end
+
+  # Give the escalation sentence a durable per-task home
+  # (`metadata["blocked_reason"]`) alongside the transient chat post, using
+  # the SAME string so the two can never disagree. This is a failure path:
+  # it logs and continues on error rather than crashing the router.
+  defp stamp_blocked_reason(task_id, sentence) do
+    case Tasks.stamp_blocked_reason(task_id, sentence) do
+      {:ok, _task} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[TaskRouter] task #{task_id} — could not stamp blocked_reason: #{inspect(reason)}"
+        )
+
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[TaskRouter] task #{task_id} — blocked_reason stamp raised: #{Exception.message(error)}"
+      )
+
+      :ok
   end
 
   # Post the human-facing blocker message to the execution space so a

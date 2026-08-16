@@ -740,10 +740,40 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # No new assign, no new branch, no new event — the shell lost a private
   # helper and gained one field on a map it already built.
   #
-  # MERGE RESOLUTION: both re-pins above are live in this tree, so the pin is
-  # the sum of both deltas against the shared 6_008 base: 6_008 - 1 + 20 =
-  # 6_027.
-  @shell_line_count 6_027
+  # 2026-08-15, task 01a004ad stage 2 — the blocked-explanation READ side.
+  # ARITHMETIC: 6_007 + 59 = 6_066. All 59 lines are one new
+  # `# ── Blocked-explanation helpers ──` region appended after
+  # `dependency_status_icon/1`: `blocked_reason/1`, `blocked_reason_at/1`
+  # and the `blocked_explanation/1` dispatcher, each with its fallback
+  # clause and the comment recording why (precedence: a stamped escalation
+  # sentence outranks unmet dependencies, and any non-`blocked` status
+  # explains nothing). Nothing was removed and nothing existing was edited
+  # — no new assign, no new event, no template change.
+  #
+  # STAGE 3 DID NOT MOVE THIS PIN. Stage 2's comment predicted it would;
+  # that prediction was wrong and is corrected here rather than left to
+  # read as fact. The stage-3 blocked-explanation block lives entirely in
+  # `tasks_live.html.heex` and calls `blocked_explanation/1` plus the
+  # already-present `dependency_status_icon/1`, `status_label/1` and
+  # `relative_time/1`, so it needed no new shell function. Measured after
+  # stage 3: 6,066.
+  #
+  # MERGE RESOLUTION, 2026-08-15 (merging `main` into task 01a004ad's branch).
+  # The two sides pinned 6_066 (this branch, measured after stage 3) and 6_027
+  # (`main`, itself a merge resolution of the -1 and +20 re-pins above). The
+  # conflict is itself the proof that the two sides did NOT share a base, so
+  # neither side's arithmetic can be carried forward and the deltas must not be
+  # summed — the branch's `6_007 + 59` premise and `main`'s `6_008 - 1 + 20`
+  # premise start from different trees. Both are kept above as the record of
+  # what each side did, not as the derivation of the number below.
+  #
+  # The pin is therefore RE-MEASURED against the merged tree, which is the only
+  # tree this assertion ever runs on: `wc -l` on the merged
+  # `tasks_live.ex` reports 6,086. (Read back another way: `main`'s 6_027 plus
+  # this branch's own +59 blocked-explanation region, which merged cleanly into
+  # `tasks_live.ex` with no overlap — 6_027 + 59 = 6_086. That agreement is a
+  # cross-check on the measurement, not its source.)
+  @shell_line_count 6_086
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

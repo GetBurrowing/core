@@ -1154,6 +1154,69 @@ defmodule Platform.Orchestration.TaskRouterTest do
       refute Enum.any?(new_contents2, &String.contains?(&1, "Executor never acked"))
     end
 
+    test "no-ack path: stamps the SAME sentence onto the task's blocked_reason metadata",
+         %{task: task, assignee: assignee, stage: stage} do
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      # A pre-existing dependency stamp in the same JSONB map must survive.
+      task
+      |> Ecto.Changeset.change(%{metadata: %{"unmet_dependencies" => ["dep-one"]}})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      :ok = sync_router(task.id)
+
+      expire_no_ack_deadline!(task.id)
+      send(pid, :check_no_ack)
+      :ok = sync_router(task.id)
+
+      stamped = Tasks.get_task_record(task.id)
+      assert stamped.status == "blocked"
+      reason = stamped.metadata["blocked_reason"]
+      assert is_binary(reason) and reason != ""
+      assert String.contains?(reason, "Executor never acked")
+      assert {:ok, _, _} = DateTime.from_iso8601(stamped.metadata["blocked_reason_at"])
+
+      # The chat post and the metadata carry the same sentence.
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      assert Enum.any?(
+               ExecutionSpace.list_messages_with_participants(space.id),
+               &String.contains?(&1.content, reason)
+             )
+
+      # The dependency key is untouched.
+      assert stamped.metadata["unmet_dependencies"] == ["dep-one"]
+    end
+
+    test "safety-net path: stamps blocked_reason independently of the no-ack path",
+         %{task: task, assignee: assignee, stage: stage} do
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      :ok = sync_router(task.id)
+
+      lease = LeaseManager.get(task.id)
+      past_deadline = DateTime.add(DateTime.utc_now(), -1_000, :millisecond)
+
+      :ets.insert(
+        :orchestration_lease_manager,
+        {task.id, %{lease | safety_net_at: past_deadline}}
+      )
+
+      send(pid, :check_safety_net)
+      :ok = sync_router(task.id)
+
+      stamped = Tasks.get_task_record(task.id)
+      assert stamped.status == "blocked"
+      assert String.contains?(stamped.metadata["blocked_reason"], "safety-net exceeded")
+      assert {:ok, _, _} = DateTime.from_iso8601(stamped.metadata["blocked_reason_at"])
+    end
+
     test "safety-net extend: :check_safety_net reschedules when record_progress extends deadline",
          %{task: task, assignee: assignee, stage: stage} do
       stage

@@ -861,6 +861,69 @@ defmodule Platform.Tasks.TasksContextTest do
     end
   end
 
+  describe "stamp_blocked_reason/2" do
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Blocked Reason Project"})
+      %{project: project}
+    end
+
+    test "blocks the task and stamps both reason keys", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Stalled", status: "in_progress"})
+
+      {:ok, stamped} =
+        Tasks.stamp_blocked_reason(task, "Executor never acked the dispatch.")
+
+      assert stamped.status == "blocked"
+      assert stamped.metadata["blocked_reason"] == "Executor never acked the dispatch."
+      assert {:ok, _, _} = DateTime.from_iso8601(stamped.metadata["blocked_reason_at"])
+    end
+
+    test "preserves a pre-existing unmet_dependencies list byte-for-byte", %{project: project} do
+      dep_ids = [Ecto.UUID.generate(), Ecto.UUID.generate()]
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Stalled with deps",
+          status: "in_progress",
+          metadata: %{"unmet_dependencies" => dep_ids, "keep_me" => "yes"}
+        })
+
+      {:ok, stamped} = Tasks.stamp_blocked_reason(task, "Safety-net exceeded.")
+
+      assert stamped.metadata["unmet_dependencies"] == dep_ids
+      assert stamped.metadata["keep_me"] == "yes"
+      assert stamped.metadata["blocked_reason"] == "Safety-net exceeded."
+    end
+
+    test "is idempotent in shape on an already-blocked task and overwrites only the reason", %{
+      project: project
+    } do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Already blocked",
+          status: "in_progress",
+          metadata: %{"unmet_dependencies" => ["dep-one"]}
+        })
+
+      {:ok, first} = Tasks.stamp_blocked_reason(task, "First reason.")
+      {:ok, second} = Tasks.stamp_blocked_reason(first, "Second reason.")
+
+      assert second.status == "blocked"
+      assert second.metadata["blocked_reason"] == "Second reason."
+      assert second.metadata["unmet_dependencies"] == ["dep-one"]
+
+      assert Map.keys(second.metadata) |> Enum.sort() ==
+               Map.keys(first.metadata) |> Enum.sort()
+    end
+
+    test "accepts a task id and reports :not_found for an unknown one" do
+      assert {:error, :not_found} = Tasks.stamp_blocked_reason(Ecto.UUID.generate(), "gone")
+    end
+  end
+
   describe "auto-unblock sweep on done" do
     setup do
       {:ok, project} = Tasks.create_project(%{name: "Sweep Project"})

@@ -4063,6 +4063,53 @@ defmodule Platform.Tasks do
   end
 
   @doc """
+  Move a task to `blocked` and stamp the human-readable escalation
+  `sentence` onto `metadata["blocked_reason"]` (plus an ISO-8601
+  `metadata["blocked_reason_at"]`).
+
+  Task 01a004ad stage 1: the router's escalation paths
+  (`TaskRouter.fire_no_ack_alert/2` and `fire_safety_net_alert/2`) compose
+  that sentence and post it to the execution-space chat only, which is
+  transient and not queryable per task. This gives the sentence a durable
+  per-task home so the board can render it.
+
+  The metadata write is a `Map.put` onto the LOADED map, never a whole-map
+  replacement: `metadata["unmet_dependencies"]` lives in the same JSONB
+  column with its own reader and its own clearing logic, and must survive
+  a `blocked_reason` stamp untouched.
+
+  A task already in `blocked` is stamped without a status transition
+  (`blocked -> blocked` is not in `@valid_task_transitions`), so a repeat
+  escalation overwrites the reason and nothing else.
+  """
+  @spec stamp_blocked_reason(Task.t() | String.t(), String.t()) ::
+          {:ok, Task.t()} | {:error, term()}
+  def stamp_blocked_reason(task_or_id, sentence)
+
+  def stamp_blocked_reason(id, sentence) when is_binary(id) do
+    case get_task_record(id) do
+      %Task{} = task -> stamp_blocked_reason(task, sentence)
+      nil -> {:error, :not_found}
+    end
+  end
+
+  def stamp_blocked_reason(%Task{} = task, sentence) when is_binary(sentence) do
+    with {:ok, blocked} <- ensure_blocked(task) do
+      existing_metadata = blocked.metadata || %{}
+
+      merged_metadata =
+        existing_metadata
+        |> Map.put("blocked_reason", sentence)
+        |> Map.put("blocked_reason_at", DateTime.utc_now() |> DateTime.to_iso8601())
+
+      update_task(blocked, %{metadata: merged_metadata})
+    end
+  end
+
+  defp ensure_blocked(%Task{status: "blocked"} = task), do: {:ok, task}
+  defp ensure_blocked(%Task{} = task), do: transition_task_status(task, "blocked")
+
+  @doc """
   Reject a plan, optionally persisting a free-text reason.
 
   Accepts plans in `pending_review` (the original planning-rejection flow)

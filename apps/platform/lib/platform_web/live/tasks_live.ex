@@ -4313,6 +4313,65 @@ defmodule PlatformWeb.TasksLive do
 
   defp dependency_status_icon(_), do: "hero-x-circle-solid text-base-content/40"
 
+  # ── Blocked-explanation helpers ────────────────────────────────────────
+
+  # The human sentence `Tasks.stamp_blocked_reason/2` stamps onto
+  # `metadata["blocked_reason"]` when the router escalates. Missing,
+  # non-binary and blank-after-trim all read as absent so the caller never
+  # renders an empty line.
+  @doc false
+  def blocked_reason(%Task{metadata: metadata}) when is_map(metadata) do
+    case Map.get(metadata, "blocked_reason") do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  def blocked_reason(_), do: nil
+
+  # Companion timestamp for `blocked_reason/1`. Anything that does not parse
+  # as ISO-8601 reads as absent — a garbled stamp must not crash the panel
+  # nor render as the epoch.
+  @doc false
+  def blocked_reason_at(%Task{metadata: metadata}) when is_map(metadata) do
+    with value when is_binary(value) <- Map.get(metadata, "blocked_reason_at"),
+         {:ok, at, _offset} <- DateTime.from_iso8601(value) do
+      at
+    else
+      _ -> nil
+    end
+  end
+
+  def blocked_reason_at(_), do: nil
+
+  # Single dispatcher for "why is this task blocked?". Precedence is part of
+  # the contract: an escalation sentence wins over unmet dependencies,
+  # because a watchdog-exhausted task needs a person even if it also carries
+  # stale dependency ids. Any non-`blocked` status is `:none` whatever the
+  # metadata says.
+  @doc false
+  def blocked_explanation(%Task{status: "blocked"} = task) do
+    case blocked_reason(task) do
+      nil ->
+        if unmet_dependency_count(task) > 0 do
+          {:dependencies, dependency_summary(task)}
+        else
+          :none
+        end
+
+      sentence ->
+        {:reason, sentence, blocked_reason_at(task)}
+    end
+  end
+
+  def blocked_explanation(_), do: :none
+
   # ── Per-phase assignee helpers (used by the assignee modal templates) ───
 
   defp phase_label("planning"), do: "Planning"
