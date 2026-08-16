@@ -462,8 +462,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 019fba18 stage 4: `live_gate/1` guards `why_not_live/1`'s `where: v.id == ^id`, whose id is a COMMAND-LINE argument to `mix suite.deploy.scope_gate` — an operator pasting a task id, a truncated uuid or a stage id is the expected failure, not an edge case. The guard is used as a BOOLEAN and the id is downcased rather than replaced by the cast's return, because persisted ids are lowercase and `valid?/1` passes an uppercase uuid. A malformed value folds into `{:error, :malformed_id}` and the mix task renders it as a named refusal with a non-zero exit, pinned by suite_deploy_scope_gate_test.exs \"refuses an id that is not a well-formed uuid, including the 16-byte case\", which first shows the unguarded query raising `Ecto.Query.CastError`"},
     {"platform/tasks/plan_engine.ex", :get, "Plan", 1, :safe_internal,
      "`stage.plan_id` off the `%Stage{}` the engine just loaded"},
-    {"platform/tasks/plan_engine.ex", :get, "Stage", 1, :safe_internal,
-     "fetch_stage/1 checks Platform.UUID.valid?/1 on the agent-supplied stage_id from stage_start / stage_complete, folding a malformed id into {:error, :not_found}"},
+    {"platform/tasks/plan_engine.ex", :get, "Stage", 2, :safe_internal,
+     "fetch_stage/1 checks Platform.UUID.valid?/1 on the agent-supplied stage_id from stage_start / stage_complete, folding a malformed id into {:error, :not_found}. 1 -> 2 for task 01a006e7 stage 3's open_remediation_stage/2, which is the SAME class: the gate stage_id reaches it from the router, is guarded by the same Platform.UUID.valid?/1 check, and a miss rolls the transaction back as {:error, :stage_not_found}"},
     {"platform/tasks/plan_engine.ex", :get, "Task", 2, :safe_internal,
      "`plan.task_id` off a loaded `%Plan{}` in both cases"},
     {"platform/tasks/plan_engine.ex", :get!, "Plan", 9, :safe_internal,
@@ -600,8 +600,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "ensure_canvas_attachable/1 on the canvas_attach MCP payload's canvas_id, plus list_canvas_tasks/1 (task 019e2c4b stage 1). The second is the same class: its canvas_id reaches the reverse lookup from the /canvases/:id URL segment via Platform.Chat.CanvasAccess, and `where: a.canvas_id == ^id` raises the SAME CastError a bare Repo.get would, so the guard folds a malformed id into an empty list. Was 3 until task 019fb581 stage 3: `ensure_task_exists/1` held the third guard on the task_id and was replaced by `ensure_task_touchable/3`, which delegates to Platform.Tasks.TaskAccess — so the guard did not disappear, it moved one module over and is recorded there"},
     {"platform/tasks/context_hydrator.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "load_task/1's guard on the task_id carried by the run-dispatch payload into hydrate_for_run/2"},
-    {"platform/tasks/plan_engine.ex", :platform_uuid_guard, "-", 3, :safe_internal,
-     "fetch_stage/1's guard plus the two get!(Validation) assertions that raise Ecto.NoResultsError instead of Ecto.Query.CastError"},
+    {"platform/tasks/plan_engine.ex", :platform_uuid_guard, "-", 4, :safe_internal,
+     "fetch_stage/1's guard plus the two get!(Validation) assertions that raise Ecto.NoResultsError instead of Ecto.Query.CastError, plus open_remediation_stage/2's guard on the gate stage_id (task 01a006e7 stage 3), which folds a malformed id into {:error, :stage_not_found} rather than a CastError"},
     {"platform/tasks/review_requests.ex", :platform_uuid_guard, "-", 5, :safe_internal,
      "list_items_for_task/1 (task 01a00570 stage 1) guards the task_id an agent hands the read tool: it lands in a `where: rr.task_id == ^task_id` that would raise the same CastError a bare Repo.get would, so the guard folds a malformed id into an empty list. Plus get_review_request/1, fetch_item/1, maybe_reopen_manual_approval/1 (stage 4) plus fetch_agent_for_display/1 (stage 5). The fourth guard is what let stage 5 DELETE the bare `rescue _` that used to end requester_display_name/1: with both arms total the function cannot raise, so the rescue had nothing left to absorb"},
     {"platform/tasks/stacks.ex", :platform_uuid_guard, "-", 2, :safe_internal,
@@ -837,7 +837,20 @@ defmodule Platform.RepoLookupBoundaryTest do
     # the whole table — so no id is pinned, no value crosses a boundary into
     # it, and `Ecto.Query.CastError` is unreachable. No guard applies.
     "platform/tasks/pipeline_health.ex" => 1,
-    "platform/tasks/plan_engine.ex" => 2,
+    # 2 → 3 for task 01a006e7's `open_remediation_stage_for/1`, which selects
+    # the plan's single remediation stage by name and status. Stage 5 added the
+    # call and left this count at 2, so the branch carried a RED boundary test;
+    # counted here as part of the same task's remediation. Triaged by hand as
+    # this map asks: the `where:` clause pins `s.plan_id == ^plan_id` where
+    # `plan_id` is read off a `%Stage{}` the same transaction just fetched by
+    # its own guarded id — it is a column value, never a boundary-supplied
+    # string — plus a module-attribute name and a literal status list. No
+    # boundary value is pinned against an id column, so `Ecto.Query.CastError`
+    # is unreachable and no `Platform.UUID.valid?/1` guard applies. The
+    # boundary-supplied `gate_stage_id` that reaches the same function IS
+    # guarded, one frame up in `open_remediation_stage/2` (see the
+    # `:platform_uuid_guard` row for this file).
+    "platform/tasks/plan_engine.ex" => 3,
     "platform/tasks/review_requests.ex" => 1,
     "platform/tasks/rollup_webhook_processor.ex" => 1,
     "platform/tasks/stacks.ex" => 4,

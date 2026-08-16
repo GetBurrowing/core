@@ -202,14 +202,44 @@ defmodule Platform.Orchestration.TaskRouterUnresolvedStageTest do
 
       before = TaskRouter.current_status(task.id)
 
-      send(pid, :dispatch)
+      # `:dispatch_now`, not `:dispatch`: the debounced form arms a 50ms timer
+      # the barrier does not wait for, so how many suppressions had actually
+      # occurred by the assertion was a race. Driven directly, this is exactly
+      # ONE more suppression than `init/1` produced.
+      send(pid, :dispatch_now)
       after_suppression = barrier(task)
 
-      assert after_suppression.status == before.status
       # A suppressed dispatch is not a dispatch: it must not advance the
       # last-dispatch clock, or the stall detector would read the silence as
       # activity.
       assert after_suppression.last_dispatch_at == before.last_dispatch_at
+
+      # The status claim this test used to make (`== before.status`) moved to
+      # the escalation test below. Task 01a006e7 stage 2 made a RUN of
+      # suppressions raise a `needs_human` blocker, and `init/1` has already
+      # contributed one by the time a test can observe anything — so "the
+      # status never moves" is no longer true of the second tick, by design.
+    end
+
+    # Task 01a006e7 stage 2. The status claim above is about the SUPPRESSION.
+    # The ESCALATION is a different event and does move the router: a
+    # `needs_human` blocker upserts the task's execution lease to `blocked`,
+    # and a blocked lease parks the router at `:waiting_human` — the same
+    # thing any other blocker does, and the point of raising one. Pinned here
+    # so a future reader does not "restore" the untouched-status claim across
+    # the escalation and silently disarm the guard.
+    test "the escalation on a later suppression parks the router at :waiting_human", %{
+      project: project
+    } do
+      %{task: task} = fixture = exhausted_plan_task(project, :settled)
+      %{pid: pid} = start_router!(fixture)
+
+      send(pid, :dispatch_now)
+      barrier(task)
+      send(pid, :dispatch_now)
+      after_escalation = barrier(task)
+
+      assert after_escalation.status == :waiting_human
     end
   end
 

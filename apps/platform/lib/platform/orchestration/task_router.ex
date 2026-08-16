@@ -191,6 +191,11 @@ defmodule Platform.Orchestration.TaskRouter do
       # optimisation, never the correctness guarantee (see
       # `handle_info({:architecture_gate_deadline, _}, _)`).
       :architecture_deadline_ref,
+      # Task 01a006e7 stage 2 — the unresolved-stage escalation counter.
+      # `nil` when the last dispatch resolved; otherwise
+      # `%{key: {task_id, task_status}, count: pos_integer, raised?: boolean}`.
+      # See `note_unresolved_suppression/2`.
+      :unresolved_suppression,
       status: :dispatching,
       # Task 019fe1b7 stage 2 — see `maybe_run_design_edge/2`. One designer
       # edge run per router process, whatever the run's fate.
@@ -1420,7 +1425,9 @@ defmodule Platform.Orchestration.TaskRouter do
     if unresolved_stage_dispatch?(task, plan, stage) do
       suppress_unresolved_stage_dispatch(state, task, plan)
     else
-      dispatch_resolved(state, task, plan, stage)
+      # A dispatch that RESOLVED means a stage is open again: the escalation
+      # counter is about a CONSECUTIVE run of suppressions, so clear it here.
+      dispatch_resolved(%{state | unresolved_suppression: nil}, task, plan, stage)
     end
   end
 
@@ -1489,7 +1496,122 @@ defmodule Platform.Orchestration.TaskRouter do
       )
     end
 
-    {:noreply, state}
+    {:noreply, note_unresolved_suppression(state, task, plan)}
+  end
+
+  # ── Unresolved-stage escalation (task 01a006e7 stage 2) ────────────────
+  #
+  # THE INVARIANT: a task at `in_progress` with an `approved` plan always has
+  # at least one stage in `pending` or `running`. Violating it for more than
+  # one dispatch interval is a real blocker, not a log line.
+  #
+  # Adopted as a SAFETY NET, not as a fix. The known route into this state is
+  # the review bounce (`bounce_to_in_progress/4`, which stage 4 of this task
+  # wired to `PlanEngine.open_remediation_stage/2` so the normal-bounce arm no
+  # longer reaches this guard at all), but it is one of several:
+  # `handle_deploy_stage_failure/2` lands in
+  # the same shape, and so does a single-stage plan whose `manual_approval`
+  # was REJECTED by a human (task `019ff6c9`). This guard fires on the STATE
+  # rather than on any one cause, so it also catches the routes nobody has
+  # enumerated yet. Until today that state emitted an INFO line and a
+  # telemetry event and nothing red.
+  #
+  # DELIBERATELY NOT auto-repair. Instance 1 above is out of the auto-repair
+  # path on purpose: an agent must not clear or reopen a human's rejection —
+  # the ruling is the point. `PlanEngine.reopen_manual_approval/1` already
+  # exists for the human/agent-triggered recovery. What that instance lacked
+  # was NOTICE; this supplies the notice and nothing else.
+  #
+  # FIRES ONCE, NOT ON A LOOP. A blocker per dispatch tick is a new bug, not a
+  # fix. The counter is keyed on `{task_id, task.status}` and lives on the
+  # router `%State{}`; it resets when a dispatch resolves (a stage is open
+  # again — see `do_dispatch/2`) and, by the key changing, when the task
+  # leaves the status it was stuck at. `raised?` latches so subsequent ticks
+  # in the same run stay quiet.
+  defp note_unresolved_suppression(%State{} = state, task, plan) do
+    key = {state.task_id, task.status}
+
+    count =
+      case state.unresolved_suppression do
+        %{key: ^key, count: n} -> n + 1
+        _ -> 1
+      end
+
+    raised? =
+      case state.unresolved_suppression do
+        %{key: ^key, raised?: true} -> true
+        _ -> false
+      end
+
+    raised? =
+      if not raised? and count >= 2 and task.status == "in_progress" do
+        record_unresolved_stage_blocker(state, task, plan, count) == :ok
+      else
+        raised?
+      end
+
+    %{state | unresolved_suppression: %{key: key, count: count, raised?: raised?}}
+  end
+
+  # Same attrs shape as `record_review_unrunnable_blocker/4`, phase
+  # `"execution"`, with a reason naming the task, the plan and the
+  # stage-status census — the census is what tells a human whether they are
+  # looking at a rejected approval, a failed deploy, or a bounced review.
+  defp record_unresolved_stage_blocker(%State{} = state, task, plan, count) do
+    census = stage_status_census(plan)
+
+    attrs = %{
+      "task_id" => task.id,
+      "phase" => "execution",
+      "runtime_id" => "task_router",
+      "event_type" => "execution.blocked",
+      "execution_space_id" => state.execution_space_id,
+      "payload" => %{
+        "stage_id" => nil,
+        "description" =>
+          "Task #{task.id} (#{task.title}) is at #{task.status} with " <>
+            "#{if plan, do: "plan #{plan.id} (#{plan.status})", else: "no plan"} but NO stage " <>
+            "is pending or running, so every dispatch is withheld " <>
+            "(#{count} consecutive). Stage statuses: #{census}. Re-open the stage the work " <>
+            "belongs in — a rejected manual_approval is re-opened with " <>
+            "PlanEngine.reopen_manual_approval/1, never silently cleared.",
+        "needs_human" => true,
+        "reported_by" => "task_router"
+      }
+    }
+
+    case Platform.Orchestration.record_runtime_event(attrs) do
+      {:ok, _event} ->
+        Logger.warning(
+          "[TaskRouter] task #{task.id} has no open stage after #{count} consecutive " <>
+            "withheld dispatches — blocker raised (#{census})"
+        )
+
+        :ok
+
+      {:error, err} ->
+        Logger.error(
+          "[TaskRouter] failed to record unresolved-stage blocker for task #{task.id}: #{inspect(err)}"
+        )
+
+        :error
+    end
+  end
+
+  defp stage_status_census(nil), do: "no plan"
+
+  defp stage_status_census(plan) do
+    case plan.stages || [] do
+      [] ->
+        "no stages"
+
+      stages ->
+        stages
+        |> Enum.frequencies_by(& &1.status)
+        |> Enum.map_join(", ", fn {status, n} -> "#{n} #{status}" end)
+    end
+  rescue
+    _ -> "unavailable"
   end
 
   defp dispatch_resolved(state, task, plan, stage) do
@@ -3479,7 +3601,18 @@ defmodule Platform.Orchestration.TaskRouter do
             "#{task.review_round_count || 0}): #{reason}"
         )
 
-        bounce_to_in_progress(state, task, "review gate could not be evaluated")
+        # ARM DECISION (task 01a006e7 stage 4): NO remediation stage here.
+        # This arm means the gate could not be RUN — the dev server would not
+        # boot, a fixture could not be built. Nothing was shown to be wrong
+        # with the code, so synthesizing "Address the failed behavioural gate"
+        # would dispatch an executor to fix a defect no one observed, and
+        # would archive a gate ruling that was never a ruling. The arm already
+        # raises a `needs_human` blocker via
+        # `record_review_unrunnable_blocker/4` — a human fixing the
+        # environment is the correct next actor — and stage 2's
+        # suppressed-dispatch guard is the backstop if that human never
+        # arrives.
+        bounce_to_in_progress(state, task, "review gate could not be evaluated", nil)
 
       classification ->
         if classification == :malformed do
@@ -3493,17 +3626,25 @@ defmodule Platform.Orchestration.TaskRouter do
           )
         end
 
-        spend_round_and_route(state, task)
+        spend_round_and_route(state, task, stage)
     end
   end
 
-  defp spend_round_and_route(%State{} = state, task) do
+  defp spend_round_and_route(%State{} = state, task, gate_stage) do
     case Tasks.spend_review_round(task) do
       {:ok, updated, count} ->
         if count >= Tasks.max_review_rounds() do
-          replan_after_exhausted_rounds(state, updated, count)
+          replan_after_exhausted_rounds(state, updated, count, gate_stage)
         else
-          bounce_to_in_progress(state, task, "review round #{count}/#{Tasks.max_review_rounds()}")
+          # ARM DECISION: the normal bounce DOES open a remediation stage.
+          # This is the instance the task exists for — a genuine behavioural
+          # verdict, a round spent, and an executor expected to land a fix.
+          bounce_to_in_progress(
+            state,
+            task,
+            "review round #{count}/#{Tasks.max_review_rounds()}",
+            gate_stage
+          )
         end
 
       {:error, reason} ->
@@ -3513,11 +3654,13 @@ defmodule Platform.Orchestration.TaskRouter do
           "[TaskRouter] could not spend a review round for task #{state.task_id}: #{inspect(reason)}"
         )
 
-        bounce_to_in_progress(state, task, "review round counter unwritten")
+        # ARM DECISION: treated exactly as the normal bounce. The counter is
+        # bookkeeping; a failed write must never cost the task its stage.
+        bounce_to_in_progress(state, task, "review round counter unwritten", gate_stage)
     end
   end
 
-  defp replan_after_exhausted_rounds(%State{} = state, task, count) do
+  defp replan_after_exhausted_rounds(%State{} = state, task, count, gate_stage) do
     reason =
       "Behavioural review failed #{count} times (bound: #{Tasks.max_review_rounds()}). " <>
         "Returning the task to planning rather than bouncing it to implementation again."
@@ -3537,16 +3680,38 @@ defmodule Platform.Orchestration.TaskRouter do
             "re-planning failed (#{inspect(err)}) — falling back to in_progress"
         )
 
-        bounce_to_in_progress(state, task, "re-plan failed")
+        # ARM DECISION: NO remediation stage. The plan here is either already
+        # superseded or on its way out; stacking a synthesized stage onto a
+        # dying plan hands the next planner an executable stage it never
+        # wrote. The `:replanned` success path above is untouched for the same
+        # reason — the task goes to `planning` and a planner is dispatched, so
+        # the "must have an open stage" invariant does not apply to it.
+        bounce_to_in_progress(state, task, "re-plan failed", nil)
     end
   end
 
-  defp bounce_to_in_progress(%State{} = state, task, why) do
+  # `gate_stage` is the failed review stage to open a remediation stage in
+  # front of, or `nil` for the arms that deliberately open none (see the
+  # per-arm comments above). Task 01a006e7 stage 4.
+  #
+  # DELIBERATE OMISSION: `handle_deploy_stage_failure/2` is NOT wired to this.
+  # A deploy bounce has its own retry semantics and its own reason for going
+  # back to `in_progress`; stage 2's suppressed-dispatch guard covers its
+  # silence, and giving it a behavioural remediation stage would misdescribe
+  # what failed.
+  defp bounce_to_in_progress(%State{} = state, task, why, gate_stage) do
     case Tasks.transition_task(task, "in_progress") do
       {:ok, _updated} ->
         Logger.info(
           "[TaskRouter] review stage failed — bounced task #{state.task_id} back to in_progress (#{why})"
         )
+
+        # AFTER the transition, so a failed transition never leaves a
+        # synthesized stage on a task that did not actually bounce. The
+        # newly `pending` stage is what makes the task a nameable dispatch
+        # subject: `unresolved_stage_dispatch?/3` withholds only when there
+        # is no running stage AND `first_pending_stage/1` is nil.
+        maybe_open_remediation_stage(state, gate_stage)
 
       {:error, reason} ->
         Logger.warning(
@@ -3555,6 +3720,32 @@ defmodule Platform.Orchestration.TaskRouter do
     end
 
     :bounced
+  end
+
+  defp maybe_open_remediation_stage(_state, nil), do: :ok
+
+  defp maybe_open_remediation_stage(%State{} = state, gate_stage) do
+    stage_id = Map.get(gate_stage, :id) || Map.get(gate_stage, "id")
+
+    if is_binary(stage_id) do
+      case Platform.Tasks.PlanEngine.open_remediation_stage(stage_id) do
+        {:ok, stage} ->
+          Logger.info(
+            "[TaskRouter] opened remediation stage #{stage.id} (position #{stage.position}) " <>
+              "for bounced task #{state.task_id}"
+          )
+
+        {:error, reason} ->
+          # Never crash the router on the failure path. `stage_needs_opening?/1`
+          # plus stage 2's suppressed-dispatch guard remain the backstop.
+          Logger.warning(
+            "[TaskRouter] could not open a remediation stage for task #{state.task_id}: " <>
+              inspect(reason)
+          )
+      end
+    end
+
+    :ok
   end
 
   # Read the stage's failed validations FROM THE DATABASE rather than off the

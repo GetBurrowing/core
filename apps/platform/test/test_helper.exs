@@ -2,7 +2,16 @@
 # here. That module records why each quarantined test is untrustworthy and
 # refuses to hide anything whose cause is deterministic or unknown — see its
 # moduledoc for the incident (task 019fa06a) that made the distinction load-bearing.
-ExUnit.start(exclude: Platform.TestQuarantine.excluded_tags())
+# The second list is `Platform.PendingFix` (task 01a006e7 stage 1): tests
+# written RED on purpose, before the fix. Kept in its OWN registry rather than
+# filed under a quarantine class, because a known-open-defect test is
+# deterministic and trustworthy — the opposite of what the quarantine records —
+# and mislabelling it `:intermittent` to borrow excludability is exactly the
+# confusion `TestQuarantine`'s moduledoc exists to end. Both lists are DERIVED;
+# neither may become a literal, which `Platform.TestQuarantineTest` asserts.
+ExUnit.start(
+  exclude: Platform.TestQuarantine.excluded_tags() ++ Platform.PendingFix.excluded_tags()
+)
 
 # ONE lifecycle step registry for the whole run, under the default name,
 # seeded with the SHIPPED allowlist and nothing else (task 019fe1b7 stage 3).

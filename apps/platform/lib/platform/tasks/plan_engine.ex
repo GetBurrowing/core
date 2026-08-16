@@ -152,6 +152,276 @@ defmodule Platform.Tasks.PlanEngine do
   defp iso8601_or_nil(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
   defp iso8601_or_nil(%NaiveDateTime{} = dt), do: NaiveDateTime.to_iso8601(dt)
 
+  # Task 01a006e7. The name of the stage synthesized by
+  # `open_remediation_stage/2`.
+  #
+  # The wording is FUNCTIONAL, not cosmetic: `e2e_host_stage_name?/1` is a
+  # case-insensitive substring match on stage NAME, so a remediation stage
+  # called "Fix the failed review" would be adopted by the engine as the
+  # e2e host the next time a plan is built. `plan_engine_remediation_test.exs`
+  # asserts this constant against that same predicate rather than a copied
+  # regex, so the two cannot drift.
+  @remediation_stage_name "Address the failed behavioural gate"
+
+  @doc "The stage name `open_remediation_stage/2` synthesizes."
+  @spec remediation_stage_name() :: String.t()
+  def remediation_stage_name, do: @remediation_stage_name
+
+  @doc """
+  Open a fresh remediation stage in front of a failed behavioural gate.
+
+  A failed `e2e_behavior` gate bounces its task back to `in_progress`, but
+  that transition touches no stage: the plan is left with nothing `pending`
+  or `running`, so the router withholds every dispatch and a human has to
+  spawn the fixing executor by hand (task 01a006e7).
+
+  This gives the bounce something to dispatch. It SYNTHESIZES a new stage
+  rather than reopening the last implementation stage, for two reasons:
+
+    * a passed implementation stage has all its validations `passed`, so
+      `advance_stage/1` reads `:all_passed` the moment anything reopens it
+      and immediately re-passes and re-advances — reopening a stage whose
+      validations are already satisfied does not create a unit of work; and
+    * a behavioural finding routinely spans several stages, so naming one
+      blames a stage that is not wrong and makes the plan's record false.
+
+  The new stage lands AT the gate's position (the gate and everything after
+  it shift by +1) so the gate still re-runs afterwards, carries the gate
+  agent's finding verbatim as its description, and gets the ordinary
+  `test_pass` + `lint_pass` validations so it can pass by the normal route.
+
+  The failed gate validations are reset to `pending` with their ruling
+  ARCHIVED into `evidence["prior_rulings"]` by the same `archive_ruling/1`
+  `reopen_manual_approval/1` uses. Blanking a gate agent's observation is
+  the defect PR #752 fixed for manual gates; it is not reintroduced here.
+
+  The gate may fail up to `Tasks.max_review_rounds/0` times before the router
+  supersedes the plan entirely. The ROUNDS are bounded there; the STAGES are
+  bounded here (task 01a006e7 stage 5): if the plan already carries a
+  remediation stage in any status but `skipped` — INCLUDING `passed`, which is
+  the status it is always in when the gate fails a second time — that row is
+  REUSED: the new finding is appended to its description under a round marker,
+  the stage is reopened to `pending`, and its own validations are re-pended.
+  A plan therefore never carries more than one remediation stage.
+  Reuse deliberately APPENDS: discarding the new finding would dispatch the
+  executor against stale feedback, which is worse than a duplicate stage.
+
+  Returns `{:ok, stage}` with the inserted-or-reused stage.
+  """
+  @spec open_remediation_stage(Stage.t() | Ecto.UUID.t(), String.t() | nil) ::
+          {:ok, Stage.t()} | {:error, term()}
+  def open_remediation_stage(gate_stage, feedback \\ nil)
+
+  def open_remediation_stage(%Stage{id: id}, feedback),
+    do: open_remediation_stage(id, feedback)
+
+  def open_remediation_stage(gate_stage_id, feedback) when is_binary(gate_stage_id) do
+    deferring_broadcasts(fn ->
+      Repo.transaction(fn ->
+        gate =
+          if Platform.UUID.valid?(gate_stage_id),
+            do: Repo.get(Stage, gate_stage_id)
+
+        gate || Repo.rollback(:stage_not_found)
+
+        failed =
+          Repo.all(
+            from(v in Validation,
+              where: v.stage_id == ^gate.id and v.kind == "e2e_behavior" and v.status == "failed",
+              order_by: [asc: v.inserted_at]
+            )
+          )
+
+        if failed == [], do: Repo.rollback(:no_failed_gate_validations)
+
+        stage =
+          case open_remediation_stage_for(gate.plan_id) do
+            nil -> insert_remediation_stage(gate, failed, feedback)
+            existing -> reuse_remediation_stage(existing, gate, failed, feedback)
+          end
+
+        Enum.each(failed, fn validation ->
+          validation
+          |> Validation.changeset(%{
+            status: "pending",
+            evidence: archive_ruling(validation),
+            evaluated_by: nil,
+            evaluated_at: nil
+          })
+          |> Repo.update!()
+        end)
+
+        reset_gate_stage(gate)
+
+        stage
+      end)
+    end)
+  end
+
+  # The single remediation stage a plan is allowed to carry. `passed` IS in the
+  # set, and that is the whole correction: the predicate originally excluded it
+  # on the reasoning that a passed stage is history, which made the reuse branch
+  # UNREACHABLE ON THE ONLY ROUTE THAT REACHES IT. The single path from a
+  # remediation stage back to the gate runs THROUGH `passed` — the executor
+  # must drive the stage to `passed` for the gate to re-run at all — so at the
+  # moment of a second gate failure the existing remediation stage is always
+  # `passed`, and excluding it inserted a second near-identical stage every
+  # time. It is precisely the round-1 stage, already passed, that round 2 must
+  # reopen.
+  #
+  # Reopening a `passed` stage is safe because reuse re-pends its own
+  # `test_pass`/`lint_pass` and clears `started_at`/`completed_at`, so the
+  # engine cannot read it as satisfied and advance straight past the gate;
+  # `reset_gate_stage/1` closes the gate in the same transaction, leaving the
+  # reopened stage as the lowest-position pending one.
+  #
+  # `skipped` stays out: a skipped stage was deliberately taken out of the plan
+  # by a human, and silently resurrecting it would overrule that.
+  #
+  # `asc: :position` is load-bearing rather than cosmetic now that a plan
+  # carrying a legacy duplicate pair (inserted before this fix) can exist: the
+  # EARLIER stage is the one that sits in front of the gate.
+  #
+  # Matched on the synthesized name, which `remediation_stage_name/0` is the
+  # single source of.
+  defp open_remediation_stage_for(plan_id) do
+    Stage
+    |> where(
+      [s],
+      s.plan_id == ^plan_id and s.name == ^@remediation_stage_name and
+        s.status in ~w(pending running failed passed)
+    )
+    |> order_by([s], asc: s.position)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp insert_remediation_stage(gate, failed, feedback) do
+    shift_stages_from(gate.plan_id, gate.position)
+
+    stage =
+      %Stage{}
+      |> Stage.changeset(%{
+        plan_id: gate.plan_id,
+        position: gate.position,
+        name: @remediation_stage_name,
+        description: remediation_description(gate, failed, feedback),
+        status: "pending"
+      })
+      |> Repo.insert!()
+
+    Enum.each(~w(test_pass lint_pass), fn kind ->
+      %Validation{}
+      |> Validation.changeset(%{stage_id: stage.id, kind: kind, status: "pending"})
+      |> Repo.insert!()
+    end)
+
+    stage
+  end
+
+  # Reuse APPENDS. The prior round's finding stays because the executor may not
+  # have addressed it, and the new one is added because it is the reason the
+  # gate failed again — a reuse that overwrote either would dispatch against a
+  # description that does not match the plan's actual state.
+  defp reuse_remediation_stage(%Stage{} = stage, gate, failed, feedback) do
+    round = round_count(stage.description) + 1
+
+    description =
+      String.trim_trailing(stage.description || "") <>
+        "\n\n---\n\n## Round #{round}\n\n" <> remediation_description(gate, failed, feedback)
+
+    # Its own validations may have been passed on the previous round; they have
+    # to be re-earned or the stage advances the instant the router opens it.
+    Validation
+    |> where([v], v.stage_id == ^stage.id and v.status != "pending")
+    |> Repo.all()
+    |> Enum.each(fn v ->
+      v
+      |> Validation.changeset(%{
+        status: "pending",
+        evidence: archive_ruling(v),
+        evaluated_by: nil,
+        evaluated_at: nil
+      })
+      |> Repo.update!()
+    end)
+
+    stage
+    |> Stage.changeset(%{description: description, status: "pending"})
+    |> Ecto.Changeset.put_change(:started_at, nil)
+    |> Ecto.Changeset.put_change(:completed_at, nil)
+    |> Repo.update!()
+  end
+
+  # Round 1 has no marker; every reuse writes exactly one.
+  defp round_count(nil), do: 1
+
+  defp round_count(description) do
+    1 + length(Regex.scan(~r/^## Round \d+$/m, description))
+  end
+
+  # `(plan_id, position)` carries a PLAIN index, not a unique one
+  # (`20260320120000_create_tasks_tables.exs:110`), so a +1 shift cannot
+  # collide at the database level. It is still written descending — highest
+  # position first — because the ordering is the property that makes the
+  # shift correct under a unique constraint too, and a later migration that
+  # tightens the index must not silently turn this into a runtime error.
+  defp shift_stages_from(plan_id, from_position) do
+    Stage
+    |> where([s], s.plan_id == ^plan_id and s.position >= ^from_position)
+    |> order_by([s], desc: s.position)
+    |> Repo.all()
+    |> Enum.each(fn s ->
+      s
+      |> Stage.changeset(%{position: s.position + 1})
+      |> Repo.update!()
+    end)
+  end
+
+  # The gate must not be open while the remediation stage runs, or the router
+  # dispatches both at once. `@valid_stage_transitions` has no `failed ->
+  # pending` edge — it describes the progression of a stage that is being
+  # WORKED, and this is a re-plan around it — so the reset is written
+  # directly, clearing the timestamps so the gate reads as never having run.
+  defp reset_gate_stage(%Stage{status: status} = gate) when status in ~w(failed running) do
+    gate
+    |> Stage.changeset(%{status: "pending"})
+    |> Ecto.Changeset.put_change(:started_at, nil)
+    |> Ecto.Changeset.put_change(:completed_at, nil)
+    |> Repo.update!()
+  end
+
+  defp reset_gate_stage(gate), do: gate
+
+  # The gate agent's evidence goes in VERBATIM. A summary would drop exactly
+  # the expected-vs-observed detail the dispatched executor needs, and that
+  # detail is the only thing that makes the synthesized stage actionable.
+  defp remediation_description(gate, failed, feedback) do
+    findings =
+      failed
+      |> Enum.with_index(1)
+      |> Enum.map(fn {v, i} ->
+        "## Finding #{i} (e2e_behavior #{v.id})\n\n" <>
+          "```json\n" <> encode_evidence(v.evidence) <> "\n```"
+      end)
+
+    [
+      "The behavioural gate \"#{gate.name}\" failed. Address the finding(s) below; " <>
+        "the gate re-runs once this stage passes.",
+      feedback && String.trim(feedback),
+      Enum.join(findings, "\n\n")
+    ]
+    |> Enum.reject(&(is_nil(&1) or &1 == ""))
+    |> Enum.join("\n\n")
+  end
+
+  defp encode_evidence(evidence) do
+    case Jason.encode(evidence || %{}, pretty: true) do
+      {:ok, json} -> json
+      {:error, _} -> inspect(evidence)
+    end
+  end
+
   @doc """
   Record a validation result and auto-advance if this was the last pending
   validation for its stage.
@@ -561,12 +831,7 @@ defmodule Platform.Tasks.PlanEngine do
   defp attach_e2e_validations_to_review_stage(stages_input, e2e_validations) do
     review_idx =
       Enum.find_index(stages_input, fn stage ->
-        name = String.downcase(stage_field(stage, "name") || "")
-
-        # An existing "task-level review" or generic "review"/"validation" stage
-        # is reused; "Deploy: ..." stages are NEVER reused as the e2e gate.
-        not String.starts_with?(name, "deploy:") and
-          (String.contains?(name, "review") or String.contains?(name, "validation"))
+        e2e_host_stage_name?(stage_field(stage, "name"))
       end)
 
     case review_idx do
@@ -579,6 +844,25 @@ defmodule Platform.Tasks.PlanEngine do
           put_stage_validations(stage, existing ++ e2e_validations)
         end)
     end
+  end
+
+  @doc """
+  Whether a stage NAME makes the engine adopt that stage as the e2e host.
+
+  An existing "task-level review" or generic "review"/"validation" stage is
+  reused; "Deploy: ..." stages are NEVER reused as the e2e gate.
+
+  Public, and the single copy: any stage the engine SYNTHESIZES must be
+  checked against this predicate (see `remediation_stage_name/0`), and a
+  test that hand-copies the substring list would drift from the matcher it
+  claims to be testing.
+  """
+  @spec e2e_host_stage_name?(String.t() | nil) :: boolean()
+  def e2e_host_stage_name?(name) do
+    name = String.downcase(name || "")
+
+    not String.starts_with?(name, "deploy:") and
+      (String.contains?(name, "review") or String.contains?(name, "validation"))
   end
 
   defp synthesize_task_level_review_stage(existing_stages, e2e_validations) do
