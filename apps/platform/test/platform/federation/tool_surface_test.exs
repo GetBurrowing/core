@@ -2639,6 +2639,177 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert Enum.count(host.validations, &(&1.kind == "e2e_behavior")) == 1
     end
 
+    # ── unnamed manual_approval gate guard (task 01a00b91 stage 3) ────────
+
+    test "plan_create accepts a manual_approval that names its UI surface, and persists it unchanged" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Named gate task"})
+
+      {:ok, plan} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Surface the stage timeline",
+                "description" => "Render it",
+                "position" => 1,
+                "validations" => [
+                  %{"kind" => "test_pass"},
+                  %{
+                    "kind" => "manual_approval",
+                    "evaluation_payload" => %{
+                      "ui_surface" => "the task detail page's stage timeline at 375px"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          %{}
+        )
+
+      assert [stage] = plan.stages
+
+      gate = Enum.find(stage.validations, &(&1.kind == "manual_approval"))
+      assert gate, "the named manual_approval must survive the guard"
+
+      # The guard READS the payload; it must not rewrite or strip it. Asserting
+      # only `{:ok, _}` would pass against an implementation that admitted the
+      # plan by deleting the field it checked.
+      assert gate.evaluation_payload["ui_surface"] ==
+               "the task detail page's stage timeline at 375px"
+    end
+
+    test "plan_create refuses a manual_approval that names no UI surface, and writes nothing" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Unnamed gate task"})
+
+      {:error, env} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Add the retry backoff",
+                "description" => "Add it",
+                "position" => 1,
+                "validations" => [%{"kind" => "test_pass"}]
+              },
+              %{
+                "name" => "Confirm the backoff numbers",
+                "description" => "Show the human the test run",
+                "position" => 2,
+                "validations" => [%{"kind" => "manual_approval"}]
+              }
+            ]
+          },
+          %{}
+        )
+
+      # The envelope must NAME the offending stage and position — "a
+      # manual_approval is unnamed" is unactionable in a six-stage plan.
+      assert env.error =~ "Confirm the backoff numbers"
+      assert env.error =~ "Stage 2"
+      assert env.recoverable == true
+
+      # And it must name BOTH exits. A guard that only says "add the field"
+      # teaches the planner to name a surface it does not have, which is the
+      # padding this task exists to remove.
+      assert env.suggestion =~ "ui_surface"
+      assert env.suggestion =~ "evaluation_payload"
+      assert env.suggestion =~ "DROP the"
+
+      # PERSISTENCE CONTROL — same call. The error envelope reads IDENTICALLY
+      # whether or not a draft row was left behind, so this is the only
+      # assertion that can see the lockout regression: a live draft blocks the
+      # author's own retry and `plan_get` resolves approved plans only, leaving
+      # them unable to read, fix, or re-submit.
+      assert Tasks.latest_plan(task.id) == nil
+    end
+
+    # DIRECTION CONTROL — an implementation that refuses every plan passes the
+    # rejection test above and must fail here.
+    test "plan_create accepts a plan with no manual_approval at all" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "No gate task"})
+
+      {:ok, plan} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Add the retry backoff",
+                "description" => "Add it",
+                "position" => 1,
+                "validations" => [%{"kind" => "test_pass"}, %{"kind" => "lint_pass"}]
+              }
+            ]
+          },
+          %{}
+        )
+
+      assert [stage] = plan.stages
+      assert stage.name == "Add the retry backoff"
+      assert Enum.map(stage.validations, & &1.kind) == ["test_pass", "lint_pass"]
+      refute Tasks.latest_plan(task.id) == nil
+    end
+
+    # COEXISTENCE — the two pre-transaction guards must not interfere. A named
+    # manual_approval passes its guard, and the e2e cases still route to the
+    # synthesised task-level host stage exactly as before.
+    test "plan_create routes e2e cases to the synthesized host stage alongside a named manual_approval" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Coexistence task"})
+
+      {:ok, plan} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Add the guard",
+                "description" => "Add it",
+                "position" => 1,
+                "validations" => [%{"kind" => "test_pass"}, e2e_case("guard fires")]
+              },
+              %{
+                "name" => "Surface the refusal banner",
+                "description" => "Render it",
+                "position" => 2,
+                "validations" => [
+                  %{
+                    "kind" => "manual_approval",
+                    "evaluation_payload" => %{"ui_surface" => "the plan refusal banner at 375px"}
+                  },
+                  e2e_case("banner explains")
+                ]
+              }
+            ]
+          },
+          %{}
+        )
+
+      names = Enum.map(plan.stages, & &1.name)
+      assert List.last(names) == "Task-level review"
+
+      host = List.last(plan.stages)
+      assert Enum.count(host.validations, &(&1.kind == "e2e_behavior")) == 2
+
+      # The manual_approval stays put on its authored stage — routing lifts e2e
+      # cases only, and the gate's payload is untouched.
+      banner = Enum.find(plan.stages, &(&1.name == "Surface the refusal banner"))
+      assert Enum.map(banner.validations, & &1.kind) == ["manual_approval"]
+
+      assert hd(banner.validations).evaluation_payload["ui_surface"] ==
+               "the plan refusal banner at 375px"
+    end
+
     # VACUOUS-TEST FINDING (019fa609 stage 4). This asserted only
     # `recoverable == true` against execute/3. After plan_create's own task_id
     # check was deleted it kept passing — Tasks.create_plan(%{task_id: nil})
@@ -2680,7 +2851,15 @@ defmodule Platform.Federation.ToolSurfaceTest do
                 "name" => "Design direction",
                 "position" => 1,
                 "responsibility" => "designer",
-                "validations" => [%{"kind" => "manual_approval"}]
+                # Names its surface — task 01a00b91 stage 3 refuses a
+                # manual_approval that does not, and this test is about the
+                # `responsibility` key, not the gate rule.
+                "validations" => [
+                  %{
+                    "kind" => "manual_approval",
+                    "evaluation_payload" => %{"ui_surface" => "the direction board at 375px"}
+                  }
+                ]
               }
             ]
           },
@@ -2745,6 +2924,13 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert description =~ "e2e_host"
       assert description =~ "REFUSED"
       assert description =~ "\"review\" or \"validation\""
+
+      # Task 01a00b91 stage 3 — same readability requirement for the
+      # manual_approval rule: a planner must be able to learn the requirement
+      # BEFORE tripping it, and must read both exits, not just the field.
+      assert description =~ "ui_surface"
+      assert description =~ "here is the UI, does it fit the brief"
+      assert description =~ "drop the gate"
 
       # `evaluation` is NOT a trigger (stage 1's verified finding); the
       # description must not claim otherwise.

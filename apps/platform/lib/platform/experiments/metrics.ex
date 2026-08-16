@@ -90,6 +90,19 @@ defmodule Platform.Experiments.Metrics do
       description: "Mean number of plan versions per task, over a variant's subjects.",
       direction: :lower_is_better
     },
+    # `:neutral` here is a judgement, argued in the module's moduledoc: the
+    # rejection COUNT is gameable toward zero by never asking for a review,
+    # and the RATE is gameable upward by asking less often. Neither
+    # direction is a win on its own, so the UI must not colour one.
+    "manual_gate_rejection_rate" => %{
+      module: Platform.Experiments.Metrics.ManualGateRejectionRate,
+      label: "Manual gate rejection rate",
+      description:
+        "Share of RESOLVED review requests with at least one needs_revision item, " <>
+          "over a variant's subjects. Read only alongside a human-recorded count of " <>
+          "escaped post-merge UI defects.",
+      direction: :neutral
+    },
     "time_in_phase" => %{
       module: Platform.Experiments.Metrics.TimeInPhase,
       label: "Time in phase",

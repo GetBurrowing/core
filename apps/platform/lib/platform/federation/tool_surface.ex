@@ -2460,7 +2460,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "array",
             required: true,
             description:
-              "Array of IMPLEMENTATION stage objects: {name, description, position, e2e_host?, validations: [{kind, evaluation_payload?}]}. Valid validation kinds for planner-authored stages: lint_pass, type_check, test_pass, manual_approval, e2e_behavior. Do NOT include a deploy stage — the system auto-injects one (with ci_passed / pr_merged / etc. validations) at deploying time from the project's resolved deploy strategy. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time). e2e HOST RULE: when the plan carries any e2e_behavior validations, they are all lifted onto ONE host stage. By default the engine synthesizes a task-level review stage at the end. A stage whose name CONTAINS \"review\" or \"validation\" (case-insensitive, anywhere in the name — e.g. \"task_plan_review\") would silently be adopted as that host instead, so such a plan is REFUSED with a recoverable error: rename the stage, or set the optional per-stage boolean \"e2e_host\": true on the stage that should genuinely host them, which is honoured over any name match. Stage names beginning \"deploy:\" are exempt and never adopted."
+              "Array of IMPLEMENTATION stage objects: {name, description, position, e2e_host?, validations: [{kind, evaluation_payload?}]}. Valid validation kinds for planner-authored stages: lint_pass, type_check, test_pass, manual_approval, e2e_behavior. Do NOT include a deploy stage — the system auto-injects one (with ci_passed / pr_merged / etc. validations) at deploying time from the project's resolved deploy strategy. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time). e2e HOST RULE: when the plan carries any e2e_behavior validations, they are all lifted onto ONE host stage. By default the engine synthesizes a task-level review stage at the end. A stage whose name CONTAINS \"review\" or \"validation\" (case-insensitive, anywhere in the name — e.g. \"task_plan_review\") would silently be adopted as that host instead, so such a plan is REFUSED with a recoverable error: rename the stage, or set the optional per-stage boolean \"e2e_host\": true on the stage that should genuinely host them, which is honoured over any name match. Stage names beginning \"deploy:\" are exempt and never adopted. manual_approval RULE: a manual_approval validation means \"here is the UI, does it fit the brief\" — nothing else. It REQUIRES an evaluation_payload map carrying a non-blank \"ui_surface\" string naming the screen or component the human will look at (e.g. \"ui_surface\": \"the task detail page's stage timeline at 375px\"); a manual_approval without it is REFUSED with a recoverable error and nothing is persisted. Test summaries, caveats, and run reports do NOT belong in a review item — those are what lint_pass / test_pass / e2e_behavior are for. If the stage has no rendered surface to show, drop the gate rather than naming one: a manual_approval that shows a human anything but UI is a notification, not a gate."
           }
         },
         returns: "The created plan with stages and validations preloaded",
@@ -6961,12 +6961,36 @@ defmodule Platform.Federation.ToolSurface do
     # after a draft row exists would leave the author unable to retry
     # (`plan_create` refuses while a draft/pending_review plan is live), which
     # is the same lockout this guard exists to prevent.
+    #
+    # Task 01a00b91 stage 3 chains a SECOND guard into the same pre-transaction
+    # position for the same reason: a manual_approval that cannot name the UI
+    # surface it will show is refused before anything is written. Both guards
+    # run before `do_plan_create/2`; neither may move below the rewrite pipe.
+    #
+    # PROBE RECORD (01a00b91 stage 5). PROBE C moved the
+    # `detect_unnamed_manual_gate/1` call from here to AFTER `Tasks.create_plan/1`,
+    # returning the same envelope from inside the transaction so the draft row
+    # committed. Predicted: the persistence control detonates and NOTHING ELSE
+    # does. That is exactly what happened, on the full suite — one failure,
+    # `assert Tasks.latest_plan(task.id) == nil`, left a `%Plan{status: "draft"}`.
+    # Every envelope assertion in the same test passed under the mutant, which
+    # is the point: the envelope is byte-identical whether or not a draft was
+    # left behind, so the nil check is the ONLY instrument that sees this
+    # ordering. Delete that one assertion and this line is free to move.
+    # (Two `Platform.Execution.ProofRunTest` failures in the same run are the
+    # known IO-contention flake; re-run green in isolation.)
     case Platform.Tasks.PlanEngine.detect_e2e_host_collision(raw_stages_input) do
       {:error, info} ->
         {:error, e2e_host_collision_envelope(info)}
 
       :ok ->
-        do_plan_create(task_id, raw_stages_input)
+        case Platform.Tasks.PlanEngine.detect_unnamed_manual_gate(raw_stages_input) do
+          {:error, info} ->
+            {:error, unnamed_manual_gate_envelope(info)}
+
+          :ok ->
+            do_plan_create(task_id, raw_stages_input)
+        end
     end
   end
 
@@ -7085,6 +7109,31 @@ defmodule Platform.Federation.ToolSurface do
           "no longer contains \"review\" or \"validation\", or set \"e2e_host\": true on the " <>
           "stage that should genuinely host the e2e cases. Nothing was written; retry " <>
           "plan_create once the stages are adjusted."
+    }
+  end
+
+  # Same discipline as the envelope above: the guard explains itself, quotes the
+  # field name the author must add, names the stage AND its position, and states
+  # both exits — because a manual_approval that cannot name a surface is as
+  # often a gate that should not exist as one that is merely under-specified.
+  # `recoverable: true` is literal: nothing was persisted, so the author can fix
+  # and retry immediately.
+  defp unnamed_manual_gate_envelope(info) do
+    %{
+      error:
+        "Stage #{info.stage_position} (\"#{info.stage_name}\") declares a \"manual_approval\" " <>
+          "validation (validation ##{info.validation_index}) that does not name the UI surface a " <>
+          "human is being asked to look at. A manual_approval means \"here is the UI, does it fit " <>
+          "the brief\" — it is not a place to show test summaries or caveats, and a gate that " <>
+          "cannot say what it will show cannot earn the interruption.",
+      recoverable: true,
+      suggestion:
+        "Either add \"ui_surface\": \"<the screen or component the human will look at>\" to that " <>
+          "validation's \"evaluation_payload\" (for example \"evaluation_payload\": " <>
+          "{\"ui_surface\": \"the task detail page's stage timeline at 375px\"}), or DROP the " <>
+          "gate — a manual_approval showing test results or caveats instead of a rendered " <>
+          "surface is a notification, not a gate, and the automated validations already cover " <>
+          "it. Nothing was written; retry plan_create once the stage is adjusted."
     }
   end
 

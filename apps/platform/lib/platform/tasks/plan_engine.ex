@@ -822,6 +822,99 @@ defmodule Platform.Tasks.PlanEngine do
 
   def detect_e2e_host_collision(_other), do: :ok
 
+  @doc """
+  Refuse a plan whose `manual_approval` gate does not NAME the UI surface it
+  will show.
+
+  Returns `:ok`, or `{:error, %{stage_name:, stage_position:, validation_index:,
+  reason:}}` for the FIRST offending stage.
+
+  The name is carried as a `ui_surface` string inside the validation's
+  `evaluation_payload` map. Missing, nil, non-binary, or blank after
+  `String.trim/1` all count as UNNAMED.
+
+  Reads RAW planner stages (string or atom keys), so it must run BEFORE
+  anything rewrites or persists the stage list.
+
+  ## What this proves, and what it does not
+
+  A required field proves NAMING, not truth. Nothing here checks that the stage
+  touches any UI, and nothing checks the named surface exists — an author who
+  wants a gate can write any string and proceed. The honest reading is "the gate
+  must state its subject", not "gates that cannot show UI are refused". That is
+  still worth the friction: it makes the gate auditable and gives the rejection
+  rate something to correlate against.
+
+  Deliberately NOT decided by `ui_touching?/1`. That is a prose heuristic over
+  the stage description; this rule is an EXPLICIT FIELD, mirroring the `e2e_host`
+  opt-in for the reason recorded in `detect_e2e_host_collision/1`'s DISPOSITION
+  comment — an expressed field, never inferred from prose.
+
+  ## PROBE RECORD (01a00b91 stage 5)
+
+  Two mutations were run against this function, one at a time, reverting to a
+  clean tree between them (two probes on one predicate absorb each other and
+  both report a false kill).
+
+  PROBE A — always return `:ok`. Predicted the stage-3 refusal test detonates.
+  KILLED as predicted, and by five more: the unnamed, blank-string, atom-key,
+  non-binary and first-offender cases here all detonate too. The refusal side
+  is pinned six ways over, not one.
+
+  PROBE B — always return `{:error, ...}`. Predicted BOTH the named-surface
+  persistence test AND the direction control (a plan with no `manual_approval`
+  at all) detonate. BOTH KILLED — neither side is unpinned. Eight further tests
+  in the tool surface detonated with them, which is the expected blast radius
+  of a guard that refuses every plan; it is also the reason the direction
+  control is worth stating separately, since without it "refuses everything"
+  would still look like a working detector from the refusal case alone.
+
+  No survivor. No coverage hole found, and no behaviour was changed.
+  """
+  @spec detect_unnamed_manual_gate([map()]) :: :ok | {:error, map()}
+  def detect_unnamed_manual_gate(stages_input) when is_list(stages_input) do
+    stages_input
+    |> Enum.with_index(1)
+    |> Enum.find_value(:ok, fn {stage, idx} ->
+      stage
+      |> stage_validations_field()
+      |> Enum.with_index(1)
+      |> Enum.find_value(nil, fn {validation, v_idx} ->
+        if manual_approval_validation?(validation) and not names_ui_surface?(validation) do
+          {:error,
+           %{
+             stage_name: stage_field(stage, "name"),
+             stage_position: stage_field(stage, "position") || idx,
+             validation_index: v_idx,
+             reason: :unnamed_ui_surface
+           }}
+        end
+      end)
+    end)
+  end
+
+  def detect_unnamed_manual_gate(_other), do: :ok
+
+  defp manual_approval_validation?(v) when is_map(v) do
+    (Map.get(v, "kind") || Map.get(v, :kind)) == "manual_approval"
+  end
+
+  defp manual_approval_validation?(_), do: false
+
+  defp names_ui_surface?(v) when is_map(v) do
+    payload = Map.get(v, "evaluation_payload") || Map.get(v, :evaluation_payload)
+
+    surface =
+      case payload do
+        p when is_map(p) -> Map.get(p, "ui_surface") || Map.get(p, :ui_surface)
+        _ -> nil
+      end
+
+    is_binary(surface) and String.trim(surface) != ""
+  end
+
+  defp names_ui_surface?(_), do: false
+
   defp e2e_behavior_validation?(v) when is_map(v) do
     (Map.get(v, "kind") || Map.get(v, :kind)) == "e2e_behavior"
   end

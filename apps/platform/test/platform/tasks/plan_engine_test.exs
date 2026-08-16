@@ -1456,6 +1456,143 @@ defmodule Platform.Tasks.PlanEngineTest do
     end
   end
 
+  describe "detect_unnamed_manual_gate/1" do
+    defp named_gate(surface),
+      do: %{
+        "kind" => "manual_approval",
+        "evaluation_payload" => %{"ui_surface" => surface}
+      }
+
+    test "NAMED: a manual_approval carrying a non-blank ui_surface → :ok" do
+      stages = [
+        %{
+          "name" => "Add the resolver",
+          "position" => 1,
+          "validations" => [%{"kind" => "test_pass"}]
+        },
+        %{
+          "name" => "Surface the panel",
+          "position" => 2,
+          "validations" => [named_gate("the tasks list mobile card"), %{"kind" => "test_pass"}]
+        }
+      ]
+
+      assert PlanEngine.detect_unnamed_manual_gate(stages) == :ok
+    end
+
+    test "UNNAMED: a manual_approval with no ui_surface is refused, naming that stage" do
+      stages = [
+        %{
+          "name" => "Add the resolver",
+          "position" => 1,
+          "validations" => [%{"kind" => "test_pass"}]
+        },
+        %{
+          "name" => "Surface the panel",
+          "position" => 2,
+          "validations" => [%{"kind" => "test_pass"}, %{"kind" => "manual_approval"}]
+        }
+      ]
+
+      assert {:error, info} = PlanEngine.detect_unnamed_manual_gate(stages)
+      assert info.stage_name == "Surface the panel"
+      assert info.stage_position == 2
+    end
+
+    test "DIRECTION CONTROL: a plan with no manual_approval at all → :ok" do
+      # The common case, and the one that already worked. An implementation
+      # that refuses everything passes the UNNAMED test and must fail here.
+      stages = [
+        %{
+          "name" => "Add the resolver",
+          "position" => 1,
+          "validations" => [%{"kind" => "test_pass"}]
+        },
+        %{
+          "name" => "Wire the router",
+          "position" => 2,
+          "validations" => [%{"kind" => "lint_pass"}, %{"kind" => "test_pass"}]
+        },
+        %{"name" => "Surface the panel", "position" => 3, "validations" => []}
+      ]
+
+      assert PlanEngine.detect_unnamed_manual_gate(stages) == :ok
+    end
+
+    test "BLANK: a whitespace-only ui_surface is unnamed" do
+      stages = [
+        %{"name" => "Surface the panel", "position" => 1, "validations" => [named_gate("   ")]}
+      ]
+
+      assert {:error, info} = PlanEngine.detect_unnamed_manual_gate(stages)
+      assert info.stage_name == "Surface the panel"
+      assert info.stage_position == 1
+    end
+
+    test "nil and non-binary ui_surface are unnamed" do
+      for bad <- [nil, 42, %{"screen" => "panel"}] do
+        stages = [
+          %{
+            "name" => "Surface the panel",
+            "position" => 1,
+            "validations" => [named_gate(bad)]
+          }
+        ]
+
+        assert {:error, _} = PlanEngine.detect_unnamed_manual_gate(stages)
+      end
+    end
+
+    test "ATOM KEYS: atom-keyed input behaves identically to string-keyed" do
+      named = [
+        %{
+          name: "Surface the panel",
+          position: 1,
+          validations: [
+            %{kind: "manual_approval", evaluation_payload: %{ui_surface: "the panel"}}
+          ]
+        }
+      ]
+
+      assert PlanEngine.detect_unnamed_manual_gate(named) == :ok
+
+      unnamed = [
+        %{
+          name: "Surface the panel",
+          position: 1,
+          validations: [%{kind: "manual_approval", evaluation_payload: %{}}]
+        }
+      ]
+
+      assert {:error, info} = PlanEngine.detect_unnamed_manual_gate(unnamed)
+      assert info.stage_name == "Surface the panel"
+      assert info.stage_position == 1
+    end
+
+    test "reports only the FIRST offending stage" do
+      stages = [
+        %{
+          "name" => "First offender",
+          "position" => 1,
+          "validations" => [%{"kind" => "manual_approval"}]
+        },
+        %{
+          "name" => "Second offender",
+          "position" => 2,
+          "validations" => [%{"kind" => "manual_approval"}]
+        }
+      ]
+
+      assert {:error, info} = PlanEngine.detect_unnamed_manual_gate(stages)
+      assert info.stage_name == "First offender"
+    end
+
+    test "a non-list argument returns :ok" do
+      assert PlanEngine.detect_unnamed_manual_gate(nil) == :ok
+      assert PlanEngine.detect_unnamed_manual_gate(%{"name" => "not a list"}) == :ok
+    end
+  end
+
   # ── ui_touching?/1 + check_manual_approval_heuristic/1 ──────────────
 
   describe "ui_touching?/1" do
