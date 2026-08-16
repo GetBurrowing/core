@@ -2071,6 +2071,102 @@ body, .font-fabrikam {
   padding-inline: 0.25rem;
 }
 
+/* ── Hover feedback on the individual action buttons ──────────────────
+   The sponsor filed "the emoji buttons don't work on desktop", then
+   retracted it to "maybe it does work". The buttons were live the whole
+   time; the hover state was simply too faint to prove it, so a working
+   control read as a dead one. That is a real defect — an affordance that
+   does not answer the cursor — and this block is the fix.
+
+   WHY `hover:bg-base-300` (the Tailwind class still on every button in
+   chat_message.ex) was not enough, measured rather than eyeballed. The
+   strip's own backing is `--color-base-100`, so the hover fill is read
+   against THAT, not against the page:
+
+     light   base-100 #FFFFFF vs base-300 oklch(88%)  ->  1.36:1
+     dark    base-100 #171b25 vs base-300 oklch(20%)  ->  1.09:1
+
+   1.09:1 is not a subtle hover, it is no hover: in dark the fill lands
+   within a percent of the surface it sits on, because base-300 is defined
+   as the RAISED surface for a base-200 sidebar and was never a step away
+   from the base-100 chat pane. Confirmed on screen before touching this
+   file — a hovered button in dark is indistinguishable from an unhovered
+   one.
+
+   It bites the four quick-react emoji hardest, which is exactly where the
+   report came from. Every other button in the row also carries
+   `text-base-content/50 hover:text-base-content`, so it has a second,
+   working signal. An emoji is a colour glyph that ignores `color`
+   entirely, so for those four the invisible fill was the ONLY feedback
+   there was.
+
+   So: two signals, neither depending on a lightness step that a theme can
+   flatten.
+
+     scale   1.2. Sized off the gap, not chosen by eye. The row is `gap-1`
+             (4px) and the widest button is a quick-react emoji at 30px
+             (the icon buttons are 28px), so 1.2 grows the worst case by
+             3px per side: it expands INTO the gap and stops 1px short of
+             the neighbour's box, which is what keeps it from stealing a
+             neighbour's clickable edge. 1.3 would grow that same button
+             4.5px per side and overrun the 4px gap. Growth is
+             centre-origin, so the pointer can never end up outside the
+             element it just grew, which would oscillate.
+
+     fill    `--color-base-content` at 18%, composited over the strip.
+             Derived from a token instead of naming a surface, so it steps
+             AWAY from the backing in both themes by construction: it
+             darkens on light, lightens on dark, and cannot silently
+             collapse the way a fixed base-300 did. Measures 1.69:1 light
+             and 1.94:1 dark — both well clear of the 1.09:1 that started
+             this, and the scale is carrying the rest.
+
+   `transform` on the BUTTONS only, never on `.message-action-row`. The row
+   is `position: absolute` (see above) to stop it reserving header width
+   and wrapping the sender name at phone widths, #759, and a transform on
+   it — or on any ancestor — would make it the containing block for its own
+   `position: absolute` and undo that. Transform also creates a stacking
+   context; on a leaf button that is harmless, which is the other reason it
+   goes here and not one level up.
+
+   No layout property is touched: `transform` paints, it does not reflow,
+   so the resting geometry `chat_message_density.spec.ts` pins (63px opener
+   / 31px continuation, sender name one line box at 320/375/414) is
+   measured on an unhovered row and is untouched by every rule in here.
+
+   120ms ease matches `.reaction-pill` a few hundred lines up, which
+   already scales on `:active` — same gesture vocabulary, one timing.
+
+   Gated on a real cursor. `:hover` latches after a tap on a touchscreen,
+   and a button left magnified after the finger lifts reads as stuck. Touch
+   keeps precisely today's behaviour; this is a desktop pointer fix. */
+@media (hover: hover) and (pointer: fine) {
+  .message-action-row > button {
+    transition:
+      transform 120ms ease,
+      background-color 120ms ease,
+      color 120ms ease;
+  }
+
+  .message-action-row > button:hover {
+    transform: scale(1.2);
+    background-color: color-mix(in oklch, var(--color-base-content) 18%, transparent);
+  }
+
+  /* The magnify is decoration on top of a colour change that already says
+     "hovered", so honouring a reduced-motion preference costs nothing that
+     matters: drop the movement, keep the fill. */
+  @media (prefers-reduced-motion: reduce) {
+    .message-action-row > button {
+      transition: background-color 120ms ease, color 120ms ease;
+    }
+
+    .message-action-row > button:hover {
+      transform: none;
+    }
+  }
+}
+
 /* Tighter than the 8px a group-opening row carries: a continuation needs
    enough separation to read as its own message and no more. Paired with
    the reclaimed avatar height this puts a one-line follow-up at roughly
