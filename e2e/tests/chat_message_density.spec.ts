@@ -67,21 +67,25 @@ const DESKTOP = { width: 1440, height: 900 }
  * (b71c66e7's commit message) says 63px for an opener; against this
  * stylesheet an opener measures 67px.
  *
- * BOTH NUMBERS ARE RIGHT, AND THE 4px BETWEEN THEM IS THE ACCESSIBILITY FIX.
- * Established at stage 5 by measurement, not inference: putting `hidden` back
- * on `.message-action-row` — and changing nothing else — moves the opener
- * from 67px to exactly 63px. `hidden` is `display: none`, so the action row
- * leaves the header's flex line and stops contributing its button height to
- * it. 63px is therefore the correct figure for the PRE-STAGE-3 markup, when
- * that row was `hidden` at rest and nothing inside it could hold focus.
- * Stage 3 swapped `hidden` for `opacity-0` precisely so the controls stay in
- * the tab order, which necessarily keeps the row in flow, which costs those
- * 4px on every run-opening row.
+ * UPDATED BY TASK 01a000c0 (v2 plan, stage 1). 67px stopped being the right
+ * number the moment `.message-action-row` became `position: absolute`
+ * unconditionally (commit `1d009294`) instead of only on grouped rows — the
+ * opener's action row now leaves the header's flex line the same way a
+ * continuation row's always has, and the opener measures 63px, not 67px.
  *
- * So do not "correct" 67 back to 63. A 63px opener on this branch means the
- * action row has left the flow, and add-reaction has gone back to being
- * unreachable by keyboard — which is why the band below is centred on 67 and
- * tight enough that 63 fails it.
+ * The paragraph this replaced argued "do not correct 67 back to 63" because
+ * the only known way to get 63px was `hidden` (`display: none`), which also
+ * breaks keyboard focus — so a 63px opener used to mean add-reaction had
+ * gone unreachable. That inference no longer holds: `position: absolute`
+ * removes the row from flow WITHOUT `display: none`, so it stays focusable.
+ * Verified by pressing Tab, not by reading this file, on the OPENER row
+ * specifically (the committed guard for this walk targets a grouped row —
+ * see below — so this needed its own check): Shift+Tab from the compose box
+ * reaches "Add reaction" on an ungrouped row in 8 presses, same as a grouped
+ * row, `.message-action-row` opacity reads `1` while it holds focus, and
+ * Enter opens `#reaction-picker`. 63px is the correct figure for a row whose
+ * action row is out of flow AND still in the tab order — which is what every
+ * row now is, not a distinct pre-accessibility-fix state.
  *
  * TOLERANCE — why ±3px, and why symmetric:
  *
@@ -99,13 +103,21 @@ const DESKTOP = { width: 1440, height: 900 }
  *     zero, and how the continuation assertion is satisfied by a
  *     `display: none` row. Each row now has to land ON its number.
  *
- * It is deliberately NOT a percentage: 5% of 31px and 5% of 67px are
+ * It is deliberately NOT a percentage: 5% of 31px and 5% of 63px are
  * different licences to drift, and the noise being absorbed is the same
  * couple of pixels of glyph rounding in both cases.
  */
-const OPENER_ROW_PX = 67
+const OPENER_ROW_PX = 63
 const GROUPED_ROW_PX = 31
 const ROW_HEIGHT_TOL_PX = 3
+
+/** Task 01a000c0 stage 2: the three widths the sponsor's regression was
+ *  reported at ("at least in mobile") and the guard now runs at. Not
+ *  emulated-touch widths — plain `browser.newContext({ viewport })` with no
+ *  device descriptor, because stage 1 established this reproduces under
+ *  `(hover: hover)` and `(pointer: fine)` both true. Narrowing the viewport
+ *  is the whole mechanism; touch is not involved. */
+const NARROW_WIDTHS = [320, 375, 414]
 
 /** Shift+Tab presses from the compose box to the add-reaction control on a
  *  grouped continuation row. Stage 4 measured 8 and recorded that the same
@@ -121,9 +133,14 @@ interface Peer {
   page: Page
 }
 
-async function login(browser: Browser, slug: string, mobile = false): Promise<Peer> {
+async function login(
+  browser: Browser,
+  slug: string,
+  mobile = false,
+  viewport?: { width: number; height: number },
+): Promise<Peer> {
   const context = await browser.newContext(
-    mobile ? { ...devices["iPhone 12"] } : { viewport: DESKTOP },
+    viewport ? { viewport } : mobile ? { ...devices["iPhone 12"] } : { viewport: DESKTOP },
   )
   const page = await context.newPage()
   page.on("pageerror", (err) => console.log(`[${slug} pageerror] ${err.message}`))
@@ -264,6 +281,20 @@ async function rowGeometry(page: Page, tag: string): Promise<RowGeometry[]> {
 /** Height of one element, straight off the box the user's eye gets. */
 async function heightOf(locator: ReturnType<Page["locator"]>): Promise<number> {
   return locator.evaluate((el) => el.getBoundingClientRect().height)
+}
+
+/**
+ * How many line boxes an element's text actually renders as. This is the
+ * property task 01a000c0 stage 2's regression guard exists to protect —
+ * see the block comment above `NARROW_WIDTHS` for why it is measured this
+ * way and not by height or by class name.
+ */
+async function lineBoxCount(locator: ReturnType<Page["locator"]>): Promise<number> {
+  return locator.evaluate((el) => {
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    return range.getClientRects().length
+  })
 }
 
 /**
@@ -809,4 +840,145 @@ test.describe("chat message density", () => {
       await warm.context.close()
     }
   })
+
+  /* ═══ Task 01a000c0 stage 2 ═══════════════════════════════════════════
+   *
+   * DURABLE FORM OF STAGE 1'S ADVERSARIAL CHECK. Stage 1 fixed a real bug:
+   * `.message-action-row` was an ordinary in-flow flex child reserving its
+   * full min-content width (324px for 7 buttons) on every render — so on a
+   * run-opening (ungrouped) row at narrow widths, the flex-shrinkable
+   * sender-name span got squeezed below its own content width and wrapped
+   * onto a second line, unhovered, at rest. Reported by the sponsor as
+   * "the username now splits across two lines... at least in mobile"; stage
+   * 1 confirmed it is not actually touch/mobile-specific — it reproduces
+   * under plain `(hover: hover)` + `(pointer: fine)`, purely from viewport
+   * width — and fixed it by generalizing `.message-header { position:
+   * relative }` / `.message-action-row { position: absolute; ... }` from
+   * `.message-row--grouped`-only to every row, so the action row can never
+   * again reserve header width.
+   *
+   * Stage 1's own verification of that fix was a one-off measurement at
+   * 375x812. This is the same check, kept alive as a committed test at the
+   * three widths the sponsor's report spans, so a future change to
+   * `.message-header` / `.message-action-row` that reopens the gap between
+   * "space available" and "space the action row reserves" gets caught
+   * automatically instead of waiting for another bug report.
+   *
+   * LINE BOXES, NOT HEIGHT. `getBoundingClientRect().height` on the name
+   * span would pass on a wrapped name if the line-height arithmetic happened
+   * to land on a value under whatever ceiling the assertion used — that
+   * would make the guard vacuous in exactly the case it exists for. Reading
+   * `document.createRange().selectNodeContents(el)` then
+   * `range.getClientRects().length` counts the actual rendered fragments of
+   * the text, which is the one thing "did it wrap" can mean.
+   *
+   * EACH MESSAGE CARRIES BOTH SHAPES. The seed composes two consecutive
+   * messages from one author: the first opens the run (ungrouped, has its
+   * own header) and the second is a same-author continuation (grouped,
+   * header stripped to just the action row). The assertion is only about
+   * the ungrouped row's name — the grouped row's name span is not rendered
+   * at all (`display: none`, task 01a000c0 stage 4) — but seeding both
+   * confirms this stage's fix did not have to trade one shape for the
+   * other, and mirrors how `#message-list` actually looks in a real
+   * conversation rather than a single isolated row.
+   *
+   * NO CUSTOM PARTICIPANT NAME NEEDED. `/dev/login?as=<slug>` names every
+   * dev user `Dev <Capitalized-slug>` (`auth_controller.ex`), which is
+   * already a two-token name with a space between "Dev" and the rest —
+   * exactly the shape the sponsor's report and stage 1's e2e_behavior case
+   * both use ("Harper Parker" / "any two-word name"). The bug is about
+   * available width against reserved width, not about English word count,
+   * so the ordinary login fixture reproduces it without a special seed.
+   */
+  for (const width of NARROW_WIDTHS) {
+    test(`sender name on an ungrouped row is one line box at ${width}px, unhovered`, async ({
+      browser,
+    }) => {
+      const tag = `wrap${width}-${Date.now().toString(36)}`
+      // Deliberately NOT `${tag}-a`: the login slug becomes the sender name
+      // (`Dev <Capitalized-slug>`), and `tag` alone is long enough (18-20
+      // chars) to overflow 320px on its own content width, independent of
+      // whether the action-row bug is present — that produced a false
+      // failure at 320px (and only 320px) with the real fix applied, caught
+      // by the anti-vacuity mutation step below reproducing on-topic but a
+      // control run against the FIX also going red for the wrong reason.
+      // A short slug keeps the fixture in the same length class as the
+      // sponsor's report and stage 1's e2e_behavior case ("Harper Parker",
+      // 13 chars): width + 6 base36 chars of the timestamp, ~9-12 chars,
+      // still unique per test run without being long enough to wrap on its
+      // own. The message body keeps the full `tag` for row filtering below.
+      const loginSlug = `${width}${Date.now().toString(36).slice(-6)}`
+      const peer = await login(browser, loginSlug, false, { width, height: 812 })
+
+      try {
+        // First message opens the run (ungrouped); second is a same-author
+        // continuation (grouped) — see the block comment above.
+        await compose(peer, `${tag} opens the run`)
+        await compose(peer, `${tag} continues it`)
+
+        // applyGrouping runs off a MutationObserver; give the last batch a
+        // frame to be classed before measuring.
+        await peer.page.waitForTimeout(500)
+        await unhover(peer.page)
+
+        // Guard the guard: if the seed silently failed or grouping never
+        // ran, the assertions below would measure the wrong row (or none)
+        // and pass for the wrong reason.
+        const rows = await rowGeometry(peer.page, tag)
+        expect(rows.length, `expected 2 seeded rows, found ${rows.length}`).toBe(2)
+        expect(
+          rows.filter((r) => !r.grouped).length,
+          "no ungrouped (run-opening) row in the seed",
+        ).toBe(1)
+        expect(
+          rows.filter((r) => r.grouped).length,
+          "no grouped (continuation) row in the seed",
+        ).toBe(1)
+
+        const openerRow = peer.page
+          .locator("#message-list > [data-message-id][data-participant-id]")
+          .filter({ hasText: tag })
+          .filter({ hasNot: peer.page.locator(".message-row--grouped") })
+          .first()
+        await expect(openerRow).toBeVisible()
+
+        // Confirmed unhovered: a hovered action row's `--color-base-100`
+        // backing is a separate, already-flagged finding at 375px (task
+        // 01a000c0 stage 1) and out of scope here — this asserts the resting
+        // state only.
+        const actionRowOpacity = await openerRow
+          .locator(".message-action-row")
+          .evaluate((el) => getComputedStyle(el).opacity)
+        expect(
+          actionRowOpacity,
+          "the action row is already revealed — this would measure the hovered " +
+            "state, which is explicitly out of scope for this guard",
+        ).toBe("0")
+
+        const nameSpan = openerRow.locator(".message-header > span").first()
+        await expect(nameSpan).toBeVisible()
+        const nameText = (await nameSpan.textContent())?.trim() ?? ""
+        // Two tokens with a break opportunity between them, or the wrap
+        // this test exists to catch has nowhere to happen.
+        expect(
+          nameText.includes(" "),
+          `sender name "${nameText}" has no space — no break opportunity for ` +
+            "the wrap this guard exists to catch",
+        ).toBe(true)
+
+        const lineBoxes = await lineBoxCount(nameSpan)
+        console.log(
+          `[measure] ${width}px sender name "${nameText}": ${lineBoxes} line box(es)`,
+        )
+        expect(
+          lineBoxes,
+          `sender name "${nameText}" rendered as ${lineBoxes} line boxes at ` +
+            `${width}px, unhovered — the header action row is reserving width ` +
+            "against it again",
+        ).toBe(1)
+      } finally {
+        await peer.context.close()
+      }
+    })
+  }
 })

@@ -2020,8 +2020,21 @@ body, .font-fabrikam {
    exactly where the message body starts — which makes it the right anchor
    for the action row below, and a better one than the row: the row box also
    contains the day separator, so anything positioned against it lands in the
-   wrong place on the first message of a day. */
-.message-row--grouped .message-header {
+   wrong place on the first message of a day.
+
+   This used to be scoped to `.message-row--grouped .message-header`, but the
+   action row is an ORDINARY IN-FLOW flex child on every row, grouped or not
+   — its base classes (`opacity-0 pointer-events-none`) carry no `hover:`/
+   `pointer:` gate, so it is present with `display:flex` and reserves its
+   full min-content width (measured 324px for 7 buttons) on every render, on
+   every device. On an ungrouped (first-of-run) row that pushes the
+   flex-shrinkable, unwrapped sender-name span below its own content width
+   at narrow viewports (315px available at 375px), wrapping the name onto two
+   lines at rest, unhovered — confirmed with `(hover: hover)` and
+   `(pointer: fine)` both true, so this is not a touch-only bug. Taking the
+   row out of flow unconditionally is the same fix the grouped case already
+   used, generalized to every row so it can never reserve header width. */
+.message-header {
   position: relative;
 }
 
@@ -2033,8 +2046,10 @@ body, .font-fabrikam {
    for the same reason.
 
    It stays `opacity: 0` until hover or focus-within (Tailwind classes, in
-   chat_message.ex), so a continuation row is visually untouched at rest and
-   still measures the 31px it measured before.
+   chat_message.ex), so a row is visually untouched at rest and still
+   measures its no-action-row width — for a grouped row that's the 31px it
+   measured before; for an ungrouped row this now also keeps the action row
+   from ever reserving width against the sender name.
 
    `right: 0` against the header lands it at the same x it occupies on a
    run-opening row, and `top` pins it to the FIRST line of the body rather
@@ -2043,9 +2058,10 @@ body, .font-fabrikam {
    of the glyphs with their ascenders poking out above it.
 
    The backing is not decoration: revealed, these buttons sit ON TOP of the
-   message text, and `--color-base-100` is the pane's own surface in both
-   themes, so it occludes the words underneath instead of tinting them. */
-.message-row--grouped .message-action-row {
+   message text (on an ungrouped row, on top of the name/timestamp baseline),
+   and `--color-base-100` is the pane's own surface in both themes, so it
+   occludes what's underneath instead of tinting it. */
+.message-action-row {
   position: absolute;
   right: 0;
   top: -0.125rem;
