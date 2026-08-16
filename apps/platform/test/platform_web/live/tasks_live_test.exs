@@ -9703,6 +9703,113 @@ defmodule PlatformWeb.TasksLiveTest do
       refute html =~ "Plan Ready"
       refute html =~ ~s(data-action-reason="plan_pending_review")
     end
+
+    # ── Task 01a00578 stage 1 REWORK: the "Needs review" pill ─────────────
+    #
+    # Rowan's rejection, verbatim: "We have a pill on the card that says
+    # 'needs review'. That is supposed to indicate to a human that something
+    # is waiting on them. We need to conditionally show it when they have
+    # actionable review items and clear it when there are none. All items in
+    # review currently show."
+    #
+    # The two tests below are a PAIR and only mean something together. The
+    # bug was the pill rendering for EVERY `in_review` task; the obvious
+    # wrong fix is to stop rendering it at all. A single test of either side
+    # cannot tell the fix from that regression:
+    #
+    #   * (d) pins the SHOW side — an `in_review` task with a real pending
+    #     ReviewRequest row still gets the pill. Deleting the pill fails here.
+    #   * (e) pins the CLEAR side — an `in_review` task with ZERO pending
+    #     requests gets no pill. The pre-fix code fails here.
+    #
+    # Both fixtures drive the count through the real
+    # `Platform.Reviews.ReviewRequest` table and the board's own
+    # `pending_review_counts/1`; neither stubs `@review_counts`. A stubbed
+    # assign cannot detect the assign failing to reach the markup, which is
+    # the class of bug (a caller not threading the count) this pair exists
+    # to catch.
+    #
+    # Assertions are SCOPED to the card's own markup region via
+    # `mobile_card_markup/2`. "Needs review" and `text-warning` both appear
+    # elsewhere on the page (other cards, the desktop DOM which shares this
+    # render), so a whole-page `=~` asserts on the wrong markup and a
+    # whole-page `refute` is vacuous.
+
+    # Slice the mobile card's markup: everything from the card button's
+    # `data-task-id` attribute up to the first closing `</button>`. The
+    # mobile card contains no nested `<button>` (the planning-step extension
+    # is a SIBLING precisely because a button inside a button is invalid
+    # HTML and gets reparented), so the first close is this card's own.
+    defp mobile_card_markup(html, task_id) do
+      case Regex.run(
+             ~r/data-task-id="#{Regex.escape(task_id)}"(.*?)<\/button>/s,
+             html
+           ) do
+        [_full, body] -> body
+        nil -> flunk("no mobile card rendered for task #{task_id}")
+      end
+    end
+
+    test "(d) SHOW side — `in_review` task WITH a pending review_request renders the 'Needs review' pill",
+         %{conn: conn, project: project} do
+      task = seed_solo_task(project, "in_review")
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          name: "Manual review",
+          position: 1,
+          status: "running"
+        })
+
+      {:ok, validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval", status: "pending"})
+
+      {:ok, _request} =
+        ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: task.id,
+          status: "pending",
+          items: [%{kind: "artifact", label: "Review me", status: "pending", content: "..."}]
+        })
+
+      task = Repo.get!(Task, task.id)
+      assert task.status == "in_review"
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      # The mobile board renders ONLY the actively-filtered column.
+      html = render_click(view, "filter_by_status", %{"status" => "in_review"})
+
+      card = mobile_card_markup(html, task.id)
+
+      assert card =~ ~s(data-role="mobile-task-action")
+      assert card =~ ~s(data-action-reason="review_request_pending")
+      assert card =~ "Needs review"
+    end
+
+    test "(e) CLEAR side — `in_review` task with ZERO pending review_requests renders NO pill",
+         %{conn: conn, project: project} do
+      # No ReviewRequest at all. Pre-fix this still rendered the pill via
+      # the `:validation_failed` branch, which keys purely off
+      # `status == \"in_review\"` — the whole defect.
+      task = seed_solo_task(project, "in_review")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "filter_by_status", %{"status" => "in_review"})
+
+      card = mobile_card_markup(html, task.id)
+
+      # ANTI-VACUITY: the slice really is this card and really has content.
+      # Without this, a regex that matched an empty body would make every
+      # refutation below pass.
+      assert card =~ task.title
+
+      refute card =~ ~s(data-role="mobile-task-action")
+      refute card =~ ~s(data-action-reason="validation_failed")
+      refute card =~ "Needs review"
+    end
   end
 
   describe "mobile stack-member rows — needs-action badge (task 019e2c25 stage 4)" do

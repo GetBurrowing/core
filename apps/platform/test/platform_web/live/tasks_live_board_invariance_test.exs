@@ -699,6 +699,30 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # same reason as the merge cluster above: a function component holds no
   # LiveView state and receives no events.
   #
+  # RE-PINNED (+20) by task 01a00578, the "Needs review" pill fix — the
+  # ticket's ONLY behavioural change. The pill rendered on every `in_review`
+  # task because `Tasks.needs_human_action_reason/2`'s `:validation_failed`
+  # branch is status-driven, so the pill reported status instead of "your
+  # turn". The fix is one new `mobile_stack_member_action_label/1` clause
+  # suppressing that branch on the mobile card. It belongs in the shell
+  # because this is the shell's own label helper, called from
+  # `tasks_live.html.heex`, and the clause IS the fix — a component cannot
+  # hold it.
+  # ARITHMETIC, +20 = 20 insertions - 0 deletions:
+  #   * the new `defp mobile_stack_member_action_label(:validation_failed)`
+  #     clause: +1.
+  #   * an 18-line comment recording the rejection, the verbatim requirement,
+  #     and why the suppression lives at the mobile call site rather than in
+  #     `needs_human_action_reason/2` (which other consumers still read): +18.
+  #   * one blank line separating the new clause from the catch-all that
+  #     `mix format` requires around a commented clause: +1.
+  #
+  # An earlier pass on this branch also made `status_dot_class/1` an arity-2
+  # form and dimmed the `in_review` column header; both were reverted on the
+  # sponsor's instruction ("We don't need to dim anything or anything else"),
+  # so they contribute 0 here and the pin is 6_008 + 20 = 6_028, not 6_038
+  # on this branch's own base.
+  #
   # RE-PINNED (-1) by task 01a00122-553c stage 5, "render the agent face
   # everywhere an agent appears". This is the first re-pin that SHRINKS the
   # shell, because the change deleted a helper rather than adding a feature:
@@ -715,7 +739,11 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   #     derived now: -7.
   # No new assign, no new branch, no new event — the shell lost a private
   # helper and gained one field on a map it already built.
-  @shell_line_count 6_007
+  #
+  # MERGE RESOLUTION: both re-pins above are live in this tree, so the pin is
+  # the sum of both deltas against the shared 6_008 base: 6_008 - 1 + 20 =
+  # 6_027.
+  @shell_line_count 6_027
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

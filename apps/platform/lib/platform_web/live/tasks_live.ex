@@ -5031,6 +5031,26 @@ defmodule PlatformWeb.TasksLive do
   # chip does NOT cover. Desktop stack-detail uses `member_status_pill/1`
   # (no "Plan Ready" overlap), so no change there.
   defp mobile_stack_member_action_label(:plan_pending_review), do: {nil, nil}
+
+  # Post-rejection fix (task 01a00578 stage 1 rework). The
+  # `:validation_failed` branch of `Tasks.needs_human_action_reason/2` is
+  # purely status-driven (`task.status == "in_review"`), so EVERY task
+  # parked in `in_review` rendered the "Needs review" pill — including the
+  # common case of zero pending ReviewRequests. That makes the pill report
+  # STATUS ("this task is in review") when its whole job is to say YOUR
+  # TURN ("there is something here for you to action"). Rowan rejected that
+  # directly: "We need to conditionally show it when they have actionable
+  # review items and clear it when there are none."
+  #
+  # Suppressing the chip here — rather than changing
+  # `needs_human_action_reason/2` or `pending_review_counts/1` — keeps the
+  # reason atom intact for every other consumer (desktop stack-detail rows
+  # still call `stack_member_action_label/1`) and confines the change to
+  # the mobile card surface Rowan was looking at. The pill now renders on
+  # mobile ONLY for `:review_request_pending`, which is exactly
+  # "pending_review_count > 0".
+  defp mobile_stack_member_action_label(:validation_failed), do: {nil, nil}
+
   defp mobile_stack_member_action_label(reason), do: stack_member_action_label(reason)
 
   # Bridge between the string-keyed `@kanban_columns` template iteration
