@@ -37,6 +37,18 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
+  # A planner-authored e2e_behavior case (task 01a006d1 stage 3).
+  defp e2e_case(name) do
+    %{
+      "kind" => "e2e_behavior",
+      "evaluation_payload" => %{
+        "setup" => "seed a #{name}",
+        "actions" => "open #{name}",
+        "expected" => "#{name} renders"
+      }
+    }
+  end
+
   # A live task in a fresh project with `canvas` attached to it — the relation
   # the `:task_agent` canvas grant reads (task 019fb01b stage 2).
   #
@@ -2503,6 +2515,130 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert length(review_stage.validations) == 1
     end
 
+    # ── e2e host collision guard (task 01a006d1 stage 3) ─────────────────
+
+    test "plan_create refuses a plan whose stage name would silently host the e2e cases" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Collision task"})
+
+      {:error, env} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Widen task_plan_review output class",
+                "description" => "Widen it",
+                "position" => 1,
+                "validations" => [%{"kind" => "test_pass"}, e2e_case("widened plan")]
+              }
+            ]
+          },
+          %{}
+        )
+
+      # The envelope must NAME the stage and the substring that matched — the
+      # author cannot see "review" inside "task_plan_review" unaided.
+      assert env.error =~ "Widen task_plan_review output class"
+      assert env.error =~ "review"
+      assert env.recoverable == true
+
+      assert env.suggestion =~ "rename"
+      assert env.suggestion =~ "e2e_host"
+
+      # PERSISTENCE CONTROL — same call. Refusing while leaving a draft plan
+      # behind would recreate the exact lockout this guard exists to prevent
+      # (a live draft blocks the retry), and only this assertion can see it.
+      assert Tasks.latest_plan(task.id) == nil
+    end
+
+    # DIRECTION CONTROL — fails outright if the guard rejects everything.
+    #
+    # It is ALSO the ordering pin (stage 4 probe): move the detector call after
+    # `route_e2e_behavior_validations/1` and this test detonates, because the
+    # SYNTHESIZED "Task-level review" stage carries the trigger. The rejection
+    # test above does NOT pin the ordering — routing relocates the e2e cases
+    # rather than deleting them, so the refusal still fires post-rewrite.
+    test "plan_create still lifts e2e cases onto a synthesized task-level review stage" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Clean task"})
+
+      {:ok, plan} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Add the guard",
+                "description" => "Add it",
+                "position" => 1,
+                "validations" => [%{"kind" => "test_pass"}, e2e_case("guard fires")]
+              },
+              %{
+                "name" => "Wire the envelope",
+                "description" => "Wire it",
+                "position" => 2,
+                "validations" => [%{"kind" => "lint_pass"}, e2e_case("envelope explains")]
+              }
+            ]
+          },
+          %{}
+        )
+
+      names = Enum.map(plan.stages, & &1.name)
+      assert List.last(names) == "Task-level review"
+      assert Enum.take(names, 2) == ["Add the guard", "Wire the envelope"]
+
+      host = List.last(plan.stages)
+      assert Enum.count(host.validations, &(&1.kind == "e2e_behavior")) == 2
+
+      # Positions of the authored stages are untouched.
+      assert Enum.map(Enum.take(plan.stages, 2), & &1.position) == [1, 2]
+
+      # And no e2e case was left behind on an authored stage.
+      refute Enum.any?(Enum.take(plan.stages, 2), fn s ->
+               Enum.any?(s.validations, &(&1.kind == "e2e_behavior"))
+             end)
+    end
+
+    test "plan_create accepts a trigger-named stage that explicitly opts in as e2e_host" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Opt-in task"})
+
+      {:ok, plan} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Add the guard",
+                "description" => "Add it",
+                "position" => 1,
+                "validations" => [%{"kind" => "test_pass"}]
+              },
+              %{
+                "name" => "Cross-surface validation sweep",
+                "description" => "Sweep it",
+                "position" => 2,
+                "e2e_host" => true,
+                "validations" => [e2e_case("sweep runs")]
+              }
+            ]
+          },
+          %{}
+        )
+
+      names = Enum.map(plan.stages, & &1.name)
+      assert names == ["Add the guard", "Cross-surface validation sweep"]
+      refute "Task-level review" in names
+
+      host = Enum.find(plan.stages, &(&1.name == "Cross-surface validation sweep"))
+      assert Enum.count(host.validations, &(&1.kind == "e2e_behavior")) == 1
+    end
+
     # VACUOUS-TEST FINDING (019fa609 stage 4). This asserted only
     # `recoverable == true` against execute/3. After plan_create's own task_id
     # check was deleted it kept passing — Tasks.create_plan(%{task_id: nil})
@@ -2599,7 +2735,20 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert description =~ "evaluation_payload"
       assert description =~ "setup/actions/expected"
       assert description =~ "Do NOT include a deploy stage"
-      assert description =~ "{name, description, position, validations:"
+      # Task 01a006d1 stage 3 widened this shape with the optional per-stage
+      # `e2e_host` boolean; the rest of the tuple is still byte-preserved.
+      assert description =~ "{name, description, position, e2e_host?, validations:"
+
+      # The e2e host rule must be READABLE by the planner that has to obey it —
+      # a refusal whose rule the caller cannot see in the tool description is a
+      # trap, not a guard.
+      assert description =~ "e2e_host"
+      assert description =~ "REFUSED"
+      assert description =~ "\"review\" or \"validation\""
+
+      # `evaluation` is NOT a trigger (stage 1's verified finding); the
+      # description must not claim otherwise.
+      refute description =~ "\"evaluation\""
     end
 
     test "plan_get returns current approved plan" do

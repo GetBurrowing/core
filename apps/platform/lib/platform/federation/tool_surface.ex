@@ -2460,7 +2460,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "array",
             required: true,
             description:
-              "Array of IMPLEMENTATION stage objects: {name, description, position, validations: [{kind, evaluation_payload?}]}. Valid validation kinds for planner-authored stages: lint_pass, type_check, test_pass, manual_approval, e2e_behavior. Do NOT include a deploy stage — the system auto-injects one (with ci_passed / pr_merged / etc. validations) at deploying time from the project's resolved deploy strategy. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time)."
+              "Array of IMPLEMENTATION stage objects: {name, description, position, e2e_host?, validations: [{kind, evaluation_payload?}]}. Valid validation kinds for planner-authored stages: lint_pass, type_check, test_pass, manual_approval, e2e_behavior. Do NOT include a deploy stage — the system auto-injects one (with ci_passed / pr_merged / etc. validations) at deploying time from the project's resolved deploy strategy. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time). e2e HOST RULE: when the plan carries any e2e_behavior validations, they are all lifted onto ONE host stage. By default the engine synthesizes a task-level review stage at the end. A stage whose name CONTAINS \"review\" or \"validation\" (case-insensitive, anywhere in the name — e.g. \"task_plan_review\") would silently be adopted as that host instead, so such a plan is REFUSED with a recoverable error: rename the stage, or set the optional per-stage boolean \"e2e_host\": true on the stage that should genuinely host them, which is honoured over any name match. Stage names beginning \"deploy:\" are exempt and never adopted."
           }
         },
         returns: "The created plan with stages and validations preloaded",
@@ -6956,6 +6956,21 @@ defmodule Platform.Federation.ToolSurface do
     task_id = Map.get(args, "task_id")
     raw_stages_input = Map.get(args, "stages", [])
 
+    # Task 01a006d1 stage 3 — the gate runs BEFORE the rewrite pipe and before
+    # the transaction opens, so a refused plan writes nothing at all. Rejecting
+    # after a draft row exists would leave the author unable to retry
+    # (`plan_create` refuses while a draft/pending_review plan is live), which
+    # is the same lockout this guard exists to prevent.
+    case Platform.Tasks.PlanEngine.detect_e2e_host_collision(raw_stages_input) do
+      {:error, info} ->
+        {:error, e2e_host_collision_envelope(info)}
+
+      :ok ->
+        do_plan_create(task_id, raw_stages_input)
+    end
+  end
+
+  defp do_plan_create(task_id, raw_stages_input) do
     # Pre-persistence rewrites:
     # 1. Lift any e2e_behavior validations into a single task-level review stage.
     # 2. Log advisory warnings about manual_approval scoping (planner authority wins).
@@ -7048,6 +7063,29 @@ defmodule Platform.Federation.ToolSurface do
            suggestion: "Check that task_id is valid and stages have valid fields"
          }}
     end
+  end
+
+  # A guard that fires without explaining itself is the failure mode this
+  # ticket is about, so the envelope IS the explanation: it names the stage,
+  # the position, the substring that matched IN QUOTES (the author cannot see
+  # `"review"` inside `"task_plan_review"` otherwise), and the consequence.
+  # `recoverable: true` is literal — nothing was persisted, so the author can
+  # fix and immediately retry.
+  defp e2e_host_collision_envelope(info) do
+    %{
+      error:
+        "Stage #{info.stage_position} (\"#{info.stage_name}\") contains the e2e host trigger " <>
+          "\"#{info.matched_substring}\", so all #{info.e2e_case_count} e2e_behavior case(s) in " <>
+          "this plan would attach to that stage instead of the synthesised task-level review " <>
+          "gate — a failing case would then fail that stage, which can leave the task with no " <>
+          "dispatchable stage.",
+      recoverable: true,
+      suggestion:
+        "Either rename the stage using a neutral verb (Add, Wire, Surface, Guard, Expose) so it " <>
+          "no longer contains \"review\" or \"validation\", or set \"e2e_host\": true on the " <>
+          "stage that should genuinely host the e2e cases. Nothing was written; retry " <>
+          "plan_create once the stages are adjusted."
+    }
   end
 
   # Task 01a006c2 stage 3 — `plan_get` widened with an explicit,

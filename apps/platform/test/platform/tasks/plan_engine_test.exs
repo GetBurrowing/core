@@ -1328,6 +1328,134 @@ defmodule Platform.Tasks.PlanEngineTest do
     end
   end
 
+  describe "e2e_host_name_match/1" do
+    test "names the trigger when it hides inside a snake_case identifier" do
+      # The shipped incident: an implementation stage whose name merely
+      # MENTIONS an identifier containing "review" was silently adopted as
+      # the e2e host. A fixture like "Review the code" cannot tell a
+      # substring check from a word-boundary check; this one can.
+      assert PlanEngine.e2e_host_name_match(
+               "Add per-kind resolution predicates for chat_mention, task_plan_review and meeting_starting"
+             ) == "review"
+    end
+
+    test "returns nil for a stage name carrying no trigger" do
+      assert PlanEngine.e2e_host_name_match("Wire the compose input") == nil
+    end
+
+    test "the deploy: prefix exemption survives a trigger in the name" do
+      assert PlanEngine.e2e_host_name_match("Deploy: PR merge — review") == nil
+    end
+
+    test "matching is case-insensitive" do
+      assert PlanEngine.e2e_host_name_match("Add cross-VALIDATION guard") == "validation"
+    end
+
+    test "\"evaluation\" is NOT a trigger" do
+      # Documented deliberately: the ticket for this work named three
+      # triggers, but the engine has only two. "evaluation" contains
+      # neither "review" nor "validation".
+      assert PlanEngine.e2e_host_name_match("Score the evaluation harness") == nil
+    end
+
+    test "accepts a planner-authored stage map, reading its name" do
+      assert PlanEngine.e2e_host_name_match(%{"name" => "Final validation"}) == "validation"
+      assert PlanEngine.e2e_host_name_match(%{"name" => "Wire the compose input"}) == nil
+    end
+  end
+
+  describe "detect_e2e_host_collision/1" do
+    @dirty_name "Add per-kind resolution predicates for chat_mention, task_plan_review and meeting_starting"
+
+    defp e2e_case(id), do: %{"kind" => "e2e_behavior", "criteria" => "case #{id}"}
+
+    test "CLEAN: no stage name carries a trigger, e2e cases present" do
+      stages = [
+        %{
+          "name" => "Add the resolver",
+          "position" => 1,
+          "validations" => [%{"kind" => "test_pass"}]
+        },
+        %{
+          "name" => "Wire the router",
+          "position" => 2,
+          "validations" => [e2e_case("a"), e2e_case("b")]
+        },
+        %{"name" => "Surface the panel", "position" => 3, "validations" => []}
+      ]
+
+      assert PlanEngine.detect_e2e_host_collision(stages) == :ok
+    end
+
+    test "DIRTY: a trigger hiding inside a snake_case identifier is refused" do
+      stages = [
+        %{"name" => @dirty_name, "position" => 1, "validations" => [%{"kind" => "test_pass"}]},
+        %{"name" => "Wire the router", "position" => 2, "validations" => [e2e_case("a")]}
+      ]
+
+      assert {:error, error} = PlanEngine.detect_e2e_host_collision(stages)
+      assert error.matched_substring == "review"
+      assert error.stage_position == 1
+      # Verbatim: the author has to recognise the stage they wrote.
+      assert error.stage_name == @dirty_name
+      assert error.e2e_case_count == 1
+    end
+
+    test "NO-E2E CONTROL: same dirty name, zero e2e cases → :ok" do
+      stages = [
+        %{"name" => @dirty_name, "position" => 1, "validations" => [%{"kind" => "test_pass"}]},
+        %{"name" => "Wire the router", "position" => 2, "validations" => []}
+      ]
+
+      assert PlanEngine.detect_e2e_host_collision(stages) == :ok
+    end
+
+    test "OPT-IN CONTROL: an explicit e2e_host stage is accepted and hosts the cases" do
+      stages = [
+        %{
+          "name" => @dirty_name,
+          "position" => 1,
+          "e2e_host" => true,
+          "validations" => [%{"kind" => "test_pass"}]
+        },
+        %{"name" => "Wire the router", "position" => 2, "validations" => [e2e_case("a")]},
+        %{"name" => "Surface the panel", "position" => 3, "validations" => [e2e_case("b")]}
+      ]
+
+      assert PlanEngine.detect_e2e_host_collision(stages) == :ok
+
+      routed = PlanEngine.route_e2e_behavior_validations(stages)
+      host = Enum.find(routed, &(&1["e2e_host"] == true))
+
+      assert Enum.count(host["validations"], &(&1["kind"] == "e2e_behavior")) == 2
+
+      assert Enum.all?(routed -- [host], fn stage ->
+               Enum.all?(stage["validations"], &(&1["kind"] != "e2e_behavior"))
+             end)
+    end
+
+    test "the explicit e2e_host wins over a DIFFERENT name-matching stage" do
+      # Precedence is only observable when the opt-in stage and the
+      # name-matching stage are different stages: with both on stage 1 the
+      # two rules pick the same index and a name-only router passes.
+      stages = [
+        %{"name" => @dirty_name, "position" => 1, "validations" => [%{"kind" => "test_pass"}]},
+        %{
+          "name" => "Wire the router",
+          "position" => 2,
+          "e2e_host" => true,
+          "validations" => [e2e_case("a")]
+        }
+      ]
+
+      assert PlanEngine.detect_e2e_host_collision(stages) == :ok
+
+      assert [named, host] = PlanEngine.route_e2e_behavior_validations(stages)
+      assert Enum.all?(named["validations"], &(&1["kind"] != "e2e_behavior"))
+      assert Enum.count(host["validations"], &(&1["kind"] == "e2e_behavior")) == 1
+    end
+  end
+
   # ── ui_touching?/1 + check_manual_approval_heuristic/1 ──────────────
 
   describe "ui_touching?/1" do

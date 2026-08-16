@@ -660,6 +660,19 @@ defmodule Platform.Tasks.PlanEngine do
     "_web/components/"
   ]
 
+  # Case-insensitive substring triggers that make the engine adopt an
+  # ALREADY-AUTHORED stage as the host for a plan's `e2e_behavior`
+  # validations. This list, and the exemption below, are the single copy:
+  # every consumer (the router, and any write-time detector) must read them
+  # through `e2e_host_name_match/1` rather than restating them, because a
+  # detector holding its own copy is precisely the drift this guard exists
+  # to prevent.
+  @e2e_host_name_triggers ["review", "validation"]
+
+  # Name prefixes that are NEVER adopted as the e2e host even when they
+  # contain a trigger (a "Deploy: ... review" stage is a deploy, not a gate).
+  @e2e_host_exempt_prefixes ["deploy:"]
+
   @doc """
   Re-route any `e2e_behavior` validations in a list of planner-authored
   stage_input maps to a single task-level review stage.
@@ -704,6 +717,90 @@ defmodule Platform.Tasks.PlanEngine do
   end
 
   def route_e2e_behavior_validations(other), do: other
+
+  @doc """
+  Refuse a plan whose stage NAME would silently make it the e2e host.
+
+  Returns `:ok`, or `{:error, %{stage_name:, stage_position:, matched_substring:,
+  e2e_case_count:}}` for the FIRST offending stage.
+
+  Reads RAW planner stages, so it must run BEFORE
+  `route_e2e_behavior_validations/1`.
+
+  Why the ordering matters (corrected in stage 4 by probe; the earlier
+  rationale here was wrong): routing RELOCATES e2e cases, it does not delete
+  them, so `e2e_case_count` survives the rewrite and rule 1 would still fire.
+  The real hazard is the other direction — routing SYNTHESIZES a stage named
+  "Task-level review", which itself carries the trigger, so a detector running
+  after the rewrite refuses every clean e2e plan. The pin for this ordering is
+  therefore the DIRECTION CONTROL test in `tool_surface_test.exs`, not the
+  rejection test.
+  """
+  # DISPOSITION: reject, not warn.
+  #
+  # In all three confirmed incidents the relocation was unintended, by authors
+  # who already had the naming rule written down — so a warning is exactly the
+  # signal they had already internalised and still tripped over. Worse, the
+  # moment after `plan_create` returns is when the author can no longer act: a
+  # draft/pending_review plan blocks `plan_create` and cannot be read back
+  # (`plan_get` returns approved plans only). A warning delivered where nothing
+  # can act on it is not a mitigation. Rejection happens pre-persistence and
+  # leaves the author free to rename and retry.
+  #
+  # The risk of rejecting a legitimately-named stage is retired by the explicit
+  # `e2e_host` opt-in below — an expressed field, never inferred from prose.
+  @spec detect_e2e_host_collision([map()]) :: :ok | {:error, map()}
+  def detect_e2e_host_collision(stages_input) when is_list(stages_input) do
+    e2e_case_count =
+      Enum.reduce(stages_input, 0, fn stage, acc ->
+        acc + Enum.count(stage_validations_field(stage), &e2e_behavior_validation?/1)
+      end)
+
+    cond do
+      # 1. No e2e cases at all — the trigger word is harmless here, and firing
+      #    would reject plans the bug cannot touch.
+      e2e_case_count == 0 ->
+        :ok
+
+      # 2. Exactly one stage explicitly opts in as the host.
+      Enum.count(stages_input, &e2e_host_opt_in?/1) == 1 ->
+        :ok
+
+      true ->
+        # 3. First stage adopted by NAME alone.
+        stages_input
+        |> Enum.with_index(1)
+        |> Enum.find_value(:ok, fn {stage, idx} ->
+          case e2e_host_name_match(stage) do
+            nil ->
+              nil
+
+            substring ->
+              {:error,
+               %{
+                 stage_name: stage_field(stage, "name"),
+                 stage_position: stage_field(stage, "position") || idx,
+                 matched_substring: substring,
+                 e2e_case_count: e2e_case_count
+               }}
+          end
+        end)
+    end
+  end
+
+  def detect_e2e_host_collision(_other), do: :ok
+
+  defp e2e_behavior_validation?(v) when is_map(v) do
+    (Map.get(v, "kind") || Map.get(v, :kind)) == "e2e_behavior"
+  end
+
+  defp e2e_behavior_validation?(_), do: false
+
+  defp e2e_host_opt_in?(stage) when is_map(stage) do
+    (Map.get(stage, "e2e_host") || Map.get(stage, :e2e_host)) == true
+  end
+
+  defp e2e_host_opt_in?(_), do: false
 
   @doc """
   Log warnings about manual_approval scoping based on a hybrid heuristic.
@@ -829,10 +926,11 @@ defmodule Platform.Tasks.PlanEngine do
   end
 
   defp attach_e2e_validations_to_review_stage(stages_input, e2e_validations) do
+    # An explicit `e2e_host` stage WINS over name matching: the opt-in is the
+    # author's expressed intent, the name match is only an inference.
     review_idx =
-      Enum.find_index(stages_input, fn stage ->
-        e2e_host_stage_name?(stage_field(stage, "name"))
-      end)
+      Enum.find_index(stages_input, &e2e_host_opt_in?/1) ||
+        Enum.find_index(stages_input, &(e2e_host_name_match(&1) != nil))
 
     case review_idx do
       nil ->
@@ -858,11 +956,32 @@ defmodule Platform.Tasks.PlanEngine do
   claims to be testing.
   """
   @spec e2e_host_stage_name?(String.t() | nil) :: boolean()
-  def e2e_host_stage_name?(name) do
+  def e2e_host_stage_name?(name), do: e2e_host_name_match(name) != nil
+
+  @doc """
+  The FIRST trigger substring that makes a stage the e2e host, or `nil`.
+
+  Accepts either a planner-authored stage_input map or a bare name. Matching
+  is case-insensitive substring matching against `@e2e_host_name_triggers`;
+  a name starting with any of `@e2e_host_exempt_prefixes` never matches.
+
+  Returns the substring rather than a boolean so a caller refusing the plan
+  can NAME which trigger fired (e.g. `"review"` inside
+  `"task_plan_review"`) instead of asserting an unexplained match.
+  """
+  @spec e2e_host_name_match(map() | String.t() | nil) :: String.t() | nil
+  def e2e_host_name_match(stage) when is_map(stage) do
+    e2e_host_name_match(stage_field(stage, "name"))
+  end
+
+  def e2e_host_name_match(name) do
     name = String.downcase(name || "")
 
-    not String.starts_with?(name, "deploy:") and
-      (String.contains?(name, "review") or String.contains?(name, "validation"))
+    if Enum.any?(@e2e_host_exempt_prefixes, &String.starts_with?(name, &1)) do
+      nil
+    else
+      Enum.find(@e2e_host_name_triggers, &String.contains?(name, &1))
+    end
   end
 
   defp synthesize_task_level_review_stage(existing_stages, e2e_validations) do
