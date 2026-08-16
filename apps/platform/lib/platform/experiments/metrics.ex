@@ -103,6 +103,19 @@ defmodule Platform.Experiments.Metrics do
           "escaped post-merge UI defects.",
       direction: :neutral
     },
+    # `:lower_is_better` here is a judgement, argued in the module's
+    # moduledoc: a gate on a stage that renders nothing has no legitimate
+    # purpose, so downward movement can only mean planners stopped adding
+    # them. The zero-by-gating-nothing strategy is caught by
+    # `manual_gate_rejection_rate` and the missed-UI advisory.
+    "overscoped_gate_count" => %{
+      module: Platform.Experiments.Metrics.OverscopedGateCount,
+      label: "Overscoped gate count",
+      description:
+        "Mean number of manual_approval validations on stages with no UI-touching tokens, " <>
+          "per plan, over the plans of a variant's subjects.",
+      direction: :lower_is_better
+    },
     "time_in_phase" => %{
       module: Platform.Experiments.Metrics.TimeInPhase,
       label: "Time in phase",

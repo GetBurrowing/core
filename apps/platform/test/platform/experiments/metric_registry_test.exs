@@ -54,7 +54,11 @@ defmodule Platform.Experiments.MetricRegistryTest do
       # to argue with the test rather than with nothing.
       assert by_slug["stages_per_plan"] == :neutral
 
-      for slug <- ~w(cycle_time validation_failure_rate plan_revision_count time_in_phase) do
+      # `overscoped_gate_count` is a judgement, argued in that module's
+      # moduledoc: a gate on a stage that renders nothing has no legitimate
+      # purpose. Pinned so a later edit to :neutral has to argue with a test.
+      for slug <-
+            ~w(cycle_time validation_failure_rate plan_revision_count time_in_phase overscoped_gate_count) do
         assert by_slug[slug] == :lower_is_better, "expected #{slug} to be :lower_is_better"
       end
     end
