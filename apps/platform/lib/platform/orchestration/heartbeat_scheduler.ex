@@ -361,7 +361,15 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       # `{{federation_preamble}}` after the stage 3 retrofit; the
       # placeholder resolves harmlessly on any template that doesn't
       # reference it, so this assign is safe on every branch.
-      federation_preamble: PromptTemplates.federation_preamble()
+      #
+      # Task-scoped (task 01a00c99 stage 3): the same subject this dispatch
+      # already resolves for its own slug is passed to the preamble read, so
+      # an experiment targeting `federation.preamble` sees a subject here.
+      # `contract_id/2` yields `nil` for a task with no usable id and the
+      # `|| ""` keeps the assign a binary — `subject_id/1` treats BOTH as
+      # no-subject, so nothing is fabricated.
+      federation_preamble:
+        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
     }
 
     case PromptTemplates.render_template("dispatch.planning", assigns) do
@@ -462,8 +470,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       skills_reference: @skills_reference,
       evidence_workflow_reference: @evidence_workflow_reference,
       # federation_preamble — canonical Claude Code guidance block
-      # (task 019f5e2a stage 2). See planning branch above for rationale.
-      federation_preamble: PromptTemplates.federation_preamble()
+      # (task 019f5e2a stage 2). See planning branch above for rationale,
+      # including the task-scoped subject (task 01a00c99 stage 3).
+      federation_preamble:
+        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
     }
 
     prompt =
@@ -519,8 +529,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         evidence_workflow_reference: @evidence_workflow_reference,
         # federation_preamble — canonical Claude Code guidance block
         # (task 019f5e2a stage 2). Also inherited into the e2e review
-        # branch via Map.merge below.
-        federation_preamble: PromptTemplates.federation_preamble()
+        # branch via Map.merge below. Task-scoped subject as on the planning
+        # branch (task 01a00c99 stage 3).
+        federation_preamble:
+          PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
       }
       |> Map.merge(extra_assigns)
 
@@ -601,8 +613,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       deploy_strategy_config: strategy_config,
       skills_reference: @skills_reference,
       # federation_preamble — canonical Claude Code guidance block
-      # (task 019f5e2a stage 2).
-      federation_preamble: PromptTemplates.federation_preamble()
+      # (task 019f5e2a stage 2). Task-scoped subject as on the planning
+      # branch (task 01a00c99 stage 3).
+      federation_preamble:
+        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
     }
 
     prompt =
@@ -628,8 +642,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       stage_info: stage_info,
       skills_reference: @skills_reference,
       # federation_preamble — canonical Claude Code guidance block
-      # (task 019f5e2a stage 2).
-      federation_preamble: PromptTemplates.federation_preamble()
+      # (task 019f5e2a stage 2). Task-scoped subject as on the planning
+      # branch (task 01a00c99 stage 3).
+      federation_preamble:
+        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
     }
 
     case PromptTemplates.render_template("dispatch.fallback", assigns) do

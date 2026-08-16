@@ -22,6 +22,31 @@ defmodule Platform.Orchestration.PromptTemplates do
 
   The old `heartbeat` slug is retained as DEPRECATED for one release and
   removed in the stage 6 ADR cleanup pass.
+
+  ## Experimenting on `federation.preamble` is confounded by construction
+
+  Read this BEFORE setting an experiment up on the `federation.preamble` slug.
+
+  The preamble is cross-cutting: it is injected into every Claude Code
+  `dispatch.*` body through the `{{federation_preamble}}` placeholder. So a
+  variant on `federation.preamble` applies to every dispatch type at once —
+  planner, executor, reviewer, deployer, scribe, triage, nudge and heartbeat
+  all receive the changed text simultaneously. There is no arm in which only
+  one of them moved.
+
+  The consequence is not subtle: a metric that moves cannot be attributed to
+  a single agent behaviour. Throughput improving under the treatment is
+  consistent with better planning, with better execution, with reviewers
+  becoming more permissive, or with any combination — including two effects
+  in opposite directions where the larger one wins. The experiment reports a
+  number and the number does not say which.
+
+  This is strictly coarser than experimenting on one template such as
+  `dispatch.planning`, where the changed text reaches exactly one dispatch
+  type. An experiment on `federation.preamble` can answer "did overall
+  throughput or quality move"; it cannot answer "which agent behaviour
+  changed". If the question is the second one, target a single `dispatch.*`
+  slug instead.
   """
 
   import Ecto.Query
@@ -446,6 +471,26 @@ defmodule Platform.Orchestration.PromptTemplates do
   # the section headers below as stable anchors — do NOT rename them without
   # coordinating with those templates.
   @federation_preamble """
+  ## Execution posture — close the ticket
+
+  Close the ticket. Do not dither, do not equivocate, and do not fear breaking something: a healthy pipeline fixes what gets broken, and what goes down comes back up. Confidence in execution is expected of every agent here, not only of the orchestrator.
+
+  That confidence is derived, not asserted. You can move fast because the adversarial machinery catches you — mutation probes, e2e cases, the test suite, CI, and the deploy pipeline are what make a wrong step cheap and recoverable. Speed is the dividend of that machinery, so weakening it is how you lose the speed. Never trade a check for pace.
+
+  These stay, and they are the source of the confidence rather than exceptions to it:
+  - Report a surviving mutant; do not patch it away.
+  - Call a flake a flake; never record one as a pass.
+  - Never self-approve a human gate.
+  - Stop when a measurement says the work is unnecessary, and say so.
+
+  What to cut is real dithering:
+  - Asking for a go-ahead you already have — an assignment IS the authorization.
+  - Re-deriving an established fact, or re-litigating a settled decision.
+  - Reporting activity as if it were a result ("monitoring CI", "waiting for the verdict") instead of finishing.
+  - Hedging a call you are competent to make. Make it, state it, and record the reasoning where the next agent will find it.
+
+  Report outcomes: what shipped, what failed, what you found. Raise a genuine blocker or a decision only a human can make — that is not dithering, that is the job.
+
   ## Subagent-spawn discipline
 
   Handle this task in a subagent with fresh context, **spawned as a background process**. Spawn it via the Agent tool — `general-purpose` is fine — with `run_in_background: true` so the parent conversation stays responsive while the subagent executes. Brief it with the full dispatch payload above, including the Organization Memory section. Do NOT do this work in the parent conversation. The goals: (1) fresh context per task so the org memory discipline below isn't competing with whatever's already loaded, (2) audit clarity so the task lives in its own conversation tree, (3) parent responsiveness — the parent can keep handling other inbound messages or tasks while the subagent runs.
@@ -505,9 +550,86 @@ defmodule Platform.Orchestration.PromptTemplates do
   and tool-name convention sections that used to be copy-pasted across each
   template. See the module attribute for the section-header contract that
   downstream stack members depend on.
+
+  ## Reading the row, and why the fallback is not optional
+
+  Since task 01a00c99 stage 1 the preamble is ALSO a seeded
+  `federation.preamble` row, so it can be edited without a deploy. This
+  function prefers that row and falls back to `@federation_preamble` in every
+  other case: row missing, `content` `nil`, `content` `""` or whitespace-only,
+  or `Repo` raising because the database is unreachable.
+
+  The blank guard is the load-bearing half. An empty preamble strips the
+  guidance from roughly fifteen `dispatch.*` templates and NOTHING ERRORS —
+  every dispatch still renders, still sends, still looks healthy, and every
+  receiving agent silently loses the subagent-spawn, org-memory, skill and
+  evidence sections. That invisible failure is what this fallback exists to
+  prevent, which is why blank is treated exactly like missing rather than as a
+  deliberate "operator emptied the preamble" edit.
+
+  Deliberately NOT routed through `render_template/2`: that returns
+  `{:error, :not_found}` for a missing row, and a caller that mishandled it
+  would render `""` into every dispatch — the exact invisible failure above. A
+  dedicated reader with an explicit non-blank guard makes the degraded case
+  impossible to reach by accident.
+
+  `interpolate/2` is deliberately NOT called on the result. The preamble
+  carries no placeholders (stage 1 pins `variables: []`), and the outer
+  `render_template/2` pass substitutes `{{federation_preamble}}` exactly once —
+  interpolating here would be a second pass over a body that has nothing to
+  substitute.
+
+  Equivalent to `federation_preamble(%{})` — no assigns means no subject, so
+  no experiment can apply.
   """
   @spec federation_preamble() :: String.t()
-  def federation_preamble, do: @federation_preamble
+  def federation_preamble, do: federation_preamble(%{})
+
+  @doc """
+  Return the federation preamble for a subject, honouring an experiment
+  variant that targets the `federation.preamble` slug.
+
+  `assigns` is the same shape every other render passes — `subject_id/1` reads
+  `:task_id` off it and treats a missing key AND the empty string as no
+  subject, so a call site with nothing task-scoped to hand may pass `%{}` (or
+  call `federation_preamble/0`) rather than fabricating an id.
+
+  The row's content goes through the SAME private `resolve_content/3` that
+  `render_template/2` uses, so a variant on this slug wins exactly the way a
+  variant wins for `dispatch.planning` — same assignment stickiness, same
+  status-blind honouring of an existing assignment, same fall-through-to-live
+  posture on any resolution failure.
+
+  The stage-2 fallback ladder is unchanged and wraps this: whatever comes back
+  is still blank-guarded against `@federation_preamble`, so a blank variant
+  blob can no more strip the preamble from ~15 dispatch templates than a blank
+  row can.
+  """
+  @spec federation_preamble(map()) :: String.t()
+  def federation_preamble(assigns) do
+    # The rescue mirrors the posture documented on `resolve_content/3`:
+    # observational/config machinery must not hold the dispatch lifecycle
+    # hostage. A DB hiccup costs an editable preamble, never a dispatch.
+    case get_template_by_slug("federation.preamble") do
+      %PromptTemplate{content: content} when is_binary(content) ->
+        "federation.preamble"
+        |> resolve_content(content, assigns)
+        |> non_blank_or_default()
+
+      _ ->
+        @federation_preamble
+    end
+  rescue
+    _ -> @federation_preamble
+  catch
+    _kind, _reason -> @federation_preamble
+  end
+
+  defp non_blank_or_default(content) when is_binary(content) do
+    if String.trim(content) == "", do: @federation_preamble, else: content
+  end
+
+  defp non_blank_or_default(_content), do: @federation_preamble
 
   # Body of the historian dreaming dispatch — extracted so the two seeded
   # slugs (`historian.dreaming` canonical + `memory.dreaming.v1` legacy)
@@ -2024,6 +2146,22 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         If, having read the task, you judge that this surface needs no design direction — the change is not visual, or the surface already has direction that still holds — do NOT attach a canvas you do not believe in and do NOT go silent. Call `task_design_decline` with the task_id above and a one-sentence reason. That records the step as not-applicable and releases the planner immediately. Going silent instead costs 30 minutes and records a failure.
         """
+      },
+      %{
+        slug: "federation.preamble",
+        name: "Federation Preamble",
+        description:
+          "Cross-cutting Claude Code guidance block injected into every `dispatch.*` body " <>
+            "via the `{{federation_preamble}}` placeholder. Not a dispatch body itself — it is " <>
+            "the shared block those bodies substitute in.",
+        # `variables: []` is correct and load-bearing: the preamble contains no
+        # `{{...}}` placeholders and must not gain any. `interpolate/2` is a
+        # single `Regex.replace` pass, so a placeholder inside a substituted
+        # value is never re-expanded and would ship to agents literally.
+        variables: [],
+        # The attribute itself, never a hand-retyped copy — byte-identity with
+        # `federation_preamble/0` is then structural rather than maintained.
+        content: @federation_preamble
       }
     ]
   end
