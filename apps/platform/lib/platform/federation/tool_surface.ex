@@ -5593,7 +5593,18 @@ defmodule Platform.Federation.ToolSurface do
     # ack raced ahead of the arm-liveness path). The runtime_event still
     # persists and the router's own `apply_runtime_event/2` clause will
     # call `record_ack/1` again when the PubSub broadcast arrives.
-    _ = Platform.Orchestration.LeaseManager.record_ack(task_id)
+    # Task 01a007bf stage 4: match on the return so the `:not_found` is
+    # visible in the log instead of vanishing into `_`. Worded as
+    # "expected" — this site runs BEFORE `record_runtime_event/1`.
+    case Platform.Orchestration.LeaseManager.record_ack(task_id) do
+      :ok ->
+        :ok
+
+      {:error, :not_found} ->
+        Logger.warning(
+          "[ToolSurface.task_ack] task #{task_id} stage #{stage_id} — LeaseManager.record_ack/1 returned :not_found: no ETS lease armed yet (expected during the dispatch race); the durable execution.acked row is still being written. No operator action needed."
+        )
+    end
 
     case Platform.Orchestration.record_runtime_event(attrs) do
       {:ok, event} ->

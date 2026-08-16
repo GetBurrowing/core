@@ -2210,7 +2210,51 @@ defmodule Platform.Orchestration.TaskRouter do
   # `mark_no_ack_fired/1` flips the LeaseManager row's `no_ack_fired?`
   # atomically — if it returns anything other than `{:ok, :fired}`
   # (already-fired race), we swallow the check with no state change.
+  # Durable-ack guard. The ETS lease row is the only place an ack lives at
+  # runtime, and `clear_liveness/1` DELETES that row from ~15 call sites — so
+  # any re-dispatch of a stage the executor already acked (opening a review
+  # request is the reachable one) re-arms this alarm against an agent that DID
+  # ack. `execution.acked` lives in Postgres and survives every clear, so we
+  # consult it before firing and re-stamp the ETS row on a hit.
+  #
+  # ACCEPTED TRADE-OFF: this deliberately does NOT compare the ack's
+  # `occurred_at` against `lease.dispatched_at`. Any time bound reintroduces
+  # the false positive, because the re-dispatch happens AFTER the ack.
+  # Consequence: a stage force-reassigned to a NEW runtime will not re-fire
+  # no-ack on the old owner's ack — that case is covered by
+  # `execution.safety_net_fired`, which is left untouched.
+  #
+  # Stage-scoped by construction: a lease with a nil/blank stage_id falls
+  # through to the alarm (`stage_acked?/2` answers false), and an ack on stage
+  # N never suppresses the alarm for stage N+1.
+  # Best-effort stage label for the ack log line: the event payload is the
+  # authority (the ack names its own stage), the router's current stage is
+  # the fallback, and "unknown" when neither is set.
+  defp acked_stage_id(event, %State{} = state) do
+    payload_stage =
+      case event do
+        %{payload: %{"stage_id" => id}} when is_binary(id) and id != "" -> id
+        _ -> nil
+      end
+
+    payload_stage || state.current_stage_id || "unknown"
+  end
+
   defp maybe_fire_no_ack(%State{} = state, task_id, lease) do
+    if Platform.Orchestration.stage_acked?(task_id, lease.stage_id) do
+      LeaseManager.record_ack(task_id)
+
+      Logger.info(
+        "[TaskRouter] task #{task_id} stage #{lease.stage_id} — no-ack alarm suppressed by a durable execution.acked event; re-stamping lease ack_at"
+      )
+
+      {:noreply, state}
+    else
+      do_fire_no_ack(state, task_id, lease)
+    end
+  end
+
+  defp do_fire_no_ack(%State{} = state, task_id, lease) do
     case LeaseManager.mark_no_ack_fired(task_id) do
       {:ok, :fired} ->
         fire_no_ack_alert(state, lease)
@@ -2486,7 +2530,19 @@ defmodule Platform.Orchestration.TaskRouter do
         # `LeaseManager.record_ack/1` clears the no-ack countdown and
         # extends the safety-net deadline; the next `:check_safety_net`
         # tick will see the extended deadline and reschedule accordingly.
-        _ = LeaseManager.record_ack(state.task_id)
+        # Task 01a007bf stage 4: match on the return. Unlike the
+        # tool_surface site, a `:not_found` HERE is not the dispatch race —
+        # the durable ack already landed, so a missing ETS row means the
+        # lease was cleared out from under an acked stage.
+        case LeaseManager.record_ack(state.task_id) do
+          :ok ->
+            :ok
+
+          {:error, :not_found} ->
+            Logger.warning(
+              "[TaskRouter] task #{state.task_id} stage #{acked_stage_id(event, state)} — LeaseManager.record_ack/1 returned :not_found on execution.acked: ETS lease row missing for an acked stage — the lease was cleared between dispatch and ack. The no-ack countdown is no longer tracked for this stage; check for a stage transition or a LeaseManager restart in between."
+            )
+        end
 
         if still_awaiting_human?(base_state) do
           base_state
