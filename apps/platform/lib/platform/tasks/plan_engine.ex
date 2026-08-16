@@ -455,7 +455,7 @@ defmodule Platform.Tasks.PlanEngine do
           validation
           |> Validation.changeset(%{
             status: status,
-            evidence: evidence,
+            evidence: carry_prior_rulings(validation, evidence),
             evaluated_by: evaluated_by,
             evaluated_at: DateTime.utc_now()
           })
@@ -495,6 +495,38 @@ defmodule Platform.Tasks.PlanEngine do
       end)
     end)
   end
+
+  # The `prior_rulings` archive used to survive only because every KNOWN caller
+  # re-attached it — `ReviewRequests` copied the archive forward itself before
+  # calling in here (that duplicate was removed at task `01a006f6` stage 3).
+  # That was a habit of the callers, not a property of the write.
+  # `Platform.Federation.ToolSurface`'s
+  # `execute("validation_evaluate", ...)` calls `evaluate_validation/2`
+  # DIRECTLY with agent-supplied evidence and never touches `ReviewRequests`,
+  # so an agent dispositioning a manual gate through the tool surface destroyed
+  # the human's recorded words with no error and no failed gate. Merging at the
+  # write makes the guarantee caller-independent.
+  #
+  # Deliberately narrow: an explicit caller-supplied `"prior_rulings"` wins (so
+  # `ReviewRequests` stays idempotent), nothing is invented where there was no
+  # archive, and only `manual_approval` rows are touched — the archive has no
+  # meaning on deploy/test kinds and must not leak into them.
+  defp carry_prior_rulings(%Validation{kind: "manual_approval"} = validation, evidence)
+       when is_map(evidence) do
+    case validation.evidence do
+      %{"prior_rulings" => [_ | _] = prior} ->
+        if Map.has_key?(evidence, "prior_rulings") do
+          evidence
+        else
+          Map.put(evidence, "prior_rulings", prior)
+        end
+
+      _ ->
+        evidence
+    end
+  end
+
+  defp carry_prior_rulings(_validation, evidence), do: evidence
 
   defp maybe_retrigger_stack_member_merge(stage_id) do
     query =

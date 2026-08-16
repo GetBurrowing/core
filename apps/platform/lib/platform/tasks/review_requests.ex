@@ -453,21 +453,13 @@ defmodule Platform.Tasks.ReviewRequests do
     |> Repo.update()
   end
 
-  # A ruling replaces the validation's whole `evidence` map. The archive that
-  # `PlanEngine.reopen_manual_approval/1` keeps under `"prior_rulings"` is not
-  # part of the new ruling, so it has to be carried across this write or the
-  # second reject-reopen cycle silently deletes the first human's words
-  # (task `01a00575`).
-  defp carry_prior_rulings(validation_id, evidence) do
-    case Repo.get(Validation, validation_id) do
-      %Validation{evidence: %{"prior_rulings" => [_ | _] = prior}} ->
-        Map.put(evidence, "prior_rulings", prior)
-
-      _ ->
-        evidence
-    end
-  end
-
+  # A ruling replaces the validation's whole `evidence` map, and the archive
+  # that `PlanEngine.reopen_manual_approval/1` keeps under `"prior_rulings"` is
+  # not part of the new ruling. This module used to re-attach that archive
+  # itself before each write (task `01a00575`); it no longer does.
+  # `PlanEngine.evaluate_validation/2` merges the archive at the write, so the
+  # guarantee holds for every caller including the tool surface, and the plain
+  # evidence maps below are complete as written (task `01a006f6`).
   defp resolve_request(request) do
     now = DateTime.utc_now()
 
@@ -486,7 +478,7 @@ defmodule Platform.Tasks.ReviewRequests do
       if all_approved? do
         PlanEngine.evaluate_validation(request.validation_id, %{
           status: "passed",
-          evidence: carry_prior_rulings(request.validation_id, %{review_request_id: request.id}),
+          evidence: %{review_request_id: request.id},
           evaluated_by: "review_gate"
         })
       else
@@ -506,11 +498,7 @@ defmodule Platform.Tasks.ReviewRequests do
 
         PlanEngine.evaluate_validation(request.validation_id, %{
           status: "failed",
-          evidence:
-            carry_prior_rulings(request.validation_id, %{
-              review_request_id: request.id,
-              feedback: consolidated
-            }),
+          evidence: %{review_request_id: request.id, feedback: consolidated},
           evaluated_by: "review_gate"
         })
 
