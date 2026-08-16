@@ -25,7 +25,13 @@ defmodule PlatformWeb.ChatLive.NewChannelComponent do
   alias Platform.Chat
 
   @impl true
-  def update(assigns, socket), do: {:ok, assign(socket, assigns)}
+  def update(assigns, socket) do
+    {:ok,
+     socket
+     |> assign_new(:org_options, fn -> [] end)
+     |> assign_new(:active_org_id, fn -> nil end)
+     |> assign(assigns)}
+  end
 
   @impl true
   def handle_event("new_channel_close", _params, socket) do
@@ -33,7 +39,11 @@ defmodule PlatformWeb.ChatLive.NewChannelComponent do
     {:noreply, socket}
   end
 
-  def handle_event("new_channel_submit", %{"name" => name, "description" => desc}, socket) do
+  def handle_event(
+        "new_channel_submit",
+        %{"name" => name, "description" => desc} = params,
+        socket
+      ) do
     slug =
       name
       |> String.downcase()
@@ -41,7 +51,11 @@ defmodule PlatformWeb.ChatLive.NewChannelComponent do
       |> String.replace(~r/\s+/, "-")
       |> String.trim("-")
 
-    case Chat.create_channel(%{name: name, slug: slug, description: desc}) do
+    attrs =
+      %{name: name, slug: slug, description: desc}
+      |> put_org_id(resolve_org_id(params, socket))
+
+    case Chat.create_channel(attrs) do
       {:ok, space} ->
         nav_target = PlatformWeb.ChatLive.space_nav_target(space)
         send(self(), {:new_channel_navigate, "/chat/#{nav_target}"})
@@ -52,6 +66,29 @@ defmodule PlatformWeb.ChatLive.NewChannelComponent do
         {:noreply, socket}
     end
   end
+
+  # The org the new channel is filed into (task 01a00910 stage 5). Before this
+  # the dialog sent NO `org_id` at all, so "+ New channel" could not create an
+  # org-scoped channel and the org-less row it did create was invisible to
+  # ChatLive's org-scoped mount lookup — which then minted a DUPLICATE of it.
+  #
+  # The submitted value is checked against `@org_options` (the server-built,
+  # viewer-scoped list) rather than trusted: the select is an affordance, not
+  # the authority. Anything not on that list falls back to the active org, so a
+  # forged option cannot file a channel into an org the viewer can't see.
+  defp resolve_org_id(params, socket) do
+    submitted = params["org_id"]
+    allowed = Enum.map(socket.assigns[:org_options] || [], & &1.id)
+
+    if is_binary(submitted) and submitted in allowed do
+      submitted
+    else
+      socket.assigns[:active_org_id]
+    end
+  end
+
+  defp put_org_id(attrs, nil), do: attrs
+  defp put_org_id(attrs, org_id), do: Map.put(attrs, :org_id, org_id)
 
   defp format_error(%Ecto.Changeset{} = changeset) do
     case changeset.errors do
@@ -87,6 +124,20 @@ defmodule PlatformWeb.ChatLive.NewChannelComponent do
                 spellcheck="false"
                 required
               />
+            </div>
+            <div :if={@org_options != []} class="form-control mb-3">
+              <label class="label" for={"#{@id}-org"}>
+                <span class="label-text">Organisation</span>
+              </label>
+              <select id={"#{@id}-org"} name="org_id" class="select select-bordered w-full">
+                <option
+                  :for={org <- @org_options}
+                  value={org.id}
+                  selected={org.id == @active_org_id}
+                >
+                  {org.name}
+                </option>
+              </select>
             </div>
             <div class="form-control mb-4">
               <label class="label"><span class="label-text">Description (optional)</span></label>

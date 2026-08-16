@@ -415,6 +415,13 @@ defmodule PlatformWeb.ChatLive do
       # `:open_message_actions_id` above.
       |> assign(:row_actions_space_id, nil)
       |> assign(:show_new_channel_modal, false)
+      # The org a new channel is filed into by default, and the destinations
+      # offered (task 01a00910 stage 5). Both come from `org_bucket_index/0`,
+      # the SAME index the rail buckets by and the "Move to organisation…"
+      # picker reads — a second source of org options is exactly the
+      # disagreeing-lists defect this task exists to kill.
+      |> assign(:active_org_id, resolve_active_org_id(socket))
+      |> assign(:new_channel_org_options, new_channel_org_options(user_id))
       |> assign(:show_new_conversation_modal, false)
       # Per-message actions sheet (3-dot menu): nil when closed, msg.id when open.
       # The matching message struct is lifted into :open_message_actions_msg so
@@ -3263,6 +3270,22 @@ defmodule PlatformWeb.ChatLive do
       not String.match?(slug, @slug_pattern) ->
         nil
 
+      # ADOPT an existing ORG-LESS row rather than minting a second one (task
+      # 01a00910 stage 5). The caller has already missed on the ORG-SCOPED
+      # `get_space_by_slug(slug, org_id: ...)`, and an org-less row is invisible
+      # to that lookup — which is how navigating to an existing channel could
+      # silently INSERT a duplicate of it. The lookup is `org_id IS NULL`
+      # specifically, NOT the unscoped oldest-row branch, so ADR-0042 per-org
+      # slug scoping ("#general" in Fabrikam vs in SXI) is untouched: a channel
+      # belonging to ANOTHER org still bootstraps a fresh one for this org.
+      #
+      # The adopted row is returned AS IS, not stamped with the active org.
+      # Writing `org_id` is `Sidebar.reassign_channel/3`'s job — an admin act,
+      # behind the "Move to organisation…" confirmation, because it re-grants
+      # canvas access across orgs. A page mount must not perform it silently.
+      space = Chat.get_orgless_space_by_slug(slug) ->
+        space
+
       true ->
         name =
           slug
@@ -3728,25 +3751,35 @@ defmodule PlatformWeb.ChatLive do
   #      flip the `Enum.reject(channels, ...)` line below to keep the channel
   #      in both buckets.
   #   2. DM (`kind in ["dm", "group"]`) → :dms.
-  #   3. Channel slug matches a sub-org → that bucket.
-  #   4. Anything else → "Fabrikam" (today's default tenant).
+  #   3. Channel's `org_id` resolves to an org → that org's bucket.
+  #   4. Anything else (`org_id: nil`, or an org that no longer exists) →
+  #      "Fabrikam" (today's default tenant). See `@default_bucket`.
   #
-  # Sub-org bucket keys are stable string keys; the map preserves all 5 keys
-  # even when buckets are empty so Stage 2's template can render section
-  # headers without conditionals. Alphabetical render order is the template's
-  # responsibility (iterate over `@sub_org_order` or `Map.keys/1 |> Enum.sort/1`).
+  # Sub-org bucket keys are stable string keys; the map preserves a key for
+  # EVERY org even when the bucket is empty, so the template can render
+  # section headers without conditionals. Alphabetical render order is the
+  # template's responsibility (`sub_org_order/0`).
   #
-  # Post-MT/RBAC seam: the `channel_scope/1` helper today does a name-match
-  # against the hardcoded sub-org slug list. After multi-tenant + RBAC ship,
-  # swap its body for `Platform.Orgs.slug(channel.org_id)` and the rest of
-  # this module keeps working unchanged.
+  # Post-MT/RBAC seam: CLOSED by task 01a00910 stage 3. `channel_scope/2` now
+  # resolves the channel's `org_id` through `org_bucket_index/0`, a single read
+  # of `Platform.Tenancy.list_orgs/0` per `channel_sections/5` call. The old
+  # `@sub_org_slug_to_bucket` / `@sub_org_buckets` module attributes matched the
+  # CHANNEL's own slug against a hardcoded six-org list and are DELETED — they
+  # were two of four hardcoded org lists that had already drifted apart (the
+  # bucket list was missing Cyberdyne while the three sibling maps had it).
+  # Do not reintroduce a literal org list here: a new org must need no code
+  # change to appear. The historical comment naming `Platform.Orgs` was stale;
+  # that module never existed. The real API is `Platform.Tenancy`.
   #
   # `pinned_space_ids` is the user's ordered pin list from
   # `Sidebar.list_pinned_space_ids/1` (task 019fd80f). It covers CHANNELS AND
   # DMs: both are `chat_spaces` rows and the Pinned block holds them in one
   # flat list, ordered by when the user pinned them. A `MapSet` is also
   # accepted, in which case the block falls back to input order.
-  @sub_org_buckets ["Paragon", "Soylent", "Fabrikam", "Wayne-Tech", "SXI"]
+  # The bucket a channel lands in when its `org_id` is nil (personal / unscoped
+  # spaces) or names an org that no longer exists. Deliberately preserved
+  # behaviour, pinned by Fixture E in chat_live_section_grouping_test.exs.
+  @default_bucket "Fabrikam"
 
   @doc """
   Group the user's channel + DM list into the sectioned-rail shape consumed
@@ -3784,12 +3817,18 @@ defmodule PlatformWeb.ChatLive do
     {_, unpinned_channels} = PinnedSpaces.partition(channels, pinned_space_ids)
     {_, unpinned_dms} = PinnedSpaces.partition(dm_conversations, pinned_space_ids)
 
-    empty_buckets = Map.new(@sub_org_buckets, fn slug -> {slug, []} end)
+    # ONE org read per call, hoisted out of the per-channel reduce below.
+    # `channel_sections/5` has 11+ call sites and fires on every sidebar
+    # recompute; a `Tenancy.get_org/1` inside the loop would be one query per
+    # channel per render. Same shape as `Sidebar.place_channels/4`, which
+    # builds its `org_to_section` index once (sidebar.ex:484).
+    org_buckets = org_bucket_index()
+    empty_buckets = Map.new(bucket_names(org_buckets), fn name -> {name, []} end)
 
     sub_orgs =
       unpinned_channels
       |> Enum.reduce(empty_buckets, fn channel, acc ->
-        bucket = channel_scope(channel)
+        bucket = channel_scope(channel, org_buckets)
         Map.update(acc, bucket, [channel], fn existing -> existing ++ [channel] end)
       end)
 
@@ -4091,26 +4130,86 @@ defmodule PlatformWeb.ChatLive do
   def section_dot_class("cyberdyne"), do: "bg-cyberdyne-dot"
   def section_dot_class(_), do: nil
 
-  # Today: exact (case-insensitive) match on channel slug against the
-  # hardcoded sub-org list, falling back to "Fabrikam" (the default tenant).
+  # ── The one org index (task 01a00910 stage 3) ──────────────────────────
   #
-  # Post-MT/RBAC: replace body with `Platform.Orgs.slug(channel.org_id)`
-  # (or whatever the new lookup is called). Until then this is the single
-  # point of change for sub-org assignment.
-  @sub_org_slug_to_bucket %{
-    "paragon" => "Paragon",
-    "soylent" => "Soylent",
-    "fabrikam" => "Fabrikam",
-    "wayne-tech" => "Wayne-Tech",
-    "sxi" => "SXI",
-    "cyberdyne" => "Cyberdyne"
-  }
-
-  defp channel_scope(%{slug: slug}) when is_binary(slug) do
-    Map.get(@sub_org_slug_to_bucket, String.downcase(slug), "Fabrikam")
+  # SOURCE OF TRUTH for sub-org bucketing is the orgs table, reached through
+  # `Platform.Tenancy`'s public surface — the same context `space_scope_atom/1`
+  # already reads for the header pill, so the rail, the drawer and the pill can
+  # never disagree about which org a channel belongs to.
+  #
+  # `org_bucket_index/0` is `org_id => display name`. `bucket_slug_index/0` is
+  # the CSS-token form of the org slug => the same display name. Org slugs are
+  # stored UNDERSCORE-form (`wayne_tech`); section colour tokens and CSS classes
+  # are HYPHEN-form (`wayne-tech`), so every lookup normalizes `_` -> `-` at the
+  # boundary. Skipping that replace misses on exactly one org, which reads as
+  # "works for five, mysteriously broken for the sixth".
+  @spec org_bucket_index() :: %{binary() => String.t()}
+  defp org_bucket_index do
+    Platform.Tenancy.list_orgs()
+    |> Map.new(fn org -> {org.id, org.name} end)
   end
 
-  defp channel_scope(_channel), do: "Fabrikam"
+  # The org destinations the "+ New channel" dialog offers (task 01a00910
+  # stage 5). Two reads, and the split is deliberate:
+  #
+  #   * WHICH orgs — `Tenancy.list_active_tenants_for_user/1`, the
+  #     viewer-scoped read. A picker is a user-facing surface that renders org
+  #     NAMES, and the unscoped reads carry an explicit warning that doing so
+  #     discloses the existence and name of orgs the viewer isn't in. Archived
+  #     orgs are excluded there too, matching `org_archived?/1`'s refusal on
+  #     the "Move to organisation…" path.
+  #   * WHAT THEY ARE CALLED — `org_bucket_index/0`, the one org index the rail
+  #     buckets by. Labelling from the same map is what stops the dialog and
+  #     the rail from disagreeing about an org's name.
+  @spec new_channel_org_options(binary() | nil) :: [%{id: binary(), name: String.t()}]
+  defp new_channel_org_options(user_id) when is_binary(user_id) do
+    names = org_bucket_index()
+
+    %{id: user_id}
+    |> Platform.Tenancy.list_active_tenants_for_user()
+    |> Enum.map(&%{id: &1.id, name: Map.get(names, &1.id, &1.name)})
+  end
+
+  defp new_channel_org_options(_user_id), do: []
+
+  @spec bucket_slug_index() :: %{String.t() => String.t()}
+  defp bucket_slug_index do
+    Platform.Tenancy.list_orgs()
+    |> Map.new(fn org -> {css_slug(org.slug), org.name} end)
+  end
+
+  defp css_slug(slug) when is_binary(slug),
+    do: slug |> String.downcase() |> String.replace("_", "-")
+
+  defp css_slug(_), do: nil
+
+  # Every bucket key the rail can render: one per org, plus the default bucket
+  # so the `org_id: nil` fallback always has somewhere to land even in a
+  # deployment where no org happens to be named "Fabrikam".
+  @spec bucket_names(%{binary() => String.t()}) :: [String.t()]
+  defp bucket_names(org_buckets) do
+    org_buckets
+    |> Map.values()
+    |> then(&[@default_bucket | &1])
+    |> Enum.uniq()
+  end
+
+  # Bucket a channel by the org it actually belongs to. Takes the pre-built
+  # index rather than reading the DB — see the hoist in `channel_sections/5`.
+  defp channel_scope(%{org_id: org_id}, org_buckets) when is_binary(org_id) do
+    # An org_id naming an org that no longer exists takes the same explicit
+    # fallback as a nil one, below.
+    Map.get(org_buckets, org_id, @default_bucket)
+  end
+
+  # DELIBERATE, not a catch-all fall-through: a space with no org (personal
+  # spaces, DMs that reached this path, anything unscoped) keeps landing in the
+  # default tenant bucket, which is exactly where it landed before this stage.
+  # Fixture E in chat_live_section_grouping_test.exs pins this; if that test
+  # changes, DM/personal behaviour was altered by accident.
+  defp channel_scope(%{org_id: nil}, _org_buckets), do: @default_bucket
+
+  defp channel_scope(_channel, _org_buckets), do: @default_bucket
 
   # ── Sectioned-rail render helpers (chat plan v2 Stage 2) ───────────────
   #
@@ -4125,7 +4224,7 @@ defmodule PlatformWeb.ChatLive do
   buckets — they're rendered separately above the sub-orgs.
   """
   @spec sub_org_order() :: [String.t()]
-  def sub_org_order, do: Enum.sort(@sub_org_buckets)
+  def sub_org_order, do: org_bucket_index() |> bucket_names() |> Enum.sort()
 
   # ── Per-user section order (chat plan v2 Stage 3) ──────────────────────
   #
@@ -4176,6 +4275,13 @@ defmodule PlatformWeb.ChatLive do
   defp sub_org_scope_atom("Wayne-Tech"), do: :wayne_tech
   defp sub_org_scope_atom("SXI"), do: :sxi
   defp sub_org_scope_atom("Cyberdyne"), do: :cyberdyne
+
+  # Buckets now derive from the orgs table, so a bucket can name an org the
+  # scope-colour vocabulary has never heard of. `nil` means "no pill" — the
+  # drawer renders the bucket's plain name instead. Do NOT `String.to_atom/1`
+  # here: `scope_pill`'s label/colour clauses are a closed enum and an unknown
+  # atom would crash the render rather than degrade it.
+  defp sub_org_scope_atom(_bucket), do: nil
 
   # Map a Space to the scope atom the `scope_pill` component takes.
   #
@@ -4278,12 +4384,16 @@ defmodule PlatformWeb.ChatLive do
 
   # `bucket_from_slug/1`: translates the SectionReorder hook's slug payload
   # back to the bucket display name used by the `section_reordered` handler.
-  # Reuses the `@sub_org_slug_to_bucket` mapping that `channel_scope/1` needs
-  # for the (Pinned/DMs) classification pass.
+  # Task 01a00910 stage 3: reads `bucket_slug_index/0` — the SAME orgs-table
+  # read `channel_scope/2` buckets on — instead of the deleted
+  # `@sub_org_slug_to_bucket` attribute. This was the second consumer of that
+  # map (the architecture review flagged it); leaving it behind would have kept
+  # the stale hardcoded list alive in the reorder path while the tests went
+  # green on the bucketing path.
   @doc false
   @spec bucket_from_slug(String.t()) :: String.t() | nil
   def bucket_from_slug(slug) when is_binary(slug) do
-    Map.get(@sub_org_slug_to_bucket, String.downcase(slug))
+    Map.get(bucket_slug_index(), css_slug(slug))
   end
 
   def bucket_from_slug(_), do: nil

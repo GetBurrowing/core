@@ -809,13 +809,26 @@
                  a recolor now changes ONLY this dot, never any name/label. The
                  dot is decorative (aria-hidden) — `section.name` beside it is
                  the text identity. --%>
-            <%= if dot = PlatformWeb.ChatLive.section_dot_class(section.color) do %>
-              <span
-                class={["channel-section-color-dot", dot]}
-                aria-hidden="true"
-              >
-              </span>
-            <% end %>
+            <%!-- The span ALWAYS renders (task 01a00910 stage 4). Since buckets
+                 derive from the orgs table, a section can carry a colour token
+                 the vocabulary has never heard of, and `section_dot_class/1`
+                 returns nil for it BY DESIGN — that nil is the signal, not a
+                 missing clause, which is why there is no seventh clause over
+                 there. Rendering nothing would slide this header's text one
+                 dot-width left and ragged-edge the column, making the newest
+                 org the one that looks broken; so the slot is reserved and the
+                 dot is drawn hollow instead. `aria-hidden` in BOTH branches —
+                 the dot is decorative either way, `section.name` is the text
+                 identity. --%>
+            <span
+              class={[
+                "channel-section-color-dot",
+                PlatformWeb.ChatLive.section_dot_class(section.color) ||
+                  "channel-section-color-dot--unassigned"
+              ]}
+              aria-hidden="true"
+            >
+            </span>
             <%!-- Per-section Hide/Show control (Stage 5, edit mode only).
                  Posts the DESIRED next hidden state so the toggle is
                  idempotent. A hidden section drops out of @sidebar_sections
@@ -1244,7 +1257,20 @@
                   hidden_channels != [] do %>
             <div class="channel-hidden-drawer-group">
               <div class="channel-hidden-drawer-group-label">
-                <.scope_pill scope={sub_org_scope_atom(bucket)} clickable={false} />
+                <%!-- Buckets derive from the orgs table (task 01a00910 stage
+                     3), so a bucket can name an org that has no scope colour
+                     token. `sub_org_scope_atom/1` returns nil for those and
+                     we label the group with its plain name — `scope_pill`'s
+                     colour/label clauses are a closed enum and would crash on
+                     an unknown scope. --%>
+                <% scope = sub_org_scope_atom(bucket) %>
+                <.scope_pill :if={scope} scope={scope} clickable={false} />
+                <span
+                  :if={is_nil(scope)}
+                  class="text-xs font-semibold uppercase tracking-wide text-base-content/50"
+                >
+                  {bucket}
+                </span>
               </div>
               <ul class="channel-hidden-drawer-group-list">
                 <li
@@ -3384,6 +3410,8 @@
   module={NewChannelComponent}
   id="chat-new-channel"
   open={@show_new_channel_modal}
+  org_options={@new_channel_org_options}
+  active_org_id={@active_org_id}
 />
 
 <%!-- rbac-external-users M5 stage 3: the DM picker IS available to external

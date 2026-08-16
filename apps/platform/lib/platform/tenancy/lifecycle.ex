@@ -105,16 +105,28 @@ defmodule Platform.Tenancy.Lifecycle do
           {:ok, Org.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
   def create_org(actor, attrs) when is_map(attrs) do
     with_fabrikam_admin_authz(actor, fn ->
-      %Org{}
-      |> Org.changeset(put_default_parent(attrs))
-      |> require_tenant_parent()
-      |> Repo.insert()
+      changeset =
+        %Org{}
+        |> Org.changeset(put_default_parent(attrs))
+        |> require_tenant_parent()
+
+      # Ecto.Multi, not log-and-continue: an org row with no `channel_sections`
+      # row is EXACTLY the half-made state task 01a00910 exists to clean up, so
+      # the create either produces both or neither. The backfill migration stays
+      # as the safety net for the orgs already in that state, not as a licence
+      # to keep producing more.
+      Ecto.Multi.new()
+      |> Ecto.Multi.insert(:org, changeset)
+      |> Ecto.Multi.run(:section, fn _repo, %{org: org} ->
+        Platform.Chat.Sidebar.ensure_default_section(org)
+      end)
+      |> Repo.transaction()
       |> case do
-        {:ok, %Org{} = org} ->
+        {:ok, %{org: %Org{} = org}} ->
           emit([:platform, :tenancy, :org_created], actor, org_meta(org, %{}))
           {:ok, org}
 
-        {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, _step, %Ecto.Changeset{} = changeset, _changes} ->
           {:error, changeset}
       end
     end)

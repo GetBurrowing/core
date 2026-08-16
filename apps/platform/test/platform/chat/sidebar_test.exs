@@ -733,4 +733,68 @@ defmodule Platform.Chat.SidebarTest do
       assert {:error, :not_found} = Sidebar.recolor_section(admin, "higginshigginsxx", "#fff")
     end
   end
+
+  # ── ensure_default_section/1 (task 01a00910 stage 2) ─────────────────────
+
+  describe "ensure_default_section/1" do
+    defp sections_for(org_id), do: Repo.all(from(s in Section, where: s.org_id == ^org_id))
+
+    defp create_org!(slug) do
+      {:ok, org} =
+        Tenancy.create_org(admin_user!(), %{
+          name: "Ensure Section #{System.unique_integer([:positive])}",
+          slug: slug
+        })
+
+      org
+    end
+
+    test "creating an org yields exactly one section owned by that org" do
+      org = create_org!("ensuresec#{System.unique_integer([:positive])}")
+
+      assert [section] = sections_for(org.id)
+      assert section.org_id == org.id
+      assert section.name == org.name
+    end
+
+    test "the new section is NOT at the lowest position, so a fallback cannot impersonate it" do
+      # `fallback_section_id/1` picks the lowest-`position` section. If a newly
+      # created org's section landed there, every grouping assertion in this
+      # task would pass by accident.
+      org = create_org!("ensurepos#{System.unique_integer([:positive])}")
+
+      [section] = sections_for(org.id)
+      min_position = Repo.one(from(s in Section, select: min(s.position)))
+
+      assert length(Sidebar.list_default_sections()) > 1
+      assert section.position > min_position
+    end
+
+    test "calling it a second time yields one row, not two" do
+      org = create_org!("ensuretwice#{System.unique_integer([:positive])}")
+
+      assert {:ok, again} = Sidebar.ensure_default_section(org)
+      assert [section] = sections_for(org.id)
+      assert again.id == section.id
+    end
+
+    test "an underscore org slug produces a hyphen-form colour token" do
+      # Org slugs are stored underscore-form (`wayne_tech`); section colour
+      # tokens and the `.bg-<token>-dot` CSS classes are hyphen-form.
+      org = create_org!("wayne_tech_#{System.unique_integer([:positive])}")
+
+      assert [section] = sections_for(org.id)
+      assert section.color == String.replace(org.slug, "_", "-")
+      refute String.contains?(section.color, "_")
+    end
+
+    test "a failed section insert rolls the org back — no half-made org" do
+      admin = admin_user!()
+
+      assert {:error, %Ecto.Changeset{}} =
+               Tenancy.create_org(admin, %{name: nil, slug: "nosuchorg"})
+
+      refute Repo.exists?(from(o in Tenancy.Org, where: o.slug == "nosuchorg"))
+    end
+  end
 end

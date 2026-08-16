@@ -3322,6 +3322,28 @@ body, .font-fabrikam {
     @apply inline-block size-2 flex-shrink-0 rounded-full;
   }
 
+  /* An org the colour vocabulary has never heard of (task 01a00910 stage 4).
+     Once sidebar buckets derive from the orgs table, a new org can reach the
+     rail with no `bg-<token>-dot` utility — `section_dot_class/1` returns nil
+     for it, deliberately, and that nil is the signal rather than a missing
+     case. It renders here as a HOLLOW dot: same `size-2` diameter, same slot,
+     a 1px ring in `--color-base-300` and NO fill.
+
+     Why not omit the dot: the slot is what keeps the header column true. Drop
+     it and that header's text slides left by a dot-width plus the gap, so the
+     newest org is the one that looks misaligned in a list where alignment is
+     the only signal that these sections are peers.
+
+     Why not a filled grey dot: grey is a plausible brand colour, so a filled
+     swatch asserts a colour choice nobody made. An empty ring cannot be
+     mistaken for a decision — it reads as "not yet assigned", which is what it
+     is. `--color-base-300` is already the rail's border value, so the ring
+     reads as structure and not as a seventh tenant colour. */
+  .channel-section-color-dot--unassigned {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1px var(--color-base-300);
+  }
+
   /* Drag handle — invisible until the parent .channel-section is hovered.
      Tailwind's `group-hover:` matches the `group` class on the section. */
   .channel-section-drag-handle {

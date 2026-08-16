@@ -75,6 +75,56 @@ defmodule Platform.Chat.Sidebar do
     )
   end
 
+  @doc """
+  Ensure the org has its `channel_sections` row, creating it if absent.
+
+  Until task 01a00910 NOTHING in `apps/platform/lib` ever created one — the
+  only rows in the table came from the `20260604000100_create_channel_sections`
+  seed, which covered the orgs that existed on 2026-06-04. Every org created
+  after that date had no section, so `default_section_id/3` fell through to
+  `fallback_section_id/1` and its channels rendered under whichever section
+  happened to hold the lowest `position`. That is the Cyberdyne symptom.
+
+  Idempotent via `on_conflict: :nothing` against the real
+  `unique_index(:channel_sections, [:org_id])`, so a second call for the same
+  org is a no-op that still returns the existing row.
+
+  `color` mirrors the seed migration EXACTLY: the org slug with `_` → `-`.
+  Org slugs are stored underscore-form (`wayne_tech`) while section colour
+  tokens and the `.bg-<token>-dot` CSS classes are hyphen-form; reversing the
+  replace yields a section whose `section_dot_class/1` lookup misses and whose
+  dot silently disappears.
+
+  `position` is `max(position) + 1`. Two concurrent creates can read the same
+  max and land on the same position; `org_id` is what's unique, so the conflict
+  target does not catch it. Accepted deliberately — org creation is rare and
+  Fabrikam-admin-gated, ties only make the render order of two brand-new sections
+  nondeterministic, and an admin reorder renumbers them. Serializing this
+  behind an advisory lock would buy strictness nothing reads.
+  """
+  @spec ensure_default_section(Tenancy.Org.t()) :: {:ok, Section.t()} | {:error, term()}
+  def ensure_default_section(%Tenancy.Org{} = org) do
+    next_position = (Repo.one(from(s in Section, select: max(s.position))) || -1) + 1
+
+    %Section{}
+    |> Section.changeset(%{
+      org_id: org.id,
+      name: org.name,
+      color: String.replace(org.slug || "", "_", "-"),
+      position: next_position
+    })
+    |> Repo.insert(on_conflict: :nothing, conflict_target: :org_id)
+    |> case do
+      # `on_conflict: :nothing` still hands back the changeset's struct — id and
+      # all — even when the INSERT was skipped, so the returned struct is NOT
+      # evidence of the row that's actually in the table. Re-read by `org_id`
+      # (the unique key) so a second call returns the EXISTING section rather
+      # than a phantom carrying an id no row has.
+      {:ok, %Section{}} -> {:ok, Repo.get_by(Section, org_id: org.id)}
+      other -> other
+    end
+  end
+
   @doc "Rename an org-default section (Fabrikam admin only)."
   @spec rename_section(map(), binary(), String.t()) ::
           {:ok, Section.t()} | {:error, :unauthorized | :not_found | Ecto.Changeset.t()}

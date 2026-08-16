@@ -22,12 +22,16 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
   """
 
   use PlatformWeb.ConnCase, async: false
+  import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
   alias Platform.Chat
+  alias Platform.Chat.Section
   alias Platform.Chat.Sidebar
   alias Platform.Repo
+  alias Platform.Tenancy
+  alias Platform.Tenancy.OrgMembership
 
   defp authenticated_conn(conn) do
     user = insert_chat_user()
@@ -1064,5 +1068,118 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
     |> Regex.scan(html)
     |> Enum.map(fn [_, id] -> id end)
     |> Enum.uniq()
+  end
+
+  # ── The colourless case (task 01a00910 stage 4) ─────────────────────────
+  #
+  # Stages 2 and 3 made it possible for the rail to render an org whose colour
+  # token the vocabulary has never heard of: every org now gets a
+  # `channel_sections` row, and buckets derive from the orgs table rather than
+  # a hardcoded six-slug map. `section_dot_class/1` returns nil for such a
+  # token BY DESIGN — there is deliberately no seventh clause — and the
+  # template used to omit the dot entirely on nil, sliding that header's text
+  # one dot-width left and ragged-edging the column.
+  #
+  # These tests assert the span EXISTS. An assertion that only checked for the
+  # modifier class name would have been green against the old omit-the-dot
+  # behaviour AND green after the fix, proving nothing.
+
+  # The dot span rendered inside one specific section element, or "".
+  # Queried by section id, NOT by `data-section-slug`: that attribute IS the
+  # colour token, which is exactly the thing under test (absent or
+  # unrecognised here), so it cannot also be the handle we grab the section by.
+  defp section_dot_html(html, section_id) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s(section[id="section-#{section_id}"] .channel-section-color-dot))
+    |> LazyHTML.to_html()
+  end
+
+  defp fabrikam_admin_conn(conn) do
+    conn = authenticated_conn(conn)
+    uid = user_id(conn)
+
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{
+      user_id: uid,
+      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      role: "admin"
+    })
+    |> Repo.insert!()
+
+    {conn, Repo.get!(User, uid)}
+  end
+
+  describe "section header dot — an org with no colour token" do
+    test "an unrecognised colour token renders a hollow dot, not no dot", %{conn: conn} do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      create_channel("general")
+
+      # Goes through the REAL org-creation path, so the section row is the one
+      # stage 2's `ensure_default_section/1` writes, carrying colour
+      # "newclient" — a token `section_dot_class/1` has never heard of.
+      {:ok, org} = Tenancy.create_org(admin, %{name: "NewClient", slug: "newclient"})
+
+      section = Repo.get_by!(Section, org_id: org.id)
+      assert section.color == "newclient"
+      refute PlatformWeb.ChatLive.section_dot_class(section.color)
+
+      {:ok, _view, html} = live_following_redirect(conn)
+      dot = section_dot_html(desktop_sidebar(html), section.id)
+
+      assert dot != "",
+             """
+             The NewClient section header rendered NO colour dot at all.
+             That is the ragged-edge failure this stage exists to prevent:
+             without the reserved slot the header text slides one dot-width
+             plus the gap to the left, so the newest org is the one that
+             looks misaligned in a list where alignment is the only signal
+             that these sections are peers.
+             """
+
+      assert dot =~ "channel-section-color-dot--unassigned"
+      assert dot =~ ~s(aria-hidden="true")
+      refute dot =~ "bg-newclient-dot"
+    end
+
+    test "a nil colour renders a hollow dot, not no dot", %{conn: conn} do
+      {conn, admin} = fabrikam_admin_conn(conn)
+      create_channel("general")
+
+      {:ok, org} = Tenancy.create_org(admin, %{name: "Colourless", slug: "colourless"})
+      section = Repo.get_by!(Section, org_id: org.id)
+
+      # The other half of `section_dot_class/1`'s nil return: a section whose
+      # colour was never assigned at all, rather than one whose token is
+      # simply unknown.
+      {1, _} =
+        Repo.update_all(
+          from(s in Section, where: s.id == ^section.id),
+          set: [color: nil]
+        )
+
+      {:ok, _view, html} = live_following_redirect(conn)
+      dot = section_dot_html(desktop_sidebar(html), section.id)
+
+      assert dot != "", "a section with color: nil rendered no colour dot at all"
+      assert dot =~ "channel-section-color-dot--unassigned"
+      assert dot =~ ~s(aria-hidden="true")
+    end
+
+    test "a known colour token still renders its swatch and NOT the modifier", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      create_channel("general")
+
+      sxi_section = Repo.get_by!(Section, org_id: Tenancy.get_org_by_slug!("sxi").id)
+
+      {:ok, _view, html} = live_following_redirect(conn)
+      dot = section_dot_html(desktop_sidebar(html), sxi_section.id)
+
+      assert dot =~ "bg-sxi-dot"
+
+      refute dot =~ "channel-section-color-dot--unassigned",
+             "SXI has a colour token; a hollow ring there would assert " <>
+               "'not yet assigned' about an org that IS assigned"
+    end
   end
 end

@@ -327,6 +327,32 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  Fetch the ORG-LESS space with this slug, if there is one.
+
+  Deliberately narrower than `get_space_by_slug(slug, [])`: that back-compat
+  branch returns the OLDEST row of any org, so an SXI channel would answer a
+  Fabrikam member's lookup and ADR-0042's per-org slug scoping would be weakened.
+  This one matches `org_id IS NULL` explicitly and can therefore never hand
+  back another tenant's channel.
+
+  Exists for `ChatLive.bootstrap_space/2` (task 01a00910 stage 5): a channel
+  created without an org (the pre-fix "+ New channel" dialog, and every
+  historical org-less row) is invisible to the org-scoped mount lookup, which
+  used to conclude "no such channel" and INSERT A SECOND ROW for the same slug
+  244ms later. See `chat_live_bootstrap_duplicate_test.exs`.
+  """
+  @spec get_orgless_space_by_slug(String.t()) :: Space.t() | nil
+  def get_orgless_space_by_slug(slug) when is_binary(slug) do
+    Space
+    |> where([s], s.slug == ^slug and is_nil(s.org_id))
+    |> order_by([s], asc: s.inserted_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def get_orgless_space_by_slug(_), do: nil
+
+  @doc """
   List spaces with optional filters.
 
   ## Options

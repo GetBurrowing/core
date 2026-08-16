@@ -228,6 +228,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`message.frozen_by_participant_id` destructured off a loaded `%Message{}`"},
     {"platform/chat/sidebar.ex", :get, "Section", 1, :safe_internal,
      "update_section/2 checks Platform.UUID.valid?/1 on the phx-value- section_id, folding a malformed id into the existing {:error, :not_found}"},
+    {"platform/chat/sidebar.ex", :get_by, "Section", 1, :safe_internal,
+     "ensure_default_section/1 re-reads by `org.id` destructured off a `%Tenancy.Org{}` the function head pattern-matches — the struct is either freshly inserted by `Lifecycle.create_org/2` inside the same Ecto.Multi or loaded from `orgs`, so the id is always a well-formed :binary_id and never a boundary string"},
     # ── Design (sibling-owned, ADR-0046) ───────────────────────────────
     {"platform/design/brand.ex", :platform_uuid_guard, "-", 1, :flagged_sibling_owned,
      "`fetch_project/1`'s predicate, collapsed from a bare Ecto.UUID.cast/1 onto Platform.UUID.cast/1 at the ADR-0046 merge. The site was already total — it passes the cast's OUTPUT to `Tasks.get_project/1` and additionally rescues — so this is the canonical-predicate fix, not a raise fix. Sibling-owned — RECORD, DO NOT EDIT"},
@@ -672,7 +674,15 @@ defmodule Platform.RepoLookupBoundaryTest do
     # documents that a stage's plan row CAN be gone and a raise there would
     # record nothing at all.
     "platform/architecture/stage_audit.ex" => 1,
-    "platform/chat.ex" => 16,
+    # 17 as of task 01a00910 stage 5: `get_orgless_space_by_slug/1`. Triaged by
+    # hand as this map asks. Its `where:` clause pins a SLUG (a URL path
+    # segment, i.e. a boundary input) — but it is narrowed by
+    # `is_nil(s.org_id)`, which is what makes it safe: it can only ever return
+    # a space belonging to NO org, so a slug typed by a member of one org can
+    # never surface another org's channel. That narrowing is the whole point of
+    # the function existing instead of reusing the unscoped oldest-row branch
+    # of `get_space_by_slug/2`; do not relax it.
+    "platform/chat.ex" => 17,
     "platform/chat/attachments/tool_handlers.ex" => 1,
     "platform/chat/canvas/versions.ex" => 1,
     # Task 019e2c4b stage 1 — `CanvasAccess.org_readable_space?/2`. Triaged by
@@ -683,6 +693,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     # is guarded by `Platform.UUID.valid?/1` one call earlier.
     "platform/chat/canvas_access.ex" => 1,
     "platform/chat/message_versions.ex" => 2,
+    # 0 → 1 for task 01a00910 stage 2's `ensure_default_section/1`. Triaged by
+    # hand: the call is `Repo.one(from s in Section, select: max(s.position))`
+    # — an aggregate over the whole table with NO `where:` clause at all, so
+    # no id of any provenance reaches the query and no `Ecto.Query.CastError`
+    # is reachable. No `Platform.UUID.valid?/1` guard applies.
+    "platform/chat/sidebar.ex" => 1,
     "platform/deploy/project_files.ex" => 3,
     # 0 → 1 for task 019fe6b9 stage 2's `get_assignment/2` (ADR-0048).
     # Triaged by hand as this map asks: the `where:` clause pins
