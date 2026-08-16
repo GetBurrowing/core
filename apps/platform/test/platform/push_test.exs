@@ -504,6 +504,58 @@ defmodule Platform.PushTest do
     end
   end
 
+  describe "subscribe_for_user/2 (task 019ffe52)" do
+    defp device(n),
+      do: %{endpoint: "https://push.example.com/dev/#{n}", keys: %{p256dh: "p", auth: "a"}}
+
+    test "files against the user's EARLIEST membership, whichever space is open" do
+      user = insert_user(name: "Multi Channel")
+
+      # joined_at set explicitly and apart, so the assertion below is about the
+      # ordering and not about how fast three inserts happened to run.
+      participants =
+        for i <- 1..3 do
+          create_space().id
+          |> add_user_participant(user)
+          |> Ecto.Changeset.change(joined_at: DateTime.add(DateTime.utc_now(), i, :second))
+          |> Repo.update!()
+        end
+
+      {:ok, sub} = Push.subscribe_for_user(user.id, device(1))
+
+      assert sub.participant_id == hd(participants).id,
+             "the anchor row must be the earliest membership, not an arbitrary one"
+
+      # Repeat calls land on the same row, so one physical device stays one row
+      # no matter how many times the client re-registers. Asserted by count and
+      # anchor, not by id: `subscribe/2` upserts with
+      # `on_conflict: {:replace, ...}` and no `returning:`, so the struct it
+      # hands back on a conflict carries the id Ecto generated for the insert
+      # it did not perform, never the stored row's.
+      {:ok, again} = Push.subscribe_for_user(user.id, device(1))
+      assert again.participant_id == sub.participant_id
+      assert Repo.aggregate(Subscription, :count) == 1
+    end
+
+    test "a user in no space gets {:error, :no_participant} and writes nothing" do
+      user = insert_user(name: "Spaceless")
+
+      assert Push.subscribe_for_user(user.id, device(2)) == {:error, :no_participant}
+      assert Repo.aggregate(Subscription, :count) == 0
+    end
+
+    # `where: p.participant_id == ^user_id` pins a `:binary_id` column, so an
+    # id that is not a UUID raises Ecto.Query.CastError out of the query rather
+    # than returning nothing. This is public API: the caller that exists today
+    # reads a session value, and the next one need not.
+    test "a malformed user id is refused, not raised on" do
+      assert Push.subscribe_for_user("definitely-not-a-uuid", device(3)) ==
+               {:error, :no_participant}
+
+      assert Repo.aggregate(Subscription, :count) == 0
+    end
+  end
+
   describe "send_to_user/2 endpoint dedup (#592 duplicate-storm fix)" do
     test "same endpoint under many participant rows → exactly ONE push per endpoint" do
       user = insert_user(name: "Heavy User")

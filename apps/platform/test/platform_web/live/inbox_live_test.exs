@@ -801,5 +801,71 @@ defmodule PlatformWeb.InboxLiveTest do
                "expected no notification row for push_permission=#{state}"
       end
     end
+
+    # Task 019ffe52 stage 3. The wiring the component tests cannot see: the
+    # shell's `:push_registration_failed` assign reaches `/inbox` and the row
+    # reads it, exactly as `:push_auto_denied` does.
+    #
+    # Driven through the real events rather than a hand-made assign. The user
+    # from `insert_user/0` is in no space, so `push_subscribed` genuinely
+    # cannot file the device and the shell sets the flag itself; a test that
+    # assigned the flag directly would pass even if nothing ever set it.
+    test "a registration with nowhere to file shows the no-conversations copy", %{lv: lv} do
+      render_hook(lv, "push_permission_state", %{"state" => "granted"})
+
+      # Control: a plain grant still adds nothing to the page.
+      refute has_element?(lv, ~s([data-role="notification-state"]))
+
+      render_hook(lv, "push_subscribed", %{
+        "endpoint" => "https://push.example.com/inbox-wiring",
+        "keys" => %{"p256dh" => "p256dh-key", "auth" => "auth-key"}
+      })
+
+      assert has_element?(
+               lv,
+               ~s([data-role="notification-state"][data-permission="granted"][data-registration-failed="no_participant"])
+             )
+
+      html = render(lv)
+
+      assert html =~ "Notifications are on, but you are not in any conversations yet."
+      assert html =~ "Start a conversation in Chat and they will switch on."
+
+      # Nothing to press: nobody can act on this from here.
+      refute has_element?(lv, ~s([data-role="notification-enable"]))
+      refute has_element?(lv, ~s([data-role="notification-state"] button))
+    end
+
+    # The other route to the same assign, and the reason it stopped being a
+    # boolean: the browser refused the subscribe, so a reload CAN change the
+    # outcome and the copy says so. Same wiring assertion, different words.
+    test "a client-side subscribe failure shows the reload copy", %{lv: lv} do
+      render_hook(lv, "push_permission_state", %{"state" => "granted"})
+      refute has_element?(lv, ~s([data-role="notification-state"]))
+
+      render_hook(lv, "push_subscribe_failed", %{
+        "name" => "AbortError",
+        "message" => "push service error"
+      })
+
+      assert has_element?(
+               lv,
+               ~s([data-role="notification-state"][data-permission="granted"][data-registration-failed="subscribe_failed"])
+             )
+
+      html = render(lv)
+
+      assert html =~
+               "Your browser allowed notifications, but this device could not be registered."
+
+      assert html =~ "Reload the page to try again."
+
+      # It must NOT borrow the other reason's words, which is the whole point
+      # of carrying a reason instead of a flag.
+      refute html =~ "Notifications are on, but you are not in any conversations yet."
+
+      # "Reload the page" is instruction text, not a control.
+      refute has_element?(lv, ~s([data-role="notification-state"] button))
+    end
   end
 end

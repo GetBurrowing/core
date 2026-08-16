@@ -32,6 +32,8 @@ defmodule PlatformWeb.ChatLivePushPermissionTest do
 
   alias Platform.Accounts
   alias Platform.Accounts.User
+  alias Platform.Chat
+  alias Platform.Push.Subscription
   alias Platform.Repo
   alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
@@ -72,6 +74,117 @@ defmodule PlatformWeb.ChatLivePushPermissionTest do
       {:error, {:live_redirect, %{to: path}}} ->
         {:ok, view, _html} = live(conn, path)
         view
+    end
+  end
+
+  # Task 019ffe52 fix A moved the `push_subscribed` clause off
+  # `:current_participant` alone and onto a user-level fallback. These are the
+  # control that the working path was not broken to fix the broken one: from a
+  # chat route, where `:current_participant` IS assigned, the device must still
+  # reach `push_subscriptions` and the permission must still read "granted".
+  describe "push_subscribed from a chat route (019ffe52 positive control)" do
+    @device "https://push.example.com/device/from-chat"
+    @keys %{"p256dh" => "p256dh-from-chat", "auth" => "auth-from-chat"}
+
+    defp channel_member_conn(conn) do
+      n = System.unique_integer([:positive])
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      user =
+        Repo.insert!(%User{
+          email: "push-chat-#{n}@example.com",
+          name: "Push Chat #{n}",
+          oidc_sub: "oidc-push-chat-#{n}"
+        })
+
+      Repo.insert!(%OrgMembership{user_id: user.id, org_id: fabrikam.id, role: "member"})
+
+      # TWO channels, joined in order. Mounting the SECOND is what makes this a
+      # real control rather than a coincidence: the user-level fallback picks
+      # the user's EARLIEST membership, so if the `:current_participant` branch
+      # were deleted the row would land on `first`'s participant and the
+      # assertion below would fail. With one channel both branches agree and
+      # the test would pass either way.
+      spaces =
+        for i <- 1..2 do
+          {:ok, space} =
+            Chat.create_space(%{
+              name: "Push Chat Chan #{i}",
+              slug: "push-chat-#{n}-#{i}",
+              kind: "channel",
+              org_id: fabrikam.id
+            })
+
+          {:ok, participant} =
+            Chat.add_participant(space.id, %{
+              participant_type: "user",
+              participant_id: user.id,
+              display_name: user.name,
+              joined_at: DateTime.add(DateTime.utc_now(), i, :second)
+            })
+
+          {space, participant}
+        end
+
+      [{first_space, first_participant}, {second_space, second_participant}] = spaces
+
+      %{
+        conn: init_test_session(conn, current_user_id: user.id),
+        first_space: first_space,
+        first_participant: first_participant,
+        space: second_space,
+        participant: second_participant
+      }
+    end
+
+    test "writes the row, keyed to THIS space's participant", %{conn: conn} do
+      %{conn: conn, space: space, participant: participant, first_participant: first} =
+        channel_member_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
+
+      render_hook(view, "push_subscribed", %{"endpoint" => @device, "keys" => @keys})
+
+      assert %Subscription{} = sub = Repo.get_by(Subscription, endpoint: @device)
+      assert sub.p256dh == @keys["p256dh"]
+      assert sub.auth == @keys["auth"]
+
+      assert sub.participant_id == participant.id,
+             "a chat route must key the device to the participant it is rendering"
+
+      refute sub.participant_id == first.id,
+             "the user-level fallback took over on a route that has a participant"
+    end
+
+    # Positive control for fix B on the chat path. A successful registration
+    # reports granted AND leaves the failure flag false. Both halves matter:
+    # the flag assertion alone would pass for code that never sets it, and the
+    # granted assertion alone is what the pre-fix bug satisfied.
+    test "a successful write reports granted and leaves the failure flag false",
+         %{conn: conn} do
+      %{conn: conn, space: space} = channel_member_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
+
+      render_hook(view, "push_subscribed", %{"endpoint" => @device, "keys" => @keys})
+
+      assert has_element?(view, "#push-subscribe[data-permission='granted']")
+      refute :sys.get_state(view.pid).socket.assigns[:push_registration_failed]
+      assert Repo.aggregate(Subscription, :count) == 1
+    end
+
+    test "still reports granted, so the banner comes down", %{conn: conn} do
+      %{conn: conn, space: space} = channel_member_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
+
+      render_hook(view, "push_permission_state", %{"state" => "prompt"})
+      assert has_element?(view, @banner)
+
+      render_hook(view, "push_subscribed", %{"endpoint" => @device, "keys" => @keys})
+
+      refute has_element?(view, @banner)
+      refute render(view) =~ @banner_text
     end
   end
 

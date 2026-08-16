@@ -2234,15 +2234,33 @@ defmodule PlatformWeb.ShellLiveTest do
       assert has_element?(view, "#push-subscribe[data-permission='granted']")
     end
 
-    # No `current_participant` exists off `/chat`, so there is no participant
-    # row to key a subscription to. The handler must no-op rather than crash.
+    # No `current_participant` exists off `/chat`. Since task 019ffe52 fix A
+    # the handler falls back to `Push.subscribe_for_user/2`, and this setup's
+    # user is in no space at all, so there is still no row to key to. The
+    # handler must degrade rather than crash, which is what this case is for.
+    #
+    # It used to assert `data-permission='granted'` here. That assertion was
+    # the defect written down: nothing was written and the shell said it was.
+    # Fix B changed the contract, so the assertion changed with it, deliberately
+    # and not to make a red go away. The permission now stays where it was
+    # ("unknown", since this setup never reported one) and the failure is
+    # carried on `:push_registration_failed`. The full contract, including the
+    # case where the browser HAS granted, is in
+    # `shell_live_push_registration_test.exs`; the registration that does land
+    # off `/chat` for a user who is in a space is there too.
     test "push_subscribed does not crash without a current participant", %{view: view} do
       render_hook(view, "push_subscribed", %{
         "endpoint" => "https://push.example.com/endpoint",
         "keys" => %{"p256dh" => "p256dh-key", "auth" => "auth-key"}
       })
 
-      assert has_element?(view, "#push-subscribe[data-permission='granted']")
+      # Alive: the clause handled the event rather than taking the view down.
+      assert has_element?(view, "#push-subscribe")
+
+      refute has_element?(view, "#push-subscribe[data-permission='granted']"),
+             "a registration that wrote nothing must not report a grant"
+
+      assert :sys.get_state(view.pid).socket.assigns[:push_registration_failed]
     end
   end
 

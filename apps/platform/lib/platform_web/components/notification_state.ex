@@ -31,7 +31,10 @@ defmodule PlatformWeb.Components.NotificationState do
                    could never honour has no business on the page.
       prompt       offer row + one primary action.
       denied       warning row, NO action (see `notification_state_row/1`).
-      granted      nothing. The healthy case adds nothing to the page.
+      granted      nothing. The healthy case adds nothing to the page,
+                   UNLESS `@registration_failed` names a reason: two
+                   granted-but-not-registered rows, one per reason
+                   (task 019ffe52 stage 3).
   """
 
   use Phoenix.Component
@@ -60,10 +63,21 @@ defmodule PlatformWeb.Components.NotificationState do
         "assets/js/hooks/push_subscribe.js). Rides ALONGSIDE :push_permission; it " <>
         "is not a sixth permission value."
 
+  attr :registration_failed, :atom,
+    default: nil,
+    values: [nil, :no_participant, :subscribe_failed],
+    doc:
+      "WHY the browser granted permission and Suite still failed to store the " <>
+        "subscription, or nil when it did not (task 019ffe52). Rides ALONGSIDE " <>
+        ":push_permission for the same reason :auto_denied does: the permission " <>
+        "is truthfully \"granted\", so the failure is a second fact, not a sixth " <>
+        "value. A REASON rather than a boolean because the two failures need " <>
+        "opposite instructions; see notification_state_row/1's moduledoc."
+
   @doc """
   Notification-state row for `/inbox`.
 
-  Two renderings, and the difference between them is the whole point:
+  Three renderings, and the difference between them is the whole point:
 
     * `prompt` — an offer, carrying the one action that works. The button
       fires `enable_notifications`, handled by `ShellLive`'s `:push_events`
@@ -74,6 +88,87 @@ defmodule PlatformWeb.Components.NotificationState do
       any button here would silently do nothing every time it was pressed.
       Never add one; the instruction line is the only thing that works. The
       row having nothing focusable is correct: there is nothing to do here.
+    * `granted` + `@registration_failed` — the browser said yes and Suite
+      failed to store the device (task 019ffe52). TWO variants, because the two
+      ways to get here need opposite instructions. Neither has a button, for a
+      close cousin of the reason above: the permission is already granted, so
+      nothing this row could offer re-runs anything usefully.
+
+  ## Why the failure carries a reason and not a boolean
+
+  This shipped as one variant behind a boolean and Marlowe rejected it on review:
+
+  > What does "suite cannot finish setting up" mean? If we are going to tell
+  > the user something is broken, we need to tell them how to fix (whether they
+  > need to do something, or we need to do something).
+
+  The copy could not answer that, and the reason it could not is structural.
+  One flag was being set by two failures whose answers are opposites:
+
+    * `:no_participant` — the user's account is in no conversation, so there is
+      no `chat_participants` row to key a subscription to. There is nothing the
+      user can do. It resolves when somebody adds them to a conversation.
+    * `:subscribe_failed` — `pushManager.subscribe` rejected in the browser
+      after permission was granted. A browser or network failure, and a reload
+      can genuinely change the outcome.
+
+  No single sentence is true of both, so the copy went vague to cover them, and
+  vague is exactly what got caught. The flag carries the reason now, and each
+  variant names who has to act.
+
+  ## The two sets of words
+
+  `:no_participant`
+
+  > Notifications are on, but you are not in any conversations yet.
+  >
+  > Start a conversation in Chat and they will switch on.
+
+  It opens by confirming the thing the user did worked, because it did: every
+  other variant in this row is about something they or their browser must
+  change, and this one is not.
+
+  The second line went through two wrong drafts before this one, and both
+  errors are worth keeping written down.
+
+  "Open any conversation and they will switch on" was wrong because nobody in
+  this state HAS a conversation to open: a device registers against any
+  participant row the user holds, so reaching this row means holding none.
+
+  "Nothing to do. They start working as soon as someone adds you to one" was
+  wrong for the opposite reason, and Marlowe caught it: everyone who can see this
+  row can start a conversation themselves. `/inbox` lives in the
+  `:authenticated` live_session behind `:require_app_surface`, while the
+  `:external_chat` session on the `chat.` host exposes only `/chat` and
+  `/chat/:space_slug`. No external user can reach this row, so the passive
+  wording was protecting a population that never arrives, and it told staff to
+  wait for something they could do themselves.
+
+  "they will switch on" is a factual claim and it was verified before shipping
+  rather than assumed. `push_subscribed` is sent from the `PushSubscribe`
+  hook's `mounted()`, which re-runs on LiveView live navigation, so walking to
+  Chat re-sends the existing subscription and `subscribe_for_user/2` files it
+  against the participant row that now exists. Measured on a dev server: user
+  in this state with 0 stored subscriptions, given a conversation, then an
+  in-app navigation to Chat with no page load (a `window` marker survived the
+  transition, which a reload would have wiped) left 1 stored subscription and
+  the row gone. It switches on without a reload.
+
+  `:subscribe_failed`
+
+  > Your browser allowed notifications, but this device could not be registered.
+  >
+  > Reload the page to try again.
+
+  Here the user CAN act, so it says so plainly. "Reload the page" is instruction
+  text and not a control: a reload button would duplicate one the browser
+  already gives them, which is a separate decision nobody has asked for.
+
+  Neither variant promises persistence. `:push_registration_failed` lives on the
+  socket and resets on reload, the same lifetime `:push_auto_denied` has. That
+  is consistent with both lines: `:subscribe_failed` asks for the reload that
+  clears it, and `:no_participant` describes a condition rather than a stored
+  state.
 
   ## Why there is no "open browser settings" link
 
@@ -184,6 +279,31 @@ defmodule PlatformWeb.Components.NotificationState do
         <p class="mt-1 text-xs text-base-content/60">
           If your computer is silencing the browser itself, no site setting will help.
         </p>
+      </div>
+    </div>
+
+    <div
+      :if={
+        @push_permission == "granted" and @registration_failed in [:no_participant, :subscribe_failed]
+      }
+      class="mb-6 flex items-start gap-3 rounded-box border border-base-300 border-l-[3px] border-l-warning bg-base-200 p-3"
+      role="status"
+      data-role="notification-state"
+      data-permission="granted"
+      data-registration-failed={Atom.to_string(@registration_failed)}
+    >
+      <.icon name="hero-bell-alert" class="mt-0.5 size-4 flex-shrink-0 text-base-content/70" />
+      <div :if={@registration_failed == :no_participant} class="min-w-0 flex-1">
+        <p class="text-sm">Notifications are on, but you are not in any conversations yet.</p>
+        <p class="mt-1 text-xs text-base-content/60">
+          Start a conversation in Chat and they will switch on.
+        </p>
+      </div>
+      <div :if={@registration_failed == :subscribe_failed} class="min-w-0 flex-1">
+        <p class="text-sm">
+          Your browser allowed notifications, but this device could not be registered.
+        </p>
+        <p class="mt-1 text-xs text-base-content/60">Reload the page to try again.</p>
       </div>
     </div>
     """

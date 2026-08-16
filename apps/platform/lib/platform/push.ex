@@ -46,6 +46,69 @@ defmodule Platform.Push do
     )
   end
 
+  @doc """
+  Upsert a push subscription for a USER, off any surface that has no
+  participant row to hand.
+
+  `subscribe/2` keys a subscription to a `chat_participants.id`, which is
+  per-space. `:current_participant` is assigned by `ChatLive` and `MeetingLive`
+  and by nothing else, so a device registered from `/inbox`, `/tasks` or any
+  other route had nothing to key to and was dropped: the user was told
+  notifications were on, and no row existed (task 019ffe52).
+
+  Nothing in the schema forces that. `distinct_endpoint_subscriptions/1`
+  resolves a user's devices across ALL of that user's user-typed participant
+  rows, so a subscription filed against any ONE of them is reachable from every
+  conversation. This picks such a row and delegates to `subscribe/2`.
+
+  Returns `{:error, :no_participant}` for a user who is in no space at all, and
+  for a `user_id` that is not a UUID. There is genuinely nowhere to file the
+  device, and the caller has to be able to tell that apart from success.
+  """
+  @spec subscribe_for_user(binary(), map()) ::
+          {:ok, Subscription.t()} | {:error, :no_participant | Ecto.Changeset.t()}
+  def subscribe_for_user(user_id, %{endpoint: _, keys: %{p256dh: _, auth: _}} = attrs)
+      when is_binary(user_id) do
+    case anchor_participant_id(user_id) do
+      nil -> {:error, :no_participant}
+      participant_id -> subscribe(participant_id, attrs)
+    end
+  end
+
+  # The user-typed `chat_participants` row a user-level subscription is filed
+  # against: the user's earliest membership, ties broken by id.
+  #
+  # Deterministic on purpose. A bare `Repo.one/1` on an unordered query may
+  # return a different row per call, and every distinct row it lands on writes
+  # ANOTHER `push_subscriptions` row for the same physical device. Endpoint
+  # dedup hides that at delivery time, so the duplication would accumulate
+  # silently with nothing to prune it.
+  #
+  # `chat_participants` carries no `inserted_at`. `joined_at` is the membership
+  # creation time, and `id` is a UUIDv7 and therefore time-ordered, which makes
+  # it a stable tiebreak for two rows sharing a `joined_at`.
+  #
+  # `Platform.UUID.valid?/1` guards the query because
+  # `chat_participants.participant_id` is a `:binary_id` and
+  # `where: p.participant_id == ^user_id` raises the same `Ecto.Query.CastError`
+  # as `Repo.get/2` on a malformed binary. `subscribe_for_user/2` is public and
+  # takes the id as an argument instead of reading it off a loaded row, so the
+  # guard belongs here rather than at one call site. Nil for the same reason
+  # `Accounts.get_user/1` returns nil on the same check: an id that cannot be a
+  # UUID resolves no row.
+  @spec anchor_participant_id(binary()) :: binary() | nil
+  defp anchor_participant_id(user_id) do
+    if Platform.UUID.valid?(user_id) do
+      from(p in Participant,
+        where: p.participant_type == "user" and p.participant_id == ^user_id,
+        order_by: [asc: p.joined_at, asc: p.id],
+        limit: 1,
+        select: p.id
+      )
+      |> Repo.one()
+    end
+  end
+
   @doc "Remove a push subscription by participant and endpoint."
   @spec unsubscribe(binary(), String.t()) :: {non_neg_integer(), nil}
   def unsubscribe(participant_id, endpoint) do

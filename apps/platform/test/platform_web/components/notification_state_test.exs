@@ -42,7 +42,8 @@ defmodule PlatformWeb.Components.NotificationStateTest do
     assigns = %{
       push_permission: permission,
       user_agent: Keyword.get(opts, :user_agent),
-      auto_denied: Keyword.get(opts, :auto_denied, false)
+      auto_denied: Keyword.get(opts, :auto_denied, false),
+      registration_failed: Keyword.get(opts, :registration_failed)
     }
 
     rendered_to_string(~H"""
@@ -50,6 +51,7 @@ defmodule PlatformWeb.Components.NotificationStateTest do
       push_permission={@push_permission}
       user_agent={@user_agent}
       auto_denied={@auto_denied}
+      registration_failed={@registration_failed}
     />
     """)
     |> LazyHTML.from_fragment()
@@ -81,6 +83,218 @@ defmodule PlatformWeb.Components.NotificationStateTest do
 
     assert count(doc, ~s([data-role="notification-state"])) == 0
     assert count(doc, "button") == 0
+  end
+
+  # --- granted-but-not-registered (task 019ffe52 stage 3) ---------------
+  #
+  # The state fix B made visible: the browser said yes and Suite failed to
+  # record the device. Two variants, because the two ways to get here need
+  # opposite instructions.
+  #
+  # This block first shipped as ONE variant behind a boolean and Marlowe rejected
+  # the copy: "If we are going to tell the user something is broken, we need to
+  # tell them how to fix (whether they need to do something, or we need to do
+  # something)." A boolean cannot answer that when it is set by two failures
+  # whose answers are opposites, which is why the discriminating tests below
+  # exist rather than one test that passes for either reason.
+
+  describe "granted with a failed registration" do
+    @no_participant_first "Notifications are on, but you are not in any conversations yet."
+    @no_participant_second "Start a conversation in Chat and they will switch on."
+
+    @subscribe_failed_first "Your browser allowed notifications, but this device could not be registered."
+    @subscribe_failed_second "Reload the page to try again."
+
+    # Positive and healthy control in ONE test per variant, on purpose. Split
+    # into "the row renders" and "the healthy case renders nothing", a variant
+    # wired to nothing passes the second and only fails the first; here they
+    # share a case, so a component that renders nothing detonates inside the
+    # same test that proves the reason matters.
+    test "no_participant says there is nothing for the user to do" do
+      failed = row_doc("granted", registration_failed: :no_participant)
+      healthy = row_doc("granted", registration_failed: nil)
+
+      assert count(failed, ~s([data-role="notification-state"])) == 1,
+             "granted + :no_participant must render the row"
+
+      assert count(healthy, ~s([data-role="notification-state"])) == 0,
+             "granted with the registration stored must still render nothing"
+
+      text = row_text(failed)
+
+      # Exact text. The words are the thing under review, and a paraphrase here
+      # would let approved copy drift silently.
+      assert text =~ @no_participant_first
+      assert text =~ @no_participant_second
+    end
+
+    test "subscribe_failed tells the user to reload" do
+      failed = row_doc("granted", registration_failed: :subscribe_failed)
+      healthy = row_doc("granted", registration_failed: nil)
+
+      assert count(failed, ~s([data-role="notification-state"])) == 1,
+             "granted + :subscribe_failed must render the row"
+
+      assert count(healthy, ~s([data-role="notification-state"])) == 0
+
+      text = row_text(failed)
+
+      assert text =~ @subscribe_failed_first
+      assert text =~ @subscribe_failed_second
+    end
+
+    # THE test the boolean could not express, and the reason this rework
+    # happened. Each reason must render ITS OWN words and not the other's. A
+    # single "the row says something about notifications" assertion passes for
+    # either, which is the vacuity that let unactionable copy through review.
+    test "the two reasons do not borrow each other's words" do
+      no_participant = row_text(row_doc("granted", registration_failed: :no_participant))
+      subscribe_failed = row_text(row_doc("granted", registration_failed: :subscribe_failed))
+
+      # Positive control, and it earns its place: without it every assertion
+      # below is a refute, and refutes all pass against the single vague
+      # variant this rework replaced, which contained neither phrase. Verified
+      # by running this file against the previous implementation: the refutes
+      # stayed green there while these two asserts went red.
+      assert no_participant =~ @no_participant_first
+      assert subscribe_failed =~ @subscribe_failed_first
+
+      refute no_participant =~ @subscribe_failed_first,
+             ":no_participant must not claim the device could not be registered"
+
+      refute no_participant =~ "Reload",
+             ":no_participant must not ask for a reload, which cannot help"
+
+      refute subscribe_failed =~ @no_participant_first,
+             ":subscribe_failed must not blame an empty conversation list"
+
+      refute subscribe_failed =~ "Start a conversation",
+             ":subscribe_failed is not about conversations; a reload is the fix"
+    end
+
+    # Marlowe's actual question. Each variant has to answer "who acts": one says
+    # outright that the user does not, the other gives them the single step
+    # that can change the outcome.
+    test "each variant says who has to act" do
+      assert row_text(row_doc("granted", registration_failed: :no_participant)) =~
+               "Start a conversation in Chat"
+
+      assert row_text(row_doc("granted", registration_failed: :subscribe_failed)) =~ "Reload"
+    end
+
+    # The line that would have shipped if nobody had thought about who reaches
+    # this state. After fix A the only users who get here have NO conversations
+    # at all, so an instruction to open one addresses exactly the population
+    # that cannot follow it.
+    test "does not tell the user to open a conversation" do
+      text = row_text(row_doc("granted", registration_failed: :no_participant))
+
+      refute text =~ "Open any conversation",
+             "the imperative form addresses users who have no conversation to open"
+
+      refute text =~ "Open a conversation"
+
+      # And it does not fall back on the vague line Marlowe rejected.
+      refute text =~ "could not finish setting them up"
+    end
+
+    # No control on either variant. The permission is already granted, so a
+    # button here re-runs the same path; "Reload the page" is instruction text
+    # and a reload button would duplicate the browser's own.
+    test "carries no button and nothing else focusable, in BOTH variants" do
+      for reason <- [:no_participant, :subscribe_failed] do
+        doc = row_doc("granted", registration_failed: reason)
+
+        # Positive control first: there IS a row here to be empty of controls.
+        assert count(doc, ~s([data-role="notification-state"])) == 1,
+               "expected a row for #{reason}"
+
+        assert count(doc, "button") == 0, "#{reason} must carry no button"
+        assert count(doc, "a") == 0
+        assert count(doc, "input") == 0
+        assert count(doc, ~s([phx-click])) == 0
+        assert count(doc, ~s([tabindex])) == 0
+        assert count(doc, ~s([data-role="notification-enable"])) == 0
+      end
+    end
+
+    test "announces itself, since it appears after connect rather than on paint" do
+      for reason <- [:no_participant, :subscribe_failed] do
+        assert row_doc("granted", registration_failed: reason)
+               |> LazyHTML.query(~s([data-role="notification-state"]))
+               |> LazyHTML.attribute("role") == ["status"],
+               "expected role=status for #{reason}"
+      end
+    end
+
+    # Same rule the `auto_denied` flag follows: `data-permission` is the
+    # five-value vocabulary other code keys on by string, and an extra fact
+    # rides beside it rather than renaming the state.
+    test "the reason does not become a sixth permission value" do
+      for reason <- [:no_participant, :subscribe_failed] do
+        assert row_doc("granted", registration_failed: reason)
+               |> LazyHTML.query(~s([data-role="notification-state"]))
+               |> LazyHTML.attribute("data-permission") == ["granted"]
+      end
+
+      # And it cannot conjure a row in a state where it has no meaning: the
+      # browser has not granted, so there was no registration to fail.
+      for state <- ["unknown", "unsupported", "prompt", "denied"],
+          reason <- [:no_participant, :subscribe_failed] do
+        row = row_doc(state, registration_failed: reason)
+
+        assert count(row, ~s([data-role="notification-state"][data-permission="granted"])) == 0,
+               "expected no granted row for push_permission=#{state} reason=#{reason}"
+      end
+    end
+
+    # Tailwind compiles `hover:` and `group-hover:` inside
+    # `@media (hover: hover)`, which never matches on a touch device, so a
+    # visibility rule written that way makes the row absent on a phone rather
+    # than merely quiet.
+    test "no hover variant gates anything here" do
+      for reason <- [:no_participant, :subscribe_failed] do
+        doc = row_doc("granted", registration_failed: reason)
+
+        # Control: without this the refutes below are satisfied by an empty
+        # string, which is exactly what a variant that renders nothing produces.
+        assert count(doc, ~s([data-role="notification-state"])) == 1
+
+        html =
+          doc
+          |> LazyHTML.query(~s([data-role="notification-state"]))
+          |> LazyHTML.to_html()
+
+        refute html =~ "hover:"
+        refute html =~ "group-hover"
+        refute html =~ "opacity-0"
+      end
+    end
+
+    # The colour is decoration. `--color-warning` is roughly 1.9:1 against
+    # base-100 and would fail WCAG 1.4.11 if any meaning depended on seeing
+    # it, so the words and the glyph carry the message at full strength.
+    # `--color-error` stays reserved for real errors; notifications not being
+    # on is a configuration state.
+    test "uses the warning accent, never error, and never as the only signal" do
+      for reason <- [:no_participant, :subscribe_failed] do
+        html =
+          row_doc("granted", registration_failed: reason)
+          |> LazyHTML.query(~s([data-role="notification-state"]))
+          |> LazyHTML.to_html()
+
+        assert html =~ "border-l-warning"
+        refute html =~ "error"
+      end
+
+      # The sentences survive with no colour at all, which is the actual test
+      # of whether the colour is load-bearing.
+      assert row_text(row_doc("granted", registration_failed: :no_participant)) =~
+               @no_participant_first
+
+      assert row_text(row_doc("granted", registration_failed: :subscribe_failed)) =~
+               @subscribe_failed_first
+    end
   end
 
   # --- the pair the anti-vacuity requirement turns on -------------------

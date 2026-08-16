@@ -17,11 +17,18 @@
          `@user_agent` and `@push_auto_denied` arrive the same way and decide
          the blocked row's wording: which browser's steps to give, and whether
          to give steps at all (the browser can refuse without ever asking, and
-         then site settings are not the problem). --%>
+         then site settings are not the problem).
+
+         `@push_registration_failed` (task 019ffe52) is the third such fact:
+         permission granted and the device still not stored. It is what makes
+         `granted` render anything at all, and it carries WHY rather than a
+         yes/no, because "nobody can fix this for you yet" and "reload and it
+         may work" are different instructions. --%>
     <.notification_state_row
       push_permission={@push_permission}
       user_agent={@user_agent}
       auto_denied={@push_auto_denied}
+      registration_failed={@push_registration_failed}
     />
 
     <%!-- Empty inbox: no section headers, no rows — just the calm minimal

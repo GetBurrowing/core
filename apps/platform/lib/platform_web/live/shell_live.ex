@@ -178,6 +178,26 @@ defmodule PlatformWeb.ShellLive do
       # sites). Deliberately a flag beside `:push_permission` and not a value
       # of it. See the `push_permission_state` clause below.
       |> assign(:push_auto_denied, false)
+      # Task 019ffe52 fix B: the browser granted permission and the device
+      # still did not get registered. Deliberately a fact beside
+      # `:push_permission` rather than a sixth value of it, exactly as
+      # `:push_auto_denied` above: the five wire values are a fixed vocabulary
+      # that several readers key on by string, and the honest state here needs
+      # two facts anyway ("permission granted" AND "registration failed"),
+      # which one string cannot carry.
+      #
+      # WHY a reason and not a boolean. It shipped as `true`/`false` and Marlowe
+      # rejected the copy on review: "If we are going to tell the user
+      # something is broken, we need to tell them how to fix (whether they need
+      # to do something, or we need to do something)." That question cannot be
+      # answered from a boolean, because the two failure routes have opposite
+      # answers. `:no_participant` means the user is in no conversations and
+      # there is nothing for them to do; `:subscribe_failed` means the browser
+      # refused the subscribe and a reload can genuinely change it. One flag
+      # covering both forced the copy vague, which is what she caught.
+      #
+      # nil | :no_participant | :subscribe_failed.
+      |> assign(:push_registration_failed, nil)
       # Same rework: the blocked row names the browser and gives the real
       # clicks, so it needs the user agent. Read once at mount from the
       # connect info; it cannot change for the life of the socket.
@@ -517,20 +537,63 @@ defmodule PlatformWeb.ShellLive do
         "push_subscribed", %{"endpoint" => endpoint, "keys" => keys}, socket ->
           # `Platform.Push.subscribe/2` keys a subscription to a
           # `Chat.Participant` id, which is per-space. `:current_participant`
-          # is assigned by ChatLive and MeetingLive and by nothing else, so
-          # off those surfaces there is no participant row to key to and the
-          # endpoint is dropped. See the stage-3 handoff: making registration
-          # durable on every route needs the subscription re-keyed on the
-          # user, or fanned out across the user's participant rows, and that
-          # is a schema decision this stage does not take.
-          if participant = socket.assigns[:current_participant] do
-            Push.subscribe(participant.id, %{
-              endpoint: endpoint,
-              keys: %{p256dh: keys["p256dh"], auth: keys["auth"]}
-            })
-          end
+          # is assigned by ChatLive and MeetingLive and by nothing else, so off
+          # those surfaces this clause used to have nothing to key to and threw
+          # the endpoint away.
+          #
+          # It no longer needs to. `Push.subscribe_for_user/2` files the device
+          # against a user-typed participant row the user already has, and
+          # `Push.distinct_endpoint_subscriptions/1` resolves a user's devices
+          # across ALL of their user-typed rows, so one row is reachable from
+          # every conversation. No re-keying of `push_subscriptions` required
+          # (task 019ffe52).
+          #
+          # A user in no space at all still has nowhere to file to, so the
+          # failure branch survives fix A and has to be reported honestly
+          # (task 019ffe52 fix B). This clause used to assign "granted"
+          # unconditionally, OUTSIDE the write, so a registration that wrote
+          # nothing still told the user notifications were on.
+          #
+          # On success: the permission moves to "granted" and the failure reason
+          # clears to nil, so a retry that works undoes an earlier failure. On
+          # failure: `:push_permission` is left exactly as it was, because this
+          # event is not evidence about the browser's permission either way,
+          # and `:push_registration_failed` carries the REASON instead.
+          #
+          # `:no_participant` is the reason every failure on this path reduces
+          # to for the user: their account is in no conversation, so there is
+          # no row to key a subscription to. `:no_user` (no session on the
+          # socket) and a changeset error are not distinct from the user's
+          # point of view and there is nothing they could do about either, so
+          # they take the same copy rather than inventing states nobody can
+          # act on. The specific reason still reaches the log below.
+          attrs = %{
+            endpoint: endpoint,
+            keys: %{p256dh: keys["p256dh"], auth: keys["auth"]}
+          }
 
-          {:halt, assign(socket, :push_permission, "granted")}
+          result =
+            case {socket.assigns[:current_participant], socket.assigns[:current_user_id]} do
+              {%{id: participant_id}, _} -> Push.subscribe(participant_id, attrs)
+              {nil, user_id} when is_binary(user_id) -> Push.subscribe_for_user(user_id, attrs)
+              {nil, _} -> {:error, :no_user}
+            end
+
+          case result do
+            {:ok, _subscription} ->
+              {:halt,
+               socket
+               |> assign(:push_registration_failed, nil)
+               |> assign(:push_permission, "granted")}
+
+            {:error, reason} ->
+              Logger.warning(
+                "web push registration not stored: " <>
+                  inspect(reason, printable_limit: 500)
+              )
+
+              {:halt, assign(socket, :push_registration_failed, :no_participant)}
+          end
 
         # `auto_denied` (stage 4 rework) is a SEPARATE fact, carried beside the
         # permission rather than folded into it: the five wire values above are
@@ -552,13 +615,24 @@ defmodule PlatformWeb.ShellLive do
         # permission. Deliberately leaves :push_permission alone: a failed
         # subscribe is not a denial, and downgrading the assign would hide
         # the banner from a user who still has no working subscription.
+        #
+        # This is the client-side twin of the `push_subscribed` failure branch
+        # above (task 019ffe52 fix B): same assign, DIFFERENT reason. It first
+        # shipped setting the same boolean as that branch, on the argument that
+        # one user-visible outcome reached from two directions should be one
+        # state. Marlowe's review killed that argument: the outcomes are not the
+        # same, because who has to act differs. Here the browser refused the
+        # subscribe, so a reload can genuinely change the result and the user
+        # is the one who can try. There, the account is in no conversation and
+        # the user can do nothing at all. Collapsing the two is what made the
+        # copy unactionable.
         "push_subscribe_failed", params, socket ->
           Logger.warning(
             "web push subscribe failed: " <>
               inspect(Map.take(params, ["name", "message"]), printable_limit: 500)
           )
 
-          {:halt, socket}
+          {:halt, assign(socket, :push_registration_failed, :subscribe_failed)}
 
         # Fired by the chat banner and, from stage 4, by the `/inbox`
         # notification-state row (`PlatformWeb.Components.NotificationState`).

@@ -384,6 +384,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`participant_id` comes off the recipient list `Chat.list_participants/2` returned for the space being notified. The third call (task 019ffd19) is `subscriptions_for_recipient/1` reading `participant_type` to decide between user-scoped and per-membership device resolution; same provenance as the other two, and the router passes the already-loaded `%Participant{}` so its own path never reaches this clause"},
     {"platform/push.ex", :get, "User", 2, :safe_internal,
      "`user_id` is `participant.participant_id` off the `%Participant{}` loaded on the line above, or a recipient id from the same list"},
+    {"platform/push.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 019ffe52: `anchor_participant_id/1` pins `p.participant_id == ^user_id` on a `:binary_id` column, which raises Ecto.Query.CastError on a malformed binary exactly as Repo.get/2 does. `subscribe_for_user/2` is public API and the id is not derived from a loaded row, so the guard belongs at the query. Today's only caller is ShellLive's `push_subscribed` clause reading `:current_user_id`, which is unvalidated (assigned from `session[\"current_user_id\"]` behind an is_binary/1 check) but unreachable with a malformed value in practice: the shell mount raises earlier on the same id in `Tenancy.visibility/1`. Covered by `subscribe_for_user/2 a malformed user id is refused, not raised on` in push_test.exs"},
     # ── Responsibilities (sibling-owned) ───────────────────────────────
     {"platform/responsibilities.ex", :get, "Responsibility", 1, :flagged_sibling_owned,
      "`Responsibilities.get/1` public getter; sibling-owned by the ADR-0046 stack — RECORD, DO NOT EDIT"},
@@ -802,6 +804,22 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/org/preamble_builder.ex" => 3,
     "platform/org/tenants_summary.ex" => 2,
     "platform/org/wiki.ex" => 5,
+    # 0 → 1 for task 019ffe52's `anchor_participant_id/1`, which resolves the
+    # `chat_participants` row a user-level push subscription is filed against.
+    # Triaged by hand as this map asks: the `where:` clause pins
+    # `p.participant_id == ^user_id` on a `:binary_id` column, so it DOES raise
+    # the same Ecto.Query.CastError as Repo.get/2 on a malformed binary, and
+    # `subscribe_for_user/2` is public API taking that id as an argument rather
+    # than reading it off a loaded row. Guarded with `Platform.UUID.valid?/1`
+    # accordingly, nil-tolerant for the reason the guard exists: an id that
+    # cannot be a UUID resolves no row.
+    #
+    # Today's caller cannot actually deliver a malformed one. `ShellLive`
+    # assigns `:current_user_id` from `session["current_user_id"]` behind
+    # nothing but an `is_binary/1` check, but the shell mount raises earlier on
+    # the same value inside `Tenancy.visibility/1`, so the crash is reached
+    # before push ever runs. The guard is for the next caller.
+    "platform/push.ex" => 1,
     # ADR-0046 merge: `latest_live_plan/1`, whose `where: p.task_id == ^task_id`
     # pins a UUID column and so raises Ecto.Query.CastError on a malformed id
     # exactly as Repo.get/2 would — the case this map exists to make someone
